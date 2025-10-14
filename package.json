@@ -1,0 +1,69 @@
+{
+  "name": "qauth",
+  "version": "0.0.0",
+  "description": "Post-quantum ready, headless-first identity platform. A developer-friendly alternative to Keycloak.",
+  "license": "Apache-2.0",
+  "author": "QAuth Labs",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/qauth-labs/qauth.git"
+  },
+  "keywords": [
+    "authentication",
+    "authorization",
+    "oauth2",
+    "oidc",
+    "sso",
+    "identity",
+    "security",
+    "jwt",
+    "keycloak-alternative"
+  ],
+  "private": true,
+  "engines": {
+    "node": ">=24.0.0",
+    "pnpm": ">=10.0.0"
+  },
+  "scripts": {
+    "prepare": "husky",
+    "dev": "nx serve",
+    "build": "nx build",
+    "test": "nx test",
+    "lint": "nx lint",
+    "format": "prettier --write .",
+    "format:check": "prettier --check ."
+  },
+  "lint-staged": {
+    "**/*.{ts,tsx,js,jsx}": [
+      "eslint --fix"
+    ],
+    "**/*.{js,jsx,json,yml,yaml,css,less,scss,ts,tsx,md,graphql}": "prettier --write"
+  },
+  "devDependencies": {
+    "@commitlint/cli": "^19.8.1",
+    "@commitlint/config-conventional": "^19.8.1",
+    "@eslint/js": "^9.8.0",
+    "@nx/eslint": "21.6.4",
+    "@nx/eslint-plugin": "21.4.1",
+    "@nx/js": "21.6.4",
+    "@swc-node/register": "~1.9.1",
+    "@swc/core": "~1.5.7",
+    "@swc/helpers": "~0.5.11",
+    "eslint": "^9.8.0",
+    "eslint-config-prettier": "^10.0.0",
+    "eslint-plugin-import": "2.31.0",
+    "eslint-plugin-jsx-a11y": "6.10.1",
+    "eslint-plugin-prettier": "^5.5.4",
+    "eslint-plugin-react": "7.35.0",
+    "eslint-plugin-react-hooks": "5.0.0",
+    "eslint-plugin-simple-import-sort": "^12.1.1",
+    "husky": "^9.1.7",
+    "lint-staged": "^16.2.4",
+    "nx": "21.6.4",
+    "prettier": "^3.6.2",
+    "prettier-plugin-tailwindcss": "^0.6.14",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.46.1"
+  },
+  "dependencies": {}
+}

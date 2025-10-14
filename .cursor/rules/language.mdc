@@ -1,0 +1,131 @@
+---
+alwaysApply: true
+---
+
+# QAuth - Language Rules
+
+## Language
+
+- **Default Language**: English
+  - All code (variables, functions, classes, comments) must be in English
+  - All documentation (README, inline comments, JSDoc) must be in English
+  - All commit messages must be in English
+  - All issues, PRs, and discussions must be in English
+  - Exception: User-facing content can be localized (i18n)
+
+## Code Standards
+
+- **TypeScript**: Use strict mode, prefer type safety over `any`
+- **Naming Conventions**:
+  - camelCase for variables and functions
+  - PascalCase for classes, interfaces, and types
+  - UPPER_SNAKE_CASE for constants
+  - kebab-case for file names
+- **Comments**: Write clear, concise comments in English for complex logic
+- **Documentation**: Use JSDoc/TSDoc for public APIs
+
+## Architecture
+
+- **Modular First**: Design modules to be extracted as microservices later
+- **API First**: Design APIs before implementation
+- **Security First**: Always consider security implications
+- **Performance**: Consider performance, but don't over-optimize prematurely
+
+## Git Commit Messages
+
+Follow Conventional Commits:
+
+- `feat:` new feature
+- `fix:` bug fix
+- `docs:` documentation changes
+- `style:` formatting, missing semicolons, etc.
+- `refactor:` code restructuring
+- `perf:` performance improvements
+- `test:` adding tests
+- `chore:` maintenance tasks
+
+Example: `feat(auth): implement OAuth 2.1 authorization code flow`
+
+## Dependencies
+
+- Prefer well-maintained, popular libraries
+- Check security advisories before adding dependencies
+- Keep dependencies up to date
+- Document why a dependency is needed
+
+## Testing
+
+- Write tests for business logic
+- Write tests for public APIs
+- Aim for meaningful coverage, not just high percentage
+
+## Pull Requests
+
+- Keep PRs small and focused
+- Write clear PR descriptions in English
+- Link related issues
+- Ensure CI passes before requesting review
+
+# QAuth - Cursor Rules
+
+## Language
+
+- **Default Language**: English
+  - All code (variables, functions, classes, comments) must be in English
+  - All documentation (README, inline comments, JSDoc) must be in English
+  - All commit messages must be in English
+  - All issues, PRs, and discussions must be in English
+  - Exception: User-facing content can be localized (i18n)
+
+## Code Standards
+
+- **TypeScript**: Use strict mode, prefer type safety over `any`
+- **Naming Conventions**:
+  - camelCase for variables and functions
+  - PascalCase for classes, interfaces, and types
+  - UPPER_SNAKE_CASE for constants
+  - kebab-case for file names
+- **Comments**: Write clear, concise comments in English for complex logic
+- **Documentation**: Use JSDoc/TSDoc for public APIs
+
+## Architecture
+
+- **Modular First**: Design modules to be extracted as microservices later
+- **API First**: Design APIs before implementation
+- **Security First**: Always consider security implications
+- **Performance**: Consider performance, but don't over-optimize prematurely
+
+## Git Commit Messages
+
+Follow Conventional Commits:
+
+- `feat:` new feature
+- `fix:` bug fix
+- `docs:` documentation changes
+- `style:` formatting, missing semicolons, etc.
+- `refactor:` code restructuring
+- `perf:` performance improvements
+- `test:` adding tests
+- `chore:` maintenance tasks
+
+Example: `feat(auth): implement OAuth 2.1 authorization code flow`
+
+## Dependencies
+
+- Prefer well-maintained, popular libraries
+- Check security advisories before adding dependencies
+- Keep dependencies up to date
+- Document why a dependency is needed
+
+## Testing
+
+- Write tests for business logic
+- Write tests for public APIs
+- Aim for meaningful coverage, not just high percentage
+
+## Pull Requests
+
+- Keep PRs small and focused
+- Write clear PR descriptions in English
+- Link related issues
+- Ensure CI passes before requesting review

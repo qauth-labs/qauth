@@ -1,0 +1,18 @@
+# Dependencies
+node_modules/
+
+# Nx
+.nx/cache
+.nx/workspace-data
+
+# Build outputs
+dist/
+build/
+
+# Environment variables
+.env
+.env.local
+
+# System files
+.DS_Store
+Thumbs.db

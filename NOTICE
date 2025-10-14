@@ -1,0 +1,25 @@
+QAuth
+Copyright 2025 QAuth Labs
+
+This product includes software developed by QAuth Labs
+and its contributors.
+
+================================================================================
+
+This project is inspired by and incorporates learnings from the following
+open-source projects:
+
+- Keycloak (https://www.keycloak.org/) - Apache License 2.0
+- Ory (https://www.ory.sh/) - Apache License 2.0
+- Supabase Auth (https://supabase.com/) - Apache License 2.0
+- Auth0 (https://auth0.com/) - Proprietary/MIT components
+- Clerk (https://clerk.dev/) - Proprietary
+
+We are grateful to these projects and their communities for their contributions
+to the open-source ecosystem.
+
+================================================================================
+
+This project uses various open-source libraries and components. For a complete
+list of dependencies and their licenses, please refer to the package.json file
+and the respective project documentation.
