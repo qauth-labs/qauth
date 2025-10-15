@@ -1,0 +1,24 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "outDir": "../../dist/out-tsc",
+    "module": "esnext",
+    "types": ["node"],
+    "declaration": true
+  },
+  "include": ["src/**/*.ts"],
+  "references": [
+    {
+      "path": "../../libs/shared/constants/tsconfig.lib.json"
+    },
+    {
+      "path": "../../libs/shared/types/tsconfig.lib.json"
+    },
+    {
+      "path": "../../libs/data-access/redis/tsconfig.lib.json"
+    },
+    {
+      "path": "../../libs/data-access/db/tsconfig.lib.json"
+    }
+  ]
+}

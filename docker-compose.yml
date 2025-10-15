@@ -1,0 +1,113 @@
+# Docker Compose for QAuth OAuth 2.1/OIDC Server Development
+# Provides PostgreSQL and Redis services for local development
+
+version: '3.8'
+
+services:
+  # =============================================================================
+  # PostgreSQL Database
+  # =============================================================================
+  postgres:
+    image: postgres:16-alpine
+    container_name: qauth-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: qauth_dev
+      POSTGRES_USER: qauth
+      POSTGRES_PASSWORD: qauth
+      POSTGRES_INITDB_ARGS: '--encoding=UTF-8 --lc-collate=C --lc-ctype=C'
+    ports:
+      - '5432:5432'
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./scripts/init-db.sql:/docker-entrypoint-initdb.d/init-db.sql:ro
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U qauth -d qauth_dev']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks:
+      - qauth-network
+
+  # =============================================================================
+  # Redis Cache & Session Store
+  # =============================================================================
+  redis:
+    image: redis:7-alpine
+    container_name: qauth-redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes --appendfsync everysec
+    ports:
+      - '6379:6379'
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks:
+      - qauth-network
+
+  # =============================================================================
+  # Optional: Redis Commander (Web UI for Redis)
+  # =============================================================================
+  redis-commander:
+    image: rediscommander/redis-commander:latest
+    container_name: qauth-redis-commander
+    restart: unless-stopped
+    environment:
+      REDIS_HOSTS: local:redis:6379
+      HTTP_USER: admin
+      HTTP_PASSWORD: admin
+    ports:
+      - '8081:8081'
+    depends_on:
+      - redis
+    networks:
+      - qauth-network
+    profiles:
+      - tools # Only start with --profile tools
+
+  # =============================================================================
+  # Optional: pgAdmin (Web UI for PostgreSQL)
+  # =============================================================================
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: qauth-pgadmin
+    restart: unless-stopped
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@qauth.dev
+      PGADMIN_DEFAULT_PASSWORD: admin
+      PGADMIN_CONFIG_SERVER_MODE: 'False'
+    ports:
+      - '8080:80'
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+    depends_on:
+      - postgres
+    networks:
+      - qauth-network
+    profiles:
+      - tools # Only start with --profile tools
+
+# =============================================================================
+# Volumes for Data Persistence
+# =============================================================================
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+  pgadmin_data:
+    driver: local
+
+# =============================================================================
+# Network Configuration
+# =============================================================================
+networks:
+  qauth-network:
+    driver: bridge
+    name: qauth-network

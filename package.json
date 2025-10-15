@@ -31,7 +31,11 @@
     "test": "nx test",
     "lint": "nx lint",
     "format": "prettier --write .",
-    "format:check": "prettier --check ."
+    "format:check": "prettier --check .",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "drizzle-kit migrate",
+    "db:push": "drizzle-kit push",
+    "db:studio": "drizzle-kit studio"
   },
   "lint-staged": {
     "**/*.{ts,tsx,js,jsx}": [
@@ -43,12 +47,18 @@
     "@commitlint/cli": "^19.8.1",
     "@commitlint/config-conventional": "^19.8.1",
     "@eslint/js": "^9.8.0",
+    "@nx/esbuild": "21.6.4",
     "@nx/eslint": "21.6.4",
     "@nx/eslint-plugin": "21.4.1",
     "@nx/js": "21.6.4",
+    "@nx/node": "^21.6.4",
     "@swc-node/register": "~1.9.1",
     "@swc/core": "~1.5.7",
     "@swc/helpers": "~0.5.11",
+    "@types/ioredis": "^5.0.0",
+    "@types/node": "20.19.9",
+    "@types/pg": "^8.15.5",
+    "esbuild": "^0.19.2",
     "eslint": "^9.8.0",
     "eslint-config-prettier": "^10.0.0",
     "eslint-plugin-import": "2.31.0",
@@ -65,5 +75,22 @@
     "typescript": "^5.9.3",
     "typescript-eslint": "^8.46.1"
   },
-  "dependencies": {}
+  "dependencies": {
+    "@fastify/autoload": "~6.0.3",
+    "@fastify/cors": "^11.1.0",
+    "@fastify/env": "^5.0.3",
+    "@fastify/helmet": "^13.0.2",
+    "@fastify/sensible": "~6.0.2",
+    "@node-rs/argon2": "^2.0.2",
+    "drizzle-kit": "^0.31.5",
+    "drizzle-orm": "^0.44.6",
+    "fastify": "~5.2.1",
+    "fastify-plugin": "~5.0.1",
+    "ioredis": "^5.8.1",
+    "nanoid": "^5.1.6",
+    "pg": "^8.16.3",
+    "pino": "^10.0.0",
+    "tslib": "^2.3.0",
+    "zod": "^4.1.12"
+  }
 }

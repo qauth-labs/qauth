@@ -20,7 +20,36 @@
           "buildDepsName": "build-deps",
           "watchDepsName": "watch-deps"
         }
+      },
+      "exclude": [
+        "libs/data-access/db/*",
+        "libs/data-access/redis/*",
+        "libs/shared/types/*",
+        "libs/shared/utils/*",
+        "libs/shared/constants/*"
+      ]
+    },
+    {
+      "plugin": "@nx/js/typescript",
+      "include": [
+        "libs/data-access/db/*",
+        "libs/data-access/redis/*",
+        "libs/shared/types/*",
+        "libs/shared/utils/*",
+        "libs/shared/constants/*"
+      ],
+      "options": {
+        "typecheck": {
+          "targetName": "typecheck"
+        }
       }
     }
-  ]
+  ],
+  "targetDefaults": {
+    "@nx/esbuild:esbuild": {
+      "cache": true,
+      "dependsOn": ["^build"],
+      "inputs": ["default", "^default"]
+    }
+  }
 }

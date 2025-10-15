@@ -368,14 +368,24 @@ docker-compose up -d
 
 ## 🗺️ Roadmap
 
-### Phase 1: Foundation (MVP) - Q1 2026
+### Phase 0: Foundation Setup - Q1 2026 ✅ **COMPLETE**
 
-- [ ] Core auth server (TypeScript)
+- [x] Core auth server (TypeScript)
+- [x] PostgreSQL + Redis setup with Docker Compose
+- [x] Type-safe environment configuration with Zod
+- [x] Database schemas and migrations with Drizzle ORM
+- [x] Redis session management
+- [x] Fastify server with plugins and error handling
+- [x] Development tooling and documentation
+
+### Phase 1: Core Authentication - Q1 2026
+
 - [ ] Email/Password authentication
 - [ ] OAuth 2.1 flows (Authorization Code + PKCE)
-- [ ] PostgreSQL + Redis setup
+- [ ] JWT token generation and validation
+- [ ] User registration and authentication
+- [ ] Client management
 - [ ] Basic admin API
-- [ ] Rust WASM crypto module
 
 ### Phase 2: Developer Portal - Q2 2026
 

@@ -1,0 +1,116 @@
+# Docker Compose for QAuth OAuth 2.1/OIDC Server Production
+# Production-ready configuration with security and performance optimizations
+
+version: '3.8'
+
+services:
+  # =============================================================================
+  # PostgreSQL Database (Production)
+  # =============================================================================
+  postgres:
+    image: postgres:16-alpine
+    container_name: qauth-postgres-prod
+    restart: always
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-qauth_prod}
+      POSTGRES_USER: ${POSTGRES_USER:-qauth}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      # Production optimizations
+      POSTGRES_SHARED_PRELOAD_LIBRARIES: pg_stat_statements
+      POSTGRES_MAX_CONNECTIONS: 200
+      POSTGRES_SHARED_BUFFERS: 256MB
+      POSTGRES_EFFECTIVE_CACHE_SIZE: 1GB
+      POSTGRES_MAINTENANCE_WORK_MEM: 64MB
+      POSTGRES_CHECKPOINT_COMPLETION_TARGET: 0.9
+      POSTGRES_WAL_BUFFERS: 16MB
+      POSTGRES_DEFAULT_STATISTICS_TARGET: 100
+    ports:
+      - '${POSTGRES_PORT:-5432}:5432'
+    volumes:
+      - postgres_data_prod:/var/lib/postgresql/data
+      - ./scripts/init-db.sql:/docker-entrypoint-initdb.d/init-db.sql:ro
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER:-qauth} -d ${POSTGRES_DB:-qauth_prod}']
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    networks:
+      - qauth-network-prod
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+        reservations:
+          memory: 512M
+
+  # =============================================================================
+  # Redis Cache & Session Store (Production)
+  # =============================================================================
+  redis:
+    image: redis:7-alpine
+    container_name: qauth-redis-prod
+    restart: always
+    command: >
+      redis-server
+      --appendonly yes
+      --appendfsync everysec
+      --maxmemory 512mb
+      --maxmemory-policy allkeys-lru
+      --save 900 1
+      --save 300 10
+      --save 60 10000
+    ports:
+      - '${REDIS_PORT:-6379}:6379'
+    volumes:
+      - redis_data_prod:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    networks:
+      - qauth-network-prod
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+        reservations:
+          memory: 256M
+
+  # =============================================================================
+  # Redis Sentinel (High Availability)
+  # =============================================================================
+  redis-sentinel:
+    image: redis:7-alpine
+    container_name: qauth-redis-sentinel
+    restart: always
+    command: redis-sentinel /usr/local/etc/redis/sentinel.conf
+    volumes:
+      - ./config/redis-sentinel.conf:/usr/local/etc/redis/sentinel.conf:ro
+    depends_on:
+      - redis
+    networks:
+      - qauth-network-prod
+    profiles:
+      - ha # Only start with --profile ha
+
+# =============================================================================
+# Volumes for Production Data Persistence
+# =============================================================================
+volumes:
+  postgres_data_prod:
+    driver: local
+  redis_data_prod:
+    driver: local
+
+# =============================================================================
+# Production Network Configuration
+# =============================================================================
+networks:
+  qauth-network-prod:
+    driver: bridge
+    name: qauth-network-prod
+    driver_opts:
+      com.docker.network.bridge.name: qauth-br-prod

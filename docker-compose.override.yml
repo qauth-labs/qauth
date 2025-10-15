@@ -1,0 +1,46 @@
+# Docker Compose override for development
+# This file extends the base docker-compose.yml with development-specific settings
+
+version: '3.8'
+
+services:
+  # =============================================================================
+  # PostgreSQL Development Overrides
+  # =============================================================================
+  postgres:
+    environment:
+      # Enable query logging for debugging
+      POSTGRES_LOG_STATEMENT: all
+      POSTGRES_LOG_MIN_DURATION_STATEMENT: 0
+    ports:
+      - '5432:5432' # Expose port for direct connection
+    volumes:
+      # Mount development SQL scripts
+      - ./scripts:/docker-entrypoint-initdb.d:ro
+
+  # =============================================================================
+  # Redis Development Overrides
+  # =============================================================================
+  redis:
+    command: redis-server --appendonly yes --appendfsync everysec --loglevel verbose
+    ports:
+      - '6379:6379' # Expose port for direct connection
+
+  # =============================================================================
+  # Development Tools (optional)
+  # =============================================================================
+  redis-commander:
+    environment:
+      # No authentication in development
+      HTTP_USER: ''
+      HTTP_PASSWORD: ''
+    ports:
+      - '8081:8081'
+
+  pgadmin:
+    environment:
+      # Simplified credentials for development
+      PGADMIN_DEFAULT_EMAIL: admin@qauth.dev
+      PGADMIN_DEFAULT_PASSWORD: admin
+    ports:
+      - '8080:80'
