@@ -2,15 +2,15 @@
   "compileOnSave": false,
   "compilerOptions": {
     "rootDir": ".",
-    "sourceMap": true,
-    "declaration": false,
-    "moduleResolution": "bundler",
+    "moduleResolution": "node",
     "target": "ES2022",
     "module": "ESNext",
     "lib": ["ES2022", "DOM", "DOM.Iterable"],
     "skipLibCheck": true,
     "baseUrl": ".",
-    "paths": {},
+    "paths": {
+      "@qauth/db": ["libs/data-access/db/src/index.ts"]
+    },
     "esModuleInterop": true,
     "strict": true,
     "resolveJsonModule": true,

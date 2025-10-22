@@ -20,6 +20,16 @@
           "buildDepsName": "build-deps",
           "watchDepsName": "watch-deps"
         }
+      },
+      "exclude": ["libs/data-access/db/*"]
+    },
+    {
+      "plugin": "@nx/js/typescript",
+      "include": ["libs/data-access/db/*"],
+      "options": {
+        "typecheck": {
+          "targetName": "typecheck"
+        }
       }
     }
   ]

@@ -1,13 +1,13 @@
 # QAuth - MVP Product Requirements Document (PRD)
 
-> **Version**: 1.0
-> **Last Updated**: 2025-10-14
-> **Author**: Taha (Solo Developer)
+> **Version**: 1.1
+> **Last Updated**: 2025-10-21
+> **Author**: Muhammed Taha Ayan
 > **Status**: Planning Phase
 
 ## Executive Summary
 
-QAuth is a post-quantum ready, headless-first identity platform designed as a developer-friendly alternative to Keycloak. This document outlines the Minimum Viable Product (MVP) roadmap broken into achievable phases for a solo developer.
+QAuth is a post-quantum ready, headless-first identity platform designed as a developer-friendly alternative to Keycloak. This document outlines the Minimum Viable Product (MVP) roadmap for a solo developer.
 
 **Core Philosophy**: Ship working features incrementally. Each phase should be production-ready before moving to the next.
 
@@ -15,19 +15,19 @@ QAuth is a post-quantum ready, headless-first identity platform designed as a de
 
 ## 🎯 MVP Vision
 
-**Goal**: Create a working OAuth 2.1/OIDC authentication server that a developer can use to authenticate users in their application.
+**Goal**: Create a working OAuth 2.1/OIDC authentication server that developers can use to authenticate users in their applications.
 
 **Success Criteria**:
 
 - A developer can register an OAuth client
-- A developer can implement login/signup in their app using QAuth
+- A developer can implement login/signup using QAuth
 - Users can authenticate with email/password
 - JWT tokens are issued and validated correctly
 - Basic security practices are implemented
 
 **Non-Goals for MVP**:
 
-- Social login (Google, GitHub, etc.)
+- Social login (Google, GitHub)
 - Multi-factor authentication (MFA)
 - WebAuthn/Passkeys
 - SAML support
@@ -35,6 +35,7 @@ QAuth is a post-quantum ready, headless-first identity platform designed as a de
 - Custom domains
 - Advanced RBAC
 - Microservices architecture
+- GraphQL API
 
 ---
 
@@ -53,7 +54,7 @@ QAuth is a post-quantum ready, headless-first identity platform designed as a de
 - [x] Configure pnpm workspace
 - [x] Set up ESLint + Prettier
 - [x] Configure Husky + commitlint
-- [x] Create project documentation (CLAUDE.md, README.md)
+- [x] Create project documentation
 - [ ] Set up database schema (PostgreSQL + Drizzle ORM)
 - [ ] Set up Redis connection
 - [ ] Create base Fastify server structure
@@ -68,32 +69,35 @@ QAuth is a post-quantum ready, headless-first identity platform designed as a de
 
 ---
 
-### Phase 1: Core Authentication (MVP Foundation)
+### Phase 1: Core Authentication
 
-**Timeline**: 4-6 weeks
+**Timeline**: 6-8 weeks
 **Status**: Not Started
 
 **Objective**: Implement basic email/password authentication with JWT tokens.
+
+---
 
 #### 1.1 Database Schema & Models
 
 **Tasks**:
 
 - [ ] Design database schema
-  - Users table (id, email, password_hash, created_at, updated_at, verified, etc.)
+  - Users table (id, email, password_hash, email_verified, created_at, updated_at)
   - Sessions table (id, user_id, token, expires_at, created_at)
-  - OAuth clients table (id, client_id, client_secret, name, redirect_uris, created_at)
-  - Authorization codes table (id, code, client_id, user_id, redirect_uri, expires_at)
-  - Refresh tokens table (id, token, user_id, client_id, expires_at)
+  - OAuth clients table (id, client_id, client_secret_hash, name, redirect_uris, created_at)
+  - Authorization codes table (id, code, client_id, user_id, redirect_uri, code_challenge, expires_at)
+  - Refresh tokens table (id, token_hash, user_id, client_id, expires_at)
+  - Email verification tokens table (id, token, user_id, expires_at, used)
 - [ ] Set up Drizzle ORM schemas
 - [ ] Create database migrations
 - [ ] Write basic CRUD operations
 
 **Acceptance Criteria**:
 
-- ✅ Database schema is normalized and follows best practices
+- ✅ Database schema is normalized
 - ✅ Migrations can be run and rolled back
-- ✅ Basic queries work (create user, find user, etc.)
+- ✅ Basic queries work
 
 **Estimated Time**: 1 week
 
@@ -104,14 +108,11 @@ QAuth is a post-quantum ready, headless-first identity platform designed as a de
 **Tasks**:
 
 - [ ] Implement user registration endpoint (`POST /auth/register`)
-- [ ] Integrate Argon2id password hashing (via Rust WASM)
-  - Create Rust WASM module for password hashing
-  - Export hash() and verify() functions
-  - Integrate with TypeScript auth service
+- [ ] Integrate @node-rs/argon2 for password hashing
 - [ ] Email validation
-- [ ] Password strength validation
+- [ ] Password strength validation (zxcvbn)
 - [ ] Check for duplicate emails
-- [ ] Basic rate limiting on registration
+- [ ] Rate limiting on registration
 
 **API Endpoint**:
 
@@ -127,9 +128,26 @@ Response:
   "user": {
     "id": "uuid",
     "email": "user@example.com",
-    "created_at": "2025-10-14T..."
+    "email_verified": false,
+    "created_at": "2025-10-21T..."
   }
 }
+```
+
+**Password Hashing**:
+
+```typescript
+import { hash, verify } from '@node-rs/argon2';
+
+// Hash password
+const hashed = await hash(password, {
+  memoryCost: 65536, // 64MB
+  timeCost: 3,
+  parallelism: 4,
+});
+
+// Verify password
+const valid = await verify(hashed, password);
 ```
 
 **Acceptance Criteria**:
@@ -144,16 +162,62 @@ Response:
 
 ---
 
-#### 1.3 User Login & JWT Tokens
+#### 1.3 Email Verification
+
+**Tasks**:
+
+- [ ] Generate verification token (32 bytes, base64url)
+- [ ] Store token in database (TTL: 24 hours)
+- [ ] Send verification email (SMTP)
+- [ ] Implement verify endpoint (`GET /auth/verify?token=...`)
+- [ ] Mark email as verified
+- [ ] Handle expired tokens
+
+**API Endpoints**:
+
+```typescript
+POST /auth/resend-verification
+{
+  "email": "user@example.com"
+}
+
+Response:
+{
+  "message": "Verification email sent"
+}
+
+---
+
+GET /auth/verify?token=abc123
+
+Response:
+{
+  "message": "Email verified successfully"
+}
+```
+
+**Acceptance Criteria**:
+
+- ✅ Verification email is sent on registration
+- ✅ Valid tokens verify the email
+- ✅ Expired tokens are rejected
+- ✅ Used tokens cannot be reused
+- ✅ Users can request new verification email
+
+**Estimated Time**: 3-4 days
+
+---
+
+#### 1.4 User Login & JWT Tokens
 
 **Tasks**:
 
 - [ ] Implement login endpoint (`POST /auth/login`)
-- [ ] Verify password using Argon2id
-- [ ] Generate JWT access tokens
+- [ ] Verify password using @node-rs/argon2
+- [ ] Generate JWT access tokens (Ed25519)
 - [ ] Generate refresh tokens
 - [ ] Store session in Redis
-- [ ] Implement JWT signing (initially Ed25519, later hybrid ML-DSA)
+- [ ] Implement JWT signing with jose library
 
 **API Endpoint**:
 
@@ -168,24 +232,44 @@ Response:
 {
   "access_token": "eyJhbGc...",
   "refresh_token": "refresh_token_here",
-  "expires_in": 3600,
+  "expires_in": 900,
   "token_type": "Bearer"
 }
+```
+
+**JWT Implementation**:
+
+```typescript
+import { SignJWT, generateKeyPair } from 'jose';
+
+// Generate EdDSA key pair
+const { publicKey, privateKey } = await generateKeyPair('EdDSA');
+
+// Sign JWT
+const jwt = await new SignJWT({
+  sub: userId,
+  email: user.email,
+})
+  .setProtectedHeader({ alg: 'EdDSA' })
+  .setIssuedAt()
+  .setExpirationTime('15m')
+  .sign(privateKey);
 ```
 
 **Acceptance Criteria**:
 
 - ✅ Users can login with correct credentials
 - ✅ Invalid credentials are rejected
-- ✅ JWT tokens are properly signed
-- ✅ Tokens have correct expiration
+- ✅ Unverified emails cannot login (optional for MVP)
+- ✅ JWT tokens are properly signed with EdDSA
+- ✅ Tokens have correct expiration (15 minutes)
 - ✅ Refresh tokens are stored securely
 
 **Estimated Time**: 1 week
 
 ---
 
-#### 1.4 Token Refresh & Logout
+#### 1.5 Token Refresh & Logout
 
 **Tasks**:
 
@@ -207,7 +291,7 @@ POST /auth/refresh
 Response:
 {
   "access_token": "eyJhbGc...",
-  "expires_in": 3600
+  "expires_in": 900
 }
 
 ---
@@ -232,7 +316,7 @@ Response:
 
 ---
 
-#### 1.5 OAuth 2.1 Authorization Code Flow (with PKCE)
+#### 1.6 OAuth 2.1 Authorization Code Flow (with PKCE)
 
 **Tasks**:
 
@@ -243,6 +327,7 @@ Response:
 - [ ] Generate authorization codes
 - [ ] Exchange authorization code for tokens
 - [ ] Validate redirect_uri
+- [ ] State parameter validation
 
 **OAuth Flow**:
 
@@ -276,29 +361,30 @@ Response:
      "access_token": "...",
      "refresh_token": "...",
      "token_type": "Bearer",
-     "expires_in": 3600
+     "expires_in": 900
    }
 ```
 
 **Acceptance Criteria**:
 
 - ✅ Authorization code flow works end-to-end
-- ✅ PKCE is enforced (no authorization without code_challenge)
+- ✅ PKCE is enforced
 - ✅ Invalid redirect_uri is rejected
-- ✅ Authorization codes expire after use
+- ✅ Authorization codes expire after 5 minutes
+- ✅ Authorization codes are single-use
 - ✅ State parameter is validated
 
 **Estimated Time**: 1.5 weeks
 
 ---
 
-#### 1.6 Protected Resource Validation
+#### 1.7 Protected Resource Validation
 
 **Tasks**:
 
 - [ ] Create JWT validation middleware
 - [ ] Implement token introspection endpoint (`POST /oauth/introspect`)
-- [ ] Create `/userinfo` endpoint (OIDC)
+- [ ] Create userinfo endpoint (`GET /userinfo`)
 - [ ] Handle expired tokens
 - [ ] Handle invalid signatures
 
@@ -312,7 +398,7 @@ Response:
 {
   "sub": "user_id",
   "email": "user@example.com",
-  "email_verified": false
+  "email_verified": true
 }
 
 ---
@@ -342,43 +428,98 @@ Response:
 
 ---
 
+#### 1.8 Health Check Endpoint
+
+**Tasks**:
+
+- [ ] Implement health check endpoint (`GET /health`)
+- [ ] Check database connection
+- [ ] Check Redis connection
+- [ ] Return service status
+
+**API Endpoint**:
+
+```typescript
+GET /health
+
+Response:
+{
+  "status": "ok",
+  "timestamp": "2025-10-21T...",
+  "services": {
+    "database": "connected",
+    "redis": "connected"
+  }
+}
+```
+
+**Acceptance Criteria**:
+
+- ✅ Health endpoint returns 200 when all services are healthy
+- ✅ Health endpoint returns 503 when services are down
+- ✅ Docker health check configured
+
+**Estimated Time**: 1 hour
+
+---
+
 ### Phase 1 Summary
 
-**Total Estimated Time**: 4-6 weeks
+**Total Estimated Time**: 6-8 weeks
 
 **Deliverables**:
 
 - ✅ Working auth server with email/password authentication
 - ✅ OAuth 2.1 authorization code flow (with PKCE)
-- ✅ JWT token generation and validation
+- ✅ JWT token generation and validation (EdDSA)
+- ✅ Email verification
 - ✅ Basic user management
-- ✅ Secure password hashing (Argon2id via Rust WASM)
+- ✅ Secure password hashing (Argon2id)
+- ✅ Health check endpoint
 
 **What You Can Do After Phase 1**:
 
 - Register users
+- Verify emails
 - Login users
 - Issue OAuth 2.1 compliant tokens
 - Validate tokens in your application
-- Build a basic application with QAuth authentication
+- Build applications with QAuth authentication
 
 ---
 
-## Phase 2: Developer Portal (Self-Service)
+## Phase 2: Developer Portal
 
-**Timeline**: 3-4 weeks
+**Timeline**: 3-4 weeks  
 **Status**: Not Started
 
-**Objective**: Allow developers to register and manage their OAuth clients without manual intervention.
+**Objective**: Allow developers to register and manage OAuth clients without manual intervention.
+
+---
 
 #### 2.1 Developer Registration
 
 **Tasks**:
 
-- [ ] Create developer registration page
-- [ ] Implement email verification
+- [ ] Create developer registration page (TanStack Start)
+- [ ] Implement email verification (reuse Phase 1 logic)
 - [ ] Create developer dashboard UI
 - [ ] Set up TanStack Start app structure
+- [ ] Implement login/logout for developers
+
+**UI Pages**:
+
+- `/register` - Developer registration
+- `/login` - Developer login
+- `/verify` - Email verification
+- `/dashboard` - Developer dashboard
+
+**Acceptance Criteria**:
+
+- ✅ Developers can register with email/password
+- ✅ Email verification works
+- ✅ Developers can login to dashboard
+- ✅ Basic dashboard layout exists
 
 **Estimated Time**: 1 week
 
@@ -388,13 +529,25 @@ Response:
 
 **Tasks**:
 
+- [ ] Create REST API for client management
 - [ ] Create "New Client" form
 - [ ] Generate client_id and client_secret
-- [ ] Store client credentials securely
+- [ ] Store client credentials securely (hash client_secret)
 - [ ] Display client details
-- [ ] Edit client (redirect URIs, name, etc.)
+- [ ] Edit client (redirect URIs, name)
 - [ ] Delete/revoke client
 - [ ] List all clients for a developer
+
+**REST API Endpoints**:
+
+```typescript
+GET    /api/clients
+POST   /api/clients
+GET    /api/clients/:id
+PATCH  /api/clients/:id
+DELETE /api/clients/:id
+POST   /api/clients/:id/regenerate-secret
+```
 
 **UI Features**:
 
@@ -403,6 +556,15 @@ Response:
 - Client details view
 - Copy client_id / client_secret
 - Regenerate client_secret
+- Delete confirmation modal
+
+**Acceptance Criteria**:
+
+- ✅ Developers can create OAuth clients
+- ✅ Client credentials are generated securely
+- ✅ Developers can view/edit/delete clients
+- ✅ Client secrets are only shown once
+- ✅ Client secrets can be regenerated
 
 **Estimated Time**: 1.5 weeks
 
@@ -413,9 +575,25 @@ Response:
 **Tasks**:
 
 - [ ] Generate API keys for developers
+- [ ] Display API keys in dashboard
 - [ ] Create API reference documentation (manual)
-- [ ] Add code examples (JavaScript/TypeScript SDK)
-- [ ] Quick start guide in portal
+- [ ] Add code examples (JavaScript/TypeScript)
+- [ ] Create quick start guide
+- [ ] Document OAuth flow with examples
+
+**Documentation Pages**:
+
+- Getting Started
+- OAuth 2.1 Flow
+- API Reference
+- Code Examples (React, Node.js, etc.)
+
+**Acceptance Criteria**:
+
+- ✅ Developers can generate API keys
+- ✅ API reference is complete
+- ✅ Quick start guide exists
+- ✅ Code examples are working
 
 **Estimated Time**: 1 week
 
@@ -429,38 +607,81 @@ Response:
 
 - ✅ Developer portal (TanStack Start)
 - ✅ Self-service client registration
+- ✅ REST API for client management
 - ✅ API key management
 - ✅ Basic documentation
 
 **What You Can Do After Phase 2**:
 
 - Developers can register and create OAuth clients
-- No manual intervention needed for client creation
-- Developers have API keys to use the service
+- No manual intervention needed
+- Developers have API keys
+- Documentation available
 
 ---
 
 ## Phase 3: Production Readiness
 
-**Timeline**: 3-4 weeks
+**Timeline**: 4-6 weeks  
 **Status**: Not Started
 
-**Objective**: Make the system production-ready with proper security, monitoring, and deployment.
+**Objective**: Make the system production-ready with security, monitoring, and OIDC compliance.
+
+---
 
 #### 3.1 Security Hardening
 
 **Tasks**:
 
-- [ ] Implement rate limiting (all endpoints)
+- [ ] Implement rate limiting (fastify-rate-limit)
+  - `/auth/register`: 3 requests/hour per IP
+  - `/auth/login`: 5 requests/15min per IP
+  - `/auth/resend-verification`: 3 requests/hour per email
+  - `/oauth/token`: 10 requests/min per client
 - [ ] Add CSRF protection
 - [ ] Secure cookie settings (HttpOnly, Secure, SameSite)
-- [ ] Input validation and sanitization
-- [ ] SQL injection prevention (verify Drizzle usage)
+- [ ] Input validation and sanitization (zod)
+- [ ] SQL injection prevention (Drizzle parameterized queries)
 - [ ] XSS protection
-- [ ] Security headers (CSP, HSTS, etc.)
+- [ ] Security headers (helmet)
+  - Content-Security-Policy
+  - Strict-Transport-Security
+  - X-Frame-Options
+  - X-Content-Type-Options
 - [ ] Audit logging (all auth events)
+- [ ] Failed login attempt tracking
 
-**Estimated Time**: 1 week
+**Security Headers**:
+
+```typescript
+import helmet from '@fastify/helmet';
+
+fastify.register(helmet, {
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'self'"],
+      styleSrc: ["'self'", "'unsafe-inline'"],
+      scriptSrc: ["'self'"],
+      imgSrc: ["'self'", 'data:', 'https:'],
+    },
+  },
+  hsts: {
+    maxAge: 31536000,
+    includeSubDomains: true,
+    preload: true,
+  },
+});
+```
+
+**Acceptance Criteria**:
+
+- ✅ Rate limiting is enforced
+- ✅ CSRF attacks are prevented
+- ✅ Security headers are set
+- ✅ All inputs are validated
+- ✅ Audit logs capture all events
+
+**Estimated Time**: 1.5 weeks
 
 ---
 
@@ -471,8 +692,9 @@ Response:
 - [ ] Implement OIDC discovery endpoint (`/.well-known/openid-configuration`)
 - [ ] Implement JWKS endpoint (`/.well-known/jwks.json`)
 - [ ] Add ID token support
-- [ ] Add `nonce` parameter support
-- [ ] Implement OIDC claims (sub, email, email_verified, etc.)
+- [ ] Add nonce parameter support
+- [ ] Implement OIDC claims (sub, email, email_verified)
+- [ ] Test with OIDC validator
 
 **OIDC Discovery Response**:
 
@@ -486,11 +708,39 @@ Response:
   "response_types_supported": ["code"],
   "grant_types_supported": ["authorization_code", "refresh_token"],
   "subject_types_supported": ["public"],
-  "id_token_signing_alg_values_supported": ["EdDSA", "RS256"]
+  "id_token_signing_alg_values_supported": ["EdDSA"],
+  "scopes_supported": ["openid", "email", "profile"],
+  "token_endpoint_auth_methods_supported": ["client_secret_post", "client_secret_basic"],
+  "claims_supported": ["sub", "email", "email_verified", "name"]
 }
 ```
 
-**Estimated Time**: 1 week
+**ID Token**:
+
+```typescript
+const idToken = await new SignJWT({
+  sub: userId,
+  email: user.email,
+  email_verified: user.emailVerified,
+  nonce: nonce, // From authorization request
+})
+  .setProtectedHeader({ alg: 'EdDSA' })
+  .setIssuedAt()
+  .setExpirationTime('15m')
+  .setIssuer('https://auth.qauth.dev')
+  .setAudience(clientId)
+  .sign(privateKey);
+```
+
+**Acceptance Criteria**:
+
+- ✅ OIDC discovery endpoint works
+- ✅ JWKS endpoint returns public keys
+- ✅ ID tokens are issued correctly
+- ✅ OIDC validator tests pass
+- ✅ Nonce parameter is validated
+
+**Estimated Time**: 1.5 weeks
 
 ---
 
@@ -498,15 +748,66 @@ Response:
 
 **Tasks**:
 
-- [ ] Set up structured logging (pino or winston)
-- [ ] Add health check endpoint (`/health`)
+- [ ] Set up structured logging (pino)
 - [ ] Add metrics endpoint (`/metrics`) - Prometheus format
 - [ ] Log all authentication events
 - [ ] Log failed login attempts
 - [ ] Monitor token generation rate
 - [ ] Set up basic alerts (optional)
+- [ ] Add request ID tracking
 
-**Estimated Time**: 3-4 days
+**Structured Logging**:
+
+```typescript
+import pino from 'pino';
+
+const logger = pino({
+  level: process.env.LOG_LEVEL || 'info',
+  transport: {
+    target: 'pino-pretty',
+    options: {
+      colorize: true,
+    },
+  },
+});
+
+logger.info(
+  {
+    event: 'user.login',
+    userId: user.id,
+    email: user.email,
+    ip: req.ip,
+    userAgent: req.headers['user-agent'],
+  },
+  'User logged in successfully'
+);
+```
+
+**Metrics**:
+
+```typescript
+GET /metrics
+
+# HELP auth_login_total Total number of login attempts
+# TYPE auth_login_total counter
+auth_login_total{status="success"} 1234
+auth_login_total{status="failure"} 56
+
+# HELP auth_token_issued_total Total number of tokens issued
+# TYPE auth_token_issued_total counter
+auth_token_issued_total{type="access"} 5678
+auth_token_issued_total{type="refresh"} 3456
+```
+
+**Acceptance Criteria**:
+
+- ✅ Structured logs are written
+- ✅ Metrics endpoint works
+- ✅ All auth events are logged
+- ✅ Failed attempts are tracked
+- ✅ Request IDs are present
+
+**Estimated Time**: 1 week
 
 ---
 
@@ -519,36 +820,118 @@ Response:
 - [ ] Create docker-compose.yml (PostgreSQL + Redis + QAuth)
 - [ ] Write deployment documentation
 - [ ] Environment variable configuration
-- [ ] Database migration strategy for production
+- [ ] Database migration strategy
+- [ ] Add .dockerignore
+- [ ] Multi-stage builds for optimization
 
-**Estimated Time**: 3-4 days
+**docker-compose.yml**:
+
+```yaml
+version: '3.9'
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: qauth
+      POSTGRES_USER: qauth
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - '5432:5432'
+
+  redis:
+    image: redis:7-alpine
+    volumes:
+      - redis_data:/data
+    ports:
+      - '6379:6379'
+
+  auth-server:
+    build: ./apps/auth-server
+    environment:
+      DATABASE_URL: postgresql://qauth:${DB_PASSWORD}@postgres:5432/qauth
+      REDIS_URL: redis://redis:6379
+      JWT_PRIVATE_KEY: ${JWT_PRIVATE_KEY}
+    ports:
+      - '3000:3000'
+    depends_on:
+      - postgres
+      - redis
+
+  developer-portal:
+    build: ./apps/developer-portal
+    environment:
+      API_URL: http://auth-server:3000
+    ports:
+      - '3001:3001'
+    depends_on:
+      - auth-server
+
+volumes:
+  postgres_data:
+  redis_data:
+```
+
+**Dockerfile (auth-server)**:
+
+```dockerfile
+FROM node:24-alpine AS builder
+
+WORKDIR /app
+COPY package.json pnpm-lock.yaml ./
+RUN npm install -g pnpm && pnpm install --frozen-lockfile
+
+COPY . .
+RUN pnpm nx build auth-server --prod
+
+FROM node:24-alpine AS runner
+
+WORKDIR /app
+COPY --from=builder /app/dist/apps/auth-server ./
+COPY --from=builder /app/node_modules ./node_modules
+
+EXPOSE 3000
+CMD ["node", "main.js"]
+```
+
+**Acceptance Criteria**:
+
+- ✅ Docker images build successfully
+- ✅ docker-compose starts all services
+- ✅ Health checks work in Docker
+- ✅ Migrations run on startup
+- ✅ Deployment documentation is complete
+
+**Estimated Time**: 1 week
 
 ---
 
 ### Phase 3 Summary
 
-**Total Estimated Time**: 3-4 weeks
+**Total Estimated Time**: 4-6 weeks
 
 **Deliverables**:
 
 - ✅ Production-ready security
 - ✅ OIDC 1.0 compliance
-- ✅ Monitoring and logging
+- ✅ Monitoring and structured logging
 - ✅ Docker deployment
-- ✅ Basic deployment documentation
+- ✅ Deployment documentation
 
 **What You Can Do After Phase 3**:
 
 - Deploy to production
 - Use QAuth for real applications
 - Monitor system health
-- Comply with OIDC standards
+- Comply with OIDC 1.0 standards
 
 ---
 
 ## Phase 4+: Future Enhancements (Post-MVP)
 
-These features are NOT part of the MVP but can be added later:
+These features are NOT part of the MVP:
 
 ### Phase 4: Social Login & MFA (4-5 weeks)
 
@@ -562,10 +945,11 @@ These features are NOT part of the MVP but can be added later:
 
 - WebAuthn/Passkeys
 - Magic link authentication
-- Custom roles and permissions (RBAC)
+- Custom roles and permissions (Advanced RBAC)
 - Organizations & Teams
 - Email templates customization
 - Webhook system
+- GraphQL API
 
 ### Phase 6: Enterprise Features (8-10 weeks)
 
@@ -576,8 +960,9 @@ These features are NOT part of the MVP but can be added later:
 - SSO (Single Sign-On)
 - Audit logs UI
 
-### Phase 7: Performance & Scale (4-6 weeks)
+### Phase 7: Post-Quantum & Scale (6-8 weeks)
 
+- Hybrid ML-DSA + Ed25519 JWT signing
 - Microservices extraction (Token service → Rust)
 - Session service → Rust microservice
 - gRPC communication
@@ -588,58 +973,54 @@ These features are NOT part of the MVP but can be added later:
 
 ## 📊 MVP Development Timeline
 
-**Total Estimated Time**: 10-14 weeks (2.5-3.5 months)
+**Total Estimated Time**: 14-20 weeks (3.5-5 months)
 
 | Phase                     | Duration        | Status       |
 | ------------------------- | --------------- | ------------ |
 | Phase 0: Foundation Setup | 1-2 weeks       | In Progress  |
-| Phase 1: Core Auth        | 4-6 weeks       | Not Started  |
+| Phase 1: Core Auth        | 6-8 weeks       | Not Started  |
 | Phase 2: Developer Portal | 3-4 weeks       | Not Started  |
-| Phase 3: Production Ready | 3-4 weeks       | Not Started  |
-| **Total MVP**             | **11-16 weeks** | **Planning** |
+| Phase 3: Production Ready | 4-6 weeks       | Not Started  |
+| **Total MVP**             | **14-20 weeks** | **Planning** |
 
 ---
 
 ## 🎯 Success Metrics (Post-MVP)
 
-After completing the MVP, measure success by:
-
 **Technical Metrics**:
 
-- ✅ 100% OAuth 2.1 compliance
-- ✅ 100% OIDC 1.0 compliance
-- ✅ <100ms token validation time
-- ✅ <1s authorization flow completion
-- ✅ Zero critical security vulnerabilities
+- 100% OAuth 2.1 compliance
+- 100% OIDC 1.0 compliance
+- <100ms token validation time
+- <1s authorization flow completion
+- Zero critical security vulnerabilities
 
 **Developer Experience**:
 
-- ✅ Developer can create client in <5 minutes
-- ✅ Developer can integrate QAuth in <30 minutes
-- ✅ Clear error messages for all failures
-- ✅ Documentation covers common use cases
+- Developer can create client in <5 minutes
+- Developer can integrate QAuth in <30 minutes
+- Clear error messages for all failures
+- Documentation covers common use cases
 
 **Business Metrics**:
 
-- ✅ First paying customer (post-MVP)
-- ✅ 10 active OAuth clients
-- ✅ 100+ authenticated users across all clients
-- ✅ 99.9% uptime
+- First paying customer
+- 10 active OAuth clients
+- 100+ authenticated users across all clients
+- 99.9% uptime
 
 ---
 
 ## 🚀 Development Principles
 
-As a solo developer, follow these principles:
-
-1. **Ship Early, Ship Often**: Each phase should be deployable
-2. **Security First**: Never compromise on security for speed
-3. **Documentation Later**: Focus on working code, document when stable
-4. **Test Critical Paths**: Focus testing on auth flows, not 100% coverage
-5. **Use Existing Tools**: Don't reinvent the wheel (Drizzle, Fastify, etc.)
-6. **Simplify**: If a feature is complex, break it down or defer it
-7. **No Gold Plating**: MVP means minimum - resist feature creep
-8. **Ask for Help**: Use communities, Stack Overflow, Claude when stuck
+1. **Ship Early, Ship Often** - Each phase should be deployable
+2. **Security First** - Never compromise security for speed
+3. **Documentation Later** - Focus on working code first
+4. **Test Critical Paths** - Focus on auth flows
+5. **Use Existing Tools** - Don't reinvent the wheel
+6. **Simplify** - If complex, break down or defer
+7. **No Gold Plating** - MVP means minimum
+8. **Ask for Help** - Use communities when stuck
 
 ---
 
@@ -647,80 +1028,74 @@ As a solo developer, follow these principles:
 
 **Backend**:
 
-- ✅ **Fastify** - Web framework
-- ✅ **Drizzle ORM** - Database access
-- ✅ **PostgreSQL** - Database
-- ✅ **Redis** - Sessions and caching
-- ✅ **Rust WASM** - Password hashing (Argon2id)
-- ✅ **jsonwebtoken** (Node.js) - JWT generation (Phase 1)
-  - Later: Rust WASM for JWT signing (Phase 4+)
+- **Fastify** - Web framework
+- **Drizzle ORM** - Database access
+- **PostgreSQL** - Database
+- **Redis** - Sessions and caching
+- **@node-rs/argon2** - Password hashing (Rust native binding)
+- **jose** - JWT generation (EdDSA)
 
 **Frontend (Developer Portal)**:
 
-- ✅ **TanStack Start** - Full-stack React framework
-- ✅ **React 19** - UI library
-- ✅ **Tailwind CSS** - Styling
-- ✅ **Radix UI** - Accessible components
+- **TanStack Start** - Full-stack React framework
+- **React 19** - UI library
+- **Tailwind CSS** - Styling
+- **Radix UI** - Accessible components
 
 **DevOps**:
 
-- ✅ **Docker** - Containerization
-- ✅ **docker-compose** - Local development
-- ✅ **GitHub Actions** - CI/CD (later)
+- **Docker** - Containerization
+- **docker-compose** - Local development
+- **pino** - Structured logging
+- **helmet** - Security headers
+- **fastify-rate-limit** - Rate limiting
 
 ---
 
-## 📝 Open Questions & Decisions Needed
+## 📝 Key Decisions
 
-### For Phase 1:
+### Password Hashing
 
-- [ ] **Decision**: Use bcrypt or Argon2id for password hashing?
-  - **Recommendation**: Argon2id (OWASP recommended, post-quantum resistant)
-- [ ] **Decision**: JWT expiration time (access token)?
-  - **Recommendation**: 15 minutes (access), 7 days (refresh)
-- [ ] **Decision**: Which JWT algorithm for MVP?
-  - **Recommendation**: Ed25519 (fast, secure) → Migrate to ML-DSA later
+- **Decision**: @node-rs/argon2 (Rust native binding)
+- **Rationale**: Fast, secure, quantum-resistant, no WASM complexity
 
-### For Phase 2:
+### JWT Algorithm
 
-- [ ] **Decision**: GraphQL or REST for developer portal API?
-  - **Recommendation**: REST for MVP (simpler), GraphQL later
-- [ ] **Decision**: Email verification required for developer registration?
-  - **Recommendation**: Yes (prevent spam)
+- **Decision**: EdDSA (Ed25519) for MVP
+- **Rationale**: Fast, secure, simple. Hybrid PQC later (Phase 7)
 
-### For Phase 3:
+### JWT Expiration
 
-- [ ] **Decision**: Which cloud provider for hosted version?
-  - **Recommendation**: Defer until post-MVP
-- [ ] **Decision**: Rate limiting strategy?
-  - **Recommendation**: Redis-based, 100 req/15min for auth endpoints
+- **Decision**: 15 minutes (access), 7 days (refresh)
+- **Rationale**: Balance security and UX
+
+### Email Verification
+
+- **Decision**: Required for production use
+- **Rationale**: Prevent spam, improve security
+
+### API Style
+
+- **Decision**: REST for MVP
+- **Rationale**: Simple, standards-compliant. GraphQL in Phase 5+
+
+### Rate Limiting
+
+- **Decision**: Redis-based token bucket
+- **Rationale**: Fast, scalable, shared across instances
 
 ---
 
 ## 🔗 Related Documents
 
 - [README.md](./README.md) - Project overview
-- [CLAUDE.md](./CLAUDE.md) - Development guidelines for Claude
-- [Architecture Overview](./docs/architecture.md) - System architecture (to be created)
-- [Development Setup](./docs/development.md) - Local setup guide (to be created)
+- [CLAUDE.md](./CLAUDE.md) - Development guidelines
+- [Architecture Overview](./docs/architecture.md) - System architecture
+- [Development Setup](./docs/development.md) - Local setup guide
 
 ---
 
-## 📞 Contact & Feedback
-
-**Developer**: Taha
-**Project**: QAuth
-**Repository**: https://github.com/qauth-labs/qauth
-**License**: Apache 2.0
-
----
-
-**Last Updated**: 2025-10-14
-**Next Review**: After Phase 1 completion
-
----
-
-## Appendix A: Database Schema (Initial Draft)
+## Appendix A: Database Schema
 
 ```sql
 -- Users
@@ -733,6 +1108,20 @@ CREATE TABLE users (
   updated_at TIMESTAMP DEFAULT NOW()
 );
 
+CREATE INDEX idx_users_email ON users(email);
+
+-- Email Verification Tokens
+CREATE TABLE email_verification_tokens (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  token VARCHAR(255) UNIQUE NOT NULL,
+  user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+  expires_at TIMESTAMP NOT NULL,
+  used BOOLEAN DEFAULT FALSE,
+  created_at TIMESTAMP DEFAULT NOW()
+);
+
+CREATE INDEX idx_verification_tokens_token ON email_verification_tokens(token);
+
 -- OAuth Clients
 CREATE TABLE oauth_clients (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -740,16 +1129,20 @@ CREATE TABLE oauth_clients (
   client_secret_hash TEXT NOT NULL,
   name VARCHAR(255) NOT NULL,
   redirect_uris TEXT[] NOT NULL,
-  developer_id UUID REFERENCES users(id),
-  created_at TIMESTAMP DEFAULT NOW()
+  developer_id UUID REFERENCES users(id) ON DELETE CASCADE,
+  created_at TIMESTAMP DEFAULT NOW(),
+  updated_at TIMESTAMP DEFAULT NOW()
 );
+
+CREATE INDEX idx_clients_client_id ON oauth_clients(client_id);
+CREATE INDEX idx_clients_developer ON oauth_clients(developer_id);
 
 -- Authorization Codes
 CREATE TABLE authorization_codes (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   code VARCHAR(255) UNIQUE NOT NULL,
-  client_id VARCHAR(255) REFERENCES oauth_clients(client_id),
-  user_id UUID REFERENCES users(id),
+  client_id VARCHAR(255) REFERENCES oauth_clients(client_id) ON DELETE CASCADE,
+  user_id UUID REFERENCES users(id) ON DELETE CASCADE,
   redirect_uri TEXT NOT NULL,
   code_challenge TEXT NOT NULL,
   code_challenge_method VARCHAR(10) NOT NULL,
@@ -758,41 +1151,71 @@ CREATE TABLE authorization_codes (
   created_at TIMESTAMP DEFAULT NOW()
 );
 
+CREATE INDEX idx_auth_codes_code ON authorization_codes(code);
+CREATE INDEX idx_auth_codes_expires ON authorization_codes(expires_at);
+
 -- Refresh Tokens
 CREATE TABLE refresh_tokens (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  token TEXT UNIQUE NOT NULL,
-  user_id UUID REFERENCES users(id),
-  client_id VARCHAR(255) REFERENCES oauth_clients(client_id),
+  token_hash TEXT UNIQUE NOT NULL,
+  user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+  client_id VARCHAR(255) REFERENCES oauth_clients(client_id) ON DELETE CASCADE,
   expires_at TIMESTAMP NOT NULL,
   revoked BOOLEAN DEFAULT FALSE,
   created_at TIMESTAMP DEFAULT NOW()
 );
 
--- Sessions (Redis for MVP, optionally PostgreSQL for persistence)
--- Stored in Redis:
--- Key: session:{token}
--- Value: { user_id, client_id, expires_at }
+CREATE INDEX idx_refresh_tokens_hash ON refresh_tokens(token_hash);
+CREATE INDEX idx_refresh_tokens_user ON refresh_tokens(user_id);
+CREATE INDEX idx_refresh_tokens_expires ON refresh_tokens(expires_at);
+
+-- Audit Logs
+CREATE TABLE audit_logs (
+  id BIGSERIAL PRIMARY KEY,
+  user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+  event VARCHAR(100) NOT NULL,
+  ip_address VARCHAR(45),
+  user_agent TEXT,
+  metadata JSONB,
+  created_at TIMESTAMP DEFAULT NOW()
+);
+
+CREATE INDEX idx_audit_logs_user ON audit_logs(user_id);
+CREATE INDEX idx_audit_logs_event ON audit_logs(event);
+CREATE INDEX idx_audit_logs_created ON audit_logs(created_at);
+
+-- Sessions (optional, can use Redis only)
+-- Redis Key: session:{token}
+-- Redis Value: { user_id, client_id, expires_at }
 ```
 
 ---
 
-## Appendix B: API Endpoints Summary (Phase 1)
+## Appendix B: API Endpoints Summary
 
-| Endpoint                            | Method | Description                  |
-| ----------------------------------- | ------ | ---------------------------- |
-| `/auth/register`                    | POST   | Register new user            |
-| `/auth/login`                       | POST   | Login with email/password    |
-| `/auth/logout`                      | POST   | Logout and revoke session    |
-| `/auth/refresh`                     | POST   | Refresh access token         |
-| `/oauth/authorize`                  | GET    | OAuth authorization endpoint |
-| `/oauth/token`                      | POST   | Token exchange endpoint      |
-| `/oauth/introspect`                 | POST   | Token introspection          |
-| `/userinfo`                         | GET    | OIDC userinfo endpoint       |
-| `/.well-known/openid-configuration` | GET    | OIDC discovery (Phase 3)     |
-| `/.well-known/jwks.json`            | GET    | JWKS public keys (Phase 3)   |
-| `/health`                           | GET    | Health check (Phase 3)       |
+| Endpoint                             | Method | Description                  | Phase |
+| ------------------------------------ | ------ | ---------------------------- | ----- |
+| `/auth/register`                     | POST   | Register new user            | 1.2   |
+| `/auth/resend-verification`          | POST   | Resend verification email    | 1.3   |
+| `/auth/verify`                       | GET    | Verify email                 | 1.3   |
+| `/auth/login`                        | POST   | Login with email/password    | 1.4   |
+| `/auth/refresh`                      | POST   | Refresh access token         | 1.5   |
+| `/auth/logout`                       | POST   | Logout and revoke session    | 1.5   |
+| `/oauth/authorize`                   | GET    | OAuth authorization endpoint | 1.6   |
+| `/oauth/token`                       | POST   | Token exchange endpoint      | 1.6   |
+| `/oauth/introspect`                  | POST   | Token introspection          | 1.7   |
+| `/userinfo`                          | GET    | OIDC userinfo endpoint       | 1.7   |
+| `/health`                            | GET    | Health check                 | 1.8   |
+| `/.well-known/openid-configuration`  | GET    | OIDC discovery               | 3.2   |
+| `/.well-known/jwks.json`             | GET    | JWKS public keys             | 3.2   |
+| `/metrics`                           | GET    | Prometheus metrics           | 3.3   |
+| `/api/clients`                       | GET    | List OAuth clients           | 2.2   |
+| `/api/clients`                       | POST   | Create OAuth client          | 2.2   |
+| `/api/clients/:id`                   | GET    | Get client details           | 2.2   |
+| `/api/clients/:id`                   | PATCH  | Update client                | 2.2   |
+| `/api/clients/:id`                   | DELETE | Delete client                | 2.2   |
+| `/api/clients/:id/regenerate-secret` | POST   | Regenerate client secret     | 2.2   |
 
 ---
 
-**End of MVP-PRD v1.0**
+**End of MVP-PRD v1.1**

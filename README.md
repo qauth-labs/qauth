@@ -2,18 +2,18 @@
 
 > Post-quantum ready, headless-first identity platform. A developer-friendly alternative to Keycloak.
 
-**QAuth** is a modern, open-source authentication platform that provides flexible deployment modes to fit any use case, with post-quantum cryptography built-in from day one.
+**QAuth** is a modern, open-source authentication platform that provides flexible deployment modes with post-quantum cryptography built-in from day one.
 
 ## 🎯 How to Use QAuth
 
 ### 1. ⚡ Auth as a Service (Headless Backend)
 
-Like Supabase Auth or Auth0 - use QAuth's hosted backend with your own branded UI and domain.
+Use QAuth's hosted backend with your own branded UI and custom domain.
 
 ```typescript
 // Your branded login page, QAuth backend
 const auth = new QAuth({
-  domain: 'auth.yourapp.com', // Your custom domain
+  domain: 'auth.yourapp.com',
   mode: 'headless',
 });
 ```
@@ -26,14 +26,15 @@ const auth = new QAuth({
 
 ### 2. 🏠 Self-hosted (Full Control)
 
-Like Keycloak or AuthJS - deploy QAuth on your own infrastructure with complete control.
+Deploy QAuth on your own infrastructure with complete control.
 
 ```bash
 # Docker deployment
 docker run -p 3000:3000 qauth/auth-server
 
-# Or Kubernetes
-kubectl apply -f qauth-k8s.yaml
+# Or with docker-compose
+curl -O https://qauth.dev/docker-compose.yml
+docker-compose up -d
 ```
 
 **Perfect for:**
@@ -44,33 +45,26 @@ kubectl apply -f qauth-k8s.yaml
 
 ## 🔐 Post-Quantum Cryptography
 
-QAuth is **quantum-ready** from day one, implementing security-first hybrid approach with NIST-standardized post-quantum algorithms.
+QAuth implements a security-first hybrid approach with NIST-standardized post-quantum algorithms.
 
-### **Primary Standards (NIST 2024)**
+### Primary Standards (NIST 2024)
 
-- ✅ **ML-DSA (Dilithium3)** - Digital signatures (primary)
-- ✅ **ML-KEM (Kyber)** - Key exchange
-- ✅ **SLH-DSA (SPHINCS+)** - Backup signatures
+- **ML-DSA (Dilithium3)** - Digital signatures
+- **ML-KEM (Kyber)** - Key exchange
+- **SLH-DSA (SPHINCS+)** - Backup signatures
 
-### **Security-First Hybrid Strategy**
+### Hybrid Strategy
 
-**Defense in depth** - we use **hybrid post-quantum cryptography**:
+Defense in depth with dual protection:
 
 ```typescript
-// Hybrid PQC JWT signing
+// Hybrid PQC JWT signing (future)
 const token = await signJWT(payload, {
   algorithm: 'hybrid-mldsa-ed25519',
-  primary: 'ML-DSA-65', // PQC primary
-  fallback: 'Ed25519', // Classical fallback
+  primary: 'ML-DSA-65',
+  fallback: 'Ed25519',
 });
 ```
-
-**Security Benefits:**
-
-- 🛡️ **Quantum-safe** (NIST primary standard)
-- 🔒 **Defense in depth** (dual protection)
-- 📈 **Risk mitigation** (PQC + classical backup)
-- 🚀 **Future-proof** (ready for pure PQC transition)
 
 **Implementation:**
 
@@ -88,7 +82,6 @@ impl HybridSigner {
     pub fn sign_hybrid(&self, message: &[u8]) -> HybridSignature {
         let pqc_sig = sign(message, &self.pqc_keypair.1);
         let classical_sig = self.classical_keypair.0.sign(message);
-
         HybridSignature {
             pqc: pqc_sig,
             classical: classical_sig,
@@ -99,40 +92,31 @@ impl HybridSigner {
 
 **Migration Timeline:**
 
-- **2026**: Hybrid ML-DSA + Ed25519 for JWT signatures
-- **2027**: Data-driven decision (pure PQC if mature)
-- **2028**: Gradual transition based on real-world validation
+- **2026**: Ed25519 for JWT signatures (MVP)
+- **2027**: Hybrid ML-DSA + Ed25519 transition
+- **2028**: Pure PQC evaluation
 
 ## 🎯 Vision
 
 A modern, developer-first alternative to Keycloak:
 
-- ✅ **Headless-first** - API-first architecture, use any UI you want
-- ✅ **Modern Stack** - TypeScript + Rust hybrid
-- ✅ **Developer Experience** - Excellent DX, simple setup
-- ✅ **Standards Compliant** - OAuth 2.1, OIDC 1.0, PKCE
-- ✅ **Production Ready** - Security-first, scalable
-- ✅ **Flexible Deployment** - Cloud, self-hosted, or hybrid
-
-Whatever your needs, QAuth adapts to you:
-
-- Avoid building user registration and login systems from scratch
-- Use OAuth 2.0 / OpenID Connect protocols out of the box
-- Manage client applications through the developer portal
-- Deploy on our cloud, your cloud, or on-premise
+- **Headless-first** - API-first architecture, use any UI
+- **Modern Stack** - TypeScript + Rust hybrid
+- **Developer Experience** - Simple setup, excellent DX
+- **Standards Compliant** - OAuth 2.1, OIDC 1.0, PKCE
+- **Production Ready** - Security-first, scalable
+- **Flexible Deployment** - Cloud, self-hosted, or hybrid
 
 ## 🏗️ Architecture
-
-**Modular Monolith → Microservices Evolution Strategy**
 
 ### Phase 1: Modular Monolith (TypeScript + Rust WASM)
 
 ```
 ┌────────────────────────────────────────────────┐
-│         Auth Server (TypeScript/Bun)           │
+│         Auth Server (TypeScript/Node.js)       │
 │                                                │
 │  ┌──────────────────────────────────────────┐  │
-│  │  API Layer (GraphQL + REST)              │  │
+│  │  API Layer (REST)                        │  │
 │  └──────────────────────────────────────────┘  │
 │                      ↓                         │
 │  ┌──────────────────────────────────────────┐  │
@@ -159,7 +143,6 @@ Whatever your needs, QAuth adapts to you:
 ```
 ┌──────────────────────┐
 │  API Gateway (TS)    │
-│  • GraphQL           │
 │  • REST              │
 └──────────────────────┘
           ↓ gRPC
@@ -178,7 +161,7 @@ qauth/
 ├── apps/
 │   ├── auth-server/          # Core auth server (Fastify)
 │   ├── developer-portal/     # Developer console (TanStack Start)
-│   ├── auth-ui/              # Login/Register UI (TanStack Start, SPA mode)
+│   ├── auth-ui/              # Login/Register UI (TanStack Start, SPA)
 │   └── admin-panel/          # Admin dashboard (TanStack Start)
 │
 ├── libs/
@@ -200,7 +183,7 @@ qauth/
 │   ├── ui/
 │   │   └── components/       # Shared React components
 │   │
-│   ├── proto/                # gRPC/Protobuf definitions
+│   ├── proto/                # gRPC/Protobuf definitions (future)
 │   │   ├── token.proto
 │   │   └── session.proto
 │   │
@@ -216,70 +199,82 @@ qauth/
 
 ## 🚀 Features
 
-### Core Authentication Features (All Modes)
+### MVP (Q1 2026)
 
-- ✅ OAuth 2.1 / OpenID Connect 1.0 support
-- ✅ Email/Password authentication
-- ✅ Social login (Google, GitHub, etc.)
-- ✅ Multi-factor authentication (MFA)
-- ✅ WebAuthn / Passkeys
-- ✅ Role-based access control (RBAC)
-- ✅ Session management
-- ✅ JWT token management
+**Core Authentication:**
 
-### Auth as a Service Mode Features
+- OAuth 2.1 / OpenID Connect 1.0 support
+- Email/Password authentication
+- JWT token management
+- Session management
+- Role-based access control (RBAC)
+- Rate limiting
+- Audit logging
 
-- ✅ Multi-tenancy support
-- ✅ Custom domains (auth.yourapp.com)
-- ✅ White-label authentication
-- ✅ Headless REST API (bring your own UI)
-- ✅ Webhook notifications
-- ✅ Usage metrics and analytics
-- ✅ Developer portal with GraphQL API
-- ✅ OAuth 2.1 & OIDC compliant endpoints
+**Developer Tools:**
 
-### Self-hosted Mode Features
+- Developer portal
+- Client app management
+- REST API
+- Basic documentation
+- TypeScript SDK
 
-- ✅ Docker + Kubernetes deployment
-- ✅ Complete data ownership
-- ✅ On-premise installation
-- ✅ Custom extensions & plugins
-- ✅ LDAP/Active Directory integration
-- ✅ Air-gapped environment support
-- ✅ Migration tools from other platforms
+**Deployment:**
 
-### Platform Features (All Modes)
+- Docker deployment
+- Self-hosted support
+- PostgreSQL + Redis
 
-- ✅ Audit logging
-- ✅ Rate limiting
-- ✅ Custom branding support
-- ✅ High performance (Rust WASM)
-- ✅ OpenTelemetry observability
-- ✅ TypeScript SDKs
+### Post-MVP (Q2+ 2026)
+
+**Advanced Authentication:**
+
+- Social login (Google, GitHub, Microsoft)
+- Multi-factor authentication (TOTP, SMS)
+- WebAuthn / Passkeys
+- Magic link authentication
+
+**Enterprise Features:**
+
+- SAML 2.0 support
+- LDAP/Active Directory integration
+- Multi-tenancy support
+- Custom domains
+- Organizations & Teams
+- Advanced RBAC
+
+**Platform:**
+
+- Webhook notifications
+- Usage metrics and analytics
+- Custom branding support
+- High availability
+- Multi-region support
+- GraphQL API
 
 ## 🛠️ Technology Stack
 
 **Backend:**
 
-- **Runtime**: Node.js 24 LTS (active October 28, 2025)
+- **Runtime**: Node.js 24 LTS
 - **Language**: TypeScript + Rust (WASM)
-- **Framework**: Fastify (high performance)
-- **API**: REST (OAuth 2.1/OIDC) + GraphQL (Developer Portal)
-- **ORM**: Drizzle ORM (lightweight, type-safe)
+- **Framework**: Fastify
+- **API**: REST (OAuth 2.1/OIDC)
+- **ORM**: Drizzle ORM
 - **Database**: PostgreSQL
 - **Cache/Session**: Redis
 
 **Frontend:**
 
-- **Meta-framework**: TanStack Start (full-stack, type-safe)
+- **Meta-framework**: TanStack Start
 - **Framework**: React 19
-- **Router**: TanStack Router (file-based, type-safe)
-- **Data Fetching**: TanStack Query + Server Functions
+- **Router**: TanStack Router
+- **Data Fetching**: TanStack Query
 - **Build Tool**: Vite
-- **UI Primitives**: Radix UI (accessible, headless)
+- **UI Primitives**: Radix UI
 - **Styling**: Tailwind CSS
-- **Tables**: TanStack Table (admin/portal)
-- **Forms**: TanStack Form (type-safe forms)
+- **Tables**: TanStack Table
+- **Forms**: TanStack Form
 
 **Infrastructure:**
 
@@ -291,56 +286,13 @@ qauth/
 
 **Performance Critical (Rust WASM):**
 
-- **Crypto**: JWT signing/verification, password hashing (Argon2id, ML-DSA)
-- **Token Validation**: High-frequency token validation
-- **Encoding**: High-throughput encoding/decoding operations
-
-**Why This Stack?**
-
-- **Node.js 24 LTS**: V8 13.6, URLPattern API, enhanced permissions model
-- **Fastify**: High-performance, security-focused, perfect for auth
-- **REST + GraphQL Hybrid**: Standards-compliant auth (REST) + flexible portal (GraphQL)
-- **TanStack Start**: Full-stack type-safety, SSR optional per route, server functions
-- **TanStack Ecosystem**: Router, Query, Table, Form - all type-safe and integrated
-- **Radix UI + Tailwind**: Accessible primitives + utility-first CSS, fully customizable
-- **Drizzle ORM**: Lightweight (~7KB), SQL-like, zero overhead, type-safe
-- **Rust WASM**: Performance-critical crypto operations (JWT, hashing)
-- **PostgreSQL**: ACID compliance, perfect for auth data integrity
-
-**API Architecture:**
-
-```
-Core Auth (REST):           Developer Portal (GraphQL):
-├── /oauth/*               ├── Client management
-├── /oidc/*                ├── Analytics queries
-├── /auth/*                ├── User management
-└── /.well-known/*         └── Webhook configuration
-```
-
-**Frontend Architecture:**
-
-```typescript
-// Auth UI routes - SPA mode (fast load critical)
-export const Route = createFileRoute('/login')({
-  component: Login,
-  // No SSR - fastest possible load
-});
-
-// Developer Portal - SSR for SEO
-export const Route = createFileRoute('/dashboard')({
-  loader: async () => getClients(), // Server-side
-  component: Dashboard,
-});
-
-// Type-safe server functions
-const createClient = createServerFn('POST', async (data) => {
-  return await db.client.create({ data });
-});
-```
+- Crypto operations (JWT, password hashing)
+- Token validation
+- High-throughput encoding/decoding
 
 ## 🚀 Quick Start
 
-### **1. Auth as a Service Mode (Recommended)**
+### Auth as a Service Mode
 
 ```typescript
 // Your custom domain, QAuth backend
@@ -352,7 +304,7 @@ const auth = new QAuth({
 });
 ```
 
-### **2. Self-hosted Mode**
+### Self-hosted Mode
 
 ```bash
 # Docker deployment
@@ -363,18 +315,15 @@ curl -O https://qauth.dev/docker-compose.yml
 docker-compose up -d
 ```
 
-**For developers:** See [Development Setup](./docs/development.md)  
-**For production:** See [Deployment Guide](./docs/deployment.md)
-
 ## 🗺️ Roadmap
 
 ### Phase 1: Foundation (MVP) - Q1 2026
 
-- [ ] Core auth server (TypeScript)
+- [ ] Core auth server (TypeScript/Fastify)
 - [ ] Email/Password authentication
 - [ ] OAuth 2.1 flows (Authorization Code + PKCE)
 - [ ] PostgreSQL + Redis setup
-- [ ] Basic admin API
+- [ ] Basic REST API
 - [ ] Rust WASM crypto module
 
 ### Phase 2: Developer Portal - Q2 2026
@@ -383,7 +332,7 @@ docker-compose up -d
 - [ ] Client app management (CRUD)
 - [ ] API keys & secrets
 - [ ] Basic documentation
-- [ ] SDK (JavaScript/TypeScript)
+- [ ] JavaScript/TypeScript SDK
 
 ### Phase 3: Production Ready - Q3 2026
 
@@ -408,10 +357,11 @@ docker-compose up -d
 - [ ] Session service → Rust microservice
 - [ ] Global CDN integration
 - [ ] Advanced analytics
+- [ ] GraphQL API
 - [ ] Enterprise features
 - [ ] Multi-region support
 
-## 🧩 SDK Usage Examples (Future)
+## 🧩 SDK Usage Examples
 
 ### Auth as a Service Mode
 
@@ -423,51 +373,48 @@ npm install @qauth/core
 import { QAuth } from '@qauth/core';
 
 const auth = new QAuth({
-  domain: 'auth.yourapp.com', // Your custom domain
+  domain: 'auth.yourapp.com',
   projectId: 'your-project-id',
   apiKey: 'your-api-key',
 });
 
-// Your own login UI
+// Sign in
 const { user, session } = await auth.signInWithPassword({
   email: 'user@example.com',
   password: 'password',
 });
 
-// Your own signup UI
+// Sign up
 await auth.signUp({
   email: 'newuser@example.com',
   password: 'securepass',
-  metadata: { plan: 'pro' }, // Your custom data
+  metadata: { plan: 'pro' },
 });
 
-// Get user session
+// Get session
 const session = await auth.getSession();
-// { accessToken: '...', refreshToken: '...', user: {...} }
 ```
 
 ### Self-hosted Mode
 
 ```typescript
-// Point SDK to your self-hosted instance
 import { QAuth } from '@qauth/core';
 
 const auth = new QAuth({
   mode: 'self-hosted',
-  baseUrl: 'https://auth.yourcompany.com', // Your server
+  baseUrl: 'https://auth.yourcompany.com',
   clientId: 'internal-app',
 });
 
-// Same API, your infrastructure
 await auth.loginWithRedirect();
 ```
 
-### React SDK Examples
+### React SDK
 
 ```typescript
 import { QAuthProvider, useAuth } from '@qauth/react';
 
-// Auth as a Service mode
+// Auth as a Service
 function App() {
   return (
     <QAuthProvider
@@ -480,7 +427,7 @@ function App() {
   );
 }
 
-// Self-hosted mode
+// Self-hosted
 function App() {
   return (
     <QAuthProvider
@@ -504,72 +451,70 @@ function Dashboard() {
 }
 ```
 
-## 📊 Which Mode Should I Choose?
+## 📊 Deployment Modes
 
-| Feature             | Auth as a Service  | Self-hosted            |
-| ------------------- | ------------------ | ---------------------- |
-| **Setup Time**      | 15 minutes         | 1-2 hours              |
-| **Infrastructure**  | None (we host)     | You manage             |
-| **Custom Domain**   | ✅                 | ✅                     |
-| **Custom Branding** | ✅                 | ✅                     |
-| **Data Location**   | Our servers        | Your servers           |
-| **Compliance**      | Standard           | Full control           |
-| **Pricing**         | Usage-based        | Free (self-host costs) |
-| **Best For**        | Branded apps       | Enterprise/Compliance  |
-| **User Experience** | Your branded login | Your branded login     |
-| **Maintenance**     | Zero               | You manage             |
+| Feature             | Auth as a Service | Self-hosted            |
+| ------------------- | ----------------- | ---------------------- |
+| **Setup Time**      | 15 minutes        | 1-2 hours              |
+| **Infrastructure**  | None (we host)    | You manage             |
+| **Custom Domain**   | ✅                | ✅                     |
+| **Custom Branding** | ✅                | ✅                     |
+| **Data Location**   | Our servers       | Your servers           |
+| **Compliance**      | Standard          | Full control           |
+| **Pricing**         | Usage-based       | Free (self-host costs) |
+| **Best For**        | Startups/Products | Enterprise/Compliance  |
+| **Maintenance**     | Zero              | You manage             |
 
 ### Quick Decision Guide
 
 **Choose Auth as a Service if:**
 
-- You need custom branding but don't want infrastructure
+- You need custom branding without infrastructure
 - You're building a startup/product
 - You want API-first headless auth
-- You want to focus on your product, not auth infrastructure
+- You want to focus on your product
 
 **Choose Self-hosted if:**
 
-- You have compliance requirements (GDPR, HIPAA, etc.)
+- You have compliance requirements (GDPR, HIPAA)
 - You need complete data sovereignty
 - You're an enterprise with existing infrastructure
 - You want to avoid vendor lock-in
-- You want to customize everything
 
 ## 📚 Documentation
 
 **Getting Started:**
 
-- [Quick Start Guide](./docs/quick-start.md) - Get started in 5 minutes
-- [Architecture Overview](./docs/architecture.md) - System architecture details
-- [Setup Guide](./docs/setup.md) - Development environment setup
+- [Quick Start Guide](./docs/quick-start.md)
+- [Architecture Overview](./docs/architecture.md)
+- [Setup Guide](./docs/setup.md)
 
 **Deployment Modes:**
 
-- [Auth as a Service Mode](./docs/auth-service.md) - Headless auth backend setup
-- [Self-hosted Mode](./docs/self-hosted.md) - Deploy on your infrastructure
+- [Auth as a Service Mode](./docs/auth-service.md)
+- [Self-hosted Mode](./docs/self-hosted.md)
 
 **Technical Documentation:**
 
-- [Authentication Flow](./docs/authentication.md) - Auth flow explanations
-- [API Reference](./docs/api.md) - REST & GraphQL API documentation
-- [SDK Documentation](./docs/sdk.md) - Client SDK usage
-- [Hybrid Architecture](./docs/hybrid-architecture.md) - TypeScript + Rust integration
+- [Authentication Flow](./docs/authentication.md)
+- [API Reference](./docs/api.md)
+- [SDK Documentation](./docs/sdk.md)
+- [Hybrid Architecture](./docs/hybrid-architecture.md)
 
 **Advanced Topics:**
 
-- [Multi-tenancy](./docs/multi-tenancy.md) - Multi-tenant architecture
-- [Custom Domains](./docs/custom-domains.md) - Setup custom domains
-- [Migration Guide](./docs/migration.md) - Migrate from other platforms
-- [Security Best Practices](./docs/security.md) - Security guidelines
+- [Multi-tenancy](./docs/multi-tenancy.md)
+- [Custom Domains](./docs/custom-domains.md)
+- [Migration Guide](./docs/migration.md)
+- [Security Best Practices](./docs/security.md)
 
 ## 🤝 Contributing
 
-We welcome contributions! Please see our [Contributing Guide](./CONTRIBUTING.md).
+We welcome contributions! See our [Contributing Guide](./CONTRIBUTING.md).
 
 ## 📄 License
 
-This project is licensed under the Apache License 2.0 - see the [LICENSE](./LICENSE) file for details.
+Apache License 2.0 - see [LICENSE](./LICENSE) file for details.
 
 Copyright © 2025 QAuth Labs
 
@@ -585,6 +530,6 @@ Copyright © 2025 QAuth Labs
 
 **Note**: This project is under active development and is not yet ready for production use.
 
-## 🙏 Acknowledgments
+## 🤲 Acknowledgments
 
-Inspired by excellent projects: Keycloak, Ory, Auth0, Clerk, and Supabase Auth.
+Inspired by: Keycloak, Ory, Auth0, Clerk, and Supabase Auth.
