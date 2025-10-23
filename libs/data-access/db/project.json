@@ -3,6 +3,47 @@
   "$schema": "../../../node_modules/nx/schemas/project-schema.json",
   "sourceRoot": "libs/data-access/db/src",
   "projectType": "library",
-  "tags": [],
-  "// targets": "to see all targets run: nx show project db --web"
+  "tags": ["scope:data-access", "type:db"],
+  "targets": {
+    "db:generate": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "drizzle-kit generate",
+        "cwd": "libs/data-access/db"
+      },
+      "description": "Generate database migrations"
+    },
+    "db:migrate": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "drizzle-kit migrate",
+        "cwd": "libs/data-access/db"
+      },
+      "description": "Run database migrations"
+    },
+    "db:studio": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "drizzle-kit studio",
+        "cwd": "libs/data-access/db"
+      },
+      "description": "Open Drizzle Studio for database management"
+    },
+    "db:push": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "drizzle-kit push",
+        "cwd": "libs/data-access/db"
+      },
+      "description": "Push schema changes directly to database (dev only)"
+    },
+    "db:drop": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "drizzle-kit drop",
+        "cwd": "libs/data-access/db"
+      },
+      "description": "Drop all tables (DANGER: use with caution)"
+    }
+  }
 }
