@@ -2,6 +2,8 @@
 
 Redis connection and caching utilities for the QAuth project.
 
+> **Note**: This is P0 infrastructure setup. When Fastify auth-server is implemented, this will be refactored into a Fastify plugin for proper lifecycle management and dependency injection.
+
 ## Overview
 
 This library provides a comprehensive Redis integration for QAuth, including:

@@ -113,6 +113,10 @@ export function getRedis(): Redis {
 export async function testConnection(): Promise<boolean> {
   try {
     const client = getRedis();
+    // Connect if not already connected (lazyConnect: true)
+    if (client.status === 'wait') {
+      await client.connect();
+    }
     await client.ping();
     return true;
   } catch (error) {
@@ -147,12 +151,3 @@ export async function gracefulShutdown(): Promise<void> {
   await closeRedis();
   console.log('Redis: Graceful shutdown completed');
 }
-
-// Handle process termination
-process.on('SIGINT', gracefulShutdown);
-process.on('SIGTERM', gracefulShutdown);
-process.on('beforeExit', gracefulShutdown);
-
-// Export default Redis instance
-export const redisClient = getRedis();
-export default redisClient;
