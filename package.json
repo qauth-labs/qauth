@@ -49,6 +49,7 @@
     "@swc-node/register": "~1.9.1",
     "@swc/core": "~1.5.7",
     "@swc/helpers": "~0.5.11",
+    "@types/ioredis": "^5.0.0",
     "@types/node": "20.19.9",
     "@types/pg": "^8.15.5",
     "drizzle-kit": "^0.31.5",
@@ -73,6 +74,7 @@
   "dependencies": {
     "dotenv": "^17.2.3",
     "drizzle-orm": "^0.44.6",
+    "ioredis": "^5.8.2",
     "pg": "^8.16.3"
   }
 }

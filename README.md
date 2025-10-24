@@ -283,6 +283,7 @@ qauth/
 - **Containerization**: Docker
 - **Orchestration**: Kubernetes ready
 - **Observability**: OpenTelemetry
+- **Cache/Session**: Redis with ioredis
 
 **Performance Critical (Rust WASM):**
 

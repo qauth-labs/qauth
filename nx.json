@@ -21,11 +21,11 @@
           "watchDepsName": "watch-deps"
         }
       },
-      "exclude": ["libs/data-access/db/*"]
+      "exclude": ["libs/data-access/db/*", "libs/data-access/cache/*"]
     },
     {
       "plugin": "@nx/js/typescript",
-      "include": ["libs/data-access/db/*"],
+      "include": ["libs/data-access/db/*", "libs/data-access/cache/*"],
       "options": {
         "typecheck": {
           "targetName": "typecheck"
