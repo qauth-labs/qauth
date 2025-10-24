@@ -9,6 +9,7 @@
     "skipLibCheck": true,
     "baseUrl": ".",
     "paths": {
+      "@qauth/cache": ["libs/data-access/cache/src/index.ts"],
       "@qauth/db": ["libs/data-access/db/src/index.ts"]
     },
     "esModuleInterop": true,
