@@ -20,4 +20,4 @@ coverage/
 .DS_Store
 Thumbs.db
 
-plans/
+.cursor/plans/
