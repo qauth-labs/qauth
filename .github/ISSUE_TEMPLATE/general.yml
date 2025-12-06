@@ -1,0 +1,123 @@
+name: General Task
+description: General task template for QAuth MVP development
+title: '[Task] '
+labels: []
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ## QAuth Task Template
+        Use this template for tracking development tasks in the QAuth MVP.
+
+  - type: dropdown
+    id: phase
+    attributes:
+      label: Phase
+      description: Which MVP phase does this task belong to?
+      options:
+        - Phase 0: Foundation Setup
+        - Phase 1: Core Authentication
+        - Phase 2: Developer Portal
+        - Phase 3: Production Readiness
+        - Other
+    validations:
+      required: true
+
+  - type: dropdown
+    id: type
+    attributes:
+      label: Task Type
+      description: What type of task is this?
+      options:
+        - Backend (API/Server)
+        - Frontend (UI/Portal)
+        - Database (Schema/Migrations)
+        - Infrastructure (Docker/Deployment)
+        - Documentation
+        - Testing
+        - Security
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: Brief description of the task
+      placeholder: 'Example: Create base Fastify server structure with health check endpoint'
+    validations:
+      required: true
+
+  - type: textarea
+    id: tasks
+    attributes:
+      label: Tasks
+      description: Checkbox list of tasks to complete
+      placeholder: |
+        - [ ] Task 1
+        - [ ] Task 2
+        - [ ] Task 3
+      render: markdown
+    validations:
+      required: true
+
+  - type: textarea
+    id: technical-details
+    attributes:
+      label: Technical Details
+      description: Technical details, code examples, architecture notes (optional)
+      placeholder: |
+        Code examples, configuration details, important decisions.
+
+        Example:
+        ```typescript
+        // Implementation details here
+        ```
+      render: markdown
+    validations:
+      required: false
+
+  - type: textarea
+    id: acceptance-criteria
+    attributes:
+      label: Acceptance Criteria
+      description: Criteria that indicate task completion
+      placeholder: |
+        - [ ] Criterion 1
+        - [ ] Criterion 2
+        - [ ] Criterion 3
+      render: markdown
+    validations:
+      required: true
+
+  - type: textarea
+    id: notes
+    attributes:
+      label: Additional Notes
+      description: Additional notes, warnings, MVP limitations (optional)
+      placeholder: |
+        Any additional context, limitations, or notes.
+
+        Example: This is a simplified approach for MVP. Full implementation will be in Phase X.
+      render: markdown
+    validations:
+      required: false
+
+  - type: markdown
+    attributes:
+      value: |
+        **Note**: Use GitHub's issue relationships (closes, relates to, blocks, etc.) in the issue description or PR to link related issues. Don't add issue numbers here.
+
+  - type: textarea
+    id: references
+    attributes:
+      label: References
+      description: Related documents, PRD sections, external documentation links (optional)
+      placeholder: |
+        - MVP-PRD.md - Phase X, Section Y
+        - [Fastify Documentation](https://www.fastify.io/)
+        - [Drizzle ORM Docs](https://orm.drizzle.team/)
+      render: markdown
+    validations:
+      required: false

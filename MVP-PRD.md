@@ -55,8 +55,8 @@ QAuth is a post-quantum ready, headless-first identity platform designed as a de
 - [x] Set up ESLint + Prettier
 - [x] Configure Husky + commitlint
 - [x] Create project documentation
-- [ ] Set up database schema (PostgreSQL + Drizzle ORM)
-- [ ] Set up Redis connection
+- [x] Set up database schema (PostgreSQL + Drizzle ORM)
+- [x] Set up Redis connection
 - [ ] Create base Fastify server structure
 - [ ] Set up environment configuration
 
