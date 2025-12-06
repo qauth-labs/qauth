@@ -1,24 +1,19 @@
-import { db, pool, testConnection } from '@qauth/db';
-import { FastifyInstance } from 'fastify';
+import { closeDatabase, type DatabasePool, db, pool, testConnection } from '@qauth/db';
+import type { FastifyInstance, FastifyPluginOptions } from 'fastify';
 import fp from 'fastify-plugin';
-import { Pool } from 'pg';
 
 declare module 'fastify' {
   interface FastifyInstance {
     db: typeof db;
-    dbPool: Pool;
+    dbPool: DatabasePool;
   }
-}
-
-export interface DatabasePluginOptions {
-  connectionString?: string;
 }
 
 /**
  * Fastify plugin for database connection
  * Decorates fastify instance with db and dbPool
  */
-export const databasePlugin = fp<DatabasePluginOptions>(
+export const databasePlugin = fp<FastifyPluginOptions>(
   async (fastify: FastifyInstance) => {
     fastify.decorate('db', db);
     fastify.decorate('dbPool', pool);
@@ -34,7 +29,7 @@ export const databasePlugin = fp<DatabasePluginOptions>(
 
     fastify.addHook('onClose', async () => {
       fastify.log.info('Closing database connection...');
-      await pool.end();
+      await closeDatabase();
       fastify.log.info('Database connection closed');
     });
   },

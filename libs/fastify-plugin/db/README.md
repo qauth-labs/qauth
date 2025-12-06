@@ -85,21 +85,7 @@ fastify.get('/health', async (request, reply) => {
 await fastify.register(databasePlugin, options?);
 ```
 
-**Options**: `DatabasePluginOptions`
-
-```typescript
-interface DatabasePluginOptions {
-  connectionString?: string; // Optional: override default connection string
-}
-```
-
-**Example with custom connection string**:
-
-```typescript
-await fastify.register(databasePlugin, {
-  connectionString: 'postgresql://user:pass@localhost:5432/mydb',
-});
-```
+**Options**: Currently accepts standard Fastify plugin options. No custom options are required. The plugin uses the connection configuration from `@qauth/db`, which reads from environment variables (e.g., `DATABASE_URL`).
 
 ### Fastify Instance Decorators
 

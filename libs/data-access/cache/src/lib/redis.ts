@@ -1,6 +1,28 @@
 import Redis, { RedisOptions } from 'ioredis';
 
 /**
+ * TODO: Refactor Redis implementation to proper abstraction layer
+ *
+ * Current implementation directly exposes ioredis Redis instance and methods.
+ * Future refactoring should:
+ * - Wrap Redis operations in a proper CacheClient interface/class
+ * - Abstract away ioredis-specific methods (e.g., `quit()`, `status`, etc.)
+ * - Create a clean API that can work with any cache implementation (Redis, Memcached, etc.)
+ * - Ensure external API remains stable even if internal implementation changes
+ *
+ * This will allow:
+ * - Replacing Redis with other cache implementations without breaking consumers
+ * - Better testability with mock implementations
+ * - Cleaner separation of concerns
+ */
+
+/**
+ * Cache client type - abstracted from implementation
+ * Currently uses ioredis Redis, but can be replaced with other cache implementations
+ */
+export type CacheClient = Redis;
+
+/**
  * Redis connection configuration interface
  */
 export interface RedisConfig {
@@ -99,6 +121,11 @@ export function createRedisConnection(): Redis {
 
 /**
  * Get Redis connection instance
+ *
+ * TODO: This function directly returns ioredis Redis instance.
+ * Should be refactored to return a wrapped CacheClient that abstracts
+ * implementation details. This will allow replacing Redis with other
+ * cache implementations without breaking consumers.
  */
 export function getRedis(): Redis {
   if (!redis) {

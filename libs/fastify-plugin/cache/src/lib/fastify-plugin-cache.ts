@@ -1,17 +1,21 @@
-import { getRedis, testConnection } from '@qauth/cache';
-import { FastifyInstance, FastifyPluginOptions } from 'fastify';
+import { getRedis, testConnection, type CacheClient } from '@qauth/cache';
+import type { FastifyInstance, FastifyPluginOptions } from 'fastify';
 import fp from 'fastify-plugin';
-import { Redis } from 'ioredis';
 
 declare module 'fastify' {
   interface FastifyInstance {
-    redis: Redis;
+    redis: CacheClient;
   }
 }
 
 /**
  * Fastify plugin for Redis connection
  * Decorates fastify instance with redis
+ *
+ * TODO: Currently uses ioredis-specific methods (e.g., `redis.quit()`).
+ * After refactoring @qauth/cache to proper abstraction, this should use
+ * abstracted methods (e.g., `redis.close()` or similar) instead of
+ * implementation-specific methods.
  */
 export const cachePlugin = fp<FastifyPluginOptions>(
   async (fastify: FastifyInstance, options: FastifyPluginOptions) => {
