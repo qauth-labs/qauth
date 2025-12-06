@@ -140,6 +140,41 @@ if (!isConnected) {
 }
 ```
 
+## Fastify Integration
+
+For Fastify applications, use the [`@qauth/fastify-plugin-db`](../../fastify-plugin/db/README.md) plugin which wraps this library and provides:
+
+- Automatic database connection lifecycle management
+- Fastify instance decoration with `fastify.db` (Drizzle ORM) and `fastify.dbPool` (connection pool)
+- Integration with Fastify's `onReady` and `onClose` hooks
+- TypeScript type definitions for Fastify
+
+**Example with Fastify**:
+
+```typescript
+import Fastify from 'fastify';
+import { databasePlugin } from '@qauth/fastify-plugin-db';
+
+const fastify = Fastify();
+
+// Register the database plugin
+await fastify.register(databasePlugin);
+
+// Use Drizzle ORM via fastify.db (when schemas are available in P1)
+fastify.get('/users', async (request, reply) => {
+  // const users = await fastify.db.select().from(usersTable);
+  return { users: [] };
+});
+
+// Or use connection pool directly
+fastify.get('/health', async (request, reply) => {
+  const result = await fastify.dbPool.query('SELECT NOW()');
+  return { timestamp: result.rows[0].now };
+});
+```
+
+The Fastify plugin automatically manages the database connection lifecycle, so you don't need to manually call `closeDatabase()` when using the plugin.
+
 ## What's Next (P1)
 
 The following features will be implemented in Phase 1:
@@ -150,6 +185,10 @@ The following features will be implemented in Phase 1:
 - Audit logging tables
 - Complete CRUD operations
 - Database seeding and fixtures
+
+## Related Libraries
+
+- [`@qauth/fastify-plugin-db`](../../fastify-plugin/db/README.md): Fastify plugin wrapper for this library
 
 ## Dependencies
 
