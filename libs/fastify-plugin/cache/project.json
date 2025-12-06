@@ -1,0 +1,9 @@
+{
+  "name": "fastify-plugin-cache",
+  "$schema": "../../../node_modules/nx/schemas/project-schema.json",
+  "sourceRoot": "libs/fastify-plugin/cache/src",
+  "projectType": "library",
+  "tags": ["scope:fastify-plugin", "type:cache"],
+  "// targets": "to see all targets run: nx show project fastify-plugin-cache --web",
+  "targets": {}
+}
