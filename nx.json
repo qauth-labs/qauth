@@ -21,16 +21,33 @@
           "watchDepsName": "watch-deps"
         }
       },
-      "exclude": ["libs/data-access/db/*", "libs/data-access/cache/*"]
+      "exclude": [
+        "libs/data-access/db/*",
+        "libs/data-access/cache/*",
+        "libs/fastify-plugin/db/*",
+        "libs/fastify-plugin/cache/*"
+      ]
     },
     {
       "plugin": "@nx/js/typescript",
-      "include": ["libs/data-access/db/*", "libs/data-access/cache/*"],
+      "include": [
+        "libs/data-access/db/*",
+        "libs/data-access/cache/*",
+        "libs/fastify-plugin/db/*",
+        "libs/fastify-plugin/cache/*"
+      ],
       "options": {
         "typecheck": {
           "targetName": "typecheck"
         }
       }
     }
-  ]
+  ],
+  "targetDefaults": {
+    "@nx/esbuild:esbuild": {
+      "cache": true,
+      "dependsOn": ["^build"],
+      "inputs": ["default", "^default"]
+    }
+  }
 }

@@ -278,7 +278,7 @@ qauth/
 
 **Infrastructure:**
 
-- **Monorepo**: Nx 21.x
+- **Monorepo**: Nx 22.1.3
 - **Package Manager**: pnpm
 - **Containerization**: Docker
 - **Orchestration**: Kubernetes ready

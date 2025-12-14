@@ -2,6 +2,12 @@ import * as dotenv from 'dotenv';
 import { drizzle } from 'drizzle-orm/node-postgres';
 import { Pool } from 'pg';
 
+/**
+ * Database pool type - abstracted from implementation
+ * Currently uses pg Pool, but provides abstraction for potential future changes
+ */
+export type DatabasePool = Pool;
+
 // Load environment variables
 dotenv.config();
 

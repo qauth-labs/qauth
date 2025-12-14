@@ -2,7 +2,7 @@
 
 Redis connection and caching utilities for the QAuth project.
 
-> **Note**: This is P0 infrastructure setup. When Fastify auth-server is implemented, this will be refactored into a Fastify plugin for proper lifecycle management and dependency injection.
+> **Note**: This is the core cache library. For Fastify integration, use [`@qauth/fastify-plugin-cache`](../../fastify-plugin/cache/README.md) which wraps this library and provides Fastify-specific lifecycle management.
 
 ## Overview
 
@@ -220,6 +220,43 @@ import { gracefulShutdown } from '@qauth/cache';
 await gracefulShutdown();
 ```
 
+## Fastify Integration
+
+For Fastify applications, use the [`@qauth/fastify-plugin-cache`](../../fastify-plugin/cache/README.md) plugin which wraps this library and provides:
+
+- Automatic Redis connection lifecycle management
+- Fastify instance decoration with `fastify.redis`
+- Integration with Fastify's `onReady` and `onClose` hooks
+- TypeScript type definitions for Fastify
+
+**Example with Fastify**:
+
+```typescript
+import Fastify from 'fastify';
+import { cachePlugin } from '@qauth/fastify-plugin-cache';
+import { SessionUtils } from '@qauth/cache';
+
+const fastify = Fastify();
+
+// Register the cache plugin
+await fastify.register(cachePlugin);
+
+// Use Redis directly via fastify.redis
+fastify.get('/cache', async (request, reply) => {
+  const value = await fastify.redis.get('key');
+  return { value };
+});
+
+// Or use utility functions (they use the same Redis connection)
+fastify.post('/session', async (request, reply) => {
+  const { userId, data } = request.body;
+  await SessionUtils.setSession(userId, data, 3600);
+  return { success: true };
+});
+```
+
+The Fastify plugin automatically manages the Redis connection lifecycle, so you don't need to manually call `gracefulShutdown()` when using the plugin.
+
 ## Best Practices
 
 1. **Key Naming**: Use descriptive, hierarchical keys
@@ -252,6 +289,10 @@ This library is designed as P0 infrastructure to support:
 - **P1 Caching**: User data and application state caching
 
 The utility classes provide a foundation for these features while keeping the current implementation focused on connection and basic operations.
+
+## Related Libraries
+
+- [`@qauth/fastify-plugin-cache`](../../fastify-plugin/cache/README.md): Fastify plugin wrapper for this library
 
 ## Dependencies
 
