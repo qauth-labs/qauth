@@ -40,11 +40,19 @@ DB_POOL_CONNECTION_TIMEOUT=2000
 
 ### 2. Database Setup
 
-Ensure you have PostgreSQL running and create a database:
+**QAuth requires PostgreSQL 18 or later** for native `uuidv7()` support.
+
+Ensure you have PostgreSQL 18+ running and create a database:
 
 ```sql
 CREATE DATABASE qauth_dev;
 ```
+
+**Why PostgreSQL 18+?**
+
+- Native `uuidv7()` function (no extension needed)
+- Better performance with time-ordered UUIDs
+- Modern PostgreSQL features
 
 ## Usage
 
