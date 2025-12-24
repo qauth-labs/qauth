@@ -21,3 +21,4 @@ coverage/
 Thumbs.db
 
 .cursor/plans/
+local-*

@@ -4,15 +4,19 @@ This library provides database connectivity and management for the QAuth platfor
 
 ## Overview
 
-This is the foundational database module for Phase 0 (P0) - configuration only, no actual table schemas. The actual database schemas will be implemented in Phase 1 (P1).
+This library provides the complete database schema and connection management for QAuth, an OAuth 2.1/OIDC authentication server. It includes all necessary tables for user management, OAuth clients, tokens, sessions, audit logging, and multi-tenancy support.
 
 ## Features
 
-- PostgreSQL connection management with connection pooling
-- Drizzle ORM integration
-- Migration system ready for use
-- Database connection utilities and testing functions
-- Nx integration for consistent tooling
+- **Complete OAuth 2.1/OIDC Schema**: All tables needed for authentication and authorization
+- **Multi-tenancy Support**: Realm-based isolation for multiple tenants
+- **PostgreSQL Optimizations**: UUIDv7 primary keys, JSONB for flexible data, optimized indexes
+- **Type Safety**: TypeScript enums for grant types, response types, and other constants
+- **PostgreSQL connection management** with connection pooling
+- **Drizzle ORM integration** with full schema definitions
+- **Migration system** ready for use
+- **Database connection utilities** and testing functions
+- **Nx integration** for consistent tooling
 
 ## Setup
 
@@ -47,20 +51,41 @@ CREATE DATABASE qauth_dev;
 ### Basic Database Connection
 
 ```typescript
-import { db, pool, testConnection } from '@qauth/data-access/db';
+import { db, pool, testConnection, schema } from '@qauth/db';
+const { users, oauthClients, realms } = schema;
 
 // Test database connection
 const isConnected = await testConnection();
 console.log('Database connected:', isConnected);
 
-// Use Drizzle ORM
-// Note: Actual schemas will be available in P1
+// Use Drizzle ORM with schemas
+import { db, schema } from '@qauth/db';
+const { users, realms, oauthClients } = schema;
+
+const allUsers = await db.select().from(users);
+const realm = await db.query.realms.findFirst({
+  where: (realms, { eq }) => eq(realms.name, 'my-realm'),
+});
+
+// Create a new OAuth client
+const newClient = await db
+  .insert(oauthClients)
+  .values({
+    realmId: realm.id,
+    clientId: 'my-app',
+    clientSecretHash: 'argon2id_hash_here',
+    name: 'My Application',
+    redirectUris: ['https://myapp.com/callback'],
+    grantTypes: ['authorization_code', 'refresh_token'],
+    responseTypes: ['code'],
+  })
+  .returning();
 ```
 
 ### Connection Pool Management
 
 ```typescript
-import { pool, closeDatabase } from '@qauth/data-access/db';
+import { pool, closeDatabase } from '@qauth/db';
 
 // Direct pool access if needed
 const client = await pool.connect();
@@ -110,18 +135,52 @@ libs/data-access/db/
 │   ├── lib/
 │   │   ├── db.ts              # Database connection and utilities
 │   │   └── schema/
-│   │       └── index.ts       # Database schemas (empty in P0)
+│   │       ├── index.ts        # Main schema exports
+│   │       ├── core.ts         # Core tables: realms, users, oauth_clients
+│   │       ├── tokens.ts       # Token tables: email_verification, authorization_codes, refresh_tokens
+│   │       ├── sessions.ts     # Session management
+│   │       ├── audit.ts        # Audit logging
+│   │       ├── roles.ts        # Roles and permissions
+│   │       ├── enums.ts        # PostgreSQL enum types
+│   │       └── sql-helpers.ts  # SQL helper functions
 │   └── index.ts               # Public API exports
 ├── drizzle.config.ts          # Drizzle configuration
 ├── project.json               # Nx project configuration
 └── README.md                  # This file
 ```
 
+## Schema Overview
+
+### Core Tables
+
+- **realms**: Multi-tenancy support, each realm is an isolated tenant
+- **users**: User accounts with email normalization and password hashing
+- **oauth_clients**: OAuth 2.1 client registrations with PKCE support
+
+### Token Tables
+
+- **email_verification_tokens**: Email verification tokens with expiration
+- **authorization_codes**: OAuth authorization codes with PKCE challenges
+- **refresh_tokens**: Refresh tokens with rotation support
+
+### Additional Tables
+
+- **sessions**: User sessions (optional, can use Redis instead)
+- **audit_logs**: Comprehensive audit logging for security events
+- **roles**: Role-based access control (Phase 5+)
+- **user_roles**: User-role assignments
+
+### Key Features
+
+- **UUIDv7 Primary Keys**: Time-ordered UUIDs for better index performance
+- **JSONB Columns**: Flexible storage for metadata, policies, and arrays
+- **PostgreSQL Enums**: Type-safe enums for grant types, response types, auth methods
+- **Optimized Indexes**: Composite indexes, partial indexes for active records
+- **Multi-tenancy**: All data scoped to realms for isolation
+
 ## Development
 
-### Adding New Schemas (P1)
-
-When implementing actual database schemas in P1:
+### Adding New Schemas
 
 1. Create schema files in `src/lib/schema/`
 2. Export them from `src/lib/schema/index.ts`
@@ -131,7 +190,7 @@ When implementing actual database schemas in P1:
 ### Testing Database Connection
 
 ```typescript
-import { testConnection } from '@qauth/data-access/db';
+import { testConnection } from '@qauth/db';
 
 // Test in your application startup
 const isConnected = await testConnection();
@@ -160,10 +219,13 @@ const fastify = Fastify();
 // Register the database plugin
 await fastify.register(databasePlugin);
 
-// Use Drizzle ORM via fastify.db (when schemas are available in P1)
+// Use Drizzle ORM via fastify.db
+import { schema } from '@qauth/db';
+const { users, oauthClients } = schema;
+
 fastify.get('/users', async (request, reply) => {
-  // const users = await fastify.db.select().from(usersTable);
-  return { users: [] };
+  const allUsers = await fastify.db.select().from(users);
+  return { users: allUsers };
 });
 
 // Or use connection pool directly
@@ -175,16 +237,35 @@ fastify.get('/health', async (request, reply) => {
 
 The Fastify plugin automatically manages the database connection lifecycle, so you don't need to manually call `closeDatabase()` when using the plugin.
 
-## What's Next (P1)
+## Schema Design Principles
 
-The following features will be implemented in Phase 1:
+### Performance Optimizations
 
-- User authentication tables (users, sessions, etc.)
-- OAuth 2.1 client management tables
-- Post-quantum cryptography key storage
-- Audit logging tables
-- Complete CRUD operations
+- **UUIDv7 Primary Keys**: Time-ordered UUIDs provide better B-tree index performance
+- **BIGINT Timestamps**: Epoch milliseconds for efficient storage and queries
+- **JSONB for Arrays**: Efficient storage and querying of arrays (grant_types, scopes, etc.)
+- **Composite Indexes**: Optimized for common query patterns
+- **Partial Indexes**: Index only active/valid records (e.g., `WHERE used = false`)
+
+### Type Safety
+
+- **PostgreSQL Enums**: Database-level validation for grant types, response types, auth methods
+- **TypeScript Types**: Full type safety with Drizzle ORM
+- **JSONB Types**: Typed JSONB columns for metadata and policies
+
+### Security
+
+- **Password Hashing**: Argon2id for user passwords and client secrets
+- **Token Hashing**: SHA-256 hashes for refresh tokens (never store plain tokens)
+- **Audit Logging**: Comprehensive logging of all security events
+- **Multi-tenancy**: Complete data isolation between realms
+
+## Future Enhancements
+
+- Post-quantum cryptography key storage (Phase 7)
 - Database seeding and fixtures
+- Advanced query optimizations
+- Read replicas support
 
 ## Related Libraries
 

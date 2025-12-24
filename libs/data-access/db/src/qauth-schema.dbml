@@ -1,0 +1,315 @@
+// QAuth Database Schema
+// Optimized, performant, and complete schema for OAuth 2.1/OIDC authentication server
+// Generated from Drizzle ORM schema for visualization on dbdiagram.io
+
+// ============================================================================
+// ENUMS
+// ============================================================================
+
+Enum "token_endpoint_auth_method" {
+  "client_secret_post" [note: "Client credentials in POST body (default)"]
+  "client_secret_basic" [note: "Client credentials in HTTP Basic Auth header"]
+  "private_key_jwt" [note: "JWT signed with private key"]
+  "none" [note: "Public client (no authentication)"]
+}
+
+Enum "ssl_required" {
+  "none" [note: "SSL never required"]
+  "external" [note: "SSL required for external requests only"]
+  "all" [note: "SSL required for all requests"]
+}
+
+Enum "code_challenge_method" {
+  "S256" [note: "SHA256 (only supported method - plain text is insecure and not supported)"]
+}
+
+Enum "grant_type" {
+  "authorization_code" [note: "Authorization Code Flow (with PKCE)"]
+  "refresh_token" [note: "Refresh Token Flow"]
+  "client_credentials" [note: "Client Credentials Flow (for service-to-service)"]
+}
+
+Enum "response_type" {
+  "code" [note: "Authorization Code (only supported in OAuth 2.1)"]
+}
+
+Enum "audit_event_type" {
+  "auth" [note: "Authentication events (login, logout, register)"]
+  "token" [note: "Token events (issued, refreshed, revoked)"]
+  "client" [note: "Client events (created, updated, deleted)"]
+  "security" [note: "Security events (failed login, suspicious activity)"]
+  "user" [note: "User management events"]
+  "realm" [note: "Realm management events"]
+}
+
+// ============================================================================
+// CORE TABLES
+// ============================================================================
+
+Table "realms" {
+  "id" uuid [pk, default: `uuidv7()`]
+  "name" varchar(255) [not null, unique]
+  "enabled" boolean [not null, default: true]
+  "access_token_lifespan" bigint [default: 900, note: "15 minutes in seconds"]
+  "refresh_token_lifespan" bigint [default: 604800, note: "7 days in seconds"]
+  "ssl_required" "ssl_required" [default: 'external']
+  "verify_email" boolean [not null, default: true]
+  "registration_allowed" boolean [not null, default: false]
+  "login_with_email_allowed" boolean [not null, default: true]
+  "duplicate_emails_allowed" boolean [not null, default: false]
+  "password_policy" jsonb [note: "Password policy configuration: { minLength, requireUppercase, requireDigits, etc. }"]
+  "sso_idle_timeout" bigint [note: "in seconds"]
+  "sso_max_lifespan" bigint [note: "in seconds"]
+  "revoke_refresh_token" boolean [not null, default: false]
+  "refresh_token_max_reuse" integer [default: 0, note: "0 = unlimited"]
+  "default_locale" varchar(10)
+  "supported_locales" jsonb [default: `'[]'::jsonb`]
+  "metadata" jsonb [note: "Additional realm configuration"]
+  "created_at" bigint [not null, default: `EXTRACT(EPOCH FROM NOW())::bigint * 1000`]
+  "updated_at" bigint [not null, default: `EXTRACT(EPOCH FROM NOW())::bigint * 1000`]
+
+  Indexes {
+    enabled [name: "idx_realms_enabled", note: "Partial index: WHERE enabled = true"]
+  }
+}
+
+Table "users" {
+  "id" uuid [pk, default: `uuidv7()`]
+  "realm_id" uuid [not null, ref: > realms.id]
+  "email" varchar(255) [not null]
+  "email_normalized" varchar(255) [not null, note: "Lowercase for case-insensitive lookup"]
+  "password_hash" text [not null]
+  "email_verified" boolean [not null, default: false]
+  "enabled" boolean [not null, default: true]
+  "first_name" varchar(255)
+  "last_name" varchar(255)
+  "metadata" jsonb [note: "Flexible storage for additional user data"]
+  "created_at" bigint [not null, default: `EXTRACT(EPOCH FROM NOW())::bigint * 1000`]
+  "updated_at" bigint [not null, default: `EXTRACT(EPOCH FROM NOW())::bigint * 1000`]
+  "last_login_at" bigint
+  "email_verified_at" bigint
+
+  Indexes {
+    (realm_id, email_normalized) [unique, name: "idx_users_realm_email_normalized_unique"]
+    email [name: "idx_users_email"]
+    realm_id [name: "idx_users_realm_id"]
+    enabled [name: "idx_users_enabled", note: "Partial index: WHERE enabled = true"]
+    (realm_id, email_normalized, enabled) [name: "idx_users_realm_email_enabled"]
+  }
+}
+
+Table "email_verification_tokens" {
+  "id" uuid [pk, default: `uuidv7()`]
+  "token" varchar(255) [not null, unique]
+  "user_id" uuid [not null, ref: > users.id]
+  "expires_at" bigint [not null]
+  "used" boolean [not null, default: false]
+  "used_at" bigint
+  "created_at" bigint [not null, default: `EXTRACT(EPOCH FROM NOW())::bigint * 1000`]
+
+  Indexes {
+    user_id [name: "idx_email_verification_tokens_user_id"]
+    (token, expires_at) [name: "idx_email_verification_tokens_active", note: "Partial index: WHERE used = false"]
+    expires_at [name: "idx_email_verification_tokens_expires_at"]
+  }
+}
+
+Table "oauth_clients" {
+  "id" uuid [pk, default: `uuidv7()`]
+  "realm_id" uuid [not null, ref: > realms.id]
+  "client_id" varchar(255) [not null]
+  "client_secret_hash" text [not null, note: "Argon2id hash"]
+  "name" varchar(255) [not null]
+  "description" text
+  "redirect_uris" jsonb [not null, note: "Array of allowed redirect URIs"]
+  "scopes" jsonb [not null, default: `'[]'::jsonb`, note: "Default OAuth scopes"]
+  "enabled" boolean [not null, default: true]
+  "require_pkce" boolean [not null, default: true, note: "PKCE required by default (OAuth 2.1)"]
+  "token_endpoint_auth_method" "token_endpoint_auth_method" [not null, default: 'client_secret_post']
+  "grant_types" jsonb [not null, default: `'["authorization_code","refresh_token"]'::jsonb`, note: "Array of grant_type enum values"]
+  "response_types" jsonb [not null, default: `'["code"]'::jsonb`, note: "Array of response_type enum values"]
+  "developer_id" uuid [ref: > users.id, note: "Nullable for system clients"]
+  "metadata" jsonb [note: "Additional client configuration"]
+  "created_at" bigint [not null, default: `EXTRACT(EPOCH FROM NOW())::bigint * 1000`]
+  "updated_at" bigint [not null, default: `EXTRACT(EPOCH FROM NOW())::bigint * 1000`]
+  "last_used_at" bigint
+
+  Indexes {
+    (realm_id, client_id) [unique, name: "idx_oauth_clients_realm_client_id_unique"]
+    client_id [name: "idx_oauth_clients_client_id"]
+    realm_id [name: "idx_oauth_clients_realm_id"]
+    developer_id [name: "idx_oauth_clients_developer_id"]
+    enabled [name: "idx_oauth_clients_enabled", note: "Partial index: WHERE enabled = true"]
+    (realm_id, client_id, enabled) [name: "idx_oauth_clients_realm_client_id_enabled"]
+  }
+}
+
+Table "authorization_codes" {
+  "id" uuid [pk, default: `uuidv7()`]
+  "code" varchar(255) [not null, unique]
+  "oauth_client_id" uuid [not null, ref: > oauth_clients.id]
+  "user_id" uuid [not null, ref: > users.id]
+  "redirect_uri" text [not null]
+  "code_challenge" text [not null, note: "PKCE code challenge"]
+  "code_challenge_method" "code_challenge_method" [not null, default: 'S256']
+  "nonce" varchar(255) [note: "OIDC nonce parameter"]
+  "scopes" jsonb [not null, default: `'[]'::jsonb`]
+  "state" varchar(255) [note: "CSRF protection state parameter"]
+  "expires_at" bigint [not null, note: "TTL: 5 minutes"]
+  "used" boolean [not null, default: false, note: "Single-use codes"]
+  "used_at" bigint
+  "created_at" bigint [not null, default: `EXTRACT(EPOCH FROM NOW())::bigint * 1000`]
+
+  Indexes {
+    (code, expires_at) [name: "idx_authorization_codes_active", note: "Partial index: WHERE used = false"]
+    expires_at [name: "idx_authorization_codes_expires_at"]
+    user_id [name: "idx_authorization_codes_user_id"]
+    oauth_client_id [name: "idx_authorization_codes_oauth_client_id"]
+  }
+}
+
+Table "refresh_tokens" {
+  "id" uuid [pk, default: `uuidv7()`]
+  "token_hash" text [not null, unique]
+  "user_id" uuid [not null, ref: > users.id]
+  "oauth_client_id" uuid [not null, ref: > oauth_clients.id]
+  "scopes" jsonb [not null, default: `'[]'::jsonb`]
+  "expires_at" bigint [not null, note: "TTL: 7 days"]
+  "revoked" boolean [not null, default: false]
+  "revoked_at" bigint
+  "revoked_reason" varchar(255) [note: "e.g., 'user_logout', 'security_breach'"]
+  "previous_token_hash" text [note: "Hash of previous token if rotated"]
+  "created_at" bigint [not null, default: `EXTRACT(EPOCH FROM NOW())::bigint * 1000`]
+  "last_used_at" bigint
+
+  Indexes {
+    (token_hash, expires_at) [name: "idx_refresh_tokens_active", note: "Partial index: WHERE revoked = false"]
+    expires_at [name: "idx_refresh_tokens_expires_at"]
+    user_id [name: "idx_refresh_tokens_user_id"]
+    oauth_client_id [name: "idx_refresh_tokens_oauth_client_id"]
+    (user_id, expires_at) [name: "idx_refresh_tokens_user_active", note: "Partial index: WHERE revoked = false"]
+  }
+}
+
+Table "audit_logs" {
+  "id" uuid [pk, default: `uuidv7()`]
+  "user_id" uuid [ref: > users.id, note: "Nullable for system events"]
+  "oauth_client_id" uuid [ref: > oauth_clients.id, note: "Nullable for system events"]
+  "event" varchar(100) [not null, note: "e.g., 'user.login', 'user.register', 'token.issued'"]
+  "event_type" "audit_event_type" [not null]
+  "success" boolean [not null, default: true]
+  "ip_address" varchar(45) [note: "IPv6 compatible"]
+  "user_agent" text
+  "metadata" jsonb [note: "Additional event data"]
+  "created_at" bigint [not null, default: `EXTRACT(EPOCH FROM NOW())::bigint * 1000`]
+
+  Indexes {
+    user_id [name: "idx_audit_logs_user_id"]
+    oauth_client_id [name: "idx_audit_logs_oauth_client_id"]
+    event_type [name: "idx_audit_logs_event_type"]
+    event [name: "idx_audit_logs_event"]
+    created_at [name: "idx_audit_logs_created_at"]
+    (user_id, event, created_at) [name: "idx_audit_logs_user_event"]
+    (event, created_at) [name: "idx_audit_logs_failed", note: "Partial index: WHERE success = false"]
+    ip_address [name: "idx_audit_logs_ip_address"]
+  }
+}
+
+// ============================================================================
+// OPTIONAL: SESSION MANAGEMENT (can use Redis instead)
+// ============================================================================
+
+Table "sessions" {
+  "id" uuid [pk, default: `uuidv7()`]
+  "user_id" uuid [not null, ref: > users.id]
+  "oauth_client_id" uuid [ref: > oauth_clients.id]
+  "access_token_hash" text [note: "SHA-256 hash of current access token"]
+  "refresh_token_hash" text [note: "SHA-256 hash of current refresh token"]
+  "ip_address" varchar(45)
+  "user_agent" text
+  "expires_at" bigint [not null]
+  "revoked" boolean [not null, default: false]
+  "revoked_at" bigint
+  "created_at" bigint [not null, default: `EXTRACT(EPOCH FROM NOW())::bigint * 1000`]
+  "last_activity_at" bigint [not null, default: `EXTRACT(EPOCH FROM NOW())::bigint * 1000`]
+
+  Indexes {
+    user_id [name: "idx_sessions_user_id"]
+    (user_id, expires_at) [name: "idx_sessions_active", note: "Partial index: WHERE revoked = false"]
+    expires_at [name: "idx_sessions_expires_at"]
+    access_token_hash [name: "idx_sessions_access_token_hash"]
+    oauth_client_id [name: "idx_sessions_oauth_client_id"]
+  }
+}
+
+// ============================================================================
+// FUTURE: ROLES & PERMISSIONS (Phase 5+)
+// ============================================================================
+
+Table "roles" {
+  "id" uuid [pk, default: `uuidv7()`]
+  "realm_id" uuid [not null, ref: > realms.id]
+  "name" varchar(255) [not null]
+  "description" text
+  "oauth_client_id" uuid [ref: > oauth_clients.id, note: "Client-specific roles (if set, role is scoped to that client)"]
+  "enabled" boolean [not null, default: true]
+  "metadata" jsonb
+  "created_at" bigint [not null, default: `EXTRACT(EPOCH FROM NOW())::bigint * 1000`]
+  "updated_at" bigint [not null, default: `EXTRACT(EPOCH FROM NOW())::bigint * 1000`]
+
+  Indexes {
+    (realm_id, name, oauth_client_id) [unique, name: "idx_roles_realm_name_unique"]
+    name [name: "idx_roles_name"]
+    realm_id [name: "idx_roles_realm_id"]
+    oauth_client_id [name: "idx_roles_oauth_client_id"]
+  }
+}
+
+Table "user_roles" {
+  "user_id" uuid [not null, ref: > users.id]
+  "role_id" uuid [not null, ref: > roles.id]
+  "assigned_at" bigint [not null, default: `EXTRACT(EPOCH FROM NOW())::bigint * 1000`]
+  "assigned_by" uuid [ref: > users.id]
+
+  Indexes {
+    (user_id, role_id) [pk, name: "user_roles_pk"]
+    user_id [name: "idx_user_roles_user_id"]
+    role_id [name: "idx_user_roles_role_id"]
+  }
+}
+
+// ============================================================================
+// RELATIONSHIPS
+// ============================================================================
+
+// Note: Foreign key relationships are defined inline in table definitions above
+// using the ref: syntax. The following are additional relationship notes:
+
+// REALMS (Multi-tenancy):
+// - Each realm is an isolated tenant
+// - Realms can have multiple users, clients, roles, etc.
+// - All data is scoped to a realm for isolation
+
+// Users can have:
+// - Belongs to one realm
+// - Multiple email verification tokens
+// - Multiple authorization codes
+// - Multiple refresh tokens
+// - Multiple sessions
+// - Multiple audit logs
+// - Multiple OAuth clients (as developer)
+// - Multiple roles (via user_roles)
+
+// OAuth clients can have:
+// - Belongs to one realm
+// - Multiple authorization codes (via oauth_client_id)
+// - Multiple refresh tokens (via oauth_client_id)
+// - Multiple sessions (via oauth_client_id)
+// - Multiple roles (client-specific, via oauth_client_id)
+// - Multiple audit logs (via oauth_client_id)
+
+// Roles can have:
+// - Belongs to one realm
+// - Multiple users (via user_roles)
+// - Optionally scoped to a specific client
+

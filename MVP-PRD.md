@@ -1,7 +1,7 @@
 # QAuth - MVP Product Requirements Document (PRD)
 
-> **Version**: 1.1
-> **Last Updated**: 2025-10-21
+> **Version**: 1.2
+> **Last Updated**: 2025-01-27
 > **Author**: Muhammed Taha Ayan
 > **Status**: Planning Phase
 
@@ -31,11 +31,12 @@ QAuth is a post-quantum ready, headless-first identity platform designed as a de
 - Multi-factor authentication (MFA)
 - WebAuthn/Passkeys
 - SAML support
-- Multi-tenancy
 - Custom domains
-- Advanced RBAC
+- Advanced RBAC (basic roles supported)
 - Microservices architecture
 - GraphQL API
+
+**Note**: Multi-tenancy is included in MVP via realms table for data isolation, but advanced multi-tenancy features (custom domains, tenant management UI) are not included.
 
 ---
 
@@ -57,15 +58,15 @@ QAuth is a post-quantum ready, headless-first identity platform designed as a de
 - [x] Create project documentation
 - [x] Set up database schema (PostgreSQL + Drizzle ORM)
 - [x] Set up Redis connection
-- [ ] Create base Fastify server structure
-- [ ] Set up environment configuration
+- [x] Create base Fastify server structure
+- [x] Set up environment configuration
 
 #### Deliverables
 
 - ✅ Working Nx workspace
 - ✅ Code quality tools configured
-- ⏳ Database schema defined
-- ⏳ Basic server running
+- ✅ Database schema defined
+- ✅ Basic server running
 
 ---
 
@@ -82,14 +83,18 @@ QAuth is a post-quantum ready, headless-first identity platform designed as a de
 
 **Tasks**:
 
-- [ ] Design database schema
-  - Users table (id, email, password_hash, email_verified, created_at, updated_at)
-  - Sessions table (id, user_id, token, expires_at, created_at)
-  - OAuth clients table (id, client_id, client_secret_hash, name, redirect_uris, created_at)
-  - Authorization codes table (id, code, client_id, user_id, redirect_uri, code_challenge, expires_at)
-  - Refresh tokens table (id, token_hash, user_id, client_id, expires_at)
+- [x] Design database schema
+  - Realms table (multi-tenancy support)
+  - Users table (id, realm_id, email, password_hash, email_verified, created_at, updated_at)
+  - Sessions table (id, user_id, oauth_client_id, expires_at, created_at)
+  - OAuth clients table (id, realm_id, client_id, client_secret_hash, name, redirect_uris, grant_types, response_types, created_at)
+  - Authorization codes table (id, code, oauth_client_id, user_id, redirect_uri, code_challenge, code_challenge_method, expires_at, used)
+  - Refresh tokens table (id, token_hash, user_id, oauth_client_id, expires_at, revoked)
   - Email verification tokens table (id, token, user_id, expires_at, used)
-- [ ] Set up Drizzle ORM schemas
+  - Audit logs table (id, user_id, oauth_client_id, event, event_type, success, ip_address, created_at)
+  - Roles table (id, realm_id, name, oauth_client_id, enabled) - Phase 5+
+  - User roles table (user_id, role_id) - Phase 5+
+- [x] Set up Drizzle ORM schemas
 - [ ] Create database migrations
 - [ ] Write basic CRUD operations
 
@@ -1097,97 +1102,140 @@ These features are NOT part of the MVP:
 
 ## Appendix A: Database Schema
 
+> **Note**: This is a simplified SQL representation. The actual implementation uses Drizzle ORM with TypeScript schemas. For the complete, up-to-date schema, see `libs/data-access/db/src/lib/schema/` or the DBML file at `libs/data-access/db/src/qauth-schema.dbml`.
+
+### Key Design Decisions
+
+- **UUIDv7 Primary Keys**: Time-ordered UUIDs for better B-tree index performance and chronological sorting
+- **BIGINT Timestamps**: Epoch milliseconds (not TIMESTAMP) for efficient storage and timezone-independent queries
+- **JSONB Columns**: Flexible storage for metadata, arrays (grant_types, scopes), and policies (password_policy)
+- **PostgreSQL Enums**: Type-safe enums for grant types, response types, token endpoint auth methods, etc.
+- **Multi-tenancy**: All data scoped to realms for complete isolation
+- **Optimized Indexes**: Composite indexes, partial indexes for active records, unique constraints at column level
+
+### Schema Overview
+
 ```sql
--- Users
-CREATE TABLE users (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  email VARCHAR(255) UNIQUE NOT NULL,
-  password_hash TEXT NOT NULL,
-  email_verified BOOLEAN DEFAULT FALSE,
-  created_at TIMESTAMP DEFAULT NOW(),
-  updated_at TIMESTAMP DEFAULT NOW()
+-- PostgreSQL Enums (must be created first)
+CREATE TYPE token_endpoint_auth_method AS ENUM ('client_secret_post', 'client_secret_basic', 'private_key_jwt', 'none');
+CREATE TYPE ssl_required AS ENUM ('none', 'external', 'all');
+CREATE TYPE code_challenge_method AS ENUM ('S256');
+CREATE TYPE grant_type AS ENUM ('authorization_code', 'refresh_token', 'client_credentials');
+CREATE TYPE response_type AS ENUM ('code');
+CREATE TYPE audit_event_type AS ENUM ('auth', 'token', 'client', 'security', 'user', 'realm');
+
+-- Realms (Multi-tenancy)
+CREATE TABLE realms (
+  id UUID PRIMARY KEY DEFAULT uuidv7(),
+  name VARCHAR(255) UNIQUE NOT NULL,
+  enabled BOOLEAN DEFAULT TRUE,
+  access_token_lifespan BIGINT DEFAULT 900,
+  refresh_token_lifespan BIGINT DEFAULT 604800,
+  ssl_required ssl_required DEFAULT 'external',
+  password_policy JSONB,
+  created_at BIGINT NOT NULL DEFAULT (EXTRACT(EPOCH FROM NOW())::bigint * 1000),
+  updated_at BIGINT NOT NULL DEFAULT (EXTRACT(EPOCH FROM NOW())::bigint * 1000)
 );
 
-CREATE INDEX idx_users_email ON users(email);
+-- Users
+CREATE TABLE users (
+  id UUID PRIMARY KEY DEFAULT uuidv7(),
+  realm_id UUID NOT NULL REFERENCES realms(id) ON DELETE CASCADE,
+  email VARCHAR(255) NOT NULL,
+  email_normalized VARCHAR(255) NOT NULL,
+  password_hash TEXT NOT NULL,
+  email_verified BOOLEAN DEFAULT FALSE,
+  enabled BOOLEAN DEFAULT TRUE,
+  created_at BIGINT NOT NULL DEFAULT (EXTRACT(EPOCH FROM NOW())::bigint * 1000),
+  updated_at BIGINT NOT NULL DEFAULT (EXTRACT(EPOCH FROM NOW())::bigint * 1000)
+);
+
+CREATE UNIQUE INDEX idx_users_realm_email_normalized_unique ON users(realm_id, email_normalized);
 
 -- Email Verification Tokens
 CREATE TABLE email_verification_tokens (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  id UUID PRIMARY KEY DEFAULT uuidv7(),
   token VARCHAR(255) UNIQUE NOT NULL,
-  user_id UUID REFERENCES users(id) ON DELETE CASCADE,
-  expires_at TIMESTAMP NOT NULL,
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  expires_at BIGINT NOT NULL,
   used BOOLEAN DEFAULT FALSE,
-  created_at TIMESTAMP DEFAULT NOW()
+  created_at BIGINT NOT NULL DEFAULT (EXTRACT(EPOCH FROM NOW())::bigint * 1000)
 );
-
-CREATE INDEX idx_verification_tokens_token ON email_verification_tokens(token);
 
 -- OAuth Clients
 CREATE TABLE oauth_clients (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  client_id VARCHAR(255) UNIQUE NOT NULL,
+  id UUID PRIMARY KEY DEFAULT uuidv7(),
+  realm_id UUID NOT NULL REFERENCES realms(id) ON DELETE CASCADE,
+  client_id VARCHAR(255) NOT NULL,
   client_secret_hash TEXT NOT NULL,
   name VARCHAR(255) NOT NULL,
-  redirect_uris TEXT[] NOT NULL,
-  developer_id UUID REFERENCES users(id) ON DELETE CASCADE,
-  created_at TIMESTAMP DEFAULT NOW(),
-  updated_at TIMESTAMP DEFAULT NOW()
+  redirect_uris JSONB NOT NULL,
+  grant_types JSONB NOT NULL DEFAULT '["authorization_code","refresh_token"]'::jsonb,
+  response_types JSONB NOT NULL DEFAULT '["code"]'::jsonb,
+  token_endpoint_auth_method token_endpoint_auth_method NOT NULL DEFAULT 'client_secret_post',
+  require_pkce BOOLEAN DEFAULT TRUE,
+  enabled BOOLEAN DEFAULT TRUE,
+  created_at BIGINT NOT NULL DEFAULT (EXTRACT(EPOCH FROM NOW())::bigint * 1000),
+  updated_at BIGINT NOT NULL DEFAULT (EXTRACT(EPOCH FROM NOW())::bigint * 1000)
 );
 
-CREATE INDEX idx_clients_client_id ON oauth_clients(client_id);
-CREATE INDEX idx_clients_developer ON oauth_clients(developer_id);
+CREATE UNIQUE INDEX idx_oauth_clients_realm_client_id_unique ON oauth_clients(realm_id, client_id);
 
 -- Authorization Codes
 CREATE TABLE authorization_codes (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  id UUID PRIMARY KEY DEFAULT uuidv7(),
   code VARCHAR(255) UNIQUE NOT NULL,
-  client_id VARCHAR(255) REFERENCES oauth_clients(client_id) ON DELETE CASCADE,
-  user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+  oauth_client_id UUID NOT NULL REFERENCES oauth_clients(id) ON DELETE CASCADE,
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   redirect_uri TEXT NOT NULL,
   code_challenge TEXT NOT NULL,
-  code_challenge_method VARCHAR(10) NOT NULL,
-  expires_at TIMESTAMP NOT NULL,
+  code_challenge_method code_challenge_method NOT NULL DEFAULT 'S256',
+  expires_at BIGINT NOT NULL,
   used BOOLEAN DEFAULT FALSE,
-  created_at TIMESTAMP DEFAULT NOW()
+  created_at BIGINT NOT NULL DEFAULT (EXTRACT(EPOCH FROM NOW())::bigint * 1000)
 );
-
-CREATE INDEX idx_auth_codes_code ON authorization_codes(code);
-CREATE INDEX idx_auth_codes_expires ON authorization_codes(expires_at);
 
 -- Refresh Tokens
 CREATE TABLE refresh_tokens (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  id UUID PRIMARY KEY DEFAULT uuidv7(),
   token_hash TEXT UNIQUE NOT NULL,
-  user_id UUID REFERENCES users(id) ON DELETE CASCADE,
-  client_id VARCHAR(255) REFERENCES oauth_clients(client_id) ON DELETE CASCADE,
-  expires_at TIMESTAMP NOT NULL,
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  oauth_client_id UUID NOT NULL REFERENCES oauth_clients(id) ON DELETE CASCADE,
+  expires_at BIGINT NOT NULL,
   revoked BOOLEAN DEFAULT FALSE,
-  created_at TIMESTAMP DEFAULT NOW()
+  created_at BIGINT NOT NULL DEFAULT (EXTRACT(EPOCH FROM NOW())::bigint * 1000)
 );
-
-CREATE INDEX idx_refresh_tokens_hash ON refresh_tokens(token_hash);
-CREATE INDEX idx_refresh_tokens_user ON refresh_tokens(user_id);
-CREATE INDEX idx_refresh_tokens_expires ON refresh_tokens(expires_at);
 
 -- Audit Logs
 CREATE TABLE audit_logs (
-  id BIGSERIAL PRIMARY KEY,
+  id UUID PRIMARY KEY DEFAULT uuidv7(),
   user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+  oauth_client_id UUID REFERENCES oauth_clients(id) ON DELETE SET NULL,
   event VARCHAR(100) NOT NULL,
+  event_type audit_event_type NOT NULL,
+  success BOOLEAN DEFAULT TRUE,
   ip_address VARCHAR(45),
   user_agent TEXT,
   metadata JSONB,
-  created_at TIMESTAMP DEFAULT NOW()
+  created_at BIGINT NOT NULL DEFAULT (EXTRACT(EPOCH FROM NOW())::bigint * 1000)
 );
 
-CREATE INDEX idx_audit_logs_user ON audit_logs(user_id);
-CREATE INDEX idx_audit_logs_event ON audit_logs(event);
-CREATE INDEX idx_audit_logs_created ON audit_logs(created_at);
-
--- Sessions (optional, can use Redis only)
--- Redis Key: session:{token}
--- Redis Value: { user_id, client_id, expires_at }
+-- Sessions (optional, can use Redis instead)
+CREATE TABLE sessions (
+  id UUID PRIMARY KEY DEFAULT uuidv7(),
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  oauth_client_id UUID REFERENCES oauth_clients(id) ON DELETE SET NULL,
+  expires_at BIGINT NOT NULL,
+  revoked BOOLEAN DEFAULT FALSE,
+  created_at BIGINT NOT NULL DEFAULT (EXTRACT(EPOCH FROM NOW())::bigint * 1000)
+);
 ```
+
+### Foreign Key Relationships
+
+- All foreign keys use UUID primary keys (not VARCHAR client_id) for better performance
+- `oauth_client_id` references `oauth_clients.id` (UUID), not `oauth_clients.client_id` (VARCHAR)
+- Cascade deletes for dependent records, SET NULL for optional relationships
 
 ---
 
@@ -1218,4 +1266,4 @@ CREATE INDEX idx_audit_logs_created ON audit_logs(created_at);
 
 ---
 
-**End of MVP-PRD v1.1**
+**End of MVP-PRD v1.2**

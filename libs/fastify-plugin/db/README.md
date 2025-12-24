@@ -58,11 +58,13 @@ Once registered, both Drizzle ORM and the connection pool are available on the F
 
 ```typescript
 // Using Drizzle ORM
+import { schema } from '@qauth/db';
+const { users, realms, oauthClients } = schema;
+
 fastify.get('/users', async (request, reply) => {
   // Access Drizzle ORM via fastify.db
-  // Note: Actual schemas will be available in P1
-  const users = await fastify.db.select().from(usersTable);
-  return { users };
+  const allUsers = await fastify.db.select().from(users);
+  return { users: allUsers };
 });
 
 // Using connection pool directly
@@ -100,12 +102,25 @@ The Drizzle ORM instance. This is the same instance exported from `@qauth/db`.
 **Example**:
 
 ```typescript
-// Using Drizzle ORM (when schemas are available in P1)
-import { users } from '@qauth/db/schema';
+// Using Drizzle ORM
+import { schema } from '@qauth/db';
+const { users, realms, oauthClients } = schema;
 
 fastify.get('/users', async (request, reply) => {
   const allUsers = await fastify.db.select().from(users);
   return { users: allUsers };
+});
+
+// Query with relations
+fastify.get('/users/:id', async (request, reply) => {
+  const { id } = request.params as { id: string };
+  const user = await fastify.db.query.users.findFirst({
+    where: (users, { eq }) => eq(users.id, id),
+    with: {
+      realm: true,
+    },
+  });
+  return { user };
 });
 ```
 

@@ -1,5 +1,7 @@
-// Database schemas will be implemented in Phase 1 (P1)
-// This file is intentionally empty for P0 minimal database setup
-
-// Placeholder for future schema exports
-export {};
+export * from './audit';
+export * from './core';
+export * from './enums';
+export * from './roles';
+export * from './sessions';
+export * from './sql-helpers';
+export * from './tokens';

@@ -281,14 +281,14 @@ nx lint cache
 
 ## Architecture Notes
 
-This library is designed as P0 infrastructure to support:
+This library provides the foundation for:
 
-- **P1 Session Management**: Full session lifecycle management
-- **P1 Rate Limiting**: API rate limiting middleware
-- **P1 Token Management**: JWT token blacklisting and validation
-- **P1 Caching**: User data and application state caching
+- **Session Management**: Full session lifecycle management with TTL support
+- **Rate Limiting**: API rate limiting utilities for protection
+- **Token Management**: JWT token blacklisting and validation
+- **Caching**: User data and application state caching with JSON serialization
 
-The utility classes provide a foundation for these features while keeping the current implementation focused on connection and basic operations.
+The utility classes provide a complete set of operations for these features while maintaining a clean, type-safe API.
 
 ## Related Libraries
 

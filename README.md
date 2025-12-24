@@ -207,6 +207,7 @@ qauth/
 - Email/Password authentication
 - JWT token management
 - Session management
+- Multi-tenancy (Realms) for data isolation
 - Role-based access control (RBAC)
 - Rate limiting
 - Audit logging
@@ -238,7 +239,7 @@ qauth/
 
 - SAML 2.0 support
 - LDAP/Active Directory integration
-- Multi-tenancy support
+- Advanced multi-tenancy features (custom domains, tenant management UI)
 - Custom domains
 - Organizations & Teams
 - Advanced RBAC
@@ -320,6 +321,8 @@ docker-compose up -d
 
 ### Phase 1: Foundation (MVP) - Q1 2026
 
+- [x] Database schema design (PostgreSQL + Drizzle ORM)
+- [x] Multi-tenancy support (Realms)
 - [ ] Core auth server (TypeScript/Fastify)
 - [ ] Email/Password authentication
 - [ ] OAuth 2.1 flows (Authorization Code + PKCE)
@@ -350,7 +353,7 @@ docker-compose up -d
 - [ ] SAML 2.0 support
 - [ ] Organizations & Teams
 - [ ] Advanced RBAC
-- [ ] Custom domains
+- [ ] Advanced multi-tenancy (custom domains, tenant management UI)
 - [ ] Microservices extraction (Token service → Rust)
 
 ### Phase 5: Scale & Optimize - 2027
