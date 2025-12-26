@@ -30,6 +30,12 @@ const pool = new Pool({
 // Create Drizzle database instance
 export const db = drizzle(pool);
 
+/**
+ * DbClient type that can be either the main db instance or a transaction
+ * This allows repository methods to work with both regular queries and transactions
+ */
+export type DbClient = typeof db;
+
 // Export pool for direct access if needed
 export { pool };
 

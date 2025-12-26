@@ -95,8 +95,10 @@ QAuth is a post-quantum ready, headless-first identity platform designed as a de
   - Roles table (id, realm_id, name, oauth_client_id, enabled) - Phase 5+
   - User roles table (user_id, role_id) - Phase 5+
 - [x] Set up Drizzle ORM schemas
-- [ ] Create database migrations
-- [ ] Write basic CRUD operations
+- [x] Create initial database migration (0000_glamorous_valkyrie.sql)
+- [x] Implement repository pattern with BaseRepository interface
+- [x] Create repositories for users, realms, audit logs, and email verification tokens
+- [x] Add centralized error handling library (@qauth/errors)
 
 **Acceptance Criteria**:
 

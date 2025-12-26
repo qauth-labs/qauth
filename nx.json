@@ -25,7 +25,8 @@
         "libs/data-access/db/*",
         "libs/data-access/cache/*",
         "libs/fastify-plugin/db/*",
-        "libs/fastify-plugin/cache/*"
+        "libs/fastify-plugin/cache/*",
+        "libs/common/errors/*"
       ]
     },
     {
@@ -34,7 +35,8 @@
         "libs/data-access/db/*",
         "libs/data-access/cache/*",
         "libs/fastify-plugin/db/*",
-        "libs/fastify-plugin/cache/*"
+        "libs/fastify-plugin/cache/*",
+        "libs/common/errors/*"
       ],
       "options": {
         "typecheck": {
