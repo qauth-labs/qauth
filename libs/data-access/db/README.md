@@ -90,6 +90,191 @@ const newClient = await db
   .returning();
 ```
 
+### Repository Pattern
+
+The library provides a repository pattern for type-safe database operations with transaction support and proper error handling.
+
+#### Using Repositories
+
+```typescript
+import {
+  usersRepository,
+  realmsRepository,
+  auditLogsRepository,
+  emailVerificationTokensRepository,
+} from '@qauth/db';
+import { NotFoundError, UniqueConstraintError } from '@qauth/errors';
+
+// Create a new user
+try {
+  const user = await usersRepository.create({
+    realmId: 'realm-123',
+    email: 'user@example.com',
+    passwordHash: 'argon2id_hash',
+    emailVerified: false,
+  });
+  console.log('User created:', user);
+} catch (error) {
+  if (error instanceof UniqueConstraintError) {
+    console.error('Email already exists:', error.constraint);
+  }
+  throw error;
+}
+
+// Find user by ID (throws NotFoundError if not found)
+try {
+  const user = await usersRepository.findByIdOrThrow('user-123');
+  console.log('User found:', user);
+} catch (error) {
+  if (error instanceof NotFoundError) {
+    console.error('User not found');
+  }
+}
+
+// Find user by email (returns undefined if not found)
+const user = await usersRepository.findByEmail('realm-123', 'user@example.com');
+if (user) {
+  console.log('User found:', user);
+}
+
+// Update user
+const updatedUser = await usersRepository.update('user-123', {
+  emailVerified: true,
+  updatedAt: Date.now(),
+});
+
+// Delete user
+const deleted = await usersRepository.delete('user-123');
+console.log('User deleted:', deleted);
+```
+
+#### Repository Factory Functions
+
+Repositories are created using factory functions that accept an optional default database client:
+
+```typescript
+import { createUsersRepository, createRealmsRepository } from '@qauth/db';
+import { db } from '@qauth/db';
+
+// Create repository with default db instance
+const usersRepo = createUsersRepository(db);
+
+// Or use the default instance
+const usersRepo = createUsersRepository();
+```
+
+#### Transaction Support
+
+All repository methods accept an optional transaction parameter:
+
+```typescript
+import { db } from '@qauth/db';
+import { usersRepository, realmsRepository } from '@qauth/db';
+
+// Use transactions
+await db.transaction(async (tx) => {
+  // Create realm
+  const realm = await realmsRepository.create({ name: 'my-realm', displayName: 'My Realm' }, tx);
+
+  // Create user in the same transaction
+  const user = await usersRepository.create(
+    {
+      realmId: realm.id,
+      email: 'user@example.com',
+      passwordHash: 'hash',
+    },
+    tx
+  );
+
+  // Both operations succeed or both fail
+  return { realm, user };
+});
+```
+
+#### Available Repositories
+
+- **`usersRepository`**: User CRUD operations
+  - `create()`, `findById()`, `findByIdOrThrow()`, `findByEmail()`, `findByEmailNormalized()`, `update()`, `updateLastLogin()`, `verifyEmail()`, `delete()`
+
+- **`realmsRepository`**: Realm CRUD operations
+  - `create()`, `findById()`, `findByIdOrThrow()`, `findByName()`, `update()`, `delete()`
+
+- **`auditLogsRepository`**: Audit log operations
+  - `create()`, `findByUserId()`, `findByRealmId()`, `findByRealmAndUserId()`
+
+- **`emailVerificationTokensRepository`**: Email verification token operations
+  - `create()`, `findByToken()`, `markUsed()`, `deleteExpired()`
+
+#### Error Handling
+
+Repositories use error classes from `@qauth/errors` with HTTP status codes:
+
+```typescript
+import { NotFoundError, UniqueConstraintError } from '@qauth/errors';
+
+try {
+  const user = await usersRepository.findByIdOrThrow('invalid-id');
+} catch (error) {
+  if (error instanceof NotFoundError) {
+    // Handle not found
+    console.error(`Entity ${error.message}`);
+    // error.statusCode === 404
+  }
+}
+
+try {
+  await usersRepository.create({ email: 'existing@example.com', ... });
+} catch (error) {
+  if (error instanceof UniqueConstraintError) {
+    // Handle unique constraint violation
+    console.error(`Constraint violated: ${error.constraint}`);
+    // error.statusCode === 409
+  }
+}
+```
+
+#### Audit Log Realm Filtering
+
+For security and multi-tenancy, audit logs can be filtered by realm:
+
+```typescript
+import { auditLogsRepository } from '@qauth/db';
+
+// Get all audit logs for a realm (security: ensures realm isolation)
+const realmLogs = await auditLogsRepository.findByRealmId('realm-123', {
+  limit: 50,
+  eventType: 'auth',
+  success: true,
+});
+
+// Get audit logs for a specific user within a realm
+const userLogs = await auditLogsRepository.findByRealmAndUserId('realm-123', 'user-456', {
+  limit: 20,
+  descending: true,
+});
+```
+
+**Security Note**: Realm filtering ensures that users can only access audit logs from their own realm, preventing cross-realm data leakage.
+
+#### Base Repository Interface
+
+All repositories follow a consistent interface defined in `BaseRepository`:
+
+```typescript
+import { BaseRepository } from '@qauth/db';
+
+// BaseRepository provides a contract for common CRUD operations
+interface BaseRepository<TSelect, TInsert, TUpdate> {
+  create(data: TInsert, tx?: DbClient): Promise<TSelect>;
+  findById(id: string, tx?: DbClient): Promise<TSelect | undefined>;
+  findByIdOrThrow(id: string, tx?: DbClient): Promise<TSelect>;
+  update(id: string, data: TUpdate, tx?: DbClient): Promise<TSelect>;
+  delete(id: string, tx?: DbClient): Promise<boolean>;
+}
+```
+
+This interface ensures consistency across all repositories and reduces code duplication.
+
 ### Connection Pool Management
 
 ```typescript
@@ -142,15 +327,25 @@ libs/data-access/db/
 ├── src/
 │   ├── lib/
 │   │   ├── db.ts              # Database connection and utilities
-│   │   └── schema/
-│   │       ├── index.ts        # Main schema exports
-│   │       ├── core.ts         # Core tables: realms, users, oauth_clients
-│   │       ├── tokens.ts       # Token tables: email_verification, authorization_codes, refresh_tokens
-│   │       ├── sessions.ts     # Session management
-│   │       ├── audit.ts        # Audit logging
-│   │       ├── roles.ts        # Roles and permissions
-│   │       ├── enums.ts        # PostgreSQL enum types
-│   │       └── sql-helpers.ts  # SQL helper functions
+│   │   ├── repositories/      # Repository pattern implementations
+│   │   │   ├── index.ts        # Repository exports
+│   │   │   ├── base.repository.ts  # Base repository interface
+│   │   │   ├── users.repository.ts
+│   │   │   ├── realms.repository.ts
+│   │   │   ├── audit-logs.repository.ts
+│   │   │   └── email-verification-tokens.repository.ts
+│   │   ├── schema/
+│   │   │   ├── index.ts        # Main schema exports
+│   │   │   ├── core.ts         # Core tables: realms, users, oauth_clients
+│   │   │   ├── tokens.ts       # Token tables: email_verification, authorization_codes, refresh_tokens
+│   │   │   ├── sessions.ts     # Session management
+│   │   │   ├── audit.ts        # Audit logging
+│   │   │   ├── roles.ts        # Roles and permissions
+│   │   │   ├── enums.ts        # PostgreSQL enum types
+│   │   │   └── sql-helpers.ts  # SQL helper functions
+│   │   └── utils/
+│   │       ├── index.ts        # Utility exports
+│   │       └── email.ts        # Email normalization utilities
 │   └── index.ts               # Public API exports
 ├── drizzle.config.ts          # Drizzle configuration
 ├── project.json               # Nx project configuration
@@ -277,6 +472,7 @@ The Fastify plugin automatically manages the database connection lifecycle, so y
 
 ## Related Libraries
 
+- [`@qauth/errors`](../../common/errors/README.md): Error classes used by repositories
 - [`@qauth/fastify-plugin-db`](../../fastify-plugin/db/README.md): Fastify plugin wrapper for this library
 
 ## Dependencies

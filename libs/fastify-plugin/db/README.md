@@ -79,6 +79,104 @@ fastify.get('/health', async (request, reply) => {
 });
 ```
 
+### Using Repositories
+
+For type-safe database operations with proper error handling, use the repository pattern:
+
+```typescript
+import { usersRepository, realmsRepository } from '@qauth/db';
+import { NotFoundError, UniqueConstraintError } from '@qauth/errors';
+
+// Get user by ID
+fastify.get('/users/:id', async (request, reply) => {
+  const { id } = request.params as { id: string };
+
+  try {
+    const user = await usersRepository.findByIdOrThrow(id);
+    return { user };
+  } catch (error) {
+    if (error instanceof NotFoundError) {
+      // Use the statusCode property from the error class
+      reply.code(error.statusCode).send({ error: error.message });
+      return;
+    }
+    throw error;
+  }
+});
+
+// Create user
+fastify.post('/users', async (request, reply) => {
+  const userData = request.body as NewUser;
+
+  try {
+    const user = await usersRepository.create(userData);
+    reply.code(201).send({ user });
+  } catch (error) {
+    if (error instanceof UniqueConstraintError) {
+      // Use the statusCode property from the error class (409 Conflict)
+      reply.code(error.statusCode).send({
+        error: 'User already exists',
+        constraint: error.constraint,
+      });
+      return;
+    }
+    throw error;
+  }
+});
+
+// Update user
+fastify.put('/users/:id', async (request, reply) => {
+  const { id } = request.params as { id: string };
+  const updateData = request.body as UpdateUser;
+
+  try {
+    const user = await usersRepository.update(id, updateData);
+    return { user };
+  } catch (error) {
+    if (error instanceof NotFoundError) {
+      // Use the statusCode property from the error class
+      reply.code(error.statusCode).send({ error: error.message });
+      return;
+    }
+    throw error;
+  }
+});
+```
+
+### Using Repositories with Transactions
+
+Repositories support transactions for atomic operations:
+
+```typescript
+import { db } from '@qauth/db';
+import { usersRepository, realmsRepository } from '@qauth/db';
+
+fastify.post('/setup', async (request, reply) => {
+  const { realmName, adminEmail } = request.body;
+
+  // All operations in a single transaction
+  const result = await db.transaction(async (tx) => {
+    // Create realm
+    const realm = await realmsRepository.create({ name: realmName, displayName: realmName }, tx);
+
+    // Create admin user in the same transaction
+    const admin = await usersRepository.create(
+      {
+        realmId: realm.id,
+        email: adminEmail,
+        passwordHash: await hashPassword('admin123'),
+        emailVerified: true,
+      },
+      tx
+    );
+
+    return { realm, admin };
+  });
+
+  return result;
+});
+```
+
 ## API
 
 ### Plugin Registration
@@ -350,7 +448,8 @@ nx lint fastify-plugin-db
 
 ## Related Libraries
 
-- [`@qauth/db`](../data-access/db/README.md): Core database utilities and Drizzle ORM
+- [`@qauth/db`](../data-access/db/README.md): Core database utilities, Drizzle ORM, and repository pattern
+- [`@qauth/errors`](../common/errors/README.md): Error classes used by repositories
 - [`@qauth/fastify-plugin-cache`](../fastify-plugin/cache/README.md): Cache plugin for Fastify
 
 ## License
