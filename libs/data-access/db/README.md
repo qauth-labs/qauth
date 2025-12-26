@@ -347,6 +347,10 @@ libs/data-access/db/
 │   │       ├── index.ts        # Utility exports
 │   │       └── email.ts        # Email normalization utilities
 │   └── index.ts               # Public API exports
+│   └── qauth-schema.dbml      # Database schema visualization (DBML format)
+├── drizzle/                   # Migration files
+│   ├── 0000_glamorous_valkyrie.sql  # Initial migration
+│   └── meta/                  # Migration metadata
 ├── drizzle.config.ts          # Drizzle configuration
 ├── project.json               # Nx project configuration
 └── README.md                  # This file
@@ -388,7 +392,16 @@ libs/data-access/db/
 1. Create schema files in `src/lib/schema/`
 2. Export them from `src/lib/schema/index.ts`
 3. Generate migrations using `nx run db:db:generate`
-4. Run migrations using `nx run db:db:migrate`
+4. Review the generated migration file in `drizzle/` directory
+5. Run migrations using `nx run db:db:migrate`
+
+### Schema Visualization
+
+The database schema is available in DBML format at `src/qauth-schema.dbml`. You can:
+
+- View it on [dbdiagram.io](https://dbdiagram.io) for visual representation
+- Use it for documentation purposes
+- Import it into database design tools
 
 ### Testing Database Connection
 

@@ -177,8 +177,15 @@ qauth/
 │   │   └── node/             # Server-side SDK
 │   │
 │   ├── data-access/
-│   │   ├── db/               # Drizzle ORM schema & queries
-│   │   └── redis/            # Redis client
+│   │   ├── db/               # Drizzle ORM schema, queries & repositories
+│   │   └── cache/            # Redis client & caching utilities
+│   │
+│   ├── common/
+│   │   └── errors/           # Centralized error classes & utilities
+│   │
+│   ├── fastify-plugin/
+│   │   ├── db/               # Fastify plugin for database
+│   │   └── cache/            # Fastify plugin for Redis cache
 │   │
 │   ├── ui/
 │   │   └── components/       # Shared React components
@@ -322,7 +329,10 @@ docker-compose up -d
 ### Phase 1: Foundation (MVP) - Q1 2026
 
 - [x] Database schema design (PostgreSQL + Drizzle ORM)
+- [x] Initial database migration created
 - [x] Multi-tenancy support (Realms)
+- [x] Repository pattern implementation with BaseRepository interface
+- [x] Centralized error handling library (@qauth/errors)
 - [ ] Core auth server (TypeScript/Fastify)
 - [ ] Email/Password authentication
 - [ ] OAuth 2.1 flows (Authorization Code + PKCE)
