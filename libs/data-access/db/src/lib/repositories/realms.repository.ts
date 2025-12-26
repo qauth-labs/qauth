@@ -49,7 +49,7 @@ export function createRealmsRepository(defaultDb: DbClient = db): RealmsReposito
         return realm;
       } catch (error) {
         if (isUniqueConstraintError(error)) {
-          const constraint = extractConstraintName(error) || 'realms_name_key';
+          const constraint = extractConstraintName(error) || 'realms_name_unique';
           throw new UniqueConstraintError(constraint, error);
         }
         throw error;
@@ -129,7 +129,7 @@ export function createRealmsRepository(defaultDb: DbClient = db): RealmsReposito
         return realm;
       } catch (error) {
         if (isUniqueConstraintError(error)) {
-          const constraint = extractConstraintName(error) || 'realms_name_key';
+          const constraint = extractConstraintName(error) || 'realms_name_unique';
           throw new UniqueConstraintError(constraint, error);
         }
         throw error;

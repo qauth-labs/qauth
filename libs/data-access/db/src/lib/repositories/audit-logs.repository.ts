@@ -42,12 +42,6 @@ export interface FindAuditLogsOptions {
 }
 
 /**
- * Options for querying audit logs by user ID
- * @deprecated Use FindAuditLogsOptions instead
- */
-export type FindByUserIdOptions = FindAuditLogsOptions;
-
-/**
  * Factory function that creates an audit logs repository
  *
  * @param defaultDb - Default database client to use (defaults to main db instance)

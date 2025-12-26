@@ -157,7 +157,7 @@ fastify.post('/setup', async (request, reply) => {
   // All operations in a single transaction
   const result = await db.transaction(async (tx) => {
     // Create realm
-    const realm = await realmsRepository.create({ name: realmName, displayName: realmName }, tx);
+    const realm = await realmsRepository.create({ name: realmName }, tx);
 
     // Create admin user in the same transaction
     const admin = await usersRepository.create(

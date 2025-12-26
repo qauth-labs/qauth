@@ -174,7 +174,7 @@ import { usersRepository, realmsRepository } from '@qauth/db';
 // Use transactions
 await db.transaction(async (tx) => {
   // Create realm
-  const realm = await realmsRepository.create({ name: 'my-realm', displayName: 'My Realm' }, tx);
+  const realm = await realmsRepository.create({ name: 'my-realm' }, tx);
 
   // Create user in the same transaction
   const user = await usersRepository.create(
