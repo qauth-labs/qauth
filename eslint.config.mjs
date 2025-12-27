@@ -10,7 +10,7 @@ export default [
     ignores: [
       '**/.expo/**',
       '**/.nx/**',
-      '**/cache/**',
+      '**/.cache/**',
       '**/coverage/**',
       '**/dist/**',
       '**/node_modules/**',

@@ -17,6 +17,12 @@
     },
     {
       "path": "./libs/data-access/cache"
+    },
+    {
+      "path": "./libs/common/validation"
+    },
+    {
+      "path": "./libs/common/password"
     }
   ]
 }

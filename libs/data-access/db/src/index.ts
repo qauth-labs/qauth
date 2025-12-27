@@ -12,6 +12,3 @@ export type { InferInsertModel, InferSelectModel } from 'drizzle-orm';
 
 // Repository exports
 export * from './lib/repositories';
-
-// Utility exports
-export * from './lib/utils';

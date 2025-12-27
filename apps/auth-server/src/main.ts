@@ -3,8 +3,6 @@ import Fastify from 'fastify';
 import { app } from './app/app';
 import { env } from './config/env';
 
-const host = process.env.HOST ?? '0.0.0.0';
-
 // Instantiate Fastify with some config
 const server = Fastify({
   logger: {
@@ -34,8 +32,8 @@ async function start() {
     await server.register(app);
 
     // Start listening.
-    await server.listen({ port: env.PORT, host });
-    server.log.info(`Server listening on http://${host}:${env.PORT}`);
+    await server.listen({ port: env.PORT, host: env.HOST });
+    server.log.info(`Server listening on http://${env.HOST}:${env.PORT}`);
   } catch (error) {
     server.log.error(error, 'Failed to start server');
     process.exit(1);

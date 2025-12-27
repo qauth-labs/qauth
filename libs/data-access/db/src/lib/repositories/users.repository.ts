@@ -4,11 +4,11 @@ import {
   NotFoundError,
   UniqueConstraintError,
 } from '@qauth/errors';
+import { normalizeEmail } from '@qauth/validation';
 import { and, eq, InferInsertModel, InferSelectModel } from 'drizzle-orm';
 
 import { db, DbClient } from '../db';
 import { users } from '../schema/core';
-import { normalizeEmail } from '../utils/email';
 import { BaseRepository } from './base.repository';
 
 export type User = InferSelectModel<typeof users>;
