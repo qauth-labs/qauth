@@ -1,4 +1,4 @@
-import { getRedis, testConnection, type CacheClient } from '@qauth/cache';
+import { type CacheClient, getRedis, testConnection } from '@qauth/cache';
 import type { FastifyInstance, FastifyPluginOptions } from 'fastify';
 import fp from 'fastify-plugin';
 

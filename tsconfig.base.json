@@ -13,7 +13,9 @@
       "@qauth/db": ["libs/data-access/db/src/index.ts"],
       "@qauth/fastify-plugin-db": ["libs/fastify-plugin/db/src/index.ts"],
       "@qauth/fastify-plugin-cache": ["libs/fastify-plugin/cache/src/index.ts"],
-      "@qauth/errors": ["libs/common/errors/src/index.ts"]
+      "@qauth/errors": ["libs/common/errors/src/index.ts"],
+      "@qauth/password": ["libs/common/password/src/index.ts"],
+      "@qauth/validation": ["libs/common/validation/src/index.ts"]
     },
     "esModuleInterop": true,
     "strict": true,

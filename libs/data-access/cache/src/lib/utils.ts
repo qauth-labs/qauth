@@ -87,7 +87,7 @@ export class RateLimitUtils {
   static async checkRateLimit(
     key: string,
     limit: number,
-    windowSeconds: number = 60
+    windowSeconds = 60
   ): Promise<{ allowed: boolean; remaining: number; resetTime: number }> {
     const client = getRedis();
     const rateKey = `${KEY_PREFIXES.RATE_LIMIT}${key}`;

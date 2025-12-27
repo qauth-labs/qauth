@@ -7,7 +7,17 @@
     "declaration": true
   },
   "include": ["src/**/*.ts"],
+  "exclude": ["src/**/*.test.ts", "src/**/*.spec.ts", "src/test/**/*"],
   "references": [
+    {
+      "path": "../../libs/common/validation/tsconfig.lib.json"
+    },
+    {
+      "path": "../../libs/common/password/tsconfig.lib.json"
+    },
+    {
+      "path": "../../libs/common/errors/tsconfig.lib.json"
+    },
     {
       "path": "../../libs/fastify-plugin/db/tsconfig.lib.json"
     },
