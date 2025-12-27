@@ -2,5 +2,21 @@
   "extends": "./tsconfig.base.json",
   "files": [],
   "include": [],
-  "references": []
+  "references": [
+    {
+      "path": "./libs/fastify-plugin/cache"
+    },
+    {
+      "path": "./libs/fastify-plugin/db"
+    },
+    {
+      "path": "./libs/data-access/db"
+    },
+    {
+      "path": "./libs/common/errors"
+    },
+    {
+      "path": "./libs/data-access/cache"
+    }
+  ]
 }

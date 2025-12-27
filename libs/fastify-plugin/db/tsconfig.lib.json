@@ -3,7 +3,13 @@
   "compilerOptions": {
     "outDir": "../../../dist/out-tsc",
     "declaration": true,
+    "composite": true,
     "types": ["node"]
   },
-  "include": ["src/**/*.ts"]
+  "include": ["src/**/*.ts"],
+  "references": [
+    {
+      "path": "../../data-access/db/tsconfig.lib.json"
+    }
+  ]
 }

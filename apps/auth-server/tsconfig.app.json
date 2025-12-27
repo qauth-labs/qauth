@@ -3,18 +3,16 @@
   "compilerOptions": {
     "outDir": "../../dist/out-tsc",
     "module": "commonjs",
-    "types": ["node"]
+    "types": ["node"],
+    "declaration": true
   },
   "include": ["src/**/*.ts"],
   "references": [
     {
-      "path": "../../libs/data-access/db"
+      "path": "../../libs/fastify-plugin/db/tsconfig.lib.json"
     },
     {
-      "path": "../../libs/fastify-plugin/db"
-    },
-    {
-      "path": "../../libs/fastify-plugin/cache"
+      "path": "../../libs/fastify-plugin/cache/tsconfig.lib.json"
     }
   ]
 }
