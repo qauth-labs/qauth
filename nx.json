@@ -55,5 +55,9 @@
       "dependsOn": ["^build"],
       "inputs": ["default", "^default"]
     }
+  },
+  "namedInputs": {
+    "sharedGlobals": ["{workspaceRoot}/.github/workflows/ci.yml"],
+    "default": ["sharedGlobals"]
   }
 }
