@@ -19,6 +19,7 @@ export const rateLimitPlugin = fp<FastifyPluginOptions>(
       timeWindow: defaultTimeWindow * 1000,
       redis: fastify.redis,
       keyGenerator: (request) => {
+        // TODO: Consider using a more secure key generator
         return request.ip || request.socket.remoteAddress || 'unknown';
       },
     });
