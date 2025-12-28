@@ -4,6 +4,9 @@ packages:
 
 onlyBuiltDependencies:
   - '@swc/core'
+  - cpu-features
   - esbuild
   - nx
+  - protobufjs
+  - ssh2
   - unrs-resolver

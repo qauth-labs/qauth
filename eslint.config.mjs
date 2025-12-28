@@ -16,6 +16,8 @@ export default [
       '**/node_modules/**',
       '**/out-tsc/**',
       '**/web-build/**',
+      '**/vitest.config.ts',
+      '**/vitest.workspace.ts',
     ],
   },
   {
@@ -25,7 +27,7 @@ export default [
         'error',
         {
           enforceBuildableLibDependency: true,
-          allow: [],
+          allow: ['apps/**'],
           depConstraints: [
             // Shared layer (bottom layer - no internal dependencies)
             // Shared libraries contain pure utilities, errors, and common types
@@ -33,6 +35,16 @@ export default [
             {
               sourceTag: 'scope:shared',
               onlyDependOnLibsWithTags: [],
+            },
+            // Testing library exception - can depend on apps for E2E testing
+            {
+              sourceTag: 'type:testing',
+              onlyDependOnLibsWithTags: [
+                'scope:shared',
+                'scope:infra',
+                'scope:server',
+                'scope:fastify',
+              ],
             },
             // Infrastructure layer
             // Infrastructure libraries handle external services (DB, Cache, etc.)

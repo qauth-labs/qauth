@@ -30,7 +30,8 @@
         "libs/shared/errors/*",
         "libs/server/config/*",
         "libs/server/password/*",
-        "libs/shared/validation/*"
+        "libs/shared/validation/*",
+        "libs/shared/testing/*"
       ]
     },
     {
@@ -44,7 +45,8 @@
         "libs/shared/errors/*",
         "libs/server/config/*",
         "libs/server/password/*",
-        "libs/shared/validation/*"
+        "libs/shared/validation/*",
+        "libs/shared/testing/*"
       ],
       "options": {
         "typecheck": {
@@ -58,6 +60,15 @@
       "cache": true,
       "dependsOn": ["^build"],
       "inputs": ["default", "^default"]
+    },
+    "@nx/vitest:test": {
+      "cache": true,
+      "inputs": [
+        "default",
+        "^default",
+        "{workspaceRoot}/vitest.config.ts",
+        "{workspaceRoot}/vitest.workspace.ts"
+      ]
     }
   },
   "namedInputs": {

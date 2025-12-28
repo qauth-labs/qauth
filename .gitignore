@@ -12,6 +12,9 @@ build/
 out-tsc/
 coverage/
 
+# Test outputs
+.vitest/
+
 # Environment variables
 .env
 .env.local

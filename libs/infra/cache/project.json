@@ -20,6 +20,14 @@
       "options": {
         "lintFilePatterns": ["libs/infra/cache/**/*.ts"]
       }
+    },
+    "test": {
+      "executor": "@nx/vitest:test",
+      "outputs": ["{workspaceRoot}/coverage/{projectRoot}"],
+      "options": {
+        "passWithNoTests": true,
+        "reportsDirectory": "{workspaceRoot}/coverage/{projectRoot}"
+      }
     }
   }
 }
