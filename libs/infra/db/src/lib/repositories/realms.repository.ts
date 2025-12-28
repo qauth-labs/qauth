@@ -6,7 +6,7 @@ import {
 } from '@qauth/errors';
 import { eq, InferInsertModel, InferSelectModel } from 'drizzle-orm';
 
-import { db, DbClient } from '../db';
+import { DbClient } from '../db';
 import { realms } from '../schema/core';
 import { BaseRepository } from './base.repository';
 
@@ -29,10 +29,10 @@ export interface RealmsRepository extends BaseRepository<Realm, NewRealm, Update
 /**
  * Factory function that creates a realms repository with CRUD operations
  *
- * @param defaultDb - Default database client to use (defaults to main db instance)
+ * @param defaultDb - Database client to use for queries
  * @returns Repository object with CRUD methods implementing BaseRepository
  */
-export function createRealmsRepository(defaultDb: DbClient = db): RealmsRepository {
+export function createRealmsRepository(defaultDb: DbClient): RealmsRepository {
   return {
     /**
      * Create a new realm
@@ -150,8 +150,3 @@ export function createRealmsRepository(defaultDb: DbClient = db): RealmsReposito
     },
   };
 }
-
-/**
- * Default realms repository instance
- */
-export const realmsRepository = createRealmsRepository();

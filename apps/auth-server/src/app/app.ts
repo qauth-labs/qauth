@@ -11,9 +11,31 @@ import errorHandler from './plugins/error-handler';
 import { rateLimitPlugin } from './plugins/rate-limit';
 
 export async function app(fastify: FastifyInstance, opts: object) {
-  await fastify.register(databasePlugin);
+  await fastify.register(databasePlugin, {
+    config: {
+      connectionString: env.DATABASE_URL,
+      pool: {
+        max: env.DB_POOL_MAX,
+        min: env.DB_POOL_MIN,
+        idleTimeoutMillis: env.DB_POOL_IDLE_TIMEOUT,
+        connectionTimeoutMillis: env.DB_POOL_CONNECTION_TIMEOUT,
+      },
+    },
+  });
 
-  await fastify.register(cachePlugin);
+  await fastify.register(cachePlugin, {
+    config: {
+      url: env.REDIS_URL,
+      host: env.REDIS_HOST,
+      port: env.REDIS_PORT,
+      password: env.REDIS_PASSWORD,
+      db: env.REDIS_DB,
+      maxRetriesPerRequest: env.REDIS_MAX_RETRIES,
+      connectTimeout: env.REDIS_CONNECTION_TIMEOUT,
+      commandTimeout: env.REDIS_COMMAND_TIMEOUT,
+      lazyConnect: true,
+    },
+  });
 
   await fastify.register(passwordPlugin, {
     hashConfig: {
@@ -41,6 +63,7 @@ export async function app(fastify: FastifyInstance, opts: object) {
   fastify.register(AutoLoad, {
     dir: path.join(__dirname, 'routes'),
     options: { ...opts },
+    ignorePattern: /\.test\.ts$/,
   });
 
   // Register error handler last to catch all unhandled errors

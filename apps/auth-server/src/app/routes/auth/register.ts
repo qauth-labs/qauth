@@ -1,9 +1,10 @@
 import { WeakPasswordError } from '@qauth/errors';
 import { validateEmail } from '@qauth/validation';
 import type { FastifyInstance } from 'fastify';
+import { ZodTypeProvider } from 'fastify-type-provider-zod';
 
 import { env } from '../../../config/env';
-import { type RegisterRequest, type RegisterResponse, registerSchema } from '../../schemas/auth';
+import { registerResponseSchema, registerSchema } from '../../schemas/auth';
 
 /**
  * Get or create default realm
@@ -24,13 +25,17 @@ async function getOrCreateDefaultRealm(fastify: FastifyInstance) {
 
 /**
  * Registration route
+ * Types are automatically inferred from registerSchema and registerResponseSchema
  */
 export default async function (fastify: FastifyInstance) {
-  fastify.post<{ Body: RegisterRequest; Reply: RegisterResponse }>(
+  fastify.withTypeProvider<ZodTypeProvider>().post(
     '/auth/register',
     {
       schema: {
         body: registerSchema,
+        response: {
+          201: registerResponseSchema,
+        },
       },
       config: {
         rateLimit: {
@@ -82,16 +87,15 @@ export default async function (fastify: FastifyInstance) {
       });
 
       // Return user data without password_hash
-      const response: RegisterResponse = {
+      // Type is automatically inferred from registerResponseSchema
+      return reply.code(201).send({
         id: user.id,
         email: user.email,
         emailVerified: user.emailVerified,
         realmId: user.realmId,
         createdAt: user.createdAt,
         updatedAt: user.updatedAt,
-      };
-
-      return reply.code(201).send(response);
+      });
     }
   );
 }

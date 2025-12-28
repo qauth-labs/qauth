@@ -15,13 +15,18 @@ export const registerSchema = z.object({
 export type RegisterRequest = z.infer<typeof registerSchema>;
 
 /**
+ * Registration response schema (user data without password_hash)
+ */
+export const registerResponseSchema = z.object({
+  id: z.uuid(),
+  email: z.email(),
+  emailVerified: z.boolean(),
+  realmId: z.uuid(),
+  createdAt: z.number(),
+  updatedAt: z.number().nullable(),
+});
+
+/**
  * Registration response type (user data without password_hash)
  */
-export interface RegisterResponse {
-  id: string;
-  email: string;
-  emailVerified: boolean;
-  realmId: string;
-  createdAt: number;
-  updatedAt: number | null;
-}
+export type RegisterResponse = z.infer<typeof registerResponseSchema>;

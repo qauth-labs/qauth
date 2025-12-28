@@ -7,7 +7,7 @@ import {
 import { normalizeEmail } from '@qauth/validation';
 import { and, eq, InferInsertModel, InferSelectModel } from 'drizzle-orm';
 
-import { db, DbClient } from '../db';
+import { DbClient } from '../db';
 import { users } from '../schema/core';
 import { BaseRepository } from './base.repository';
 
@@ -46,10 +46,10 @@ export interface UsersRepository extends BaseRepository<User, NewUser, UpdateUse
 /**
  * Factory function that creates a users repository with CRUD operations
  *
- * @param defaultDb - Default database client to use (defaults to main db instance)
+ * @param defaultDb - Database client to use for queries
  * @returns Repository object with CRUD methods implementing BaseRepository
  */
-export function createUsersRepository(defaultDb: DbClient = db): UsersRepository {
+export function createUsersRepository(defaultDb: DbClient): UsersRepository {
   return {
     /**
      * Create a new user
@@ -262,8 +262,3 @@ export function createUsersRepository(defaultDb: DbClient = db): UsersRepository
     },
   };
 }
-
-/**
- * Default users repository instance
- */
-export const usersRepository = createUsersRepository();

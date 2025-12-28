@@ -1,13 +1,11 @@
 import {
-  closeDatabase,
+  createDatabase,
   createRealmsRepository,
   createUsersRepository,
+  type DatabaseConfig,
   type DatabasePool,
-  db,
   type DbClient,
-  pool,
   type RealmsRepository,
-  testConnection,
   type UsersRepository,
 } from '@qauth/db';
 import type { FastifyInstance, FastifyPluginOptions } from 'fastify';
@@ -25,20 +23,48 @@ declare module 'fastify' {
 }
 
 /**
+ * Options for the database plugin
+ */
+export interface DatabasePluginOptions extends FastifyPluginOptions {
+  /**
+   * Database configuration with connection string and pool settings
+   */
+  config: DatabaseConfig;
+}
+
+/**
  * Fastify plugin for database connection
  * Decorates fastify instance with db, dbPool, and repositories
+ *
+ * @example
+ * ```typescript
+ * await fastify.register(databasePlugin, {
+ *   config: {
+ *     connectionString: env.DATABASE_URL,
+ *     pool: {
+ *       max: env.DB_POOL_MAX,
+ *       min: env.DB_POOL_MIN,
+ *       idleTimeoutMillis: env.DB_POOL_IDLE_TIMEOUT,
+ *       connectionTimeoutMillis: env.DB_POOL_CONNECTION_TIMEOUT,
+ *     },
+ *   },
+ * });
+ * ```
  */
-export const databasePlugin = fp<FastifyPluginOptions>(
-  async (fastify: FastifyInstance) => {
-    fastify.decorate('db', db);
-    fastify.decorate('dbPool', pool);
+export const databasePlugin = fp<DatabasePluginOptions>(
+  async (fastify: FastifyInstance, options: DatabasePluginOptions) => {
+    // Create database instance using factory
+    const database = createDatabase(options.config);
+
+    fastify.decorate('db', database.db);
+    fastify.decorate('dbPool', database.pool);
     fastify.decorate('repositories', {
-      users: createUsersRepository(db),
-      realms: createRealmsRepository(db),
+      users: createUsersRepository(database.db),
+      realms: createRealmsRepository(database.db),
     });
 
     fastify.addHook('onReady', async () => {
-      const isConnected = await testConnection();
+      const isConnected = await database.testConnection();
       if (!isConnected) {
         fastify.log.warn('Database connection test failed on ready');
       } else {
@@ -48,7 +74,7 @@ export const databasePlugin = fp<FastifyPluginOptions>(
 
     fastify.addHook('onClose', async () => {
       fastify.log.info('Closing database connection...');
-      await closeDatabase();
+      await database.close();
       fastify.log.info('Database connection closed');
     });
   },
