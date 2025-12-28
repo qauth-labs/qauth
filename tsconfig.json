@@ -19,10 +19,13 @@
       "path": "./libs/data-access/cache"
     },
     {
-      "path": "./libs/common/validation"
+      "path": "./libs/fastify-plugin/password"
     },
     {
-      "path": "./libs/common/password"
+      "path": "./libs/server/validation"
+    },
+    {
+      "path": "./libs/server/password"
     }
   ]
 }

@@ -183,9 +183,15 @@ qauth/
 │   ├── common/
 │   │   └── errors/           # Centralized error classes & utilities
 │   │
+│   ├── server/
+│   │   ├── config/           # Environment configuration & validation
+│   │   ├── password/         # Password hashing (Argon2) with factory pattern
+│   │   └── validation/       # Password & email validation with factory pattern
+│   │
 │   ├── fastify-plugin/
 │   │   ├── db/               # Fastify plugin for database
-│   │   └── cache/            # Fastify plugin for Redis cache
+│   │   ├── cache/            # Fastify plugin for Redis cache
+│   │   └── password/         # Fastify plugin for password hashing & validation
 │   │
 │   ├── ui/
 │   │   └── components/       # Shared React components

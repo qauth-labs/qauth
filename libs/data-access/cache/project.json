@@ -12,14 +12,6 @@
       "options": {
         "lintFilePatterns": ["libs/data-access/cache/**/*.ts"]
       }
-    },
-    "test": {
-      "executor": "@nx/jest:jest",
-      "outputs": ["{workspaceRoot}/coverage/{projectRoot}"],
-      "options": {
-        "jestConfig": "libs/data-access/cache/jest.config.ts",
-        "passWithNoTests": true
-      }
     }
   },
   "metadata": {
