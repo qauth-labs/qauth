@@ -1,22 +1,6 @@
 import Redis, { RedisOptions } from 'ioredis';
 
 /**
- * TODO: Refactor Redis implementation to proper abstraction layer
- *
- * Current implementation directly exposes ioredis Redis instance and methods.
- * Future refactoring should:
- * - Wrap Redis operations in a proper CacheClient interface/class
- * - Abstract away ioredis-specific methods (e.g., `quit()`, `status`, etc.)
- * - Create a clean API that can work with any cache implementation (Redis, Memcached, etc.)
- * - Ensure external API remains stable even if internal implementation changes
- *
- * This will allow:
- * - Replacing Redis with other cache implementations without breaking consumers
- * - Better testability with mock implementations
- * - Cleaner separation of concerns
- */
-
-/**
  * Cache client type - abstracted from implementation
  * Currently uses ioredis Redis, but can be replaced with other cache implementations
  */
@@ -26,71 +10,142 @@ export type CacheClient = Redis;
  * Redis connection configuration interface
  */
 export interface RedisConfig {
+  /**
+   * Redis connection URL (takes precedence over individual settings)
+   */
   url?: string;
+
+  /**
+   * Redis host address (used if url is not set)
+   */
   host?: string;
+
+  /**
+   * Redis port number (used if url is not set)
+   * @default 6379
+   */
   port?: number;
+
+  /**
+   * Redis password
+   */
   password?: string;
+
+  /**
+   * Redis database number
+   * @default 0
+   */
   db?: number;
+
+  /**
+   * Maximum retries per request
+   * @default 3
+   */
   maxRetriesPerRequest?: number;
-  retryDelayOnFailover?: number;
+
+  /**
+   * Connection timeout in milliseconds
+   * @default 10000
+   */
   connectTimeout?: number;
+
+  /**
+   * Command timeout in milliseconds
+   * @default 5000
+   */
   commandTimeout?: number;
+
+  /**
+   * Whether to use lazy connection (connect on first command)
+   * @default true
+   */
   lazyConnect?: boolean;
 }
 
 /**
- * Redis connection instance
+ * Default Redis configuration values
  */
-let redis: Redis | null = null;
+export const DEFAULT_REDIS_CONFIG: Partial<RedisConfig> = {
+  host: 'localhost',
+  port: 6379,
+  db: 0,
+  maxRetriesPerRequest: 3,
+  connectTimeout: 10000,
+  commandTimeout: 5000,
+  lazyConnect: true,
+};
 
 /**
- * Redis connection status
+ * Create a new Redis connection instance with the given configuration
+ *
+ * @param config - Redis configuration with connection settings
+ * @returns Redis client instance
+ *
+ * @example
+ * ```typescript
+ * const redis = createRedisConnection({
+ *   url: 'redis://localhost:6379/0',
+ *   lazyConnect: true,
+ * });
+ *
+ * // Or with individual settings
+ * const redis = createRedisConnection({
+ *   host: 'localhost',
+ *   port: 6379,
+ *   password: 'secret',
+ *   db: 0,
+ * });
+ *
+ * // Use the client
+ * await redis.set('key', 'value');
+ * const value = await redis.get('key');
+ *
+ * // Close when done
+ * await redis.quit();
+ * ```
  */
-let isConnected = false;
+export function createRedisConnection(config: RedisConfig): CacheClient {
+  // Merge with defaults (url takes precedence if provided)
+  const mergedConfig: RedisConfig = {
+    ...DEFAULT_REDIS_CONFIG,
+    ...config,
+  };
 
-/**
- * Get Redis configuration from environment variables
- */
-function getRedisConfig(): RedisConfig {
-  const config: RedisConfig = {};
+  // Build ioredis options
+  const redisOptions: RedisOptions = {};
 
-  // Primary configuration: REDIS_URL
-  if (process.env['REDIS_URL']) {
-    config.url = process.env['REDIS_URL'];
+  // If URL is provided, use it
+  if (mergedConfig.url) {
+    // ioredis accepts URL as the first argument to constructor
+    // We'll pass it through the options
+    Object.assign(redisOptions, {
+      host: undefined,
+      port: undefined,
+    });
   } else {
-    // Fallback to individual configuration
-    config.host = process.env['REDIS_HOST'] || 'localhost';
-    config.port = parseInt(process.env['REDIS_PORT'] || '6379');
-    config.password = process.env['REDIS_PASSWORD'];
-    config.db = parseInt(process.env['REDIS_DB'] || '0');
+    // Use individual connection settings
+    redisOptions.host = mergedConfig.host;
+    redisOptions.port = mergedConfig.port;
+    if (mergedConfig.password) {
+      redisOptions.password = mergedConfig.password;
+    }
+    redisOptions.db = mergedConfig.db;
   }
 
-  // Connection pool settings
-  config.maxRetriesPerRequest = parseInt(process.env['REDIS_MAX_RETRIES'] || '3');
-  config.retryDelayOnFailover = parseInt(process.env['REDIS_RETRY_DELAY'] || '1000');
-  config.connectTimeout = parseInt(process.env['REDIS_CONNECTION_TIMEOUT'] || '10000');
-  config.commandTimeout = parseInt(process.env['REDIS_COMMAND_TIMEOUT'] || '5000');
-  config.lazyConnect = true;
+  // Connection settings
+  redisOptions.maxRetriesPerRequest = mergedConfig.maxRetriesPerRequest;
+  redisOptions.connectTimeout = mergedConfig.connectTimeout;
+  redisOptions.commandTimeout = mergedConfig.commandTimeout;
+  redisOptions.lazyConnect = mergedConfig.lazyConnect;
 
-  return config;
-}
+  // Create Redis instance
+  const redis = mergedConfig.url
+    ? new Redis(mergedConfig.url, redisOptions)
+    : new Redis(redisOptions);
 
-/**
- * Create Redis connection instance
- */
-export function createRedisConnection(): Redis {
-  if (redis) {
-    return redis;
-  }
-
-  const config = getRedisConfig();
-
-  redis = new Redis(config as RedisOptions);
-
-  // Connection event handlers
+  // Connection event handlers for logging
   redis.on('connect', () => {
     console.log('Redis: Connected');
-    isConnected = true;
   });
 
   redis.on('ready', () => {
@@ -99,12 +154,10 @@ export function createRedisConnection(): Redis {
 
   redis.on('error', (error) => {
     console.error('Redis: Connection error:', error);
-    isConnected = false;
   });
 
   redis.on('close', () => {
     console.log('Redis: Connection closed');
-    isConnected = false;
   });
 
   redis.on('reconnecting', () => {
@@ -113,38 +166,24 @@ export function createRedisConnection(): Redis {
 
   redis.on('end', () => {
     console.log('Redis: Connection ended');
-    isConnected = false;
   });
 
   return redis;
 }
 
 /**
- * Get Redis connection instance
- *
- * TODO: This function directly returns ioredis Redis instance.
- * Should be refactored to return a wrapped CacheClient that abstracts
- * implementation details. This will allow replacing Redis with other
- * cache implementations without breaking consumers.
- */
-export function getRedis(): Redis {
-  if (!redis) {
-    return createRedisConnection();
-  }
-  return redis;
-}
-
-/**
  * Test Redis connection
+ *
+ * @param redis - Redis client instance to test
+ * @returns true if connection is successful, false otherwise
  */
-export async function testConnection(): Promise<boolean> {
+export async function testRedisConnection(redis: CacheClient): Promise<boolean> {
   try {
-    const client = getRedis();
     // Connect if not already connected (lazyConnect: true)
-    if (client.status === 'wait') {
-      await client.connect();
+    if (redis.status === 'wait') {
+      await redis.connect();
     }
-    await client.ping();
+    await redis.ping();
     return true;
   } catch (error) {
     console.error('Redis connection test failed:', error);
@@ -154,27 +193,19 @@ export async function testConnection(): Promise<boolean> {
 
 /**
  * Check if Redis is connected
+ *
+ * @param redis - Redis client instance to check
+ * @returns true if connected and ready, false otherwise
  */
-export function isRedisConnected(): boolean {
-  return isConnected && redis?.status === 'ready';
+export function isRedisConnected(redis: CacheClient): boolean {
+  return redis.status === 'ready';
 }
 
 /**
  * Close Redis connection
+ *
+ * @param redis - Redis client instance to close
  */
-export async function closeRedis(): Promise<void> {
-  if (redis) {
-    await redis.quit();
-    redis = null;
-    isConnected = false;
-  }
-}
-
-/**
- * Graceful shutdown handler
- */
-export async function gracefulShutdown(): Promise<void> {
-  console.log('Redis: Starting graceful shutdown...');
-  await closeRedis();
-  console.log('Redis: Graceful shutdown completed');
+export async function closeRedis(redis: CacheClient): Promise<void> {
+  await redis.quit();
 }

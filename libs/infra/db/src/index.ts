@@ -1,8 +1,14 @@
-// Database connection and utilities
-export { closeDatabase, db, pool, testConnection } from './lib/db';
+// Database factory and utilities
+export { createDatabase, DEFAULT_POOL_CONFIG } from './lib/db';
 
 // Export database types (abstracted from implementation)
-export type { DatabasePool, DbClient } from './lib/db';
+export type {
+  DatabaseConfig,
+  DatabaseInstance,
+  DatabasePool,
+  DatabasePoolConfig,
+  DbClient,
+} from './lib/db';
 
 // Schema exports
 export * as schema from './lib/schema';

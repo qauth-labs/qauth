@@ -1,7 +1,7 @@
 import { NotFoundError } from '@qauth/errors';
 import { and, eq, gt, InferInsertModel, InferSelectModel, lt } from 'drizzle-orm';
 
-import { db, DbClient } from '../db';
+import { DbClient } from '../db';
 import { emailVerificationTokens } from '../schema/tokens';
 
 export type EmailVerificationToken = InferSelectModel<typeof emailVerificationTokens>;
@@ -10,10 +10,10 @@ export type NewEmailVerificationToken = InferInsertModel<typeof emailVerificatio
 /**
  * Factory function that creates an email verification tokens repository
  *
- * @param defaultDb - Default database client to use (defaults to main db instance)
+ * @param defaultDb - Database client to use for queries
  * @returns Repository object with token methods
  */
-export function createEmailVerificationTokensRepository(defaultDb: DbClient = db) {
+export function createEmailVerificationTokensRepository(defaultDb: DbClient) {
   return {
     /**
      * Create a new email verification token
@@ -104,8 +104,3 @@ export function createEmailVerificationTokensRepository(defaultDb: DbClient = db
     },
   };
 }
-
-/**
- * Default email verification tokens repository instance
- */
-export const emailVerificationTokensRepository = createEmailVerificationTokensRepository();

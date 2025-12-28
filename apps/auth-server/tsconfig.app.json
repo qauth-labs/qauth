@@ -7,13 +7,13 @@
     "declaration": true
   },
   "include": ["src/**/*.ts"],
-  "exclude": ["src/**/*.test.ts", "src/**/*.spec.ts", "src/test/**/*"],
+  "exclude": [],
   "references": [
     {
       "path": "../../libs/server/config/tsconfig.lib.json"
     },
     {
-      "path": "../../libs/server/validation/tsconfig.lib.json"
+      "path": "../../libs/shared/validation/tsconfig.lib.json"
     },
     {
       "path": "../../libs/shared/errors/tsconfig.lib.json"

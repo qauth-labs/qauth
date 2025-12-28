@@ -107,7 +107,6 @@ Redis cache configuration.
 | `REDIS_PASSWORD`           | string | -       | Redis password          |
 | `REDIS_DB`                 | number | -       | Redis database number   |
 | `REDIS_MAX_RETRIES`        | number | `3`     | Max retries per request |
-| `REDIS_RETRY_DELAY`        | number | `1000`  | Retry delay (ms)        |
 | `REDIS_CONNECTION_TIMEOUT` | number | `10000` | Connection timeout (ms) |
 | `REDIS_COMMAND_TIMEOUT`    | number | `5000`  | Command timeout (ms)    |
 

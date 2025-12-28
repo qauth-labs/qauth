@@ -1,4 +1,4 @@
-import { getRedis } from './redis';
+import { CacheClient } from './redis';
 
 /**
  * Key prefixes for different data types
@@ -30,181 +30,189 @@ export interface SessionData {
 }
 
 /**
- * Session storage utilities
+ * Session utilities interface
  */
-export class SessionUtils {
-  /**
-   * Set session data
-   */
-  static async setSession<T extends SessionData>(
-    sessionId: string,
-    data: T,
-    ttl: number = DEFAULT_TTL.SESSION
-  ): Promise<void> {
-    const client = getRedis();
-    const key = `${KEY_PREFIXES.SESSION}${sessionId}`;
-    await client.setex(key, ttl, JSON.stringify(data));
-  }
-
-  /**
-   * Get session data
-   */
-  static async getSession<T extends SessionData>(sessionId: string): Promise<T | null> {
-    const client = getRedis();
-    const key = `${KEY_PREFIXES.SESSION}${sessionId}`;
-    const data = await client.get(key);
-    return data ? (JSON.parse(data) as T) : null;
-  }
-
-  /**
-   * Delete session
-   */
-  static async deleteSession(sessionId: string): Promise<void> {
-    const client = getRedis();
-    const key = `${KEY_PREFIXES.SESSION}${sessionId}`;
-    await client.del(key);
-  }
-
-  /**
-   * Extend session TTL
-   */
-  static async extendSession(sessionId: string, ttl: number = DEFAULT_TTL.SESSION): Promise<void> {
-    const client = getRedis();
-    const key = `${KEY_PREFIXES.SESSION}${sessionId}`;
-    await client.expire(key, ttl);
-  }
-
-  /**
-   * Check if session exists
-   */
-  static async hasSession(sessionId: string): Promise<boolean> {
-    const client = getRedis();
-    const key = `${KEY_PREFIXES.SESSION}${sessionId}`;
-    return (await client.exists(key)) === 1;
-  }
+export interface SessionUtilsInstance {
+  setSession<T extends SessionData>(sessionId: string, data: T, ttl?: number): Promise<void>;
+  getSession<T extends SessionData>(sessionId: string): Promise<T | null>;
+  deleteSession(sessionId: string): Promise<void>;
+  extendSession(sessionId: string, ttl?: number): Promise<void>;
+  hasSession(sessionId: string): Promise<boolean>;
 }
 
 /**
- * Rate limiting utilities
+ * Create session utilities with the given Redis client
+ *
+ * @param client - Redis client instance
+ * @returns Session utilities object
  */
-export class RateLimitUtils {
-  /**
-   * Check rate limit
-   */
-  static async checkRateLimit(
-    key: string,
-    limit: number,
-    windowSeconds = 60
-  ): Promise<{ allowed: boolean; remaining: number; resetTime: number }> {
-    const client = getRedis();
-    const rateKey = `${KEY_PREFIXES.RATE_LIMIT}${key}`;
+export function createSessionUtils(client: CacheClient): SessionUtilsInstance {
+  return {
+    async setSession<T extends SessionData>(
+      sessionId: string,
+      data: T,
+      ttl: number = DEFAULT_TTL.SESSION
+    ): Promise<void> {
+      const key = `${KEY_PREFIXES.SESSION}${sessionId}`;
+      await client.setex(key, ttl, JSON.stringify(data));
+    },
 
-    const current = await client.incr(rateKey);
+    async getSession<T extends SessionData>(sessionId: string): Promise<T | null> {
+      const key = `${KEY_PREFIXES.SESSION}${sessionId}`;
+      const data = await client.get(key);
+      return data ? (JSON.parse(data) as T) : null;
+    },
 
-    if (current === 1) {
-      await client.expire(rateKey, windowSeconds);
-    }
+    async deleteSession(sessionId: string): Promise<void> {
+      const key = `${KEY_PREFIXES.SESSION}${sessionId}`;
+      await client.del(key);
+    },
 
-    const ttl = await client.ttl(rateKey);
-    const resetTime = Date.now() + ttl * 1000;
+    async extendSession(sessionId: string, ttl: number = DEFAULT_TTL.SESSION): Promise<void> {
+      const key = `${KEY_PREFIXES.SESSION}${sessionId}`;
+      await client.expire(key, ttl);
+    },
 
-    return {
-      allowed: current <= limit,
-      remaining: Math.max(0, limit - current),
-      resetTime,
-    };
-  }
-
-  /**
-   * Reset rate limit counter
-   */
-  static async resetRateLimit(key: string): Promise<void> {
-    const client = getRedis();
-    const rateKey = `${KEY_PREFIXES.RATE_LIMIT}${key}`;
-    await client.del(rateKey);
-  }
-
-  /**
-   * Get rate limit status
-   */
-  static async getRateLimitStatus(
-    key: string,
-    limit: number
-  ): Promise<{ current: number; remaining: number; resetTime: number }> {
-    const client = getRedis();
-    const rateKey = `${KEY_PREFIXES.RATE_LIMIT}${key}`;
-
-    const current = await client.get(rateKey);
-    const count = current ? parseInt(current, 10) : 0;
-    const ttl = await client.ttl(rateKey);
-    const resetTime = ttl > 0 ? Date.now() + ttl * 1000 : 0;
-
-    return {
-      current: count,
-      remaining: Math.max(0, limit - count),
-      resetTime,
-    };
-  }
+    async hasSession(sessionId: string): Promise<boolean> {
+      const key = `${KEY_PREFIXES.SESSION}${sessionId}`;
+      return (await client.exists(key)) === 1;
+    },
+  };
 }
 
 /**
- * Cache utilities
+ * Rate limit result
  */
-export class CacheUtils {
-  /**
-   * Set cache data
-   */
-  static async setCache<T>(key: string, data: T, ttl: number = DEFAULT_TTL.CACHE): Promise<void> {
-    const client = getRedis();
-    const cacheKey = `${KEY_PREFIXES.CACHE}${key}`;
-    await client.setex(cacheKey, ttl, JSON.stringify(data));
-  }
+export interface RateLimitResult {
+  allowed: boolean;
+  remaining: number;
+  resetTime: number;
+}
 
-  /**
-   * Get cache data
-   */
-  static async getCache<T>(key: string): Promise<T | null> {
-    const client = getRedis();
-    const cacheKey = `${KEY_PREFIXES.CACHE}${key}`;
-    const data = await client.get(cacheKey);
-    return data ? (JSON.parse(data) as T) : null;
-  }
+/**
+ * Rate limit status
+ */
+export interface RateLimitStatus {
+  current: number;
+  remaining: number;
+  resetTime: number;
+}
 
-  /**
-   * Delete cache
-   */
-  static async deleteCache(key: string): Promise<void> {
-    const client = getRedis();
-    const cacheKey = `${KEY_PREFIXES.CACHE}${key}`;
-    await client.del(cacheKey);
-  }
+/**
+ * Rate limit utilities interface
+ */
+export interface RateLimitUtilsInstance {
+  checkRateLimit(key: string, limit: number, windowSeconds?: number): Promise<RateLimitResult>;
+  resetRateLimit(key: string): Promise<void>;
+  getRateLimitStatus(key: string, limit: number): Promise<RateLimitStatus>;
+}
 
-  /**
-   * Check if cache exists
-   */
-  static async hasCache(key: string): Promise<boolean> {
-    const client = getRedis();
-    const cacheKey = `${KEY_PREFIXES.CACHE}${key}`;
-    return (await client.exists(cacheKey)) === 1;
-  }
+/**
+ * Create rate limiting utilities with the given Redis client
+ *
+ * @param client - Redis client instance
+ * @returns Rate limit utilities object
+ */
+export function createRateLimitUtils(client: CacheClient): RateLimitUtilsInstance {
+  return {
+    async checkRateLimit(key: string, limit: number, windowSeconds = 60): Promise<RateLimitResult> {
+      const rateKey = `${KEY_PREFIXES.RATE_LIMIT}${key}`;
 
-  /**
-   * Get or set cache with fallback function
-   */
-  static async getOrSetCache<T>(
-    key: string,
-    fallback: () => Promise<T>,
-    ttl: number = DEFAULT_TTL.CACHE
-  ): Promise<T> {
-    const cached = await this.getCache<T>(key);
-    if (cached !== null) {
-      return cached;
-    }
+      const current = await client.incr(rateKey);
 
-    const data = await fallback();
-    await this.setCache(key, data, ttl);
-    return data;
-  }
+      if (current === 1) {
+        await client.expire(rateKey, windowSeconds);
+      }
+
+      const ttl = await client.ttl(rateKey);
+      const resetTime = Date.now() + ttl * 1000;
+
+      return {
+        allowed: current <= limit,
+        remaining: Math.max(0, limit - current),
+        resetTime,
+      };
+    },
+
+    async resetRateLimit(key: string): Promise<void> {
+      const rateKey = `${KEY_PREFIXES.RATE_LIMIT}${key}`;
+      await client.del(rateKey);
+    },
+
+    async getRateLimitStatus(key: string, limit: number): Promise<RateLimitStatus> {
+      const rateKey = `${KEY_PREFIXES.RATE_LIMIT}${key}`;
+
+      const current = await client.get(rateKey);
+      const count = current ? parseInt(current, 10) : 0;
+      const ttl = await client.ttl(rateKey);
+      const resetTime = ttl > 0 ? Date.now() + ttl * 1000 : 0;
+
+      return {
+        current: count,
+        remaining: Math.max(0, limit - count),
+        resetTime,
+      };
+    },
+  };
+}
+
+/**
+ * Cache utilities interface
+ */
+export interface CacheUtilsInstance {
+  setCache<T>(key: string, data: T, ttl?: number): Promise<void>;
+  getCache<T>(key: string): Promise<T | null>;
+  deleteCache(key: string): Promise<void>;
+  hasCache(key: string): Promise<boolean>;
+  getOrSetCache<T>(key: string, fallback: () => Promise<T>, ttl?: number): Promise<T>;
+}
+
+/**
+ * Create cache utilities with the given Redis client
+ *
+ * @param client - Redis client instance
+ * @returns Cache utilities object
+ */
+export function createCacheUtils(client: CacheClient): CacheUtilsInstance {
+  const utils: CacheUtilsInstance = {
+    async setCache<T>(key: string, data: T, ttl: number = DEFAULT_TTL.CACHE): Promise<void> {
+      const cacheKey = `${KEY_PREFIXES.CACHE}${key}`;
+      await client.setex(cacheKey, ttl, JSON.stringify(data));
+    },
+
+    async getCache<T>(key: string): Promise<T | null> {
+      const cacheKey = `${KEY_PREFIXES.CACHE}${key}`;
+      const data = await client.get(cacheKey);
+      return data ? (JSON.parse(data) as T) : null;
+    },
+
+    async deleteCache(key: string): Promise<void> {
+      const cacheKey = `${KEY_PREFIXES.CACHE}${key}`;
+      await client.del(cacheKey);
+    },
+
+    async hasCache(key: string): Promise<boolean> {
+      const cacheKey = `${KEY_PREFIXES.CACHE}${key}`;
+      return (await client.exists(cacheKey)) === 1;
+    },
+
+    async getOrSetCache<T>(
+      key: string,
+      fallback: () => Promise<T>,
+      ttl: number = DEFAULT_TTL.CACHE
+    ): Promise<T> {
+      const cached = await utils.getCache<T>(key);
+      if (cached !== null) {
+        return cached;
+      }
+
+      const data = await fallback();
+      await utils.setCache(key, data, ttl);
+      return data;
+    },
+  };
+
+  return utils;
 }
 
 /**
@@ -215,70 +223,74 @@ export interface UserData {
 }
 
 /**
- * User data utilities
+ * User utilities interface
  */
-export class UserUtils {
-  /**
-   * Set user data
-   */
-  static async setUserData<T extends UserData>(
-    userId: string,
-    data: T,
-    ttl: number = DEFAULT_TTL.USER
-  ): Promise<void> {
-    const client = getRedis();
-    const key = `${KEY_PREFIXES.USER}${userId}`;
-    await client.setex(key, ttl, JSON.stringify(data));
-  }
-
-  /**
-   * Get user data
-   */
-  static async getUserData<T extends UserData>(userId: string): Promise<T | null> {
-    const client = getRedis();
-    const key = `${KEY_PREFIXES.USER}${userId}`;
-    const data = await client.get(key);
-    return data ? (JSON.parse(data) as T) : null;
-  }
-
-  /**
-   * Delete user data
-   */
-  static async deleteUserData(userId: string): Promise<void> {
-    const client = getRedis();
-    const key = `${KEY_PREFIXES.USER}${userId}`;
-    await client.del(key);
-  }
+export interface UserUtilsInstance {
+  setUserData<T extends UserData>(userId: string, data: T, ttl?: number): Promise<void>;
+  getUserData<T extends UserData>(userId: string): Promise<T | null>;
+  deleteUserData(userId: string): Promise<void>;
 }
 
 /**
- * Token utilities
+ * Create user data utilities with the given Redis client
+ *
+ * @param client - Redis client instance
+ * @returns User utilities object
  */
-export class TokenUtils {
-  /**
-   * Blacklist token
-   */
-  static async blacklistToken(token: string, ttl: number = DEFAULT_TTL.TOKEN): Promise<void> {
-    const client = getRedis();
-    const key = `${KEY_PREFIXES.TOKEN}blacklist:${token}`;
-    await client.setex(key, ttl, '1');
-  }
+export function createUserUtils(client: CacheClient): UserUtilsInstance {
+  return {
+    async setUserData<T extends UserData>(
+      userId: string,
+      data: T,
+      ttl: number = DEFAULT_TTL.USER
+    ): Promise<void> {
+      const key = `${KEY_PREFIXES.USER}${userId}`;
+      await client.setex(key, ttl, JSON.stringify(data));
+    },
 
-  /**
-   * Check if token is blacklisted
-   */
-  static async isTokenBlacklisted(token: string): Promise<boolean> {
-    const client = getRedis();
-    const key = `${KEY_PREFIXES.TOKEN}blacklist:${token}`;
-    return (await client.exists(key)) === 1;
-  }
+    async getUserData<T extends UserData>(userId: string): Promise<T | null> {
+      const key = `${KEY_PREFIXES.USER}${userId}`;
+      const data = await client.get(key);
+      return data ? (JSON.parse(data) as T) : null;
+    },
 
-  /**
-   * Remove token from blacklist
-   */
-  static async unblacklistToken(token: string): Promise<void> {
-    const client = getRedis();
-    const key = `${KEY_PREFIXES.TOKEN}blacklist:${token}`;
-    await client.del(key);
-  }
+    async deleteUserData(userId: string): Promise<void> {
+      const key = `${KEY_PREFIXES.USER}${userId}`;
+      await client.del(key);
+    },
+  };
+}
+
+/**
+ * Token utilities interface
+ */
+export interface TokenUtilsInstance {
+  blacklistToken(token: string, ttl?: number): Promise<void>;
+  isTokenBlacklisted(token: string): Promise<boolean>;
+  unblacklistToken(token: string): Promise<void>;
+}
+
+/**
+ * Create token utilities with the given Redis client
+ *
+ * @param client - Redis client instance
+ * @returns Token utilities object
+ */
+export function createTokenUtils(client: CacheClient): TokenUtilsInstance {
+  return {
+    async blacklistToken(token: string, ttl: number = DEFAULT_TTL.TOKEN): Promise<void> {
+      const key = `${KEY_PREFIXES.TOKEN}blacklist:${token}`;
+      await client.setex(key, ttl, '1');
+    },
+
+    async isTokenBlacklisted(token: string): Promise<boolean> {
+      const key = `${KEY_PREFIXES.TOKEN}blacklist:${token}`;
+      return (await client.exists(key)) === 1;
+    },
+
+    async unblacklistToken(token: string): Promise<void> {
+      const key = `${KEY_PREFIXES.TOKEN}blacklist:${token}`;
+      await client.del(key);
+    },
+  };
 }

@@ -1,4 +1,9 @@
-import { type CacheClient, getRedis, testConnection } from '@qauth/cache';
+import {
+  type CacheClient,
+  createRedisConnection,
+  type RedisConfig,
+  testRedisConnection,
+} from '@qauth/cache';
 import type { FastifyInstance, FastifyPluginOptions } from 'fastify';
 import fp from 'fastify-plugin';
 
@@ -9,22 +14,45 @@ declare module 'fastify' {
 }
 
 /**
+ * Options for the cache plugin
+ */
+export interface CachePluginOptions extends FastifyPluginOptions {
+  /**
+   * Redis configuration with connection settings
+   */
+  config: RedisConfig;
+}
+
+/**
  * Fastify plugin for Redis connection
  * Decorates fastify instance with redis
  *
- * TODO: Currently uses ioredis-specific methods (e.g., `redis.quit()`).
- * After refactoring @qauth/cache to proper abstraction, this should use
- * abstracted methods (e.g., `redis.close()` or similar) instead of
- * implementation-specific methods.
+ * @example
+ * ```typescript
+ * await fastify.register(cachePlugin, {
+ *   config: {
+ *     url: env.REDIS_URL,
+ *     host: env.REDIS_HOST,
+ *     port: env.REDIS_PORT,
+ *     password: env.REDIS_PASSWORD,
+ *     db: env.REDIS_DB,
+ *     maxRetriesPerRequest: env.REDIS_MAX_RETRIES,
+ *     connectTimeout: env.REDIS_CONNECTION_TIMEOUT,
+ *     commandTimeout: env.REDIS_COMMAND_TIMEOUT,
+ *     lazyConnect: true,
+ *   },
+ * });
+ * ```
  */
-export const cachePlugin = fp<FastifyPluginOptions>(
-  async (fastify: FastifyInstance) => {
-    const redis = getRedis();
+export const cachePlugin = fp<CachePluginOptions>(
+  async (fastify: FastifyInstance, options: CachePluginOptions) => {
+    // Create Redis instance using factory
+    const redis = createRedisConnection(options.config);
 
     fastify.decorate('redis', redis);
 
     fastify.addHook('onReady', async () => {
-      const isConnected = await testConnection();
+      const isConnected = await testRedisConnection(redis);
       if (!isConnected) {
         fastify.log.warn('Redis connection test failed on ready');
       } else {

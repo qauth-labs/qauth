@@ -1,6 +1,6 @@
 import { and, desc, eq, InferInsertModel, InferSelectModel } from 'drizzle-orm';
 
-import { db, DbClient } from '../db';
+import { DbClient } from '../db';
 import { auditLogs } from '../schema/audit';
 import { users } from '../schema/core';
 
@@ -44,10 +44,10 @@ export interface FindAuditLogsOptions {
 /**
  * Factory function that creates an audit logs repository
  *
- * @param defaultDb - Default database client to use (defaults to main db instance)
+ * @param defaultDb - Database client to use for queries
  * @returns Repository object with audit log methods
  */
-export function createAuditLogsRepository(defaultDb: DbClient = db) {
+export function createAuditLogsRepository(defaultDb: DbClient) {
   return {
     /**
      * Create a new audit log entry
@@ -187,8 +187,3 @@ export function createAuditLogsRepository(defaultDb: DbClient = db) {
     },
   };
 }
-
-/**
- * Default audit logs repository instance
- */
-export const auditLogsRepository = createAuditLogsRepository();

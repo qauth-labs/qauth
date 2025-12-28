@@ -1,4 +1,5 @@
 import Fastify from 'fastify';
+import { serializerCompiler, validatorCompiler, ZodTypeProvider } from 'fastify-type-provider-zod';
 
 import { app } from './app/app';
 import { env } from './config/env';
@@ -8,7 +9,11 @@ const server = Fastify({
   logger: {
     level: env.LOG_LEVEL,
   },
-});
+}).withTypeProvider<ZodTypeProvider>();
+
+// Set up Zod validator and serializer
+server.setValidatorCompiler(validatorCompiler);
+server.setSerializerCompiler(serializerCompiler);
 
 async function shutdown(signal: string) {
   server.log.info(`${signal} received, shutting down gracefully...`);
