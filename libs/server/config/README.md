@@ -225,8 +225,8 @@ nx lint config
 
 - [`@qauth/password`](../password/README.md): Password hashing (uses `passwordEnvSchema`)
 - [`@qauth/validation`](../validation/README.md): Password validation (uses `passwordEnvSchema`)
-- [`@qauth/fastify-plugin-db`](../../fastify-plugin/db/README.md): Database plugin (uses `databaseEnvSchema`)
-- [`@qauth/fastify-plugin-cache`](../../fastify-plugin/cache/README.md): Cache plugin (uses `redisEnvSchema`)
+- [`@qauth/fastify-plugin-db`](../../fastify/plugins/db/README.md): Database plugin (uses `databaseEnvSchema`)
+- [`@qauth/fastify-plugin-cache`](../../fastify/plugins/cache/README.md): Cache plugin (uses `redisEnvSchema`)
 
 ## License
 

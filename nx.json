@@ -22,27 +22,29 @@
         }
       },
       "exclude": [
-        "libs/data-access/db/*",
-        "libs/data-access/cache/*",
-        "libs/fastify-plugin/db/*",
-        "libs/fastify-plugin/cache/*",
-        "libs/common/errors/*",
-        "libs/common/validation/*",
-        "libs/common/password/*",
-        "libs/server/config/*"
+        "libs/infra/db/*",
+        "libs/infra/cache/*",
+        "libs/fastify/plugins/db/*",
+        "libs/fastify/plugins/cache/*",
+        "libs/fastify/plugins/password/*",
+        "libs/shared/errors/*",
+        "libs/server/config/*",
+        "libs/server/password/*",
+        "libs/server/validation/*"
       ]
     },
     {
       "plugin": "@nx/js/typescript",
       "include": [
-        "libs/data-access/db/*",
-        "libs/data-access/cache/*",
-        "libs/fastify-plugin/db/*",
-        "libs/fastify-plugin/cache/*",
-        "libs/common/errors/*",
-        "libs/common/validation/*",
-        "libs/common/password/*",
-        "libs/server/config/*"
+        "libs/infra/db/*",
+        "libs/infra/cache/*",
+        "libs/fastify/plugins/db/*",
+        "libs/fastify/plugins/cache/*",
+        "libs/fastify/plugins/password/*",
+        "libs/shared/errors/*",
+        "libs/server/config/*",
+        "libs/server/password/*",
+        "libs/server/validation/*"
       ],
       "options": {
         "typecheck": {

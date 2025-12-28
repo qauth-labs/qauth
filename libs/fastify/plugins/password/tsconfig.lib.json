@@ -1,0 +1,18 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "outDir": "../../../../dist/out-tsc",
+    "declaration": true,
+    "composite": true,
+    "types": ["node"]
+  },
+  "include": ["src/**/*.ts"],
+  "references": [
+    {
+      "path": "../../../server/validation/tsconfig.lib.json"
+    },
+    {
+      "path": "../../../server/password/tsconfig.lib.json"
+    }
+  ]
+}

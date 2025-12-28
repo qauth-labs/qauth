@@ -4,28 +4,28 @@
   "include": [],
   "references": [
     {
-      "path": "./libs/fastify-plugin/cache"
-    },
-    {
-      "path": "./libs/fastify-plugin/db"
-    },
-    {
-      "path": "./libs/data-access/db"
-    },
-    {
-      "path": "./libs/common/errors"
-    },
-    {
-      "path": "./libs/data-access/cache"
-    },
-    {
-      "path": "./libs/fastify-plugin/password"
-    },
-    {
       "path": "./libs/server/validation"
     },
     {
       "path": "./libs/server/password"
+    },
+    {
+      "path": "./libs/fastify/plugins/password"
+    },
+    {
+      "path": "./libs/fastify/plugins/cache"
+    },
+    {
+      "path": "./libs/fastify/plugins/db"
+    },
+    {
+      "path": "./libs/shared/errors"
+    },
+    {
+      "path": "./libs/infra/cache"
+    },
+    {
+      "path": "./libs/infra/db"
     }
   ]
 }

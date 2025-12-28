@@ -16,16 +16,16 @@
       "path": "../../libs/server/validation/tsconfig.lib.json"
     },
     {
-      "path": "../../libs/common/errors/tsconfig.lib.json"
+      "path": "../../libs/shared/errors/tsconfig.lib.json"
     },
     {
-      "path": "../../libs/fastify-plugin/password/tsconfig.lib.json"
+      "path": "../../libs/fastify/plugins/password/tsconfig.lib.json"
     },
     {
-      "path": "../../libs/fastify-plugin/db/tsconfig.lib.json"
+      "path": "../../libs/fastify/plugins/db/tsconfig.lib.json"
     },
     {
-      "path": "../../libs/fastify-plugin/cache/tsconfig.lib.json"
+      "path": "../../libs/fastify/plugins/cache/tsconfig.lib.json"
     }
   ]
 }
