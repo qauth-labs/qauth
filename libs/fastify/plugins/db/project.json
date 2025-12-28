@@ -1,0 +1,9 @@
+{
+  "name": "fastify-plugin-db",
+  "$schema": "../../../../node_modules/nx/schemas/project-schema.json",
+  "sourceRoot": "libs/fastify/plugins/db/src",
+  "projectType": "library",
+  "tags": ["scope:fastify-plugin", "type:db"],
+  "// targets": "to see all targets run: nx show project fastify-plugin-db --web",
+  "targets": {}
+}

@@ -1,9 +1,0 @@
-{
-  "name": "errors",
-  "$schema": "../../../node_modules/nx/schemas/project-schema.json",
-  "sourceRoot": "libs/common/errors/src",
-  "projectType": "library",
-  "tags": ["scope:common", "type:errors"],
-  "// targets": "to see all targets run: nx show project errors --web",
-  "targets": {}
-}

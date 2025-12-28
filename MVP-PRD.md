@@ -1104,7 +1104,7 @@ These features are NOT part of the MVP:
 
 ## Appendix A: Database Schema
 
-> **Note**: This is a simplified SQL representation. The actual implementation uses Drizzle ORM with TypeScript schemas. For the complete, up-to-date schema, see `libs/data-access/db/src/lib/schema/` or the DBML file at `libs/data-access/db/src/qauth-schema.dbml`.
+> **Note**: This is a simplified SQL representation. The actual implementation uses Drizzle ORM with TypeScript schemas. For the complete, up-to-date schema, see `libs/infra/db/src/lib/schema/` or the DBML file at `libs/infra/db/src/qauth-schema.dbml`.
 
 ### Key Design Decisions
 

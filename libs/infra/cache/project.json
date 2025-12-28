@@ -1,0 +1,25 @@
+{
+  "name": "cache",
+  "$schema": "../../../node_modules/nx/schemas/project-schema.json",
+  "sourceRoot": "libs/infra/cache/src",
+  "projectType": "library",
+  "tags": ["scope:infra", "type:cache"],
+  "metadata": {
+    "description": "Redis connection and caching utilities for QAuth",
+    "version": "1.0.0",
+    "author": "QAuth Team",
+    "keywords": ["redis", "cache", "session", "rate-limit", "auth"],
+    "dependencies": {
+      "ioredis": "^5.8.2"
+    }
+  },
+  "targets": {
+    "lint": {
+      "executor": "@nx/eslint:lint",
+      "outputs": ["{options.outputFile}"],
+      "options": {
+        "lintFilePatterns": ["libs/infra/cache/**/*.ts"]
+      }
+    }
+  }
+}

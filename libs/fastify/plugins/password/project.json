@@ -1,0 +1,9 @@
+{
+  "name": "fastify-plugin-password",
+  "$schema": "../../../../node_modules/nx/schemas/project-schema.json",
+  "sourceRoot": "libs/fastify/plugins/password/src",
+  "projectType": "library",
+  "tags": ["scope:fastify-plugin", "type:password"],
+  "// targets": "to see all targets run: nx show project fastify-plugin-password --web",
+  "targets": {}
+}

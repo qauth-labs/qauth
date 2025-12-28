@@ -9,12 +9,12 @@
     "skipLibCheck": true,
     "baseUrl": ".",
     "paths": {
-      "@qauth/cache": ["libs/data-access/cache/src/index.ts"],
-      "@qauth/db": ["libs/data-access/db/src/index.ts"],
-      "@qauth/fastify-plugin-db": ["libs/fastify-plugin/db/src/index.ts"],
-      "@qauth/fastify-plugin-cache": ["libs/fastify-plugin/cache/src/index.ts"],
-      "@qauth/fastify-plugin-password": ["libs/fastify-plugin/password/src/index.ts"],
-      "@qauth/errors": ["libs/common/errors/src/index.ts"],
+      "@qauth/cache": ["libs/infra/cache/src/index.ts"],
+      "@qauth/db": ["libs/infra/db/src/index.ts"],
+      "@qauth/fastify-plugin-db": ["libs/fastify/plugins/db/src/index.ts"],
+      "@qauth/fastify-plugin-cache": ["libs/fastify/plugins/cache/src/index.ts"],
+      "@qauth/fastify-plugin-password": ["libs/fastify/plugins/password/src/index.ts"],
+      "@qauth/errors": ["libs/shared/errors/src/index.ts"],
       "@qauth/password": ["libs/server/password/src/index.ts"],
       "@qauth/validation": ["libs/server/validation/src/index.ts"],
       "@qauth/config": ["libs/server/config/src/index.ts"]

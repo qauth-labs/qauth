@@ -1,0 +1,49 @@
+{
+  "name": "db",
+  "$schema": "../../../node_modules/nx/schemas/project-schema.json",
+  "sourceRoot": "libs/infra/db/src",
+  "projectType": "library",
+  "tags": ["scope:infra", "type:db"],
+  "targets": {
+    "db:generate": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "drizzle-kit generate",
+        "cwd": "libs/infra/db"
+      },
+      "description": "Generate database migrations"
+    },
+    "db:migrate": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "drizzle-kit migrate",
+        "cwd": "libs/infra/db"
+      },
+      "description": "Run database migrations"
+    },
+    "db:studio": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "drizzle-kit studio",
+        "cwd": "libs/infra/db"
+      },
+      "description": "Open Drizzle Studio for database management"
+    },
+    "db:push": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "drizzle-kit push",
+        "cwd": "libs/infra/db"
+      },
+      "description": "Push schema changes directly to database (dev only)"
+    },
+    "db:drop": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "drizzle-kit drop",
+        "cwd": "libs/infra/db"
+      },
+      "description": "Drop all tables (DANGER: use with caution)"
+    }
+  }
+}
