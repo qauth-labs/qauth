@@ -10,6 +10,9 @@
   "exclude": ["src/**/*.test.ts", "src/**/*.spec.ts", "src/test/**/*"],
   "references": [
     {
+      "path": "../../libs/server/config/tsconfig.lib.json"
+    },
+    {
       "path": "../../libs/common/validation/tsconfig.lib.json"
     },
     {
