@@ -79,14 +79,6 @@
           "buildTarget": "auth-server:build:production"
         }
       }
-    },
-    "test": {
-      "executor": "@nx/jest:jest",
-      "outputs": ["{workspaceRoot}/coverage/{projectRoot}"],
-      "options": {
-        "jestConfig": "apps/auth-server/jest.config.ts",
-        "passWithNoTests": true
-      }
     }
   }
 }
