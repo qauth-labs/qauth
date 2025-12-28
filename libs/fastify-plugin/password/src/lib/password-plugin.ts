@@ -24,12 +24,14 @@ declare module 'fastify' {
 export interface PasswordPluginOptions extends FastifyPluginOptions {
   /**
    * Configuration for password hashing (Argon2)
+   * Optional - missing values will use defaults
    */
-  hashConfig: PasswordHashConfig;
+  hashConfig?: Partial<PasswordHashConfig>;
   /**
    * Configuration for password strength validation
+   * Optional - missing values will use defaults
    */
-  validationConfig: PasswordValidationConfig;
+  validationConfig?: Partial<PasswordValidationConfig>;
 }
 
 /**
