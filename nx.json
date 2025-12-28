@@ -28,7 +28,8 @@
         "libs/fastify-plugin/cache/*",
         "libs/common/errors/*",
         "libs/common/validation/*",
-        "libs/common/password/*"
+        "libs/common/password/*",
+        "libs/server/config/*"
       ]
     },
     {
@@ -40,7 +41,8 @@
         "libs/fastify-plugin/cache/*",
         "libs/common/errors/*",
         "libs/common/validation/*",
-        "libs/common/password/*"
+        "libs/common/password/*",
+        "libs/server/config/*"
       ],
       "options": {
         "typecheck": {
