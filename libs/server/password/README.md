@@ -187,7 +187,9 @@ async function loginUser(email: string, password: string) {
     throw new Error('Invalid password');
   }
 
-  return user;
+  // Remove passwordHash from response
+  const { passwordHash: _, ...safeUser } = user;
+  return safeUser;
 }
 ```
 
@@ -216,9 +218,10 @@ describe('Password hashing', () => {
 ## Security Considerations
 
 1. **Never store plain text passwords** - Always hash passwords before storing
-2. **Use appropriate configuration** - Higher `memoryCost` and `timeCost` values provide better security but may impact performance
-3. **Handle errors** - Password hashing can fail; always wrap in try-catch blocks
-4. **Invalid hash handling** - `verifyPassword` returns `false` for invalid hash formats (does not throw)
+2. **Never return password hashes in API responses** - Always remove `passwordHash` from user objects before sending to clients
+3. **Use appropriate configuration** - Higher `memoryCost` and `timeCost` values provide better security but may impact performance
+4. **Handle errors** - Password hashing can fail; always wrap in try-catch blocks
+5. **Invalid hash handling** - `verifyPassword` returns `false` for invalid hash formats (does not throw)
 
 ## Migration from Direct Function Calls
 

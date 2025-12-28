@@ -92,7 +92,10 @@ fastify.post('/register', async (request, reply) => {
 
   // Create user with hashed password
   const user = await createUser({ email, passwordHash });
-  return { user };
+
+  // Remove passwordHash from response
+  const { passwordHash: _, ...safeUser } = user;
+  return { user: safeUser };
 });
 
 fastify.post('/login', async (request, reply) => {
@@ -110,7 +113,9 @@ fastify.post('/login', async (request, reply) => {
     return reply.code(401).send({ error: 'Invalid credentials' });
   }
 
-  return { user };
+  // Remove passwordHash from response
+  const { passwordHash: _, ...safeUser } = user;
+  return { user: safeUser };
 });
 ```
 
@@ -314,11 +319,13 @@ fastify.post('/register', async (request, reply) => {
 
 3. **Error Handling**: Always wrap password operations in try-catch blocks in production code.
 
-4. **Password Strength**: Use appropriate `minScore` values based on your security requirements (2 = Fair is a good default).
+4. **Never Return Password Hashes**: Always remove `passwordHash` from API responses. Use a helper function like `sanitizeUser()` to exclude sensitive fields.
 
-5. **Argon2 Configuration**: Adjust `memoryCost`, `timeCost`, and `parallelism` based on your server capabilities and security requirements.
+5. **Password Strength**: Use appropriate `minScore` values based on your security requirements (2 = Fair is a good default).
 
-6. **Testing**: Use lower-cost configurations in tests for faster execution.
+6. **Argon2 Configuration**: Adjust `memoryCost`, `timeCost`, and `parallelism` based on your server capabilities and security requirements.
+
+7. **Testing**: Use lower-cost configurations in tests for faster execution.
 
 ## Example: Complete Integration
 
@@ -345,6 +352,12 @@ await fastify.register(passwordPlugin, {
   },
 });
 
+// Helper function to sanitize user data (remove sensitive fields)
+function sanitizeUser(user: { passwordHash: string; [key: string]: unknown }) {
+  const { passwordHash, ...safeUser } = user;
+  return safeUser;
+}
+
 // Registration route
 fastify.post('/auth/register', async (request, reply) => {
   const { email, password } = request.body as { email: string; password: string };
@@ -368,7 +381,8 @@ fastify.post('/auth/register', async (request, reply) => {
     // ... other fields
   });
 
-  return reply.code(201).send({ user });
+  // Remove passwordHash from response
+  return reply.code(201).send({ user: sanitizeUser(user) });
 });
 
 // Login route
@@ -386,7 +400,8 @@ fastify.post('/auth/login', async (request, reply) => {
     return reply.code(401).send({ error: 'Invalid credentials' });
   }
 
-  return { user };
+  // Remove passwordHash from response
+  return { user: sanitizeUser(user) };
 });
 
 await fastify.listen({ port: 3000 });
