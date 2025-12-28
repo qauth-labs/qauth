@@ -1,6 +1,5 @@
 import { WeakPasswordError } from '@qauth/errors';
-import { hashPassword } from '@qauth/password';
-import { validateEmail, validatePasswordStrength } from '@qauth/validation';
+import { validateEmail } from '@qauth/validation';
 import type { FastifyInstance } from 'fastify';
 
 import { env } from '../../../config/env';
@@ -46,8 +45,8 @@ export default async function (fastify: FastifyInstance) {
       // Validate email format and normalize
       const normalizedEmail = validateEmail(email);
 
-      // Validate password strength
-      const passwordStrength = validatePasswordStrength(password);
+      // Validate password strength using injected validator
+      const passwordStrength = fastify.passwordValidator.validatePasswordStrength(password);
       if (!passwordStrength.valid) {
         throw new WeakPasswordError(
           'Password does not meet strength requirements',
@@ -69,8 +68,8 @@ export default async function (fastify: FastifyInstance) {
         realm = await getOrCreateDefaultRealm(fastify);
       }
 
-      // Hash password
-      const passwordHash = await hashPassword(password);
+      // Hash password using injected hasher
+      const passwordHash = await fastify.passwordHasher.hashPassword(password);
 
       // Create user (database unique constraint prevents race conditions)
       // UniqueConstraintError will be handled by error handler with constraint information

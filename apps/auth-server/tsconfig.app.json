@@ -13,13 +13,13 @@
       "path": "../../libs/server/config/tsconfig.lib.json"
     },
     {
-      "path": "../../libs/common/validation/tsconfig.lib.json"
-    },
-    {
-      "path": "../../libs/common/password/tsconfig.lib.json"
+      "path": "../../libs/server/validation/tsconfig.lib.json"
     },
     {
       "path": "../../libs/common/errors/tsconfig.lib.json"
+    },
+    {
+      "path": "../../libs/fastify-plugin/password/tsconfig.lib.json"
     },
     {
       "path": "../../libs/fastify-plugin/db/tsconfig.lib.json"

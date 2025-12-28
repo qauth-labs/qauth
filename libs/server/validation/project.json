@@ -1,16 +1,16 @@
 {
-  "name": "password",
+  "name": "validation",
   "$schema": "../../../node_modules/nx/schemas/project-schema.json",
-  "sourceRoot": "libs/common/password/src",
+  "sourceRoot": "libs/server/validation/src",
   "projectType": "library",
-  "tags": ["scope:common", "type:utility"],
-  "// targets": "to see all targets run: nx show project password --web",
+  "tags": ["scope:server", "type:utility"],
+  "// targets": "to see all targets run: nx show project validation --web",
   "targets": {
     "test": {
       "executor": "@nx/jest:jest",
       "outputs": ["{workspaceRoot}/coverage/{projectRoot}"],
       "options": {
-        "jestConfig": "libs/common/password/jest.config.ts",
+        "jestConfig": "libs/server/validation/jest.config.ts",
         "passWithNoTests": true
       }
     }

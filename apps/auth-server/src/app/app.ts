@@ -2,6 +2,7 @@ import AutoLoad from '@fastify/autoload';
 import cors from '@fastify/cors';
 import { cachePlugin } from '@qauth/fastify-plugin-cache';
 import { databasePlugin } from '@qauth/fastify-plugin-db';
+import { passwordPlugin } from '@qauth/fastify-plugin-password';
 import { FastifyInstance } from 'fastify';
 import * as path from 'path';
 
@@ -13,6 +14,17 @@ export async function app(fastify: FastifyInstance, opts: object) {
   await fastify.register(databasePlugin);
 
   await fastify.register(cachePlugin);
+
+  await fastify.register(passwordPlugin, {
+    hashConfig: {
+      memoryCost: env.PASSWORD_MEMORY_COST,
+      timeCost: env.PASSWORD_TIME_COST,
+      parallelism: env.PASSWORD_PARALLELISM,
+    },
+    validationConfig: {
+      minScore: env.PASSWORD_MIN_SCORE,
+    },
+  });
 
   await fastify.register(rateLimitPlugin);
 
