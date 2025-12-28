@@ -15,11 +15,15 @@ import { z } from 'zod';
  *
  * @example
  * ```typescript
+ * import { z } from 'zod';
  * import { baseEnvSchema, databaseEnvSchema, parseEnv } from '@qauth/config';
  *
- * const envSchema = baseEnvSchema.merge(databaseEnvSchema);
+ * const envSchema = z.object({
+ *   ...baseEnvSchema.shape,
+ *   ...databaseEnvSchema.shape,
+ * });
  * const env = parseEnv(envSchema);
- * // env is typed as BaseEnv & DatabaseEnv
+ * // env is fully typed
  * ```
  */
 export function parseEnv<T extends z.ZodTypeAny>(schema: T): z.infer<T> {
