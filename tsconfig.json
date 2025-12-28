@@ -4,9 +4,6 @@
   "include": [],
   "references": [
     {
-      "path": "./libs/server/validation"
-    },
-    {
       "path": "./libs/server/password"
     },
     {
@@ -26,6 +23,9 @@
     },
     {
       "path": "./libs/infra/db"
+    },
+    {
+      "path": "./libs/shared/validation"
     }
   ]
 }

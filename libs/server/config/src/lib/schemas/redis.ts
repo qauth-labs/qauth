@@ -36,11 +36,6 @@ export const redisEnvSchema = z.object({
   REDIS_MAX_RETRIES: z.coerce.number().int().min(1).default(3),
 
   /**
-   * Retry delay on failover in milliseconds
-   */
-  REDIS_RETRY_DELAY: z.coerce.number().int().min(1).default(1000),
-
-  /**
    * Connection timeout in milliseconds
    */
   REDIS_CONNECTION_TIMEOUT: z.coerce.number().int().min(1).default(10000),

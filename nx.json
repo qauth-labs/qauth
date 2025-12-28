@@ -30,7 +30,7 @@
         "libs/shared/errors/*",
         "libs/server/config/*",
         "libs/server/password/*",
-        "libs/server/validation/*"
+        "libs/shared/validation/*"
       ]
     },
     {
@@ -44,7 +44,7 @@
         "libs/shared/errors/*",
         "libs/server/config/*",
         "libs/server/password/*",
-        "libs/server/validation/*"
+        "libs/shared/validation/*"
       ],
       "options": {
         "typecheck": {

@@ -25,11 +25,55 @@ export default [
         'error',
         {
           enforceBuildableLibDependency: true,
-          allow: ['^.*/eslint(\\.base)?\\.config\\.[cm]?[jt]s$'],
+          allow: [],
           depConstraints: [
+            // Shared layer (bottom layer - no internal dependencies)
+            // Shared libraries contain pure utilities, errors, and common types
+            // They can only depend on external npm packages, not other workspace libs
             {
-              sourceTag: '*',
-              onlyDependOnLibsWithTags: ['*'],
+              sourceTag: 'scope:shared',
+              onlyDependOnLibsWithTags: [],
+            },
+            // Infrastructure layer
+            // Infrastructure libraries handle external services (DB, Cache, etc.)
+            // Can depend on: other infra libs, shared libs
+            // Cannot depend on: server, fastify, app layers
+            {
+              sourceTag: 'scope:infra',
+              onlyDependOnLibsWithTags: ['scope:infra', 'scope:shared'],
+            },
+            // Server utilities layer
+            // Server libraries contain business logic utilities (password, config, etc.)
+            // Can depend on: other server libs, shared libs
+            // Cannot depend on: infra, fastify, app layers
+            {
+              sourceTag: 'scope:server',
+              onlyDependOnLibsWithTags: ['scope:server', 'scope:shared'],
+            },
+            // Fastify plugins layer
+            // Fastify plugins wrap infrastructure and server utilities for Fastify
+            // Can depend on: other fastify plugins, server libs, infra libs, shared libs
+            // Cannot depend on: app layer
+            {
+              sourceTag: 'scope:fastify',
+              onlyDependOnLibsWithTags: [
+                'scope:fastify',
+                'scope:server',
+                'scope:infra',
+                'scope:shared',
+              ],
+            },
+            // Application layer (top layer)
+            // Applications are the entry points and can use all layers
+            // Can depend on: fastify plugins, server libs, infra libs, shared libs
+            {
+              sourceTag: 'scope:app',
+              onlyDependOnLibsWithTags: [
+                'scope:fastify',
+                'scope:server',
+                'scope:infra',
+                'scope:shared',
+              ],
             },
           ],
         },

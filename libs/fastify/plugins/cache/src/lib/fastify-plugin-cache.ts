@@ -37,7 +37,6 @@ export interface CachePluginOptions extends FastifyPluginOptions {
  *     password: env.REDIS_PASSWORD,
  *     db: env.REDIS_DB,
  *     maxRetriesPerRequest: env.REDIS_MAX_RETRIES,
- *     retryDelayOnFailover: env.REDIS_RETRY_DELAY,
  *     connectTimeout: env.REDIS_CONNECTION_TIMEOUT,
  *     commandTimeout: env.REDIS_COMMAND_TIMEOUT,
  *     lazyConnect: true,

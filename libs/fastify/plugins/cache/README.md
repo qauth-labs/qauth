@@ -146,7 +146,6 @@ REDIS_COMMAND_TIMEOUT=5000
 
 # Retry Configuration
 REDIS_MAX_RETRIES=3
-REDIS_RETRY_DELAY=1000
 ```
 
 For detailed configuration options, see the [`@qauth/cache` README](../../infra/cache/README.md).

@@ -9,10 +9,10 @@
   "include": ["src/**/*.ts"],
   "references": [
     {
-      "path": "../../server/validation/tsconfig.lib.json"
+      "path": "../../shared/errors/tsconfig.lib.json"
     },
     {
-      "path": "../../shared/errors/tsconfig.lib.json"
+      "path": "../../shared/validation/tsconfig.lib.json"
     }
   ]
 }

@@ -1,9 +1,9 @@
 {
   "name": "validation",
   "$schema": "../../../node_modules/nx/schemas/project-schema.json",
-  "sourceRoot": "libs/server/validation/src",
+  "sourceRoot": "libs/shared/validation/src",
   "projectType": "library",
-  "tags": ["scope:server", "type:utility"],
+  "tags": ["scope:shared", "type:utility"],
   "// targets": "to see all targets run: nx show project validation --web",
   "targets": {}
 }
