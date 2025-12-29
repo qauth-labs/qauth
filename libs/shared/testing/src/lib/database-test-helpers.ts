@@ -18,7 +18,7 @@ export async function startTestDatabase(): Promise<{
     return { container, pool, connectionString: container.getConnectionUri() };
   }
 
-  container = await new PostgreSqlContainer('postgres:17-alpine').start();
+  container = await new PostgreSqlContainer('postgres:18-alpine').start();
   const connectionString = container.getConnectionUri();
 
   pool = new Pool({
