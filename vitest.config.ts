@@ -12,7 +12,6 @@ export default defineConfig({
       '**/coverage/**',
       '**/.{idea,git,cache,output,temp}/**',
       '**/{karma,rollup,webpack,vite,vitest,jest,ava,babel,nyc,cypress,tsup,build,eslint,prettier}.config.*',
-      '**/*.e2e.test.{js,ts}', // E2E tests use Supertest, not Vitest
     ],
     coverage: {
       provider: 'v8',
