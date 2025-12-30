@@ -17,7 +17,8 @@
       "@qauth/errors": ["libs/shared/errors/src/index.ts"],
       "@qauth/validation": ["libs/shared/validation/src/index.ts"],
       "@qauth/password": ["libs/server/password/src/index.ts"],
-      "@qauth/config": ["libs/server/config/src/index.ts"]
+      "@qauth/config": ["libs/server/config/src/index.ts"],
+      "@qauth/testing": ["libs/shared/testing/src/index.ts"]
     },
     "esModuleInterop": true,
     "strict": true,

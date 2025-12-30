@@ -1,10 +1,10 @@
 {
-  "name": "config",
+  "name": "testing",
   "$schema": "../../../node_modules/nx/schemas/project-schema.json",
-  "sourceRoot": "libs/server/config/src",
+  "sourceRoot": "libs/shared/testing/src",
   "projectType": "library",
-  "tags": ["scope:server", "type:config"],
-  "// targets": "to see all targets run: nx show project config --web",
+  "tags": ["scope:shared", "type:testing"],
+  "// targets": "to see all targets run: nx show project testing --web",
   "targets": {
     "test": {
       "executor": "@nx/vitest:test",

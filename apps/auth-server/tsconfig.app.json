@@ -16,6 +16,9 @@
       "path": "../../libs/shared/validation/tsconfig.lib.json"
     },
     {
+      "path": "../../libs/shared/testing/tsconfig.lib.json"
+    },
+    {
       "path": "../../libs/shared/errors/tsconfig.lib.json"
     },
     {

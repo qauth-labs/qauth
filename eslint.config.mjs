@@ -16,6 +16,8 @@ export default [
       '**/node_modules/**',
       '**/out-tsc/**',
       '**/web-build/**',
+      '**/vitest.config.ts',
+      '**/vitest.workspace.ts',
     ],
   },
   {
@@ -33,6 +35,15 @@ export default [
             {
               sourceTag: 'scope:shared',
               onlyDependOnLibsWithTags: [],
+            },
+            {
+              sourceTag: 'type:testing',
+              onlyDependOnLibsWithTags: [
+                'scope:shared',
+                'scope:infra',
+                'scope:server',
+                'scope:fastify',
+              ],
             },
             // Infrastructure layer
             // Infrastructure libraries handle external services (DB, Cache, etc.)

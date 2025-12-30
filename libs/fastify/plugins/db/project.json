@@ -5,5 +5,14 @@
   "projectType": "library",
   "tags": ["scope:fastify", "type:db"],
   "// targets": "to see all targets run: nx show project fastify-plugin-db --web",
-  "targets": {}
+  "targets": {
+    "test": {
+      "executor": "@nx/vitest:test",
+      "outputs": ["{workspaceRoot}/coverage/{projectRoot}"],
+      "options": {
+        "passWithNoTests": true,
+        "reportsDirectory": "{workspaceRoot}/coverage/{projectRoot}"
+      }
+    }
+  }
 }
