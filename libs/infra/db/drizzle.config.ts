@@ -1,7 +1,7 @@
 import * as dotenv from 'dotenv';
 import type { Config } from 'drizzle-kit';
 
-if (process.env.NODE_ENV !== 'test') {
+if (!process.env.VITEST && !process.env.VITEST_WORKER_ID) {
   dotenv.config({ path: '../../../.env' }); // Load .env from project root
 }
 

@@ -27,7 +27,7 @@ export default [
         'error',
         {
           enforceBuildableLibDependency: true,
-          allow: ['apps/**'],
+          allow: [],
           depConstraints: [
             // Shared layer (bottom layer - no internal dependencies)
             // Shared libraries contain pure utilities, errors, and common types
@@ -36,7 +36,6 @@ export default [
               sourceTag: 'scope:shared',
               onlyDependOnLibsWithTags: [],
             },
-            // Testing library exception - can depend on apps for E2E testing
             {
               sourceTag: 'type:testing',
               onlyDependOnLibsWithTags: [
