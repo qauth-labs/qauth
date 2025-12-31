@@ -4,7 +4,7 @@ Password and email validation library with factory pattern for dependency inject
 
 ## Overview
 
-The `@qauth/validation` library provides:
+The `@qauth/shared-validation` library provides:
 
 - **Password strength validation** - Using zxcvbn algorithm with configurable minimum score
 - **Email validation** - Format validation and normalization
@@ -21,7 +21,7 @@ import {
   createPasswordValidator,
   DEFAULT_PASSWORD_VALIDATION_CONFIG,
   validateEmail,
-} from '@qauth/validation';
+} from '@qauth/shared-validation';
 ```
 
 ## Usage
@@ -29,7 +29,10 @@ import {
 ### Password Validation with Factory Pattern
 
 ```typescript
-import { createPasswordValidator, DEFAULT_PASSWORD_VALIDATION_CONFIG } from '@qauth/validation';
+import {
+  createPasswordValidator,
+  DEFAULT_PASSWORD_VALIDATION_CONFIG,
+} from '@qauth/shared-validation';
 
 // Create validator with default configuration
 const validator = createPasswordValidator(DEFAULT_PASSWORD_VALIDATION_CONFIG);
@@ -46,7 +49,7 @@ if (!result.valid) {
 ### Custom Password Validation Configuration
 
 ```typescript
-import { createPasswordValidator } from '@qauth/validation';
+import { createPasswordValidator } from '@qauth/shared-validation';
 
 // Create validator with custom minimum score
 const strictValidator = createPasswordValidator({ minScore: 3 }); // Good minimum
@@ -60,7 +63,7 @@ const result = strictValidator.validatePasswordStrength('password');
 Email validation doesn't require configuration, so it's available as a direct function:
 
 ```typescript
-import { validateEmail, normalizeEmail, isValidEmail } from '@qauth/validation';
+import { validateEmail, normalizeEmail, isValidEmail } from '@qauth/shared-validation';
 
 // Validate and normalize email (throws if invalid)
 try {
@@ -83,8 +86,8 @@ if (isValidEmail('user@example.com')) {
 ### With Environment Configuration
 
 ```typescript
-import { createPasswordValidator } from '@qauth/validation';
-import { env } from '@qauth/config';
+import { createPasswordValidator } from '@qauth/shared-validation';
+import { env } from '@qauth/server-config';
 
 // Use validated environment variables
 const validator = createPasswordValidator({
@@ -204,7 +207,7 @@ Default password validation configuration:
 
 ### Environment Variables
 
-When using with `@qauth/config`, this environment variable is validated:
+When using with `@qauth/server-config`, this environment variable is validated:
 
 ```bash
 PASSWORD_MIN_SCORE=2  # Minimum password strength score (0-4)
@@ -215,7 +218,7 @@ PASSWORD_MIN_SCORE=2  # Minimum password strength score (0-4)
 ### Registration Flow
 
 ```typescript
-import { createPasswordValidator, validateEmail } from '@qauth/validation';
+import { createPasswordValidator, validateEmail } from '@qauth/shared-validation';
 
 const validator = createPasswordValidator(); // Uses defaults
 
@@ -237,7 +240,7 @@ async function registerUser(email: string, password: string) {
 ### Login Flow
 
 ```typescript
-import { validateEmail, normalizeEmail } from '@qauth/validation';
+import { validateEmail, normalizeEmail } from '@qauth/shared-validation';
 
 async function loginUser(email: string, password: string) {
   // Normalize email for lookup (no validation needed for login)
@@ -252,7 +255,7 @@ async function loginUser(email: string, password: string) {
 ### Testing with Custom Configuration
 
 ```typescript
-import { createPasswordValidator } from '@qauth/validation';
+import { createPasswordValidator } from '@qauth/shared-validation';
 
 // Use lenient configuration for tests
 const testValidator = createPasswordValidator({ minScore: 1 });
@@ -272,7 +275,7 @@ If you're migrating from the old direct function calls:
 **Before**:
 
 ```typescript
-import { validatePasswordStrength, validateEmail } from '@qauth/validation';
+import { validatePasswordStrength, validateEmail } from '@qauth/shared-validation';
 
 const strength = validatePasswordStrength(password);
 const email = validateEmail(email);
@@ -281,7 +284,7 @@ const email = validateEmail(email);
 **After**:
 
 ```typescript
-import { createPasswordValidator, validateEmail } from '@qauth/validation';
+import { createPasswordValidator, validateEmail } from '@qauth/shared-validation';
 
 const validator = createPasswordValidator(); // Config is optional
 const strength = validator.validatePasswordStrength(password);
@@ -318,7 +321,7 @@ nx lint validation
 
 - [`@qauth/password`](../password/README.md): Password hashing library
 - [`@qauth/fastify-plugin-password`](../../fastify/plugins/password/README.md): Fastify plugin for password services
-- [`@qauth/config`](../config/README.md): Environment configuration and validation
+- [`@qauth/server-config`](../config/README.md): Environment configuration and validation
 
 ## License
 

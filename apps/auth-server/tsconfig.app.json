@@ -16,13 +16,13 @@
       "path": "../../libs/shared/validation/tsconfig.lib.json"
     },
     {
-      "path": "../../libs/shared/testing/tsconfig.lib.json"
-    },
-    {
       "path": "../../libs/shared/errors/tsconfig.lib.json"
     },
     {
       "path": "../../libs/fastify/plugins/password/tsconfig.lib.json"
+    },
+    {
+      "path": "../../libs/fastify/plugins/email/tsconfig.lib.json"
     },
     {
       "path": "../../libs/fastify/plugins/db/tsconfig.lib.json"

@@ -1,4 +1,4 @@
-import { NotFoundError, UniqueConstraintError, WeakPasswordError } from '@qauth/errors';
+import { NotFoundError, UniqueConstraintError, WeakPasswordError } from '@qauth/shared-errors';
 import type { FastifyError, FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import fp from 'fastify-plugin';
 

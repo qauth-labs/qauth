@@ -1,18 +1,8 @@
 {
-  "name": "validation",
+  "name": "shared-validation",
   "$schema": "../../../node_modules/nx/schemas/project-schema.json",
   "sourceRoot": "libs/shared/validation/src",
   "projectType": "library",
   "tags": ["scope:shared", "type:utility"],
-  "// targets": "to see all targets run: nx show project validation --web",
-  "targets": {
-    "test": {
-      "executor": "@nx/vitest:test",
-      "outputs": ["{workspaceRoot}/coverage/{projectRoot}"],
-      "options": {
-        "passWithNoTests": true,
-        "reportsDirectory": "{workspaceRoot}/coverage/{projectRoot}"
-      }
-    }
-  }
+  "// targets": "to see all targets run: nx show project shared-validation --web"
 }

@@ -4,7 +4,7 @@ Composable Zod schemas for environment variable validation. This library provide
 
 ## Overview
 
-The `@qauth/config` library provides:
+The `@qauth/server-config` library provides:
 
 - **Composable schemas** - Mix and match only the configuration you need
 - **Type-safe validation** - Full TypeScript support with Zod validation
@@ -16,7 +16,7 @@ The `@qauth/config` library provides:
 This library is part of the QAuth monorepo and is automatically available to other projects within the workspace.
 
 ```typescript
-import { baseEnvSchema, databaseEnvSchema, parseEnv } from '@qauth/config';
+import { baseEnvSchema, databaseEnvSchema, parseEnv } from '@qauth/server-config';
 ```
 
 ## Usage
@@ -25,7 +25,7 @@ import { baseEnvSchema, databaseEnvSchema, parseEnv } from '@qauth/config';
 
 ```typescript
 import { z } from 'zod';
-import { baseEnvSchema, databaseEnvSchema, parseEnv } from '@qauth/config';
+import { baseEnvSchema, databaseEnvSchema, parseEnv } from '@qauth/server-config';
 
 // Compose only the schemas you need using spread syntax
 const envSchema = z.object({
@@ -53,7 +53,7 @@ import {
   passwordEnvSchema,
   rateLimitEnvSchema,
   redisEnvSchema,
-} from '@qauth/config';
+} from '@qauth/server-config';
 
 // Compose all schemas with app-specific extensions using spread syntax
 const envSchema = z.object({
@@ -152,7 +152,7 @@ Parses and validates environment variables against a Zod schema.
 - Throws `ZodError` if validation fails
 
 ```typescript
-import { baseEnvSchema, parseEnv } from '@qauth/config';
+import { baseEnvSchema, parseEnv } from '@qauth/server-config';
 
 const env = parseEnv(baseEnvSchema);
 ```
@@ -169,7 +169,7 @@ import type {
   PasswordEnv,
   RateLimitEnv,
   RedisEnv,
-} from '@qauth/config';
+} from '@qauth/server-config';
 ```
 
 ## Error Handling
@@ -223,7 +223,7 @@ nx lint config
 ## Related Libraries
 
 - [`@qauth/password`](../password/README.md): Password hashing (uses `passwordEnvSchema`)
-- [`@qauth/validation`](../validation/README.md): Password validation (uses `passwordEnvSchema`)
+- [`@qauth/shared-validation`](../validation/README.md): Password validation (uses `passwordEnvSchema`)
 - [`@qauth/fastify-plugin-db`](../../fastify/plugins/db/README.md): Database plugin (uses `databaseEnvSchema`)
 - [`@qauth/fastify-plugin-cache`](../../fastify/plugins/cache/README.md): Cache plugin (uses `redisEnvSchema`)
 

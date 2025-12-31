@@ -1,4 +1,4 @@
-import { NotFoundError } from '@qauth/errors';
+import { NotFoundError } from '@qauth/shared-errors';
 import { and, eq, gt, InferInsertModel, InferSelectModel, lt } from 'drizzle-orm';
 
 import { DbClient } from '../db';

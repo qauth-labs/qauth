@@ -1,18 +1,8 @@
 {
-  "name": "password",
+  "name": "server-password",
   "$schema": "../../../node_modules/nx/schemas/project-schema.json",
   "sourceRoot": "libs/server/password/src",
   "projectType": "library",
   "tags": ["scope:server", "type:utility"],
-  "// targets": "to see all targets run: nx show project password --web",
-  "targets": {
-    "test": {
-      "executor": "@nx/vitest:test",
-      "outputs": ["{workspaceRoot}/coverage/{projectRoot}"],
-      "options": {
-        "passWithNoTests": true,
-        "reportsDirectory": "{workspaceRoot}/coverage/{projectRoot}"
-      }
-    }
-  }
+  "// targets": "to see all targets run: nx show project server-password --web"
 }

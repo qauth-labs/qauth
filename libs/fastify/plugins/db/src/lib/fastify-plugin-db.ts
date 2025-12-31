@@ -7,7 +7,7 @@ import {
   type DbClient,
   type RealmsRepository,
   type UsersRepository,
-} from '@qauth/db';
+} from '@qauth/infra-db';
 import type { FastifyInstance, FastifyPluginOptions } from 'fastify';
 import fp from 'fastify-plugin';
 

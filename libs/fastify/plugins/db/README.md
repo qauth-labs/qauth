@@ -58,7 +58,7 @@ Once registered, both Drizzle ORM and the connection pool are available on the F
 
 ```typescript
 // Using Drizzle ORM
-import { schema } from '@qauth/db';
+import { schema } from '@qauth/infra-db';
 const { users, realms, oauthClients } = schema;
 
 fastify.get('/users', async (request, reply) => {
@@ -84,8 +84,8 @@ fastify.get('/health', async (request, reply) => {
 For type-safe database operations with proper error handling, use the repository pattern:
 
 ```typescript
-import { usersRepository, realmsRepository } from '@qauth/db';
-import { NotFoundError, UniqueConstraintError } from '@qauth/errors';
+import { usersRepository, realmsRepository } from '@qauth/infra-db';
+import { NotFoundError, UniqueConstraintError } from '@qauth/shared-errors';
 
 // Get user by ID
 fastify.get('/users/:id', async (request, reply) => {
@@ -148,8 +148,8 @@ fastify.put('/users/:id', async (request, reply) => {
 Repositories support transactions for atomic operations:
 
 ```typescript
-import { db } from '@qauth/db';
-import { usersRepository, realmsRepository } from '@qauth/db';
+import { db } from '@qauth/infra-db';
+import { usersRepository, realmsRepository } from '@qauth/infra-db';
 
 fastify.post('/setup', async (request, reply) => {
   const { realmName, adminEmail } = request.body;
@@ -201,7 +201,7 @@ The Drizzle ORM instance. This is the same instance exported from `@qauth/db`.
 
 ```typescript
 // Using Drizzle ORM
-import { schema } from '@qauth/db';
+import { schema } from '@qauth/infra-db';
 const { users, realms, oauthClients } = schema;
 
 fastify.get('/users', async (request, reply) => {
@@ -328,7 +328,7 @@ This plugin wraps the `@qauth/db` library. The underlying database connection is
 You can still use utilities from `@qauth/db` directly:
 
 ```typescript
-import { db, pool, testConnection } from '@qauth/db';
+import { db, pool, testConnection } from '@qauth/infra-db';
 
 // These use the same database connection
 const isConnected = await testConnection();
@@ -449,7 +449,7 @@ nx lint fastify-plugin-db
 ## Related Libraries
 
 - [`@qauth/db`](../../infra/db/README.md): Core database utilities, Drizzle ORM, and repository pattern
-- [`@qauth/errors`](../../shared/errors/README.md): Error classes used by repositories
+- [`@qauth/shared-errors`](../../shared/errors/README.md): Error classes used by repositories
 - [`@qauth/fastify-plugin-cache`](../cache/README.md): Cache plugin for Fastify
 
 ## License

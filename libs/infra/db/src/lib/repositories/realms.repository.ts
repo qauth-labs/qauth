@@ -3,7 +3,7 @@ import {
   isUniqueConstraintError,
   NotFoundError,
   UniqueConstraintError,
-} from '@qauth/errors';
+} from '@qauth/shared-errors';
 import { eq, InferInsertModel, InferSelectModel } from 'drizzle-orm';
 
 import { DbClient } from '../db';

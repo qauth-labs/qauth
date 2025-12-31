@@ -198,7 +198,7 @@ This plugin wraps the `@qauth/cache` library. The underlying Redis connection is
 You can still use utilities from `@qauth/cache` directly:
 
 ```typescript
-import { SessionUtils, CacheUtils } from '@qauth/cache';
+import { SessionUtils, CacheUtils } from '@qauth/infra-cache';
 
 // These utilities use the same Redis connection
 await SessionUtils.setSession('user123', data, 3600);
@@ -242,7 +242,7 @@ fastify.get('/safe-cache', async (request, reply) => {
 ```typescript
 import Fastify from 'fastify';
 import { cachePlugin } from '@qauth/fastify-plugin-cache';
-import { SessionUtils } from '@qauth/cache';
+import { SessionUtils } from '@qauth/infra-cache';
 
 const fastify = Fastify();
 

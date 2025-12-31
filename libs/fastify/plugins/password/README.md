@@ -51,7 +51,7 @@ await fastify.listen({ port: 3000 });
 ```typescript
 import Fastify from 'fastify';
 import { passwordPlugin } from '@qauth/fastify-plugin-password';
-import { env } from '@qauth/config';
+import { env } from '@qauth/server-config';
 
 const fastify = Fastify();
 
@@ -214,10 +214,10 @@ async function myRoute(fastify: FastifyInstance) {
 
 ### Environment Variables
 
-The plugin accepts configuration through options. For environment-based configuration, use `@qauth/config`:
+The plugin accepts configuration through options. For environment-based configuration, use `@qauth/server-config`:
 
 ```typescript
-import { env } from '@qauth/config';
+import { env } from '@qauth/server-config';
 
 await fastify.register(passwordPlugin, {
   hashConfig: {
@@ -231,7 +231,7 @@ await fastify.register(passwordPlugin, {
 });
 ```
 
-Environment variables (validated by `@qauth/config`):
+Environment variables (validated by `@qauth/server-config`):
 
 ```bash
 # Password hashing configuration (Argon2)
@@ -253,7 +253,7 @@ PASSWORD_MIN_SCORE=2        # Minimum strength score 0-4 (default: 2 = Fair)
 
 ## Factory Pattern
 
-This plugin uses the factory pattern from `@qauth/password` and `@qauth/validation`:
+This plugin uses the factory pattern from `@qauth/password` and `@qauth/shared-validation`:
 
 - **No direct `process.env` access** - Configuration is passed explicitly
 - **Testable** - Easy to inject mock configurations in tests
@@ -315,7 +315,7 @@ fastify.post('/register', async (request, reply) => {
 
 1. **Register After Database/Cache**: Register the password plugin after database and cache plugins if you need them in your routes.
 
-2. **Use Environment Configuration**: Use `@qauth/config` for environment-based configuration to ensure validation.
+2. **Use Environment Configuration**: Use `@qauth/server-config` for environment-based configuration to ensure validation.
 
 3. **Error Handling**: Always wrap password operations in try-catch blocks in production code.
 
@@ -334,7 +334,7 @@ import Fastify from 'fastify';
 import { databasePlugin } from '@qauth/fastify-plugin-db';
 import { cachePlugin } from '@qauth/fastify-plugin-cache';
 import { passwordPlugin } from '@qauth/fastify-plugin-password';
-import { env } from '@qauth/config';
+import { env } from '@qauth/server-config';
 
 const fastify = Fastify();
 
@@ -424,13 +424,13 @@ nx lint fastify-plugin-password
 ## Dependencies
 
 - `@qauth/password`: Password hashing with factory pattern
-- `@qauth/validation`: Password validation with factory pattern
+- `@qauth/shared-validation`: Password validation with factory pattern
 - `fastify-plugin`: Fastify plugin wrapper
 
 ## Related Libraries
 
 - [`@qauth/password`](../../server/password/README.md): Password hashing library with factory pattern
-- [`@qauth/validation`](../../server/validation/README.md): Password and email validation library
+- [`@qauth/shared-validation`](../../server/validation/README.md): Password and email validation library
 - [`@qauth/fastify-plugin-db`](../db/README.md): Database plugin for Fastify
 - [`@qauth/fastify-plugin-cache`](../cache/README.md): Cache plugin for Fastify
 

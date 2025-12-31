@@ -16,7 +16,7 @@ The `@qauth/password` library provides:
 This library is part of the QAuth monorepo and is automatically available to other projects within the workspace.
 
 ```typescript
-import { createPasswordHasher, DEFAULT_PASSWORD_CONFIG } from '@qauth/password';
+import { createPasswordHasher, DEFAULT_PASSWORD_CONFIG } from '@qauth/server-password';
 ```
 
 ## Usage
@@ -24,7 +24,7 @@ import { createPasswordHasher, DEFAULT_PASSWORD_CONFIG } from '@qauth/password';
 ### Basic Usage with Factory Pattern
 
 ```typescript
-import { createPasswordHasher } from '@qauth/password';
+import { createPasswordHasher } from '@qauth/server-password';
 
 // Create hasher with default configuration (config is optional)
 const hasher = createPasswordHasher();
@@ -39,7 +39,7 @@ const isValid = await hasher.verifyPassword(hashed, 'mySecurePassword123');
 ### Custom Configuration
 
 ```typescript
-import { createPasswordHasher } from '@qauth/password';
+import { createPasswordHasher } from '@qauth/server-password';
 
 // Create hasher with custom configuration
 const hasher = createPasswordHasher({
@@ -54,8 +54,8 @@ const hashed = await hasher.hashPassword('password');
 ### With Environment Configuration
 
 ```typescript
-import { createPasswordHasher } from '@qauth/password';
-import { env } from '@qauth/config';
+import { createPasswordHasher } from '@qauth/server-password';
+import { env } from '@qauth/server-config';
 
 // Use validated environment variables
 const hasher = createPasswordHasher({
@@ -142,7 +142,7 @@ Default password hashing configuration:
 
 ### Environment Variables
 
-When using with `@qauth/config`, these environment variables are validated:
+When using with `@qauth/server-config`, these environment variables are validated:
 
 ```bash
 PASSWORD_MEMORY_COST=65536  # Memory cost in KB
@@ -155,7 +155,7 @@ PASSWORD_PARALLELISM=4      # Parallelism / threads
 ### Registration Flow
 
 ```typescript
-import { createPasswordHasher } from '@qauth/password';
+import { createPasswordHasher } from '@qauth/server-password';
 
 const hasher = createPasswordHasher(); // Uses defaults
 
@@ -171,7 +171,7 @@ async function registerUser(email: string, password: string) {
 ### Login Flow
 
 ```typescript
-import { createPasswordHasher } from '@qauth/password';
+import { createPasswordHasher } from '@qauth/server-password';
 
 const hasher = createPasswordHasher(); // Uses defaults
 
@@ -196,7 +196,7 @@ async function loginUser(email: string, password: string) {
 ### Testing with Custom Configuration
 
 ```typescript
-import { createPasswordHasher } from '@qauth/password';
+import { createPasswordHasher } from '@qauth/server-password';
 
 // Use lower-cost configuration for faster tests
 const testHasher = createPasswordHasher({
@@ -230,7 +230,7 @@ If you're migrating from the old direct function calls:
 **Before**:
 
 ```typescript
-import { hashPassword, verifyPassword } from '@qauth/password';
+import { hashPassword, verifyPassword } from '@qauth/server-password';
 
 const hashed = await hashPassword(password);
 const isValid = await verifyPassword(hashed, password);
@@ -239,7 +239,7 @@ const isValid = await verifyPassword(hashed, password);
 **After**:
 
 ```typescript
-import { createPasswordHasher } from '@qauth/password';
+import { createPasswordHasher } from '@qauth/server-password';
 
 const hasher = createPasswordHasher(); // Config is optional
 const hashed = await hasher.hashPassword(password);
@@ -267,9 +267,9 @@ nx lint password
 
 ## Related Libraries
 
-- [`@qauth/validation`](../validation/README.md): Password strength validation
+- [`@qauth/shared-validation`](../validation/README.md): Password strength validation
 - [`@qauth/fastify-plugin-password`](../../fastify/plugins/password/README.md): Fastify plugin for password services
-- [`@qauth/config`](../config/README.md): Environment configuration and validation
+- [`@qauth/server-config`](../config/README.md): Environment configuration and validation
 
 ## License
 

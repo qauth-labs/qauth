@@ -24,6 +24,11 @@ export const baseEnvSchema = z.object({
    * Logging level
    */
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace']).default('info'),
+
+  /**
+   * Vitest test environment flag
+   */
+  VITEST: z.string().optional(),
 });
 
 /**

@@ -6,7 +6,7 @@ import {
   passwordEnvSchema,
   rateLimitEnvSchema,
   redisEnvSchema,
-} from '@qauth/config';
+} from '@qauth/server-config';
 import { z } from 'zod';
 
 /**

@@ -2,12 +2,12 @@ import {
   createPasswordHasher,
   type PasswordHashConfig,
   type PasswordHasher,
-} from '@qauth/password';
+} from '@qauth/server-password';
 import {
   createPasswordValidator,
   type PasswordValidationConfig,
   type PasswordValidator,
-} from '@qauth/validation';
+} from '@qauth/shared-validation';
 import type { FastifyInstance, FastifyPluginOptions } from 'fastify';
 import fp from 'fastify-plugin';
 
