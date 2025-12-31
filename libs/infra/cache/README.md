@@ -48,7 +48,7 @@ REDIS_MAX_RETRIES=3
 ### Basic Connection
 
 ```typescript
-import { getRedis, testConnection, isRedisConnected } from '@qauth/cache';
+import { getRedis, testConnection, isRedisConnected } from '@qauth/infra-cache';
 
 // Test connection
 const isConnected = await testConnection();
@@ -63,7 +63,7 @@ if (isRedisConnected()) {
 ### Session Management
 
 ```typescript
-import { SessionUtils } from '@qauth/cache';
+import { SessionUtils } from '@qauth/infra-cache';
 
 // Set session data
 await SessionUtils.setSession(
@@ -93,7 +93,7 @@ await SessionUtils.deleteSession('user123');
 ### Rate Limiting
 
 ```typescript
-import { RateLimitUtils } from '@qauth/cache';
+import { RateLimitUtils } from '@qauth/infra-cache';
 
 // Check rate limit
 const result = await RateLimitUtils.checkRateLimit('user123', 10, 60); // 10 requests per minute
@@ -112,7 +112,7 @@ await RateLimitUtils.resetRateLimit('user123');
 ### Caching
 
 ```typescript
-import { CacheUtils } from '@qauth/cache';
+import { CacheUtils } from '@qauth/infra-cache';
 
 // Set cache
 await CacheUtils.setCache(
@@ -147,7 +147,7 @@ await CacheUtils.deleteCache('user:profile:123');
 ### User Data
 
 ```typescript
-import { UserUtils } from '@qauth/cache';
+import { UserUtils } from '@qauth/infra-cache';
 
 // Set user data
 await UserUtils.setUserData(
@@ -169,7 +169,7 @@ await UserUtils.deleteUserData('user123');
 ### Token Management
 
 ```typescript
-import { TokenUtils } from '@qauth/cache';
+import { TokenUtils } from '@qauth/infra-cache';
 
 // Blacklist token
 await TokenUtils.blacklistToken('jwt-token-here', 900); // 15 minutes TTL
@@ -213,7 +213,7 @@ The library includes comprehensive error handling:
 The library automatically handles graceful shutdown:
 
 ```typescript
-import { gracefulShutdown } from '@qauth/cache';
+import { gracefulShutdown } from '@qauth/infra-cache';
 
 // Manual graceful shutdown
 await gracefulShutdown();
@@ -233,7 +233,7 @@ For Fastify applications, use the [`@qauth/fastify-plugin-cache`](../../fastify/
 ```typescript
 import Fastify from 'fastify';
 import { cachePlugin } from '@qauth/fastify-plugin-cache';
-import { SessionUtils } from '@qauth/cache';
+import { SessionUtils } from '@qauth/infra-cache';
 
 const fastify = Fastify();
 

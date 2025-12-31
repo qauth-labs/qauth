@@ -1,18 +1,8 @@
 {
-  "name": "testing",
+  "name": "shared-testing",
   "$schema": "../../../node_modules/nx/schemas/project-schema.json",
   "sourceRoot": "libs/shared/testing/src",
   "projectType": "library",
   "tags": ["scope:shared", "type:testing"],
-  "// targets": "to see all targets run: nx show project testing --web",
-  "targets": {
-    "test": {
-      "executor": "@nx/vitest:test",
-      "outputs": ["{workspaceRoot}/coverage/{projectRoot}"],
-      "options": {
-        "passWithNoTests": true,
-        "reportsDirectory": "{workspaceRoot}/coverage/{projectRoot}"
-      }
-    }
-  }
+  "// targets": "to see all targets run: nx show project shared-testing --web"
 }

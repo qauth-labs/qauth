@@ -338,7 +338,7 @@ docker-compose up -d
 - [x] Initial database migration created
 - [x] Multi-tenancy support (Realms)
 - [x] Repository pattern implementation with BaseRepository interface
-- [x] Centralized error handling library (@qauth/errors)
+- [x] Centralized error handling library (@qauth/shared-errors)
 - [ ] Core auth server (TypeScript/Fastify)
 - [ ] Email/Password authentication
 - [ ] OAuth 2.1 flows (Authorization Code + PKCE)

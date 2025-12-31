@@ -2,6 +2,7 @@ import AutoLoad from '@fastify/autoload';
 import cors from '@fastify/cors';
 import { cachePlugin } from '@qauth/fastify-plugin-cache';
 import { databasePlugin } from '@qauth/fastify-plugin-db';
+import { emailPlugin } from '@qauth/fastify-plugin-email';
 import { passwordPlugin } from '@qauth/fastify-plugin-password';
 import { FastifyInstance } from 'fastify';
 import * as path from 'path';
@@ -45,6 +46,15 @@ export async function app(fastify: FastifyInstance, opts: object) {
     },
     validationConfig: {
       minScore: env.PASSWORD_MIN_SCORE,
+    },
+  });
+
+  await fastify.register(emailPlugin, {
+    provider: 'mock', // TODO: Configure based on environment (resend, smtp, mock)
+    serviceConfig: {
+      // TODO: Add email configuration from environment variables
+      // defaultFrom: env.EMAIL_FROM,
+      // baseUrl: env.EMAIL_BASE_URL,
     },
   });
 

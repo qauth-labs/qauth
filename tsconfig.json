@@ -7,6 +7,9 @@
       "path": "./libs/server/password"
     },
     {
+      "path": "./libs/server/email"
+    },
+    {
       "path": "./libs/fastify/plugins/password"
     },
     {
@@ -16,16 +19,19 @@
       "path": "./libs/fastify/plugins/db"
     },
     {
+      "path": "./libs/fastify/plugins/email"
+    },
+    {
       "path": "./libs/shared/errors"
+    },
+    {
+      "path": "./libs/shared/validation"
     },
     {
       "path": "./libs/infra/cache"
     },
     {
       "path": "./libs/infra/db"
-    },
-    {
-      "path": "./libs/shared/validation"
     }
   ]
 }

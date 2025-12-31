@@ -98,7 +98,7 @@ QAuth is a post-quantum ready, headless-first identity platform designed as a de
 - [x] Create initial database migration (0000_glamorous_valkyrie.sql)
 - [x] Implement repository pattern with BaseRepository interface
 - [x] Create repositories for users, realms, audit logs, and email verification tokens
-- [x] Add centralized error handling library (@qauth/errors)
+- [x] Add centralized error handling library (@qauth/shared-errors)
 
 **Acceptance Criteria**:
 

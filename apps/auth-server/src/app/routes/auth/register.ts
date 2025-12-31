@@ -1,5 +1,5 @@
-import { WeakPasswordError } from '@qauth/errors';
-import { validateEmail } from '@qauth/validation';
+import { WeakPasswordError } from '@qauth/shared-errors';
+import { validateEmail } from '@qauth/shared-validation';
 import type { FastifyInstance } from 'fastify';
 import { ZodTypeProvider } from 'fastify-type-provider-zod';
 

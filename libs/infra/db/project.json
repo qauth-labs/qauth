@@ -1,5 +1,5 @@
 {
-  "name": "db",
+  "name": "infra-db",
   "$schema": "../../../node_modules/nx/schemas/project-schema.json",
   "sourceRoot": "libs/infra/db/src",
   "projectType": "library",
@@ -44,14 +44,6 @@
         "cwd": "libs/infra/db"
       },
       "description": "Drop all tables (DANGER: use with caution)"
-    },
-    "test": {
-      "executor": "@nx/vitest:test",
-      "outputs": ["{workspaceRoot}/coverage/{projectRoot}"],
-      "options": {
-        "passWithNoTests": true,
-        "reportsDirectory": "{workspaceRoot}/coverage/{projectRoot}"
-      }
     }
   }
 }

@@ -59,7 +59,7 @@ CREATE DATABASE qauth_dev;
 ### Basic Database Connection
 
 ```typescript
-import { db, pool, testConnection, schema } from '@qauth/db';
+import { db, pool, testConnection, schema } from '@qauth/infra-db';
 const { users, oauthClients, realms } = schema;
 
 // Test database connection
@@ -67,7 +67,7 @@ const isConnected = await testConnection();
 console.log('Database connected:', isConnected);
 
 // Use Drizzle ORM with schemas
-import { db, schema } from '@qauth/db';
+import { db, schema } from '@qauth/infra-db';
 const { users, realms, oauthClients } = schema;
 
 const allUsers = await db.select().from(users);
@@ -102,8 +102,8 @@ import {
   realmsRepository,
   auditLogsRepository,
   emailVerificationTokensRepository,
-} from '@qauth/db';
-import { NotFoundError, UniqueConstraintError } from '@qauth/errors';
+} from '@qauth/infra-db';
+import { NotFoundError, UniqueConstraintError } from '@qauth/shared-errors';
 
 // Create a new user
 try {
@@ -153,8 +153,8 @@ console.log('User deleted:', deleted);
 Repositories are created using factory functions that accept an optional default database client:
 
 ```typescript
-import { createUsersRepository, createRealmsRepository } from '@qauth/db';
-import { db } from '@qauth/db';
+import { createUsersRepository, createRealmsRepository } from '@qauth/infra-db';
+import { db } from '@qauth/infra-db';
 
 // Create repository with default db instance
 const usersRepo = createUsersRepository(db);
@@ -168,8 +168,8 @@ const usersRepo = createUsersRepository();
 All repository methods accept an optional transaction parameter:
 
 ```typescript
-import { db } from '@qauth/db';
-import { usersRepository, realmsRepository } from '@qauth/db';
+import { db } from '@qauth/infra-db';
+import { usersRepository, realmsRepository } from '@qauth/infra-db';
 
 // Use transactions
 await db.transaction(async (tx) => {
@@ -207,10 +207,10 @@ await db.transaction(async (tx) => {
 
 #### Error Handling
 
-Repositories use error classes from `@qauth/errors` with HTTP status codes:
+Repositories use error classes from `@qauth/shared-errors` with HTTP status codes:
 
 ```typescript
-import { NotFoundError, UniqueConstraintError } from '@qauth/errors';
+import { NotFoundError, UniqueConstraintError } from '@qauth/shared-errors';
 
 try {
   const user = await usersRepository.findByIdOrThrow('invalid-id');
@@ -238,7 +238,7 @@ try {
 For security and multi-tenancy, audit logs can be filtered by realm:
 
 ```typescript
-import { auditLogsRepository } from '@qauth/db';
+import { auditLogsRepository } from '@qauth/infra-db';
 
 // Get all audit logs for a realm (security: ensures realm isolation)
 const realmLogs = await auditLogsRepository.findByRealmId('realm-123', {
@@ -261,7 +261,7 @@ const userLogs = await auditLogsRepository.findByRealmAndUserId('realm-123', 'us
 All repositories follow a consistent interface defined in `BaseRepository`:
 
 ```typescript
-import { BaseRepository } from '@qauth/db';
+import { BaseRepository } from '@qauth/infra-db';
 
 // BaseRepository provides a contract for common CRUD operations
 interface BaseRepository<TSelect, TInsert, TUpdate> {
@@ -278,7 +278,7 @@ This interface ensures consistency across all repositories and reduces code dupl
 ### Connection Pool Management
 
 ```typescript
-import { pool, closeDatabase } from '@qauth/db';
+import { pool, closeDatabase } from '@qauth/infra-db';
 
 // Direct pool access if needed
 const client = await pool.connect();
@@ -406,7 +406,7 @@ The database schema is available in DBML format at `src/qauth-schema.dbml`. You 
 ### Testing Database Connection
 
 ```typescript
-import { testConnection } from '@qauth/db';
+import { testConnection } from '@qauth/infra-db';
 
 // Test in your application startup
 const isConnected = await testConnection();
@@ -436,7 +436,7 @@ const fastify = Fastify();
 await fastify.register(databasePlugin);
 
 // Use Drizzle ORM via fastify.db
-import { schema } from '@qauth/db';
+import { schema } from '@qauth/infra-db';
 const { users, oauthClients } = schema;
 
 fastify.get('/users', async (request, reply) => {
@@ -485,7 +485,7 @@ The Fastify plugin automatically manages the database connection lifecycle, so y
 
 ## Related Libraries
 
-- [`@qauth/errors`](../../shared/errors/README.md): Error classes used by repositories
+- [`@qauth/shared-errors`](../../shared/errors/README.md): Error classes used by repositories
 - [`@qauth/fastify-plugin-db`](../../fastify/plugins/db/README.md): Fastify plugin wrapper for this library
 
 ## Dependencies

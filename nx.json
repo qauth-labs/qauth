@@ -27,8 +27,10 @@
         "libs/fastify/plugins/db/*",
         "libs/fastify/plugins/cache/*",
         "libs/fastify/plugins/password/*",
+        "libs/fastify/plugins/email/*",
         "libs/shared/errors/*",
         "libs/server/config/*",
+        "libs/server/email/*",
         "libs/server/password/*",
         "libs/shared/validation/*",
         "libs/shared/testing/*"
@@ -42,8 +44,10 @@
         "libs/fastify/plugins/db/*",
         "libs/fastify/plugins/cache/*",
         "libs/fastify/plugins/password/*",
+        "libs/fastify/plugins/email/*",
         "libs/shared/errors/*",
         "libs/server/config/*",
+        "libs/server/email/*",
         "libs/server/password/*",
         "libs/shared/validation/*",
         "libs/shared/testing/*"
@@ -52,6 +56,13 @@
         "typecheck": {
           "targetName": "typecheck"
         }
+      }
+    },
+    {
+      "plugin": "@nx/vitest",
+      "options": {
+        "testTargetName": "test",
+        "testMode": "run"
       }
     }
   ],

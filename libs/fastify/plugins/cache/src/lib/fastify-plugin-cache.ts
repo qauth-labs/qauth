@@ -3,7 +3,7 @@ import {
   createRedisConnection,
   type RedisConfig,
   testRedisConnection,
-} from '@qauth/cache';
+} from '@qauth/infra-cache';
 import type { FastifyInstance, FastifyPluginOptions } from 'fastify';
 import fp from 'fastify-plugin';
 
