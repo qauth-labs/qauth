@@ -26,11 +26,22 @@ import { databasePlugin } from '@qauth/fastify-plugin-db';
 ```typescript
 import Fastify from 'fastify';
 import { databasePlugin } from '@qauth/fastify-plugin-db';
+import { env } from '@qauth/server-config';
 
 const fastify = Fastify();
 
 // Register the database plugin
-await fastify.register(databasePlugin);
+await fastify.register(databasePlugin, {
+  config: {
+    connectionString: env.DATABASE_URL,
+    pool: {
+      max: env.DB_POOL_MAX,
+      min: env.DB_POOL_MIN,
+      idleTimeoutMillis: env.DB_POOL_IDLE_TIMEOUT,
+      connectionTimeoutMillis: env.DB_POOL_CONNECTION_TIMEOUT,
+    },
+  },
+});
 
 // Start the server
 await fastify.listen({ port: 3000 });
@@ -42,12 +53,35 @@ await fastify.listen({ port: 3000 });
 import Fastify from 'fastify';
 import { databasePlugin } from '@qauth/fastify-plugin-db';
 import { cachePlugin } from '@qauth/fastify-plugin-cache';
+import { env } from '@qauth/server-config';
 
 const fastify = Fastify();
 
 // Register plugins in order
-await fastify.register(databasePlugin);
-await fastify.register(cachePlugin);
+await fastify.register(databasePlugin, {
+  config: {
+    connectionString: env.DATABASE_URL,
+    pool: {
+      max: env.DB_POOL_MAX,
+      min: env.DB_POOL_MIN,
+      idleTimeoutMillis: env.DB_POOL_IDLE_TIMEOUT,
+      connectionTimeoutMillis: env.DB_POOL_CONNECTION_TIMEOUT,
+    },
+  },
+});
+await fastify.register(cachePlugin, {
+  config: {
+    url: env.REDIS_URL,
+    host: env.REDIS_HOST,
+    port: env.REDIS_PORT,
+    password: env.REDIS_PASSWORD,
+    db: env.REDIS_DB,
+    maxRetriesPerRequest: env.REDIS_MAX_RETRIES,
+    connectTimeout: env.REDIS_CONNECTION_TIMEOUT,
+    commandTimeout: env.REDIS_COMMAND_TIMEOUT,
+    lazyConnect: true,
+  },
+});
 
 await fastify.listen({ port: 3000 });
 ```
@@ -185,7 +219,18 @@ fastify.post('/setup', async (request, reply) => {
 await fastify.register(databasePlugin, options?);
 ```
 
-**Options**: Currently accepts standard Fastify plugin options. No custom options are required. The plugin uses the connection configuration from `@qauth/infra-db`, which reads from environment variables (e.g., `DATABASE_URL`).
+**Options**:
+
+```typescript
+interface DatabasePluginOptions {
+  /**
+   * Database configuration with connection string and pool settings
+   */
+  config: DatabaseConfig;
+}
+```
+
+The plugin requires a `config` object with database connection settings. Configuration is passed explicitly (factory pattern), not read directly from environment variables.
 
 ### Fastify Instance Decorators
 

@@ -26,11 +26,24 @@ import { cachePlugin } from '@qauth/fastify-plugin-cache';
 ```typescript
 import Fastify from 'fastify';
 import { cachePlugin } from '@qauth/fastify-plugin-cache';
+import { env } from '@qauth/server-config';
 
 const fastify = Fastify();
 
 // Register the cache plugin
-await fastify.register(cachePlugin);
+await fastify.register(cachePlugin, {
+  config: {
+    url: env.REDIS_URL,
+    host: env.REDIS_HOST,
+    port: env.REDIS_PORT,
+    password: env.REDIS_PASSWORD,
+    db: env.REDIS_DB,
+    maxRetriesPerRequest: env.REDIS_MAX_RETRIES,
+    connectTimeout: env.REDIS_CONNECTION_TIMEOUT,
+    commandTimeout: env.REDIS_COMMAND_TIMEOUT,
+    lazyConnect: true,
+  },
+});
 
 // Start the server
 await fastify.listen({ port: 3000 });
@@ -42,12 +55,35 @@ await fastify.listen({ port: 3000 });
 import Fastify from 'fastify';
 import { cachePlugin } from '@qauth/fastify-plugin-cache';
 import { databasePlugin } from '@qauth/fastify-plugin-db';
+import { env } from '@qauth/server-config';
 
 const fastify = Fastify();
 
 // Register plugins in order
-await fastify.register(databasePlugin);
-await fastify.register(cachePlugin);
+await fastify.register(databasePlugin, {
+  config: {
+    connectionString: env.DATABASE_URL,
+    pool: {
+      max: env.DB_POOL_MAX,
+      min: env.DB_POOL_MIN,
+      idleTimeoutMillis: env.DB_POOL_IDLE_TIMEOUT,
+      connectionTimeoutMillis: env.DB_POOL_CONNECTION_TIMEOUT,
+    },
+  },
+});
+await fastify.register(cachePlugin, {
+  config: {
+    url: env.REDIS_URL,
+    host: env.REDIS_HOST,
+    port: env.REDIS_PORT,
+    password: env.REDIS_PASSWORD,
+    db: env.REDIS_DB,
+    maxRetriesPerRequest: env.REDIS_MAX_RETRIES,
+    connectTimeout: env.REDIS_CONNECTION_TIMEOUT,
+    commandTimeout: env.REDIS_COMMAND_TIMEOUT,
+    lazyConnect: true,
+  },
+});
 
 await fastify.listen({ port: 3000 });
 ```
@@ -78,7 +114,18 @@ fastify.post('/cache-example', async (request, reply) => {
 await fastify.register(cachePlugin, options?);
 ```
 
-**Options**: Currently accepts standard Fastify plugin options. No custom options are required.
+**Options**:
+
+```typescript
+interface CachePluginOptions {
+  /**
+   * Redis configuration with connection settings
+   */
+  config: RedisConfig;
+}
+```
+
+The plugin requires a `config` object with Redis connection settings. Configuration is passed explicitly (factory pattern), not read directly from environment variables.
 
 ### Fastify Instance Decorator
 
