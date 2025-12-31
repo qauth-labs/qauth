@@ -249,7 +249,7 @@ await fastify.register(emailPlugin, {
 
 ## Factory Pattern
 
-This plugin uses the factory pattern from `@qauth/email`:
+This plugin uses the factory pattern from `@qauth/server-email`:
 
 - **No direct `process.env` access** - Configuration is passed explicitly
 - **Testable** - Easy to inject mock configurations in tests
@@ -420,12 +420,12 @@ nx lint fastify-plugin-email
 
 ## Dependencies
 
-- `@qauth/email`: Email service library with factory pattern
+- `@qauth/server-email`: Email service library with factory pattern
 - `fastify-plugin`: Fastify plugin wrapper
 
 ## Related Libraries
 
-- [`@qauth/email`](../../server/email/README.md): Email service library with factory pattern
+- [`@qauth/server-email`](../../server/email/README.md): Email service library with factory pattern
 - [`@qauth/fastify-plugin-db`](../db/README.md): Database plugin for Fastify
 - [`@qauth/fastify-plugin-password`](../password/README.md): Password plugin for Fastify
 

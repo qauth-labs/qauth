@@ -4,7 +4,7 @@ Password hashing library using Argon2id with factory pattern for dependency inje
 
 ## Overview
 
-The `@qauth/password` library provides:
+The `@qauth/server-password` library provides:
 
 - **Argon2id password hashing** - Industry-standard password hashing algorithm
 - **Factory pattern** - Configuration-based instantiation (no `process.env` access)

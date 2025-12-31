@@ -253,7 +253,7 @@ PASSWORD_MIN_SCORE=2        # Minimum strength score 0-4 (default: 2 = Fair)
 
 ## Factory Pattern
 
-This plugin uses the factory pattern from `@qauth/password` and `@qauth/shared-validation`:
+This plugin uses the factory pattern from `@qauth/server-password` and `@qauth/shared-validation`:
 
 - **No direct `process.env` access** - Configuration is passed explicitly
 - **Testable** - Easy to inject mock configurations in tests
@@ -423,13 +423,13 @@ nx lint fastify-plugin-password
 
 ## Dependencies
 
-- `@qauth/password`: Password hashing with factory pattern
+- `@qauth/server-password`: Password hashing with factory pattern
 - `@qauth/shared-validation`: Password validation with factory pattern
 - `fastify-plugin`: Fastify plugin wrapper
 
 ## Related Libraries
 
-- [`@qauth/password`](../../server/password/README.md): Password hashing library with factory pattern
+- [`@qauth/server-password`](../../server/password/README.md): Password hashing library with factory pattern
 - [`@qauth/shared-validation`](../../server/validation/README.md): Password and email validation library
 - [`@qauth/fastify-plugin-db`](../db/README.md): Database plugin for Fastify
 - [`@qauth/fastify-plugin-cache`](../cache/README.md): Cache plugin for Fastify

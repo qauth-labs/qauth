@@ -251,7 +251,7 @@ import {
   extractConstraintName,
 } from '@qauth/shared-errors';
 import { db } from '@qauth/infra-db';
-import { users } from '@qauth/db/schema';
+import { users } from '@qauth/infra-db/schema';
 
 export async function createUser(data: NewUser) {
   try {
@@ -345,7 +345,7 @@ nx typecheck errors
 
 ## Related Libraries
 
-- [`@qauth/db`](../../infra/db/README.md): Database library that uses these errors in repositories
+- [`@qauth/infra-db`](../../infra/db/README.md): Database library that uses these errors in repositories
 
 ## Dependencies
 

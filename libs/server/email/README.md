@@ -4,7 +4,7 @@ Email service library for QAuth with token generation utilities. This library pr
 
 ## Overview
 
-The `@qauth/email` library provides:
+The `@qauth/server-email` library provides:
 
 - **Token Generator**: Secure token generation and verification utilities
 - **Email Service**: Factory-pattern email service with provider abstraction
@@ -267,7 +267,7 @@ import type {
 ## Related Libraries
 
 - [`@qauth/fastify-plugin-email`](../../fastify/plugins/email/README.md): Fastify plugin for email service
-- [`@qauth/password`](../password/README.md): Password hashing library
+- [`@qauth/server-password`](../password/README.md): Password hashing library
 - [`@qauth/shared-validation`](../../shared/validation/README.md): Email validation utilities
 
 ## License

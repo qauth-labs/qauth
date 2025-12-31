@@ -1,6 +1,6 @@
 # Fastify Database Plugin
 
-Fastify plugin for PostgreSQL database connection management in QAuth. This plugin wraps the `@qauth/db` library and provides database connection lifecycle management within Fastify applications.
+Fastify plugin for PostgreSQL database connection management in QAuth. This plugin wraps the `@qauth/infra-db` library and provides database connection lifecycle management within Fastify applications.
 
 ## Overview
 
@@ -185,7 +185,7 @@ fastify.post('/setup', async (request, reply) => {
 await fastify.register(databasePlugin, options?);
 ```
 
-**Options**: Currently accepts standard Fastify plugin options. No custom options are required. The plugin uses the connection configuration from `@qauth/db`, which reads from environment variables (e.g., `DATABASE_URL`).
+**Options**: Currently accepts standard Fastify plugin options. No custom options are required. The plugin uses the connection configuration from `@qauth/infra-db`, which reads from environment variables (e.g., `DATABASE_URL`).
 
 ### Fastify Instance Decorators
 
@@ -195,7 +195,7 @@ The plugin decorates the Fastify instance with two properties:
 
 Type: `typeof db` (Drizzle ORM instance)
 
-The Drizzle ORM instance. This is the same instance exported from `@qauth/db`.
+The Drizzle ORM instance. This is the same instance exported from `@qauth/infra-db`.
 
 **Example**:
 
@@ -226,7 +226,7 @@ fastify.get('/users/:id', async (request, reply) => {
 
 Type: `Pool` (from `pg`)
 
-The PostgreSQL connection pool. This is the same pool instance exported from `@qauth/db`.
+The PostgreSQL connection pool. This is the same pool instance exported from `@qauth/infra-db`.
 
 **Example**:
 
@@ -265,7 +265,7 @@ async function myRoute(fastify: FastifyInstance) {
 
 ## Configuration
 
-The plugin uses the same environment variables as `@qauth/db`. Configure database connection in your `.env` file:
+The plugin uses the same environment variables as `@qauth/infra-db`. Configure database connection in your `.env` file:
 
 ```bash
 # Database URL (recommended)
@@ -278,7 +278,7 @@ DB_POOL_IDLE_TIMEOUT=10000
 DB_POOL_CONNECTION_TIMEOUT=2000
 ```
 
-For detailed configuration options, see the [`@qauth/db` README](../../infra/db/README.md).
+For detailed configuration options, see the [`@qauth/infra-db` README](../../infra/db/README.md).
 
 ## Lifecycle Hooks
 
@@ -321,11 +321,11 @@ fastify.addHook('onClose', async () => {
 });
 ```
 
-## Integration with @qauth/db
+## Integration with @qauth/infra-db
 
-This plugin wraps the `@qauth/db` library. The underlying database connection is managed by `@qauth/db`, and this plugin provides Fastify-specific lifecycle management.
+This plugin wraps the `@qauth/infra-db` library. The underlying database connection is managed by `@qauth/infra-db`, and this plugin provides Fastify-specific lifecycle management.
 
-You can still use utilities from `@qauth/db` directly:
+You can still use utilities from `@qauth/infra-db` directly:
 
 ```typescript
 import { db, pool, testConnection } from '@qauth/infra-db';
@@ -365,7 +365,7 @@ fastify.get('/safe-query', async (request, reply) => {
 
 4. **Error Handling**: Always wrap database operations in try-catch blocks in production code.
 
-5. **Connection Testing**: The plugin automatically tests connections on ready, but you can also test manually using utilities from `@qauth/db`.
+5. **Connection Testing**: The plugin automatically tests connections on ready, but you can also test manually using utilities from `@qauth/infra-db`.
 
 6. **Graceful Shutdown**: The plugin handles graceful shutdown automatically. Ensure your Fastify server properly handles SIGTERM and SIGINT signals.
 
@@ -423,7 +423,7 @@ await fastify.listen({ port: 3000 });
 
 ## Migrations
 
-Database migrations are managed through the `@qauth/db` library. See the [`@qauth/db` README](../../infra/db/README.md) for migration commands.
+Database migrations are managed through the `@qauth/infra-db` library. See the [`@qauth/infra-db` README](../../infra/db/README.md) for migration commands.
 
 ## Development
 
@@ -441,14 +441,14 @@ nx lint fastify-plugin-db
 
 ## Dependencies
 
-- `@qauth/db`: Core database connection and Drizzle ORM
+- `@qauth/infra-db`: Core database connection and Drizzle ORM
 - `fastify-plugin`: Fastify plugin wrapper
-- `pg`: PostgreSQL client (via `@qauth/db`)
-- `drizzle-orm`: TypeScript ORM (via `@qauth/db`)
+- `pg`: PostgreSQL client (via `@qauth/infra-db`)
+- `drizzle-orm`: TypeScript ORM (via `@qauth/infra-db`)
 
 ## Related Libraries
 
-- [`@qauth/db`](../../infra/db/README.md): Core database utilities, Drizzle ORM, and repository pattern
+- [`@qauth/infra-db`](../../infra/db/README.md): Core database utilities, Drizzle ORM, and repository pattern
 - [`@qauth/shared-errors`](../../shared/errors/README.md): Error classes used by repositories
 - [`@qauth/fastify-plugin-cache`](../cache/README.md): Cache plugin for Fastify
 

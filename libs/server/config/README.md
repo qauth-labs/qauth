@@ -222,7 +222,7 @@ nx lint config
 
 ## Related Libraries
 
-- [`@qauth/password`](../password/README.md): Password hashing (uses `passwordEnvSchema`)
+- [`@qauth/server-password`](../password/README.md): Password hashing (uses `passwordEnvSchema`)
 - [`@qauth/shared-validation`](../validation/README.md): Password validation (uses `passwordEnvSchema`)
 - [`@qauth/fastify-plugin-db`](../../fastify/plugins/db/README.md): Database plugin (uses `databaseEnvSchema`)
 - [`@qauth/fastify-plugin-cache`](../../fastify/plugins/cache/README.md): Cache plugin (uses `redisEnvSchema`)
