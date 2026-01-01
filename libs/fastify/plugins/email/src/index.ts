@@ -1,1 +1,2 @@
-export { emailPlugin, type EmailPluginOptions } from './lib/fastify-plugin-email';
+export * from './lib/fastify-plugin-email';
+export type * from './types';

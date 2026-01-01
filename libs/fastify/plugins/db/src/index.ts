@@ -1,1 +1,2 @@
-export { databasePlugin, type DatabasePluginOptions } from './lib/fastify-plugin-db';
+export * from './lib/fastify-plugin-db';
+export type * from './types';

@@ -1,37 +1,15 @@
-import {
-  createPasswordHasher,
-  type PasswordHashConfig,
-  type PasswordHasher,
-} from '@qauth/server-password';
-import {
-  createPasswordValidator,
-  type PasswordValidationConfig,
-  type PasswordValidator,
-} from '@qauth/shared-validation';
-import type { FastifyInstance, FastifyPluginOptions } from 'fastify';
+import { createPasswordHasher, type PasswordHasher } from '@qauth/server-password';
+import { createPasswordValidator, type PasswordValidator } from '@qauth/shared-validation';
+import type { FastifyInstance } from 'fastify';
 import fp from 'fastify-plugin';
+
+import type { PasswordPluginOptions } from '../types';
 
 declare module 'fastify' {
   interface FastifyInstance {
     passwordHasher: PasswordHasher;
     passwordValidator: PasswordValidator;
   }
-}
-
-/**
- * Password plugin configuration options
- */
-export interface PasswordPluginOptions extends FastifyPluginOptions {
-  /**
-   * Configuration for password hashing (Argon2)
-   * Optional - missing values will use defaults
-   */
-  hashConfig?: Partial<PasswordHashConfig>;
-  /**
-   * Configuration for password strength validation
-   * Optional - missing values will use defaults
-   */
-  validationConfig?: Partial<PasswordValidationConfig>;
 }
 
 /**

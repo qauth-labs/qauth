@@ -2,10 +2,10 @@
  * Realm test fixtures
  */
 
-export interface RealmFixture {
+type RealmFixture = {
   name: string;
   enabled?: boolean;
-}
+};
 
 /**
  * Create a test realm fixture

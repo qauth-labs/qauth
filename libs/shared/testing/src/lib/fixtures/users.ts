@@ -2,14 +2,14 @@
  * User test fixtures
  */
 
-export interface UserFixture {
+type UserFixture = {
   email: string;
   emailNormalized: string;
   password: string;
   passwordHash?: string;
   realmId?: string;
   emailVerified?: boolean;
-}
+};
 
 /**
  * Create a test user fixture

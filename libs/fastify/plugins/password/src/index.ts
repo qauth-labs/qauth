@@ -1,1 +1,2 @@
-export { passwordPlugin, type PasswordPluginOptions } from './lib/password-plugin';
+export * from './lib/password-plugin';
+export type * from './types';

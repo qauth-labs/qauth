@@ -8,7 +8,8 @@ The `@qauth/server-email` library provides:
 
 - **Token Generator**: Secure token generation and verification utilities
 - **Email Service**: Factory-pattern email service with provider abstraction
-- **Mock Provider**: Testing provider for development and testing
+- **Email Providers**: Resend, SMTP, and Mock providers for sending emails
+- **React Email Templates**: Type-safe, component-based email templates
 
 ## Installation
 
@@ -75,14 +76,14 @@ const isValid = constantTimeCompare(storedToken, providedToken);
 
 ## Email Service
 
-### Factory Pattern
+### Email Service
 
-The email service uses a factory pattern for dependency injection:
+The email service uses dependency injection for flexibility:
 
 ```typescript
-import { createEmailService, createMockEmailProvider } from '@qauth/server-email';
+import { createEmailService, MockEmailProvider } from '@qauth/server-email';
 
-const provider = createMockEmailProvider();
+const provider = new MockEmailProvider();
 const emailService = createEmailService(provider, {
   defaultFrom: 'noreply@example.com',
   baseUrl: 'https://example.com',
@@ -118,14 +119,18 @@ interface EmailProvider {
 }
 ```
 
-### Mock Provider
+### Email Providers
+
+The library supports multiple email providers:
+
+#### Mock Provider
 
 For testing and development:
 
 ```typescript
-import { createMockEmailProvider } from '@qauth/server-email';
+import { MockEmailProvider } from '@qauth/server-email';
 
-const provider = createMockEmailProvider();
+const provider = new MockEmailProvider();
 await provider.sendEmail({
   to: 'user@example.com',
   subject: 'Test',
@@ -139,6 +144,87 @@ console.log(sentEmails);
 // Clear history
 provider.clearSentEmails();
 ```
+
+#### Resend Provider
+
+For production use with Resend API:
+
+```typescript
+import { ResendEmailProvider } from '@qauth/server-email';
+
+const provider = new ResendEmailProvider({
+  apiKey: 're_...',
+  fromAddress: 'noreply@example.com',
+});
+
+await provider.sendEmail({
+  to: 'user@example.com',
+  subject: 'Welcome',
+  html: '<p>Welcome!</p>',
+  text: 'Welcome!',
+});
+```
+
+**Features**:
+
+- Automatic retry on transient failures
+- Idempotency key support to prevent duplicate sends
+- TypeScript-first SDK
+
+#### SMTP Provider
+
+For self-hosted deployments:
+
+```typescript
+import { SmtpEmailProvider } from '@qauth/server-email';
+
+const provider = new SmtpEmailProvider({
+  host: 'smtp.example.com',
+  port: 587,
+  secure: false,
+  auth: {
+    user: 'user@example.com',
+    pass: 'password',
+  },
+  fromAddress: 'noreply@example.com',
+});
+
+await provider.sendEmail({
+  to: 'user@example.com',
+  subject: 'Welcome',
+  html: '<p>Welcome!</p>',
+  text: 'Welcome!',
+});
+```
+
+**Features**:
+
+- Support for STARTTLS and direct SSL/TLS
+- Configurable authentication
+- Connection pooling via nodemailer
+
+### React Email Templates
+
+The library includes React Email templates for type-safe, component-based email creation:
+
+```typescript
+import { VerifyEmail, renderEmail, renderEmailText } from '@qauth/server-email';
+import * as React from 'react';
+
+// Create template
+const template = React.createElement(VerifyEmail, {
+  verificationUrl: 'https://example.com/auth/verify?token=abc123',
+  expiresIn: '24 hours',
+});
+
+// Render to HTML
+const html = await renderEmail(template);
+
+// Render to plain text
+const text = await renderEmailText(template);
+```
+
+The email service automatically uses React Email templates for verification emails when custom HTML/text is not provided.
 
 ## API Reference
 

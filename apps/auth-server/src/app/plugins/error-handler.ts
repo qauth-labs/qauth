@@ -1,4 +1,9 @@
-import { NotFoundError, UniqueConstraintError, WeakPasswordError } from '@qauth/shared-errors';
+import {
+  BadRequestError,
+  NotFoundError,
+  UniqueConstraintError,
+  WeakPasswordError,
+} from '@qauth/shared-errors';
 import type { FastifyError, FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import fp from 'fastify-plugin';
 
@@ -29,6 +34,14 @@ export default fp(async function (fastify: FastifyInstance) {
       );
 
       // Handle custom error types
+      if (error instanceof BadRequestError) {
+        const response: ErrorResponse = {
+          error: error.message,
+          statusCode: error.statusCode,
+        };
+        return reply.code(error.statusCode).send(response);
+      }
+
       if (error instanceof WeakPasswordError) {
         const response: ErrorResponse = {
           error: error.message,
@@ -67,7 +80,7 @@ export default fp(async function (fastify: FastifyInstance) {
         });
       }
 
-      // Handle Fastify HTTP errors (from @fastify/sensible)
+      // Handle HTTP errors with statusCode property
       if ('statusCode' in error && typeof error.statusCode === 'number') {
         const statusCode = error.statusCode;
         const response: ErrorResponse = {

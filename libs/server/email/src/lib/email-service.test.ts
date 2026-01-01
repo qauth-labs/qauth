@@ -1,21 +1,18 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 
-import {
-  createEmailService,
-  createMockEmailProvider,
-  type EmailOptions,
-  type EmailService,
-} from './email-service';
+import type { EmailService } from '../types';
+import { createEmailService } from './email-service';
+import { MockEmailProvider } from './providers/mock.provider';
 
 describe('createEmailService', () => {
   it('should create an email service', () => {
-    const provider = createMockEmailProvider();
+    const provider = new MockEmailProvider();
     const service = createEmailService(provider);
     expect(service).toHaveProperty('sendVerificationEmail');
   });
 
   it('should create an email service with config', () => {
-    const provider = createMockEmailProvider();
+    const provider = new MockEmailProvider();
     const service = createEmailService(provider, {
       defaultFrom: 'noreply@example.com',
       baseUrl: 'https://example.com',
@@ -26,10 +23,10 @@ describe('createEmailService', () => {
 
 describe('EmailService', () => {
   let service: EmailService;
-  let mockProvider: ReturnType<typeof createMockEmailProvider>;
+  let mockProvider: MockEmailProvider;
 
   beforeEach(() => {
-    mockProvider = createMockEmailProvider();
+    mockProvider = new MockEmailProvider();
     service = createEmailService(mockProvider);
   });
 
@@ -67,7 +64,7 @@ describe('EmailService', () => {
     });
 
     it('should include verification URL when baseUrl is configured', async () => {
-      const customProvider = createMockEmailProvider();
+      const customProvider = new MockEmailProvider();
       const customService = createEmailService(customProvider, {
         baseUrl: 'https://example.com',
       });
@@ -82,11 +79,11 @@ describe('EmailService', () => {
       await service.sendVerificationEmail('user@example.com', 'token123');
 
       const sentEmails = mockProvider.getSentEmails();
-      expect(sentEmails[0]?.text).toContain('Use token: token123');
+      expect(sentEmails[0]?.text).toContain('#token=token123');
     });
 
     it('should use defaultFrom from config', async () => {
-      const customProvider = createMockEmailProvider();
+      const customProvider = new MockEmailProvider();
       const customService = createEmailService(customProvider, {
         defaultFrom: 'noreply@example.com',
       });
@@ -97,7 +94,7 @@ describe('EmailService', () => {
     });
 
     it('should use custom from if provided in options', async () => {
-      const customProvider = createMockEmailProvider();
+      const customProvider = new MockEmailProvider();
       const customService = createEmailService(customProvider, {
         defaultFrom: 'noreply@example.com',
       });
@@ -126,104 +123,5 @@ describe('EmailService', () => {
       const sentEmails = mockProvider.getSentEmails();
       expect(sentEmails[0]?.html).toBe('<p>Custom HTML</p>');
     });
-  });
-});
-
-describe('MockEmailProvider', () => {
-  let provider: ReturnType<typeof createMockEmailProvider>;
-
-  beforeEach(() => {
-    provider = createMockEmailProvider();
-  });
-
-  it('should send an email', async () => {
-    const options: EmailOptions = {
-      to: 'user@example.com',
-      subject: 'Test Subject',
-      text: 'Test body',
-    };
-
-    const result = await provider.sendEmail(options);
-    expect(result.success).toBe(true);
-    expect(result.messageId).toBeDefined();
-  });
-
-  it('should store sent emails', async () => {
-    const options: EmailOptions = {
-      to: 'user@example.com',
-      subject: 'Test Subject',
-      text: 'Test body',
-    };
-
-    await provider.sendEmail(options);
-    const sentEmails = provider.getSentEmails();
-    expect(sentEmails).toHaveLength(1);
-    expect(sentEmails[0]).toEqual(options);
-  });
-
-  it('should store multiple sent emails', async () => {
-    await provider.sendEmail({
-      to: 'user1@example.com',
-      subject: 'Subject 1',
-      text: 'Body 1',
-    });
-    await provider.sendEmail({
-      to: 'user2@example.com',
-      subject: 'Subject 2',
-      text: 'Body 2',
-    });
-
-    const sentEmails = provider.getSentEmails();
-    expect(sentEmails).toHaveLength(2);
-  });
-
-  it('should clear sent emails', async () => {
-    await provider.sendEmail({
-      to: 'user@example.com',
-      subject: 'Test',
-      text: 'Body',
-    });
-
-    expect(provider.getSentEmails()).toHaveLength(1);
-    provider.clearSentEmails();
-    expect(provider.getSentEmails()).toHaveLength(0);
-  });
-
-  it('should return a copy of sent emails', async () => {
-    await provider.sendEmail({
-      to: 'user@example.com',
-      subject: 'Test',
-      text: 'Body',
-    });
-
-    const emails1 = provider.getSentEmails();
-    const emails2 = provider.getSentEmails();
-    expect(emails1).not.toBe(emails2); // Different array instances
-    expect(emails1).toEqual(emails2); // Same content
-  });
-
-  it('should handle HTML emails', async () => {
-    const options: EmailOptions = {
-      to: 'user@example.com',
-      subject: 'Test',
-      html: '<p>HTML body</p>',
-    };
-
-    await provider.sendEmail(options);
-    const sentEmails = provider.getSentEmails();
-    expect(sentEmails[0]?.html).toBe('<p>HTML body</p>');
-  });
-
-  it('should handle emails with from address', async () => {
-    const options: EmailOptions = {
-      to: 'user@example.com',
-      subject: 'Test',
-      text: 'Body',
-      from: 'sender@example.com',
-    };
-
-    await provider.sendEmail(options);
-    const sentEmails = provider.getSentEmails();
-    expect(sentEmails[0]?.from).toBe('sender@example.com');
   });
 });

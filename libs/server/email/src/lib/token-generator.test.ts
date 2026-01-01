@@ -1,11 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
+import type { TokenPair } from '../types';
 import {
   constantTimeCompare,
   generateVerificationToken,
   hashToken,
   isValidTokenFormat,
-  type TokenPair,
 } from './token-generator';
 
 describe('generateVerificationToken', () => {
