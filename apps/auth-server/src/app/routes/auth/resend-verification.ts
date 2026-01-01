@@ -1,5 +1,6 @@
 import { generateVerificationToken } from '@qauth/server-email';
 import { TooManyRequestsError } from '@qauth/shared-errors';
+import { normalizeEmail } from '@qauth/shared-validation';
 import type { FastifyInstance } from 'fastify';
 import { ZodTypeProvider } from 'fastify-type-provider-zod';
 
@@ -20,7 +21,8 @@ const MIN_RESPONSE_TIME_MS = 200;
  * - Per-IP rate limiting (RESEND_VERIFICATION_RATE_LIMIT) prevents DDoS attacks
  * - Per-email rate limiting (RESEND_VERIFICATION_EMAIL_LIMIT) prevents inbox bombing
  * - Minimum interval (RESEND_VERIFICATION_MIN_INTERVAL) prevents rapid requests
- * - Atomic Redis operations prevent race conditions in rate limiting
+ * - Atomic Redis INCR prevents race conditions in rate limiting
+ * - TTL set only on first request to prevent sliding window bypass
  * - Rate limit counters increment for ALL requests (even non-existent users)
  *   to prevent email enumeration via timing/behavior differences
  * - Fixed minimum response time prevents timing-based email enumeration
@@ -52,22 +54,23 @@ export default async function (fastify: FastifyInstance) {
       const { email } = request.body;
 
       // Email is already validated by Zod schema, just normalize it
-      const normalizedEmail = email.toLowerCase().trim();
+      const normalizedEmail = normalizeEmail(email);
 
-      // Per-email rate limiting using atomic INCR + EXPIRE to prevent race conditions
+      // Per-email rate limiting using atomic INCR
       // This counter is incremented for ALL requests (even if user doesn't exist)
       // to prevent email enumeration via rate limit behavior differences
       const emailRateLimitKey = REDIS_KEYS.RESEND_RATE_LIMIT(normalizedEmail);
 
-      // Atomic increment and expire using Redis multi to prevent TTL race condition
-      const results = await fastify.redis
-        .multi()
-        .incr(emailRateLimitKey)
-        .expire(emailRateLimitKey, env.RESEND_VERIFICATION_EMAIL_WINDOW)
-        .exec();
+      // INCR is atomic - returns unique incrementing value per request
+      // TTL is set only on first request (count=1) to ensure window doesn't reset
+      // Note: If EXPIRE fails after INCR=1, key will persist without TTL.
+      // This is acceptable as it's a conservative failure (blocks more, not less)
+      const emailRateLimitCount = await fastify.redis.incr(emailRateLimitKey);
 
-      // Get the count from multi result: [[null, count], [null, 1]]
-      const emailRateLimitCount = results?.[0]?.[1] as number;
+      if (emailRateLimitCount === 1) {
+        // Set TTL only on first request to prevent window reset on subsequent requests
+        await fastify.redis.expire(emailRateLimitKey, env.RESEND_VERIFICATION_EMAIL_WINDOW);
+      }
 
       if (emailRateLimitCount > env.RESEND_VERIFICATION_EMAIL_LIMIT) {
         throw new TooManyRequestsError(ERROR_MESSAGES.RATE_LIMIT_EXCEEDED);

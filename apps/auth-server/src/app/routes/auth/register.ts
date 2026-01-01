@@ -1,5 +1,5 @@
 import { BadRequestError, WeakPasswordError } from '@qauth/shared-errors';
-import { validateEmail } from '@qauth/shared-validation';
+import { normalizeEmail } from '@qauth/shared-validation';
 import type { FastifyInstance } from 'fastify';
 import { ZodTypeProvider } from 'fastify-type-provider-zod';
 
@@ -31,8 +31,8 @@ export default async function (fastify: FastifyInstance) {
     async (request, reply) => {
       const { email, password, realmId } = request.body;
 
-      // Validate email format and normalize
-      const normalizedEmail = validateEmail(email);
+      // Email is already validated by Zod schema, just normalize it
+      const normalizedEmail = normalizeEmail(email);
 
       // Validate password strength using injected validator
       const passwordStrength = fastify.passwordValidator.validatePasswordStrength(password);
