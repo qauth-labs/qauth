@@ -5,6 +5,7 @@ import {
   NotFoundError,
   TokenAlreadyUsedError,
   TokenExpiredError,
+  TooManyRequestsError,
   UniqueConstraintError,
   WeakPasswordError,
 } from '@qauth/shared-errors';
@@ -28,6 +29,7 @@ const SimpleErrorClasses = [
   TokenExpiredError,
   TokenAlreadyUsedError,
   EmailAlreadyVerifiedError,
+  TooManyRequestsError,
 ] as const;
 
 /**

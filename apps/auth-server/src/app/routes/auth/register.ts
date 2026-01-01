@@ -1,27 +1,11 @@
 import { BadRequestError, WeakPasswordError } from '@qauth/shared-errors';
-import { validateEmail } from '@qauth/shared-validation';
+import { normalizeEmail } from '@qauth/shared-validation';
 import type { FastifyInstance } from 'fastify';
 import { ZodTypeProvider } from 'fastify-type-provider-zod';
 
 import { env } from '../../../config/env';
+import { getOrCreateDefaultRealm } from '../../helpers/realm';
 import { registerResponseSchema, registerSchema } from '../../schemas/auth';
-
-/**
- * Get or create default realm
- */
-async function getOrCreateDefaultRealm(fastify: FastifyInstance) {
-  const defaultRealmName = env.DEFAULT_REALM_NAME;
-  let realm = await fastify.repositories.realms.findByName(defaultRealmName);
-
-  if (!realm) {
-    realm = await fastify.repositories.realms.create({
-      name: defaultRealmName,
-      enabled: true,
-    });
-  }
-
-  return realm;
-}
 
 /**
  * Registration route
@@ -47,8 +31,8 @@ export default async function (fastify: FastifyInstance) {
     async (request, reply) => {
       const { email, password, realmId } = request.body;
 
-      // Validate email format and normalize
-      const normalizedEmail = validateEmail(email);
+      // Email is already validated by Zod schema, just normalize it
+      const normalizedEmail = normalizeEmail(email);
 
       // Validate password strength using injected validator
       const passwordStrength = fastify.passwordValidator.validatePasswordStrength(password);
