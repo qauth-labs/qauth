@@ -12,7 +12,8 @@ export const emailVerificationTokens = pgTable(
     id: uuid('id')
       .primaryKey()
       .default(sql`uuidv7()`),
-    token: varchar('token', { length: 255 }).notNull().unique(),
+    /** SHA-256 hash of the verification token (64 hex characters) */
+    tokenHash: varchar('token_hash', { length: 64 }).notNull().unique(),
     userId: uuid('user_id')
       .notNull()
       .references(() => users.id, { onDelete: 'cascade' }),
@@ -24,7 +25,7 @@ export const emailVerificationTokens = pgTable(
   (t) => [
     index('idx_email_verification_tokens_user_id').on(t.userId),
     index('idx_email_verification_tokens_active')
-      .on(t.token, t.expiresAt)
+      .on(t.tokenHash, t.expiresAt)
       .where(sql`${t.used} = false`),
     index('idx_email_verification_tokens_expires_at').on(t.expiresAt),
   ]
@@ -70,7 +71,8 @@ export const refreshTokens = pgTable(
     id: uuid('id')
       .primaryKey()
       .default(sql`uuidv7()`),
-    tokenHash: text('token_hash').notNull().unique(),
+    /** SHA-256 hash of the refresh token (64 hex characters) */
+    tokenHash: varchar('token_hash', { length: 64 }).notNull().unique(),
     userId: uuid('user_id')
       .notNull()
       .references(() => users.id, { onDelete: 'cascade' }),
@@ -82,7 +84,8 @@ export const refreshTokens = pgTable(
     revoked: boolean('revoked').notNull().default(false),
     revokedAt: bigint('revoked_at', { mode: 'number' }),
     revokedReason: varchar('revoked_reason', { length: 255 }),
-    previousTokenHash: text('previous_token_hash'),
+    /** SHA-256 hash of the previous token for rotation tracking (64 hex characters) */
+    previousTokenHash: varchar('previous_token_hash', { length: 64 }),
     createdAt: bigint('created_at', { mode: 'number' }).notNull().default(EPOCH_MS_NOW),
     lastUsedAt: bigint('last_used_at', { mode: 'number' }),
   },

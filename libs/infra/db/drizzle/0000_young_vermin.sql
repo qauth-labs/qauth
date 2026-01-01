@@ -140,18 +140,18 @@ CREATE TABLE "authorization_codes" (
 --> statement-breakpoint
 CREATE TABLE "email_verification_tokens" (
 	"id" uuid PRIMARY KEY DEFAULT uuidv7() NOT NULL,
-	"token" varchar(255) NOT NULL,
+	"token_hash" varchar(64) NOT NULL,
 	"user_id" uuid NOT NULL,
 	"expires_at" bigint NOT NULL,
 	"used" boolean DEFAULT false NOT NULL,
 	"used_at" bigint,
 	"created_at" bigint DEFAULT (EXTRACT(EPOCH FROM NOW())::bigint * 1000) NOT NULL,
-	CONSTRAINT "email_verification_tokens_token_unique" UNIQUE("token")
+	CONSTRAINT "email_verification_tokens_token_hash_unique" UNIQUE("token_hash")
 );
 --> statement-breakpoint
 CREATE TABLE "refresh_tokens" (
 	"id" uuid PRIMARY KEY DEFAULT uuidv7() NOT NULL,
-	"token_hash" text NOT NULL,
+	"token_hash" varchar(64) NOT NULL,
 	"user_id" uuid NOT NULL,
 	"oauth_client_id" uuid NOT NULL,
 	"scopes" jsonb DEFAULT '[]'::jsonb NOT NULL,
@@ -159,7 +159,7 @@ CREATE TABLE "refresh_tokens" (
 	"revoked" boolean DEFAULT false NOT NULL,
 	"revoked_at" bigint,
 	"revoked_reason" varchar(255),
-	"previous_token_hash" text,
+	"previous_token_hash" varchar(64),
 	"created_at" bigint DEFAULT (EXTRACT(EPOCH FROM NOW())::bigint * 1000) NOT NULL,
 	"last_used_at" bigint,
 	CONSTRAINT "refresh_tokens_token_hash_unique" UNIQUE("token_hash")
@@ -203,6 +203,7 @@ CREATE INDEX "idx_users_realm_id" ON "users" USING btree ("realm_id");--> statem
 CREATE INDEX "idx_users_enabled" ON "users" USING btree ("enabled") WHERE "users"."enabled" = true;--> statement-breakpoint
 CREATE INDEX "idx_users_realm_email_enabled" ON "users" USING btree ("realm_id","email_normalized","enabled");--> statement-breakpoint
 CREATE UNIQUE INDEX "idx_roles_realm_name_unique" ON "roles" USING btree ("realm_id","name","oauth_client_id");--> statement-breakpoint
+CREATE INDEX "idx_roles_name" ON "roles" USING btree ("name");--> statement-breakpoint
 CREATE INDEX "idx_roles_realm_id" ON "roles" USING btree ("realm_id");--> statement-breakpoint
 CREATE INDEX "idx_roles_oauth_client_id" ON "roles" USING btree ("oauth_client_id");--> statement-breakpoint
 CREATE INDEX "idx_user_roles_user_id" ON "user_roles" USING btree ("user_id");--> statement-breakpoint
@@ -217,7 +218,7 @@ CREATE INDEX "idx_authorization_codes_expires_at" ON "authorization_codes" USING
 CREATE INDEX "idx_authorization_codes_user_id" ON "authorization_codes" USING btree ("user_id");--> statement-breakpoint
 CREATE INDEX "idx_authorization_codes_oauth_client_id" ON "authorization_codes" USING btree ("oauth_client_id");--> statement-breakpoint
 CREATE INDEX "idx_email_verification_tokens_user_id" ON "email_verification_tokens" USING btree ("user_id");--> statement-breakpoint
-CREATE INDEX "idx_email_verification_tokens_active" ON "email_verification_tokens" USING btree ("token","expires_at") WHERE "email_verification_tokens"."used" = false;--> statement-breakpoint
+CREATE INDEX "idx_email_verification_tokens_active" ON "email_verification_tokens" USING btree ("token_hash","expires_at") WHERE "email_verification_tokens"."used" = false;--> statement-breakpoint
 CREATE INDEX "idx_email_verification_tokens_expires_at" ON "email_verification_tokens" USING btree ("expires_at");--> statement-breakpoint
 CREATE INDEX "idx_refresh_tokens_active" ON "refresh_tokens" USING btree ("token_hash","expires_at") WHERE "refresh_tokens"."revoked" = false;--> statement-breakpoint
 CREATE INDEX "idx_refresh_tokens_expires_at" ON "refresh_tokens" USING btree ("expires_at");--> statement-breakpoint

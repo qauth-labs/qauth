@@ -5,19 +5,36 @@ import { z } from 'zod';
  */
 export const emailEnvSchema = z.object({
   /**
+   * Email verification token expiry in seconds (default: 86400 = 24 hours)
+   */
+  EMAIL_VERIFICATION_TOKEN_EXPIRY: z.coerce.number().int().min(3600).default(86400),
+
+  /**
+   * Whether to invalidate existing tokens when resending verification email
+   * If true, only the latest token is valid (more secure)
+   * If false, multiple tokens can be active (user can use any valid token)
+   */
+  EMAIL_VERIFICATION_INVALIDATE_EXISTING_ON_RESEND: z.coerce.boolean().default(true),
+
+  /**
    * Email provider type
    */
   EMAIL_PROVIDER: z.enum(['mock', 'resend', 'smtp']).default('mock'),
 
   /**
-   * Default sender email address
+   * Default sender email address (required)
    */
-  EMAIL_FROM: z.string().email().optional(),
+  EMAIL_FROM_ADDRESS: z.email(),
+
+  /**
+   * Default sender name (default: 'QAuth')
+   */
+  EMAIL_FROM_NAME: z.string().default('QAuth'),
 
   /**
    * Base URL for email links (e.g., verification links)
    */
-  EMAIL_BASE_URL: z.string().url().optional(),
+  EMAIL_BASE_URL: z.url(),
 
   /**
    * Resend API key (required if EMAIL_PROVIDER is 'resend')
@@ -37,11 +54,7 @@ export const emailEnvSchema = z.object({
   /**
    * SMTP secure connection (TLS/SSL)
    */
-  SMTP_SECURE: z
-    .string()
-    .transform((val) => val === 'true' || val === '1')
-    .pipe(z.boolean())
-    .default(false),
+  SMTP_SECURE: z.coerce.boolean().default(true),
 
   /**
    * SMTP username (required if EMAIL_PROVIDER is 'smtp')

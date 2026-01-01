@@ -2,6 +2,7 @@ import {
   authEnvSchema,
   baseEnvSchema,
   databaseEnvSchema,
+  emailEnvSchema,
   parseEnv,
   passwordEnvSchema,
   rateLimitEnvSchema,
@@ -20,6 +21,7 @@ const envSchema = z.object({
   ...passwordEnvSchema.shape,
   ...authEnvSchema.shape,
   ...rateLimitEnvSchema.shape,
+  ...emailEnvSchema.shape,
   /**
    * CORS allowed origin (app-specific)
    */
