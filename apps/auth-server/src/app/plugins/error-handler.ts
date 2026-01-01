@@ -1,6 +1,10 @@
 import {
   BadRequestError,
+  EmailAlreadyVerifiedError,
+  InvalidTokenError,
   NotFoundError,
+  TokenAlreadyUsedError,
+  TokenExpiredError,
   UniqueConstraintError,
   WeakPasswordError,
 } from '@qauth/shared-errors';
@@ -15,6 +19,16 @@ interface ErrorResponse {
   constraint?: string;
   retryAfter?: number;
 }
+
+/** Simple errors that only need message and statusCode */
+const SimpleErrorClasses = [
+  BadRequestError,
+  NotFoundError,
+  InvalidTokenError,
+  TokenExpiredError,
+  TokenAlreadyUsedError,
+  EmailAlreadyVerifiedError,
+] as const;
 
 /**
  * Global error handler plugin
@@ -33,15 +47,18 @@ export default fp(async function (fastify: FastifyInstance) {
         'Error occurred'
       );
 
-      // Handle custom error types
-      if (error instanceof BadRequestError) {
-        const response: ErrorResponse = {
-          error: error.message,
-          statusCode: error.statusCode,
-        };
-        return reply.code(error.statusCode).send(response);
+      // Handle simple error types (message + statusCode only)
+      for (const ErrorClass of SimpleErrorClasses) {
+        if (error instanceof ErrorClass) {
+          const response: ErrorResponse = {
+            error: error.message,
+            statusCode: error.statusCode,
+          };
+          return reply.code(error.statusCode).send(response);
+        }
       }
 
+      // Handle WeakPasswordError (includes feedback)
       if (error instanceof WeakPasswordError) {
         const response: ErrorResponse = {
           error: error.message,
@@ -52,20 +69,13 @@ export default fp(async function (fastify: FastifyInstance) {
         return reply.code(error.statusCode).send(response);
       }
 
+      // Handle UniqueConstraintError (includes constraint)
       if (error instanceof UniqueConstraintError) {
         const response: ErrorResponse = {
           error: error.message,
           code: error.code,
           statusCode: error.statusCode,
           constraint: error.constraint,
-        };
-        return reply.code(error.statusCode).send(response);
-      }
-
-      if (error instanceof NotFoundError) {
-        const response: ErrorResponse = {
-          error: error.message,
-          statusCode: error.statusCode,
         };
         return reply.code(error.statusCode).send(response);
       }

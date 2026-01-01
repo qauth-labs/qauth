@@ -13,6 +13,9 @@
       "path": "../../libs/server/config/tsconfig.lib.json"
     },
     {
+      "path": "../../libs/server/email/tsconfig.lib.json"
+    },
+    {
       "path": "../../libs/shared/validation/tsconfig.lib.json"
     },
     {
