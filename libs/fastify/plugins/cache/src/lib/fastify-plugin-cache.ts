@@ -1,11 +1,8 @@
-import {
-  type CacheClient,
-  createRedisConnection,
-  type RedisConfig,
-  testRedisConnection,
-} from '@qauth/infra-cache';
-import type { FastifyInstance, FastifyPluginOptions } from 'fastify';
+import { type CacheClient, createRedisConnection, testRedisConnection } from '@qauth/infra-cache';
+import type { FastifyInstance } from 'fastify';
 import fp from 'fastify-plugin';
+
+import type { CachePluginOptions } from '../types';
 
 declare module 'fastify' {
   interface FastifyInstance {
@@ -14,14 +11,10 @@ declare module 'fastify' {
 }
 
 /**
- * Options for the cache plugin
+ * Plugin name for cache plugin
+ * Used by other plugins that depend on this plugin
  */
-export interface CachePluginOptions extends FastifyPluginOptions {
-  /**
-   * Redis configuration with connection settings
-   */
-  config: RedisConfig;
-}
+export const CACHE_PLUGIN_NAME = '@qauth/fastify-plugin-cache';
 
 /**
  * Fastify plugin for Redis connection
@@ -67,6 +60,6 @@ export const cachePlugin = fp<CachePluginOptions>(
     });
   },
   {
-    name: '@qauth/fastify-plugin-cache',
+    name: CACHE_PLUGIN_NAME,
   }
 );

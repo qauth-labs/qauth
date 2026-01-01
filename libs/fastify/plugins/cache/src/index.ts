@@ -1,1 +1,2 @@
-export { cachePlugin, type CachePluginOptions } from './lib/fastify-plugin-cache';
+export * from './lib/fastify-plugin-cache';
+export type * from './types';

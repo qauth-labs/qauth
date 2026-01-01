@@ -1,57 +1,22 @@
 import {
   createEmailService,
-  createMockEmailProvider,
   type EmailProvider,
   type EmailService,
-  type EmailServiceConfig,
+  MockEmailProvider,
+  ResendEmailProvider,
+  type ResendProviderConfig,
+  SmtpEmailProvider,
+  type SmtpProviderConfig,
 } from '@qauth/server-email';
-import type { FastifyInstance, FastifyPluginOptions } from 'fastify';
+import type { FastifyInstance } from 'fastify';
 import fp from 'fastify-plugin';
+
+import type { EmailPluginOptions, EmailProviderConfig, EmailProviderType } from '../types';
 
 declare module 'fastify' {
   interface FastifyInstance {
     emailService: EmailService;
   }
-}
-
-/**
- * Email provider type
- */
-export type EmailProviderType = 'mock' | 'resend' | 'smtp';
-
-/**
- * Provider-specific configuration
- * This will be extended when resend/smtp providers are implemented
- */
-export interface EmailProviderConfig {
-  /**
-   * Provider-specific configuration
-   * For mock: no config needed
-   * For resend: API key, etc. (future)
-   * For smtp: host, port, auth, etc. (future)
-   */
-  [key: string]: unknown;
-}
-
-/**
- * Email plugin configuration options
- */
-export interface EmailPluginOptions extends FastifyPluginOptions {
-  /**
-   * Email provider type (mock, resend, smtp)
-   * Default: 'mock'
-   */
-  provider?: EmailProviderType;
-  /**
-   * Provider-specific configuration
-   * Optional - depends on provider type
-   */
-  providerConfig?: EmailProviderConfig;
-  /**
-   * Email service configuration
-   * Optional - missing values will use defaults
-   */
-  serviceConfig?: Partial<EmailServiceConfig>;
 }
 
 /**
@@ -63,18 +28,23 @@ export interface EmailPluginOptions extends FastifyPluginOptions {
  */
 function createProvider(
   providerType: EmailProviderType = 'mock',
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  _config?: EmailProviderConfig
+  config?: EmailProviderConfig
 ): EmailProvider {
   switch (providerType) {
     case 'mock':
-      return createMockEmailProvider();
-    case 'resend':
-      // TODO: Implement Resend provider
-      throw new Error('Resend provider not yet implemented');
-    case 'smtp':
-      // TODO: Implement SMTP provider
-      throw new Error('SMTP provider not yet implemented');
+      return new MockEmailProvider();
+    case 'resend': {
+      if (!config || !('apiKey' in config)) {
+        throw new Error('Resend provider requires apiKey in providerConfig');
+      }
+      return new ResendEmailProvider(config as ResendProviderConfig);
+    }
+    case 'smtp': {
+      if (!config || !('host' in config)) {
+        throw new Error('SMTP provider requires host, port, secure, and auth in providerConfig');
+      }
+      return new SmtpEmailProvider(config as SmtpProviderConfig);
+    }
     default:
       throw new Error(`Unknown email provider type: ${providerType}`);
   }

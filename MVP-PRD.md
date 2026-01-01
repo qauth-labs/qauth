@@ -1,9 +1,9 @@
 # QAuth - MVP Product Requirements Document (PRD)
 
-> **Version**: 1.2
-> **Last Updated**: 2025-01-27
+> **Version**: 1.4
+> **Last Updated**: 2026-01-01
 > **Author**: Muhammed Taha Ayan
-> **Status**: Planning Phase
+> **Status**: Phase 1 - Core Authentication
 
 ## Executive Summary
 
@@ -42,10 +42,10 @@ QAuth is a post-quantum ready, headless-first identity platform designed as a de
 
 ## 📋 Phase Breakdown
 
-### Phase 0: Foundation Setup (CURRENT)
+### Phase 0: Foundation Setup (COMPLETED)
 
 **Timeline**: 1-2 weeks
-**Status**: In Progress
+**Status**: Completed
 
 **Objective**: Set up the development environment and project structure.
 
@@ -60,6 +60,8 @@ QAuth is a post-quantum ready, headless-first identity platform designed as a de
 - [x] Set up Redis connection
 - [x] Create base Fastify server structure
 - [x] Set up environment configuration
+- [x] Set up testing infrastructure (@qauth/shared-testing)
+- [x] Create Fastify plugins (db, cache, password, email)
 
 #### Deliverables
 
@@ -67,13 +69,15 @@ QAuth is a post-quantum ready, headless-first identity platform designed as a de
 - ✅ Code quality tools configured
 - ✅ Database schema defined
 - ✅ Basic server running
+- ✅ Testing infrastructure ready
+- ✅ Fastify plugin architecture established
 
 ---
 
-### Phase 1: Core Authentication
+### Phase 1: Core Authentication (CURRENT)
 
 **Timeline**: 6-8 weeks
-**Status**: Not Started
+**Status**: In Progress
 
 **Objective**: Implement basic email/password authentication with JWT tokens.
 
@@ -114,12 +118,13 @@ QAuth is a post-quantum ready, headless-first identity platform designed as a de
 
 **Tasks**:
 
-- [ ] Implement user registration endpoint (`POST /auth/register`)
-- [ ] Integrate @node-rs/argon2 for password hashing
-- [ ] Email validation
-- [ ] Password strength validation (zxcvbn)
-- [ ] Check for duplicate emails
-- [ ] Rate limiting on registration
+- [x] Implement user registration endpoint (`POST /auth/register`)
+- [x] Integrate @node-rs/argon2 for password hashing (@qauth/server-password)
+- [x] Email validation schema (@qauth/shared-validation)
+- [x] Password strength validation (zxcvbn) (@qauth/shared-validation)
+- [x] Fastify password plugin (@qauth/fastify-plugin-password)
+- [x] Check for duplicate emails (database unique constraint)
+- [x] Rate limiting on registration
 
 **API Endpoint**:
 
@@ -173,9 +178,11 @@ const valid = await verify(hashed, password);
 
 **Tasks**:
 
-- [ ] Generate verification token (32 bytes, base64url)
-- [ ] Store token in database (TTL: 24 hours)
-- [ ] Send verification email (SMTP)
+- [x] Generate verification token (32 bytes, hex encoded)
+- [x] Store token hash in database (TTL: 24 hours)
+- [x] Email infrastructure ready (Resend, SMTP, Mock providers)
+- [x] React Email templates for verification emails
+- [ ] Send verification email on registration
 - [ ] Implement verify endpoint (`GET /auth/verify?token=...`)
 - [ ] Mark email as verified
 - [ ] Handle expired tokens
@@ -984,11 +991,11 @@ These features are NOT part of the MVP:
 
 | Phase                     | Duration        | Status       |
 | ------------------------- | --------------- | ------------ |
-| Phase 0: Foundation Setup | 1-2 weeks       | In Progress  |
-| Phase 1: Core Auth        | 6-8 weeks       | Not Started  |
+| Phase 0: Foundation Setup | 1-2 weeks       | ✅ Completed |
+| Phase 1: Core Auth        | 6-8 weeks       | In Progress  |
 | Phase 2: Developer Portal | 3-4 weeks       | Not Started  |
 | Phase 3: Production Ready | 4-6 weeks       | Not Started  |
-| **Total MVP**             | **14-20 weeks** | **Planning** |
+| **Total MVP**             | **14-20 weeks** | **Phase 1**  |
 
 ---
 
@@ -1040,7 +1047,12 @@ These features are NOT part of the MVP:
 - **PostgreSQL** - Database
 - **Redis** - Sessions and caching
 - **@node-rs/argon2** - Password hashing (Rust native binding)
+- **zxcvbn** - Password strength validation
 - **jose** - JWT generation (EdDSA)
+- **resend** - Email delivery (production)
+- **nodemailer** - SMTP email delivery
+- **@react-email/components** - Email templates
+- **zod** - Schema validation
 
 **Frontend (Developer Portal)**:
 
@@ -1048,6 +1060,12 @@ These features are NOT part of the MVP:
 - **React 19** - UI library
 - **Tailwind CSS** - Styling
 - **Radix UI** - Accessible components
+
+**Testing**:
+
+- **Vitest** - Unit and integration testing
+- **Supertest** - HTTP API testing
+- **@qauth/shared-testing** - Test utilities and fixtures
 
 **DevOps**:
 
@@ -1268,4 +1286,42 @@ CREATE TABLE sessions (
 
 ---
 
-**End of MVP-PRD v1.2**
+## Appendix C: Library Structure
+
+The QAuth monorepo is organized into the following libraries:
+
+### Server Libraries (`libs/server/`)
+
+| Library    | Package                  | Description                                                |
+| ---------- | ------------------------ | ---------------------------------------------------------- |
+| `config`   | `@qauth/server-config`   | Environment configuration with Zod schemas                 |
+| `email`    | `@qauth/server-email`    | Email service with multiple providers (Resend, SMTP, Mock) |
+| `password` | `@qauth/server-password` | Password hashing with Argon2id                             |
+
+### Infrastructure Libraries (`libs/infra/`)
+
+| Library | Package              | Description                                        |
+| ------- | -------------------- | -------------------------------------------------- |
+| `db`    | `@qauth/infra-db`    | PostgreSQL database with Drizzle ORM, repositories |
+| `cache` | `@qauth/infra-cache` | Redis connection and caching utilities             |
+
+### Shared Libraries (`libs/shared/`)
+
+| Library      | Package                    | Description                                         |
+| ------------ | -------------------------- | --------------------------------------------------- |
+| `errors`     | `@qauth/shared-errors`     | Centralized error handling (auth, database, common) |
+| `validation` | `@qauth/shared-validation` | Validation utilities (email, password strength)     |
+| `testing`    | `@qauth/shared-testing`    | Test helpers (Fastify, Supertest, fixtures)         |
+
+### Fastify Plugins (`libs/fastify/plugins/`)
+
+| Plugin     | Package                          | Description                                     |
+| ---------- | -------------------------------- | ----------------------------------------------- |
+| `db`       | `@qauth/fastify-plugin-db`       | Database plugin with repository injection       |
+| `cache`    | `@qauth/fastify-plugin-cache`    | Redis cache plugin                              |
+| `password` | `@qauth/fastify-plugin-password` | Password hasher and validator injection         |
+| `email`    | `@qauth/fastify-plugin-email`    | Email service injection with provider selection |
+
+---
+
+**End of MVP-PRD v1.4**

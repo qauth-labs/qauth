@@ -1,4 +1,4 @@
-import { WeakPasswordError } from '@qauth/shared-errors';
+import { BadRequestError, WeakPasswordError } from '@qauth/shared-errors';
 import { validateEmail } from '@qauth/shared-validation';
 import type { FastifyInstance } from 'fastify';
 import { ZodTypeProvider } from 'fastify-type-provider-zod';
@@ -64,10 +64,10 @@ export default async function (fastify: FastifyInstance) {
       if (realmId) {
         realm = await fastify.repositories.realms.findById(realmId);
         if (!realm) {
-          return reply.badRequest(`Invalid realmId: ${realmId}`);
+          throw new BadRequestError(`Invalid realmId: ${realmId}`);
         }
         if (!realm.enabled) {
-          return reply.badRequest(`Realm ${realmId} is disabled`);
+          throw new BadRequestError(`Realm ${realmId} is disabled`);
         }
       } else {
         realm = await getOrCreateDefaultRealm(fastify);

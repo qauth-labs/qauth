@@ -191,24 +191,34 @@ await fastify.register(emailPlugin, {
 - Stores emails in memory for testing
 - Always succeeds
 
-### Resend Provider (Future)
+### Resend Provider
 
-The Resend provider will send emails via the Resend API:
+The Resend provider sends emails via the Resend API:
 
 ```typescript
 await fastify.register(emailPlugin, {
   provider: 'resend',
   providerConfig: {
     apiKey: 're_...',
+    fromAddress: 'noreply@example.com', // Optional, can be set per email
+  },
+  serviceConfig: {
+    defaultFrom: 'noreply@example.com',
+    baseUrl: 'https://example.com',
   },
 });
 ```
 
-**Status**: Not yet implemented
+**Features**:
 
-### SMTP Provider (Future)
+- Automatic retry on transient failures (network errors, rate limits)
+- Idempotency key support to prevent duplicate sends
+- TypeScript-first SDK
+- 3,000 emails/month free tier
 
-The SMTP provider will send emails via SMTP:
+### SMTP Provider
+
+The SMTP provider sends emails via SMTP:
 
 ```typescript
 await fastify.register(emailPlugin, {
@@ -216,16 +226,30 @@ await fastify.register(emailPlugin, {
   providerConfig: {
     host: 'smtp.example.com',
     port: 587,
-    secure: false,
+    secure: false, // true for SSL/TLS, false for STARTTLS
     auth: {
       user: 'user@example.com',
       pass: 'password',
     },
+    fromAddress: 'noreply@example.com', // Optional
+    options: {
+      requireTLS: true, // Optional: require TLS
+      ignoreTLS: false, // Optional: ignore TLS certificate errors
+    },
+  },
+  serviceConfig: {
+    defaultFrom: 'noreply@example.com',
+    baseUrl: 'https://example.com',
   },
 });
 ```
 
-**Status**: Not yet implemented
+**Features**:
+
+- Support for STARTTLS and direct SSL/TLS
+- Configurable authentication
+- Connection pooling via nodemailer
+- Ideal for self-hosted deployments
 
 ## Configuration
 
@@ -245,7 +269,7 @@ await fastify.register(emailPlugin, {
 });
 ```
 
-**Note**: Email environment variables are not yet defined in `@qauth/server-config`. This can be added in a future update.
+**Note**: Email environment variables are now available in `@qauth/server-config` via `emailEnvSchema`. See the [server-config documentation](../../server/config/README.md) for details.
 
 ## Factory Pattern
 
@@ -358,7 +382,7 @@ fastify.post('/auth/register', async (request, reply) => {
 5. **Provider Selection**: Choose the appropriate provider based on your environment:
    - Development: `mock`
    - Testing: `mock`
-   - Production: `resend` or `smtp` (when implemented)
+   - Production: `resend` or `smtp`
 
 6. **Configuration**: Use environment-based configuration for production deployments.
 

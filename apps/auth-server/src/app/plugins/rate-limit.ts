@@ -1,4 +1,5 @@
 import rateLimit from '@fastify/rate-limit';
+import { CACHE_PLUGIN_NAME } from '@qauth/fastify-plugin-cache';
 import type { FastifyInstance, FastifyPluginOptions } from 'fastify';
 import fp from 'fastify-plugin';
 
@@ -28,6 +29,6 @@ export const rateLimitPlugin = fp<FastifyPluginOptions>(
   },
   {
     name: '@qauth/rate-limit',
-    dependencies: ['@qauth/fastify-plugin-cache'],
+    dependencies: [CACHE_PLUGIN_NAME],
   }
 );

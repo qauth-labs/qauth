@@ -1,4 +1,27 @@
-import { CacheClient } from './redis';
+import type { CacheClient } from '../types';
+import type {
+  CacheUtilsInstance,
+  RateLimitResult,
+  RateLimitStatus,
+  RateLimitUtilsInstance,
+  SessionData,
+  SessionUtilsInstance,
+  TokenUtilsInstance,
+  UserData,
+  UserUtilsInstance,
+} from '../types';
+
+export type {
+  CacheUtilsInstance,
+  RateLimitResult,
+  RateLimitStatus,
+  RateLimitUtilsInstance,
+  SessionData,
+  SessionUtilsInstance,
+  TokenUtilsInstance,
+  UserData,
+  UserUtilsInstance,
+};
 
 /**
  * Key prefixes for different data types
@@ -21,24 +44,6 @@ export const DEFAULT_TTL = {
   USER: 30 * 60, // 30 minutes
   TOKEN: 15 * 60, // 15 minutes
 } as const;
-
-/**
- * Session data type - can be extended by consumers
- */
-export interface SessionData {
-  [key: string]: unknown;
-}
-
-/**
- * Session utilities interface
- */
-export interface SessionUtilsInstance {
-  setSession<T extends SessionData>(sessionId: string, data: T, ttl?: number): Promise<void>;
-  getSession<T extends SessionData>(sessionId: string): Promise<T | null>;
-  deleteSession(sessionId: string): Promise<void>;
-  extendSession(sessionId: string, ttl?: number): Promise<void>;
-  hasSession(sessionId: string): Promise<boolean>;
-}
 
 /**
  * Create session utilities with the given Redis client
@@ -78,33 +83,6 @@ export function createSessionUtils(client: CacheClient): SessionUtilsInstance {
       return (await client.exists(key)) === 1;
     },
   };
-}
-
-/**
- * Rate limit result
- */
-export interface RateLimitResult {
-  allowed: boolean;
-  remaining: number;
-  resetTime: number;
-}
-
-/**
- * Rate limit status
- */
-export interface RateLimitStatus {
-  current: number;
-  remaining: number;
-  resetTime: number;
-}
-
-/**
- * Rate limit utilities interface
- */
-export interface RateLimitUtilsInstance {
-  checkRateLimit(key: string, limit: number, windowSeconds?: number): Promise<RateLimitResult>;
-  resetRateLimit(key: string): Promise<void>;
-  getRateLimitStatus(key: string, limit: number): Promise<RateLimitStatus>;
 }
 
 /**
@@ -157,17 +135,6 @@ export function createRateLimitUtils(client: CacheClient): RateLimitUtilsInstanc
 }
 
 /**
- * Cache utilities interface
- */
-export interface CacheUtilsInstance {
-  setCache<T>(key: string, data: T, ttl?: number): Promise<void>;
-  getCache<T>(key: string): Promise<T | null>;
-  deleteCache(key: string): Promise<void>;
-  hasCache(key: string): Promise<boolean>;
-  getOrSetCache<T>(key: string, fallback: () => Promise<T>, ttl?: number): Promise<T>;
-}
-
-/**
  * Create cache utilities with the given Redis client
  *
  * @param client - Redis client instance
@@ -216,22 +183,6 @@ export function createCacheUtils(client: CacheClient): CacheUtilsInstance {
 }
 
 /**
- * User data type - can be extended by consumers
- */
-export interface UserData {
-  [key: string]: unknown;
-}
-
-/**
- * User utilities interface
- */
-export interface UserUtilsInstance {
-  setUserData<T extends UserData>(userId: string, data: T, ttl?: number): Promise<void>;
-  getUserData<T extends UserData>(userId: string): Promise<T | null>;
-  deleteUserData(userId: string): Promise<void>;
-}
-
-/**
  * Create user data utilities with the given Redis client
  *
  * @param client - Redis client instance
@@ -259,15 +210,6 @@ export function createUserUtils(client: CacheClient): UserUtilsInstance {
       await client.del(key);
     },
   };
-}
-
-/**
- * Token utilities interface
- */
-export interface TokenUtilsInstance {
-  blacklistToken(token: string, ttl?: number): Promise<void>;
-  isTokenBlacklisted(token: string): Promise<boolean>;
-  unblacklistToken(token: string): Promise<void>;
 }
 
 /**

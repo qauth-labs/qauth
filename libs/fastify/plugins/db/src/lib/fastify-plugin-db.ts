@@ -2,14 +2,15 @@ import {
   createDatabase,
   createRealmsRepository,
   createUsersRepository,
-  type DatabaseConfig,
   type DatabasePool,
   type DbClient,
   type RealmsRepository,
   type UsersRepository,
 } from '@qauth/infra-db';
-import type { FastifyInstance, FastifyPluginOptions } from 'fastify';
+import type { FastifyInstance } from 'fastify';
 import fp from 'fastify-plugin';
+
+import type { DatabasePluginOptions } from '../types';
 
 declare module 'fastify' {
   interface FastifyInstance {
@@ -20,16 +21,6 @@ declare module 'fastify' {
       realms: RealmsRepository;
     };
   }
-}
-
-/**
- * Options for the database plugin
- */
-export interface DatabasePluginOptions extends FastifyPluginOptions {
-  /**
-   * Database configuration with connection string and pool settings
-   */
-  config: DatabaseConfig;
 }
 
 /**
