@@ -4,24 +4,8 @@ import type { FastifyInstance } from 'fastify';
 import { ZodTypeProvider } from 'fastify-type-provider-zod';
 
 import { env } from '../../../config/env';
+import { getOrCreateDefaultRealm } from '../../helpers/realm';
 import { registerResponseSchema, registerSchema } from '../../schemas/auth';
-
-/**
- * Get or create default realm
- */
-async function getOrCreateDefaultRealm(fastify: FastifyInstance) {
-  const defaultRealmName = env.DEFAULT_REALM_NAME;
-  let realm = await fastify.repositories.realms.findByName(defaultRealmName);
-
-  if (!realm) {
-    realm = await fastify.repositories.realms.create({
-      name: defaultRealmName,
-      enabled: true,
-    });
-  }
-
-  return realm;
-}
 
 /**
  * Registration route

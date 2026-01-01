@@ -59,3 +59,27 @@ export const verifyResponseSchema = z.object({
  * Email verification response type
  */
 export type VerifyResponse = z.infer<typeof verifyResponseSchema>;
+
+/**
+ * Resend verification request schema
+ */
+export const resendVerificationSchema = z.object({
+  email: z.email('Invalid email format'),
+});
+
+/**
+ * Resend verification request type
+ */
+export type ResendVerificationRequest = z.infer<typeof resendVerificationSchema>;
+
+/**
+ * Resend verification response schema
+ */
+export const resendVerificationResponseSchema = z.object({
+  message: z.string(),
+});
+
+/**
+ * Resend verification response type
+ */
+export type ResendVerificationResponse = z.infer<typeof resendVerificationResponseSchema>;
