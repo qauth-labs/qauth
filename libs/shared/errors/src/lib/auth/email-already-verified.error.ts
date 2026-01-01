@@ -4,8 +4,8 @@
 export class EmailAlreadyVerifiedError extends Error {
   readonly statusCode = 409;
 
-  constructor(email: string) {
-    super(`Email ${email} is already verified`);
+  constructor(message = 'Email is already verified') {
+    super(message);
     this.name = 'EmailAlreadyVerifiedError';
     // Ensure proper prototype chain for instanceof checks
     Object.setPrototypeOf(this, EmailAlreadyVerifiedError.prototype);

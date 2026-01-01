@@ -1,11 +1,5 @@
-import { hashToken, isValidTokenFormat } from '@qauth/server-email';
-import {
-  EmailAlreadyVerifiedError,
-  InvalidTokenError,
-  NotFoundError,
-  TokenAlreadyUsedError,
-  TokenExpiredError,
-} from '@qauth/shared-errors';
+import { hashToken } from '@qauth/server-email';
+import { EmailAlreadyVerifiedError, InvalidTokenError, NotFoundError } from '@qauth/shared-errors';
 import type { FastifyInstance } from 'fastify';
 import { ZodTypeProvider } from 'fastify-type-provider-zod';
 
@@ -48,51 +42,39 @@ export default async function (fastify: FastifyInstance) {
     async (request) => {
       const { token } = request.query;
 
-      // 1. Validate token format (prevents CVE-2025-12374)
-      if (!isValidTokenFormat(token)) {
-        throw new InvalidTokenError('Invalid token format');
-      }
+      // Token format already validated by Zod schema (64-char hex string)
+      // This prevents CVE-2025-12374 style attacks at schema level
 
-      // 2. Hash token before database lookup
+      // 1. Hash token before database lookup
       const tokenHash = hashToken(token);
 
-      // 3. Find token in database (repository handles expiry and used checks)
+      // 2. Find token in database (returns undefined if not found, expired, or used)
       const verificationToken =
         await fastify.repositories.emailVerificationTokens.findByTokenHash(tokenHash);
 
       if (!verificationToken) {
-        // Generic error message to prevent token enumeration (don't expose hash)
+        // Generic error to prevent token enumeration (security: don't reveal why it failed)
         throw new InvalidTokenError('Invalid or expired token');
       }
 
-      // 4. Double-check token expiry (defensive check)
-      if (verificationToken.expiresAt < Date.now()) {
-        throw new TokenExpiredError();
-      }
-
-      // 5. Double-check if token is already used (defensive check for CVE-2025-12421)
-      if (verificationToken.used) {
-        throw new TokenAlreadyUsedError();
-      }
-
-      // 6. Get user by verificationToken.userId
+      // 3. Get user by verificationToken.userId
       const user = await fastify.repositories.users.findById(verificationToken.userId);
       if (!user) {
         throw new NotFoundError('User', verificationToken.userId);
       }
 
-      // 7. Check if email already verified
+      // 4. Check if email already verified
       if (user.emailVerified) {
-        throw new EmailAlreadyVerifiedError(user.email);
+        throw new EmailAlreadyVerifiedError();
       }
 
-      // 8. Mark token as used (prevents reuse)
+      // 5. Mark token as used (prevents reuse)
       await fastify.repositories.emailVerificationTokens.markUsed(verificationToken.id);
 
-      // 9. Verify user email
+      // 6. Verify user email
       await fastify.repositories.users.verifyEmail(user.id);
 
-      // 10. Return success response
+      // 7. Return success response
       return {
         message: 'Email verified successfully',
         email: user.email,
