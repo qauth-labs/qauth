@@ -1,7 +1,8 @@
-import { resolve } from 'path';
 import { defineConfig } from 'vitest/config';
+import tsconfigPaths from 'vite-tsconfig-paths';
 
 export default defineConfig({
+  plugins: [tsconfigPaths()],
   test: {
     globals: true,
     environment: 'node',
@@ -29,22 +30,5 @@ export default defineConfig({
   },
   resolve: {
     conditions: ['source', 'default'],
-    alias: {
-      '@qauth/infra-cache': resolve(__dirname, 'libs/infra/cache/src/index.ts'),
-      '@qauth/infra-db': resolve(__dirname, 'libs/infra/db/src/index.ts'),
-      '@qauth/fastify-plugin-db': resolve(__dirname, 'libs/fastify/plugins/db/src/index.ts'),
-      '@qauth/fastify-plugin-cache': resolve(__dirname, 'libs/fastify/plugins/cache/src/index.ts'),
-      '@qauth/fastify-plugin-password': resolve(
-        __dirname,
-        'libs/fastify/plugins/password/src/index.ts'
-      ),
-      '@qauth/fastify-plugin-email': resolve(__dirname, 'libs/fastify/plugins/email/src/index.ts'),
-      '@qauth/shared-errors': resolve(__dirname, 'libs/shared/errors/src/index.ts'),
-      '@qauth/shared-validation': resolve(__dirname, 'libs/shared/validation/src/index.ts'),
-      '@qauth/shared-testing': resolve(__dirname, 'libs/shared/testing/src/index.ts'),
-      '@qauth/server-password': resolve(__dirname, 'libs/server/password/src/index.ts'),
-      '@qauth/server-email': resolve(__dirname, 'libs/server/email/src/index.ts'),
-      '@qauth/server-config': resolve(__dirname, 'libs/server/config/src/index.ts'),
-    },
   },
 });
