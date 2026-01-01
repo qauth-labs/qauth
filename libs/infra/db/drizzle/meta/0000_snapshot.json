@@ -1,5 +1,5 @@
 {
-  "id": "cb332a38-574d-47da-ad4e-b906efab5af8",
+  "id": "9037b9e4-8e88-472c-a2fe-498ee6a19f54",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "version": "7",
   "dialect": "postgresql",
@@ -1541,9 +1541,9 @@
           "notNull": true,
           "default": "uuidv7()"
         },
-        "token": {
-          "name": "token",
-          "type": "varchar(255)",
+        "token_hash": {
+          "name": "token_hash",
+          "type": "varchar(64)",
           "primaryKey": false,
           "notNull": true
         },
@@ -1600,7 +1600,7 @@
           "name": "idx_email_verification_tokens_active",
           "columns": [
             {
-              "expression": "token",
+              "expression": "token_hash",
               "isExpression": false,
               "asc": true,
               "nulls": "last"
@@ -1647,10 +1647,10 @@
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {
-        "email_verification_tokens_token_unique": {
-          "name": "email_verification_tokens_token_unique",
+        "email_verification_tokens_token_hash_unique": {
+          "name": "email_verification_tokens_token_hash_unique",
           "nullsNotDistinct": false,
-          "columns": ["token"]
+          "columns": ["token_hash"]
         }
       },
       "policies": {},
@@ -1670,7 +1670,7 @@
         },
         "token_hash": {
           "name": "token_hash",
-          "type": "text",
+          "type": "varchar(64)",
           "primaryKey": false,
           "notNull": true
         },
@@ -1720,7 +1720,7 @@
         },
         "previous_token_hash": {
           "name": "previous_token_hash",
-          "type": "text",
+          "type": "varchar(64)",
           "primaryKey": false,
           "notNull": false
         },

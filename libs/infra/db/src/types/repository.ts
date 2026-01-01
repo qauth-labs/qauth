@@ -1,4 +1,13 @@
+import type { InferInsertModel, InferSelectModel } from 'drizzle-orm';
+
+import type { emailVerificationTokens } from '../lib/schema/tokens';
 import type { DbClient } from './database';
+
+/**
+ * Email verification token types
+ */
+export type EmailVerificationToken = InferSelectModel<typeof emailVerificationTokens>;
+export type NewEmailVerificationToken = InferInsertModel<typeof emailVerificationTokens>;
 
 /**
  * Base repository interface for common CRUD operations
@@ -16,4 +25,30 @@ export interface BaseRepository<TSelect, TInsert, TUpdate> {
   update(id: string, data: TUpdate, tx?: DbClient): Promise<TSelect>;
   /** Delete an entity by ID @returns True if deleted, false if not found */
   delete(id: string, tx?: DbClient): Promise<boolean>;
+}
+
+/**
+ * Email verification tokens repository interface
+ */
+export interface EmailVerificationTokensRepository {
+  /**
+   * Create a new email verification token
+   */
+  create(data: NewEmailVerificationToken, tx?: DbClient): Promise<EmailVerificationToken>;
+  /**
+   * Find a token by its token hash
+   */
+  findByTokenHash(tokenHash: string, tx?: DbClient): Promise<EmailVerificationToken | undefined>;
+  /**
+   * Mark a token as used
+   */
+  markUsed(id: string, tx?: DbClient): Promise<EmailVerificationToken>;
+  /**
+   * Invalidate all active tokens for a user
+   */
+  invalidateUserTokens(userId: string, tx?: DbClient): Promise<number>;
+  /**
+   * Delete expired tokens
+   */
+  deleteExpired(tx?: DbClient): Promise<EmailVerificationToken[]>;
 }
