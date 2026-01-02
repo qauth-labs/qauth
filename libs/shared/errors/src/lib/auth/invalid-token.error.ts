@@ -3,8 +3,9 @@
  */
 export class InvalidTokenError extends Error {
   readonly statusCode = 400;
+  readonly code = 'INVALID_TOKEN';
 
-  constructor(message: string) {
+  constructor(message = 'Invalid or expired verification token') {
     super(message);
     this.name = 'InvalidTokenError';
     // Ensure proper prototype chain for instanceof checks

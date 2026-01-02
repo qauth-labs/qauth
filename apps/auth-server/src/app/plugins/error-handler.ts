@@ -49,12 +49,13 @@ export default fp(async function (fastify: FastifyInstance) {
         'Error occurred'
       );
 
-      // Handle simple error types (message + statusCode only)
+      // Handle simple error types (message + statusCode + optional code)
       for (const ErrorClass of SimpleErrorClasses) {
         if (error instanceof ErrorClass) {
           const response: ErrorResponse = {
             error: error.message,
             statusCode: error.statusCode,
+            ...('code' in error && error.code ? { code: error.code } : {}),
           };
           return reply.code(error.statusCode).send(response);
         }

@@ -69,7 +69,7 @@ export function hashToken(token: string): string {
  */
 export function isValidTokenFormat(token: string): boolean {
   // Must be exactly 64 characters
-  if (token.length !== 64) {
+  if (token?.length !== 64) {
     return false;
   }
 

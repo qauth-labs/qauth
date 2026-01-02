@@ -3,8 +3,9 @@
  */
 export class TokenExpiredError extends Error {
   readonly statusCode = 410;
+  readonly code = 'TOKEN_EXPIRED';
 
-  constructor(message = 'Token has expired') {
+  constructor(message = 'Verification token has expired') {
     super(message);
     this.name = 'TokenExpiredError';
     // Ensure proper prototype chain for instanceof checks
