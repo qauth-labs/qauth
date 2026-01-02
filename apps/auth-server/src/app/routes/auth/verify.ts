@@ -1,4 +1,3 @@
-import { hashToken } from '@qauth/server-email';
 import { EmailAlreadyVerifiedError, InvalidTokenError, NotFoundError } from '@qauth/shared-errors';
 import type { FastifyInstance } from 'fastify';
 import { ZodTypeProvider } from 'fastify-type-provider-zod';
@@ -46,7 +45,7 @@ export default async function (fastify: FastifyInstance) {
       // This prevents CVE-2025-12374 style attacks at schema level
 
       // 1. Hash token before database lookup
-      const tokenHash = hashToken(token);
+      const tokenHash = fastify.emailVerificationTokenUtils.hashToken(token);
 
       // 2. Find token in database (returns undefined if not found, expired, or used)
       const verificationToken =

@@ -70,6 +70,32 @@ export default async function (fastify: FastifyInstance) {
         emailVerified: false,
       });
 
+      // Generate verification token pair (token + tokenHash)
+      const { token, tokenHash } = fastify.emailVerificationTokenUtils.generateVerificationToken();
+
+      // Calculate expiration time
+      const expiresAt = Date.now() + env.EMAIL_VERIFICATION_TOKEN_EXPIRY * 1000;
+
+      // Store tokenHash in database (NOT plain token)
+      await fastify.repositories.emailVerificationTokens.create({
+        userId: user.id,
+        tokenHash,
+        expiresAt,
+        used: false,
+      });
+
+      // Send verification email (don't fail registration if this fails)
+      try {
+        await fastify.emailService.sendVerificationEmail(user.email, token);
+        fastify.log.info({ userId: user.id, email: user.email }, 'Verification email sent');
+      } catch (error) {
+        fastify.log.error(
+          { err: error, userId: user.id, email: user.email },
+          'Failed to send verification email during registration'
+        );
+        // Don't throw - registration succeeded, user can request resend
+      }
+
       // Return user data without password_hash
       // Type is automatically inferred from registerResponseSchema
       return reply.code(201).send({

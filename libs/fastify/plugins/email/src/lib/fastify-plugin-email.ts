@@ -1,7 +1,11 @@
 import {
+  constantTimeCompare,
   createEmailService,
   type EmailProvider,
   type EmailService,
+  generateVerificationToken,
+  hashToken,
+  isValidTokenFormat,
   MockEmailProvider,
   ResendEmailProvider,
   type ResendProviderConfig,
@@ -11,11 +15,17 @@ import {
 import type { FastifyInstance } from 'fastify';
 import fp from 'fastify-plugin';
 
-import type { EmailPluginOptions, EmailProviderConfig, EmailProviderType } from '../types';
+import type {
+  EmailPluginOptions,
+  EmailProviderConfig,
+  EmailProviderType,
+  EmailVerificationTokenUtils,
+} from '../types';
 
 declare module 'fastify' {
   interface FastifyInstance {
     emailService: EmailService;
+    emailVerificationTokenUtils: EmailVerificationTokenUtils;
   }
 }
 
@@ -75,6 +85,12 @@ export const emailPlugin = fp<EmailPluginOptions>(
     const emailService = createEmailService(provider, options.serviceConfig);
 
     fastify.decorate('emailService', emailService);
+    fastify.decorate('emailVerificationTokenUtils', {
+      generateVerificationToken,
+      hashToken,
+      isValidTokenFormat,
+      constantTimeCompare,
+    });
 
     fastify.log.debug({ provider: providerType }, 'Email plugin registered');
   },
