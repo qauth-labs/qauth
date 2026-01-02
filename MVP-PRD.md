@@ -182,10 +182,11 @@ const valid = await verify(hashed, password);
 - [x] Store token hash in database (TTL: 24 hours)
 - [x] Email infrastructure ready (Resend, SMTP, Mock providers)
 - [x] React Email templates for verification emails
-- [ ] Send verification email on registration
-- [ ] Implement verify endpoint (`GET /auth/verify?token=...`)
-- [ ] Mark email as verified
-- [ ] Handle expired tokens
+- [x] Configure email provider from environment variables
+- [x] Send verification email on registration
+- [x] Implement verify endpoint (`GET /auth/verify?token=...`)
+- [x] Mark email as verified
+- [x] Handle expired tokens
 
 **API Endpoints**:
 
@@ -212,6 +213,8 @@ Response:
 
 **Acceptance Criteria**:
 
+- ✅ Email provider can be configured via environment variables (mock, resend, smtp)
+- ✅ Provider-specific configuration validated at startup
 - ✅ Verification email is sent on registration
 - ✅ Valid tokens verify the email
 - ✅ Expired tokens are rejected

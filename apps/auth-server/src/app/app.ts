@@ -2,7 +2,7 @@ import AutoLoad from '@fastify/autoload';
 import cors from '@fastify/cors';
 import { cachePlugin } from '@qauth/fastify-plugin-cache';
 import { databasePlugin } from '@qauth/fastify-plugin-db';
-import { emailPlugin } from '@qauth/fastify-plugin-email';
+import { emailPlugin, type EmailProviderConfig } from '@qauth/fastify-plugin-email';
 import { passwordPlugin } from '@qauth/fastify-plugin-password';
 import { FastifyInstance } from 'fastify';
 import * as path from 'path';
@@ -49,11 +49,45 @@ export async function app(fastify: FastifyInstance, opts: object) {
     },
   });
 
+  // Configure email provider from environment variables
+  const emailProvider = env.EMAIL_PROVIDER;
+
+  // Build provider-specific configuration
+  let providerConfig: EmailProviderConfig | undefined;
+  if (emailProvider === 'resend') {
+    if (!env.RESEND_API_KEY) {
+      throw new Error(
+        'RESEND_API_KEY is required when EMAIL_PROVIDER is "resend". Please set it in your environment variables.'
+      );
+    }
+    providerConfig = {
+      apiKey: env.RESEND_API_KEY,
+      fromAddress: env.EMAIL_FROM_ADDRESS,
+    };
+  } else if (emailProvider === 'smtp') {
+    if (!env.SMTP_HOST || !env.SMTP_PORT || !env.SMTP_USER || !env.SMTP_PASSWORD) {
+      throw new Error(
+        'SMTP_HOST, SMTP_PORT, SMTP_USER, and SMTP_PASSWORD are required when EMAIL_PROVIDER is "smtp". Please set them in your environment variables.'
+      );
+    }
+    providerConfig = {
+      host: env.SMTP_HOST,
+      port: env.SMTP_PORT,
+      secure: env.SMTP_SECURE,
+      auth: {
+        user: env.SMTP_USER,
+        pass: env.SMTP_PASSWORD,
+      },
+      fromAddress: env.EMAIL_FROM_ADDRESS,
+    };
+  }
+  // For 'mock' provider, providerConfig is undefined (no config needed)
+
   await fastify.register(emailPlugin, {
-    provider: 'mock', // TODO: Configure based on environment (resend, smtp, mock)
+    provider: emailProvider,
+    providerConfig,
     serviceConfig: {
-      // TODO: Add email configuration from environment variables
-      // defaultFrom: env.EMAIL_FROM,
+      defaultFrom: env.EMAIL_FROM_ADDRESS,
       baseUrl: env.EMAIL_BASE_URL,
     },
   });
