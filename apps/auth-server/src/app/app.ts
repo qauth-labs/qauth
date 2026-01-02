@@ -54,7 +54,7 @@ export async function app(fastify: FastifyInstance, opts: object) {
     serviceConfig: {
       // TODO: Add email configuration from environment variables
       // defaultFrom: env.EMAIL_FROM,
-      // baseUrl: env.EMAIL_BASE_URL,
+      baseUrl: env.EMAIL_BASE_URL,
     },
   });
 

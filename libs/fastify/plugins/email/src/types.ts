@@ -3,6 +3,12 @@ import type {
   ResendProviderConfig,
   SmtpProviderConfig,
 } from '@qauth/server-email';
+import {
+  constantTimeCompare,
+  generateVerificationToken,
+  hashToken,
+  isValidTokenFormat,
+} from '@qauth/server-email';
 import type { FastifyPluginOptions } from 'fastify';
 
 /**
@@ -26,4 +32,15 @@ export interface EmailPluginOptions extends FastifyPluginOptions {
   providerConfig?: EmailProviderConfig;
   /** Email service configuration (optional, missing values will use defaults) */
   serviceConfig?: Partial<EmailServiceConfig>;
+}
+
+/**
+ * Email verification token utilities interface
+ * Provides token generation and validation utilities for email verification
+ */
+export interface EmailVerificationTokenUtils {
+  generateVerificationToken: typeof generateVerificationToken;
+  hashToken: typeof hashToken;
+  isValidTokenFormat: typeof isValidTokenFormat;
+  constantTimeCompare: typeof constantTimeCompare;
 }

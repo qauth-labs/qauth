@@ -76,15 +76,10 @@ export default [
             },
             // Application layer (top layer)
             // Applications are the entry points and can use all layers
-            // Can depend on: fastify plugins, server libs, infra libs, shared libs
+            // Can depend on: fastify plugins, shared libs
             {
               sourceTag: 'scope:app',
-              onlyDependOnLibsWithTags: [
-                'scope:fastify',
-                'scope:server',
-                'scope:infra',
-                'scope:shared',
-              ],
+              onlyDependOnLibsWithTags: ['scope:fastify', 'scope:shared', 'scope:server-config'],
             },
           ],
         },

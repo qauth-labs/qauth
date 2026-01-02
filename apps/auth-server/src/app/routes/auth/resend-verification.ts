@@ -1,4 +1,3 @@
-import { generateVerificationToken } from '@qauth/server-email';
 import { TooManyRequestsError } from '@qauth/shared-errors';
 import { normalizeEmail } from '@qauth/shared-validation';
 import type { FastifyInstance } from 'fastify';
@@ -102,7 +101,8 @@ export default async function (fastify: FastifyInstance) {
         }
 
         // Generate new verification token
-        const { token, tokenHash } = generateVerificationToken();
+        const { token, tokenHash } =
+          fastify.emailVerificationTokenUtils.generateVerificationToken();
 
         // Calculate expiration time
         const expiresAt = Date.now() + env.EMAIL_VERIFICATION_TOKEN_EXPIRY * 1000;

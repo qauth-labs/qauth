@@ -3,6 +3,6 @@
   "$schema": "../../../node_modules/nx/schemas/project-schema.json",
   "sourceRoot": "libs/server/config/src",
   "projectType": "library",
-  "tags": ["scope:server", "type:config"],
+  "tags": ["scope:server", "scope:server-config", "type:config"],
   "// targets": "to see all targets run: nx show project server-config --web"
 }
