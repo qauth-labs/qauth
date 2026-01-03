@@ -3,6 +3,7 @@ import {
   baseEnvSchema,
   databaseEnvSchema,
   emailEnvSchema,
+  jwtEnvSchema,
   parseEnv,
   passwordEnvSchema,
   rateLimitEnvSchema,
@@ -20,6 +21,7 @@ const envSchema = z.object({
   ...redisEnvSchema.shape,
   ...passwordEnvSchema.shape,
   ...authEnvSchema.shape,
+  ...jwtEnvSchema,
   ...rateLimitEnvSchema.shape,
   ...emailEnvSchema.shape,
   /**

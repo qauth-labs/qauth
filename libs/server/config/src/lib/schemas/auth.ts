@@ -59,6 +59,17 @@ export const authEnvSchema = z.object({
    * Prevents rapid repeated requests
    */
   RESEND_VERIFICATION_MIN_INTERVAL: z.coerce.number().int().min(1).default(60),
+
+  /**
+   * Maximum login attempts per window
+   */
+  LOGIN_RATE_LIMIT: z.coerce.number().int().min(1).default(5),
+
+  /**
+   * Login rate limit window in seconds (default: 900 = 15 minutes)
+   * Note: Converted to milliseconds in route handlers (value * 1000)
+   */
+  LOGIN_RATE_WINDOW: z.coerce.number().int().min(1).default(900),
 });
 
 /**
