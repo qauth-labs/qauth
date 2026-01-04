@@ -1,0 +1,8 @@
+{
+  "name": "server-jwt",
+  "$schema": "../../../node_modules/nx/schemas/project-schema.json",
+  "sourceRoot": "libs/server/jwt/src",
+  "projectType": "library",
+  "tags": ["scope:server", "type:utility"],
+  "// targets": "to see all targets run: nx show project server-jwt --web"
+}

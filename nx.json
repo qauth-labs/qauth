@@ -33,7 +33,8 @@
         "libs/server/email/*",
         "libs/server/password/*",
         "libs/shared/validation/*",
-        "libs/shared/testing/*"
+        "libs/shared/testing/*",
+        "libs/server/jwt/*"
       ]
     },
     {
@@ -50,7 +51,8 @@
         "libs/server/email/*",
         "libs/server/password/*",
         "libs/shared/validation/*",
-        "libs/shared/testing/*"
+        "libs/shared/testing/*",
+        "libs/server/jwt/*"
       ],
       "options": {
         "typecheck": {

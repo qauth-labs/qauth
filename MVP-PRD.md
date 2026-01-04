@@ -980,8 +980,8 @@ These features are NOT part of the MVP:
 ### Phase 7: Post-Quantum & Scale (6-8 weeks)
 
 - Hybrid ML-DSA + Ed25519 JWT signing
-- Microservices extraction (Token service → Rust)
-- Session service → Rust microservice
+- Microservices extraction (Token service, TypeScript)
+- Session service microservice (TypeScript, Rust optional for extreme scale)
 - gRPC communication
 - Horizontal scaling
 - CDN integration

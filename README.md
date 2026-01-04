@@ -68,26 +68,28 @@ const token = await signJWT(payload, {
 
 **Implementation:**
 
-```rust
-// libs/core/crypto-wasm/src/lib.rs
-use pqcrypto_mldsa::dilithium3::*;
-use ed25519_dalek::{SigningKey, VerifyingKey};
+Uses Node.js 24.7.0+ built-in PQC support via `node:crypto` WebCrypto API:
 
-pub struct HybridSigner {
-    pqc_keypair: (PublicKey, SecretKey),
-    classical_keypair: (SigningKey, VerifyingKey),
-}
+```typescript
+// Hybrid PQC JWT signing (Phase 7: 2027)
+import { webcrypto } from 'node:crypto';
+import { SignJWT, generateKeyPair } from 'jose'; // Ed25519 fallback
 
-impl HybridSigner {
-    pub fn sign_hybrid(&self, message: &[u8]) -> HybridSignature {
-        let pqc_sig = sign(message, &self.pqc_keypair.1);
-        let classical_sig = self.classical_keypair.0.sign(message);
-        HybridSignature {
-            pqc: pqc_sig,
-            classical: classical_sig,
-        }
-    }
-}
+// Generate ML-DSA key pair (Node.js built-in)
+const mlDsaKeyPair = await webcrypto.subtle.generateKey({ name: 'ML-DSA-65' }, true, [
+  'sign',
+  'verify',
+]);
+
+// Generate Ed25519 key pair (jose)
+const { publicKey: ed25519PublicKey, privateKey: ed25519PrivateKey } =
+  await generateKeyPair('EdDSA');
+
+// Hybrid signing: Both ML-DSA + Ed25519 signatures
+const pqcSignature = await webcrypto.subtle.sign('ML-DSA-65', mlDsaKeyPair.privateKey, message);
+const classicalSignature = await new SignJWT(payload)
+  .setProtectedHeader({ alg: 'EdDSA' })
+  .sign(ed25519PrivateKey);
 ```
 
 **Migration Timeline:**
@@ -101,7 +103,7 @@ impl HybridSigner {
 A modern, developer-first alternative to Keycloak:
 
 - **Headless-first** - API-first architecture, use any UI
-- **Modern Stack** - TypeScript + Rust hybrid
+- **Modern Stack** - TypeScript with native performance
 - **Developer Experience** - Simple setup, excellent DX
 - **Standards Compliant** - OAuth 2.1, OIDC 1.0, PKCE
 - **Production Ready** - Security-first, scalable
@@ -109,7 +111,7 @@ A modern, developer-first alternative to Keycloak:
 
 ## 🏗️ Architecture
 
-### Phase 1: Modular Monolith (TypeScript + Rust WASM)
+### Phase 1: Modular Monolith (TypeScript)
 
 ```
 ┌────────────────────────────────────────────────┐
@@ -128,7 +130,7 @@ A modern, developer-first alternative to Keycloak:
 │  └──────────────────────────────────────────┘  │
 │                      ↓                         │
 │  ┌──────────────────────────────────────────┐  │
-│  │  Performance Layer (Rust WASM)           │  │
+│  │  Performance Layer (Native Bindings)     │  │
 │  │  • Crypto operations (JWT, hashing)      │  │
 │  │  • Token validation                      │  │
 │  │  • Password verification                 │  │
@@ -150,7 +152,7 @@ A modern, developer-first alternative to Keycloak:
     ↓           ↓             ↓              ↓
 ┌────────┐ ┌─────────┐ ┌──────────┐ ┌─────────────┐
 │ Auth   │ │ Token   │ │ Session  │ │ Developer   │
-│ (TS)   │ │ (Rust)  │ │ (Rust)   │ │ Portal (TS) │
+│ (TS)   │ │ (TS)    │ │ (TS)     │ │ Portal (TS) │
 └────────┘ └─────────┘ └──────────┘ └─────────────┘
 ```
 
@@ -169,7 +171,7 @@ qauth/
 │   │   ├── auth/             # Auth business logic (TS)
 │   │   ├── oauth/            # OAuth 2.1 implementation (TS)
 │   │   ├── oidc/             # OIDC implementation (TS)
-│   │   └── crypto-wasm/      # Crypto operations (Rust → WASM)
+│   │   └── (Native crypto via npm packages: @node-rs/argon2, jose)
 │   │
 │   ├── sdk/
 │   │   ├── js/               # Vanilla JS SDK
@@ -205,7 +207,7 @@ qauth/
 │       ├── utils/            # Utilities
 │       └── constants/        # Constants
 │
-└── services/                 # Future microservices (Rust)
+└── services/                 # Future microservices (TypeScript, Rust optional)
     ├── token-service/        # Token generation (gRPC)
     └── session-service/      # Session management (gRPC)
 ```
@@ -270,8 +272,8 @@ qauth/
 
 **Backend:**
 
-- **Runtime**: Node.js 24 LTS
-- **Language**: TypeScript + Rust (WASM)
+- **Runtime**: Node.js 24.7.0+ LTS (PQC support via built-in WebCrypto API)
+- **Language**: TypeScript (Native bindings: npm packages like @node-rs/argon2, jose)
 - **Framework**: Fastify
 - **API**: REST (OAuth 2.1/OIDC)
 - **ORM**: Drizzle ORM
@@ -299,7 +301,7 @@ qauth/
 - **Observability**: OpenTelemetry
 - **Cache/Session**: Redis with ioredis
 
-**Performance Critical (Rust WASM):**
+**Performance Critical (Native Bindings):**
 
 - Crypto operations (JWT, password hashing)
 - Token validation
@@ -344,7 +346,7 @@ docker-compose up -d
 - [ ] OAuth 2.1 flows (Authorization Code + PKCE)
 - [ ] PostgreSQL + Redis setup
 - [ ] Basic REST API
-- [ ] Rust WASM crypto module
+- [x] Native crypto modules (@node-rs/argon2, jose)
 
 ### Phase 2: Developer Portal - Q2 2026
 
@@ -370,11 +372,11 @@ docker-compose up -d
 - [ ] Organizations & Teams
 - [ ] Advanced RBAC
 - [ ] Advanced multi-tenancy (custom domains, tenant management UI)
-- [ ] Microservices extraction (Token service → Rust)
+- [ ] Microservices extraction (Token service, TypeScript)
 
 ### Phase 5: Scale & Optimize - 2027
 
-- [ ] Session service → Rust microservice
+- [ ] Session service microservice (TypeScript, Rust optional for extreme scale)
 - [ ] Global CDN integration
 - [ ] Advanced analytics
 - [ ] GraphQL API

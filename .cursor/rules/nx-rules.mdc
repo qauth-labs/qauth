@@ -24,7 +24,9 @@ You have access to the Nx MCP server and the tools it provides. Use them. Follow
 - **Always use `pnpm nx`** instead of `nx` - Use `pnpm nx generate` for all generator commands
 - **Default library configuration** (unless explicitly specified otherwise):
   - Libraries should NOT be buildable (no build target)
+  - Libraries should NOT have bundler configured (no bundler option)
   - Libraries should NOT have linter configured (no lint target)
+  - Libraries should NOT have UI configured (no UI framework)
 - Use `pnpm nx generate @nx/js:library` or appropriate generator for creating new libraries
 - After generation, read the generator log to understand what was created
 - Only modify generated files after the generator has created the initial structure
