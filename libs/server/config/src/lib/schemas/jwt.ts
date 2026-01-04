@@ -24,6 +24,25 @@ function readKeyFromFile(filePath: string): string {
 }
 
 /**
+ * Helper function to resolve key from either file path or direct value
+ * File paths take precedence over direct values for security and consistency
+ */
+function resolveKey(
+  directKey: string | undefined,
+  filePath: string | undefined
+): string | undefined {
+  // Prefer file path over direct key (for security and consistency with documentation)
+  if (filePath) {
+    return readKeyFromFile(filePath);
+  }
+  // Fallback to direct key if provided and not empty
+  if (directKey && directKey.trim().length > 0) {
+    return directKey.trim();
+  }
+  return undefined;
+}
+
+/**
  * JWT environment configuration schema
  * JWT token generation and validation settings
  *
@@ -73,29 +92,33 @@ export const jwtEnvSchema = z
      */
     REFRESH_TOKEN_LIFESPAN: z.coerce.number().int().positive().default(604800),
   })
-  .transform((data) => {
-    // Resolve private key: prefer direct key, fallback to file path
-    let privateKey: string | undefined;
-    if (data.JWT_PRIVATE_KEY && data.JWT_PRIVATE_KEY.trim().length > 0) {
-      privateKey = data.JWT_PRIVATE_KEY.trim();
-    } else if (data.JWT_PRIVATE_KEY_PATH) {
-      privateKey = readKeyFromFile(data.JWT_PRIVATE_KEY_PATH);
-    }
+  .superRefine((data, ctx) => {
+    // Validate that at least one private key source is provided
+    const hasPrivateKey = data.JWT_PRIVATE_KEY && data.JWT_PRIVATE_KEY.trim().length > 0;
+    const hasPrivateKeyPath = !!data.JWT_PRIVATE_KEY_PATH;
 
-    // Validate private key is provided
-    if (!privateKey || privateKey.length === 0) {
+    if (!hasPrivateKey && !hasPrivateKeyPath) {
+      ctx.addIssue({
+        code: 'custom',
+        message:
+          'JWT private key is required. Provide either JWT_PRIVATE_KEY or JWT_PRIVATE_KEY_PATH',
+        path: ['JWT_PRIVATE_KEY'],
+      });
+    }
+  })
+  .transform((data) => {
+    // Resolve private key: prefer file path, fallback to direct key
+    const privateKey = resolveKey(data.JWT_PRIVATE_KEY, data.JWT_PRIVATE_KEY_PATH);
+
+    // Private key is guaranteed to be defined after superRefine validation
+    if (!privateKey) {
       throw new Error(
         'JWT private key is required. Provide either JWT_PRIVATE_KEY or JWT_PRIVATE_KEY_PATH'
       );
     }
 
-    // Resolve public key: prefer direct key, fallback to file path
-    let publicKey: string | undefined;
-    if (data.JWT_PUBLIC_KEY && data.JWT_PUBLIC_KEY.trim().length > 0) {
-      publicKey = data.JWT_PUBLIC_KEY.trim();
-    } else if (data.JWT_PUBLIC_KEY_PATH) {
-      publicKey = readKeyFromFile(data.JWT_PUBLIC_KEY_PATH);
-    }
+    // Resolve public key only if private key exists: prefer file path, fallback to direct key
+    const publicKey = resolveKey(data.JWT_PUBLIC_KEY, data.JWT_PUBLIC_KEY_PATH);
 
     // Return resolved configuration
     return {
