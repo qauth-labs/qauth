@@ -319,9 +319,9 @@ nx lint validation
 
 ## Related Libraries
 
-- [`@qauth/server-password`](../password/README.md): Password hashing library
+- [`@qauth/server-password`](../../server/password/README.md): Password hashing library
+- [`@qauth/server-config`](../../server/config/README.md): Environment configuration and validation
 - [`@qauth/fastify-plugin-password`](../../fastify/plugins/password/README.md): Fastify plugin for password services
-- [`@qauth/server-config`](../config/README.md): Environment configuration and validation
 
 ## License
 

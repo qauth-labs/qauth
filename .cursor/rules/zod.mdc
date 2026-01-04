@@ -4,8 +4,11 @@ alwaysApply: true
 
 # Schema Documentation
 
-z.email() is a validator that validates an email address, not z.string().email()
-z.uuid() is a validator that validates a uuid, not z.string().uuid()
+In Zod v4, the following validators are standalone functions, not string methods:
+
+- z.email() validates an email address, not z.string().email()
+- z.uuid() validates a uuid, not z.string().uuid()
+- z.url() validates a URL, not z.string().url()
 
 Reference: https://zod.dev/api
 
@@ -14,6 +17,7 @@ Example:
 ```typescript
 const email = z.email();
 const uuid = z.uuid();
+const url = z.url('Custom error message'); // z.url() accepts optional error message parameter
 ```
 
-If I teach you a new validator, please add it to memory. Stop using deprecated validators like z.string().email() and z.string().uuid().
+If I teach you a new validator, please add it to memory. Stop using deprecated validators like z.string().email(), z.string().uuid(), and z.string().url(). There are more validators like these in the zod documentation. Don't use deprecated validators ever.
