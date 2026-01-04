@@ -87,26 +87,14 @@ export async function verifyAccessToken(token: string, publicKey: KeyLike): Prom
     };
   } catch (error) {
     if (error instanceof Error) {
-      // Check for expiration error (jose throws JWTExpired error)
-      if (
-        error.name === 'JWTExpired' ||
-        error.constructor.name === 'JWTExpired' ||
-        error.message.includes('exp') ||
-        error.message.includes('expired') ||
-        error.message.includes('ExpirationTime')
-      ) {
+      // 'jose' errors have a `code` property, and `JWTExpired` is a specific error name.
+      if (error.name === 'JWTExpired') {
         throw new JWTExpiredError('JWT token has expired');
       }
 
-      // Check for invalid token errors
-      if (
-        error.name === 'JWTInvalid' ||
-        error.constructor.name === 'JWTInvalid' ||
-        error.message.includes('invalid') ||
-        error.message.includes('malformed') ||
-        error.message.includes('signature') ||
-        error.message.includes('JWS')
-      ) {
+      // Any other error from `jose` can be considered an invalid token error.
+      // We can identify them by checking for the `code` property, which is a pattern in `jose`.
+      if ('code' in error && typeof error.code === 'string') {
         throw new JWTInvalidError(`Invalid JWT token: ${error.message}`);
       }
     }

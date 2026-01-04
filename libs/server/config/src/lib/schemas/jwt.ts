@@ -33,7 +33,11 @@ function resolveKey(
 ): string | undefined {
   // Prefer file path over direct key (for security and consistency with documentation)
   if (filePath) {
-    return readKeyFromFile(filePath);
+    const key = readKeyFromFile(filePath);
+    // Ensure we don't return an empty key from a file
+    if (key && key.length > 0) {
+      return key;
+    }
   }
   // Fallback to direct key if provided and not empty
   if (directKey && directKey.trim().length > 0) {
