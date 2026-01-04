@@ -477,7 +477,7 @@ nx lint fastify-plugin-password
 ## Related Libraries
 
 - [`@qauth/server-password`](../../server/password/README.md): Password hashing library with factory pattern
-- [`@qauth/shared-validation`](../../server/validation/README.md): Password and email validation library
+- [`@qauth/shared-validation`](../../shared/validation/README.md): Password and email validation library
 - [`@qauth/fastify-plugin-db`](../db/README.md): Database plugin for Fastify
 - [`@qauth/fastify-plugin-cache`](../cache/README.md): Cache plugin for Fastify
 

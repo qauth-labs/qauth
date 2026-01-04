@@ -178,17 +178,20 @@ qauth/
 │   │   ├── react/            # React SDK + hooks
 │   │   └── node/             # Server-side SDK
 │   │
-│   ├── data-access/
-│   │   ├── db/               # Drizzle ORM schema, queries & repositories
-│   │   └── cache/            # Redis client & caching utilities
+│   ├── infra/
+│   │   ├── db/               # PostgreSQL database with Drizzle ORM
+│   │   └── cache/            # Redis connection and caching utilities
 │   │
-│   ├── common/
-│   │   └── errors/           # Centralized error classes & utilities
+│   ├── shared/
+│   │   ├── errors/           # Centralized error classes & utilities
+│   │   ├── validation/       # Validation utilities (email, password)
+│   │   └── testing/          # Test helpers and utilities
 │   │
 │   ├── server/
 │   │   ├── config/           # Environment configuration & validation
 │   │   ├── password/         # Password hashing (Argon2) with factory pattern
-│   │   └── validation/       # Password & email validation with factory pattern
+│   │   ├── email/            # Email service with multiple providers
+│   │   └── jwt/              # JWT signing & verification with EdDSA
 │   │
 │   ├── fastify-plugin/
 │   │   ├── db/               # Fastify plugin for database

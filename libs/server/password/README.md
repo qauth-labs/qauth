@@ -267,9 +267,9 @@ nx lint password
 
 ## Related Libraries
 
-- [`@qauth/shared-validation`](../validation/README.md): Password strength validation
-- [`@qauth/fastify-plugin-password`](../../fastify/plugins/password/README.md): Fastify plugin for password services
+- [`@qauth/shared-validation`](../../shared/validation/README.md): Password strength validation
 - [`@qauth/server-config`](../config/README.md): Environment configuration and validation
+- [`@qauth/fastify-plugin-password`](../../fastify/plugins/password/README.md): Fastify plugin for password services
 
 ## License
 
