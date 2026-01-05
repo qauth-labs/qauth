@@ -150,7 +150,7 @@ export function createRefreshTokensRepository(defaultDb: DbClient): RefreshToken
       const deleted = await invoker
         .delete(refreshTokens)
         .where(lt(refreshTokens.expiresAt, now))
-        .returning();
+        .returning({ id: refreshTokens.id });
 
       return deleted.length;
     },
