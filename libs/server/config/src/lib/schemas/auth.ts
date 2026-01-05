@@ -11,6 +11,12 @@ export const authEnvSchema = z.object({
   DEFAULT_REALM_NAME: z.string().min(1).default('master'),
 
   /**
+   * System OAuth client ID (defaults to "system")
+   * Used for direct login operations (not OAuth flow)
+   */
+  SYSTEM_CLIENT_ID: z.string().optional().default('system'),
+
+  /**
    * Maximum registration attempts per window
    */
   REGISTRATION_RATE_LIMIT: z.coerce.number().int().min(1).default(3),
