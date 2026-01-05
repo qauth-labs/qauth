@@ -1,7 +1,17 @@
 import type { InferInsertModel, InferSelectModel } from 'drizzle-orm';
 
+import type { oauthClients } from '../lib/schema/core';
 import type { emailVerificationTokens } from '../lib/schema/tokens';
 import type { DbClient } from './database';
+
+/**
+ * OAuth client types
+ */
+export type OAuthClient = InferSelectModel<typeof oauthClients>;
+export type NewOAuthClient = InferInsertModel<typeof oauthClients>;
+export type UpdateOAuthClient = Partial<Omit<NewOAuthClient, 'id' | 'createdAt' | 'realmId'>> & {
+  updatedAt?: number;
+};
 
 /**
  * Email verification token types
@@ -25,6 +35,24 @@ export interface BaseRepository<TSelect, TInsert, TUpdate> {
   update(id: string, data: TUpdate, tx?: DbClient): Promise<TSelect>;
   /** Delete an entity by ID @returns True if deleted, false if not found */
   delete(id: string, tx?: DbClient): Promise<boolean>;
+}
+
+/**
+ * OAuth clients repository interface extending BaseRepository with additional methods
+ */
+export interface OAuthClientsRepository extends BaseRepository<
+  OAuthClient,
+  NewOAuthClient,
+  UpdateOAuthClient
+> {
+  /**
+   * Find an OAuth client by client ID within a realm
+   */
+  findByClientId(
+    realmId: string,
+    clientId: string,
+    tx?: DbClient
+  ): Promise<OAuthClient | undefined>;
 }
 
 /**
