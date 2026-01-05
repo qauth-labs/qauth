@@ -1,7 +1,7 @@
 import type { InferInsertModel, InferSelectModel } from 'drizzle-orm';
 
 import type { oauthClients } from '../lib/schema/core';
-import type { emailVerificationTokens } from '../lib/schema/tokens';
+import type { emailVerificationTokens, refreshTokens } from '../lib/schema/tokens';
 import type { DbClient } from './database';
 
 /**
@@ -18,6 +18,12 @@ export type UpdateOAuthClient = Partial<Omit<NewOAuthClient, 'id' | 'createdAt' 
  */
 export type EmailVerificationToken = InferSelectModel<typeof emailVerificationTokens>;
 export type NewEmailVerificationToken = InferInsertModel<typeof emailVerificationTokens>;
+
+/**
+ * Refresh token types inferred from schema
+ */
+export type RefreshToken = InferSelectModel<typeof refreshTokens>;
+export type NewRefreshToken = InferInsertModel<typeof refreshTokens>;
 
 /**
  * Base repository interface for common CRUD operations
@@ -79,4 +85,39 @@ export interface EmailVerificationTokensRepository {
    * Delete expired tokens
    */
   deleteExpired(tx?: DbClient): Promise<EmailVerificationToken[]>;
+}
+
+/**
+ * Refresh tokens repository interface
+ */
+export interface RefreshTokensRepository {
+  /**
+   * Create a new refresh token
+   */
+  create(data: NewRefreshToken, tx?: DbClient): Promise<RefreshToken>;
+  /**
+   * Find a token by its token hash
+   * Only returns tokens that are not revoked and not expired
+   */
+  findByTokenHash(tokenHash: string, tx?: DbClient): Promise<RefreshToken | undefined>;
+  /**
+   * Find all active tokens for a user
+   * Returns tokens that are not revoked and not expired
+   */
+  findByUserId(userId: string, tx?: DbClient): Promise<RefreshToken[]>;
+  /**
+   * Revoke a token by ID
+   * Sets revoked=true, revokedAt=now, and optional revocation reason
+   */
+  revoke(id: string, reason?: string, tx?: DbClient): Promise<RefreshToken>;
+  /**
+   * Revoke all active tokens for a user
+   * Useful for "logout all sessions" functionality
+   */
+  revokeAllForUser(userId: string, reason?: string, tx?: DbClient): Promise<void>;
+  /**
+   * Delete expired tokens
+   * Returns count of deleted tokens
+   */
+  deleteExpired(tx?: DbClient): Promise<number>;
 }
