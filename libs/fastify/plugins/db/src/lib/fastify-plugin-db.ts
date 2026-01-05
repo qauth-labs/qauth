@@ -1,11 +1,13 @@
 import {
   createDatabase,
   createEmailVerificationTokensRepository,
+  createOAuthClientsRepository,
   createRealmsRepository,
   createUsersRepository,
   type DatabasePool,
   type DbClient,
   type EmailVerificationTokensRepository,
+  OAuthClientsRepository,
   type RealmsRepository,
   type UsersRepository,
 } from '@qauth/infra-db';
@@ -22,6 +24,7 @@ declare module 'fastify' {
       users: UsersRepository;
       realms: RealmsRepository;
       emailVerificationTokens: EmailVerificationTokensRepository;
+      oauthClients: OAuthClientsRepository;
     };
   }
 }
@@ -56,6 +59,7 @@ export const databasePlugin = fp<DatabasePluginOptions>(
       users: createUsersRepository(database.db),
       realms: createRealmsRepository(database.db),
       emailVerificationTokens: createEmailVerificationTokensRepository(database.db),
+      oauthClients: createOAuthClientsRepository(database.db),
     });
 
     fastify.addHook('onReady', async () => {
