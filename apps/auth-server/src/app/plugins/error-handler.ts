@@ -1,6 +1,8 @@
 import {
   BadRequestError,
   EmailAlreadyVerifiedError,
+  EmailNotVerifiedError,
+  InvalidCredentialsError,
   InvalidTokenError,
   NotFoundError,
   TokenAlreadyUsedError,
@@ -24,11 +26,13 @@ interface ErrorResponse {
 /** Simple errors that only need message and statusCode */
 const SimpleErrorClasses = [
   BadRequestError,
-  NotFoundError,
-  InvalidTokenError,
-  TokenExpiredError,
-  TokenAlreadyUsedError,
   EmailAlreadyVerifiedError,
+  EmailNotVerifiedError,
+  InvalidCredentialsError,
+  InvalidTokenError,
+  NotFoundError,
+  TokenAlreadyUsedError,
+  TokenExpiredError,
   TooManyRequestsError,
 ] as const;
 
