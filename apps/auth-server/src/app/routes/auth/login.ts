@@ -8,6 +8,7 @@ import { env } from '../../../config/env';
 import { MIN_RESPONSE_TIME_MS } from '../../constants';
 import { getOrCreateSystemClient } from '../../helpers/oauth-client';
 import { getOrCreateDefaultRealm } from '../../helpers/realm';
+import { ensureMinimumResponseTime } from '../../helpers/timing';
 import { loginResponseSchema, loginSchema } from '../../schemas/auth';
 
 /**
@@ -62,12 +63,7 @@ export default async function (fastify: FastifyInstance) {
         // If credentials are invalid, throw generic error
         if (!user || !passwordValid) {
           // Ensure minimum response time to prevent timing attacks
-          const elapsed = Date.now() - startTime;
-          if (elapsed < MIN_RESPONSE_TIME_MS.LOGIN) {
-            await new Promise((resolve) =>
-              setTimeout(resolve, MIN_RESPONSE_TIME_MS.LOGIN - elapsed)
-            );
-          }
+          await ensureMinimumResponseTime(startTime, MIN_RESPONSE_TIME_MS.LOGIN);
 
           // Log failed login attempt
           await fastify.repositories.auditLogs.create({
@@ -142,7 +138,6 @@ export default async function (fastify: FastifyInstance) {
           userAgent: request.headers['user-agent'] || null,
           metadata: {
             sessionId,
-            oauthClientId: systemClient.id,
           },
         });
 
@@ -157,15 +152,9 @@ export default async function (fastify: FastifyInstance) {
           token_type: 'Bearer' as const,
         });
       } catch (error) {
-        // If error is already an InvalidCredentialsError, it was already logged
+        // If error is already an InvalidCredentialsError, delay and logging were already handled
+        // Simply re-throw the error without additional processing
         if (error instanceof InvalidCredentialsError) {
-          // Ensure minimum response time even on errors
-          const elapsed = Date.now() - startTime;
-          if (elapsed < MIN_RESPONSE_TIME_MS.LOGIN) {
-            await new Promise((resolve) =>
-              setTimeout(resolve, MIN_RESPONSE_TIME_MS.LOGIN - elapsed)
-            );
-          }
           throw error;
         }
 
@@ -187,10 +176,7 @@ export default async function (fastify: FastifyInstance) {
         });
 
         // Ensure minimum response time even on errors
-        const elapsed = Date.now() - startTime;
-        if (elapsed < MIN_RESPONSE_TIME_MS.LOGIN) {
-          await new Promise((resolve) => setTimeout(resolve, MIN_RESPONSE_TIME_MS.LOGIN - elapsed));
-        }
+        await ensureMinimumResponseTime(startTime, MIN_RESPONSE_TIME_MS.LOGIN);
 
         throw error;
       }
