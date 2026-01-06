@@ -4,13 +4,15 @@ import type { FastifyInstance } from 'fastify';
 import { ZodTypeProvider } from 'fastify-type-provider-zod';
 
 import { env } from '../../../config/env';
-import { ERROR_MESSAGES, REDIS_KEYS, SUCCESS_MESSAGES } from '../../constants';
+import {
+  ERROR_MESSAGES,
+  MIN_RESPONSE_TIME_MS,
+  REDIS_KEYS,
+  SUCCESS_MESSAGES,
+} from '../../constants';
 import { getOrCreateDefaultRealm } from '../../helpers/realm';
 import { resendVerificationResponseSchema, resendVerificationSchema } from '../../schemas/auth';
 import { errorResponseSchema } from '../../schemas/common';
-
-/** Minimum response time in milliseconds to prevent timing attacks */
-const MIN_RESPONSE_TIME_MS = 200;
 
 /**
  * Resend verification email route
@@ -137,8 +139,10 @@ export default async function (fastify: FastifyInstance) {
       // Enforce minimum response time to prevent timing-based email enumeration
       // This ensures consistent response time regardless of whether user exists
       const elapsed = Date.now() - startTime;
-      if (elapsed < MIN_RESPONSE_TIME_MS) {
-        await new Promise((resolve) => setTimeout(resolve, MIN_RESPONSE_TIME_MS - elapsed));
+      if (elapsed < MIN_RESPONSE_TIME_MS.RESEND_VERIFICATION) {
+        await new Promise((resolve) =>
+          setTimeout(resolve, MIN_RESPONSE_TIME_MS.RESEND_VERIFICATION - elapsed)
+        );
       }
 
       // Always return success with generic message (prevent email enumeration)

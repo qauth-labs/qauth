@@ -3,6 +3,7 @@ import cors from '@fastify/cors';
 import { cachePlugin } from '@qauth/fastify-plugin-cache';
 import { databasePlugin } from '@qauth/fastify-plugin-db';
 import { emailPlugin, type EmailProviderConfig } from '@qauth/fastify-plugin-email';
+import { jwtPlugin } from '@qauth/fastify-plugin-jwt';
 import { passwordPlugin } from '@qauth/fastify-plugin-password';
 import { FastifyInstance } from 'fastify';
 import * as path from 'path';
@@ -90,6 +91,13 @@ export async function app(fastify: FastifyInstance, opts: object) {
       defaultFrom: env.EMAIL_FROM_ADDRESS,
       baseUrl: env.EMAIL_BASE_URL,
     },
+  });
+
+  await fastify.register(jwtPlugin, {
+    privateKey: env.JWT_PRIVATE_KEY,
+    issuer: env.JWT_ISSUER,
+    accessTokenLifespan: env.ACCESS_TOKEN_LIFESPAN,
+    refreshTokenLifespan: env.REFRESH_TOKEN_LIFESPAN,
   });
 
   await fastify.register(rateLimitPlugin);

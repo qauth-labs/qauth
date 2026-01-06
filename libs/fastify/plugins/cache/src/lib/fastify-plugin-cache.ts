@@ -1,4 +1,10 @@
-import { type CacheClient, createRedisConnection, testRedisConnection } from '@qauth/infra-cache';
+import {
+  type CacheClient,
+  createRedisConnection,
+  createSessionUtils,
+  type SessionUtilsInstance,
+  testRedisConnection,
+} from '@qauth/infra-cache';
 import type { FastifyInstance } from 'fastify';
 import fp from 'fastify-plugin';
 
@@ -7,6 +13,7 @@ import type { CachePluginOptions } from '../types';
 declare module 'fastify' {
   interface FastifyInstance {
     redis: CacheClient;
+    sessionUtils: SessionUtilsInstance;
   }
 }
 
@@ -42,7 +49,11 @@ export const cachePlugin = fp<CachePluginOptions>(
     // Create Redis instance using factory
     const redis = createRedisConnection(options.config);
 
+    // Create session utilities
+    const sessionUtils = createSessionUtils(redis);
+
     fastify.decorate('redis', redis);
+    fastify.decorate('sessionUtils', sessionUtils);
 
     fastify.addHook('onReady', async () => {
       const isConnected = await testRedisConnection(redis);

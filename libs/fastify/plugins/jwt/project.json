@@ -1,0 +1,8 @@
+{
+  "name": "fastify-plugin-jwt",
+  "$schema": "../../../../node_modules/nx/schemas/project-schema.json",
+  "sourceRoot": "libs/fastify/plugins/jwt/src",
+  "projectType": "library",
+  "tags": ["scope:fastify", "type:jwt"],
+  "// targets": "to see all targets run: nx show project fastify-plugin-jwt --web"
+}
