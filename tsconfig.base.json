@@ -15,6 +15,7 @@
       "@qauth/fastify-plugin-cache": ["libs/fastify/plugins/cache/src/index.ts"],
       "@qauth/fastify-plugin-password": ["libs/fastify/plugins/password/src/index.ts"],
       "@qauth/fastify-plugin-email": ["libs/fastify/plugins/email/src/index.ts"],
+      "@qauth/fastify-plugin-jwt": ["libs/fastify/plugins/jwt/src/index.ts"],
       "@qauth/shared-errors": ["libs/shared/errors/src/index.ts"],
       "@qauth/shared-validation": ["libs/shared/validation/src/index.ts"],
       "@qauth/shared-testing": ["libs/shared/testing/src/index.ts"],

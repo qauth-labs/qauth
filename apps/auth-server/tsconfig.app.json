@@ -22,6 +22,9 @@
       "path": "../../libs/fastify/plugins/password/tsconfig.lib.json"
     },
     {
+      "path": "../../libs/fastify/plugins/jwt/tsconfig.lib.json"
+    },
+    {
       "path": "../../libs/fastify/plugins/email/tsconfig.lib.json"
     },
     {

@@ -1,4 +1,6 @@
 export * from './email-already-verified.error';
+export * from './email-not-verified.error';
+export * from './invalid-credentials.error';
 export * from './invalid-token.error';
 export * from './jwt-expired.error';
 export * from './jwt-invalid.error';

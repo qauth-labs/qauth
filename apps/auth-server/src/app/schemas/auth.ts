@@ -83,3 +83,31 @@ export const resendVerificationResponseSchema = z.object({
  * Resend verification response type
  */
 export type ResendVerificationResponse = z.infer<typeof resendVerificationResponseSchema>;
+
+/**
+ * Login request schema
+ */
+export const loginSchema = z.object({
+  email: z.email('Invalid email format'),
+  password: z.string(),
+});
+
+/**
+ * Login request type
+ */
+export type LoginRequest = z.infer<typeof loginSchema>;
+
+/**
+ * Login response schema
+ */
+export const loginResponseSchema = z.object({
+  access_token: z.string(),
+  refresh_token: z.string(),
+  expires_in: z.number(),
+  token_type: z.literal('Bearer'),
+});
+
+/**
+ * Login response type
+ */
+export type LoginResponse = z.infer<typeof loginResponseSchema>;

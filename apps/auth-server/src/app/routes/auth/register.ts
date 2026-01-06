@@ -25,6 +25,7 @@ export default async function (fastify: FastifyInstance) {
         rateLimit: {
           max: env.REGISTRATION_RATE_LIMIT,
           timeWindow: env.REGISTRATION_RATE_WINDOW * 1000,
+          keyGenerator: (request) => request.ip || 'unknown',
         },
       },
     },

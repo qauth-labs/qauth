@@ -21,7 +21,6 @@ const envSchema = z.object({
   ...redisEnvSchema.shape,
   ...passwordEnvSchema.shape,
   ...authEnvSchema.shape,
-  ...jwtEnvSchema,
   ...rateLimitEnvSchema.shape,
   ...emailEnvSchema.shape,
   /**
@@ -33,4 +32,4 @@ const envSchema = z.object({
 /**
  * Validated environment configuration
  */
-export const env = parseEnv(envSchema);
+export const env = { ...parseEnv(envSchema), ...parseEnv(jwtEnvSchema) };
