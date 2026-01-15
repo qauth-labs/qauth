@@ -23,6 +23,59 @@ import { NotFoundError, UniqueConstraintError } from '@qauth/shared-errors';
 
 ## Usage
 
+### Authentication Errors
+
+Authentication-specific errors for JWT, tokens, and credentials.
+
+```typescript
+import {
+  JWTExpiredError,
+  JWTInvalidError,
+  InvalidCredentialsError,
+  TokenExpiredError,
+  TokenAlreadyUsedError,
+  WeakPasswordError,
+  EmailNotVerifiedError,
+  EmailAlreadyVerifiedError,
+} from '@qauth/shared-errors';
+
+// JWT verification
+try {
+  const payload = await verifyAccessToken(token, publicKey);
+} catch (error) {
+  if (error instanceof JWTExpiredError) {
+    // Token has expired - prompt refresh
+    // error.statusCode === 401
+  } else if (error instanceof JWTInvalidError) {
+    // Token is malformed or has wrong signature
+    // error.statusCode === 401
+  }
+}
+
+// Login flow
+if (!user || !(await verifyPassword(user.passwordHash, password))) {
+  throw new InvalidCredentialsError(); // 401
+}
+
+if (!user.emailVerified) {
+  throw new EmailNotVerifiedError(); // 403
+}
+
+// Token verification
+if (token.used) {
+  throw new TokenAlreadyUsedError(); // 400
+}
+
+if (token.expiresAt < Date.now()) {
+  throw new TokenExpiredError(); // 401
+}
+
+// Password validation
+if (passwordScore < minScore) {
+  throw new WeakPasswordError('Password is too weak'); // 400
+}
+```
+
 ### Common Errors
 
 Common errors are domain-agnostic and can be used across different parts of the application.
@@ -204,12 +257,25 @@ libs/shared/errors/
 ├── src/
 │   ├── index.ts                          # Main exports
 │   └── lib/
+│       ├── auth/                          # Authentication errors
+│       │   ├── email-already-verified.error.ts
+│       │   ├── email-not-verified.error.ts
+│       │   ├── invalid-credentials.error.ts
+│       │   ├── invalid-token.error.ts
+│       │   ├── jwt-expired.error.ts
+│       │   ├── jwt-invalid.error.ts
+│       │   ├── token-already-used.error.ts
+│       │   ├── token-expired.error.ts
+│       │   ├── weak-password.error.ts
+│       │   └── index.ts
 │       ├── common/                        # Domain-agnostic errors
-│       │   ├── not-found.error.ts        # NotFoundError class
+│       │   ├── bad-request.error.ts
+│       │   ├── not-found.error.ts
+│       │   ├── too-many-requests.error.ts
 │       │   └── index.ts
 │       └── database/                      # Database-specific errors
-│           ├── unique-constraint.error.ts # UniqueConstraintError class
-│           ├── helpers.ts                 # Database error utilities
+│           ├── unique-constraint.error.ts
+│           ├── helpers.ts
 │           └── index.ts
 ├── project.json
 └── README.md
@@ -219,19 +285,26 @@ libs/shared/errors/
 
 Errors are organized by domain to maintain clear separation:
 
-- **common/**: Domain-agnostic errors that can be used across different parts of the application
-  - `NotFoundError`: Generic "not found" error
+- **auth/**: Authentication-specific errors
+  - `EmailAlreadyVerifiedError`: Email is already verified (400)
+  - `EmailNotVerifiedError`: Email not verified yet (403)
+  - `InvalidCredentialsError`: Invalid email or password (401)
+  - `InvalidTokenError`: Token is invalid or malformed (401)
+  - `JWTExpiredError`: JWT token has expired (401)
+  - `JWTInvalidError`: JWT token is invalid (401)
+  - `TokenAlreadyUsedError`: Token has already been used (400)
+  - `TokenExpiredError`: Token has expired (401)
+  - `WeakPasswordError`: Password does not meet requirements (400)
+
+- **common/**: Domain-agnostic errors
+  - `BadRequestError`: Generic bad request error (400)
+  - `NotFoundError`: Entity not found (404)
+  - `TooManyRequestsError`: Rate limit exceeded (429)
 
 - **database/**: Database-specific errors and utilities
-  - `UniqueConstraintError`: Database unique constraint violations
+  - `UniqueConstraintError`: Database unique constraint violations (409)
   - `isUniqueConstraintError()`: Helper to identify unique constraint errors
   - `extractConstraintName()`: Helper to extract constraint names
-
-Future domains may include:
-
-- **auth/**: Authentication-specific errors
-- **oauth/**: OAuth-specific errors
-- **validation/**: Validation errors
 
 ## Best Practices
 
