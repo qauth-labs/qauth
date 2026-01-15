@@ -297,7 +297,7 @@ qauth/
 
 **Infrastructure:**
 
-- **Monorepo**: Nx 22.1.3
+- **Monorepo**: Nx 22.3+
 - **Package Manager**: pnpm
 - **Containerization**: Docker
 - **Orchestration**: Kubernetes ready
@@ -312,6 +312,112 @@ qauth/
 
 ## 🚀 Quick Start
 
+### Local Development with Docker
+
+The easiest way to get started with QAuth locally is using Docker Compose. This will set up PostgreSQL, Redis, and the auth-server with a single command.
+
+**Prerequisites:**
+
+- Docker 20.10+ and Docker Compose 2.0+
+- OpenSSL (for generating JWT keys)
+
+**Quick Start:**
+
+1. **Generate JWT keys** (required for authentication):
+
+```bash
+# Generate EdDSA key pair
+openssl genpkey -algorithm Ed25519 -out private.pem
+openssl pkey -in private.pem -pubout -out public.pem
+```
+
+2. **Set up environment variables**:
+
+```bash
+# Copy the example environment file
+cp .env.docker.example .env
+
+# Edit .env and add your JWT keys:
+# JWT_PRIVATE_KEY="$(cat private.pem)"
+# JWT_PUBLIC_KEY="$(cat public.pem)"
+```
+
+3. **Start all services**:
+
+```bash
+docker-compose up -d
+```
+
+This will:
+
+- Start PostgreSQL 18 (with uuidv7() support)
+- Start Redis 7
+- Build and start the auth-server
+- Run database migrations automatically
+- Expose the API on http://localhost:3000
+
+4. **Verify the setup**:
+
+```bash
+# Check service health
+curl http://localhost:3000/health
+
+# Check service logs
+docker-compose logs -f auth-server
+```
+
+**Accessing Services:**
+
+- **Auth API**: http://localhost:3000
+- **PostgreSQL**: localhost:5432 (user: `qauth`, password: from `.env` `DB_PASSWORD`)
+- **Redis**: localhost:6379
+
+**Running Migrations Manually:**
+
+Migrations run automatically via the `migration-runner` service before auth-server starts. You can also run them manually:
+
+```bash
+docker-compose run --rm migration-runner
+```
+
+**Stopping Services:**
+
+```bash
+docker-compose down
+
+# To also remove volumes (deletes all data):
+docker-compose down -v
+```
+
+**Testing the Setup:**
+
+A comprehensive test script is available to verify everything works:
+
+```bash
+# Run the test script
+./scripts/test-docker.sh
+```
+
+This script will:
+
+- Check environment configuration
+- Build Docker images
+- Start all services
+- Run migrations
+- Verify health checks
+- Test API endpoints
+- Verify data persistence
+
+**Troubleshooting:**
+
+- **Port conflicts**: If ports 3000, 5432, or 6379 are already in use, modify the port mappings in `docker-compose.yml`
+- **Migration errors**: Check that PostgreSQL is healthy: `docker-compose ps`
+- **JWT errors**: Ensure your JWT keys are properly formatted in `.env` (include BEGIN/END lines)
+- **Build failures**: Ensure you have enough disk space and Docker has sufficient resources allocated
+- **Migration runner fails**: Check logs with `docker-compose logs migration-runner`
+
+For more details, see the [Docker documentation](./docs/docker.md).
+
 ### Auth as a Service Mode
 
 ```typescript
@@ -324,7 +430,7 @@ const auth = new QAuth({
 });
 ```
 
-### Self-hosted Mode
+### Self-hosted Mode (Production)
 
 ```bash
 # Docker deployment
@@ -508,30 +614,32 @@ function Dashboard() {
 
 ## 📚 Documentation
 
-**Getting Started:**
+**Available Documentation:**
 
-- [Quick Start Guide](./docs/quick-start.md)
-- [Architecture Overview](./docs/architecture.md)
-- [Setup Guide](./docs/setup.md)
+- [MVP Product Requirements](./MVP-PRD.md) - Detailed development roadmap and specifications
+- [Docker Development Guide](./docs/docker.md) - Local development with Docker
+- [Architecture Decision Records](./docs/adr/README.md) - Key architectural decisions
 
-**Deployment Modes:**
+**Library Documentation:**
 
-- [Auth as a Service Mode](./docs/auth-service.md)
-- [Self-hosted Mode](./docs/self-hosted.md)
+- [@qauth/infra-db](./libs/infra/db/README.md) - Database schema and repositories
+- [@qauth/infra-cache](./libs/infra/cache/README.md) - Redis caching utilities
+- [@qauth/server-config](./libs/server/config/README.md) - Environment configuration
+- [@qauth/server-email](./libs/server/email/README.md) - Email service with multiple providers
+- [@qauth/server-password](./libs/server/password/README.md) - Password hashing with Argon2
+- [@qauth/server-jwt](./libs/server/jwt/README.md) - JWT signing and verification
+- [@qauth/shared-errors](./libs/shared/errors/README.md) - Centralized error handling
+- [@qauth/shared-validation](./libs/shared/validation/README.md) - Input validation utilities
+- [@qauth/shared-testing](./libs/shared/testing/README.md) - Test helpers and fixtures
 
-**Technical Documentation:**
+**Planned Documentation** (coming in future phases):
 
-- [Authentication Flow](./docs/authentication.md)
-- [API Reference](./docs/api.md)
-- [SDK Documentation](./docs/sdk.md)
-- [Hybrid Architecture](./docs/hybrid-architecture.md)
-
-**Advanced Topics:**
-
-- [Multi-tenancy](./docs/multi-tenancy.md)
-- [Custom Domains](./docs/custom-domains.md)
-- [Migration Guide](./docs/migration.md)
-- [Security Best Practices](./docs/security.md)
+- Quick Start Guide
+- API Reference
+- SDK Documentation
+- Authentication Flow
+- Multi-tenancy Guide
+- Security Best Practices
 
 ## 🤝 Contributing
 

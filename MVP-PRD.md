@@ -1,9 +1,9 @@
 # QAuth - MVP Product Requirements Document (PRD)
 
-> **Version**: 1.4
-> **Last Updated**: 2026-01-01
+> **Version**: 1.5
+> **Last Updated**: 2026-01-15
 > **Author**: Muhammed Taha Ayan
-> **Status**: Phase 1 - Core Authentication
+> **Status**: Phase 1 - Core Authentication (Docker infrastructure ready)
 
 ## Executive Summary
 
@@ -447,12 +447,14 @@ Response:
 
 #### 1.8 Health Check Endpoint
 
+**Status**: ✅ Completed
+
 **Tasks**:
 
-- [ ] Implement health check endpoint (`GET /health`)
-- [ ] Check database connection
-- [ ] Check Redis connection
-- [ ] Return service status
+- [x] Implement health check endpoint (`GET /health`)
+- [x] Check database connection
+- [x] Check Redis connection
+- [x] Return service status
 
 **API Endpoint**:
 
@@ -830,87 +832,109 @@ auth_token_issued_total{type="refresh"} 3456
 
 #### 3.4 Docker & Deployment
 
+**Status**: ✅ Completed (2026-01-15)
+
 **Tasks**:
 
-- [ ] Create Dockerfile for auth-server
-- [ ] Create Dockerfile for developer-portal
-- [ ] Create docker-compose.yml (PostgreSQL + Redis + QAuth)
-- [ ] Write deployment documentation
-- [ ] Environment variable configuration
-- [ ] Database migration strategy
-- [ ] Add .dockerignore
-- [ ] Multi-stage builds for optimization
+- [x] Create Dockerfile for auth-server
+- [x] Create Dockerfile for migration-runner (separate service for DB migrations)
+- [ ] Create Dockerfile for developer-portal (Phase 2)
+- [x] Create docker-compose.yml (PostgreSQL 18 + Redis 7 + QAuth)
+- [x] Write deployment documentation (README.md, docs/docker.md)
+- [x] Environment variable configuration (.env.docker.example)
+- [x] Database migration strategy (migration-runner service using Nx targets)
+- [x] Add .dockerignore
+- [x] Multi-stage builds for optimization
+- [x] Health checks for all services
+- [x] Non-root user in containers
+- [x] JWT key management strategy (ADR-001)
 
-**docker-compose.yml**:
+**docker-compose.yml** (simplified, see actual file for full config):
 
 ```yaml
-version: '3.9'
-
 services:
   postgres:
-    image: postgres:16-alpine
+    image: postgres:18-alpine # PostgreSQL 18 for uuidv7() support
     environment:
       POSTGRES_DB: qauth
       POSTGRES_USER: qauth
       POSTGRES_PASSWORD: ${DB_PASSWORD}
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U qauth -d qauth']
     volumes:
       - postgres_data:/var/lib/postgresql/data
-    ports:
-      - '5432:5432'
 
   redis:
     image: redis:7-alpine
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
     volumes:
       - redis_data:/data
-    ports:
-      - '6379:6379'
+
+  migration-runner:
+    build:
+      context: .
+      dockerfile: apps/migration-runner/Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: 'no' # Run once and exit
 
   auth-server:
-    build: ./apps/auth-server
+    build:
+      context: .
+      dockerfile: apps/auth-server/Dockerfile
     environment:
-      DATABASE_URL: postgresql://qauth:${DB_PASSWORD}@postgres:5432/qauth
-      REDIS_URL: redis://redis:6379
+      # See .env.docker.example for all variables
       JWT_PRIVATE_KEY: ${JWT_PRIVATE_KEY}
-    ports:
-      - '3000:3000'
+      JWT_PUBLIC_KEY: ${JWT_PUBLIC_KEY}
     depends_on:
-      - postgres
-      - redis
-
-  developer-portal:
-    build: ./apps/developer-portal
-    environment:
-      API_URL: http://auth-server:3000
-    ports:
-      - '3001:3001'
-    depends_on:
-      - auth-server
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migration-runner:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ['CMD', 'node', '-e', "require('http').get('http://localhost:3000/health')"]
 
 volumes:
   postgres_data:
   redis_data:
 ```
 
-**Dockerfile (auth-server)**:
+**Dockerfile (auth-server)** - Multi-stage build with corepack:
 
 ```dockerfile
-FROM node:24-alpine AS builder
-
+# Stage 1: Dependencies
+FROM node:24-alpine AS deps
 WORKDIR /app
-COPY package.json pnpm-lock.yaml ./
-RUN npm install -g pnpm && pnpm install --frozen-lockfile
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml nx.json tsconfig.base.json ./
+RUN corepack enable && pnpm install --frozen-lockfile
 
-COPY . .
+# Stage 2: Builder
+FROM deps AS builder
+COPY vitest.config.ts libs apps ./
 RUN pnpm nx build auth-server --prod
 
+# Stage 3: Runner (minimal production image)
 FROM node:24-alpine AS runner
-
 WORKDIR /app
+RUN corepack enable
+
+# Copy built application and dependencies
 COPY --from=builder /app/dist/apps/auth-server ./
-COPY --from=builder /app/node_modules ./node_modules
+COPY --from=builder /app/dist/libs ./dist/libs
+COPY --from=builder /app/package.json /app/pnpm-lock.yaml /app/node_modules ./
+
+# Security: non-root user
+RUN addgroup -g 1001 -S nodejs && adduser -S nodejs -u 1001
+USER nodejs
 
 EXPOSE 3000
-CMD ["node", "main.js"]
+HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
+  CMD node -e "require('http').get('http://localhost:3000/health', (r) => {process.exit(r.statusCode === 200 ? 0 : 1)})"
+ENTRYPOINT ["/bin/sh", "/app/docker-entrypoint.sh"]
 ```
 
 **Acceptance Criteria**:

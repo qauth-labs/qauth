@@ -1,0 +1,161 @@
+services:
+  postgres:
+    image: postgres:18-alpine
+    container_name: qauth-postgres
+    environment:
+      POSTGRES_DB: qauth
+      POSTGRES_USER: qauth
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-qauth_dev_password}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - '5432:5432'
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U qauth -d qauth']
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - qauth-network
+
+  redis:
+    image: redis:7-alpine
+    container_name: qauth-redis
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+    ports:
+      - '6379:6379'
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks:
+      - qauth-network
+
+  migration-runner:
+    build:
+      context: .
+      dockerfile: apps/migration-runner/Dockerfile
+    container_name: qauth-migration-runner
+    environment:
+      DATABASE_URL: postgresql://qauth:${DB_PASSWORD:-qauth_dev_password}@postgres:5432/qauth
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - qauth-network
+    # This is a one-time job, exits after migrations complete
+    restart: 'no'
+
+  auth-server:
+    build:
+      context: .
+      dockerfile: apps/auth-server/Dockerfile
+    container_name: qauth-auth-server
+    environment:
+      # Database
+      DATABASE_URL: postgresql://qauth:${DB_PASSWORD:-qauth_dev_password}@postgres:5432/qauth
+      DB_POOL_MAX: ${DB_POOL_MAX:-10}
+      DB_POOL_MIN: ${DB_POOL_MIN:-2}
+      DB_POOL_IDLE_TIMEOUT: ${DB_POOL_IDLE_TIMEOUT:-30000}
+      DB_POOL_CONNECTION_TIMEOUT: ${DB_POOL_CONNECTION_TIMEOUT:-2000}
+
+      # Redis
+      REDIS_URL: redis://redis:6379/0
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+      REDIS_DB: ${REDIS_DB:-0}
+      REDIS_MAX_RETRIES: ${REDIS_MAX_RETRIES:-3}
+      REDIS_CONNECTION_TIMEOUT: ${REDIS_CONNECTION_TIMEOUT:-10000}
+      REDIS_COMMAND_TIMEOUT: ${REDIS_COMMAND_TIMEOUT:-5000}
+
+      # JWT (from .env file)
+      JWT_PRIVATE_KEY: ${JWT_PRIVATE_KEY}
+      JWT_PUBLIC_KEY: ${JWT_PUBLIC_KEY:-}
+      JWT_ISSUER: ${JWT_ISSUER:-http://localhost:3000}
+      ACCESS_TOKEN_LIFESPAN: ${ACCESS_TOKEN_LIFESPAN:-900}
+      REFRESH_TOKEN_LIFESPAN: ${REFRESH_TOKEN_LIFESPAN:-604800}
+
+      # Server
+      NODE_ENV: ${NODE_ENV:-production}
+      PORT: 3000
+      HOST: 0.0.0.0
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+
+      # Auth
+      DEFAULT_REALM_NAME: ${DEFAULT_REALM_NAME:-master}
+      SYSTEM_CLIENT_ID: ${SYSTEM_CLIENT_ID:-system}
+      REGISTRATION_RATE_LIMIT: ${REGISTRATION_RATE_LIMIT:-3}
+      REGISTRATION_RATE_WINDOW: ${REGISTRATION_RATE_WINDOW:-3600}
+      LOGIN_RATE_LIMIT: ${LOGIN_RATE_LIMIT:-5}
+      LOGIN_RATE_WINDOW: ${LOGIN_RATE_WINDOW:-900}
+
+      # Password
+      PASSWORD_MEMORY_COST: ${PASSWORD_MEMORY_COST:-65536}
+      PASSWORD_TIME_COST: ${PASSWORD_TIME_COST:-3}
+      PASSWORD_PARALLELISM: ${PASSWORD_PARALLELISM:-4}
+      PASSWORD_MIN_SCORE: ${PASSWORD_MIN_SCORE:-2}
+
+      # Email
+      EMAIL_PROVIDER: ${EMAIL_PROVIDER:-mock}
+      EMAIL_FROM_ADDRESS: ${EMAIL_FROM_ADDRESS:-noreply@qauth.dev}
+      EMAIL_FROM_NAME: ${EMAIL_FROM_NAME:-QAuth}
+      EMAIL_BASE_URL: ${EMAIL_BASE_URL:-http://localhost:3000}
+      EMAIL_VERIFICATION_TOKEN_EXPIRY: ${EMAIL_VERIFICATION_TOKEN_EXPIRY:-86400}
+      EMAIL_VERIFICATION_INVALIDATE_EXISTING_ON_RESEND: ${EMAIL_VERIFICATION_INVALIDATE_EXISTING_ON_RESEND:-true}
+      # Resend provider (only needed if EMAIL_PROVIDER=resend)
+      # RESEND_API_KEY: ${RESEND_API_KEY}
+      # SMTP provider (only needed if EMAIL_PROVIDER=smtp)
+      # SMTP_HOST: ${SMTP_HOST}
+      # SMTP_PORT: ${SMTP_PORT}
+      # SMTP_SECURE: ${SMTP_SECURE}
+      # SMTP_USER: ${SMTP_USER}
+      # SMTP_PASSWORD: ${SMTP_PASSWORD}
+
+      # CORS
+      CORS_ORIGIN: ${CORS_ORIGIN:-*}
+
+      # Rate Limiting
+      RATE_LIMIT_MAX: ${RATE_LIMIT_MAX:-100}
+      RATE_LIMIT_WINDOW: ${RATE_LIMIT_WINDOW:-3600}
+      VERIFICATION_RATE_LIMIT: ${VERIFICATION_RATE_LIMIT:-10}
+      VERIFICATION_RATE_WINDOW: ${VERIFICATION_RATE_WINDOW:-900}
+      RESEND_VERIFICATION_RATE_LIMIT: ${RESEND_VERIFICATION_RATE_LIMIT:-100}
+      RESEND_VERIFICATION_RATE_WINDOW: ${RESEND_VERIFICATION_RATE_WINDOW:-60}
+      RESEND_VERIFICATION_EMAIL_LIMIT: ${RESEND_VERIFICATION_EMAIL_LIMIT:-3}
+      RESEND_VERIFICATION_EMAIL_WINDOW: ${RESEND_VERIFICATION_EMAIL_WINDOW:-3600}
+      RESEND_VERIFICATION_MIN_INTERVAL: ${RESEND_VERIFICATION_MIN_INTERVAL:-60}
+    ports:
+      - '3000:3000'
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migration-runner:
+        condition: service_completed_successfully
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "require('http').get('http://localhost:3000/health', (r) => {process.exit(r.statusCode === 200 ? 0 : 1)})",
+        ]
+      interval: 30s
+      timeout: 10s
+      start_period: 40s
+      retries: 3
+    networks:
+      - qauth-network
+
+volumes:
+  postgres_data:
+  redis_data:
+
+networks:
+  qauth-network:
+    driver: bridge
