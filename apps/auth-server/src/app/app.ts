@@ -5,7 +5,7 @@ import { databasePlugin } from '@qauth/fastify-plugin-db';
 import { emailPlugin, type EmailProviderConfig } from '@qauth/fastify-plugin-email';
 import { jwtPlugin } from '@qauth/fastify-plugin-jwt';
 import { passwordPlugin } from '@qauth/fastify-plugin-password';
-import { FastifyInstance } from 'fastify';
+import type { FastifyInstance } from 'fastify';
 import * as path from 'path';
 
 import { env } from '../config/env';
@@ -109,7 +109,7 @@ export async function app(fastify: FastifyInstance, opts: object) {
   fastify.register(AutoLoad, {
     dir: path.join(__dirname, 'plugins'),
     options: { ...opts },
-    ignorePattern: /error-handler\.ts$/,
+    ignorePattern: /(error-handler|rate-limit)\.(ts|js)$/,
   });
 
   fastify.register(AutoLoad, {

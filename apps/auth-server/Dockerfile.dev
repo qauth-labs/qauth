@@ -1,0 +1,28 @@
+# Auth Server – Development Dockerfile
+# Uses nx serve --watch; pair with docker-compose.dev.yml + Compose Watch (sync).
+
+FROM node:24-alpine
+
+WORKDIR /app
+
+RUN corepack enable
+
+# Dependencies only (layer cache)
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY nx.json tsconfig.base.json ./
+COPY vitest.config.ts ./
+RUN pnpm install --frozen-lockfile
+
+# Workspace (Compose Watch will sync over these; writable for sync targets)
+COPY libs ./libs
+COPY apps ./apps
+
+RUN addgroup -g 1001 -S nodejs && adduser -S nodejs -u 1001 && \
+    chown -R nodejs:nodejs /app
+
+USER nodejs
+
+EXPOSE 3000
+
+# Nx serve --watch: build on change, restart node
+CMD ["pnpm", "nx", "serve", "auth-server", "--watch"]

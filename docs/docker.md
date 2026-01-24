@@ -1,6 +1,6 @@
-# Docker Development Guide
+# Docker Guide
 
-This guide covers the Docker setup for local development of QAuth.
+This guide covers the Docker setup for QAuth: **production** (prod build, no watch) and **development** (dev image, Compose Watch + `nx serve --watch`).
 
 ## Overview
 
@@ -13,9 +13,17 @@ QAuth uses Docker Compose to orchestrate the following services:
 | **migration-runner** | Custom               | Runs database migrations via Nx                          |
 | **auth-server**      | Custom               | Main authentication API server                           |
 
+### Production vs development
+
+| Use case        | Compose file(s)                                 | Auth-server image                            | Watch                |
+| --------------- | ----------------------------------------------- | -------------------------------------------- | -------------------- |
+| **Production**  | `docker-compose.yml`                            | `Dockerfile` (multi-stage prod build)        | No                   |
+| **Development** | `docker-compose.yml` + `docker-compose.dev.yml` | `Dockerfile.dev` (deps + source, `nx serve`) | Yes (sync + rebuild) |
+
 ## Prerequisites
 
 - Docker 20.10+ and Docker Compose 2.0+
+- Docker Compose **2.22+** for development watch (`docker-compose.dev.yml` + `--watch`)
 - OpenSSL (for generating JWT keys)
 
 ## Quick Start
@@ -60,13 +68,23 @@ JWT_ISSUER=http://localhost:3000
 
 ### 3. Start Services
 
-```bash
-# Start all services (builds images on first run)
-docker-compose up -d
+**Production** (prod build, no watch):
 
-# Watch logs
-docker-compose logs -f
+```bash
+docker compose up -d
+docker compose logs -f
 ```
+
+**Development** (dev image, Compose Watch, `nx serve --watch`; requires Docker Compose 2.22+):
+
+```bash
+# In .env: NODE_ENV=development, LOG_LEVEL=debug
+docker compose -f docker-compose.yml -f docker-compose.dev.yml up --watch
+```
+
+- Sync: changes in `apps/auth-server/` and `libs/` are synced into the container; `nx serve --watch` rebuilds and restarts.
+- Rebuild: changes to `package.json`, lockfile, `nx.json`, etc. trigger a full image rebuild.
+- See [Compose file watch](https://docs.docker.com/compose/file-watch/).
 
 ### 4. Verify Setup
 
@@ -161,22 +179,22 @@ The main authentication API server.
 
 - **Port**: 3000 (mapped to host)
 - **Health Check**: `GET /health`
-- **Entrypoint**: `/app/docker-entrypoint.sh`
+- **Production**: `Dockerfile` → `docker-entrypoint.sh` runs `node main.js`.
+- **Development**: `Dockerfile.dev` → `pnpm nx serve auth-server --watch`; use with `docker-compose.dev.yml` and `--watch`.
 
 ## Common Operations
 
 ### Rebuild Images
 
-After code changes:
+**Production:**
 
 ```bash
-# Rebuild and restart
-docker-compose up -d --build
-
-# Or rebuild specific service
-docker-compose build auth-server
-docker-compose up -d auth-server
+docker compose up -d --build
+# Or rebuild only auth-server
+docker compose build auth-server && docker compose up -d auth-server
 ```
+
+**Development:** use `docker compose -f docker-compose.yml -f docker-compose.dev.yml up --watch`; sync/rebuild is automatic. For dependency or config changes, the dev setup will rebuild the auth-server image when those files change.
 
 ### View Logs
 
@@ -236,6 +254,10 @@ See `.env.docker.example` for all available variables. Key variables:
 | `JWT_PUBLIC_KEY`  | Yes      | EdDSA public key (PEM format)                      |
 | `JWT_ISSUER`      | No       | JWT issuer URL (default: http://localhost:3000)    |
 | `EMAIL_PROVIDER`  | No       | Email provider: mock, resend, smtp (default: mock) |
+| `NODE_ENV`        | No       | `production` (default) or `development` for dev    |
+| `LOG_LEVEL`       | No       | `info` (default); use `debug` for development      |
+
+For **development** with `docker-compose.dev.yml`, set `NODE_ENV=development` and `LOG_LEVEL=debug` in `.env`.
 
 ## Troubleshooting
 
@@ -282,6 +304,26 @@ docker builder prune
 # Rebuild without cache
 docker-compose build --no-cache
 ```
+
+### Watch: "no space left on device"
+
+When running `docker compose ... up --watch`, Compose uses inotify. The error often means **inotify limits** (not disk space):
+
+1. **Close other watchers** (Nx graph, IDE, etc.):
+   ```bash
+   pkill -f 'nx graph.*watch'
+   ```
+2. **Increase inotify instance limit**:
+   ```bash
+   sudo sysctl fs.inotify.max_user_instances=4096
+   echo "fs.inotify.max_user_instances=4096" | sudo tee -a /etc/sysctl.d/99-inotify.conf
+   ```
+3. **Use watch-free dev** if it still fails:
+   ```bash
+   docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
+   # After code changes:
+   docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build auth-server
+   ```
 
 ### Container Won't Start
 
