@@ -18,7 +18,7 @@ import { loginResponseSchema, loginSchema } from '../../schemas/auth';
  */
 export default async function (fastify: FastifyInstance) {
   fastify.withTypeProvider<ZodTypeProvider>().post(
-    '/auth/login',
+    '/login',
     {
       schema: {
         body: loginSchema,
@@ -51,7 +51,7 @@ export default async function (fastify: FastifyInstance) {
         // Verify password (always perform verification to prevent timing attacks)
         let passwordValid = false;
         if (user) {
-          passwordValid = await fastify.passwordHasher.verifyPassword(password, user.passwordHash);
+          passwordValid = await fastify.passwordHasher.verifyPassword(user.passwordHash, password);
         }
 
         // Check email verified (optional for MVP - can be configurable)

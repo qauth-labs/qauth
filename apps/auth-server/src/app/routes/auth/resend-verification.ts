@@ -33,7 +33,7 @@ import { errorResponseSchema } from '../../schemas/common';
  */
 export default async function (fastify: FastifyInstance) {
   fastify.withTypeProvider<ZodTypeProvider>().post(
-    '/auth/resend-verification',
+    '/resend-verification',
     {
       schema: {
         body: resendVerificationSchema,

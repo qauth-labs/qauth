@@ -95,6 +95,7 @@ export async function app(fastify: FastifyInstance, opts: object) {
 
   await fastify.register(jwtPlugin, {
     privateKey: env.JWT_PRIVATE_KEY,
+    publicKey: env.JWT_PUBLIC_KEY,
     issuer: env.JWT_ISSUER,
     accessTokenLifespan: env.ACCESS_TOKEN_LIFESPAN,
     refreshTokenLifespan: env.REFRESH_TOKEN_LIFESPAN,

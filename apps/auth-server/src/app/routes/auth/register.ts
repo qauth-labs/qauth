@@ -13,7 +13,7 @@ import { registerResponseSchema, registerSchema } from '../../schemas/auth';
  */
 export default async function (fastify: FastifyInstance) {
   fastify.withTypeProvider<ZodTypeProvider>().post(
-    '/auth/register',
+    '/register',
     {
       schema: {
         body: registerSchema,
@@ -88,7 +88,11 @@ export default async function (fastify: FastifyInstance) {
       // Send verification email (don't fail registration if this fails)
       try {
         await fastify.emailService.sendVerificationEmail(user.email, token);
-        fastify.log.info({ userId: user.id, email: user.email }, 'Verification email sent');
+        fastify.log.info(
+          { userId: user.id, email: user.email },
+          'Verification email sent: %s',
+          token
+        );
       } catch (error) {
         fastify.log.error(
           { err: error, userId: user.id, email: user.email },

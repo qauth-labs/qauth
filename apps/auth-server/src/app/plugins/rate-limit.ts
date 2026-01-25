@@ -9,9 +9,15 @@ import { env } from '../../config/env';
  * Rate limiting plugin configuration
  * Uses Redis store for distributed rate limiting
  * Applied globally, but can be overridden per-route via config.rateLimit
+ * Can be disabled via RATE_LIMIT_ENABLED=false environment variable
  */
 export const rateLimitPlugin = fp<FastifyPluginOptions>(
   async (fastify: FastifyInstance) => {
+    if (!env.RATE_LIMIT_ENABLED) {
+      fastify.log.warn('Rate limiting is DISABLED via RATE_LIMIT_ENABLED=false');
+      return;
+    }
+
     const defaultMax = env.RATE_LIMIT_MAX;
     const defaultTimeWindow = env.RATE_LIMIT_WINDOW;
 
