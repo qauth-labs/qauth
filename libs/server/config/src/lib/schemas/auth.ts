@@ -76,6 +76,28 @@ export const authEnvSchema = z.object({
    * Note: Converted to milliseconds in route handlers (value * 1000)
    */
   LOGIN_RATE_WINDOW: z.coerce.number().int().min(1).default(900),
+
+  /**
+   * Maximum refresh token attempts per window
+   */
+  REFRESH_RATE_LIMIT: z.coerce.number().int().min(1).default(10),
+
+  /**
+   * Refresh token rate limit window in seconds (default: 60 = 1 minute)
+   * Note: Converted to milliseconds in route handlers (value * 1000)
+   */
+  REFRESH_RATE_WINDOW: z.coerce.number().int().min(1).default(60),
+
+  /**
+   * Maximum logout attempts per window
+   */
+  LOGOUT_RATE_LIMIT: z.coerce.number().int().min(1).default(20),
+
+  /**
+   * Logout rate limit window in seconds (default: 60 = 1 minute)
+   * Note: Converted to milliseconds in route handlers (value * 1000)
+   */
+  LOGOUT_RATE_WINDOW: z.coerce.number().int().min(1).default(60),
 });
 
 /**

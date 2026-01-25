@@ -111,3 +111,61 @@ export const loginResponseSchema = z.object({
  * Login response type
  */
 export type LoginResponse = z.infer<typeof loginResponseSchema>;
+
+/**
+ * Refresh request schema
+ */
+export const refreshSchema = z.object({
+  refresh_token: z
+    .string()
+    .length(64, 'Refresh token must be exactly 64 characters')
+    .regex(/^[0-9a-fA-F]{64}$/, 'Refresh token must be a valid hex string'),
+});
+
+/**
+ * Refresh request type
+ */
+export type RefreshRequest = z.infer<typeof refreshSchema>;
+
+/**
+ * Refresh response schema
+ */
+export const refreshResponseSchema = z.object({
+  access_token: z.string(),
+  refresh_token: z.string(),
+  expires_in: z.number(),
+  token_type: z.literal('Bearer'),
+});
+
+/**
+ * Refresh response type
+ */
+export type RefreshResponse = z.infer<typeof refreshResponseSchema>;
+
+/**
+ * Logout request headers schema
+ * Validates Authorization header format
+ */
+export const logoutHeadersSchema = z.object({
+  authorization: z
+    .string()
+    .regex(/^Bearer .+$/, 'Authorization header must be in format: Bearer <token>'),
+});
+
+/**
+ * Logout request headers type
+ */
+export type LogoutHeaders = z.infer<typeof logoutHeadersSchema>;
+
+/**
+ * Logout response schema
+ */
+export const logoutResponseSchema = z.object({
+  success: z.literal(true),
+  message: z.literal('Successfully logged out'),
+});
+
+/**
+ * Logout response type
+ */
+export type LogoutResponse = z.infer<typeof logoutResponseSchema>;

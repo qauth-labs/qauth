@@ -13,7 +13,7 @@ import { registerResponseSchema, registerSchema } from '../../schemas/auth';
  */
 export default async function (fastify: FastifyInstance) {
   fastify.withTypeProvider<ZodTypeProvider>().post(
-    '/auth/register',
+    '/register',
     {
       schema: {
         body: registerSchema,

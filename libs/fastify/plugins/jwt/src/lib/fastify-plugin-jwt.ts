@@ -1,8 +1,13 @@
 import {
+  decodeJwtUnsafe,
+  exportPublicKeyPem,
+  extractJWTFromHeader,
   generateRefreshToken,
   hashRefreshToken,
   importPrivateKey,
+  importPublicKey,
   signAccessToken,
+  verifyAccessToken,
 } from '@qauth/server-jwt';
 import type { FastifyInstance } from 'fastify';
 import fp from 'fastify-plugin';
@@ -41,6 +46,25 @@ export const jwtPlugin = fp<JwtPluginOptions>(
     // Import private key once at plugin registration
     const privateKey = await importPrivateKey(options.privateKey);
 
+    // Import or derive public key for verification
+    let publicKey: Awaited<ReturnType<typeof importPublicKey>>;
+    if (options.publicKey) {
+      // Use provided public key
+      publicKey = await importPublicKey(options.publicKey);
+    } else {
+      // Derive public key from private key
+      // For EdDSA keys, we can export the public key from the private key
+      // Note: This requires the key to be extractable, which imported keys are by default in jose
+      try {
+        const publicKeyPem = await exportPublicKeyPem(privateKey);
+        publicKey = await importPublicKey(publicKeyPem);
+      } catch {
+        throw new Error(
+          'Failed to derive public key from private key. Please provide JWT_PUBLIC_KEY in environment variables.'
+        );
+      }
+    }
+
     const jwtUtils: JwtUtils = {
       async signAccessToken(payload) {
         return signAccessToken(payload, privateKey, options.issuer, options.accessTokenLifespan);
@@ -50,6 +74,15 @@ export const jwtPlugin = fp<JwtPluginOptions>(
       },
       hashRefreshToken(token) {
         return hashRefreshToken(token);
+      },
+      async verifyAccessToken(token) {
+        return verifyAccessToken(token, publicKey);
+      },
+      extractFromHeader(authHeader) {
+        return extractJWTFromHeader(authHeader);
+      },
+      decodeTokenUnsafe(token) {
+        return decodeJwtUnsafe(token);
       },
       getAccessTokenLifespan() {
         return options.accessTokenLifespan;

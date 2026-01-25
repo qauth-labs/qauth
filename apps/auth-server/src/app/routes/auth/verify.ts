@@ -22,7 +22,7 @@ import { verifyQuerySchema, verifyResponseSchema } from '../../schemas/auth';
  */
 export default async function (fastify: FastifyInstance) {
   fastify.withTypeProvider<ZodTypeProvider>().get(
-    '/auth/verify',
+    '/verify',
     {
       schema: {
         querystring: verifyQuerySchema,
