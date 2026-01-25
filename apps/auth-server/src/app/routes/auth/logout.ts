@@ -46,18 +46,22 @@ export default async function (fastify: FastifyInstance) {
         // Try to verify JWT token
         // For logout, we allow expired tokens - user is ending their session anyway
         try {
-          const payload = await fastify.jwtUtils.verifyAccessToken(token);
-          userId = payload.sub;
+          const { sub } = await fastify.jwtUtils.verifyAccessToken(token);
+          userId = sub;
         } catch (error) {
           if (error instanceof JWTExpiredError) {
             // Token expired - decode without verification to get user ID
             isExpired = true;
-            const payload = fastify.jwtUtils.decodeTokenUnsafe(token);
-            userId = payload.sub;
+            const { sub } = fastify.jwtUtils.decodeTokenUnsafe(token);
+            userId = sub;
           } else {
             // Token is invalid (bad signature, malformed, etc.)
             throw error;
           }
+        }
+
+        if (!userId) {
+          throw new JWTInvalidError('Invalid JWT token');
         }
 
         // Get user from database to verify existence

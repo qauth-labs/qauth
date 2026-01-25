@@ -88,11 +88,7 @@ export default async function (fastify: FastifyInstance) {
       // Send verification email (don't fail registration if this fails)
       try {
         await fastify.emailService.sendVerificationEmail(user.email, token);
-        fastify.log.info(
-          { userId: user.id, email: user.email },
-          'Verification email sent: %s',
-          token
-        );
+        fastify.log.info({ userId: user.id, email: user.email }, 'Verification email sent');
       } catch (error) {
         fastify.log.error(
           { err: error, userId: user.id, email: user.email },

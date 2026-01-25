@@ -1,7 +1,6 @@
 import { JWTInvalidError } from '@qauth/shared-errors';
 import { decodeJwt as joseDecodeJwt, exportSPKI as joseExportSPKI } from 'jose';
 
-import type { JWTPayload } from '../types/jwt-service';
 import type { KeyLike } from '../types/key-management';
 
 /**
@@ -26,13 +25,22 @@ import type { KeyLike } from '../types/key-management';
  * }
  * ```
  */
-export function decodeJwtUnsafe(token: string): JWTPayload {
+export function decodeJwtUnsafe(token: string) {
   try {
     const decoded = joseDecodeJwt(token);
+
+    if (
+      typeof decoded.sub !== 'string' ||
+      typeof decoded['email'] !== 'string' ||
+      typeof decoded['email_verified'] !== 'boolean'
+    ) {
+      throw new JWTInvalidError('Invalid JWT payload claims');
+    }
+
     return {
-      sub: decoded.sub as string,
-      email: decoded['email'] as string,
-      email_verified: decoded['email_verified'] as boolean,
+      sub: decoded.sub,
+      email: decoded['email'],
+      email_verified: decoded['email_verified'],
       iat: decoded.iat,
       exp: decoded.exp,
       iss: decoded.iss,
