@@ -22,7 +22,8 @@
       "@qauth/server-password": ["libs/server/password/src/index.ts"],
       "@qauth/server-email": ["libs/server/email/src/index.ts"],
       "@qauth/server-config": ["libs/server/config/src/index.ts"],
-      "@qauth/server-jwt": ["libs/server/jwt/src/index.ts"]
+      "@qauth/server-jwt": ["libs/server/jwt/src/index.ts"],
+      "@qauth/server-pkce": ["libs/server/pkce/src/index.ts"]
     },
     "esModuleInterop": true,
     "strict": true,
