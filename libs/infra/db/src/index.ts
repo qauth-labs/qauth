@@ -5,7 +5,7 @@ export type * from './types';
 export * from './lib/db';
 
 // Schema exports
-export * as schema from './lib/schema';
+export * from './lib/schema';
 
 // Repository exports
 export * from './lib/repositories';

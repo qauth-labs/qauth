@@ -1,5 +1,7 @@
 import {
+  type AuthorizationCodesRepository,
   createAuditLogsRepository,
+  createAuthorizationCodesRepository,
   createDatabase,
   createEmailVerificationTokensRepository,
   createOAuthClientsRepository,
@@ -29,6 +31,7 @@ declare module 'fastify' {
       emailVerificationTokens: EmailVerificationTokensRepository;
       oauthClients: OAuthClientsRepository;
       refreshTokens: RefreshTokensRepository;
+      authorizationCodes: AuthorizationCodesRepository;
       auditLogs: ReturnType<typeof createAuditLogsRepository>;
     };
   }
@@ -66,6 +69,7 @@ export const databasePlugin = fp<DatabasePluginOptions>(
       emailVerificationTokens: createEmailVerificationTokensRepository(database.db),
       oauthClients: createOAuthClientsRepository(database.db),
       refreshTokens: createRefreshTokensRepository(database.db),
+      authorizationCodes: createAuthorizationCodesRepository(database.db),
       auditLogs: createAuditLogsRepository(database.db),
     });
 
