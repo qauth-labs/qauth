@@ -35,7 +35,8 @@
         "libs/server/password/*",
         "libs/shared/validation/*",
         "libs/shared/testing/*",
-        "libs/server/jwt/*"
+        "libs/server/jwt/*",
+        "libs/server/pkce/*"
       ]
     },
     {
@@ -54,7 +55,8 @@
         "libs/server/password/*",
         "libs/shared/validation/*",
         "libs/shared/testing/*",
-        "libs/server/jwt/*"
+        "libs/server/jwt/*",
+        "libs/server/pkce/*"
       ],
       "options": {
         "typecheck": {
