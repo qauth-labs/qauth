@@ -19,6 +19,26 @@
       "key": "refreshToken",
       "value": "",
       "type": "string"
+    },
+    {
+      "key": "oauthClientId",
+      "value": "web-app",
+      "type": "string"
+    },
+    {
+      "key": "oauthRedirectUri",
+      "value": "http://localhost:3000/oauth/callback",
+      "type": "string"
+    },
+    {
+      "key": "oauthCodeChallenge",
+      "value": "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM",
+      "type": "string"
+    },
+    {
+      "key": "oauthState",
+      "value": "postman_test_state",
+      "type": "string"
     }
   ],
   "item": [
@@ -223,6 +243,55 @@
               "path": ["auth", "resend-verification"]
             },
             "description": "Request a new verification email.\n\nAlways returns success to prevent email enumeration.\nRate limited per IP and per email address."
+          }
+        }
+      ]
+    },
+    {
+      "name": "OAuth",
+      "item": [
+        {
+          "name": "GET /oauth/authorize",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/oauth/authorize?response_type=code&client_id={{oauthClientId}}&redirect_uri={{oauthRedirectUri}}&code_challenge={{oauthCodeChallenge}}&code_challenge_method=S256&state={{oauthState}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["oauth", "authorize"],
+              "query": [
+                {
+                  "key": "response_type",
+                  "value": "code"
+                },
+                {
+                  "key": "client_id",
+                  "value": "{{oauthClientId}}"
+                },
+                {
+                  "key": "redirect_uri",
+                  "value": "{{oauthRedirectUri}}"
+                },
+                {
+                  "key": "code_challenge",
+                  "value": "{{oauthCodeChallenge}}"
+                },
+                {
+                  "key": "code_challenge_method",
+                  "value": "S256"
+                },
+                {
+                  "key": "state",
+                  "value": "{{oauthState}}"
+                }
+              ]
+            },
+            "description": "OAuth 2.1 Authorization Code Flow with PKCE.\n\nRequires Authorization: Bearer <access_token>. Run **Login** first to set `accessToken`.\n\nPrerequisites:\n- An OAuth client registered with `client_id` (e.g. web-app), `redirect_uri` in whitelist, `authorization_code` grant, `code` response type.\n- Variables: `oauthClientId`, `oauthRedirectUri`, `oauthCodeChallenge`, `oauthState` (collection or environment).\n\n`oauthCodeChallenge` uses RFC 7636 Appendix B example (S256). For real flows, generate a PKCE pair and use that challenge here; use the matching verifier at POST /oauth/token.\n\nOn success: 302 redirect to `redirect_uri?code=...&state=...`. Disable **Follow redirects** to inspect the Location header."
           }
         }
       ]
