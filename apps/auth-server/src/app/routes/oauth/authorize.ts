@@ -129,27 +129,6 @@ export default async function (fastify: FastifyInstance) {
         );
       }
 
-      if (client.requirePkce && (!query.code_challenge || query.code_challenge_method !== 'S256')) {
-        await fastify.repositories.auditLogs.create({
-          userId: null,
-          oauthClientId: client.id,
-          event: 'oauth.authorize.failure',
-          eventType: 'token',
-          success: false,
-          ipAddress: request.ip,
-          userAgent: request.headers['user-agent'] || null,
-          metadata: { error: 'invalid_request', client_id: query.client_id },
-        });
-        return reply.redirect(
-          buildRedirectUrl(redirectUri, {
-            error: 'invalid_request',
-            error_description: 'PKCE required',
-            state: state ?? undefined,
-          }),
-          302
-        );
-      }
-
       const token = fastify.jwtUtils.extractFromHeader(request.headers.authorization);
       if (!token) {
         await fastify.repositories.auditLogs.create({
@@ -224,16 +203,18 @@ export default async function (fastify: FastifyInstance) {
         return code;
       };
 
-      let code: string;
-      try {
-        code = await createCode();
-      } catch (err) {
-        if (isUniqueConstraintError(err)) {
+      const MAX_CREATE_ATTEMPTS = 3;
+      let code: string | null = null;
+      for (let attempt = 0; attempt < MAX_CREATE_ATTEMPTS; attempt++) {
+        try {
           code = await createCode();
-        } else {
-          throw err;
+          break;
+        } catch (err) {
+          if (!isUniqueConstraintError(err)) throw err;
+          if (attempt === MAX_CREATE_ATTEMPTS - 1) throw err;
         }
       }
+      if (!code) throw new Error('Unreachable');
 
       await fastify.repositories.auditLogs.create({
         userId,
