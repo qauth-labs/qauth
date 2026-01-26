@@ -1,7 +1,11 @@
 import type { InferInsertModel, InferSelectModel } from 'drizzle-orm';
 
 import type { oauthClients } from '../lib/schema/core';
-import type { emailVerificationTokens, refreshTokens } from '../lib/schema/tokens';
+import type {
+  authorizationCodes,
+  emailVerificationTokens,
+  refreshTokens,
+} from '../lib/schema/tokens';
 import type { DbClient } from './database';
 
 /**
@@ -24,6 +28,12 @@ export type NewEmailVerificationToken = InferInsertModel<typeof emailVerificatio
  */
 export type RefreshToken = InferSelectModel<typeof refreshTokens>;
 export type NewRefreshToken = InferInsertModel<typeof refreshTokens>;
+
+/**
+ * Authorization code types inferred from schema
+ */
+export type AuthorizationCode = InferSelectModel<typeof authorizationCodes>;
+export type NewAuthorizationCode = InferInsertModel<typeof authorizationCodes>;
 
 /**
  * Base repository interface for common CRUD operations
@@ -118,6 +128,36 @@ export interface RefreshTokensRepository {
   /**
    * Delete expired tokens
    * Returns count of deleted tokens
+   */
+  deleteExpired(tx?: DbClient): Promise<number>;
+}
+
+/**
+ * Authorization codes repository interface
+ */
+export interface AuthorizationCodesRepository {
+  /**
+   * Create a new authorization code
+   */
+  create(data: NewAuthorizationCode, tx?: DbClient): Promise<AuthorizationCode>;
+  /**
+   * Find an authorization code by its code value
+   * Only returns codes that are not used and not expired
+   */
+  findByCode(code: string, tx?: DbClient): Promise<AuthorizationCode | undefined>;
+  /**
+   * Mark a code as used
+   * Sets used=true and usedAt=now
+   */
+  markUsed(id: string, tx?: DbClient): Promise<AuthorizationCode>;
+  /**
+   * Invalidate all active codes for a user
+   * Useful for security events (password change, account compromise)
+   */
+  invalidateForUser(userId: string, tx?: DbClient): Promise<number>;
+  /**
+   * Delete expired codes
+   * Returns count of deleted codes
    */
   deleteExpired(tx?: DbClient): Promise<number>;
 }
