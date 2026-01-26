@@ -2,6 +2,9 @@
  * Security-related constants
  */
 
+/** Authorization code TTL in milliseconds (5 minutes, OAuth 2.1) */
+export const AUTHORIZATION_CODE_TTL_MS = 5 * 60 * 1000;
+
 /**
  * Minimum response time in milliseconds to prevent timing attacks
  * Used in authentication endpoints to prevent user enumeration

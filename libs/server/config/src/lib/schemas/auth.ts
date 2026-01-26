@@ -98,6 +98,16 @@ export const authEnvSchema = z.object({
    * Note: Converted to milliseconds in route handlers (value * 1000)
    */
   LOGOUT_RATE_WINDOW: z.coerce.number().int().min(1).default(60),
+
+  /**
+   * Maximum authorize attempts per window
+   */
+  AUTHORIZE_RATE_LIMIT: z.coerce.number().int().min(1).default(60),
+
+  /**
+   * Authorize rate limit window in seconds (default: 60 = 1 minute)
+   */
+  AUTHORIZE_RATE_WINDOW: z.coerce.number().int().min(1).default(60),
 });
 
 /**
