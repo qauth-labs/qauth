@@ -13,7 +13,7 @@
       "path": "../../libs/server/config/tsconfig.lib.json"
     },
     {
-      "path": "../../libs/server/pkce/tsconfig.lib.json"
+      "path": "../../libs/fastify/plugins/pkce/tsconfig.lib.json"
     },
     {
       "path": "../../libs/shared/validation/tsconfig.lib.json"

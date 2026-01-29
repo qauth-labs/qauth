@@ -1,5 +1,3 @@
-// eslint-disable-next-line @nx/enforce-module-boundaries
-import { verifyCodeChallenge } from '@qauth/server-pkce';
 import { InvalidCredentialsError, InvalidTokenError, NotFoundError } from '@qauth/shared-errors';
 import { randomUUID } from 'crypto';
 import type { FastifyInstance } from 'fastify';
@@ -28,8 +26,8 @@ export default async function (fastify: FastifyInstance) {
       },
       config: {
         rateLimit: {
-          max: (env as typeof env & { TOKEN_RATE_LIMIT: number }).TOKEN_RATE_LIMIT,
-          timeWindow: (env as typeof env & { TOKEN_RATE_WINDOW: number }).TOKEN_RATE_WINDOW * 1000,
+          max: env.TOKEN_RATE_LIMIT,
+          timeWindow: env.TOKEN_RATE_WINDOW * 1000,
           keyGenerator: (req) => req.ip || 'unknown',
         },
       },
@@ -49,7 +47,6 @@ export default async function (fastify: FastifyInstance) {
         );
 
         if (!client) {
-          await ensureMinimumResponseTime(startTime, MIN_RESPONSE_TIME_MS.TOKEN);
           await fastify.repositories.auditLogs.create({
             userId: null,
             oauthClientId: null,
@@ -65,7 +62,6 @@ export default async function (fastify: FastifyInstance) {
 
         // Client checks
         if (!client.enabled || !client.grantTypes.includes('authorization_code')) {
-          await ensureMinimumResponseTime(startTime, MIN_RESPONSE_TIME_MS.TOKEN);
           await fastify.repositories.auditLogs.create({
             userId: null,
             oauthClientId: client.id,
@@ -86,7 +82,6 @@ export default async function (fastify: FastifyInstance) {
         );
 
         if (!clientSecretValid) {
-          await ensureMinimumResponseTime(startTime, MIN_RESPONSE_TIME_MS.TOKEN);
           await fastify.repositories.auditLogs.create({
             userId: null,
             oauthClientId: client.id,
@@ -104,7 +99,6 @@ export default async function (fastify: FastifyInstance) {
         const authCode = await fastify.repositories.authorizationCodes.findByCode(body.code);
 
         if (!authCode) {
-          await ensureMinimumResponseTime(startTime, MIN_RESPONSE_TIME_MS.TOKEN);
           await fastify.repositories.auditLogs.create({
             userId: null,
             oauthClientId: client.id,
@@ -120,7 +114,6 @@ export default async function (fastify: FastifyInstance) {
 
         // Code–client match
         if (authCode.oauthClientId !== client.id) {
-          await ensureMinimumResponseTime(startTime, MIN_RESPONSE_TIME_MS.TOKEN);
           await fastify.repositories.auditLogs.create({
             userId: null,
             oauthClientId: client.id,
@@ -136,7 +129,6 @@ export default async function (fastify: FastifyInstance) {
 
         // Redirect URI match
         if (body.redirect_uri !== authCode.redirectUri) {
-          await ensureMinimumResponseTime(startTime, MIN_RESPONSE_TIME_MS.TOKEN);
           await fastify.repositories.auditLogs.create({
             userId: null,
             oauthClientId: client.id,
@@ -151,10 +143,12 @@ export default async function (fastify: FastifyInstance) {
         }
 
         // PKCE verification
-        const pkceValid = verifyCodeChallenge(body.code_verifier, authCode.codeChallenge);
+        const pkceValid = fastify.pkceUtils.verifyCodeChallenge(
+          body.code_verifier,
+          authCode.codeChallenge
+        );
 
         if (!pkceValid) {
-          await ensureMinimumResponseTime(startTime, MIN_RESPONSE_TIME_MS.TOKEN);
           await fastify.repositories.auditLogs.create({
             userId: null,
             oauthClientId: client.id,
@@ -175,7 +169,6 @@ export default async function (fastify: FastifyInstance) {
         const user = await fastify.repositories.users.findById(authCode.userId);
 
         if (!user) {
-          await ensureMinimumResponseTime(startTime, MIN_RESPONSE_TIME_MS.TOKEN);
           await fastify.repositories.auditLogs.create({
             userId: null,
             oauthClientId: client.id,

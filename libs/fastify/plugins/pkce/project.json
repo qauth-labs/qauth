@@ -1,0 +1,8 @@
+{
+  "name": "fastify-plugin-pkce",
+  "$schema": "../../../../node_modules/nx/schemas/project-schema.json",
+  "sourceRoot": "libs/fastify/plugins/pkce/src",
+  "projectType": "library",
+  "tags": ["scope:fastify", "type:pkce"],
+  "// targets": "to see all targets run: nx show project fastify-plugin-pkce --web"
+}
