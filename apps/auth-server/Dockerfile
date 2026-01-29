@@ -43,7 +43,9 @@ COPY --from=builder /app/node_modules ./node_modules
 
 # Copy entrypoint script
 COPY apps/auth-server/docker-entrypoint.sh ./docker-entrypoint.sh
-RUN chmod +x ./docker-entrypoint.sh
+# Fix Windows line endings (CRLF) and permissions
+RUN sed -i 's/\r$//' ./docker-entrypoint.sh && \
+    chmod +x ./docker-entrypoint.sh
 
 # Create non-root user
 RUN addgroup -g 1001 -S nodejs && \

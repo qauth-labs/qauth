@@ -108,6 +108,16 @@ export const authEnvSchema = z.object({
    * Authorize rate limit window in seconds (default: 60 = 1 minute)
    */
   AUTHORIZE_RATE_WINDOW: z.coerce.number().int().min(1).default(60),
+
+  /**
+   * Maximum token exchange attempts per window
+   */
+  TOKEN_RATE_LIMIT: z.coerce.number().int().min(1).default(30),
+
+  /**
+   * Token rate limit window in seconds (default: 60 = 1 minute)
+   */
+  TOKEN_RATE_WINDOW: z.coerce.number().int().min(1).default(60),
 });
 
 /**

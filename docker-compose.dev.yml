@@ -1,7 +1,6 @@
 # Development override: dev image, nx serve --watch, Compose Watch (sync).
 # Use: docker compose -f docker-compose.yml -f docker-compose.dev.yml up --watch
 # Set NODE_ENV=development and LOG_LEVEL=debug in .env for dev.
-# If you get "no space left on device": close Nx graph/IDE watchers, or run without --watch.
 
 services:
   auth-server:
@@ -9,31 +8,37 @@ services:
       context: .
       dockerfile: apps/auth-server/Dockerfile.dev
     command: ['pnpm', 'nx', 'serve', 'auth-server', '--watch']
+    environment:
+      # Fix for Prisma/NX finding schema in monorepo structure inside container
+      NX_DAEMON: 'false'
     develop:
       watch:
+        # Sync source code changes immediately (Hot Reload)
         - action: sync
           path: ./apps/auth-server
           target: /app/apps/auth-server
-          initial_sync: true
           ignore:
             - node_modules
             - dist
         - action: sync
           path: ./libs
           target: /app/libs
-          initial_sync: true
           ignore:
             - node_modules
             - dist
-        - action: rebuild
+
+        # Sync config files but DO NOT trigger full rebuilds automatically
+        # This prevents "soft-locks" on every save.
+        # If dependencies change, run: docker compose down && docker compose up --build
+        - action: sync
           path: ./package.json
-        - action: rebuild
+          target: /app/package.json
+        - action: sync
           path: ./pnpm-lock.yaml
-        - action: rebuild
-          path: ./pnpm-workspace.yaml
-        - action: rebuild
+          target: /app/pnpm-lock.yaml
+        - action: sync
           path: ./nx.json
-        - action: rebuild
+          target: /app/nx.json
+        - action: sync
           path: ./tsconfig.base.json
-        - action: rebuild
-          path: ./vitest.config.ts
+          target: /app/tsconfig.base.json

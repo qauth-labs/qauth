@@ -39,6 +39,24 @@
       "key": "oauthState",
       "value": "postman_test_state",
       "type": "string"
+    },
+    {
+      "key": "oauthCodeVerifier",
+      "value": "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk",
+      "type": "string",
+      "description": "PKCE code_verifier (RFC 7636). Must match the code_challenge used in GET /oauth/authorize. This value pairs with the default oauthCodeChallenge."
+    },
+    {
+      "key": "oauthClientSecret",
+      "value": "",
+      "type": "string",
+      "description": "OAuth client secret (client_secret_post). Set for the client identified by oauthClientId."
+    },
+    {
+      "key": "authorizationCode",
+      "value": "",
+      "type": "string",
+      "description": "Authorization code from GET /oauth/authorize redirect (Location: redirect_uri?code=...&state=...). Copy the 'code' param, then run this request."
     }
   ],
   "item": [
@@ -292,6 +310,43 @@
               ]
             },
             "description": "OAuth 2.1 Authorization Code Flow with PKCE.\n\nRequires Authorization: Bearer <access_token>. Run **Login** first to set `accessToken`.\n\nPrerequisites:\n- An OAuth client registered with `client_id` (e.g. web-app), `redirect_uri` in whitelist, `authorization_code` grant, `code` response type.\n- Variables: `oauthClientId`, `oauthRedirectUri`, `oauthCodeChallenge`, `oauthState` (collection or environment).\n\n`oauthCodeChallenge` uses RFC 7636 Appendix B example (S256). For real flows, generate a PKCE pair and use that challenge here; use the matching verifier at POST /oauth/token.\n\nOn success: 302 redirect to `redirect_uri?code=...&state=...`. Disable **Follow redirects** to inspect the Location header."
+          }
+        },
+        {
+          "name": "POST /oauth/token",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 200) {",
+                  "    const response = pm.response.json();",
+                  "    pm.collectionVariables.set('accessToken', response.access_token);",
+                  "    pm.collectionVariables.set('refreshToken', response.refresh_token);",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"grant_type\": \"authorization_code\",\n  \"code\": \"{{authorizationCode}}\",\n  \"redirect_uri\": \"{{oauthRedirectUri}}\",\n  \"client_id\": \"{{oauthClientId}}\",\n  \"code_verifier\": \"{{oauthCodeVerifier}}\",\n  \"client_secret\": \"{{oauthClientSecret}}\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/oauth/token",
+              "host": ["{{baseUrl}}"],
+              "path": ["oauth", "token"]
+            },
+            "description": "OAuth 2.1 token endpoint. Exchange authorization code for access and refresh tokens (Authorization Code Grant with PKCE, client_secret_post).\n\n**Flow:**\n1. Run **GET /oauth/authorize** (with valid Bearer token).\n2. Copy the `code` from the redirect Location (disable Follow redirects): `redirect_uri?code=...&state=...`.\n3. Set collection variable `authorizationCode` to that code (or paste in body).\n4. Set `oauthClientSecret` for your OAuth client.\n5. Run this request.\n\n**Variables:** `authorizationCode`, `oauthRedirectUri`, `oauthClientId`, `oauthCodeVerifier`, `oauthClientSecret`.\n\nOn success: 200 with `access_token`, `refresh_token`, `expires_in`, `token_type: Bearer`. Tokens are stored in collection variables for subsequent requests."
           }
         }
       ]

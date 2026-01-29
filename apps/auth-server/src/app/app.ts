@@ -5,6 +5,7 @@ import { databasePlugin } from '@qauth/fastify-plugin-db';
 import { emailPlugin, type EmailProviderConfig } from '@qauth/fastify-plugin-email';
 import { jwtPlugin } from '@qauth/fastify-plugin-jwt';
 import { passwordPlugin } from '@qauth/fastify-plugin-password';
+import { pkcePlugin } from '@qauth/fastify-plugin-pkce';
 import type { FastifyInstance } from 'fastify';
 import * as path from 'path';
 
@@ -49,6 +50,8 @@ export async function app(fastify: FastifyInstance, opts: object) {
       minScore: env.PASSWORD_MIN_SCORE,
     },
   });
+
+  await fastify.register(pkcePlugin);
 
   // Configure email provider from environment variables
   const emailProvider = env.EMAIL_PROVIDER;

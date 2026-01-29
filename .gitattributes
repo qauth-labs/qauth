@@ -1,0 +1,9 @@
+# Force unix line endings for shell scripts (fixes Windows execution issues)
+*.sh text eol=lf
+*.bash text eol=lf
+*.js text eol=lf
+*.ts text eol=lf
+*.json text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.md text eol=lf

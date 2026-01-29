@@ -1010,6 +1010,14 @@ These features are NOT part of the MVP:
 - Horizontal scaling
 - CDN integration
 
+### Phase 8: Agent Authentication & Authorization (TBD)
+
+- "Agent" client type on QAuth (register and identify agents)
+- Agent session state / mode (ReadOnly, Admin, Exec)
+- Granular scopes (e.g. `fs:read`, `fs:write`, `exec:run`) enforced per client/mode
+- Step-up auth (MFA/OTP) before critical operations (e.g. destructive or high-impact)
+- QAuth-side audit log of agent actions by mode for compliance
+
 ---
 
 ## 📊 MVP Development Timeline
