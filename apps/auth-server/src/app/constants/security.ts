@@ -16,4 +16,6 @@ export const MIN_RESPONSE_TIME_MS = {
   RESEND_VERIFICATION: 200,
   /** Refresh endpoint minimum response time (300ms) */
   REFRESH: 300,
+  /** Token endpoint minimum response time (300ms) */
+  TOKEN: 300,
 } as const;

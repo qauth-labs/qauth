@@ -32,4 +32,7 @@ const envSchema = z.object({
 /**
  * Validated environment configuration
  */
-export const env = { ...parseEnv(envSchema), ...parseEnv(jwtEnvSchema) };
+export const env: z.infer<typeof envSchema> & z.infer<typeof jwtEnvSchema> = {
+  ...parseEnv(envSchema),
+  ...parseEnv(jwtEnvSchema),
+};
