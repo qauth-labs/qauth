@@ -60,13 +60,14 @@ export function createAuthorizationCodesRepository(
     },
 
     /**
-     * Mark a code as used
-     * Sets used=true and usedAt=now
+     * Mark a code as used (atomic operation)
+     * Sets used=true and usedAt=now only if not already used.
+     * Prevents race conditions where two concurrent requests could both use the same code.
      *
      * @param id - Authorization code ID to mark as used
      * @param tx - Optional transaction client
      * @returns Updated authorization code
-     * @throws NotFoundError if authorization code is not found
+     * @throws NotFoundError if authorization code is not found or already used
      */
     async markUsed(id: string, tx?: DbClient): Promise<AuthorizationCode> {
       const invoker = tx ?? defaultDb;
@@ -78,7 +79,7 @@ export function createAuthorizationCodesRepository(
           used: true,
           usedAt: now,
         })
-        .where(eq(authorizationCodes.id, id))
+        .where(and(eq(authorizationCodes.id, id), eq(authorizationCodes.used, false)))
         .returning();
 
       if (!authCode) {
