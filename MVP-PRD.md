@@ -77,7 +77,7 @@ QAuth is a post-quantum ready, headless-first identity platform designed as a de
 ### Phase 1: Core Authentication (CURRENT)
 
 **Timeline**: 6-8 weeks
-**Status**: In Progress
+**Status**: Near Completion (Missing 1.7)
 
 **Objective**: Implement basic email/password authentication with JWT tokens.
 
@@ -229,12 +229,12 @@ Response:
 
 **Tasks**:
 
-- [ ] Implement login endpoint (`POST /auth/login`)
-- [ ] Verify password using @node-rs/argon2
-- [ ] Generate JWT access tokens (Ed25519)
-- [ ] Generate refresh tokens
-- [ ] Store session in Redis
-- [ ] Implement JWT signing with jose library
+- [x] Implement login endpoint (`POST /auth/login`)
+- [x] Verify password using @node-rs/argon2
+- [x] Generate JWT access tokens (Ed25519)
+- [x] Generate refresh tokens
+- [x] Store session in Redis
+- [x] Implement JWT signing with jose library
 
 **API Endpoint**:
 
@@ -290,12 +290,12 @@ const jwt = await new SignJWT({
 
 **Tasks**:
 
-- [ ] Implement token refresh endpoint (`POST /auth/refresh`)
-- [ ] Validate refresh token
-- [ ] Issue new access token
-- [ ] Implement logout endpoint (`POST /auth/logout`)
-- [ ] Revoke refresh token on logout
-- [ ] Clear session from Redis
+- [x] Implement token refresh endpoint (`POST /auth/refresh`)
+- [x] Validate refresh token
+- [x] Issue new access token
+- [x] Implement logout endpoint (`POST /auth/logout`)
+- [x] Revoke refresh token on logout
+- [x] Clear session from Redis
 
 **API Endpoints**:
 
@@ -337,14 +337,14 @@ Response:
 
 **Tasks**:
 
-- [ ] Implement client registration (manual for MVP)
-- [ ] Create authorization endpoint (`GET /oauth/authorize`)
-- [ ] Create token endpoint (`POST /oauth/token`)
-- [ ] Implement PKCE (code_challenge, code_verifier)
-- [ ] Generate authorization codes
-- [ ] Exchange authorization code for tokens
-- [ ] Validate redirect_uri
-- [ ] State parameter validation
+- [x] Implement client registration (manual for MVP)
+- [x] Create authorization endpoint (`GET /oauth/authorize`)
+- [x] Create token endpoint (`POST /oauth/token`)
+- [x] Implement PKCE (code_challenge, code_verifier)
+- [x] Generate authorization codes
+- [x] Exchange authorization code for tokens
+- [x] Validate redirect_uri
+- [x] State parameter validation
 
 **OAuth Flow**:
 
@@ -1149,9 +1149,8 @@ These features are NOT part of the MVP:
 ## 🔗 Related Documents
 
 - [README.md](./README.md) - Project overview
-- [CLAUDE.md](./CLAUDE.md) - Development guidelines
-- [Architecture Overview](./docs/architecture.md) - System architecture
-- [Development Setup](./docs/development.md) - Local setup guide
+- [Docker Guide](./docs/docker.md) - Local development with Docker
+- [ADR Index](./docs/adr/README.md) - Architecture Decision Records
 
 ---
 

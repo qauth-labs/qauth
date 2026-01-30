@@ -450,11 +450,11 @@ docker-compose up -d
 - [x] Multi-tenancy support (Realms)
 - [x] Repository pattern implementation with BaseRepository interface
 - [x] Centralized error handling library (@qauth/shared-errors)
-- [ ] Core auth server (TypeScript/Fastify)
-- [ ] Email/Password authentication
-- [ ] OAuth 2.1 flows (Authorization Code + PKCE)
-- [ ] PostgreSQL + Redis setup
-- [ ] Basic REST API
+- [x] Core auth server (TypeScript/Fastify)
+- [x] Email/Password authentication
+- [x] OAuth 2.1 flows (Authorization Code + PKCE)
+- [x] PostgreSQL + Redis setup
+- [x] Basic REST API
 - [x] Native crypto modules (@node-rs/argon2, jose)
 
 ### Phase 2: Developer Portal - Q2 2026
