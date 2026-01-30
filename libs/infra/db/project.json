@@ -44,6 +44,14 @@
         "cwd": "libs/infra/db"
       },
       "description": "Drop all tables (DANGER: use with caution)"
+    },
+    "db:seed": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "tsx src/scripts/seed.ts",
+        "cwd": "libs/infra/db"
+      },
+      "description": "Seed database with initial data (dev client)"
     }
   }
 }
