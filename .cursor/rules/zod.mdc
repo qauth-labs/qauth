@@ -1,23 +1,32 @@
 ---
+description: Zod v4 validators—use standalone format validators, not z.string().email() etc. See https://zod.dev/api for full list.
 alwaysApply: true
 ---
 
-# Schema Documentation
+# Zod v4 (QAuth)
 
-In Zod v4, the following validators are standalone functions, not string methods:
+This project uses **Zod v4**. Many format validators are **standalone functions**, not string methods.
 
-- z.email() validates an email address, not z.string().email()
-- z.uuid() validates a uuid, not z.string().uuid()
-- z.url() validates a URL, not z.string().url()
+## Standalone validators (do not use deprecated form)
 
-Reference: https://zod.dev/api
+| Use         | Not                  |
+| ----------- | -------------------- |
+| `z.email()` | `z.string().email()` |
+| `z.uuid()`  | `z.string().uuid()`  |
+| `z.url()`   | `z.string().url()`   |
 
-Example:
+Optional error message: `z.email('Invalid email format')`, `z.uuid('Invalid realm ID format')`, `z.url('Must be a valid URL')`.
+
+## More string formats (Zod v4)
+
+Also standalone: `z.httpUrl()`, `z.hostname()`, `z.jwt()`, `z.iso.date()`, `z.iso.datetime()`, `z.ipv4()`, `z.ipv6()`, `z.hex()`, `z.base64()`, etc. See [zod.dev/api](https://zod.dev/api) under "String formats."
+
+## Types from schemas
 
 ```typescript
-const email = z.email();
-const uuid = z.uuid();
-const url = z.url('Custom error message'); // z.url() accepts optional error message parameter
+export type RequestType = z.infer<typeof requestSchema>;
 ```
 
-If I teach you a new validator, please add it to memory. Stop using deprecated validators like z.string().email(), z.string().uuid(), and z.string().url(). There are more validators like these in the zod documentation. Don't use deprecated validators ever.
+## Rule
+
+Do **not** use deprecated validators like `z.string().email()`, `z.string().uuid()`, or `z.string().url()`. If you learn another Zod v4 standalone validator, use it consistently and do not fall back to the old string-method form.

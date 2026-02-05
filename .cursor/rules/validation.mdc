@@ -1,0 +1,66 @@
+---
+description: Input validation patterns, schema organization, and security for Zod schemas
+globs: apps/auth-server/src/app/schemas/**/*.ts,libs/server/config/src/lib/schemas/**/*.ts,libs/shared/validation/**/*.ts
+alwaysApply: false
+---
+
+# Validation (QAuth)
+
+## Zod v4 Validators
+
+Use standalone validators (see `.cursor/rules/zod.mdc`):
+
+- `z.email()` not `z.string().email()`
+- `z.uuid()` not `z.string().uuid()`
+- `z.url()` not `z.string().url()`
+
+## Schema Organization
+
+- **API schemas**: `apps/auth-server/src/app/schemas/` (e.g. `auth.ts`, `oauth.ts`, `common.ts`)
+- **Config schemas**: `libs/server/config/src/lib/schemas/` (env validation)
+- **Shared validators**: `libs/shared/validation/` (email normalization, password strength)
+- Export schema and inferred type: `export type RequestType = z.infer<typeof requestSchema>`
+
+## Security and Best Practices
+
+- **Validate all inputs**: Request body, query params, headers, and response shape. Never trust user input.
+- **Fail fast**: Validation happens at the route level via Fastify schema; invalid requests return 400 before handler runs.
+- **Normalize before validation**: Email normalization (`normalizeEmail`) happens after format validation but before storage/query.
+- **Specific formats**: Use regex for exact formats (e.g. hex tokens: `/^[0-9a-fA-F]{64}$/`, PKCE verifiers: `/^[A-Za-z0-9._~-]{43,128}$/`).
+- **Length limits**: Set `.min()` and `.max()` on strings to prevent DoS (e.g. `state: z.string().max(255).optional()`).
+- **Password strength**: Use `zxcvbn` via `@qauth/shared-validation`; return feedback for weak passwords.
+
+## Route Integration
+
+```typescript
+// ✅ GOOD: Schema registered on route
+fastify.withTypeProvider<ZodTypeProvider>().post(
+  '/login',
+  {
+    schema: {
+      body: loginSchema,
+      response: { 200: loginResponseSchema },
+    },
+  },
+  async (request, reply) => {
+    // request.body is typed and validated
+  }
+);
+
+// ❌ BAD: Manual validation in handler
+fastify.post('/login', async (request, reply) => {
+  const body = loginSchema.parse(request.body); // Too late, already in handler
+});
+```
+
+## Example Schema
+
+```typescript
+export const registerSchema = z.object({
+  email: z.email('Invalid email format'),
+  password: z.string(),
+  realmId: z.uuid('Invalid realm ID format').optional(),
+});
+
+export type RegisterRequest = z.infer<typeof registerSchema>;
+```
