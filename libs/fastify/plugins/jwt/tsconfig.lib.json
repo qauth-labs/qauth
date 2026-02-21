@@ -9,6 +9,9 @@
   "include": ["src/**/*.ts"],
   "references": [
     {
+      "path": "../../../shared/errors/tsconfig.lib.json"
+    },
+    {
       "path": "../../../server/jwt/tsconfig.lib.json"
     }
   ]

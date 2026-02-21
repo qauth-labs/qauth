@@ -9,14 +9,20 @@ import {
   signAccessToken,
   verifyAccessToken,
 } from '@qauth/server-jwt';
-import type { FastifyInstance } from 'fastify';
+import { JWTInvalidError } from '@qauth/shared-errors';
+import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import fp from 'fastify-plugin';
 
-import type { JwtPluginOptions, JwtUtils } from '../types';
+import type { JWTPayload, JwtPluginOptions, JwtUtils } from '../types';
 
 declare module 'fastify' {
   interface FastifyInstance {
     jwtUtils: JwtUtils;
+    requireJwt: (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
+  }
+
+  interface FastifyRequest {
+    jwtPayload?: JWTPayload;
   }
 }
 
@@ -93,6 +99,16 @@ export const jwtPlugin = fp<JwtPluginOptions>(
     };
 
     fastify.decorate('jwtUtils', jwtUtils);
+
+    async function requireJwt(request: FastifyRequest): Promise<void> {
+      const token = jwtUtils.extractFromHeader(request.headers.authorization);
+      if (!token) {
+        throw new JWTInvalidError('Missing or malformed Authorization header');
+      }
+      request.jwtPayload = await jwtUtils.verifyAccessToken(token);
+    }
+
+    fastify.decorate('requireJwt', requireJwt);
 
     fastify.log.debug('JWT plugin registered');
   },
