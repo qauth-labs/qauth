@@ -39,9 +39,10 @@ pnpm nx generate @nx/js:library \
   --name={name} \
   --directory=libs/{domain}/{name} \
   --projectNameAndRootFormat=as-provided \
+  --importPath=@qauth/{domain}-{name} \
   --bundler=none \
   --linter=none \
-  --unitTestRunner=vitest \
+  --unitTestRunner=none \
   --no-interactive
 ```
 
@@ -53,9 +54,10 @@ pnpm nx generate @nx/js:library \
   --name=auth \
   --directory=libs/server/auth \
   --projectNameAndRootFormat=as-provided \
+  --importPath=@qauth/{domain}-{name} \
   --bundler=none \
   --linter=none \
-  --unitTestRunner=vitest \
+  --unitTestRunner=none \
   --no-interactive
 
 # Fastify plugin
@@ -63,9 +65,10 @@ pnpm nx generate @nx/js:library \
   --name=auth \
   --directory=libs/fastify/plugins/auth \
   --projectNameAndRootFormat=as-provided \
+  --importPath=@qauth/{domain}-{name} \
   --bundler=none \
   --linter=none \
-  --unitTestRunner=vitest \
+  --unitTestRunner=none \
   --no-interactive
 ```
 
