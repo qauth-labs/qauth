@@ -1,9 +1,17 @@
 import { InvalidCredentialsError, JWTExpiredError, JWTInvalidError } from '@qauth/shared-errors';
 import type { FastifyInstance } from 'fastify';
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, type Mock, vi } from 'vitest';
 
 vi.mock('../../helpers/timing', () => ({
   ensureMinimumResponseTime: vi.fn().mockResolvedValue(undefined),
+}));
+
+vi.mock('../../../config/env', () => ({
+  env: {
+    DATABASE_URL: 'postgresql://test:test@localhost:5432/test',
+    EMAIL_FROM_ADDRESS: 'noreply@example.com',
+    EMAIL_BASE_URL: 'http://localhost:3000',
+  },
 }));
 
 import introspectRoute from './introspect';
@@ -15,12 +23,7 @@ interface TestContext {
 function createFastifyStub() {
   const ctx: TestContext = {};
 
-  const fastify: Partial<FastifyInstance> & {
-    repositories: any;
-    passwordHasher: any;
-    jwtUtils: any;
-    log: any;
-  } = {
+  const fastify: any = {
     withTypeProvider: () => ({
       post: (
         _url: string,
@@ -32,6 +35,18 @@ function createFastifyStub() {
       },
     }),
     repositories: {
+      realms: {
+        findByName: vi.fn().mockResolvedValue({
+          id: 'realm-1',
+          name: 'default',
+          enabled: true,
+        }),
+        create: vi.fn().mockResolvedValue({
+          id: 'realm-1',
+          name: 'default',
+          enabled: true,
+        }),
+      },
       oauthClients: {
         findByClientId: vi.fn(),
       },
@@ -71,9 +86,13 @@ describe('POST /oauth/introspect route', () => {
       enabled: true,
     };
 
-    fastify.repositories.oauthClients.findByClientId.mockResolvedValue(client);
-    fastify.passwordHasher.verifyPassword.mockResolvedValue(true);
-    fastify.jwtUtils.verifyAccessToken.mockResolvedValue({
+    const findByClientIdMock = fastify.repositories.oauthClients.findByClientId as unknown as Mock;
+    const verifyPasswordMock = fastify.passwordHasher.verifyPassword as unknown as Mock;
+    const verifyAccessTokenMock = fastify.jwtUtils.verifyAccessToken as unknown as Mock;
+
+    findByClientIdMock.mockResolvedValue(client);
+    verifyPasswordMock.mockResolvedValue(true);
+    verifyAccessTokenMock.mockResolvedValue({
       sub: 'user-1',
       email: 'user@example.com',
       email_verified: true,
@@ -103,7 +122,11 @@ describe('POST /oauth/introspect route', () => {
       },
     };
 
-    const result = await handler!(request, reply);
+    if (!handler) {
+      throw new Error('Introspect handler was not registered');
+    }
+
+    const result = await handler(request, reply);
 
     expect(result).toEqual({
       active: true,
@@ -130,11 +153,13 @@ describe('POST /oauth/introspect route', () => {
       enabled: true,
     };
 
-    fastify.repositories.oauthClients.findByClientId.mockResolvedValue(client);
-    fastify.passwordHasher.verifyPassword.mockResolvedValue(true);
-    fastify.jwtUtils.verifyAccessToken.mockRejectedValue(
-      new JWTExpiredError('JWT token has expired')
-    );
+    const findByClientIdMock = fastify.repositories.oauthClients.findByClientId as unknown as Mock;
+    const verifyPasswordMock = fastify.passwordHasher.verifyPassword as unknown as Mock;
+    const verifyAccessTokenMock = fastify.jwtUtils.verifyAccessToken as unknown as Mock;
+
+    findByClientIdMock.mockResolvedValue(client);
+    verifyPasswordMock.mockResolvedValue(true);
+    verifyAccessTokenMock.mockRejectedValue(new JWTExpiredError('JWT token has expired'));
 
     const request = {
       body: {
@@ -156,7 +181,11 @@ describe('POST /oauth/introspect route', () => {
       },
     };
 
-    const result = await handler!(request, reply);
+    if (!handler) {
+      throw new Error('Introspect handler was not registered');
+    }
+
+    const result = await handler(request, reply);
 
     expect(result).toEqual({ active: false });
   });
@@ -175,9 +204,13 @@ describe('POST /oauth/introspect route', () => {
       enabled: true,
     };
 
-    fastify.repositories.oauthClients.findByClientId.mockResolvedValue(client);
-    fastify.passwordHasher.verifyPassword.mockResolvedValue(true);
-    fastify.jwtUtils.verifyAccessToken.mockResolvedValue({
+    const findByClientIdMock = fastify.repositories.oauthClients.findByClientId as unknown as Mock;
+    const verifyPasswordMock = fastify.passwordHasher.verifyPassword as unknown as Mock;
+    const verifyAccessTokenMock = fastify.jwtUtils.verifyAccessToken as unknown as Mock;
+
+    findByClientIdMock.mockResolvedValue(client);
+    verifyPasswordMock.mockResolvedValue(true);
+    verifyAccessTokenMock.mockResolvedValue({
       sub: 'user-1',
       email: 'user@example.com',
       email_verified: true,
@@ -207,7 +240,11 @@ describe('POST /oauth/introspect route', () => {
       },
     };
 
-    const result = await handler!(request, reply);
+    if (!handler) {
+      throw new Error('Introspect handler was not registered');
+    }
+
+    const result = await handler(request, reply);
 
     expect(result).toEqual({ active: false });
   });
@@ -226,9 +263,13 @@ describe('POST /oauth/introspect route', () => {
       enabled: true,
     };
 
-    fastify.repositories.oauthClients.findByClientId.mockResolvedValue(client);
-    fastify.passwordHasher.verifyPassword.mockResolvedValue(false);
-    fastify.jwtUtils.verifyAccessToken.mockResolvedValue({
+    const findByClientIdMock = fastify.repositories.oauthClients.findByClientId as unknown as Mock;
+    const verifyPasswordMock = fastify.passwordHasher.verifyPassword as unknown as Mock;
+    const verifyAccessTokenMock = fastify.jwtUtils.verifyAccessToken as unknown as Mock;
+
+    findByClientIdMock.mockResolvedValue(client);
+    verifyPasswordMock.mockResolvedValue(false);
+    verifyAccessTokenMock.mockResolvedValue({
       sub: 'user-1',
       email: 'user@example.com',
       email_verified: true,
@@ -251,12 +292,16 @@ describe('POST /oauth/introspect route', () => {
     };
 
     const reply = {
-      send: (_body: unknown) => {
+      send: () => {
         throw new Error('send should not be called on invalid credentials');
       },
     };
 
-    await expect(handler!(request, reply)).rejects.toThrow(InvalidCredentialsError);
+    if (!handler) {
+      throw new Error('Introspect handler was not registered');
+    }
+
+    await expect(handler(request, reply)).rejects.toThrow(InvalidCredentialsError);
   });
 
   it('returns active: false for invalid token format', async () => {
@@ -273,9 +318,13 @@ describe('POST /oauth/introspect route', () => {
       enabled: true,
     };
 
-    fastify.repositories.oauthClients.findByClientId.mockResolvedValue(client);
-    fastify.passwordHasher.verifyPassword.mockResolvedValue(true);
-    fastify.jwtUtils.verifyAccessToken.mockRejectedValue(new JWTInvalidError('Invalid JWT token'));
+    const findByClientIdMock = fastify.repositories.oauthClients.findByClientId as unknown as Mock;
+    const verifyPasswordMock = fastify.passwordHasher.verifyPassword as unknown as Mock;
+    const verifyAccessTokenMock = fastify.jwtUtils.verifyAccessToken as unknown as Mock;
+
+    findByClientIdMock.mockResolvedValue(client);
+    verifyPasswordMock.mockResolvedValue(true);
+    verifyAccessTokenMock.mockRejectedValue(new JWTInvalidError('Invalid JWT token'));
 
     const request = {
       body: {
@@ -297,7 +346,11 @@ describe('POST /oauth/introspect route', () => {
       },
     };
 
-    const result = await handler!(request, reply);
+    if (!handler) {
+      throw new Error('Introspect handler was not registered');
+    }
+
+    const result = await handler(request, reply);
 
     expect(result).toEqual({ active: false });
   });
