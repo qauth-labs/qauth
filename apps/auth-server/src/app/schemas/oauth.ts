@@ -78,7 +78,6 @@ export const introspectResponseSchema = z.object({
   iat: z.number().optional(),
   iss: z.string().optional(),
   token_type: z.literal('Bearer').optional(),
-  scope: z.string().optional(),
 });
 
 export type IntrospectResponse = z.infer<typeof introspectResponseSchema>;

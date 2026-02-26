@@ -41,6 +41,7 @@ export function decodeJwtUnsafe(token: string) {
       sub: decoded.sub,
       email: decoded['email'],
       email_verified: decoded['email_verified'],
+      clientId: typeof decoded['client_id'] === 'string' ? decoded['client_id'] : 'unknown-client',
       iat: decoded.iat,
       exp: decoded.exp,
       iss: decoded.iss,

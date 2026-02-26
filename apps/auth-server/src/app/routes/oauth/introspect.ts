@@ -29,8 +29,8 @@ export default async function (fastify: FastifyInstance) {
       },
       config: {
         rateLimit: {
-          max: env.TOKEN_RATE_LIMIT,
-          timeWindow: env.TOKEN_RATE_WINDOW * 1000,
+          max: env.INTROSPECT_RATE_LIMIT,
+          timeWindow: env.INTROSPECT_RATE_WINDOW * 1000,
           keyGenerator: (request) => request.ip || 'unknown',
         },
       },
@@ -166,9 +166,12 @@ export default async function (fastify: FastifyInstance) {
           throw error;
         }
 
+        const fallbackOauthClientId =
+          typeof request.body.client_id === 'string' ? request.body.client_id : null;
+
         await fastify.repositories.auditLogs.create({
           userId: null,
-          oauthClientId: null,
+          oauthClientId: fallbackOauthClientId,
           event: 'oauth.introspect.failure',
           eventType: 'token',
           success: false,

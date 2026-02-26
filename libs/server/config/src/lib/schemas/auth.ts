@@ -118,6 +118,16 @@ export const authEnvSchema = z.object({
    * Token rate limit window in seconds (default: 60 = 1 minute)
    */
   TOKEN_RATE_WINDOW: z.coerce.number().int().min(1).default(60),
+
+  /**
+   * Maximum token introspection attempts per window
+   */
+  INTROSPECT_RATE_LIMIT: z.coerce.number().int().min(1).default(30),
+
+  /**
+   * Introspect rate limit window in seconds (default: 60 = 1 minute)
+   */
+  INTROSPECT_RATE_WINDOW: z.coerce.number().int().min(1).default(60),
 });
 
 /**
