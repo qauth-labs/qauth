@@ -11,6 +11,7 @@ describe('signAccessToken', () => {
       sub: 'user-123',
       email: 'user@example.com',
       email_verified: true,
+      clientId: 'client-123',
     };
 
     const token = await signAccessToken(payload, privateKey, 'https://auth.example.com', 900);
@@ -27,6 +28,7 @@ describe('signAccessToken', () => {
       sub: 'user-456',
       email: 'test@example.com',
       email_verified: false,
+      clientId: 'client-456',
     };
 
     const token = await signAccessToken(payload, privateKey, 'https://auth.example.com', 900);
@@ -35,6 +37,7 @@ describe('signAccessToken', () => {
     expect(decoded.sub).toBe(payload.sub);
     expect(decoded.email).toBe(payload.email);
     expect(decoded.email_verified).toBe(payload.email_verified);
+    expect(decoded.clientId).toBe(payload.clientId);
     expect(decoded.iss).toBe('https://auth.example.com');
     expect(decoded.iat).toBeDefined();
     expect(decoded.exp).toBeDefined();
@@ -47,6 +50,7 @@ describe('signAccessToken', () => {
       sub: 'user-789',
       email: 'expire@example.com',
       email_verified: true,
+      clientId: 'client-789',
     };
 
     const token = await signAccessToken(payload, privateKey, 'https://auth.example.com', expiresIn);
@@ -71,6 +75,7 @@ describe('verifyAccessToken', () => {
       sub: 'user-123',
       email: 'user@example.com',
       email_verified: true,
+      clientId: 'client-123',
     };
 
     const token = await signAccessToken(payload, privateKey, 'https://auth.example.com', 900);
@@ -87,6 +92,7 @@ describe('verifyAccessToken', () => {
       sub: 'user-123',
       email: 'user@example.com',
       email_verified: true,
+      clientId: 'client-123',
     };
 
     // Sign with very short expiration (1 second)
@@ -113,6 +119,7 @@ describe('verifyAccessToken', () => {
       sub: 'user-123',
       email: 'user@example.com',
       email_verified: true,
+      clientId: 'client-123',
     };
 
     const token = await signAccessToken(payload, privateKey1, 'https://auth.example.com', 900);
@@ -136,6 +143,7 @@ describe('verifyAccessToken', () => {
       sub: 'user-imported',
       email: 'imported@example.com',
       email_verified: true,
+      clientId: 'client-imported',
     };
 
     const token = await signAccessToken(

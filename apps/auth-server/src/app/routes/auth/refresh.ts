@@ -109,6 +109,7 @@ export default async function (fastify: FastifyInstance) {
           sub: user.id,
           email: user.email,
           email_verified: user.emailVerified,
+          clientId: oauthClient.clientId,
         });
 
         // Session management

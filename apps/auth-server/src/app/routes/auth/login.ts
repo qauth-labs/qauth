@@ -91,6 +91,7 @@ export default async function (fastify: FastifyInstance) {
           sub: user.id,
           email: user.email,
           email_verified: user.emailVerified,
+          clientId: systemClient.clientId,
         });
 
         // Generate refresh token using JWT plugin

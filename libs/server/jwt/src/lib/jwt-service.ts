@@ -35,6 +35,7 @@ export async function signAccessToken(
     sub: payload.sub,
     email: payload.email,
     email_verified: payload.email_verified,
+    client_id: payload.clientId,
   })
     .setProtectedHeader({ alg: 'EdDSA' })
     .setIssuedAt()
@@ -81,6 +82,7 @@ export async function verifyAccessToken(token: string, publicKey: KeyLike): Prom
       sub: payload.sub as string,
       email: payload['email'] as string,
       email_verified: payload['email_verified'] as boolean,
+      clientId: payload['client_id'] as string,
       iat: payload.iat as number | undefined,
       exp: payload.exp as number | undefined,
       iss: payload.iss as string | undefined,

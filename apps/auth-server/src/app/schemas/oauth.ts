@@ -52,3 +52,33 @@ export const tokenExchangeResponseSchema = z.object({
 });
 
 export type TokenExchangeResponse = z.infer<typeof tokenExchangeResponseSchema>;
+
+/**
+ * Token introspection request body (POST /oauth/introspect).
+ * RFC 7662 2.1. Uses application/x-www-form-urlencoded in transport.
+ */
+export const introspectRequestSchema = z.object({
+  token: z.string().min(1),
+  token_type_hint: z.string().max(64).optional(),
+  client_id: z.string().min(1),
+  client_secret: z.string().min(1),
+});
+
+export type IntrospectRequest = z.infer<typeof introspectRequestSchema>;
+
+/**
+ * Token introspection response body.
+ * RFC 7662 2.2.
+ */
+export const introspectResponseSchema = z.object({
+  active: z.boolean(),
+  sub: z.string().optional(),
+  client_id: z.string().optional(),
+  exp: z.number().optional(),
+  iat: z.number().optional(),
+  iss: z.string().optional(),
+  token_type: z.literal('Bearer').optional(),
+  scope: z.string().optional(),
+});
+
+export type IntrospectResponse = z.infer<typeof introspectResponseSchema>;
