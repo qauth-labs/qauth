@@ -3,7 +3,7 @@ import type { FastifyInstance } from 'fastify';
 import { ZodTypeProvider } from 'fastify-type-provider-zod';
 
 import { env } from '../../../config/env';
-import { verifyQuerySchema, verifyResponseSchema } from '../../schemas/auth';
+import { type VerifyQuery, verifyQuerySchema, verifyResponseSchema } from '../../schemas/auth';
 
 /**
  * Email verification route
@@ -25,6 +25,9 @@ export default async function (fastify: FastifyInstance) {
     '/verify',
     {
       schema: {
+        description:
+          'Verify email address using token sent via email. Single-use; marks token as used. Returns success message.',
+        tags: ['Auth'],
         querystring: verifyQuerySchema,
         response: {
           200: verifyResponseSchema,
@@ -39,7 +42,7 @@ export default async function (fastify: FastifyInstance) {
       },
     },
     async (request) => {
-      const { token } = request.query;
+      const { token } = request.query as VerifyQuery;
 
       // Token format already validated by Zod schema (64-char hex string)
       // This prevents CVE-2025-12374 style attacks at schema level

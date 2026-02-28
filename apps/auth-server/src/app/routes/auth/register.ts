@@ -5,7 +5,7 @@ import { ZodTypeProvider } from 'fastify-type-provider-zod';
 
 import { env } from '../../../config/env';
 import { getOrCreateDefaultRealm } from '../../helpers/realm';
-import { registerResponseSchema, registerSchema } from '../../schemas/auth';
+import { type RegisterRequest, registerResponseSchema, registerSchema } from '../../schemas/auth';
 
 /**
  * Registration route
@@ -16,6 +16,9 @@ export default async function (fastify: FastifyInstance) {
     '/register',
     {
       schema: {
+        description:
+          'Register a new user account. Creates user, sends verification email, and returns user data. Password must meet strength requirements.',
+        tags: ['Auth'],
         body: registerSchema,
         response: {
           201: registerResponseSchema,
@@ -30,7 +33,7 @@ export default async function (fastify: FastifyInstance) {
       },
     },
     async (request, reply) => {
-      const { email, password, realmId } = request.body;
+      const { email, password, realmId } = request.body as RegisterRequest;
 
       // Email is already validated by Zod schema, just normalize it
       const normalizedEmail = normalizeEmail(email);

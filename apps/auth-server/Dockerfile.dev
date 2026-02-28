@@ -7,15 +7,13 @@ WORKDIR /app
 
 RUN corepack enable
 
-# Dependencies only (layer cache)
+# Workspace and config (needed before install for pnpm workspace)
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY libs ./libs
+COPY apps ./apps
 COPY nx.json tsconfig.base.json ./
 COPY vitest.config.ts ./
 RUN pnpm install --frozen-lockfile
-
-# Workspace (Compose Watch will sync over these; writable for sync targets)
-COPY libs ./libs
-COPY apps ./apps
 
 RUN addgroup -g 1001 -S nodejs && adduser -S nodejs -u 1001 && \
     chown -R nodejs:nodejs /app

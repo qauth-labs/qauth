@@ -15,6 +15,11 @@ export default async function (fastify: FastifyInstance) {
   fastify.get<{ Reply: HealthResponse }>(
     '/health',
     {
+      schema: {
+        description:
+          'Health check endpoint. Returns database and Redis connectivity status. Used for liveness and readiness probes.',
+        tags: ['System'],
+      },
       config: {
         rateLimit: {
           max: env.HEALTH_RATE_LIMIT_MAX,

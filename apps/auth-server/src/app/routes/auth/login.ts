@@ -9,7 +9,7 @@ import { MIN_RESPONSE_TIME_MS } from '../../constants';
 import { getOrCreateSystemClient } from '../../helpers/oauth-client';
 import { getOrCreateDefaultRealm } from '../../helpers/realm';
 import { ensureMinimumResponseTime } from '../../helpers/timing';
-import { loginResponseSchema, loginSchema } from '../../schemas/auth';
+import { type LoginRequest, loginResponseSchema, loginSchema } from '../../schemas/auth';
 
 /**
  * Login route
@@ -21,6 +21,9 @@ export default async function (fastify: FastifyInstance) {
     '/login',
     {
       schema: {
+        description:
+          'Authenticate with email and password. Returns access token, refresh token, and expiration. Requires valid credentials.',
+        tags: ['Auth'],
         body: loginSchema,
         response: {
           200: loginResponseSchema,
@@ -36,7 +39,7 @@ export default async function (fastify: FastifyInstance) {
     },
     async (request, reply) => {
       const startTime = Date.now();
-      const { email, password } = request.body;
+      const { email, password } = request.body as LoginRequest;
 
       try {
         // Normalize email

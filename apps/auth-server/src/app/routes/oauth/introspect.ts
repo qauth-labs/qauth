@@ -6,7 +6,11 @@ import { env } from '../../../config/env';
 import { MIN_RESPONSE_TIME_MS } from '../../constants';
 import { getOrCreateDefaultRealm } from '../../helpers/realm';
 import { ensureMinimumResponseTime } from '../../helpers/timing';
-import { introspectRequestSchema, introspectResponseSchema } from '../../schemas/oauth';
+import {
+  type IntrospectRequest,
+  introspectRequestSchema,
+  introspectResponseSchema,
+} from '../../schemas/oauth';
 
 /**
  * POST /oauth/introspect
@@ -22,6 +26,9 @@ export default async function (fastify: FastifyInstance) {
     '/introspect',
     {
       schema: {
+        description:
+          'RFC 7662 token introspection. Send access token and client credentials in application/x-www-form-urlencoded body. Returns active and claims when token is valid for the client.',
+        tags: ['OAuth', 'Introspection'],
         body: introspectRequestSchema,
         response: {
           200: introspectResponseSchema,
@@ -37,7 +44,8 @@ export default async function (fastify: FastifyInstance) {
     },
     async (request, reply) => {
       const startTime = Date.now();
-      const { token, client_id, client_secret } = request.body;
+      const body = request.body as IntrospectRequest;
+      const { token, client_id, client_secret } = body;
 
       try {
         const realm = await getOrCreateDefaultRealm(fastify);
@@ -163,8 +171,7 @@ export default async function (fastify: FastifyInstance) {
           throw error;
         }
 
-        const fallbackOauthClientId =
-          typeof request.body.client_id === 'string' ? request.body.client_id : null;
+        const fallbackOauthClientId = body.client_id ?? null;
 
         await fastify.repositories.auditLogs.create({
           userId: null,

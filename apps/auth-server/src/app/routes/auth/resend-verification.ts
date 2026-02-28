@@ -11,7 +11,11 @@ import {
   SUCCESS_MESSAGES,
 } from '../../constants';
 import { getOrCreateDefaultRealm } from '../../helpers/realm';
-import { resendVerificationResponseSchema, resendVerificationSchema } from '../../schemas/auth';
+import {
+  type ResendVerificationRequest,
+  resendVerificationResponseSchema,
+  resendVerificationSchema,
+} from '../../schemas/auth';
 import { errorResponseSchema } from '../../schemas/common';
 
 /**
@@ -36,6 +40,9 @@ export default async function (fastify: FastifyInstance) {
     '/resend-verification',
     {
       schema: {
+        description:
+          'Request a new verification email. Rate limited per IP and per email. Always returns success to prevent email enumeration.',
+        tags: ['Auth'],
         body: resendVerificationSchema,
         response: {
           200: resendVerificationResponseSchema,
@@ -52,7 +59,7 @@ export default async function (fastify: FastifyInstance) {
     },
     async (request) => {
       const startTime = Date.now();
-      const { email } = request.body;
+      const { email } = request.body as ResendVerificationRequest;
 
       // Email is already validated by Zod schema, just normalize it
       const normalizedEmail = normalizeEmail(email);

@@ -7,7 +7,11 @@ import { env } from '../../../config/env';
 import { MIN_RESPONSE_TIME_MS } from '../../constants';
 import { getOrCreateDefaultRealm } from '../../helpers/realm';
 import { ensureMinimumResponseTime } from '../../helpers/timing';
-import { tokenExchangeBodySchema, tokenExchangeResponseSchema } from '../../schemas/oauth';
+import {
+  type TokenExchangeBody,
+  tokenExchangeBodySchema,
+  tokenExchangeResponseSchema,
+} from '../../schemas/oauth';
 
 /**
  * POST /oauth/token
@@ -19,6 +23,9 @@ export default async function (fastify: FastifyInstance) {
     '/token',
     {
       schema: {
+        description:
+          'OAuth 2.1 token endpoint. Exchanges authorization code for access and refresh tokens. Requires client credentials and PKCE code_verifier.',
+        tags: ['OAuth', 'Token'],
         body: tokenExchangeBodySchema,
         response: {
           200: tokenExchangeResponseSchema,
@@ -34,7 +41,7 @@ export default async function (fastify: FastifyInstance) {
     },
     async (request, reply) => {
       const startTime = Date.now();
-      const body = request.body;
+      const body = request.body as TokenExchangeBody;
 
       try {
         // Realm
