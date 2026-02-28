@@ -1,8 +1,15 @@
 import { JWTInvalidError, NotFoundError } from '@qauth/shared-errors';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
+import Fastify from 'fastify';
+import { serializerCompiler, validatorCompiler, ZodTypeProvider } from 'fastify-type-provider-zod';
 import { describe, expect, it, type Mock, vi } from 'vitest';
 
+import errorHandler from '../../plugins/error-handler';
 import userinfoRoute from './userinfo';
+
+vi.mock('../../helpers/timing', () => ({
+  ensureMinimumResponseTime: vi.fn().mockResolvedValue(undefined),
+}));
 
 vi.mock('../../../config/env', () => ({
   env: {
@@ -280,5 +287,43 @@ describe('GET /userinfo route', () => {
         error: 'Missing JWT payload',
       },
     });
+  });
+
+  it('returns 401 for invalid or malformed access token signature', async () => {
+    const app = Fastify({ logger: false }).withTypeProvider<ZodTypeProvider>();
+    app.setValidatorCompiler(validatorCompiler);
+    app.setSerializerCompiler(serializerCompiler);
+
+    app.get(
+      '/oauth/userinfo',
+      {
+        preHandler: async () => {
+          throw new JWTInvalidError('Invalid JWT token');
+        },
+      },
+      async () => ({ sub: 'user-1' })
+    );
+
+    await app.register(errorHandler);
+
+    const response = await app.inject({
+      method: 'GET',
+      url: '/oauth/userinfo',
+      headers: {
+        authorization: 'Bearer invalid-or-malformed-token',
+        'user-agent': 'vitest',
+      },
+    });
+
+    expect(response.statusCode).toBe(401);
+
+    const json = response.json();
+    expect(json).toMatchObject({
+      statusCode: 401,
+      error: expect.any(String),
+      code: 'JWT_INVALID',
+    });
+
+    await app.close();
   });
 });
