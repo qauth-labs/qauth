@@ -399,13 +399,15 @@ Response:
 
 **Tasks**:
 
-- [ ] Create JWT validation middleware
-- [ ] Implement token introspection endpoint (`POST /oauth/introspect`)
-- [ ] Create userinfo endpoint (`GET /userinfo`)
-- [ ] Handle expired tokens
-- [ ] Handle invalid signatures
+- [x] Create JWT validation middleware
+- [x] Implement token introspection endpoint (`POST /oauth/introspect`)
+- [x] Create userinfo endpoint (`GET /userinfo`)
+- [x] Handle expired tokens
+- [x] Handle invalid signatures
 
 **API Endpoints**:
+
+**GET /userinfo** (OIDC userinfo):
 
 ```typescript
 GET /userinfo
@@ -417,10 +419,17 @@ Response:
   "email": "user@example.com",
   "email_verified": true
 }
+```
 
----
+- **Auth**: `Authorization: Bearer <access_token>` (required). JWT middleware verifies the token and attaches the payload.
+- **Response**: `sub` (required), `email` (optional), `email_verified` (optional). Claims reflect the authenticated user.
 
+**POST /oauth/introspect** (RFC 7662 token introspection):
+
+```typescript
 POST /oauth/introspect
+Content-Type: application/x-www-form-urlencoded
+
 token=access_token_here&client_id=client_123&client_secret=client_secret_here
 
 Response (active token):
@@ -434,11 +443,14 @@ Response (active token):
   "token_type": "Bearer"
 }
 
-Response (invalid or expired token, or token issued to different client):
+Response (invalid, expired, or cross-client token):
 {
   "active": false
 }
 ```
+
+- **Body**: `token` (required), `client_id` (required), `client_secret` (required), `token_type_hint` (optional). Confidential client authentication (client_secret_post).
+- **Response**: RFC 7662 2.2 — `active` (required); when active, optional claims `sub`, `client_id`, `exp`, `iat`, `iss`, `token_type` may be returned.
 
 **Acceptance Criteria**:
 

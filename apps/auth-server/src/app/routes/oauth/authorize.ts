@@ -7,7 +7,7 @@ import { env } from '../../../config/env';
 import { AUTHORIZATION_CODE_TTL_MS } from '../../constants';
 import { buildRedirectUrl } from '../../helpers/oauth-redirect';
 import { getOrCreateDefaultRealm } from '../../helpers/realm';
-import { authorizeQuerySchema } from '../../schemas/oauth';
+import { type AuthorizeQuery, authorizeQuerySchema } from '../../schemas/oauth';
 
 /**
  * GET /oauth/authorize
@@ -19,6 +19,9 @@ export default async function (fastify: FastifyInstance) {
     '/authorize',
     {
       schema: {
+        description:
+          'OAuth 2.1 authorization endpoint. Issues authorization code with PKCE. Requires Bearer access token for user context. Redirects to client redirect_uri.',
+        tags: ['OAuth', 'Authorization'],
         querystring: authorizeQuerySchema,
       },
       config: {
@@ -30,7 +33,7 @@ export default async function (fastify: FastifyInstance) {
       },
     },
     async (request, reply) => {
-      const query = request.query;
+      const query = request.query as AuthorizeQuery;
       const redirectUri = query.redirect_uri;
       const state = query.state;
 

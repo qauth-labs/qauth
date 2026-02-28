@@ -6,7 +6,7 @@ import { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { env } from '../../../config/env';
 import { MIN_RESPONSE_TIME_MS } from '../../constants';
 import { ensureMinimumResponseTime } from '../../helpers/timing';
-import { refreshResponseSchema, refreshSchema } from '../../schemas/auth';
+import { type RefreshRequest, refreshResponseSchema, refreshSchema } from '../../schemas/auth';
 
 /**
  * Refresh token route
@@ -18,6 +18,9 @@ export default async function (fastify: FastifyInstance) {
     '/refresh',
     {
       schema: {
+        description:
+          'Exchange a refresh token for new access and refresh tokens. Implements token rotation for security.',
+        tags: ['Auth'],
         body: refreshSchema,
         response: {
           200: refreshResponseSchema,
@@ -33,7 +36,7 @@ export default async function (fastify: FastifyInstance) {
     },
     async (request, reply) => {
       const startTime = Date.now();
-      const { refresh_token } = request.body;
+      const { refresh_token } = request.body as RefreshRequest;
 
       try {
         // Hash refresh token

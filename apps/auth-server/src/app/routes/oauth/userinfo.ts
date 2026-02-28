@@ -21,6 +21,10 @@ export default async function (fastify: FastifyInstance) {
     {
       preHandler: fastify.requireJwt,
       schema: {
+        description:
+          'OIDC userinfo endpoint. Returns claims for the authenticated user. Requires Bearer access token.',
+        tags: ['OAuth', 'Userinfo'],
+        security: [{ bearerAuth: [] }],
         response: {
           200: userinfoResponseSchema,
         },

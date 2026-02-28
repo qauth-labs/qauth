@@ -94,6 +94,8 @@
     "@fastify/autoload": "^6.3.1",
     "@fastify/cors": "^11.2.0",
     "@fastify/rate-limit": "^10.3.0",
+    "@fastify/swagger": "^9.7.0",
+    "@fastify/swagger-ui": "^5.2.5",
     "@node-rs/argon2": "^2.0.2",
     "@react-email/components": "^1.0.3",
     "dotenv": "^17.2.3",

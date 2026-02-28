@@ -15,6 +15,9 @@ export default async function (fastify: FastifyInstance) {
     '/logout',
     {
       schema: {
+        description:
+          'Log out the current user. Revokes all refresh tokens for the user. Accepts expired access tokens.',
+        tags: ['Auth'],
         headers: logoutHeadersSchema,
         response: {
           200: logoutResponseSchema,

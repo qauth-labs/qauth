@@ -1,5 +1,12 @@
+import swagger from '@fastify/swagger';
+import swaggerUi from '@fastify/swagger-ui';
 import Fastify from 'fastify';
-import { serializerCompiler, validatorCompiler, ZodTypeProvider } from 'fastify-type-provider-zod';
+import {
+  createJsonSchemaTransform,
+  serializerCompiler,
+  validatorCompiler,
+  ZodTypeProvider,
+} from 'fastify-type-provider-zod';
 
 import { app } from './app/app';
 import { env } from './config/env';
@@ -9,7 +16,9 @@ const server = Fastify({
   logger: {
     level: env.LOG_LEVEL,
   },
-  ignoreTrailingSlash: true,
+  routerOptions: {
+    ignoreTrailingSlash: true,
+  },
 }).withTypeProvider<ZodTypeProvider>();
 
 // Set up Zod validator and serializer
@@ -34,7 +43,38 @@ process.on('SIGINT', () => shutdown('SIGINT'));
 // Start server
 async function start() {
   try {
-    // Register your application as a normal plugin.
+    // Swagger must be registered BEFORE routes for route discovery (see @fastify/swagger README)
+    await server.register(swagger, {
+      openapi: {
+        openapi: '3.1.0',
+        info: {
+          title: 'QAuth Auth Server API',
+          description:
+            'OAuth 2.1 / OIDC authentication server API. Phase 1.7: userinfo and token introspection.',
+          version: '1.0.0',
+        },
+        servers: [{ url: '/', description: 'Default' }],
+        components: {
+          securitySchemes: {
+            bearerAuth: {
+              type: 'http',
+              scheme: 'bearer',
+              bearerFormat: 'JWT',
+              description: 'Access token obtained from login, refresh, or OAuth token endpoint.',
+            },
+          },
+        },
+      },
+      transform: createJsonSchemaTransform({
+        zodToJsonConfig: { target: 'draft-2020-12' },
+      }),
+    });
+    await server.register(swaggerUi, {
+      routePrefix: '/docs',
+      uiConfig: { docExpansion: 'list', filter: true },
+    });
+
+    // Register app (routes) after swagger so they appear in OpenAPI spec
     await server.register(app);
 
     // Start listening.

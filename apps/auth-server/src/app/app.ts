@@ -113,12 +113,13 @@ export async function app(fastify: FastifyInstance, opts: object) {
   fastify.register(AutoLoad, {
     dir: path.join(__dirname, 'plugins'),
     options: { ...opts },
-    ignorePattern: /(error-handler|rate-limit)\.(ts|js)$/,
+    ignorePattern: /(error-handler|rate-limit)\.(ts|js)$|\.(test|spec)\.(ts|js)$/,
   });
 
   fastify.register(AutoLoad, {
     dir: path.join(__dirname, 'routes'),
     options: { ...opts },
+    ignorePattern: /\.(test|spec)\.(ts|js)$/,
   });
 
   // Register error handler last to catch all unhandled errors
