@@ -1,5 +1,7 @@
 import { InvalidCredentialsError, JWTExpiredError, JWTInvalidError } from '@qauth/shared-errors';
 import type { FastifyInstance } from 'fastify';
+import Fastify from 'fastify';
+import { serializerCompiler, validatorCompiler, ZodTypeProvider } from 'fastify-type-provider-zod';
 import { describe, expect, it, type Mock, vi } from 'vitest';
 
 vi.mock('../../helpers/timing', () => ({
@@ -11,9 +13,12 @@ vi.mock('../../../config/env', () => ({
     DATABASE_URL: 'postgresql://test:test@localhost:5432/test',
     EMAIL_FROM_ADDRESS: 'noreply@example.com',
     EMAIL_BASE_URL: 'http://localhost:3000',
+    INTROSPECT_RATE_LIMIT: 60,
+    INTROSPECT_RATE_WINDOW: 60,
   },
 }));
 
+import errorHandler from '../../plugins/error-handler';
 import introspectRoute from './introspect';
 
 interface TestContext {
@@ -444,5 +449,45 @@ describe('POST /oauth/introspect route', () => {
         error: 'Invalid JWT token: signature verification failed',
       },
     });
+  });
+
+  it('returns 400 for missing or empty token', async () => {
+    const app = Fastify({ logger: false }).withTypeProvider<ZodTypeProvider>();
+    app.setValidatorCompiler(validatorCompiler);
+    app.setSerializerCompiler(serializerCompiler);
+
+    app.decorate('repositories', {
+      realms: { findByName: vi.fn(), create: vi.fn() },
+      oauthClients: { findByClientId: vi.fn() },
+      auditLogs: { create: vi.fn() },
+    } as any);
+    app.decorate('passwordHasher', { verifyPassword: vi.fn() } as any);
+    app.decorate('jwtUtils', { verifyAccessToken: vi.fn() } as any);
+
+    await app.register(introspectRoute);
+    await app.register(errorHandler);
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/introspect',
+      headers: {
+        'content-type': 'application/json',
+      },
+      payload: {
+        token: '',
+        client_id: 'client-123',
+        client_secret: 'secret',
+      },
+    });
+
+    expect(response.statusCode).toBe(400);
+
+    const json = response.json();
+    expect(json).toMatchObject({
+      statusCode: 400,
+    });
+    expect(json.error).toBeDefined();
+
+    await app.close();
   });
 });
