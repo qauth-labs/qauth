@@ -2,6 +2,7 @@ import { JWTInvalidError, NotFoundError } from '@qauth/shared-errors';
 import type { FastifyInstance } from 'fastify';
 import { ZodTypeProvider } from 'fastify-type-provider-zod';
 
+import { env } from '../../../config/env';
 import { userinfoResponseSchema } from '../../schemas/oauth';
 
 /**
@@ -22,25 +23,76 @@ export default async function (fastify: FastifyInstance) {
           200: userinfoResponseSchema,
         },
       },
+      config: {
+        rateLimit: {
+          max: env.USERINFO_RATE_LIMIT,
+          timeWindow: env.USERINFO_RATE_WINDOW * 1000,
+          keyGenerator: (request) => request.ip || 'unknown',
+        },
+      },
     },
     async (request, reply) => {
-      const payload = request.jwtPayload;
+      let userId: string | null = null;
 
-      if (!payload || !payload.sub) {
-        throw new JWTInvalidError('Missing JWT payload');
+      try {
+        const payload = request.jwtPayload;
+
+        if (!payload || !payload.sub) {
+          throw new JWTInvalidError('Missing JWT payload');
+        }
+
+        userId = payload.sub;
+
+        const user = await fastify.repositories.users.findById(userId);
+
+        if (!user) {
+          throw new NotFoundError('User', userId);
+        }
+
+        const responseBody: {
+          sub: string;
+          email?: string;
+          email_verified?: boolean;
+        } = {
+          sub: user.id,
+        };
+
+        if (typeof user.email === 'string' && user.email.length > 0) {
+          responseBody.email = user.email;
+        }
+
+        if (typeof user.emailVerified === 'boolean') {
+          responseBody.email_verified = user.emailVerified;
+        }
+
+        await fastify.repositories.auditLogs.create({
+          userId: user.id,
+          oauthClientId: null,
+          event: 'oauth.userinfo.success',
+          eventType: 'token',
+          success: true,
+          ipAddress: request.ip,
+          userAgent: request.headers['user-agent'] || null,
+          metadata: {},
+        });
+
+        return reply.send(responseBody);
+      } catch (error) {
+        await fastify.repositories.auditLogs.create({
+          userId: userId,
+          oauthClientId: null,
+          event: 'oauth.userinfo.failure',
+          eventType: 'token',
+          success: false,
+          ipAddress: request.ip,
+          userAgent: request.headers['user-agent'] || null,
+          metadata: {
+            error: error instanceof Error ? error.message : 'Unknown error',
+          },
+        });
+
+        throw error;
       }
-
-      const user = await fastify.repositories.users.findById(payload.sub);
-
-      if (!user) {
-        throw new NotFoundError('User', payload.sub);
-      }
-
-      return reply.send({
-        sub: user.id,
-        email: user.email,
-        email_verified: user.emailVerified,
-      });
     }
   );
 }

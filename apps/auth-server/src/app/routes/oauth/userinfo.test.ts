@@ -4,6 +4,16 @@ import { describe, expect, it, type Mock, vi } from 'vitest';
 
 import userinfoRoute from './userinfo';
 
+vi.mock('../../../config/env', () => ({
+  env: {
+    DATABASE_URL: 'postgresql://test:test@localhost:5432/test',
+    EMAIL_FROM_ADDRESS: 'noreply@example.com',
+    EMAIL_BASE_URL: 'http://localhost:3000',
+    USERINFO_RATE_LIMIT: 60,
+    USERINFO_RATE_WINDOW: 60,
+  },
+}));
+
 interface TestContext {
   handler?: (request: FastifyRequest, reply: FastifyReply) => Promise<unknown>;
   options?: {
@@ -126,6 +136,18 @@ describe('GET /userinfo route', () => {
       email: 'user@example.com',
       email_verified: true,
     });
+
+    const auditLogMock = fastify.repositories.auditLogs.create as unknown as Mock;
+    expect(auditLogMock).toHaveBeenCalledWith({
+      userId: 'user-1',
+      oauthClientId: null,
+      event: 'oauth.userinfo.success',
+      eventType: 'token',
+      success: true,
+      ipAddress: '127.0.0.1',
+      userAgent: 'vitest',
+      metadata: {},
+    });
   });
 
   it('throws NotFoundError when user is not found', async () => {
@@ -160,6 +182,61 @@ describe('GET /userinfo route', () => {
     }
 
     await expect(handler(request, reply)).rejects.toThrow(NotFoundError);
+
+    const auditLogMock = fastify.repositories.auditLogs.create as unknown as Mock;
+    expect(auditLogMock).toHaveBeenCalledWith({
+      userId: 'missing-user',
+      oauthClientId: null,
+      event: 'oauth.userinfo.failure',
+      eventType: 'token',
+      success: false,
+      ipAddress: '127.0.0.1',
+      userAgent: 'vitest',
+      metadata: {
+        error: expect.stringContaining('missing-user'),
+      },
+    });
+  });
+
+  it('handles user without email gracefully', async () => {
+    const { fastify, ctx } = createFastifyStub();
+    await userinfoRoute(fastify);
+
+    const handler = ctx.handler;
+    expect(handler).toBeDefined();
+
+    const findByIdMock = fastify.repositories.users.findById as unknown as Mock;
+    findByIdMock.mockResolvedValue({
+      id: 'user-2',
+      email: null,
+      emailVerified: false,
+    });
+
+    const request = {
+      jwtPayload: {
+        sub: 'user-2',
+      },
+      ip: '127.0.0.1',
+      headers: {
+        authorization: 'Bearer token',
+        'user-agent': 'vitest',
+      },
+    } as unknown as FastifyRequest;
+
+    const reply = {
+      send: (body: unknown) => body,
+    } as unknown as FastifyReply;
+
+    if (!handler) {
+      throw new Error('Userinfo handler was not registered');
+    }
+
+    const result = await handler(request, reply);
+
+    expect(result).toEqual({
+      sub: 'user-2',
+      email_verified: false,
+    });
   });
 
   it('throws JWTInvalidError when jwt payload is missing', async () => {
@@ -189,5 +266,19 @@ describe('GET /userinfo route', () => {
     }
 
     await expect(handler(request, reply)).rejects.toThrow(JWTInvalidError);
+
+    const auditLogMock = fastify.repositories.auditLogs.create as unknown as Mock;
+    expect(auditLogMock).toHaveBeenCalledWith({
+      userId: null,
+      oauthClientId: null,
+      event: 'oauth.userinfo.failure',
+      eventType: 'token',
+      success: false,
+      ipAddress: '127.0.0.1',
+      userAgent: 'vitest',
+      metadata: {
+        error: 'Missing JWT payload',
+      },
+    });
   });
 });

@@ -128,6 +128,14 @@ export const authEnvSchema = z.object({
    * Introspect rate limit window in seconds (default: 60 = 1 minute)
    */
   INTROSPECT_RATE_WINDOW: z.coerce.number().int().min(1).default(60),
+  /**
+   * Maximum userinfo requests per window
+   */
+  USERINFO_RATE_LIMIT: z.coerce.number().int().min(1).default(60),
+  /**
+   * Userinfo rate limit window in seconds (default: 60 = 1 minute)
+   */
+  USERINFO_RATE_WINDOW: z.coerce.number().int().min(1).default(60),
 });
 
 /**

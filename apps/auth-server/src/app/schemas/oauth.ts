@@ -88,8 +88,8 @@ export type IntrospectResponse = z.infer<typeof introspectResponseSchema>;
  */
 export const userinfoResponseSchema = z.object({
   sub: z.string().min(1),
-  email: z.email(),
-  email_verified: z.boolean(),
+  email: z.email().optional(),
+  email_verified: z.boolean().optional(),
 });
 
 export type UserinfoResponse = z.infer<typeof userinfoResponseSchema>;
