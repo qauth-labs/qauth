@@ -97,10 +97,7 @@ export default async function (fastify: FastifyInstance) {
               ipAddress: request.ip,
               userAgent: request.headers['user-agent'] || null,
               metadata: {
-                error:
-                  error instanceof Error && error.message
-                    ? error.message
-                    : 'Invalid or expired token',
+                error: error.message || 'Invalid or expired token',
               },
             });
 
