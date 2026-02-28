@@ -187,6 +187,7 @@ export default async function (fastify: FastifyInstance) {
           sub: user.id,
           email: user.email,
           email_verified: user.emailVerified,
+          clientId: client.clientId,
         });
 
         const { token: refreshToken, tokenHash } = fastify.jwtUtils.generateRefreshToken();

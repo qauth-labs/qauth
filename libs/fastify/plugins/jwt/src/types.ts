@@ -35,6 +35,7 @@ export interface JwtUtils {
     sub: string;
     email: string;
     email_verified: boolean;
+    clientId: string;
   }): Promise<string>;
   /**
    * Generate a refresh token pair (token and hash)

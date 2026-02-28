@@ -8,6 +8,8 @@ export interface SignAccessTokenPayload {
   email: string;
   /** Email verification status */
   email_verified: boolean;
+  /** OAuth client identifier */
+  clientId: string;
 }
 
 /**

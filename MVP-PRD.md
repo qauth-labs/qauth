@@ -421,16 +421,22 @@ Response:
 ---
 
 POST /oauth/introspect
-{
-  "token": "access_token_here"
-}
+token=access_token_here&client_id=client_123&client_secret=client_secret_here
 
-Response:
+Response (active token):
 {
   "active": true,
   "sub": "user_id",
-  "client_id": "client_id",
-  "exp": 1234567890
+  "client_id": "client_123",
+  "exp": 1234567890,
+  "iat": 1234567800,
+  "iss": "https://auth.example.com",
+  "token_type": "Bearer"
+}
+
+Response (invalid or expired token, or token issued to different client):
+{
+  "active": false
 }
 ```
 
