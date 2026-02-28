@@ -306,25 +306,27 @@ describe('GET /userinfo route', () => {
       async () => ({ sub: 'user-1' })
     );
 
-    const response = await app.inject({
-      method: 'GET',
-      url: '/oauth/userinfo',
-      headers: {
-        authorization: 'Bearer invalid-or-malformed-token',
-        'user-agent': 'vitest',
-      },
-    });
+    try {
+      const response = await app.inject({
+        method: 'GET',
+        url: '/oauth/userinfo',
+        headers: {
+          authorization: 'Bearer invalid-or-malformed-token',
+          'user-agent': 'vitest',
+        },
+      });
 
-    expect(response.statusCode).toBe(401);
+      expect(response.statusCode).toBe(401);
 
-    const json = response.json();
-    expect(json).toMatchObject({
-      statusCode: 401,
-      error: expect.any(String),
-      code: 'JWT_INVALID',
-    });
-
-    await app.close();
+      const json = response.json();
+      expect(json).toMatchObject({
+        statusCode: 401,
+        error: expect.any(String),
+        code: 'JWT_INVALID',
+      });
+    } finally {
+      await app.close();
+    }
   });
 
   it('returns 401 for expired token', async () => {
@@ -344,25 +346,27 @@ describe('GET /userinfo route', () => {
       async () => ({ sub: 'user-1' })
     );
 
-    const response = await app.inject({
-      method: 'GET',
-      url: '/oauth/userinfo',
-      headers: {
-        authorization: 'Bearer expired-token',
-        'user-agent': 'vitest',
-      },
-    });
+    try {
+      const response = await app.inject({
+        method: 'GET',
+        url: '/oauth/userinfo',
+        headers: {
+          authorization: 'Bearer expired-token',
+          'user-agent': 'vitest',
+        },
+      });
 
-    expect(response.statusCode).toBe(401);
+      expect(response.statusCode).toBe(401);
 
-    const json = response.json();
-    expect(json).toMatchObject({
-      statusCode: 401,
-      error: 'JWT token has expired',
-      code: 'JWT_EXPIRED',
-    });
-
-    await app.close();
+      const json = response.json();
+      expect(json).toMatchObject({
+        statusCode: 401,
+        error: 'JWT token has expired',
+        code: 'JWT_EXPIRED',
+      });
+    } finally {
+      await app.close();
+    }
   });
 
   it('returns 401 for missing token', async () => {
@@ -382,23 +386,25 @@ describe('GET /userinfo route', () => {
       async () => ({ sub: 'user-1' })
     );
 
-    const response = await app.inject({
-      method: 'GET',
-      url: '/oauth/userinfo',
-      headers: {
-        'user-agent': 'vitest',
-      },
-    });
+    try {
+      const response = await app.inject({
+        method: 'GET',
+        url: '/oauth/userinfo',
+        headers: {
+          'user-agent': 'vitest',
+        },
+      });
 
-    expect(response.statusCode).toBe(401);
+      expect(response.statusCode).toBe(401);
 
-    const json = response.json();
-    expect(json).toMatchObject({
-      statusCode: 401,
-      error: 'Missing or malformed Authorization header',
-      code: 'JWT_INVALID',
-    });
-
-    await app.close();
+      const json = response.json();
+      expect(json).toMatchObject({
+        statusCode: 401,
+        error: 'Missing or malformed Authorization header',
+        code: 'JWT_INVALID',
+      });
+    } finally {
+      await app.close();
+    }
   });
 });

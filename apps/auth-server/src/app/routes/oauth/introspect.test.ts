@@ -467,27 +467,29 @@ describe('POST /oauth/introspect route', () => {
     await app.register(introspectRoute);
     await app.register(errorHandler);
 
-    const response = await app.inject({
-      method: 'POST',
-      url: '/introspect',
-      headers: {
-        'content-type': 'application/json',
-      },
-      payload: {
-        token: '',
-        client_id: 'client-123',
-        client_secret: 'secret',
-      },
-    });
+    try {
+      const response = await app.inject({
+        method: 'POST',
+        url: '/introspect',
+        headers: {
+          'content-type': 'application/json',
+        },
+        payload: {
+          token: '',
+          client_id: 'client-123',
+          client_secret: 'secret',
+        },
+      });
 
-    expect(response.statusCode).toBe(400);
+      expect(response.statusCode).toBe(400);
 
-    const json = response.json();
-    expect(json).toMatchObject({
-      statusCode: 400,
-    });
-    expect(json.error).toBeDefined();
-
-    await app.close();
+      const json = response.json();
+      expect(json).toMatchObject({
+        statusCode: 400,
+      });
+      expect(json.error).toBeDefined();
+    } finally {
+      await app.close();
+    }
   });
 });

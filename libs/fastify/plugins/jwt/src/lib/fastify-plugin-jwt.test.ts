@@ -2,13 +2,38 @@ import { generateEdDSAKeyPair, importPrivateKey, signAccessToken } from '@qauth/
 import { JWTExpiredError, JWTInvalidError } from '@qauth/shared-errors';
 import type { FastifyInstance } from 'fastify';
 import Fastify from 'fastify';
-import { exportPKCS8, exportSPKI } from 'jose';
+import { exportPKCS8, exportSPKI, SignJWT } from 'jose';
 import { describe, expect, it } from 'vitest';
 
 import { jwtPlugin } from './fastify-plugin-jwt';
 
 /**
- * Minimal error handler for tests - maps JWT errors to 401
+ * Sign an already-expired token (avoids flaky setTimeout-based tests).
+ * Uses past exp timestamp so verification fails immediately with JWTExpiredError.
+ */
+async function signExpiredToken(
+  privateKeyPem: string,
+  payload: { sub: string; email: string; email_verified: boolean; clientId: string }
+): Promise<string> {
+  const key = await importPrivateKey(privateKeyPem);
+  const now = Math.floor(Date.now() / 1000);
+  return new SignJWT({
+    sub: payload.sub,
+    email: payload.email,
+    email_verified: payload.email_verified,
+    client_id: payload.clientId,
+  })
+    .setProtectedHeader({ alg: 'EdDSA' })
+    .setIssuedAt(now - 3600)
+    .setExpirationTime(now - 60)
+    .setIssuer('https://auth.test.example.com')
+    .sign(key);
+}
+
+/**
+ * Minimal error handler for tests - maps JWT errors to 401.
+ * Kept local (not imported from auth-server) to avoid pulling in auth-server
+ * dependencies into the fastify-plugin-jwt library.
  */
 async function registerTestErrorHandler(app: FastifyInstance) {
   app.setErrorHandler((error, _request, reply) => {
@@ -58,146 +83,144 @@ async function buildTestApp() {
 describe('requireJwt middleware', () => {
   it('allows valid token and sets jwtPayload', async () => {
     const { app, privateKeyPem } = await buildTestApp();
+    try {
+      const token = await signAccessToken(
+        {
+          sub: 'user-1',
+          email: 'user@example.com',
+          email_verified: true,
+          clientId: 'client-1',
+        },
+        await importPrivateKey(privateKeyPem),
+        'https://auth.test.example.com',
+        900
+      );
 
-    const token = await signAccessToken(
-      {
+      const response = await app.inject({
+        method: 'GET',
+        url: '/protected',
+        headers: {
+          authorization: `Bearer ${token}`,
+        },
+      });
+
+      expect(response.statusCode).toBe(200);
+      const json = response.json();
+      expect(json).toEqual({
         sub: 'user-1',
         email: 'user@example.com',
-        email_verified: true,
-        clientId: 'client-1',
-      },
-      await importPrivateKey(privateKeyPem),
-      'https://auth.test.example.com',
-      900
-    );
-
-    const response = await app.inject({
-      method: 'GET',
-      url: '/protected',
-      headers: {
-        authorization: `Bearer ${token}`,
-      },
-    });
-
-    expect(response.statusCode).toBe(200);
-    const json = response.json();
-    expect(json).toEqual({
-      sub: 'user-1',
-      email: 'user@example.com',
-    });
-
-    await app.close();
+      });
+    } finally {
+      await app.close();
+    }
   });
 
   it('returns 401 for expired token', async () => {
     const { app, privateKeyPem } = await buildTestApp();
-
-    const token = await signAccessToken(
-      {
+    try {
+      const token = await signExpiredToken(privateKeyPem, {
         sub: 'user-1',
         email: 'user@example.com',
         email_verified: true,
         clientId: 'client-1',
-      },
-      await importPrivateKey(privateKeyPem),
-      'https://auth.test.example.com',
-      1
-    );
+      });
 
-    await new Promise((resolve) => setTimeout(resolve, 1100));
+      const response = await app.inject({
+        method: 'GET',
+        url: '/protected',
+        headers: {
+          authorization: `Bearer ${token}`,
+        },
+      });
 
-    const response = await app.inject({
-      method: 'GET',
-      url: '/protected',
-      headers: {
-        authorization: `Bearer ${token}`,
-      },
-    });
-
-    expect(response.statusCode).toBe(401);
-    const json = response.json();
-    expect(json).toMatchObject({
-      statusCode: 401,
-      code: 'JWT_EXPIRED',
-      error: expect.any(String),
-    });
-
-    await app.close();
-  }, 10000);
+      expect(response.statusCode).toBe(401);
+      const json = response.json();
+      expect(json).toMatchObject({
+        statusCode: 401,
+        code: 'JWT_EXPIRED',
+        error: expect.any(String),
+      });
+    } finally {
+      await app.close();
+    }
+  });
 
   it('returns 401 for invalid signature', async () => {
     const { app } = await buildTestApp();
-    const { privateKey: otherPrivateKey } = await generateEdDSAKeyPair();
+    try {
+      const { privateKey: otherPrivateKey } = await generateEdDSAKeyPair();
+      const token = await signAccessToken(
+        {
+          sub: 'user-1',
+          email: 'user@example.com',
+          email_verified: true,
+          clientId: 'client-1',
+        },
+        otherPrivateKey,
+        'https://auth.test.example.com',
+        900
+      );
 
-    const token = await signAccessToken(
-      {
-        sub: 'user-1',
-        email: 'user@example.com',
-        email_verified: true,
-        clientId: 'client-1',
-      },
-      otherPrivateKey,
-      'https://auth.test.example.com',
-      900
-    );
+      const response = await app.inject({
+        method: 'GET',
+        url: '/protected',
+        headers: {
+          authorization: `Bearer ${token}`,
+        },
+      });
 
-    const response = await app.inject({
-      method: 'GET',
-      url: '/protected',
-      headers: {
-        authorization: `Bearer ${token}`,
-      },
-    });
-
-    expect(response.statusCode).toBe(401);
-    const json = response.json();
-    expect(json).toMatchObject({
-      statusCode: 401,
-      code: 'JWT_INVALID',
-      error: expect.any(String),
-    });
-
-    await app.close();
+      expect(response.statusCode).toBe(401);
+      const json = response.json();
+      expect(json).toMatchObject({
+        statusCode: 401,
+        code: 'JWT_INVALID',
+        error: expect.any(String),
+      });
+    } finally {
+      await app.close();
+    }
   });
 
   it('returns 401 for missing token', async () => {
     const { app } = await buildTestApp();
+    try {
+      const response = await app.inject({
+        method: 'GET',
+        url: '/protected',
+      });
 
-    const response = await app.inject({
-      method: 'GET',
-      url: '/protected',
-    });
-
-    expect(response.statusCode).toBe(401);
-    const json = response.json();
-    expect(json).toMatchObject({
-      statusCode: 401,
-      code: 'JWT_INVALID',
-      error: 'Missing or malformed Authorization header',
-    });
-
-    await app.close();
+      expect(response.statusCode).toBe(401);
+      const json = response.json();
+      expect(json).toMatchObject({
+        statusCode: 401,
+        code: 'JWT_INVALID',
+        error: 'Missing or malformed Authorization header',
+      });
+    } finally {
+      await app.close();
+    }
   });
 
   it('returns 401 for malformed Authorization header', async () => {
     const { app } = await buildTestApp();
+    try {
+      const response = await app.inject({
+        method: 'GET',
+        url: '/protected',
+        headers: {
+          authorization: 'InvalidFormat',
+        },
+      });
 
-    const response = await app.inject({
-      method: 'GET',
-      url: '/protected',
-      headers: {
-        authorization: 'InvalidFormat',
-      },
-    });
-
-    expect(response.statusCode).toBe(401);
-    const json = response.json();
-    expect(json).toMatchObject({
-      statusCode: 401,
-      code: 'JWT_INVALID',
-      error: 'Missing or malformed Authorization header',
-    });
-
-    await app.close();
+      expect(response.statusCode).toBe(401);
+      const json = response.json();
+      expect(json).toMatchObject({
+        statusCode: 401,
+        code: 'JWT_INVALID',
+        error: 'Missing or malformed Authorization header',
+      });
+    } finally {
+      await app.close();
+    }
   });
 });
