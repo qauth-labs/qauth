@@ -3,6 +3,8 @@ import type { FastifyInstance } from 'fastify';
 import { ZodTypeProvider } from 'fastify-type-provider-zod';
 
 import { env } from '../../../config/env';
+import { MIN_RESPONSE_TIME_MS } from '../../constants';
+import { ensureMinimumResponseTime } from '../../helpers/timing';
 import { userinfoResponseSchema } from '../../schemas/oauth';
 
 /**
@@ -32,6 +34,7 @@ export default async function (fastify: FastifyInstance) {
       },
     },
     async (request, reply) => {
+      const startTime = Date.now();
       let userId: string | null = null;
 
       try {
@@ -76,6 +79,8 @@ export default async function (fastify: FastifyInstance) {
           metadata: {},
         });
 
+        await ensureMinimumResponseTime(startTime, MIN_RESPONSE_TIME_MS.USERINFO);
+
         return reply.send(responseBody);
       } catch (error) {
         await fastify.repositories.auditLogs.create({
@@ -90,6 +95,8 @@ export default async function (fastify: FastifyInstance) {
             error: error instanceof Error ? error.message : 'Unknown error',
           },
         });
+
+        await ensureMinimumResponseTime(startTime, MIN_RESPONSE_TIME_MS.USERINFO);
 
         throw error;
       }
