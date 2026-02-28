@@ -382,4 +382,67 @@ describe('POST /oauth/introspect route', () => {
       },
     });
   });
+
+  it('returns active: false for invalid signature', async () => {
+    const { fastify, ctx } = createFastifyStub();
+    await introspectRoute(fastify);
+
+    const handler = ctx.handler;
+    expect(handler).toBeDefined();
+
+    const client = {
+      id: 'client-1',
+      clientId: 'client-123',
+      clientSecretHash: 'hashed-secret',
+      enabled: true,
+    };
+
+    const findByClientIdMock = fastify.repositories.oauthClients.findByClientId as unknown as Mock;
+    const verifyPasswordMock = fastify.passwordHasher.verifyPassword as unknown as Mock;
+    const verifyAccessTokenMock = fastify.jwtUtils.verifyAccessToken as unknown as Mock;
+    const auditLogMock = fastify.repositories.auditLogs.create as unknown as Mock;
+
+    findByClientIdMock.mockResolvedValue(client);
+    verifyPasswordMock.mockResolvedValue(true);
+    verifyAccessTokenMock.mockRejectedValue(
+      new JWTInvalidError('Invalid JWT token: signature verification failed')
+    );
+
+    const request = {
+      body: {
+        token: 'eyJhbGciOiJFUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ1c2VyLTEifQ.fake-sig',
+        client_id: client.clientId,
+        client_secret: 'secret',
+      },
+      ip: '127.0.0.1',
+      headers: {
+        'user-agent': 'vitest',
+      },
+    };
+
+    const reply = {
+      send: (body: unknown) => body,
+    };
+
+    if (!handler) {
+      throw new Error('Introspect handler was not registered');
+    }
+
+    const result = await handler(request, reply);
+
+    expect(result).toEqual({ active: false });
+
+    expect(auditLogMock).toHaveBeenCalledWith({
+      userId: null,
+      oauthClientId: client.id,
+      event: 'oauth.introspect.failure',
+      eventType: 'token',
+      success: false,
+      ipAddress: '127.0.0.1',
+      userAgent: 'vitest',
+      metadata: {
+        error: 'Invalid JWT token: signature verification failed',
+      },
+    });
+  });
 });
