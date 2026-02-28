@@ -1,4 +1,4 @@
-import { JWTInvalidError, NotFoundError } from '@qauth/shared-errors';
+import { JWTExpiredError, JWTInvalidError, NotFoundError } from '@qauth/shared-errors';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import Fastify from 'fastify';
 import { serializerCompiler, validatorCompiler, ZodTypeProvider } from 'fastify-type-provider-zod';
@@ -294,6 +294,8 @@ describe('GET /userinfo route', () => {
     app.setValidatorCompiler(validatorCompiler);
     app.setSerializerCompiler(serializerCompiler);
 
+    await app.register(errorHandler);
+
     app.get(
       '/oauth/userinfo',
       {
@@ -304,26 +306,105 @@ describe('GET /userinfo route', () => {
       async () => ({ sub: 'user-1' })
     );
 
+    try {
+      const response = await app.inject({
+        method: 'GET',
+        url: '/oauth/userinfo',
+        headers: {
+          authorization: 'Bearer invalid-or-malformed-token',
+          'user-agent': 'vitest',
+        },
+      });
+
+      expect(response.statusCode).toBe(401);
+
+      const json = response.json();
+      expect(json).toMatchObject({
+        statusCode: 401,
+        error: expect.any(String),
+        code: 'JWT_INVALID',
+      });
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('returns 401 for expired token', async () => {
+    const app = Fastify({ logger: false }).withTypeProvider<ZodTypeProvider>();
+    app.setValidatorCompiler(validatorCompiler);
+    app.setSerializerCompiler(serializerCompiler);
+
     await app.register(errorHandler);
 
-    const response = await app.inject({
-      method: 'GET',
-      url: '/oauth/userinfo',
-      headers: {
-        authorization: 'Bearer invalid-or-malformed-token',
-        'user-agent': 'vitest',
+    app.get(
+      '/oauth/userinfo',
+      {
+        preHandler: async () => {
+          throw new JWTExpiredError('JWT token has expired');
+        },
       },
-    });
+      async () => ({ sub: 'user-1' })
+    );
 
-    expect(response.statusCode).toBe(401);
+    try {
+      const response = await app.inject({
+        method: 'GET',
+        url: '/oauth/userinfo',
+        headers: {
+          authorization: 'Bearer expired-token',
+          'user-agent': 'vitest',
+        },
+      });
 
-    const json = response.json();
-    expect(json).toMatchObject({
-      statusCode: 401,
-      error: expect.any(String),
-      code: 'JWT_INVALID',
-    });
+      expect(response.statusCode).toBe(401);
 
-    await app.close();
+      const json = response.json();
+      expect(json).toMatchObject({
+        statusCode: 401,
+        error: 'JWT token has expired',
+        code: 'JWT_EXPIRED',
+      });
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('returns 401 for missing token', async () => {
+    const app = Fastify({ logger: false }).withTypeProvider<ZodTypeProvider>();
+    app.setValidatorCompiler(validatorCompiler);
+    app.setSerializerCompiler(serializerCompiler);
+
+    await app.register(errorHandler);
+
+    app.get(
+      '/oauth/userinfo',
+      {
+        preHandler: async () => {
+          throw new JWTInvalidError('Missing or malformed Authorization header');
+        },
+      },
+      async () => ({ sub: 'user-1' })
+    );
+
+    try {
+      const response = await app.inject({
+        method: 'GET',
+        url: '/oauth/userinfo',
+        headers: {
+          'user-agent': 'vitest',
+        },
+      });
+
+      expect(response.statusCode).toBe(401);
+
+      const json = response.json();
+      expect(json).toMatchObject({
+        statusCode: 401,
+        error: 'Missing or malformed Authorization header',
+        code: 'JWT_INVALID',
+      });
+    } finally {
+      await app.close();
+    }
   });
 });
