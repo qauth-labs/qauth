@@ -16,7 +16,9 @@ const server = Fastify({
   logger: {
     level: env.LOG_LEVEL,
   },
-  ignoreTrailingSlash: true,
+  routerOptions: {
+    ignoreTrailingSlash: true,
+  },
 }).withTypeProvider<ZodTypeProvider>();
 
 // Set up Zod validator and serializer
