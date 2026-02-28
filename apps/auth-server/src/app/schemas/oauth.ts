@@ -81,3 +81,15 @@ export const introspectResponseSchema = z.object({
 });
 
 export type IntrospectResponse = z.infer<typeof introspectResponseSchema>;
+
+/**
+ * OIDC userinfo response schema (GET /userinfo).
+ * Returns selected claims for the authenticated end-user.
+ */
+export const userinfoResponseSchema = z.object({
+  sub: z.string().min(1),
+  email: z.email().optional(),
+  email_verified: z.boolean().optional(),
+});
+
+export type UserinfoResponse = z.infer<typeof userinfoResponseSchema>;

@@ -20,4 +20,6 @@ export const MIN_RESPONSE_TIME_MS = {
   TOKEN: 300,
   /** Introspect endpoint minimum response time (300ms) */
   INTROSPECT: 300,
+  /** Userinfo endpoint minimum response time (300ms) */
+  USERINFO: 300,
 } as const;
