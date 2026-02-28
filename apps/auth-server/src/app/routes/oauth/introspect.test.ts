@@ -156,6 +156,7 @@ describe('POST /oauth/introspect route', () => {
     const findByClientIdMock = fastify.repositories.oauthClients.findByClientId as unknown as Mock;
     const verifyPasswordMock = fastify.passwordHasher.verifyPassword as unknown as Mock;
     const verifyAccessTokenMock = fastify.jwtUtils.verifyAccessToken as unknown as Mock;
+    const auditLogMock = fastify.repositories.auditLogs.create as unknown as Mock;
 
     findByClientIdMock.mockResolvedValue(client);
     verifyPasswordMock.mockResolvedValue(true);
@@ -188,6 +189,19 @@ describe('POST /oauth/introspect route', () => {
     const result = await handler(request, reply);
 
     expect(result).toEqual({ active: false });
+
+    expect(auditLogMock).toHaveBeenCalledWith({
+      userId: null,
+      oauthClientId: client.id,
+      event: 'oauth.introspect.failure',
+      eventType: 'token',
+      success: false,
+      ipAddress: '127.0.0.1',
+      userAgent: 'vitest',
+      metadata: {
+        error: 'JWT token has expired',
+      },
+    });
   });
 
   it('returns active: false for token issued to a different client', async () => {
@@ -321,6 +335,7 @@ describe('POST /oauth/introspect route', () => {
     const findByClientIdMock = fastify.repositories.oauthClients.findByClientId as unknown as Mock;
     const verifyPasswordMock = fastify.passwordHasher.verifyPassword as unknown as Mock;
     const verifyAccessTokenMock = fastify.jwtUtils.verifyAccessToken as unknown as Mock;
+    const auditLogMock = fastify.repositories.auditLogs.create as unknown as Mock;
 
     findByClientIdMock.mockResolvedValue(client);
     verifyPasswordMock.mockResolvedValue(true);
@@ -353,5 +368,18 @@ describe('POST /oauth/introspect route', () => {
     const result = await handler(request, reply);
 
     expect(result).toEqual({ active: false });
+
+    expect(auditLogMock).toHaveBeenCalledWith({
+      userId: null,
+      oauthClientId: client.id,
+      event: 'oauth.introspect.failure',
+      eventType: 'token',
+      success: false,
+      ipAddress: '127.0.0.1',
+      userAgent: 'vitest',
+      metadata: {
+        error: 'Invalid JWT token',
+      },
+    });
   });
 });
