@@ -8,6 +8,8 @@ import {
 import type { FastifyInstance } from 'fastify';
 import fp from 'fastify-plugin';
 
+import packageJson from '../../package.json';
+
 /**
  * PKCE utilities interface exposed on Fastify instance
  */
@@ -53,6 +55,6 @@ export const pkcePlugin = fp(
     fastify.log.debug('PKCE plugin registered');
   },
   {
-    name: '@qauth/fastify-plugin-pkce',
+    name: packageJson.name,
   }
 );

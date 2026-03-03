@@ -4,212 +4,573 @@ settings:
   autoInstallPeers: true
   excludeLinksFromLockfile: false
 
+catalogs:
+  default:
+    '@commitlint/cli':
+      specifier: ^20.2.0
+      version: 20.2.0
+    '@commitlint/config-conventional':
+      specifier: ^20.2.0
+      version: 20.2.0
+    '@eslint/js':
+      specifier: ^9.39.2
+      version: 9.39.2
+    '@fastify/autoload':
+      specifier: ^6.3.1
+      version: 6.3.1
+    '@fastify/cors':
+      specifier: ^11.2.0
+      version: 11.2.0
+    '@fastify/rate-limit':
+      specifier: ^10.3.0
+      version: 10.3.0
+    '@fastify/swagger':
+      specifier: ^9.7.0
+      version: 9.7.0
+    '@fastify/swagger-ui':
+      specifier: ^5.2.5
+      version: 5.2.5
+    '@node-rs/argon2':
+      specifier: ^2.0.2
+      version: 2.0.2
+    '@nx/esbuild':
+      specifier: ^22.3.3
+      version: 22.3.3
+    '@nx/eslint':
+      specifier: ^22.3.3
+      version: 22.3.3
+    '@nx/eslint-plugin':
+      specifier: ^22.3.3
+      version: 22.3.3
+    '@nx/js':
+      specifier: ^22.3.3
+      version: 22.3.3
+    '@nx/node':
+      specifier: ^22.3.3
+      version: 22.3.3
+    '@nx/vitest':
+      specifier: 22.3.3
+      version: 22.3.3
+    '@react-email/components':
+      specifier: ^1.0.3
+      version: 1.0.3
+    '@swc-node/register':
+      specifier: ~1.11.1
+      version: 1.11.1
+    '@swc/core':
+      specifier: ~1.15.7
+      version: 1.15.7
+    '@swc/helpers':
+      specifier: ~0.5.18
+      version: 0.5.18
+    '@testcontainers/postgresql':
+      specifier: 11.11.0
+      version: 11.11.0
+    '@testcontainers/redis':
+      specifier: 11.11.0
+      version: 11.11.0
+    '@types/node':
+      specifier: ^24.10.4
+      version: 24.10.4
+    '@types/nodemailer':
+      specifier: ^7.0.4
+      version: 7.0.4
+    '@types/pg':
+      specifier: ^8.16.0
+      version: 8.16.0
+    '@types/react':
+      specifier: ^19.2.7
+      version: 19.2.7
+    '@types/react-dom':
+      specifier: ^19.2.3
+      version: 19.2.3
+    '@types/supertest':
+      specifier: 6.0.3
+      version: 6.0.3
+    '@types/zxcvbn':
+      specifier: ^4.4.5
+      version: 4.4.5
+    '@vitest/coverage-v8':
+      specifier: 4.0.16
+      version: 4.0.16
+    '@vitest/ui':
+      specifier: 4.0.16
+      version: 4.0.16
+    dotenv:
+      specifier: ^17.2.3
+      version: 17.2.3
+    drizzle-kit:
+      specifier: ^0.31.8
+      version: 0.31.8
+    drizzle-orm:
+      specifier: ^0.45.1
+      version: 0.45.1
+    drizzle-seed:
+      specifier: ^0.3.1
+      version: 0.3.1
+    esbuild:
+      specifier: ^0.19.12
+      version: 0.19.12
+    eslint:
+      specifier: ^9.39.2
+      version: 9.39.2
+    eslint-config-prettier:
+      specifier: ^10.1.8
+      version: 10.1.8
+    eslint-plugin-import:
+      specifier: ^2.32.0
+      version: 2.32.0
+    eslint-plugin-jsx-a11y:
+      specifier: ^6.10.2
+      version: 6.10.2
+    eslint-plugin-prettier:
+      specifier: ^5.5.4
+      version: 5.5.4
+    eslint-plugin-react:
+      specifier: ^7.37.5
+      version: 7.37.5
+    eslint-plugin-react-hooks:
+      specifier: ^7.0.1
+      version: 7.0.1
+    eslint-plugin-simple-import-sort:
+      specifier: ^12.1.1
+      version: 12.1.1
+    fastify:
+      specifier: ^5.6.2
+      version: 5.6.2
+    fastify-plugin:
+      specifier: ^5.1.0
+      version: 5.1.0
+    fastify-type-provider-zod:
+      specifier: ^6.1.0
+      version: 6.1.0
+    husky:
+      specifier: ^9.1.7
+      version: 9.1.7
+    ioredis:
+      specifier: ^5.8.2
+      version: 5.8.2
+    jose:
+      specifier: ^6.1.3
+      version: 6.1.3
+    lint-staged:
+      specifier: ^16.2.7
+      version: 16.2.7
+    nodemailer:
+      specifier: ^7.0.12
+      version: 7.0.12
+    nx:
+      specifier: ^22.3.3
+      version: 22.3.3
+    pg:
+      specifier: ^8.16.3
+      version: 8.16.3
+    prettier:
+      specifier: ^3.7.4
+      version: 3.7.4
+    prettier-plugin-tailwindcss:
+      specifier: ^0.7.2
+      version: 0.7.2
+    react:
+      specifier: ^19.2.3
+      version: 19.2.3
+    react-dom:
+      specifier: ^19.2.3
+      version: 19.2.3
+    resend:
+      specifier: ^6.6.0
+      version: 6.6.0
+    supertest:
+      specifier: 7.1.4
+      version: 7.1.4
+    tslib:
+      specifier: ^2.8.1
+      version: 2.8.1
+    tsx:
+      specifier: ^4.21.0
+      version: 4.21.0
+    typescript:
+      specifier: ^5.9.3
+      version: 5.9.3
+    typescript-eslint:
+      specifier: ^8.50.1
+      version: 8.50.1
+    vite-tsconfig-paths:
+      specifier: ^6.0.3
+      version: 6.0.3
+    vitest:
+      specifier: 4.0.16
+      version: 4.0.16
+    zod:
+      specifier: ^4.2.1
+      version: 4.2.1
+    zxcvbn:
+      specifier: ^4.4.2
+      version: 4.4.2
+
 importers:
 
   .:
     dependencies:
-      '@fastify/autoload':
-        specifier: ^6.3.1
-        version: 6.3.1
-      '@fastify/cors':
-        specifier: ^11.2.0
-        version: 11.2.0
-      '@fastify/rate-limit':
-        specifier: ^10.3.0
-        version: 10.3.0
-      '@fastify/swagger':
-        specifier: ^9.7.0
-        version: 9.7.0
-      '@fastify/swagger-ui':
-        specifier: ^5.2.5
-        version: 5.2.5
       '@node-rs/argon2':
-        specifier: ^2.0.2
+        specifier: 'catalog:'
         version: 2.0.2
       '@react-email/components':
-        specifier: ^1.0.3
+        specifier: 'catalog:'
         version: 1.0.3(react-dom@19.2.3(react@19.2.3))(react@19.2.3)
       dotenv:
-        specifier: ^17.2.3
+        specifier: 'catalog:'
         version: 17.2.3
       drizzle-orm:
-        specifier: ^0.45.1
+        specifier: 'catalog:'
         version: 0.45.1(@types/pg@8.16.0)(pg@8.16.3)
       drizzle-seed:
-        specifier: ^0.3.1
+        specifier: 'catalog:'
         version: 0.3.1(drizzle-orm@0.45.1(@types/pg@8.16.0)(pg@8.16.3))
-      fastify:
-        specifier: ^5.6.2
-        version: 5.6.2
-      fastify-plugin:
-        specifier: ^5.1.0
-        version: 5.1.0
-      fastify-type-provider-zod:
-        specifier: ^6.1.0
-        version: 6.1.0(@fastify/swagger@9.7.0)(fastify@5.6.2)(openapi-types@12.1.3)(zod@4.2.1)
       ioredis:
-        specifier: ^5.8.2
+        specifier: 'catalog:'
         version: 5.8.2
       jose:
-        specifier: ^6.1.3
+        specifier: 'catalog:'
         version: 6.1.3
       nodemailer:
-        specifier: ^7.0.12
+        specifier: 'catalog:'
         version: 7.0.12
       pg:
-        specifier: ^8.16.3
+        specifier: 'catalog:'
         version: 8.16.3
       react:
-        specifier: ^19.2.3
+        specifier: 'catalog:'
         version: 19.2.3
       react-dom:
-        specifier: ^19.2.3
+        specifier: 'catalog:'
         version: 19.2.3(react@19.2.3)
       resend:
-        specifier: ^6.6.0
+        specifier: 'catalog:'
         version: 6.6.0(@react-email/render@2.0.1(react-dom@19.2.3(react@19.2.3))(react@19.2.3))
-      zod:
-        specifier: ^4.2.1
-        version: 4.2.1
       zxcvbn:
-        specifier: ^4.4.2
+        specifier: 'catalog:'
         version: 4.4.2
     devDependencies:
       '@commitlint/cli':
-        specifier: ^20.2.0
+        specifier: 'catalog:'
         version: 20.2.0(@types/node@24.10.4)(typescript@5.9.3)
       '@commitlint/config-conventional':
-        specifier: ^20.2.0
+        specifier: 'catalog:'
         version: 20.2.0
       '@eslint/js':
-        specifier: ^9.39.2
+        specifier: 'catalog:'
         version: 9.39.2
       '@nx/esbuild':
-        specifier: ^22.3.3
+        specifier: 'catalog:'
         version: 22.3.3(@babel/traverse@7.28.5)(@swc-node/register@1.11.1(@swc/core@1.15.7(@swc/helpers@0.5.18))(@swc/types@0.1.25)(typescript@5.9.3))(@swc/core@1.15.7(@swc/helpers@0.5.18))(esbuild@0.19.12)(nx@22.3.3(@swc-node/register@1.11.1(@swc/core@1.15.7(@swc/helpers@0.5.18))(@swc/types@0.1.25)(typescript@5.9.3))(@swc/core@1.15.7(@swc/helpers@0.5.18)))
       '@nx/eslint':
-        specifier: ^22.3.3
+        specifier: 'catalog:'
         version: 22.3.3(@babel/traverse@7.28.5)(@swc-node/register@1.11.1(@swc/core@1.15.7(@swc/helpers@0.5.18))(@swc/types@0.1.25)(typescript@5.9.3))(@swc/core@1.15.7(@swc/helpers@0.5.18))(@zkochan/js-yaml@0.0.7)(eslint@9.39.2(jiti@2.6.1))(nx@22.3.3(@swc-node/register@1.11.1(@swc/core@1.15.7(@swc/helpers@0.5.18))(@swc/types@0.1.25)(typescript@5.9.3))(@swc/core@1.15.7(@swc/helpers@0.5.18)))
       '@nx/eslint-plugin':
-        specifier: ^22.3.3
+        specifier: 'catalog:'
         version: 22.3.3(@babel/traverse@7.28.5)(@swc-node/register@1.11.1(@swc/core@1.15.7(@swc/helpers@0.5.18))(@swc/types@0.1.25)(typescript@5.9.3))(@swc/core@1.15.7(@swc/helpers@0.5.18))(@typescript-eslint/parser@8.50.1(eslint@9.39.2(jiti@2.6.1))(typescript@5.9.3))(eslint-config-prettier@10.1.8(eslint@9.39.2(jiti@2.6.1)))(eslint@9.39.2(jiti@2.6.1))(nx@22.3.3(@swc-node/register@1.11.1(@swc/core@1.15.7(@swc/helpers@0.5.18))(@swc/types@0.1.25)(typescript@5.9.3))(@swc/core@1.15.7(@swc/helpers@0.5.18)))(typescript@5.9.3)
       '@nx/js':
-        specifier: ^22.3.3
+        specifier: 'catalog:'
         version: 22.3.3(@babel/traverse@7.28.5)(@swc-node/register@1.11.1(@swc/core@1.15.7(@swc/helpers@0.5.18))(@swc/types@0.1.25)(typescript@5.9.3))(@swc/core@1.15.7(@swc/helpers@0.5.18))(nx@22.3.3(@swc-node/register@1.11.1(@swc/core@1.15.7(@swc/helpers@0.5.18))(@swc/types@0.1.25)(typescript@5.9.3))(@swc/core@1.15.7(@swc/helpers@0.5.18)))
       '@nx/node':
-        specifier: ^22.3.3
+        specifier: 'catalog:'
         version: 22.3.3(@babel/traverse@7.28.5)(@swc-node/register@1.11.1(@swc/core@1.15.7(@swc/helpers@0.5.18))(@swc/types@0.1.25)(typescript@5.9.3))(@swc/core@1.15.7(@swc/helpers@0.5.18))(@types/node@24.10.4)(@zkochan/js-yaml@0.0.7)(babel-plugin-macros@3.1.0)(esbuild-register@3.6.0(esbuild@0.19.12))(eslint@9.39.2(jiti@2.6.1))(nx@22.3.3(@swc-node/register@1.11.1(@swc/core@1.15.7(@swc/helpers@0.5.18))(@swc/types@0.1.25)(typescript@5.9.3))(@swc/core@1.15.7(@swc/helpers@0.5.18)))(typescript@5.9.3)
       '@nx/vitest':
-        specifier: 22.3.3
+        specifier: 'catalog:'
         version: 22.3.3(@babel/traverse@7.28.5)(@swc-node/register@1.11.1(@swc/core@1.15.7(@swc/helpers@0.5.18))(@swc/types@0.1.25)(typescript@5.9.3))(@swc/core@1.15.7(@swc/helpers@0.5.18))(nx@22.3.3(@swc-node/register@1.11.1(@swc/core@1.15.7(@swc/helpers@0.5.18))(@swc/types@0.1.25)(typescript@5.9.3))(@swc/core@1.15.7(@swc/helpers@0.5.18)))(typescript@5.9.3)(vite@7.3.0(@types/node@24.10.4)(jiti@2.6.1)(tsx@4.21.0)(yaml@2.8.2))(vitest@4.0.16)
       '@swc-node/register':
-        specifier: ~1.11.1
+        specifier: 'catalog:'
         version: 1.11.1(@swc/core@1.15.7(@swc/helpers@0.5.18))(@swc/types@0.1.25)(typescript@5.9.3)
       '@swc/core':
-        specifier: ~1.15.7
+        specifier: 'catalog:'
         version: 1.15.7(@swc/helpers@0.5.18)
       '@swc/helpers':
-        specifier: ~0.5.18
+        specifier: 'catalog:'
         version: 0.5.18
       '@testcontainers/postgresql':
-        specifier: 11.11.0
+        specifier: 'catalog:'
         version: 11.11.0
       '@testcontainers/redis':
-        specifier: 11.11.0
+        specifier: 'catalog:'
         version: 11.11.0
       '@types/node':
-        specifier: ^24.10.4
+        specifier: 'catalog:'
         version: 24.10.4
       '@types/nodemailer':
-        specifier: ^7.0.4
+        specifier: 'catalog:'
         version: 7.0.4
       '@types/pg':
-        specifier: ^8.16.0
+        specifier: 'catalog:'
         version: 8.16.0
       '@types/react':
-        specifier: ^19.2.7
+        specifier: 'catalog:'
         version: 19.2.7
       '@types/react-dom':
-        specifier: ^19.2.3
+        specifier: 'catalog:'
         version: 19.2.3(@types/react@19.2.7)
       '@types/supertest':
-        specifier: 6.0.3
+        specifier: 'catalog:'
         version: 6.0.3
       '@types/zxcvbn':
-        specifier: ^4.4.5
+        specifier: 'catalog:'
         version: 4.4.5
       '@vitest/coverage-v8':
-        specifier: 4.0.16
+        specifier: 'catalog:'
         version: 4.0.16(vitest@4.0.16)
       '@vitest/ui':
-        specifier: 4.0.16
+        specifier: 'catalog:'
         version: 4.0.16(vitest@4.0.16)
       drizzle-kit:
-        specifier: ^0.31.8
+        specifier: 'catalog:'
         version: 0.31.8
       esbuild:
-        specifier: ^0.19.12
+        specifier: 'catalog:'
         version: 0.19.12
       eslint:
-        specifier: ^9.39.2
+        specifier: 'catalog:'
         version: 9.39.2(jiti@2.6.1)
       eslint-config-prettier:
-        specifier: ^10.1.8
+        specifier: 'catalog:'
         version: 10.1.8(eslint@9.39.2(jiti@2.6.1))
       eslint-plugin-import:
-        specifier: ^2.32.0
+        specifier: 'catalog:'
         version: 2.32.0(@typescript-eslint/parser@8.50.1(eslint@9.39.2(jiti@2.6.1))(typescript@5.9.3))(eslint@9.39.2(jiti@2.6.1))
       eslint-plugin-jsx-a11y:
-        specifier: ^6.10.2
+        specifier: 'catalog:'
         version: 6.10.2(eslint@9.39.2(jiti@2.6.1))
       eslint-plugin-prettier:
-        specifier: ^5.5.4
+        specifier: 'catalog:'
         version: 5.5.4(eslint-config-prettier@10.1.8(eslint@9.39.2(jiti@2.6.1)))(eslint@9.39.2(jiti@2.6.1))(prettier@3.7.4)
       eslint-plugin-react:
-        specifier: ^7.37.5
+        specifier: 'catalog:'
         version: 7.37.5(eslint@9.39.2(jiti@2.6.1))
       eslint-plugin-react-hooks:
-        specifier: ^7.0.1
+        specifier: 'catalog:'
         version: 7.0.1(eslint@9.39.2(jiti@2.6.1))
       eslint-plugin-simple-import-sort:
-        specifier: ^12.1.1
+        specifier: 'catalog:'
         version: 12.1.1(eslint@9.39.2(jiti@2.6.1))
       husky:
-        specifier: ^9.1.7
+        specifier: 'catalog:'
         version: 9.1.7
       lint-staged:
-        specifier: ^16.2.7
+        specifier: 'catalog:'
         version: 16.2.7
       nx:
-        specifier: ^22.3.3
+        specifier: 'catalog:'
         version: 22.3.3(@swc-node/register@1.11.1(@swc/core@1.15.7(@swc/helpers@0.5.18))(@swc/types@0.1.25)(typescript@5.9.3))(@swc/core@1.15.7(@swc/helpers@0.5.18))
       prettier:
-        specifier: ^3.7.4
+        specifier: 'catalog:'
         version: 3.7.4
       prettier-plugin-tailwindcss:
-        specifier: ^0.7.2
+        specifier: 'catalog:'
         version: 0.7.2(prettier@3.7.4)
       supertest:
-        specifier: 7.1.4
+        specifier: 'catalog:'
         version: 7.1.4
       tslib:
-        specifier: ^2.8.1
+        specifier: 'catalog:'
         version: 2.8.1
       tsx:
-        specifier: ^4.21.0
+        specifier: 'catalog:'
         version: 4.21.0
       typescript:
-        specifier: ^5.9.3
+        specifier: 'catalog:'
         version: 5.9.3
       typescript-eslint:
-        specifier: ^8.50.1
+        specifier: 'catalog:'
         version: 8.50.1(eslint@9.39.2(jiti@2.6.1))(typescript@5.9.3)
       vite-tsconfig-paths:
-        specifier: ^6.0.3
+        specifier: 'catalog:'
         version: 6.0.3(typescript@5.9.3)(vite@7.3.0(@types/node@24.10.4)(jiti@2.6.1)(tsx@4.21.0)(yaml@2.8.2))
       vitest:
-        specifier: 4.0.16
+        specifier: 'catalog:'
         version: 4.0.16(@types/node@24.10.4)(@vitest/ui@4.0.16)(jiti@2.6.1)(tsx@4.21.0)(yaml@2.8.2)
+
+  apps/auth-server:
+    dependencies:
+      '@fastify/autoload':
+        specifier: 'catalog:'
+        version: 6.3.1
+      '@fastify/cors':
+        specifier: 'catalog:'
+        version: 11.2.0
+      '@fastify/rate-limit':
+        specifier: 'catalog:'
+        version: 10.3.0
+      '@fastify/swagger':
+        specifier: 'catalog:'
+        version: 9.7.0
+      '@fastify/swagger-ui':
+        specifier: 'catalog:'
+        version: 5.2.5
+      '@qauth/fastify-plugin-cache':
+        specifier: workspace:*
+        version: link:../../libs/fastify/plugins/cache
+      '@qauth/fastify-plugin-db':
+        specifier: workspace:*
+        version: link:../../libs/fastify/plugins/db
+      '@qauth/fastify-plugin-email':
+        specifier: workspace:*
+        version: link:../../libs/fastify/plugins/email
+      '@qauth/fastify-plugin-jwt':
+        specifier: workspace:*
+        version: link:../../libs/fastify/plugins/jwt
+      '@qauth/fastify-plugin-password':
+        specifier: workspace:*
+        version: link:../../libs/fastify/plugins/password
+      '@qauth/fastify-plugin-pkce':
+        specifier: workspace:*
+        version: link:../../libs/fastify/plugins/pkce
+      '@qauth/server-config':
+        specifier: workspace:*
+        version: link:../../libs/server/config
+      '@qauth/shared-errors':
+        specifier: workspace:*
+        version: link:../../libs/shared/errors
+      '@qauth/shared-validation':
+        specifier: workspace:*
+        version: link:../../libs/shared/validation
+      fastify:
+        specifier: 'catalog:'
+        version: 5.6.2
+      fastify-plugin:
+        specifier: 'catalog:'
+        version: 5.1.0
+      fastify-type-provider-zod:
+        specifier: 'catalog:'
+        version: 6.1.0(@fastify/swagger@9.7.0)(fastify@5.6.2)(openapi-types@12.1.3)(zod@4.2.1)
+      zod:
+        specifier: 'catalog:'
+        version: 4.2.1
+    devDependencies:
+      '@vitest/coverage-v8':
+        specifier: 'catalog:'
+        version: 4.0.16(vitest@4.0.16)
+      '@vitest/ui':
+        specifier: 'catalog:'
+        version: 4.0.16(vitest@4.0.16)
+      typescript:
+        specifier: 'catalog:'
+        version: 5.9.3
+      vitest:
+        specifier: 'catalog:'
+        version: 4.0.16(@types/node@24.10.4)(@vitest/ui@4.0.16)(jiti@2.6.1)(tsx@4.21.0)(yaml@2.8.2)
+
+  libs/fastify/plugins/cache:
+    dependencies:
+      '@qauth/infra-cache':
+        specifier: workspace:*
+        version: link:../../../infra/cache
+      fastify:
+        specifier: 'catalog:'
+        version: 5.6.2
+      fastify-plugin:
+        specifier: 'catalog:'
+        version: 5.1.0
+
+  libs/fastify/plugins/db:
+    dependencies:
+      '@qauth/infra-db':
+        specifier: workspace:*
+        version: link:../../../infra/db
+      fastify:
+        specifier: 'catalog:'
+        version: 5.6.2
+      fastify-plugin:
+        specifier: 'catalog:'
+        version: 5.1.0
+
+  libs/fastify/plugins/email:
+    dependencies:
+      '@qauth/server-email':
+        specifier: workspace:*
+        version: link:../../../server/email
+      fastify:
+        specifier: 'catalog:'
+        version: 5.6.2
+      fastify-plugin:
+        specifier: 'catalog:'
+        version: 5.1.0
+
+  libs/fastify/plugins/jwt:
+    dependencies:
+      '@qauth/server-jwt':
+        specifier: workspace:*
+        version: link:../../../server/jwt
+      '@qauth/shared-errors':
+        specifier: workspace:*
+        version: link:../../../shared/errors
+      fastify:
+        specifier: 'catalog:'
+        version: 5.6.2
+      fastify-plugin:
+        specifier: 'catalog:'
+        version: 5.1.0
+      jose:
+        specifier: 'catalog:'
+        version: 6.1.3
+    devDependencies:
+      '@vitest/coverage-v8':
+        specifier: 'catalog:'
+        version: 4.0.16(vitest@4.0.16)
+      '@vitest/ui':
+        specifier: 'catalog:'
+        version: 4.0.16(vitest@4.0.16)
+      typescript:
+        specifier: 'catalog:'
+        version: 5.9.3
+      vitest:
+        specifier: 'catalog:'
+        version: 4.0.16(@types/node@24.10.4)(@vitest/ui@4.0.16)(jiti@2.6.1)(tsx@4.21.0)(yaml@2.8.2)
+
+  libs/fastify/plugins/password:
+    dependencies:
+      '@qauth/server-password':
+        specifier: workspace:*
+        version: link:../../../server/password
+      '@qauth/shared-validation':
+        specifier: workspace:*
+        version: link:../../../shared/validation
+      fastify:
+        specifier: 'catalog:'
+        version: 5.6.2
+      fastify-plugin:
+        specifier: 'catalog:'
+        version: 5.1.0
+
+  libs/fastify/plugins/pkce:
+    dependencies:
+      '@qauth/server-pkce':
+        specifier: workspace:*
+        version: link:../../../server/pkce
+      fastify:
+        specifier: 'catalog:'
+        version: 5.6.2
+      fastify-plugin:
+        specifier: 'catalog:'
+        version: 5.1.0
+
+  libs/infra/cache: {}
+
+  libs/infra/db: {}
+
+  libs/server/config: {}
+
+  libs/server/email: {}
+
+  libs/server/jwt: {}
+
+  libs/server/password: {}
+
+  libs/server/pkce: {}
+
+  libs/shared/errors: {}
+
+  libs/shared/testing: {}
+
+  libs/shared/validation: {}
 
 packages:
 
@@ -4396,6 +4757,7 @@ packages:
   git-raw-commits@4.0.0:
     resolution: {integrity: sha512-ICsMM1Wk8xSGMowkOmPrzo2Fgmfo4bMHLNX6ytHjajRJUqvHOw/TFapQ+QG75c3X/tTDDhOSRPGC52dDbNM8FQ==}
     engines: {node: '>=16'}
+    deprecated: This package is no longer maintained. For the JavaScript API, please use @conventional-changelog/git-client instead.
     hasBin: true
 
   glob-parent@6.0.2:
@@ -4404,6 +4766,7 @@ packages:
 
   glob@10.5.0:
     resolution: {integrity: sha512-DfXN8DfhJ7NH3Oe7cFmu3NCu1wKbkReJ8TorzSAFbSKrlNaQSKfIzqYqVY8zlbs2NLBbWpRiU52GX2PbaBVNkg==}
+    deprecated: Old versions of glob are not supported, and contain widely publicized security vulnerabilities, which have been fixed in the current version. Please update. Support for old versions may be purchased (at exorbitant rates) by contacting i@izs.me
     hasBin: true
 
   glob@13.0.6:
@@ -4412,7 +4775,7 @@ packages:
 
   glob@7.2.3:
     resolution: {integrity: sha512-nFR0zLpU2YCaRxwoCJvL6UvCH2JFyFVIvwTLsIf21AuHlMskA1hhTdk+LlYJtOlYt9v6dvszD2BGRqBL+iQK9Q==}
-    deprecated: Glob versions prior to v9 are no longer supported
+    deprecated: Old versions of glob are not supported, and contain widely publicized security vulnerabilities, which have been fixed in the current version. Please update. Support for old versions may be purchased (at exorbitant rates) by contacting i@izs.me
 
   global-directory@4.0.1:
     resolution: {integrity: sha512-wHTUcDUoZ1H5/0iVqEudYW4/kAlN5cZ3j/bXn0Dpbizl9iaUVeWSHqiOjsgk6OW2bkLclbBjzewBz6weQ1zA2Q==}
@@ -5120,10 +5483,6 @@ packages:
 
   minimist@1.2.8:
     resolution: {integrity: sha512-2yyAR8qBkN3YuheJanUpWC5U3bb5osDywNB8RzDVlDwDHbocAJveqqj1u8+SVD7jkWT4yvsHCpWqqWqAxb0zCA==}
-
-  minipass@7.1.2:
-    resolution: {integrity: sha512-qOOzS1cBTWYF4BH8fVePDBOO9iptMnGUEZwNc/cMWnTV2nVLZ7VoNWEPHkYczZA0pdoA7dl6e7FL659nX9S2aw==}
-    engines: {node: '>=16 || 14 >=14.17'}
 
   minipass@7.1.3:
     resolution: {integrity: sha512-tEBHqDnIoM/1rXME1zgka9g6Q2lcoCkxHLuc7ODJ5BxbP5d4c2Z5cGgtXAku59200Cx7diuHTOYfSBD8n6mm8A==}
@@ -11223,7 +11582,7 @@ snapshots:
       foreground-child: 3.3.1
       jackspeak: 3.4.3
       minimatch: 9.0.5
-      minipass: 7.1.2
+      minipass: 7.1.3
       package-json-from-dist: 1.0.1
       path-scurry: 1.11.1
 
@@ -12095,8 +12454,6 @@ snapshots:
 
   minimist@1.2.8: {}
 
-  minipass@7.1.2: {}
-
   minipass@7.1.3: {}
 
   mkdirp-classic@0.5.3: {}
@@ -12359,7 +12716,7 @@ snapshots:
   path-scurry@1.11.1:
     dependencies:
       lru-cache: 10.4.3
-      minipass: 7.1.2
+      minipass: 7.1.3
 
   path-scurry@2.0.2:
     dependencies:

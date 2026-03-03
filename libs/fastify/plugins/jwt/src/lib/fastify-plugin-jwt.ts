@@ -13,6 +13,7 @@ import { JWTInvalidError } from '@qauth/shared-errors';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import fp from 'fastify-plugin';
 
+import packageJson from '../../package.json';
 import type { JWTPayload, JwtPluginOptions, JwtUtils } from '../types';
 
 declare module 'fastify' {
@@ -113,6 +114,6 @@ export const jwtPlugin = fp<JwtPluginOptions>(
     fastify.log.debug('JWT plugin registered');
   },
   {
-    name: '@qauth/fastify-plugin-jwt',
+    name: packageJson.name,
   }
 );

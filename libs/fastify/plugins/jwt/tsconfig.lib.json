@@ -6,7 +6,7 @@
     "composite": true,
     "types": ["node"]
   },
-  "include": ["src/**/*.ts"],
+  "include": ["src/**/*.ts", "./package.json"],
   "references": [
     {
       "path": "../../../shared/errors/tsconfig.lib.json"

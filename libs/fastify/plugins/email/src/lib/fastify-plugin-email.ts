@@ -15,6 +15,7 @@ import {
 import type { FastifyInstance } from 'fastify';
 import fp from 'fastify-plugin';
 
+import packageJson from '../../package.json';
 import type {
   EmailPluginOptions,
   EmailProviderConfig,
@@ -95,6 +96,6 @@ export const emailPlugin = fp<EmailPluginOptions>(
     fastify.log.debug({ provider: providerType }, 'Email plugin registered');
   },
   {
-    name: '@qauth/fastify-plugin-email',
+    name: packageJson.name,
   }
 );

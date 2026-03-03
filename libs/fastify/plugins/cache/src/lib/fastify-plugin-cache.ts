@@ -8,20 +8,14 @@ import {
 import type { FastifyInstance } from 'fastify';
 import fp from 'fastify-plugin';
 
+import packageJson from '../../package.json';
 import type { CachePluginOptions } from '../types';
-
 declare module 'fastify' {
   interface FastifyInstance {
     redis: CacheClient;
     sessionUtils: SessionUtilsInstance;
   }
 }
-
-/**
- * Plugin name for cache plugin
- * Used by other plugins that depend on this plugin
- */
-export const CACHE_PLUGIN_NAME = '@qauth/fastify-plugin-cache';
 
 /**
  * Fastify plugin for Redis connection
@@ -71,6 +65,6 @@ export const cachePlugin = fp<CachePluginOptions>(
     });
   },
   {
-    name: CACHE_PLUGIN_NAME,
+    name: packageJson.name,
   }
 );

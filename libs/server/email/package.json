@@ -1,0 +1,6 @@
+{
+  "name": "@qauth/server-email",
+  "version": "0.0.0",
+  "private": true,
+  "main": "src/index.ts"
+}

@@ -1,5 +1,6 @@
+import { randomBytes } from 'node:crypto';
+
 import { BadRequestError, isUniqueConstraintError } from '@qauth/shared-errors';
-import { randomBytes } from 'crypto';
 import type { FastifyInstance } from 'fastify';
 import { ZodTypeProvider } from 'fastify-type-provider-zod';
 

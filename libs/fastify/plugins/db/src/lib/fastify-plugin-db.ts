@@ -19,6 +19,7 @@ import {
 import type { FastifyInstance } from 'fastify';
 import fp from 'fastify-plugin';
 
+import packageJson from '../../package.json';
 import type { DatabasePluginOptions } from '../types';
 
 declare module 'fastify' {
@@ -89,6 +90,6 @@ export const databasePlugin = fp<DatabasePluginOptions>(
     });
   },
   {
-    name: '@qauth/fastify-plugin-db',
+    name: packageJson.name,
   }
 );

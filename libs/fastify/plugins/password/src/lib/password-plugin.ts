@@ -3,6 +3,7 @@ import { createPasswordValidator, type PasswordValidator } from '@qauth/shared-v
 import type { FastifyInstance } from 'fastify';
 import fp from 'fastify-plugin';
 
+import packageJson from '../../package.json';
 import type { PasswordPluginOptions } from '../types';
 
 declare module 'fastify' {
@@ -45,6 +46,6 @@ export const passwordPlugin = fp<PasswordPluginOptions>(
     fastify.log.debug('Password plugin registered');
   },
   {
-    name: '@qauth/fastify-plugin-password',
+    name: packageJson.name,
   }
 );
