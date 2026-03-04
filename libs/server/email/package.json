@@ -10,9 +10,12 @@
     "resend": "catalog:"
   },
   "devDependencies": {
-    "typescript": "catalog:",
+    "@types/nodemailer": "catalog:",
+    "@types/react": "catalog:",
+    "@types/react-dom": "catalog:",
     "@vitest/coverage-v8": "catalog:",
     "@vitest/ui": "catalog:",
+    "typescript": "catalog:",
     "vitest": "catalog:"
   }
 }

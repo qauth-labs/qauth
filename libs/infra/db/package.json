@@ -8,8 +8,14 @@
     "@qauth/shared-errors": "workspace:*",
     "@qauth/shared-validation": "workspace:*",
     "dotenv": "catalog:",
+    "drizzle-kit": "catalog:",
     "drizzle-orm": "catalog:",
     "drizzle-seed": "catalog:",
     "pg": "catalog:"
+  },
+  "devDependencies": {
+    "@types/pg": "catalog:",
+    "tsx": "catalog:",
+    "typescript": "catalog:"
   }
 }
