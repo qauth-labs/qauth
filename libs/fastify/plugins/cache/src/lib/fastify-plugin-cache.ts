@@ -17,6 +17,8 @@ declare module 'fastify' {
   }
 }
 
+export const CACHE_PLUGIN_NAME = packageJson.name;
+
 /**
  * Fastify plugin for Redis connection
  * Decorates fastify instance with redis
@@ -65,6 +67,6 @@ export const cachePlugin = fp<CachePluginOptions>(
     });
   },
   {
-    name: packageJson.name,
+    name: CACHE_PLUGIN_NAME,
   }
 );

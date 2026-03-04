@@ -1,6 +1,5 @@
 import { relations, sql } from 'drizzle-orm';
-import { bigint, boolean, jsonb, pgTable, text, uuid, varchar } from 'drizzle-orm/pg-core';
-import { index } from 'drizzle-orm/pg-core';
+import { bigint, boolean, index, jsonb, pgTable, text, uuid, varchar } from 'drizzle-orm/pg-core';
 
 import { oauthClients, users } from './core';
 import { codeChallengeMethodEnum } from './enums';

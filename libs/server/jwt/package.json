@@ -2,5 +2,15 @@
   "name": "@qauth/server-jwt",
   "version": "0.0.0",
   "private": true,
-  "main": "src/index.ts"
+  "main": "src/index.ts",
+  "dependencies": {
+    "@qauth/shared-errors": "workspace:*",
+    "jose": "catalog:"
+  },
+  "devDependencies": {
+    "@vitest/coverage-v8": "catalog:",
+    "@vitest/ui": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  }
 }

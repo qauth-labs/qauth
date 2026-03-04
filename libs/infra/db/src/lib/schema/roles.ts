@@ -2,14 +2,15 @@ import { relations, sql } from 'drizzle-orm';
 import {
   bigint,
   boolean,
+  index,
   jsonb,
   pgTable,
   primaryKey,
   text,
+  uniqueIndex,
   uuid,
   varchar,
 } from 'drizzle-orm/pg-core';
-import { index, uniqueIndex } from 'drizzle-orm/pg-core';
 
 import { oauthClients, realms, users } from './core';
 import { EPOCH_MS_NOW } from './sql-helpers';

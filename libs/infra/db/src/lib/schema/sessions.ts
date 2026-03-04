@@ -1,6 +1,5 @@
 import { relations, sql } from 'drizzle-orm';
-import { bigint, boolean, pgTable, text, uuid, varchar } from 'drizzle-orm/pg-core';
-import { index } from 'drizzle-orm/pg-core';
+import { bigint, boolean, index, pgTable, text, uuid, varchar } from 'drizzle-orm/pg-core';
 
 import { oauthClients, users } from './core';
 import { EPOCH_MS_NOW } from './sql-helpers';
