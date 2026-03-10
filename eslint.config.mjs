@@ -18,6 +18,8 @@ export default [
       '**/web-build/**',
       '**/vitest.config.ts',
       '**/vitest.workspace.ts',
+      '**/vite.config.*.timestamp*',
+      '**/vitest.config.*.timestamp*',
     ],
   },
   {
@@ -36,10 +38,18 @@ export default [
               sourceTag: 'scope:shared',
               onlyDependOnLibsWithTags: [],
             },
+            // UI layer
+            // UI libraries contain React components and utilities
+            // They can only depend on external npm packages, not other workspace libs
+            {
+              sourceTag: 'scope:ui',
+              onlyDependOnLibsWithTags: [],
+            },
             {
               sourceTag: 'type:testing',
               onlyDependOnLibsWithTags: [
                 'scope:shared',
+                'scope:ui',
                 'scope:infra',
                 'scope:server',
                 'scope:fastify',
@@ -76,10 +86,15 @@ export default [
             },
             // Application layer (top layer)
             // Applications are the entry points and can use all layers
-            // Can depend on: fastify plugins, shared libs
+            // Can depend on: fastify plugins, shared libs, ui
             {
               sourceTag: 'scope:app',
-              onlyDependOnLibsWithTags: ['scope:fastify', 'scope:shared', 'scope:server-config'],
+              onlyDependOnLibsWithTags: [
+                'scope:fastify',
+                'scope:shared',
+                'scope:server-config',
+                'scope:ui',
+              ],
             },
           ],
         },

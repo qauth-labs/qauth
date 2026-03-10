@@ -13,7 +13,10 @@
     "resolveJsonModule": true,
     "forceConsistentCasingInFileNames": true,
     "isolatedModules": true,
-    "jsx": "react-jsx"
+    "jsx": "react-jsx",
+    "paths": {
+      "ui": ["libs/ui/src/index.ts"]
+    }
   },
   "exclude": ["node_modules", "tmp", "dist", "out-tsc", "coverage", ".nx"]
 }

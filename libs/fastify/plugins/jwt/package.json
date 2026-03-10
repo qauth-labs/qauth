@@ -13,7 +13,6 @@
   "devDependencies": {
     "@vitest/coverage-v8": "catalog:",
     "@vitest/ui": "catalog:",
-    "typescript": "catalog:",
     "vitest": "catalog:"
   }
 }

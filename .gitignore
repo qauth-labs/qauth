@@ -26,3 +26,6 @@ Thumbs.db
 
 .cursor/plans/
 local-*
+
+vite.config.*.timestamp*
+vitest.config.*.timestamp*

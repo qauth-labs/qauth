@@ -4,6 +4,7 @@ export default defineConfig({
   test: {
     globals: true,
     environment: 'node',
+    watch: false,
     exclude: [
       '**/node_modules/**',
       '**/dist/**',
