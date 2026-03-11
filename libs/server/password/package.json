@@ -1,0 +1,15 @@
+{
+  "name": "@qauth/server-password",
+  "version": "0.0.0",
+  "private": true,
+  "main": "src/index.ts",
+  "dependencies": {
+    "@node-rs/argon2": "catalog:",
+    "zod": "catalog:"
+  },
+  "devDependencies": {
+    "@vitest/coverage-v8": "catalog:",
+    "@vitest/ui": "catalog:",
+    "vitest": "catalog:"
+  }
+}

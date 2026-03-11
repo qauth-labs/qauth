@@ -1,0 +1,13 @@
+{
+  "name": "@qauth/shared-testing",
+  "version": "0.0.0",
+  "private": true,
+  "main": "src/index.ts",
+  "dependencies": {
+    "supertest": "catalog:",
+    "fastify": "catalog:"
+  },
+  "devDependencies": {
+    "@types/supertest": "catalog:"
+  }
+}

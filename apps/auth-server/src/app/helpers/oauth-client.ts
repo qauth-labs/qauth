@@ -1,4 +1,5 @@
-import { randomBytes } from 'crypto';
+import { randomBytes } from 'node:crypto';
+
 import type { FastifyInstance } from 'fastify';
 
 import { env } from '../../config/env';

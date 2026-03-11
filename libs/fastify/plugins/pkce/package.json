@@ -1,0 +1,11 @@
+{
+  "name": "@qauth/fastify-plugin-pkce",
+  "version": "0.0.0",
+  "private": true,
+  "main": "src/index.ts",
+  "dependencies": {
+    "@qauth/server-pkce": "workspace:*",
+    "fastify": "catalog:",
+    "fastify-plugin": "catalog:"
+  }
+}

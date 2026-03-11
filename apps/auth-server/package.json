@@ -1,0 +1,31 @@
+{
+  "name": "@qauth/auth-server",
+  "version": "0.0.0",
+  "private": true,
+  "dependencies": {
+    "fastify": "catalog:",
+    "fastify-type-provider-zod": "catalog:",
+    "@fastify/autoload": "catalog:",
+    "@fastify/cors": "catalog:",
+    "@fastify/rate-limit": "catalog:",
+    "@fastify/swagger": "catalog:",
+    "@fastify/swagger-ui": "catalog:",
+    "@qauth/fastify-plugin-cache": "workspace:*",
+    "@qauth/fastify-plugin-db": "workspace:*",
+    "@qauth/fastify-plugin-email": "workspace:*",
+    "@qauth/fastify-plugin-jwt": "workspace:*",
+    "@qauth/fastify-plugin-password": "workspace:*",
+    "@qauth/fastify-plugin-pkce": "workspace:*",
+    "@qauth/server-config": "workspace:*",
+    "@qauth/shared-validation": "workspace:*",
+    "@qauth/shared-errors": "workspace:*",
+    "fastify-plugin": "catalog:",
+    "zod": "catalog:"
+  },
+  "devDependencies": {
+    "@vitest/coverage-v8": "catalog:",
+    "@vitest/ui": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  }
+}

@@ -1,5 +1,5 @@
-import type { CacheClient } from '../types';
 import type {
+  CacheClient,
   CacheUtilsInstance,
   RateLimitResult,
   RateLimitStatus,

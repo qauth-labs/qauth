@@ -1,3 +1,5 @@
+import * as path from 'node:path';
+
 import AutoLoad from '@fastify/autoload';
 import cors from '@fastify/cors';
 import { cachePlugin } from '@qauth/fastify-plugin-cache';
@@ -7,7 +9,6 @@ import { jwtPlugin } from '@qauth/fastify-plugin-jwt';
 import { passwordPlugin } from '@qauth/fastify-plugin-password';
 import { pkcePlugin } from '@qauth/fastify-plugin-pkce';
 import type { FastifyInstance } from 'fastify';
-import * as path from 'path';
 
 import { env } from '../config/env';
 import errorHandler from './plugins/error-handler';

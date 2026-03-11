@@ -1,0 +1,20 @@
+{
+  "name": "@qauth/infra-db",
+  "version": "0.0.0",
+  "private": true,
+  "main": "src/index.ts",
+  "dependencies": {
+    "@node-rs/argon2": "catalog:",
+    "@qauth/shared-errors": "workspace:*",
+    "@qauth/shared-validation": "workspace:*",
+    "dotenv": "catalog:",
+    "drizzle-kit": "catalog:",
+    "drizzle-orm": "catalog:",
+    "drizzle-seed": "catalog:",
+    "pg": "catalog:"
+  },
+  "devDependencies": {
+    "@types/pg": "catalog:",
+    "tsx": "catalog:"
+  }
+}

@@ -1,5 +1,6 @@
+import { randomUUID } from 'node:crypto';
+
 import { InvalidCredentialsError, InvalidTokenError, NotFoundError } from '@qauth/shared-errors';
-import { randomUUID } from 'crypto';
 import type { FastifyInstance } from 'fastify';
 import { ZodTypeProvider } from 'fastify-type-provider-zod';
 

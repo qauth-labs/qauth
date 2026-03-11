@@ -1,4 +1,5 @@
-import * as crypto from 'crypto';
+import * as crypto from 'node:crypto';
+
 import type { CreateEmailOptions } from 'resend';
 import { Resend } from 'resend';
 

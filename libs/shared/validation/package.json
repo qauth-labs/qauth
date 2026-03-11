@@ -1,0 +1,13 @@
+{
+  "name": "@qauth/shared-validation",
+  "version": "0.0.0",
+  "private": true,
+  "main": "src/index.ts",
+  "dependencies": {
+    "zod": "catalog:",
+    "zxcvbn": "catalog:"
+  },
+  "devDependencies": {
+    "@types/zxcvbn": "catalog:"
+  }
+}

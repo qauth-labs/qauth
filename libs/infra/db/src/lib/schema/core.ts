@@ -1,7 +1,15 @@
-import { relations } from 'drizzle-orm';
-import { sql } from 'drizzle-orm';
-import { bigint, boolean, jsonb, pgTable, text, uuid, varchar } from 'drizzle-orm/pg-core';
-import { index, uniqueIndex } from 'drizzle-orm/pg-core';
+import { relations, sql } from 'drizzle-orm';
+import {
+  bigint,
+  boolean,
+  index,
+  jsonb,
+  pgTable,
+  text,
+  uniqueIndex,
+  uuid,
+  varchar,
+} from 'drizzle-orm/pg-core';
 
 import { GrantType, ResponseType, sslRequiredEnum, tokenEndpointAuthMethodEnum } from './enums';
 import { EPOCH_MS_NOW, JSONB_EMPTY_ARRAY } from './sql-helpers';

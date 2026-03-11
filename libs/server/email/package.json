@@ -1,0 +1,20 @@
+{
+  "name": "@qauth/server-email",
+  "version": "0.0.0",
+  "private": true,
+  "main": "src/index.ts",
+  "dependencies": {
+    "@react-email/components": "catalog:",
+    "nodemailer": "catalog:",
+    "react": "catalog:",
+    "resend": "catalog:"
+  },
+  "devDependencies": {
+    "@types/nodemailer": "catalog:",
+    "@types/react": "catalog:",
+    "@types/react-dom": "catalog:",
+    "@vitest/coverage-v8": "catalog:",
+    "@vitest/ui": "catalog:",
+    "vitest": "catalog:"
+  }
+}
