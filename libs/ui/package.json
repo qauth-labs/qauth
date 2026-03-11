@@ -3,12 +3,14 @@
   "version": "0.0.0",
   "private": true,
   "main": "src/index.ts",
-  "devDependencies": {
-    "@types/react": "catalog:",
-    "@types/react-dom": "catalog:",
+  "dependencies": {
     "class-variance-authority": "catalog:",
     "clsx": "catalog:",
     "tailwind-merge": "catalog:"
+  },
+  "devDependencies": {
+    "@types/react": "catalog:",
+    "@types/react-dom": "catalog:"
   },
   "peerDependencies": {
     "react": "catalog:",

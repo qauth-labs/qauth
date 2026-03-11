@@ -7,7 +7,6 @@ import tailwindcss from '@tailwindcss/vite';
 import { tanstackStart } from '@tanstack/react-start/plugin/vite';
 import react from '@vitejs/plugin-react';
 import { defineConfig, type PluginOption } from 'vite';
-import tsConfigPaths from 'vite-tsconfig-paths';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -27,7 +26,6 @@ export default defineConfig({
   },
   plugins: [
     ...(tailwindcss() as PluginOption[]),
-    tsConfigPaths(),
     tanstackStart(),
     react(),
     nxViteTsPaths(),

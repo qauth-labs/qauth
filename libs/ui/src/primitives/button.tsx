@@ -13,7 +13,7 @@ const buttonVariants = cva('rounded-md bg-blue-500 p-2 text-white hover:bg-blue-
       default: 'bg-blue-500 hover:bg-blue-600',
       outline: 'border border-gray-300 bg-white text-gray-800 hover:bg-gray-100',
       ghost: 'bg-transparent text-gray-800 hover:bg-gray-100',
-      link: 'text-blue-500 hover:underline',
+      link: 'p-0 text-blue-500 hover:underline',
     },
     size: {
       default: 'p-2',
