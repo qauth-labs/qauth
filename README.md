@@ -19,17 +19,6 @@
   <h3>🇪🇺 Made in Europe · 🇪🇪 Made in Estonia · 🇹🇷 Made in Türkiye</h3>
 </div>
 
-<br />
-
-<div align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="logos/eidas.png">
-    <img src="logos/eidas.png" alt="eIDAS 2.0 Logo" height="140">
-  </picture>
-</div>
-
-<br />
-
 ## 🎯 How to Use QAuth
 
 ### 1. ⚡ Auth as a Service (Headless Backend)
