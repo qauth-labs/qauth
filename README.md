@@ -1,6 +1,6 @@
 <br /><br />
 
-<div style="text-align: center;">
+<div align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="logos/qauth-logo-light.svg">
     <img src="logos/qauth-logo.svg" alt="QAuth Logo" height="140">
@@ -9,19 +9,19 @@
 
 <br /><br />
 
-<div style="text-align: center;">
+<div align="center">
   <h2>Open-source federated identity platform.<br />OAuth 2.1 · OIDC 1.0 · eIDAS 2.0 bridge · Post-quantum ready · Apache 2.0.</h2>
 </div>
 
 **QAuth** is an open-source identity server and federation hub. It accepts identity from multiple upstream sources — including EUDI Wallets (OID4VC / SIOPv2), email/password, and external OIDC providers — normalises them through a common federation layer, and issues standard OAuth 2.1 access tokens and OIDC ID tokens to downstream applications. Applications integrate once against QAuth's OIDC layer and require no changes to support new upstream identity sources.
 
-<div style="text-align: center;">
+<div align="center">
   <h3>🇪🇺 Made in Europe · 🇪🇪 Made in Estonia · 🇹🇷 Made in Türkiye</h3>
 </div>
 
 <br />
 
-<div style="text-align: center; background-color: #fff; padding: 20px; border-radius: 10px;">
+<div align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="logos/eidas.png">
     <img src="logos/eidas.png" alt="eIDAS 2.0 Logo" height="140">
