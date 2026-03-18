@@ -1,8 +1,34 @@
-# QAuth
+<br /><br />
 
-> Post-quantum ready, headless-first identity platform. A developer-friendly alternative to Keycloak.
+<div align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="logos/qauth-logo-light.svg">
+    <img src="logos/qauth-logo.svg" alt="QAuth Logo" height="140">
+  </picture>
+</div>
 
-**QAuth** is a modern, open-source authentication platform that provides flexible deployment modes with post-quantum cryptography built-in from day one.
+<br /><br />
+
+<div align="center">
+  <h2>Open-source federated identity platform.<br />OAuth 2.1 · OIDC 1.0 · eIDAS 2.0 bridge · Post-quantum ready.</h2>
+</div>
+
+**QAuth** is an open-source identity server and federation hub. It accepts identity from multiple upstream sources — including EUDI Wallets (OID4VC / SIOPv2), email/password, and external OIDC providers — normalises them through a common federation layer, and issues standard OAuth 2.1 access tokens and OIDC ID tokens to downstream applications. Applications integrate once against QAuth's OIDC layer and require no changes to support new upstream identity sources.
+
+<div align="center">
+  <h3>🇪🇺 Made in Europe · 🇪🇪 Made in Estonia · 🇹🇷 Made in Türkiye</h3>
+</div>
+
+<br />
+
+<div align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="logos/eidas.png">
+    <img src="logos/eidas.png" alt="eIDAS 2.0 Logo" height="140">
+  </picture>
+</div>
+
+<br />
 
 ## 🎯 How to Use QAuth
 
@@ -20,9 +46,9 @@ const auth = new QAuth({
 
 **Perfect for:**
 
-- Startups wanting auth without infrastructure
-- Custom branding requirements
-- API-first applications
+- Applications that need eIDAS 2.0 EUDI Wallet login without rewriting auth infrastructure
+- Custom branding requirements with a headless API-first backend
+- Startups and products that want auth without managing infrastructure
 
 ### 2. 🏠 Self-hosted (Full Control)
 
@@ -39,105 +65,86 @@ docker-compose up -d
 
 **Perfect for:**
 
-- Enterprise compliance requirements
-- Data sovereignty needs
-- Complete customization control
+- Regulated industries (banking, healthcare, transport) with eIDAS 2.0 compliance requirements
+- Data sovereignty and GDPR requirements
+- Organisations that need full control over their identity infrastructure
 
 ## 🔐 Post-Quantum Cryptography
 
 QAuth implements a security-first hybrid approach with NIST-standardized post-quantum algorithms.
 
-### Primary Standards (NIST 2024)
+### Primary Standard
 
-- **ML-DSA (Dilithium3)** - Digital signatures
-- **ML-KEM (Kyber)** - Key exchange
-- **SLH-DSA (SPHINCS+)** - Backup signatures
+- **ML-DSA-65 (NIST FIPS 204)** — Digital signatures for JWT tokens. Level 3 (192-bit security), the minimum floor recommended by BSI (Germany) and ANSSI (France).
 
 ### Hybrid Strategy
 
-Defense in depth with dual protection:
+Defense in depth with composite dual-signing — tokens carry both an ML-DSA-65 and an Ed25519 signature, following the IETF LAMPS composite signatures model (`draft-ietf-lamps-pq-composite-sigs`). Both classical and post-quantum verifiers can validate without coordination.
 
 ```typescript
-// Hybrid PQC JWT signing (future)
-const token = await signJWT(payload, {
-  algorithm: 'hybrid-mldsa-ed25519',
-  primary: 'ML-DSA-65',
-  fallback: 'Ed25519',
-});
+// Hybrid PQC JWT signing (Phase 5)
+import { signHybrid } from '@qauth/crypto';
+
+// Composite ML-DSA-65 + Ed25519 — verifiable by classical and PQC verifiers
+const token = await signHybrid(payload, { mlDsaKey, ed25519Key });
 ```
 
 **Implementation:**
 
-Uses Node.js 24.7.0+ built-in PQC support via `node:crypto` WebCrypto API:
+`@qauth/crypto` is a native Node.js binding (napi-rs) wrapping `aws-lc-rs` (AWS-LC, a production-hardened BoringSSL fork with FIPS 140-3 validation in progress). This follows the same pattern as `@node-rs/argon2` — prebuilt binaries per platform, no build tooling required for consumers. `@noble/post-quantum` (pure TypeScript, audited) is used as the fallback in development environments and CI.
 
-```typescript
-// Hybrid PQC JWT signing (Phase 7: 2027)
-import { webcrypto } from 'node:crypto';
-import { SignJWT, generateKeyPair } from 'jose'; // Ed25519 fallback
+The `libs/core/crypto` abstraction layer exposes algorithm-agnostic `sign` / `verify` / `generateKeyPair` interfaces so business logic is never coupled to a specific implementation. Swapping the underlying library requires no changes to the auth server.
 
-// Generate ML-DSA key pair (Node.js built-in)
-const mlDsaKeyPair = await webcrypto.subtle.generateKey({ name: 'ML-DSA-65' }, true, [
-  'sign',
-  'verify',
-]);
+**Token size considerations:**
 
-// Generate Ed25519 key pair (jose)
-const { publicKey: ed25519PublicKey, privateKey: ed25519PrivateKey } =
-  await generateKeyPair('EdDSA');
-
-// Hybrid signing: Both ML-DSA + Ed25519 signatures
-const pqcSignature = await webcrypto.subtle.sign('ML-DSA-65', mlDsaKeyPair.privateKey, message);
-const classicalSignature = await new SignJWT(payload)
-  .setProtectedHeader({ alg: 'EdDSA' })
-  .sign(ed25519PrivateKey);
-```
+ML-DSA-65 signatures are 3,309 bytes vs. Ed25519's 64 bytes. QAuth's architecture defaults to **reference tokens with introspection** (RFC 7662) rather than large self-contained JWTs — mitigating HTTP header limits and cookie size constraints during the PQC transition period.
 
 **Migration Timeline:**
 
-- **2026**: Ed25519 for JWT signatures (MVP)
-- **2027**: Hybrid ML-DSA + Ed25519 transition
-- **2028**: Pure PQC evaluation
+- **Phase 1** (complete): Ed25519 / EdDSA for JWT signatures
+- **Phase 5**: Hybrid composite ML-DSA-65 + Ed25519 (JOSE WG draft adopted Jan 2026)
+- **Future**: FN-DSA (NIST FIPS 206, pending) evaluation — compact signatures (~666 B) may make self-contained PQC JWTs practical
 
 ## 🎯 Vision
 
-A modern, developer-first alternative to Keycloak:
+A federated identity hub for the next generation of the internet:
 
-- **Headless-first** - API-first architecture, use any UI
-- **Modern Stack** - TypeScript with native performance
-- **Developer Experience** - Simple setup, excellent DX
-- **Standards Compliant** - OAuth 2.1, OIDC 1.0, PKCE
-- **Production Ready** - Security-first, scalable
-- **Flexible Deployment** - Cloud, self-hosted, or hybrid
+- **Federation-first** — accepts identity from multiple upstream sources (Verifiable Credential wallets, email/password, external OIDC providers, W3C DIDs) through a common `federation-core` layer; downstream applications see standard OIDC tokens regardless of source
+- **Wallet-agnostic** — any standards-compliant VC wallet (OID4VC / SIOPv2) is a valid upstream; EUDI Wallet under eIDAS 2.0 is one concrete deployment target, not the only one
+- **Post-quantum ready** — crypto-agile architecture with a clear ML-DSA-65 hybrid transition path, designed so algorithm upgrades never touch application business logic
+- **Headless-first** — API-first, bring your own branded UI
+- **Standards compliant** — OAuth 2.1 (RFC 9700), OIDC 1.0, OID4VC, SIOPv2, W3C DID, NIST FIPS 204
+- **Open and self-hostable** — Apache 2.0, no telemetry, runs anywhere
 
 ## 🏗️ Architecture
 
 ### Phase 1: Modular Monolith (TypeScript)
 
 ```
-┌────────────────────────────────────────────────┐
-│         Auth Server (TypeScript/Node.js)       │
-│                                                │
-│  ┌──────────────────────────────────────────┐  │
-│  │  API Layer (REST)                        │  │
-│  └──────────────────────────────────────────┘  │
-│                      ↓                         │
-│  ┌──────────────────────────────────────────┐  │
-│  │  Business Logic Modules                  │  │
-│  │  • Auth Module                           │  │
-│  │  • User Module                           │  │
-│  │  • Client Module                         │  │
-│  │  • Session Module                        │  │
-│  └──────────────────────────────────────────┘  │
-│                      ↓                         │
-│  ┌──────────────────────────────────────────┐  │
-│  │  Performance Layer (Native Bindings)     │  │
-│  │  • Crypto operations (JWT, hashing)      │  │
-│  │  • Token validation                      │  │
-│  │  • Password verification                 │  │
-│  └──────────────────────────────────────────┘  │
-└────────────────────────────────────────────────┘
-         ↓                           ↓
-   PostgreSQL                     Redis
+┌──────────────────────────────────────────────────────┐
+│              Auth Server (TypeScript/Node.js)        │
+│                                                      │
+│  ┌────────────────────────────────────────────────┐  │
+│  │  API Layer (REST)                              │  │
+│  │  OAuth 2.1 · OIDC 1.0 · OID4VC · SIOPv2       │  │
+│  └────────────────────────────────────────────────┘  │
+│                          ↓                           │
+│  ┌────────────────────────────────────────────────┐  │
+│  │  federation-core                               │  │
+│  │  • Upstream normalisation (VC wallet / OIDC /  │  │
+│  │    password → internal user model)             │  │
+│  │  • Downstream token issuance                   │  │
+│  └────────────────────────────────────────────────┘  │
+│                          ↓                           │
+│  ┌────────────────────────────────────────────────┐  │
+│  │  Native Bindings Layer (@qauth/crypto)         │  │
+│  │  • JWT signing / verification (EdDSA → ML-DSA) │  │
+│  │  • Password hashing (Argon2id)                 │  │
+│  │  • DID resolution utilities                    │  │
+│  └────────────────────────────────────────────────┘  │
+└──────────────────────────────────────────────────────┘
+              ↓                           ↓
+        PostgreSQL                     Redis
 ```
 
 ### Phase 2: Microservices (When Needed)
@@ -161,17 +168,30 @@ A modern, developer-first alternative to Keycloak:
 ```
 qauth/
 ├── apps/
-│   ├── auth-server/          # Core auth server (Fastify)
-│   ├── developer-portal/     # Developer console (TanStack Start)
-│   ├── auth-ui/              # Login/Register UI (TanStack Start, SPA)
+│   ├── auth-server/          # Core auth server (Fastify/TypeScript)
+│   │                         #   OAuth 2.1, OIDC 1.0, OID4VC, SIOPv2 endpoints
+│   ├── developer-portal/     # Self-service OAuth client management (TanStack Start)
+│   ├── auth-ui/              # Brandable authentication UI (TanStack Start, SPA)
 │   └── admin-panel/          # Admin dashboard (TanStack Start)
 │
 ├── libs/
 │   ├── core/
-│   │   ├── auth/             # Auth business logic (TS)
-│   │   ├── oauth/            # OAuth 2.1 implementation (TS)
-│   │   ├── oidc/             # OIDC implementation (TS)
-│   │   └── (Native crypto via npm packages: @node-rs/argon2, jose)
+│   │   ├── oauth/            # OAuth 2.1 implementation
+│   │   ├── oidc/             # OIDC 1.0, OID4VC, SIOPv2
+│   │   └── crypto/           # @qauth/crypto — crypto abstraction layer (ADR-005)
+│   │                         #   Algorithm-agnostic: sign/verify/generateKeyPair
+│   │                         #   Prod: native Node.js binding (napi-rs + aws-lc-rs)
+│   │                         #   Dev/CI: @noble/post-quantum (pure TypeScript fallback)
+│   │                         #   Ed25519 (Phase 1) → hybrid ML-DSA-65+Ed25519 (Phase 5)
+│   │
+│   ├── server/
+│   │   ├── federation/       # CredentialProvider interface + registry (ADR-003)
+│   │   │                     #   password.provider.ts, wallet.provider.ts (Phase 4)
+│   │   │                     #   Normalises upstream identity → VerifiedIdentity → user_attributes
+│   │   ├── config/           # Environment configuration & Zod validation
+│   │   ├── password/         # Argon2id password hashing (Rust native binding)
+│   │   ├── email/            # Email service — Resend, SMTP, Mock providers
+│   │   └── jwt/              # JWT signing & verification (EdDSA; delegates to @qauth/crypto)
 │   │
 │   ├── sdk/
 │   │   ├── js/               # Vanilla JS SDK
@@ -179,109 +199,111 @@ qauth/
 │   │   └── node/             # Server-side SDK
 │   │
 │   ├── infra/
-│   │   ├── db/               # PostgreSQL database with Drizzle ORM
+│   │   ├── db/               # PostgreSQL with Drizzle ORM, repository pattern
 │   │   └── cache/            # Redis connection and caching utilities
 │   │
 │   ├── shared/
-│   │   ├── errors/           # Centralized error classes & utilities
+│   │   ├── errors/           # Centralised error classes (@qauth/shared-errors)
 │   │   ├── validation/       # Validation utilities (email, password)
 │   │   └── testing/          # Test helpers and utilities
 │   │
-│   ├── server/
-│   │   ├── config/           # Environment configuration & validation
-│   │   ├── password/         # Password hashing (Argon2) with factory pattern
-│   │   ├── email/            # Email service with multiple providers
-│   │   └── jwt/              # JWT signing & verification with EdDSA
-│   │
 │   ├── fastify-plugin/
 │   │   ├── db/               # Fastify plugin for database
-│   │   ├── cache/            # Fastify plugin for Redis cache
+│   │   ├── cache/            # Fastify plugin for Redis
 │   │   └── password/         # Fastify plugin for password hashing & validation
 │   │
-│   ├── ui/
-│   │   └── components/       # Shared React components
-│   │
-│   ├── proto/                # gRPC/Protobuf definitions (future)
-│   │   ├── token.proto
-│   │   └── session.proto
-│   │
-│   └── shared/
-│       ├── types/            # Shared TypeScript types
-│       ├── utils/            # Utilities
-│       └── constants/        # Constants
+│   └── ui/
+│       └── components/       # Shared React components
 │
-└── services/                 # Future microservices (TypeScript, Rust optional)
+└── services/                 # Future microservices (when needed)
     ├── token-service/        # Token generation (gRPC)
     └── session-service/      # Session management (gRPC)
 ```
 
 ## 🚀 Features
 
-### MVP (Q1 2026)
+### Phase 1 — Core Auth Server (completed)
 
 **Core Authentication:**
 
-- OAuth 2.1 / OpenID Connect 1.0 support
-- Email/Password authentication
-- JWT token management
-- Session management
-- Multi-tenancy (Realms) for data isolation
-- Role-based access control (RBAC)
-- Rate limiting
-- Audit logging
+- OAuth 2.1 / OpenID Connect 1.0
+- Email/password authentication with Argon2id hashing
+- JWT token issuance, refresh, and revocation (Ed25519 / EdDSA)
+- Token introspection (RFC 7662)
+- OIDC userinfo endpoint
+- Multi-tenancy via Realms for complete data isolation
+- Mandatory PKCE on all authorization code flows
+
+**Infrastructure:**
+
+- Email verification — Resend, SMTP, and Mock providers
+- PostgreSQL 18 + Redis 7
+- Docker deployment with automated migrations and health checks
+- Structured audit logging
 
 **Developer Tools:**
 
-- Developer portal
-- Client app management
-- REST API
-- Basic documentation
-- TypeScript SDK
+- REST API (OAuth 2.1 / OIDC endpoints)
+- Self-service developer portal (Phase 2)
+- TypeScript / React / Node.js SDKs (Phase 3)
 
-**Deployment:**
+### Post-MVP
 
-- Docker deployment
-- Self-hosted support
-- PostgreSQL + Redis
+**Phase 2 — Developer Portal:**
 
-### Post-MVP (Q2+ 2026)
+- Self-service OAuth client registration and management
+- API key management
+- Federation provider configuration UI
 
-**Advanced Authentication:**
+**Phase 3 — Production Hardening:**
+
+- OIDC 1.0 conformance (OpenID Foundation test suite)
+- OIDC discovery + JWKS endpoint, ID tokens, nonce, scopes
+- Rate limiting (Redis token bucket, per-IP and per-email)
+- Security headers (Helmet: HSTS, CSP, X-Frame-Options)
+- Prometheus metrics, Kubernetes manifests
+
+**Phase 4 — Wallet Federation Bridge (OID4VC / SIOPv2):**
+
+- SIOPv2 authentication request handling
+- OID4VC Verifiable Presentation endpoint
+- Trust anchor validation (extensible: EU Trusted List and other registries)
+- `federation-core`: normalises Verifiable Credentials → standard OAuth 2.1 tokens
+- Wallet login UI flow in `auth-ui`
+- Inverse: QAuth as a Verifiable Credential issuer
+
+**Phase 5 — Post-Quantum Crypto:**
+
+- `@qauth/crypto`: native Node.js binding (napi-rs + aws-lc-rs)
+- Hybrid composite ML-DSA-65 + Ed25519 JWT signing (IETF LAMPS composite model)
+- Reference-token architecture to handle PQC JWT size constraints
+- Crypto-agile abstraction: algorithm swaps require no changes to business logic
+- `@noble/post-quantum` fallback for dev/CI environments
+
+**Phase 6+ — Enterprise & Scale:**
 
 - Social login (Google, GitHub, Microsoft)
-- Multi-factor authentication (TOTP, SMS)
-- WebAuthn / Passkeys
-- Magic link authentication
-
-**Enterprise Features:**
-
-- SAML 2.0 support
-- LDAP/Active Directory integration
-- Advanced multi-tenancy features (custom domains, tenant management UI)
-- Custom domains
-- Organizations & Teams
-- Advanced RBAC
-
-**Platform:**
-
-- Webhook notifications
-- Usage metrics and analytics
-- Custom branding support
-- High availability
-- Multi-region support
-- GraphQL API
+- WebAuthn / Passkeys, TOTP / MFA
+- SAML 2.0, LDAP / Active Directory
+- W3C Decentralised Identifiers (DIDs)
+- Organizations, Teams, advanced RBAC
+- GraphQL API, webhook system
+- Multi-region, CDN, microservices extraction
 
 ## 🛠️ Technology Stack
 
 **Backend:**
 
-- **Runtime**: Node.js 24.7.0+ LTS (PQC support via built-in WebCrypto API)
-- **Language**: TypeScript (Native bindings: npm packages like @node-rs/argon2, jose)
+- **Runtime**: Node.js 24 LTS
+- **Language**: TypeScript
 - **Framework**: Fastify
-- **API**: REST (OAuth 2.1/OIDC)
+- **API**: REST (OAuth 2.1 / OIDC)
 - **ORM**: Drizzle ORM
-- **Database**: PostgreSQL
-- **Cache/Session**: Redis
+- **Database**: PostgreSQL 18
+- **Cache/Session**: Redis 7
+- **Crypto**: `@qauth/crypto` — native Node.js binding (napi-rs + aws-lc-rs); `@noble/post-quantum` in dev/CI (ADR-005)
+- **Password hashing**: `@node-rs/argon2` (Rust native binding, Argon2id)
+- **JWT**: `jose` (EdDSA; algorithm selection via `@qauth/crypto` abstraction)
 
 **Frontend:**
 
@@ -303,12 +325,6 @@ qauth/
 - **Orchestration**: Kubernetes ready
 - **Observability**: OpenTelemetry
 - **Cache/Session**: Redis with ioredis
-
-**Performance Critical (Native Bindings):**
-
-- Crypto operations (JWT, password hashing)
-- Token validation
-- High-throughput encoding/decoding
 
 ## 🚀 Quick Start
 
@@ -443,54 +459,65 @@ docker-compose up -d
 
 ## 🗺️ Roadmap
 
-### Phase 1: Foundation (MVP) - Q1 2026
+### Phase 1: Core Auth Server (completed)
 
-- [x] Database schema design (PostgreSQL + Drizzle ORM)
-- [x] Initial database migration created
-- [x] Multi-tenancy support (Realms)
-- [x] Repository pattern implementation with BaseRepository interface
-- [x] Centralized error handling library (@qauth/shared-errors)
-- [x] Core auth server (TypeScript/Fastify)
-- [x] Email/Password authentication
-- [x] OAuth 2.1 flows (Authorization Code + PKCE)
+- [x] Database schema design (PostgreSQL + Drizzle ORM, UUIDv7)
+- [x] Multi-tenancy via Realms
+- [x] Repository pattern with BaseRepository interface
+- [x] Centralised error handling (@qauth/shared-errors)
+- [x] Core auth server (Fastify/TypeScript)
+- [x] Email/password authentication with Argon2id
+- [x] OAuth 2.1 authorization code flow + PKCE
+- [x] JWT issuance / refresh / revocation (EdDSA)
+- [x] Token introspection (RFC 7662), OIDC userinfo
+- [x] Email verification (Resend, SMTP, Mock providers)
 - [x] PostgreSQL + Redis setup
-- [x] Basic REST API
-- [x] Native crypto modules (@node-rs/argon2, jose)
+- [x] Docker deployment with automated migrations
 
-### Phase 2: Developer Portal - Q2 2026
+### Phase 2: Developer Portal (current)
 
 - [ ] Developer registration/login
-- [ ] Client app management (CRUD)
-- [ ] API keys & secrets
-- [ ] Basic documentation
-- [ ] JavaScript/TypeScript SDK
+- [ ] Self-service OAuth client management (CRUD)
+- [ ] API key management
+- [ ] Federation provider configuration UI
+- [ ] JavaScript / React / Node.js SDKs
 
-### Phase 3: Production Ready - Q3 2026
+### Phase 3: Production Hardening
 
-- [ ] OIDC 1.0 compliance
-- [ ] Social login providers
-- [ ] Multi-factor authentication (TOTP)
-- [ ] Audit logs
-- [ ] Rate limiting
-- [ ] Monitoring & alerts
+- [ ] OIDC 1.0 conformance (OpenID Foundation test suite)
+- [ ] OIDC discovery (`/.well-known/openid-configuration`) + JWKS endpoint
+- [ ] ID tokens, nonce, scope handling
+- [ ] Rate limiting (Redis token bucket, per-IP and per-email)
+- [ ] CSRF protection, security headers (Helmet)
+- [ ] Prometheus metrics, structured audit logging
+- [ ] Kubernetes manifests
 
-### Phase 4: Advanced Features - Q4 2026
+### Phase 4: Wallet Federation Bridge (OID4VC / SIOPv2)
 
-- [ ] WebAuthn / Passkeys
-- [ ] SAML 2.0 support
-- [ ] Organizations & Teams
-- [ ] Advanced RBAC
-- [ ] Advanced multi-tenancy (custom domains, tenant management UI)
-- [ ] Microservices extraction (Token service, TypeScript)
+- [ ] SIOPv2 authentication request handling
+- [ ] OID4VC Verifiable Presentation endpoint
+- [ ] Trust anchor validation (extensible: EU Trusted List and other registries)
+- [ ] `federation-core` library: VC wallet → standard OAuth 2.1 / OIDC tokens
+- [ ] Wallet login UI flow in `auth-ui`
+- [ ] Inverse direction: QAuth as a Verifiable Credential issuer
+- [ ] Integration tests against EUDI reference wallet
 
-### Phase 5: Scale & Optimize - 2027
+### Phase 5: Post-Quantum Crypto
 
-- [ ] Session service microservice (TypeScript, Rust optional for extreme scale)
-- [ ] Global CDN integration
-- [ ] Advanced analytics
-- [ ] GraphQL API
-- [ ] Enterprise features
-- [ ] Multi-region support
+- [ ] `@qauth/crypto`: native Node.js binding (napi-rs + aws-lc-rs)
+- [ ] Hybrid composite ML-DSA-65 + Ed25519 JWT signing
+- [ ] Reference-token architecture for PQC JWT size compatibility
+- [ ] Crypto-agile abstraction layer (`sign` / `verify` / `generateKeyPair`)
+- [ ] `@noble/post-quantum` dev/CI fallback
+- [ ] Security review of cryptographic implementation
+
+### Phase 6+: Enterprise & Scale
+
+- [ ] Social login (Google, GitHub, Microsoft)
+- [ ] WebAuthn / Passkeys, TOTP / MFA
+- [ ] SAML 2.0, LDAP / Active Directory
+- [ ] W3C DIDs, advanced RBAC, Organizations & Teams
+- [ ] GraphQL API, webhooks, multi-region, microservices extraction
 
 ## 🧩 SDK Usage Examples
 
@@ -616,7 +643,7 @@ function Dashboard() {
 
 **Available Documentation:**
 
-- [MVP Product Requirements](./MVP-PRD.md) - Detailed development roadmap and specifications
+- [Product Requirements Document](./MVP-PRD.md) — Full phase breakdown, API specs, database schema
 - [Docker Development Guide](./docs/docker.md) - Local development with Docker
 - [Architecture Decision Records](./docs/adr/README.md) - Key architectural decisions
 
@@ -649,7 +676,7 @@ We welcome contributions! See our [Contributing Guide](./CONTRIBUTING.md).
 
 Apache License 2.0 - see [LICENSE](./LICENSE) file for details.
 
-Copyright © 2025 QAuth Labs
+Copyright © 2025–2026 QAuth Labs
 
 ## 🔗 Links
 
@@ -661,8 +688,10 @@ Copyright © 2025 QAuth Labs
 
 ---
 
-**Note**: This project is under active development and is not yet ready for production use.
+**Note**: This project is under active development. Phase 1 is complete; Phase 2 (Developer Portal) is in progress. Not yet recommended for production use.
 
 ## 🤲 Acknowledgments
 
 Inspired by: Keycloak, Ory, Auth0, Clerk, and Supabase Auth.
+
+Standards and prior art this project builds on: [OAuth 2.1 RFC 9700](https://datatracker.ietf.org/doc/rfc9700/), [OIDC Core 1.0](https://openid.net/specs/openid-connect-core-1_0.html), [OID4VC](https://openid.net/specs/openid-4-verifiable-credential-issuance-1_0.html), [SIOPv2](https://openid.net/specs/openid-connect-self-issued-v2-1_0.html), [NIST FIPS 204 (ML-DSA)](https://csrc.nist.gov/pubs/fips/204/final), [W3C DID v1.0](https://www.w3.org/TR/did-core/).

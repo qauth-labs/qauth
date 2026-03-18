@@ -274,11 +274,16 @@ const pkceValid = fastify.pkceUtils.verifyCodeChallenge(body.code_verifier, auth
 // 3. Mark authorization code as used BEFORE issuing tokens
 await fastify.repositories.authorizationCodes.markUsed(authCode.id);
 
-// 4. Issue tokens
+// 4. Resolve email claim from user_attributes (identifier abstraction — no email on users table)
+const emailAttr = await fastify.repositories.userAttributes.findVerifiedByUserIdAndKey(
+  user.id,
+  'email'
+);
+
+// 5. Issue tokens — omit email claim entirely if no verified attribute exists
 const accessToken = await fastify.jwtUtils.signAccessToken({
   sub: user.id,
-  email: user.email,
-  email_verified: user.emailVerified,
+  ...(emailAttr ? { email: emailAttr.attrValue, email_verified: true } : {}),
 });
 ```
 

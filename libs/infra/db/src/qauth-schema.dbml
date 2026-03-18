@@ -1,5 +1,6 @@
 // QAuth Database Schema
-// Optimized, performant, and complete schema for OAuth 2.1/OIDC authentication server
+// Three-table identity model: users (anchor), user_credentials (auth methods), user_attributes (claims)
+// Designed for wallet-agnostic federation — email/password in Phase 1, SIOPv2/OID4VP wallets in Phase 4
 // Generated from Drizzle ORM schema for visualization on dbdiagram.io
 
 // ============================================================================
@@ -73,43 +74,83 @@ Table "realms" {
   }
 }
 
+// Identity anchor only. No email, no password_hash, no credential-specific columns.
+// One row per user across all authentication methods (password, wallet, OIDC federation).
+// OIDC sub claim is always this table's id (UUID) — never email, never external_sub.
 Table "users" {
   "id" uuid [pk, default: `uuidv7()`]
   "realm_id" uuid [not null, ref: > realms.id]
-  "email" varchar(255) [not null]
-  "email_normalized" varchar(255) [not null, note: "Lowercase for case-insensitive lookup"]
-  "password_hash" text [not null]
-  "email_verified" boolean [not null, default: false]
   "enabled" boolean [not null, default: true]
-  "first_name" varchar(255)
-  "last_name" varchar(255)
   "metadata" jsonb [note: "Flexible storage for additional user data"]
   "created_at" bigint [not null, default: `EXTRACT(EPOCH FROM NOW())::bigint * 1000`]
   "updated_at" bigint [not null, default: `EXTRACT(EPOCH FROM NOW())::bigint * 1000`]
   "last_login_at" bigint
-  "email_verified_at" bigint
 
   Indexes {
-    (realm_id, email_normalized) [unique, name: "idx_users_realm_email_normalized_unique"]
-    email [name: "idx_users_email"]
     realm_id [name: "idx_users_realm_id"]
     enabled [name: "idx_users_enabled", note: "Partial index: WHERE enabled = true"]
-    (realm_id, email_normalized, enabled) [name: "idx_users_realm_email_enabled"]
   }
 }
 
+// One row per authentication method per user.
+// provider_type discriminates the method. external_sub is the method-specific subject identifier.
+// credential_data is a JSONB blob carrying method-specific fields (password hash, wallet metadata, etc.)
+// Unique constraint on (realm_id, provider_type, external_sub) enforces per-method uniqueness.
+Table "user_credentials" {
+  "id" uuid [pk, default: `uuidv7()`]
+  "user_id" uuid [not null, ref: > users.id]
+  "realm_id" uuid [not null, ref: > realms.id]
+  "provider_type" varchar(50) [not null, note: "'password' | 'wallet' | 'oidc_google' | 'oidc_github' | 'did'"]
+  "external_sub" text [not null, note: "'password': normalized email | 'wallet': DID or issuer subject | 'oidc_*': upstream sub claim"]
+  "credential_data" jsonb [not null, default: `'{}'::jsonb`, note: "'password': { password_hash, email_verified, email_verified_at? } | 'wallet': { wallet_provider, assurance_level, vc_types, last_vp_verified_at? } | 'oidc_*': { iss, email?, email_verified? }"]
+  "created_at" bigint [not null, default: `EXTRACT(EPOCH FROM NOW())::bigint * 1000`]
+  "last_used_at" bigint
+
+  Indexes {
+    (realm_id, provider_type, external_sub) [unique, name: "idx_user_credentials_realm_provider_sub_unique"]
+    user_id [name: "idx_user_credentials_user_id"]
+    realm_id [name: "idx_user_credentials_realm_id"]
+    provider_type [name: "idx_user_credentials_provider_type"]
+  }
+}
+
+// Claims and attributes as data, not identity anchors.
+// source tracks where the attribute came from and determines trust level.
+// Trust order for claim resolution: wallet > oidc_* > self_reported
+// email claim is present in OIDC tokens only if a verified row exists here.
+// If no verified email exists, the email claim is omitted entirely (not null).
+Table "user_attributes" {
+  "id" uuid [pk, default: `uuidv7()`]
+  "user_id" uuid [not null, ref: > users.id]
+  "source" varchar(50) [not null, note: "'self_reported' (user-entered) | 'wallet' (from Verifiable Credential) | 'oidc_google' | 'oidc_github'"]
+  "attr_key" varchar(100) [not null, note: "Attribute name, e.g. 'email', 'name', 'birthdate', 'phone_number'"]
+  "attr_value" text [not null]
+  "verified" boolean [not null, default: false]
+  "verified_at" bigint
+  "expires_at" bigint [note: "For VC-derived attributes — null for self-reported attributes"]
+  "created_at" bigint [not null, default: `EXTRACT(EPOCH FROM NOW())::bigint * 1000`]
+
+  Indexes {
+    (user_id, source, attr_key) [unique, name: "idx_user_attributes_user_source_key_unique"]
+    user_id [name: "idx_user_attributes_user_id"]
+    attr_key [name: "idx_user_attributes_attr_key"]
+  }
+}
+
+// References user_credentials (not users) because email verification is a property
+// of the password authentication method, not of the abstract user identity.
 Table "email_verification_tokens" {
   "id" uuid [pk, default: `uuidv7()`]
-  "token" varchar(255) [not null, unique]
-  "user_id" uuid [not null, ref: > users.id]
+  "token_hash" varchar(64) [not null, unique, note: "SHA-256 hash of the verification token"]
+  "credential_id" uuid [not null, ref: > user_credentials.id]
   "expires_at" bigint [not null]
   "used" boolean [not null, default: false]
   "used_at" bigint
   "created_at" bigint [not null, default: `EXTRACT(EPOCH FROM NOW())::bigint * 1000`]
 
   Indexes {
-    user_id [name: "idx_email_verification_tokens_user_id"]
-    (token, expires_at) [name: "idx_email_verification_tokens_active", note: "Partial index: WHERE used = false"]
+    credential_id [name: "idx_email_verification_tokens_credential_id"]
+    (token_hash, expires_at) [name: "idx_email_verification_tokens_active", note: "Partial index: WHERE used = false"]
     expires_at [name: "idx_email_verification_tokens_expires_at"]
   }
 }
@@ -282,17 +323,27 @@ Table "user_roles" {
 // RELATIONSHIPS
 // ============================================================================
 
-// Note: Foreign key relationships are defined inline in table definitions above
-// using the ref: syntax. The following are additional relationship notes:
+// IDENTITY MODEL:
+// users is a pure identity anchor — no email, no password, no credential fields.
+// user_credentials: one row per auth method per user
+//   - provider_type='password' → external_sub is email, credential_data has password_hash
+//   - provider_type='wallet'   → external_sub is DID or issuer subject (Phase 4)
+//   - provider_type='oidc_*'  → external_sub is upstream sub claim (Phase 6+)
+// user_attributes: claims as data with source tracking and trust ordering
+//   - wallet > oidc_* > self_reported (trust order for claim resolution)
+//   - email claim in OIDC tokens comes from here, not from users or user_credentials
+//   - absent (not null) when no verified email attribute exists
 
 // REALMS (Multi-tenancy):
 // - Each realm is an isolated tenant
 // - Realms can have multiple users, clients, roles, etc.
 // - All data is scoped to a realm for isolation
+// - user_credentials.realm_id enables the unique constraint on (realm_id, provider_type, external_sub)
 
 // Users can have:
 // - Belongs to one realm
-// - Multiple email verification tokens
+// - Multiple user_credentials (one per authentication method)
+// - Multiple user_attributes (email, name, etc. from various sources)
 // - Multiple authorization codes
 // - Multiple refresh tokens
 // - Multiple sessions
@@ -307,9 +358,3 @@ Table "user_roles" {
 // - Multiple sessions (via oauth_client_id)
 // - Multiple roles (client-specific, via oauth_client_id)
 // - Multiple audit logs (via oauth_client_id)
-
-// Roles can have:
-// - Belongs to one realm
-// - Multiple users (via user_roles)
-// - Optionally scoped to a specific client
-

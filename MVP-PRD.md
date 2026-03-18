@@ -1,13 +1,15 @@
-# QAuth - MVP Product Requirements Document (PRD)
+# QAuth - Product Requirements Document (PRD)
 
-> **Version**: 1.5
-> **Last Updated**: 2026-01-15
+> **Version**: 2.0
+> **Last Updated**: 2026-03-18
 > **Author**: Muhammed Taha Ayan
-> **Status**: Phase 1 - Core Authentication (Docker infrastructure ready)
+> **Status**: Phase 2 - Developer Portal (Phase 1 complete)
 
 ## Executive Summary
 
-QAuth is a post-quantum ready, headless-first identity platform designed as a developer-friendly alternative to Keycloak. This document outlines the Minimum Viable Product (MVP) roadmap for a solo developer.
+QAuth is an open-source federated identity platform. It accepts identity from multiple upstream sources — Verifiable Credential wallets (OID4VC / SIOPv2), email/password, and external OIDC providers — normalises them through a common `federation-core` layer, and issues standard OAuth 2.1 access tokens and OIDC ID tokens to downstream applications.
+
+The project is built toward a future where digital identity is portable and user-controlled across services and platforms. Standards-compliant VC wallet support (Phase 4) means any application using QAuth gains wallet-based login without modifying its auth layer. The eIDAS 2.0 regulated-industry deployment (EUDI Wallet, EU member states) is a primary real-world target for Phase 4, but the federation architecture is wallet-agnostic.
 
 **Core Philosophy**: Ship working features incrementally. Each phase should be production-ready before moving to the next.
 
@@ -15,28 +17,27 @@ QAuth is a post-quantum ready, headless-first identity platform designed as a de
 
 ## 🎯 MVP Vision
 
-**Goal**: Create a working OAuth 2.1/OIDC authentication server that developers can use to authenticate users in their applications.
+**Goal**: A working OAuth 2.1 / OIDC authentication server (Phase 1) that is the foundation for a full federated identity hub (Phases 2–5).
 
-**Success Criteria**:
+**Phase 1 Success Criteria**:
 
 - A developer can register an OAuth client
 - A developer can implement login/signup using QAuth
 - Users can authenticate with email/password
-- JWT tokens are issued and validated correctly
+- JWT tokens are issued and validated correctly (EdDSA)
+- OAuth 2.1 authorization code flow with mandatory PKCE works end-to-end
 - Basic security practices are implemented
 
-**Non-Goals for MVP**:
+**Non-Goals for Phase 1**:
 
-- Social login (Google, GitHub)
-- Multi-factor authentication (MFA)
-- WebAuthn/Passkeys
-- SAML support
-- Custom domains
-- Advanced RBAC (basic roles supported)
-- Microservices architecture
-- GraphQL API
+- Verifiable Credential / wallet login (Phase 4)
+- Post-quantum JWT signing (Phase 5)
+- Social login, MFA, WebAuthn/Passkeys (Phase 6+)
+- SAML support (Phase 6+)
+- Custom domains, advanced RBAC (Phase 6+)
+- Microservices architecture, GraphQL API (Phase 6+)
 
-**Note**: Multi-tenancy is included in MVP via realms table for data isolation, but advanced multi-tenancy features (custom domains, tenant management UI) are not included.
+**Note**: Multi-tenancy is included via the Realms table for data isolation. Advanced multi-tenancy features (custom domains, tenant management UI) are Phase 6+.
 
 ---
 
@@ -74,10 +75,10 @@ QAuth is a post-quantum ready, headless-first identity platform designed as a de
 
 ---
 
-### Phase 1: Core Authentication (CURRENT)
+### Phase 1: Core Authentication (COMPLETED)
 
 **Timeline**: 6-8 weeks
-**Status**: Near Completion (Missing 1.7)
+**Status**: Completed
 
 **Objective**: Implement basic email/password authentication with JWT tokens.
 
@@ -527,8 +528,8 @@ Response:
 
 ## Phase 2: Developer Portal
 
-**Timeline**: 3-4 weeks  
-**Status**: Not Started
+**Timeline**: 3-4 weeks
+**Status**: In Progress
 
 **Objective**: Allow developers to register and manage OAuth clients without manual intervention.
 
@@ -988,93 +989,150 @@ ENTRYPOINT ["/bin/sh", "/app/docker-entrypoint.sh"]
 
 ---
 
-## Phase 4+: Future Enhancements (Post-MVP)
+## Phase 4: Wallet Federation Bridge (OID4VC / SIOPv2)
 
-These features are NOT part of the MVP:
+**Timeline**: 6-8 weeks
+**Status**: Not Started
 
-### Phase 4: Social Login & MFA (4-5 weeks)
+**Objective**: Enable QAuth to accept identity from standards-compliant VC wallets as an upstream source. Downstream applications receive standard OAuth 2.1 tokens with no changes required. The EU EUDI Wallet (eIDAS 2.0) is the primary integration test target, but the architecture is wallet-agnostic.
 
-- Google OAuth
-- GitHub OAuth
-- Microsoft OAuth
+**Tasks**:
+
+- [ ] SIOPv2 authentication request generation and handling
+- [ ] OID4VC Verifiable Presentation endpoint (`POST /oidc/credential-presentation`)
+- [ ] Trust anchor validation (extensible registry: EU Trusted List + others)
+- [ ] `federation-core` library: normalise Verifiable Credentials → internal user model
+- [ ] Claims extraction from Verifiable Credentials (sub, email, age, nationality, professional credentials)
+- [ ] Create or link internal user record from VC subject
+- [ ] Issue standard OAuth 2.1 access token + OIDC ID token after VC validation
+- [ ] Wallet login UI flow in `auth-ui`
+- [ ] Inverse direction: QAuth as Verifiable Credential issuer (OID4VCI)
+- [ ] End-to-end integration tests against EUDI reference wallet
+
+**Acceptance Criteria**:
+
+- A user holding a standards-compliant VC wallet can authenticate to a QAuth-protected application
+- The downstream application sees a normal OIDC token — no protocol changes required
+- VC trust anchor validation passes for EU Trusted List member state credentials
+- Existing email/password login is unaffected
+
+---
+
+## Phase 5: Post-Quantum Crypto (`@qauth/crypto`)
+
+**Timeline**: 4-6 weeks
+**Status**: Not Started
+
+**Objective**: Introduce hybrid post-quantum JWT signing with a crypto-agile abstraction layer. No business logic changes when the underlying algorithm is swapped.
+
+**Key decisions from the 2026 PQC landscape assessment**:
+
+- **Algorithm**: ML-DSA-65 (NIST FIPS 204, Level 3) — minimum floor recommended by BSI and ANSSI
+- **Hybrid model**: Composite ML-DSA-65 + Ed25519, following `draft-ietf-lamps-pq-composite-sigs` (JOSE WG adoption Jan 2026)
+- **Implementation**: Native Node.js binding via napi-rs wrapping `aws-lc-rs` (same pattern as `@node-rs/argon2`)
+- **Dev/CI fallback**: `@noble/post-quantum` (pure TypeScript, audited — no native deps)
+- **Token architecture**: Reference tokens (RFC 7662 introspection) as default, to manage PQC JWT size (ML-DSA-65 signatures are 3,309 B vs. Ed25519's 64 B)
+
+**Tasks**:
+
+- [ ] Design algorithm-agnostic abstraction: `sign(payload, key)` / `verify(token, key)` / `generateKeyPair(alg)`
+- [ ] Implement `@qauth/crypto` napi-rs binding wrapping `aws-lc-rs`
+- [ ] ML-DSA-65 key generation, signing, and verification
+- [ ] Hybrid composite signing: ML-DSA-65 + Ed25519 per IETF LAMPS draft
+- [ ] JWKS endpoint: support mixed key types (`"kty": "AKP"` for ML-DSA per JOSE draft)
+- [ ] Reference-token architecture: short-lived opaque tokens with introspection as default path
+- [ ] `@noble/post-quantum` dev/CI fallback wired through same abstraction
+- [ ] Security review of cryptographic implementation
+
+**Acceptance Criteria**:
+
+- JWT tokens are signed with hybrid ML-DSA-65 + Ed25519
+- Tokens are verifiable by both classical (Ed25519 only) and PQC-capable verifiers
+- Swapping the underlying crypto implementation requires zero changes to auth-server business logic
+- PQC JWT size does not break HTTP header or cookie limits (reference-token architecture)
+
+**Future (Phase 5+)**:
+
+- FN-DSA (NIST FIPS 206, pending finalization ~2027) evaluation — compact signatures (~666 B) may make self-contained PQC JWTs practical
+- `libcrux` as formally-verified upgrade path over `aws-lc-rs`
+
+---
+
+## Phase 6+: Enterprise & Scale
+
+These features are NOT part of Phases 1–5:
+
+### Phase 6: Advanced Authentication (4-5 weeks)
+
+- Social login (Google, GitHub, Microsoft)
 - TOTP-based MFA
-- SMS-based MFA (optional)
-
-### Phase 5: Advanced Features (6-8 weeks)
-
-- WebAuthn/Passkeys
+- WebAuthn / Passkeys
 - Magic link authentication
-- Custom roles and permissions (Advanced RBAC)
+
+### Phase 7: Enterprise Features (8-10 weeks)
+
+- SAML 2.0 support
+- LDAP / Active Directory integration
+- Custom domains, advanced multi-tenancy
 - Organizations & Teams
-- Email templates customization
+- Advanced RBAC
+- Audit logs UI
 - Webhook system
 - GraphQL API
 
-### Phase 6: Enterprise Features (8-10 weeks)
+### Phase 8: Scale & Infrastructure (6-8 weeks)
 
-- SAML 2.0 support
-- LDAP/Active Directory integration
-- Multi-tenancy
-- Custom domains
-- SSO (Single Sign-On)
-- Audit logs UI
+- Microservices extraction (Token service, Session service)
+- gRPC communication between services
+- Horizontal scaling, CDN integration
+- Multi-region support
 
-### Phase 7: Post-Quantum & Scale (6-8 weeks)
-
-- Hybrid ML-DSA + Ed25519 JWT signing
-- Microservices extraction (Token service, TypeScript)
-- Session service microservice (TypeScript, Rust optional for extreme scale)
-- gRPC communication
-- Horizontal scaling
-- CDN integration
-
-### Phase 8: Agent Authentication & Authorization (TBD)
+### Phase 9: Agent Authentication & Authorization (TBD)
 
 - "Agent" client type on QAuth (register and identify agents)
 - Agent session state / mode (ReadOnly, Admin, Exec)
 - Granular scopes (e.g. `fs:read`, `fs:write`, `exec:run`) enforced per client/mode
-- Step-up auth (MFA/OTP) before critical operations (e.g. destructive or high-impact)
+- Step-up auth (MFA/OTP) before critical operations
 - QAuth-side audit log of agent actions by mode for compliance
 
 ---
 
-## 📊 MVP Development Timeline
+## 📊 Development Timeline
 
-**Total Estimated Time**: 14-20 weeks (3.5-5 months)
-
-| Phase                     | Duration        | Status       |
-| ------------------------- | --------------- | ------------ |
-| Phase 0: Foundation Setup | 1-2 weeks       | ✅ Completed |
-| Phase 1: Core Auth        | 6-8 weeks       | In Progress  |
-| Phase 2: Developer Portal | 3-4 weeks       | Not Started  |
-| Phase 3: Production Ready | 4-6 weeks       | Not Started  |
-| **Total MVP**             | **14-20 weeks** | **Phase 1**  |
+| Phase                             | Duration  | Status       |
+| --------------------------------- | --------- | ------------ |
+| Phase 0: Foundation Setup         | 1-2 weeks | ✅ Completed |
+| Phase 1: Core Auth Server         | 6-8 weeks | ✅ Completed |
+| Phase 2: Developer Portal         | 3-4 weeks | In Progress  |
+| Phase 3: Production Hardening     | 4-6 weeks | Not Started  |
+| Phase 4: Wallet Federation Bridge | 6-8 weeks | Not Started  |
+| Phase 5: Post-Quantum Crypto      | 4-6 weeks | Not Started  |
+| Phase 6+: Enterprise & Scale      | TBD       | Not Started  |
 
 ---
 
-## 🎯 Success Metrics (Post-MVP)
+## 🎯 Success Metrics
 
 **Technical Metrics**:
 
-- 100% OAuth 2.1 compliance
-- 100% OIDC 1.0 compliance
+- 100% OAuth 2.1 compliance (RFC 9700)
+- 100% OIDC 1.0 compliance (OpenID Foundation conformance tests)
 - <100ms token validation time
 - <1s authorization flow completion
 - Zero critical security vulnerabilities
+- Hybrid ML-DSA-65 + Ed25519 JWT signing with no HTTP header regressions (Phase 5)
 
 **Developer Experience**:
 
-- Developer can create client in <5 minutes
+- Developer can register an OAuth client in <5 minutes
 - Developer can integrate QAuth in <30 minutes
-- Clear error messages for all failures
-- Documentation covers common use cases
+- Clear error messages for all auth failures
+- Documentation covers core use cases
 
-**Business Metrics**:
+**Federation**:
 
-- First paying customer
-- 10 active OAuth clients
-- 100+ authenticated users across all clients
-- 99.9% uptime
+- A VC wallet user can authenticate to a QAuth-protected application with no changes to the application (Phase 4)
+- Trust anchor validation passes for at least one standards-compliant VC issuer registry (Phase 4)
 
 ---
 
@@ -1376,4 +1434,4 @@ The QAuth monorepo is organized into the following libraries:
 
 ---
 
-**End of MVP-PRD v1.4**
+**End of PRD v2.0**
