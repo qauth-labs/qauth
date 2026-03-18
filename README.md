@@ -10,7 +10,7 @@
 <br /><br />
 
 <div align="center">
-  <h2>Open-source federated identity platform.<br />OAuth 2.1 · OIDC 1.0 · eIDAS 2.0 bridge · Post-quantum ready · Apache 2.0.</h2>
+  <h2>Open-source federated identity platform.<br />OAuth 2.1 · OIDC 1.0 · eIDAS 2.0 bridge · Post-quantum ready.</h2>
 </div>
 
 **QAuth** is an open-source identity server and federation hub. It accepts identity from multiple upstream sources — including EUDI Wallets (OID4VC / SIOPv2), email/password, and external OIDC providers — normalises them through a common federation layer, and issues standard OAuth 2.1 access tokens and OIDC ID tokens to downstream applications. Applications integrate once against QAuth's OIDC layer and require no changes to support new upstream identity sources.
