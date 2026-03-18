@@ -17,18 +17,18 @@ You are working in the QAuth OAuth/OIDC implementation.
 
 ## Endpoints
 
-| Endpoint                                | Description                                                                                          |
-| --------------------------------------- | ---------------------------------------------------------------------------------------------------- |
-| `POST /auth/register`                   | Registration — creates user, credential, attribute, verification token                               |
-| `POST /auth/login`                      | Password login — looks up `user_credentials` by `(realm_id, 'password', email)`                      |
-| `GET /auth/verify`                      | Email verification — marks `credential_data.email_verified=true` and `user_attributes.verified=true` |
-| `POST /auth/resend-verification`        | Resend verification email                                                                            |
-| `GET /oauth/authorize`                  | Authorization Code Flow initiation                                                                   |
-| `POST /oauth/token`                     | Token endpoint (authorization_code, refresh_token grants)                                            |
-| `POST /oauth/introspect`                | RFC 7662 introspection (client auth required)                                                        |
-| `GET /oauth/userinfo`                   | OIDC userinfo — reads `sub` from JWT, returns verified email from `user_attributes`                  |
-| `GET /.well-known/jwks.json`            | JWKS endpoint                                                                                        |
-| `GET /.well-known/openid-configuration` | OIDC discovery                                                                                       |
+| Endpoint                                | Description                                                                                                                         |
+| --------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| `POST /auth/register`                   | Registration — creates user, credential, attribute, verification token                                                              |
+| `POST /auth/login`                      | Password login — looks up `user_credentials` by `(realm_id, 'password', external_sub)` where `external_sub` is the normalised email |
+| `GET /auth/verify`                      | Email verification — marks `credential_data.email_verified=true` and `user_attributes.verified=true`                                |
+| `POST /auth/resend-verification`        | Resend verification email                                                                                                           |
+| `GET /oauth/authorize`                  | Authorization Code Flow initiation                                                                                                  |
+| `POST /oauth/token`                     | Token endpoint (authorization_code, refresh_token grants)                                                                           |
+| `POST /oauth/introspect`                | RFC 7662 introspection (client auth required)                                                                                       |
+| `GET /oauth/userinfo`                   | OIDC userinfo — reads `sub` from JWT, returns verified email from `user_attributes`                                                 |
+| `GET /.well-known/jwks.json`            | JWKS endpoint                                                                                                                       |
+| `GET /.well-known/openid-configuration` | OIDC discovery                                                                                                                      |
 
 ## Introspection
 
@@ -44,12 +44,12 @@ for any unauthenticated request rather than an error, per RFC 7662.
 `/.well-known/openid-configuration` must always reflect the current set of supported
 grant types, response types, and signing algorithms.
 
-When wallet federation (Phase 2) is implemented, update to advertise:
+When wallet federation (Phase 4) is implemented, update to advertise:
 
 - `subject_types_supported: ["public", "pairwise"]`
 - `request_object_signing_alg_values_supported` (for SIOPv2)
 
-Do not add these fields until `WalletProvider` is implemented and tested.
+Do not add these fields until `WalletProvider` is implemented and tested (Phase 4).
 
 ## Email Claim Behaviour
 
@@ -70,7 +70,7 @@ not supported.
 
 ## Token Security
 
-- Access tokens: JWT, signed with Ed25519 (Phase 1), hybrid ML-DSA+Ed25519 (Phase 2)
+- Access tokens: JWT, signed with Ed25519 (Phase 1), hybrid ML-DSA-65+Ed25519 (Phase 5 — post-quantum)
 - Refresh tokens: opaque random tokens, SHA-256 hashed before storage
 - Verification tokens: opaque random tokens, SHA-256 hashed before storage
 - All token hashes stored as 64-character hex strings (SHA-256 output)

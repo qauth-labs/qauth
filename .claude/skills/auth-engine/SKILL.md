@@ -37,7 +37,7 @@ belongs only in the provider registry, not in service routes.
   - Located at `libs/server/federation/src/providers/password.provider.ts`
   - `externalSub` is the normalized email address
   - `assuranceLevel: 'low'` — no `acr` claim in tokens
-- `WalletProvider` (`provider_type: 'wallet'`) — Phase 2, NOT YET IMPLEMENTED
+- `WalletProvider` (`provider_type: 'wallet'`) — Phase 4, NOT YET IMPLEMENTED
 
 ## Token Claims
 
@@ -70,5 +70,6 @@ the `passwordHasher` Fastify decorator. Do not call Argon2 directly.
 ## Phase Status
 
 - Phase 1 (email/password + OAuth 2.1 / OIDC): COMPLETE after identifier-abstraction refactor
-- Phase 2 (WalletProvider + SIOPv2/OID4VP): NOT YET STARTED
+- Phase 2 (Developer Portal): IN PROGRESS — no new providers
+- Phase 4 (WalletProvider + SIOPv2/OID4VP): NOT YET STARTED
 - The `PasswordProvider` is permanent infrastructure, not a legacy path to be deprecated
