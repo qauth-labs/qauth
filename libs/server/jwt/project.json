@@ -4,5 +4,25 @@
   "sourceRoot": "libs/server/jwt/src",
   "projectType": "library",
   "tags": ["scope:server", "type:utility"],
-  "// targets": "to see all targets run: nx show project server-jwt --web"
+  "// targets": "to see all targets run: nx show project server-jwt --web",
+  "targets": {
+    "typecheck": {
+      "dependsOn": ["^typecheck"],
+      "options": {
+        "cwd": "libs/server/jwt",
+        "command": "tsc --build --emitDeclarationOnly"
+      },
+      "cache": true,
+      "inputs": [
+        "default",
+        {
+          "dependentTasksOutputFiles": "**/*.d.ts"
+        }
+      ],
+      "outputs": [
+        "{workspaceRoot}/dist/out-tsc/**/*.d.ts",
+        "{workspaceRoot}/dist/out-tsc/libs/server/jwt/*.tsbuildinfo"
+      ]
+    }
+  }
 }

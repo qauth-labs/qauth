@@ -3,6 +3,10 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
+  "scripts": {
+    "build": "vite build",
+    "dev": "vite dev"
+  },
   "dependencies": {
     "@qauth/ui": "workspace:*",
     "@tailwindcss/vite": "catalog:",
@@ -10,7 +14,8 @@
     "@tanstack/react-router": "catalog:",
     "react": "catalog:",
     "react-dom": "catalog:",
-    "tailwindcss": "catalog:"
+    "tailwindcss": "catalog:",
+    "zod": "catalog:"
   },
   "devDependencies": {
     "@types/node": "catalog:",
