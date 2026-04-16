@@ -1,4 +1,4 @@
-import { JWTExpiredError, JWTInvalidError } from '@qauth/shared-errors';
+import { JWTExpiredError, JWTInvalidError } from '@qauth-labs/shared-errors';
 import type { FastifyInstance } from 'fastify';
 import Fastify from 'fastify';
 import { describe, expect, it } from 'vitest';

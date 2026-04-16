@@ -1,5 +1,5 @@
-import type { PasswordHashConfig } from '@qauth/server-password';
-import type { PasswordValidationConfig } from '@qauth/shared-validation';
+import type { PasswordHashConfig } from '@qauth-labs/server-password';
+import type { PasswordValidationConfig } from '@qauth-labs/shared-validation';
 import type { FastifyPluginOptions } from 'fastify';
 
 /**

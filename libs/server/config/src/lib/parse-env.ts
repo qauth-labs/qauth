@@ -16,7 +16,7 @@ import { z } from 'zod';
  * @example
  * ```typescript
  * import { z } from 'zod';
- * import { baseEnvSchema, databaseEnvSchema, parseEnv } from '@qauth/server-config';
+ * import { baseEnvSchema, databaseEnvSchema, parseEnv } from '@qauth-labs/server-config';
  *
  * const envSchema = z.object({
  *   ...baseEnvSchema.shape,

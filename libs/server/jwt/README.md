@@ -4,7 +4,7 @@ JWT (JSON Web Token) service library for QAuth with EdDSA signing, key managemen
 
 ## Overview
 
-The `@qauth/server-jwt` library provides:
+The `@qauth-labs/server-jwt` library provides:
 
 - **JWT Signing & Verification** - EdDSA (Ed25519) based JWT operations
 - **Key Management** - EdDSA key pair generation and import/export utilities
@@ -22,7 +22,7 @@ import {
   verifyAccessToken,
   generateEdDSAKeyPair,
   generateRefreshToken,
-} from '@qauth/server-jwt';
+} from '@qauth-labs/server-jwt';
 ```
 
 ## Usage
@@ -32,7 +32,7 @@ import {
 #### Signing Access Tokens
 
 ```typescript
-import { signAccessToken, generateEdDSAKeyPair } from '@qauth/server-jwt';
+import { signAccessToken, generateEdDSAKeyPair } from '@qauth-labs/server-jwt';
 
 // Generate key pair (or import existing keys)
 const { privateKey, publicKey } = await generateEdDSAKeyPair();
@@ -53,8 +53,8 @@ const token = await signAccessToken(
 #### Verifying Access Tokens
 
 ```typescript
-import { verifyAccessToken } from '@qauth/server-jwt';
-import { JWTExpiredError, JWTInvalidError } from '@qauth/shared-errors';
+import { verifyAccessToken } from '@qauth-labs/server-jwt';
+import { JWTExpiredError, JWTInvalidError } from '@qauth-labs/shared-errors';
 
 try {
   const payload = await verifyAccessToken(token, publicKey);
@@ -76,7 +76,7 @@ try {
 #### Generate EdDSA Key Pair
 
 ```typescript
-import { generateEdDSAKeyPair } from '@qauth/server-jwt';
+import { generateEdDSAKeyPair } from '@qauth-labs/server-jwt';
 
 // Generate non-extractable keys (default, more secure)
 const { privateKey, publicKey } = await generateEdDSAKeyPair();
@@ -89,7 +89,7 @@ const { privateKey: extractablePrivate, publicKey: extractablePublic } =
 #### Import Existing Keys
 
 ```typescript
-import { importPrivateKey, importPublicKey } from '@qauth/server-jwt';
+import { importPrivateKey, importPublicKey } from '@qauth-labs/server-jwt';
 
 // Import private key from PEM format (PKCS#8)
 const privateKey = await importPrivateKey(
@@ -113,7 +113,7 @@ import {
   generateRefreshToken,
   hashRefreshToken,
   isValidRefreshTokenFormat,
-} from '@qauth/server-jwt';
+} from '@qauth-labs/server-jwt';
 
 // Generate refresh token pair
 const { token, tokenHash } = generateRefreshToken();
@@ -137,8 +137,8 @@ import {
   verifyAccessToken,
   generateEdDSAKeyPair,
   generateRefreshToken,
-} from '@qauth/server-jwt';
-import { JWTExpiredError, JWTInvalidError } from '@qauth/shared-errors';
+} from '@qauth-labs/server-jwt';
+import { JWTExpiredError, JWTInvalidError } from '@qauth-labs/shared-errors';
 
 // Setup: Generate or import keys
 const { privateKey, publicKey } = await generateEdDSAKeyPair();
@@ -398,14 +398,14 @@ interface RefreshTokenResult {
 
 ## Error Handling
 
-The library uses custom error types from `@qauth/shared-errors`:
+The library uses custom error types from `@qauth-labs/shared-errors`:
 
 ### `JWTExpiredError`
 
 Thrown when a JWT token has expired.
 
 ```typescript
-import { JWTExpiredError } from '@qauth/shared-errors';
+import { JWTExpiredError } from '@qauth-labs/shared-errors';
 
 try {
   await verifyAccessToken(token, publicKey);
@@ -424,7 +424,7 @@ try {
 Thrown when a JWT token is invalid (malformed, wrong signature, etc.).
 
 ```typescript
-import { JWTInvalidError } from '@qauth/shared-errors';
+import { JWTInvalidError } from '@qauth-labs/shared-errors';
 
 try {
   await verifyAccessToken(token, publicKey);
@@ -474,12 +474,12 @@ pnpm nx typecheck server-jwt
 ## Dependencies
 
 - `jose`: JWT operations with EdDSA support
-- `@qauth/shared-errors`: Custom error types for JWT operations
+- `@qauth-labs/shared-errors`: Custom error types for JWT operations
 
 ## Related Libraries
 
-- [`@qauth/server-config`](../config/README.md): JWT configuration schema (`jwtEnvSchema`)
-- [`@qauth/shared-errors`](../../shared/errors/README.md): JWT error types (`JWTExpiredError`, `JWTInvalidError`)
+- [`@qauth-labs/server-config`](../config/README.md): JWT configuration schema (`jwtEnvSchema`)
+- [`@qauth-labs/shared-errors`](../../shared/errors/README.md): JWT error types (`JWTExpiredError`, `JWTInvalidError`)
 
 ## License
 

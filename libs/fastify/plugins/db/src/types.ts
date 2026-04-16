@@ -1,4 +1,4 @@
-import type { DatabaseConfig } from '@qauth/infra-db';
+import type { DatabaseConfig } from '@qauth-labs/infra-db';
 import type { FastifyPluginOptions } from 'fastify';
 
 /**

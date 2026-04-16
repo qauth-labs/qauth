@@ -8,11 +8,11 @@ alwaysApply: false
 
 ## Use Domain Errors
 
-Throw domain-specific errors from `@qauth/shared-errors`:
+Throw domain-specific errors from `@qauth-labs/shared-errors`:
 
 ```typescript
 // ✅ GOOD: Domain error with statusCode
-import { NotFoundError, InvalidCredentialsError } from '@qauth/shared-errors';
+import { NotFoundError, InvalidCredentialsError } from '@qauth-labs/shared-errors';
 
 if (!user) {
   throw new NotFoundError('User', userId);

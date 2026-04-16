@@ -1,11 +1,11 @@
 # fastify-plugin-pkce
 
-Fastify plugin wrapping `@qauth/server-pkce` for OAuth 2.1 PKCE operations.
+Fastify plugin wrapping `@qauth-labs/server-pkce` for OAuth 2.1 PKCE operations.
 
 ## Usage
 
 ```typescript
-import { pkcePlugin } from '@qauth/fastify-plugin-pkce';
+import { pkcePlugin } from '@qauth-labs/fastify-plugin-pkce';
 
 await fastify.register(pkcePlugin);
 

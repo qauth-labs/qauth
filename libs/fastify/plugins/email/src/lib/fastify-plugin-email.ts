@@ -11,7 +11,7 @@ import {
   type ResendProviderConfig,
   SmtpEmailProvider,
   type SmtpProviderConfig,
-} from '@qauth/server-email';
+} from '@qauth-labs/server-email';
 import type { FastifyInstance } from 'fastify';
 import fp from 'fastify-plugin';
 

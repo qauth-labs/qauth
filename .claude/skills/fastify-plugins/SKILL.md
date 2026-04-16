@@ -1,6 +1,6 @@
 ---
 name: fastify-plugins
-description: Create and review Fastify plugins with correct encapsulation, decorators, and lifecycle. Use when adding or modifying @qauth/fastify-plugin-* libraries, wrapping utilities for the auth server, or when the user asks about Fastify plugin patterns.
+description: Create and review Fastify plugins with correct encapsulation, decorators, and lifecycle. Use when adding or modifying @qauth-labs/fastify-plugin-* libraries, wrapping utilities for the auth server, or when the user asks about Fastify plugin patterns.
 ---
 
 # Fastify Plugins (QAuth)
@@ -9,7 +9,7 @@ Standards-aligned Fastify plugin authoring for QAuth. Plugins extend the server 
 
 ## When to Use This Skill
 
-- Adding a new `@qauth/fastify-plugin-*` library
+- Adding a new `@qauth-labs/fastify-plugin-*` library
 - Wrapping a shared utility (DB, cache, JWT, PKCE, etc.) as a Fastify plugin
 - Reviewing or refactoring plugin registration order or decorator availability
 - Questions about encapsulation, `fastify-plugin`, or lifecycle hooks
@@ -19,7 +19,7 @@ Standards-aligned Fastify plugin authoring for QAuth. Plugins extend the server 
 | Concern          | QAuth pattern                                                                   |
 | ---------------- | ------------------------------------------------------------------------------- |
 | **Distribution** | Wrap with `fastify-plugin` so decorators are available to parent/children       |
-| **Name**         | `name: '@qauth/fastify-plugin-<feature>'` in fp options                         |
+| **Name**         | `name: '@qauth-labs/fastify-plugin-<feature>'` in fp options                    |
 | **Types**        | `declare module 'fastify' { interface FastifyInstance { ... } }` in plugin file |
 | **Options**      | Typed via `fp<OptionsType>(async (fastify, options) => {...}, { name })`        |
 | **Lifecycle**    | Use `onReady` for post-boot checks, `onClose` for cleanup (e.g. DB/cache)       |
@@ -31,7 +31,7 @@ Standards-aligned Fastify plugin authoring for QAuth. Plugins extend the server 
    All plugins that add decorators used outside their own context must use `fastify-plugin`. Otherwise decorators are encapsulated and not visible to the root app or sibling plugins.
 
 2. **Name and TypeScript**
-   - Pass `{ name: '@qauth/fastify-plugin-<feature>' }` as second argument to `fp()`.
+   - Pass `{ name: '@qauth-labs/fastify-plugin-<feature>' }` as second argument to `fp()`.
    - In the same file, extend `FastifyInstance` via `declare module 'fastify'` so routes and other plugins get correct types for your decorators.
 
 3. **Options**
@@ -69,7 +69,7 @@ Standards-aligned Fastify plugin authoring for QAuth. Plugins extend the server 
 
 ## Checklist for New Plugins
 
-- [ ] Plugin wrapped with `fp(..., { name: '@qauth/fastify-plugin-<feature>' })`
+- [ ] Plugin wrapped with `fp(..., { name: '@qauth-labs/fastify-plugin-<feature>' })`
 - [ ] `declare module 'fastify'` extends `FastifyInstance` with new decorators
 - [ ] Options type defined and used as `fp<Options>(...)` when plugin is configurable
 - [ ] Resources (DB, Redis, etc.) cleaned up in `onClose`

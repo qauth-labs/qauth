@@ -8,8 +8,8 @@ import {
   importPublicKey,
   signAccessToken,
   verifyAccessToken,
-} from '@qauth/server-jwt';
-import { JWTInvalidError } from '@qauth/shared-errors';
+} from '@qauth-labs/server-jwt';
+import { JWTInvalidError } from '@qauth-labs/shared-errors';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import fp from 'fastify-plugin';
 

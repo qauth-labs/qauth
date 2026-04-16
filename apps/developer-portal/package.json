@@ -1,10 +1,10 @@
 {
-  "name": "@qauth/developer-portal",
+  "name": "@qauth-labs/developer-portal",
   "version": "0.0.0",
   "private": true,
   "type": "module",
   "dependencies": {
-    "@qauth/ui": "workspace:*",
+    "@qauth-labs/ui": "workspace:*",
     "@tailwindcss/vite": "catalog:",
     "@tanstack/react-start": "catalog:",
     "@tanstack/react-router": "catalog:",

@@ -1,5 +1,5 @@
 {
-  "name": "@qauth/shared-validation",
+  "name": "@qauth-labs/shared-validation",
   "version": "0.0.0",
   "private": true,
   "main": "src/index.ts",

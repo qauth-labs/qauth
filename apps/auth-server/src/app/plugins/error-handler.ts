@@ -12,7 +12,7 @@ import {
   TooManyRequestsError,
   UniqueConstraintError,
   WeakPasswordError,
-} from '@qauth/shared-errors';
+} from '@qauth-labs/shared-errors';
 import type { FastifyError, FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import fp from 'fastify-plugin';
 

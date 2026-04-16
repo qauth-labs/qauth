@@ -19,7 +19,7 @@ When invoked:
    - **Phase 2 — Developer Portal (CURRENT)**: Self-service OAuth client registration, API key management, federation provider config UI, SDKs.
    - **Phase 3 — Production Hardening**: OIDC conformance, discovery + JWKS, rate limiting, security headers, Kubernetes.
    - **Phase 4 — Wallet Federation**: SIOPv2, OID4VP, EUDI Wallet, trust anchor registry, `federation-core` normalization. This is a real planned phase, not post-MVP.
-   - **Phase 5 — Post-Quantum Crypto**: Hybrid ML-DSA-65 + Ed25519 JWT, `@qauth/crypto` abstraction layer, napi-rs binding.
+   - **Phase 5 — Post-Quantum Crypto**: Hybrid ML-DSA-65 + Ed25519 JWT, `@qauth-labs/crypto` abstraction layer, napi-rs binding.
    - **Phase 6+ — Enterprise & Scale**: Social login, MFA/WebAuthn/TOTP, SAML, LDAP, orgs/teams, GraphQL, multi-region.
    - Call out when a request is ahead of its phase and suggest deferring or scoping to the current phase.
 

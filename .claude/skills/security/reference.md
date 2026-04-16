@@ -77,7 +77,7 @@ QAuth applies: rate limits on login/token/register/resend; minimum response time
 | Passwords    | Argon2id; zxcvbn strength; never log or store plaintext         |
 | PKCE         | `crypto.timingSafeEqual` for challenge verification             |
 | Auth timing  | `ensureMinimumResponseTime` on login, token, refresh            |
-| Errors       | Generic message for auth failure; `@qauth/shared-errors`        |
+| Errors       | Generic message for auth failure; `@qauth-labs/shared-errors`   |
 | Rate limit   | Global + per-route; Redis; env-driven; stricter on auth flows   |
 | Secrets      | Env/secrets manager; never in code/images/logs; ADR-001 for JWT |
 | Audit        | `audit_logs` for auth/token events; IP, userAgent, no secrets   |

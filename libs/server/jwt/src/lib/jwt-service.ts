@@ -1,4 +1,4 @@
-import { JWTExpiredError, JWTInvalidError } from '@qauth/shared-errors';
+import { JWTExpiredError, JWTInvalidError } from '@qauth-labs/shared-errors';
 import { jwtVerify, SignJWT } from 'jose';
 
 import type { JWTPayload, SignAccessTokenPayload } from '../types/jwt-service';

@@ -63,7 +63,7 @@ describe('Service', () => {
 
 ```typescript
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { buildTestApp } from '@qauth/shared-testing';
+import { buildTestApp } from '@qauth-labs/shared-testing';
 import type { FastifyInstance } from 'fastify';
 
 describe('Route', () => {
@@ -90,7 +90,7 @@ describe('Route', () => {
 ## Best Practices
 
 1. Test business logic in isolation
-2. Use `@qauth/shared-testing` utilities
+2. Use `@qauth-labs/shared-testing` utilities
 3. Use Testcontainers for real PostgreSQL
 4. Mock external services
 5. Name tests descriptively

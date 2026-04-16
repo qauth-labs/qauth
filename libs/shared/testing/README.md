@@ -4,7 +4,7 @@ Test helpers and utilities for QAuth. This library provides Fastify test helpers
 
 ## Overview
 
-The `@qauth/shared-testing` library provides:
+The `@qauth-labs/shared-testing` library provides:
 
 - **Fastify Test Helpers**: Utilities for building and managing test Fastify instances
 - **Supertest Helpers**: Utilities for making HTTP requests in tests
@@ -22,7 +22,7 @@ import {
   createTestRequest,
   createUserFixture,
   createRealmFixture,
-} from '@qauth/shared-testing';
+} from '@qauth-labs/shared-testing';
 ```
 
 ## Usage
@@ -34,8 +34,8 @@ import {
 Builds a test Fastify instance with the given plugin.
 
 ```typescript
-import { buildTestApp } from '@qauth/shared-testing';
-import { databasePlugin } from '@qauth/fastify-plugin-db';
+import { buildTestApp } from '@qauth-labs/shared-testing';
+import { databasePlugin } from '@qauth-labs/fastify-plugin-db';
 
 // Build test app with database plugin
 const app = await buildTestApp(databasePlugin, {
@@ -54,8 +54,8 @@ const app = await buildTestApp(databasePlugin, {
 **Example:**
 
 ```typescript
-import { buildTestApp } from '@qauth/shared-testing';
-import { databasePlugin } from '@qauth/fastify-plugin-db';
+import { buildTestApp } from '@qauth-labs/shared-testing';
+import { databasePlugin } from '@qauth-labs/fastify-plugin-db';
 
 const app = await buildTestApp(databasePlugin, { logger: false });
 ```
@@ -65,7 +65,7 @@ const app = await buildTestApp(databasePlugin, { logger: false });
 Closes a test Fastify instance and cleans up resources.
 
 ```typescript
-import { buildTestApp, closeTestApp } from '@qauth/shared-testing';
+import { buildTestApp, closeTestApp } from '@qauth-labs/shared-testing';
 
 const app = await buildTestApp(databasePlugin);
 
@@ -85,7 +85,7 @@ await closeTestApp(app);
 **Example:**
 
 ```typescript
-import { buildTestApp, closeTestApp } from '@qauth/shared-testing';
+import { buildTestApp, closeTestApp } from '@qauth-labs/shared-testing';
 
 describe('Database Plugin', () => {
   let app: FastifyInstance;
@@ -111,8 +111,8 @@ describe('Database Plugin', () => {
 Creates a Supertest request instance from a Fastify app.
 
 ```typescript
-import { buildTestApp, createTestRequest } from '@qauth/shared-testing';
-import { databasePlugin } from '@qauth/fastify-plugin-db';
+import { buildTestApp, createTestRequest } from '@qauth-labs/shared-testing';
+import { databasePlugin } from '@qauth-labs/fastify-plugin-db';
 
 const app = await buildTestApp(databasePlugin);
 const request = createTestRequest(app);
@@ -131,7 +131,7 @@ expect(response.status).toBe(200);
 **Example:**
 
 ```typescript
-import { buildTestApp, createTestRequest } from '@qauth/shared-testing';
+import { buildTestApp, createTestRequest } from '@qauth-labs/shared-testing';
 
 const app = await buildTestApp(databasePlugin);
 const request = createTestRequest(app);
@@ -153,7 +153,7 @@ const postResponse = await request.post('/users').send({
 Create user test data with `createUserFixture` and `createUserFixtures`.
 
 ```typescript
-import { createUserFixture, createUserFixtures } from '@qauth/shared-testing';
+import { createUserFixture, createUserFixtures } from '@qauth-labs/shared-testing';
 
 // Create a single user fixture
 const user = createUserFixture({
@@ -206,7 +206,7 @@ expect(users).toHaveLength(10);
 Create realm test data with `createRealmFixture`.
 
 ```typescript
-import { createRealmFixture } from '@qauth/shared-testing';
+import { createRealmFixture } from '@qauth-labs/shared-testing';
 
 // Create a realm fixture
 const realm = createRealmFixture({
@@ -236,9 +236,9 @@ const realm = createRealmFixture({
 
 ```typescript
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { buildTestApp, closeTestApp, createTestRequest } from '@qauth/shared-testing';
-import { createUserFixture, createRealmFixture } from '@qauth/shared-testing';
-import { databasePlugin } from '@qauth/fastify-plugin-db';
+import { buildTestApp, closeTestApp, createTestRequest } from '@qauth-labs/shared-testing';
+import { createUserFixture, createRealmFixture } from '@qauth-labs/shared-testing';
+import { databasePlugin } from '@qauth-labs/fastify-plugin-db';
 
 describe('User API', () => {
   let app: FastifyInstance;
@@ -344,10 +344,10 @@ pnpm nx typecheck shared-testing
 
 This library is used by test suites across the QAuth monorepo. It provides common testing utilities for:
 
-- [`@qauth/fastify-plugin-db`](../../fastify/plugins/db/README.md): Database plugin tests
-- [`@qauth/fastify-plugin-cache`](../../fastify/plugins/cache/README.md): Cache plugin tests
-- [`@qauth/fastify-plugin-password`](../../fastify/plugins/password/README.md): Password plugin tests
-- [`@qauth/fastify-plugin-email`](../../fastify/plugins/email/README.md): Email plugin tests
+- [`@qauth-labs/fastify-plugin-db`](../../fastify/plugins/db/README.md): Database plugin tests
+- [`@qauth-labs/fastify-plugin-cache`](../../fastify/plugins/cache/README.md): Cache plugin tests
+- [`@qauth-labs/fastify-plugin-password`](../../fastify/plugins/password/README.md): Password plugin tests
+- [`@qauth-labs/fastify-plugin-email`](../../fastify/plugins/email/README.md): Email plugin tests
 
 ## Dependencies
 

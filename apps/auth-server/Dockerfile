@@ -29,7 +29,7 @@ RUN corepack enable
 # Copy built application
 COPY --from=builder /app/dist/apps/auth-server ./
 
-# Copy compiled workspace libraries (referenced by @qauth/* imports)
+# Copy compiled workspace libraries (referenced by @qauth-labs/* imports)
 COPY --from=builder /app/dist/libs ./dist/libs
 
 # Copy package files for dependency resolution

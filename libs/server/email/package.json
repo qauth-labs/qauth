@@ -1,5 +1,5 @@
 {
-  "name": "@qauth/server-email",
+  "name": "@qauth-labs/server-email",
   "version": "0.0.0",
   "private": true,
   "main": "src/index.ts",

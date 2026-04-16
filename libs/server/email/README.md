@@ -4,7 +4,7 @@ Email service library for QAuth with token generation utilities. This library pr
 
 ## Overview
 
-The `@qauth/server-email` library provides:
+The `@qauth-labs/server-email` library provides:
 
 - **Token Generator**: Secure token generation and verification utilities
 - **Email Service**: Factory-pattern email service with provider abstraction
@@ -16,7 +16,7 @@ The `@qauth/server-email` library provides:
 This library is part of the QAuth monorepo and is automatically available to other projects within the workspace.
 
 ```typescript
-import { generateVerificationToken, createEmailService } from '@qauth/server-email';
+import { generateVerificationToken, createEmailService } from '@qauth-labs/server-email';
 ```
 
 ## Token Generator
@@ -26,7 +26,7 @@ import { generateVerificationToken, createEmailService } from '@qauth/server-ema
 Generates a secure verification token pair (token and hash).
 
 ```typescript
-import { generateVerificationToken } from '@qauth/server-email';
+import { generateVerificationToken } from '@qauth-labs/server-email';
 
 const { token, tokenHash } = generateVerificationToken();
 // token: "a1b2c3d4e5f6..." (64 chars, send to user)
@@ -45,7 +45,7 @@ const { token, tokenHash } = generateVerificationToken();
 Hashes a token using SHA-256 before storing in the database.
 
 ```typescript
-import { hashToken } from '@qauth/server-email';
+import { hashToken } from '@qauth-labs/server-email';
 
 const hash = hashToken('a1b2c3d4e5f6...');
 // Returns: "9f8e7d6c5b4a..." (SHA-256 hash)
@@ -56,7 +56,7 @@ const hash = hashToken('a1b2c3d4e5f6...');
 Validates that a token is a valid 64-character hexadecimal string.
 
 ```typescript
-import { isValidTokenFormat } from '@qauth/server-email';
+import { isValidTokenFormat } from '@qauth-labs/server-email';
 
 isValidTokenFormat('a1b2c3d4e5f6...'); // true (64 hex chars)
 isValidTokenFormat('invalid'); // false (too short)
@@ -67,7 +67,7 @@ isValidTokenFormat('invalid'); // false (too short)
 Compares two tokens in constant time to prevent timing attacks.
 
 ```typescript
-import { constantTimeCompare } from '@qauth/server-email';
+import { constantTimeCompare } from '@qauth-labs/server-email';
 
 const isValid = constantTimeCompare(storedToken, providedToken);
 ```
@@ -81,7 +81,7 @@ const isValid = constantTimeCompare(storedToken, providedToken);
 The email service uses dependency injection for flexibility:
 
 ```typescript
-import { createEmailService, MockEmailProvider } from '@qauth/server-email';
+import { createEmailService, MockEmailProvider } from '@qauth-labs/server-email';
 
 const provider = new MockEmailProvider();
 const emailService = createEmailService(provider, {
@@ -128,7 +128,7 @@ The library supports multiple email providers:
 For testing and development:
 
 ```typescript
-import { MockEmailProvider } from '@qauth/server-email';
+import { MockEmailProvider } from '@qauth-labs/server-email';
 
 const provider = new MockEmailProvider();
 await provider.sendEmail({
@@ -150,7 +150,7 @@ provider.clearSentEmails();
 For production use with Resend API:
 
 ```typescript
-import { ResendEmailProvider } from '@qauth/server-email';
+import { ResendEmailProvider } from '@qauth-labs/server-email';
 
 const provider = new ResendEmailProvider({
   apiKey: 're_...',
@@ -176,7 +176,7 @@ await provider.sendEmail({
 For self-hosted deployments:
 
 ```typescript
-import { SmtpEmailProvider } from '@qauth/server-email';
+import { SmtpEmailProvider } from '@qauth-labs/server-email';
 
 const provider = new SmtpEmailProvider({
   host: 'smtp.example.com',
@@ -208,7 +208,7 @@ await provider.sendEmail({
 The library includes React Email templates for type-safe, component-based email creation:
 
 ```typescript
-import { VerifyEmail, renderEmail, renderEmailText } from '@qauth/server-email';
+import { VerifyEmail, renderEmail, renderEmailText } from '@qauth-labs/server-email';
 import * as React from 'react';
 
 // Create template
@@ -310,7 +310,11 @@ Sends a verification email.
 ### Example: Token Verification Flow
 
 ```typescript
-import { generateVerificationToken, hashToken, constantTimeCompare } from '@qauth/server-email';
+import {
+  generateVerificationToken,
+  hashToken,
+  constantTimeCompare,
+} from '@qauth-labs/server-email';
 
 // 1. Generate token on registration
 const { token, tokenHash } = generateVerificationToken();
@@ -347,14 +351,14 @@ import type {
   EmailOptions,
   EmailResult,
   EmailServiceConfig,
-} from '@qauth/server-email';
+} from '@qauth-labs/server-email';
 ```
 
 ## Related Libraries
 
-- [`@qauth/fastify-plugin-email`](../../fastify/plugins/email/README.md): Fastify plugin for email service
-- [`@qauth/server-password`](../password/README.md): Password hashing library
-- [`@qauth/shared-validation`](../../shared/validation/README.md): Email validation utilities
+- [`@qauth-labs/fastify-plugin-email`](../../fastify/plugins/email/README.md): Fastify plugin for email service
+- [`@qauth-labs/server-password`](../password/README.md): Password hashing library
+- [`@qauth-labs/shared-validation`](../../shared/validation/README.md): Email validation utilities
 
 ## License
 

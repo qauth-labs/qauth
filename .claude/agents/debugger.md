@@ -22,7 +22,7 @@ Start debugging immediately; do not ask for permission to proceed.
 - **Debug config**: `.vscode/launch.json` — "Debug auth-server with Nx" (NODE_OPTIONS=--inspect).
 - **Tests**: `pnpm nx test <project>`; Vitest UI: `pnpm test:ui`. See `.claude/skills/nx-testing`.
 - **CI**: Use Nx MCP `ci_information` and `nx_current_running_task_output` for CI failures.
-- **Rules**: Apply `.cursor/rules/` (errors, validation, fastify); domain errors from `@qauth/shared-errors`.
+- **Rules**: Apply `.cursor/rules/` (errors, validation, fastify); domain errors from `@qauth-labs/shared-errors`.
 
 ## Debugging Process
 

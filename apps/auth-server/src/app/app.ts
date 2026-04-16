@@ -2,12 +2,12 @@ import * as path from 'node:path';
 
 import AutoLoad from '@fastify/autoload';
 import cors from '@fastify/cors';
-import { cachePlugin } from '@qauth/fastify-plugin-cache';
-import { databasePlugin } from '@qauth/fastify-plugin-db';
-import { emailPlugin, type EmailProviderConfig } from '@qauth/fastify-plugin-email';
-import { jwtPlugin } from '@qauth/fastify-plugin-jwt';
-import { passwordPlugin } from '@qauth/fastify-plugin-password';
-import { pkcePlugin } from '@qauth/fastify-plugin-pkce';
+import { cachePlugin } from '@qauth-labs/fastify-plugin-cache';
+import { databasePlugin } from '@qauth-labs/fastify-plugin-db';
+import { emailPlugin, type EmailProviderConfig } from '@qauth-labs/fastify-plugin-email';
+import { jwtPlugin } from '@qauth-labs/fastify-plugin-jwt';
+import { passwordPlugin } from '@qauth-labs/fastify-plugin-password';
+import { pkcePlugin } from '@qauth-labs/fastify-plugin-pkce';
 import type { FastifyInstance } from 'fastify';
 
 import { env } from '../config/env';

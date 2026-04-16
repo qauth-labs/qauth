@@ -1,4 +1,4 @@
-import { NotFoundError } from '@qauth/shared-errors';
+import { NotFoundError } from '@qauth-labs/shared-errors';
 import { and, eq, gt, lt } from 'drizzle-orm';
 
 import type { NewRefreshToken, RefreshToken, RefreshTokensRepository } from '../../types';

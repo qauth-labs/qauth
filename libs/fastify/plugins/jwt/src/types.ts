@@ -1,4 +1,4 @@
-import type { JWTPayload } from '@qauth/server-jwt';
+import type { JWTPayload } from '@qauth-labs/server-jwt';
 import type { FastifyPluginOptions } from 'fastify';
 
 /**
@@ -19,7 +19,7 @@ export interface JwtPluginOptions extends FastifyPluginOptions {
 
 /**
  * JWT payload structure
- * Re-exported to avoid apps needing direct dependency on @qauth/server-jwt
+ * Re-exported to avoid apps needing direct dependency on @qauth-labs/server-jwt
  */
 export type { JWTPayload };
 

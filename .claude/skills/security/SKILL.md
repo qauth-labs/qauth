@@ -22,7 +22,7 @@ Standards-aligned security for QAuth: authentication, authorization, rate limiti
 | **Passwords**     | Argon2id via `@node-rs/argon2`; never store plaintext; validate strength (zxcvbn)                          |
 | **Timing**        | Constant-time comparison for PKCE (`crypto.timingSafeEqual`); minimum response time on login/token/refresh |
 | **Rate limiting** | Per-route and global via `@fastify/rate-limit`; Redis store; env-driven limits                             |
-| **Errors**        | Generic messages for auth failures (no user enumeration); domain errors from `@qauth/shared-errors`        |
+| **Errors**        | Generic messages for auth failures (no user enumeration); domain errors from `@qauth-labs/shared-errors`   |
 | **Secrets**       | Keys in env/secrets manager; never in images or logs; see ADR-001 for JWT keys                             |
 | **Audit**         | Log auth/token events to `audit_logs` (success/failure, IP, userAgent, metadata)                           |
 | **Dependencies**  | Run `pnpm audit` (or npm audit); fix or document exceptions; track CVEs                                    |

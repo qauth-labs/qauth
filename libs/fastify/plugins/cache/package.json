@@ -1,10 +1,10 @@
 {
-  "name": "@qauth/fastify-plugin-cache",
+  "name": "@qauth-labs/fastify-plugin-cache",
   "version": "0.0.0",
   "private": true,
   "main": "src/index.ts",
   "dependencies": {
-    "@qauth/infra-cache": "workspace:*",
+    "@qauth-labs/infra-cache": "workspace:*",
     "fastify": "catalog:",
     "fastify-plugin": "catalog:"
   }

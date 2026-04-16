@@ -4,7 +4,7 @@ import {
   generatePkcePair,
   isValidCodeVerifierFormat,
   verifyCodeChallenge,
-} from '@qauth/server-pkce';
+} from '@qauth-labs/server-pkce';
 import type { FastifyInstance } from 'fastify';
 import fp from 'fastify-plugin';
 

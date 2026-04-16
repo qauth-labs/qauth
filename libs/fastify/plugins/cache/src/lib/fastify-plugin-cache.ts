@@ -4,7 +4,7 @@ import {
   createSessionUtils,
   type SessionUtilsInstance,
   testRedisConnection,
-} from '@qauth/infra-cache';
+} from '@qauth-labs/infra-cache';
 import type { FastifyInstance } from 'fastify';
 import fp from 'fastify-plugin';
 

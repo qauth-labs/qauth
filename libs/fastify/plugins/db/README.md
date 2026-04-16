@@ -1,10 +1,10 @@
 # Fastify Database Plugin
 
-Fastify plugin for PostgreSQL database connection management in QAuth. This plugin wraps the `@qauth/infra-db` library and provides database connection lifecycle management within Fastify applications.
+Fastify plugin for PostgreSQL database connection management in QAuth. This plugin wraps the `@qauth-labs/infra-db` library and provides database connection lifecycle management within Fastify applications.
 
 ## Overview
 
-The `@qauth/fastify-plugin-db` plugin integrates PostgreSQL into your Fastify application by:
+The `@qauth-labs/fastify-plugin-db` plugin integrates PostgreSQL into your Fastify application by:
 
 - Decorating the Fastify instance with `db` (Drizzle ORM) and `dbPool` (PostgreSQL connection pool) properties
 - Managing database connection lifecycle (connection, verification, graceful shutdown)
@@ -16,7 +16,7 @@ The `@qauth/fastify-plugin-db` plugin integrates PostgreSQL into your Fastify ap
 This library is part of the QAuth monorepo and is automatically available to other projects within the workspace.
 
 ```typescript
-import { databasePlugin } from '@qauth/fastify-plugin-db';
+import { databasePlugin } from '@qauth-labs/fastify-plugin-db';
 ```
 
 ## Usage
@@ -25,8 +25,8 @@ import { databasePlugin } from '@qauth/fastify-plugin-db';
 
 ```typescript
 import Fastify from 'fastify';
-import { databasePlugin } from '@qauth/fastify-plugin-db';
-import { env } from '@qauth/server-config';
+import { databasePlugin } from '@qauth-labs/fastify-plugin-db';
+import { env } from '@qauth-labs/server-config';
 
 const fastify = Fastify();
 
@@ -51,9 +51,9 @@ await fastify.listen({ port: 3000 });
 
 ```typescript
 import Fastify from 'fastify';
-import { databasePlugin } from '@qauth/fastify-plugin-db';
-import { cachePlugin } from '@qauth/fastify-plugin-cache';
-import { env } from '@qauth/server-config';
+import { databasePlugin } from '@qauth-labs/fastify-plugin-db';
+import { cachePlugin } from '@qauth-labs/fastify-plugin-cache';
+import { env } from '@qauth-labs/server-config';
 
 const fastify = Fastify();
 
@@ -92,7 +92,7 @@ Once registered, both Drizzle ORM and the connection pool are available on the F
 
 ```typescript
 // Using Drizzle ORM
-import { schema } from '@qauth/infra-db';
+import { schema } from '@qauth-labs/infra-db';
 const { users, realms, oauthClients } = schema;
 
 fastify.get('/users', async (request, reply) => {
@@ -118,8 +118,8 @@ fastify.get('/health', async (request, reply) => {
 For type-safe database operations with proper error handling, use the repository pattern:
 
 ```typescript
-import { usersRepository, realmsRepository } from '@qauth/infra-db';
-import { NotFoundError, UniqueConstraintError } from '@qauth/shared-errors';
+import { usersRepository, realmsRepository } from '@qauth-labs/infra-db';
+import { NotFoundError, UniqueConstraintError } from '@qauth-labs/shared-errors';
 
 // Get user by ID
 fastify.get('/users/:id', async (request, reply) => {
@@ -182,8 +182,8 @@ fastify.put('/users/:id', async (request, reply) => {
 Repositories support transactions for atomic operations:
 
 ```typescript
-import { db } from '@qauth/infra-db';
-import { usersRepository, realmsRepository } from '@qauth/infra-db';
+import { db } from '@qauth-labs/infra-db';
+import { usersRepository, realmsRepository } from '@qauth-labs/infra-db';
 
 fastify.post('/setup', async (request, reply) => {
   const { realmName, adminEmail } = request.body;
@@ -240,13 +240,13 @@ The plugin decorates the Fastify instance with two properties:
 
 Type: `typeof db` (Drizzle ORM instance)
 
-The Drizzle ORM instance. This is the same instance exported from `@qauth/infra-db`.
+The Drizzle ORM instance. This is the same instance exported from `@qauth-labs/infra-db`.
 
 **Example**:
 
 ```typescript
 // Using Drizzle ORM
-import { schema } from '@qauth/infra-db';
+import { schema } from '@qauth-labs/infra-db';
 const { users, realms, oauthClients } = schema;
 
 fastify.get('/users', async (request, reply) => {
@@ -271,7 +271,7 @@ fastify.get('/users/:id', async (request, reply) => {
 
 Type: `Pool` (from `pg`)
 
-The PostgreSQL connection pool. This is the same pool instance exported from `@qauth/infra-db`.
+The PostgreSQL connection pool. This is the same pool instance exported from `@qauth-labs/infra-db`.
 
 **Example**:
 
@@ -310,7 +310,7 @@ async function myRoute(fastify: FastifyInstance) {
 
 ## Configuration
 
-The plugin uses the same environment variables as `@qauth/infra-db`. Configure database connection in your `.env` file:
+The plugin uses the same environment variables as `@qauth-labs/infra-db`. Configure database connection in your `.env` file:
 
 ```bash
 # Database URL (recommended)
@@ -323,7 +323,7 @@ DB_POOL_IDLE_TIMEOUT=10000
 DB_POOL_CONNECTION_TIMEOUT=2000
 ```
 
-For detailed configuration options, see the [`@qauth/infra-db` README](../../infra/db/README.md).
+For detailed configuration options, see the [`@qauth-labs/infra-db` README](../../infra/db/README.md).
 
 ## Lifecycle Hooks
 
@@ -366,14 +366,14 @@ fastify.addHook('onClose', async () => {
 });
 ```
 
-## Integration with @qauth/infra-db
+## Integration with @qauth-labs/infra-db
 
-This plugin wraps the `@qauth/infra-db` library. The underlying database connection is managed by `@qauth/infra-db`, and this plugin provides Fastify-specific lifecycle management.
+This plugin wraps the `@qauth-labs/infra-db` library. The underlying database connection is managed by `@qauth-labs/infra-db`, and this plugin provides Fastify-specific lifecycle management.
 
-You can still use utilities from `@qauth/infra-db` directly:
+You can still use utilities from `@qauth-labs/infra-db` directly:
 
 ```typescript
-import { db, pool, testConnection } from '@qauth/infra-db';
+import { db, pool, testConnection } from '@qauth-labs/infra-db';
 
 // These use the same database connection
 const isConnected = await testConnection();
@@ -410,7 +410,7 @@ fastify.get('/safe-query', async (request, reply) => {
 
 4. **Error Handling**: Always wrap database operations in try-catch blocks in production code.
 
-5. **Connection Testing**: The plugin automatically tests connections on ready, but you can also test manually using utilities from `@qauth/infra-db`.
+5. **Connection Testing**: The plugin automatically tests connections on ready, but you can also test manually using utilities from `@qauth-labs/infra-db`.
 
 6. **Graceful Shutdown**: The plugin handles graceful shutdown automatically. Ensure your Fastify server properly handles SIGTERM and SIGINT signals.
 
@@ -420,7 +420,7 @@ fastify.get('/safe-query', async (request, reply) => {
 
 ```typescript
 import Fastify from 'fastify';
-import { databasePlugin } from '@qauth/fastify-plugin-db';
+import { databasePlugin } from '@qauth-labs/fastify-plugin-db';
 
 const fastify = Fastify();
 
@@ -468,7 +468,7 @@ await fastify.listen({ port: 3000 });
 
 ## Migrations
 
-Database migrations are managed through the `@qauth/infra-db` library. See the [`@qauth/infra-db` README](../../infra/db/README.md) for migration commands.
+Database migrations are managed through the `@qauth-labs/infra-db` library. See the [`@qauth-labs/infra-db` README](../../infra/db/README.md) for migration commands.
 
 ## Development
 
@@ -486,16 +486,16 @@ nx lint fastify-plugin-db
 
 ## Dependencies
 
-- `@qauth/infra-db`: Core database connection and Drizzle ORM
+- `@qauth-labs/infra-db`: Core database connection and Drizzle ORM
 - `fastify-plugin`: Fastify plugin wrapper
-- `pg`: PostgreSQL client (via `@qauth/infra-db`)
-- `drizzle-orm`: TypeScript ORM (via `@qauth/infra-db`)
+- `pg`: PostgreSQL client (via `@qauth-labs/infra-db`)
+- `drizzle-orm`: TypeScript ORM (via `@qauth-labs/infra-db`)
 
 ## Related Libraries
 
-- [`@qauth/infra-db`](../../infra/db/README.md): Core database utilities, Drizzle ORM, and repository pattern
-- [`@qauth/shared-errors`](../../shared/errors/README.md): Error classes used by repositories
-- [`@qauth/fastify-plugin-cache`](../cache/README.md): Cache plugin for Fastify
+- [`@qauth-labs/infra-db`](../../infra/db/README.md): Core database utilities, Drizzle ORM, and repository pattern
+- [`@qauth-labs/shared-errors`](../../shared/errors/README.md): Error classes used by repositories
+- [`@qauth-labs/fastify-plugin-cache`](../cache/README.md): Cache plugin for Fastify
 
 ## License
 

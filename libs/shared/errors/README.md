@@ -4,7 +4,7 @@ Centralized error classes and error handling utilities for the QAuth platform. T
 
 ## Overview
 
-The `@qauth/shared-errors` library provides a comprehensive set of error classes and utilities for consistent error handling across the QAuth platform. Errors are organized by domain (common, database, etc.) to maintain clear separation of concerns.
+The `@qauth-labs/shared-errors` library provides a comprehensive set of error classes and utilities for consistent error handling across the QAuth platform. Errors are organized by domain (common, database, etc.) to maintain clear separation of concerns.
 
 ## Features
 
@@ -18,7 +18,7 @@ The `@qauth/shared-errors` library provides a comprehensive set of error classes
 This library is part of the QAuth monorepo and is automatically available to other projects within the workspace.
 
 ```typescript
-import { NotFoundError, UniqueConstraintError } from '@qauth/shared-errors';
+import { NotFoundError, UniqueConstraintError } from '@qauth-labs/shared-errors';
 ```
 
 ## Usage
@@ -37,7 +37,7 @@ import {
   WeakPasswordError,
   EmailNotVerifiedError,
   EmailAlreadyVerifiedError,
-} from '@qauth/shared-errors';
+} from '@qauth-labs/shared-errors';
 
 // JWT verification
 try {
@@ -85,7 +85,7 @@ Common errors are domain-agnostic and can be used across different parts of the 
 Thrown when an entity is not found in the database or any data store.
 
 ```typescript
-import { NotFoundError } from '@qauth/shared-errors';
+import { NotFoundError } from '@qauth-labs/shared-errors';
 
 // In a repository or service
 async function getUser(id: string) {
@@ -112,7 +112,7 @@ import {
   UniqueConstraintError,
   isUniqueConstraintError,
   extractConstraintName,
-} from '@qauth/shared-errors';
+} from '@qauth-labs/shared-errors';
 
 try {
   await db.insert(users).values({ email: 'existing@example.com' });
@@ -130,7 +130,7 @@ try {
 Utilities for identifying and extracting information from database errors.
 
 ```typescript
-import { isUniqueConstraintError, extractConstraintName } from '@qauth/shared-errors';
+import { isUniqueConstraintError, extractConstraintName } from '@qauth-labs/shared-errors';
 
 try {
   // Database operation
@@ -155,7 +155,7 @@ try {
 
 ### NotFoundError
 
-**Location**: `@qauth/shared-errors` (from `common` domain)
+**Location**: `@qauth-labs/shared-errors` (from `common` domain)
 
 **Constructor**:
 
@@ -179,7 +179,7 @@ throw new NotFoundError('User', 'user-123');
 
 ### UniqueConstraintError
 
-**Location**: `@qauth/shared-errors` (from `database` domain)
+**Location**: `@qauth-labs/shared-errors` (from `database` domain)
 
 **Constructor**:
 
@@ -322,9 +322,9 @@ import {
   UniqueConstraintError,
   isUniqueConstraintError,
   extractConstraintName,
-} from '@qauth/shared-errors';
-import { db } from '@qauth/infra-db';
-import { users } from '@qauth/infra-db/schema';
+} from '@qauth-labs/shared-errors';
+import { db } from '@qauth-labs/infra-db';
+import { users } from '@qauth-labs/infra-db/schema';
 
 export async function createUser(data: NewUser) {
   try {
@@ -357,7 +357,7 @@ export async function getUserById(id: string) {
 Error classes include HTTP status codes for easy REST API integration:
 
 ```typescript
-import { NotFoundError, UniqueConstraintError } from '@qauth/shared-errors';
+import { NotFoundError, UniqueConstraintError } from '@qauth-labs/shared-errors';
 import Fastify from 'fastify';
 
 fastify.get('/users/:id', async (request, reply) => {
@@ -418,7 +418,7 @@ nx typecheck errors
 
 ## Related Libraries
 
-- [`@qauth/infra-db`](../../infra/db/README.md): Database library that uses these errors in repositories
+- [`@qauth-labs/infra-db`](../../infra/db/README.md): Database library that uses these errors in repositories
 
 ## Dependencies
 

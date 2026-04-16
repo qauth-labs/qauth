@@ -1,5 +1,5 @@
 {
-  "name": "@qauth/infra-cache",
+  "name": "@qauth-labs/infra-cache",
   "version": "0.0.0",
   "private": true,
   "main": "src/index.ts",

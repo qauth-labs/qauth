@@ -1,4 +1,8 @@
-import { InvalidCredentialsError, JWTExpiredError, JWTInvalidError } from '@qauth/shared-errors';
+import {
+  InvalidCredentialsError,
+  JWTExpiredError,
+  JWTInvalidError,
+} from '@qauth-labs/shared-errors';
 import type { FastifyInstance } from 'fastify';
 import Fastify from 'fastify';
 import { serializerCompiler, validatorCompiler, ZodTypeProvider } from 'fastify-type-provider-zod';

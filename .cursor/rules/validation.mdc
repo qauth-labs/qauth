@@ -28,7 +28,7 @@ Use standalone validators (see `.cursor/rules/zod.mdc`):
 - **Normalize before validation**: Email normalization (`normalizeEmail`) happens after format validation but before storage/query.
 - **Specific formats**: Use regex for exact formats (e.g. hex tokens: `/^[0-9a-fA-F]{64}$/`, PKCE verifiers: `/^[A-Za-z0-9._~-]{43,128}$/`).
 - **Length limits**: Set `.min()` and `.max()` on strings to prevent DoS (e.g. `state: z.string().max(255).optional()`).
-- **Password strength**: Use `zxcvbn` via `@qauth/shared-validation`; return feedback for weak passwords.
+- **Password strength**: Use `zxcvbn` via `@qauth-labs/shared-validation`; return feedback for weak passwords.
 
 ## Route Integration
 

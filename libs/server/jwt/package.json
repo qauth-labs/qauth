@@ -1,10 +1,10 @@
 {
-  "name": "@qauth/server-jwt",
+  "name": "@qauth-labs/server-jwt",
   "version": "0.0.0",
   "private": true,
   "main": "src/index.ts",
   "dependencies": {
-    "@qauth/shared-errors": "workspace:*",
+    "@qauth-labs/shared-errors": "workspace:*",
     "jose": "catalog:"
   },
   "devDependencies": {

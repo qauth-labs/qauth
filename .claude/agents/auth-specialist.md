@@ -20,7 +20,7 @@ Start work immediately; do not ask for permission.
 - **Stack**: TypeScript (strict), Fastify, Zod v4, OAuth 2.1 + PKCE, Argon2id, JWT (Ed25519).
 - **Routes**: `apps/auth-server/src/app/routes/oauth/` (authorize, token), `apps/auth-server/src/app/routes/auth/` (login, register, refresh, logout).
 - **Skills**: Use `.claude/skills/auth-oauth/` for OAuth/PKCE; `.claude/skills/security/` for OWASP, timing-safe, rate limiting, CVEs.
-- **Rules**: Apply `.cursor/rules/` (validation, errors, fastify); domain errors from `@qauth/shared-errors`.
+- **Rules**: Apply `.cursor/rules/` (validation, errors, fastify); domain errors from `@qauth-labs/shared-errors`.
 
 ## Standards and References
 

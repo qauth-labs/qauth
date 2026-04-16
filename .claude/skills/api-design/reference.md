@@ -77,7 +77,7 @@ Standardize error payload so clients can parse reliably:
 - **constraint** (optional): E.g. DB constraint name for 409/422.
 - **retryAfter** (optional): For 429.
 
-QAuth implements this in the global error handler; domain errors from `@qauth/shared-errors` map to this shape.
+QAuth implements this in the global error handler; domain errors from `@qauth-labs/shared-errors` map to this shape.
 
 ---
 
@@ -113,16 +113,16 @@ When adding OpenAPI export: document all public routes, request/response schemas
 
 ## 9. QAuth conventions (summary)
 
-| Item        | Convention                                                                    |
-| ----------- | ----------------------------------------------------------------------------- | --------------------------------------- |
-| Schemas     | Zod in `app/schemas/`; `z.infer<>` for types                                  |
-| Validators  | Zod v4: `z.email()`, `z.uuid()`, `z.url()` (standalone)                       |
-| Route       | `fastify.withTypeProvider<ZodTypeProvider>().get                              | post(..., { schema, config }, handler)` |
-| Success     | 200/201/204 with typed body; no envelope                                      |
-| Errors      | `@qauth/shared-errors` + global handler → `{ error, statusCode, code?, ... }` |
-| OAuth/token | snake_case per RFC 6749                                                       |
-| App JSON    | camelCase                                                                     |
-| Rate limit  | `config.rateLimit` with env-driven values                                     |
-| Versioning  | Not used; use `/v1/` or header when added                                     |
+| Item        | Convention                                                                         |
+| ----------- | ---------------------------------------------------------------------------------- | --------------------------------------- |
+| Schemas     | Zod in `app/schemas/`; `z.infer<>` for types                                       |
+| Validators  | Zod v4: `z.email()`, `z.uuid()`, `z.url()` (standalone)                            |
+| Route       | `fastify.withTypeProvider<ZodTypeProvider>().get                                   | post(..., { schema, config }, handler)` |
+| Success     | 200/201/204 with typed body; no envelope                                           |
+| Errors      | `@qauth-labs/shared-errors` + global handler → `{ error, statusCode, code?, ... }` |
+| OAuth/token | snake_case per RFC 6749                                                            |
+| App JSON    | camelCase                                                                          |
+| Rate limit  | `config.rateLimit` with env-driven values                                          |
+| Versioning  | Not used; use `/v1/` or header when added                                          |
 
 These align with current REST and OpenAPI practice and with QAuth’s auth-server implementation.

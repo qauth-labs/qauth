@@ -2,7 +2,7 @@
 
 Redis connection and caching utilities for the QAuth project.
 
-> **Note**: This is the core cache library. For Fastify integration, use [`@qauth/fastify-plugin-cache`](../../fastify/plugins/cache/README.md) which wraps this library and provides Fastify-specific lifecycle management.
+> **Note**: This is the core cache library. For Fastify integration, use [`@qauth-labs/fastify-plugin-cache`](../../fastify/plugins/cache/README.md) which wraps this library and provides Fastify-specific lifecycle management.
 
 ## Overview
 
@@ -48,7 +48,7 @@ REDIS_MAX_RETRIES=3
 ### Basic Connection
 
 ```typescript
-import { getRedis, testConnection, isRedisConnected } from '@qauth/infra-cache';
+import { getRedis, testConnection, isRedisConnected } from '@qauth-labs/infra-cache';
 
 // Test connection
 const isConnected = await testConnection();
@@ -63,7 +63,7 @@ if (isRedisConnected()) {
 ### Session Management
 
 ```typescript
-import { SessionUtils } from '@qauth/infra-cache';
+import { SessionUtils } from '@qauth-labs/infra-cache';
 
 // Set session data
 await SessionUtils.setSession(
@@ -93,7 +93,7 @@ await SessionUtils.deleteSession('user123');
 ### Rate Limiting
 
 ```typescript
-import { RateLimitUtils } from '@qauth/infra-cache';
+import { RateLimitUtils } from '@qauth-labs/infra-cache';
 
 // Check rate limit
 const result = await RateLimitUtils.checkRateLimit('user123', 10, 60); // 10 requests per minute
@@ -112,7 +112,7 @@ await RateLimitUtils.resetRateLimit('user123');
 ### Caching
 
 ```typescript
-import { CacheUtils } from '@qauth/infra-cache';
+import { CacheUtils } from '@qauth-labs/infra-cache';
 
 // Set cache
 await CacheUtils.setCache(
@@ -147,7 +147,7 @@ await CacheUtils.deleteCache('user:profile:123');
 ### User Data
 
 ```typescript
-import { UserUtils } from '@qauth/infra-cache';
+import { UserUtils } from '@qauth-labs/infra-cache';
 
 // Set user data
 await UserUtils.setUserData(
@@ -169,7 +169,7 @@ await UserUtils.deleteUserData('user123');
 ### Token Management
 
 ```typescript
-import { TokenUtils } from '@qauth/infra-cache';
+import { TokenUtils } from '@qauth-labs/infra-cache';
 
 // Blacklist token
 await TokenUtils.blacklistToken('jwt-token-here', 900); // 15 minutes TTL
@@ -213,7 +213,7 @@ The library includes comprehensive error handling:
 The library automatically handles graceful shutdown:
 
 ```typescript
-import { gracefulShutdown } from '@qauth/infra-cache';
+import { gracefulShutdown } from '@qauth-labs/infra-cache';
 
 // Manual graceful shutdown
 await gracefulShutdown();
@@ -221,7 +221,7 @@ await gracefulShutdown();
 
 ## Fastify Integration
 
-For Fastify applications, use the [`@qauth/fastify-plugin-cache`](../../fastify/plugins/cache/README.md) plugin which wraps this library and provides:
+For Fastify applications, use the [`@qauth-labs/fastify-plugin-cache`](../../fastify/plugins/cache/README.md) plugin which wraps this library and provides:
 
 - Automatic Redis connection lifecycle management
 - Fastify instance decoration with `fastify.redis`
@@ -232,8 +232,8 @@ For Fastify applications, use the [`@qauth/fastify-plugin-cache`](../../fastify/
 
 ```typescript
 import Fastify from 'fastify';
-import { cachePlugin } from '@qauth/fastify-plugin-cache';
-import { SessionUtils } from '@qauth/infra-cache';
+import { cachePlugin } from '@qauth-labs/fastify-plugin-cache';
+import { SessionUtils } from '@qauth-labs/infra-cache';
 
 const fastify = Fastify();
 
@@ -291,7 +291,7 @@ The utility classes provide a complete set of operations for these features whil
 
 ## Related Libraries
 
-- [`@qauth/fastify-plugin-cache`](../../fastify/plugins/cache/README.md): Fastify plugin wrapper for this library
+- [`@qauth-labs/fastify-plugin-cache`](../../fastify/plugins/cache/README.md): Fastify plugin wrapper for this library
 
 ## Dependencies
 

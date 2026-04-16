@@ -1,4 +1,4 @@
-import type { RedisConfig } from '@qauth/infra-cache';
+import type { RedisConfig } from '@qauth-labs/infra-cache';
 import type { FastifyPluginOptions } from 'fastify';
 
 /**

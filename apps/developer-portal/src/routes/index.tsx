@@ -1,4 +1,4 @@
-import { Button } from '@qauth/ui';
+import { Button } from '@qauth-labs/ui';
 import { createFileRoute } from '@tanstack/react-router';
 
 export const Route = createFileRoute('/')({

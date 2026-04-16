@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 
-import { InvalidTokenError, NotFoundError } from '@qauth/shared-errors';
+import { InvalidTokenError, NotFoundError } from '@qauth-labs/shared-errors';
 import type { FastifyInstance } from 'fastify';
 import { ZodTypeProvider } from 'fastify-type-provider-zod';
 
