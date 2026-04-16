@@ -1,10 +1,10 @@
 # Fastify Cache Plugin
 
-Fastify plugin for Redis connection management in QAuth. This plugin wraps the `@qauth/infra-cache` library and provides Redis connection lifecycle management within Fastify applications.
+Fastify plugin for Redis connection management in QAuth. This plugin wraps the `@qauth-labs/infra-cache` library and provides Redis connection lifecycle management within Fastify applications.
 
 ## Overview
 
-The `@qauth/fastify-plugin-cache` plugin integrates Redis into your Fastify application by:
+The `@qauth-labs/fastify-plugin-cache` plugin integrates Redis into your Fastify application by:
 
 - Decorating the Fastify instance with a `redis` property
 - Managing Redis connection lifecycle (connection, verification, graceful shutdown)
@@ -16,7 +16,7 @@ The `@qauth/fastify-plugin-cache` plugin integrates Redis into your Fastify appl
 This library is part of the QAuth monorepo and is automatically available to other projects within the workspace.
 
 ```typescript
-import { cachePlugin } from '@qauth/fastify-plugin-cache';
+import { cachePlugin } from '@qauth-labs/fastify-plugin-cache';
 ```
 
 ## Usage
@@ -25,8 +25,8 @@ import { cachePlugin } from '@qauth/fastify-plugin-cache';
 
 ```typescript
 import Fastify from 'fastify';
-import { cachePlugin } from '@qauth/fastify-plugin-cache';
-import { env } from '@qauth/server-config';
+import { cachePlugin } from '@qauth-labs/fastify-plugin-cache';
+import { env } from '@qauth-labs/server-config';
 
 const fastify = Fastify();
 
@@ -53,9 +53,9 @@ await fastify.listen({ port: 3000 });
 
 ```typescript
 import Fastify from 'fastify';
-import { cachePlugin } from '@qauth/fastify-plugin-cache';
-import { databasePlugin } from '@qauth/fastify-plugin-db';
-import { env } from '@qauth/server-config';
+import { cachePlugin } from '@qauth-labs/fastify-plugin-cache';
+import { databasePlugin } from '@qauth-labs/fastify-plugin-db';
+import { env } from '@qauth-labs/server-config';
 
 const fastify = Fastify();
 
@@ -135,7 +135,7 @@ The plugin decorates the Fastify instance with:
 
 Type: `Redis` (from `ioredis`)
 
-The Redis client instance. This is the same instance returned by `getRedis()` from `@qauth/infra-cache`.
+The Redis client instance. This is the same instance returned by `getRedis()` from `@qauth-labs/infra-cache`.
 
 **Example**:
 
@@ -173,7 +173,7 @@ async function myRoute(fastify: FastifyInstance) {
 
 ## Configuration
 
-The plugin uses the same environment variables as `@qauth/infra-cache`. Configure Redis connection in your `.env` file:
+The plugin uses the same environment variables as `@qauth-labs/infra-cache`. Configure Redis connection in your `.env` file:
 
 ```bash
 # Redis Configuration
@@ -195,7 +195,7 @@ REDIS_COMMAND_TIMEOUT=5000
 REDIS_MAX_RETRIES=3
 ```
 
-For detailed configuration options, see the [`@qauth/infra-cache` README](../../infra/cache/README.md).
+For detailed configuration options, see the [`@qauth-labs/infra-cache` README](../../infra/cache/README.md).
 
 ## Lifecycle Hooks
 
@@ -238,14 +238,14 @@ fastify.addHook('onClose', async () => {
 });
 ```
 
-## Integration with @qauth/infra-cache
+## Integration with @qauth-labs/infra-cache
 
-This plugin wraps the `@qauth/infra-cache` library. The underlying Redis connection is managed by `@qauth/infra-cache`, and this plugin provides Fastify-specific lifecycle management.
+This plugin wraps the `@qauth-labs/infra-cache` library. The underlying Redis connection is managed by `@qauth-labs/infra-cache`, and this plugin provides Fastify-specific lifecycle management.
 
-You can still use utilities from `@qauth/infra-cache` directly:
+You can still use utilities from `@qauth-labs/infra-cache` directly:
 
 ```typescript
-import { SessionUtils, CacheUtils } from '@qauth/infra-cache';
+import { SessionUtils, CacheUtils } from '@qauth-labs/infra-cache';
 
 // These utilities use the same Redis connection
 await SessionUtils.setSession('user123', data, 3600);
@@ -278,18 +278,18 @@ fastify.get('/safe-cache', async (request, reply) => {
 
 2. **Error Handling**: Always wrap Redis operations in try-catch blocks in production code.
 
-3. **Connection Testing**: The plugin automatically tests connections on ready, but you can also test manually using utilities from `@qauth/infra-cache`.
+3. **Connection Testing**: The plugin automatically tests connections on ready, but you can also test manually using utilities from `@qauth-labs/infra-cache`.
 
 4. **Graceful Shutdown**: The plugin handles graceful shutdown automatically. Ensure your Fastify server properly handles SIGTERM and SIGINT signals.
 
-5. **Use Utilities**: For common operations (sessions, caching, rate limiting), prefer using utilities from `@qauth/infra-cache` rather than direct Redis commands.
+5. **Use Utilities**: For common operations (sessions, caching, rate limiting), prefer using utilities from `@qauth-labs/infra-cache` rather than direct Redis commands.
 
 ## Example: Complete Integration
 
 ```typescript
 import Fastify from 'fastify';
-import { cachePlugin } from '@qauth/fastify-plugin-cache';
-import { SessionUtils } from '@qauth/infra-cache';
+import { cachePlugin } from '@qauth-labs/fastify-plugin-cache';
+import { SessionUtils } from '@qauth-labs/infra-cache';
 
 const fastify = Fastify();
 
@@ -340,14 +340,14 @@ nx lint fastify-plugin-cache
 
 ## Dependencies
 
-- `@qauth/infra-cache`: Core Redis connection and utilities
+- `@qauth-labs/infra-cache`: Core Redis connection and utilities
 - `fastify-plugin`: Fastify plugin wrapper
-- `ioredis`: Redis client (via `@qauth/infra-cache`)
+- `ioredis`: Redis client (via `@qauth-labs/infra-cache`)
 
 ## Related Libraries
 
-- [`@qauth/infra-cache`](../../infra/cache/README.md): Core Redis utilities and connection management
-- [`@qauth/fastify-plugin-db`](../db/README.md): Database plugin for Fastify
+- [`@qauth-labs/infra-cache`](../../infra/cache/README.md): Core Redis utilities and connection management
+- [`@qauth-labs/fastify-plugin-db`](../db/README.md): Database plugin for Fastify
 
 ## License
 

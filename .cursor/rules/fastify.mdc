@@ -14,7 +14,7 @@ alwaysApply: false
 
 ## Plugins
 
-- **Shared decorators**: Wrap with `fastify-plugin` and pass `{ name: '@qauth/fastify-plugin-<feature>' }` so decorators are visible to the parent app. Without `fp`, decorators are encapsulated.
+- **Shared decorators**: Wrap with `fastify-plugin` and pass `{ name: '@qauth-labs/fastify-plugin-<feature>' }` so decorators are visible to the parent app. Without `fp`, decorators are encapsulated.
 - **Lifecycle**: Use `onReady` for post-boot checks and `onClose` for cleanup (e.g. DB/Redis). Decorate only after async setup completes.
 - **TypeScript**: Extend `FastifyInstance` via `declare module 'fastify'` in the plugin file so routes get correct types.
 
@@ -56,6 +56,6 @@ export const myPlugin = fp(
   async (fastify, options) => {
     fastify.decorate('myUtil', createUtil(options));
   },
-  { name: '@qauth/fastify-plugin-myfeature' }
+  { name: '@qauth-labs/fastify-plugin-myfeature' }
 );
 ```

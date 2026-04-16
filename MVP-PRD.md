@@ -61,7 +61,7 @@ The project is built toward a future where digital identity is portable and user
 - [x] Set up Redis connection
 - [x] Create base Fastify server structure
 - [x] Set up environment configuration
-- [x] Set up testing infrastructure (@qauth/shared-testing)
+- [x] Set up testing infrastructure (@qauth-labs/shared-testing)
 - [x] Create Fastify plugins (db, cache, password, email)
 
 #### Deliverables
@@ -103,7 +103,7 @@ The project is built toward a future where digital identity is portable and user
 - [x] Create initial database migration (0000_glamorous_valkyrie.sql)
 - [x] Implement repository pattern with BaseRepository interface
 - [x] Create repositories for users, realms, audit logs, and email verification tokens
-- [x] Add centralized error handling library (@qauth/shared-errors)
+- [x] Add centralized error handling library (@qauth-labs/shared-errors)
 
 **Acceptance Criteria**:
 
@@ -120,10 +120,10 @@ The project is built toward a future where digital identity is portable and user
 **Tasks**:
 
 - [x] Implement user registration endpoint (`POST /auth/register`)
-- [x] Integrate @node-rs/argon2 for password hashing (@qauth/server-password)
-- [x] Email validation schema (@qauth/shared-validation)
-- [x] Password strength validation (zxcvbn) (@qauth/shared-validation)
-- [x] Fastify password plugin (@qauth/fastify-plugin-password)
+- [x] Integrate @node-rs/argon2 for password hashing (@qauth-labs/server-password)
+- [x] Email validation schema (@qauth-labs/shared-validation)
+- [x] Password strength validation (zxcvbn) (@qauth-labs/shared-validation)
+- [x] Fastify password plugin (@qauth-labs/fastify-plugin-password)
 - [x] Check for duplicate emails (database unique constraint)
 - [x] Rate limiting on registration
 
@@ -1018,7 +1018,7 @@ ENTRYPOINT ["/bin/sh", "/app/docker-entrypoint.sh"]
 
 ---
 
-## Phase 5: Post-Quantum Crypto (`@qauth/crypto`)
+## Phase 5: Post-Quantum Crypto (`@qauth-labs/crypto`)
 
 **Timeline**: 4-6 weeks
 **Status**: Not Started
@@ -1036,7 +1036,7 @@ ENTRYPOINT ["/bin/sh", "/app/docker-entrypoint.sh"]
 **Tasks**:
 
 - [ ] Design algorithm-agnostic abstraction: `sign(payload, key)` / `verify(token, key)` / `generateKeyPair(alg)`
-- [ ] Implement `@qauth/crypto` napi-rs binding wrapping `aws-lc-rs`
+- [ ] Implement `@qauth-labs/crypto` napi-rs binding wrapping `aws-lc-rs`
 - [ ] ML-DSA-65 key generation, signing, and verification
 - [ ] Hybrid composite signing: ML-DSA-65 + Ed25519 per IETF LAMPS draft
 - [ ] JWKS endpoint: support mixed key types (`"kty": "AKP"` for ML-DSA per JOSE draft)
@@ -1176,7 +1176,7 @@ These features are NOT part of Phases 1–5:
 
 - **Vitest** - Unit and integration testing
 - **Supertest** - HTTP API testing
-- **@qauth/shared-testing** - Test utilities and fixtures
+- **@qauth-labs/shared-testing** - Test utilities and fixtures
 
 **DevOps**:
 
@@ -1402,35 +1402,35 @@ The QAuth monorepo is organized into the following libraries:
 
 ### Server Libraries (`libs/server/`)
 
-| Library    | Package                  | Description                                                |
-| ---------- | ------------------------ | ---------------------------------------------------------- |
-| `config`   | `@qauth/server-config`   | Environment configuration with Zod schemas                 |
-| `email`    | `@qauth/server-email`    | Email service with multiple providers (Resend, SMTP, Mock) |
-| `password` | `@qauth/server-password` | Password hashing with Argon2id                             |
+| Library    | Package                       | Description                                                |
+| ---------- | ----------------------------- | ---------------------------------------------------------- |
+| `config`   | `@qauth-labs/server-config`   | Environment configuration with Zod schemas                 |
+| `email`    | `@qauth-labs/server-email`    | Email service with multiple providers (Resend, SMTP, Mock) |
+| `password` | `@qauth-labs/server-password` | Password hashing with Argon2id                             |
 
 ### Infrastructure Libraries (`libs/infra/`)
 
-| Library | Package              | Description                                        |
-| ------- | -------------------- | -------------------------------------------------- |
-| `db`    | `@qauth/infra-db`    | PostgreSQL database with Drizzle ORM, repositories |
-| `cache` | `@qauth/infra-cache` | Redis connection and caching utilities             |
+| Library | Package                   | Description                                        |
+| ------- | ------------------------- | -------------------------------------------------- |
+| `db`    | `@qauth-labs/infra-db`    | PostgreSQL database with Drizzle ORM, repositories |
+| `cache` | `@qauth-labs/infra-cache` | Redis connection and caching utilities             |
 
 ### Shared Libraries (`libs/shared/`)
 
-| Library      | Package                    | Description                                         |
-| ------------ | -------------------------- | --------------------------------------------------- |
-| `errors`     | `@qauth/shared-errors`     | Centralized error handling (auth, database, common) |
-| `validation` | `@qauth/shared-validation` | Validation utilities (email, password strength)     |
-| `testing`    | `@qauth/shared-testing`    | Test helpers (Fastify, Supertest, fixtures)         |
+| Library      | Package                         | Description                                         |
+| ------------ | ------------------------------- | --------------------------------------------------- |
+| `errors`     | `@qauth-labs/shared-errors`     | Centralized error handling (auth, database, common) |
+| `validation` | `@qauth-labs/shared-validation` | Validation utilities (email, password strength)     |
+| `testing`    | `@qauth-labs/shared-testing`    | Test helpers (Fastify, Supertest, fixtures)         |
 
 ### Fastify Plugins (`libs/fastify/plugins/`)
 
-| Plugin     | Package                          | Description                                     |
-| ---------- | -------------------------------- | ----------------------------------------------- |
-| `db`       | `@qauth/fastify-plugin-db`       | Database plugin with repository injection       |
-| `cache`    | `@qauth/fastify-plugin-cache`    | Redis cache plugin                              |
-| `password` | `@qauth/fastify-plugin-password` | Password hasher and validator injection         |
-| `email`    | `@qauth/fastify-plugin-email`    | Email service injection with provider selection |
+| Plugin     | Package                               | Description                                     |
+| ---------- | ------------------------------------- | ----------------------------------------------- |
+| `db`       | `@qauth-labs/fastify-plugin-db`       | Database plugin with repository injection       |
+| `cache`    | `@qauth-labs/fastify-plugin-cache`    | Redis cache plugin                              |
+| `password` | `@qauth-labs/fastify-plugin-password` | Password hasher and validator injection         |
+| `email`    | `@qauth-labs/fastify-plugin-email`    | Email service injection with provider selection |
 
 ---
 

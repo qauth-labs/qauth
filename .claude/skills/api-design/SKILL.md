@@ -38,7 +38,7 @@ Standards-aligned HTTP API design for QAuth auth-server. APIs are resource-orien
    Use `config.rateLimit` with `max`, `timeWindow`, and optional `keyGenerator` (e.g. by `request.ip`). Values come from env (e.g. `env.LOGIN_RATE_LIMIT`).
 
 4. **Errors**  
-   Throw domain errors from `@qauth/shared-errors`. Error handler maps them to HTTP status and the standard error JSON shape. For validation, rely on Fastify validation (schema); it produces 400 with `details`.
+   Throw domain errors from `@qauth-labs/shared-errors`. Error handler maps them to HTTP status and the standard error JSON shape. For validation, rely on Fastify validation (schema); it produces 400 with `details`.
 
 5. **Security**  
    Keep handlers stateless. Use constant-time checks and minimum response time where needed (e.g. login). Do not log secrets or tokens.
@@ -74,7 +74,7 @@ All errors use a common shape (see `error-handler.ts` and `common.ts`):
 - **Required**: `error` (string), `statusCode` (number).
 - **Optional**: `code` (e.g. `VALIDATION_ERROR`), `feedback` (e.g. password rules), `constraint` (e.g. unique violation), `retryAfter` (429), `details` (validation details). In development, `stack` may be included for 500.
 
-Use custom error classes from `@qauth/shared-errors` so the handler can set status and optional fields consistently.
+Use custom error classes from `@qauth-labs/shared-errors` so the handler can set status and optional fields consistently.
 
 ## Naming Conventions
 
@@ -87,7 +87,7 @@ Use custom error classes from `@qauth/shared-errors` so the handler can set stat
 - [ ] Zod schema(s) in `app/schemas/` with exported type
 - [ ] Route registered with `schema.body` / `querystring` / `params` and `schema.response`
 - [ ] Rate limit via `config.rateLimit` where appropriate
-- [ ] Domain errors thrown from `@qauth/shared-errors`; no ad-hoc status codes in handler
+- [ ] Domain errors thrown from `@qauth-labs/shared-errors`; no ad-hoc status codes in handler
 - [ ] OAuth-related payloads use RFC snake_case; other JSON uses camelCase
 - [ ] No secrets or tokens in logs
 

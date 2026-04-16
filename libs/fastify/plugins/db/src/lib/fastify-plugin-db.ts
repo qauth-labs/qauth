@@ -15,7 +15,7 @@ import {
   type RealmsRepository,
   type RefreshTokensRepository,
   type UsersRepository,
-} from '@qauth/infra-db';
+} from '@qauth-labs/infra-db';
 import type { FastifyInstance } from 'fastify';
 import fp from 'fastify-plugin';
 

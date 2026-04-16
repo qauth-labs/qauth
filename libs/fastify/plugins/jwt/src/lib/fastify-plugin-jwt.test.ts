@@ -1,5 +1,5 @@
-import { generateEdDSAKeyPair, importPrivateKey, signAccessToken } from '@qauth/server-jwt';
-import { JWTExpiredError, JWTInvalidError } from '@qauth/shared-errors';
+import { generateEdDSAKeyPair, importPrivateKey, signAccessToken } from '@qauth-labs/server-jwt';
+import { JWTExpiredError, JWTInvalidError } from '@qauth-labs/shared-errors';
 import type { FastifyInstance } from 'fastify';
 import Fastify from 'fastify';
 import { exportPKCS8, exportSPKI, SignJWT } from 'jose';

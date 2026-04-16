@@ -1,5 +1,5 @@
 {
-  "name": "@qauth/server-config",
+  "name": "@qauth-labs/server-config",
   "version": "0.0.0",
   "private": true,
   "main": "src/index.ts",

@@ -1,11 +1,11 @@
 # JWT Plugin
 
-Fastify plugin wrapping `@qauth/server-jwt` for JWT signing, verification, and route protection.
+Fastify plugin wrapping `@qauth-labs/server-jwt` for JWT signing, verification, and route protection.
 
 ## Usage
 
 ```typescript
-import { jwtPlugin } from '@qauth/fastify-plugin-jwt';
+import { jwtPlugin } from '@qauth-labs/fastify-plugin-jwt';
 
 await fastify.register(jwtPlugin, {
   privateKey: env.JWT_PRIVATE_KEY,

@@ -8,7 +8,7 @@ import {
   passwordEnvSchema,
   rateLimitEnvSchema,
   redisEnvSchema,
-} from '@qauth/server-config';
+} from '@qauth-labs/server-config';
 import { z } from 'zod';
 
 /**

@@ -3,8 +3,8 @@ import {
   isUniqueConstraintError,
   NotFoundError,
   UniqueConstraintError,
-} from '@qauth/shared-errors';
-import { normalizeEmail } from '@qauth/shared-validation';
+} from '@qauth-labs/shared-errors';
+import { normalizeEmail } from '@qauth-labs/shared-validation';
 import { and, eq, InferInsertModel, InferSelectModel } from 'drizzle-orm';
 
 import { DbClient } from '../db';

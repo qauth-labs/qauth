@@ -3,7 +3,7 @@ import {
   isUniqueConstraintError,
   NotFoundError,
   UniqueConstraintError,
-} from '@qauth/shared-errors';
+} from '@qauth-labs/shared-errors';
 import { and, eq } from 'drizzle-orm';
 
 import type {

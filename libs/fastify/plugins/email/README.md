@@ -4,7 +4,7 @@ Fastify plugin for email service in QAuth. This plugin provides dependency injec
 
 ## Overview
 
-The `@qauth/fastify-plugin-email` plugin integrates email functionality into your Fastify application by:
+The `@qauth-labs/fastify-plugin-email` plugin integrates email functionality into your Fastify application by:
 
 - Decorating the Fastify instance with `emailService` property
 - Using factory pattern for configuration (no direct `process.env` access)
@@ -17,7 +17,7 @@ The `@qauth/fastify-plugin-email` plugin integrates email functionality into you
 This library is part of the QAuth monorepo and is automatically available to other projects within the workspace.
 
 ```typescript
-import { emailPlugin } from '@qauth/fastify-plugin-email';
+import { emailPlugin } from '@qauth-labs/fastify-plugin-email';
 ```
 
 ## Usage
@@ -26,7 +26,7 @@ import { emailPlugin } from '@qauth/fastify-plugin-email';
 
 ```typescript
 import Fastify from 'fastify';
-import { emailPlugin } from '@qauth/fastify-plugin-email';
+import { emailPlugin } from '@qauth-labs/fastify-plugin-email';
 
 const fastify = Fastify();
 
@@ -46,7 +46,7 @@ await fastify.listen({ port: 3000 });
 
 ```typescript
 import Fastify from 'fastify';
-import { emailPlugin } from '@qauth/fastify-plugin-email';
+import { emailPlugin } from '@qauth-labs/fastify-plugin-email';
 
 const fastify = Fastify();
 
@@ -255,10 +255,10 @@ await fastify.register(emailPlugin, {
 
 ### Environment Variables
 
-The plugin accepts configuration through options. For environment-based configuration, you can extend `@qauth/server-config`:
+The plugin accepts configuration through options. For environment-based configuration, you can extend `@qauth-labs/server-config`:
 
 ```typescript
-import { env } from '@qauth/server-config';
+import { env } from '@qauth-labs/server-config';
 
 await fastify.register(emailPlugin, {
   provider: env.EMAIL_PROVIDER || 'mock',
@@ -269,11 +269,11 @@ await fastify.register(emailPlugin, {
 });
 ```
 
-**Note**: Email environment variables are now available in `@qauth/server-config` via `emailEnvSchema`. See the [server-config documentation](../../server/config/README.md) for details.
+**Note**: Email environment variables are now available in `@qauth-labs/server-config` via `emailEnvSchema`. See the [server-config documentation](../../server/config/README.md) for details.
 
 ## Factory Pattern
 
-This plugin uses the factory pattern from `@qauth/server-email`:
+This plugin uses the factory pattern from `@qauth-labs/server-email`:
 
 - **No direct `process.env` access** - Configuration is passed explicitly
 - **Testable** - Easy to inject mock configurations in tests
@@ -301,11 +301,11 @@ await testApp.register(emailPlugin, {
 Register the email plugin after database and password plugins:
 
 ```typescript
-import { databasePlugin } from '@qauth/fastify-plugin-db';
-import { cachePlugin } from '@qauth/fastify-plugin-cache';
-import { passwordPlugin } from '@qauth/fastify-plugin-password';
-import { emailPlugin } from '@qauth/fastify-plugin-email';
-import { env } from '@qauth/server-config';
+import { databasePlugin } from '@qauth-labs/fastify-plugin-db';
+import { cachePlugin } from '@qauth-labs/fastify-plugin-cache';
+import { passwordPlugin } from '@qauth-labs/fastify-plugin-password';
+import { emailPlugin } from '@qauth-labs/fastify-plugin-email';
+import { env } from '@qauth-labs/server-config';
 
 await fastify.register(databasePlugin, {
   config: {
@@ -390,11 +390,11 @@ fastify.post('/auth/register', async (request, reply) => {
 
 ```typescript
 import Fastify from 'fastify';
-import { databasePlugin } from '@qauth/fastify-plugin-db';
-import { cachePlugin } from '@qauth/fastify-plugin-cache';
-import { passwordPlugin } from '@qauth/fastify-plugin-password';
-import { emailPlugin } from '@qauth/fastify-plugin-email';
-import { generateVerificationToken } from '@qauth/server-email';
+import { databasePlugin } from '@qauth-labs/fastify-plugin-db';
+import { cachePlugin } from '@qauth-labs/fastify-plugin-cache';
+import { passwordPlugin } from '@qauth-labs/fastify-plugin-password';
+import { emailPlugin } from '@qauth-labs/fastify-plugin-email';
+import { generateVerificationToken } from '@qauth-labs/server-email';
 
 const fastify = Fastify();
 
@@ -477,14 +477,14 @@ nx lint fastify-plugin-email
 
 ## Dependencies
 
-- `@qauth/server-email`: Email service library with factory pattern
+- `@qauth-labs/server-email`: Email service library with factory pattern
 - `fastify-plugin`: Fastify plugin wrapper
 
 ## Related Libraries
 
-- [`@qauth/server-email`](../../server/email/README.md): Email service library with factory pattern
-- [`@qauth/fastify-plugin-db`](../db/README.md): Database plugin for Fastify
-- [`@qauth/fastify-plugin-password`](../password/README.md): Password plugin for Fastify
+- [`@qauth-labs/server-email`](../../server/email/README.md): Email service library with factory pattern
+- [`@qauth-labs/fastify-plugin-db`](../db/README.md): Database plugin for Fastify
+- [`@qauth-labs/fastify-plugin-password`](../password/README.md): Password plugin for Fastify
 
 ## License
 

@@ -1,4 +1,4 @@
-import { JWTInvalidError } from '@qauth/shared-errors';
+import { JWTInvalidError } from '@qauth-labs/shared-errors';
 import { decodeJwt as joseDecodeJwt, exportSPKI as joseExportSPKI } from 'jose';
 
 import type { KeyLike } from '../types/key-management';

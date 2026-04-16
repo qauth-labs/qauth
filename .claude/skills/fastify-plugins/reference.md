@@ -80,7 +80,7 @@ export const myPlugin = fp(
 );
 ```
 
-- Use **name** for debugging and for Fastify’s dependency/metadata. QAuth uses `@qauth/fastify-plugin-<feature>`.
+- Use **name** for debugging and for Fastify’s dependency/metadata. QAuth uses `@qauth-labs/fastify-plugin-<feature>`.
 - Plugins are loaded after `.listen()`, `.inject()`, or `.ready()`; decorators are not available before that.
 
 ---
@@ -129,8 +129,8 @@ fastify.register(databasePlugin, config).after((err) => {
 
 | Item         | Convention                                                                      |
 | ------------ | ------------------------------------------------------------------------------- |
-| Package name | `@qauth/fastify-plugin-<feature>`                                               |
-| fp name      | `name: '@qauth/fastify-plugin-<feature>'`                                       |
+| Package name | `@qauth-labs/fastify-plugin-<feature>`                                          |
+| fp name      | `name: '@qauth-labs/fastify-plugin-<feature>'`                                  |
 | Types        | `declare module 'fastify' { interface FastifyInstance { ... } }` in plugin file |
 | Options      | Typed in `src/types.ts`, use `fp<Options>(...)`                                 |
 | Lifecycle    | `onReady` for checks, `onClose` for cleanup                                     |

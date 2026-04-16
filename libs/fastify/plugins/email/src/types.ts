@@ -2,13 +2,13 @@ import type {
   EmailServiceConfig,
   ResendProviderConfig,
   SmtpProviderConfig,
-} from '@qauth/server-email';
+} from '@qauth-labs/server-email';
 import {
   constantTimeCompare,
   generateVerificationToken,
   hashToken,
   isValidTokenFormat,
-} from '@qauth/server-email';
+} from '@qauth-labs/server-email';
 import type { FastifyPluginOptions } from 'fastify';
 
 /**

@@ -1,5 +1,5 @@
-import { TooManyRequestsError } from '@qauth/shared-errors';
-import { normalizeEmail } from '@qauth/shared-validation';
+import { TooManyRequestsError } from '@qauth-labs/shared-errors';
+import { normalizeEmail } from '@qauth-labs/shared-validation';
 import type { FastifyInstance } from 'fastify';
 import { ZodTypeProvider } from 'fastify-type-provider-zod';
 

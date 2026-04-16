@@ -1,4 +1,4 @@
-import { JWTExpiredError, JWTInvalidError, NotFoundError } from '@qauth/shared-errors';
+import { JWTExpiredError, JWTInvalidError, NotFoundError } from '@qauth-labs/shared-errors';
 import type { FastifyInstance } from 'fastify';
 import { ZodTypeProvider } from 'fastify-type-provider-zod';
 

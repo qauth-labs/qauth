@@ -1,5 +1,5 @@
-import { createPasswordHasher, type PasswordHasher } from '@qauth/server-password';
-import { createPasswordValidator, type PasswordValidator } from '@qauth/shared-validation';
+import { createPasswordHasher, type PasswordHasher } from '@qauth-labs/server-password';
+import { createPasswordValidator, type PasswordValidator } from '@qauth-labs/shared-validation';
 import type { FastifyInstance } from 'fastify';
 import fp from 'fastify-plugin';
 

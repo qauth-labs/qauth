@@ -407,31 +407,31 @@ importers:
       '@fastify/swagger-ui':
         specifier: 'catalog:'
         version: 5.2.5
-      '@qauth/fastify-plugin-cache':
+      '@qauth-labs/fastify-plugin-cache':
         specifier: workspace:*
         version: link:../../libs/fastify/plugins/cache
-      '@qauth/fastify-plugin-db':
+      '@qauth-labs/fastify-plugin-db':
         specifier: workspace:*
         version: link:../../libs/fastify/plugins/db
-      '@qauth/fastify-plugin-email':
+      '@qauth-labs/fastify-plugin-email':
         specifier: workspace:*
         version: link:../../libs/fastify/plugins/email
-      '@qauth/fastify-plugin-jwt':
+      '@qauth-labs/fastify-plugin-jwt':
         specifier: workspace:*
         version: link:../../libs/fastify/plugins/jwt
-      '@qauth/fastify-plugin-password':
+      '@qauth-labs/fastify-plugin-password':
         specifier: workspace:*
         version: link:../../libs/fastify/plugins/password
-      '@qauth/fastify-plugin-pkce':
+      '@qauth-labs/fastify-plugin-pkce':
         specifier: workspace:*
         version: link:../../libs/fastify/plugins/pkce
-      '@qauth/server-config':
+      '@qauth-labs/server-config':
         specifier: workspace:*
         version: link:../../libs/server/config
-      '@qauth/shared-errors':
+      '@qauth-labs/shared-errors':
         specifier: workspace:*
         version: link:../../libs/shared/errors
-      '@qauth/shared-validation':
+      '@qauth-labs/shared-validation':
         specifier: workspace:*
         version: link:../../libs/shared/validation
       fastify:
@@ -462,7 +462,7 @@ importers:
 
   apps/developer-portal:
     dependencies:
-      '@qauth/ui':
+      '@qauth-labs/ui':
         specifier: workspace:*
         version: link:../../libs/ui
       '@tailwindcss/vite':
@@ -505,7 +505,7 @@ importers:
 
   libs/fastify/plugins/cache:
     dependencies:
-      '@qauth/infra-cache':
+      '@qauth-labs/infra-cache':
         specifier: workspace:*
         version: link:../../../infra/cache
       fastify:
@@ -517,7 +517,7 @@ importers:
 
   libs/fastify/plugins/db:
     dependencies:
-      '@qauth/infra-db':
+      '@qauth-labs/infra-db':
         specifier: workspace:*
         version: link:../../../infra/db
       fastify:
@@ -529,7 +529,7 @@ importers:
 
   libs/fastify/plugins/email:
     dependencies:
-      '@qauth/server-email':
+      '@qauth-labs/server-email':
         specifier: workspace:*
         version: link:../../../server/email
       fastify:
@@ -541,10 +541,10 @@ importers:
 
   libs/fastify/plugins/jwt:
     dependencies:
-      '@qauth/server-jwt':
+      '@qauth-labs/server-jwt':
         specifier: workspace:*
         version: link:../../../server/jwt
-      '@qauth/shared-errors':
+      '@qauth-labs/shared-errors':
         specifier: workspace:*
         version: link:../../../shared/errors
       fastify:
@@ -569,10 +569,10 @@ importers:
 
   libs/fastify/plugins/password:
     dependencies:
-      '@qauth/server-password':
+      '@qauth-labs/server-password':
         specifier: workspace:*
         version: link:../../../server/password
-      '@qauth/shared-validation':
+      '@qauth-labs/shared-validation':
         specifier: workspace:*
         version: link:../../../shared/validation
       fastify:
@@ -584,7 +584,7 @@ importers:
 
   libs/fastify/plugins/pkce:
     dependencies:
-      '@qauth/server-pkce':
+      '@qauth-labs/server-pkce':
         specifier: workspace:*
         version: link:../../../server/pkce
       fastify:
@@ -605,10 +605,10 @@ importers:
       '@node-rs/argon2':
         specifier: 'catalog:'
         version: 2.0.2
-      '@qauth/shared-errors':
+      '@qauth-labs/shared-errors':
         specifier: workspace:*
         version: link:../../shared/errors
-      '@qauth/shared-validation':
+      '@qauth-labs/shared-validation':
         specifier: workspace:*
         version: link:../../shared/validation
       dotenv:
@@ -679,7 +679,7 @@ importers:
 
   libs/server/jwt:
     dependencies:
-      '@qauth/shared-errors':
+      '@qauth-labs/shared-errors':
         specifier: workspace:*
         version: link:../../shared/errors
       jose:

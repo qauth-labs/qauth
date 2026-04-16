@@ -1,4 +1,4 @@
-import { JWTExpiredError, JWTInvalidError } from '@qauth/shared-errors';
+import { JWTExpiredError, JWTInvalidError } from '@qauth-labs/shared-errors';
 import { describe, expect, it } from 'vitest';
 
 import { signAccessToken, verifyAccessToken } from './jwt-service';
