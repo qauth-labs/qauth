@@ -2,6 +2,7 @@ import { relations, sql } from 'drizzle-orm';
 import {
   bigint,
   boolean,
+  check,
   index,
   jsonb,
   pgTable,
@@ -139,6 +140,10 @@ export const oauthClients = pgTable(
       .on(t.enabled)
       .where(sql`${t.enabled} = true`),
     index('idx_oauth_clients_realm_client_id_enabled').on(t.realmId, t.clientId, t.enabled),
+    check(
+      'oauth_clients_audience_is_array',
+      sql`${t.audience} IS NULL OR jsonb_typeof(${t.audience}) = 'array'`
+    ),
   ]
 );
 

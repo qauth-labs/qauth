@@ -88,10 +88,15 @@ export async function signAccessToken(
  * }
  * ```
  */
-export async function verifyAccessToken(token: string, publicKey: KeyLike): Promise<JWTPayload> {
+export async function verifyAccessToken(
+  token: string,
+  publicKey: KeyLike,
+  options: { audience?: string | string[] } = {}
+): Promise<JWTPayload> {
   try {
     const { payload } = await jwtVerify(token, publicKey, {
       algorithms: ['EdDSA'],
+      ...(options.audience !== undefined ? { audience: options.audience } : {}),
     });
 
     return {

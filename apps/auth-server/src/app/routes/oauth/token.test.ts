@@ -1,7 +1,7 @@
 import {
-  BadRequestError,
-  InvalidCredentialsError,
-  InvalidTokenError,
+  InvalidClientError,
+  InvalidGrantError,
+  InvalidScopeError,
   NotFoundError,
   UnauthorizedClientError,
 } from '@qauth-labs/shared-errors';
@@ -26,6 +26,23 @@ import tokenRoute from './token';
 
 interface TestContext {
   handler?: (request: any, reply: any) => Promise<unknown>;
+}
+
+/** Minimal reply stub supporting chainable .header() and .send(). */
+function createReply(onSend?: (body: unknown) => void): {
+  header: (k: string, v: string) => any;
+  send: (b: unknown) => unknown;
+} {
+  const reply = {
+    header(_k: string, _v: string) {
+      return reply;
+    },
+    send(body: unknown) {
+      onSend?.(body);
+      return body;
+    },
+  };
+  return reply;
 }
 
 function createFastifyStub() {
@@ -127,12 +144,7 @@ describe('POST /oauth/token route — client_credentials grant', () => {
     };
 
     const replyBody: unknown[] = [];
-    const reply = {
-      send: (body: unknown) => {
-        replyBody.push(body);
-        return body;
-      },
-    };
+    const reply = createReply((body) => replyBody.push(body));
 
     if (!handler) throw new Error('Handler missing');
     const result = await handler(request, reply);
@@ -193,7 +205,7 @@ describe('POST /oauth/token route — client_credentials grant', () => {
       },
     };
 
-    const reply = { send: (b: unknown) => b };
+    const reply = createReply();
     if (!handler) throw new Error('Handler missing');
     await handler(request, reply);
 
@@ -230,9 +242,9 @@ describe('POST /oauth/token route — client_credentials grant', () => {
       },
     };
 
-    const reply = { send: (b: unknown) => b };
+    const reply = createReply();
     if (!handler) throw new Error('Handler missing');
-    await expect(handler(request, reply)).rejects.toThrow(InvalidCredentialsError);
+    await expect(handler(request, reply)).rejects.toThrow(InvalidClientError);
 
     // Must reject before reaching the client lookup.
     expect(fastify.repositories.oauthClients.findByClientId).not.toHaveBeenCalled();
@@ -267,9 +279,9 @@ describe('POST /oauth/token route — client_credentials grant', () => {
       headers: { 'user-agent': 'vitest' },
     };
 
-    const reply = { send: (b: unknown) => b };
+    const reply = createReply();
     if (!handler) throw new Error('Handler missing');
-    await expect(handler(request, reply)).rejects.toThrow(BadRequestError);
+    await expect(handler(request, reply)).rejects.toThrow(InvalidScopeError);
   });
 
   it('rejects client_credentials with unauthorized_client when grant not enabled for client', async () => {
@@ -300,7 +312,7 @@ describe('POST /oauth/token route — client_credentials grant', () => {
       headers: { 'user-agent': 'vitest' },
     };
 
-    const reply = { send: (b: unknown) => b };
+    const reply = createReply();
     if (!handler) throw new Error('Handler missing');
     await expect(handler(request, reply)).rejects.toThrow(UnauthorizedClientError);
   });
@@ -333,9 +345,9 @@ describe('POST /oauth/token route — client_credentials grant', () => {
       headers: { 'user-agent': 'vitest' },
     };
 
-    const reply = { send: (b: unknown) => b };
+    const reply = createReply();
     if (!handler) throw new Error('Handler missing');
-    await expect(handler(request, reply)).rejects.toThrow(InvalidCredentialsError);
+    await expect(handler(request, reply)).rejects.toThrow(InvalidClientError);
   });
 
   it('falls back to client_id as aud when client.audience is null', async () => {
@@ -368,7 +380,7 @@ describe('POST /oauth/token route — client_credentials grant', () => {
       headers: { 'user-agent': 'vitest' },
     };
 
-    const reply = { send: (b: unknown) => b };
+    const reply = createReply();
     if (!handler) throw new Error('Handler missing');
     await handler(request, reply);
 
@@ -407,7 +419,7 @@ describe('POST /oauth/token route — client_credentials grant', () => {
       headers: { 'user-agent': 'vitest' },
     };
 
-    const reply = { send: (b: unknown) => b };
+    const reply = createReply();
     if (!handler) throw new Error('Handler missing');
     await handler(request, reply);
 
@@ -447,12 +459,207 @@ describe('POST /oauth/token route — client_credentials grant', () => {
       headers: { 'user-agent': 'vitest' },
     };
 
-    const reply = { send: (b: unknown) => b };
+    const reply = createReply();
     if (!handler) throw new Error('Handler missing');
-    await expect(handler(request, reply)).rejects.toThrow(BadRequestError);
+    await expect(handler(request, reply)).rejects.toThrow(InvalidScopeError);
 
     // No token should be signed when the grant fails at the scope guard.
     expect(fastify.jwtUtils.signAccessToken).not.toHaveBeenCalled();
+  });
+
+  it('rejects client_credentials when the client is disabled', async () => {
+    const { fastify, ctx } = createFastifyStub();
+    await tokenRoute(fastify);
+    const handler = ctx.handler;
+
+    const client = {
+      id: 'client-uuid-disabled',
+      clientId: 'test-client-disabled',
+      clientSecretHash: 'hash',
+      enabled: false,
+      grantTypes: ['client_credentials'],
+      scopes: ['read:foo'],
+      audience: null,
+    };
+
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(client);
+    (fastify.passwordHasher.verifyPassword as unknown as Mock).mockResolvedValue(true);
+
+    const request = {
+      body: {
+        grant_type: 'client_credentials',
+        client_id: client.clientId,
+        client_secret: 'secret',
+        scope: 'read:foo',
+      },
+      ip: '127.0.0.1',
+      headers: { 'user-agent': 'vitest' },
+    };
+
+    const reply = createReply();
+    if (!handler) throw new Error('Handler missing');
+    await expect(handler(request, reply)).rejects.toThrow(InvalidClientError);
+    // Secret must not be verified for a disabled client.
+    expect(fastify.passwordHasher.verifyPassword).not.toHaveBeenCalled();
+  });
+
+  it('rejects client_credentials when the client_id is unknown', async () => {
+    const { fastify, ctx } = createFastifyStub();
+    await tokenRoute(fastify);
+    const handler = ctx.handler;
+
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(null);
+
+    const request = {
+      body: {
+        grant_type: 'client_credentials',
+        client_id: 'does-not-exist',
+        client_secret: 'secret',
+        scope: 'read:foo',
+      },
+      ip: '127.0.0.1',
+      headers: { 'user-agent': 'vitest' },
+    };
+
+    const reply = createReply();
+    if (!handler) throw new Error('Handler missing');
+    await expect(handler(request, reply)).rejects.toThrow(InvalidClientError);
+  });
+
+  it('rejects client_credentials when no credentials are supplied', async () => {
+    const { fastify, ctx } = createFastifyStub();
+    await tokenRoute(fastify);
+    const handler = ctx.handler;
+
+    const request = {
+      body: {
+        grant_type: 'client_credentials',
+        scope: 'read:foo',
+        // no client_id, no client_secret, no Basic header
+      },
+      ip: '127.0.0.1',
+      headers: { 'user-agent': 'vitest' },
+    };
+
+    const reply = createReply();
+    if (!handler) throw new Error('Handler missing');
+    await expect(handler(request, reply)).rejects.toThrow(InvalidClientError);
+    expect(fastify.repositories.oauthClients.findByClientId).not.toHaveBeenCalled();
+  });
+
+  it('rejects when Basic header is combined with conflicting body client_id (no body secret)', async () => {
+    const { fastify, ctx } = createFastifyStub();
+    await tokenRoute(fastify);
+    const handler = ctx.handler;
+
+    const creds = Buffer.from('real-client:secret', 'utf8').toString('base64');
+
+    const request = {
+      body: {
+        grant_type: 'client_credentials',
+        client_id: 'different-client', // contradicts Basic
+        scope: 'read:foo',
+      },
+      ip: '127.0.0.1',
+      headers: {
+        'user-agent': 'vitest',
+        authorization: `Basic ${creds}`,
+      },
+    };
+
+    const reply = createReply();
+    if (!handler) throw new Error('Handler missing');
+    await expect(handler(request, reply)).rejects.toThrow(InvalidClientError);
+    expect(fastify.repositories.oauthClients.findByClientId).not.toHaveBeenCalled();
+  });
+
+  it('URL-decodes Basic auth credentials per RFC 6749 §2.3.1', async () => {
+    const { fastify, ctx } = createFastifyStub();
+    await tokenRoute(fastify);
+    const handler = ctx.handler;
+
+    const client = {
+      id: 'client-uuid-encoded',
+      clientId: 'client id with space',
+      clientSecretHash: 'hash',
+      enabled: true,
+      grantTypes: ['client_credentials'],
+      scopes: ['read:foo'],
+      audience: null,
+    };
+
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(client);
+    (fastify.passwordHasher.verifyPassword as unknown as Mock).mockResolvedValue(true);
+    (fastify.jwtUtils.signAccessToken as unknown as Mock).mockResolvedValue('jwt');
+
+    // `+` encodes a space in application/x-www-form-urlencoded; `%40` encodes `@`.
+    // Credentials: clientId="client id with space", secret="p@ss:word"
+    const raw = 'client+id+with+space:p%40ss%3Aword';
+    const encoded = Buffer.from(raw, 'utf8').toString('base64');
+
+    const request = {
+      body: { grant_type: 'client_credentials', scope: 'read:foo' },
+      ip: '127.0.0.1',
+      headers: {
+        'user-agent': 'vitest',
+        authorization: `Basic ${encoded}`,
+      },
+    };
+
+    const reply = createReply();
+    if (!handler) throw new Error('Handler missing');
+    await handler(request, reply);
+
+    expect(fastify.repositories.oauthClients.findByClientId).toHaveBeenCalledWith(
+      'realm-1',
+      'client id with space'
+    );
+    expect(fastify.passwordHasher.verifyPassword).toHaveBeenCalledWith('hash', 'p@ss:word');
+  });
+
+  it('accepts Basic auth with a matching body client_id (non-conflicting)', async () => {
+    const { fastify, ctx } = createFastifyStub();
+    await tokenRoute(fastify);
+    const handler = ctx.handler;
+
+    const client = {
+      id: 'client-uuid-match',
+      clientId: 'match-client',
+      clientSecretHash: 'hash',
+      enabled: true,
+      grantTypes: ['client_credentials'],
+      scopes: ['read:foo'],
+      audience: null,
+    };
+
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(client);
+    (fastify.passwordHasher.verifyPassword as unknown as Mock).mockResolvedValue(true);
+    (fastify.jwtUtils.signAccessToken as unknown as Mock).mockResolvedValue('jwt');
+
+    const creds = Buffer.from('match-client:secret', 'utf8').toString('base64');
+
+    const request = {
+      body: {
+        grant_type: 'client_credentials',
+        client_id: 'match-client', // same as Basic
+        scope: 'read:foo',
+      },
+      ip: '127.0.0.1',
+      headers: {
+        'user-agent': 'vitest',
+        authorization: `Basic ${creds}`,
+      },
+    };
+
+    const reply = createReply();
+    if (!handler) throw new Error('Handler missing');
+    const result = await handler(request, reply);
+
+    expect(result).toMatchObject({ access_token: 'jwt', token_type: 'Bearer' });
+    expect(fastify.repositories.oauthClients.findByClientId).toHaveBeenCalledWith(
+      'realm-1',
+      'match-client'
+    );
   });
 });
 
@@ -528,7 +735,7 @@ describe('POST /oauth/token route — authorization_code grant', () => {
     expect(handler).toBeDefined();
 
     const request = baseRequest();
-    const reply = { send: (b: unknown) => b };
+    const reply = createReply();
 
     if (!handler) throw new Error('Handler missing');
     const result = await handler(request, reply);
@@ -576,8 +783,8 @@ describe('POST /oauth/token route — authorization_code grant', () => {
     const handler = ctx.handler;
     if (!handler) throw new Error('Handler missing');
 
-    const reply = { send: (b: unknown) => b };
-    await expect(handler(baseRequest(), reply)).rejects.toThrow(InvalidTokenError);
+    const reply = createReply();
+    await expect(handler(baseRequest(), reply)).rejects.toThrow(InvalidGrantError);
   });
 
   it('rejects when redirect_uri does not match the authorization request', async () => {
@@ -586,10 +793,10 @@ describe('POST /oauth/token route — authorization_code grant', () => {
     const handler = ctx.handler;
     if (!handler) throw new Error('Handler missing');
 
-    const reply = { send: (b: unknown) => b };
+    const reply = createReply();
     await expect(
       handler(baseRequest({ redirect_uri: 'https://evil.example.com/callback' }), reply)
-    ).rejects.toThrow(InvalidTokenError);
+    ).rejects.toThrow(InvalidGrantError);
   });
 
   it('rejects when PKCE verification fails', async () => {
@@ -599,8 +806,8 @@ describe('POST /oauth/token route — authorization_code grant', () => {
     const handler = ctx.handler;
     if (!handler) throw new Error('Handler missing');
 
-    const reply = { send: (b: unknown) => b };
-    await expect(handler(baseRequest(), reply)).rejects.toThrow(InvalidTokenError);
+    const reply = createReply();
+    await expect(handler(baseRequest(), reply)).rejects.toThrow(InvalidGrantError);
   });
 
   it('rejects when the user bound to the code cannot be found', async () => {
@@ -610,7 +817,7 @@ describe('POST /oauth/token route — authorization_code grant', () => {
     const handler = ctx.handler;
     if (!handler) throw new Error('Handler missing');
 
-    const reply = { send: (b: unknown) => b };
+    const reply = createReply();
     await expect(handler(baseRequest(), reply)).rejects.toThrow(NotFoundError);
   });
 
@@ -629,7 +836,7 @@ describe('POST /oauth/token route — authorization_code grant', () => {
     const handler = ctx.handler;
     if (!handler) throw new Error('Handler missing');
 
-    const reply = { send: (b: unknown) => b };
+    const reply = createReply();
     await expect(handler(baseRequest(), reply)).rejects.toThrow(UnauthorizedClientError);
   });
 });

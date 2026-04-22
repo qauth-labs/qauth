@@ -150,6 +150,9 @@ export default async function (fastify: FastifyInstance) {
         // Update user lastLoginAt timestamp
         await fastify.repositories.users.updateLastLogin(user.id);
 
+        // RFC 6749 §5.1: token responses MUST NOT be cached by intermediaries.
+        reply.header('Cache-Control', 'no-store').header('Pragma', 'no-cache');
+
         // Return tokens
         return reply.send({
           access_token: accessToken,

@@ -3,11 +3,11 @@
  * permitted to use the requested grant type (RFC 6749 Section 5.2
  * `unauthorized_client`).
  *
- * Distinct from `InvalidCredentialsError` (which maps to `invalid_client`
- * — client auth itself failed).
+ * Distinct from `InvalidClientError` (`invalid_client`), which is raised
+ * when client authentication itself fails.
  */
 export class UnauthorizedClientError extends Error {
-  readonly statusCode = 401;
+  readonly statusCode = 400;
   readonly code = 'UNAUTHORIZED_CLIENT';
 
   constructor(message = 'unauthorized_client') {

@@ -82,8 +82,8 @@ export const jwtPlugin = fp<JwtPluginOptions>(
       hashRefreshToken(token) {
         return hashRefreshToken(token);
       },
-      async verifyAccessToken(token) {
-        return verifyAccessToken(token, publicKey);
+      async verifyAccessToken(token, options) {
+        return verifyAccessToken(token, publicKey, options);
       },
       extractFromHeader(authHeader) {
         return extractJWTFromHeader(authHeader);

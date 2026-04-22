@@ -2,8 +2,9 @@ import { randomUUID } from 'node:crypto';
 
 import {
   BadRequestError,
-  InvalidCredentialsError,
-  InvalidTokenError,
+  InvalidClientError,
+  InvalidGrantError,
+  InvalidScopeError,
   NotFoundError,
   UnauthorizedClientError,
 } from '@qauth-labs/shared-errors';
@@ -110,6 +111,9 @@ export default async function (fastify: FastifyInstance) {
           throw err;
         }
 
+        // RFC 6749 §5.1: token responses MUST NOT be cached by intermediaries.
+        reply.header('Cache-Control', 'no-store').header('Pragma', 'no-cache');
+
         // Route by grant type.
         if (body.grant_type === 'authorization_code') {
           const responseBody = await handleAuthorizationCode({
@@ -135,8 +139,9 @@ export default async function (fastify: FastifyInstance) {
         throw new BadRequestError('unsupported_grant_type');
       } catch (error) {
         if (
-          error instanceof InvalidTokenError ||
-          error instanceof InvalidCredentialsError ||
+          error instanceof InvalidGrantError ||
+          error instanceof InvalidClientError ||
+          error instanceof InvalidScopeError ||
           error instanceof NotFoundError ||
           error instanceof BadRequestError ||
           error instanceof UnauthorizedClientError
@@ -209,7 +214,7 @@ async function handleAuthorizationCode(
       userAgent: request.headers['user-agent'] || null,
       metadata: { error: 'Invalid or expired authorization code' },
     });
-    throw new InvalidTokenError('Invalid or expired authorization code');
+    throw new InvalidGrantError('Invalid or expired authorization code');
   }
 
   if (authCode.oauthClientId !== client.id) {
@@ -223,7 +228,7 @@ async function handleAuthorizationCode(
       userAgent: request.headers['user-agent'] || null,
       metadata: { error: 'Invalid or expired authorization code' },
     });
-    throw new InvalidTokenError('Invalid or expired authorization code');
+    throw new InvalidGrantError('Invalid or expired authorization code');
   }
 
   if (body.redirect_uri !== authCode.redirectUri) {
@@ -237,7 +242,7 @@ async function handleAuthorizationCode(
       userAgent: request.headers['user-agent'] || null,
       metadata: { error: 'Invalid or expired authorization code' },
     });
-    throw new InvalidTokenError('Invalid or expired authorization code');
+    throw new InvalidGrantError('Invalid or expired authorization code');
   }
 
   const pkceValid = fastify.pkceUtils.verifyCodeChallenge(
@@ -255,7 +260,7 @@ async function handleAuthorizationCode(
       userAgent: request.headers['user-agent'] || null,
       metadata: { error: 'Invalid or expired authorization code' },
     });
-    throw new InvalidTokenError('Invalid or expired authorization code');
+    throw new InvalidGrantError('Invalid or expired authorization code');
   }
 
   await fastify.repositories.authorizationCodes.markUsed(authCode.id);
@@ -402,9 +407,7 @@ async function handleClientCredentials(
         grantType: 'client_credentials',
       },
     });
-    throw new BadRequestError(
-      'invalid_scope: client_credentials grant requires at least one scope'
-    );
+    throw new InvalidScopeError('client_credentials grant requires at least one scope');
   }
 
   const scopeString = grantedScopes.join(' ');

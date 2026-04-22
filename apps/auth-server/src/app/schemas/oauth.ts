@@ -84,12 +84,16 @@ export type TokenExchangeResponse = z.infer<typeof tokenExchangeResponseSchema>;
 /**
  * Token introspection request body (POST /oauth/introspect).
  * RFC 7662 2.1. Uses application/x-www-form-urlencoded in transport.
+ *
+ * `client_id` / `client_secret` are optional because clients may also
+ * authenticate with `client_secret_basic` via the HTTP `Authorization`
+ * header. The route handler enforces that at least one auth method is used.
  */
 export const introspectRequestSchema = z.object({
   token: z.string().min(1),
   token_type_hint: z.string().max(64).optional(),
-  client_id: z.string().min(1),
-  client_secret: z.string().min(1),
+  client_id: z.string().min(1).optional(),
+  client_secret: z.string().min(1).optional(),
 });
 
 export type IntrospectRequest = z.infer<typeof introspectRequestSchema>;

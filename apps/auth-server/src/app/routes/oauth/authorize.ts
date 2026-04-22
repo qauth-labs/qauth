@@ -6,6 +6,8 @@ import { ZodTypeProvider } from 'fastify-type-provider-zod';
 
 import { env } from '../../../config/env';
 import { AUTHORIZATION_CODE_TTL_MS } from '../../constants';
+import { resolveAudience } from '../../helpers/client-auth';
+import { getOrCreateSystemClient } from '../../helpers/oauth-client';
 import { buildRedirectUrl } from '../../helpers/oauth-redirect';
 import { getOrCreateDefaultRealm } from '../../helpers/realm';
 import { type AuthorizeQuery, authorizeQuerySchema } from '../../schemas/oauth';
@@ -157,7 +159,10 @@ export default async function (fastify: FastifyInstance) {
 
       let userId: string;
       try {
-        const payload = await fastify.jwtUtils.verifyAccessToken(token);
+        const systemClient = await getOrCreateSystemClient(realm.id, fastify);
+        const payload = await fastify.jwtUtils.verifyAccessToken(token, {
+          audience: resolveAudience(systemClient),
+        });
         userId = payload.sub;
       } catch {
         await fastify.repositories.auditLogs.create({
@@ -183,10 +188,11 @@ export default async function (fastify: FastifyInstance) {
       const requestedScopes = query.scope
         ? query.scope.split(/\s+/).filter((s) => s.length > 0)
         : [];
-      const scopes =
-        client.scopes.length > 0
-          ? requestedScopes.filter((s) => client.scopes.includes(s))
-          : requestedScopes;
+      // Deny-by-default: when a client has no scope allowlist configured we
+      // grant nothing, matching `validateScopes` on the client_credentials
+      // path. Previously an empty allowlist silently over-granted every
+      // requested scope on the auth-code flow.
+      const scopes = requestedScopes.filter((s) => client.scopes.includes(s));
 
       const expiresAt = Date.now() + AUTHORIZATION_CODE_TTL_MS;
 
