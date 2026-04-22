@@ -20,6 +20,7 @@ export default [
       '**/vitest.workspace.ts',
       '**/vite.config.*.timestamp*',
       '**/vitest.config.*.timestamp*',
+      '**/routeTree.gen.ts',
     ],
   },
   {
