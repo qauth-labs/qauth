@@ -5,6 +5,7 @@ import {
   InvalidCredentialsError,
   InvalidTokenError,
   NotFoundError,
+  UnauthorizedClientError,
 } from '@qauth-labs/shared-errors';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { ZodTypeProvider } from 'fastify-type-provider-zod';
@@ -137,7 +138,8 @@ export default async function (fastify: FastifyInstance) {
           error instanceof InvalidTokenError ||
           error instanceof InvalidCredentialsError ||
           error instanceof NotFoundError ||
-          error instanceof BadRequestError
+          error instanceof BadRequestError ||
+          error instanceof UnauthorizedClientError
         ) {
           await ensureMinimumResponseTime(startTime, MIN_RESPONSE_TIME_MS.TOKEN);
           throw error;
@@ -190,7 +192,8 @@ async function handleAuthorizationCode(
       userAgent: request.headers['user-agent'] || null,
       metadata: { error: 'unauthorized_client', grantType: 'authorization_code' },
     });
-    throw new InvalidCredentialsError('Client authentication failed');
+    // RFC 6749 5.2: client authenticated, but not authorized for this grant.
+    throw new UnauthorizedClientError();
   }
 
   // Authorization code lookup
@@ -357,7 +360,8 @@ async function handleClientCredentials(
       userAgent: request.headers['user-agent'] || null,
       metadata: { error: 'unauthorized_client', grantType: 'client_credentials' },
     });
-    throw new InvalidCredentialsError('Client authentication failed');
+    // RFC 6749 5.2: client authenticated, but not authorized for this grant.
+    throw new UnauthorizedClientError();
   }
 
   // Validate requested scopes against client.scopes allowlist.

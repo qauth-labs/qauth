@@ -29,7 +29,9 @@ export interface ExtractedClientCredentials {
 
 /**
  * Parse `Authorization: Basic <b64>` header per RFC 6749 2.3.1.
- * Values are `application/x-www-form-urlencoded`-decoded after base64 decoding.
+ * Values are `application/x-www-form-urlencoded`-decoded after base64 decoding
+ * — in that encoding, spaces are represented as `+` (not `%20`), so we
+ * translate `+` → ` ` before calling decodeURIComponent.
  *
  * Returns null if the header is missing or not Basic-scheme.
  */
@@ -47,8 +49,8 @@ function parseBasicAuthHeader(
   }
   const sep = decoded.indexOf(':');
   if (sep === -1) return null;
-  const clientId = decodeURIComponent(decoded.slice(0, sep));
-  const clientSecret = decodeURIComponent(decoded.slice(sep + 1));
+  const clientId = decodeURIComponent(decoded.slice(0, sep).replace(/\+/g, ' '));
+  const clientSecret = decodeURIComponent(decoded.slice(sep + 1).replace(/\+/g, ' '));
   if (!clientId || !clientSecret) return null;
   return { clientId, clientSecret };
 }
@@ -56,9 +58,11 @@ function parseBasicAuthHeader(
 /**
  * Extract client credentials from an OAuth token/introspection request.
  *
- * Precedence follows RFC 6749 2.3: the Authorization header (Basic) wins over
- * body fields if both are present. If body fields provide a `client_id` that
- * conflicts with the header, we reject — per RFC 6749 2.3.1.
+ * RFC 6749 Section 2.3 is explicit: "The authorization server MUST NOT accept
+ * more than one mechanism of client authentication in any given request."
+ * So when the Authorization header carries Basic credentials, the body MUST
+ * NOT also carry a `client_secret`, and any `client_id` in the body must
+ * match the one decoded from the header.
  */
 export function extractClientCredentials(
   request: FastifyRequest,
@@ -68,8 +72,8 @@ export function extractClientCredentials(
   const basic = parseBasicAuthHeader(request.headers.authorization);
 
   if (basic) {
-    // If the body also includes client_id, it must match.
-    if (bodyClientId && bodyClientId !== basic.clientId) {
+    // Reject any additional body-based auth material — RFC 6749 2.3.
+    if (bodyClientSecret || (bodyClientId && bodyClientId !== basic.clientId)) {
       throw new InvalidCredentialsError('Client authentication failed');
     }
     return {

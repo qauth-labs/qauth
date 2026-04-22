@@ -3,6 +3,7 @@ import {
   InvalidCredentialsError,
   InvalidTokenError,
   NotFoundError,
+  UnauthorizedClientError,
 } from '@qauth-labs/shared-errors';
 import type { FastifyInstance } from 'fastify';
 import { describe, expect, it, type Mock, vi } from 'vitest';
@@ -209,6 +210,34 @@ describe('POST /oauth/token route — client_credentials grant', () => {
     );
   });
 
+  it('rejects when Basic header is combined with body client_secret (RFC 6749 2.3)', async () => {
+    const { fastify, ctx } = createFastifyStub();
+    await tokenRoute(fastify);
+    const handler = ctx.handler;
+
+    const creds = Buffer.from('test-client-dual:secret', 'utf8').toString('base64');
+
+    const request = {
+      body: {
+        grant_type: 'client_credentials',
+        client_secret: 'another-secret', // present alongside Basic — must fail
+        scope: 'read:foo',
+      },
+      ip: '127.0.0.1',
+      headers: {
+        'user-agent': 'vitest',
+        authorization: `Basic ${creds}`,
+      },
+    };
+
+    const reply = { send: (b: unknown) => b };
+    if (!handler) throw new Error('Handler missing');
+    await expect(handler(request, reply)).rejects.toThrow(InvalidCredentialsError);
+
+    // Must reject before reaching the client lookup.
+    expect(fastify.repositories.oauthClients.findByClientId).not.toHaveBeenCalled();
+  });
+
   it('rejects requested scopes not in client.scopes allowlist', async () => {
     const { fastify, ctx } = createFastifyStub();
     await tokenRoute(fastify);
@@ -243,7 +272,7 @@ describe('POST /oauth/token route — client_credentials grant', () => {
     await expect(handler(request, reply)).rejects.toThrow(BadRequestError);
   });
 
-  it('rejects client_credentials when client is not enabled for the grant', async () => {
+  it('rejects client_credentials with unauthorized_client when grant not enabled for client', async () => {
     const { fastify, ctx } = createFastifyStub();
     await tokenRoute(fastify);
     const handler = ctx.handler;
@@ -273,7 +302,7 @@ describe('POST /oauth/token route — client_credentials grant', () => {
 
     const reply = { send: (b: unknown) => b };
     if (!handler) throw new Error('Handler missing');
-    await expect(handler(request, reply)).rejects.toThrow(InvalidCredentialsError);
+    await expect(handler(request, reply)).rejects.toThrow(UnauthorizedClientError);
   });
 
   it('rejects when client authentication fails', async () => {
@@ -585,7 +614,7 @@ describe('POST /oauth/token route — authorization_code grant', () => {
     await expect(handler(baseRequest(), reply)).rejects.toThrow(NotFoundError);
   });
 
-  it('rejects when the client is not authorized for the authorization_code grant', async () => {
+  it('rejects with unauthorized_client when the client is not authorized for the authorization_code grant', async () => {
     const { fastify, ctx } = setupAuthCodeStub();
     (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue({
       id: 'client-uuid-ac-1',
@@ -601,6 +630,6 @@ describe('POST /oauth/token route — authorization_code grant', () => {
     if (!handler) throw new Error('Handler missing');
 
     const reply = { send: (b: unknown) => b };
-    await expect(handler(baseRequest(), reply)).rejects.toThrow(InvalidCredentialsError);
+    await expect(handler(baseRequest(), reply)).rejects.toThrow(UnauthorizedClientError);
   });
 });
