@@ -6,6 +6,7 @@ import { ZodTypeProvider } from 'fastify-type-provider-zod';
 
 import { env } from '../../../config/env';
 import { MIN_RESPONSE_TIME_MS } from '../../constants';
+import { resolveAudience } from '../../helpers/client-auth';
 import { ensureMinimumResponseTime } from '../../helpers/timing';
 import { type RefreshRequest, refreshResponseSchema, refreshSchema } from '../../schemas/auth';
 
@@ -109,11 +110,14 @@ export default async function (fastify: FastifyInstance) {
         });
 
         // Generate new access token with current user data
+        const refreshScopeString = token.scopes.length > 0 ? token.scopes.join(' ') : undefined;
         const accessToken = await fastify.jwtUtils.signAccessToken({
           sub: user.id,
           email: user.email,
           email_verified: user.emailVerified,
           clientId: oauthClient.clientId,
+          scope: refreshScopeString,
+          aud: resolveAudience(oauthClient),
         });
 
         // Session management
@@ -167,6 +171,7 @@ export default async function (fastify: FastifyInstance) {
           refresh_token: newRefreshToken,
           expires_in: accessTokenExpiresIn,
           token_type: 'Bearer' as const,
+          ...(refreshScopeString ? { scope: refreshScopeString } : {}),
         });
       } catch (error) {
         // If error is already handled (InvalidTokenError, NotFoundError), ensure minimum response time

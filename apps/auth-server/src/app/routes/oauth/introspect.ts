@@ -167,6 +167,8 @@ export default async function (fastify: FastifyInstance) {
           exp: payload.exp,
           iat: payload.iat,
           iss: payload.iss,
+          aud: payload.aud,
+          scope: payload.scope,
           token_type: 'Bearer' as const,
         });
       } catch (error) {

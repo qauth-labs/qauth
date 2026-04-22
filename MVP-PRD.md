@@ -1,7 +1,7 @@
 # QAuth - Product Requirements Document (PRD)
 
-> **Version**: 2.0
-> **Last Updated**: 2026-03-18
+> **Version**: 2.1
+> **Last Updated**: 2026-04-16
 > **Author**: Muhammed Taha Ayan
 > **Status**: Phase 2 - Developer Portal (Phase 1 complete)
 
@@ -392,6 +392,13 @@ Response:
 - ✅ Authorization codes are single-use
 - ✅ State parameter is validated
 
+**Post-Phase 1 additions** (see [ADR-006](./docs/adr/006-oauth-grants-and-audience.md)):
+
+- ✅ `client_credentials` grant (RFC 6749 4.4) for service-to-service auth — no refresh token, `sub = clientId`
+- ✅ `client_secret_basic` client authentication (RFC 6749 2.3.1) alongside `client_secret_post`
+- ✅ `aud` and `scope` JWT claims — per-client audience via `oauth_clients.audience`, defaults to `client_id` (RFC 8707 light-mode)
+- ✅ `scope` propagated to `/oauth/introspect` and refresh responses (RFC 6749 5.1, RFC 7662 2.2)
+
 **Estimated Time**: 1.5 weeks
 
 ---
@@ -661,7 +668,7 @@ POST   /api/clients/:id/regenerate-secret
 ## Phase 3: Production Readiness
 
 **Timeline**: 4-6 weeks  
-**Status**: Not Started
+**Status**: In Progress (3.4 Docker complete; 3.1 partial — rate limiting, zod validation, Drizzle SQLi defence, audit logging done; helmet/CSRF/XSS pending)
 
 **Objective**: Make the system production-ready with security, monitoring, and OIDC compliance.
 
@@ -671,22 +678,22 @@ POST   /api/clients/:id/regenerate-secret
 
 **Tasks**:
 
-- [ ] Implement rate limiting (fastify-rate-limit)
+- [x] Implement rate limiting (fastify-rate-limit) — Redis-backed global plugin in place; per-endpoint limits still to be tuned:
   - `/auth/register`: 3 requests/hour per IP
   - `/auth/login`: 5 requests/15min per IP
   - `/auth/resend-verification`: 3 requests/hour per email
   - `/oauth/token`: 10 requests/min per client
 - [ ] Add CSRF protection
 - [ ] Secure cookie settings (HttpOnly, Secure, SameSite)
-- [ ] Input validation and sanitization (zod)
-- [ ] SQL injection prevention (Drizzle parameterized queries)
+- [x] Input validation and sanitization (zod via `ZodTypeProvider` on every route)
+- [x] SQL injection prevention (Drizzle parameterized queries throughout)
 - [ ] XSS protection
 - [ ] Security headers (helmet)
   - Content-Security-Policy
   - Strict-Transport-Security
   - X-Frame-Options
   - X-Content-Type-Options
-- [ ] Audit logging (all auth events)
+- [x] Audit logging (all auth events via `auditLogs.create`)
 - [ ] Failed login attempt tracking
 
 **Security Headers**:
@@ -1104,7 +1111,7 @@ These features are NOT part of Phases 1–5:
 | Phase 0: Foundation Setup         | 1-2 weeks | ✅ Completed |
 | Phase 1: Core Auth Server         | 6-8 weeks | ✅ Completed |
 | Phase 2: Developer Portal         | 3-4 weeks | In Progress  |
-| Phase 3: Production Hardening     | 4-6 weeks | Not Started  |
+| Phase 3: Production Hardening     | 4-6 weeks | In Progress  |
 | Phase 4: Wallet Federation Bridge | 6-8 weeks | Not Started  |
 | Phase 5: Post-Quantum Crypto      | 4-6 weeks | Not Started  |
 | Phase 6+: Enterprise & Scale      | TBD       | Not Started  |
@@ -1302,6 +1309,8 @@ CREATE TABLE oauth_clients (
   redirect_uris JSONB NOT NULL,
   grant_types JSONB NOT NULL DEFAULT '["authorization_code","refresh_token"]'::jsonb,
   response_types JSONB NOT NULL DEFAULT '["code"]'::jsonb,
+  scopes JSONB NOT NULL DEFAULT '[]'::jsonb,
+  audience JSONB,
   token_endpoint_auth_method token_endpoint_auth_method NOT NULL DEFAULT 'client_secret_post',
   require_pkce BOOLEAN DEFAULT TRUE,
   enabled BOOLEAN DEFAULT TRUE,
@@ -1371,28 +1380,28 @@ CREATE TABLE sessions (
 
 ## Appendix B: API Endpoints Summary
 
-| Endpoint                             | Method | Description                  | Phase |
-| ------------------------------------ | ------ | ---------------------------- | ----- |
-| `/auth/register`                     | POST   | Register new user            | 1.2   |
-| `/auth/resend-verification`          | POST   | Resend verification email    | 1.3   |
-| `/auth/verify`                       | GET    | Verify email                 | 1.3   |
-| `/auth/login`                        | POST   | Login with email/password    | 1.4   |
-| `/auth/refresh`                      | POST   | Refresh access token         | 1.5   |
-| `/auth/logout`                       | POST   | Logout and revoke session    | 1.5   |
-| `/oauth/authorize`                   | GET    | OAuth authorization endpoint | 1.6   |
-| `/oauth/token`                       | POST   | Token exchange endpoint      | 1.6   |
-| `/oauth/introspect`                  | POST   | Token introspection          | 1.7   |
-| `/userinfo`                          | GET    | OIDC userinfo endpoint       | 1.7   |
-| `/health`                            | GET    | Health check                 | 1.8   |
-| `/.well-known/openid-configuration`  | GET    | OIDC discovery               | 3.2   |
-| `/.well-known/jwks.json`             | GET    | JWKS public keys             | 3.2   |
-| `/metrics`                           | GET    | Prometheus metrics           | 3.3   |
-| `/api/clients`                       | GET    | List OAuth clients           | 2.2   |
-| `/api/clients`                       | POST   | Create OAuth client          | 2.2   |
-| `/api/clients/:id`                   | GET    | Get client details           | 2.2   |
-| `/api/clients/:id`                   | PATCH  | Update client                | 2.2   |
-| `/api/clients/:id`                   | DELETE | Delete client                | 2.2   |
-| `/api/clients/:id/regenerate-secret` | POST   | Regenerate client secret     | 2.2   |
+| Endpoint                             | Method | Description                                                                                                          | Phase |
+| ------------------------------------ | ------ | -------------------------------------------------------------------------------------------------------------------- | ----- |
+| `/auth/register`                     | POST   | Register new user                                                                                                    | 1.2   |
+| `/auth/resend-verification`          | POST   | Resend verification email                                                                                            | 1.3   |
+| `/auth/verify`                       | GET    | Verify email                                                                                                         | 1.3   |
+| `/auth/login`                        | POST   | Login with email/password                                                                                            | 1.4   |
+| `/auth/refresh`                      | POST   | Refresh access token                                                                                                 | 1.5   |
+| `/auth/logout`                       | POST   | Logout and revoke session                                                                                            | 1.5   |
+| `/oauth/authorize`                   | GET    | OAuth authorization endpoint                                                                                         | 1.6   |
+| `/oauth/token`                       | POST   | Token exchange — `authorization_code` (PKCE) and `client_credentials`; `client_secret_post` or `client_secret_basic` | 1.6   |
+| `/oauth/introspect`                  | POST   | Token introspection                                                                                                  | 1.7   |
+| `/userinfo`                          | GET    | OIDC userinfo endpoint                                                                                               | 1.7   |
+| `/health`                            | GET    | Health check                                                                                                         | 1.8   |
+| `/.well-known/openid-configuration`  | GET    | OIDC discovery                                                                                                       | 3.2   |
+| `/.well-known/jwks.json`             | GET    | JWKS public keys                                                                                                     | 3.2   |
+| `/metrics`                           | GET    | Prometheus metrics                                                                                                   | 3.3   |
+| `/api/clients`                       | GET    | List OAuth clients                                                                                                   | 2.2   |
+| `/api/clients`                       | POST   | Create OAuth client                                                                                                  | 2.2   |
+| `/api/clients/:id`                   | GET    | Get client details                                                                                                   | 2.2   |
+| `/api/clients/:id`                   | PATCH  | Update client                                                                                                        | 2.2   |
+| `/api/clients/:id`                   | DELETE | Delete client                                                                                                        | 2.2   |
+| `/api/clients/:id/regenerate-secret` | POST   | Regenerate client secret                                                                                             | 2.2   |
 
 ---
 

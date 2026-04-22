@@ -29,13 +29,20 @@ export type { JWTPayload };
  */
 export interface JwtUtils {
   /**
-   * Sign an access token
+   * Sign an access token.
+   *
+   * For user-context grants (authorization_code, refresh_token, password
+   * login) pass `email` / `email_verified`. For client_credentials grants
+   * omit them and set `sub` to the `clientId`. `scope` is space-separated
+   * per RFC 6749. `aud` falls back to `clientId` when undefined.
    */
   signAccessToken(payload: {
     sub: string;
-    email: string;
-    email_verified: boolean;
+    email?: string;
+    email_verified?: boolean;
     clientId: string;
+    scope?: string;
+    aud?: string | string[];
   }): Promise<string>;
   /**
    * Generate a refresh token pair (token and hash)

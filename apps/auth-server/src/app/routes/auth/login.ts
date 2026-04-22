@@ -6,6 +6,7 @@ import { ZodTypeProvider } from 'fastify-type-provider-zod';
 
 import { env } from '../../../config/env';
 import { MIN_RESPONSE_TIME_MS } from '../../constants';
+import { resolveAudience } from '../../helpers/client-auth';
 import { getOrCreateSystemClient } from '../../helpers/oauth-client';
 import { getOrCreateDefaultRealm } from '../../helpers/realm';
 import { ensureMinimumResponseTime } from '../../helpers/timing';
@@ -95,6 +96,7 @@ export default async function (fastify: FastifyInstance) {
           email: user.email,
           email_verified: user.emailVerified,
           clientId: systemClient.clientId,
+          aud: resolveAudience(systemClient),
         });
 
         // Generate refresh token using JWT plugin

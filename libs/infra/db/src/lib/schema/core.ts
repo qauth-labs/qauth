@@ -110,6 +110,7 @@ export const oauthClients = pgTable(
     description: text('description'),
     redirectUris: jsonb('redirect_uris').notNull().$type<string[]>(),
     scopes: jsonb('scopes').notNull().default(JSONB_EMPTY_ARRAY).$type<string[]>(),
+    audience: jsonb('audience').$type<string[] | null>(),
     enabled: boolean('enabled').notNull().default(true),
     requirePkce: boolean('require_pkce').notNull().default(true),
     tokenEndpointAuthMethod: tokenEndpointAuthMethodEnum('token_endpoint_auth_method')

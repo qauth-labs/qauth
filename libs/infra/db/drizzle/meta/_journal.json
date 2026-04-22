@@ -8,6 +8,13 @@
       "when": 1767256756723,
       "tag": "0000_young_vermin",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1776371685401,
+      "tag": "0001_add_oauth_clients_audience",
+      "breakpoints": true
     }
   ]
 }

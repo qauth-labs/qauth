@@ -13,7 +13,7 @@
   <h2>Open-source federated identity platform.<br />OAuth 2.1 · OIDC 1.0 · eIDAS 2.0 bridge · Post-quantum ready.</h2>
 </div>
 
-**QAuth** is an open-source identity server, designed from day one as a federation hub. Today it ships OAuth 2.1 / OIDC 1.0 with email/password authentication. The architecture — documented across [ADR-003](./docs/adr/003-credential-provider-interface.md), [ADR-004](./docs/adr/004-wallet-agnostic-federation.md), and [ADR-005](./docs/adr/005-pqc-hybrid-signing.md) — is built so that wallet-based upstreams (EUDI Wallets via OID4VC / SIOPv2), external OIDC providers, and post-quantum signing algorithms slot in behind stable interfaces without changes to downstream applications. Applications integrate against QAuth's OIDC layer once.
+**QAuth** is an open-source identity server, designed from day one as a federation hub. Today it ships OAuth 2.1 / OIDC 1.0 with email/password authentication, both `authorization_code` (PKCE) and `client_credentials` grants, and per-client audience (`aud`) on issued JWTs. The architecture — documented across [ADR-003](./docs/adr/003-credential-provider-interface.md), [ADR-004](./docs/adr/004-wallet-agnostic-federation.md), [ADR-005](./docs/adr/005-pqc-hybrid-signing.md), and [ADR-006](./docs/adr/006-oauth-grants-and-audience.md) — is built so that wallet-based upstreams (EUDI Wallets via OID4VC / SIOPv2), external OIDC providers, and post-quantum signing algorithms slot in behind stable interfaces without changes to downstream applications. Applications integrate against QAuth's OIDC layer once.
 
 <div align="center">
   <h3>🇪🇺 Made in Europe · 🇪🇪 Made in Estonia · 🇹🇷 Made in Türkiye</h3>
@@ -41,10 +41,17 @@ curl http://localhost:3000/health
 You can then drive it directly via the standard OAuth 2.1 / OIDC endpoints:
 
 ```bash
-# Token endpoint — authorization code + PKCE
+# Token endpoint — authorization code + PKCE (user-context)
 curl -X POST http://localhost:3000/oauth/token \
   -H "Content-Type: application/x-www-form-urlencoded" \
   -d "grant_type=authorization_code&code=...&code_verifier=...&client_id=..."
+
+# Token endpoint — client_credentials (service-to-service, RFC 6749 4.4)
+# Client auth via HTTP Basic (client_secret_basic, RFC 6749 2.3.1)
+curl -X POST http://localhost:3000/oauth/token \
+  -u "CLIENT_ID:CLIENT_SECRET" \
+  -H "Content-Type: application/x-www-form-urlencoded" \
+  -d "grant_type=client_credentials&scope=read:foo"
 ```
 
 Interactive API docs (OpenAPI / Swagger UI) are served at `/docs` on the running instance.
@@ -267,8 +274,10 @@ qauth/
 **Core authentication (working today):**
 
 - OAuth 2.1 / OpenID Connect 1.0 authorization code flow
+- OAuth 2.1 `client_credentials` grant for service-to-service auth (RFC 6749 4.4)
+- Client authentication via `client_secret_post` and `client_secret_basic` (RFC 6749 2.3.1)
 - Email/password authentication with Argon2id hashing
-- JWT token issuance, refresh, and revocation (Ed25519 / EdDSA)
+- JWT token issuance with `aud` and `scope` claims, refresh, and revocation (Ed25519 / EdDSA)
 - Token introspection (RFC 7662)
 - OIDC userinfo endpoint
 - Multi-tenancy via Realms for complete data isolation
