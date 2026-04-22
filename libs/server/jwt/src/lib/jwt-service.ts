@@ -31,16 +31,32 @@ export async function signAccessToken(
   issuer: string,
   expiresIn: number
 ): Promise<string> {
-  const jwt = new SignJWT({
+  // Build claims. Omit email/email_verified for client_credentials tokens where
+  // there is no end-user. Include scope only when granted.
+  const claims: Record<string, unknown> = {
     sub: payload.sub,
-    email: payload.email,
-    email_verified: payload.email_verified,
     client_id: payload.clientId,
-  })
+  };
+  if (payload.email !== undefined) {
+    claims['email'] = payload.email;
+  }
+  if (payload.email_verified !== undefined) {
+    claims['email_verified'] = payload.email_verified;
+  }
+  if (payload.scope !== undefined && payload.scope.length > 0) {
+    claims['scope'] = payload.scope;
+  }
+
+  let jwt = new SignJWT(claims)
     .setProtectedHeader({ alg: 'EdDSA' })
     .setIssuedAt()
     .setExpirationTime(`${expiresIn}s`)
     .setIssuer(issuer);
+
+  // `aud` claim: array → multi-audience, string → single, otherwise fall back
+  // to the client_id (OAuth 2.1 RFC 8707 light-mode default).
+  const audience = payload.aud ?? payload.clientId;
+  jwt = jwt.setAudience(audience);
 
   return jwt.sign(privateKey);
 }
@@ -72,17 +88,24 @@ export async function signAccessToken(
  * }
  * ```
  */
-export async function verifyAccessToken(token: string, publicKey: KeyLike): Promise<JWTPayload> {
+export async function verifyAccessToken(
+  token: string,
+  publicKey: KeyLike,
+  options: { audience?: string | string[] } = {}
+): Promise<JWTPayload> {
   try {
     const { payload } = await jwtVerify(token, publicKey, {
       algorithms: ['EdDSA'],
+      ...(options.audience !== undefined ? { audience: options.audience } : {}),
     });
 
     return {
       sub: payload.sub as string,
-      email: payload['email'] as string,
-      email_verified: payload['email_verified'] as boolean,
+      email: payload['email'] as string | undefined,
+      email_verified: payload['email_verified'] as boolean | undefined,
       clientId: payload['client_id'] as string,
+      scope: payload['scope'] as string | undefined,
+      aud: payload.aud as string | string[] | undefined,
       iat: payload.iat as number | undefined,
       exp: payload.exp as number | undefined,
       iss: payload.iss as string | undefined,

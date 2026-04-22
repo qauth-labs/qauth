@@ -135,6 +135,7 @@ export const refreshResponseSchema = z.object({
   refresh_token: z.string(),
   expires_in: z.number(),
   token_type: z.literal('Bearer'),
+  scope: z.string().optional(),
 });
 
 /**

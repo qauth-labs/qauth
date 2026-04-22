@@ -1,6 +1,6 @@
 ---
 name: code-reviewer
-model: claude-4.6-opus-high-thinking
+model: opus
 description: Expert code review specialist for QAuth. Proactively reviews code for quality, security (OWASP, CVEs), and project standards. Use immediately after writing or modifying code, before opening PRs, or when the user asks for a review.
 readonly: true
 ---

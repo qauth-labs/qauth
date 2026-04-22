@@ -1,4 +1,4 @@
-import { JWTExpiredError, JWTInvalidError } from '@qauth-labs/shared-errors';
+import { InvalidClientError, JWTExpiredError, JWTInvalidError } from '@qauth-labs/shared-errors';
 import type { FastifyInstance } from 'fastify';
 import Fastify from 'fastify';
 import { describe, expect, it } from 'vitest';
@@ -15,6 +15,10 @@ async function buildTestApp(): Promise<FastifyInstance> {
 
   app.get('/test-jwt-invalid', async () => {
     throw new JWTInvalidError('Invalid JWT token');
+  });
+
+  app.post('/test-invalid-client', async () => {
+    throw new InvalidClientError();
   });
 
   return app;
@@ -56,6 +60,47 @@ describe('error-handler plugin', () => {
       statusCode: 401,
       error: 'Invalid JWT token',
       code: 'JWT_INVALID',
+    });
+
+    await app.close();
+  });
+
+  it('sets WWW-Authenticate: Basic on InvalidClientError when request used Basic auth (RFC 6749 §5.2)', async () => {
+    const app = await buildTestApp();
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/test-invalid-client',
+      headers: {
+        authorization: `Basic ${Buffer.from('cid:bad').toString('base64')}`,
+      },
+    });
+
+    expect(response.statusCode).toBe(401);
+    expect(response.headers['www-authenticate']).toBe('Basic realm="OAuth"');
+    expect(response.json()).toMatchObject({
+      error: 'invalid_client',
+      code: 'INVALID_CLIENT',
+      statusCode: 401,
+    });
+
+    await app.close();
+  });
+
+  it('omits WWW-Authenticate on InvalidClientError when request did not use Basic auth', async () => {
+    const app = await buildTestApp();
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/test-invalid-client',
+    });
+
+    expect(response.statusCode).toBe(401);
+    expect(response.headers['www-authenticate']).toBeUndefined();
+    expect(response.json()).toMatchObject({
+      error: 'invalid_client',
+      code: 'INVALID_CLIENT',
+      statusCode: 401,
     });
 
     await app.close();

@@ -6,6 +6,7 @@ import { ZodTypeProvider } from 'fastify-type-provider-zod';
 
 import { env } from '../../../config/env';
 import { MIN_RESPONSE_TIME_MS } from '../../constants';
+import { resolveAudience } from '../../helpers/client-auth';
 import { ensureMinimumResponseTime } from '../../helpers/timing';
 import { type RefreshRequest, refreshResponseSchema, refreshSchema } from '../../schemas/auth';
 
@@ -82,8 +83,25 @@ export default async function (fastify: FastifyInstance) {
           throw new NotFoundError('OAuthClient', token.oauthClientId);
         }
 
-        // Verify user and client are enabled
-        // Note: Add enabled checks if needed in the future
+        // Reject refresh when the client or user has been disabled. Revoke
+        // the stored token so repeated attempts fail fast, and audit the
+        // disabled-state reason (RFC 9700 §4.14 — token revocation on
+        // subject/client deactivation).
+        if (!oauthClient.enabled || !user.enabled) {
+          const reason = !oauthClient.enabled ? 'client_disabled' : 'user_disabled';
+          await fastify.repositories.refreshTokens.revoke(token.id, reason);
+          await fastify.repositories.auditLogs.create({
+            userId: user.id,
+            oauthClientId: oauthClient.id,
+            event: 'user.token.refresh.failure',
+            eventType: 'auth',
+            success: false,
+            ipAddress: request.ip,
+            userAgent: request.headers['user-agent'] || null,
+            metadata: { error: reason },
+          });
+          throw new InvalidTokenError('Invalid or expired refresh token');
+        }
 
         // Token rotation: Revoke old refresh token
         await fastify.repositories.refreshTokens.revoke(token.id, 'rotated');
@@ -109,11 +127,14 @@ export default async function (fastify: FastifyInstance) {
         });
 
         // Generate new access token with current user data
+        const refreshScopeString = token.scopes.length > 0 ? token.scopes.join(' ') : undefined;
         const accessToken = await fastify.jwtUtils.signAccessToken({
           sub: user.id,
           email: user.email,
           email_verified: user.emailVerified,
           clientId: oauthClient.clientId,
+          scope: refreshScopeString,
+          aud: resolveAudience(oauthClient),
         });
 
         // Session management
@@ -161,12 +182,16 @@ export default async function (fastify: FastifyInstance) {
         // Update token lastUsedAt (if supported by repository)
         // Note: This might require repository enhancement
 
+        // RFC 6749 §5.1: token responses MUST NOT be cached by intermediaries.
+        reply.header('Cache-Control', 'no-store').header('Pragma', 'no-cache');
+
         // Return new tokens
         return reply.send({
           access_token: accessToken,
           refresh_token: newRefreshToken,
           expires_in: accessTokenExpiresIn,
           token_type: 'Bearer' as const,
+          ...(refreshScopeString ? { scope: refreshScopeString } : {}),
         });
       } catch (error) {
         // If error is already handled (InvalidTokenError, NotFoundError), ensure minimum response time

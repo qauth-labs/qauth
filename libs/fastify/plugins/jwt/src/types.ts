@@ -29,13 +29,20 @@ export type { JWTPayload };
  */
 export interface JwtUtils {
   /**
-   * Sign an access token
+   * Sign an access token.
+   *
+   * For user-context grants (authorization_code, refresh_token, password
+   * login) pass `email` / `email_verified`. For client_credentials grants
+   * omit them and set `sub` to the `clientId`. `scope` is space-separated
+   * per RFC 6749. `aud` falls back to `clientId` when undefined.
    */
   signAccessToken(payload: {
     sub: string;
-    email: string;
-    email_verified: boolean;
+    email?: string;
+    email_verified?: boolean;
     clientId: string;
+    scope?: string;
+    aud?: string | string[];
   }): Promise<string>;
   /**
    * Generate a refresh token pair (token and hash)
@@ -46,11 +53,13 @@ export interface JwtUtils {
    */
   hashRefreshToken(token: string): string;
   /**
-   * Verify an access token and return payload
+   * Verify an access token and return payload.
+   * When `audience` is provided, the token's `aud` claim MUST match
+   * (string or array intersection per RFC 7519 §4.1.3).
    * @throws JWTExpiredError if token has expired
-   * @throws JWTInvalidError if token is invalid
+   * @throws JWTInvalidError if token is invalid or audience mismatches
    */
-  verifyAccessToken(token: string): Promise<JWTPayload>;
+  verifyAccessToken(token: string, options?: { audience?: string | string[] }): Promise<JWTPayload>;
   /**
    * Extract JWT token from Authorization header
    * @param authHeader - Authorization header value (e.g., "Bearer <token>")

@@ -2,7 +2,10 @@ import {
   BadRequestError,
   EmailAlreadyVerifiedError,
   EmailNotVerifiedError,
+  InvalidClientError,
   InvalidCredentialsError,
+  InvalidGrantError,
+  InvalidScopeError,
   InvalidTokenError,
   JWTExpiredError,
   JWTInvalidError,
@@ -10,6 +13,7 @@ import {
   TokenAlreadyUsedError,
   TokenExpiredError,
   TooManyRequestsError,
+  UnauthorizedClientError,
   UniqueConstraintError,
   WeakPasswordError,
 } from '@qauth-labs/shared-errors';
@@ -18,6 +22,7 @@ import fp from 'fastify-plugin';
 
 interface ErrorResponse {
   error: string;
+  error_description?: string;
   code?: string;
   statusCode: number;
   feedback?: string[];
@@ -38,6 +43,7 @@ const SimpleErrorClasses = [
   TokenAlreadyUsedError,
   TokenExpiredError,
   TooManyRequestsError,
+  UnauthorizedClientError,
 ] as const;
 
 /**
@@ -56,6 +62,31 @@ export default fp(async function (fastify: FastifyInstance) {
         },
         'Error occurred'
       );
+
+      // OAuth errors that carry an optional `error_description` (RFC 6749 §5.2)
+      if (error instanceof InvalidScopeError || error instanceof InvalidGrantError) {
+        const response: ErrorResponse = {
+          error: error.message,
+          statusCode: error.statusCode,
+          code: error.code,
+          ...(error.errorDescription ? { error_description: error.errorDescription } : {}),
+        };
+        return reply.code(error.statusCode).send(response);
+      }
+
+      // RFC 6749 §5.2: if the client attempted Basic auth, the 401 response
+      // MUST include a `WWW-Authenticate` header matching the scheme used.
+      if (error instanceof InvalidClientError) {
+        if (/^basic\s/i.test(request.headers.authorization ?? '')) {
+          reply.header('WWW-Authenticate', 'Basic realm="OAuth"');
+        }
+        const response: ErrorResponse = {
+          error: error.message,
+          statusCode: error.statusCode,
+          code: error.code,
+        };
+        return reply.code(error.statusCode).send(response);
+      }
 
       // Handle simple error types (message + statusCode + optional code)
       for (const ErrorClass of SimpleErrorClasses) {

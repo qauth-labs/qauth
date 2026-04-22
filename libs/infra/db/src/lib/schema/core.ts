@@ -2,6 +2,7 @@ import { relations, sql } from 'drizzle-orm';
 import {
   bigint,
   boolean,
+  check,
   index,
   jsonb,
   pgTable,
@@ -110,6 +111,7 @@ export const oauthClients = pgTable(
     description: text('description'),
     redirectUris: jsonb('redirect_uris').notNull().$type<string[]>(),
     scopes: jsonb('scopes').notNull().default(JSONB_EMPTY_ARRAY).$type<string[]>(),
+    audience: jsonb('audience').$type<string[] | null>(),
     enabled: boolean('enabled').notNull().default(true),
     requirePkce: boolean('require_pkce').notNull().default(true),
     tokenEndpointAuthMethod: tokenEndpointAuthMethodEnum('token_endpoint_auth_method')
@@ -138,6 +140,10 @@ export const oauthClients = pgTable(
       .on(t.enabled)
       .where(sql`${t.enabled} = true`),
     index('idx_oauth_clients_realm_client_id_enabled').on(t.realmId, t.clientId, t.enabled),
+    check(
+      'oauth_clients_audience_is_array',
+      sql`${t.audience} IS NULL OR jsonb_typeof(${t.audience}) = 'array'`
+    ),
   ]
 );
 

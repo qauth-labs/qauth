@@ -8,13 +8,14 @@ An ADR is a document that captures an important architectural decision made alon
 
 ## ADR Index
 
-| ID                                            | Title                                                      | Status   | Date       |
-| --------------------------------------------- | ---------------------------------------------------------- | -------- | ---------- |
-| [001](./001-jwt-key-management.md)            | JWT Key Management Strategy                                | Accepted | 2026-01-15 |
-| [002](./002-identifier-abstraction.md)        | Identifier Abstraction — Email as Credential, Not Identity | Accepted | 2026-03-11 |
-| [003](./003-credential-provider-interface.md) | CredentialProvider Abstraction for Authentication Methods  | Accepted | 2026-03-11 |
-| [004](./004-wallet-agnostic-federation.md)    | Wallet-Agnostic VC Federation via SIOPv2/OID4VP            | Accepted | 2026-03-11 |
-| [005](./005-pqc-hybrid-signing.md)            | Post-Quantum Cryptography — Hybrid Signing Roadmap         | Accepted | 2026-03-18 |
+| ID                                            | Title                                                                       | Status   | Date       |
+| --------------------------------------------- | --------------------------------------------------------------------------- | -------- | ---------- |
+| [001](./001-jwt-key-management.md)            | JWT Key Management Strategy                                                 | Accepted | 2026-01-15 |
+| [002](./002-identifier-abstraction.md)        | Identifier Abstraction — Email as Credential, Not Identity                  | Accepted | 2026-03-11 |
+| [003](./003-credential-provider-interface.md) | CredentialProvider Abstraction for Authentication Methods                   | Accepted | 2026-03-11 |
+| [004](./004-wallet-agnostic-federation.md)    | Wallet-Agnostic VC Federation via SIOPv2/OID4VP                             | Accepted | 2026-03-11 |
+| [005](./005-pqc-hybrid-signing.md)            | Post-Quantum Cryptography — Hybrid Signing Roadmap                          | Accepted | 2026-03-18 |
+| [006](./006-oauth-grants-and-audience.md)     | OAuth Grants — `client_credentials`, `client_secret_basic`, and `aud` Claim | Accepted | 2026-04-16 |
 
 ## ADR Template
 

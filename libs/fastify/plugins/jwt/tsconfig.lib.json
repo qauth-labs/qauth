@@ -3,16 +3,7 @@
   "compilerOptions": {
     "outDir": "../../../../dist/out-tsc",
     "declaration": true,
-    "composite": true,
     "types": ["node"]
   },
-  "include": ["src/**/*.ts", "./package.json"],
-  "references": [
-    {
-      "path": "../../../shared/errors/tsconfig.lib.json"
-    },
-    {
-      "path": "../../../server/jwt/tsconfig.lib.json"
-    }
-  ]
+  "include": ["src/**/*.ts", "./package.json"]
 }

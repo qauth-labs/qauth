@@ -1,13 +1,10 @@
-import {
-  InvalidCredentialsError,
-  JWTExpiredError,
-  JWTInvalidError,
-} from '@qauth-labs/shared-errors';
+import { InvalidClientError, JWTExpiredError, JWTInvalidError } from '@qauth-labs/shared-errors';
 import type { FastifyInstance } from 'fastify';
 import { ZodTypeProvider } from 'fastify-type-provider-zod';
 
 import { env } from '../../../config/env';
 import { MIN_RESPONSE_TIME_MS } from '../../constants';
+import { authenticateClient, extractClientCredentials } from '../../helpers/client-auth';
 import { getOrCreateDefaultRealm } from '../../helpers/realm';
 import { ensureMinimumResponseTime } from '../../helpers/timing';
 import {
@@ -49,15 +46,18 @@ export default async function (fastify: FastifyInstance) {
     async (request, reply) => {
       const startTime = Date.now();
       const body = request.body as IntrospectRequest;
-      const { token, client_id, client_secret } = body;
+      const { token } = body;
 
       try {
         const realm = await getOrCreateDefaultRealm(fastify);
 
-        // Client lookup
-        const client = await fastify.repositories.oauthClients.findByClientId(realm.id, client_id);
-
-        if (!client || !client.enabled) {
+        // Accept both `client_secret_post` (body) and `client_secret_basic`
+        // (Authorization header) per RFC 6749 §2.3.
+        let client;
+        try {
+          const creds = extractClientCredentials(request, body.client_id, body.client_secret);
+          client = await authenticateClient(fastify, realm.id, creds);
+        } catch (err) {
           await fastify.repositories.auditLogs.create({
             userId: null,
             oauthClientId: null,
@@ -68,29 +68,7 @@ export default async function (fastify: FastifyInstance) {
             userAgent: request.headers['user-agent'] || null,
             metadata: { error: 'Client authentication failed' },
           });
-
-          throw new InvalidCredentialsError('Client authentication failed');
-        }
-
-        // Client authentication (client_secret_post)
-        const clientSecretValid = await fastify.passwordHasher.verifyPassword(
-          client.clientSecretHash,
-          client_secret
-        );
-
-        if (!clientSecretValid) {
-          await fastify.repositories.auditLogs.create({
-            userId: null,
-            oauthClientId: client.id,
-            event: 'oauth.introspect.failure',
-            eventType: 'token',
-            success: false,
-            ipAddress: request.ip,
-            userAgent: request.headers['user-agent'] || null,
-            metadata: { error: 'Client authentication failed' },
-          });
-
-          throw new InvalidCredentialsError('Client authentication failed');
+          throw err;
         }
 
         let payload;
@@ -167,10 +145,12 @@ export default async function (fastify: FastifyInstance) {
           exp: payload.exp,
           iat: payload.iat,
           iss: payload.iss,
+          aud: payload.aud,
+          scope: payload.scope,
           token_type: 'Bearer' as const,
         });
       } catch (error) {
-        if (error instanceof InvalidCredentialsError) {
+        if (error instanceof InvalidClientError) {
           await ensureMinimumResponseTime(startTime, MIN_RESPONSE_TIME_MS.INTROSPECT);
           throw error;
         }

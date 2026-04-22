@@ -1,8 +1,4 @@
-import {
-  InvalidCredentialsError,
-  JWTExpiredError,
-  JWTInvalidError,
-} from '@qauth-labs/shared-errors';
+import { InvalidClientError, JWTExpiredError, JWTInvalidError } from '@qauth-labs/shared-errors';
 import type { FastifyInstance } from 'fastify';
 import Fastify from 'fastify';
 import { serializerCompiler, validatorCompiler, ZodTypeProvider } from 'fastify-type-provider-zod';
@@ -272,7 +268,7 @@ describe('POST /oauth/introspect route', () => {
     expect(result).toEqual({ active: false });
   });
 
-  it('throws InvalidCredentialsError for invalid client credentials', async () => {
+  it('throws InvalidClientError for invalid client credentials', async () => {
     const { fastify, ctx } = createFastifyStub();
     await introspectRoute(fastify);
 
@@ -324,7 +320,7 @@ describe('POST /oauth/introspect route', () => {
       throw new Error('Introspect handler was not registered');
     }
 
-    await expect(handler(request, reply)).rejects.toThrow(InvalidCredentialsError);
+    await expect(handler(request, reply)).rejects.toThrow(InvalidClientError);
   });
 
   it('returns active: false for invalid token format', async () => {
