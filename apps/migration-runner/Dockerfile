@@ -1,29 +1,28 @@
 # Migration Runner Dockerfile
-# Runs database migrations using Nx targets from infra-db
-# This maintains separation of concerns: infra-db owns migrations
+# Runs database migrations using Nx targets from infra-db. Requires
+# BuildKit (default on Docker 23+) for the `--mount=type=cache` pnpm-store
+# mount.
+#
+# syntax=docker/dockerfile:1.7
 
-# Stage 1: Dependencies
+# Stage 1: Base image with corepack + root workspace manifests.
+# No install here — see the auth-server Dockerfile for the reason.
 FROM node:24-alpine AS deps
 WORKDIR /app
-
-# Copy only package files first (layer caching)
+RUN corepack enable
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY nx.json tsconfig.base.json ./
 
-# Enable corepack to use correct pnpm version from package.json
-RUN corepack enable && \
-    pnpm install --frozen-lockfile
-
-# Stage 2: Full workspace (needed for Nx to work)
+# Stage 2: Full workspace (needed for Nx to resolve the project graph).
 FROM deps AS workspace
-# Copy root vitest.config.ts (needed for Nx project graph processing)
 COPY vitest.config.ts ./
 COPY libs ./libs
 COPY apps ./apps
 
-# Re-run install now that workspace packages are on disk. See the auth-server
+# Install with a cache mount for pnpm's package store — see auth-server
 # Dockerfile for the full rationale.
-RUN pnpm install --frozen-lockfile
+RUN --mount=type=cache,id=pnpm,target=/pnpm/store \
+    pnpm install --frozen-lockfile --store-dir /pnpm/store
 
 # Copy entrypoint script
 COPY apps/migration-runner/docker-entrypoint.sh ./docker-entrypoint.sh

@@ -1,26 +1,34 @@
 # Auth Server Dockerfile
-# Multi-stage build for production
+# Multi-stage build for production. Requires BuildKit (default on Docker
+# 23+) for the `--mount=type=cache` pnpm-store mount.
+#
+# syntax=docker/dockerfile:1.7
 
-# Stage 1: Dependencies
+# Stage 1: Base image with corepack + root workspace manifests.
+#
+# We intentionally do NOT run `pnpm install` here. pnpm-workspace.yaml points
+# at apps/** and libs/**; without those directories on disk, the install
+# only resolves root-manifest deps and leaves every workspace-scoped dep
+# (fastify, @fastify/*, etc.) out of node_modules. The install happens in
+# the builder stage, once workspace sources are in place.
 FROM node:24-alpine AS deps
 WORKDIR /app
+RUN corepack enable
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY nx.json tsconfig.base.json ./
-RUN corepack enable && \
-    pnpm install --frozen-lockfile
 
 # Stage 2: Builder
 FROM deps AS builder
-# Copy root vitest.config.ts (needed for Nx project graph processing)
+# Copy root vitest.config.ts (needed for Nx project-graph processing)
 COPY vitest.config.ts ./
 COPY libs ./libs
 COPY apps ./apps
 
-# Re-run install now that workspace packages are on disk. The deps-stage
-# install only saw the root manifest (workspace dirs didn't exist yet), so
-# workspace-scoped deps like `fastify`, `@fastify/*`, etc. were not wired
-# into node_modules. This pass completes the workspace graph.
-RUN pnpm install --frozen-lockfile
+# Install with a cache mount for pnpm's package store — lockfile changes
+# or source changes invalidate the layer, but downloaded/extracted packages
+# persist across builds, so only the workspace symlink graph is rebuilt.
+RUN --mount=type=cache,id=pnpm,target=/pnpm/store \
+    pnpm install --frozen-lockfile --store-dir /pnpm/store
 
 # Build auth-server and all its dependencies
 RUN pnpm nx build auth-server --prod
