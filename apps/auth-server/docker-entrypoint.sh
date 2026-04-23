@@ -2,4 +2,4 @@
 set -e
 
 echo "Starting auth server..."
-exec node main.js
+exec tsx src/main.ts
