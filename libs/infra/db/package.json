@@ -11,7 +11,8 @@
     "drizzle-kit": "catalog:",
     "drizzle-orm": "catalog:",
     "drizzle-seed": "catalog:",
-    "pg": "catalog:"
+    "pg": "catalog:",
+    "zod": "catalog:"
   },
   "devDependencies": {
     "@types/pg": "catalog:",

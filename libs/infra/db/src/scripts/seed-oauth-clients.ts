@@ -28,26 +28,6 @@
  *   client_ids. Uses plain `drizzle-orm` inserts because `drizzle-seed`'s
  *   faker-style API is awkward for "insert these exact rows."
  *
- * Manifest shape:
- *
- *   {
- *     "realm": "default",
- *     "clients": [
- *       {
- *         "client_id": "example-service",
- *         "name": "Example Service",
- *         "description": "A machine client that does things.",
- *         "grant_types": ["client_credentials"],
- *         "scopes": ["read:things"],
- *         "audience": ["https://api.example.com"],
- *         "redirect_uris": [],
- *         "response_types": [],
- *         "require_pkce": false,
- *         "token_endpoint_auth_method": "client_secret_basic"
- *       }
- *     ]
- *   }
- *
  * The target realm must already exist. Create it via migrations or the
  * default-realm helper before running this.
  */
@@ -56,96 +36,56 @@ import { readFileSync } from 'node:fs';
 
 import { hash } from '@node-rs/argon2';
 import * as dotenv from 'dotenv';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/node-postgres';
+import { z } from 'zod';
 
 import { oauthClients, realms } from '../lib/schema';
-import type { GrantType, ResponseType } from '../lib/schema/enums';
+import { grantTypeEnum, responseTypeEnum, tokenEndpointAuthMethodEnum } from '../lib/schema/enums';
 
 dotenv.config({ path: '../../../.env' });
 
 /* ------------------------------------------------------------------------ */
-/*                             Manifest shape                               */
+/*                       Manifest schema (zod)                              */
 /* ------------------------------------------------------------------------ */
 
-const VALID_GRANT_TYPES = [
-  'authorization_code',
-  'refresh_token',
-  'client_credentials',
-] as const satisfies readonly GrantType[];
+// Reuse pgEnum values to stay in lock-step with the database schema. If
+// someone adds a grant type or auth method to the enum, the manifest
+// validator picks it up automatically.
+const grantTypeZ = z.enum(grantTypeEnum.enumValues);
+const responseTypeZ = z.enum(responseTypeEnum.enumValues);
+const tokenEndpointAuthMethodZ = z.enum(tokenEndpointAuthMethodEnum.enumValues);
 
-const VALID_AUTH_METHODS = [
-  'client_secret_post',
-  'client_secret_basic',
-  'private_key_jwt',
-  'none',
-] as const;
-type TokenEndpointAuthMethod = (typeof VALID_AUTH_METHODS)[number];
+const clientSpecSchema = z
+  .object({
+    client_id: z.string().min(1).max(255),
+    name: z.string().min(1).max(255),
+    description: z.string().max(2000).optional(),
+    grant_types: z.array(grantTypeZ).min(1),
+    response_types: z.array(responseTypeZ).optional(),
+    scopes: z.array(z.string().min(1)).optional(),
+    audience: z.array(z.string().min(1)).nullable().optional(),
+    redirect_uris: z.array(z.string().url()).optional(),
+    require_pkce: z.boolean().optional(),
+    token_endpoint_auth_method: tokenEndpointAuthMethodZ.optional(),
+  })
+  .strict();
 
-type ClientSpec = {
-  client_id: string;
-  name: string;
-  description?: string;
-  grant_types: GrantType[];
-  response_types?: ResponseType[];
-  scopes?: string[];
-  audience?: string[] | null;
-  redirect_uris?: string[];
-  require_pkce?: boolean;
-  token_endpoint_auth_method?: TokenEndpointAuthMethod;
-};
+const manifestSchema = z
+  .object({
+    realm: z.string().min(1),
+    clients: z.array(clientSpecSchema).min(1),
+  })
+  .strict();
 
-type Manifest = {
-  realm: string;
-  clients: ClientSpec[];
-};
-
-function assertManifest(raw: unknown): asserts raw is Manifest {
-  if (!raw || typeof raw !== 'object') {
-    throw new Error('Manifest must be a JSON object.');
-  }
-  const obj = raw as Record<string, unknown>;
-  if (typeof obj['realm'] !== 'string' || obj['realm'].length === 0) {
-    throw new Error('Manifest.realm must be a non-empty string.');
-  }
-  if (!Array.isArray(obj['clients']) || obj['clients'].length === 0) {
-    throw new Error('Manifest.clients must be a non-empty array.');
-  }
-  for (const [i, c] of obj['clients'].entries()) {
-    if (!c || typeof c !== 'object') {
-      throw new Error(`clients[${i}] is not an object.`);
-    }
-    const spec = c as Record<string, unknown>;
-    if (typeof spec['client_id'] !== 'string' || !spec['client_id']) {
-      throw new Error(`clients[${i}].client_id must be a non-empty string.`);
-    }
-    if (typeof spec['name'] !== 'string' || !spec['name']) {
-      throw new Error(`clients[${i}].name must be a non-empty string.`);
-    }
-    if (
-      !Array.isArray(spec['grant_types']) ||
-      spec['grant_types'].length === 0 ||
-      !spec['grant_types'].every((g) => VALID_GRANT_TYPES.includes(g as GrantType))
-    ) {
-      throw new Error(
-        `clients[${i}].grant_types must be a non-empty subset of ${VALID_GRANT_TYPES.join(', ')}.`
-      );
-    }
-    if (
-      spec['token_endpoint_auth_method'] !== undefined &&
-      !VALID_AUTH_METHODS.includes(spec['token_endpoint_auth_method'] as TokenEndpointAuthMethod)
-    ) {
-      throw new Error(
-        `clients[${i}].token_endpoint_auth_method must be one of ${VALID_AUTH_METHODS.join(', ')}.`
-      );
-    }
-  }
-}
+type ClientSpec = z.infer<typeof clientSpecSchema>;
 
 /* ------------------------------------------------------------------------ */
 /*                                 Helpers                                  */
 /* ------------------------------------------------------------------------ */
 
+// Matches `DEFAULT_PASSWORD_CONFIG` in libs/server/password so hashes verify
+// against the same settings the auth-server uses at runtime.
 const ARGON2_OPTS = { memoryCost: 65536, timeCost: 3, parallelism: 4 } as const;
 
 function generateClientSecret(): string {
@@ -178,6 +118,9 @@ function parseArgs(argv: string[]): { manifestPath: string; rotate: boolean } {
 /*                                   Main                                   */
 /* ------------------------------------------------------------------------ */
 
+type Action = 'created' | 'rotated' | 'skipped';
+type Issued = { clientId: string; secret: string; action: Action };
+
 async function main(): Promise<void> {
   const { manifestPath, rotate } = parseArgs(process.argv);
 
@@ -188,8 +131,7 @@ async function main(): Promise<void> {
   }
 
   const raw: unknown = JSON.parse(readFileSync(manifestPath, 'utf8'));
-  assertManifest(raw);
-  const manifest = raw;
+  const manifest = manifestSchema.parse(raw);
 
   const db = drizzle(databaseUrl);
 
@@ -203,83 +145,141 @@ async function main(): Promise<void> {
       process.exit(1);
     }
 
-    type Issued = { clientId: string; secret: string; action: 'created' | 'rotated' | 'skipped' };
     const issued: Issued[] = [];
-
     for (const spec of manifest.clients) {
-      const [existing] = await db
-        .select({ id: oauthClients.id })
-        .from(oauthClients)
-        .where(and(eq(oauthClients.realmId, realm.id), eq(oauthClients.clientId, spec.client_id)))
-        .limit(1);
-
-      if (existing && !rotate) {
-        issued.push({ clientId: spec.client_id, secret: '', action: 'skipped' });
-        continue;
-      }
-
-      const plaintextSecret = generateClientSecret();
-      const clientSecretHash = await hash(plaintextSecret, ARGON2_OPTS);
-
-      const row = {
-        realmId: realm.id,
-        clientId: spec.client_id,
-        clientSecretHash,
-        name: spec.name,
-        description: spec.description ?? null,
-        redirectUris: spec.redirect_uris ?? [],
-        scopes: spec.scopes ?? [],
-        audience: spec.audience ?? null,
-        requirePkce: spec.require_pkce ?? false,
-        tokenEndpointAuthMethod: spec.token_endpoint_auth_method ?? 'client_secret_basic',
-        grantTypes: spec.grant_types,
-        responseTypes: spec.response_types ?? [],
-        enabled: true,
-      } as const;
-
-      if (existing) {
-        await db.update(oauthClients).set(row).where(eq(oauthClients.id, existing.id));
-        issued.push({ clientId: spec.client_id, secret: plaintextSecret, action: 'rotated' });
-      } else {
-        await db.insert(oauthClients).values(row);
-        issued.push({ clientId: spec.client_id, secret: plaintextSecret, action: 'created' });
-      }
+      issued.push(await provisionClient(db, realm.id, spec, rotate));
     }
 
-    /* ------------------------------ Report ------------------------------ */
-
-    const created = issued.filter((i) => i.action === 'created');
-    const rotated = issued.filter((i) => i.action === 'rotated');
-    const skipped = issued.filter((i) => i.action === 'skipped');
-
-    console.log(
-      `\nSeeded realm "${manifest.realm}": ` +
-        `${created.length} created, ${rotated.length} rotated, ${skipped.length} skipped.\n`
-    );
-
-    if (created.length + rotated.length > 0) {
-      console.log(
-        'Store these plaintext secrets securely — the DB only keeps argon2id hashes.\n' +
-          '  (fingerprint = first 8 chars of sha256(secret), for cross-checking)\n'
-      );
-      for (const i of [...created, ...rotated]) {
-        console.log(`  ${i.clientId}`);
-        console.log(`    secret:      ${i.secret}`);
-        console.log(`    fingerprint: ${fingerprint(i.secret)}`);
-        console.log(`    action:      ${i.action}`);
-      }
-      console.log('');
-    }
-
-    if (skipped.length > 0) {
-      console.log(
-        `Skipped (already exist; pass --rotate to re-issue secrets):\n  ` +
-          skipped.map((s) => s.clientId).join(', ') +
-          '\n'
-      );
-    }
+    report(manifest.realm, issued);
   } finally {
     await db.$client.end();
+  }
+}
+
+/**
+ * Provision a single client. The check-then-act is wrapped in a transaction
+ * so that if two seeder instances ever raced, one would block on the
+ * row-level lock acquired by the other's read (FOR UPDATE semantics are
+ * implicit in an UPDATE under READ COMMITTED on the same row).
+ *
+ * argon2 hashing is deliberately done *inside* the transaction only after
+ * we've decided we need a new hash — so the skip path incurs no CPU cost.
+ */
+async function provisionClient(
+  db: ReturnType<typeof drizzle>,
+  realmId: string,
+  spec: ClientSpec,
+  rotate: boolean
+): Promise<Issued> {
+  return db.transaction(async (tx) => {
+    const [existing] = await tx
+      .select({ id: oauthClients.id })
+      .from(oauthClients)
+      .where(and(eq(oauthClients.realmId, realmId), eq(oauthClients.clientId, spec.client_id)))
+      .limit(1);
+
+    if (existing && !rotate) {
+      return { clientId: spec.client_id, secret: '', action: 'skipped' as const };
+    }
+
+    const plaintextSecret = generateClientSecret();
+    const clientSecretHash = await hash(plaintextSecret, ARGON2_OPTS);
+
+    if (existing) {
+      await tx
+        .update(oauthClients)
+        .set(buildUpdate(spec, clientSecretHash))
+        .where(eq(oauthClients.id, existing.id));
+      return { clientId: spec.client_id, secret: plaintextSecret, action: 'rotated' as const };
+    }
+
+    await tx.insert(oauthClients).values(buildInsert(realmId, spec, clientSecretHash));
+    return { clientId: spec.client_id, secret: plaintextSecret, action: 'created' as const };
+  });
+}
+
+/* ------------------------------------------------------------------------ */
+/*                              Row builders                                */
+/* ------------------------------------------------------------------------ */
+
+/**
+ * Row for a freshly-inserted client. Defaults here mirror the schema column
+ * defaults (require_pkce = true, response_types = ['code']) so a client
+ * created via seed behaves identically to one created via the dev portal.
+ */
+function buildInsert(realmId: string, spec: ClientSpec, clientSecretHash: string) {
+  return {
+    realmId,
+    clientId: spec.client_id,
+    clientSecretHash,
+    name: spec.name,
+    description: spec.description ?? null,
+    redirectUris: spec.redirect_uris ?? [],
+    scopes: spec.scopes ?? [],
+    audience: spec.audience ?? null,
+    requirePkce: spec.require_pkce ?? true,
+    tokenEndpointAuthMethod: spec.token_endpoint_auth_method ?? 'client_secret_basic',
+    grantTypes: spec.grant_types,
+    responseTypes: spec.response_types ?? ['code'],
+    enabled: true,
+  } as const;
+}
+
+/**
+ * Row for a rotation. Deliberately omits `enabled` so Drizzle doesn't emit
+ * it in the SET clause — a client that was manually disabled in the DB
+ * stays disabled after a secret rotation.
+ */
+function buildUpdate(spec: ClientSpec, clientSecretHash: string) {
+  return {
+    clientSecretHash,
+    name: spec.name,
+    description: spec.description ?? null,
+    redirectUris: spec.redirect_uris ?? [],
+    scopes: spec.scopes ?? [],
+    audience: spec.audience ?? null,
+    requirePkce: spec.require_pkce ?? true,
+    tokenEndpointAuthMethod: spec.token_endpoint_auth_method ?? 'client_secret_basic',
+    grantTypes: spec.grant_types,
+    responseTypes: spec.response_types ?? ['code'],
+    updatedAt: sql`(EXTRACT(EPOCH FROM now()) * 1000)::bigint`,
+  } as const;
+}
+
+/* ------------------------------------------------------------------------ */
+/*                                 Report                                   */
+/* ------------------------------------------------------------------------ */
+
+function report(realm: string, issued: Issued[]): void {
+  const created = issued.filter((i) => i.action === 'created');
+  const rotated = issued.filter((i) => i.action === 'rotated');
+  const skipped = issued.filter((i) => i.action === 'skipped');
+
+  console.log(
+    `\nSeeded realm "${realm}": ` +
+      `${created.length} created, ${rotated.length} rotated, ${skipped.length} skipped.\n`
+  );
+
+  if (created.length + rotated.length > 0) {
+    console.log(
+      'Store these plaintext secrets securely — the DB only keeps argon2id hashes.\n' +
+        '  (fingerprint = first 8 chars of sha256(secret), for cross-checking)\n'
+    );
+    for (const i of [...created, ...rotated]) {
+      console.log(`  ${i.clientId}`);
+      console.log(`    secret:      ${i.secret}`);
+      console.log(`    fingerprint: ${fingerprint(i.secret)}`);
+      console.log(`    action:      ${i.action}`);
+    }
+    console.log('');
+  }
+
+  if (skipped.length > 0) {
+    console.log(
+      `Skipped (already exist; pass --rotate to re-issue secrets):\n  ` +
+        skipped.map((s) => s.clientId).join(', ') +
+        '\n'
+    );
   }
 }
 
