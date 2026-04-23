@@ -54,3 +54,16 @@ Thumbs.db
 .cache
 .temp
 tmp
+
+# Apps that are not built inside the auth-server / migration-runner images.
+# Both Dockerfiles `COPY apps ./apps`; Nx's project-graph processor then tries
+# to parse every app's config (e.g. developer-portal/vite.config.mts) which
+# imports `@tailwindcss/vite`. That dep is scoped to developer-portal and is
+# not pulled in by the root-level `pnpm install --frozen-lockfile` in the
+# deps stage — so the build fails even though auth-server itself has no
+# reference to developer-portal.
+#
+# Excluding developer-portal from the build context removes it from Nx's
+# view entirely. Add a dedicated build story for developer-portal when it
+# ships its own image.
+apps/developer-portal

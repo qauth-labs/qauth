@@ -22,7 +22,8 @@ QAuth uses Docker Compose to orchestrate the following services:
 
 ## Prerequisites
 
-- Docker 20.10+ and Docker Compose 2.0+
+- Docker **23.0+** (BuildKit on by default) or earlier Docker with `DOCKER_BUILDKIT=1` set. The auth-server and migration-runner Dockerfiles use `# syntax=docker/dockerfile:1.7` and a `--mount=type=cache` pnpm-store mount, both of which require BuildKit.
+- Docker Compose 2.0+
 - Docker Compose **2.22+** for development watch (`docker-compose.dev.yml` + `--watch`)
 - OpenSSL (for generating JWT keys)
 
@@ -304,6 +305,8 @@ docker builder prune
 # Rebuild without cache
 docker-compose build --no-cache
 ```
+
+If the build fails on `Cannot find module '@tailwindcss/vite'` or a similar dev-portal-scoped import: `apps/developer-portal` is intentionally excluded from the auth-server and migration-runner build contexts via `.dockerignore`. The exclusion keeps Nx's project-graph processor from trying to parse configs for an app that has no Dockerfile of its own yet. Developer-portal will ship with its own image when Phase 2 is ready; until then the exclusion is load-bearing and should not be removed.
 
 ### Watch: "no space left on device"
 
