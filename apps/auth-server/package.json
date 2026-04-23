@@ -7,6 +7,7 @@
     "fastify-type-provider-zod": "catalog:",
     "@fastify/autoload": "catalog:",
     "@fastify/cors": "catalog:",
+    "@fastify/formbody": "catalog:",
     "@fastify/rate-limit": "catalog:",
     "@fastify/swagger": "catalog:",
     "@fastify/swagger-ui": "catalog:",
