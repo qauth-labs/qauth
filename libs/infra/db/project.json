@@ -52,6 +52,15 @@
         "cwd": "libs/infra/db"
       },
       "description": "Seed database with initial data (dev client)"
+    },
+    "db:seed-oauth-clients": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "tsx src/scripts/seed-oauth-clients.ts",
+        "cwd": "libs/infra/db",
+        "forwardAllArgs": true
+      },
+      "description": "Idempotent OAuth-client provisioner — pass `-- --manifest=<path> [--rotate]`"
     }
   }
 }
