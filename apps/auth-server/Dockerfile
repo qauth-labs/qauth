@@ -16,6 +16,12 @@ COPY vitest.config.ts ./
 COPY libs ./libs
 COPY apps ./apps
 
+# Re-run install now that workspace packages are on disk. The deps-stage
+# install only saw the root manifest (workspace dirs didn't exist yet), so
+# workspace-scoped deps like `fastify`, `@fastify/*`, etc. were not wired
+# into node_modules. This pass completes the workspace graph.
+RUN pnpm install --frozen-lockfile
+
 # Build auth-server and all its dependencies
 RUN pnpm nx build auth-server --prod
 
@@ -26,11 +32,10 @@ WORKDIR /app
 # Enable corepack to use correct pnpm version
 RUN corepack enable
 
-# Copy built application
+# Copy built application bundle. Nx's build output already embeds the
+# compiled workspace libs at `./libs/` inside this directory and main.js
+# contains a resolver that points `@qauth-labs/*` at them.
 COPY --from=builder /app/dist/apps/auth-server ./
-
-# Copy compiled workspace libraries (referenced by @qauth-labs/* imports)
-COPY --from=builder /app/dist/libs ./dist/libs
 
 # Copy package files for dependency resolution
 COPY --from=builder /app/package.json ./package.json

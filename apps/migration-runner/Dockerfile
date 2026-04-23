@@ -21,6 +21,10 @@ COPY vitest.config.ts ./
 COPY libs ./libs
 COPY apps ./apps
 
+# Re-run install now that workspace packages are on disk. See the auth-server
+# Dockerfile for the full rationale.
+RUN pnpm install --frozen-lockfile
+
 # Copy entrypoint script
 COPY apps/migration-runner/docker-entrypoint.sh ./docker-entrypoint.sh
 # Fix Windows line endings (CRLF) and permissions
