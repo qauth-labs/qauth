@@ -338,7 +338,7 @@ Response:
 
 **Tasks**:
 
-- [x] Implement client registration (manual for MVP)
+- [x] Implement client registration (manual for MVP — also scriptable via `nx run db:db:seed-oauth-clients` for machine-client bootstrap at deploy time; see `libs/infra/db/README.md`)
 - [x] Create authorization endpoint (`GET /oauth/authorize`)
 - [x] Create token endpoint (`POST /oauth/token`)
 - [x] Implement PKCE (code_challenge, code_verifier)
@@ -538,7 +538,7 @@ Response:
 **Timeline**: 3-4 weeks
 **Status**: In Progress
 
-**Objective**: Allow developers to register and manage OAuth clients without manual intervention.
+**Objective**: Allow developers to register and manage OAuth clients without manual intervention via a web UI. Machine clients (`client_credentials`) can already be provisioned from a JSON manifest using `nx run db:db:seed-oauth-clients` — the portal is the user-facing equivalent for developer-registered clients.
 
 ---
 

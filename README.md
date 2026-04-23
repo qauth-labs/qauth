@@ -289,6 +289,7 @@ qauth/
 - PostgreSQL 18 + Redis 7
 - Docker deployment with automated migrations and health checks
 - Structured audit logging (basic)
+- Scriptable machine-client provisioning (`nx run db:db:seed-oauth-clients`) — JSON-manifest-driven, idempotent, argon2id-hashed secrets; useful for bootstrapping `client_credentials` clients at deploy time before the developer portal ships
 
 **Developer tools:**
 

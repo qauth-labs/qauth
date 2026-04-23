@@ -320,6 +320,40 @@ nx run db:db:studio
 nx run db:db:drop
 ```
 
+### Seeding
+
+Two seeders live under `src/scripts/`. Both require `DATABASE_URL` in the environment (or in the repo-root `.env` — `dotenv` is loaded automatically).
+
+```bash
+# Dev fixture generator (destructive — calls reset() then replants realms + oauth_clients)
+nx run db:db:seed
+
+# Idempotent OAuth-client provisioner (additive; production-safe)
+# Reads a JSON manifest; generates 32-byte client secrets; argon2id-hashes
+# them; prints plaintext secrets once to STDOUT (the DB only keeps hashes).
+# Existing client_ids are skipped unless `--rotate` is passed.
+nx run db:db:seed-oauth-clients -- --manifest=/path/to/manifest.json [--rotate]
+```
+
+Manifest shape for `db:seed-oauth-clients`:
+
+```json
+{
+  "realm": "default",
+  "clients": [
+    {
+      "client_id": "example-service",
+      "name": "Example Service",
+      "grant_types": ["client_credentials"],
+      "scopes": ["read:things"],
+      "audience": ["https://api.example.com"]
+    }
+  ]
+}
+```
+
+The target realm must already exist. See `src/scripts/seed-oauth-clients.ts` for the authoritative Zod schema and the full set of optional fields (`description`, `response_types`, `redirect_uris`, `require_pkce`, `token_endpoint_auth_method`).
+
 ## Project Structure
 
 ```
@@ -346,6 +380,9 @@ libs/infra/db/
 │   │   └── utils/
 │   │       ├── index.ts        # Utility exports
 │   │       └── email.ts        # Email normalization utilities
+│   ├── scripts/
+│   │   ├── seed.ts                    # Dev-fixture seeder (drizzle-seed)
+│   │   └── seed-oauth-clients.ts      # Idempotent client provisioner
 │   └── index.ts               # Public API exports
 │   └── qauth-schema.dbml      # Database schema visualization (DBML format)
 ├── drizzle/                   # Migration files
@@ -479,7 +516,6 @@ The Fastify plugin automatically manages the database connection lifecycle, so y
 ## Future Enhancements
 
 - Post-quantum cryptography key storage (Phase 7)
-- Database seeding and fixtures
 - Advanced query optimizations
 - Read replicas support
 
