@@ -65,7 +65,7 @@ const clientSpecSchema = z
     response_types: z.array(responseTypeZ).optional(),
     scopes: z.array(z.string().min(1)).optional(),
     audience: z.array(z.string().min(1)).nullable().optional(),
-    redirect_uris: z.array(z.string().url()).optional(),
+    redirect_uris: z.array(z.url()).optional(),
     require_pkce: z.boolean().optional(),
     token_endpoint_auth_method: tokenEndpointAuthMethodZ.optional(),
   })
