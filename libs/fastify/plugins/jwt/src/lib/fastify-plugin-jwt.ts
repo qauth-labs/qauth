@@ -1,5 +1,6 @@
 import {
   decodeJwtUnsafe,
+  exportPublicJwk,
   exportPublicKeyPem,
   extractJWTFromHeader,
   generateRefreshToken,
@@ -96,6 +97,15 @@ export const jwtPlugin = fp<JwtPluginOptions>(
       },
       getRefreshTokenLifespan() {
         return options.refreshTokenLifespan;
+      },
+      getIssuer() {
+        return options.issuer;
+      },
+      async getJwks() {
+        // Single active key for now. When we add rotation, push retired keys
+        // with their own `kid` here so in-flight tokens keep verifying.
+        const jwk = await exportPublicJwk(publicKey, options.keyId);
+        return { keys: [jwk] };
       },
     };
 

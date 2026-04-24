@@ -1,4 +1,4 @@
-import type { JWTPayload } from '@qauth-labs/server-jwt';
+import type { JWTPayload, PublicJwk } from '@qauth-labs/server-jwt';
 import type { FastifyPluginOptions } from 'fastify';
 
 /**
@@ -15,6 +15,18 @@ export interface JwtPluginOptions extends FastifyPluginOptions {
   accessTokenLifespan: number;
   /** Refresh token expiration in seconds */
   refreshTokenLifespan: number;
+  /**
+   * Optional stable key identifier published in the JWKS `kid` member.
+   * Required once key rotation is enabled; absent for a single-active-key setup.
+   */
+  keyId?: string;
+}
+
+/**
+ * JWKS envelope as served by `/.well-known/jwks.json` (RFC 7517 §5).
+ */
+export interface Jwks {
+  keys: PublicJwk[];
 }
 
 /**
@@ -82,4 +94,14 @@ export interface JwtUtils {
    * Get refresh token lifespan in seconds
    */
   getRefreshTokenLifespan(): number;
+  /**
+   * Get the configured issuer URL (the `iss` claim value used when signing).
+   * Used by discovery endpoints (RFC 8414 / OIDC Discovery 1.0).
+   */
+  getIssuer(): string;
+  /**
+   * Export the server's active public key(s) as a JWKS document, ready to
+   * serve at `/.well-known/jwks.json` (RFC 7517).
+   */
+  getJwks(): Promise<Jwks>;
 }
