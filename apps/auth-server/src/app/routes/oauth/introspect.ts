@@ -21,7 +21,36 @@ import {
  * - Requires confidential client authentication (client_id + client_secret).
  * - Returns token activity and selected claims for valid tokens.
  * - Returns active: false for invalid, expired, or cross-client tokens.
+ *
+ * Authorization model (who may introspect what):
+ *   1. Same-client: a client may always introspect tokens it itself issued
+ *      (`payload.client_id === client.client_id`).
+ *   2. Audience-bound: a resource server holds a confidential introspection
+ *      client whose `audience` column lists the audiences it is authoritative
+ *      for. If the token's `aud` is a member of the client's `audience`, the
+ *      introspection is allowed. This is what lets a single resource server
+ *      validate tokens minted by many distinct callers, without giving the
+ *      resource server the ability to mint tokens for those audiences itself.
+ *   Any other cross-client introspection returns `active: false`.
  */
+
+/**
+ * Returns true if the introspecting client is authoritative for the token's
+ * audience: every token-aud value appears in the client's configured audience
+ * list. Undefined/null/empty on either side returns false. Accepts both string
+ * and string[] shapes for `payload.aud` per RFC 7519.
+ */
+function isClientAuthoritativeForAudience(
+  payloadAud: string | string[] | undefined,
+  clientAudience: string[] | null
+): boolean {
+  if (!payloadAud || !clientAudience || clientAudience.length === 0) {
+    return false;
+  }
+  const tokenAuds = Array.isArray(payloadAud) ? payloadAud : [payloadAud];
+  if (tokenAuds.length === 0) return false;
+  return tokenAuds.every((a) => clientAudience.includes(a));
+}
 export default async function (fastify: FastifyInstance) {
   fastify.withTypeProvider<ZodTypeProvider>().post(
     '/introspect',
@@ -101,8 +130,10 @@ export default async function (fastify: FastifyInstance) {
           throw error;
         }
 
-        // Restrict clients to introspecting only their own tokens
-        if (payload.clientId !== client.clientId) {
+        // Authorize the introspection: same-client OR audience-authoritative.
+        const sameClient = payload.clientId === client.clientId;
+        const audAuthoritative = isClientAuthoritativeForAudience(payload.aud, client.audience);
+        if (!sameClient && !audAuthoritative) {
           await fastify.repositories.auditLogs.create({
             userId: null,
             oauthClientId: client.id,
@@ -112,7 +143,7 @@ export default async function (fastify: FastifyInstance) {
             ipAddress: request.ip,
             userAgent: request.headers['user-agent'] || null,
             metadata: {
-              error: 'Token client mismatch',
+              error: 'Client not authorized for this token',
             },
           });
 

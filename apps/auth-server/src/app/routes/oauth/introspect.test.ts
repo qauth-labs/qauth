@@ -268,6 +268,200 @@ describe('POST /oauth/introspect route', () => {
     expect(result).toEqual({ active: false });
   });
 
+  it('returns active: true when the introspecting client is authoritative for the token audience (string aud)', async () => {
+    const { fastify, ctx } = createFastifyStub();
+    await introspectRoute(fastify);
+
+    const handler = ctx.handler;
+    expect(handler).toBeDefined();
+
+    // Resource-server-style client: no minted scopes, but listed as
+    // authoritative for "api.example.com".
+    const client = {
+      id: 'client-rs',
+      clientId: 'resource-server',
+      clientSecretHash: 'hashed-secret',
+      enabled: true,
+      audience: ['api.example.com'],
+    };
+
+    const findByClientIdMock = fastify.repositories.oauthClients.findByClientId as unknown as Mock;
+    const verifyPasswordMock = fastify.passwordHasher.verifyPassword as unknown as Mock;
+    const verifyAccessTokenMock = fastify.jwtUtils.verifyAccessToken as unknown as Mock;
+
+    findByClientIdMock.mockResolvedValue(client);
+    verifyPasswordMock.mockResolvedValue(true);
+    verifyAccessTokenMock.mockResolvedValue({
+      sub: 'user-1',
+      clientId: 'caller-app',
+      scope: 'api:read',
+      aud: 'api.example.com',
+      exp: 1234567890,
+      iat: 1234567800,
+      iss: 'https://auth.example.com',
+    });
+
+    const request = {
+      body: { token: 'caller-token', client_id: client.clientId, client_secret: 'secret' },
+      ip: '127.0.0.1',
+      headers: { 'user-agent': 'vitest' },
+    };
+
+    const reply = { send: (body: unknown) => body };
+
+    if (!handler) throw new Error('Introspect handler was not registered');
+
+    const result = await handler(request, reply);
+
+    expect(result).toEqual({
+      active: true,
+      sub: 'user-1',
+      client_id: 'caller-app',
+      exp: 1234567890,
+      iat: 1234567800,
+      iss: 'https://auth.example.com',
+      aud: 'api.example.com',
+      scope: 'api:read',
+      token_type: 'Bearer',
+    });
+  });
+
+  it('returns active: true when every member of an array aud is in the client audience list', async () => {
+    const { fastify, ctx } = createFastifyStub();
+    await introspectRoute(fastify);
+
+    const handler = ctx.handler;
+    expect(handler).toBeDefined();
+
+    const client = {
+      id: 'client-rs',
+      clientId: 'resource-server',
+      clientSecretHash: 'hashed-secret',
+      enabled: true,
+      audience: ['api.example.com', 'admin.example.com'],
+    };
+
+    const findByClientIdMock = fastify.repositories.oauthClients.findByClientId as unknown as Mock;
+    const verifyPasswordMock = fastify.passwordHasher.verifyPassword as unknown as Mock;
+    const verifyAccessTokenMock = fastify.jwtUtils.verifyAccessToken as unknown as Mock;
+
+    findByClientIdMock.mockResolvedValue(client);
+    verifyPasswordMock.mockResolvedValue(true);
+    verifyAccessTokenMock.mockResolvedValue({
+      sub: 'user-1',
+      clientId: 'caller-app',
+      aud: ['api.example.com', 'admin.example.com'],
+      exp: 1234567890,
+      iat: 1234567800,
+      iss: 'https://auth.example.com',
+    });
+
+    const request = {
+      body: { token: 'caller-token', client_id: client.clientId, client_secret: 'secret' },
+      ip: '127.0.0.1',
+      headers: { 'user-agent': 'vitest' },
+    };
+
+    const reply = { send: (body: unknown) => body };
+
+    if (!handler) throw new Error('Introspect handler was not registered');
+
+    const result = (await handler(request, reply)) as { active: boolean };
+    expect(result.active).toBe(true);
+  });
+
+  it('returns active: false when token aud is not in the introspecting client audience list', async () => {
+    const { fastify, ctx } = createFastifyStub();
+    await introspectRoute(fastify);
+
+    const handler = ctx.handler;
+    expect(handler).toBeDefined();
+
+    // Client is authoritative only for "other.example.com" — cross-audience
+    // introspection must be rejected even though the client authenticates.
+    const client = {
+      id: 'client-rs',
+      clientId: 'resource-server',
+      clientSecretHash: 'hashed-secret',
+      enabled: true,
+      audience: ['other.example.com'],
+    };
+
+    const findByClientIdMock = fastify.repositories.oauthClients.findByClientId as unknown as Mock;
+    const verifyPasswordMock = fastify.passwordHasher.verifyPassword as unknown as Mock;
+    const verifyAccessTokenMock = fastify.jwtUtils.verifyAccessToken as unknown as Mock;
+
+    findByClientIdMock.mockResolvedValue(client);
+    verifyPasswordMock.mockResolvedValue(true);
+    verifyAccessTokenMock.mockResolvedValue({
+      sub: 'user-1',
+      clientId: 'caller-app',
+      aud: 'api.example.com',
+      exp: 1234567890,
+      iat: 1234567800,
+      iss: 'https://auth.example.com',
+    });
+
+    const request = {
+      body: { token: 'caller-token', client_id: client.clientId, client_secret: 'secret' },
+      ip: '127.0.0.1',
+      headers: { 'user-agent': 'vitest' },
+    };
+
+    const reply = { send: (body: unknown) => body };
+
+    if (!handler) throw new Error('Introspect handler was not registered');
+
+    const result = await handler(request, reply);
+    expect(result).toEqual({ active: false });
+  });
+
+  it('returns active: false for cross-client introspection when the client has no audience configured', async () => {
+    const { fastify, ctx } = createFastifyStub();
+    await introspectRoute(fastify);
+
+    const handler = ctx.handler;
+    expect(handler).toBeDefined();
+
+    // Regression guard: pre-audience-bound behaviour is preserved when a
+    // client has no `audience` configured — cross-client is rejected.
+    const client = {
+      id: 'client-1',
+      clientId: 'client-123',
+      clientSecretHash: 'hashed-secret',
+      enabled: true,
+      audience: null,
+    };
+
+    const findByClientIdMock = fastify.repositories.oauthClients.findByClientId as unknown as Mock;
+    const verifyPasswordMock = fastify.passwordHasher.verifyPassword as unknown as Mock;
+    const verifyAccessTokenMock = fastify.jwtUtils.verifyAccessToken as unknown as Mock;
+
+    findByClientIdMock.mockResolvedValue(client);
+    verifyPasswordMock.mockResolvedValue(true);
+    verifyAccessTokenMock.mockResolvedValue({
+      sub: 'user-1',
+      clientId: 'other-client',
+      aud: 'api.example.com',
+      exp: 1234567890,
+      iat: 1234567800,
+      iss: 'https://auth.example.com',
+    });
+
+    const request = {
+      body: { token: 'cross-client-token', client_id: client.clientId, client_secret: 'secret' },
+      ip: '127.0.0.1',
+      headers: { 'user-agent': 'vitest' },
+    };
+
+    const reply = { send: (body: unknown) => body };
+
+    if (!handler) throw new Error('Introspect handler was not registered');
+
+    const result = await handler(request, reply);
+    expect(result).toEqual({ active: false });
+  });
+
   it('throws InvalidClientError for invalid client credentials', async () => {
     const { fastify, ctx } = createFastifyStub();
     await introspectRoute(fastify);
