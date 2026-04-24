@@ -78,6 +78,17 @@ export const refreshTokens = pgTable(
     oauthClientId: uuid('oauth_client_id')
       .notNull()
       .references(() => oauthClients.id, { onDelete: 'cascade' }),
+    /**
+     * Refresh token family identifier (OAuth 2.1 §4.3.1 / RFC 9700 §2.2.2).
+     *
+     * Every rotation MUST preserve this value so that a single "family"
+     * can be revoked atomically when replay of a revoked token is detected.
+     * Tokens created at initial issuance (authorization_code, password login)
+     * generate a new UUID; rotations inherit the predecessor's family_id.
+     */
+    familyId: uuid('family_id')
+      .notNull()
+      .default(sql`uuidv7()`),
     scopes: jsonb('scopes').notNull().default(JSONB_EMPTY_ARRAY).$type<string[]>(),
     expiresAt: bigint('expires_at', { mode: 'number' }).notNull(),
     revoked: boolean('revoked').notNull().default(false),
@@ -98,6 +109,8 @@ export const refreshTokens = pgTable(
     index('idx_refresh_tokens_user_active')
       .on(t.userId, t.expiresAt)
       .where(sql`${t.revoked} = false`),
+    // Fast family-wide revocation lookups for replay detection.
+    index('idx_refresh_tokens_family_id').on(t.familyId),
   ]
 );
 
