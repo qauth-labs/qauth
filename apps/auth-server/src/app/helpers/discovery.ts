@@ -69,6 +69,9 @@ export function buildAuthorizationServerMetadata(
     // Public subject identifiers — no pairwise salts today.
     subject_types_supported: ['public'],
     id_token_signing_alg_values_supported: ['EdDSA'],
+    // RFC 8707 §3: advertise Resource Indicator support. Clients that want
+    // audience-scoped tokens can rely on this metadata flag.
+    resource_indicators_supported: true,
   };
 }
 

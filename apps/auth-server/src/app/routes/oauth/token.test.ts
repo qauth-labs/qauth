@@ -2,6 +2,7 @@ import {
   InvalidClientError,
   InvalidGrantError,
   InvalidScopeError,
+  InvalidTargetError,
   NotFoundError,
   UnauthorizedClientError,
 } from '@qauth-labs/shared-errors';
@@ -177,6 +178,86 @@ describe('POST /oauth/token route — client_credentials grant', () => {
 
     // No refresh token persisted
     expect(fastify.repositories.refreshTokens.create).not.toHaveBeenCalled();
+  });
+
+  it('issues a client_credentials token with aud = requested resource when inside audience allowlist (RFC 8707)', async () => {
+    const { fastify, ctx } = createFastifyStub();
+    await tokenRoute(fastify);
+    const handler = ctx.handler;
+
+    const client = {
+      id: 'client-uuid-ccr-1',
+      clientId: 'machine-client',
+      clientSecretHash: 'hash',
+      enabled: true,
+      grantTypes: ['client_credentials'],
+      scopes: ['read:foo'],
+      audience: ['https://api.example.com/v1', 'https://api2.example.com/v1'],
+    };
+
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(client);
+    (fastify.passwordHasher.verifyPassword as unknown as Mock).mockResolvedValue(true);
+    (fastify.jwtUtils.signAccessToken as unknown as Mock).mockResolvedValue('cc.jwt');
+
+    const request = {
+      body: {
+        grant_type: 'client_credentials',
+        client_id: client.clientId,
+        client_secret: 'secret',
+        scope: 'read:foo',
+        resource: ['https://api.example.com/v1'],
+      },
+      ip: '127.0.0.1',
+      headers: { 'user-agent': 'vitest' },
+    };
+
+    const reply = createReply();
+    if (!handler) throw new Error('Handler missing');
+    await handler(request, reply);
+
+    // aud must be the requested resource, narrowing from the allowlist.
+    expect(fastify.jwtUtils.signAccessToken).toHaveBeenCalledWith(
+      expect.objectContaining({ aud: 'https://api.example.com/v1' })
+    );
+  });
+
+  it('rejects client_credentials with resource outside the client audience allowlist (RFC 8707 §2.2)', async () => {
+    // Security: without this check, a compromised machine credential could
+    // mint tokens for arbitrary resource servers it was never configured to reach.
+    const { fastify, ctx } = createFastifyStub();
+    await tokenRoute(fastify);
+    const handler = ctx.handler;
+
+    const client = {
+      id: 'client-uuid-ccr-2',
+      clientId: 'machine-client-2',
+      clientSecretHash: 'hash',
+      enabled: true,
+      grantTypes: ['client_credentials'],
+      scopes: ['read:foo'],
+      audience: ['https://api.example.com/v1'],
+    };
+
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(client);
+    (fastify.passwordHasher.verifyPassword as unknown as Mock).mockResolvedValue(true);
+
+    const request = {
+      body: {
+        grant_type: 'client_credentials',
+        client_id: client.clientId,
+        client_secret: 'secret',
+        scope: 'read:foo',
+        // Client asks for a resource NOT in its audience allowlist.
+        resource: ['https://unauthorized.example.com/v1'],
+      },
+      ip: '127.0.0.1',
+      headers: { 'user-agent': 'vitest' },
+    };
+
+    const reply = createReply();
+    if (!handler) throw new Error('Handler missing');
+    await expect(handler(request, reply)).rejects.toThrow(InvalidTargetError);
+    expect(fastify.jwtUtils.signAccessToken).not.toHaveBeenCalled();
   });
 
   it('authenticates client via Authorization: Basic header', async () => {
@@ -847,6 +928,44 @@ describe('POST /oauth/token route — authorization_code grant', () => {
     await expect(handler(baseRequest(), reply)).rejects.toThrow(UnauthorizedClientError);
   });
 
+  it('issues access token with aud = resource bound to the auth code (RFC 8707)', async () => {
+    const { fastify, ctx, authCode } = setupAuthCodeStub();
+    // Simulate the authorize step having stored `resource` on the auth code.
+    (fastify.repositories.authorizationCodes.findByCode as unknown as Mock).mockResolvedValue({
+      ...authCode,
+      resource: ['https://api.example.com/v1'],
+    });
+    await tokenRoute(fastify);
+    const handler = ctx.handler;
+    if (!handler) throw new Error('Handler missing');
+
+    const reply = createReply();
+    await handler(baseRequest(), reply);
+
+    const signArg = (fastify.jwtUtils.signAccessToken as unknown as Mock).mock.calls[0][0];
+    expect(signArg.aud).toBe('https://api.example.com/v1');
+    const rtArg = (fastify.repositories.refreshTokens.create as unknown as Mock).mock.calls[0][0];
+    expect(rtArg.resource).toEqual(['https://api.example.com/v1']);
+  });
+
+  it('rejects authorization_code exchange when request resource is outside code binding', async () => {
+    const { fastify, ctx, authCode } = setupAuthCodeStub();
+    (fastify.repositories.authorizationCodes.findByCode as unknown as Mock).mockResolvedValue({
+      ...authCode,
+      resource: ['https://api.example.com/v1'],
+    });
+    await tokenRoute(fastify);
+    const handler = ctx.handler;
+    if (!handler) throw new Error('Handler missing');
+
+    const reply = createReply();
+    // Client tries to request a different resource at token time — must fail
+    // with RFC 8707 §2.2 `invalid_target` (not invalid_grant).
+    await expect(
+      handler(baseRequest({ resource: ['https://api2.example.com/v1'] }), reply)
+    ).rejects.toThrow(InvalidTargetError);
+  });
+
   it('authenticates a public client (token_endpoint_auth_method=none) by client_id alone', async () => {
     // PKCE-capable public client — OAuth 2.1 §4.1.3. No client_secret sent;
     // PKCE code_verifier + client_id is sufficient to bind the code to the
@@ -1045,6 +1164,50 @@ describe('POST /oauth/token route — refresh_token grant', () => {
     // the other client's family.
     expect(fastify.repositories.refreshTokens.revokeFamily).not.toHaveBeenCalled();
     expect(fastify.repositories.refreshTokens.revoke).not.toHaveBeenCalled();
+  });
+
+  it('carries RFC 8707 resource binding across a refresh rotation', async () => {
+    const { fastify, ctx, confidentialClient, storedToken } = setupRefreshStub();
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(
+      confidentialClient
+    );
+    (
+      fastify.repositories.refreshTokens.findByTokenHashIncludingRevoked as unknown as Mock
+    ).mockResolvedValue({ ...storedToken, resource: ['https://api.example.com/v1'] });
+
+    await tokenRoute(fastify);
+    const handler = ctx.handler;
+    if (!handler) throw new Error('Handler missing');
+
+    const reply = createReply();
+    await handler(refreshRequest(), reply);
+
+    expect(fastify.jwtUtils.signAccessToken).toHaveBeenCalledWith(
+      expect.objectContaining({ aud: 'https://api.example.com/v1' })
+    );
+    expect(fastify.repositories.refreshTokens.create).toHaveBeenCalledWith(
+      expect.objectContaining({ resource: ['https://api.example.com/v1'] }),
+      expect.anything()
+    );
+  });
+
+  it('rejects refresh with resource outside the refresh-token binding (RFC 8707)', async () => {
+    const { fastify, ctx, confidentialClient, storedToken } = setupRefreshStub();
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(
+      confidentialClient
+    );
+    (
+      fastify.repositories.refreshTokens.findByTokenHashIncludingRevoked as unknown as Mock
+    ).mockResolvedValue({ ...storedToken, resource: ['https://api.example.com/v1'] });
+
+    await tokenRoute(fastify);
+    const handler = ctx.handler;
+    if (!handler) throw new Error('Handler missing');
+
+    const reply = createReply();
+    await expect(
+      handler(refreshRequest({ resource: ['https://api2.example.com/v1'] }), reply)
+    ).rejects.toThrow(InvalidTargetError);
   });
 
   it('honours scope down-scoping when a subset is requested', async () => {

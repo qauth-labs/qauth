@@ -1,0 +1,2 @@
+ALTER TABLE "authorization_codes" ADD COLUMN "resource" jsonb DEFAULT '[]'::jsonb NOT NULL;--> statement-breakpoint
+ALTER TABLE "refresh_tokens" ADD COLUMN "resource" jsonb DEFAULT '[]'::jsonb NOT NULL;

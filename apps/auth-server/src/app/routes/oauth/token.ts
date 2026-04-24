@@ -5,6 +5,7 @@ import {
   InvalidClientError,
   InvalidGrantError,
   InvalidScopeError,
+  InvalidTargetError,
   NotFoundError,
   UnauthorizedClientError,
 } from '@qauth-labs/shared-errors';
@@ -158,6 +159,7 @@ export default async function (fastify: FastifyInstance) {
       } catch (error) {
         if (
           error instanceof InvalidGrantError ||
+          error instanceof InvalidTargetError ||
           error instanceof InvalidClientError ||
           error instanceof InvalidScopeError ||
           error instanceof NotFoundError ||
@@ -281,6 +283,32 @@ async function handleAuthorizationCode(
     throw new InvalidGrantError('Invalid or expired authorization code');
   }
 
+  // RFC 8707 §2.2: if the token request also includes `resource`, it MUST
+  // be a subset of the one bound to the auth code. Empty request resource
+  // carries forward the code's resource unchanged.
+  const codeResource = authCode.resource ?? [];
+  const requestedResource = body.resource ?? [];
+  if (requestedResource.length > 0) {
+    const extra = requestedResource.filter((r) => !codeResource.includes(r));
+    if (extra.length > 0) {
+      await fastify.repositories.auditLogs.create({
+        userId: authCode.userId,
+        oauthClientId: client.id,
+        event: 'oauth.token.exchange.failure',
+        eventType: 'token',
+        success: false,
+        ipAddress: request.ip,
+        userAgent: request.headers['user-agent'] || null,
+        metadata: {
+          error: 'invalid_target: resource outside the authorization-code binding',
+          extra,
+        },
+      });
+      throw new InvalidTargetError('requested resource is outside the authorization-code binding');
+    }
+  }
+  const effectiveResource = requestedResource.length > 0 ? requestedResource : codeResource;
+
   await fastify.repositories.authorizationCodes.markUsed(authCode.id);
 
   const user = await fastify.repositories.users.findById(authCode.userId);
@@ -306,7 +334,7 @@ async function handleAuthorizationCode(
     email_verified: user.emailVerified,
     clientId: client.clientId,
     scope: scopeString,
-    aud: resolveAudience(client),
+    aud: resolveAudience(client, effectiveResource),
   });
 
   const { token: refreshToken, tokenHash } = fastify.jwtUtils.generateRefreshToken();
@@ -326,6 +354,9 @@ async function handleAuthorizationCode(
     familyId,
     expiresAt: refreshTokenExpiresAt,
     scopes: authCode.scopes,
+    // RFC 8707: carry the resource set onto the refresh token so subsequent
+    // refreshes produce access tokens with the same `aud`.
+    resource: effectiveResource,
   });
 
   let sessionId: string | undefined;
@@ -436,11 +467,42 @@ async function handleClientCredentials(
 
   const scopeString = grantedScopes.join(' ');
 
+  // RFC 8707 §2.2: machine clients MAY include `resource` to scope the
+  // minted token to a specific resource server, but only WITHIN the
+  // client's pre-configured audience allowlist. Without this check, a
+  // compromised machine-client credential could mint tokens for arbitrary
+  // resource URIs — including resource servers it was never configured
+  // to reach. Falls back to `[client.clientId]` when the client has no
+  // explicit audience, matching resolveAudience's light-mode default.
+  const requestedResource = body.resource ?? [];
+  if (requestedResource.length > 0) {
+    const allowedAudience =
+      client.audience && client.audience.length > 0 ? client.audience : [client.clientId];
+    const extra = requestedResource.filter((r) => !allowedAudience.includes(r));
+    if (extra.length > 0) {
+      await fastify.repositories.auditLogs.create({
+        userId: null,
+        oauthClientId: client.id,
+        event: 'oauth.token.exchange.failure',
+        eventType: 'token',
+        success: false,
+        ipAddress: request.ip,
+        userAgent: request.headers['user-agent'] || null,
+        metadata: {
+          error: 'invalid_target: resource outside the client audience allowlist',
+          extra,
+          allowedAudience,
+        },
+      });
+      throw new InvalidTargetError('requested resource is outside the client audience allowlist');
+    }
+  }
+
   const accessToken = await fastify.jwtUtils.signAccessToken({
     sub: client.clientId,
     clientId: client.clientId,
     scope: scopeString,
-    aud: resolveAudience(client),
+    aud: resolveAudience(client, requestedResource),
   });
 
   const accessTokenExpiresIn = fastify.jwtUtils.getAccessTokenLifespan();
@@ -456,6 +518,7 @@ async function handleClientCredentials(
     metadata: {
       grantType: 'client_credentials',
       scope: scopeString,
+      resource: requestedResource,
     },
   });
 
@@ -644,6 +707,34 @@ async function handleRefreshToken(
     grantedScopes = storedToken.scopes;
   }
 
+  // RFC 8707 §2.2: refresh requests MAY include `resource` to narrow the
+  // audience of the minted access token, but MUST NOT request a resource
+  // outside the set bound to the refresh token (which itself descends
+  // from the auth code). Empty request resource carries the stored set
+  // forward unchanged.
+  const storedResource = storedToken.resource ?? [];
+  const requestedResource = body.resource ?? [];
+  if (requestedResource.length > 0) {
+    const extra = requestedResource.filter((r) => !storedResource.includes(r));
+    if (extra.length > 0) {
+      await fastify.repositories.auditLogs.create({
+        userId: user.id,
+        oauthClientId: client.id,
+        event: 'oauth.token.exchange.failure',
+        eventType: 'token',
+        success: false,
+        ipAddress: request.ip,
+        userAgent: request.headers['user-agent'] || null,
+        metadata: {
+          error: 'invalid_target: resource outside the refresh-token binding',
+          extra,
+        },
+      });
+      throw new InvalidTargetError('requested resource is outside the refresh-token binding');
+    }
+  }
+  const effectiveResource = requestedResource.length > 0 ? requestedResource : storedResource;
+
   // Rotate atomically: revoke the presented token and insert the new one
   // inside a single transaction so a crash/failure between the two steps
   // can never leave the user with a revoked token and no replacement.
@@ -666,6 +757,10 @@ async function handleRefreshToken(
         previousTokenHash: presentedHash,
         expiresAt: refreshTokenExpiresAt,
         scopes: grantedScopes,
+        // RFC 8707: the rotated refresh token carries the (possibly
+        // narrowed) resource binding — NOT the request's — so we never
+        // widen the binding across a rotation.
+        resource: effectiveResource,
       },
       tx
     );
@@ -679,7 +774,7 @@ async function handleRefreshToken(
     email_verified: user.emailVerified,
     clientId: client.clientId,
     scope: scopeString,
-    aud: resolveAudience(client),
+    aud: resolveAudience(client, effectiveResource),
   });
 
   const accessTokenExpiresIn = fastify.jwtUtils.getAccessTokenLifespan();

@@ -4,6 +4,7 @@ export * from './invalid-client.error';
 export * from './invalid-credentials.error';
 export * from './invalid-grant.error';
 export * from './invalid-scope.error';
+export * from './invalid-target.error';
 export * from './invalid-token.error';
 export * from './jwt-expired.error';
 export * from './jwt-invalid.error';
