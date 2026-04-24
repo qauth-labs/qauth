@@ -109,11 +109,14 @@ export default async function (fastify: FastifyInstance) {
           Date.now() + fastify.jwtUtils.getRefreshTokenLifespan() * 1000
         );
 
-        // Store refresh token in database (hashed)
+        // Store refresh token in database (hashed). Each login starts a
+        // new refresh-token family — every rotation at /oauth/token
+        // inherits this `familyId` for replay-detection revocation.
         await fastify.repositories.refreshTokens.create({
           userId: user.id,
           oauthClientId: systemClient.id,
           tokenHash: refreshTokenHash,
+          familyId: randomUUID(),
           expiresAt: refreshTokenExpiresAt.getTime(),
           scopes: [],
         });
