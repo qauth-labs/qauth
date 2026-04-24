@@ -126,6 +126,13 @@ export const oauthClients = pgTable(
       .default(sql`'["code"]'::jsonb`)
       .$type<ResponseType[]>(),
     developerId: uuid('developer_id').references(() => users.id, { onDelete: 'set null' }),
+    /**
+     * Set when the client was created via dynamic client registration (RFC 7591).
+     * Null for hand-provisioned / first-party clients. Consumed by the consent
+     * screen to show a "newly registered" phishing-defense badge — callers
+     * MUST treat null as "not dynamic" and therefore not new.
+     */
+    dynamicRegisteredAt: bigint('dynamic_registered_at', { mode: 'number' }),
     metadata: jsonb('metadata').$type<Record<string, unknown> | null>(),
     createdAt: bigint('created_at', { mode: 'number' }).notNull().default(EPOCH_MS_NOW),
     updatedAt: bigint('updated_at', { mode: 'number' }).notNull().default(EPOCH_MS_NOW),

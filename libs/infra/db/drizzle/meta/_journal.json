@@ -15,6 +15,13 @@
       "when": 1776371685401,
       "tag": "0001_add_oauth_clients_audience",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1777372800000,
+      "tag": "0002_add_oauth_consents_and_dynamic_client_flag",
+      "breakpoints": true
     }
   ]
 }

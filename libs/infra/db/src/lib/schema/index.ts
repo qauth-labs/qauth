@@ -1,4 +1,5 @@
 export * from './audit';
+export * from './consents';
 export * from './core';
 export * from './enums';
 export * from './roles';
