@@ -205,18 +205,27 @@ export function validateScopes(
 
 /**
  * Resolve the `aud` JWT claim for a client.
- * Returns the client's configured audience (string[] from DB) when set,
- * otherwise falls back to the client_id per RFC 8707 light-mode.
  *
- * Validates the stored JSONB shape at read time — element type, non-empty,
- * per-entry length, and array size — and falls back to `client_id` when the
- * stored value is malformed (belt-and-braces beside the DB CHECK constraint).
+ * Precedence (RFC 8707 §2 then RFC 8707 light-mode fallback):
+ *   1. `resource` — resource indicators bound to the grant (auth code /
+ *      refresh token) or sent with a client_credentials request. When
+ *      present, overrides the pre-configured client audience so tokens
+ *      are always scoped to the caller-requested resource.
+ *   2. `client.audience` — configured per-client in the DB (machine
+ *      clients that don't send `resource`).
+ *   3. `client.clientId` — last-resort light-mode default.
+ *
+ * Validates the stored JSONB shape at read time for (2); falls back to
+ * (3) when the stored value is malformed (belt-and-braces beside the DB
+ * CHECK constraint).
  */
-export function resolveAudience(client: OAuthClientLike): string | string[] {
+export function resolveAudience(client: OAuthClientLike, resource?: string[]): string | string[] {
+  if (resource && resource.length > 0) {
+    return resource.length === 1 ? resource[0] : resource;
+  }
   const parsed = audienceSchema.safeParse(client.audience);
   if (!parsed.success || parsed.data.length === 0) {
     return client.clientId;
   }
-  // Collapse single-item arrays to string for compact JWTs.
   return parsed.data.length === 1 ? parsed.data[0] : parsed.data;
 }

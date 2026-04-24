@@ -1,8 +1,27 @@
 import { z } from 'zod';
 
 /**
+ * RFC 8707 §2: `resource` is an absolute URI without fragment, identifying
+ * the protected resource the access token is intended for. Clients MAY
+ * include multiple values (one per resource). We accept either a single
+ * string or an array; the route normalizes to an array.
+ *
+ * Coerced to string[] so downstream code (authorize/token routes, DB
+ * repositories, `resolveAudience`) can treat all cases uniformly.
+ */
+const resourceEntrySchema = z
+  .url()
+  .max(2048)
+  .refine((v) => !v.includes('#'), { message: 'resource must not contain a fragment' });
+
+export const resourceParamSchema = z
+  .union([resourceEntrySchema, z.array(resourceEntrySchema).max(10)])
+  .optional()
+  .transform((v) => (v === undefined ? undefined : Array.isArray(v) ? v : [v]));
+
+/**
  * OAuth 2.1 authorize query parameters (GET /oauth/authorize).
- * RFC 6749 4.1.1, RFC 7636 PKCE.
+ * RFC 6749 4.1.1, RFC 7636 PKCE, RFC 8707 Resource Indicators.
  */
 export const authorizeQuerySchema = z.object({
   response_type: z.literal('code'),
@@ -17,6 +36,7 @@ export const authorizeQuerySchema = z.object({
   state: z.string().max(255).optional(),
   scope: z.string().optional(),
   nonce: z.string().max(255).optional(),
+  resource: resourceParamSchema,
 });
 
 export type AuthorizeQuery = z.infer<typeof authorizeQuerySchema>;
@@ -40,6 +60,9 @@ export const tokenExchangeAuthCodeBodySchema = z.object({
     .max(128)
     .regex(/^[A-Za-z0-9._~-]+$/),
   client_secret: z.string().min(1).optional(),
+  // RFC 8707 §2: when present, MUST match the resource set bound to the
+  // authorization code. Enforced in the handler, not the schema.
+  resource: resourceParamSchema,
 });
 
 /**
@@ -52,6 +75,9 @@ export const tokenExchangeClientCredsBodySchema = z.object({
   client_id: z.string().min(1).optional(),
   client_secret: z.string().min(1).optional(),
   scope: z.string().optional(),
+  // RFC 8707 §2: machine clients request a resource at mint time; handler
+  // uses it as the token `aud` (overrides client.audience when present).
+  resource: resourceParamSchema,
 });
 
 /**
@@ -76,6 +102,9 @@ export const tokenExchangeRefreshBodySchema = z.object({
   client_id: z.string().min(1).optional(),
   client_secret: z.string().min(1).optional(),
   scope: z.string().optional(),
+  // RFC 8707 §2: on refresh, resource MUST be a subset of the one bound
+  // to the original authorization code. Enforced in the handler.
+  resource: resourceParamSchema,
 });
 
 /**

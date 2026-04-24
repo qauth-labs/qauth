@@ -6,6 +6,7 @@ import {
   InvalidCredentialsError,
   InvalidGrantError,
   InvalidScopeError,
+  InvalidTargetError,
   InvalidTokenError,
   JWTExpiredError,
   JWTInvalidError,
@@ -63,8 +64,13 @@ export default fp(async function (fastify: FastifyInstance) {
         'Error occurred'
       );
 
-      // OAuth errors that carry an optional `error_description` (RFC 6749 §5.2)
-      if (error instanceof InvalidScopeError || error instanceof InvalidGrantError) {
+      // OAuth errors that carry an optional `error_description` (RFC 6749 §5.2,
+      // RFC 8707 §2.2 for `invalid_target`)
+      if (
+        error instanceof InvalidScopeError ||
+        error instanceof InvalidGrantError ||
+        error instanceof InvalidTargetError
+      ) {
         const response: ErrorResponse = {
           error: error.message,
           statusCode: error.statusCode,

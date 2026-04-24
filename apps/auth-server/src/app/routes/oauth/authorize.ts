@@ -230,6 +230,10 @@ export default async function (fastify: FastifyInstance) {
           codeChallengeMethod: 'S256',
           nonce: query.nonce ?? null,
           scopes,
+          // RFC 8707: bind the resource indicator(s) to the authorization
+          // code so /oauth/token can set the access token's `aud` claim to
+          // exactly what the client requested.
+          resource: query.resource ?? [],
           state: query.state ?? null,
           expiresAt,
         });

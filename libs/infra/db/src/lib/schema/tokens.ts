@@ -48,6 +48,14 @@ export const authorizationCodes = pgTable(
     codeChallengeMethod: codeChallengeMethodEnum('code_challenge_method').notNull().default('S256'),
     nonce: varchar('nonce', { length: 255 }),
     scopes: jsonb('scopes').notNull().default(JSONB_EMPTY_ARRAY).$type<string[]>(),
+    /**
+     * RFC 8707 `resource` parameter(s) from /oauth/authorize. Absolute URIs
+     * identifying the protected resource(s) the issued access token is
+     * intended for. Becomes the token's `aud` claim at /oauth/token time.
+     * Empty array means "no resource indicated; fall back to
+     * client.audience / light-mode default" (backward-compatible path).
+     */
+    resource: jsonb('resource').notNull().default(JSONB_EMPTY_ARRAY).$type<string[]>(),
     state: varchar('state', { length: 255 }),
     expiresAt: bigint('expires_at', { mode: 'number' }).notNull(),
     used: boolean('used').notNull().default(false),
@@ -90,6 +98,13 @@ export const refreshTokens = pgTable(
       .notNull()
       .default(sql`uuidv7()`),
     scopes: jsonb('scopes').notNull().default(JSONB_EMPTY_ARRAY).$type<string[]>(),
+    /**
+     * RFC 8707 resource indicator(s) carried from the originating
+     * authorization code. All access tokens minted from this refresh
+     * token MUST have `aud` equal to (or a subset of) this list. Empty
+     * array means "no resource bound; use light-mode default".
+     */
+    resource: jsonb('resource').notNull().default(JSONB_EMPTY_ARRAY).$type<string[]>(),
     expiresAt: bigint('expires_at', { mode: 'number' }).notNull(),
     revoked: boolean('revoked').notNull().default(false),
     revokedAt: bigint('revoked_at', { mode: 'number' }),

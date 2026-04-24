@@ -203,4 +203,40 @@ describe('GET /oauth/authorize — session-cookie integration', () => {
     expect(state.redirected).toContain('code=');
     expect(state.redirected).toContain('state=xyz');
   });
+
+  it('persists RFC 8707 resource indicator(s) onto the authorization code', async () => {
+    // RFC 8707 clients sends `resource` with /oauth/authorize;
+    // the code row MUST carry it so /oauth/token can set `aud` correctly.
+    const { fastify, ctx } = makeFastify();
+    await authorizeRoute(fastify);
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(CLIENT);
+    (fastify.repositories.oauthConsents.findActive as unknown as Mock).mockResolvedValue({
+      scopes: ['email'],
+      revokedAt: null,
+    });
+    const { signSessionId } = await import('../../helpers/session-cookie');
+    const signed = signSessionId('sid-3');
+    (fastify.sessionUtils.getSession as unknown as Mock).mockResolvedValue({
+      userId: 'user-1',
+      email: 'a@b.com',
+      sessionId: 'sid-3',
+      createdAt: Date.now(),
+    });
+
+    const { reply } = createReply();
+    await ctx.handler!(
+      {
+        query: { ...BASE_QUERY, resource: ['https://api.example.com/v1'] },
+        url: '/oauth/authorize?response_type=code&client_id=app-123&scope=email&resource=https%3A%2F%2Fapi.example.com%2Fv1',
+        headers: { cookie: `__Host-qauth_session=${signed}` },
+        ip: '127.0.0.1',
+      },
+      reply
+    );
+
+    expect(fastify.repositories.authorizationCodes.create).toHaveBeenCalledOnce();
+    const createArg = (fastify.repositories.authorizationCodes.create as unknown as Mock).mock
+      .calls[0][0];
+    expect(createArg.resource).toEqual(['https://api.example.com/v1']);
+  });
 });
