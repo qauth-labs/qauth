@@ -134,18 +134,19 @@ export async function authenticateClient(
 }
 
 /**
- * Authenticate a client for the refresh_token grant.
+ * Authenticate a client for grant types that permit public clients:
+ * `authorization_code` (PKCE-bound) and `refresh_token` (ownership-bound).
  *
- * OAuth 2.1 §4.3.1 / RFC 6749 §6: confidential clients present full
- * credentials (same rules as `authenticateClient`); public clients
- * (`token_endpoint_auth_method: 'none'`) present only `client_id` and
- * are bound to the presented refresh token by ownership + rotation.
+ * OAuth 2.1 §4.1.3 / §4.3.1 / RFC 6749 §6: confidential clients present
+ * full credentials (same rules as `authenticateClient`); public clients
+ * (`token_endpoint_auth_method: 'none'`) present only `client_id`.
  *
  * Returns the client row regardless of confidential-vs-public
- * classification. The caller MUST still enforce refresh-token ownership
- * (`refreshToken.oauthClientId === client.id`).
+ * classification. The caller MUST still enforce the grant-specific
+ * binding — PKCE `code_verifier` for authorization_code, refresh-token
+ * ownership + rotation for refresh_token.
  */
-export async function authenticateClientForRefresh(
+export async function authenticateClientPublicOrConfidential(
   fastify: FastifyInstance,
   realmId: string,
   request: FastifyRequest,

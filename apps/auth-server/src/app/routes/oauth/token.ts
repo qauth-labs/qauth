@@ -15,7 +15,7 @@ import { env } from '../../../config/env';
 import { MIN_RESPONSE_TIME_MS } from '../../constants';
 import {
   authenticateClient,
-  authenticateClientForRefresh,
+  authenticateClientPublicOrConfidential,
   extractClientCredentials,
   type OAuthClientLike,
   resolveAudience,
@@ -81,15 +81,16 @@ export default async function (fastify: FastifyInstance) {
       try {
         const realm = await getOrCreateDefaultRealm(fastify);
 
-        // Authenticate the client. refresh_token supports public clients
-        // (RFC 6749 §6 / OAuth 2.1 §4.3.1) — `authenticateClientForRefresh`
-        // accepts the `client_id`-only path for `token_endpoint_auth_method
-        // = 'none'` clients. Confidential clients in every grant (including
-        // refresh_token) continue to present full credentials.
+        // Authenticate the client. authorization_code (PKCE) and
+        // refresh_token both support public clients
+        // (OAuth 2.1 §4.1.3 / §4.3.1 / RFC 6749 §6). The PKCE verifier /
+        // refresh-token ownership binds the grant to the client; no
+        // `client_secret` is required when `token_endpoint_auth_method:
+        // 'none'`. client_credentials is confidential-only by definition.
         let client: OAuthClientLike;
         try {
-          if (body.grant_type === 'refresh_token') {
-            client = await authenticateClientForRefresh(
+          if (body.grant_type === 'authorization_code' || body.grant_type === 'refresh_token') {
+            client = await authenticateClientPublicOrConfidential(
               fastify,
               realm.id,
               request as FastifyRequest,
