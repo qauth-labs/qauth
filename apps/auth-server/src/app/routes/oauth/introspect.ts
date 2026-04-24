@@ -44,11 +44,15 @@ function isClientAuthoritativeForAudience(
   payloadAud: string | string[] | undefined,
   clientAudience: string[] | null
 ): boolean {
-  if (!payloadAud || !clientAudience || clientAudience.length === 0) {
+  if (
+    !payloadAud ||
+    (Array.isArray(payloadAud) && payloadAud.length === 0) ||
+    !clientAudience ||
+    clientAudience.length === 0
+  ) {
     return false;
   }
   const tokenAuds = Array.isArray(payloadAud) ? payloadAud : [payloadAud];
-  if (tokenAuds.length === 0) return false;
   return tokenAuds.every((a) => clientAudience.includes(a));
 }
 export default async function (fastify: FastifyInstance) {
