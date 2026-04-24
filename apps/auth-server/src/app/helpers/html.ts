@@ -21,18 +21,29 @@ export function esc(value: unknown): string {
     .replace(/'/g, '&#39;');
 }
 
-/** Marker wrapper for values that should NOT be HTML-escaped. */
+/**
+ * Marker wrapper for values that should NOT be HTML-escaped.
+ *
+ * The marker is a module-private Symbol, not a plain string key: symbols
+ * are not serialisable through JSON/form-parsing, so a user-controlled
+ * request body cannot forge a { __safe: true, value: '<script>...' }
+ * object that sneaks past `isSafe()`.
+ */
+const SAFE_MARKER: unique symbol = Symbol('qauth.SafeHtml');
+
 export interface SafeHtml {
-  readonly __safe: true;
+  readonly [SAFE_MARKER]: true;
   readonly value: string;
 }
 
 export function safe(value: string): SafeHtml {
-  return { __safe: true, value };
+  return { [SAFE_MARKER]: true, value };
 }
 
 function isSafe(x: unknown): x is SafeHtml {
-  return typeof x === 'object' && x !== null && (x as SafeHtml).__safe === true;
+  return (
+    typeof x === 'object' && x !== null && (x as Record<symbol, unknown>)[SAFE_MARKER] === true
+  );
 }
 
 export function html(strings: TemplateStringsArray, ...values: unknown[]): SafeHtml {

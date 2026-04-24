@@ -51,23 +51,17 @@ export default async function (fastify: FastifyInstance) {
         return reply.send({ consents: [] });
       }
 
-      const rows = await fastify.repositories.oauthConsents.listActiveForUser(session.userId);
-
-      // N+1 is fine at the scale of "consents a user has granted". If this
-      // ever becomes a problem, add a joined `listActiveForUserWithClient`
-      // repo method.
-      const consents = await Promise.all(
-        rows.map(async (row) => {
-          const client = await fastify.repositories.oauthClients.findById(row.oauthClientId);
-          return {
-            id: row.id,
-            clientId: client?.clientId ?? 'unknown',
-            clientName: client?.name ?? 'Unknown application',
-            scopes: row.scopes,
-            grantedAt: row.grantedAt,
-          };
-        })
+      const rows = await fastify.repositories.oauthConsents.listActiveForUserWithClient(
+        session.userId
       );
+
+      const consents = rows.map((row) => ({
+        id: row.id,
+        clientId: row.clientClientId,
+        clientName: row.clientName,
+        scopes: row.scopes,
+        grantedAt: row.grantedAt,
+      }));
 
       return reply.send({ consents });
     }

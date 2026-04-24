@@ -9,8 +9,8 @@ import {
   createRealmsRepository,
   createRefreshTokensRepository,
   createUsersRepository,
+  type Database,
   type DatabasePool,
-  type DbClient,
   type EmailVerificationTokensRepository,
   OAuthClientsRepository,
   type OAuthConsentsRepository,
@@ -26,7 +26,7 @@ import type { DatabasePluginOptions } from '../types';
 
 declare module 'fastify' {
   interface FastifyInstance {
-    db: DbClient;
+    db: Database;
     dbPool: DatabasePool;
     repositories: {
       users: UsersRepository;

@@ -104,6 +104,9 @@ function createFastifyStub() {
     sessionUtils: {
       setSession: vi.fn().mockResolvedValue(undefined),
     },
+    db: {
+      transaction: vi.fn(async (cb: (tx: unknown) => Promise<unknown>) => cb({})),
+    },
     log: {
       debug: vi.fn(),
       info: vi.fn(),
@@ -929,10 +932,12 @@ describe('POST /oauth/token route — refresh_token grant', () => {
     const reply = createReply();
     const result = await handler(refreshRequest(), reply);
 
-    // Old token revoked as 'rotated' BEFORE new token persisted.
+    // Old token revoked as 'rotated' BEFORE new token persisted. Third
+    // arg is the tx handle propagated from fastify.db.transaction.
     expect(fastify.repositories.refreshTokens.revoke).toHaveBeenCalledWith(
       storedToken.id,
-      'rotated'
+      'rotated',
+      expect.anything()
     );
     // New token inherits the same family_id.
     expect(fastify.repositories.refreshTokens.create).toHaveBeenCalledWith(
@@ -943,7 +948,8 @@ describe('POST /oauth/token route — refresh_token grant', () => {
         familyId: storedToken.familyId,
         previousTokenHash: `hash:${REFRESH_TOKEN_HEX}`,
         scopes: ['read:foo', 'write:foo'],
-      })
+      }),
+      expect.anything()
     );
     expect(fastify.jwtUtils.signAccessToken).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -1030,7 +1036,8 @@ describe('POST /oauth/token route — refresh_token grant', () => {
       expect.objectContaining({ scope: 'read:foo' })
     );
     expect(fastify.repositories.refreshTokens.create).toHaveBeenCalledWith(
-      expect.objectContaining({ scopes: ['read:foo'] })
+      expect.objectContaining({ scopes: ['read:foo'] }),
+      expect.anything()
     );
     expect(result).toMatchObject({ scope: 'read:foo' });
   });

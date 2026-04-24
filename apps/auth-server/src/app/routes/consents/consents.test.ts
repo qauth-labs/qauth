@@ -56,6 +56,7 @@ function makeFastify() {
     repositories: {
       oauthConsents: {
         listActiveForUser: vi.fn(),
+        listActiveForUserWithClient: vi.fn(),
         revoke: vi.fn(),
       },
       oauthClients: {
@@ -91,13 +92,19 @@ describe('/consents JSON API', () => {
       sessionId: 's1',
       createdAt: 0,
     });
-    (fastify.repositories.oauthConsents.listActiveForUser as unknown as Mock).mockResolvedValue([
-      { id: 'c1', oauthClientId: 'cli1', scopes: ['email'], grantedAt: 1, revokedAt: null },
+    (
+      fastify.repositories.oauthConsents.listActiveForUserWithClient as unknown as Mock
+    ).mockResolvedValue([
+      {
+        id: 'c1',
+        oauthClientId: 'cli1',
+        scopes: ['email'],
+        grantedAt: 1,
+        revokedAt: null,
+        clientClientId: 'app-123',
+        clientName: 'Cool App',
+      },
     ]);
-    (fastify.repositories.oauthClients.findById as unknown as Mock).mockResolvedValue({
-      clientId: 'app-123',
-      name: 'Cool App',
-    });
 
     const { reply, state } = createReply();
     await ctx.get!({ headers: { cookie: `__Host-qauth_session=${signed}` } }, reply);

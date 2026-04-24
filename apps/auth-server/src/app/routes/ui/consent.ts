@@ -264,16 +264,21 @@ export default async function (fastify: FastifyInstance) {
 
       const scopes = filterRequestedScopes(query.scope, client);
 
-      // Rotate the CSRF token on every consent render so an old page cannot
-      // be replayed. The same token is returned to the browser via the
-      // hidden form field *and* stored in the server-side session; the
-      // POST handler compares the two in a timing-safe way.
-      const csrfToken = generateCsrfToken();
-      await fastify.sessionUtils.setSession<BrowserSessionData>(
-        session.sessionId,
-        { ...session, csrfToken },
-        env.SESSION_COOKIE_TTL
-      );
+      // Reuse the session's existing CSRF token if present; only mint a
+      // fresh one when none exists yet. Rotating on every GET would break
+      // multi-tab flows: opening the consent page in a second tab would
+      // invalidate the first tab's hidden form field, so the first tab's
+      // submit would fail even though the user's intent is legitimate.
+      // The token is still burned on successful POST, and a new session
+      // (re-login) always mints a new one.
+      const csrfToken = session.csrfToken ?? generateCsrfToken();
+      if (!session.csrfToken) {
+        await fastify.sessionUtils.setSession<BrowserSessionData>(
+          session.sessionId,
+          { ...session, csrfToken },
+          env.SESSION_COOKIE_TTL
+        );
+      }
 
       reply.header('Content-Type', 'text/html; charset=utf-8');
       reply.header('Cache-Control', 'no-store');

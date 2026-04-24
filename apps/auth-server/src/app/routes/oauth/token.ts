@@ -643,24 +643,31 @@ async function handleRefreshToken(
     grantedScopes = storedToken.scopes;
   }
 
-  // Rotate: revoke the presented token FIRST so a concurrent replay
-  // cannot also succeed. We then issue a new token carrying the same
-  // `familyId`. (The unique index on `token_hash` protects against the
-  // degenerate case of a collision.)
-  await fastify.repositories.refreshTokens.revoke(storedToken.id, 'rotated');
-
+  // Rotate atomically: revoke the presented token and insert the new one
+  // inside a single transaction so a crash/failure between the two steps
+  // can never leave the user with a revoked token and no replacement.
+  // The revoke runs first inside the transaction so a concurrent replay
+  // attempt waits on the row lock and then sees the token as already
+  // revoked (→ family-revoke path). The unique index on `token_hash`
+  // protects against the degenerate collision case.
   const { token: newRefreshToken, tokenHash: newRefreshTokenHash } =
     fastify.jwtUtils.generateRefreshToken();
   const refreshTokenExpiresAt = Date.now() + fastify.jwtUtils.getRefreshTokenLifespan() * 1000;
 
-  await fastify.repositories.refreshTokens.create({
-    userId: user.id,
-    oauthClientId: client.id,
-    tokenHash: newRefreshTokenHash,
-    familyId: storedToken.familyId,
-    previousTokenHash: presentedHash,
-    expiresAt: refreshTokenExpiresAt,
-    scopes: grantedScopes,
+  await fastify.db.transaction(async (tx) => {
+    await fastify.repositories.refreshTokens.revoke(storedToken.id, 'rotated', tx);
+    await fastify.repositories.refreshTokens.create(
+      {
+        userId: user.id,
+        oauthClientId: client.id,
+        tokenHash: newRefreshTokenHash,
+        familyId: storedToken.familyId,
+        previousTokenHash: presentedHash,
+        expiresAt: refreshTokenExpiresAt,
+        scopes: grantedScopes,
+      },
+      tx
+    );
   });
 
   const scopeString = grantedScopes.length > 0 ? grantedScopes.join(' ') : undefined;

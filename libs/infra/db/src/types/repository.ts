@@ -180,6 +180,22 @@ export interface OAuthConsentsRepository {
   /** List all active consents for a user, joined to client metadata (revocation UI). */
   listActiveForUser(userId: string, tx?: DbClient): Promise<OAuthConsent[]>;
   /**
+   * List all active consents for a user *with* their client metadata joined
+   * in a single query. Used by the revocation UI to render client name and
+   * client_id without a per-row findById fan-out.
+   */
+  listActiveForUserWithClient(
+    userId: string,
+    tx?: DbClient
+  ): Promise<
+    Array<
+      OAuthConsent & {
+        clientClientId: string;
+        clientName: string;
+      }
+    >
+  >;
+  /**
    * Grant/update consent for (user, client).
    *
    * If an active row exists, its `scopes` array is replaced with the union
