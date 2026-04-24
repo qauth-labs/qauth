@@ -52,6 +52,17 @@ export const realms = pgTable(
     refreshTokenMaxReuse: bigint('refresh_token_max_reuse', { mode: 'number' }).default(0),
     defaultLocale: varchar('default_locale', { length: 10 }),
     supportedLocales: jsonb('supported_locales').default(JSONB_EMPTY_ARRAY).$type<unknown[]>(),
+    /**
+     * Scopes that may be requested by clients created via Dynamic Client
+     * Registration (RFC 7591). This is the hard cap enforced by the
+     * `/oauth/register` endpoint: any scope outside this list is rejected
+     * with `invalid_client_metadata`. Admin-level scopes (e.g. `memory:admin`)
+     * and tenant-scoped grants (e.g. `akinon:*`) MUST NOT appear here.
+     */
+    dynamicRegistrationAllowedScopes: jsonb('dynamic_registration_allowed_scopes')
+      .notNull()
+      .default(JSONB_EMPTY_ARRAY)
+      .$type<string[]>(),
     metadata: jsonb('metadata').$type<Record<string, unknown> | null>(),
     createdAt: bigint('created_at', { mode: 'number' }).notNull().default(EPOCH_MS_NOW),
     updatedAt: bigint('updated_at', { mode: 'number' }).notNull().default(EPOCH_MS_NOW),

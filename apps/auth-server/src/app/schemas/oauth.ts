@@ -143,6 +143,80 @@ export const introspectResponseSchema = z.object({
 export type IntrospectResponse = z.infer<typeof introspectResponseSchema>;
 
 /**
+ * Dynamic Client Registration request body (POST /oauth/register).
+ * RFC 7591 §2. Accepts the common subset of client metadata fields; any
+ * unknown keys are allowed and echoed back per §3.2.1 (server MAY omit,
+ * but we round-trip recognized fields only to keep DB shape bounded).
+ *
+ * Policy notes:
+ *   - `token_endpoint_auth_method=none` marks the client as public
+ *     (PKCE required).
+ *   - Grant/response type consistency is enforced in the route handler,
+ *     not in the schema, so we can surface a structured OAuth error.
+ *   - `scope` is space-separated per RFC 7591 §2 / RFC 6749 §3.3.
+ */
+export const dynamicClientRegistrationRequestSchema = z
+  .object({
+    client_name: z.string().min(1).max(255).optional(),
+    redirect_uris: z.array(z.string().min(1).max(2048)).max(20).optional(),
+    grant_types: z
+      .array(z.enum(['authorization_code', 'refresh_token', 'client_credentials']))
+      .max(8)
+      .optional(),
+    response_types: z
+      .array(z.enum(['code']))
+      .max(4)
+      .optional(),
+    token_endpoint_auth_method: z
+      .enum(['none', 'client_secret_basic', 'client_secret_post'])
+      .optional(),
+    scope: z.string().max(2048).optional(),
+    client_uri: z.url().max(2048).optional(),
+    logo_uri: z.url().max(2048).optional(),
+    tos_uri: z.url().max(2048).optional(),
+    policy_uri: z.url().max(2048).optional(),
+    contacts: z.array(z.email().max(255)).max(10).optional(),
+    software_id: z.string().max(255).optional(),
+    software_version: z.string().max(64).optional(),
+  })
+  .strict();
+
+export type DynamicClientRegistrationRequest = z.infer<
+  typeof dynamicClientRegistrationRequestSchema
+>;
+
+/**
+ * Dynamic Client Registration response body.
+ * RFC 7591 §3.2.1. `client_secret` is omitted for public clients.
+ * `client_id_issued_at` / `client_secret_expires_at` are seconds-since-epoch
+ * (not milliseconds).
+ */
+export const dynamicClientRegistrationResponseSchema = z.object({
+  client_id: z.string(),
+  client_secret: z.string().optional(),
+  client_id_issued_at: z.number().int().nonnegative(),
+  // RFC 7591: 0 means "does not expire". We emit 0 for non-expiring secrets.
+  client_secret_expires_at: z.number().int().nonnegative().optional(),
+  client_name: z.string().optional(),
+  redirect_uris: z.array(z.string()).optional(),
+  grant_types: z.array(z.string()),
+  response_types: z.array(z.string()),
+  token_endpoint_auth_method: z.string(),
+  scope: z.string().optional(),
+  client_uri: z.string().optional(),
+  logo_uri: z.string().optional(),
+  tos_uri: z.string().optional(),
+  policy_uri: z.string().optional(),
+  contacts: z.array(z.string()).optional(),
+  software_id: z.string().optional(),
+  software_version: z.string().optional(),
+});
+
+export type DynamicClientRegistrationResponse = z.infer<
+  typeof dynamicClientRegistrationResponseSchema
+>;
+
+/**
  * OIDC userinfo response schema (GET /userinfo).
  * Returns selected claims for the authenticated end-user.
  */
