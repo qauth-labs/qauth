@@ -136,6 +136,37 @@ export const authEnvSchema = z.object({
    * Userinfo rate limit window in seconds (default: 60 = 1 minute)
    */
   USERINFO_RATE_WINDOW: z.coerce.number().int().min(1).default(60),
+
+  /**
+   * Maximum Dynamic Client Registration attempts per window per-IP
+   * (RFC 7591). Matches /oauth/token's default (30) as a conservative
+   * starting point — registration is higher-impact than a token exchange,
+   * so this should never be looser than the token endpoint.
+   */
+  REGISTER_CLIENT_RATE_LIMIT: z.coerce.number().int().min(1).default(30),
+  /**
+   * Dynamic Client Registration rate limit window in seconds.
+   */
+  REGISTER_CLIENT_RATE_WINDOW: z.coerce.number().int().min(1).default(60),
+
+  /**
+   * Comma-separated scopes allowed by default for dynamically registered
+   * clients when a realm's `dynamic_registration_allowed_scopes` column is
+   * empty. Used at /oauth/register time to seed the realm on first use.
+   *
+   * Intentionally tight: only OIDC core scopes. Admin / tenant-scoped
+   * grants (e.g. `memory:admin`, `akinon:*`) MUST be added explicitly by
+   * an operator and MUST NOT live in this default.
+   */
+  DEFAULT_DYNAMIC_REGISTRATION_SCOPES: z
+    .string()
+    .default('openid profile email offline_access')
+    .transform((s) =>
+      s
+        .split(/[\s,]+/)
+        .map((x) => x.trim())
+        .filter((x) => x.length > 0)
+    ),
 });
 
 /**
