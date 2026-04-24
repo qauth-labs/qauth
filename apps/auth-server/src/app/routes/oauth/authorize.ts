@@ -6,7 +6,9 @@ import { ZodTypeProvider } from 'fastify-type-provider-zod';
 
 import { env } from '../../../config/env';
 import { AUTHORIZATION_CODE_TTL_MS } from '../../constants';
+import { resolveBrowserSession } from '../../helpers/browser-session';
 import { resolveAudience } from '../../helpers/client-auth';
+import { canSkipConsent, filterRequestedScopes } from '../../helpers/consent';
 import { getOrCreateSystemClient } from '../../helpers/oauth-client';
 import { buildRedirectUrl } from '../../helpers/oauth-redirect';
 import { getOrCreateDefaultRealm } from '../../helpers/realm';
@@ -15,7 +17,16 @@ import { type AuthorizeQuery, authorizeQuerySchema } from '../../schemas/oauth';
 /**
  * GET /oauth/authorize
  * OAuth 2.1 Authorization Code Flow with PKCE.
- * Requires Authorization: Bearer <access_token> for user context (MVP).
+ *
+ * Accepts two user-auth mechanisms:
+ *   1. Browser-driven (issue #150): signed __Host-qauth_session cookie.
+ *      No session → redirect to /ui/login with return_to. Session + no
+ *      prior consent covering the requested scopes → redirect to the
+ *      consent screen at /ui/consent. Otherwise issue a code directly.
+ *   2. Legacy/machine: Authorization: Bearer <access_token>. Retained for
+ *      backwards compatibility with first-party callers that have not yet
+ *      migrated to the browser flow. MUST NOT be relied on once dynamic
+ *      client registration is opened up.
  */
 export default async function (fastify: FastifyInstance) {
   fastify.withTypeProvider<ZodTypeProvider>().get(
@@ -135,64 +146,76 @@ export default async function (fastify: FastifyInstance) {
         );
       }
 
-      const token = fastify.jwtUtils.extractFromHeader(request.headers.authorization);
-      if (!token) {
-        await fastify.repositories.auditLogs.create({
-          userId: null,
-          oauthClientId: client.id,
-          event: 'oauth.authorize.failure',
-          eventType: 'token',
-          success: false,
-          ipAddress: request.ip,
-          userAgent: request.headers['user-agent'] || null,
-          metadata: { error: 'access_denied', client_id: query.client_id },
-        });
-        return reply.redirect(
-          buildRedirectUrl(redirectUri, {
-            error: 'access_denied',
-            error_description: 'Missing or invalid Authorization header',
-            state: state ?? undefined,
-          }),
-          302
-        );
+      // -----------------------------------------------------------------
+      // User authentication. Prefer the session cookie; fall back to
+      // Bearer for backwards compat. When both are absent we kick to the
+      // login page with a return_to URL so the user can establish a
+      // session and come back.
+      // -----------------------------------------------------------------
+      const browserSession = await resolveBrowserSession(fastify, request, reply);
+      const bearer = fastify.jwtUtils.extractFromHeader(request.headers.authorization);
+
+      if (!browserSession && !bearer) {
+        // No auth at all → browser flow. Redirect to login, then the user
+        // lands back on this very URL and the session cookie path takes
+        // over. We preserve the exact query string so PKCE challenge,
+        // scope, and state survive the round-trip.
+        const returnTo = `${request.url}`;
+        return reply.redirect(`/ui/login?return_to=${encodeURIComponent(returnTo)}`, 302);
       }
 
       let userId: string;
-      try {
-        const systemClient = await getOrCreateSystemClient(realm.id, fastify);
-        const payload = await fastify.jwtUtils.verifyAccessToken(token, {
-          audience: resolveAudience(systemClient),
-        });
-        userId = payload.sub;
-      } catch {
-        await fastify.repositories.auditLogs.create({
-          userId: null,
-          oauthClientId: client.id,
-          event: 'oauth.authorize.failure',
-          eventType: 'token',
-          success: false,
-          ipAddress: request.ip,
-          userAgent: request.headers['user-agent'] || null,
-          metadata: { error: 'access_denied', client_id: query.client_id },
-        });
-        return reply.redirect(
-          buildRedirectUrl(redirectUri, {
-            error: 'access_denied',
-            error_description: 'Invalid or expired token',
-            state: state ?? undefined,
-          }),
-          302
-        );
+      if (browserSession) {
+        userId = browserSession.userId;
+      } else {
+        // bearer path
+        try {
+          const systemClient = await getOrCreateSystemClient(realm.id, fastify);
+          const payload = await fastify.jwtUtils.verifyAccessToken(bearer as string, {
+            audience: resolveAudience(systemClient),
+          });
+          userId = payload.sub;
+        } catch {
+          await fastify.repositories.auditLogs.create({
+            userId: null,
+            oauthClientId: client.id,
+            event: 'oauth.authorize.failure',
+            eventType: 'token',
+            success: false,
+            ipAddress: request.ip,
+            userAgent: request.headers['user-agent'] || null,
+            metadata: { error: 'access_denied', client_id: query.client_id },
+          });
+          return reply.redirect(
+            buildRedirectUrl(redirectUri, {
+              error: 'access_denied',
+              error_description: 'Invalid or expired token',
+              state: state ?? undefined,
+            }),
+            302
+          );
+        }
       }
 
-      const requestedScopes = query.scope
-        ? query.scope.split(/\s+/).filter((s) => s.length > 0)
-        : [];
       // Deny-by-default: when a client has no scope allowlist configured we
       // grant nothing, matching `validateScopes` on the client_credentials
       // path. Previously an empty allowlist silently over-granted every
       // requested scope on the auth-code flow.
-      const scopes = requestedScopes.filter((s) => client.scopes.includes(s));
+      const scopes = filterRequestedScopes(query.scope, client);
+
+      // Browser-driven flow: show the consent screen unless a previous
+      // grant already covers the requested scopes. Bearer-token callers
+      // skip the consent step entirely — they are first-party and the
+      // Bearer path is not exposed to dynamically-registered clients.
+      if (browserSession) {
+        const existingConsent = await fastify.repositories.oauthConsents.findActive(
+          userId,
+          client.id
+        );
+        if (!canSkipConsent(existingConsent, client, scopes)) {
+          return reply.redirect(`/ui/consent${request.url.slice(request.url.indexOf('?'))}`, 302);
+        }
+      }
 
       const expiresAt = Date.now() + AUTHORIZATION_CODE_TTL_MS;
 

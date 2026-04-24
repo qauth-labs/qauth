@@ -136,6 +136,43 @@ export const authEnvSchema = z.object({
    * Userinfo rate limit window in seconds (default: 60 = 1 minute)
    */
   USERINFO_RATE_WINDOW: z.coerce.number().int().min(1).default(60),
+
+  /**
+   * HMAC secret used to sign the `__Host-qauth_session` cookie (issue #150).
+   * Minimum 32 characters. In production this MUST be set explicitly —
+   * the default value is test-only and is rejected in NODE_ENV=production
+   * by downstream consumers if needed.
+   */
+  SESSION_COOKIE_SECRET: z
+    .string()
+    .min(32, 'SESSION_COOKIE_SECRET must be at least 32 characters')
+    .default('dev-only-session-secret-change-me-1234567890abcdef'),
+
+  /**
+   * Browser session TTL in seconds (default 86400 = 24 hours, per issue #150).
+   */
+  SESSION_COOKIE_TTL: z.coerce
+    .number()
+    .int()
+    .min(60)
+    .default(24 * 60 * 60),
+
+  /**
+   * Whether to set the Secure attribute on the session cookie. Defaults true;
+   * tests and local dev can set false to use plain HTTP. Production MUST
+   * keep this true — the __Host- prefix will reject the cookie otherwise.
+   */
+  SESSION_COOKIE_SECURE: z
+    .enum(['true', 'false'])
+    .default('true')
+    .transform((v) => v === 'true'),
+
+  /**
+   * Window (in days) after dynamic registration during which the consent
+   * screen shows the "Newly registered" phishing-defense badge. Zero
+   * disables the badge.
+   */
+  DYNAMIC_CLIENT_BADGE_DAYS: z.coerce.number().int().min(0).default(30),
 });
 
 /**
