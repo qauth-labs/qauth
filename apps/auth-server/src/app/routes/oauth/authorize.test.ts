@@ -239,4 +239,44 @@ describe('GET /oauth/authorize — session-cookie integration', () => {
       .calls[0][0];
     expect(createArg.resource).toEqual(['https://api.example.com/v1']);
   });
+
+  it('normalizes a single-value resource querystring (bare string) to an array', async () => {
+    // Fastify querystring parsing + fastify-type-provider-zod@6 does not apply
+    // Zod `.transform()` outputs to `request.query` for GET routes the way it
+    // does for POST bodies. A single `resource=X` arrives as a bare string,
+    // not an array. The route normalizes before persistence so the auth code
+    // carries the correct shape for the /oauth/token binding check.
+    const { fastify, ctx } = makeFastify();
+    await authorizeRoute(fastify);
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(CLIENT);
+    (fastify.repositories.oauthConsents.findActive as unknown as Mock).mockResolvedValue({
+      scopes: ['email'],
+      revokedAt: null,
+    });
+    const { signSessionId } = await import('../../helpers/session-cookie');
+    const signed = signSessionId('sid-4');
+    (fastify.sessionUtils.getSession as unknown as Mock).mockResolvedValue({
+      userId: 'user-1',
+      email: 'a@b.com',
+      sessionId: 'sid-4',
+      createdAt: Date.now(),
+    });
+
+    const { reply } = createReply();
+    await ctx.handler!(
+      {
+        // Note: `resource` is a bare string here (not wrapped in an array),
+        // simulating Fastify's raw querystring parsing for `?resource=X`.
+        query: { ...BASE_QUERY, resource: 'https://api.example.com/v1' },
+        url: '/oauth/authorize?response_type=code&client_id=app-123&scope=email&resource=https%3A%2F%2Fapi.example.com%2Fv1',
+        headers: { cookie: `__Host-qauth_session=${signed}` },
+        ip: '127.0.0.1',
+      },
+      reply
+    );
+
+    const createArg = (fastify.repositories.authorizationCodes.create as unknown as Mock).mock
+      .calls[0][0];
+    expect(createArg.resource).toEqual(['https://api.example.com/v1']);
+  });
 });
