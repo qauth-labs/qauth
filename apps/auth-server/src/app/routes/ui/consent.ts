@@ -22,7 +22,19 @@ import {
   csrfTokensEqual,
   generateCsrfToken,
 } from '../../helpers/session-cookie';
-import { authorizeQuerySchema } from '../../schemas/oauth';
+import { authorizeQuerySchema, resourceParamSchema } from '../../schemas/oauth';
+
+/**
+ * RFC 8707: parse every `resource=` entry from a URL query string.
+ * See authorize.ts's parseResourceFromUrl — fastify-type-provider-zod@6.1.0
+ * drops the parsed `resource` from request.query for GET routes when the
+ * schema is a union + transform. Reading request.url sidesteps that.
+ */
+function parseResourceFromUrl(url: string): string[] {
+  const q = url.indexOf('?');
+  if (q < 0) return [];
+  return new URLSearchParams(url.slice(q + 1)).getAll('resource');
+}
 
 /**
  * Consent screen & Allow/Deny POST handler (issue #150).
@@ -52,6 +64,10 @@ const consentFormSchema = z.object({
   code_challenge: z.string().min(43).max(128),
   code_challenge_method: z.literal('S256'),
   response_type: z.literal('code'),
+  // RFC 8707: carried through as hidden form field(s). POST body transforms
+  // work (unlike GET querystrings), so `resourceParamSchema` populates an
+  // array on `body.resource`.
+  resource: resourceParamSchema,
 });
 
 type ConsentForm = z.infer<typeof consentFormSchema>;
@@ -73,15 +89,20 @@ function consentPage(opts: {
   badgeDynamic: boolean;
   csrfToken: string;
   authorizeParams: Record<string, string | undefined>;
+  /** RFC 8707 resource indicators — emitted as one hidden input per URI. */
+  resources: string[];
   userEmail: string;
 }): string {
   const scopeRows = opts.scopes.length
     ? opts.scopes.map((s) => html`<li><code>${s}</code> — ${describeScope(s)}</li>`)
     : [html`<li><em>No scopes requested.</em></li>`];
 
-  const hidden = Object.entries(opts.authorizeParams)
-    .filter(([, v]) => v != null && v !== '')
-    .map(([k, v]) => html`<input type="hidden" name="${k}" value="${String(v)}" />`);
+  const hidden = [
+    ...Object.entries(opts.authorizeParams)
+      .filter(([, v]) => v != null && v !== '')
+      .map(([k, v]) => html`<input type="hidden" name="${k}" value="${String(v)}" />`),
+    ...opts.resources.map((r) => html`<input type="hidden" name="resource" value="${r}" />`),
+  ];
 
   const audienceBlock = opts.audience.length
     ? html`<p><strong>Tokens will be valid for:</strong> ${opts.audience.join(', ')}</p>`
@@ -307,6 +328,11 @@ export default async function (fastify: FastifyInstance) {
             code_challenge_method: query.code_challenge_method,
             response_type: query.response_type,
           },
+          // RFC 8707: parsed directly from request.url (see
+          // parseResourceFromUrl). Rendered as one hidden <input
+          // name="resource" value="<uri>" /> per entry so the POST body
+          // carries every requested resource URI back to the handler.
+          resources: parseResourceFromUrl(request.url),
           userEmail: session.email,
         })
       );
@@ -441,6 +467,9 @@ export default async function (fastify: FastifyInstance) {
             codeChallengeMethod: 'S256',
             nonce: body.nonce ?? null,
             scopes,
+            // RFC 8707: bind the requested resource(s) to this code so
+            // /oauth/token can set the issued access token's `aud` claim.
+            resource: body.resource ?? [],
             state: body.state ?? null,
             expiresAt,
           });

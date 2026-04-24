@@ -15,17 +15,25 @@ import { getOrCreateDefaultRealm } from '../../helpers/realm';
 import { type AuthorizeQuery, authorizeQuerySchema } from '../../schemas/oauth';
 
 /**
- * RFC 8707: normalize the `resource` querystring param to a string[].
- * See `resourceParamSchema` note — Fastify querystring transforms don't
- * always reach the handler, so a single `resource=X` may arrive as a bare
- * string. Zod has already validated shape (single URI or array of URIs);
- * all we need is the shape coercion.
+ * RFC 8707: parse every `resource=` query param directly from the request
+ * URL instead of relying on `request.query.resource`.
+ *
+ * Why: fastify-type-provider-zod@6.1.0 drops the `resource` field from the
+ * parsed query when its Zod schema is a union + transform (e.g.
+ * `z.union([z.url(), z.array(z.url())]).transform(...)`) — the raw-string
+ * variant from Fastify's querystring parser does not survive the validator.
+ * The field IS validated (invalid URIs fail the whole request), but the
+ * validator does not write the parsed array back into request.query.
+ *
+ * Reading from `request.url` sidesteps the validator entirely. Zod has
+ * already rejected invalid inputs at schema time, so whatever reaches this
+ * code point is already shape-safe.
  */
-function normalizeResource(v: unknown): string[] {
-  if (v === undefined || v === null) return [];
-  if (Array.isArray(v)) return v.filter((x): x is string => typeof x === 'string');
-  if (typeof v === 'string') return [v];
-  return [];
+function parseResourceFromUrl(url: string): string[] {
+  const q = url.indexOf('?');
+  if (q < 0) return [];
+  const params = new URLSearchParams(url.slice(q + 1));
+  return params.getAll('resource');
 }
 
 /**
@@ -246,13 +254,10 @@ export default async function (fastify: FastifyInstance) {
           scopes,
           // RFC 8707: bind the resource indicator(s) to the authorization
           // code so /oauth/token can set the access token's `aud` claim to
-          // exactly what the client requested.
-          //
-          // fastify-type-provider-zod@6.1.0 does not apply Zod `.transform()`
-          // outputs to `request.query` on GET routes the way it does for
-          // POST bodies, so a single `resource=X` query param arrives as
-          // the raw string — normalize manually here.
-          resource: normalizeResource(query.resource as unknown),
+          // exactly what the client requested. Reached on the consent-skip
+          // path (returning user, prior consent covers requested scopes);
+          // the consent-screen path creates codes in ui/consent.ts.
+          resource: parseResourceFromUrl(request.url),
           state: query.state ?? null,
           expiresAt,
         });
