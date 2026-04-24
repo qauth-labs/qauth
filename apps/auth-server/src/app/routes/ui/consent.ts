@@ -232,7 +232,7 @@ export default async function (fastify: FastifyInstance) {
    * re-issue the authorize call on Allow.
    */
   fastify.withTypeProvider<ZodTypeProvider>().get(
-    '/ui/consent',
+    '/consent',
     {
       schema: {
         description:
@@ -318,7 +318,7 @@ export default async function (fastify: FastifyInstance) {
    * client's redirect_uri in both cases.
    */
   fastify.withTypeProvider<ZodTypeProvider>().post(
-    '/ui/consent',
+    '/consent',
     {
       schema: {
         description:

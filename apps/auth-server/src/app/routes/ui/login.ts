@@ -148,7 +148,7 @@ type LoginForm = z.infer<typeof loginFormSchema>;
 
 export default async function (fastify: FastifyInstance) {
   fastify.withTypeProvider<ZodTypeProvider>().get(
-    '/ui/login',
+    '/login',
     {
       schema: {
         description:
@@ -170,7 +170,7 @@ export default async function (fastify: FastifyInstance) {
   );
 
   fastify.withTypeProvider<ZodTypeProvider>().post(
-    '/ui/login',
+    '/login',
     {
       schema: {
         description: 'Submit the session-cookie login form. Sets __Host-qauth_session on success.',
