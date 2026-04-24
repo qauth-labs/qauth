@@ -1,5 +1,6 @@
 import type { InferInsertModel, InferSelectModel } from 'drizzle-orm';
 
+import type { oauthConsents } from '../lib/schema/consents';
 import type { oauthClients } from '../lib/schema/core';
 import type {
   authorizationCodes,
@@ -111,6 +112,17 @@ export interface RefreshTokensRepository {
    */
   findByTokenHash(tokenHash: string, tx?: DbClient): Promise<RefreshToken | undefined>;
   /**
+   * Find a token by its token hash regardless of `revoked`/`expiresAt`.
+   *
+   * Used by the refresh-token rotation flow to detect replay of an
+   * already-revoked token (OAuth 2.1 §4.3.1 / RFC 9700 §2.2.2). Callers
+   * MUST apply their own liveness and freshness checks.
+   */
+  findByTokenHashIncludingRevoked(
+    tokenHash: string,
+    tx?: DbClient
+  ): Promise<RefreshToken | undefined>;
+  /**
    * Find all active tokens for a user
    * Returns tokens that are not revoked and not expired
    */
@@ -121,6 +133,17 @@ export interface RefreshTokensRepository {
    */
   revoke(id: string, reason?: string, tx?: DbClient): Promise<RefreshToken>;
   /**
+   * Revoke all tokens in a refresh-token family.
+   *
+   * Triggered when a revoked token is replayed: the whole family (every
+   * rotation descended from the initial token) is revoked in a single
+   * statement. Already-revoked rows are left untouched so the original
+   * `revokedReason` is preserved for audit.
+   *
+   * @returns Count of rows whose state was changed by this call.
+   */
+  revokeFamily(familyId: string, reason?: string, tx?: DbClient): Promise<number>;
+  /**
    * Revoke all active tokens for a user
    * Useful for "logout all sessions" functionality
    */
@@ -130,6 +153,64 @@ export interface RefreshTokensRepository {
    * Returns count of deleted tokens
    */
   deleteExpired(tx?: DbClient): Promise<number>;
+}
+
+/**
+ * OAuth consent types
+ */
+export type OAuthConsent = InferSelectModel<typeof oauthConsents>;
+export type NewOAuthConsent = InferInsertModel<typeof oauthConsents>;
+
+/**
+ * OAuth consents repository interface.
+ *
+ * Consents are scoped to (userId, oauthClientId). A single active
+ * (not revoked) row exists per pair; re-consent merges scopes into the same
+ * row. Revocation sets `revokedAt` rather than deleting, so history is kept.
+ */
+export interface OAuthConsentsRepository {
+  /** Create a consent row (insert). Caller is responsible for uniqueness. */
+  create(data: NewOAuthConsent, tx?: DbClient): Promise<OAuthConsent>;
+  /** Fetch the active (non-revoked) consent for a (user, client) pair. */
+  findActive(
+    userId: string,
+    oauthClientId: string,
+    tx?: DbClient
+  ): Promise<OAuthConsent | undefined>;
+  /** List all active consents for a user, joined to client metadata (revocation UI). */
+  listActiveForUser(userId: string, tx?: DbClient): Promise<OAuthConsent[]>;
+  /**
+   * List all active consents for a user *with* their client metadata joined
+   * in a single query. Used by the revocation UI to render client name and
+   * client_id without a per-row findById fan-out.
+   */
+  listActiveForUserWithClient(
+    userId: string,
+    tx?: DbClient
+  ): Promise<
+    Array<
+      OAuthConsent & {
+        clientClientId: string;
+        clientName: string;
+      }
+    >
+  >;
+  /**
+   * Grant/update consent for (user, client).
+   *
+   * If an active row exists, its `scopes` array is replaced with the union
+   * of old ∪ new and `grantedAt` is refreshed. Otherwise a new row is
+   * inserted.
+   */
+  upsertGrant(
+    userId: string,
+    oauthClientId: string,
+    realmId: string,
+    scopes: string[],
+    tx?: DbClient
+  ): Promise<OAuthConsent>;
+  /** Revoke a consent row by id (owner must be checked by caller). */
+  revoke(id: string, tx?: DbClient): Promise<OAuthConsent>;
 }
 
 /**

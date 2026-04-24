@@ -1,4 +1,6 @@
-import type { drizzle } from 'drizzle-orm/node-postgres';
+import type { ExtractTablesWithRelations } from 'drizzle-orm';
+import type { drizzle, NodePgQueryResultHKT } from 'drizzle-orm/node-postgres';
+import type { PgTransaction } from 'drizzle-orm/pg-core';
 import type { Pool } from 'pg';
 
 /**
@@ -32,17 +34,34 @@ export interface DatabaseConfig {
 }
 
 /**
- * DbClient type that can be either the main db instance or a transaction
- * This allows repository methods to work with both regular queries and transactions
+ * The top-level drizzle database instance. Has `$client` + `.transaction(...)`.
+ * Use this when you specifically need the root connection (e.g. to open a
+ * transaction from a Fastify decorator).
  */
-export type DbClient = ReturnType<typeof drizzle<Record<string, never>>>;
+export type Database = ReturnType<typeof drizzle<Record<string, never>>>;
+
+/**
+ * Drizzle transaction handle as yielded to `db.transaction(async (tx) => ...)`.
+ */
+export type DbTransaction = PgTransaction<
+  NodePgQueryResultHKT,
+  Record<string, never>,
+  ExtractTablesWithRelations<Record<string, never>>
+>;
+
+/**
+ * DbClient accepts either the top-level database or an in-flight
+ * transaction. Repository methods take this so the same call can
+ * participate in an outer transaction or stand alone.
+ */
+export type DbClient = Database | DbTransaction;
 
 /**
  * Database instance returned by the factory
  */
 export interface DatabaseInstance {
   /** Drizzle database client for queries */
-  db: DbClient;
+  db: Database;
   /** PostgreSQL connection pool for direct access */
   pool: DatabasePool;
   /** Close the database connection pool */

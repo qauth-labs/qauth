@@ -80,6 +80,9 @@ function createFastifyStub() {
       },
       refreshTokens: {
         create: vi.fn(),
+        findByTokenHashIncludingRevoked: vi.fn(),
+        revoke: vi.fn().mockResolvedValue(undefined),
+        revokeFamily: vi.fn().mockResolvedValue(0),
       },
       auditLogs: {
         create: vi.fn(),
@@ -91,6 +94,7 @@ function createFastifyStub() {
     jwtUtils: {
       signAccessToken: vi.fn(),
       generateRefreshToken: vi.fn(),
+      hashRefreshToken: vi.fn().mockImplementation((t: string) => `hash:${t}`),
       getAccessTokenLifespan: vi.fn().mockReturnValue(900),
       getRefreshTokenLifespan: vi.fn().mockReturnValue(604800),
     },
@@ -99,6 +103,9 @@ function createFastifyStub() {
     },
     sessionUtils: {
       setSession: vi.fn().mockResolvedValue(undefined),
+    },
+    db: {
+      transaction: vi.fn(async (cb: (tx: unknown) => Promise<unknown>) => cb({})),
     },
     log: {
       debug: vi.fn(),
@@ -838,5 +845,351 @@ describe('POST /oauth/token route — authorization_code grant', () => {
 
     const reply = createReply();
     await expect(handler(baseRequest(), reply)).rejects.toThrow(UnauthorizedClientError);
+  });
+});
+
+describe('POST /oauth/token route — refresh_token grant', () => {
+  const REFRESH_TOKEN_HEX = 'a'.repeat(64);
+  const OTHER_REFRESH_HEX = 'b'.repeat(64);
+
+  function setupRefreshStub() {
+    const { fastify, ctx } = createFastifyStub();
+
+    const confidentialClient = {
+      id: 'client-uuid-rt-1',
+      clientId: 'confidential-client',
+      clientSecretHash: 'hash',
+      enabled: true,
+      grantTypes: ['authorization_code', 'refresh_token'],
+      scopes: ['read:foo', 'write:foo'],
+      audience: ['https://api.example.com'],
+      tokenEndpointAuthMethod: 'client_secret_post',
+    };
+    const publicClient = {
+      id: 'client-uuid-rt-pub',
+      clientId: 'public-client',
+      clientSecretHash: '',
+      enabled: true,
+      grantTypes: ['authorization_code', 'refresh_token'],
+      scopes: ['read:foo'],
+      audience: null,
+      tokenEndpointAuthMethod: 'none',
+    };
+    const user = {
+      id: 'user-uuid-rt',
+      email: 'rt@example.com',
+      emailVerified: true,
+      enabled: true,
+    };
+    const storedToken = {
+      id: 'token-uuid-rt-1',
+      userId: user.id,
+      oauthClientId: confidentialClient.id,
+      familyId: 'family-uuid-1',
+      scopes: ['read:foo', 'write:foo'],
+      expiresAt: Date.now() + 60_000,
+      revoked: false,
+    };
+
+    (fastify.passwordHasher.verifyPassword as unknown as Mock).mockResolvedValue(true);
+    (fastify.jwtUtils.signAccessToken as unknown as Mock).mockResolvedValue('new.access.jwt');
+    (fastify.jwtUtils.generateRefreshToken as unknown as Mock).mockReturnValue({
+      token: 'new-refresh-token',
+      tokenHash: 'new-refresh-token-hash',
+    });
+    (fastify.repositories.users.findById as unknown as Mock).mockResolvedValue(user);
+
+    return { fastify, ctx, confidentialClient, publicClient, user, storedToken };
+  }
+
+  function refreshRequest(overrides: Record<string, unknown> = {}, headers = {}) {
+    return {
+      body: {
+        grant_type: 'refresh_token',
+        refresh_token: REFRESH_TOKEN_HEX,
+        client_id: 'confidential-client',
+        client_secret: 'secret',
+        ...overrides,
+      },
+      ip: '127.0.0.1',
+      headers: { 'user-agent': 'vitest', ...headers },
+    };
+  }
+
+  it('rotates the token and returns new access+refresh for a confidential client', async () => {
+    const { fastify, ctx, confidentialClient, storedToken, user } = setupRefreshStub();
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(
+      confidentialClient
+    );
+    (
+      fastify.repositories.refreshTokens.findByTokenHashIncludingRevoked as unknown as Mock
+    ).mockResolvedValue(storedToken);
+
+    await tokenRoute(fastify);
+    const handler = ctx.handler;
+    if (!handler) throw new Error('Handler missing');
+
+    const reply = createReply();
+    const result = await handler(refreshRequest(), reply);
+
+    // Old token revoked as 'rotated' BEFORE new token persisted. Third
+    // arg is the tx handle propagated from fastify.db.transaction.
+    expect(fastify.repositories.refreshTokens.revoke).toHaveBeenCalledWith(
+      storedToken.id,
+      'rotated',
+      expect.anything()
+    );
+    // New token inherits the same family_id.
+    expect(fastify.repositories.refreshTokens.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: user.id,
+        oauthClientId: confidentialClient.id,
+        tokenHash: 'new-refresh-token-hash',
+        familyId: storedToken.familyId,
+        previousTokenHash: `hash:${REFRESH_TOKEN_HEX}`,
+        scopes: ['read:foo', 'write:foo'],
+      }),
+      expect.anything()
+    );
+    expect(fastify.jwtUtils.signAccessToken).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sub: user.id,
+        email: user.email,
+        scope: 'read:foo write:foo',
+        aud: 'https://api.example.com',
+      })
+    );
+    expect(result).toMatchObject({
+      access_token: 'new.access.jwt',
+      refresh_token: 'new-refresh-token',
+      token_type: 'Bearer',
+      scope: 'read:foo write:foo',
+    });
+  });
+
+  it('detects replay and revokes the whole family when a revoked token is presented', async () => {
+    const { fastify, ctx, confidentialClient, storedToken } = setupRefreshStub();
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(
+      confidentialClient
+    );
+    (
+      fastify.repositories.refreshTokens.findByTokenHashIncludingRevoked as unknown as Mock
+    ).mockResolvedValue({ ...storedToken, revoked: true });
+    (fastify.repositories.refreshTokens.revokeFamily as unknown as Mock).mockResolvedValue(3);
+
+    await tokenRoute(fastify);
+    const handler = ctx.handler;
+    if (!handler) throw new Error('Handler missing');
+
+    const reply = createReply();
+    await expect(handler(refreshRequest(), reply)).rejects.toThrow(InvalidGrantError);
+
+    // Family-wide revocation triggered with the correct family_id + reason.
+    expect(fastify.repositories.refreshTokens.revokeFamily).toHaveBeenCalledWith(
+      storedToken.familyId,
+      'replay_detected'
+    );
+    // Replay path must NOT mint a new token.
+    expect(fastify.jwtUtils.signAccessToken).not.toHaveBeenCalled();
+    expect(fastify.repositories.refreshTokens.create).not.toHaveBeenCalled();
+  });
+
+  it('rejects when the refresh token is bound to a different client (cross-client)', async () => {
+    const { fastify, ctx, confidentialClient, storedToken } = setupRefreshStub();
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(
+      confidentialClient
+    );
+    (
+      fastify.repositories.refreshTokens.findByTokenHashIncludingRevoked as unknown as Mock
+    ).mockResolvedValue({ ...storedToken, oauthClientId: 'some-other-client' });
+
+    await tokenRoute(fastify);
+    const handler = ctx.handler;
+    if (!handler) throw new Error('Handler missing');
+
+    const reply = createReply();
+    await expect(handler(refreshRequest(), reply)).rejects.toThrow(InvalidGrantError);
+
+    // Ownership check fires BEFORE family revocation — must never touch
+    // the other client's family.
+    expect(fastify.repositories.refreshTokens.revokeFamily).not.toHaveBeenCalled();
+    expect(fastify.repositories.refreshTokens.revoke).not.toHaveBeenCalled();
+  });
+
+  it('honours scope down-scoping when a subset is requested', async () => {
+    const { fastify, ctx, confidentialClient, storedToken } = setupRefreshStub();
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(
+      confidentialClient
+    );
+    (
+      fastify.repositories.refreshTokens.findByTokenHashIncludingRevoked as unknown as Mock
+    ).mockResolvedValue(storedToken);
+
+    await tokenRoute(fastify);
+    const handler = ctx.handler;
+    if (!handler) throw new Error('Handler missing');
+
+    const reply = createReply();
+    const result = await handler(refreshRequest({ scope: 'read:foo' }), reply);
+
+    expect(fastify.jwtUtils.signAccessToken).toHaveBeenCalledWith(
+      expect.objectContaining({ scope: 'read:foo' })
+    );
+    expect(fastify.repositories.refreshTokens.create).toHaveBeenCalledWith(
+      expect.objectContaining({ scopes: ['read:foo'] }),
+      expect.anything()
+    );
+    expect(result).toMatchObject({ scope: 'read:foo' });
+  });
+
+  it('rejects upscoping with invalid_scope', async () => {
+    const { fastify, ctx, confidentialClient, storedToken } = setupRefreshStub();
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(
+      confidentialClient
+    );
+    (
+      fastify.repositories.refreshTokens.findByTokenHashIncludingRevoked as unknown as Mock
+    ).mockResolvedValue(storedToken);
+
+    await tokenRoute(fastify);
+    const handler = ctx.handler;
+    if (!handler) throw new Error('Handler missing');
+
+    const reply = createReply();
+    await expect(handler(refreshRequest({ scope: 'read:foo admin:all' }), reply)).rejects.toThrow(
+      InvalidScopeError
+    );
+
+    // No rotation when the grant fails validation.
+    expect(fastify.repositories.refreshTokens.revoke).not.toHaveBeenCalled();
+    expect(fastify.repositories.refreshTokens.create).not.toHaveBeenCalled();
+  });
+
+  it('accepts a public client with client_id only (no client_secret)', async () => {
+    const { fastify, ctx, publicClient, storedToken } = setupRefreshStub();
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(
+      publicClient
+    );
+    (
+      fastify.repositories.refreshTokens.findByTokenHashIncludingRevoked as unknown as Mock
+    ).mockResolvedValue({ ...storedToken, oauthClientId: publicClient.id, scopes: ['read:foo'] });
+
+    await tokenRoute(fastify);
+    const handler = ctx.handler;
+    if (!handler) throw new Error('Handler missing');
+
+    const reply = createReply();
+    const request = {
+      body: {
+        grant_type: 'refresh_token',
+        refresh_token: REFRESH_TOKEN_HEX,
+        client_id: 'public-client',
+      },
+      ip: '127.0.0.1',
+      headers: { 'user-agent': 'vitest' },
+    };
+
+    const result = await handler(request, reply);
+
+    // Secret verification must be skipped for a 'none' auth method.
+    expect(fastify.passwordHasher.verifyPassword).not.toHaveBeenCalled();
+    expect(result).toMatchObject({
+      access_token: 'new.access.jwt',
+      refresh_token: 'new-refresh-token',
+    });
+  });
+
+  it('rejects a confidential client presenting client_id without secret', async () => {
+    const { fastify, ctx, confidentialClient } = setupRefreshStub();
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(
+      confidentialClient
+    );
+
+    await tokenRoute(fastify);
+    const handler = ctx.handler;
+    if (!handler) throw new Error('Handler missing');
+
+    const reply = createReply();
+    const request = {
+      body: {
+        grant_type: 'refresh_token',
+        refresh_token: REFRESH_TOKEN_HEX,
+        client_id: 'confidential-client',
+      },
+      ip: '127.0.0.1',
+      headers: { 'user-agent': 'vitest' },
+    };
+
+    await expect(handler(request, reply)).rejects.toThrow(InvalidClientError);
+
+    // Token lookup must not occur before client auth succeeds.
+    expect(
+      fastify.repositories.refreshTokens.findByTokenHashIncludingRevoked
+    ).not.toHaveBeenCalled();
+  });
+
+  it('rejects with invalid_grant when the refresh token is unknown', async () => {
+    const { fastify, ctx, confidentialClient } = setupRefreshStub();
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(
+      confidentialClient
+    );
+    (
+      fastify.repositories.refreshTokens.findByTokenHashIncludingRevoked as unknown as Mock
+    ).mockResolvedValue(undefined);
+
+    await tokenRoute(fastify);
+    const handler = ctx.handler;
+    if (!handler) throw new Error('Handler missing');
+
+    const reply = createReply();
+    await expect(
+      handler(refreshRequest({ refresh_token: OTHER_REFRESH_HEX }), reply)
+    ).rejects.toThrow(InvalidGrantError);
+  });
+
+  it('rejects with invalid_grant when the refresh token is expired', async () => {
+    const { fastify, ctx, confidentialClient, storedToken } = setupRefreshStub();
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(
+      confidentialClient
+    );
+    (
+      fastify.repositories.refreshTokens.findByTokenHashIncludingRevoked as unknown as Mock
+    ).mockResolvedValue({ ...storedToken, expiresAt: Date.now() - 1000 });
+
+    await tokenRoute(fastify);
+    const handler = ctx.handler;
+    if (!handler) throw new Error('Handler missing');
+
+    const reply = createReply();
+    await expect(handler(refreshRequest(), reply)).rejects.toThrow(InvalidGrantError);
+    expect(fastify.repositories.refreshTokens.revoke).not.toHaveBeenCalled();
+  });
+
+  it('rejects with unauthorized_client when the client lacks refresh_token grant', async () => {
+    const { fastify, ctx, storedToken } = setupRefreshStub();
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue({
+      id: 'client-uuid-rt-norefresh',
+      clientId: 'confidential-client',
+      clientSecretHash: 'hash',
+      enabled: true,
+      grantTypes: ['authorization_code'], // refresh_token intentionally absent
+      scopes: ['read:foo'],
+      audience: null,
+      tokenEndpointAuthMethod: 'client_secret_post',
+    });
+    (
+      fastify.repositories.refreshTokens.findByTokenHashIncludingRevoked as unknown as Mock
+    ).mockResolvedValue(storedToken);
+
+    await tokenRoute(fastify);
+    const handler = ctx.handler;
+    if (!handler) throw new Error('Handler missing');
+
+    const reply = createReply();
+    await expect(handler(refreshRequest(), reply)).rejects.toThrow(UnauthorizedClientError);
+    // Unauthorized grant must short-circuit before hitting the token table.
+    expect(
+      fastify.repositories.refreshTokens.findByTokenHashIncludingRevoked
+    ).not.toHaveBeenCalled();
   });
 });

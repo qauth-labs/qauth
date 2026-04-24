@@ -5,13 +5,15 @@ import {
   createDatabase,
   createEmailVerificationTokensRepository,
   createOAuthClientsRepository,
+  createOAuthConsentsRepository,
   createRealmsRepository,
   createRefreshTokensRepository,
   createUsersRepository,
+  type Database,
   type DatabasePool,
-  type DbClient,
   type EmailVerificationTokensRepository,
   OAuthClientsRepository,
+  type OAuthConsentsRepository,
   type RealmsRepository,
   type RefreshTokensRepository,
   type UsersRepository,
@@ -24,13 +26,14 @@ import type { DatabasePluginOptions } from '../types';
 
 declare module 'fastify' {
   interface FastifyInstance {
-    db: DbClient;
+    db: Database;
     dbPool: DatabasePool;
     repositories: {
       users: UsersRepository;
       realms: RealmsRepository;
       emailVerificationTokens: EmailVerificationTokensRepository;
       oauthClients: OAuthClientsRepository;
+      oauthConsents: OAuthConsentsRepository;
       refreshTokens: RefreshTokensRepository;
       authorizationCodes: AuthorizationCodesRepository;
       auditLogs: ReturnType<typeof createAuditLogsRepository>;
@@ -69,6 +72,7 @@ export const databasePlugin = fp<DatabasePluginOptions>(
       realms: createRealmsRepository(database.db),
       emailVerificationTokens: createEmailVerificationTokensRepository(database.db),
       oauthClients: createOAuthClientsRepository(database.db),
+      oauthConsents: createOAuthConsentsRepository(database.db),
       refreshTokens: createRefreshTokensRepository(database.db),
       authorizationCodes: createAuthorizationCodesRepository(database.db),
       auditLogs: createAuditLogsRepository(database.db),

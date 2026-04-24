@@ -15,6 +15,7 @@ import { env } from '../../../config/env';
 import { MIN_RESPONSE_TIME_MS } from '../../constants';
 import {
   authenticateClient,
+  authenticateClientForRefresh,
   extractClientCredentials,
   type OAuthClientLike,
   resolveAudience,
@@ -26,6 +27,7 @@ import {
   type TokenExchangeAuthCodeBody,
   tokenExchangeBodySchema,
   type TokenExchangeClientCredsBody,
+  type TokenExchangeRefreshBody,
   type TokenExchangeResponse,
   tokenExchangeResponseSchema,
 } from '../../schemas/oauth';
@@ -36,6 +38,10 @@ import {
  * OAuth 2.1 token endpoint. Supports:
  *  - `authorization_code` grant with PKCE (RFC 6749 4.1.3 + RFC 7636).
  *  - `client_credentials` grant for service-to-service auth (RFC 6749 4.4).
+ *  - `refresh_token` grant with rotation + replay detection (RFC 6749 §6,
+ *    OAuth 2.1 §4.3.1, RFC 9700 §2.2.2). Confidential and public clients
+ *    both dispatch here; public clients authenticate by refresh-token
+ *    ownership instead of a client secret.
  *
  * Client auth supports both `client_secret_post` (form body) and
  * `client_secret_basic` (Authorization header, RFC 6749 2.3.1).
@@ -67,36 +73,37 @@ export default async function (fastify: FastifyInstance) {
     },
     async (request, reply) => {
       const startTime = Date.now();
-      const body = request.body as TokenExchangeAuthCodeBody | TokenExchangeClientCredsBody;
+      const body = request.body as
+        | TokenExchangeAuthCodeBody
+        | TokenExchangeClientCredsBody
+        | TokenExchangeRefreshBody;
 
       try {
         const realm = await getOrCreateDefaultRealm(fastify);
 
-        // Authenticate the client up-front. This handles both
-        // client_secret_post (body) and client_secret_basic (header).
-        let creds;
+        // Authenticate the client. refresh_token supports public clients
+        // (RFC 6749 §6 / OAuth 2.1 §4.3.1) — `authenticateClientForRefresh`
+        // accepts the `client_id`-only path for `token_endpoint_auth_method
+        // = 'none'` clients. Confidential clients in every grant (including
+        // refresh_token) continue to present full credentials.
+        let client: OAuthClientLike;
         try {
-          creds = extractClientCredentials(request, body.client_id, body.client_secret);
-        } catch (err) {
-          await fastify.repositories.auditLogs.create({
-            userId: null,
-            oauthClientId: null,
-            event: 'oauth.token.exchange.failure',
-            eventType: 'token',
-            success: false,
-            ipAddress: request.ip,
-            userAgent: request.headers['user-agent'] || null,
-            metadata: {
-              error: 'Client authentication failed (credentials extraction)',
-              grantType: body.grant_type,
-            },
-          });
-          throw err;
-        }
-
-        let client;
-        try {
-          client = await authenticateClient(fastify, realm.id, creds);
+          if (body.grant_type === 'refresh_token') {
+            client = await authenticateClientForRefresh(
+              fastify,
+              realm.id,
+              request as FastifyRequest,
+              body.client_id,
+              body.client_secret
+            );
+          } else {
+            const creds = extractClientCredentials(
+              request as FastifyRequest,
+              body.client_id,
+              body.client_secret
+            );
+            client = await authenticateClient(fastify, realm.id, creds);
+          }
         } catch (err) {
           await fastify.repositories.auditLogs.create({
             userId: null,
@@ -127,6 +134,16 @@ export default async function (fastify: FastifyInstance) {
 
         if (body.grant_type === 'client_credentials') {
           const responseBody = await handleClientCredentials({
+            fastify,
+            request: request as FastifyRequest,
+            client,
+            body,
+          });
+          return reply.send(responseBody);
+        }
+
+        if (body.grant_type === 'refresh_token') {
+          const responseBody = await handleRefreshToken({
             fastify,
             request: request as FastifyRequest,
             client,
@@ -296,10 +313,16 @@ async function handleAuthorizationCode(
   const accessTokenExpiresIn = fastify.jwtUtils.getAccessTokenLifespan();
   const refreshTokenExpiresAt = Date.now() + fastify.jwtUtils.getRefreshTokenLifespan() * 1000;
 
+  // Start a fresh refresh-token family. Every rotation (see
+  // `handleRefreshToken`) inherits this `familyId` so replay of a revoked
+  // token can be traced to — and revoke — the entire family.
+  const familyId = randomUUID();
+
   await fastify.repositories.refreshTokens.create({
     userId: user.id,
     oauthClientId: client.id,
     tokenHash,
+    familyId,
     expiresAt: refreshTokenExpiresAt,
     scopes: authCode.scopes,
   });
@@ -437,6 +460,248 @@ async function handleClientCredentials(
 
   return {
     access_token: accessToken,
+    expires_in: accessTokenExpiresIn,
+    token_type: 'Bearer' as const,
+    ...(scopeString ? { scope: scopeString } : {}),
+  };
+}
+
+/**
+ * Handle the refresh_token grant (RFC 6749 §6, OAuth 2.1 §4.3.1).
+ *
+ * Security invariants enforced here:
+ * - The client (confidential or public) must be enabled and allowed the
+ *   `refresh_token` grant type (RFC 6749 §5.2 `unauthorized_client`).
+ * - Presented refresh token must hash to a row that is either active OR
+ *   revoked-but-known. Unknown/expired → `invalid_grant`.
+ * - Ownership: `refreshToken.oauthClientId === client.id` (OAuth 2.1
+ *   §4.3.1). Cross-client presentation → `invalid_grant`.
+ * - Replay detection (RFC 9700 §2.2.2): if a revoked token is presented,
+ *   revoke the entire family (every rotation sharing `family_id`) so any
+ *   still-active descendant cannot be exchanged.
+ * - Rotation: the presented token is marked `revoked='rotated'` BEFORE
+ *   the new refresh token is persisted — never issue two concurrently
+ *   live tokens for the same link in the family chain.
+ * - Down-scoping: a `scope` param may request a subset of the original
+ *   scopes; any scope not present in the original set → `invalid_scope`.
+ *   Omitting the parameter reuses the original scopes verbatim.
+ */
+async function handleRefreshToken(
+  ctx: HandlerContext<TokenExchangeRefreshBody>
+): Promise<TokenExchangeResponse> {
+  const { fastify, request, client, body } = ctx;
+
+  if (!client.grantTypes.includes('refresh_token')) {
+    await fastify.repositories.auditLogs.create({
+      userId: null,
+      oauthClientId: client.id,
+      event: 'oauth.token.exchange.failure',
+      eventType: 'token',
+      success: false,
+      ipAddress: request.ip,
+      userAgent: request.headers['user-agent'] || null,
+      metadata: { error: 'unauthorized_client', grantType: 'refresh_token' },
+    });
+    throw new UnauthorizedClientError();
+  }
+
+  const presentedHash = fastify.jwtUtils.hashRefreshToken(body.refresh_token);
+
+  // Fetch the row without any active-state filter so replay of a
+  // revoked token is detectable; downstream checks enforce liveness.
+  const storedToken =
+    await fastify.repositories.refreshTokens.findByTokenHashIncludingRevoked(presentedHash);
+
+  if (!storedToken) {
+    await fastify.repositories.auditLogs.create({
+      userId: null,
+      oauthClientId: client.id,
+      event: 'oauth.token.exchange.failure',
+      eventType: 'token',
+      success: false,
+      ipAddress: request.ip,
+      userAgent: request.headers['user-agent'] || null,
+      metadata: { error: 'invalid_grant: refresh token not recognised' },
+    });
+    throw new InvalidGrantError('Invalid or expired refresh token');
+  }
+
+  // Ownership check — before any replay logic, before any revocation.
+  // Cross-client replay must never be able to fan out family revocation
+  // on another client's tokens.
+  if (storedToken.oauthClientId !== client.id) {
+    await fastify.repositories.auditLogs.create({
+      userId: storedToken.userId,
+      oauthClientId: client.id,
+      event: 'oauth.token.exchange.failure',
+      eventType: 'token',
+      success: false,
+      ipAddress: request.ip,
+      userAgent: request.headers['user-agent'] || null,
+      metadata: {
+        error: 'invalid_grant: refresh token bound to different client',
+        presentingClientId: client.id,
+        ownerClientId: storedToken.oauthClientId,
+      },
+    });
+    throw new InvalidGrantError('Invalid or expired refresh token');
+  }
+
+  // Replay detection — a revoked token in the correct family MUST trigger
+  // family-wide revocation per RFC 9700 §2.2.2 / OAuth 2.1 §4.3.1.
+  if (storedToken.revoked) {
+    const familyRevokedCount = await fastify.repositories.refreshTokens.revokeFamily(
+      storedToken.familyId,
+      'replay_detected'
+    );
+    await fastify.repositories.auditLogs.create({
+      userId: storedToken.userId,
+      oauthClientId: client.id,
+      event: 'oauth.token.exchange.failure',
+      eventType: 'security',
+      success: false,
+      ipAddress: request.ip,
+      userAgent: request.headers['user-agent'] || null,
+      metadata: {
+        error: 'invalid_grant: refresh token replay detected',
+        familyId: storedToken.familyId,
+        familyTokensRevoked: familyRevokedCount,
+      },
+    });
+    throw new InvalidGrantError('Invalid or expired refresh token');
+  }
+
+  if (storedToken.expiresAt <= Date.now()) {
+    await fastify.repositories.auditLogs.create({
+      userId: storedToken.userId,
+      oauthClientId: client.id,
+      event: 'oauth.token.exchange.failure',
+      eventType: 'token',
+      success: false,
+      ipAddress: request.ip,
+      userAgent: request.headers['user-agent'] || null,
+      metadata: { error: 'invalid_grant: refresh token expired' },
+    });
+    throw new InvalidGrantError('Invalid or expired refresh token');
+  }
+
+  // Load the subject user; reject if missing or disabled (RFC 9700 §4.14).
+  const user = await fastify.repositories.users.findById(storedToken.userId);
+  if (!user) {
+    await fastify.repositories.auditLogs.create({
+      userId: storedToken.userId,
+      oauthClientId: client.id,
+      event: 'oauth.token.exchange.failure',
+      eventType: 'token',
+      success: false,
+      ipAddress: request.ip,
+      userAgent: request.headers['user-agent'] || null,
+      metadata: { error: 'invalid_grant: user not found' },
+    });
+    throw new InvalidGrantError('Invalid or expired refresh token');
+  }
+  if (!user.enabled) {
+    await fastify.repositories.refreshTokens.revoke(storedToken.id, 'user_disabled');
+    await fastify.repositories.auditLogs.create({
+      userId: user.id,
+      oauthClientId: client.id,
+      event: 'oauth.token.exchange.failure',
+      eventType: 'token',
+      success: false,
+      ipAddress: request.ip,
+      userAgent: request.headers['user-agent'] || null,
+      metadata: { error: 'invalid_grant: user_disabled' },
+    });
+    throw new InvalidGrantError('Invalid or expired refresh token');
+  }
+
+  // Down-scoping: request narrower scope or keep original set.
+  // Upscoping (any scope not in the original set) → invalid_scope.
+  let grantedScopes: string[];
+  if (body.scope !== undefined) {
+    const requested = body.scope.split(/\s+/).filter((s) => s.length > 0);
+    const extraneous = requested.filter((s) => !storedToken.scopes.includes(s));
+    if (extraneous.length > 0) {
+      await fastify.repositories.auditLogs.create({
+        userId: user.id,
+        oauthClientId: client.id,
+        event: 'oauth.token.exchange.failure',
+        eventType: 'token',
+        success: false,
+        ipAddress: request.ip,
+        userAgent: request.headers['user-agent'] || null,
+        metadata: {
+          error: 'invalid_scope: upscoping rejected',
+          extraneous,
+          originalScopes: storedToken.scopes,
+        },
+      });
+      throw new InvalidScopeError(`${extraneous.join(' ')} not in original refresh token scope`);
+    }
+    grantedScopes = requested;
+  } else {
+    grantedScopes = storedToken.scopes;
+  }
+
+  // Rotate atomically: revoke the presented token and insert the new one
+  // inside a single transaction so a crash/failure between the two steps
+  // can never leave the user with a revoked token and no replacement.
+  // The revoke runs first inside the transaction so a concurrent replay
+  // attempt waits on the row lock and then sees the token as already
+  // revoked (→ family-revoke path). The unique index on `token_hash`
+  // protects against the degenerate collision case.
+  const { token: newRefreshToken, tokenHash: newRefreshTokenHash } =
+    fastify.jwtUtils.generateRefreshToken();
+  const refreshTokenExpiresAt = Date.now() + fastify.jwtUtils.getRefreshTokenLifespan() * 1000;
+
+  await fastify.db.transaction(async (tx) => {
+    await fastify.repositories.refreshTokens.revoke(storedToken.id, 'rotated', tx);
+    await fastify.repositories.refreshTokens.create(
+      {
+        userId: user.id,
+        oauthClientId: client.id,
+        tokenHash: newRefreshTokenHash,
+        familyId: storedToken.familyId,
+        previousTokenHash: presentedHash,
+        expiresAt: refreshTokenExpiresAt,
+        scopes: grantedScopes,
+      },
+      tx
+    );
+  });
+
+  const scopeString = grantedScopes.length > 0 ? grantedScopes.join(' ') : undefined;
+
+  const accessToken = await fastify.jwtUtils.signAccessToken({
+    sub: user.id,
+    email: user.email,
+    email_verified: user.emailVerified,
+    clientId: client.clientId,
+    scope: scopeString,
+    aud: resolveAudience(client),
+  });
+
+  const accessTokenExpiresIn = fastify.jwtUtils.getAccessTokenLifespan();
+
+  await fastify.repositories.auditLogs.create({
+    userId: user.id,
+    oauthClientId: client.id,
+    event: 'oauth.token.exchange.success',
+    eventType: 'token',
+    success: true,
+    ipAddress: request.ip,
+    userAgent: request.headers['user-agent'] || null,
+    metadata: {
+      grantType: 'refresh_token',
+      familyId: storedToken.familyId,
+      rotatedFromTokenId: storedToken.id,
+      scope: scopeString,
+    },
+  });
+
+  return {
+    access_token: accessToken,
+    refresh_token: newRefreshToken,
     expires_in: accessTokenExpiresIn,
     token_type: 'Bearer' as const,
     ...(scopeString ? { scope: scopeString } : {}),

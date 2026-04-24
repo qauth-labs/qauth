@@ -52,6 +52,17 @@ export const realms = pgTable(
     refreshTokenMaxReuse: bigint('refresh_token_max_reuse', { mode: 'number' }).default(0),
     defaultLocale: varchar('default_locale', { length: 10 }),
     supportedLocales: jsonb('supported_locales').default(JSONB_EMPTY_ARRAY).$type<unknown[]>(),
+    /**
+     * Scopes that may be requested by clients created via Dynamic Client
+     * Registration (RFC 7591). This is the hard cap enforced by the
+     * `/oauth/register` endpoint: any scope outside this list is rejected
+     * with `invalid_client_metadata`. Admin-level scopes (e.g. `memory:admin`)
+     * and tenant-scoped grants (e.g. `akinon:*`) MUST NOT appear here.
+     */
+    dynamicRegistrationAllowedScopes: jsonb('dynamic_registration_allowed_scopes')
+      .notNull()
+      .default(JSONB_EMPTY_ARRAY)
+      .$type<string[]>(),
     metadata: jsonb('metadata').$type<Record<string, unknown> | null>(),
     createdAt: bigint('created_at', { mode: 'number' }).notNull().default(EPOCH_MS_NOW),
     updatedAt: bigint('updated_at', { mode: 'number' }).notNull().default(EPOCH_MS_NOW),
@@ -126,6 +137,13 @@ export const oauthClients = pgTable(
       .default(sql`'["code"]'::jsonb`)
       .$type<ResponseType[]>(),
     developerId: uuid('developer_id').references(() => users.id, { onDelete: 'set null' }),
+    /**
+     * Set when the client was created via dynamic client registration (RFC 7591).
+     * Null for hand-provisioned / first-party clients. Consumed by the consent
+     * screen to show a "newly registered" phishing-defense badge — callers
+     * MUST treat null as "not dynamic" and therefore not new.
+     */
+    dynamicRegisteredAt: bigint('dynamic_registered_at', { mode: 'number' }),
     metadata: jsonb('metadata').$type<Record<string, unknown> | null>(),
     createdAt: bigint('created_at', { mode: 'number' }).notNull().default(EPOCH_MS_NOW),
     updatedAt: bigint('updated_at', { mode: 'number' }).notNull().default(EPOCH_MS_NOW),
