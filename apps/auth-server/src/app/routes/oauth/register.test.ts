@@ -266,6 +266,34 @@ describe('POST /oauth/register — Dynamic Client Registration (RFC 7591)', () =
     ).rejects.toThrow(/invalid_client_metadata/);
   });
 
+  it('strips unrecognized fields (application_type, custom_ext) without error (RFC 7591 §3.2)', async () => {
+    const { fastify, ctx } = createFastifyStub();
+    await registerRoute(fastify);
+
+    const { reply } = createReply();
+    const result = (await ctx.handler!(
+      {
+        body: {
+          client_name: 'test-native-client',
+          redirect_uris: ['http://localhost:54545/callback'],
+          grant_types: ['authorization_code', 'refresh_token'],
+          response_types: ['code'],
+          token_endpoint_auth_method: 'none',
+          scope: 'openid',
+          application_type: 'native',
+          'x-custom-extension': 'value',
+        },
+        ip: '127.0.0.1',
+        headers: {},
+      },
+      reply
+    )) as Record<string, unknown>;
+
+    expect(result.client_id).toBeDefined();
+    expect('client_secret' in result).toBe(false);
+    expect('application_type' in result).toBe(false);
+  });
+
   it('seeds the realm default allowlist on first use when empty', async () => {
     const { fastify, ctx, state } = createFastifyStub({
       dynamicRegistrationAllowedScopes: [],

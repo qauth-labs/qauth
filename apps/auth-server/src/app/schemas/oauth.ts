@@ -154,32 +154,32 @@ export type IntrospectResponse = z.infer<typeof introspectResponseSchema>;
  *   - Grant/response type consistency is enforced in the route handler,
  *     not in the schema, so we can surface a structured OAuth error.
  *   - `scope` is space-separated per RFC 7591 §2 / RFC 6749 §3.3.
+ *   - RFC 7591 §3.2 requires servers to ignore unrecognized metadata fields,
+ *     so this schema uses Zod's default strip behaviour (no `.strict()`).
  */
-export const dynamicClientRegistrationRequestSchema = z
-  .object({
-    client_name: z.string().min(1).max(255).optional(),
-    redirect_uris: z.array(z.string().min(1).max(2048)).max(20).optional(),
-    grant_types: z
-      .array(z.enum(['authorization_code', 'refresh_token', 'client_credentials']))
-      .max(8)
-      .optional(),
-    response_types: z
-      .array(z.enum(['code']))
-      .max(4)
-      .optional(),
-    token_endpoint_auth_method: z
-      .enum(['none', 'client_secret_basic', 'client_secret_post'])
-      .optional(),
-    scope: z.string().max(2048).optional(),
-    client_uri: z.url().max(2048).optional(),
-    logo_uri: z.url().max(2048).optional(),
-    tos_uri: z.url().max(2048).optional(),
-    policy_uri: z.url().max(2048).optional(),
-    contacts: z.array(z.email().max(255)).max(10).optional(),
-    software_id: z.string().max(255).optional(),
-    software_version: z.string().max(64).optional(),
-  })
-  .strict();
+export const dynamicClientRegistrationRequestSchema = z.object({
+  client_name: z.string().min(1).max(255).optional(),
+  redirect_uris: z.array(z.string().min(1).max(2048)).max(20).optional(),
+  grant_types: z
+    .array(z.enum(['authorization_code', 'refresh_token', 'client_credentials']))
+    .max(8)
+    .optional(),
+  response_types: z
+    .array(z.enum(['code']))
+    .max(4)
+    .optional(),
+  token_endpoint_auth_method: z
+    .enum(['none', 'client_secret_basic', 'client_secret_post'])
+    .optional(),
+  scope: z.string().max(2048).optional(),
+  client_uri: z.url().max(2048).optional(),
+  logo_uri: z.url().max(2048).optional(),
+  tos_uri: z.url().max(2048).optional(),
+  policy_uri: z.url().max(2048).optional(),
+  contacts: z.array(z.email().max(255)).max(10).optional(),
+  software_id: z.string().max(255).optional(),
+  software_version: z.string().max(64).optional(),
+});
 
 export type DynamicClientRegistrationRequest = z.infer<
   typeof dynamicClientRegistrationRequestSchema
