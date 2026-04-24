@@ -54,6 +54,27 @@ export function createRefreshTokensRepository(defaultDb: DbClient): RefreshToken
     },
 
     /**
+     * Find a token by its token hash ignoring `revoked`/`expiresAt`.
+     *
+     * Used to detect replay of a revoked refresh token (OAuth 2.1 §4.3.1).
+     * Callers MUST verify liveness/expiry before trusting the returned row.
+     */
+    async findByTokenHashIncludingRevoked(
+      tokenHash: string,
+      tx?: DbClient
+    ): Promise<RefreshToken | undefined> {
+      const invoker = tx ?? defaultDb;
+
+      const [result] = await invoker
+        .select()
+        .from(refreshTokens)
+        .where(eq(refreshTokens.tokenHash, tokenHash))
+        .limit(1);
+
+      return result;
+    },
+
+    /**
      * Find all active tokens for a user
      * Returns tokens that are not revoked and not expired
      *
@@ -106,6 +127,37 @@ export function createRefreshTokensRepository(defaultDb: DbClient): RefreshToken
       }
 
       return token;
+    },
+
+    /**
+     * Revoke every token in a refresh-token family in a single statement.
+     *
+     * When a revoked refresh token is replayed, OAuth 2.1 §4.3.1 /
+     * RFC 9700 §2.2.2 require the whole family to be revoked — the
+     * replay indicates either the legitimate client or an attacker is
+     * using a stolen token. Only rows that are currently NOT revoked
+     * are touched so the earliest `revokedReason` is preserved for audit.
+     *
+     * @param familyId - Family identifier shared by every rotation
+     * @param reason - Optional reason string ('replay_detected' etc.)
+     * @param tx - Optional transaction client
+     * @returns Count of rows whose state was changed.
+     */
+    async revokeFamily(familyId: string, reason?: string, tx?: DbClient): Promise<number> {
+      const invoker = tx ?? defaultDb;
+      const now = Date.now();
+
+      const updated = await invoker
+        .update(refreshTokens)
+        .set({
+          revoked: true,
+          revokedAt: now,
+          revokedReason: reason ?? null,
+        })
+        .where(and(eq(refreshTokens.familyId, familyId), eq(refreshTokens.revoked, false)))
+        .returning({ id: refreshTokens.id });
+
+      return updated.length;
     },
 
     /**

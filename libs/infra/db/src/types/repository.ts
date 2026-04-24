@@ -111,6 +111,17 @@ export interface RefreshTokensRepository {
    */
   findByTokenHash(tokenHash: string, tx?: DbClient): Promise<RefreshToken | undefined>;
   /**
+   * Find a token by its token hash regardless of `revoked`/`expiresAt`.
+   *
+   * Used by the refresh-token rotation flow to detect replay of an
+   * already-revoked token (OAuth 2.1 §4.3.1 / RFC 9700 §2.2.2). Callers
+   * MUST apply their own liveness and freshness checks.
+   */
+  findByTokenHashIncludingRevoked(
+    tokenHash: string,
+    tx?: DbClient
+  ): Promise<RefreshToken | undefined>;
+  /**
    * Find all active tokens for a user
    * Returns tokens that are not revoked and not expired
    */
@@ -120,6 +131,17 @@ export interface RefreshTokensRepository {
    * Sets revoked=true, revokedAt=now, and optional revocation reason
    */
   revoke(id: string, reason?: string, tx?: DbClient): Promise<RefreshToken>;
+  /**
+   * Revoke all tokens in a refresh-token family.
+   *
+   * Triggered when a revoked token is replayed: the whole family (every
+   * rotation descended from the initial token) is revoked in a single
+   * statement. Already-revoked rows are left untouched so the original
+   * `revokedReason` is preserved for audit.
+   *
+   * @returns Count of rows whose state was changed by this call.
+   */
+  revokeFamily(familyId: string, reason?: string, tx?: DbClient): Promise<number>;
   /**
    * Revoke all active tokens for a user
    * Useful for "logout all sessions" functionality

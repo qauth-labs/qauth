@@ -24,6 +24,12 @@ export type OAuthClientLike = {
   grantTypes: string[];
   scopes: string[];
   audience: string[] | null;
+  /**
+   * Token endpoint auth method (RFC 7591). `'none'` identifies public
+   * clients (PKCE, native/SPA) that present only `client_id` at /token.
+   * When absent we conservatively treat the client as confidential.
+   */
+  tokenEndpointAuthMethod?: string;
 };
 
 /**
@@ -122,6 +128,51 @@ export async function authenticateClient(
     creds.clientSecret
   );
   if (!valid) {
+    throw new InvalidClientError();
+  }
+  return client;
+}
+
+/**
+ * Authenticate a client for the refresh_token grant.
+ *
+ * OAuth 2.1 §4.3.1 / RFC 6749 §6: confidential clients present full
+ * credentials (same rules as `authenticateClient`); public clients
+ * (`token_endpoint_auth_method: 'none'`) present only `client_id` and
+ * are bound to the presented refresh token by ownership + rotation.
+ *
+ * Returns the client row regardless of confidential-vs-public
+ * classification. The caller MUST still enforce refresh-token ownership
+ * (`refreshToken.oauthClientId === client.id`).
+ */
+export async function authenticateClientForRefresh(
+  fastify: FastifyInstance,
+  realmId: string,
+  request: FastifyRequest,
+  bodyClientId: string | undefined,
+  bodyClientSecret: string | undefined
+): Promise<OAuthClientLike> {
+  // Determine whether the request carries any secret material (Basic
+  // header or body client_secret). If it does, run the confidential
+  // authentication path — mixing auth modes must remain rejected.
+  const hasBasic = /^Basic\s/i.test(request.headers.authorization ?? '');
+  if (hasBasic || bodyClientSecret) {
+    const creds = extractClientCredentials(request, bodyClientId, bodyClientSecret);
+    return authenticateClient(fastify, realmId, creds);
+  }
+
+  // Public-client path: only `client_id` supplied. Resolve the client
+  // record and verify it's registered as public. Confidential clients
+  // that omit credentials get `invalid_client` (RFC 6749 §5.2).
+  if (!bodyClientId) {
+    throw new InvalidClientError();
+  }
+  const client = await fastify.repositories.oauthClients.findByClientId(realmId, bodyClientId);
+  if (!client || !client.enabled) {
+    throw new InvalidClientError();
+  }
+  if (client.tokenEndpointAuthMethod !== 'none') {
+    // Confidential client missing its secret.
     throw new InvalidClientError();
   }
   return client;

@@ -55,15 +55,41 @@ export const tokenExchangeClientCredsBodySchema = z.object({
 });
 
 /**
+ * OAuth 2.1 refresh_token grant body (POST /oauth/token).
+ * RFC 6749 §6. Supports rotation and optional scope down-scoping.
+ *
+ * `client_id` / `client_secret` remain optional here — confidential
+ * clients authenticate via `client_secret_basic` or `client_secret_post`;
+ * public clients (PKCE, `token_endpoint_auth_method: none`) present only
+ * their `client_id` and rely on refresh-token ownership for binding.
+ *
+ * The refresh-token format is the hex pair produced by
+ * `jwtUtils.generateRefreshToken()` (64-char lowercase hex). Strict
+ * validation keeps malformed tokens out of DB lookups.
+ */
+export const tokenExchangeRefreshBodySchema = z.object({
+  grant_type: z.literal('refresh_token'),
+  refresh_token: z
+    .string()
+    .length(64, 'refresh_token must be exactly 64 characters')
+    .regex(/^[0-9a-fA-F]{64}$/, 'refresh_token must be a valid hex string'),
+  client_id: z.string().min(1).optional(),
+  client_secret: z.string().min(1).optional(),
+  scope: z.string().optional(),
+});
+
+/**
  * Discriminated union of supported token grant bodies.
  */
 export const tokenExchangeBodySchema = z.discriminatedUnion('grant_type', [
   tokenExchangeAuthCodeBodySchema,
   tokenExchangeClientCredsBodySchema,
+  tokenExchangeRefreshBodySchema,
 ]);
 
 export type TokenExchangeAuthCodeBody = z.infer<typeof tokenExchangeAuthCodeBodySchema>;
 export type TokenExchangeClientCredsBody = z.infer<typeof tokenExchangeClientCredsBodySchema>;
+export type TokenExchangeRefreshBody = z.infer<typeof tokenExchangeRefreshBodySchema>;
 export type TokenExchangeBody = z.infer<typeof tokenExchangeBodySchema>;
 
 /**
