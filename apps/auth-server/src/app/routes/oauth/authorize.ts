@@ -15,6 +15,20 @@ import { getOrCreateDefaultRealm } from '../../helpers/realm';
 import { type AuthorizeQuery, authorizeQuerySchema } from '../../schemas/oauth';
 
 /**
+ * RFC 8707: normalize the `resource` querystring param to a string[].
+ * See `resourceParamSchema` note — Fastify querystring transforms don't
+ * always reach the handler, so a single `resource=X` may arrive as a bare
+ * string. Zod has already validated shape (single URI or array of URIs);
+ * all we need is the shape coercion.
+ */
+function normalizeResource(v: unknown): string[] {
+  if (v === undefined || v === null) return [];
+  if (Array.isArray(v)) return v.filter((x): x is string => typeof x === 'string');
+  if (typeof v === 'string') return [v];
+  return [];
+}
+
+/**
  * GET /oauth/authorize
  * OAuth 2.1 Authorization Code Flow with PKCE.
  *
@@ -233,7 +247,12 @@ export default async function (fastify: FastifyInstance) {
           // RFC 8707: bind the resource indicator(s) to the authorization
           // code so /oauth/token can set the access token's `aud` claim to
           // exactly what the client requested.
-          resource: query.resource ?? [],
+          //
+          // fastify-type-provider-zod@6.1.0 does not apply Zod `.transform()`
+          // outputs to `request.query` on GET routes the way it does for
+          // POST bodies, so a single `resource=X` query param arrives as
+          // the raw string — normalize manually here.
+          resource: normalizeResource(query.resource as unknown),
           state: query.state ?? null,
           expiresAt,
         });
