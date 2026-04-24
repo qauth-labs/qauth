@@ -2,7 +2,7 @@ import { generateEdDSAKeyPair, importPrivateKey, signAccessToken } from '@qauth-
 import { JWTExpiredError, JWTInvalidError } from '@qauth-labs/shared-errors';
 import type { FastifyInstance } from 'fastify';
 import Fastify from 'fastify';
-import { exportPKCS8, exportSPKI, SignJWT } from 'jose';
+import { exportPKCS8, exportSPKI, importJWK, jwtVerify, SignJWT } from 'jose';
 import { describe, expect, it } from 'vitest';
 
 import { jwtPlugin } from './fastify-plugin-jwt';
@@ -196,6 +196,46 @@ describe('requireJwt middleware', () => {
         code: 'JWT_INVALID',
         error: 'Missing or malformed Authorization header',
       });
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('exposes getIssuer() returning the configured issuer', async () => {
+    const { app } = await buildTestApp();
+    try {
+      expect(app.jwtUtils.getIssuer()).toBe('https://auth.test.example.com');
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('exposes getJwks() returning a JWKS that verifies issued tokens', async () => {
+    const { app, privateKeyPem } = await buildTestApp();
+    try {
+      const jwks = await app.jwtUtils.getJwks();
+
+      expect(jwks.keys).toHaveLength(1);
+      const [jwk] = jwks.keys;
+      expect(jwk.alg).toBe('EdDSA');
+      expect(jwk.use).toBe('sig');
+      expect(jwk).not.toHaveProperty('d');
+
+      const token = await signAccessToken(
+        {
+          sub: 'user-1',
+          email: 'user@example.com',
+          email_verified: true,
+          clientId: 'client-1',
+        },
+        await importPrivateKey(privateKeyPem),
+        'https://auth.test.example.com',
+        900
+      );
+
+      const key = await importJWK(jwk, 'EdDSA');
+      const { payload } = await jwtVerify(token, key, { algorithms: ['EdDSA'] });
+      expect(payload.sub).toBe('user-1');
     } finally {
       await app.close();
     }
