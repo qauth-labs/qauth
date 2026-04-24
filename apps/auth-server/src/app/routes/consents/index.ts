@@ -29,6 +29,10 @@ const listResponseSchema = z.object({
   consents: z.array(consentRowSchema),
 });
 
+const unauthorizedResponseSchema = z.object({
+  consents: z.array(consentRowSchema),
+});
+
 export default async function (fastify: FastifyInstance) {
   fastify.withTypeProvider<ZodTypeProvider>().get(
     '/consents',
@@ -37,7 +41,7 @@ export default async function (fastify: FastifyInstance) {
         description:
           'List the active OAuth consents for the currently signed-in user. Drives the developer portal revocation screen (issue #150).',
         tags: ['Consents'],
-        response: { 200: listResponseSchema },
+        response: { 200: listResponseSchema, 401: unauthorizedResponseSchema },
       },
     },
     async (request, reply) => {
@@ -76,7 +80,7 @@ export default async function (fastify: FastifyInstance) {
         description: 'Revoke an OAuth consent row owned by the currently signed-in user.',
         tags: ['Consents'],
         params: z.object({ id: z.string().uuid() }),
-        response: { 204: z.null() },
+        response: { 204: z.null(), 401: z.null() },
       },
     },
     async (request, reply) => {
