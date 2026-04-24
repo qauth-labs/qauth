@@ -2,6 +2,7 @@ import * as path from 'node:path';
 
 import AutoLoad from '@fastify/autoload';
 import cors from '@fastify/cors';
+import formbody from '@fastify/formbody';
 import { cachePlugin } from '@qauth-labs/fastify-plugin-cache';
 import { databasePlugin } from '@qauth-labs/fastify-plugin-db';
 import { emailPlugin, type EmailProviderConfig } from '@qauth-labs/fastify-plugin-email';
@@ -110,6 +111,13 @@ export async function app(fastify: FastifyInstance, opts: object) {
   await fastify.register(cors, {
     origin: env.CORS_ORIGIN || '*',
   });
+
+  // RFC 6749 §3.2 (token endpoint) and RFC 7662 §2.1 (introspection)
+  // both mandate `application/x-www-form-urlencoded` for request bodies.
+  // Fastify ships with a JSON parser by default — without formbody,
+  // every OAuth-spec-compliant client gets 415 Unsupported Media Type.
+  // Register before routes so /oauth/* receives decoded form bodies.
+  await fastify.register(formbody);
 
   fastify.register(AutoLoad, {
     dir: path.join(__dirname, 'plugins'),
