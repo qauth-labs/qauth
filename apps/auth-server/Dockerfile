@@ -49,19 +49,27 @@ WORKDIR /app
 # node_modules stays tight to the app's own runtime deps.
 RUN npm install --global tsx@4
 
+# Create the non-root user up-front so the subsequent COPY --chown can
+# reference it. Chowning at COPY time avoids a trailing `chown -R /app`
+# pass, which would otherwise rewrite the entire ~450MB deploy layer.
+RUN addgroup -g 1001 -S nodejs && \
+    adduser -S nodejs -u 1001
+
 # Copy the self-contained deploy.
-COPY --from=builder /deploy ./
+COPY --from=builder --chown=nodejs:nodejs /deploy ./
 
 # Entrypoint: tsx on auth-server's TS entry. Since this is a deploy bundle,
 # workspace packages live as real copies under ./node_modules/@qauth-labs/
 # and external deps under ./node_modules/ — Node's normal resolution finds
 # both without any custom resolver or generated manifest.
-COPY apps/auth-server/docker-entrypoint.sh ./docker-entrypoint.sh
-RUN sed -i 's/\r$//' ./docker-entrypoint.sh && chmod +x ./docker-entrypoint.sh
+COPY --chown=nodejs:nodejs apps/auth-server/docker-entrypoint.sh ./docker-entrypoint.sh
+# BusyBox `sed -i` writes a temp file and renames it, which resets the
+# file's ownership to root; re-chown the single file back to nodejs so
+# USER nodejs can exec it cleanly. (Per-file chown, not -R — cheap.)
+RUN sed -i 's/\r$//' ./docker-entrypoint.sh && \
+    chmod +x ./docker-entrypoint.sh && \
+    chown nodejs:nodejs ./docker-entrypoint.sh
 
-RUN addgroup -g 1001 -S nodejs && \
-    adduser -S nodejs -u 1001 && \
-    chown -R nodejs:nodejs /app
 USER nodejs
 
 EXPOSE 3000
