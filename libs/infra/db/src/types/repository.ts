@@ -1,5 +1,6 @@
 import type { InferInsertModel, InferSelectModel } from 'drizzle-orm';
 
+import type { oauthConsents } from '../lib/schema/consents';
 import type { oauthClients } from '../lib/schema/core';
 import type {
   authorizationCodes,
@@ -152,6 +153,48 @@ export interface RefreshTokensRepository {
    * Returns count of deleted tokens
    */
   deleteExpired(tx?: DbClient): Promise<number>;
+}
+
+/**
+ * OAuth consent types
+ */
+export type OAuthConsent = InferSelectModel<typeof oauthConsents>;
+export type NewOAuthConsent = InferInsertModel<typeof oauthConsents>;
+
+/**
+ * OAuth consents repository interface.
+ *
+ * Consents are scoped to (userId, oauthClientId). A single active
+ * (not revoked) row exists per pair; re-consent merges scopes into the same
+ * row. Revocation sets `revokedAt` rather than deleting, so history is kept.
+ */
+export interface OAuthConsentsRepository {
+  /** Create a consent row (insert). Caller is responsible for uniqueness. */
+  create(data: NewOAuthConsent, tx?: DbClient): Promise<OAuthConsent>;
+  /** Fetch the active (non-revoked) consent for a (user, client) pair. */
+  findActive(
+    userId: string,
+    oauthClientId: string,
+    tx?: DbClient
+  ): Promise<OAuthConsent | undefined>;
+  /** List all active consents for a user, joined to client metadata (revocation UI). */
+  listActiveForUser(userId: string, tx?: DbClient): Promise<OAuthConsent[]>;
+  /**
+   * Grant/update consent for (user, client).
+   *
+   * If an active row exists, its `scopes` array is replaced with the union
+   * of old ∪ new and `grantedAt` is refreshed. Otherwise a new row is
+   * inserted.
+   */
+  upsertGrant(
+    userId: string,
+    oauthClientId: string,
+    realmId: string,
+    scopes: string[],
+    tx?: DbClient
+  ): Promise<OAuthConsent>;
+  /** Revoke a consent row by id (owner must be checked by caller). */
+  revoke(id: string, tx?: DbClient): Promise<OAuthConsent>;
 }
 
 /**
