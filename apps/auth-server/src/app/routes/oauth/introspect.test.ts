@@ -97,8 +97,9 @@ describe('POST /oauth/introspect route', () => {
 
     findByClientIdMock.mockResolvedValue(client);
     verifyPasswordMock.mockResolvedValue(true);
+    const userUuid = '019dbc24-7a2d-724d-bf26-1923f21f2234';
     verifyAccessTokenMock.mockResolvedValue({
-      sub: 'user-1',
+      sub: userUuid,
       email: 'user@example.com',
       email_verified: true,
       clientId: client.clientId,
@@ -135,20 +136,33 @@ describe('POST /oauth/introspect route', () => {
 
     expect(result).toEqual({
       active: true,
-      sub: 'user-1',
+      sub: userUuid,
       client_id: client.clientId,
       exp: 1234567890,
       iat: 1234567800,
       iss: 'https://auth.example.com',
       token_type: 'Bearer',
     });
+
+    // User tokens: sub is a UUID → writes through to audit_logs.user_id.
+    const auditLogMock = fastify.repositories.auditLogs.create as unknown as Mock;
+    expect(auditLogMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: userUuid,
+        event: 'oauth.introspect.success',
+        metadata: expect.objectContaining({ tokenClientId: client.clientId }),
+      })
+    );
+    // `tokenSub` is only added when `sub` is not UUID-shaped.
+    const auditCall = auditLogMock.mock.calls[0][0];
+    expect(auditCall.metadata).not.toHaveProperty('tokenSub');
   });
 
-  it('writes a NULL user_id audit row for client_credentials tokens (sub === client_id)', async () => {
-    // Regression: audit_logs.user_id is a uuid column. `client_credentials`
-    // tokens have sub = clientId (a slug), which would fail the uuid cast.
-    // The success path must set `userId: null` in that case and preserve
-    // the token's sub in `metadata.tokenSub`.
+  it('nulls out user_id on the audit row when sub is not UUID-shaped (client_credentials)', async () => {
+    // audit_logs.user_id is strictly a uuid column. client_credentials
+    // tokens have sub === clientId (a slug), which would fail the uuid
+    // cast. The success path must gate on sub shape, null out `userId`
+    // when sub is not UUID-shaped, and preserve sub in `metadata.tokenSub`.
     const { fastify, ctx } = createFastifyStub();
     await introspectRoute(fastify);
 
@@ -156,7 +170,7 @@ describe('POST /oauth/introspect route', () => {
     expect(handler).toBeDefined();
 
     const client = {
-      id: 'client-rs-uuid',
+      id: '019dbc24-7bc9-725c-81c3-71bd0c78c4ad',
       clientId: 'resource-server',
       clientSecretHash: 'hashed-secret',
       enabled: true,
@@ -172,7 +186,6 @@ describe('POST /oauth/introspect route', () => {
     findByClientIdMock.mockResolvedValue(client);
     verifyPasswordMock.mockResolvedValue(true);
     verifyAccessTokenMock.mockResolvedValue({
-      // sub === clientId is the hallmark of a client_credentials token.
       sub: callerClientId,
       clientId: callerClientId,
       scope: 'api:read',
@@ -204,6 +217,64 @@ describe('POST /oauth/introspect route', () => {
         metadata: expect.objectContaining({
           tokenClientId: callerClientId,
           tokenSub: callerClientId,
+        }),
+      })
+    );
+  });
+
+  it('nulls out user_id when sub is non-UUID but differs from clientId (forward-compat: service-account / prefixed subs)', async () => {
+    // Guards against a future grant type that emits sub !== clientId but
+    // still non-UUID (service accounts, prefixed identifiers). The fix
+    // must be shape-gated, not coupled to sub-equals-clientId.
+    const { fastify, ctx } = createFastifyStub();
+    await introspectRoute(fastify);
+
+    const handler = ctx.handler;
+    expect(handler).toBeDefined();
+
+    const client = {
+      id: '019dbc24-8aaa-7aaa-aaaa-aaaaaaaaaaaa',
+      clientId: 'resource-server',
+      clientSecretHash: 'hashed-secret',
+      enabled: true,
+      audience: ['api.example.com'],
+    };
+
+    const findByClientIdMock = fastify.repositories.oauthClients.findByClientId as unknown as Mock;
+    const verifyPasswordMock = fastify.passwordHasher.verifyPassword as unknown as Mock;
+    const verifyAccessTokenMock = fastify.jwtUtils.verifyAccessToken as unknown as Mock;
+    const auditLogMock = fastify.repositories.auditLogs.create as unknown as Mock;
+
+    findByClientIdMock.mockResolvedValue(client);
+    verifyPasswordMock.mockResolvedValue(true);
+    verifyAccessTokenMock.mockResolvedValue({
+      sub: 'svc:billing-reporter',
+      clientId: 'caller-machine',
+      scope: 'api:read',
+      aud: 'api.example.com',
+      exp: 1234567890,
+      iat: 1234567800,
+      iss: 'https://auth.example.com',
+    });
+
+    const request = {
+      body: { token: 'svc-token', client_id: client.clientId, client_secret: 'secret' },
+      ip: '127.0.0.1',
+      headers: { 'user-agent': 'vitest' },
+    };
+    const reply = { send: (body: unknown) => body };
+
+    if (!handler) throw new Error('Introspect handler was not registered');
+
+    const result = (await handler(request, reply)) as { active: boolean };
+    expect(result.active).toBe(true);
+
+    expect(auditLogMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: null,
+        metadata: expect.objectContaining({
+          tokenClientId: 'caller-machine',
+          tokenSub: 'svc:billing-reporter',
         }),
       })
     );

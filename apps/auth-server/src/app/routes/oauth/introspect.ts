@@ -35,6 +35,14 @@ import {
  */
 
 /**
+ * Canonical hex UUID shape (8-4-4-4-12). Used to gate writes to
+ * `audit_logs.user_id`, which is strictly a uuid column: non-UUID subjects
+ * (client_credentials client slugs, future service-account identifiers)
+ * must not be cast into that column.
+ */
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
  * Returns true if the introspecting client is authoritative for the token's
  * audience: every token-aud value appears in the client's configured audience
  * list. Undefined/null/empty on either side returns false. Accepts both string
@@ -158,15 +166,17 @@ export default async function (fastify: FastifyInstance) {
           });
         }
 
-        // `audit_logs.user_id` is a uuid column. For `client_credentials`
-        // tokens there is no end-user; `payload.sub` is the caller's
-        // client_id (a slug), which would fail the uuid cast. Detect that
-        // case (sub === clientId) and null out `userId`, preserving the
-        // token's sub in `metadata` for audit trail parity. User tokens
-        // (authorization_code flow) keep `sub` as the user UUID unchanged.
-        const isClientCredentialsToken = payload.sub === payload.clientId;
+        // `audit_logs.user_id` is strictly a uuid column. A token's `sub`
+        // is a user UUID for authorization_code flows but a client slug
+        // for client_credentials flows — and future grant types could
+        // introduce service-account or prefixed subjects. Rather than
+        // couple this audit write to qauth's current emission convention,
+        // gate on the schema invariant itself: only write `sub` into
+        // `user_id` when it parses as a UUID. Non-UUID subs are preserved
+        // in `metadata.tokenSub` so audit-trail parity holds.
+        const subIsUuid = payload.sub !== undefined && UUID_REGEX.test(payload.sub);
         await fastify.repositories.auditLogs.create({
-          userId: isClientCredentialsToken ? null : payload.sub,
+          userId: subIsUuid ? payload.sub : null,
           oauthClientId: client.id,
           event: 'oauth.introspect.success',
           eventType: 'token',
@@ -175,7 +185,7 @@ export default async function (fastify: FastifyInstance) {
           userAgent: request.headers['user-agent'] || null,
           metadata: {
             tokenClientId: payload.clientId,
-            ...(isClientCredentialsToken ? { tokenSub: payload.sub } : {}),
+            ...(subIsUuid ? {} : { tokenSub: payload.sub }),
           },
         });
 
