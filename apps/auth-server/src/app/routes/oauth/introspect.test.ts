@@ -144,6 +144,71 @@ describe('POST /oauth/introspect route', () => {
     });
   });
 
+  it('writes a NULL user_id audit row for client_credentials tokens (sub === client_id)', async () => {
+    // Regression: audit_logs.user_id is a uuid column. `client_credentials`
+    // tokens have sub = clientId (a slug), which would fail the uuid cast.
+    // The success path must set `userId: null` in that case and preserve
+    // the token's sub in `metadata.tokenSub`.
+    const { fastify, ctx } = createFastifyStub();
+    await introspectRoute(fastify);
+
+    const handler = ctx.handler;
+    expect(handler).toBeDefined();
+
+    const client = {
+      id: 'client-rs-uuid',
+      clientId: 'resource-server',
+      clientSecretHash: 'hashed-secret',
+      enabled: true,
+      audience: ['api.example.com'],
+    };
+    const callerClientId = 'caller-machine';
+
+    const findByClientIdMock = fastify.repositories.oauthClients.findByClientId as unknown as Mock;
+    const verifyPasswordMock = fastify.passwordHasher.verifyPassword as unknown as Mock;
+    const verifyAccessTokenMock = fastify.jwtUtils.verifyAccessToken as unknown as Mock;
+    const auditLogMock = fastify.repositories.auditLogs.create as unknown as Mock;
+
+    findByClientIdMock.mockResolvedValue(client);
+    verifyPasswordMock.mockResolvedValue(true);
+    verifyAccessTokenMock.mockResolvedValue({
+      // sub === clientId is the hallmark of a client_credentials token.
+      sub: callerClientId,
+      clientId: callerClientId,
+      scope: 'api:read',
+      aud: 'api.example.com',
+      exp: 1234567890,
+      iat: 1234567800,
+      iss: 'https://auth.example.com',
+    });
+
+    const request = {
+      body: { token: 'cc-token', client_id: client.clientId, client_secret: 'secret' },
+      ip: '127.0.0.1',
+      headers: { 'user-agent': 'vitest' },
+    };
+    const reply = { send: (body: unknown) => body };
+
+    if (!handler) throw new Error('Introspect handler was not registered');
+
+    const result = (await handler(request, reply)) as { active: boolean; sub: string };
+    expect(result.active).toBe(true);
+    expect(result.sub).toBe(callerClientId);
+
+    expect(auditLogMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: null,
+        oauthClientId: client.id,
+        event: 'oauth.introspect.success',
+        success: true,
+        metadata: expect.objectContaining({
+          tokenClientId: callerClientId,
+          tokenSub: callerClientId,
+        }),
+      })
+    );
+  });
+
   it('returns active: false for expired token', async () => {
     const { fastify, ctx } = createFastifyStub();
     await introspectRoute(fastify);

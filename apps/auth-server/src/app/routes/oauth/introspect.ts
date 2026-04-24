@@ -158,8 +158,15 @@ export default async function (fastify: FastifyInstance) {
           });
         }
 
+        // `audit_logs.user_id` is a uuid column. For `client_credentials`
+        // tokens there is no end-user; `payload.sub` is the caller's
+        // client_id (a slug), which would fail the uuid cast. Detect that
+        // case (sub === clientId) and null out `userId`, preserving the
+        // token's sub in `metadata` for audit trail parity. User tokens
+        // (authorization_code flow) keep `sub` as the user UUID unchanged.
+        const isClientCredentialsToken = payload.sub === payload.clientId;
         await fastify.repositories.auditLogs.create({
-          userId: payload.sub,
+          userId: isClientCredentialsToken ? null : payload.sub,
           oauthClientId: client.id,
           event: 'oauth.introspect.success',
           eventType: 'token',
@@ -168,6 +175,7 @@ export default async function (fastify: FastifyInstance) {
           userAgent: request.headers['user-agent'] || null,
           metadata: {
             tokenClientId: payload.clientId,
+            ...(isClientCredentialsToken ? { tokenSub: payload.sub } : {}),
           },
         });
 
