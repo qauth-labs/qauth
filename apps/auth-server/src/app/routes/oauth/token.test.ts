@@ -846,6 +846,37 @@ describe('POST /oauth/token route — authorization_code grant', () => {
     const reply = createReply();
     await expect(handler(baseRequest(), reply)).rejects.toThrow(UnauthorizedClientError);
   });
+
+  it('authenticates a public client (token_endpoint_auth_method=none) by client_id alone', async () => {
+    // PKCE-capable public client — OAuth 2.1 §4.1.3. No client_secret sent;
+    // PKCE code_verifier + client_id is sufficient to bind the code to the
+    // client. Previously failed with invalid_client because the token route
+    // only accepted the public-client path for refresh_token.
+    const { fastify, ctx } = setupAuthCodeStub();
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue({
+      id: 'client-uuid-ac-1',
+      clientId: 'test-client-1',
+      clientSecretHash: null,
+      enabled: true,
+      grantTypes: ['authorization_code', 'refresh_token'],
+      scopes: ['read:foo'],
+      audience: null,
+      tokenEndpointAuthMethod: 'none',
+    });
+    await tokenRoute(fastify);
+    const handler = ctx.handler;
+    if (!handler) throw new Error('Handler missing');
+
+    const request = baseRequest({ client_secret: undefined });
+    // No Authorization header, no client_secret — just client_id + PKCE verifier.
+    const reply = createReply();
+    const result = (await handler(request, reply)) as Record<string, unknown>;
+
+    expect(result.access_token).toBe('signed.jwt.token');
+    expect(result.refresh_token).toBe('refresh-token-plain');
+    // Password hasher MUST NOT have been called — public client, no secret to verify.
+    expect(fastify.passwordHasher.verifyPassword as unknown as Mock).not.toHaveBeenCalled();
+  });
 });
 
 describe('POST /oauth/token route — refresh_token grant', () => {
