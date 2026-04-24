@@ -298,6 +298,50 @@ describe('UI /ui/consent POST — allow/deny', () => {
     expect(state.redirected).toContain('state=xyz');
   });
 
+  it('persists RFC 8707 resource on the code when POST body carries resource field(s)', async () => {
+    const { fastify, ctx } = makeFastify();
+    await consentRoute(fastify);
+    const { signSessionId } = await import('../../helpers/session-cookie');
+    const signed = signSessionId('sid-res');
+    const csrf = 'csrf-res';
+    (fastify.sessionUtils.getSession as unknown as Mock).mockResolvedValue({
+      userId: 'user-1',
+      email: 'a@b.com',
+      sessionId: 'sid-res',
+      csrfToken: csrf,
+      createdAt: Date.now(),
+    });
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(CLIENT);
+
+    const { reply } = createReply();
+    await ctx.post!(
+      {
+        body: {
+          decision: 'allow',
+          allow_forever: '1',
+          csrf_token: csrf,
+          client_id: 'app-123',
+          redirect_uri: 'https://example.com/cb',
+          state: 'xyz',
+          scope: 'email',
+          code_challenge: 'A'.repeat(43),
+          code_challenge_method: 'S256',
+          response_type: 'code',
+          // Hidden form inputs from the consent page — one or more values
+          // (Fastify parses multi-value form bodies as an array).
+          resource: ['https://api.example.com/v1'],
+        },
+        headers: { cookie: `__Host-qauth_session=${signed}` },
+        ip: '127.0.0.1',
+      },
+      reply
+    );
+
+    const createArg = (fastify.repositories.authorizationCodes.create as unknown as Mock).mock
+      .calls[0][0];
+    expect(createArg.resource).toEqual(['https://api.example.com/v1']);
+  });
+
   it('allow without allow_forever issues code but does NOT persist consent', async () => {
     const { fastify, ctx } = makeFastify();
     await consentRoute(fastify);
