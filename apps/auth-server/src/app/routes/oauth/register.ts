@@ -127,6 +127,10 @@ export default async function (fastify: FastifyInstance) {
         requirePkce: true,
         enabled: true,
         developerId: null,
+        // Stamp the dyn-reg timestamp so the consent screen (issue #150)
+        // can surface the "Newly registered" phishing-defense badge
+        // within DYNAMIC_CLIENT_BADGE_DAYS of registration.
+        dynamicRegisteredAt: Date.now(),
         metadata: {
           registrationType: 'dynamic',
           ...(normalized.softwareId ? { softwareId: normalized.softwareId } : {}),
