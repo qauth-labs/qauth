@@ -28,6 +28,7 @@ export default {
         'db',
         'api',
         'ui',
+        'portal',
         'sdk',
         'docs',
         'config',
