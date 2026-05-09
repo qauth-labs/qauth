@@ -1,3 +1,4 @@
+import { Button } from '@qauth-labs/ui';
 import { createFileRoute, Outlet, redirect, useRouter } from '@tanstack/react-router';
 
 import { currentUserFn } from '../server/actions/current-user';
@@ -31,14 +32,9 @@ function AuthedLayout() {
           <span className="text-sm font-medium text-gray-700">QAuth Developer Portal</span>
           <div className="flex items-center gap-4">
             <span className="text-sm text-gray-500">{user.email ?? user.sub}</span>
-            {/* Button primitive drops onClick — use native button here */}
-            <button
-              type="button"
-              onClick={() => void handleLogout()}
-              className="rounded-md border border-gray-300 bg-white px-3 py-1 text-sm text-gray-800 hover:bg-gray-100"
-            >
+            <Button variant="ghost" size="sm" type="button" onClick={() => void handleLogout()}>
               Log out
-            </button>
+            </Button>
           </div>
         </div>
       </header>

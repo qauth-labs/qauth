@@ -1,4 +1,4 @@
-import { FormField, Input } from '@qauth-labs/ui';
+import { Button, FormField, Input } from '@qauth-labs/ui';
 import { createFileRoute, Link, redirect, useRouter } from '@tanstack/react-router';
 import { useState } from 'react';
 
@@ -71,14 +71,9 @@ function LoginPage() {
 
           <p className="text-sm text-gray-400">Forgot password? Coming soon.</p>
 
-          {/* Button primitive drops type/disabled — use native button for form submission */}
-          <button
-            type="submit"
-            disabled={isSubmitting}
-            className="w-full rounded-md bg-blue-500 px-4 py-2 text-sm text-white hover:bg-blue-600 disabled:cursor-not-allowed disabled:opacity-50"
-          >
+          <Button type="submit" disabled={isSubmitting} className="w-full">
             {isSubmitting ? 'Logging in...' : 'Log in'}
-          </button>
+          </Button>
         </form>
 
         <p className="text-center text-sm text-gray-500">

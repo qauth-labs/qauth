@@ -1,4 +1,4 @@
-import { FormField, Input } from '@qauth-labs/ui';
+import { Button, FormField, Input } from '@qauth-labs/ui';
 import { createFileRoute, Link, redirect } from '@tanstack/react-router';
 import { useState } from 'react';
 
@@ -90,15 +90,14 @@ function RegisterPage() {
           ) : typeof resendState === 'object' ? (
             <p className="text-sm text-red-600">{resendState.error}</p>
           ) : (
-            /* Button primitive drops onClick/disabled — use native button here */
-            <button
+            <Button
+              variant="outline"
               type="button"
               disabled={resendState === 'sending'}
               onClick={() => void handleResend(formState.email)}
-              className="rounded-md border border-gray-300 bg-white px-4 py-2 text-sm text-gray-800 hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-50"
             >
               {resendState === 'sending' ? 'Sending...' : 'Resend verification email'}
-            </button>
+            </Button>
           )}
         </div>
       </main>
@@ -143,14 +142,9 @@ function RegisterPage() {
             />
           </FormField>
 
-          {/* Button primitive drops type/disabled — use native button for form submission */}
-          <button
-            type="submit"
-            disabled={isSubmitting}
-            className="w-full rounded-md bg-blue-500 px-4 py-2 text-sm text-white hover:bg-blue-600 disabled:cursor-not-allowed disabled:opacity-50"
-          >
+          <Button type="submit" disabled={isSubmitting} className="w-full">
             {isSubmitting ? 'Creating account...' : 'Create account'}
-          </button>
+          </Button>
         </form>
 
         <p className="text-center text-sm text-gray-500">

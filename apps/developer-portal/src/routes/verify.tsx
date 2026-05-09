@@ -1,4 +1,4 @@
-import { FormField, Input } from '@qauth-labs/ui';
+import { Button, FormField, Input } from '@qauth-labs/ui';
 import { createFileRoute, Link } from '@tanstack/react-router';
 import { useEffect, useState } from 'react';
 
@@ -92,11 +92,8 @@ function VerifyPage() {
           ) : (
             <p className="text-sm text-gray-600">This email is already verified.</p>
           )}
-          <Link
-            to="/login"
-            className="inline-block rounded-md bg-blue-500 px-4 py-2 text-sm text-white hover:bg-blue-600"
-          >
-            Continue to login
+          <Link to="/login">
+            <Button type="button">Continue to login</Button>
           </Link>
         </div>
       </main>
@@ -136,14 +133,9 @@ function VerifyPage() {
               <p className="text-sm text-red-600">{resendState.error}</p>
             ) : null}
 
-            {/* Button primitive drops type/disabled — use native button for form submission */}
-            <button
-              type="submit"
-              disabled={resendState === 'sending'}
-              className="rounded-md bg-blue-500 px-4 py-2 text-sm text-white hover:bg-blue-600 disabled:cursor-not-allowed disabled:opacity-50"
-            >
+            <Button type="submit" disabled={resendState === 'sending'}>
               {resendState === 'sending' ? 'Sending...' : 'Resend verification email'}
-            </button>
+            </Button>
           </form>
         )}
       </div>
