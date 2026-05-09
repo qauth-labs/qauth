@@ -57,8 +57,7 @@ function VerifyPage() {
     return () => {
       cancelled = true;
     };
-    // token is stable for the lifetime of this page load — empty deps is intentional
-  }, []);
+  }, [token]);
 
   async function handleResend(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();

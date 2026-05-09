@@ -44,23 +44,32 @@ export function verifySession(value: string): PortalSessionPayload | null {
   }
 }
 
+// `Secure` is always emitted: the `__Host-` prefix requires it (RFC 6265bis
+// §4.1.3.2). Browsers reject any `Set-Cookie` header for a `__Host-` cookie
+// without `Secure`, even on localhost. Dev over plain HTTP must therefore
+// loop back through localhost (which browsers treat as a secure context) or
+// use a TLS-terminating proxy.
 export function setSessionCookieHeader(payload: PortalSessionPayload): string {
   const value = signSession(payload);
-  const attrs = [
+  return [
     `${SESSION_COOKIE_NAME}=${value}`,
     'Path=/',
     'HttpOnly',
+    'Secure',
     'SameSite=Lax',
     `Max-Age=${env.PORTAL_SESSION_TTL}`,
-  ];
-  if (process.env['NODE_ENV'] === 'production') attrs.push('Secure');
-  return attrs.join('; ');
+  ].join('; ');
 }
 
 export function clearSessionCookieHeader(): string {
-  const attrs = [`${SESSION_COOKIE_NAME}=`, 'Path=/', 'HttpOnly', 'SameSite=Lax', 'Max-Age=0'];
-  if (process.env['NODE_ENV'] === 'production') attrs.push('Secure');
-  return attrs.join('; ');
+  return [
+    `${SESSION_COOKIE_NAME}=`,
+    'Path=/',
+    'HttpOnly',
+    'Secure',
+    'SameSite=Lax',
+    'Max-Age=0',
+  ].join('; ');
 }
 
 export function readSessionCookie(cookieHeader: string | undefined): PortalSessionPayload | null {

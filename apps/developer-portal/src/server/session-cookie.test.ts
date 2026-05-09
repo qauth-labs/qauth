@@ -68,19 +68,15 @@ describe('setSessionCookieHeader', () => {
     expect(header).toContain('Max-Age=900');
   });
 
-  it('does not include Secure outside production', () => {
+  // The `__Host-` prefix mandates `Secure`; browsers reject the cookie
+  // without it (RFC 6265bis §4.1.3.2). Emit it unconditionally.
+  it('always includes Secure regardless of NODE_ENV', () => {
     const original = process.env['NODE_ENV'];
-    process.env['NODE_ENV'] = 'test';
-    const header = setSessionCookieHeader(samplePayload);
-    expect(header).not.toContain('Secure');
-    process.env['NODE_ENV'] = original;
-  });
-
-  it('includes Secure in production', () => {
-    const original = process.env['NODE_ENV'];
-    process.env['NODE_ENV'] = 'production';
-    const header = setSessionCookieHeader(samplePayload);
-    expect(header).toContain('Secure');
+    for (const envValue of ['test', 'development', 'production']) {
+      process.env['NODE_ENV'] = envValue;
+      const header = setSessionCookieHeader(samplePayload);
+      expect(header).toContain('Secure');
+    }
     process.env['NODE_ENV'] = original;
   });
 });
@@ -91,6 +87,13 @@ describe('clearSessionCookieHeader', () => {
     expect(header).toContain(`${SESSION_COOKIE_NAME}=`);
     expect(header).toContain('Max-Age=0');
     expect(header).toContain('HttpOnly');
+  });
+
+  it('always includes Secure on the clearing header', () => {
+    const original = process.env['NODE_ENV'];
+    process.env['NODE_ENV'] = 'test';
+    expect(clearSessionCookieHeader()).toContain('Secure');
+    process.env['NODE_ENV'] = original;
   });
 });
 

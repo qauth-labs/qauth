@@ -64,8 +64,18 @@ describe('currentUserHandler', () => {
     expect(authServerClient.userinfo).not.toHaveBeenCalled();
   });
 
-  it('returns null when userinfo call fails', async () => {
+  it('returns null without hitting userinfo when expiresAt is in the past', async () => {
     const session = { accessToken: 'expired-at', refreshToken: 'rt', expiresAt: Date.now() - 1000 };
+    vi.mocked(readSessionCookie).mockReturnValue(session);
+    mockGetRequestHeader.mockReturnValue('some-cookie-header');
+
+    const result = await currentUserHandler();
+    expect(result).toBeNull();
+    expect(authServerClient.userinfo).not.toHaveBeenCalled();
+  });
+
+  it('returns null when userinfo call fails for a non-expired session', async () => {
+    const session = { accessToken: 'at', refreshToken: 'rt', expiresAt: Date.now() + 60_000 };
     vi.mocked(readSessionCookie).mockReturnValue(session);
     vi.mocked(authServerClient.userinfo).mockResolvedValue({
       ok: false,
@@ -75,5 +85,6 @@ describe('currentUserHandler', () => {
 
     const result = await currentUserHandler();
     expect(result).toBeNull();
+    expect(authServerClient.userinfo).toHaveBeenCalledOnce();
   });
 });
