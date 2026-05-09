@@ -31,6 +31,11 @@ export const Button = ({
   variant = 'default',
   size = 'default',
   className,
+  ...rest
 }: ButtonProps) => {
-  return <button className={cn(buttonVariants({ variant, size }), className)}>{children}</button>;
+  return (
+    <button {...rest} className={cn(buttonVariants({ variant, size }), className)}>
+      {children}
+    </button>
+  );
 };
