@@ -8,81 +8,87 @@
 // You should NOT make any changes in this file as it will be overwritten.
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
-import { Route as rootRouteImport } from './routes/__root';
-import { Route as VerifyRouteImport } from './routes/verify';
-import { Route as RegisterRouteImport } from './routes/register';
-import { Route as LoginRouteImport } from './routes/login';
-import { Route as ConsentsRouteImport } from './routes/consents';
-import { Route as AuthedRouteImport } from './routes/_authed';
-import { Route as IndexRouteImport } from './routes/index';
-import { Route as AuthedDashboardRouteImport } from './routes/_authed/dashboard';
+import { Route as rootRouteImport } from './routes/__root'
+import { Route as VerifyRouteImport } from './routes/verify'
+import { Route as RegisterRouteImport } from './routes/register'
+import { Route as LoginRouteImport } from './routes/login'
+import { Route as ConsentsRouteImport } from './routes/consents'
+import { Route as AuthedRouteImport } from './routes/_authed'
+import { Route as IndexRouteImport } from './routes/index'
+import { Route as AuthedDashboardRouteImport } from './routes/_authed/dashboard'
 
 const VerifyRoute = VerifyRouteImport.update({
   id: '/verify',
   path: '/verify',
   getParentRoute: () => rootRouteImport,
-} as any);
+} as any)
 const RegisterRoute = RegisterRouteImport.update({
   id: '/register',
   path: '/register',
   getParentRoute: () => rootRouteImport,
-} as any);
+} as any)
 const LoginRoute = LoginRouteImport.update({
   id: '/login',
   path: '/login',
   getParentRoute: () => rootRouteImport,
-} as any);
+} as any)
 const ConsentsRoute = ConsentsRouteImport.update({
   id: '/consents',
   path: '/consents',
   getParentRoute: () => rootRouteImport,
-} as any);
+} as any)
 const AuthedRoute = AuthedRouteImport.update({
   id: '/_authed',
   getParentRoute: () => rootRouteImport,
-} as any);
+} as any)
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
   getParentRoute: () => rootRouteImport,
-} as any);
+} as any)
 const AuthedDashboardRoute = AuthedDashboardRouteImport.update({
   id: '/dashboard',
   path: '/dashboard',
   getParentRoute: () => AuthedRoute,
-} as any);
+} as any)
 
 export interface FileRoutesByFullPath {
-  '/': typeof IndexRoute;
-  '/consents': typeof ConsentsRoute;
-  '/login': typeof LoginRoute;
-  '/register': typeof RegisterRoute;
-  '/verify': typeof VerifyRoute;
-  '/dashboard': typeof AuthedDashboardRoute;
+  '/': typeof IndexRoute
+  '/consents': typeof ConsentsRoute
+  '/login': typeof LoginRoute
+  '/register': typeof RegisterRoute
+  '/verify': typeof VerifyRoute
+  '/dashboard': typeof AuthedDashboardRoute
 }
 export interface FileRoutesByTo {
-  '/': typeof IndexRoute;
-  '/consents': typeof ConsentsRoute;
-  '/login': typeof LoginRoute;
-  '/register': typeof RegisterRoute;
-  '/verify': typeof VerifyRoute;
-  '/dashboard': typeof AuthedDashboardRoute;
+  '/': typeof IndexRoute
+  '/consents': typeof ConsentsRoute
+  '/login': typeof LoginRoute
+  '/register': typeof RegisterRoute
+  '/verify': typeof VerifyRoute
+  '/dashboard': typeof AuthedDashboardRoute
 }
 export interface FileRoutesById {
-  __root__: typeof rootRouteImport;
-  '/': typeof IndexRoute;
-  '/_authed': typeof AuthedRouteWithChildren;
-  '/consents': typeof ConsentsRoute;
-  '/login': typeof LoginRoute;
-  '/register': typeof RegisterRoute;
-  '/verify': typeof VerifyRoute;
-  '/_authed/dashboard': typeof AuthedDashboardRoute;
+  __root__: typeof rootRouteImport
+  '/': typeof IndexRoute
+  '/_authed': typeof AuthedRouteWithChildren
+  '/consents': typeof ConsentsRoute
+  '/login': typeof LoginRoute
+  '/register': typeof RegisterRoute
+  '/verify': typeof VerifyRoute
+  '/_authed/dashboard': typeof AuthedDashboardRoute
 }
 export interface FileRouteTypes {
-  fileRoutesByFullPath: FileRoutesByFullPath;
-  fullPaths: '/' | '/consents' | '/login' | '/register' | '/verify' | '/dashboard';
-  fileRoutesByTo: FileRoutesByTo;
-  to: '/' | '/consents' | '/login' | '/register' | '/verify' | '/dashboard';
+  fileRoutesByFullPath: FileRoutesByFullPath
+  fullPaths:
+    | '/'
+    | '/consents'
+    | '/login'
+    | '/register'
+    | '/verify'
+    | '/dashboard'
+  fileRoutesByTo: FileRoutesByTo
+  to: '/' | '/consents' | '/login' | '/register' | '/verify' | '/dashboard'
   id:
     | '__root__'
     | '/'
@@ -91,81 +97,82 @@ export interface FileRouteTypes {
     | '/login'
     | '/register'
     | '/verify'
-    | '/_authed/dashboard';
-  fileRoutesById: FileRoutesById;
+    | '/_authed/dashboard'
+  fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
-  IndexRoute: typeof IndexRoute;
-  AuthedRoute: typeof AuthedRouteWithChildren;
-  ConsentsRoute: typeof ConsentsRoute;
-  LoginRoute: typeof LoginRoute;
-  RegisterRoute: typeof RegisterRoute;
-  VerifyRoute: typeof VerifyRoute;
+  IndexRoute: typeof IndexRoute
+  AuthedRoute: typeof AuthedRouteWithChildren
+  ConsentsRoute: typeof ConsentsRoute
+  LoginRoute: typeof LoginRoute
+  RegisterRoute: typeof RegisterRoute
+  VerifyRoute: typeof VerifyRoute
 }
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
     '/verify': {
-      id: '/verify';
-      path: '/verify';
-      fullPath: '/verify';
-      preLoaderRoute: typeof VerifyRouteImport;
-      parentRoute: typeof rootRouteImport;
-    };
+      id: '/verify'
+      path: '/verify'
+      fullPath: '/verify'
+      preLoaderRoute: typeof VerifyRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/register': {
-      id: '/register';
-      path: '/register';
-      fullPath: '/register';
-      preLoaderRoute: typeof RegisterRouteImport;
-      parentRoute: typeof rootRouteImport;
-    };
+      id: '/register'
+      path: '/register'
+      fullPath: '/register'
+      preLoaderRoute: typeof RegisterRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/login': {
-      id: '/login';
-      path: '/login';
-      fullPath: '/login';
-      preLoaderRoute: typeof LoginRouteImport;
-      parentRoute: typeof rootRouteImport;
-    };
+      id: '/login'
+      path: '/login'
+      fullPath: '/login'
+      preLoaderRoute: typeof LoginRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/consents': {
-      id: '/consents';
-      path: '/consents';
-      fullPath: '/consents';
-      preLoaderRoute: typeof ConsentsRouteImport;
-      parentRoute: typeof rootRouteImport;
-    };
+      id: '/consents'
+      path: '/consents'
+      fullPath: '/consents'
+      preLoaderRoute: typeof ConsentsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/_authed': {
-      id: '/_authed';
-      path: '';
-      fullPath: '/';
-      preLoaderRoute: typeof AuthedRouteImport;
-      parentRoute: typeof rootRouteImport;
-    };
+      id: '/_authed'
+      path: ''
+      fullPath: '/'
+      preLoaderRoute: typeof AuthedRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/': {
-      id: '/';
-      path: '/';
-      fullPath: '/';
-      preLoaderRoute: typeof IndexRouteImport;
-      parentRoute: typeof rootRouteImport;
-    };
+      id: '/'
+      path: '/'
+      fullPath: '/'
+      preLoaderRoute: typeof IndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/_authed/dashboard': {
-      id: '/_authed/dashboard';
-      path: '/dashboard';
-      fullPath: '/dashboard';
-      preLoaderRoute: typeof AuthedDashboardRouteImport;
-      parentRoute: typeof AuthedRoute;
-    };
+      id: '/_authed/dashboard'
+      path: '/dashboard'
+      fullPath: '/dashboard'
+      preLoaderRoute: typeof AuthedDashboardRouteImport
+      parentRoute: typeof AuthedRoute
+    }
   }
 }
 
 interface AuthedRouteChildren {
-  AuthedDashboardRoute: typeof AuthedDashboardRoute;
+  AuthedDashboardRoute: typeof AuthedDashboardRoute
 }
 
 const AuthedRouteChildren: AuthedRouteChildren = {
   AuthedDashboardRoute: AuthedDashboardRoute,
-};
+}
 
-const AuthedRouteWithChildren = AuthedRoute._addFileChildren(AuthedRouteChildren);
+const AuthedRouteWithChildren =
+  AuthedRoute._addFileChildren(AuthedRouteChildren)
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
@@ -174,16 +181,16 @@ const rootRouteChildren: RootRouteChildren = {
   LoginRoute: LoginRoute,
   RegisterRoute: RegisterRoute,
   VerifyRoute: VerifyRoute,
-};
+}
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
-  ._addFileTypes<FileRouteTypes>();
+  ._addFileTypes<FileRouteTypes>()
 
-import type { getRouter } from './router.tsx';
-import type { createStart } from '@tanstack/react-start';
+import type { getRouter } from './router.tsx'
+import type { createStart } from '@tanstack/react-start'
 declare module '@tanstack/react-start' {
   interface Register {
-    ssr: true;
-    router: Awaited<ReturnType<typeof getRouter>>;
+    ssr: true
+    router: Awaited<ReturnType<typeof getRouter>>
   }
 }
