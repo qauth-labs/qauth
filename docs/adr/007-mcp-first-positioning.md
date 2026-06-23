@@ -15,7 +15,7 @@ The OAuth 2.1 work integrated in PR #156 (`integration/oauth-mcp-stack`) was bui
 - Public-client (`token_endpoint_auth_method=none`) `authorization_code` + PKCE (PR #159)
 - A browser consent screen with session cookies and a revocation surface
 
-This was validated end-to-end: **Claude Code**, configured with only a server URL, drove the full `on-401 → discovery → dynamic registration → authorization_code + PKCE → consent → token` handshake against a live `memory-mcp` server deployed at `qauth.naqshi.net`.
+This was validated end-to-end: **Claude Code**, configured with only a server URL, drove the full `on-401 → discovery → dynamic registration → authorization_code + PKCE → consent → token` handshake against a live MCP server.
 
 Two facts make this strategically significant:
 
@@ -62,7 +62,7 @@ The NLnet / NGI grant narrative is treated as **reframable**: an MCP framing ("s
 
 - Drifts from the originally-pitched federation/PQC narrative; requires reframing in any grant update.
 - Risk of split focus for a small team — federation and PQC slip further out.
-- **Open dynamic client registration is currently live and unguarded** (e.g. on `qauth.naqshi.net`). It must be gated before the project is promoted for adoption — immediate follow-up; adopting CIMD (see Spec tracking) is the durable fix, since it removes persistent registration records entirely.
+- **Open dynamic client registration is unguarded by default.** Any instance exposing the registration endpoint must gate it before the project is promoted for adoption — immediate follow-up; adopting CIMD (see Spec tracking) is the durable fix, since it removes persistent registration records entirely.
 - New surface area to maintain: an SDK package and agent-delegation semantics.
 
 ### Neutral
