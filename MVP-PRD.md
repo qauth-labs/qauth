@@ -1,9 +1,9 @@
 # QAuth - Product Requirements Document (PRD)
 
-> **Version**: 2.1
-> **Last Updated**: 2026-04-16
+> **Version**: 2.2
+> **Last Updated**: 2026-06-23
 > **Author**: Muhammed Taha Ayan
-> **Status**: Phase 2 - Developer Portal (Phase 1 complete)
+> **Status**: MCP-first re-baseline — see [ADR-007](./docs/adr/007-mcp-first-positioning.md). Phase 1 complete; near-term focus is MCP / AI-agent authentication.
 
 ## Executive Summary
 
@@ -12,6 +12,8 @@ QAuth is an open-source federated identity platform. It accepts identity from mu
 The project is built toward a future where digital identity is portable and user-controlled across services and platforms. Standards-compliant VC wallet support (Phase 4) means any application using QAuth gains wallet-based login without modifying its auth layer. The eIDAS 2.0 regulated-industry deployment (EUDI Wallet, EU member states) is a primary real-world target for Phase 4, but the federation architecture is wallet-agnostic.
 
 **Core Philosophy**: Ship working features incrementally. Each phase should be production-ready before moving to the next.
+
+> **2026-06-23 re-baseline (MCP-first).** While executing Phases 1–3, QAuth's OAuth 2.1 work (PR #156) delivered a working OAuth 2.1 **authorization server for MCP servers and AI agents** — the protocol foundation of Phase 9, years early and never previously in scope (validated end-to-end with Claude Code against a live MCP server). Per [ADR-007](./docs/adr/007-mcp-first-positioning.md), the near-term direction is now **MCP-first**: productize MCP auth (a resource-server SDK + dynamic-registration abuse controls) and build agent-native authorization (the Phase 9 substance), while wallet federation (Phase 4) and post-quantum signing (Phase 5) become the resequenced **long-term platform**. The identifier-abstraction migration ([ADR-002](./docs/adr/002-identifier-abstraction.md)) is **deferred** and re-scoped as the Phase 4 gate. The phase breakdown below predates this re-baseline and is retained for reference; **ADR-007 governs near-term priority**.
 
 ---
 
@@ -999,7 +1001,7 @@ ENTRYPOINT ["/bin/sh", "/app/docker-entrypoint.sh"]
 ## Phase 4: Wallet Federation Bridge (OID4VC / SIOPv2)
 
 **Timeline**: 6-8 weeks
-**Status**: Not Started
+**Status**: Not Started — **deferred** (long-term platform per [ADR-007](./docs/adr/007-mcp-first-positioning.md)); **gated on the [ADR-002](./docs/adr/002-identifier-abstraction.md) identifier-abstraction migration**, which is the first task of this phase.
 
 **Objective**: Enable QAuth to accept identity from standards-compliant VC wallets as an upstream source. Downstream applications receive standard OAuth 2.1 tokens with no changes required. The EU EUDI Wallet (eIDAS 2.0) is the primary integration test target, but the architecture is wallet-agnostic.
 
@@ -1094,7 +1096,9 @@ These features are NOT part of Phases 1–5:
 - Horizontal scaling, CDN integration
 - Multi-region support
 
-### Phase 9: Agent Authentication & Authorization (TBD)
+### Phase 9: Agent Authentication & Authorization (pulled forward — see [ADR-007](./docs/adr/007-mcp-first-positioning.md))
+
+> **Re-baselined to near-term.** The OAuth 2.1 / MCP protocol foundation for this phase shipped early in PR #156 (discovery, dynamic client registration, resource-indicator audience binding, public-client PKCE, consent). The remaining substance below — agent client type, modes, granular scopes, step-up, agent-action audit — is now the **T2 differentiation track**, augmented with on-behalf-of delegation via OAuth Token Exchange (RFC 8693).
 
 - "Agent" client type on QAuth (register and identify agents)
 - Agent session state / mode (ReadOnly, Admin, Exec)

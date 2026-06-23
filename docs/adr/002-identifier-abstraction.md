@@ -4,6 +4,8 @@
 **Date:** 2026-03-11
 **Authors:** QAuth Team
 
+> **Implementation status (2026-06-23):** Accepted as a design, **not yet implemented**. The `users` table still carries `email` / `email_normalized` / `password_hash`; the `user_credentials` and `user_attributes` tables do not exist; password auth reads `users.password_hash` directly. Per [ADR-007](./007-mcp-first-positioning.md) (MCP-first positioning), this migration is **deferred** and re-scoped as the gate for Phase 4 (wallet federation) — it is required only when a second human-identity upstream is added. MCP authorization runs on the current schema.
+
 ## Context
 
 The Phase 1 schema used email as the primary user identifier, with `email`, `email_normalized`, `password_hash`, and `email_verified` columns directly on the `users` table. This design creates a hard dependency between the authentication method (password/email) and the identity anchor.
