@@ -19,7 +19,7 @@
   <h3>🇪🇺 Made in Europe · 🇪🇪 Made in Estonia · 🇹🇷 Made in Türkiye</h3>
 </div>
 
-> **Status:** Early. Core OAuth 2.1 / OIDC flows are working; conformance hardening, observability, and the developer portal are in progress. See [Current Status](#-current-status-april-2026) and the [MVP milestone](https://github.com/qauth-labs/qauth/milestone/1). Not yet recommended for production use.
+> **Status:** Early. Core OAuth 2.1 / OIDC flows work end-to-end — including discovery, dynamic client registration, resource-indicator audience binding, and a consent screen — and the **near-term focus is MCP / AI-agent authentication** (the self-hostable OAuth 2.1 authorization server for MCP servers; see [ADR-007](./docs/adr/007-mcp-first-positioning.md)). Wallet federation and post-quantum signing remain the long-term platform. See [Current Status](#-current-status-june-2026) and the [MVP milestone](https://github.com/qauth-labs/qauth/milestone/1). Not yet recommended for production use.
 
 ## 🎯 How to Use QAuth
 
@@ -130,36 +130,37 @@ A federated identity hub for the next generation of the internet:
 - **Standards compliant** — OAuth 2.1 (RFC 9700), OIDC 1.0, OID4VC, SIOPv2, W3C DID, NIST FIPS 204
 - **Open and self-hostable** — Apache 2.0, no telemetry, runs anywhere
 
-## 📍 Current Status (April 2026)
+## 📍 Current Status (June 2026)
 
-QAuth is **early and not yet production-ready**. An honest snapshot:
+QAuth is **early and not yet production-ready**. An honest snapshot.
+
+> **Near-term focus — MCP / AI-agent auth.** Building OAuth 2.1 properly produced a working **authorization server for MCP servers and AI agents**, validated end-to-end with Claude Code against a live MCP server. That is now the near-term direction; wallet federation and post-quantum signing are the long-term platform, sequenced after. See [ADR-007](./docs/adr/007-mcp-first-positioning.md).
 
 **✅ Working today**
 
-- OAuth 2.1 authorization code flow with mandatory PKCE
-- OIDC 1.0 userinfo + token introspection (RFC 7662)
-- Email/password registration with Argon2id hashing
-- JWT issuance, refresh, revocation (Ed25519)
-- Email verification (Resend / SMTP / Mock providers)
-- Multi-tenancy via Realms for data isolation
-- PostgreSQL 18 + Redis 7 with Docker Compose
-- OpenAPI / Swagger UI at `/docs`
-- Phase 1.7 test coverage for JWT middleware, introspect, and userinfo
+- OAuth 2.1 authorization code flow with mandatory PKCE, including public clients (`none` + PKCE)
+- `client_credentials` and `refresh_token` grants — rotation + family-based replay detection (RFC 9700)
+- Resource Indicators (RFC 8707) — audience-bound tokens across authorize → code → token → refresh
+- Dynamic Client Registration (RFC 7591, open mode) + Authorization Server Metadata / OIDC discovery / JWKS
+- Token introspection (RFC 7662), OIDC userinfo, consent screen + grant revocation
+- Email/password registration + verification (Argon2id; Resend / SMTP / Mock), multi-tenancy via Realms
+- Developer portal: registration / login / verify + dashboard shell (server-side `__Host-` session)
+- PostgreSQL 18 + Redis 7 with Docker Compose; OpenAPI / Swagger UI at `/docs`
 
-**🚧 In progress**
+**🚧 In progress / next (MCP-first tracks — see [ADR-007](./docs/adr/007-mcp-first-positioning.md))**
 
-- Developer portal skeleton (Phase 2)
-- OIDC conformance items: ID tokens, nonce, scope/claims handling
-- Structured logging (pino), Prometheus metrics, rate limiting
-- Full OIDC discovery endpoint + JWKS
+- `@qauth-labs/mcp-guard` — resource-server SDK: RFC 9728 protected-resource metadata + 401 challenge + token validation
+- Client ID Metadata Documents (CIMD) as the primary client-registration path (MCP 2025-11-25); RFC 7591 dynamic registration kept as the documented fallback
+- Trust floor: real-DB repository tests + logout endpoint test + CI typecheck/coverage gate
+- Security hardening (CSRF, Helmet headers, secure cookies), structured logging (pino) + `/metrics`
+- OIDC conformance detail: ID token, nonce, scope/claims
 
-**📋 Designed but not yet implemented**
+**📋 Deferred — long-term platform** (designed, not yet implemented; resequenced per [ADR-007](./docs/adr/007-mcp-first-positioning.md))
 
-- Wallet federation (OID4VC / SIOPv2) — architecture in [ADR-004](./docs/adr/004-wallet-agnostic-federation.md)
-- Post-quantum hybrid signing — roadmap in [ADR-005](./docs/adr/005-pqc-hybrid-signing.md)
-- `@qauth-labs/crypto` native binding package
-- SDKs (`@qauth-labs/core`, `@qauth-labs/react`, `@qauth-labs/node`)
-- `auth-ui` (brandable login UI) and `admin-panel`
+- Identifier-abstraction migration — [ADR-002](./docs/adr/002-identifier-abstraction.md), now the gate for Phase 4
+- Wallet federation (OID4VC / SIOPv2) — [ADR-004](./docs/adr/004-wallet-agnostic-federation.md)
+- Post-quantum hybrid signing + `@qauth-labs/crypto` — [ADR-005](./docs/adr/005-pqc-hybrid-signing.md)
+- SDKs (`@qauth-labs/core`, `@qauth-labs/react`, `@qauth-labs/node`), `auth-ui`, `admin-panel`
 
 **Tracking:** [MVP milestone](https://github.com/qauth-labs/qauth/milestone/1) · [ADR index](./docs/adr/README.md) · [MVP-PRD](./MVP-PRD.md)
 
@@ -269,7 +270,7 @@ qauth/
 
 ### Phase 1 — Core Auth Server (core flows complete; conformance & ops in progress)
 
-> **Status:** Core OAuth 2.1 / OIDC flows work end-to-end with Ed25519 JWTs, Argon2id, PKCE, and multi-tenancy via Realms. The MVP milestone tracks at **43 of 95 issues closed**. The remaining Phase 1 work is OIDC conformance detail (ID tokens, nonce, claims), Prometheus + structured logging, rate limiting, and the developer-portal Dockerfile. See the [MVP milestone](https://github.com/qauth-labs/qauth/milestone/1).
+> **Status:** Core OAuth 2.1 / OIDC flows work end-to-end with Ed25519 JWTs, Argon2id, PKCE, multi-tenancy via Realms, dynamic client registration, resource-indicator audience binding, and consent. Remaining hardening — OIDC conformance detail (ID token, nonce, claims), structured logging + metrics, security headers, and the developer-portal Dockerfile — is tracked under the [T0–T4 milestones](https://github.com/qauth-labs/qauth/milestones) (see [ADR-007](./docs/adr/007-mcp-first-positioning.md)). For the full snapshot, see [Current Status](#-current-status-june-2026).
 
 **Core authentication (working today):**
 
@@ -503,6 +504,14 @@ docker compose up -d
 
 ## 🗺️ Roadmap
 
+> **Near-term direction is MCP-first** ([ADR-007](./docs/adr/007-mcp-first-positioning.md)). The tracks below set near-term priority; the numbered phases that follow remain the long-term plan, resequenced so wallet federation (Phase 4) and post-quantum signing (Phase 5) follow the MCP work.
+>
+> - **T0 — Trust floor:** real-DB repository tests, logout endpoint test, CI typecheck + coverage gate
+> - **T1 — MCP productization:** `@qauth-labs/mcp-guard` (RFC 9728 metadata + token validation + step-up scope challenges), Client ID Metadata Documents (CIMD) support, MCP quickstart + example, RFC 7009 revocation
+> - **T2 — Agent-native authZ (the Phase 9 substance, pulled forward):** agent client type, RFC 8693 token-exchange delegation, scope modes (ReadOnly/Admin/Exec), step-up, per-agent audit
+> - **T3 — OIDC conformance + hardening:** security (CSRF/Helmet), observability (pino/metrics), ID token/nonce/claims
+> - **T4 — Federation + PQC (deferred long-term moat):** Phases 4–5 below, gated on the [ADR-002](./docs/adr/002-identifier-abstraction.md) migration
+
 ### Phase 1: Core Auth Server (core flows complete; conformance & ops in progress)
 
 - [x] Database schema design (PostgreSQL + Drizzle ORM, UUIDv7)
@@ -522,7 +531,7 @@ docker compose up -d
 - [ ] Structured logging (pino) + Prometheus metrics
 - [ ] Rate limiting (Redis token bucket)
 
-### Phase 2: Developer Portal (current)
+### Phase 2: Developer Portal (registration/login/verify shipped; client management → track T2)
 
 - [ ] Developer registration / login
 - [ ] Self-service OAuth client management (CRUD)
@@ -537,7 +546,7 @@ docker compose up -d
 - [ ] Kubernetes manifests
 - [ ] JavaScript / React / Node.js SDKs (`@qauth-labs/core`, `@qauth-labs/react`, `@qauth-labs/node`)
 
-### Phase 4: Wallet Federation Bridge (OID4VC / SIOPv2)
+### Phase 4: Wallet Federation Bridge (OID4VC / SIOPv2) _(deferred — gated on [ADR-002](./docs/adr/002-identifier-abstraction.md) migration)_
 
 - [ ] SIOPv2 authentication request handling
 - [ ] OID4VC Verifiable Presentation endpoint
@@ -547,7 +556,7 @@ docker compose up -d
 - [ ] Inverse direction: QAuth as a Verifiable Credential issuer
 - [ ] Integration tests against EUDI reference wallet
 
-### Phase 5: Post-Quantum Crypto
+### Phase 5: Post-Quantum Crypto _(deferred — long-term platform)_
 
 - [ ] `@qauth-labs/crypto`: native Node.js binding (napi-rs + aws-lc-rs)
 - [ ] Hybrid composite ML-DSA-65 + Ed25519 JWT signing
@@ -720,7 +729,7 @@ Copyright © 2025–2026 QAuth Labs
 
 ---
 
-**Note:** This project is under active development. Phase 1 core flows work; Phase 1 conformance, observability, and Phase 2 (Developer Portal) are in progress. **Not yet recommended for production use.**
+**Note:** This project is under active development. Core OAuth 2.1 / OIDC flows work; the near-term focus is MCP / AI-agent auth plus conformance and observability hardening (see [ADR-007](./docs/adr/007-mcp-first-positioning.md)). **Not yet recommended for production use.**
 
 ## 🤲 Acknowledgments
 
