@@ -270,7 +270,7 @@ qauth/
 
 ### Phase 1 — Core Auth Server (core flows complete; conformance & ops in progress)
 
-> **Status:** Core OAuth 2.1 / OIDC flows work end-to-end with Ed25519 JWTs, Argon2id, PKCE, and multi-tenancy via Realms. The MVP milestone tracks at **43 of 95 issues closed**. The remaining Phase 1 work is OIDC conformance detail (ID tokens, nonce, claims), Prometheus + structured logging, rate limiting, and the developer-portal Dockerfile. See the [MVP milestone](https://github.com/qauth-labs/qauth/milestone/1).
+> **Status:** Core OAuth 2.1 / OIDC flows work end-to-end with Ed25519 JWTs, Argon2id, PKCE, multi-tenancy via Realms, dynamic client registration, resource-indicator audience binding, and consent. Remaining hardening — OIDC conformance detail (ID token, nonce, claims), structured logging + metrics, security headers, and the developer-portal Dockerfile — is tracked under the [T0–T4 milestones](https://github.com/qauth-labs/qauth/milestones) (see [ADR-007](./docs/adr/007-mcp-first-positioning.md)). For the full snapshot, see [Current Status](#-current-status-june-2026).
 
 **Core authentication (working today):**
 
@@ -531,7 +531,7 @@ docker compose up -d
 - [ ] Structured logging (pino) + Prometheus metrics
 - [ ] Rate limiting (Redis token bucket)
 
-### Phase 2: Developer Portal (current)
+### Phase 2: Developer Portal (registration/login/verify shipped; client management → track T2)
 
 - [ ] Developer registration / login
 - [ ] Self-service OAuth client management (CRUD)
@@ -729,7 +729,7 @@ Copyright © 2025–2026 QAuth Labs
 
 ---
 
-**Note:** This project is under active development. Phase 1 core flows work; Phase 1 conformance, observability, and Phase 2 (Developer Portal) are in progress. **Not yet recommended for production use.**
+**Note:** This project is under active development. Core OAuth 2.1 / OIDC flows work; the near-term focus is MCP / AI-agent auth plus conformance and observability hardening (see [ADR-007](./docs/adr/007-mcp-first-positioning.md)). **Not yet recommended for production use.**
 
 ## 🤲 Acknowledgments
 

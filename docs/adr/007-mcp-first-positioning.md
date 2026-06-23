@@ -78,7 +78,7 @@ The NLnet / NGI grant narrative is treated as **reframable**: an MCP framing ("s
 - [ADR-005: Post-Quantum Hybrid Signing](./005-pqc-hybrid-signing.md) — long-term platform
 - [ADR-006: OAuth Grants and Audience](./006-oauth-grants-and-audience.md) — the foundation this builds on
 - PR #156 — `integration/oauth-mcp-stack`; PR #159 — public-client `authorization_code`
-- [MCP Authorization specification](https://modelcontextprotocol.io/specification/draft/basic/authorization)
+- [MCP Authorization specification (2025-06-18)](https://modelcontextprotocol.io/specification/2025-06-18/basic/authorization)
 - [RFC 9728 — OAuth 2.0 Protected Resource Metadata](https://datatracker.ietf.org/doc/html/rfc9728)
 - [RFC 8707 — Resource Indicators](https://datatracker.ietf.org/doc/html/rfc8707) · [RFC 7591 — Dynamic Client Registration](https://datatracker.ietf.org/doc/html/rfc7591) · [RFC 8414 — Authorization Server Metadata](https://datatracker.ietf.org/doc/html/rfc8414)
 - [RFC 8693 — OAuth 2.0 Token Exchange](https://datatracker.ietf.org/doc/html/rfc8693) · [RFC 7009 — Token Revocation](https://datatracker.ietf.org/doc/html/rfc7009)
