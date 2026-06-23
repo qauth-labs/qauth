@@ -37,10 +37,11 @@ Wallet federation (ADR-004) and post-quantum signing (ADR-005) are retained as t
 
 1. **Productize the existing capability into a turnkey MCP-auth offering.**
    - `@qauth-labs/mcp-guard` — a resource-server-side SDK/middleware that serves `/.well-known/oauth-protected-resource` (RFC 9728), emits the `401 + WWW-Authenticate: Bearer resource_metadata=…` challenge, and validates QAuth-issued tokens (JWKS verification + `aud`/scope checks, or introspection). This is the adoption lever: without it, only the maintainer can wire QAuth to an MCP server.
-   - Abuse controls on dynamic client registration: `initial_access_token`-gated mode (open mode becomes opt-in), client TTL/expiry for dynamically-registered clients, optional admin-approval queue.
+   - **Client registration: adopt Client ID Metadata Documents (CIMD)** as the primary path per MCP 2025-11-25 — advertise `client_id_metadata_document_supported`, fetch + validate the metadata document (`client_id` == URL, redirect-URI checks, SSRF guards, optional domain trust policy). CIMD keeps no persistent registration records, so it also neutralizes the open-DCR abuse surface. Keep RFC 7591 dynamic registration as the documented fallback, and gate open mode (`initial_access_token`, client TTL, optional approval) for any deployment that still exposes it.
+   - **Step-up scope challenges:** `mcp-guard` emits `403 insufficient_scope` + `WWW-Authenticate` scope hints; QAuth supports re-authorization for an increased scope set (MCP 2025-11-25 incremental consent).
    - An MCP quickstart and a runnable example (the Claude Code → `memory-mcp` flow), plus `RFC 7009` token revocation.
 
-2. **Build the agent-native authorization substance of Phase 9 as the differentiation.** Agent client type; on-behalf-of delegation via OAuth Token Exchange (RFC 8693, `act` claim); agent scope modes (ReadOnly / Admin / Exec); step-up authentication before dangerous operations; per-agent action audit (extending the existing `audit_logs` table). This is what makes QAuth _more_ than a generic OAuth server for agents.
+2. **Build the agent-native authorization substance of Phase 9 as the differentiation.** Agent client type; on-behalf-of delegation via OAuth Token Exchange (RFC 8693, `act` claim — an additive MCP auth _extension_, not core; see the [ext-auth](https://github.com/modelcontextprotocol/ext-auth) repo); agent scope modes (ReadOnly / Admin / Exec); step-up authentication before dangerous operations; per-agent action audit (extending the existing `audit_logs` table). This is what makes QAuth _more_ than a generic OAuth server for agents.
 
 3. **Defer the ADR-002 identifier-abstraction migration.** It is re-scoped as the **gate for Phase 4 (wallet federation)**, not near-term work. MCP authorization is dominated by client identity, audience binding, and consent — not human multi-credential identity — and runs on the current schema. See the implementation-status note added to ADR-002.
 
@@ -61,7 +62,7 @@ The NLnet / NGI grant narrative is treated as **reframable**: an MCP framing ("s
 
 - Drifts from the originally-pitched federation/PQC narrative; requires reframing in any grant update.
 - Risk of split focus for a small team — federation and PQC slip further out.
-- **Open dynamic client registration is currently live and unguarded** (e.g. on `qauth.naqshi.net`). It must be gated before the project is promoted for adoption. Immediate follow-up.
+- **Open dynamic client registration is currently live and unguarded** (e.g. on `qauth.naqshi.net`). It must be gated before the project is promoted for adoption — immediate follow-up; adopting CIMD (see Spec tracking) is the durable fix, since it removes persistent registration records entirely.
 - New surface area to maintain: an SDK package and agent-delegation semantics.
 
 ### Neutral
@@ -69,6 +70,17 @@ The NLnet / NGI grant narrative is treated as **reframable**: an MCP framing ("s
 - No work is discarded — federation (ADR-004) and PQC (ADR-005) remain on the roadmap; only the order changes.
 - ADR-002/003/004/005 remain **Accepted** as designs; only their implementation sequence is affected.
 - The MCP authorization specification is still evolving; `mcp-guard` must be versioned against a specific spec revision and tracked as the spec changes.
+
+## Spec tracking
+
+Reviewed against MCP Authorization **revision 2025-11-25** (the revision this ADR targets; the implementation in PR #156 was built to 2025-06-18). Auth-relevant deltas and QAuth's posture:
+
+- **Client ID Metadata Documents (CIMD)** — now the _recommended_ client-registration mechanism (client priority: pre-registered → CIMD → DCR → manual). **RFC 7591 Dynamic Client Registration is explicitly demoted to a backwards-compatibility fallback.** → Reshapes T1: adopt CIMD (Decision §1); it supersedes the earlier "DCR abuse controls" framing because there are no persistent registration records to abuse.
+- **Incremental scope consent / step-up authorization** — runtime `403 insufficient_scope` + `WWW-Authenticate` scope challenge; clients re-authorize for a larger scope set. → `mcp-guard` (T1) emits the challenge; richer scope _modes_ stay T2.
+- **OIDC Discovery accepted as an AS-metadata alternative**, with OIDC-discovery providers **required** to expose `code_challenge_methods_supported`; the PRM `WWW-Authenticate` header is now optional with a `.well-known` fallback. → **Already satisfied:** QAuth serves both RFC 8414 and OIDC discovery, each carrying `code_challenge_methods_supported: ['S256']`.
+- **Delegation / on-behalf-of is not core MCP auth** — it lives in the separate [ext-auth extensions](https://github.com/modelcontextprotocol/ext-auth) repo, so QAuth's RFC 8693 token-exchange work (Decision §2 / T2) is an _extension_, not a core requirement.
+
+Unchanged core QAuth already meets: OAuth 2.1 (public + confidential), PKCE S256 (advertised), RFC 9728 PRM discovery, RFC 8707 resource indicators + audience-bound tokens + audience-validated introspection, public-client refresh-token rotation, and consent.
 
 ## Related
 
@@ -78,7 +90,7 @@ The NLnet / NGI grant narrative is treated as **reframable**: an MCP framing ("s
 - [ADR-005: Post-Quantum Hybrid Signing](./005-pqc-hybrid-signing.md) — long-term platform
 - [ADR-006: OAuth Grants and Audience](./006-oauth-grants-and-audience.md) — the foundation this builds on
 - PR #156 — `integration/oauth-mcp-stack`; PR #159 — public-client `authorization_code`
-- [MCP Authorization specification (2025-11-25)](https://modelcontextprotocol.io/specification/2025-11-25/basic/authorization)
+- [MCP Authorization specification (2025-11-25)](https://modelcontextprotocol.io/specification/2025-11-25/basic/authorization) · [changelog vs 2025-06-18](https://modelcontextprotocol.io/specification/2025-11-25/changelog) · [auth extensions (ext-auth)](https://github.com/modelcontextprotocol/ext-auth)
 - [RFC 9728 — OAuth 2.0 Protected Resource Metadata](https://datatracker.ietf.org/doc/html/rfc9728)
-- [RFC 8707 — Resource Indicators](https://datatracker.ietf.org/doc/html/rfc8707) · [RFC 7591 — Dynamic Client Registration](https://datatracker.ietf.org/doc/html/rfc7591) · [RFC 8414 — Authorization Server Metadata](https://datatracker.ietf.org/doc/html/rfc8414)
+- [RFC 8707 — Resource Indicators](https://datatracker.ietf.org/doc/html/rfc8707) · [RFC 7591 — Dynamic Client Registration](https://datatracker.ietf.org/doc/html/rfc7591) · [RFC 8414 — Authorization Server Metadata](https://datatracker.ietf.org/doc/html/rfc8414) · [OAuth Client ID Metadata Documents (CIMD draft-00)](https://datatracker.ietf.org/doc/html/draft-ietf-oauth-client-id-metadata-document-00)
 - [RFC 8693 — OAuth 2.0 Token Exchange](https://datatracker.ietf.org/doc/html/rfc8693) · [RFC 7009 — Token Revocation](https://datatracker.ietf.org/doc/html/rfc7009)

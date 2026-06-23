@@ -150,7 +150,7 @@ QAuth is **early and not yet production-ready**. An honest snapshot.
 **🚧 In progress / next (MCP-first tracks — see [ADR-007](./docs/adr/007-mcp-first-positioning.md))**
 
 - `@qauth-labs/mcp-guard` — resource-server SDK: RFC 9728 protected-resource metadata + 401 challenge + token validation
-- Dynamic-registration abuse controls (`initial_access_token` gating, client TTL/approval)
+- Client ID Metadata Documents (CIMD) as the primary client-registration path (MCP 2025-11-25); RFC 7591 dynamic registration kept as the documented fallback
 - Trust floor: real-DB repository tests + logout endpoint test + CI typecheck/coverage gate
 - Security hardening (CSRF, Helmet headers, secure cookies), structured logging (pino) + `/metrics`
 - OIDC conformance detail: ID token, nonce, scope/claims
@@ -507,7 +507,7 @@ docker compose up -d
 > **Near-term direction is MCP-first** ([ADR-007](./docs/adr/007-mcp-first-positioning.md)). The tracks below set near-term priority; the numbered phases that follow remain the long-term plan, resequenced so wallet federation (Phase 4) and post-quantum signing (Phase 5) follow the MCP work.
 >
 > - **T0 — Trust floor:** real-DB repository tests, logout endpoint test, CI typecheck + coverage gate
-> - **T1 — MCP productization:** `@qauth-labs/mcp-guard` (RFC 9728 metadata + token validation), dynamic-registration abuse controls, MCP quickstart + example, RFC 7009 revocation
+> - **T1 — MCP productization:** `@qauth-labs/mcp-guard` (RFC 9728 metadata + token validation + step-up scope challenges), Client ID Metadata Documents (CIMD) support, MCP quickstart + example, RFC 7009 revocation
 > - **T2 — Agent-native authZ (the Phase 9 substance, pulled forward):** agent client type, RFC 8693 token-exchange delegation, scope modes (ReadOnly/Admin/Exec), step-up, per-agent audit
 > - **T3 — OIDC conformance + hardening:** security (CSRF/Helmet), observability (pino/metrics), ID token/nonce/claims
 > - **T4 — Federation + PQC (deferred long-term moat):** Phases 4–5 below, gated on the [ADR-002](./docs/adr/002-identifier-abstraction.md) migration
