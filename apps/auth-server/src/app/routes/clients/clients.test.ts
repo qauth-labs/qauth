@@ -11,6 +11,11 @@ interface TestContext {
   };
 }
 
+// `oauth_clients.developer_id` is a UUID column and a user token's `sub` is a
+// UUID `users.id`, so the developer subjects in these tests must be UUIDs.
+const DEV_A = '0190a000-0000-7000-8000-00000000000a';
+const DEV_B = '0190a000-0000-7000-8000-00000000000b';
+
 function createReply() {
   const state: { statusCode?: number; body?: unknown } = {};
   const reply: any = {
@@ -98,14 +103,14 @@ describe('GET /api/clients route', () => {
     ]);
 
     const request = {
-      jwtPayload: { sub: 'dev-A' },
+      jwtPayload: { sub: DEV_A },
       headers: { authorization: 'Bearer token' },
     } as unknown as FastifyRequest;
     const { reply, state } = createReply();
 
     await ctx.handler!(request, reply);
 
-    expect(fastify.repositories.oauthClients.listByDeveloper).toHaveBeenCalledWith('dev-A');
+    expect(fastify.repositories.oauthClients.listByDeveloper).toHaveBeenCalledWith(DEV_A);
     expect(state.body).toEqual({
       clients: [
         {
@@ -140,7 +145,7 @@ describe('GET /api/clients route', () => {
     (fastify.repositories.oauthClients.listByDeveloper as unknown as Mock).mockResolvedValue([]);
 
     const request = {
-      jwtPayload: { sub: 'dev-A' },
+      jwtPayload: { sub: DEV_A },
       headers: { authorization: 'Bearer token' },
     } as unknown as FastifyRequest;
     const { reply, state } = createReply();
@@ -158,21 +163,41 @@ describe('GET /api/clients route', () => {
     // caller's own developer id and returns only that developer's rows.
     (fastify.repositories.oauthClients.listByDeveloper as unknown as Mock).mockImplementation(
       async (developerId: string) =>
-        developerId === 'dev-A' ? [makeClientRow({ developerId: 'dev-A' })] : []
+        developerId === DEV_A ? [makeClientRow({ developerId: DEV_A })] : []
     );
 
     // Developer B is authenticated and must not receive developer A's client.
     const request = {
-      jwtPayload: { sub: 'dev-B' },
+      jwtPayload: { sub: DEV_B },
       headers: { authorization: 'Bearer token' },
     } as unknown as FastifyRequest;
     const { reply, state } = createReply();
 
     await ctx.handler!(request, reply);
 
-    expect(fastify.repositories.oauthClients.listByDeveloper).toHaveBeenCalledWith('dev-B');
-    expect(fastify.repositories.oauthClients.listByDeveloper).not.toHaveBeenCalledWith('dev-A');
+    expect(fastify.repositories.oauthClients.listByDeveloper).toHaveBeenCalledWith(DEV_B);
+    expect(fastify.repositories.oauthClients.listByDeveloper).not.toHaveBeenCalledWith(DEV_A);
     expect(state.body).toEqual({ clients: [] });
+  });
+
+  it('returns an empty list without querying when sub is not a UUID (client_credentials token)', async () => {
+    const { fastify, ctx } = makeFastify();
+    await clientsRoute(fastify);
+
+    // A client_credentials access token carries `sub === client_id`, an opaque
+    // varchar rather than a UUID. Querying the UUID `developer_id` column with
+    // it would raise Postgres 22P02 and surface as a 500, so the handler must
+    // short-circuit to an empty list and never reach the repository.
+    const request = {
+      jwtPayload: { sub: 'app-123' },
+      headers: { authorization: 'Bearer token' },
+    } as unknown as FastifyRequest;
+    const { reply, state } = createReply();
+
+    await ctx.handler!(request, reply);
+
+    expect(state.body).toEqual({ clients: [] });
+    expect(fastify.repositories.oauthClients.listByDeveloper).not.toHaveBeenCalled();
   });
 
   it('throws JWTInvalidError when the jwt payload is missing a sub', async () => {

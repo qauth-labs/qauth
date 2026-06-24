@@ -1,6 +1,7 @@
 import { JWTInvalidError } from '@qauth-labs/shared-errors';
 import type { FastifyInstance } from 'fastify';
 import { ZodTypeProvider } from 'fastify-type-provider-zod';
+import { z } from 'zod';
 
 import { listClientsResponseSchema } from '../../schemas/clients';
 
@@ -45,6 +46,15 @@ type OAuthClientRow = Awaited<
 // `@fastify/autoload` mounts this module under `/api/clients` regardless of
 // the `clients/` directory name. Keep route paths resource-relative.
 export const autoPrefix = '/api/clients';
+
+// `oauth_clients.developer_id` is a UUID column. `request.jwtPayload.sub` is a
+// developer's `users.id` (a UUID) for user tokens, but for the
+// `client_credentials` grant `sub` equals the `client_id` — an opaque
+// varchar, not a UUID. Querying Postgres with a non-UUID value would raise
+// `22P02` (invalid input syntax for type uuid) and surface as a 500. Since a
+// non-UUID subject can never own a UUID-keyed client row, treat it as
+// "no clients" rather than letting it reach the database.
+const uuidSubjectSchema = z.uuid();
 
 /**
  * Project an `oauth_clients` row down to the safe fields exposed by the
@@ -93,6 +103,13 @@ export default async function (fastify: FastifyInstance) {
       }
 
       const developerId = payload.sub;
+
+      // A non-UUID subject (e.g. a client_credentials token whose `sub` is a
+      // `client_id`) can never own a client row, so short-circuit to an empty
+      // list instead of issuing a query that Postgres would reject with 22P02.
+      if (!uuidSubjectSchema.safeParse(developerId).success) {
+        return reply.send({ clients: [] });
+      }
 
       const rows = await fastify.repositories.oauthClients.listByDeveloper(developerId);
 
