@@ -2,6 +2,7 @@
   "compileOnSave": false,
   "compilerOptions": {
     "rootDir": ".",
+    "ignoreDeprecations": "6.0",
     "moduleResolution": "node",
     "target": "ES2022",
     "module": "ESNext",

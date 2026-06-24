@@ -12,12 +12,14 @@ function readKeyFromFile(filePath: string): string {
   } catch (error) {
     if (error instanceof Error) {
       if ('code' in error && error.code === 'ENOENT') {
-        throw new Error(`JWT key file not found: ${filePath}`);
+        throw new Error(`JWT key file not found: ${filePath}`, { cause: error });
       }
       if ('code' in error && error.code === 'EACCES') {
-        throw new Error(`Permission denied reading JWT key file: ${filePath}`);
+        throw new Error(`Permission denied reading JWT key file: ${filePath}`, { cause: error });
       }
-      throw new Error(`Failed to read JWT key file ${filePath}: ${error.message}`);
+      throw new Error(`Failed to read JWT key file ${filePath}: ${error.message}`, {
+        cause: error,
+      });
     }
     throw error;
   }
