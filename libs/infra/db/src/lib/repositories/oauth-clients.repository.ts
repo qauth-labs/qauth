@@ -123,6 +123,39 @@ export function createOAuthClientsRepository(defaultDb: DbClient): OAuthClientsR
     },
 
     /**
+     * Idempotently materialise a CIMD client keyed by (realm_id, client_id).
+     *
+     * Uses a single INSERT ... ON CONFLICT so concurrent authorize requests
+     * for the same metadata-document client_id collapse onto one row instead
+     * of racing on a find-then-create. On conflict we refresh only the
+     * document-derived fields (name / redirect_uris / grant+response types)
+     * and bump `updatedAt`; identity columns and the secret sentinel are
+     * left as-is.
+     */
+    async upsertCimdClient(data: NewOAuthClient, tx?: DbClient): Promise<OAuthClient> {
+      const invoker = tx ?? defaultDb;
+      const [client] = await invoker
+        .insert(oauthClients)
+        .values(data)
+        .onConflictDoUpdate({
+          target: [oauthClients.realmId, oauthClients.clientId],
+          set: {
+            name: data.name,
+            description: data.description,
+            redirectUris: data.redirectUris,
+            grantTypes: data.grantTypes,
+            responseTypes: data.responseTypes,
+            tokenEndpointAuthMethod: data.tokenEndpointAuthMethod,
+            metadata: data.metadata,
+            enabled: data.enabled,
+            updatedAt: Date.now(),
+          },
+        })
+        .returning();
+      return client;
+    },
+
+    /**
      * Update an OAuth client by ID
      *
      * @param id - OAuth client ID

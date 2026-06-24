@@ -8,6 +8,7 @@ import { env } from '../../../config/env';
 import { AUTHORIZATION_CODE_TTL_MS } from '../../constants';
 import { resolveBrowserSession } from '../../helpers/browser-session';
 import { resolveAudience } from '../../helpers/client-auth';
+import { resolveClient } from '../../helpers/client-resolution';
 import { canSkipConsent, filterRequestedScopes } from '../../helpers/consent';
 import { getOrCreateSystemClient } from '../../helpers/oauth-client';
 import { buildRedirectUrl } from '../../helpers/oauth-redirect';
@@ -75,10 +76,12 @@ export default async function (fastify: FastifyInstance) {
 
       const realm = await getOrCreateDefaultRealm(fastify);
 
-      const client = await fastify.repositories.oauthClients.findByClientId(
-        realm.id,
-        query.client_id
-      );
+      // Client resolution priority (MCP 2025-11-25): pre-registered (DB) →
+      // CIMD (https-URL client_id, fetched + SSRF-guarded + validated, then
+      // idempotently materialised as a row) → unknown. A resolved CIMD
+      // client is a real persisted row, so the existing audit / auth-code /
+      // refresh-token foreign keys work unchanged. See client-resolution.ts.
+      const { client, reason } = await resolveClient(fastify, realm.id, query.client_id);
 
       if (!client) {
         await fastify.repositories.auditLogs.create({
@@ -89,11 +92,15 @@ export default async function (fastify: FastifyInstance) {
           success: false,
           ipAddress: request.ip,
           userAgent: request.headers['user-agent'] || null,
-          metadata: { error: 'invalid_client', client_id: query.client_id },
+          metadata: { error: reason ?? 'invalid_client', client_id: query.client_id },
         });
         throw new BadRequestError('invalid_client');
       }
 
+      // CIMD §: the authorization request's redirect_uri MUST exactly match
+      // one of the document's redirect_uris (this list came from the
+      // metadata document for a CIMD client, or the registered set for a
+      // pre-registered one). No wildcards.
       if (!client.redirectUris.includes(redirectUri)) {
         await fastify.repositories.auditLogs.create({
           userId: null,

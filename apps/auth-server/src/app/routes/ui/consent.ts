@@ -8,11 +8,14 @@ import { z } from 'zod';
 import { env } from '../../../config/env';
 import { AUTHORIZATION_CODE_TTL_MS } from '../../constants';
 import { resolveBrowserSession } from '../../helpers/browser-session';
+import { resolveClient } from '../../helpers/client-resolution';
 import {
   canSkipConsent,
   describeScope,
   filterRequestedScopes,
   isDynamicClientWithinBadgeWindow,
+  isLoopbackRedirect,
+  redirectHost,
 } from '../../helpers/consent';
 import { html, render, safe } from '../../helpers/html';
 import { buildRedirectUrl } from '../../helpers/oauth-redirect';
@@ -101,6 +104,12 @@ function consentPage(opts: {
   /** RFC 8707 resource indicators — emitted as one hidden input per URI. */
   resources: string[];
   userEmail: string;
+  /** Host portion of the redirect_uri, shown so the user can sanity-check the destination. */
+  redirectHost: string;
+  /** True when the redirect targets loopback/localhost (CIMD §6 impersonation warning). */
+  redirectIsLoopback: boolean;
+  /** True for CIMD-resolved clients (no operator pre-registration). */
+  isCimd: boolean;
 }): string {
   const scopeRows = opts.scopes.length
     ? opts.scopes.map((s) => html`<li><code>${s}</code> — ${describeScope(s)}</li>`)
@@ -116,6 +125,21 @@ function consentPage(opts: {
   const audienceBlock = opts.audience.length
     ? html`<p><strong>Tokens will be valid for:</strong> ${opts.audience.join(', ')}</p>`
     : safe('');
+
+  // CIMD §6: always show where the authorization code will be sent, and warn
+  // when that destination is the user's own machine (localhost) for a client
+  // the operator never pre-registered.
+  const redirectBlock = html`<p class="redirect">
+    <strong>You will be redirected to:</strong> <code>${opts.redirectHost}</code>
+  </p>`;
+
+  const loopbackWarning =
+    opts.redirectIsLoopback && opts.isCimd
+      ? html`<div class="warn">
+          This app will receive your authorization code on <code>${opts.redirectHost}</code>
+          (your own device). Only continue if you started this sign-in yourself.
+        </div>`
+      : safe('');
 
   const badge = opts.badgeDynamic
     ? html`<div class="badge">
@@ -192,6 +216,19 @@ function consentPage(opts: {
               margin: 16px 0;
               font-size: 13px;
             }
+            .warn {
+              background: #fdecea;
+              color: #8a1c12;
+              border: 1px solid #f1a59c;
+              border-radius: 6px;
+              padding: 10px 12px;
+              margin: 16px 0;
+              font-size: 13px;
+            }
+            .redirect {
+              font-size: 13px;
+              color: #374151;
+            }
             .actions {
               display: flex;
               gap: 12px;
@@ -233,12 +270,12 @@ function consentPage(opts: {
             <h1>${opts.clientName} wants to access your account</h1>
             ${homepage}
             <p class="as-user">Signed in as ${opts.userEmail}</p>
-            ${badge}
+            ${badge} ${loopbackWarning}
             <p><strong>Requested access:</strong></p>
             <ul class="scopes">
               ${scopeRows}
             </ul>
-            ${audienceBlock}
+            ${audienceBlock} ${redirectBlock}
             <label class="forever">
               <input type="checkbox" name="allow_forever" value="1" checked />
               Remember this decision
@@ -281,16 +318,20 @@ export default async function (fastify: FastifyInstance) {
       }
 
       const realm = await getOrCreateDefaultRealm(fastify);
-      const client = await fastify.repositories.oauthClients.findByClientId(
-        realm.id,
-        query.client_id
-      );
+      // Pre-registered → CIMD resolution (a CIMD client reaching consent was
+      // already materialised by /oauth/authorize, so findByClientId inside
+      // resolveClient hits it; if its document cache expired it is re-fetched
+      // and re-validated here).
+      const { client } = await resolveClient(fastify, realm.id, query.client_id);
       if (!client || !client.enabled) {
         throw new BadRequestError('invalid_client');
       }
       if (!client.redirectUris.includes(query.redirect_uri)) {
         throw new BadRequestError('redirect_uri not registered');
       }
+
+      const isCimd =
+        (client.metadata as Record<string, unknown> | null)?.registrationType === 'cimd';
 
       const scopes = filterRequestedScopes(query.scope, client);
 
@@ -343,6 +384,9 @@ export default async function (fastify: FastifyInstance) {
           // carries every requested resource URI back to the handler.
           resources: parseResourceFromUrl(request.url),
           userEmail: session.email,
+          redirectHost: redirectHost(query.redirect_uri),
+          redirectIsLoopback: isLoopbackRedirect(query.redirect_uri),
+          isCimd,
         })
       );
     }
@@ -414,10 +458,7 @@ export default async function (fastify: FastifyInstance) {
       );
 
       const realm = await getOrCreateDefaultRealm(fastify);
-      const client = await fastify.repositories.oauthClients.findByClientId(
-        realm.id,
-        body.client_id
-      );
+      const { client } = await resolveClient(fastify, realm.id, body.client_id);
       if (!client || !client.enabled) {
         throw new BadRequestError('invalid_client');
       }

@@ -61,6 +61,26 @@ describe('buildAuthorizationServerMetadata', () => {
     expect(meta['issuer']).toBe(ISSUER);
     expect(meta['token_endpoint']).toBe(`${ISSUER}/oauth/token`);
   });
+
+  it('advertises client_id_metadata_document_supported when CIMD is enabled (MCP 2025-11-25)', () => {
+    const meta = buildAuthorizationServerMetadata({
+      issuer: ISSUER,
+      clientIdMetadataDocumentSupported: true,
+    });
+
+    expect(meta['client_id_metadata_document_supported']).toBe(true);
+  });
+
+  it('omits the CIMD flag entirely when disabled (does not over-advertise)', () => {
+    const enabledDefault = buildAuthorizationServerMetadata({ issuer: ISSUER });
+    const explicitlyOff = buildAuthorizationServerMetadata({
+      issuer: ISSUER,
+      clientIdMetadataDocumentSupported: false,
+    });
+
+    expect('client_id_metadata_document_supported' in enabledDefault).toBe(false);
+    expect('client_id_metadata_document_supported' in explicitlyOff).toBe(false);
+  });
 });
 
 describe('buildOpenIdConfiguration', () => {
@@ -76,5 +96,14 @@ describe('buildOpenIdConfiguration', () => {
     expect(oidc['claims_supported']).toEqual(
       expect.arrayContaining(['sub', 'iss', 'aud', 'exp', 'iat', 'email', 'email_verified'])
     );
+  });
+
+  it('carries the CIMD flag into the OIDC config too (advertised on BOTH documents)', () => {
+    const oidc = buildOpenIdConfiguration({
+      issuer: ISSUER,
+      clientIdMetadataDocumentSupported: true,
+    });
+
+    expect(oidc['client_id_metadata_document_supported']).toBe(true);
   });
 });
