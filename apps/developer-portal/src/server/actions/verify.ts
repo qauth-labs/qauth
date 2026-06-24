@@ -10,4 +10,15 @@ export async function verifyHandler({
   return authServerClient.verifyEmail(data.token);
 }
 
-export const verifyFn = createServerFn({ method: 'POST' }).handler(verifyHandler);
+export const verifyFn = createServerFn({ method: 'POST' })
+  .inputValidator((data: unknown): { token: string } => {
+    if (
+      typeof data !== 'object' ||
+      data === null ||
+      typeof (data as Record<string, unknown>).token !== 'string'
+    ) {
+      throw new Error('Invalid input: expected { token: string }');
+    }
+    return { token: (data as { token: string }).token };
+  })
+  .handler(verifyHandler);

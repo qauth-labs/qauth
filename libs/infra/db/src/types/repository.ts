@@ -70,6 +70,27 @@ export interface OAuthClientsRepository extends BaseRepository<
     clientId: string,
     tx?: DbClient
   ): Promise<OAuthClient | undefined>;
+  /**
+   * List the OAuth clients owned by a developer, newest first.
+   *
+   * Ownership is scoped by `oauth_clients.developer_id`. Clients created via
+   * open dynamic registration (RFC 7591) have a null `developer_id` and are
+   * therefore never returned here.
+   */
+  listByDeveloper(developerId: string, tx?: DbClient): Promise<OAuthClient[]>;
+
+  /**
+   * Idempotently materialise a Client ID Metadata Document (CIMD) client.
+   *
+   * CIMD clients are keyed by their (realm_id, client_id) URL. On conflict
+   * the mutable, document-derived fields are refreshed from the latest
+   * validated metadata document; the row is otherwise left untouched. This
+   * is NOT open registration: the row is keyed by the URL itself, so
+   * re-resolving the same client_id updates one row rather than creating
+   * new ones — there is no record to spam. The row exists only to satisfy
+   * the auth-code / refresh-token / audit foreign keys.
+   */
+  upsertCimdClient(data: NewOAuthClient, tx?: DbClient): Promise<OAuthClient>;
 }
 
 /**

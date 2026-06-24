@@ -30,6 +30,8 @@ vi.mock('@tanstack/react-router', async (importOriginal) => {
 import { currentUserFn } from '../server/actions/current-user';
 import { Route } from './login';
 
+const PageComponent = Route.options.component as NonNullable<typeof Route.options.component>;
+
 describe('login beforeLoad guard', () => {
   it('throws a redirect to /dashboard when user is already authenticated', async () => {
     vi.mocked(currentUserFn).mockResolvedValue({
@@ -51,23 +53,23 @@ describe('login beforeLoad guard', () => {
 
 describe('LoginPage component', () => {
   it('renders email and password fields', () => {
-    const html = renderToString(<Route.options.component />);
+    const html = renderToString(<PageComponent />);
     expect(html).toContain('type="email"');
     expect(html).toContain('type="password"');
   });
 
   it('renders the submit button', () => {
-    const html = renderToString(<Route.options.component />);
+    const html = renderToString(<PageComponent />);
     expect(html).toContain('Log in');
   });
 
   it('renders a link to the register page', () => {
-    const html = renderToString(<Route.options.component />);
+    const html = renderToString(<PageComponent />);
     expect(html).toContain('Register');
   });
 
   it('renders the forgot password placeholder text', () => {
-    const html = renderToString(<Route.options.component />);
+    const html = renderToString(<PageComponent />);
     expect(html).toContain('Coming soon');
   });
 });

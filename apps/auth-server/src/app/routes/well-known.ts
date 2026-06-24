@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 
+import { env } from '../../config/env';
 import { buildAuthorizationServerMetadata, buildOpenIdConfiguration } from '../helpers/discovery';
 
 /**
@@ -22,7 +23,11 @@ const DISCOVERY_CACHE_CONTROL = 'public, max-age=3600';
  * during bootstrap and cache responses locally.
  */
 export default async function (fastify: FastifyInstance) {
-  const buildInput = () => ({ issuer: fastify.jwtUtils.getIssuer() });
+  const buildInput = () => ({
+    issuer: fastify.jwtUtils.getIssuer(),
+    // CIMD (MCP 2025-11-25): advertise on BOTH AS metadata and OIDC config.
+    clientIdMetadataDocumentSupported: env.CIMD_ENABLED,
+  });
 
   fastify.get(
     '/.well-known/oauth-authorization-server',

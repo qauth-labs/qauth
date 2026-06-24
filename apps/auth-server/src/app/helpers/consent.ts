@@ -114,3 +114,61 @@ const SCOPE_DESCRIPTIONS: Record<string, string> = {
 export function describeScope(scope: string): string {
   return SCOPE_DESCRIPTIONS[scope] ?? scope;
 }
+
+/**
+ * Non-IPv4 loopback host literals, matched after stripping any IPv6 brackets
+ * (Node's `URL.hostname` returns `[::1]` *with* brackets). The full IPv4
+ * `127.0.0.0/8` range is matched separately — see below.
+ */
+const LOOPBACK_HOSTS = new Set(['::1', 'localhost']);
+
+/**
+ * True when `host` is anywhere in the IPv4 loopback block `127.0.0.0/8`
+ * (RFC 1122 §3.2.1.3). The whole /8 — not just `127.0.0.1` — loops back, so
+ * `127.0.0.2`, `127.1.2.3`, etc. must all be treated as loopback; matching
+ * only `127.0.0.1` let a malicious client dodge the consent-screen warning.
+ */
+function isIpv4Loopback(host: string): boolean {
+  const octets = host.split('.');
+  if (octets.length !== 4) return false;
+  for (const o of octets) {
+    if (!/^\d{1,3}$/.test(o)) return false;
+    const n = Number(o);
+    if (n < 0 || n > 255) return false;
+  }
+  return Number(octets[0]) === 127;
+}
+
+/**
+ * Extract the hostname of a redirect_uri for display at the consent screen.
+ * CIMD §6 calls out localhost-redirect impersonation: a malicious client can
+ * present a `client_id` document whose redirect_uri points at the user's own
+ * machine to intercept the code. Surfacing the destination host lets the
+ * user notice an unexpected target. Returns the raw value if it can't be
+ * parsed (so the screen still shows *something* rather than hiding it).
+ */
+export function redirectHost(redirectUri: string): string {
+  try {
+    return new URL(redirectUri).host || redirectUri;
+  } catch {
+    return redirectUri;
+  }
+}
+
+/**
+ * True when the redirect_uri targets a loopback / localhost address. The
+ * consent screen warns on these because, for a client the AS never
+ * pre-registered (CIMD), a localhost redirect means the authorization code
+ * is delivered to whatever is listening on the user's own machine — a known
+ * impersonation vector (CIMD §6, "localhost-redirect impersonation").
+ */
+export function isLoopbackRedirect(redirectUri: string): boolean {
+  try {
+    // URL.hostname keeps the brackets on IPv6 literals (`[::1]`); strip them
+    // so both bracketed and bare forms match.
+    const host = new URL(redirectUri).hostname.toLowerCase().replace(/^\[|\]$/g, '');
+    return LOOPBACK_HOSTS.has(host) || isIpv4Loopback(host);
+  } catch {
+    return false;
+  }
+}

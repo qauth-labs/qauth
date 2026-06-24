@@ -204,6 +204,99 @@ export const authEnvSchema = z.object({
         .map((x) => x.trim())
         .filter((x) => x.length > 0)
     ),
+
+  // ------------------------------------------------------------------
+  // Client ID Metadata Documents (CIMD) — draft-ietf-oauth-client-id-
+  // metadata-document-00 / MCP Authorization rev 2025-11-25. When a
+  // `client_id` is an HTTPS URL, the AS fetches the metadata document on
+  // demand instead of consulting a persisted registration record.
+  // ------------------------------------------------------------------
+
+  /**
+   * Master switch for CIMD. When false, URL-formatted `client_id`s are
+   * treated like any other (unknown) client_id and rejected with
+   * `invalid_client`. Defaults to enabled per the MCP-first positioning
+   * (ADR-007 §1) — CIMD is the recommended client-registration mechanism.
+   */
+  CIMD_ENABLED: z
+    .enum(['true', 'false'])
+    .default('true')
+    .transform((v) => v === 'true'),
+
+  /**
+   * Domain trust policy applied to a CIMD `client_id` URL host after the
+   * SSRF / structural checks pass (CIMD §6 leaves this to deployment
+   * policy):
+   *   - `accept-any-https` — any https URL whose document validates is
+   *     accepted (most permissive; appropriate for open MCP servers).
+   *   - `allowlist` — only hosts in `CIMD_TRUSTED_DOMAINS` are accepted.
+   *     Any other host → `invalid_client`. Use for locked-down installs.
+   */
+  CIMD_TRUST_POLICY: z.enum(['accept-any-https', 'allowlist']).default('accept-any-https'),
+
+  /**
+   * Comma/space-separated host allowlist consulted when
+   * `CIMD_TRUST_POLICY=allowlist`. A leading `*.` permits subdomains
+   * (e.g. `*.example.com` matches `app.example.com` but not
+   * `example.com`). Empty + allowlist policy means "trust nothing".
+   */
+  CIMD_TRUSTED_DOMAINS: z
+    .string()
+    .default('')
+    .transform((s) =>
+      s
+        .split(/[\s,]+/)
+        .map((x) => x.trim().toLowerCase())
+        .filter((x) => x.length > 0)
+    ),
+
+  /**
+   * Default TTL (seconds) for a cached CIMD document when the upstream
+   * response carries no usable `Cache-Control: max-age` / `Expires`
+   * header. Bounds how long a stale document can be served.
+   */
+  CIMD_CACHE_DEFAULT_TTL: z.coerce
+    .number()
+    .int()
+    .min(0)
+    .default(5 * 60),
+
+  /**
+   * Hard upper bound (seconds) on any cached CIMD document, regardless of
+   * the upstream `max-age`. Prevents a misbehaving client document from
+   * pinning a registration in cache indefinitely.
+   */
+  CIMD_CACHE_MAX_TTL: z.coerce
+    .number()
+    .int()
+    .min(1)
+    .default(60 * 60),
+
+  /**
+   * Maximum CIMD document size in bytes. Bounds memory + abuse surface
+   * (CIMD documents are small JSON blobs).
+   */
+  CIMD_MAX_DOCUMENT_BYTES: z.coerce
+    .number()
+    .int()
+    .min(256)
+    .default(64 * 1024),
+
+  /**
+   * Per-fetch timeout (milliseconds) for retrieving a CIMD document.
+   */
+  CIMD_FETCH_TIMEOUT_MS: z.coerce.number().int().min(100).default(5000),
+
+  /**
+   * Allow CIMD fetches to non-public IP ranges (loopback, private,
+   * link-local). MUST stay false in production — it disables the core
+   * SSRF guard. Exists only so an integration/dev harness can point a
+   * CIMD client_id at a localhost fixture server.
+   */
+  CIMD_ALLOW_PRIVATE_ADDRESSES: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((v) => v === 'true'),
 });
 
 /**

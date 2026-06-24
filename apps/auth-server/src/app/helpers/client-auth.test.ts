@@ -2,6 +2,21 @@ import { InvalidClientError, InvalidScopeError } from '@qauth-labs/shared-errors
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { describe, expect, it, type Mock, vi } from 'vitest';
 
+// client-auth → client-resolution → cimd pulls in the env module; stub it so
+// the real env-schema parse (which needs DB/EMAIL vars) does not run in tests.
+vi.mock('../../config/env', () => ({
+  env: {
+    CIMD_ENABLED: true,
+    CIMD_TRUST_POLICY: 'accept-any-https',
+    CIMD_TRUSTED_DOMAINS: [],
+    CIMD_CACHE_DEFAULT_TTL: 300,
+    CIMD_CACHE_MAX_TTL: 3600,
+    CIMD_MAX_DOCUMENT_BYTES: 65536,
+    CIMD_FETCH_TIMEOUT_MS: 5000,
+    CIMD_ALLOW_PRIVATE_ADDRESSES: false,
+  },
+}));
+
 import {
   authenticateClient,
   extractClientCredentials,

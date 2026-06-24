@@ -4,7 +4,7 @@ import {
   NotFoundError,
   UniqueConstraintError,
 } from '@qauth-labs/shared-errors';
-import { and, eq } from 'drizzle-orm';
+import { and, desc, eq } from 'drizzle-orm';
 
 import type {
   NewOAuthClient,
@@ -99,6 +99,59 @@ export function createOAuthClientsRepository(defaultDb: DbClient): OAuthClientsR
         .from(oauthClients)
         .where(and(eq(oauthClients.realmId, realmId), eq(oauthClients.clientId, clientId)))
         .limit(1);
+      return client;
+    },
+
+    /**
+     * List the OAuth clients owned by a developer, newest first.
+     *
+     * Scoped strictly by `developer_id` so a developer only ever sees their
+     * own clients. Dynamically registered clients (RFC 7591) carry a null
+     * `developer_id` and are excluded by the equality filter.
+     *
+     * @param developerId - Owning developer's user id
+     * @param tx - Optional transaction client
+     * @returns Owned OAuth clients ordered by creation time, newest first
+     */
+    async listByDeveloper(developerId: string, tx?: DbClient): Promise<OAuthClient[]> {
+      const invoker = tx ?? defaultDb;
+      return invoker
+        .select()
+        .from(oauthClients)
+        .where(eq(oauthClients.developerId, developerId))
+        .orderBy(desc(oauthClients.createdAt));
+    },
+
+    /**
+     * Idempotently materialise a CIMD client keyed by (realm_id, client_id).
+     *
+     * Uses a single INSERT ... ON CONFLICT so concurrent authorize requests
+     * for the same metadata-document client_id collapse onto one row instead
+     * of racing on a find-then-create. On conflict we refresh only the
+     * document-derived fields (name / redirect_uris / grant+response types)
+     * and bump `updatedAt`; identity columns and the secret sentinel are
+     * left as-is.
+     */
+    async upsertCimdClient(data: NewOAuthClient, tx?: DbClient): Promise<OAuthClient> {
+      const invoker = tx ?? defaultDb;
+      const [client] = await invoker
+        .insert(oauthClients)
+        .values(data)
+        .onConflictDoUpdate({
+          target: [oauthClients.realmId, oauthClients.clientId],
+          set: {
+            name: data.name,
+            description: data.description,
+            redirectUris: data.redirectUris,
+            grantTypes: data.grantTypes,
+            responseTypes: data.responseTypes,
+            tokenEndpointAuthMethod: data.tokenEndpointAuthMethod,
+            metadata: data.metadata,
+            enabled: data.enabled,
+            updatedAt: Date.now(),
+          },
+        })
+        .returning();
       return client;
     },
 

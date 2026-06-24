@@ -15,6 +15,7 @@
     "zod": "catalog:"
   },
   "devDependencies": {
+    "@qauth-labs/shared-testing": "workspace:*",
     "@types/pg": "catalog:",
     "tsx": "catalog:"
   }

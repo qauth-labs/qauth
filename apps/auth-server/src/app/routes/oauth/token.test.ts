@@ -1117,6 +1117,28 @@ describe('POST /oauth/token route — refresh_token grant', () => {
     });
   });
 
+  it('returns expires_in from the configured access-token lifespan on rotation', async () => {
+    const { fastify, ctx, confidentialClient, storedToken } = setupRefreshStub();
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(
+      confidentialClient
+    );
+    (
+      fastify.repositories.refreshTokens.findByTokenHashIncludingRevoked as unknown as Mock
+    ).mockResolvedValue(storedToken);
+
+    await tokenRoute(fastify);
+    const handler = ctx.handler;
+    if (!handler) throw new Error('Handler missing');
+
+    const reply = createReply();
+    const result = await handler(refreshRequest(), reply);
+
+    // expires_in mirrors getAccessTokenLifespan() (900s in the stub), not the
+    // refresh-token lifespan.
+    expect(fastify.jwtUtils.getAccessTokenLifespan).toHaveBeenCalled();
+    expect(result).toMatchObject({ expires_in: 900 });
+  });
+
   it('detects replay and revokes the whole family when a revoked token is presented', async () => {
     const { fastify, ctx, confidentialClient, storedToken } = setupRefreshStub();
     (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(
