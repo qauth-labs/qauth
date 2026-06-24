@@ -84,7 +84,7 @@ const auth = new QAuth({
 
 ## 🔐 Post-Quantum Cryptography
 
-QAuth's PQC strategy is documented in [ADR-005](./docs/adr/005-pqc-hybrid-signing.md) and is **design-stage today**. Phase 1 signs JWTs with Ed25519; the hybrid transition is planned for Phase 5.
+QAuth's PQC strategy is documented in [ADR-005](./docs/adr/005-pqc-hybrid-signing.md). The post-quantum hybrid layer is **design-stage today**, but the crypto-agile foundation is **live now**: Phase 1 — current and shipping — signs JWTs with Ed25519 behind algorithm-agnostic interfaces. The ML-DSA hybrid transition is planned for Phase 5.
 
 ### Primary standard (target)
 
@@ -115,7 +115,7 @@ ML-DSA-65 signatures are 3,309 bytes vs. Ed25519's 64 bytes. QAuth's architectur
 
 **Migration timeline:**
 
-- **Phase 1** (in progress): Ed25519 / EdDSA for JWT signatures, plus crypto-agile interfaces
+- **Phase 1** (current / live now): Ed25519 / EdDSA for JWT signatures, plus crypto-agile interfaces
 - **Phase 5** (2027 target): Hybrid composite ML-DSA-65 + Ed25519 (JOSE WG draft adopted Jan 2026)
 - **Future**: FN-DSA (NIST FIPS 206, pending) evaluation — compact signatures (~666 B) may make self-contained PQC JWTs practical
 
@@ -134,6 +134,8 @@ A federated identity hub for the next generation of the internet:
 
 QAuth is **early and not yet production-ready**. An honest snapshot.
 
+Phase 1 core OAuth 2.1 / OIDC is architecturally complete and live-tested end-to-end; near-term work is MCP productization and agent-native features — so it is not yet production-ready.
+
 > **Near-term focus — MCP / AI-agent auth.** Building OAuth 2.1 properly produced a working **authorization server for MCP servers and AI agents**, validated end-to-end with Claude Code against a live MCP server. That is now the near-term direction; wallet federation and post-quantum signing are the long-term platform, sequenced after. See [ADR-007](./docs/adr/007-mcp-first-positioning.md).
 
 **✅ Working today**
@@ -146,12 +148,13 @@ QAuth is **early and not yet production-ready**. An honest snapshot.
 - Email/password registration + verification (Argon2id; Resend / SMTP / Mock), multi-tenancy via Realms
 - Developer portal: registration / login / verify + dashboard shell (server-side `__Host-` session)
 - PostgreSQL 18 + Redis 7 with Docker Compose; OpenAPI / Swagger UI at `/docs`
+- `@qauth-labs/mcp-guard` — resource-server SDK: RFC 9728 protected-resource metadata + 401 challenge + token validation
+- Client ID Metadata Documents (CIMD) as the primary client-registration path (MCP 2025-11-25); RFC 7591 dynamic registration kept as the documented fallback
+- Trust floor: real-DB (testcontainers) repository tests + logout endpoint test + CI typecheck/coverage gate
 
 **🚧 In progress / next (MCP-first tracks — see [ADR-007](./docs/adr/007-mcp-first-positioning.md))**
 
-- `@qauth-labs/mcp-guard` — resource-server SDK: RFC 9728 protected-resource metadata + 401 challenge + token validation
-- Client ID Metadata Documents (CIMD) as the primary client-registration path (MCP 2025-11-25); RFC 7591 dynamic registration kept as the documented fallback
-- Trust floor: real-DB repository tests + logout endpoint test + CI typecheck/coverage gate
+- Agent-native authZ: agent client type, RFC 8693 token-exchange delegation, scope modes, step-up scope challenges
 - Security hardening (CSRF, Helmet headers, secure cookies), structured logging (pino) + `/metrics`
 - OIDC conformance detail: ID token, nonce, scope/claims
 
@@ -161,6 +164,8 @@ QAuth is **early and not yet production-ready**. An honest snapshot.
 - Wallet federation (OID4VC / SIOPv2) — [ADR-004](./docs/adr/004-wallet-agnostic-federation.md)
 - Post-quantum hybrid signing + `@qauth-labs/crypto` — [ADR-005](./docs/adr/005-pqc-hybrid-signing.md)
 - SDKs (`@qauth-labs/core`, `@qauth-labs/react`, `@qauth-labs/node`), `auth-ui`, `admin-panel`
+
+> [ADR-006](./docs/adr/006-oauth-grants-and-audience.md) (OAuth grants — `client_credentials` / `client_secret_basic` + `aud` claim) is **implemented and shipping today**, not deferred; the grants and audience binding above ship in the auth server now.
 
 **Tracking:** [MVP milestone](https://github.com/qauth-labs/qauth/milestone/1) · [ADR index](./docs/adr/README.md) · [MVP-PRD](./MVP-PRD.md)
 
@@ -238,7 +243,7 @@ qauth/
 │   │                         #     password.provider.ts, wallet.provider.ts
 │   │                         #     Normalises upstream → VerifiedIdentity
 │   │
-│   ├── fastify/plugins/      ✅ db · cache · email · jwt · password · pkce
+│   ├── fastify/plugins/      ✅ db · cache · email · jwt · password · pkce · mcp-guard
 │   ├── infra/
 │   │   ├── db/               ✅ PostgreSQL 18 + Drizzle ORM, repository pattern
 │   │   └── cache/            ✅ Redis 7 connection + caching utilities
@@ -347,7 +352,7 @@ qauth/
 **Backend:**
 
 - **Runtime**: Node.js 24 LTS
-- **Language**: TypeScript
+- **Language**: TypeScript 6.0
 - **Framework**: Fastify
 - **API**: REST (OAuth 2.1 / OIDC)
 - **ORM**: Drizzle ORM
@@ -363,7 +368,7 @@ qauth/
 - **Framework**: React 19
 - **Router**: TanStack Router
 - **Data Fetching**: TanStack Query
-- **Build Tool**: Vite
+- **Build Tool**: Vite 8 (Rolldown)
 - **UI Primitives**: Radix UI
 - **Styling**: Tailwind CSS
 - **Tables**: TanStack Table
@@ -371,8 +376,9 @@ qauth/
 
 **Infrastructure:**
 
-- **Monorepo**: Nx 22.3+
-- **Package Manager**: pnpm
+- **Monorepo**: Nx 23
+- **Package Manager**: pnpm 11
+- **Linting**: ESLint 10
 - **Containerization**: Docker
 - **Orchestration**: Kubernetes ready (manifests planned, Phase 3)
 - **Observability**: OpenTelemetry (planned, Phase 3)

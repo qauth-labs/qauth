@@ -4,6 +4,8 @@
 **Date:** 2026-03-18
 **Authors:** QAuth Team
 
+> **Implementation status (2026-06-24):** Accepted as design; not implemented. Phase 1 signs JWTs with Ed25519; the hybrid ML-DSA transition is Phase 5 (long-term per [ADR-007](./007-mcp-first-positioning.md)).
+
 ## Context
 
 Post-quantum cryptography (PQC) standardization has materially advanced. NIST finalized FIPS 203 (ML-KEM), FIPS 204 (ML-DSA), and FIPS 205 (SLH-DSA) in August 2024, and FIPS 206 (FN-DSA) is expected to finalize in the 2026-2027 period.

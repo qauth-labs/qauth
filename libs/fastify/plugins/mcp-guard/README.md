@@ -1,5 +1,8 @@
 # @qauth-labs/mcp-guard
 
+> Targets the **MCP Authorization** specification, **revision 2025-11-25**, and
+> **RFC 9728** (OAuth 2.0 Protected Resource Metadata).
+
 The resource-server (RS) side SDK for protecting an **MCP server** with a
 self-hosted **[QAuth](../../../../README.md)** OAuth 2.1 authorization server.
 

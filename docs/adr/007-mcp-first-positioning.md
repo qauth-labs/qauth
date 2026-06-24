@@ -4,6 +4,8 @@
 **Date:** 2026-06-23
 **Authors:** QAuth Team
 
+> **Implementation status (2026-06-24):** The near-term MCP track has **shipped**. CIMD client registration is live (config-gated via `CIMD_*`, with SSRF guards and an optional domain trust policy); `@qauth-labs/mcp-guard` ships as the resource-server SDK (PRM discovery, `401`/`403` challenges, JWKS/introspection token validation); the agent-facing `GET /api/clients` developer surface exists; and the T0 trust floor is in place — testcontainers-backed repository tests plus a CI gate running `lint typecheck test build` and a repo-wide coverage threshold. The long-term federation/PQC items below remain accepted designs only (see [ADR-002](./002-identifier-abstraction.md) / [ADR-003](./003-credential-provider-interface.md) / [ADR-004](./004-wallet-agnostic-federation.md) / [ADR-005](./005-pqc-hybrid-signing.md)).
+
 ## Context
 
 The OAuth 2.1 work integrated in PR #156 (`integration/oauth-mcp-stack`) was built, in its own words, for _"first-class MCP / third-party client support."_ It delivered, together and in one release:

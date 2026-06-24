@@ -9,7 +9,7 @@
  *   `requireScopes` preHandlers.
  * - {@link McpGuard} — the framework-agnostic core, for non-Fastify hosts.
  *
- * See the package README and `examples/mcp-guard-memory` for usage.
+ * See the package README and `examples/memory-mcp` for usage.
  */
 
 // Fastify adapter (default + named).

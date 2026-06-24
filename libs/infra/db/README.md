@@ -199,6 +199,11 @@ await db.transaction(async (tx) => {
 - **`realmsRepository`**: Realm CRUD operations
   - `create()`, `findById()`, `findByIdOrThrow()`, `findByName()`, `update()`, `delete()`
 
+- **`oauthClientsRepository`** (`createOAuthClientsRepository`): OAuth client CRUD operations
+  - `create()`, `findById()`, `findByIdOrThrow()`, `findByClientId()`, `listByDeveloper()`, `upsertCimdClient()`, `update()`, `delete()`
+  - `listByDeveloper(developerId, tx?)`: lists a developer's own clients, scoped strictly by `developer_id` and ordered newest-first. Dynamically registered (RFC 7591 / DCR) clients carry a null `developer_id` and are excluded.
+  - `upsertCimdClient(data, tx?)`: idempotent `INSERT ... ON CONFLICT` for Client ID Metadata Document (CIMD) clients keyed by `(realm_id, client_id)`. On conflict it refreshes only the document-derived fields (name, description, redirect URIs, grant/response types, auth method, metadata, enabled) and bumps `updatedAt`; identity columns and the secret sentinel are left untouched, so concurrent authorize requests for the same metadata-document `client_id` collapse onto a single row instead of racing a find-then-create.
+
 - **`auditLogsRepository`**: Audit log operations
   - `create()`, `findByUserId()`, `findByRealmId()`, `findByRealmAndUserId()`
 
