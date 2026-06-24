@@ -576,24 +576,24 @@ Response:
 
 **Tasks**:
 
-- [ ] Create REST API for client management
+- [ ] Create REST API for client management — partial: `GET /api/clients` (list) shipped; create/update/delete/regenerate still pending
 - [ ] Create "New Client" form
 - [ ] Generate client_id and client_secret
 - [ ] Store client credentials securely (hash client_secret)
 - [ ] Display client details
 - [ ] Edit client (redirect URIs, name)
 - [ ] Delete/revoke client
-- [ ] List all clients for a developer
+- [x] List all clients for a developer — `GET /api/clients`, scoped by developer, secret never returned
 
 **REST API Endpoints**:
 
 ```typescript
-GET    /api/clients
-POST   /api/clients
-GET    /api/clients/:id
-PATCH  /api/clients/:id
-DELETE /api/clients/:id
-POST   /api/clients/:id/regenerate-secret
+GET    /api/clients                     # shipped
+POST   /api/clients                     # pending
+GET    /api/clients/:id                 # pending
+PATCH  /api/clients/:id                 # pending
+DELETE /api/clients/:id                 # pending
+POST   /api/clients/:id/regenerate-secret  # pending
 ```
 
 **UI Features**:
@@ -652,11 +652,11 @@ POST   /api/clients/:id/regenerate-secret
 
 **Deliverables**:
 
-- ✅ Developer portal (TanStack Start)
-- ✅ Self-service client registration
-- ✅ REST API for client management
-- ✅ API key management
-- ✅ Basic documentation
+- ⏳ Developer portal (TanStack Start) — scaffolded & typecheck-clean; pages still in progress
+- ⏳ Self-service client registration
+- ⏳ REST API for client management — partial: `GET /api/clients` (list) shipped; create/update/delete/regenerate pending
+- ⏳ API key management
+- ⏳ Basic documentation
 
 **What You Can Do After Phase 2**:
 
@@ -1209,7 +1209,7 @@ These features are NOT part of Phases 1–5:
 ### JWT Algorithm
 
 - **Decision**: EdDSA (Ed25519) for MVP
-- **Rationale**: Fast, secure, simple. Hybrid PQC later (Phase 7)
+- **Rationale**: Fast, secure, simple. Hybrid PQC later (Phase 5)
 
 ### JWT Expiration
 
@@ -1400,12 +1400,12 @@ CREATE TABLE sessions (
 | `/.well-known/openid-configuration`  | GET    | OIDC discovery                                                                                                       | 3.2   |
 | `/.well-known/jwks.json`             | GET    | JWKS public keys                                                                                                     | 3.2   |
 | `/metrics`                           | GET    | Prometheus metrics                                                                                                   | 3.3   |
-| `/api/clients`                       | GET    | List OAuth clients                                                                                                   | 2.2   |
-| `/api/clients`                       | POST   | Create OAuth client                                                                                                  | 2.2   |
-| `/api/clients/:id`                   | GET    | Get client details                                                                                                   | 2.2   |
-| `/api/clients/:id`                   | PATCH  | Update client                                                                                                        | 2.2   |
-| `/api/clients/:id`                   | DELETE | Delete client                                                                                                        | 2.2   |
-| `/api/clients/:id/regenerate-secret` | POST   | Regenerate client secret                                                                                             | 2.2   |
+| `/api/clients`                       | GET    | List OAuth clients (shipped) — scoped by developer, secret never returned                                            | 2.2   |
+| `/api/clients`                       | POST   | Create OAuth client (pending)                                                                                        | 2.2   |
+| `/api/clients/:id`                   | GET    | Get client details (pending)                                                                                         | 2.2   |
+| `/api/clients/:id`                   | PATCH  | Update client (pending)                                                                                              | 2.2   |
+| `/api/clients/:id`                   | DELETE | Delete client (pending)                                                                                              | 2.2   |
+| `/api/clients/:id/regenerate-secret` | POST   | Regenerate client secret (pending)                                                                                  | 2.2   |
 
 ---
 
