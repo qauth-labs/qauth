@@ -215,6 +215,15 @@ function isUniqueConstraintError(error: unknown): boolean;
 
 **Returns**: `true` if the error is a PostgreSQL unique constraint violation (error code `23505`), `false` otherwise.
 
+> **Note — don't read `error.code` directly.** Since drizzle-orm `>=0.30`, the raw
+> `pg` error is wrapped in a `DrizzleQueryError`, so the SQLSTATE `code` and the
+> `constraint`/`detail`/`severity` fields live on `error.cause`, not the top-level
+> error. `isUniqueConstraintError` and `extractConstraintName` walk the `.cause`
+> chain (skipping any unrelated wrappers that carry their own non-SQLSTATE `code`,
+> such as Fastify `FST_ERR_*`) to find the real Postgres error. Always go through
+> these helpers rather than inspecting `error.code` yourself — the value you want
+> may be several links down the cause chain.
+
 **Example**:
 
 ```typescript

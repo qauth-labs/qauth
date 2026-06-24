@@ -9,6 +9,7 @@ The `@qauth-labs/shared-testing` library provides:
 - **Fastify Test Helpers**: Utilities for building and managing test Fastify instances
 - **Supertest Helpers**: Utilities for making HTTP requests in tests
 - **Test Fixtures**: Reusable test data factories for users, realms, and other entities
+- **Docker Integration Testing**: A disposable PostgreSQL testcontainer for repository integration tests
 - **Type-Safe API**: Full TypeScript support
 
 ## Installation
@@ -22,6 +23,9 @@ import {
   createTestRequest,
   createUserFixture,
   createRealmFixture,
+  startPostgresContainer,
+  isDockerAvailable,
+  POSTGRES_IMAGE,
 } from '@qauth-labs/shared-testing';
 ```
 
@@ -232,6 +236,66 @@ const realm = createRealmFixture({
 });
 ```
 
+### Docker Integration Testing
+
+For repository/integration suites that need a real database, the library exposes
+a disposable PostgreSQL [testcontainer](https://testcontainers.com/). It starts a
+throwaway `postgres:18-alpine` container (the same image as docker-compose;
+PostgreSQL 18 is required for native `uuidv7()`), waits until Postgres is genuinely
+ready, and hands you a connection string to run migrations and tests against.
+
+#### `startPostgresContainer(): Promise<StartedPostgres>`
+
+Starts a disposable PostgreSQL 18 container and resolves once it is accepting
+connections. Requires a running Docker daemon. The returned `StartedPostgres` has:
+
+- `connectionString: string` — node-postgres / Drizzle compatible URL
+- `port: number` — the host port mapped to the container's `5432`
+- `stop(): Promise<void>` — stop and remove the container
+
+#### `isDockerAvailable(): Promise<boolean>`
+
+Best-effort probe for a reachable Docker daemon. Call it first so suites can
+`describe.skip` (instead of failing) on CI lanes or sandboxes where Docker is
+absent.
+
+#### `POSTGRES_IMAGE`
+
+The pinned image string (`'postgres:18-alpine'`), exported so callers can assert
+on or reuse it.
+
+**Example:**
+
+```typescript
+import { describe, it, beforeAll, afterAll, expect } from 'vitest';
+import {
+  startPostgresContainer,
+  isDockerAvailable,
+  type StartedPostgres,
+} from '@qauth-labs/shared-testing';
+
+const dockerAvailable = await isDockerAvailable();
+
+describe.skipIf(!dockerAvailable)('OAuth clients repository (integration)', () => {
+  let pg: StartedPostgres;
+
+  beforeAll(async () => {
+    pg = await startPostgresContainer();
+    // Connect with pg/Drizzle and apply migrations against pg.connectionString…
+    // e.g. process.env.DATABASE_URL = pg.connectionString;
+  }, 120_000); // pulling/booting the image can take a while on a cold cache
+
+  afterAll(async () => {
+    await pg.stop();
+  });
+
+  it('persists a row', async () => {
+    // run repository code against pg.connectionString
+    expect(pg.port).toBeGreaterThan(0);
+  });
+});
+```
+
 ## Complete Example
 
 ```typescript
@@ -326,6 +390,22 @@ Creates multiple user fixtures.
 
 Creates a single realm fixture with optional overrides.
 
+### Docker Integration Testing
+
+#### `startPostgresContainer(): Promise<StartedPostgres>`
+
+Starts a disposable `postgres:18-alpine` container for integration tests and
+resolves once it is ready. Returns `{ connectionString, port, stop() }`.
+
+#### `isDockerAvailable(): Promise<boolean>`
+
+Resolves `true` when a Docker daemon is reachable, `false` otherwise (use to skip
+integration suites gracefully).
+
+#### `POSTGRES_IMAGE: string`
+
+The pinned Postgres image (`'postgres:18-alpine'`).
+
 ## Development
 
 ### Running Tests
@@ -354,6 +434,7 @@ This library is used by test suites across the QAuth monorepo. It provides commo
 - `fastify`: Fast HTTP server framework
 - `supertest`: HTTP assertion library
 - `vitest`: Test runner
+- `testcontainers`: Disposable Docker containers for integration tests (Postgres harness)
 
 ## License
 
