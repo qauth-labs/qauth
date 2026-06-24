@@ -1,0 +1,413 @@
+/**
+ * Real-DB repository integration tests (#167).
+ *
+ * Exercises the security-critical atomics against a throwaway Postgres 18
+ * container with the real generated migrations applied — the parts that can
+ * NOT be verified by the mocked-repo route tests:
+ *
+ *   - authorization-code single-use (markUsed CAS — second use fails)
+ *   - refresh-token rotation + family-wide revocation on replay (RFC 9700)
+ *   - consent revoke = soft-delete (row preserved) + upsertGrant scope union
+ *   - realm-scoped unique constraints (users / oauth_clients)
+ *
+ * Requires Docker. When Docker is unavailable the whole suite is skipped
+ * (see the top-level guard) rather than failing the run.
+ *
+ * Tagged via the `*.integration.test.ts` suffix so the fast unit run and the
+ * coverage gate (vitest.config.ts) exclude it — CI runs it via the dedicated
+ * `test-integration` target instead.
+ */
+import { UniqueConstraintError } from '@qauth-labs/shared-errors';
+import { isDockerAvailable } from '@qauth-labs/shared-testing';
+import { eq } from 'drizzle-orm';
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+
+import { oauthConsents, refreshTokens } from '../schema';
+import {
+  createAuthorizationCodesRepository,
+  createOAuthClientsRepository,
+  createOAuthConsentsRepository,
+  createRealmsRepository,
+  createRefreshTokensRepository,
+  createUsersRepository,
+} from './index';
+import { type IntegrationDb, setupIntegrationDb } from './integration-setup';
+
+describe('repository integration (real Postgres)', () => {
+  let ctx: IntegrationDb | undefined;
+  // Resolved in beforeAll (Docker probe is async — avoids top-level await,
+  // which the lib's CommonJS typecheck disallows). When Docker is absent each
+  // test self-skips so non-Docker lanes stay green instead of failing.
+  let dockerUp = false;
+
+  // Container startup is paid once for the whole suite.
+  beforeAll(async () => {
+    dockerUp = await isDockerAvailable();
+    if (!dockerUp) return;
+    ctx = await setupIntegrationDb();
+  }, 180_000);
+
+  afterAll(async () => {
+    await ctx?.teardown();
+  });
+
+  beforeEach(async (testCtx) => {
+    if (!dockerUp || !ctx) {
+      testCtx.skip();
+      return;
+    }
+    await ctx.reset();
+  });
+
+  // Non-null accessor: tests only run past the beforeEach guard when ctx is set.
+  function db() {
+    if (!ctx) throw new Error('integration db not initialised');
+    return ctx;
+  }
+
+  // --- seed helpers --------------------------------------------------------
+
+  async function seedRealm(name = 'default') {
+    const realms = createRealmsRepository(db().database.db);
+    return realms.create({ name });
+  }
+
+  async function seedUser(realmId: string, email = 'user@example.com') {
+    const users = createUsersRepository(db().database.db);
+    return users.create({
+      realmId,
+      email,
+      // The repo derives emailNormalized when omitted, but NewUser types it as
+      // required; pass the lowercased form so the realm-scoped unique index is
+      // exercised deterministically.
+      emailNormalized: email.toLowerCase(),
+      passwordHash: 'argon2-hash',
+      emailVerified: true,
+    });
+  }
+
+  async function seedClient(realmId: string, clientId = 'client-a') {
+    const clients = createOAuthClientsRepository(db().database.db);
+    return clients.create({
+      realmId,
+      clientId,
+      clientSecretHash: 'secret-hash',
+      name: 'Client A',
+      redirectUris: ['https://app.example.com/cb'],
+      scopes: ['read:foo', 'write:foo'],
+      grantTypes: ['authorization_code', 'refresh_token'],
+    });
+  }
+
+  // --- authorization-code single-use (CAS) ---------------------------------
+
+  describe('authorization codes — single-use markUsed CAS', () => {
+    it('marks a code used exactly once; the second use throws NotFoundError', async () => {
+      const realm = await seedRealm();
+      const user = await seedUser(realm.id);
+      const client = await seedClient(realm.id);
+      const codes = createAuthorizationCodesRepository(db().database.db);
+
+      const code = await codes.create({
+        code: 'auth-code-123',
+        oauthClientId: client.id,
+        userId: user.id,
+        redirectUri: 'https://app.example.com/cb',
+        codeChallenge: 'challenge',
+        codeChallengeMethod: 'S256',
+        scopes: ['read:foo'],
+        expiresAt: Date.now() + 60_000,
+      });
+
+      const first = await codes.markUsed(code.id);
+      expect(first.used).toBe(true);
+      expect(first.usedAt).toBeTypeOf('number');
+
+      // Second redemption must fail — the CAS `WHERE used = false` matches no
+      // rows, so the repository surfaces NotFoundError.
+      await expect(codes.markUsed(code.id)).rejects.toThrow();
+
+      // And findByCode (used=false filter) no longer returns it.
+      const after = await codes.findByCode('auth-code-123');
+      expect(after).toBeUndefined();
+    });
+
+    it('only one of two concurrent markUsed calls succeeds (race)', async () => {
+      const realm = await seedRealm();
+      const user = await seedUser(realm.id);
+      const client = await seedClient(realm.id);
+      const codes = createAuthorizationCodesRepository(db().database.db);
+
+      const code = await codes.create({
+        code: 'race-code',
+        oauthClientId: client.id,
+        userId: user.id,
+        redirectUri: 'https://app.example.com/cb',
+        codeChallenge: 'challenge',
+        codeChallengeMethod: 'S256',
+        scopes: ['read:foo'],
+        expiresAt: Date.now() + 60_000,
+      });
+
+      const results = await Promise.allSettled([codes.markUsed(code.id), codes.markUsed(code.id)]);
+      const fulfilled = results.filter((r) => r.status === 'fulfilled');
+      const rejected = results.filter((r) => r.status === 'rejected');
+
+      expect(fulfilled).toHaveLength(1);
+      expect(rejected).toHaveLength(1);
+    });
+
+    it('does not return expired codes from findByCode', async () => {
+      const realm = await seedRealm();
+      const user = await seedUser(realm.id);
+      const client = await seedClient(realm.id);
+      const codes = createAuthorizationCodesRepository(db().database.db);
+
+      await codes.create({
+        code: 'expired-code',
+        oauthClientId: client.id,
+        userId: user.id,
+        redirectUri: 'https://app.example.com/cb',
+        codeChallenge: 'challenge',
+        codeChallengeMethod: 'S256',
+        scopes: ['read:foo'],
+        expiresAt: Date.now() - 1_000,
+      });
+
+      expect(await codes.findByCode('expired-code')).toBeUndefined();
+    });
+  });
+
+  // --- refresh-token rotation + family-wide revocation ----------------------
+
+  describe('refresh tokens — rotation + family-wide revoke on replay', () => {
+    async function seedToken(
+      userId: string,
+      clientId: string,
+      tokenHash: string,
+      familyId: string,
+      overrides: Record<string, unknown> = {}
+    ) {
+      const tokens = createRefreshTokensRepository(db().database.db);
+      return tokens.create({
+        tokenHash,
+        userId,
+        oauthClientId: clientId,
+        familyId,
+        scopes: ['read:foo'],
+        expiresAt: Date.now() + 600_000,
+        ...overrides,
+      });
+    }
+
+    it('revokeFamily revokes every active token sharing a family_id and returns the count', async () => {
+      const realm = await seedRealm();
+      const user = await seedUser(realm.id);
+      const client = await seedClient(realm.id);
+      const tokens = createRefreshTokensRepository(db().database.db);
+
+      const familyId = (
+        await seedToken(user.id, client.id, 'h'.repeat(64), 'fam-1', {
+          familyId: undefined,
+        })
+      ).familyId;
+      // Two more rotations in the same family.
+      await seedToken(user.id, client.id, 'i'.repeat(64), familyId);
+      await seedToken(user.id, client.id, 'j'.repeat(64), familyId);
+      // An unrelated family that must remain untouched.
+      const other = await seedToken(user.id, client.id, 'k'.repeat(64), 'fam-2', {
+        familyId: undefined,
+      });
+
+      const revokedCount = await tokens.revokeFamily(familyId, 'replay_detected');
+      expect(revokedCount).toBe(3);
+
+      // All three in the family are revoked with the reason recorded.
+      const familyRows = await db()
+        .database.db.select()
+        .from(refreshTokens)
+        .where(eq(refreshTokens.familyId, familyId));
+      expect(familyRows).toHaveLength(3);
+      expect(familyRows.every((r) => r.revoked && r.revokedReason === 'replay_detected')).toBe(
+        true
+      );
+
+      // The other family is still active.
+      const otherRow = await db()
+        .database.db.select()
+        .from(refreshTokens)
+        .where(eq(refreshTokens.id, other.id));
+      expect(otherRow[0].revoked).toBe(false);
+    });
+
+    it('revokeFamily preserves the earliest revokedReason (only touches active rows)', async () => {
+      const realm = await seedRealm();
+      const user = await seedUser(realm.id);
+      const client = await seedClient(realm.id);
+      const tokens = createRefreshTokensRepository(db().database.db);
+
+      const familyId = (
+        await seedToken(user.id, client.id, 'a'.repeat(64), 'fam-x', {
+          familyId: undefined,
+        })
+      ).familyId;
+      const rotated = await seedToken(user.id, client.id, 'b'.repeat(64), familyId);
+
+      // The rotated predecessor was already revoked as 'rotated' during normal use.
+      await tokens.revoke(rotated.id, 'rotated');
+
+      const count = await tokens.revokeFamily(familyId, 'replay_detected');
+      // Only the still-active token is flipped (the already-revoked one is skipped).
+      expect(count).toBe(1);
+
+      const rows = await db()
+        .database.db.select()
+        .from(refreshTokens)
+        .where(eq(refreshTokens.familyId, familyId));
+      const reasons = rows.map((r) => r.revokedReason).sort();
+      // The earlier 'rotated' reason is preserved, not overwritten.
+      expect(reasons).toEqual(['replay_detected', 'rotated']);
+    });
+
+    it('findByTokenHash hides revoked/expired tokens but findByTokenHashIncludingRevoked surfaces them', async () => {
+      const realm = await seedRealm();
+      const user = await seedUser(realm.id);
+      const client = await seedClient(realm.id);
+      const tokens = createRefreshTokensRepository(db().database.db);
+
+      const token = await seedToken(user.id, client.id, 'c'.repeat(64), 'fam-y', {
+        familyId: undefined,
+      });
+      await tokens.revoke(token.id, 'rotated');
+
+      // Liveness-filtered lookup hides it (replay must not pass the happy path)...
+      expect(await tokens.findByTokenHash('c'.repeat(64))).toBeUndefined();
+      // ...but the replay-detection lookup still finds the revoked row.
+      const replayRow = await tokens.findByTokenHashIncludingRevoked('c'.repeat(64));
+      expect(replayRow?.id).toBe(token.id);
+      expect(replayRow?.revoked).toBe(true);
+    });
+
+    it('revokeAllForUser revokes only that user’s active tokens (logout-all)', async () => {
+      const realm = await seedRealm();
+      const userA = await seedUser(realm.id, 'a@example.com');
+      const userB = await seedUser(realm.id, 'b@example.com');
+      const client = await seedClient(realm.id);
+      const tokens = createRefreshTokensRepository(db().database.db);
+
+      await seedToken(userA.id, client.id, 'd'.repeat(64), 'fam-a', { familyId: undefined });
+      await seedToken(userB.id, client.id, 'e'.repeat(64), 'fam-b', { familyId: undefined });
+
+      await tokens.revokeAllForUser(userA.id, 'logout');
+
+      expect(await tokens.findByUserId(userA.id)).toHaveLength(0);
+      expect(await tokens.findByUserId(userB.id)).toHaveLength(1);
+    });
+  });
+
+  // --- consent soft-delete + scope union ------------------------------------
+
+  describe('oauth consents — soft-delete revoke + upsertGrant scope union', () => {
+    it('revoke is a soft-delete: the row is preserved with revokedAt set', async () => {
+      const realm = await seedRealm();
+      const user = await seedUser(realm.id);
+      const client = await seedClient(realm.id);
+      const consents = createOAuthConsentsRepository(db().database.db);
+
+      const grant = await consents.upsertGrant(user.id, client.id, realm.id, ['read:foo']);
+      const revoked = await consents.revoke(grant.id);
+      expect(revoked.revokedAt).toBeTypeOf('number');
+
+      // No longer "active"...
+      expect(await consents.findActive(user.id, client.id)).toBeUndefined();
+      // ...but the audit row physically remains in the table.
+      const all = await db()
+        .database.db.select()
+        .from(oauthConsents)
+        .where(eq(oauthConsents.id, grant.id));
+      expect(all).toHaveLength(1);
+      expect(all[0].revokedAt).toBeTypeOf('number');
+    });
+
+    it('upsertGrant unions scopes on the active row instead of dropping any', async () => {
+      const realm = await seedRealm();
+      const user = await seedUser(realm.id);
+      const client = await seedClient(realm.id);
+      const consents = createOAuthConsentsRepository(db().database.db);
+
+      await consents.upsertGrant(user.id, client.id, realm.id, ['read:foo']);
+      const merged = await consents.upsertGrant(user.id, client.id, realm.id, ['write:foo']);
+
+      // Union, sorted — a narrower follow-up grant never removes prior scopes.
+      expect(merged.scopes).toEqual(['read:foo', 'write:foo']);
+
+      // Still a single active row (upsert, not insert).
+      const active = await consents.listActiveForUser(user.id);
+      expect(active).toHaveLength(1);
+    });
+
+    it('a fresh grant after revoke inserts a NEW active row (partial unique index allows it)', async () => {
+      const realm = await seedRealm();
+      const user = await seedUser(realm.id);
+      const client = await seedClient(realm.id);
+      const consents = createOAuthConsentsRepository(db().database.db);
+
+      const first = await consents.upsertGrant(user.id, client.id, realm.id, ['read:foo']);
+      await consents.revoke(first.id);
+
+      // The partial unique index is `WHERE revoked_at IS NULL`, so granting
+      // again does not collide with the revoked row.
+      const second = await consents.upsertGrant(user.id, client.id, realm.id, ['write:foo']);
+      expect(second.id).not.toBe(first.id);
+      expect(second.scopes).toEqual(['write:foo']);
+
+      // Two rows total (one revoked, one active); only one active.
+      const allRows = await db()
+        .database.db.select()
+        .from(oauthConsents)
+        .where(eq(oauthConsents.userId, user.id));
+      expect(allRows).toHaveLength(2);
+      expect(await consents.listActiveForUser(user.id)).toHaveLength(1);
+    });
+  });
+
+  // --- realm-scoped unique constraints --------------------------------------
+
+  describe('realm-scoped unique constraints', () => {
+    it('rejects a duplicate normalized email within the same realm', async () => {
+      const realm = await seedRealm();
+      await seedUser(realm.id, 'dup@example.com');
+
+      await expect(seedUser(realm.id, 'dup@example.com')).rejects.toThrow(UniqueConstraintError);
+    });
+
+    it('allows the same email across DIFFERENT realms (uniqueness is realm-scoped)', async () => {
+      const realmA = await seedRealm('realm-a');
+      const realmB = await seedRealm('realm-b');
+
+      const a = await seedUser(realmA.id, 'same@example.com');
+      const b = await seedUser(realmB.id, 'same@example.com');
+
+      expect(a.realmId).toBe(realmA.id);
+      expect(b.realmId).toBe(realmB.id);
+      expect(a.id).not.toBe(b.id);
+    });
+
+    it('rejects a duplicate client_id within a realm but allows it across realms', async () => {
+      const realmA = await seedRealm('client-realm-a');
+      const realmB = await seedRealm('client-realm-b');
+
+      await seedClient(realmA.id, 'shared-client');
+      // Same client_id in the same realm collides...
+      await expect(seedClient(realmA.id, 'shared-client')).rejects.toThrow(UniqueConstraintError);
+      // ...but is fine in a different realm.
+      const other = await seedClient(realmB.id, 'shared-client');
+      expect(other.realmId).toBe(realmB.id);
+    });
+
+    it('rejects a duplicate realm name', async () => {
+      await seedRealm('unique-realm');
+      await expect(seedRealm('unique-realm')).rejects.toThrow(UniqueConstraintError);
+    });
+  });
+});

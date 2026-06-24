@@ -4,10 +4,11 @@
   "private": true,
   "main": "src/index.ts",
   "dependencies": {
-    "supertest": "catalog:",
-    "fastify": "catalog:"
+    "fastify": "catalog:",
+    "supertest": "catalog:"
   },
   "devDependencies": {
-    "@types/supertest": "catalog:"
+    "@types/supertest": "catalog:",
+    "testcontainers": "^11.14.0"
   }
 }
