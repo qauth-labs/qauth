@@ -2,7 +2,10 @@ import { env } from './config';
 
 export type Result<T> =
   | { ok: true; data: T }
-  | { ok: false; error: { code: string; message: string; details?: unknown; status: number } };
+  | {
+      ok: false;
+      error: { code: string; message: string; details?: string | string[]; status: number };
+    };
 
 interface AuthServerErrorBody {
   error: string;
@@ -89,9 +92,9 @@ async function apiRequest<T>(
       return { ok: true, data };
     }
 
-    let body: AuthServerErrorBody;
+    let parsed: unknown;
     try {
-      body = (await res.json()) as AuthServerErrorBody;
+      parsed = await res.json();
     } catch {
       return {
         ok: false,
@@ -99,7 +102,15 @@ async function apiRequest<T>(
       };
     }
 
-    const details: unknown = body.feedback ?? body.constraint ?? undefined;
+    if (typeof parsed !== 'object' || parsed === null) {
+      return {
+        ok: false,
+        error: { code: 'UNKNOWN', message: `HTTP ${res.status}`, status: res.status },
+      };
+    }
+
+    const body = parsed as AuthServerErrorBody;
+    const details = body.feedback ?? body.constraint ?? undefined;
     return {
       ok: false,
       error: {

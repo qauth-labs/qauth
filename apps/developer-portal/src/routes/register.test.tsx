@@ -33,6 +33,8 @@ vi.mock('@tanstack/react-router', async (importOriginal) => {
 import { currentUserFn } from '../server/actions/current-user';
 import { Route } from './register';
 
+const PageComponent = Route.options.component as NonNullable<typeof Route.options.component>;
+
 describe('register beforeLoad guard', () => {
   it('throws a redirect to /dashboard when user is already authenticated', async () => {
     vi.mocked(currentUserFn).mockResolvedValue({
@@ -54,24 +56,24 @@ describe('register beforeLoad guard', () => {
 
 describe('RegisterPage component', () => {
   it('renders email and password fields in idle state', () => {
-    const html = renderToString(<Route.options.component />);
+    const html = renderToString(<PageComponent />);
     expect(html).toContain('type="email"');
     expect(html).toContain('type="password"');
   });
 
   it('renders the submit button', () => {
-    const html = renderToString(<Route.options.component />);
+    const html = renderToString(<PageComponent />);
     expect(html).toContain('Create account');
   });
 
   it('renders a link to the login page', () => {
-    const html = renderToString(<Route.options.component />);
+    const html = renderToString(<PageComponent />);
     expect(html).toContain('Log in');
   });
 
   it('renders the email field with autocomplete attribute', () => {
     // React 19 preserves camelCase attribute names in renderToString output.
-    const html = renderToString(<Route.options.component />);
+    const html = renderToString(<PageComponent />);
     expect(html).toContain('autoComplete="email"');
   });
 });

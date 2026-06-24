@@ -34,6 +34,8 @@ vi.mock('@tanstack/react-router', async (importOriginal) => {
 import { currentUserFn } from '../server/actions/current-user';
 import { Route } from './_authed';
 
+const PageComponent = Route.options.component as NonNullable<typeof Route.options.component>;
+
 // Route.id is a getter backed by Route._id, which is normally populated by the
 // route tree generator via Route.init(). Set _id directly so that
 // Route.useRouteContext() passes from: '/_authed' to useMatch in tests.
@@ -75,7 +77,7 @@ describe('AuthedLayout component', () => {
   it('renders the portal header with user email and logout button', () => {
     const html = renderToString(
       <RouterContextProvider router={fakeRouter}>
-        <Route.options.component />
+        <PageComponent />
       </RouterContextProvider>
     );
     expect(html).toContain('QAuth Developer Portal');
