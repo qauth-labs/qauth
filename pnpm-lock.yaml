@@ -561,6 +561,28 @@ importers:
         specifier: 'catalog:'
         version: 4.1.9(@types/node@26.0.0)(@vitest/coverage-v8@4.1.9)(@vitest/ui@4.1.9)(jsdom@28.1.0(@noble/hashes@1.8.0))(vite@7.3.5(@types/node@26.0.0)(jiti@2.7.0)(lightningcss@1.31.1)(terser@5.48.0)(tsx@4.21.0)(yaml@2.9.0))
 
+  libs/fastify/plugins/mcp-guard:
+    dependencies:
+      fastify:
+        specifier: 'catalog:'
+        version: 5.8.5
+      fastify-plugin:
+        specifier: 'catalog:'
+        version: 5.1.0
+      jose:
+        specifier: 'catalog:'
+        version: 6.1.3
+    devDependencies:
+      '@vitest/coverage-v8':
+        specifier: 'catalog:'
+        version: 4.1.9(vitest@4.1.9)
+      '@vitest/ui':
+        specifier: 'catalog:'
+        version: 4.1.9(vitest@4.1.9)
+      vitest:
+        specifier: 'catalog:'
+        version: 4.1.9(@types/node@26.0.0)(@vitest/coverage-v8@4.1.9)(@vitest/ui@4.1.9)(jsdom@28.1.0(@noble/hashes@1.8.0))(vite@7.3.5(@types/node@26.0.0)(jiti@2.7.0)(lightningcss@1.31.1)(terser@5.48.0)(tsx@4.21.0)(yaml@2.9.0))
+
   libs/fastify/plugins/password:
     dependencies:
       '@qauth-labs/server-password':
