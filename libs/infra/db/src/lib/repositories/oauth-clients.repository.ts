@@ -4,7 +4,7 @@ import {
   NotFoundError,
   UniqueConstraintError,
 } from '@qauth-labs/shared-errors';
-import { and, eq } from 'drizzle-orm';
+import { and, desc, eq } from 'drizzle-orm';
 
 import type {
   NewOAuthClient,
@@ -100,6 +100,26 @@ export function createOAuthClientsRepository(defaultDb: DbClient): OAuthClientsR
         .where(and(eq(oauthClients.realmId, realmId), eq(oauthClients.clientId, clientId)))
         .limit(1);
       return client;
+    },
+
+    /**
+     * List the OAuth clients owned by a developer, newest first.
+     *
+     * Scoped strictly by `developer_id` so a developer only ever sees their
+     * own clients. Dynamically registered clients (RFC 7591) carry a null
+     * `developer_id` and are excluded by the equality filter.
+     *
+     * @param developerId - Owning developer's user id
+     * @param tx - Optional transaction client
+     * @returns Owned OAuth clients ordered by creation time, newest first
+     */
+    async listByDeveloper(developerId: string, tx?: DbClient): Promise<OAuthClient[]> {
+      const invoker = tx ?? defaultDb;
+      return invoker
+        .select()
+        .from(oauthClients)
+        .where(eq(oauthClients.developerId, developerId))
+        .orderBy(desc(oauthClients.createdAt));
     },
 
     /**

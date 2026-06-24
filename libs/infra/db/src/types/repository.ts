@@ -70,6 +70,14 @@ export interface OAuthClientsRepository extends BaseRepository<
     clientId: string,
     tx?: DbClient
   ): Promise<OAuthClient | undefined>;
+  /**
+   * List the OAuth clients owned by a developer, newest first.
+   *
+   * Ownership is scoped by `oauth_clients.developer_id`. Clients created via
+   * open dynamic registration (RFC 7591) have a null `developer_id` and are
+   * therefore never returned here.
+   */
+  listByDeveloper(developerId: string, tx?: DbClient): Promise<OAuthClient[]>;
 }
 
 /**
