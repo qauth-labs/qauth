@@ -72,10 +72,19 @@ const consentFormSchema = z.object({
 
 type ConsentForm = z.infer<typeof consentFormSchema>;
 
-function buildAuthorizeUrl(query: Record<string, string | undefined>): string {
+function buildAuthorizeUrl(query: Record<string, string | string[] | undefined>): string {
   const u = new URL('/oauth/authorize', 'http://placeholder');
   for (const [k, v] of Object.entries(query)) {
-    if (v != null && v !== '') u.searchParams.set(k, v);
+    if (v == null) continue;
+    // RFC 8707: `resource` may be multi-valued — append one param per entry
+    // so every requested resource survives the login round-trip.
+    if (Array.isArray(v)) {
+      for (const entry of v) {
+        if (entry !== '') u.searchParams.append(k, entry);
+      }
+    } else if (v !== '') {
+      u.searchParams.set(k, v);
+    }
   }
   // Return only the path + query portion; login's return_to rejects absolute.
   return `${u.pathname}?${u.searchParams.toString()}`;
