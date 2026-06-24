@@ -33,6 +33,14 @@ export interface DiscoveryMetadataInput {
   issuer: string;
   /** Supported scopes list; defaults to {@link DEFAULT_SCOPES_SUPPORTED}. */
   scopesSupported?: readonly string[];
+  /**
+   * Whether the server accepts Client ID Metadata Documents (CIMD) —
+   * draft-ietf-oauth-client-id-metadata-document-00 / MCP 2025-11-25.
+   * When true, `client_id_metadata_document_supported: true` is advertised
+   * so MCP clients know they can present an https-URL `client_id`. Defaults
+   * to false here; the route layer passes the env-gated value.
+   */
+  clientIdMetadataDocumentSupported?: boolean;
 }
 
 /**
@@ -72,6 +80,13 @@ export function buildAuthorizationServerMetadata(
     // RFC 8707 §3: advertise Resource Indicator support. Clients that want
     // audience-scoped tokens can rely on this metadata flag.
     resource_indicators_supported: true,
+    // CIMD (draft-ietf-oauth-client-id-metadata-document-00 / MCP
+    // 2025-11-25): advertise that an https-URL `client_id` resolves to a
+    // metadata document fetched on demand. Only emitted when enabled so a
+    // deployment that turns CIMD off does not over-advertise.
+    ...(input.clientIdMetadataDocumentSupported
+      ? { client_id_metadata_document_supported: true }
+      : {}),
   };
 }
 

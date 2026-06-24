@@ -1,6 +1,8 @@
 import type { FastifyInstance } from 'fastify';
 import { describe, expect, it, type Mock, vi } from 'vitest';
 
+const { ssrfSafeGet } = vi.hoisted(() => ({ ssrfSafeGet: vi.fn() }));
+
 vi.mock('../../../config/env', () => ({
   env: {
     AUTHORIZE_RATE_LIMIT: 60,
@@ -11,8 +13,25 @@ vi.mock('../../../config/env', () => ({
     SESSION_COOKIE_TTL: 3600,
     SESSION_COOKIE_SECURE: false,
     DYNAMIC_CLIENT_BADGE_DAYS: 30,
+    // CIMD config (consumed transitively via client-resolution → cimd).
+    CIMD_ENABLED: true,
+    CIMD_TRUST_POLICY: 'accept-any-https',
+    CIMD_TRUSTED_DOMAINS: [],
+    CIMD_CACHE_DEFAULT_TTL: 300,
+    CIMD_CACHE_MAX_TTL: 3600,
+    CIMD_MAX_DOCUMENT_BYTES: 65536,
+    CIMD_FETCH_TIMEOUT_MS: 5000,
+    CIMD_ALLOW_PRIVATE_ADDRESSES: false,
   },
 }));
+
+// Mock only the network layer so CIMD resolution runs against a fixture doc.
+vi.mock('../../helpers/ssrf-safe-fetch', async () => {
+  const actual = await vi.importActual<typeof import('../../helpers/ssrf-safe-fetch')>(
+    '../../helpers/ssrf-safe-fetch'
+  );
+  return { ...actual, ssrfSafeGet };
+});
 
 import authorizeRoute from './authorize';
 
@@ -316,5 +335,126 @@ describe('GET /oauth/authorize — session-cookie integration', () => {
       'https://api.example.com/v1',
       'https://api2.example.com/v1',
     ]);
+  });
+});
+
+describe('GET /oauth/authorize — CIMD (Client ID Metadata Documents)', () => {
+  const CIMD_ID = 'https://app.example.com/client-metadata.json';
+
+  function cimdDoc(redirectUris: string[]) {
+    return {
+      status: 200,
+      body: JSON.stringify({
+        client_id: CIMD_ID,
+        client_name: 'MCP Client',
+        redirect_uris: redirectUris,
+      }),
+      headers: { 'cache-control': 'max-age=600' },
+    };
+  }
+
+  function makeCimdFastify() {
+    const ctx: { handler?: (req: any, reply: any) => Promise<unknown> } = {};
+    const store = new Map<string, string>();
+    const fastify: any = {
+      withTypeProvider: () => ({
+        get: (_url: string, _opts: unknown, handler: any) => {
+          ctx.handler = handler;
+          return fastify;
+        },
+      }),
+      redis: {
+        get: vi.fn(async (k: string) => store.get(k) ?? null),
+        set: vi.fn(async (k: string, v: string) => {
+          store.set(k, v);
+          return 'OK';
+        }),
+      },
+      passwordHasher: { hashPassword: vi.fn(async () => 'argon2id$sentinel') },
+      repositories: {
+        realms: {
+          findByName: vi.fn().mockResolvedValue({ id: 'realm-1', name: 'master', enabled: true }),
+          create: vi.fn(),
+        },
+        oauthClients: {
+          // No pre-registered row → falls through to CIMD resolution.
+          findByClientId: vi.fn().mockResolvedValue(undefined),
+          upsertCimdClient: vi.fn(async (row: any) => ({
+            ...row,
+            id: '22222222-2222-2222-2222-222222222222',
+            audience: null,
+            dynamicRegisteredAt: null,
+          })),
+        },
+        oauthConsents: { findActive: vi.fn() },
+        authorizationCodes: { create: vi.fn().mockResolvedValue({ id: 'code-1' }) },
+        auditLogs: { create: vi.fn().mockResolvedValue(undefined) },
+      },
+      jwtUtils: { extractFromHeader: vi.fn(), verifyAccessToken: vi.fn() },
+      sessionUtils: { getSession: vi.fn() },
+      log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+    };
+    return { fastify: fastify as FastifyInstance, ctx };
+  }
+
+  it('rejects when redirect_uri is not in the CIMD document (mismatch)', async () => {
+    ssrfSafeGet.mockReset();
+    ssrfSafeGet.mockResolvedValue(cimdDoc(['https://app.example.com/other-cb']));
+
+    const { fastify, ctx } = makeCimdFastify();
+    await authorizeRoute(fastify);
+
+    const { reply } = createReply();
+    await expect(
+      ctx.handler!(
+        {
+          query: {
+            response_type: 'code',
+            client_id: CIMD_ID,
+            redirect_uri: 'https://app.example.com/callback', // not in the doc
+            code_challenge: 'A'.repeat(43),
+            code_challenge_method: 'S256',
+            state: 'xyz',
+          },
+          url: `/oauth/authorize?response_type=code&client_id=${encodeURIComponent(CIMD_ID)}`,
+          headers: {},
+          ip: '127.0.0.1',
+        },
+        reply
+      )
+    ).rejects.toThrow(/redirect_uri/);
+  });
+
+  it('happy path: resolves CIMD client, materialises it, and proceeds to login/consent', async () => {
+    ssrfSafeGet.mockReset();
+    ssrfSafeGet.mockResolvedValue(cimdDoc(['https://app.example.com/callback']));
+
+    const { fastify, ctx } = makeCimdFastify();
+    await authorizeRoute(fastify);
+    (fastify.jwtUtils.extractFromHeader as unknown as Mock).mockReturnValue(null);
+    (fastify.sessionUtils.getSession as unknown as Mock).mockResolvedValue(null);
+
+    const { reply, state } = createReply();
+    await ctx.handler!(
+      {
+        query: {
+          response_type: 'code',
+          client_id: CIMD_ID,
+          redirect_uri: 'https://app.example.com/callback', // in the doc
+          code_challenge: 'A'.repeat(43),
+          code_challenge_method: 'S256',
+          state: 'xyz',
+        },
+        url: `/oauth/authorize?response_type=code&client_id=${encodeURIComponent(CIMD_ID)}`,
+        headers: {},
+        ip: '127.0.0.1',
+      },
+      reply
+    );
+
+    // The redirect_uri matched the document → resolution + materialisation
+    // succeeded, and with no session the flow proceeds to login.
+    expect(fastify.repositories.oauthClients.upsertCimdClient).toHaveBeenCalledOnce();
+    expect(state.redirected).toContain('/ui/login?return_to=');
   });
 });

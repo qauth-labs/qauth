@@ -114,3 +114,37 @@ const SCOPE_DESCRIPTIONS: Record<string, string> = {
 export function describeScope(scope: string): string {
   return SCOPE_DESCRIPTIONS[scope] ?? scope;
 }
+
+const LOOPBACK_HOSTS = new Set(['127.0.0.1', '::1', '[::1]', 'localhost']);
+
+/**
+ * Extract the hostname of a redirect_uri for display at the consent screen.
+ * CIMD §6 calls out localhost-redirect impersonation: a malicious client can
+ * present a `client_id` document whose redirect_uri points at the user's own
+ * machine to intercept the code. Surfacing the destination host lets the
+ * user notice an unexpected target. Returns the raw value if it can't be
+ * parsed (so the screen still shows *something* rather than hiding it).
+ */
+export function redirectHost(redirectUri: string): string {
+  try {
+    return new URL(redirectUri).host || redirectUri;
+  } catch {
+    return redirectUri;
+  }
+}
+
+/**
+ * True when the redirect_uri targets a loopback / localhost address. The
+ * consent screen warns on these because, for a client the AS never
+ * pre-registered (CIMD), a localhost redirect means the authorization code
+ * is delivered to whatever is listening on the user's own machine — a known
+ * impersonation vector (CIMD §6, "localhost-redirect impersonation").
+ */
+export function isLoopbackRedirect(redirectUri: string): boolean {
+  try {
+    const host = new URL(redirectUri).hostname.toLowerCase();
+    return LOOPBACK_HOSTS.has(host);
+  } catch {
+    return false;
+  }
+}

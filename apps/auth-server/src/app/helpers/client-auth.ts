@@ -2,6 +2,8 @@ import { InvalidClientError, InvalidScopeError } from '@qauth-labs/shared-errors
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 
+import { resolveClient } from './client-resolution';
+
 /** Maximum length of a single audience URI (defensive cap, RFC 8707 leaves this open). */
 const AUDIENCE_ENTRY_MAX_LENGTH = 256;
 /** Maximum number of audience entries per client (defensive cap to bound JWT size). */
@@ -162,13 +164,16 @@ export async function authenticateClientPublicOrConfidential(
     return authenticateClient(fastify, realmId, creds);
   }
 
-  // Public-client path: only `client_id` supplied. Resolve the client
-  // record and verify it's registered as public. Confidential clients
-  // that omit credentials get `invalid_client` (RFC 6749 §5.2).
+  // Public-client path: only `client_id` supplied. Resolve via the shared
+  // pre-registered → CIMD chain. A CIMD client (https-URL client_id) is
+  // materialised here too, so a direct token call whose authorize-time row
+  // was never created (or whose document cache expired) still resolves.
+  // CIMD clients are public by construction (token_endpoint_auth_method:
+  // 'none'), so they satisfy the public-client requirement below.
   if (!bodyClientId) {
     throw new InvalidClientError();
   }
-  const client = await fastify.repositories.oauthClients.findByClientId(realmId, bodyClientId);
+  const { client } = await resolveClient(fastify, realmId, bodyClientId);
   if (!client || !client.enabled) {
     throw new InvalidClientError();
   }
@@ -176,7 +181,7 @@ export async function authenticateClientPublicOrConfidential(
     // Confidential client missing its secret.
     throw new InvalidClientError();
   }
-  return client;
+  return client as unknown as OAuthClientLike;
 }
 
 /**
