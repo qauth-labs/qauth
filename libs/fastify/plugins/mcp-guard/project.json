@@ -1,0 +1,8 @@
+{
+  "name": "mcp-guard",
+  "$schema": "../../../../node_modules/nx/schemas/project-schema.json",
+  "sourceRoot": "libs/fastify/plugins/mcp-guard/src",
+  "projectType": "library",
+  "tags": ["scope:fastify", "type:mcp-guard"],
+  "// targets": "to see all targets run: nx show project mcp-guard --web"
+}

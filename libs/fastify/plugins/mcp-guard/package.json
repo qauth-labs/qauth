@@ -1,0 +1,16 @@
+{
+  "name": "@qauth-labs/mcp-guard",
+  "version": "0.0.0",
+  "private": true,
+  "main": "src/index.ts",
+  "dependencies": {
+    "fastify": "catalog:",
+    "fastify-plugin": "catalog:",
+    "jose": "catalog:"
+  },
+  "devDependencies": {
+    "@vitest/coverage-v8": "catalog:",
+    "@vitest/ui": "catalog:",
+    "vitest": "catalog:"
+  }
+}
