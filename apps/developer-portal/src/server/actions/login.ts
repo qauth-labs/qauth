@@ -28,4 +28,6 @@ export async function loginHandler({
   return { ok: true, data: { expiresAt } };
 }
 
-export const loginFn = createServerFn({ method: 'POST' }).handler(loginHandler);
+export const loginFn = createServerFn({ method: 'POST' })
+  .inputValidator((data: { email: string; password: string }) => data)
+  .handler(loginHandler);

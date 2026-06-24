@@ -10,4 +10,6 @@ export async function registerHandler({
   return authServerClient.register(data.email, data.password);
 }
 
-export const registerFn = createServerFn({ method: 'POST' }).handler(registerHandler);
+export const registerFn = createServerFn({ method: 'POST' })
+  .inputValidator((data: { email: string; password: string }) => data)
+  .handler(registerHandler);

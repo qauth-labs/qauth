@@ -10,6 +10,6 @@ export async function resendVerificationHandler({
   return authServerClient.resendVerification(data.email);
 }
 
-export const resendVerificationFn = createServerFn({ method: 'POST' }).handler(
-  resendVerificationHandler
-);
+export const resendVerificationFn = createServerFn({ method: 'POST' })
+  .inputValidator((data: { email: string }) => data)
+  .handler(resendVerificationHandler);

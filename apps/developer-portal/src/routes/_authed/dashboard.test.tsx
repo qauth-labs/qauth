@@ -4,6 +4,8 @@ import { describe, expect, it } from 'vitest';
 
 import { Route } from './dashboard';
 
+const PageComponent = Route.options.component as NonNullable<typeof Route.options.component>;
+
 // Route.id is a getter backed by Route._id, which is normally populated by the
 // route tree generator via Route.init(). Set _id directly so that
 // Route.useRouteContext() passes from: '/_authed/dashboard' to useMatch in tests.
@@ -33,7 +35,7 @@ describe('DashboardPage component', () => {
   it('greets the user by email', () => {
     const html = renderToString(
       <RouterContextProvider router={fakeRouter}>
-        <Route.options.component />
+        <PageComponent />
       </RouterContextProvider>
     );
     expect(html).toContain('dev@example.com');
@@ -43,7 +45,7 @@ describe('DashboardPage component', () => {
   it('renders the OAuth Clients placeholder card', () => {
     const html = renderToString(
       <RouterContextProvider router={fakeRouter}>
-        <Route.options.component />
+        <PageComponent />
       </RouterContextProvider>
     );
     expect(html).toContain('OAuth Clients');
@@ -53,7 +55,7 @@ describe('DashboardPage component', () => {
   it('renders the API Keys placeholder card', () => {
     const html = renderToString(
       <RouterContextProvider router={fakeRouter}>
-        <Route.options.component />
+        <PageComponent />
       </RouterContextProvider>
     );
     expect(html).toContain('API Keys');

@@ -10,4 +10,6 @@ export async function verifyHandler({
   return authServerClient.verifyEmail(data.token);
 }
 
-export const verifyFn = createServerFn({ method: 'POST' }).handler(verifyHandler);
+export const verifyFn = createServerFn({ method: 'POST' })
+  .inputValidator((data: { token: string }) => data)
+  .handler(verifyHandler);

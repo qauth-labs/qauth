@@ -2,7 +2,10 @@ import { env } from './config';
 
 export type Result<T> =
   | { ok: true; data: T }
-  | { ok: false; error: { code: string; message: string; details?: unknown; status: number } };
+  | {
+      ok: false;
+      error: { code: string; message: string; details?: string | string[]; status: number };
+    };
 
 interface AuthServerErrorBody {
   error: string;
@@ -99,7 +102,7 @@ async function apiRequest<T>(
       };
     }
 
-    const details: unknown = body.feedback ?? body.constraint ?? undefined;
+    const details = body.feedback ?? body.constraint ?? undefined;
     return {
       ok: false,
       error: {

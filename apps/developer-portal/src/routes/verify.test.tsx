@@ -20,6 +20,8 @@ vi.mock('@tanstack/react-router', async (importOriginal) => {
 
 import { Route } from './verify';
 
+const PageComponent = Route.options.component as NonNullable<typeof Route.options.component>;
+
 const VALID_TOKEN = 'a'.repeat(64);
 
 // Route.id is a getter backed by Route._id, which is normally populated by the
@@ -70,7 +72,7 @@ describe('VerifyPage component', () => {
     // starts in the "pending" stage.
     const html = renderToString(
       <RouterContextProvider router={fakeRouter}>
-        <Route.options.component />
+        <PageComponent />
       </RouterContextProvider>
     );
     expect(html).toContain('Verifying your email');
