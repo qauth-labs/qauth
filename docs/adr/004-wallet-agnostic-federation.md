@@ -4,6 +4,8 @@
 **Date:** 2026-03-11
 **Authors:** QAuth Team
 
+> **Implementation status (2026-06-24):** Accepted as design; not implemented. Deferred per [ADR-007](./007-mcp-first-positioning.md) to the long-term platform; gated on the [ADR-002](./002-identifier-abstraction.md) migration.
+
 ## Context
 
 The eIDAS 2.0 regulation (EU 2024/1183) requires EU member states to provide EUDI-compliant digital identity wallets by December 2026. By December 2027, regulated EU businesses across banking, healthcare, transport, energy, and telecommunications must accept EUDI Wallet authentication. The EU's Web 4.0 strategy (COM(2023) 442) identifies portable, user-controlled digital identity as foundational infrastructure.

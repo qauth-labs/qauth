@@ -151,7 +151,7 @@ docker exec -it qauth-postgres psql -U qauth -d qauth
 
 ### Redis
 
-- **Image**: `redis:7-alpine`
+- **Image**: `redis:7-alpine` (Redis 7)
 - **Port**: 6379 (mapped to host)
 
 Connect via redis-cli:
@@ -259,6 +259,23 @@ See `.env.docker.example` for all available variables. Key variables:
 | `LOG_LEVEL`       | No       | `info` (default); use `debug` for development      |
 
 For **development** with `docker-compose.dev.yml`, set `NODE_ENV=development` and `LOG_LEVEL=debug` in `.env`.
+
+### Client ID Metadata Documents (CIMD)
+
+CIMD is the recommended MCP client-registration mechanism (see [ADR-007](./adr/007-mcp-first-positioning.md)). When a `client_id` is an HTTPS URL, the auth-server fetches and validates the client's metadata document on demand instead of persisting a registration record. All settings have safe defaults — none are required to run.
+
+| Variable                       | Required | Default              | Description                                                                                                   |
+| ------------------------------ | -------- | -------------------- | ------------------------------------------------------------------------------------------------------------- |
+| `CIMD_ENABLED`                 | No       | `true`               | Master switch. When `false`, URL-formatted `client_id`s are rejected with `invalid_client`.                   |
+| `CIMD_TRUST_POLICY`            | No       | `accept-any-https`   | `accept-any-https` (any validating HTTPS document) or `allowlist` (only hosts in `CIMD_TRUSTED_DOMAINS`).     |
+| `CIMD_TRUSTED_DOMAINS`         | No       | _(empty)_            | Comma/space-separated host allowlist for `allowlist` policy. A leading `*.` permits subdomains.               |
+| `CIMD_CACHE_DEFAULT_TTL`       | No       | `300`                | Cache TTL (seconds) when the document carries no usable `Cache-Control`/`Expires`.                            |
+| `CIMD_CACHE_MAX_TTL`           | No       | `3600`               | Hard upper bound (seconds) on any cached document, regardless of upstream `max-age`.                          |
+| `CIMD_MAX_DOCUMENT_BYTES`      | No       | `65536`              | Maximum document size in bytes.                                                                               |
+| `CIMD_FETCH_TIMEOUT_MS`        | No       | `5000`               | Per-fetch timeout in milliseconds.                                                                            |
+| `CIMD_ALLOW_PRIVATE_ADDRESSES` | No       | `false`              | Allow fetches to non-public IPs (loopback/private/link-local). **Keep `false` in production** — it disables the SSRF guard; for dev/integration harnesses only. |
+
+> **Note:** `.env.docker.example` does not yet list the `CIMD_*` variables. They are optional and default-safe, so the stack runs without them; add them to `.env` only to override the defaults above.
 
 ## Troubleshooting
 
