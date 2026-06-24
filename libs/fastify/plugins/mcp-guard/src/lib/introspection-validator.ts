@@ -15,7 +15,7 @@
  */
 
 import type { FetchLike, IntrospectionClientCredentials, ValidatedToken } from '../types';
-import { InvalidTokenError } from './errors';
+import { IntrospectionError, InvalidTokenError } from './errors';
 import { parseScopes } from './scope';
 
 export interface IntrospectionValidatorOptions {
@@ -59,9 +59,11 @@ export class IntrospectionValidator {
   constructor(options: IntrospectionValidatorOptions) {
     this.endpoint = options.endpoint;
     this.audience = options.audience;
-    const basic = Buffer.from(`${options.client.clientId}:${options.client.clientSecret}`).toString(
-      'base64'
-    );
+    // `btoa` is a standard global in every modern runtime (Node 16+, Deno,
+    // Bun, Cloudflare Workers) — unlike the Node-only `Buffer` — so the
+    // framework-agnostic core stays portable. Client credentials are ASCII, so
+    // `btoa`'s latin1-only limitation does not apply here.
+    const basic = btoa(`${options.client.clientId}:${options.client.clientSecret}`);
     this.authorization = `Basic ${basic}`;
     this.fetchImpl = options.fetch ?? (globalThis.fetch as unknown as FetchLike);
   }
@@ -70,9 +72,19 @@ export class IntrospectionValidator {
    * Introspect a token and, if active and audience-bound, return normalised
    * claims.
    *
-   * @throws {InvalidTokenError} when the token is inactive, the endpoint is
-   * unreachable / errors, or `aud` does not include this resource. Reasons are
-   * short and non-sensitive; the token is never echoed.
+   * Two error classes, deliberately distinct (RFC 6750 §3.1 semantics):
+   *
+   * @throws {InvalidTokenError} when the AS authoritatively says the *token* is
+   * unusable — inactive (revoked/expired/unknown) or bound to a different
+   * audience. Maps to a 401 `invalid_token` Bearer challenge.
+   * @throws {IntrospectionError} when the *introspection call itself* fails for
+   * a reason that is not the token's fault — the AS is unreachable, returns a
+   * non-2xx (e.g. THIS RS's introspection credentials are misconfigured → 401
+   * from the AS to *us*), or sends a malformed body. This is an operational /
+   * server-side fault and must surface as a 5xx, not a 401 that wrongly blames
+   * the client's token and can trigger pointless refresh loops.
+   *
+   * Reasons are short and non-sensitive; the token is never echoed.
    */
   async validate(token: string): Promise<ValidatedToken> {
     let response: Awaited<ReturnType<FetchLike>>;
@@ -90,22 +102,30 @@ export class IntrospectionValidator {
           token_type_hint: 'access_token',
         }).toString(),
       });
-    } catch {
-      // Network / transport failure. Fail closed; do not leak details.
-      throw new InvalidTokenError('introspection endpoint unreachable');
+    } catch (err) {
+      // Network / transport failure: the AS could not be reached. This is an
+      // RS-side operational fault, not an invalid token — surface as 5xx.
+      throw new IntrospectionError(
+        `introspection endpoint unreachable: ${err instanceof Error ? err.message : String(err)}`
+      );
     }
 
     if (!response.ok) {
-      // 401 here means OUR introspection client is misconfigured; still fail
-      // closed for the bearer, but the reason is generic to the caller.
-      throw new InvalidTokenError('introspection request failed');
+      // A non-2xx from the introspection endpoint means OUR request was
+      // rejected — typically a 401 because this RS's introspection client
+      // credentials are misconfigured, or a 5xx from the AS. Either way it is
+      // an operational fault on the server side, NOT a verdict that the
+      // bearer's token is invalid. Do not collapse it into 401 invalid_token.
+      throw new IntrospectionError(`introspection request failed with status ${response.status}`);
     }
 
     let body: IntrospectionResponse;
     try {
       body = (await response.json()) as IntrospectionResponse;
     } catch {
-      throw new InvalidTokenError('malformed introspection response');
+      // A 2xx with an unparseable body is a broken/misbehaving AS — again an
+      // operational fault rather than an invalid token.
+      throw new IntrospectionError('malformed introspection response');
     }
 
     if (!body.active) {

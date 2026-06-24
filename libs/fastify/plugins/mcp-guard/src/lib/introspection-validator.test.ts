@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import type { FetchLike } from '../types';
-import { InvalidTokenError } from './errors';
+import { IntrospectionError, InvalidTokenError } from './errors';
 import { IntrospectionValidator } from './introspection-validator';
 
 const ENDPOINT = 'https://auth.example.com/oauth/introspect';
@@ -69,7 +69,7 @@ describe('IntrospectionValidator', () => {
     expect(seenInput).toBe(ENDPOINT);
     expect(seenInit['method']).toBe('POST');
     const headers = seenInit['headers'] as Record<string, string>;
-    const expectedBasic = `Basic ${Buffer.from('rs-introspect:s3cr3t').toString('base64')}`;
+    const expectedBasic = `Basic ${btoa('rs-introspect:s3cr3t')}`;
     expect(headers['authorization']).toBe(expectedBasic);
     expect(headers['content-type']).toBe('application/x-www-form-urlencoded');
     expect(seenInit['body']).toContain('token=opaque-token');
@@ -96,16 +96,44 @@ describe('IntrospectionValidator', () => {
     expect(result.audience).toEqual(['https://other.example.com', RESOURCE]);
   });
 
-  it('fails closed when the endpoint returns a non-2xx (e.g. our client misconfigured)', async () => {
+  it('surfaces a non-2xx as an operational IntrospectionError, NOT invalid_token (e.g. our client misconfigured → AS 401s us)', async () => {
     const validator = makeValidator(fakeFetch({ ok: false, status: 401, body: {} }));
-    await expect(validator.validate('x')).rejects.toBeInstanceOf(InvalidTokenError);
+    // A non-2xx is an RS/AS-side fault; it must not be reported as the
+    // *bearer's* token being invalid (that would 401 the client and can drive
+    // futile refresh loops). It is operational → propagates as a 5xx.
+    await expect(validator.validate('x')).rejects.toBeInstanceOf(IntrospectionError);
+    await expect(validator.validate('x')).rejects.not.toBeInstanceOf(InvalidTokenError);
+    await expect(validator.validate('x')).rejects.toThrow(/failed with status 401/i);
   });
 
-  it('fails closed on transport error', async () => {
+  it('surfaces a transport failure as an operational IntrospectionError, NOT invalid_token', async () => {
     const throwing: FetchLike = vi.fn(async () => {
       throw new Error('ECONNREFUSED');
     }) as unknown as FetchLike;
     const validator = makeValidator(throwing);
+    await expect(validator.validate('x')).rejects.toBeInstanceOf(IntrospectionError);
+    await expect(validator.validate('x')).rejects.not.toBeInstanceOf(InvalidTokenError);
     await expect(validator.validate('x')).rejects.toThrow(/unreachable/i);
+  });
+
+  it('surfaces a malformed (2xx) introspection body as an operational IntrospectionError', async () => {
+    // A 2xx whose body cannot be parsed is a broken/misbehaving AS — an
+    // operational fault, not an invalid token.
+    const bespoke: FetchLike = (async () => ({
+      ok: true,
+      status: 200,
+      json: async () => {
+        throw new Error('not json');
+      },
+      text: async () => 'not json',
+    })) as FetchLike;
+    const validator = makeValidator(bespoke);
+    await expect(validator.validate('x')).rejects.toBeInstanceOf(IntrospectionError);
+    await expect(validator.validate('x')).rejects.toThrow(/malformed/i);
+  });
+
+  it('still rejects an inactive token as InvalidTokenError (token-state fault → 401)', async () => {
+    const validator = makeValidator(fakeFetch({ body: { active: false } }));
+    await expect(validator.validate('x')).rejects.toBeInstanceOf(InvalidTokenError);
   });
 });

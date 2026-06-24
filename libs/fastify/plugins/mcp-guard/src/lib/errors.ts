@@ -108,3 +108,30 @@ export class McpGuardConfigError extends Error {
     }
   }
 }
+
+/**
+ * An operational failure while validating a token *that is not the token's
+ * fault*: the authorization server was unreachable, returned a non-2xx (e.g.
+ * because THIS resource server's introspection credentials are misconfigured),
+ * or sent a malformed response.
+ *
+ * Crucially this is **not** an {@link McpGuardError}, so it does not produce a
+ * 401 `invalid_token` Bearer challenge. Blaming the client's token for an
+ * RS/AS-side fault is wrong HTTP semantics (RFC 6750 §3.1) and can drive
+ * clients into futile token-refresh loops (OWASP A10, mishandling exceptional
+ * conditions). It propagates to the host's error handler and should surface as
+ * a 5xx so operators see — and clients are told — that the failure is
+ * server-side, not a bad credential.
+ *
+ * The message is short and non-sensitive; the token is never echoed.
+ */
+export class IntrospectionError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'IntrospectionError';
+    Object.setPrototypeOf(this, IntrospectionError.prototype);
+    if (Error.captureStackTrace) {
+      Error.captureStackTrace(this, IntrospectionError);
+    }
+  }
+}

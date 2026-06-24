@@ -68,6 +68,21 @@ export interface McpGuardPluginOptions extends McpGuardConfig {
 const PLUGIN_NAME = '@qauth-labs/mcp-guard';
 
 /**
+ * Marks, on the instance the plugin attaches to, that the bare
+ * `/.well-known/oauth-protected-resource` route has already been claimed by
+ * some `mcpGuard` registration. Used so that registering several guards (for
+ * different path-bearing resources) on one instance does not crash with
+ * `FST_ERR_DUPLICATED_ROUTE` when more than one of them wants to also expose
+ * the bare prefix. A `Symbol.for(...)` keeps the flag stable across module
+ * copies (monorepo / bundler duplication).
+ */
+const BARE_METADATA_CLAIMED = Symbol.for('@qauth-labs/mcp-guard.bare-metadata-claimed');
+
+interface FlaggedInstance {
+  [BARE_METADATA_CLAIMED]?: boolean;
+}
+
+/**
  * Send the RFC 6750 §3.1 response for a guard error, including the
  * `WWW-Authenticate` challenge with the `resource_metadata` pointer.
  */
@@ -92,32 +107,13 @@ const plugin: FastifyPluginAsync<McpGuardPluginOptions> = async (
   const guard = new McpGuard(options);
   const cacheControl = options.metadataCacheControl ?? 'public, max-age=3600';
 
-  fastify.decorate('mcpGuard', guard);
-
-  // --- RFC 9728 Protected Resource Metadata ---------------------------------
-  const metadataHandler = async (_request: FastifyRequest, reply: FastifyReply) => {
-    reply
-      .header('Cache-Control', cacheControl)
-      .header('Content-Type', 'application/json; charset=utf-8');
-    return reply.send(guard.getProtectedResourceMetadata());
-  };
-
-  const metadataPath = guard.getMetadataPath();
-  fastify.get(metadataPath, metadataHandler);
-  // For a path-bearing resource the canonical document lives at a nested
-  // well-known path; also expose the bare prefix so a client that probes the
-  // origin root can still discover the AS.
-  if (metadataPath !== PRM_WELL_KNOWN_PREFIX) {
-    fastify.get(PRM_WELL_KNOWN_PREFIX, metadataHandler);
-  }
-
   // --- Guard preHandlers ----------------------------------------------------
   // The preHandlers reply with the Bearer challenge directly (returning the
   // reply halts the lifecycle) rather than throwing, so the plugin is fully
   // self-contained and never has to take over the host app's error handler.
   // `McpGuardError`s that still escape into the host's error path (e.g. thrown
   // deep inside a route handler) can be mapped with the exported
-  // `mcpGuardErrorHandler` / `sendBearerChallenge` helpers.
+  // `sendBearerChallenge` helper.
   const requireBearer: preHandlerHookHandler = async (request, reply) => {
     try {
       request.tokenClaims = await guard.authenticate(request.headers.authorization);
@@ -128,7 +124,6 @@ const plugin: FastifyPluginAsync<McpGuardPluginOptions> = async (
       throw error;
     }
   };
-  fastify.decorate('requireBearer', requireBearer);
 
   const requireScopes = (...scopes: string[]): preHandlerHookHandler => {
     return async (request, reply) => {
@@ -148,7 +143,66 @@ const plugin: FastifyPluginAsync<McpGuardPluginOptions> = async (
       }
     };
   };
-  fastify.decorate('requireScopes', requireScopes);
+
+  // --- Convenience decorators -----------------------------------------------
+  // The plugin is wrapped with `fastify-plugin` (no encapsulation) so these
+  // are visible to the parent app and its routes — the documented single-guard
+  // ergonomics (`app.requireBearer`, `app.requireScopes(...)`).
+  //
+  // A host may, however, register the plugin more than once on the same
+  // instance to protect several path-bearing resources. The decorator names
+  // are shared, so a second `decorate` would throw
+  // `FST_ERR_DEC_ALREADY_PRESENT` and crash boot. We therefore decorate only
+  // once and warn on subsequent registrations: the shared `mcpGuard` /
+  // `requireBearer` / `requireScopes` reflect the FIRST guard. Additional
+  // guards remain fully usable per-route via the closures returned from this
+  // registration (and via the per-scope `mcpGuard` when registered inside an
+  // encapsulated child context). Each resource still gets its own PRM route
+  // (paths differ), so discovery is correct for every resource.
+  if (!fastify.hasDecorator('mcpGuard')) {
+    fastify.decorate('mcpGuard', guard);
+    fastify.decorate('requireBearer', requireBearer);
+    fastify.decorate('requireScopes', requireScopes);
+  } else {
+    fastify.log.warn(
+      `mcp-guard: another guard is already registered on this instance; the shared ` +
+        `\`mcpGuard\`/\`requireBearer\`/\`requireScopes\` decorators continue to reference the ` +
+        `first guard. Wire this guard (resource=${guard.resource}) explicitly per route, or ` +
+        `register it in an encapsulated child scope, to protect multiple resources on one instance.`
+    );
+  }
+
+  // --- RFC 9728 Protected Resource Metadata ---------------------------------
+  const metadataHandler = async (_request: FastifyRequest, reply: FastifyReply) => {
+    reply
+      .header('Cache-Control', cacheControl)
+      .header('Content-Type', 'application/json; charset=utf-8');
+    return reply.send(guard.getProtectedResourceMetadata());
+  };
+
+  // The per-resource document path is unique per resource (the resource's own
+  // path is nested under the well-known prefix), so this never collides.
+  const metadataPath = guard.getMetadataPath();
+  fastify.get(metadataPath, metadataHandler);
+
+  // For a path-bearing resource the canonical document lives at a nested
+  // well-known path; also expose the bare prefix so a client that probes the
+  // origin root can still discover an AS. The bare prefix is a single, shared
+  // path: claim it at most once across all guards on this instance, otherwise
+  // a second path-bearing guard would crash boot with FST_ERR_DUPLICATED_ROUTE.
+  if (metadataPath !== PRM_WELL_KNOWN_PREFIX) {
+    const flagged = fastify as unknown as FlaggedInstance;
+    if (!flagged[BARE_METADATA_CLAIMED]) {
+      flagged[BARE_METADATA_CLAIMED] = true;
+      fastify.get(PRM_WELL_KNOWN_PREFIX, metadataHandler);
+    } else {
+      fastify.log.debug(
+        'mcp-guard: bare %s already served by an earlier guard; not re-registering for resource=%s',
+        PRM_WELL_KNOWN_PREFIX,
+        guard.resource
+      );
+    }
+  }
 
   fastify.log.debug('mcp-guard plugin registered (resource=%s)', guard.resource);
 };

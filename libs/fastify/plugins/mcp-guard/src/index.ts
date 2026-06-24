@@ -27,6 +27,7 @@ export { extractBearerToken, McpGuard } from './lib/core';
 export {
   type BearerErrorCode,
   InsufficientScopeError,
+  IntrospectionError,
   InvalidTokenError,
   McpGuardConfigError,
   McpGuardError,

@@ -189,3 +189,84 @@ describe('mcp-guard Fastify plugin — path-bearing resource', () => {
     }
   });
 });
+
+describe('mcp-guard Fastify plugin — multiple resources on one instance', () => {
+  it('boots without colliding on the decorator or the bare PRM prefix, and serves each resource its own metadata', async () => {
+    const multi = Fastify();
+    // Two path-bearing resources on one origin — the scenario that previously
+    // crashed boot (FST_ERR_DEC_ALREADY_PRESENT, then FST_ERR_DUPLICATED_ROUTE).
+    await multi.register(mcpGuardPlugin, {
+      resource: 'https://host.example.com/mcp/a',
+      authorizationServer: ISSUER,
+      fetch: jwksFetch({ keys: [publicJwk] }),
+    });
+    await multi.register(mcpGuardPlugin, {
+      resource: 'https://host.example.com/mcp/b',
+      authorizationServer: ISSUER,
+      fetch: jwksFetch({ keys: [publicJwk] }),
+    });
+    // Must not throw on ready().
+    await expect(multi.ready()).resolves.toBeDefined();
+    try {
+      const aRes = await multi.inject({
+        method: 'GET',
+        url: '/.well-known/oauth-protected-resource/mcp/a',
+      });
+      expect(aRes.statusCode).toBe(200);
+      expect(aRes.json().resource).toBe('https://host.example.com/mcp/a');
+
+      const bRes = await multi.inject({
+        method: 'GET',
+        url: '/.well-known/oauth-protected-resource/mcp/b',
+      });
+      expect(bRes.statusCode).toBe(200);
+      expect(bRes.json().resource).toBe('https://host.example.com/mcp/b');
+
+      // The bare prefix is claimed once (by the first guard) and still serves.
+      const bareRes = await multi.inject({
+        method: 'GET',
+        url: '/.well-known/oauth-protected-resource',
+      });
+      expect(bareRes.statusCode).toBe(200);
+    } finally {
+      await multi.close();
+    }
+  });
+});
+
+describe('mcp-guard Fastify plugin — operational introspection failure', () => {
+  it('surfaces a misconfigured-introspection (non-2xx) failure as 5xx, not 401 invalid_token', async () => {
+    const opApp = Fastify();
+    // The AS rejects OUR introspection client credentials with 401 — an
+    // RS-side misconfiguration, not a bad bearer. The guard must not relabel
+    // this as the client's token being invalid.
+    const introspectFetch = (async () => ({
+      ok: false,
+      status: 401,
+      json: async () => ({}),
+      text: async () => '{}',
+    })) as unknown as never;
+    await opApp.register(mcpGuardPlugin, {
+      resource: RESOURCE,
+      authorizationServer: ISSUER,
+      validationMode: 'introspection',
+      introspectionClient: { clientId: 'rs', clientSecret: 'bad' },
+      fetch: introspectFetch,
+    });
+    opApp.get('/data', { preHandler: opApp.requireBearer }, async () => ({ ok: true }));
+    await opApp.ready();
+    try {
+      const res = await opApp.inject({
+        method: 'GET',
+        url: '/data',
+        headers: { authorization: 'Bearer some-opaque-token' },
+      });
+      expect(res.statusCode).toBe(500);
+      // Not a Bearer challenge — the client's token was never declared invalid.
+      expect(res.headers['www-authenticate']).toBeUndefined();
+      expect(res.json().error).not.toBe('invalid_token');
+    } finally {
+      await opApp.close();
+    }
+  });
+});
