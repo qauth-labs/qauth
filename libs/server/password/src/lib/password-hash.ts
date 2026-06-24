@@ -110,7 +110,8 @@ export function createPasswordHasher(config?: Partial<PasswordHashConfig>): Pass
         });
       } catch (error) {
         throw new Error(
-          `Failed to hash password: ${error instanceof Error ? error.message : 'Unknown error'}`
+          `Failed to hash password: ${error instanceof Error ? error.message : 'Unknown error'}`,
+          { cause: error }
         );
       }
     },

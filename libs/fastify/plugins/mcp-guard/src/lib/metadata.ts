@@ -77,7 +77,7 @@ export function buildProtectedResourceMetadata(
  * @returns the path (always starting with the well-known prefix).
  */
 export function metadataPathForResource(resource: string): string {
-  let pathname = '/';
+  let pathname: string;
   try {
     pathname = new URL(resource).pathname;
   } catch {
