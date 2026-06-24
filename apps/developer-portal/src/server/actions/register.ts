@@ -11,5 +11,16 @@ export async function registerHandler({
 }
 
 export const registerFn = createServerFn({ method: 'POST' })
-  .inputValidator((data: { email: string; password: string }) => data)
+  .inputValidator((data: unknown): { email: string; password: string } => {
+    if (
+      typeof data !== 'object' ||
+      data === null ||
+      typeof (data as Record<string, unknown>).email !== 'string' ||
+      typeof (data as Record<string, unknown>).password !== 'string'
+    ) {
+      throw new Error('Invalid input: expected { email: string; password: string }');
+    }
+    const { email, password } = data as { email: string; password: string };
+    return { email, password };
+  })
   .handler(registerHandler);

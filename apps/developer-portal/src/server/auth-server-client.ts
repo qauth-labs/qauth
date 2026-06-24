@@ -92,9 +92,9 @@ async function apiRequest<T>(
       return { ok: true, data };
     }
 
-    let body: AuthServerErrorBody;
+    let parsed: unknown;
     try {
-      body = (await res.json()) as AuthServerErrorBody;
+      parsed = await res.json();
     } catch {
       return {
         ok: false,
@@ -102,6 +102,14 @@ async function apiRequest<T>(
       };
     }
 
+    if (typeof parsed !== 'object' || parsed === null) {
+      return {
+        ok: false,
+        error: { code: 'UNKNOWN', message: `HTTP ${res.status}`, status: res.status },
+      };
+    }
+
+    const body = parsed as AuthServerErrorBody;
     const details = body.feedback ?? body.constraint ?? undefined;
     return {
       ok: false,
