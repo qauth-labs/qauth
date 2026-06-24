@@ -1,6 +1,14 @@
 packages:
   - 'libs/**'
   - 'apps/**'
+# pnpm 11 defaults `verifyDepsBeforeRun` to "install": before any script/`pnpm exec`
+# it auto-installs when node_modules looks out of sync, and that reconcile can prune
+# devDeps — which needs a modules-dir purge. In non-TTY contexts (the husky pre-commit
+# hook, CI) the purge aborts with ERR_PNPM_ABORTED_REMOVE_MODULES_DIR_NO_TTY. "warn"
+# keeps the "node_modules out of sync — run pnpm install" heads-up without ever
+# auto-installing or failing in non-interactive runs. (This setting is read from
+# pnpm-workspace.yaml in pnpm 11, not .npmrc.)
+verifyDepsBeforeRun: warn
 onlyBuiltDependencies:
   - '@swc/core'
   - 'esbuild'
