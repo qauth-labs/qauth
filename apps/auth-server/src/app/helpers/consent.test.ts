@@ -11,6 +11,7 @@ import {
   describeScope,
   filterRequestedScopes,
   isDynamicClientWithinBadgeWindow,
+  isLoopbackRedirect,
   isScopeSubset,
   type OAuthClientLike,
   type OAuthConsentLike,
@@ -115,6 +116,38 @@ describe('canSkipConsent', () => {
   it('dynamic client inside badge window forces re-consent', () => {
     const c = client({ dynamicRegisteredAt: Date.now() - 1 * 24 * 60 * 60 * 1000 });
     expect(canSkipConsent(consent({ scopes: ['email'] }), c, ['email'])).toBe(false);
+  });
+});
+
+describe('isLoopbackRedirect', () => {
+  it('flags localhost and ::1', () => {
+    expect(isLoopbackRedirect('http://localhost/cb')).toBe(true);
+    expect(isLoopbackRedirect('http://localhost:8080/cb')).toBe(true);
+    expect(isLoopbackRedirect('http://[::1]:5173/cb')).toBe(true); // URL strips brackets
+  });
+
+  it('flags 127.0.0.1', () => {
+    expect(isLoopbackRedirect('http://127.0.0.1/cb')).toBe(true);
+    expect(isLoopbackRedirect('http://127.0.0.1:3000/cb')).toBe(true);
+  });
+
+  // Regression: the entire 127.0.0.0/8 block loops back, not just 127.0.0.1.
+  // A client could otherwise dodge the consent-screen warning via 127.0.0.2.
+  it('flags the whole 127.0.0.0/8 loopback range', () => {
+    expect(isLoopbackRedirect('http://127.0.0.2/cb')).toBe(true);
+    expect(isLoopbackRedirect('http://127.1.2.3/cb')).toBe(true);
+    expect(isLoopbackRedirect('http://127.255.255.254:9000/cb')).toBe(true);
+  });
+
+  it('does NOT flag genuine remote hosts', () => {
+    expect(isLoopbackRedirect('https://app.example.com/cb')).toBe(false);
+    expect(isLoopbackRedirect('https://12.7.0.0.1.example.com/cb')).toBe(false);
+    expect(isLoopbackRedirect('https://128.0.0.1/cb')).toBe(false);
+    expect(isLoopbackRedirect('https://1.2.3.4/cb')).toBe(false);
+  });
+
+  it('returns false for an unparseable redirect_uri', () => {
+    expect(isLoopbackRedirect('not a url')).toBe(false);
   });
 });
 

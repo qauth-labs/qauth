@@ -51,6 +51,32 @@ export function isCimdClient(client: { metadata: Record<string, unknown> | null 
 }
 
 /**
+ * Build a non-verifiable sentinel for the NOT-NULL `client_secret_hash`
+ * column of a CIMD (public) client, WITHOUT running Argon2id.
+ *
+ * CIMD clients are public (`token_endpoint_auth_method=none`, PKCE-only) and
+ * have no shared secret, but the column is NOT NULL. The previous code ran
+ * the CPU/memory-intensive Argon2id KDF here — on the *unauthenticated*,
+ * on-demand `resolveClient` path — which is a denial-of-service / CPU- and
+ * memory-exhaustion amplifier (OWASP API4 Unrestricted Resource Consumption):
+ * an attacker drives any number of distinct CIMD `client_id`s through
+ * authorize and forces one ~64MB Argon2id computation per resolution.
+ *
+ * We instead synthesise a well-formed argon2id PHC string from random bytes.
+ * It is structurally a hash but corresponds to no known password, so
+ * `verifyPassword` returns `false` for every input (it does not throw — see
+ * @qauth-labs/server-password), i.e. any `client_secret` attempt fails
+ * closed. Cost is a few `randomBytes` calls instead of a full KDF.
+ */
+export function cimdSentinelSecretHash(): string {
+  const salt = randomBytes(16).toString('base64').replace(/=+$/, '');
+  const digest = randomBytes(32).toString('base64').replace(/=+$/, '');
+  // Mirrors the @node-rs/argon2 default params (m=65536,t=3,p=4) so the value
+  // is shaped like a genuine hash; the salt/digest are random and unverifiable.
+  return `$argon2id$v=19$m=65536,t=3,p=4$${salt}$${digest}`;
+}
+
+/**
  * Resolve a client_id to a client record, honouring the pre-registered →
  * CIMD priority. Returns `{ client: null, reason }` when no client can be
  * resolved so the caller controls the audit-log shape and error mapping.
@@ -76,11 +102,10 @@ export async function resolveClient(
       const doc = await fetchAndValidateCimdDocument(fastify, clientId);
 
       // Public client → no usable secret. Store a non-verifiable sentinel
-      // (random hash of random bytes) sized like a real argon2id hash so the
-      // NOT-NULL column is satisfied and any client_secret attempt fails.
-      const sentinelSecretHash = await fastify.passwordHasher.hashPassword(
-        randomBytes(32).toString('hex')
-      );
+      // shaped like a real argon2id hash so the NOT-NULL column is satisfied
+      // and any client_secret attempt fails closed. Built synchronously
+      // (no Argon2id) — see cimdSentinelSecretHash for the DoS rationale.
+      const sentinelSecretHash = cimdSentinelSecretHash();
 
       const insert = toCimdClientInsert(realmId, clientId, doc, sentinelSecretHash);
       const row = await fastify.repositories.oauthClients.upsertCimdClient(insert);

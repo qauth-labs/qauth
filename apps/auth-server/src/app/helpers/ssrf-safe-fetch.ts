@@ -141,16 +141,59 @@ function isPublicIpv4(ip: string): boolean {
   return true;
 }
 
+/**
+ * Extract the embedded IPv4 address from a fully-expanded (8-hextet) IPv6
+ * literal when it is an IPv4-mapped (`::ffff:a.b.c.d`) or IPv4-compatible
+ * (`::a.b.c.d`) address, in EITHER notation:
+ *
+ *   ::ffff:127.0.0.1  → expandIpv6 → 0:0:0:0:0:ffff:7f00:1
+ *   ::ffff:7f00:1     → expandIpv6 → 0:0:0:0:0:ffff:7f00:1   (same form)
+ *
+ * Both collapse to the same hextet sequence, so working off the expanded form
+ * normalises the two notations and closes the hex-form SSRF bypass. Returns
+ * the dotted-quad string (e.g. `"127.0.0.1"`) or `null` when the address is
+ * not an embedded-v4 form.
+ *
+ * Only the well-known prefixes `::ffff:0:0/96` (mapped) and `::/96`
+ * (compatible) carry an embedded v4 address; any other prefix is a native
+ * IPv6 address whose trailing hextets are NOT a v4 address.
+ */
+function extractEmbeddedIpv4(expanded: string): string | null {
+  const parts = expanded.split(':');
+  if (parts.length !== 8) return null;
+
+  const prefix = parts.slice(0, 6).join(':');
+  const isMapped = prefix === '0:0:0:0:0:ffff';
+  const isCompatible = prefix === '0:0:0:0:0:0';
+  if (!isMapped && !isCompatible) return null;
+
+  const high = Number.parseInt(parts[6], 16);
+  const low = Number.parseInt(parts[7], 16);
+  if (!Number.isFinite(high) || !Number.isFinite(low)) return null;
+  if (high < 0 || high > 0xffff || low < 0 || low > 0xffff) return null;
+
+  return `${high >> 8}.${high & 0xff}.${low >> 8}.${low & 0xff}`;
+}
+
 function isPublicIpv6(ip: string): boolean {
   const expanded = expandIpv6(ip);
 
   // Unspecified (::) and loopback (::1).
   if (expanded === '0:0:0:0:0:0:0:0' || expanded === '0:0:0:0:0:0:0:1') return false;
 
-  // IPv4-mapped (::ffff:a.b.c.d) and IPv4-compatible — re-check the embedded
-  // v4 address so `::ffff:169.254.169.254` cannot slip through.
-  const mapped = ip.toLowerCase().match(/::ffff:(\d+\.\d+\.\d+\.\d+)$/);
-  if (mapped) return isPublicIpv4(mapped[1]);
+  // IPv4-mapped (::ffff:a.b.c.d) and IPv4-compatible (::a.b.c.d) — re-check
+  // the embedded v4 address so `::ffff:169.254.169.254` cannot slip through.
+  //
+  // CRITICAL: this must catch BOTH notations of the embedded address:
+  //   - dot-decimal  ::ffff:127.0.0.1
+  //   - pure hex     ::ffff:7f00:1   (== 127.0.0.1)
+  // Matching only the dot-decimal text form lets the hex form bypass every
+  // check below (its `firstHextet` is 0), enabling loopback/RFC1918 SSRF.
+  // We therefore work off the fully-expanded 8-hextet form, which normalises
+  // both notations identically (expandIpv6 collapses `::ffff:7f00:1` and
+  // `::ffff:127.0.0.1` to the same `0:0:0:0:0:ffff:7f00:1`).
+  const embeddedIpv4 = extractEmbeddedIpv4(expanded);
+  if (embeddedIpv4 !== null) return isPublicIpv4(embeddedIpv4);
 
   const firstHextet = Number.parseInt(expanded.split(':')[0] || '0', 16);
   // fe80::/10 — link-local. (fe80–febf)

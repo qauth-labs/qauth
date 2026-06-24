@@ -23,7 +23,7 @@ vi.mock('./ssrf-safe-fetch', async () => {
   return { ...actual, ssrfSafeGet };
 });
 
-import { isCimdClient, resolveClient } from './client-resolution';
+import { cimdSentinelSecretHash, isCimdClient, resolveClient } from './client-resolution';
 
 const CIMD_ID = 'https://app.example.com/client.json';
 
@@ -116,6 +116,27 @@ describe('resolveClient — pre-registered → CIMD priority (MCP 2025-11-25)', 
     expect(isCimdClient(client!)).toBe(true);
   });
 
+  // Regression (DoS / OWASP API4): the unauthenticated CIMD resolution path
+  // must NOT invoke the CPU/memory-intensive Argon2id KDF. It stores a
+  // synchronously-built, well-formed argon2id sentinel instead.
+  it('does NOT run Argon2id on the unauthenticated CIMD path (DoS guard)', async () => {
+    const { fastify, upserted } = fastifyStub();
+    fastify.repositories.oauthClients.findByClientId.mockResolvedValue(undefined);
+    ssrfSafeGet.mockResolvedValue(
+      ok({
+        client_id: CIMD_ID,
+        client_name: 'Example',
+        redirect_uris: ['https://app.example.com/cb'],
+      })
+    );
+
+    await resolveClient(fastify, 'realm-1', CIMD_ID);
+
+    expect(fastify.passwordHasher.hashPassword).not.toHaveBeenCalled();
+    // Sentinel is shaped like a genuine argon2id PHC string.
+    expect(upserted[0].clientSecretHash).toMatch(/^\$argon2id\$v=19\$m=\d+,t=\d+,p=\d+\$/);
+  });
+
   it('returns null + reason when CIMD resolution fails (client_id ≠ URL)', async () => {
     const { fastify } = fastifyStub();
     fastify.repositories.oauthClients.findByClientId.mockResolvedValue(undefined);
@@ -134,6 +155,13 @@ describe('resolveClient — pre-registered → CIMD priority (MCP 2025-11-25)', 
     expect(reason).toMatch(/does not match/);
     // Never materialised a row for the rejected document.
     expect(fastify.repositories.oauthClients.upsertCimdClient).not.toHaveBeenCalled();
+  });
+
+  it('cimdSentinelSecretHash returns a unique, well-formed, unverifiable argon2id string', () => {
+    const a = cimdSentinelSecretHash();
+    const b = cimdSentinelSecretHash();
+    expect(a).toMatch(/^\$argon2id\$v=19\$m=\d+,t=\d+,p=\d+\$[^$]+\$[^$]+$/);
+    expect(a).not.toBe(b); // random salt + digest each call
   });
 
   it('returns null for an unknown opaque client_id (priority 3, no CIMD attempt)', async () => {

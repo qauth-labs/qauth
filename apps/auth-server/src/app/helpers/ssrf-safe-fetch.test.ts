@@ -40,6 +40,37 @@ describe('isPublicUnicastAddress — SSRF blocklist (CIMD §6)', () => {
     expect(isPublicUnicastAddress('::ffff:10.0.0.1')).toBe(false); // mapped private
   });
 
+  // Regression: the IPv4-mapped check previously only matched the
+  // dot-decimal text form (::ffff:127.0.0.1). The pure-hex form of the SAME
+  // address (::ffff:7f00:1) bypassed every range check (its first hextet is
+  // 0) and was wrongly classified public — a loopback/RFC1918 SSRF bypass.
+  // Both notations must now normalise to the same embedded v4 and be blocked.
+  it('blocks the HEX form of IPv4-mapped private/loopback addresses (SSRF bypass)', () => {
+    expect(isPublicUnicastAddress('::ffff:7f00:1')).toBe(false); // == 127.0.0.1
+    expect(isPublicUnicastAddress('::ffff:7f00:0001')).toBe(false); // == 127.0.0.1
+    expect(isPublicUnicastAddress('::ffff:a9fe:a9fe')).toBe(false); // == 169.254.169.254 metadata
+    expect(isPublicUnicastAddress('::ffff:a00:1')).toBe(false); // == 10.0.0.1
+    expect(isPublicUnicastAddress('::ffff:c0a8:101')).toBe(false); // == 192.168.1.1
+    expect(isPublicUnicastAddress('::ffff:ac10:5')).toBe(false); // == 172.16.0.5
+    // Fully-expanded hex notation of the same mapped loopback address.
+    expect(isPublicUnicastAddress('0:0:0:0:0:ffff:7f00:1')).toBe(false);
+  });
+
+  // IPv4-compatible (::a.b.c.d) addresses embed a v4 address under an all-zero
+  // /96 prefix; the hex form (::7f00:1) must be blocked the same way.
+  it('blocks IPv4-compatible addresses embedding private/loopback v4 (hex + dotted)', () => {
+    expect(isPublicUnicastAddress('::7f00:1')).toBe(false); // == 127.0.0.1
+    expect(isPublicUnicastAddress('::a9fe:a9fe')).toBe(false); // == 169.254.169.254 metadata
+    expect(isPublicUnicastAddress('::a00:1')).toBe(false); // == 10.0.0.1
+  });
+
+  // Guard against over-blocking: a genuine public IPv6 must NOT be mistaken
+  // for an embedded-v4 form (its /96 prefix is neither ::ffff:0:0 nor ::).
+  it('still allows genuine public IPv6 that is not an embedded-v4 form', () => {
+    expect(isPublicUnicastAddress('2606:4700:4700::1111')).toBe(true); // Cloudflare
+    expect(isPublicUnicastAddress('2001:4860:4860::8888')).toBe(true); // Google DNS
+  });
+
   it('allows genuine public addresses', () => {
     expect(isPublicUnicastAddress('8.8.8.8')).toBe(true);
     expect(isPublicUnicastAddress('1.1.1.1')).toBe(true);

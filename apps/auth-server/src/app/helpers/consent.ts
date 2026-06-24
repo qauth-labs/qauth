@@ -115,7 +115,29 @@ export function describeScope(scope: string): string {
   return SCOPE_DESCRIPTIONS[scope] ?? scope;
 }
 
-const LOOPBACK_HOSTS = new Set(['127.0.0.1', '::1', '[::1]', 'localhost']);
+/**
+ * Non-IPv4 loopback host literals, matched after stripping any IPv6 brackets
+ * (Node's `URL.hostname` returns `[::1]` *with* brackets). The full IPv4
+ * `127.0.0.0/8` range is matched separately — see below.
+ */
+const LOOPBACK_HOSTS = new Set(['::1', 'localhost']);
+
+/**
+ * True when `host` is anywhere in the IPv4 loopback block `127.0.0.0/8`
+ * (RFC 1122 §3.2.1.3). The whole /8 — not just `127.0.0.1` — loops back, so
+ * `127.0.0.2`, `127.1.2.3`, etc. must all be treated as loopback; matching
+ * only `127.0.0.1` let a malicious client dodge the consent-screen warning.
+ */
+function isIpv4Loopback(host: string): boolean {
+  const octets = host.split('.');
+  if (octets.length !== 4) return false;
+  for (const o of octets) {
+    if (!/^\d{1,3}$/.test(o)) return false;
+    const n = Number(o);
+    if (n < 0 || n > 255) return false;
+  }
+  return Number(octets[0]) === 127;
+}
 
 /**
  * Extract the hostname of a redirect_uri for display at the consent screen.
@@ -142,8 +164,10 @@ export function redirectHost(redirectUri: string): string {
  */
 export function isLoopbackRedirect(redirectUri: string): boolean {
   try {
-    const host = new URL(redirectUri).hostname.toLowerCase();
-    return LOOPBACK_HOSTS.has(host);
+    // URL.hostname keeps the brackets on IPv6 literals (`[::1]`); strip them
+    // so both bracketed and bare forms match.
+    const host = new URL(redirectUri).hostname.toLowerCase().replace(/^\[|\]$/g, '');
+    return LOOPBACK_HOSTS.has(host) || isIpv4Loopback(host);
   } catch {
     return false;
   }
