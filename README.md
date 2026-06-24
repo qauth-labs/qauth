@@ -687,10 +687,15 @@ function Dashboard() {
 
 ## 📚 Documentation
 
-**Available documentation:**
+**Guides** (start at the [docs index](./docs/README.md)):
+
+- [MCP Quickstart](./docs/mcp-quickstart.md) — run QAuth + a `mcp-guard`-protected MCP server and complete the full OAuth handshake end-to-end
+- [OAuth 2.1 Flow](./docs/oauth-flow.md) — every endpoint with copy-paste `curl` (PKCE, authorize, token, refresh, client_credentials, introspection)
+- [Docker Development Guide](./docs/docker.md) — local development with Docker
+
+**Reference:**
 
 - [Product Requirements Document](./MVP-PRD.md) — full phase breakdown, API specs, database schema
-- [Docker Development Guide](./docs/docker.md) — local development with Docker
 - [Architecture Decision Records](./docs/adr/README.md) — key architectural decisions
 - **API docs** (OpenAPI / Swagger UI) — served at `/docs` on the running instance
 
@@ -702,16 +707,16 @@ function Dashboard() {
 - [@qauth-labs/server-email](./libs/server/email/README.md) — email service with multiple providers
 - [@qauth-labs/server-password](./libs/server/password/README.md) — password hashing with Argon2id
 - [@qauth-labs/server-jwt](./libs/server/jwt/README.md) — JWT signing and verification
+- [@qauth-labs/mcp-guard](./libs/fastify/plugins/mcp-guard/README.md) — resource-server SDK for protecting MCP servers
 - [@qauth-labs/shared-errors](./libs/shared/errors/README.md) — centralized error handling
 - [@qauth-labs/shared-validation](./libs/shared/validation/README.md) — input validation utilities
 - [@qauth-labs/shared-testing](./libs/shared/testing/README.md) — test helpers and fixtures
 
 **Planned documentation** (future phases):
 
-- Quick Start Guide (external site)
-- API Reference
+- Standalone API Reference ([#99](https://github.com/qauth-labs/qauth/issues/99)) — incl. client-management endpoints (T2)
+- Node/TypeScript client code examples ([#100](https://github.com/qauth-labs/qauth/issues/100))
 - SDK Documentation (Phase 3)
-- Authentication Flow guide
 - Multi-tenancy Guide
 - Security Best Practices
 
