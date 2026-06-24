@@ -35,7 +35,8 @@
     "test:watch": "nx run-many -t test --all --watch",
     "test:ui": "vitest --ui",
     "test:coverage": "nx run-many -t test --all --coverage",
-    "test:affected": "nx affected -t test"
+    "test:affected": "nx affected -t test",
+    "test:integration": "vitest run --config vitest.integration.config.ts"
   },
   "lint-staged": {
     "**/*.{ts,tsx,js,jsx}": [

@@ -5,6 +5,14 @@
   "projectType": "library",
   "tags": ["scope:infra", "type:db"],
   "targets": {
+    "test-integration": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "vitest run --config vitest.integration.config.ts libs/infra/db",
+        "cwd": "{workspaceRoot}"
+      },
+      "description": "Run Docker-backed repository integration tests (testcontainers Postgres). Requires a running Docker daemon."
+    },
     "db:generate": {
       "executor": "nx:run-commands",
       "options": {

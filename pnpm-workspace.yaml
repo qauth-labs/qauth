@@ -107,5 +107,3 @@ catalog:
   tailwind-merge: '^3.5.0'
   clsx: '^2.1.1'
   class-variance-authority: '^0.7.1'
-allowBuilds:
-  nx: set this to true or false
