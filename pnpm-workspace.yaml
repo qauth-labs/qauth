@@ -104,3 +104,14 @@ catalog:
   tailwind-merge: '^3.5.0'
   clsx: '^2.1.1'
   class-variance-authority: '^0.7.1'
+# pnpm 11 requires an explicit build decision per dependency with a postinstall
+# script (it no longer infers them from onlyBuiltDependencies). Mirror the
+# approved set; cpu-features is an optional ssh2 native accel we don't build.
+allowBuilds:
+  '@swc/core': true
+  cpu-features: false
+  esbuild: true
+  nx: true
+  protobufjs: true
+  ssh2: true
+  unrs-resolver: true
