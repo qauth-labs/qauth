@@ -8,6 +8,7 @@ import { z } from 'zod';
 import { env } from '../../../config/env';
 import { AUTHORIZATION_CODE_TTL_MS } from '../../constants';
 import { resolveBrowserSession } from '../../helpers/browser-session';
+import { findExceedingAgentScopesForClient } from '../../helpers/client-auth';
 import { resolveClient } from '../../helpers/client-resolution';
 import {
   canSkipConsent,
@@ -330,6 +331,22 @@ export default async function (fastify: FastifyInstance) {
         throw new BadRequestError('redirect_uri not registered');
       }
 
+      // ADR-007 §2 (#184): fail fast on the render path too — don't show a
+      // consent screen for an over-cap agent scope that the POST handler will
+      // (correctly) refuse to mint a code for. Same deny-by-default gate;
+      // redirect_uri is already validated above so an `invalid_scope` redirect
+      // is safe (RFC 6749 §4.1.2.1).
+      if (findExceedingAgentScopesForClient(query.scope, client).length > 0) {
+        return reply.redirect(
+          buildRedirectUrl(query.redirect_uri, {
+            error: 'invalid_scope',
+            error_description: 'requested scope exceeds the agent scope mode for this client',
+            state: query.state ?? undefined,
+          }),
+          302
+        );
+      }
+
       const isCimd =
         (client.metadata as Record<string, unknown> | null)?.registrationType === 'cimd';
 
@@ -483,6 +500,43 @@ export default async function (fastify: FastifyInstance) {
           buildRedirectUrl(body.redirect_uri, {
             error: 'access_denied',
             error_description: 'User denied the authorization request.',
+            state: body.state ?? undefined,
+          }),
+          302
+        );
+      }
+
+      // ADR-007 §2 (#184): enforce the agent scope-mode cap HERE, on the path
+      // that actually mints the authorization code. The pre-consent cap check
+      // in /oauth/authorize is bypassed for first-time consent (the common
+      // case), because authorize redirects to this route before issuing the
+      // code. Without this gate a `readonly`-capped agent whose allowlist
+      // contains `agent:exec` could POST `scope=agent:exec` here and obtain an
+      // exec code (the hidden `scope` field is attacker-controlled; the CSRF
+      // token binds the session, not the scope). Deny-by-default, fail-closed:
+      // a non-agent / un-capped client is rejected too. RFC 6749 §4.1.2.1
+      // `invalid_scope`, state preserved.
+      const exceedingAgentScopes = findExceedingAgentScopesForClient(body.scope, client);
+      if (exceedingAgentScopes.length > 0) {
+        await fastify.repositories.auditLogs.create({
+          userId: session.userId,
+          oauthClientId: client.id,
+          event: 'oauth.consent.denied',
+          eventType: 'auth',
+          success: false,
+          ipAddress: request.ip,
+          userAgent: request.headers['user-agent'] || null,
+          metadata: {
+            error: 'invalid_scope',
+            reason: 'agent_scope_mode_exceeded',
+            client_id: body.client_id,
+            exceeding: exceedingAgentScopes.join(' '),
+          },
+        });
+        return reply.redirect(
+          buildRedirectUrl(body.redirect_uri, {
+            error: 'invalid_scope',
+            error_description: 'requested scope exceeds the agent scope mode for this client',
             state: body.state ?? undefined,
           }),
           302

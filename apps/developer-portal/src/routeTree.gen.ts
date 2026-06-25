@@ -16,6 +16,9 @@ import { Route as ConsentsRouteImport } from './routes/consents'
 import { Route as AuthedRouteImport } from './routes/_authed'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as AuthedDashboardRouteImport } from './routes/_authed/dashboard'
+import { Route as AuthedClientsIndexRouteImport } from './routes/_authed/clients.index'
+import { Route as AuthedClientsNewRouteImport } from './routes/_authed/clients.new'
+import { Route as AuthedClientsClientIdRouteImport } from './routes/_authed/clients.$clientId'
 
 const VerifyRoute = VerifyRouteImport.update({
   id: '/verify',
@@ -51,6 +54,21 @@ const AuthedDashboardRoute = AuthedDashboardRouteImport.update({
   path: '/dashboard',
   getParentRoute: () => AuthedRoute,
 } as any)
+const AuthedClientsIndexRoute = AuthedClientsIndexRouteImport.update({
+  id: '/clients/',
+  path: '/clients/',
+  getParentRoute: () => AuthedRoute,
+} as any)
+const AuthedClientsNewRoute = AuthedClientsNewRouteImport.update({
+  id: '/clients/new',
+  path: '/clients/new',
+  getParentRoute: () => AuthedRoute,
+} as any)
+const AuthedClientsClientIdRoute = AuthedClientsClientIdRouteImport.update({
+  id: '/clients/$clientId',
+  path: '/clients/$clientId',
+  getParentRoute: () => AuthedRoute,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
@@ -59,6 +77,9 @@ export interface FileRoutesByFullPath {
   '/register': typeof RegisterRoute
   '/verify': typeof VerifyRoute
   '/dashboard': typeof AuthedDashboardRoute
+  '/clients/$clientId': typeof AuthedClientsClientIdRoute
+  '/clients/new': typeof AuthedClientsNewRoute
+  '/clients/': typeof AuthedClientsIndexRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -67,6 +88,9 @@ export interface FileRoutesByTo {
   '/register': typeof RegisterRoute
   '/verify': typeof VerifyRoute
   '/dashboard': typeof AuthedDashboardRoute
+  '/clients/$clientId': typeof AuthedClientsClientIdRoute
+  '/clients/new': typeof AuthedClientsNewRoute
+  '/clients': typeof AuthedClientsIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -77,6 +101,9 @@ export interface FileRoutesById {
   '/register': typeof RegisterRoute
   '/verify': typeof VerifyRoute
   '/_authed/dashboard': typeof AuthedDashboardRoute
+  '/_authed/clients/$clientId': typeof AuthedClientsClientIdRoute
+  '/_authed/clients/new': typeof AuthedClientsNewRoute
+  '/_authed/clients/': typeof AuthedClientsIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -87,8 +114,20 @@ export interface FileRouteTypes {
     | '/register'
     | '/verify'
     | '/dashboard'
+    | '/clients/$clientId'
+    | '/clients/new'
+    | '/clients/'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/consents' | '/login' | '/register' | '/verify' | '/dashboard'
+  to:
+    | '/'
+    | '/consents'
+    | '/login'
+    | '/register'
+    | '/verify'
+    | '/dashboard'
+    | '/clients/$clientId'
+    | '/clients/new'
+    | '/clients'
   id:
     | '__root__'
     | '/'
@@ -98,6 +137,9 @@ export interface FileRouteTypes {
     | '/register'
     | '/verify'
     | '/_authed/dashboard'
+    | '/_authed/clients/$clientId'
+    | '/_authed/clients/new'
+    | '/_authed/clients/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -160,15 +202,42 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthedDashboardRouteImport
       parentRoute: typeof AuthedRoute
     }
+    '/_authed/clients/': {
+      id: '/_authed/clients/'
+      path: '/clients'
+      fullPath: '/clients/'
+      preLoaderRoute: typeof AuthedClientsIndexRouteImport
+      parentRoute: typeof AuthedRoute
+    }
+    '/_authed/clients/new': {
+      id: '/_authed/clients/new'
+      path: '/clients/new'
+      fullPath: '/clients/new'
+      preLoaderRoute: typeof AuthedClientsNewRouteImport
+      parentRoute: typeof AuthedRoute
+    }
+    '/_authed/clients/$clientId': {
+      id: '/_authed/clients/$clientId'
+      path: '/clients/$clientId'
+      fullPath: '/clients/$clientId'
+      preLoaderRoute: typeof AuthedClientsClientIdRouteImport
+      parentRoute: typeof AuthedRoute
+    }
   }
 }
 
 interface AuthedRouteChildren {
   AuthedDashboardRoute: typeof AuthedDashboardRoute
+  AuthedClientsClientIdRoute: typeof AuthedClientsClientIdRoute
+  AuthedClientsNewRoute: typeof AuthedClientsNewRoute
+  AuthedClientsIndexRoute: typeof AuthedClientsIndexRoute
 }
 
 const AuthedRouteChildren: AuthedRouteChildren = {
   AuthedDashboardRoute: AuthedDashboardRoute,
+  AuthedClientsClientIdRoute: AuthedClientsClientIdRoute,
+  AuthedClientsNewRoute: AuthedClientsNewRoute,
+  AuthedClientsIndexRoute: AuthedClientsIndexRoute,
 }
 
 const AuthedRouteWithChildren =

@@ -71,6 +71,27 @@ export const responseTypeEnum = pgEnum('response_type', RESPONSE_TYPES);
 export type ResponseType = (typeof RESPONSE_TYPES)[number];
 
 /**
+ * Agent scope modes (ADR-007 §2, issue #184).
+ *
+ * The coarse capability ceiling an agent client may be granted, ordered
+ * lowest → highest privilege: ReadOnly ⊂ Admin ⊂ Exec (for cap purposes).
+ * Persisted on `oauth_clients.max_agent_mode` as the server-side MAXIMUM mode
+ * a client may request via the reserved `agent:*` scopes. NULL ⇒ no agent
+ * mode permitted (default-deny). This is operator-set server state, NOT
+ * client input — it is the independent server-side criterion that gates the
+ * self-asserted `is_agent` flag.
+ */
+const AGENT_MODES = [
+  'readonly', // read-only access
+  'admin', // administrative (⊇ ReadOnly)
+  'exec', // action-taking (most privileged)
+] as const;
+
+export const agentModeEnum = pgEnum('agent_mode', AGENT_MODES);
+
+export type AgentMode = (typeof AGENT_MODES)[number];
+
+/**
  * Audit Log Event Types
  * Categorizes audit events for filtering and analysis
  */

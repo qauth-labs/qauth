@@ -458,3 +458,77 @@ describe('GET /oauth/authorize — CIMD (Client ID Metadata Documents)', () => {
     expect(state.redirected).toContain('/ui/login?return_to=');
   });
 });
+
+describe('GET /oauth/authorize — agent scope-mode cap (ADR-007 §2, #184)', () => {
+  // An agent capped at `readonly` whose ALLOWLIST nevertheless contains
+  // `agent:exec` — the exact escalation the cap must block even though the
+  // ordinary allowlist would permit the scope.
+  const READONLY_AGENT = {
+    ...CLIENT,
+    clientId: 'agent-ro',
+    scopes: ['agent:readonly', 'agent:exec', 'email'],
+    isAgent: true,
+    maxAgentMode: 'readonly' as const,
+  };
+
+  async function runAuthorize(client: typeof CLIENT, scope: string, sid: string) {
+    const { fastify, ctx } = makeFastify();
+    await authorizeRoute(fastify);
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(client);
+    (fastify.jwtUtils.extractFromHeader as unknown as Mock).mockReturnValue(null);
+    // Existing consent covers the requested scopes so the flow reaches code
+    // issuance (skips the /ui/consent redirect) — isolating the cap check.
+    (fastify.repositories.oauthConsents.findActive as unknown as Mock).mockResolvedValue({
+      scopes: ['agent:readonly', 'agent:exec', 'email'],
+      revokedAt: null,
+    });
+    const { signSessionId } = await import('../../helpers/session-cookie');
+    const signed = signSessionId(sid);
+    (fastify.sessionUtils.getSession as unknown as Mock).mockResolvedValue({
+      userId: 'user-1',
+      email: 'a@b.com',
+      sessionId: sid,
+      createdAt: Date.now(),
+    });
+    const { reply, state } = createReply();
+    await ctx.handler!(
+      {
+        query: { ...BASE_QUERY, client_id: (client as { clientId: string }).clientId, scope },
+        url: `/oauth/authorize?response_type=code&client_id=${(client as { clientId: string }).clientId}&scope=${encodeURIComponent(scope)}`,
+        headers: { cookie: `__Host-qauth_session=${signed}` },
+        ip: '127.0.0.1',
+      },
+      reply
+    );
+    return { fastify, state };
+  }
+
+  it('rejects an over-cap scope with invalid_scope and issues NO code', async () => {
+    const { fastify, state } = await runAuthorize(READONLY_AGENT, 'agent:exec', 'sid-ro-1');
+    expect(state.redirected).toContain('error=invalid_scope');
+    expect(state.redirected).toContain('state=xyz');
+    expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
+  });
+
+  it('allows an in-cap scope and issues a code', async () => {
+    const { fastify, state } = await runAuthorize(READONLY_AGENT, 'agent:readonly', 'sid-ro-2');
+    expect(fastify.repositories.authorizationCodes.create).toHaveBeenCalledOnce();
+    expect(state.redirected).toContain('code=');
+    expect(state.redirected).not.toContain('error=');
+  });
+
+  it('rejects ANY agent scope for a non-agent client even if allowlisted (untrusted is_agent)', async () => {
+    // is_agent omitted ⇒ not an agent ⇒ agent:readonly denied despite the cap.
+    const nonAgent = { ...READONLY_AGENT, clientId: 'not-agent', isAgent: false };
+    const { fastify, state } = await runAuthorize(nonAgent, 'agent:readonly', 'sid-ro-3');
+    expect(state.redirected).toContain('error=invalid_scope');
+    expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
+  });
+
+  it('rejects an agent scope when the cap is null (default-deny)', async () => {
+    const noCap = { ...READONLY_AGENT, clientId: 'no-cap', maxAgentMode: null };
+    const { fastify, state } = await runAuthorize(noCap, 'agent:readonly', 'sid-ro-4');
+    expect(state.redirected).toContain('error=invalid_scope');
+    expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
+  });
+});
