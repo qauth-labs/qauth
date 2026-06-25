@@ -5,10 +5,9 @@ import {
   BadRequestError,
   InvalidClientError,
   InvalidGrantError,
+  InvalidRequestError,
   InvalidScopeError,
   InvalidTargetError,
-  JWTExpiredError,
-  JWTInvalidError,
   NotFoundError,
   UnauthorizedClientError,
 } from '@qauth-labs/shared-errors';
@@ -98,15 +97,7 @@ export default async function (fastify: FastifyInstance) {
         // 'none'`. client_credentials is confidential-only by definition.
         let client: OAuthClientLike;
         try {
-          if (
-            body.grant_type === 'authorization_code' ||
-            body.grant_type === 'refresh_token' ||
-            body.grant_type === TOKEN_EXCHANGE_GRANT_TYPE
-          ) {
-            // token-exchange agents may be public (PKCE-registered, no secret)
-            // or confidential; this resolver accepts both. The agent
-            // classification + subject-token validation gate the grant in the
-            // handler — client auth alone never authorises an exchange.
+          if (body.grant_type === 'authorization_code' || body.grant_type === 'refresh_token') {
             client = await authenticateClientPublicOrConfidential(
               fastify,
               realm.id,
@@ -115,6 +106,12 @@ export default async function (fastify: FastifyInstance) {
               body.client_secret
             );
           } else {
+            // client_credentials AND token-exchange are CONFIDENTIAL-ONLY. For
+            // token-exchange this is a deliberate security floor (RFC 9700,
+            // epic #181): on-behalf-of delegation must not be mintable by a
+            // public client that proves nothing but knowledge of a `client_id`.
+            // A public agent (token_endpoint_auth_method=none) presents no
+            // secret, so `extractClientCredentials` → `invalid_client`.
             const creds = extractClientCredentials(
               request as FastifyRequest,
               body.client_id,
@@ -188,10 +185,9 @@ export default async function (fastify: FastifyInstance) {
           error instanceof InvalidTargetError ||
           error instanceof InvalidClientError ||
           error instanceof InvalidScopeError ||
+          error instanceof InvalidRequestError ||
           error instanceof NotFoundError ||
           error instanceof BadRequestError ||
-          error instanceof JWTExpiredError ||
-          error instanceof JWTInvalidError ||
           error instanceof UnauthorizedClientError
         ) {
           await ensureMinimumResponseTime(startTime, MIN_RESPONSE_TIME_MS.TOKEN);
@@ -935,11 +931,13 @@ async function handleTokenExchange(
   }
 
   // GATE 2 — token-type support. We only mint/consume OAuth access tokens.
+  // OAuth error codes are the BARE token (RFC 6749 §5.2 / RFC 8693 §2.2.2);
+  // human detail goes in `error_description` via InvalidRequestError.
   if (body.subject_token_type !== TOKEN_TYPE_ACCESS_TOKEN) {
     await auditFailure('invalid_request: unsupported subject_token_type', {
       subjectTokenType: body.subject_token_type,
     });
-    throw new BadRequestError('invalid_request: unsupported subject_token_type');
+    throw new InvalidRequestError('unsupported subject_token_type');
   }
   if (
     body.requested_token_type !== undefined &&
@@ -948,18 +946,18 @@ async function handleTokenExchange(
     await auditFailure('invalid_request: unsupported requested_token_type', {
       requestedTokenType: body.requested_token_type,
     });
-    throw new BadRequestError('invalid_request: unsupported requested_token_type');
+    throw new InvalidRequestError('unsupported requested_token_type');
   }
   // RFC 8693 §2.1: actor_token_type is REQUIRED when actor_token is present.
   if (body.actor_token !== undefined && body.actor_token_type === undefined) {
     await auditFailure('invalid_request: actor_token_type required when actor_token present');
-    throw new BadRequestError('invalid_request: actor_token_type is required with actor_token');
+    throw new InvalidRequestError('actor_token_type is required when actor_token is present');
   }
   if (body.actor_token !== undefined && body.actor_token_type !== TOKEN_TYPE_ACCESS_TOKEN) {
     await auditFailure('invalid_request: unsupported actor_token_type', {
       actorTokenType: body.actor_token_type,
     });
-    throw new BadRequestError('invalid_request: unsupported actor_token_type');
+    throw new InvalidRequestError('unsupported actor_token_type');
   }
 
   // GATE 3 — verify the subject token (EdDSA signature + exp). Only QAuth's
@@ -970,11 +968,36 @@ async function handleTokenExchange(
     subjectPayload = await fastify.jwtUtils.verifyAccessToken(body.subject_token);
   } catch {
     await auditFailure('invalid_request: subject_token failed verification');
-    throw new BadRequestError('invalid_request: subject_token is not a valid access token');
+    throw new InvalidRequestError('subject_token is not a valid access token');
   }
   if (!subjectPayload.sub) {
     await auditFailure('invalid_request: subject_token missing sub');
-    throw new BadRequestError('invalid_request: subject_token has no subject');
+    throw new InvalidRequestError('subject_token has no subject');
+  }
+
+  // GATE 3b — token-confusion defence. `verifyAccessToken` proves the EdDSA
+  // signature + exp only; it does NOT assert issuer or token purpose. Without
+  // this check, ANY JWT QAuth signs with the same key (e.g. a future ID token)
+  // would verify and, if its `sub` resolved to a user, be accepted as a
+  // subject token. Require (a) our own issuer and (b) the access-token
+  // `token_use` marker. The marker is absent on legacy access tokens minted
+  // before it existed, so we accept its absence only when the structural
+  // access-token markers (`client_id` + `aud`) are present — never accept a
+  // token that positively declares a non-access `token_use`.
+  const expectedIssuer = fastify.jwtUtils.getIssuer();
+  const issuerOk = subjectPayload.iss === expectedIssuer;
+  const tokenUse = subjectPayload.token_use;
+  const isAccessToken =
+    tokenUse === 'access' ||
+    (tokenUse === undefined &&
+      subjectPayload.clientId !== undefined &&
+      subjectPayload.aud !== undefined);
+  if (!issuerOk || !isAccessToken) {
+    await auditFailure('invalid_request: subject_token is not a QAuth access token', {
+      issuerOk,
+      tokenUse: tokenUse ?? null,
+    });
+    throw new InvalidRequestError('subject_token is not a QAuth-issued access token');
   }
 
   // If an actor_token is supplied, verify it too. We do not trust the agent's
@@ -986,8 +1009,23 @@ async function handleTokenExchange(
       actorPayload = await fastify.jwtUtils.verifyAccessToken(body.actor_token);
     } catch {
       await auditFailure('invalid_request: actor_token failed verification');
-      throw new BadRequestError('invalid_request: actor_token is not a valid access token');
+      throw new InvalidRequestError('actor_token is not a valid access token');
     }
+  }
+
+  // GATE 3c — bind the subject token to the requesting agent (RFC 8693 leaves
+  // authorisation to AS policy; epic #181 default-deny). The subject token MUST
+  // have been minted for THIS agent: its `aud` must contain the agent's
+  // `client_id`. Without this, possession of ANY user's access token plus a
+  // known agent client_id would suffice to mint a delegated token. Combined
+  // with the confidential-client requirement (the agent proved its secret at
+  // the dispatch layer), this closes the unauthorized-delegation gap.
+  const subjectAudience = audToArray(subjectPayload.aud);
+  if (!subjectAudience.includes(client.clientId)) {
+    await auditFailure('invalid_request: subject_token not issued for this agent', {
+      subjectAudience,
+    });
+    throw new InvalidRequestError('subject_token was not issued for this client');
   }
 
   // The subject user must still exist and be enabled (RFC 9700 §4.14). We bind
@@ -996,11 +1034,11 @@ async function handleTokenExchange(
   const user = await fastify.repositories.users.findById(subjectPayload.sub);
   if (!user) {
     await auditFailure('invalid_request: subject user not found');
-    throw new BadRequestError('invalid_request: subject_token subject is unknown');
+    throw new InvalidRequestError('subject_token subject is unknown');
   }
   if (!user.enabled) {
     await auditFailure('invalid_request: subject user disabled', { userId: user.id });
-    throw new BadRequestError('invalid_request: subject_token subject is not active');
+    throw new InvalidRequestError('subject_token subject is not active');
   }
 
   // GATE 4a — scope narrowing. The delegated token's scope is the subject
@@ -1019,7 +1057,8 @@ async function handleTokenExchange(
       });
       throw new InvalidScopeError(`${extraneous.join(' ')} not in subject_token scope`);
     }
-    grantedScopes = requested;
+    // Dedupe so a repeated scope cannot bloat the minted claim.
+    grantedScopes = [...new Set(requested)];
   } else {
     grantedScopes = subjectScopes;
   }
@@ -1027,9 +1066,9 @@ async function handleTokenExchange(
   // GATE 4b — audience narrowing (RFC 8707 §2.2 + RFC 8693 `audience`). The
   // delegated token's `aud` is the subject token's `aud`, optionally narrowed
   // by `resource` and/or `audience`. Any value outside the subject token's
-  // audience set is rejected (`invalid_target`) — never widen.
-  const subjectAudience = audToArray(subjectPayload.aud);
-  const requestedTargets = [...(body.resource ?? []), ...(body.audience ?? [])];
+  // audience set is rejected (`invalid_target`) — never widen. Deduped to keep
+  // the minted claim bounded.
+  const requestedTargets = [...new Set([...(body.resource ?? []), ...(body.audience ?? [])])];
   let effectiveAudience: string[];
   if (requestedTargets.length > 0) {
     const extra = requestedTargets.filter((t) => !subjectAudience.includes(t));
@@ -1042,6 +1081,9 @@ async function handleTokenExchange(
     }
     effectiveAudience = requestedTargets;
   } else {
+    // Preserve the subject token's audience verbatim. The subject `aud` is
+    // always present (signing falls back to client_id) and was asserted to
+    // contain this agent above — so there is no agent-default fallback here.
     effectiveAudience = subjectAudience;
   }
 
@@ -1062,14 +1104,26 @@ async function handleTokenExchange(
       depth,
       max: MAX_DELEGATION_DEPTH,
     });
-    throw new BadRequestError('invalid_request: delegation chain exceeds the maximum depth');
+    throw new InvalidRequestError('delegation chain exceeds the maximum depth');
   }
 
   const scopeString = grantedScopes.length > 0 ? grantedScopes.join(' ') : undefined;
-  // Preserve the subject token's aud when no narrowing was requested; fall back
-  // to resolveAudience's client default only if the subject had no aud at all.
-  const aud =
-    effectiveAudience.length > 0 ? arrayToAud(effectiveAudience) : resolveAudience(client);
+  const aud = arrayToAud(effectiveAudience);
+
+  // Clamp lifespan so the delegated token NEVER outlives the subject token's
+  // authority (and so it cannot be re-exchanged to extend it indefinitely).
+  // `exp` is in seconds; verifyAccessToken already rejected an expired token,
+  // so remaining is > 0 here, but we guard against the boundary defensively.
+  const configuredLifespan = fastify.jwtUtils.getAccessTokenLifespan();
+  const subjectRemaining =
+    subjectPayload.exp !== undefined
+      ? subjectPayload.exp - Math.floor(Date.now() / 1000)
+      : configuredLifespan;
+  const accessTokenExpiresIn = Math.max(0, Math.min(configuredLifespan, subjectRemaining));
+  if (accessTokenExpiresIn <= 0) {
+    await auditFailure('invalid_request: subject_token has no remaining lifetime');
+    throw new InvalidRequestError('subject_token has expired');
+  }
 
   const accessToken = await fastify.jwtUtils.signAccessToken({
     sub: user.id,
@@ -1079,9 +1133,8 @@ async function handleTokenExchange(
     scope: scopeString,
     aud,
     act,
+    expiresInOverride: accessTokenExpiresIn,
   });
-
-  const accessTokenExpiresIn = fastify.jwtUtils.getAccessTokenLifespan();
 
   await fastify.repositories.auditLogs.create({
     userId: user.id,
@@ -1094,11 +1147,12 @@ async function handleTokenExchange(
     metadata: {
       grantType: 'token-exchange',
       actor: client.clientId,
-      delegationDepth: actDepth(act),
+      delegationDepth: depth,
       hasActorToken: body.actor_token !== undefined,
       actorTokenSubject: actorPayload?.sub,
       scope: scopeString,
       audience: effectiveAudience,
+      expiresIn: accessTokenExpiresIn,
     },
   });
 

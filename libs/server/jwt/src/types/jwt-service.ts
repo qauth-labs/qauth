@@ -63,4 +63,12 @@ export interface JWTPayload extends SignAccessTokenPayload {
   exp?: number;
   /** Issuer */
   iss?: string;
+  /**
+   * Token-use marker. `signAccessToken` always stamps `'access'` so consumers
+   * can distinguish a genuine access token from any other JWT signed with the
+   * same key (token-confusion defence — e.g. an ID token must not be accepted
+   * as a `subject_token` at the token-exchange endpoint). Absent on legacy
+   * tokens minted before this marker existed.
+   */
+  token_use?: string;
 }

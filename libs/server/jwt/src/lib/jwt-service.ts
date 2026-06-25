@@ -36,6 +36,11 @@ export async function signAccessToken(
   const claims: Record<string, unknown> = {
     sub: payload.sub,
     client_id: payload.clientId,
+    // Token-use marker (token-confusion defence): every token minted by this
+    // function is an OAuth access token. Consumers that must accept ONLY access
+    // tokens — e.g. RFC 8693 token-exchange subject tokens — assert this so a
+    // differently-purposed JWT signed with the same key cannot be substituted.
+    token_use: 'access',
   };
   if (payload.email !== undefined) {
     claims['email'] = payload.email;
@@ -118,6 +123,7 @@ export async function verifyAccessToken(
       iat: payload.iat as number | undefined,
       exp: payload.exp as number | undefined,
       iss: payload.iss as string | undefined,
+      token_use: payload['token_use'] as string | undefined,
     };
   } catch (error) {
     if (error instanceof Error) {

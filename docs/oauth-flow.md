@@ -268,19 +268,32 @@ Rules and guarantees:
 
 - **Agent-only, default-deny.** Only clients classified as agents
   (`is_agent: true`) **and** granted the token-exchange grant type may use it.
-  Because `is_agent` is self-asserted, the server never trusts it alone — it
-  also verifies the subject token (signature / `iss` / `exp`), that the client
-  is enabled, and that the subject user exists and is enabled. Non-agent clients
-  get `unauthorized_client`.
+  Because `is_agent` is self-asserted, the server never trusts it alone.
+- **Confidential clients only.** The token-exchange grant requires confidential
+  client authentication (`client_secret_basic` / `client_secret_post`); a public
+  agent (`token_endpoint_auth_method=none`) is rejected with `invalid_client`.
+- **Subject token must be bound to the agent.** The `subject_token` must be a
+  QAuth-issued **access token** (verified EdDSA signature + `exp`, matching
+  issuer, and an `access`-use marker — ID tokens and other JWTs are rejected
+  with `invalid_request`) **and** its `aud` must contain the requesting agent's
+  `client_id` — i.e. the token was minted for this agent. Together with the
+  confidential-client requirement, this prevents an attacker from minting a
+  delegated token from any captured user token plus a known agent `client_id`.
+  The subject user must also exist and be enabled.
 - **Down-scoping only.** `scope` must be a subset of the subject token's scope
   (else `invalid_scope`); omit it to inherit the full set. `resource` /
   `audience` must fall within the subject token's `aud` (else `invalid_target`).
   Scope and audience are preserved or narrowed — **never widened**.
+- **Lifetime never exceeds the subject token.** The delegated token's
+  `expires_in` is clamped to `min(configured_lifespan, subject_token_remaining)`,
+  so delegation can never outlast the authority it derives from.
 - **Token types.** Only
   `urn:ietf:params:oauth:token-type:access_token` is supported for
   `subject_token_type` / `actor_token_type` / `requested_token_type`; anything
   else returns `invalid_request`. An optional `actor_token` (the acting party)
   requires `actor_token_type` when present.
+- **Bounded delegation depth.** Chained re-exchanges are capped (the nested
+  `act` chain may not exceed 4 actors); deeper requests get `invalid_request`.
 - **No refresh token** is issued — a delegated token is short-lived; the agent
   re-exchanges as needed.
 - Every exchange (success and failure) is written to `audit_logs`, including the

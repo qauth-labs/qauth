@@ -41,6 +41,8 @@ describe('signAccessToken', () => {
     expect(decoded.iss).toBe('https://auth.example.com');
     expect(decoded.iat).toBeDefined();
     expect(decoded.exp).toBeDefined();
+    // Token-use marker is always stamped (token-confusion defence).
+    expect(decoded.token_use).toBe('access');
   });
 
   it('should set expiration time correctly', async () => {
