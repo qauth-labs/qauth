@@ -25,6 +25,7 @@ export default {
         'auth',
         'oauth',
         'oidc',
+        'mcp',
         'db',
         'api',
         'ui',
