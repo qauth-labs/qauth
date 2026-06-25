@@ -156,7 +156,11 @@ Key contract facts:
   an `act` claim names the agent (nested for chained delegation). Agent-only and
   default-deny; scope/audience are preserved or narrowed, never widened. See the
   [Token Exchange](./oauth-flow.md#token-exchange--agent-on-behalf-of-delegation-rfc-8693)
-  section.
+  section and the [Agent Authorization guide](./agent-authorization.md).
+- Dynamic Client Registration (`POST /oauth/register`) accepts the optional
+  QAuth extension field `is_agent` (boolean, default `false`) marking the client
+  as an AI agent; it is echoed back in the response. The flag is self-asserted
+  and untrusted — see [Agent Authorization](./agent-authorization.md#1-agent-client-type-is_agent).
 
 ### Token response (`POST /oauth/token`, `200 OK`)
 
@@ -357,5 +361,7 @@ Clients may also be registered via [Dynamic Client Registration](./oauth-flow.md
 ## See also
 
 - [OAuth 2.1 Flow](./oauth-flow.md) — worked flows with `curl`.
+- [Agent Authorization](./agent-authorization.md) — the agent-native layer
+  (`is_agent`, Token Exchange, scope modes, step-up, audit).
 - [Code Examples](./code-examples.md) — runnable Node/TS and browser clients.
 - [MCP Quickstart](./mcp-quickstart.md) — protect an MCP server end-to-end.

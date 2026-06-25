@@ -320,6 +320,9 @@ even if both trust the same QAuth instance.
 
 - [OAuth 2.1 Flow](./oauth-flow.md) — the `authorization_code` + PKCE flow in
   detail, with copy-paste `curl` for every step (build your own client).
+- [Agent Authorization](./agent-authorization.md) — when an **AI agent** acts on
+  behalf of a user: the `is_agent` client type, RFC 8693 token-exchange
+  delegation, agent scope modes, and step-up before dangerous operations.
 - [`@qauth-labs/mcp-guard` README](../libs/fastify/plugins/mcp-guard/README.md) —
   full configuration, `introspection` mode, and the framework-agnostic core.
 - [ADR-007: MCP-First Positioning](./adr/007-mcp-first-positioning.md) — why this
