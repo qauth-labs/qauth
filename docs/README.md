@@ -19,6 +19,12 @@ interactive **Swagger UI at `/docs`** on any running instance.
 | [**OAuth 2.1 Flow**](./oauth-flow.md)                                          | Every endpoint with copy-paste `curl`: PKCE generation, `/oauth/authorize`, token exchange, refresh-token rotation, `client_credentials`, introspection, UserInfo, and Dynamic Client Registration. |
 | [**ADR-006: OAuth grants & audience**](./adr/006-oauth-grants-and-audience.md) | Why `client_credentials` + `client_secret_basic` and per-client `aud` binding work the way they do.                                                                                                 |
 
+## Agent authorization
+
+| Guide                                               | What it covers                                                                                                                                                                                                                                                                         |
+| --------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [**Agent Authorization**](./agent-authorization.md) | The agent-native layer (ADR-007 §2): the agent client type (`is_agent`), RFC 8693 Token Exchange / on-behalf-of delegation (`act` claim), agent scope modes (ReadOnly / Admin / Exec + the operator-set cap), step-up authentication before dangerous operations, and per-agent audit. |
+
 ## API reference
 
 | Guide                                   | What it covers                                                                                                                                                                                                         |
@@ -30,8 +36,8 @@ The authoritative, always-current surface is the live OpenAPI / Swagger UI at
 
 - **Resource-server SDK** — [`@qauth-labs/mcp-guard`](../libs/fastify/plugins/mcp-guard/README.md)
   (Protected Resource Metadata, Bearer challenges, JWT/introspection validation).
-- The client-management write endpoints (`POST/PATCH/DELETE /api/clients`, regenerate-secret)
-  land with the T2 milestone — see the [API Reference](./api-reference.md#planned--gated-on-the-t2-milestone).
+- The client-management API (`GET/POST/PATCH/DELETE /api/clients`, regenerate-secret)
+  is shipped — see [API Reference → Client management](./api-reference.md#client-management-apiclients).
 
 ## Code examples
 

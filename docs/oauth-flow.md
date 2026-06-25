@@ -236,7 +236,9 @@ curl -s -X POST http://localhost:3000/oauth/token \
 
 > ADR-007 §2 / agent-native authorization. On-behalf-of delegation is an MCP
 > auth **extension** ([ext-auth](https://github.com/modelcontextprotocol/ext-auth)),
-> not core MCP — QAuth provides it as a value-add.
+> not core MCP — QAuth provides it as a value-add. This section is the wire-level
+> reference; for the end-to-end agent story (registering an agent, scope modes,
+> step-up, and audit) see the [Agent Authorization guide](./agent-authorization.md).
 
 An **agent** client exchanges a user's access token (`subject_token`) for a
 delegated access token whose `sub` is the user and whose `act` (actor) claim
@@ -382,6 +384,8 @@ QAuth returns standard OAuth error codes (RFC 6749 §5.2):
 ## See also
 
 - [MCP Quickstart](./mcp-quickstart.md) — end-to-end QAuth → MCP handshake.
+- [Agent Authorization](./agent-authorization.md) — the agent-native layer
+  (`is_agent`, scope modes, step-up, per-agent audit) built on these grants.
 - [`@qauth-labs/mcp-guard`](../libs/fastify/plugins/mcp-guard/README.md) —
   resource-server SDK that validates these tokens.
 - [ADR-006: OAuth grants and audience](./adr/006-oauth-grants-and-audience.md).
