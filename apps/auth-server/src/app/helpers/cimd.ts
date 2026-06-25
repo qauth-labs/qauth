@@ -111,6 +111,12 @@ export interface CimdClientInsert {
   scopes: string[];
   /** ADR-007 §2 agent classification, mirrored from the metadata document. */
   isAgent: boolean;
+  // NOTE (#184): no `maxAgentMode` here, by design. The agent scope-mode cap
+  // is operator-set server state and MUST NOT be self-asserted via a CIMD
+  // document. A CIMD client therefore defaults to a NULL cap (the DB column
+  // default) — deny-by-default — so it can hold no `agent:*` scope until an
+  // operator provisions a cap out of band. This is the epic #181 requirement:
+  // never trust the client's own document for an escalation control.
   metadata: Record<string, unknown>;
 }
 

@@ -4,6 +4,7 @@ import { InvalidClientError } from '@qauth-labs/shared-errors';
 import type { FastifyInstance } from 'fastify';
 
 import { fetchAndValidateCimdDocument, isCimdClientId, toCimdClientInsert } from './cimd';
+import type { AgentMode } from './scope-modes';
 
 /**
  * Unified OAuth client resolution implementing the MCP 2025-11-25 client
@@ -46,9 +47,18 @@ export interface ResolvedClient {
    * ADR-007 §2 first-class agent classification. Surfaced here so the
    * authorize / token / consent handlers that already consume the resolved
    * client can gate agent-native behaviour (delegation, scope modes,
-   * step-up) in later issues. Nothing is gated on it yet.
+   * step-up). Self-asserted, untrusted (see schema column note) — agent-mode
+   * gating uses it via the fail-closed {@link isAgentClient} accessor AND the
+   * server-side `maxAgentMode` cap below, never on its own.
    */
   isAgent: boolean;
+  /**
+   * ADR-007 §2 (#184) server-side maximum agent scope mode. NULL ⇒ no agent
+   * mode permitted (deny-by-default). Operator-set server state, not client
+   * input. Consumed by `toAgentScopeContext` / `findExceedingAgentScopes` to
+   * bound the reserved `agent:*` scopes the client may request.
+   */
+  maxAgentMode: AgentMode | null;
   metadata: Record<string, unknown> | null;
 }
 

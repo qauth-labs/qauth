@@ -442,4 +442,34 @@ describe('repository integration (real Postgres)', () => {
       expect(reloaded?.isAgent).toBe(true);
     });
   });
+
+  describe('oauth_clients — max_agent_mode cap (ADR-007 §2, #184)', () => {
+    it('defaults max_agent_mode to null (deny-by-default migration)', async () => {
+      const realm = await seedRealm('agent-mode-default-realm');
+      // seedClient does not set maxAgentMode, so the nullable column default applies.
+      const client = await seedClient(realm.id, 'no-cap-client');
+      expect(client.maxAgentMode).toBeNull();
+    });
+
+    it('persists and round-trips an operator-set agent mode cap', async () => {
+      const realm = await seedRealm('agent-mode-realm');
+      const clients = createOAuthClientsRepository(db().database.db);
+
+      const created = await clients.create({
+        realmId: realm.id,
+        clientId: 'capped-agent-client',
+        clientSecretHash: 'secret-hash',
+        name: 'Capped Agent',
+        redirectUris: ['https://agent.example.com/cb'],
+        scopes: ['agent:readonly', 'agent:admin'],
+        grantTypes: ['authorization_code', 'refresh_token'],
+        isAgent: true,
+        maxAgentMode: 'admin',
+      });
+      expect(created.maxAgentMode).toBe('admin');
+
+      const reloaded = await clients.findByClientId(realm.id, 'capped-agent-client');
+      expect(reloaded?.maxAgentMode).toBe('admin');
+    });
+  });
 });

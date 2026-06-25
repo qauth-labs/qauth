@@ -2,7 +2,8 @@ import { InvalidClientError, InvalidScopeError } from '@qauth-labs/shared-errors
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 
-import { resolveClient } from './client-resolution';
+import { isAgentClient, resolveClient } from './client-resolution';
+import { type AgentMode, findExceedingAgentScopes, parseAgentMode } from './scope-modes';
 
 /** Maximum length of a single audience URI (defensive cap, RFC 8707 leaves this open). */
 const AUDIENCE_ENTRY_MAX_LENGTH = 256;
@@ -32,6 +33,19 @@ export type OAuthClientLike = {
    * When absent we conservatively treat the client as confidential.
    */
   tokenEndpointAuthMethod?: string;
+  /**
+   * ADR-007 §2 (#182) self-asserted agent classification. Optional here so
+   * the structural type stays a superset of older callers; absent ⇒ NOT an
+   * agent (fail-closed via {@link isAgentClient}).
+   */
+  isAgent?: boolean;
+  /**
+   * ADR-007 §2 (#184) server-side maximum agent scope mode. NULL/absent ⇒ no
+   * agent-mode scope is permitted (default-deny). This is operator-set
+   * server state, NOT client input — it is the independent server-side
+   * criterion that, together with `isAgent`, gates agent-mode scopes.
+   */
+  maxAgentMode?: AgentMode | null;
 };
 
 /**
@@ -185,22 +199,107 @@ export async function authenticateClientPublicOrConfidential(
 }
 
 /**
+ * Agent context consumed by the scope-mode cap (ADR-007 §2, #184). Carries
+ * exactly the two server-side inputs the cap needs:
+ *   - `isAgent` — the fail-closed classification (pass `isAgentClient(client)`).
+ *   - `maxAgentMode` — the operator-set ceiling (NULL ⇒ no agent mode).
+ */
+export interface AgentScopeContext {
+  isAgent: boolean;
+  maxAgentMode: AgentMode | null;
+}
+
+/**
+ * Build the {@link AgentScopeContext} for a resolved client, applying the
+ * fail-closed accessor and parsing the stored cap. A non-agent client, or a
+ * client whose stored `maxAgentMode` is null / unknown, yields a context that
+ * denies every reserved agent-mode scope.
+ *
+ * `maxAgentMode` may arrive as a string from the DB column; {@link parseAgentMode}
+ * fails closed to `null` for any unrecognised value.
+ */
+export function toAgentScopeContext(
+  client: { isAgent?: boolean; maxAgentMode?: string | AgentMode | null } | null | undefined
+): AgentScopeContext {
+  return {
+    isAgent: isAgentClient(client),
+    maxAgentMode: parseAgentMode(client?.maxAgentMode ?? null),
+  };
+}
+
+/**
+ * Reject any reserved agent-mode scope (`agent:readonly|admin|exec`) that the
+ * client may not hold (ADR-007 §2, #184). Runs as a deny-by-default gate in
+ * front of the ordinary allowlist: a reserved-mode scope is permitted ONLY
+ * when the client is a verified agent AND the mode is within its server-side
+ * cap. See `scope-modes.ts` for the full trust-boundary rationale.
+ *
+ * Throws `InvalidScopeError` (RFC 6749 §5.2 `invalid_scope`) — the same error
+ * shape `validateScopes` raises — so callers need no new error handling.
+ */
+export function enforceAgentScopeCap(
+  requestedScopes: readonly string[],
+  agent: AgentScopeContext
+): void {
+  const exceeding = findExceedingAgentScopes(requestedScopes, agent.isAgent, agent.maxAgentMode);
+  if (exceeding.length > 0) {
+    throw new InvalidScopeError(`${exceeding.join(' ')} exceeds the client's agent scope mode`);
+  }
+}
+
+/**
+ * Compute the reserved agent-mode scopes (`agent:readonly|admin|exec`) in a
+ * raw, space-delimited scope string that a client may NOT hold (ADR-007 §2,
+ * #184). A thin façade over {@link toAgentScopeContext} + the cap check so the
+ * redirect-based issuance routes (`/oauth/authorize`, `/ui/consent`) enforce
+ * the cap identically without each re-implementing the split + deny logic —
+ * the consent route in particular MUST share this so the authorization_code
+ * path is enforced where the code is actually minted, not only pre-consent.
+ *
+ * Returns the offending scopes (empty ⇒ within policy). Does NOT throw —
+ * these routes signal failure with an `invalid_scope` redirect, not an
+ * exception. Fail-closed via `toAgentScopeContext` (non-agent / null / unknown
+ * cap ⇒ every `agent:*` scope is reported).
+ */
+export function findExceedingAgentScopesForClient(
+  requestedScopeString: string | undefined,
+  client: { isAgent?: boolean; maxAgentMode?: string | AgentMode | null } | null | undefined
+): string[] {
+  const requested = (requestedScopeString ?? '').split(/\s+/).filter((s) => s.length > 0);
+  const ctx = toAgentScopeContext(client);
+  return findExceedingAgentScopes(requested, ctx.isAgent, ctx.maxAgentMode);
+}
+
+/**
  * Validate that every requested scope is in the client's allowed list.
  * Empty allowed-list means "no custom scopes configured" — we accept nothing
  * (safer default for machine grants).
  *
+ * When an {@link AgentScopeContext} is supplied, the reserved agent-mode
+ * scopes are additionally gated by {@link enforceAgentScopeCap} BEFORE the
+ * allowlist check, so a capped agent can never obtain a higher mode and a
+ * non-agent client can never obtain any agent-mode scope (default-deny). The
+ * parameter is optional so existing two-argument callers compile unchanged;
+ * callers that resolve a full client SHOULD pass `toAgentScopeContext(client)`.
+ *
  * Returns the validated list (may be empty). Throws `InvalidScopeError`
  * (RFC 6749 5.2 `invalid_scope`, HTTP 400) when any requested scope is
- * outside the client's allowlist.
+ * outside the client's allowlist or exceeds its agent scope mode.
  */
 export function validateScopes(
   requestedScopeString: string | undefined,
-  allowedScopes: string[]
+  allowedScopes: string[],
+  agent?: AgentScopeContext
 ): string[] {
   if (!requestedScopeString || requestedScopeString.trim().length === 0) {
     return [];
   }
   const requested = requestedScopeString.split(/\s+/).filter((s) => s.length > 0);
+  // Deny-by-default agent-mode cap first: an agent-mode scope that the client
+  // may not hold is rejected even if it also appears in the raw allowlist.
+  if (agent) {
+    enforceAgentScopeCap(requested, agent);
+  }
   const disallowed = requested.filter((s) => !allowedScopes.includes(s));
   if (disallowed.length > 0) {
     throw new InvalidScopeError(`${disallowed.join(' ')} not permitted for this client`);
