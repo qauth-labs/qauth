@@ -246,20 +246,103 @@ List the authenticated developer's OAuth clients.
 
 A developer with no clients gets `{ "clients": [] }`. Errors: `401` (missing/invalid bearer).
 
-### Planned — gated on the T2 milestone
+> **Ownership & 404 semantics.** Every per-client route is scoped to the token
+> subject's `developer_id`. A client that exists but is owned by another
+> developer is reported as **`404 Not Found`** (not `403`) so the API never
+> confirms the existence of clients the caller does not own.
 
-The write operations are not yet implemented (tracked under
-[T2 — Agent-native authZ](https://github.com/qauth-labs/qauth/milestones)):
+### `POST /api/clients`
 
-| Endpoint                             | Method | Issue                                                |
-| ------------------------------------ | ------ | ---------------------------------------------------- |
-| `/api/clients`                       | POST   | [#86](https://github.com/qauth-labs/qauth/issues/86) |
-| `/api/clients/:id`                   | GET    | [#87](https://github.com/qauth-labs/qauth/issues/87) |
-| `/api/clients/:id`                   | PATCH  | [#88](https://github.com/qauth-labs/qauth/issues/88) |
-| `/api/clients/:id`                   | DELETE | [#89](https://github.com/qauth-labs/qauth/issues/89) |
-| `/api/clients/:id/regenerate-secret` | POST   | [#90](https://github.com/qauth-labs/qauth/issues/90) |
+Create an OAuth client owned by the authenticated developer. The server
+generates the `clientId` (UUID) and, for confidential clients, a 32-byte
+`clientSecret`. **The plaintext `clientSecret` is returned in this response
+only** — only its argon2id hash is stored, so it is unrecoverable afterwards.
 
-Until they land, register clients via [Dynamic Client Registration](./oauth-flow.md#dynamic-client-registration-rfc-7591)
+**Headers**: `Authorization: Bearer <access_token>` (required).
+
+**Body** (all besides `name` optional):
+
+| Field                     | Type     | Default                                  | Notes                                                                                                                                         |
+| ------------------------- | -------- | ---------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| `name`                    | string   | —                                        | Required, 1–255 chars.                                                                                                                        |
+| `description`             | string   | `null`                                   |                                                                                                                                               |
+| `redirectUris`            | string[] | `[]`                                     | Each validated (OAuth 2.1 §10.3 — `https` or loopback). **Required (≥1) for user-involving grants** (`authorization_code` / `refresh_token`). |
+| `scopes`                  | string[] | `[]`                                     | Capped to the realm's allowed-scopes policy (same allowlist as dynamic registration); a scope outside it is rejected.                         |
+| `grantTypes`              | string[] | `["authorization_code","refresh_token"]` | `authorization_code` / `refresh_token` / `client_credentials`.                                                                                |
+| `responseTypes`           | string[] | `["code"]`                               | OAuth 2.1 only supports `code`.                                                                                                               |
+| `tokenEndpointAuthMethod` | string   | `"none"`                                 | `none` (public) / `client_secret_post` / `client_secret_basic` / `private_key_jwt`.                                                           |
+
+**Rate limit**: per-IP, shared budget with `POST /oauth/register`
+(`REGISTER_CLIENT_RATE_LIMIT` / `REGISTER_CLIENT_RATE_WINDOW`) — create runs an
+argon2id hash on every call, so the cap is mandatory (`429` on exceed).
+
+**`201 Created`** (`Cache-Control: no-store`)
+
+```json
+{
+  "id": "0190f7…",
+  "clientId": "0190f7a0-…-uuid",
+  "name": "My App",
+  "description": null,
+  "redirectUris": ["https://app.example.com/cb"],
+  "scopes": ["openid"],
+  "grantTypes": ["authorization_code", "refresh_token"],
+  "responseTypes": ["code"],
+  "tokenEndpointAuthMethod": "client_secret_post",
+  "enabled": true,
+  "requirePkce": true,
+  "createdAt": 1750000000000,
+  "updatedAt": 1750000000000,
+  "lastUsedAt": null,
+  "clientSecret": "a1b2c3…(64 hex chars, shown once)"
+}
+```
+
+Public clients (`tokenEndpointAuthMethod: "none"`) get **no** `clientSecret`.
+Errors: `400` (invalid `redirectUri`, inconsistent grant/response types, missing
+`redirectUris` for a user-involving grant, or a scope outside the realm policy),
+`401` (missing/invalid bearer, or a non-user token), `429` (rate limited).
+
+### `GET /api/clients/:id`
+
+Get one of the developer's clients. Safe fields only — never the secret.
+
+**`200 OK`** — the same shape as a `GET /api/clients` list item.
+Errors: `401`; `404` (not found or not owned).
+
+### `PATCH /api/clients/:id`
+
+Partially update a client. Any subset of: `name`, `description`,
+`redirectUris`, `scopes`, `grantTypes`, `responseTypes`,
+`tokenEndpointAuthMethod`, `enabled`. `clientId`, the secret, and
+`developerId` are **immutable** here (unknown/immutable keys are ignored). The
+_effective_ configuration (request value or persisted value) is re-validated:
+grant/response-type consistency, a redirect URI for user-involving grants, and
+the realm scope cap when `scopes` is changed.
+
+**`200 OK`** — the updated client (safe fields, no secret).
+Errors: `400` (validation / inconsistent config / disallowed scope / missing
+redirect for a user-involving grant), `401`, `404`.
+
+### `DELETE /api/clients/:id`
+
+Delete a client. After deletion the client can no longer authenticate at the
+token endpoint and cannot start new authorization flows. Note: already-issued
+**access tokens are stateless JWTs** and remain valid until they expire;
+short access-token lifetimes bound this window.
+
+**`204 No Content`**. Errors: `401`; `404` (not found or not owned).
+
+### `POST /api/clients/:id/regenerate-secret`
+
+Issue a new `clientSecret`. The previous secret is invalidated immediately;
+**the new plaintext secret is returned in this response only.**
+
+**`200 OK`** (`Cache-Control: no-store`) — the client (safe fields) plus a
+`clientSecret` string. Errors: `400` (public client — no secret to rotate),
+`401`, `404`, `429` (rate limited — argon2id, same per-IP budget as create).
+
+Clients may also be registered via [Dynamic Client Registration](./oauth-flow.md#dynamic-client-registration-rfc-7591)
 (`POST /oauth/register`), CIMD, or the `seed-oauth-clients` script.
 
 ---
