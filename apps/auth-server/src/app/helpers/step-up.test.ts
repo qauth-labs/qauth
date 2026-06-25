@@ -5,6 +5,8 @@ import {
   evaluateStepUp,
   isDangerousScope,
   parsePromptMode,
+  type StepUpDecision,
+  stepUpErrorForPromptNone,
   type StepUpInput,
 } from './step-up';
 
@@ -106,6 +108,23 @@ describe('evaluateStepUp', () => {
     expect(d.requiresConsent).toBe(true);
   });
 
+  it('a dangerous scope ALREADY covered by prior consent still forces fresh auth (no elevation needed)', () => {
+    // Should-fix #2: dangerous gating spans all requested scopes, not just the
+    // elevated subset, so a "remembered" dangerous grant cannot be replayed off
+    // a stale session without a fresh authentication.
+    const d = evaluateStepUp({
+      ...base,
+      requestedScopes: ['write:files'],
+      priorConsentScopes: ['write:files'], // already remembered → NOT elevated
+      authTimeMs: NOW - 10 * 60 * 1000, // stale
+    });
+    expect(d.elevated).toEqual([]); // nothing newly requested
+    expect(d.dangerous).toEqual(['write:files']); // but still dangerous
+    expect(d.requiresFreshLogin).toBe(true); // and still gated
+    // No elevation → no forced consent on its own (the danger drives login).
+    expect(d.requiresConsent).toBe(false);
+  });
+
   it('a dangerous elevated scope is satisfied by a recent (in-window) authentication', () => {
     const d = evaluateStepUp({
       ...base,
@@ -143,13 +162,25 @@ describe('evaluateStepUp', () => {
     expect(d.elevated).toEqual([]);
   });
 
-  it('max_age=0 always forces a fresh login (any positive age exceeds 0), ignoring the window', () => {
-    const d = evaluateStepUp({
+  // OIDC `auth_time` is second-granular: a just-completed login (sub-second
+  // age) MUST satisfy max_age=0 so the authorize→login→authorize round-trip
+  // terminates. A millisecond-precision comparison here would loop forever
+  // (the prior bug this test now guards against).
+  it('max_age=0 is satisfied by a sub-second-old authentication (no infinite loop)', () => {
+    const justLoggedIn = evaluateStepUp({
       ...base,
       maxAgeSeconds: 0,
-      authTimeMs: NOW - 1, // 1ms old — inside the freshness window, but max_age is exact
+      authTimeMs: NOW - 40, // 40ms old — floor(0.04s) = 0, so 0 > 0 is false
     });
-    expect(d.requiresFreshLogin).toBe(true);
+    expect(justLoggedIn.requiresFreshLogin).toBe(false);
+
+    // But an authentication a full second or more old DOES exceed max_age=0.
+    const oneSecondOld = evaluateStepUp({
+      ...base,
+      maxAgeSeconds: 0,
+      authTimeMs: NOW - 1500, // floor(1.5s) = 1 > 0
+    });
+    expect(oneSecondOld.requiresFreshLogin).toBe(true);
   });
 
   it('max_age is enforced exactly against its own value, not widened by the window', () => {
@@ -164,5 +195,31 @@ describe('evaluateStepUp', () => {
 
     const within = evaluateStepUp({ ...base, maxAgeSeconds: 60, authTimeMs: NOW - 30 * 1000 });
     expect(within.requiresFreshLogin).toBe(false);
+  });
+});
+
+describe('stepUpErrorForPromptNone', () => {
+  function decision(over: Partial<StepUpDecision>): StepUpDecision {
+    return {
+      elevated: [],
+      dangerous: [],
+      requiresFreshLogin: false,
+      requiresConsent: false,
+      ...over,
+    };
+  }
+
+  it('returns login_required when a fresh login is needed (takes precedence)', () => {
+    expect(
+      stepUpErrorForPromptNone(decision({ requiresFreshLogin: true, requiresConsent: true }))
+    ).toBe('login_required');
+  });
+
+  it('returns consent_required when only consent is needed', () => {
+    expect(stepUpErrorForPromptNone(decision({ requiresConsent: true }))).toBe('consent_required');
+  });
+
+  it('returns null when no interaction is required (request may proceed)', () => {
+    expect(stepUpErrorForPromptNone(decision({}))).toBeNull();
   });
 });

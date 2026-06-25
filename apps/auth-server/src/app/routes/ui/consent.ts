@@ -573,6 +573,11 @@ export default async function (fastify: FastifyInstance) {
       // resetting auth_time). Prior consent is intentionally NOT consulted here
       // — every scope about to be minted is treated as needing the gate, so the
       // dangerous-op re-auth cannot be skipped by a stale prior grant.
+      // Only `requiresFreshLogin` is consulted on this mint path: the user is
+      // actively consenting (this IS the consent screen submit), so
+      // `requiresConsent` — always true here given `priorConsentScopes: []` —
+      // is irrelevant. We just need to confirm the authentication is fresh
+      // enough for whatever (incl. dangerous) scopes are about to be granted.
       const prompt = parsePromptMode(body.prompt);
       const stepUp = evaluateStepUp({
         requestedScopes: scopes,

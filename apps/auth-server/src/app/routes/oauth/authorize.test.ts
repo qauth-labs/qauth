@@ -667,16 +667,138 @@ describe('GET /oauth/authorize — step-up authentication (ADR-007 §2, #185)', 
     expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
   });
 
-  it('max_age=0 forces fresh auth even on an otherwise-skippable request', async () => {
+  it('max_age=0 forces fresh auth when the session is a second or more old', async () => {
     const { fastify, state } = await run({
       client: CLIENT,
       scope: 'email',
       priorConsent: ['email'],
-      createdAt: Date.now() - 5000,
+      createdAt: Date.now() - 5000, // 5s old → floor(5) = 5 > 0
       maxAge: '0',
       sid: 'sid-su-6',
     });
     expect(state.redirected).toContain('/ui/login?return_to=');
     expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
+  });
+
+  // BLOCKER #1 regression: the authorize → login → authorize round-trip for
+  // max_age=0 MUST terminate. After login re-mints the session, the second
+  // authorize sees a sub-second-old auth_time; with OIDC second-granularity
+  // (floor), max_age=0 is satisfied (0 > 0 is false) and a code is minted
+  // rather than bouncing to /ui/login again forever.
+  it('max_age=0 TERMINATES: a just-logged-in (sub-second) session mints the code', async () => {
+    const { fastify, state } = await run({
+      client: CLIENT,
+      scope: 'email',
+      priorConsent: ['email'],
+      createdAt: Date.now() - 40, // 40ms old, simulating the post-login return trip
+      maxAge: '0',
+      sid: 'sid-su-6b',
+    });
+    expect(state.redirected).not.toContain('/ui/login');
+    expect(state.redirected).toContain('code=');
+    expect(fastify.repositories.authorizationCodes.create).toHaveBeenCalledOnce();
+  });
+
+  // Should-fix #2: a dangerous scope already covered by a remembered prior
+  // consent must STILL force fresh auth on the authorize skip-consent path — it
+  // cannot be replayed off a stale grant. (Previously this minted directly.)
+  it('forces fresh auth for a REMEMBERED dangerous scope on a stale session (no replay)', async () => {
+    const { fastify, state } = await run({
+      scope: 'write:foo',
+      priorConsent: ['write:foo'], // remembered → would otherwise skip consent
+      createdAt: Date.now() - 10 * MINUTE,
+      sid: 'sid-su-7',
+    });
+    expect(state.redirected).toContain('/ui/login?return_to=');
+    expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
+  });
+
+  // OIDC Core §3.1.2.1: prompt=none must NOT show UI; an interaction need is
+  // reported as the matching error to the client instead.
+  it('prompt=none returns login_required (no UI) when a dangerous scope needs fresh auth', async () => {
+    const { fastify, state } = await run({
+      scope: 'write:foo',
+      priorConsent: ['write:foo'],
+      createdAt: Date.now() - 10 * MINUTE,
+      prompt: 'none',
+      sid: 'sid-su-8',
+    });
+    expect(state.redirected).toContain('https://example.com/cb');
+    expect(state.redirected).toContain('error=login_required');
+    expect(state.redirected).not.toContain('/ui/login');
+    expect(state.redirected).not.toContain('/ui/consent');
+    expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
+  });
+
+  it('prompt=none returns consent_required (no UI) for a non-dangerous elevation', async () => {
+    const { fastify, state } = await run({
+      client: CLIENT,
+      scope: 'read:foo email',
+      priorConsent: ['email'], // read:foo is a new, non-dangerous elevation
+      createdAt: Date.now() - 1000,
+      prompt: 'none',
+      sid: 'sid-su-9',
+    });
+    expect(state.redirected).toContain('error=consent_required');
+    expect(state.redirected).not.toContain('/ui/consent');
+    expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
+  });
+
+  it('prompt=none proceeds (mints a code) when no interaction is required', async () => {
+    const { fastify, state } = await run({
+      client: CLIENT,
+      scope: 'email',
+      priorConsent: ['email'],
+      createdAt: Date.now() - 1000,
+      prompt: 'none',
+      sid: 'sid-su-10',
+    });
+    expect(state.redirected).toContain('code=');
+    expect(fastify.repositories.authorizationCodes.create).toHaveBeenCalledOnce();
+  });
+});
+
+describe('GET /oauth/authorize — Bearer path step-up (ADR-007 §2, #185)', () => {
+  // The Bearer (legacy first-party) path cannot run interactive step-up, so a
+  // dangerous scope on it is refused rather than minted with no fresh auth.
+  const DANGEROUS_CLIENT = {
+    ...CLIENT,
+    clientId: 'app-bearer',
+    scopes: ['read:foo', 'write:foo', 'email'],
+  };
+
+  async function runBearer(scope: string) {
+    const { fastify, ctx } = makeFastify();
+    await authorizeRoute(fastify);
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(
+      DANGEROUS_CLIENT
+    );
+    // No browser session; a valid Bearer token resolves the user.
+    (fastify.sessionUtils.getSession as unknown as Mock).mockResolvedValue(null);
+    (fastify.jwtUtils.extractFromHeader as unknown as Mock).mockReturnValue('bearer.token');
+    (fastify.jwtUtils.verifyAccessToken as unknown as Mock).mockResolvedValue({ sub: 'user-1' });
+    const { reply, state } = createReply();
+    await ctx.handler!(
+      {
+        query: { ...BASE_QUERY, client_id: 'app-bearer', scope },
+        url: `/oauth/authorize?response_type=code&client_id=app-bearer&scope=${encodeURIComponent(scope)}`,
+        headers: { authorization: 'Bearer bearer.token' },
+        ip: '127.0.0.1',
+      },
+      reply
+    );
+    return { fastify, state };
+  }
+
+  it('refuses a dangerous scope on the Bearer path with access_denied (no interactive step-up)', async () => {
+    const { fastify, state } = await runBearer('write:foo');
+    expect(state.redirected).toContain('error=access_denied');
+    expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
+  });
+
+  it('still mints a code for a non-dangerous scope on the Bearer path', async () => {
+    const { fastify, state } = await runBearer('email');
+    expect(state.redirected).toContain('code=');
+    expect(fastify.repositories.authorizationCodes.create).toHaveBeenCalledOnce();
   });
 });

@@ -13,7 +13,12 @@ import { canSkipConsent, filterRequestedScopes } from '../../helpers/consent';
 import { getOrCreateSystemClient } from '../../helpers/oauth-client';
 import { buildRedirectUrl } from '../../helpers/oauth-redirect';
 import { getOrCreateDefaultRealm } from '../../helpers/realm';
-import { evaluateStepUp, parsePromptMode } from '../../helpers/step-up';
+import {
+  evaluateStepUp,
+  isDangerousScope,
+  parsePromptMode,
+  stepUpErrorForPromptNone,
+} from '../../helpers/step-up';
 import { type AuthorizeQuery, authorizeQuerySchema } from '../../schemas/oauth';
 
 /**
@@ -268,6 +273,45 @@ export default async function (fastify: FastifyInstance) {
       // requested scope on the auth-code flow.
       const scopes = filterRequestedScopes(query.scope, client);
 
+      // ADR-007 §2 (#185): step-up on the legacy Bearer path. The Bearer path
+      // authenticates the user from an existing access token and CANNOT run an
+      // interactive step-up (no login / consent screen for a machine caller),
+      // so it must not be a back door that mints a dangerous-scope code with no
+      // fresh authentication. Default-deny: a Bearer authorize request carrying
+      // any dangerous scope (write:* / agent:admin / agent:exec) is refused
+      // with `access_denied` and the client is told to use the interactive
+      // browser flow (which enforces the dangerous-op re-auth gate). Bearer is
+      // legacy first-party and not exposed to dynamically-registered clients,
+      // so this only affects first-party callers requesting dangerous scopes.
+      if (!browserSession) {
+        const bearerDangerous = scopes.filter(isDangerousScope);
+        if (bearerDangerous.length > 0) {
+          await fastify.repositories.auditLogs.create({
+            userId,
+            oauthClientId: client.id,
+            event: 'oauth.stepup.required',
+            eventType: 'auth',
+            success: false,
+            ipAddress: request.ip,
+            userAgent: request.headers['user-agent'] || null,
+            metadata: {
+              client_id: query.client_id,
+              reason: 'bearer_path_dangerous_scope_requires_interactive_stepup',
+              dangerous: bearerDangerous,
+            },
+          });
+          return reply.redirect(
+            buildRedirectUrl(redirectUri, {
+              error: 'access_denied',
+              error_description:
+                'dangerous scopes require interactive step-up; use the browser authorization flow',
+              state: state ?? undefined,
+            }),
+            302
+          );
+        }
+      }
+
       // Browser-driven flow: show the consent screen unless a previous
       // grant already covers the requested scopes. Bearer-token callers
       // skip the consent step entirely — they are first-party and the
@@ -298,7 +342,41 @@ export default async function (fastify: FastifyInstance) {
           freshAuthWindowMs: STEP_UP_FRESH_AUTH_WINDOW_MS,
         });
 
-        if (stepUp.requiresFreshLogin) {
+        // OIDC Core §3.1.2.1: `prompt=none` forbids ANY user-facing UI. If
+        // step-up would otherwise show the login or consent screen, return the
+        // matching bare OIDC error to the client instead of redirecting to UI.
+        if (prompt === 'none') {
+          const oidcError = stepUpErrorForPromptNone(stepUp);
+          if (oidcError) {
+            await fastify.repositories.auditLogs.create({
+              userId,
+              oauthClientId: client.id,
+              event: 'oauth.stepup.required',
+              eventType: 'auth',
+              success: false,
+              ipAddress: request.ip,
+              userAgent: request.headers['user-agent'] || null,
+              metadata: {
+                client_id: query.client_id,
+                reason: 'prompt_none_interaction_required',
+                error: oidcError,
+                elevated: stepUp.elevated,
+                dangerous: stepUp.dangerous,
+              },
+            });
+            return reply.redirect(
+              buildRedirectUrl(redirectUri, {
+                error: oidcError,
+                error_description: 'step-up interaction is required but prompt=none was requested',
+                state: state ?? undefined,
+              }),
+              302
+            );
+          }
+          // No interaction required → fall through to ordinary issuance.
+        }
+
+        if (prompt !== 'none' && stepUp.requiresFreshLogin) {
           // Force a fresh end-user authentication: bounce through /ui/login,
           // which always mints a brand-new session (session-fixation defense),
           // resetting auth_time so the elevation is granted only right after
@@ -328,7 +406,11 @@ export default async function (fastify: FastifyInstance) {
         // Re-consent when the request elevates scope or explicitly asks for it,
         // even if a prior grant would otherwise let us skip the screen — a
         // wider scope set must be explicitly re-affirmed, never auto-widened.
-        if (stepUp.requiresConsent || !canSkipConsent(existingConsent, client, scopes)) {
+        // (`prompt=none` already returned consent_required above if needed.)
+        if (
+          prompt !== 'none' &&
+          (stepUp.requiresConsent || !canSkipConsent(existingConsent, client, scopes))
+        ) {
           if (stepUp.elevated.length > 0) {
             await fastify.repositories.auditLogs.create({
               userId,

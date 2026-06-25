@@ -27,9 +27,11 @@ import { AGENT_MODE_SCOPES } from './scope-modes';
  *   - `login`   — force a fresh end-user authentication.
  *   - `consent` — force the consent screen even if a prior grant would cover
  *     the request (used to re-affirm an elevation).
- *   - `none`    — caller asserts no UI; we still fail-closed and refuse to
- *     silently elevate (the route maps this to an interaction-required style
- *     error rather than auto-widening).
+ *   - `none`    — caller asserts no UI may be shown (OIDC Core §3.1.2.1). When
+ *     step-up would otherwise display UI, the route MUST instead return the
+ *     matching OIDC error (`login_required` / `consent_required` /
+ *     `interaction_required`) — see {@link stepUpErrorForPromptNone}. We never
+ *     silently elevate.
  */
 export type PromptMode = 'login' | 'consent' | 'none';
 
@@ -122,13 +124,19 @@ export interface StepUpInput {
 export interface StepUpDecision {
   /** The newly-requested (elevated) scopes that drove the decision. */
   elevated: string[];
-  /** The elevated scopes classified dangerous (subset of `elevated`). */
+  /**
+   * The requested scopes classified dangerous (`write:*` / `agent:admin` /
+   * `agent:exec`). NB: computed over ALL requested scopes, NOT just elevated
+   * ones — a dangerous scope already covered by a prior "remembered" consent
+   * still requires fresh auth, so the skip-consent fast path can never mint a
+   * dangerous-scope code off a stale grant (see rule 3).
+   */
   dangerous: string[];
   /**
    * The current session must re-authenticate before a code is issued. Driven
-   * by `prompt=login`, a `max_age` the session age exceeds, OR a dangerous
-   * elevation (default-deny: a dangerous new scope always forces fresh auth,
-   * regardless of any client-supplied signal).
+   * by `prompt=login`, a `max_age` the session age exceeds, OR any dangerous
+   * scope being granted (default-deny: a dangerous scope always forces fresh
+   * auth, regardless of prior consent or any client-supplied signal).
    */
   requiresFreshLogin: boolean;
   /**
@@ -147,37 +155,73 @@ export interface StepUpDecision {
  *  1. Any scope newly requested beyond the prior consent is an `elevated`
  *     scope ⇒ `requiresConsent` (re-affirm the wider set; never auto-widen).
  *  2. `prompt=consent` ⇒ `requiresConsent` even with no elevation.
- *  3. A dangerous elevated scope ⇒ `requiresFreshLogin` — a state-changing /
- *     privileged capability is only granted right after the user proves
- *     presence. This is the "dangerous operation" gate and needs no client
- *     opt-in.
+ *  3. Any dangerous scope being granted (whether newly elevated OR already
+ *     covered by a remembered prior consent) ⇒ `requiresFreshLogin` — a
+ *     state-changing / privileged capability is only granted right after the
+ *     user proves presence. This is the "dangerous operation" gate; it needs
+ *     no client opt-in and a stale prior grant cannot satisfy it. Both the
+ *     authorize skip-consent path and the consent mint path share this, so
+ *     they agree.
  *  4. `prompt=login` ⇒ `requiresFreshLogin`.
- *  5. `max_age` present and the session is older than it ⇒ `requiresFreshLogin`
- *     (`max_age=0` ⇒ always, since any positive age exceeds 0).
+ *  5. `max_age` present and the authentication is older than it ⇒
+ *     `requiresFreshLogin`. Age is floored to whole seconds to match OIDC
+ *     `auth_time` granularity (OIDC Core §2), so a just-completed login (a
+ *     sub-second-old session) satisfies even `max_age=0` — `0 > 0` is false.
+ *     This is what makes the `authorize → login → authorize` round-trip
+ *     TERMINATE instead of looping forever.
  *
- * A request that is fully within an existing grant, with no prompt/max_age and
- * no dangerous scope, yields no step-up (`requiresFreshLogin=false`,
- * `requiresConsent=false`) and the ordinary skip-consent fast path applies.
+ * The `prompt=login` / dangerous-scope requirement (3, 4) additionally honours
+ * the freshness window: an authentication newer than `freshAuthWindowMs` counts
+ * as fresh, so the post-login return trip is not bounced again. `max_age` (5)
+ * is enforced exactly against its own value and is NOT widened by that window.
+ *
+ * A request fully within an existing grant, with no prompt/max_age and no
+ * dangerous scope, yields no step-up and the ordinary skip-consent fast path
+ * applies.
  */
 export function evaluateStepUp(input: StepUpInput): StepUpDecision {
   const elevated = elevatedScopes(input.requestedScopes, input.priorConsentScopes);
-  const dangerous = elevated.filter(isDangerousScope);
+  // Dangerous classification spans ALL requested scopes (rule 3), not only the
+  // elevated subset — a remembered dangerous scope must still force fresh auth.
+  const dangerous = input.requestedScopes.filter(isDangerousScope);
 
   const requiresConsent = elevated.length > 0 || input.prompt === 'consent';
 
   const authAgeMs = input.nowMs - input.authTimeMs;
 
-  // `prompt=login` and dangerous elevations demand a *fresh* authentication,
-  // but one performed within the freshness window counts — otherwise the
-  // post-login return trip would re-trigger the same requirement and loop.
+  // `prompt=login` and dangerous scopes demand a *fresh* authentication, but
+  // one performed within the freshness window counts — otherwise the post-login
+  // return trip would re-trigger the same requirement and loop.
   const authIsFresh = authAgeMs <= input.freshAuthWindowMs;
   const loginRequirement = (dangerous.length > 0 || input.prompt === 'login') && !authIsFresh;
 
-  // `max_age` is enforced exactly against the request value (not widened by
-  // the freshness window). `max_age=0` ⇒ any positive age fails.
-  const maxAgeExceeded = input.maxAgeSeconds !== null && authAgeMs > input.maxAgeSeconds * 1000;
+  // `max_age` is enforced exactly against the request value (not widened by the
+  // freshness window) BUT at OIDC second-granularity: floor the age to whole
+  // seconds so a just-completed login satisfies `max_age=0` (`0 > 0` is false)
+  // and the re-auth round-trip terminates instead of looping forever.
+  const authAgeSeconds = Math.floor(authAgeMs / 1000);
+  const maxAgeExceeded = input.maxAgeSeconds !== null && authAgeSeconds > input.maxAgeSeconds;
 
   const requiresFreshLogin = loginRequirement || maxAgeExceeded;
 
   return { elevated, dangerous, requiresFreshLogin, requiresConsent };
+}
+
+/**
+ * OIDC `prompt=none` error mapping (OIDC Core §3.1.2.1). When the caller forbids
+ * UI but a step-up decision would otherwise display the login or consent screen,
+ * the route MUST return one of these bare error codes instead (delivered as an
+ * `error=` redirect to the client). Returns `null` when no interaction is
+ * required (the request may proceed without UI).
+ *
+ * Precedence: a fresh-authentication requirement is reported as `login_required`
+ * even if consent is also pending — the user cannot consent before
+ * (re-)authenticating. `interaction_required` is the generic fallback.
+ */
+export function stepUpErrorForPromptNone(
+  decision: StepUpDecision
+): 'login_required' | 'consent_required' | 'interaction_required' | null {
+  if (decision.requiresFreshLogin) return 'login_required';
+  if (decision.requiresConsent) return 'consent_required';
+  return null;
 }

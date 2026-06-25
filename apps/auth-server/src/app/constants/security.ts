@@ -9,13 +9,19 @@ export const AUTHORIZATION_CODE_TTL_MS = 5 * 60 * 1000;
  * Step-up authentication freshness window in milliseconds (ADR-007 §2, #185).
  *
  * When a request triggers a fresh-authentication step-up (`prompt=login` or a
- * dangerous elevated scope), an authentication performed within this window is
- * accepted as "fresh". This both (a) prevents an infinite login→authorize→login
- * redirect loop after the user re-authenticates, and (b) bounds how long a
- * single re-authentication stays valid for issuing a dangerous/elevated grant.
- * Exact `max_age` requests are enforced against their own value and are NOT
- * widened by this window. Two minutes balances usability against the
- * "authenticate immediately before the dangerous operation" intent.
+ * dangerous scope), an authentication performed within this window is accepted
+ * as "fresh". This both (a) prevents an infinite login→authorize→login redirect
+ * loop after the user re-authenticates, and (b) bounds how long a single
+ * re-authentication stays valid for issuing a dangerous/elevated grant.
+ *
+ * Tradeoff: a dangerous scope is satisfied by ANY authentication within this
+ * window — including an unrelated login that happened ~110s earlier — so the
+ * window is a deliberate usability relaxation of the dangerous-op gate, not a
+ * guarantee of an immediate prompt. A relying party (e.g. `mcp-guard`) that
+ * needs *exact* immediacy must send `max_age` (e.g. `max_age=0`), which is
+ * enforced against its own value at OIDC second-granularity and is NOT widened
+ * by this window. Two minutes balances usability against the "authenticate
+ * shortly before the dangerous operation" intent.
  */
 export const STEP_UP_FRESH_AUTH_WINDOW_MS = 2 * 60 * 1000;
 
