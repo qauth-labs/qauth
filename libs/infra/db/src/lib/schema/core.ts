@@ -138,6 +138,29 @@ export const oauthClients = pgTable(
       .$type<ResponseType[]>(),
     developerId: uuid('developer_id').references(() => users.id, { onDelete: 'set null' }),
     /**
+     * First-class classification flag for autonomous AI-agent clients
+     * (ADR-007 §2 agent-native authorization). When true, the auth server
+     * may later treat the client differently for delegation eligibility,
+     * scope modes, step-up policy, and per-agent audit — all gated by
+     * separate, later issues. This issue only persists + plumbs the flag;
+     * nothing is gated on it yet.
+     *
+     * Orthogonal to confidential/public: an agent client can be either.
+     * Defaults to false so every existing row stays a standard client and
+     * the migration is backward-compatible.
+     *
+     * TRUST BOUNDARY — this value is SELF-ASSERTED, UNVERIFIED client input.
+     * It is set by the client itself: in its own DCR request body, or in its
+     * own externally-fetched CIMD metadata document. It is NOT an
+     * authenticated property the AS established. Downstream agent gating
+     * (token exchange #183, scope modes #184, step-up #185) MUST treat it as
+     * untrusted (verify, don't trust). Note the real escalation direction is
+     * a client *omitting* the flag to dodge agent-specific controls, so any
+     * such gating must default-deny / fail-closed and must not assume the
+     * flag is truthful or present.
+     */
+    isAgent: boolean('is_agent').notNull().default(false),
+    /**
      * Set when the client was created via dynamic client registration (RFC 7591).
      * Null for hand-provisioned / first-party clients. Consumed by the consent
      * screen to show a "newly registered" phishing-defense badge — callers

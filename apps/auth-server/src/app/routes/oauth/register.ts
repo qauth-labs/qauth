@@ -127,6 +127,9 @@ export default async function (fastify: FastifyInstance) {
         requirePkce: true,
         enabled: true,
         developerId: null,
+        // ADR-007 §2: first-class agent classification. Defaults to false
+        // (standard client); nothing is gated on it yet.
+        isAgent: normalized.isAgent,
         // Stamp the dyn-reg timestamp so the consent screen (issue #150)
         // can surface the "Newly registered" phishing-defense badge
         // within DYNAMIC_CLIENT_BADGE_DAYS of registration.
@@ -155,6 +158,7 @@ export default async function (fastify: FastifyInstance) {
           registrationType: 'dynamic',
           clientId,
           isPublic: normalized.isPublic,
+          isAgent: normalized.isAgent,
           grantTypes: normalized.grantTypes,
           scopes: normalized.scopes,
         },
@@ -186,6 +190,9 @@ export default async function (fastify: FastifyInstance) {
         ...(normalized.contacts ? { contacts: normalized.contacts } : {}),
         ...(normalized.softwareId ? { software_id: normalized.softwareId } : {}),
         ...(normalized.softwareVersion ? { software_version: normalized.softwareVersion } : {}),
+        // Echo the agent classification back only when set, mirroring the
+        // optional-field convention above (omit for standard clients).
+        ...(normalized.isAgent ? { is_agent: true } : {}),
       };
 
       // RFC 7591 §3.2.1: response MUST NOT be cached (contains secret).

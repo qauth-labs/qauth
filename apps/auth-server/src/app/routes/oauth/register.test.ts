@@ -294,6 +294,60 @@ describe('POST /oauth/register — Dynamic Client Registration (RFC 7591)', () =
     expect('application_type' in result).toBe(false);
   });
 
+  it('registers an agent client and round-trips the is_agent flag (ADR-007 §2)', async () => {
+    const { fastify, ctx, state } = createFastifyStub();
+    await registerRoute(fastify);
+
+    const { reply } = createReply();
+    const result = (await ctx.handler!(
+      {
+        body: {
+          client_name: 'Autonomous Agent',
+          redirect_uris: ['https://agent.example/callback'],
+          grant_types: ['authorization_code', 'refresh_token'],
+          response_types: ['code'],
+          scope: 'openid',
+          is_agent: true,
+        },
+        ip: '127.0.0.1',
+        headers: { 'user-agent': 'vitest' },
+      },
+      reply
+    )) as Record<string, unknown>;
+
+    // Echoed back in the registration response.
+    expect(result.is_agent).toBe(true);
+    // Persisted on the client row.
+    expect(state.createdClients[0].isAgent).toBe(true);
+    // Captured in the audit log for the registration event.
+    expect(state.auditLogs[0].metadata).toMatchObject({ isAgent: true });
+  });
+
+  it('defaults to a standard (non-agent) client when is_agent is omitted', async () => {
+    const { fastify, ctx, state } = createFastifyStub();
+    await registerRoute(fastify);
+
+    const { reply } = createReply();
+    const result = (await ctx.handler!(
+      {
+        body: {
+          client_name: 'Standard Client',
+          redirect_uris: ['https://app.example/cb'],
+          grant_types: ['authorization_code'],
+          response_types: ['code'],
+        },
+        ip: '127.0.0.1',
+        headers: {},
+      },
+      reply
+    )) as Record<string, unknown>;
+
+    // Omitted from the response (matches the optional-field echo convention).
+    expect('is_agent' in result).toBe(false);
+    // Stored as the backward-compatible default.
+    expect(state.createdClients[0].isAgent).toBe(false);
+  });
+
   it('seeds the realm default allowlist on first use when empty', async () => {
     const { fastify, ctx, state } = createFastifyStub({
       dynamicRegistrationAllowedScopes: [],

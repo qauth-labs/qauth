@@ -22,7 +22,13 @@ vi.mock('./ssrf-safe-fetch', async () => {
   return { ...actual, ssrfSafeGet };
 });
 
-import { fetchAndValidateCimdDocument, isCimdClientId, resolveCacheTtlSeconds } from './cimd';
+import {
+  cimdDocumentSchema,
+  fetchAndValidateCimdDocument,
+  isCimdClientId,
+  resolveCacheTtlSeconds,
+  toCimdClientInsert,
+} from './cimd';
 
 const CLIENT_ID = 'https://app.example.com/oauth/client-metadata.json';
 
@@ -212,5 +218,30 @@ describe('fetchAndValidateCimdDocument', () => {
 
     const doc = await fetchAndValidateCimdDocument(fastify, CLIENT_ID);
     expect(doc.client_id).toBe(CLIENT_ID);
+  });
+
+  it('recognises the is_agent indicator in the metadata document (ADR-007 §2)', async () => {
+    const fastify = fastifyStub();
+    ssrfSafeGet.mockResolvedValue(ok(validDoc({ is_agent: true })));
+
+    const doc = await fetchAndValidateCimdDocument(fastify, CLIENT_ID);
+    expect(doc.is_agent).toBe(true);
+  });
+});
+
+describe('toCimdClientInsert — agent classification (ADR-007 §2)', () => {
+  const REALM = 'realm-1';
+  const SENTINEL = '$argon2id$v=19$m=65536,t=3,p=4$c2FsdA$ZGlnZXN0';
+
+  it('defaults isAgent to false when the document omits the indicator', () => {
+    const doc = cimdDocumentSchema.parse(validDoc());
+    const insert = toCimdClientInsert(REALM, CLIENT_ID, doc, SENTINEL);
+    expect(insert.isAgent).toBe(false);
+  });
+
+  it('sets isAgent true when the document declares is_agent', () => {
+    const doc = cimdDocumentSchema.parse(validDoc({ is_agent: true }));
+    const insert = toCimdClientInsert(REALM, CLIENT_ID, doc, SENTINEL);
+    expect(insert.isAgent).toBe(true);
   });
 });

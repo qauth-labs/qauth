@@ -208,6 +208,20 @@ export const dynamicClientRegistrationRequestSchema = z.object({
   contacts: z.array(z.email().max(255)).max(10).optional(),
   software_id: z.string().max(255).optional(),
   software_version: z.string().max(64).optional(),
+  /**
+   * QAuth extension metadata (ADR-007 §2): marks the client as an autonomous
+   * AI agent. RFC 7591 §2 permits a server to define additional client
+   * metadata; this QAuth-specific flag is a plain boolean and defaults to a
+   * standard (non-agent) client when omitted. Persisted as
+   * `oauth_clients.is_agent` and echoed back per §3.2.1. Nothing is gated on
+   * it yet — delegation / scope modes / step-up are later ADR-007 §2 issues.
+   *
+   * TRUST: this is self-asserted, unverified client input — the client sets
+   * it in its own registration request. Later gating must treat it as
+   * untrusted (verify, don't trust) and default-deny, since a client can
+   * also *omit* it to dodge agent-specific controls.
+   */
+  is_agent: z.boolean().optional(),
 });
 
 export type DynamicClientRegistrationRequest = z.infer<
@@ -239,6 +253,8 @@ export const dynamicClientRegistrationResponseSchema = z.object({
   contacts: z.array(z.string()).optional(),
   software_id: z.string().optional(),
   software_version: z.string().optional(),
+  /** QAuth extension: echoed back when the client was registered as an agent. */
+  is_agent: z.boolean().optional(),
 });
 
 export type DynamicClientRegistrationResponse = z.infer<

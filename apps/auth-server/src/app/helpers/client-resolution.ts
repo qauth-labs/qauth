@@ -42,12 +42,38 @@ export interface ResolvedClient {
   tokenEndpointAuthMethod?: string;
   name: string;
   dynamicRegisteredAt: number | null;
+  /**
+   * ADR-007 §2 first-class agent classification. Surfaced here so the
+   * authorize / token / consent handlers that already consume the resolved
+   * client can gate agent-native behaviour (delegation, scope modes,
+   * step-up) in later issues. Nothing is gated on it yet.
+   */
+  isAgent: boolean;
   metadata: Record<string, unknown> | null;
 }
 
 /** True iff the resolved client originated from a CIMD metadata document. */
 export function isCimdClient(client: { metadata: Record<string, unknown> | null }): boolean {
   return client.metadata?.registrationType === 'cimd';
+}
+
+/**
+ * True iff the client is classified as an autonomous AI agent (ADR-007 §2).
+ * A thin, intention-revealing accessor for the `is_agent` column so later
+ * agent-native gating reads `isAgentClient(client)` rather than poking the
+ * raw field. Nothing gates on it yet.
+ *
+ * Fail-closed by design: returns true ONLY for a strict `isAgent === true`,
+ * so a missing / null / undefined field (e.g. an object built via the
+ * `as unknown as ResolvedClient` casts above, or a partially-shaped object)
+ * reads as NOT an agent rather than throwing. This is the safe default for a
+ * classification gate. It does NOT make `is_agent` trustworthy — the value is
+ * self-asserted client input (see the schema column note); downstream gating
+ * must still verify rather than trust, and the escalation risk is a client
+ * *omitting* the flag, which this accessor treats as non-agent.
+ */
+export function isAgentClient(client: { isAgent?: boolean } | null | undefined): boolean {
+  return client?.isAgent === true;
 }
 
 /**

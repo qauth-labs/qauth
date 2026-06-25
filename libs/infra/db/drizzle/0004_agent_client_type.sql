@@ -1,0 +1,1 @@
+ALTER TABLE "oauth_clients" ADD COLUMN "is_agent" boolean DEFAULT false NOT NULL;
