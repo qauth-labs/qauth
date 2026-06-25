@@ -41,6 +41,8 @@ import {
   deleteClientHandler,
   getClientHandler,
   listClientsHandler,
+  normalizeCreateInput,
+  normalizeUpdateInput,
   regenerateSecretHandler,
   updateClientHandler,
 } from './clients';
@@ -170,5 +172,108 @@ describe('regenerateSecretHandler', () => {
     const result = await regenerateSecretHandler({ data: { id: 'row-1' } });
     expect(result.ok).toBe(true);
     expect(mockSetResponseHeader).toHaveBeenCalledWith('Cache-Control', 'no-store');
+  });
+});
+
+describe('GET handlers set no-store', () => {
+  it('listClientsHandler marks the list non-cacheable', async () => {
+    vi.mocked(readSessionCookie).mockReturnValue(validSession);
+    vi.mocked(authServerClient.listClients).mockResolvedValue({ ok: true, data: { clients: [] } });
+    await listClientsHandler();
+    expect(mockSetResponseHeader).toHaveBeenCalledWith('Cache-Control', 'no-store');
+  });
+
+  it('getClientHandler marks the response non-cacheable', async () => {
+    vi.mocked(readSessionCookie).mockReturnValue(validSession);
+    vi.mocked(authServerClient.getClient).mockResolvedValue({ ok: true, data: {} as never });
+    await getClientHandler({ data: { id: 'row-1' } });
+    expect(mockSetResponseHeader).toHaveBeenCalledWith('Cache-Control', 'no-store');
+  });
+});
+
+describe('expired-session short-circuit applies to mutations too', () => {
+  it('updateClientHandler returns UNAUTHENTICATED without a network call', async () => {
+    vi.mocked(readSessionCookie).mockReturnValue(expiredSession);
+    const result = await updateClientHandler({ data: { id: 'row-1', patch: { name: 'x' } } });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe('UNAUTHENTICATED');
+    expect(authServerClient.updateClient).not.toHaveBeenCalled();
+  });
+
+  it('regenerateSecretHandler returns UNAUTHENTICATED without a network call', async () => {
+    vi.mocked(readSessionCookie).mockReturnValue(expiredSession);
+    const result = await regenerateSecretHandler({ data: { id: 'row-1' } });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe('UNAUTHENTICATED');
+    expect(authServerClient.regenerateClientSecret).not.toHaveBeenCalled();
+  });
+});
+
+describe('normalizeCreateInput — input caps & enum validation', () => {
+  it('accepts a minimal valid payload', () => {
+    expect(normalizeCreateInput({ name: '  My App  ' })).toEqual({ name: 'My App' });
+  });
+
+  it('rejects a missing/blank name', () => {
+    expect(() => normalizeCreateInput({ name: '   ' })).toThrow(/name is required/i);
+  });
+
+  it('rejects an over-length name', () => {
+    expect(() => normalizeCreateInput({ name: 'a'.repeat(256) })).toThrow(/at most 255/i);
+  });
+
+  it('rejects an over-length description', () => {
+    expect(() => normalizeCreateInput({ name: 'ok', description: 'd'.repeat(2001) })).toThrow(
+      /at most 2000/i
+    );
+  });
+
+  it('rejects too many redirect URIs', () => {
+    const redirectUris = Array.from({ length: 51 }, (_, i) => `https://app.example.com/cb${i}`);
+    expect(() => normalizeCreateInput({ name: 'ok', redirectUris })).toThrow(/at most 50 entries/i);
+  });
+
+  it('rejects an over-length redirect URI', () => {
+    expect(() =>
+      normalizeCreateInput({ name: 'ok', redirectUris: [`https://x/${'a'.repeat(2001)}`] })
+    ).toThrow(/at most 2000 characters/i);
+  });
+
+  it('rejects too many scopes', () => {
+    const scopes = Array.from({ length: 101 }, (_, i) => `scope${i}`);
+    expect(() => normalizeCreateInput({ name: 'ok', scopes })).toThrow(/at most 100 entries/i);
+  });
+
+  it('surfaces an unknown grant type instead of silently dropping it', () => {
+    expect(() =>
+      normalizeCreateInput({ name: 'ok', grantTypes: ['authorization_code', 'password'] })
+    ).toThrow(/unknown grant type/i);
+  });
+
+  it('surfaces an unknown token endpoint auth method', () => {
+    expect(() => normalizeCreateInput({ name: 'ok', tokenEndpointAuthMethod: 'magic' })).toThrow(
+      /unknown token endpoint auth method/i
+    );
+  });
+});
+
+describe('normalizeUpdateInput — input caps & enum validation', () => {
+  it('rejects an over-length name', () => {
+    expect(() => normalizeUpdateInput({ id: 'row-1', name: 'a'.repeat(256) })).toThrow(
+      /at most 255/i
+    );
+  });
+
+  it('clears the description when an empty string is given', () => {
+    expect(normalizeUpdateInput({ id: 'row-1', description: '' })).toEqual({
+      id: 'row-1',
+      patch: { description: null },
+    });
+  });
+
+  it('surfaces an unknown grant type', () => {
+    expect(() => normalizeUpdateInput({ id: 'row-1', grantTypes: ['nope'] })).toThrow(
+      /unknown grant type/i
+    );
   });
 });

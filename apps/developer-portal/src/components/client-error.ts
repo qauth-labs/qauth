@@ -24,6 +24,8 @@ export function clientErrorMessage(error: ApiError): string {
     case 'NETWORK_ERROR':
       return 'Could not reach the server. Check your connection and try again.';
     default:
-      return error.message || 'Something went wrong. Please try again.';
+      // Do not echo the raw upstream message for unclassified errors (e.g. an
+      // unexpected 5xx body) — show a generic message instead.
+      return 'Something went wrong. Please try again.';
   }
 }

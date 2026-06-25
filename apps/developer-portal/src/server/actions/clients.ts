@@ -55,6 +55,61 @@ function asStringArray(value: unknown): string[] {
   return value.filter((v): v is string => typeof v === 'string');
 }
 
+/**
+ * Defense-in-depth input caps. The auth-server is authoritative, but these
+ * keep the portal from proxying an unbounded payload (e.g. a megabyte of
+ * redirect URIs) before the upstream rejects it. Values are generous — they
+ * only fence off abuse, not legitimate use.
+ */
+const LIMITS = {
+  NAME_MAX: 255,
+  DESCRIPTION_MAX: 2000,
+  REDIRECT_URIS_MAX: 50,
+  REDIRECT_URI_MAX: 2000,
+  SCOPES_MAX: 100,
+  SCOPE_MAX: 255,
+} as const;
+
+class InputError extends Error {}
+
+function checkLength(field: string, value: string, max: number): void {
+  if (value.length > max) {
+    throw new InputError(`${field} must be at most ${max} characters.`);
+  }
+}
+
+function checkArray(field: string, arr: string[], maxItems: number, itemMax: number): void {
+  if (arr.length > maxItems) {
+    throw new InputError(`${field} must have at most ${maxItems} entries.`);
+  }
+  for (const item of arr) {
+    if (item.length > itemMax) {
+      throw new InputError(`Each ${field} entry must be at most ${itemMax} characters.`);
+    }
+  }
+}
+
+/**
+ * Validate `grantTypes` strictly: unknown values are reported rather than
+ * silently dropped, so a malformed selection surfaces as an error instead of
+ * vanishing.
+ */
+function validateGrantTypes(value: unknown): GrantType[] {
+  const arr = asStringArray(value);
+  const invalid = arr.filter((g) => !VALID_GRANT_TYPES.includes(g as GrantType));
+  if (invalid.length > 0) {
+    throw new InputError(`Unknown grant type(s): ${invalid.join(', ')}.`);
+  }
+  return arr as GrantType[];
+}
+
+function validateAuthMethod(value: unknown): TokenEndpointAuthMethod {
+  if (typeof value !== 'string' || !VALID_AUTH_METHODS.includes(value as TokenEndpointAuthMethod)) {
+    throw new InputError(`Unknown token endpoint auth method: ${String(value)}.`);
+  }
+  return value as TokenEndpointAuthMethod;
+}
+
 // ---------------------------------------------------------------------------
 // List
 // ---------------------------------------------------------------------------
@@ -62,6 +117,9 @@ function asStringArray(value: unknown): string[] {
 export async function listClientsHandler(): Promise<Result<{ clients: OAuthClient[] }>> {
   const token = readAccessToken();
   if (!token) return UNAUTHENTICATED;
+  // Client config is not secret, but it is per-developer; keep it out of any
+  // shared/proxy cache for consistency with the secret-bearing responses.
+  setResponseHeader('Cache-Control', 'no-store');
   return authServerClient.listClients(token);
 }
 
@@ -78,6 +136,7 @@ export async function getClientHandler({
 }): Promise<Result<OAuthClient>> {
   const token = readAccessToken();
   if (!token) return UNAUTHENTICATED;
+  setResponseHeader('Cache-Control', 'no-store');
   return authServerClient.getClient(token, data.id);
 }
 
@@ -98,28 +157,35 @@ export const getClientFn = createServerFn({ method: 'GET' })
 // Create
 // ---------------------------------------------------------------------------
 
-function normalizeCreateInput(data: unknown): CreateClientInput {
+export function normalizeCreateInput(data: unknown): CreateClientInput {
   if (typeof data !== 'object' || data === null) {
     throw new Error('Invalid input: expected an object');
   }
   const d = data as Record<string, unknown>;
   if (typeof d['name'] !== 'string' || d['name'].trim().length === 0) {
-    throw new Error('Invalid input: name is required');
+    throw new InputError('Name is required.');
   }
-  const input: CreateClientInput = { name: d['name'].trim() };
+  const name = d['name'].trim();
+  checkLength('Name', name, LIMITS.NAME_MAX);
+  const input: CreateClientInput = { name };
   if (typeof d['description'] === 'string' && d['description'].trim().length > 0) {
-    input.description = d['description'].trim();
+    const description = d['description'].trim();
+    checkLength('Description', description, LIMITS.DESCRIPTION_MAX);
+    input.description = description;
   }
-  if (d['redirectUris'] !== undefined) input.redirectUris = asStringArray(d['redirectUris']);
-  if (d['scopes'] !== undefined) input.scopes = asStringArray(d['scopes']);
-  if (d['grantTypes'] !== undefined) {
-    input.grantTypes = asStringArray(d['grantTypes']).filter((g): g is GrantType =>
-      VALID_GRANT_TYPES.includes(g as GrantType)
-    );
+  if (d['redirectUris'] !== undefined) {
+    const uris = asStringArray(d['redirectUris']);
+    checkArray('Redirect URI', uris, LIMITS.REDIRECT_URIS_MAX, LIMITS.REDIRECT_URI_MAX);
+    input.redirectUris = uris;
   }
-  if (typeof d['tokenEndpointAuthMethod'] === 'string') {
-    const m = d['tokenEndpointAuthMethod'] as TokenEndpointAuthMethod;
-    if (VALID_AUTH_METHODS.includes(m)) input.tokenEndpointAuthMethod = m;
+  if (d['scopes'] !== undefined) {
+    const scopes = asStringArray(d['scopes']);
+    checkArray('Scope', scopes, LIMITS.SCOPES_MAX, LIMITS.SCOPE_MAX);
+    input.scopes = scopes;
+  }
+  if (d['grantTypes'] !== undefined) input.grantTypes = validateGrantTypes(d['grantTypes']);
+  if (d['tokenEndpointAuthMethod'] !== undefined) {
+    input.tokenEndpointAuthMethod = validateAuthMethod(d['tokenEndpointAuthMethod']);
   }
   return input;
 }
@@ -145,7 +211,7 @@ export const createClientFn = createServerFn({ method: 'POST' })
 // Update (PATCH)
 // ---------------------------------------------------------------------------
 
-function normalizeUpdateInput(data: unknown): { id: string; patch: UpdateClientInput } {
+export function normalizeUpdateInput(data: unknown): { id: string; patch: UpdateClientInput } {
   if (
     typeof data !== 'object' ||
     data === null ||
@@ -155,23 +221,33 @@ function normalizeUpdateInput(data: unknown): { id: string; patch: UpdateClientI
   }
   const d = data as Record<string, unknown>;
   const patch: UpdateClientInput = {};
-  if (typeof d['name'] === 'string') patch.name = d['name'].trim();
+  if (typeof d['name'] === 'string') {
+    const name = d['name'].trim();
+    checkLength('Name', name, LIMITS.NAME_MAX);
+    patch.name = name;
+  }
   if (d['description'] !== undefined) {
-    patch.description =
-      typeof d['description'] === 'string' && d['description'].trim().length > 0
-        ? d['description'].trim()
-        : null;
+    if (typeof d['description'] === 'string' && d['description'].trim().length > 0) {
+      const description = d['description'].trim();
+      checkLength('Description', description, LIMITS.DESCRIPTION_MAX);
+      patch.description = description;
+    } else {
+      patch.description = null;
+    }
   }
-  if (d['redirectUris'] !== undefined) patch.redirectUris = asStringArray(d['redirectUris']);
-  if (d['scopes'] !== undefined) patch.scopes = asStringArray(d['scopes']);
-  if (d['grantTypes'] !== undefined) {
-    patch.grantTypes = asStringArray(d['grantTypes']).filter((g): g is GrantType =>
-      VALID_GRANT_TYPES.includes(g as GrantType)
-    );
+  if (d['redirectUris'] !== undefined) {
+    const uris = asStringArray(d['redirectUris']);
+    checkArray('Redirect URI', uris, LIMITS.REDIRECT_URIS_MAX, LIMITS.REDIRECT_URI_MAX);
+    patch.redirectUris = uris;
   }
-  if (typeof d['tokenEndpointAuthMethod'] === 'string') {
-    const m = d['tokenEndpointAuthMethod'] as TokenEndpointAuthMethod;
-    if (VALID_AUTH_METHODS.includes(m)) patch.tokenEndpointAuthMethod = m;
+  if (d['scopes'] !== undefined) {
+    const scopes = asStringArray(d['scopes']);
+    checkArray('Scope', scopes, LIMITS.SCOPES_MAX, LIMITS.SCOPE_MAX);
+    patch.scopes = scopes;
+  }
+  if (d['grantTypes'] !== undefined) patch.grantTypes = validateGrantTypes(d['grantTypes']);
+  if (d['tokenEndpointAuthMethod'] !== undefined) {
+    patch.tokenEndpointAuthMethod = validateAuthMethod(d['tokenEndpointAuthMethod']);
   }
   if (typeof d['enabled'] === 'boolean') patch.enabled = d['enabled'];
   return { id: d['id'] as string, patch };
