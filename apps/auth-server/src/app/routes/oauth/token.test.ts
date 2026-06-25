@@ -752,6 +752,110 @@ describe('POST /oauth/token route — client_credentials grant', () => {
       'match-client'
     );
   });
+
+  // ADR-007 §2 (#184): agent scope-mode cap on the client_credentials path.
+  // The cap is enforced via validateScopes(..., toAgentScopeContext(client))
+  // and is deny-by-default — a non-agent client (or one without/over its
+  // server-side max_agent_mode) can never mint a machine token carrying a
+  // reserved agent-mode scope, even when that scope is in its raw allowlist.
+  describe('agent scope-mode cap (#184 wiring)', () => {
+    function ccAgentClient(opts: { isAgent?: boolean; maxAgentMode?: string | null }) {
+      return {
+        id: 'cc-agent-uuid',
+        clientId: 'cc-agent',
+        clientSecretHash: 'hash',
+        enabled: true,
+        grantTypes: ['client_credentials'],
+        // Raw allowlist deliberately INCLUDES agent:exec to prove the cap, not
+        // the allowlist, is what blocks an over-mode request.
+        scopes: ['read:foo', 'agent:readonly', 'agent:exec'],
+        audience: null,
+        isAgent: opts.isAgent ?? true,
+        maxAgentMode: opts.maxAgentMode ?? null,
+      };
+    }
+
+    function ccRequest(scope: string) {
+      return {
+        body: {
+          grant_type: 'client_credentials',
+          client_id: 'cc-agent',
+          client_secret: 'secret',
+          scope,
+        },
+        ip: '127.0.0.1',
+        headers: { 'user-agent': 'vitest' },
+      };
+    }
+
+    it('issues an agent-mode scope within the cap (readonly ⊆ admin)', async () => {
+      const { fastify, ctx } = createFastifyStub();
+      await tokenRoute(fastify);
+      const handler = ctx.handler;
+      (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(
+        ccAgentClient({ maxAgentMode: 'admin' })
+      );
+      (fastify.passwordHasher.verifyPassword as unknown as Mock).mockResolvedValue(true);
+      (fastify.jwtUtils.signAccessToken as unknown as Mock).mockResolvedValue('jwt');
+
+      if (!handler) throw new Error('Handler missing');
+      const result = await handler(ccRequest('agent:readonly'), createReply());
+
+      expect(result).toMatchObject({ scope: 'agent:readonly', token_type: 'Bearer' });
+      expect(fastify.jwtUtils.signAccessToken).toHaveBeenCalledWith(
+        expect.objectContaining({ scope: 'agent:readonly' })
+      );
+    });
+
+    it('rejects an agent-mode scope above the cap (exec > readonly) with invalid_scope', async () => {
+      const { fastify, ctx } = createFastifyStub();
+      await tokenRoute(fastify);
+      const handler = ctx.handler;
+      (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(
+        ccAgentClient({ maxAgentMode: 'readonly' })
+      );
+      (fastify.passwordHasher.verifyPassword as unknown as Mock).mockResolvedValue(true);
+
+      if (!handler) throw new Error('Handler missing');
+      await expect(handler(ccRequest('agent:exec'), createReply())).rejects.toThrow(
+        InvalidScopeError
+      );
+      expect(fastify.jwtUtils.signAccessToken).not.toHaveBeenCalled();
+    });
+
+    it('rejects ANY agent-mode scope for a non-agent client (default-deny, fail-closed)', async () => {
+      const { fastify, ctx } = createFastifyStub();
+      await tokenRoute(fastify);
+      const handler = ctx.handler;
+      // isAgent:false even though a cap is set and the scope is allowlisted.
+      (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(
+        ccAgentClient({ isAgent: false, maxAgentMode: 'exec' })
+      );
+      (fastify.passwordHasher.verifyPassword as unknown as Mock).mockResolvedValue(true);
+
+      if (!handler) throw new Error('Handler missing');
+      await expect(handler(ccRequest('agent:readonly'), createReply())).rejects.toThrow(
+        InvalidScopeError
+      );
+      expect(fastify.jwtUtils.signAccessToken).not.toHaveBeenCalled();
+    });
+
+    it('rejects an agent-mode scope when the agent has no cap configured (null = deny)', async () => {
+      const { fastify, ctx } = createFastifyStub();
+      await tokenRoute(fastify);
+      const handler = ctx.handler;
+      (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(
+        ccAgentClient({ isAgent: true, maxAgentMode: null })
+      );
+      (fastify.passwordHasher.verifyPassword as unknown as Mock).mockResolvedValue(true);
+
+      if (!handler) throw new Error('Handler missing');
+      await expect(handler(ccRequest('agent:readonly'), createReply())).rejects.toThrow(
+        InvalidScopeError
+      );
+      expect(fastify.jwtUtils.signAccessToken).not.toHaveBeenCalled();
+    });
+  });
 });
 
 describe('POST /oauth/token route — authorization_code grant', () => {
@@ -1434,6 +1538,7 @@ describe('POST /oauth/token route — token-exchange grant (RFC 8693, ADR-007 §
       isAgent?: boolean;
       confidential?: boolean;
       grantTypes?: string[];
+      maxAgentMode?: string | null;
       subjectScope?: string;
       subjectAud?: string | string[] | undefined;
       subjectAct?: unknown;
@@ -1456,6 +1561,7 @@ describe('POST /oauth/token route — token-exchange grant (RFC 8693, ADR-007 §
       scopes: [] as string[],
       audience: null,
       isAgent: opts.isAgent ?? true,
+      maxAgentMode: opts.maxAgentMode ?? null,
       tokenEndpointAuthMethod: opts.confidential === false ? 'none' : 'client_secret_post',
     };
 
@@ -1791,5 +1897,58 @@ describe('POST /oauth/token route — token-exchange grant (RFC 8693, ADR-007 §
       expect((err as InvalidRequestError).message).toBe('invalid_request');
       expect((err as InvalidRequestError).errorDescription).toBeTruthy();
     }
+  });
+
+  // ADR-007 §2 (#184): GATE 4c — the (narrowed) delegated scope is additionally
+  // clamped to the agent's server-side max_agent_mode. A capped agent must not
+  // be able to launder a higher-mode reserved scope through delegation even
+  // when the subject token (issued under a broader prior grant) still carries
+  // it. Fail-closed via toAgentScopeContext.
+  describe('agent scope-mode cap (#184 wiring)', () => {
+    it('mints a delegated agent-mode scope within the cap (readonly ⊆ exec)', async () => {
+      const { fastify, ctx } = setupExchangeStub({
+        maxAgentMode: 'exec',
+        subjectScope: 'read:docs agent:readonly',
+      });
+      const result = await invoke(fastify, ctx, exchangeRequest());
+      expect(result).toMatchObject({ scope: 'read:docs agent:readonly' });
+      expect(fastify.jwtUtils.signAccessToken).toHaveBeenCalledWith(
+        expect.objectContaining({ scope: 'read:docs agent:readonly' })
+      );
+    });
+
+    it('rejects a delegated agent-mode scope above the cap (subject has exec, agent capped readonly)', async () => {
+      // The subject token legitimately carries agent:exec (minted under a broader
+      // grant), but THIS agent is capped at readonly — the clamp must reject it
+      // rather than mint an exec delegated token.
+      const { fastify, ctx } = setupExchangeStub({
+        maxAgentMode: 'readonly',
+        subjectScope: 'read:docs agent:exec',
+      });
+      await expect(invoke(fastify, ctx, exchangeRequest())).rejects.toThrow(InvalidScopeError);
+      expect(fastify.jwtUtils.signAccessToken).not.toHaveBeenCalled();
+    });
+
+    it('rejects a delegated agent-mode scope when the agent has no cap (null = deny)', async () => {
+      const { fastify, ctx } = setupExchangeStub({
+        maxAgentMode: null,
+        subjectScope: 'agent:readonly',
+      });
+      await expect(invoke(fastify, ctx, exchangeRequest())).rejects.toThrow(InvalidScopeError);
+      expect(fastify.jwtUtils.signAccessToken).not.toHaveBeenCalled();
+    });
+
+    it('still rejects when the request narrows to an over-cap agent-mode scope', async () => {
+      // Subject carries both readonly+exec; the request explicitly narrows to
+      // exec, which exceeds the readonly cap → invalid_scope.
+      const { fastify, ctx } = setupExchangeStub({
+        maxAgentMode: 'readonly',
+        subjectScope: 'agent:readonly agent:exec',
+      });
+      await expect(invoke(fastify, ctx, exchangeRequest({ scope: 'agent:exec' }))).rejects.toThrow(
+        InvalidScopeError
+      );
+      expect(fastify.jwtUtils.signAccessToken).not.toHaveBeenCalled();
+    });
   });
 });

@@ -19,9 +19,11 @@ import { MIN_RESPONSE_TIME_MS } from '../../constants';
 import {
   authenticateClient,
   authenticateClientPublicOrConfidential,
+  enforceAgentScopeCap,
   extractClientCredentials,
   type OAuthClientLike,
   resolveAudience,
+  toAgentScopeContext,
   validateScopes,
 } from '../../helpers/client-auth';
 import { isAgentClient } from '../../helpers/client-resolution';
@@ -448,10 +450,16 @@ async function handleClientCredentials(
     throw new UnauthorizedClientError();
   }
 
-  // Validate requested scopes against client.scopes allowlist.
+  // Validate requested scopes against client.scopes allowlist, additionally
+  // clamping any reserved agent-mode scope (`agent:readonly|admin|exec`) to the
+  // agent client's server-side `max_agent_mode` (ADR-007 §2, #184 — wired now
+  // that #182/#183/#184 are merged). Deny-by-default + fail-closed via
+  // `toAgentScopeContext`: a non-agent client (incl. one that omitted
+  // `is_agent`) or one over its cap can never mint a machine token carrying an
+  // agent-mode scope, even if that scope also sits in its raw allowlist.
   let grantedScopes: string[];
   try {
-    grantedScopes = validateScopes(body.scope, client.scopes);
+    grantedScopes = validateScopes(body.scope, client.scopes, toAgentScopeContext(client));
   } catch (err) {
     await fastify.repositories.auditLogs.create({
       userId: null,
@@ -895,10 +903,12 @@ const MAX_DELEGATION_DEPTH = 4;
  * No refresh token is issued — a delegated token is intentionally short-lived
  * and the agent re-exchanges as needed.
  *
- * TODO(#184): scope modes (ReadOnly / Admin / Exec) are owned by the parallel
- * scope-mode PR. This handler does generic scope preservation/narrowing only;
- * once #184 lands, the narrowed scope set should additionally be clamped to
- * the agent's `max_agent_mode`. The two integrate at that point.
+ * GATE 4c — agent scope-mode cap (ADR-007 §2, #184, wired now that #182/#183/
+ * #184 are merged): on top of the generic preserve/narrow logic, any reserved
+ * agent-mode scope (`agent:readonly|admin|exec`) that survives narrowing is
+ * additionally clamped to the requesting agent's server-side `max_agent_mode`.
+ * Fail-closed via `toAgentScopeContext`: a capped agent cannot launder a
+ * higher-mode scope through delegation even when the subject token carried it.
  */
 async function handleTokenExchange(
   ctx: HandlerContext<TokenExchangeTokenExchangeBody>
@@ -1061,6 +1071,23 @@ async function handleTokenExchange(
     grantedScopes = [...new Set(requested)];
   } else {
     grantedScopes = subjectScopes;
+  }
+
+  // GATE 4c — clamp the (narrowed) scope set to the agent's server-side
+  // `max_agent_mode` (ADR-007 §2, #184). A reserved agent-mode scope is
+  // permitted ONLY when this client is a verified agent within its cap; a
+  // capped agent must not be able to mint a higher-mode delegated token even
+  // when the subject token (issued under a broader prior grant) still carries
+  // it. Fail-closed via `toAgentScopeContext`. `enforceAgentScopeCap` throws
+  // the same `InvalidScopeError` shape as the up-scoping check above.
+  try {
+    enforceAgentScopeCap(grantedScopes, toAgentScopeContext(client));
+  } catch (err) {
+    await auditFailure('invalid_scope: delegated scope exceeds the agent scope mode', {
+      grantedScopes,
+      maxAgentMode: client.maxAgentMode ?? null,
+    });
+    throw err;
   }
 
   // GATE 4b — audience narrowing (RFC 8707 §2.2 + RFC 8693 `audience`). The
