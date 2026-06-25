@@ -21,27 +21,29 @@ interactive **Swagger UI at `/docs`** on any running instance.
 
 ## API reference
 
-QAuth serves a live OpenAPI / Swagger UI at **`/docs`** on the running
-instance — that is the authoritative, versioned reference for request/response
-shapes and error codes.
+| Guide                                   | What it covers                                                                                                                                                                                                         |
+| --------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [**API Reference**](./api-reference.md) | Hand-written contract for every endpoint: first-party auth (`/auth/*`), OAuth 2.1 (`/oauth/*`), discovery, and client management (`/api/clients`), with request/response shapes, status codes, and the error envelope. |
 
-- **OAuth / OIDC endpoints** — documented with examples in
-  [OAuth 2.1 Flow](./oauth-flow.md).
+The authoritative, always-current surface is the live OpenAPI / Swagger UI at
+**`/docs`** on the running instance. Also:
+
 - **Resource-server SDK** — [`@qauth-labs/mcp-guard`](../libs/fastify/plugins/mcp-guard/README.md)
   (Protected Resource Metadata, Bearer challenges, JWT/introspection validation).
-- **Auth & client-management endpoints** — a standalone, hand-written reference
-  ([issue #99](https://github.com/qauth-labs/qauth/issues/99)) is in progress; the
-  client-management (`/api/clients`) section lands with the T2 milestone.
+- The client-management write endpoints (`POST/PATCH/DELETE /api/clients`, regenerate-secret)
+  land with the T2 milestone — see the [API Reference](./api-reference.md#planned--gated-on-the-t2-milestone).
 
 ## Code examples
+
+| Guide                                   | What it covers                                                                                                                                                             |
+| --------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [**Code Examples**](./code-examples.md) | Copy-paste-ready clients — Node/TS (first-party register→login→protected call; machine `client_credentials`) and browser JS (`authorization_code` + PKCE with Web Crypto). |
 
 - [`memory-mcp` example server](../libs/fastify/plugins/mcp-guard/examples/memory-mcp/server.ts) —
   a runnable, `mcp-guard`-protected resource server (the resource half of the
   quickstart).
 - Copy-paste `curl` for every OAuth step in the [OAuth 2.1 Flow](./oauth-flow.md)
   guide.
-- A Node/TypeScript client walkthrough ([issue #100](https://github.com/qauth-labs/qauth/issues/100))
-  is planned.
 
 ## Architecture & decisions
 

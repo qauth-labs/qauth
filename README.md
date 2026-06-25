@@ -691,6 +691,8 @@ function Dashboard() {
 
 - [MCP Quickstart](./docs/mcp-quickstart.md) — run QAuth + a `mcp-guard`-protected MCP server and complete the full OAuth handshake end-to-end
 - [OAuth 2.1 Flow](./docs/oauth-flow.md) — every endpoint with copy-paste `curl` (PKCE, authorize, token, refresh, client_credentials, introspection)
+- [API Reference](./docs/api-reference.md) — hand-written contract for `/auth/*`, `/oauth/*`, discovery, and `/api/clients`
+- [Code Examples](./docs/code-examples.md) — copy-paste Node/TS and browser (PKCE) clients
 - [Docker Development Guide](./docs/docker.md) — local development with Docker
 
 **Reference:**
@@ -714,8 +716,6 @@ function Dashboard() {
 
 **Planned documentation** (future phases):
 
-- Standalone API Reference ([#99](https://github.com/qauth-labs/qauth/issues/99)) — incl. client-management endpoints (T2)
-- Node/TypeScript client code examples ([#100](https://github.com/qauth-labs/qauth/issues/100))
 - SDK Documentation (Phase 3)
 - Multi-tenancy Guide
 - Security Best Practices
