@@ -833,6 +833,40 @@ describe('POST /oauth/token route — client_credentials grant', () => {
       );
     });
 
+    it('per-agent audit (#186): client_credentials success persists no secret/token material', async () => {
+      const { fastify, ctx } = createFastifyStub();
+      await tokenRoute(fastify);
+      const handler = ctx.handler;
+      (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(
+        ccAgentClient({ maxAgentMode: 'exec' })
+      );
+      (fastify.passwordHasher.verifyPassword as unknown as Mock).mockResolvedValue(true);
+      (fastify.jwtUtils.signAccessToken as unknown as Mock).mockResolvedValue('cc-access.jwt');
+
+      if (!handler) throw new Error('Handler missing');
+      await handler(
+        {
+          body: {
+            grant_type: 'client_credentials',
+            client_id: 'cc-agent',
+            client_secret: 'cc-super-secret',
+            scope: 'agent:exec',
+          },
+          ip: '127.0.0.1',
+          headers: { 'user-agent': 'vitest' },
+        },
+        createReply()
+      );
+
+      const successCall = (
+        fastify.repositories.auditLogs.create as unknown as Mock
+      ).mock.calls.find(([arg]) => arg?.event === 'oauth.token.exchange.success');
+      expect(successCall).toBeDefined();
+      const serialized = JSON.stringify(successCall?.[0]);
+      expect(serialized).not.toContain('cc-super-secret');
+      expect(serialized).not.toContain('cc-access.jwt');
+    });
+
     it('per-agent audit (#186): NON-agent client_credentials success records no agent attribution', async () => {
       const { fastify, ctx } = createFastifyStub();
       await tokenRoute(fastify);

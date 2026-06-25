@@ -116,6 +116,12 @@ export function isModeWithinCap(mode: AgentMode, cap: AgentMode | null): boolean
  * This is a read-only summarizer over an ALREADY-AUTHORISED scope set — it
  * does not gate anything (the cap is enforced upstream); it only labels the
  * audit row. Returns `null` (not a default mode) when no mode scope is present.
+ *
+ * Recording only the single highest mode is intentional: it is the effective
+ * privilege ceiling the action ran under (and matches the cap rank used by
+ * `enforceAgentScopeCap`). No information is lost — the FULL granted scope set,
+ * including every `agent:*` scope, is preserved verbatim in the audit row's
+ * `metadata.scope`; `scope_mode` is the queryable rollup over that detail.
  */
 export function highestAgentModeInScopes(scopes: readonly string[]): AgentMode | null {
   let highest: AgentMode | null = null;

@@ -1,5 +1,15 @@
 import { relations, sql } from 'drizzle-orm';
-import { bigint, boolean, index, jsonb, pgTable, text, uuid, varchar } from 'drizzle-orm/pg-core';
+import {
+  bigint,
+  boolean,
+  check,
+  index,
+  jsonb,
+  pgTable,
+  text,
+  uuid,
+  varchar,
+} from 'drizzle-orm/pg-core';
 
 import { oauthClients, users } from './core';
 import { agentModeEnum, auditEventTypeEnum } from './enums';
@@ -67,6 +77,14 @@ export const auditLogs = pgTable(
     index('idx_audit_logs_actor_client_id')
       .on(t.actorClientId, t.createdAt)
       .where(sql`${t.actorClientId} IS NOT NULL`),
+    // Defensive: the delegation chain is a JSON array of client_id strings.
+    // Mirrors the `oauth_clients_audience_is_array` check so a malformed
+    // (non-array) value cannot be persisted even if a future caller bypasses
+    // the typed `$type<string[]>()` helper.
+    check(
+      'audit_logs_delegation_chain_is_array',
+      sql`${t.delegationChain} IS NULL OR jsonb_typeof(${t.delegationChain}) = 'array'`
+    ),
   ]
 );
 

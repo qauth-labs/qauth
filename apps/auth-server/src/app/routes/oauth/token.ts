@@ -16,7 +16,7 @@ import { ZodTypeProvider } from 'fastify-type-provider-zod';
 
 import { env } from '../../../config/env';
 import { MIN_RESPONSE_TIME_MS } from '../../constants';
-import { flattenActChain } from '../../helpers/agent-audit';
+import { flattenActChain, MAX_DELEGATION_DEPTH } from '../../helpers/agent-audit';
 import {
   authenticateClient,
   authenticateClientPublicOrConfidential,
@@ -872,15 +872,6 @@ function actDepth(act: ActClaim | undefined): number {
   }
   return depth;
 }
-
-/**
- * Maximum delegation depth (number of nested `act` actors) we will mint. Each
- * additional hop appends a nested `act`, growing the JWT unboundedly; an
- * attacker chaining re-exchanges could otherwise inflate token size (DoS) and
- * obscure provenance. A small cap bounds both. Re-exchanging an already-deep
- * delegated token past the limit → `invalid_request`.
- */
-const MAX_DELEGATION_DEPTH = 4;
 
 /**
  * Handle the OAuth 2.0 Token Exchange grant (RFC 8693) — QAuth's agent

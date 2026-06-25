@@ -539,7 +539,7 @@ describe('repository integration (real Postgres)', () => {
       expect(row.scopeMode).toBeNull();
     });
 
-    it('findByActorClientId returns only an agent’s actions, newest first', async () => {
+    it('findByRealmAndActorClientId returns only an agent’s actions, newest first', async () => {
       const realm = await seedRealm('agent-activity-realm');
       const subject = await seedUser(realm.id, 'activity@example.com');
       const agentA = await seedClient(realm.id, 'agent-a');
@@ -581,7 +581,7 @@ describe('repository integration (real Postgres)', () => {
         createdAt: 1_500,
       });
 
-      const activity = await audit.findByActorClientId('agent-a');
+      const activity = await audit.findByRealmAndActorClientId(realm.id, 'agent-a');
       expect(activity).toHaveLength(2);
       // Newest first (created_at desc).
       expect(activity[0].event).toBe('oauth.stepup.elevation');
@@ -591,9 +591,55 @@ describe('repository integration (real Postgres)', () => {
       expect(activity.every((r) => r.actorClientId === 'agent-a')).toBe(true);
 
       // eventType filter narrows within the agent's activity.
-      const tokenOnly = await audit.findByActorClientId('agent-a', { eventType: 'token' });
+      const tokenOnly = await audit.findByRealmAndActorClientId(realm.id, 'agent-a', {
+        eventType: 'token',
+      });
       expect(tokenOnly).toHaveLength(1);
       expect(tokenOnly[0].event).toBe('oauth.token.exchange.success');
+    });
+
+    it('findByRealmAndActorClientId is REALM-ISOLATED — same client_id in two realms does not leak', async () => {
+      // Two realms each own a client called `agent-shared` (client_id is unique
+      // only per realm). Each agent acts once; a query scoped to realm A must
+      // return ONLY realm A's row, never realm B's.
+      const realmA = await seedRealm('iso-realm-a');
+      const realmB = await seedRealm('iso-realm-b');
+      const userA = await seedUser(realmA.id, 'a@example.com');
+      const userB = await seedUser(realmB.id, 'b@example.com');
+      const clientA = await seedClient(realmA.id, 'agent-shared');
+      const clientB = await seedClient(realmB.id, 'agent-shared');
+      const audit = createAuditLogsRepository(db().database.db);
+
+      await audit.create({
+        userId: userA.id,
+        oauthClientId: clientA.id,
+        actorClientId: 'agent-shared',
+        delegationChain: ['agent-shared'],
+        scopeMode: 'readonly',
+        event: 'oauth.token.exchange.success',
+        eventType: 'token',
+        success: true,
+      });
+      await audit.create({
+        userId: userB.id,
+        oauthClientId: clientB.id,
+        actorClientId: 'agent-shared',
+        delegationChain: ['agent-shared'],
+        scopeMode: 'exec',
+        event: 'oauth.token.exchange.success',
+        eventType: 'token',
+        success: true,
+      });
+
+      const activityA = await audit.findByRealmAndActorClientId(realmA.id, 'agent-shared');
+      expect(activityA).toHaveLength(1);
+      expect(activityA[0].userId).toBe(userA.id);
+      expect(activityA[0].scopeMode).toBe('readonly');
+
+      const activityB = await audit.findByRealmAndActorClientId(realmB.id, 'agent-shared');
+      expect(activityB).toHaveLength(1);
+      expect(activityB[0].userId).toBe(userB.id);
+      expect(activityB[0].scopeMode).toBe('exec');
     });
   });
 });

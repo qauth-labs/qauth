@@ -707,6 +707,13 @@ describe('UI /ui/consent — step-up authentication (ADR-007 §2, #185)', () => 
       actorClientId: 'app-123',
       scopeMode: 'exec',
     });
+    // No-leak: the step-up elevation row must carry no session/CSRF secret,
+    // no minted code, and no token material — only public identifiers.
+    const serialized = JSON.stringify(elevation);
+    expect(serialized).not.toContain('csrf-su');
+    expect(serialized).not.toContain('sid-su');
+    expect(serialized).not.toContain(signed);
+    expect(serialized).not.toContain('code=');
   });
 
   it('per-agent audit (#186): elevation by a NON-agent client records no agent attribution', async () => {

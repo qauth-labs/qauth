@@ -1,5 +1,5 @@
 {
-  "id": "6ba97109-f6f9-405d-ad68-31c7f2135507",
+  "id": "0b64f09c-13ff-480f-8c51-cb7a0aa33807",
   "prevId": "bc158bc3-6e4e-456c-97ca-b83157a55ae5",
   "version": "7",
   "dialect": "postgresql",
@@ -278,7 +278,12 @@
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
       "policies": {},
-      "checkConstraints": {},
+      "checkConstraints": {
+        "audit_logs_delegation_chain_is_array": {
+          "name": "audit_logs_delegation_chain_is_array",
+          "value": "\"audit_logs\".\"delegation_chain\" IS NULL OR jsonb_typeof(\"audit_logs\".\"delegation_chain\") = 'array'"
+        }
+      },
       "isRLSEnabled": false
     },
     "public.oauth_consents": {
