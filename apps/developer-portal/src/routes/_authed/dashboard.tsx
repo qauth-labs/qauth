@@ -1,5 +1,5 @@
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@qauth-labs/ui';
-import { createFileRoute } from '@tanstack/react-router';
+import { Button, Card, CardContent, CardDescription, CardHeader, CardTitle } from '@qauth-labs/ui';
+import { createFileRoute, Link } from '@tanstack/react-router';
 
 import type { UserInfoData } from '../../server/auth-server-client';
 
@@ -25,7 +25,11 @@ function DashboardPage() {
             </CardDescription>
           </CardHeader>
           <CardContent>
-            <p className="text-sm text-gray-400">Coming soon in Phase 2.2.</p>
+            <Link to="/clients">
+              <Button type="button" variant="outline">
+                Manage clients
+              </Button>
+            </Link>
           </CardContent>
         </Card>
 

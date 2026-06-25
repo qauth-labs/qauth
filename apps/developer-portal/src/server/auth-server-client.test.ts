@@ -205,3 +205,123 @@ describe('authServerClient.userinfo', () => {
     if (!result.ok) expect(result.error.status).toBe(401);
   });
 });
+
+const sampleClient = {
+  id: 'row-1',
+  clientId: 'client-uuid',
+  name: 'My App',
+  description: null,
+  redirectUris: ['https://app.example.com/cb'],
+  scopes: ['openid'],
+  grantTypes: ['authorization_code', 'refresh_token'],
+  responseTypes: ['code'],
+  tokenEndpointAuthMethod: 'client_secret_post',
+  enabled: true,
+  requirePkce: true,
+  createdAt: 1_750_000_000_000,
+  updatedAt: 1_750_000_000_000,
+  lastUsedAt: null,
+};
+
+describe('authServerClient.listClients', () => {
+  it('returns the clients array on 200', async () => {
+    mockFetch(200, { clients: [sampleClient] });
+    const result = await authServerClient.listClients('at');
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.data.clients).toHaveLength(1);
+  });
+
+  it('maps 401 to UNAUTHENTICATED', async () => {
+    mockFetch(401, { error: 'Unauthorized', statusCode: 401 }, false);
+    const result = await authServerClient.listClients('bad');
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe('UNAUTHENTICATED');
+  });
+});
+
+describe('authServerClient.getClient', () => {
+  it('returns the client on 200', async () => {
+    mockFetch(200, sampleClient);
+    const result = await authServerClient.getClient('at', 'row-1');
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.data.clientId).toBe('client-uuid');
+  });
+
+  it('maps 404 to NOT_FOUND (not owned / missing)', async () => {
+    mockFetch(404, { error: 'Not found', statusCode: 404 }, false);
+    const result = await authServerClient.getClient('at', 'missing');
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe('NOT_FOUND');
+  });
+});
+
+describe('authServerClient.createClient', () => {
+  it('returns the client with a one-time secret on 201', async () => {
+    mockFetch(201, { ...sampleClient, clientSecret: 'a'.repeat(64) });
+    const result = await authServerClient.createClient('at', { name: 'My App' });
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.data.clientSecret).toHaveLength(64);
+  });
+
+  it('maps a 400 without a code to VALIDATION_ERROR', async () => {
+    mockFetch(400, { error: 'Invalid redirect URI', statusCode: 400 }, false);
+    const result = await authServerClient.createClient('at', { name: 'x' });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe('VALIDATION_ERROR');
+  });
+
+  it('maps 429 to RATE_LIMITED', async () => {
+    mockFetch(429, { error: 'Too many requests', statusCode: 429 }, false);
+    const result = await authServerClient.createClient('at', { name: 'x' });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe('RATE_LIMITED');
+  });
+});
+
+describe('authServerClient.updateClient', () => {
+  it('returns the updated client on 200 (no secret)', async () => {
+    mockFetch(200, { ...sampleClient, name: 'Renamed' });
+    const result = await authServerClient.updateClient('at', 'row-1', { name: 'Renamed' });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.data.name).toBe('Renamed');
+      expect((result.data as { clientSecret?: string }).clientSecret).toBeUndefined();
+    }
+  });
+});
+
+describe('authServerClient.deleteClient', () => {
+  it('returns ok with null data on 204 without parsing a body', async () => {
+    const jsonSpy = vi.fn(() => Promise.reject(new Error('no body')));
+    global.fetch = vi
+      .fn()
+      .mockResolvedValue({ ok: true, status: 204, json: jsonSpy } as unknown as Response);
+    const result = await authServerClient.deleteClient('at', 'row-1');
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.data).toBeNull();
+    expect(jsonSpy).not.toHaveBeenCalled();
+  });
+
+  it('maps 404 to NOT_FOUND', async () => {
+    mockFetch(404, { error: 'Not found', statusCode: 404 }, false);
+    const result = await authServerClient.deleteClient('at', 'missing');
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe('NOT_FOUND');
+  });
+});
+
+describe('authServerClient.regenerateClientSecret', () => {
+  it('returns the new one-time secret on 200', async () => {
+    mockFetch(200, { ...sampleClient, clientSecret: 'b'.repeat(64) });
+    const result = await authServerClient.regenerateClientSecret('at', 'row-1');
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.data.clientSecret).toBe('b'.repeat(64));
+  });
+
+  it('maps a public-client 400 to VALIDATION_ERROR', async () => {
+    mockFetch(400, { error: 'Public client has no secret', statusCode: 400 }, false);
+    const result = await authServerClient.regenerateClientSecret('at', 'row-1');
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe('VALIDATION_ERROR');
+  });
+});
