@@ -2,7 +2,7 @@ import { and, desc, eq, InferInsertModel, InferSelectModel } from 'drizzle-orm';
 
 import { DbClient } from '../db';
 import { auditLogs } from '../schema/audit';
-import { users } from '../schema/core';
+import { oauthClients, users } from '../schema/core';
 
 export type AuditLog = InferSelectModel<typeof auditLogs>;
 export type NewAuditLog = InferInsertModel<typeof auditLogs>;
@@ -10,7 +10,7 @@ export type NewAuditLog = InferInsertModel<typeof auditLogs>;
 /**
  * Audit event type enum values
  */
-export type AuditEventType = 'auth' | 'token' | 'client' | 'security' | 'user' | 'realm';
+export type AuditEventType = 'auth' | 'token' | 'client' | 'security' | 'user' | 'realm' | 'agent';
 
 /**
  * Options for querying audit logs
@@ -173,6 +173,72 @@ export function createAuditLogsRepository(defaultDb: DbClient) {
         .select({ auditLog: auditLogs })
         .from(auditLogs)
         .innerJoin(users, eq(auditLogs.userId, users.id))
+        .where(and(...conditions))
+        .limit(limit)
+        .offset(offset);
+
+      if (descending) {
+        const result = await baseQuery.orderBy(desc(auditLogs.createdAt));
+        return result.map((row) => row.auditLog);
+      }
+
+      const result = await baseQuery;
+      return result.map((row) => row.auditLog);
+    },
+
+    /**
+     * Find audit logs attributed to a specific agent WITHIN a realm, newest
+     * first. This is the query foundation for the future developer-portal
+     * "agent activity" view (ADR-007 §2, #186): every entry an agent produced
+     * acting on behalf of a user, with the subject (`userId`), delegation chain
+     * (`delegationChain`), and scope mode (`scopeMode`) available on each row.
+     *
+     * Security: REALM-ISOLATED. `client_id` is unique only PER realm
+     * (`idx_oauth_clients_realm_client_id_unique` on `(realm_id, client_id)`;
+     * the standalone `idx_oauth_clients_client_id` is non-unique), so two
+     * realms can each own a client called `agent-a`. Matching the denormalized
+     * `actor_client_id` string ALONE would return rows from every realm that
+     * owns that `client_id` — a cross-tenant leak. We therefore inner-join
+     * `oauth_clients` on the FK and require `realm_id = $realmId`, mirroring the
+     * realm guard on `findByRealmId` / `findByRealmAndUserId`.
+     *
+     * Trade-off: the join is on the `set null` FK (`oauthClientId`), so rows
+     * whose client row was later deleted are NOT returned (they have no realm
+     * to scope to). For a tenant-scoped activity view excluding such orphaned
+     * rows is the safe default — never leak them across realms. The
+     * denormalized `actorClientId` column still preserves the attribution on
+     * the row itself for any non-realm-scoped administrative query.
+     *
+     * @param realmId - Realm ID the agent belongs to (isolation boundary)
+     * @param actorClientId - The agent's `client_id` string
+     * @param options - Query options (pagination, filters)
+     * @param tx - Optional transaction client
+     * @returns Array of audit logs attributed to the agent in this realm
+     */
+    async findByRealmAndActorClientId(
+      realmId: string,
+      actorClientId: string,
+      options: FindAuditLogsOptions = {},
+      tx?: DbClient
+    ): Promise<AuditLog[]> {
+      const invoker = tx ?? defaultDb;
+      const { limit = 50, offset = 0, descending = true, eventType, success } = options;
+
+      const conditions = [
+        eq(auditLogs.actorClientId, actorClientId),
+        eq(oauthClients.realmId, realmId),
+      ];
+      if (eventType !== undefined) {
+        conditions.push(eq(auditLogs.eventType, eventType));
+      }
+      if (success !== undefined) {
+        conditions.push(eq(auditLogs.success, success));
+      }
+
+      const baseQuery = invoker
+        .select({ auditLog: auditLogs })
+        .from(auditLogs)
+        .innerJoin(oauthClients, eq(auditLogs.oauthClientId, oauthClients.id))
         .where(and(...conditions))
         .limit(limit)
         .offset(offset);

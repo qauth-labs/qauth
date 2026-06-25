@@ -43,6 +43,13 @@
       "when": 1782381503568,
       "tag": "0005_agent_scope_mode",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1782388437344,
+      "tag": "0006_open_wolfsbane",
+      "breakpoints": true
     }
   ]
 }

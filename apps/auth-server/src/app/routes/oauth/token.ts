@@ -16,6 +16,7 @@ import { ZodTypeProvider } from 'fastify-type-provider-zod';
 
 import { env } from '../../../config/env';
 import { MIN_RESPONSE_TIME_MS } from '../../constants';
+import { flattenActChain, MAX_DELEGATION_DEPTH } from '../../helpers/agent-audit';
 import {
   authenticateClient,
   authenticateClientPublicOrConfidential,
@@ -28,6 +29,7 @@ import {
 } from '../../helpers/client-auth';
 import { isAgentClient } from '../../helpers/client-resolution';
 import { getOrCreateDefaultRealm } from '../../helpers/realm';
+import { highestAgentModeInScopes } from '../../helpers/scope-modes';
 import { ensureMinimumResponseTime } from '../../helpers/timing';
 import {
   TOKEN_EXCHANGE_GRANT_TYPE,
@@ -539,9 +541,18 @@ async function handleClientCredentials(
 
   const accessTokenExpiresIn = fastify.jwtUtils.getAccessTokenLifespan();
 
+  // Per-agent action audit (ADR-007 §2, #186). client_credentials has no
+  // subject user and no on-behalf-of `act` chain — the agent acts as itself —
+  // so we attribute the agent and the effective scope mode but leave
+  // `delegationChain`/`userId` null. Only an agent client (fail-closed
+  // `isAgentClient`) is attributed; an ordinary machine client records no
+  // agent fields, keeping existing behavior for non-agent clients unchanged.
+  const isAgent = isAgentClient(client);
   await fastify.repositories.auditLogs.create({
     userId: null,
     oauthClientId: client.id,
+    actorClientId: isAgent ? client.clientId : null,
+    scopeMode: isAgent ? highestAgentModeInScopes(grantedScopes) : null,
     event: 'oauth.token.exchange.success',
     eventType: 'token',
     success: true,
@@ -863,15 +874,6 @@ function actDepth(act: ActClaim | undefined): number {
 }
 
 /**
- * Maximum delegation depth (number of nested `act` actors) we will mint. Each
- * additional hop appends a nested `act`, growing the JWT unboundedly; an
- * attacker chaining re-exchanges could otherwise inflate token size (DoS) and
- * obscure provenance. A small cap bounds both. Re-exchanging an already-deep
- * delegated token past the limit → `invalid_request`.
- */
-const MAX_DELEGATION_DEPTH = 4;
-
-/**
  * Handle the OAuth 2.0 Token Exchange grant (RFC 8693) — QAuth's agent
  * on-behalf-of delegation (ADR-007 §2). An **agent** client presents a user's
  * `subject_token` and receives a delegated access token whose `sub` is the
@@ -1163,9 +1165,18 @@ async function handleTokenExchange(
     expiresInOverride: accessTokenExpiresIn,
   });
 
+  // Per-agent action audit (ADR-007 §2, #186). The delegated token was minted
+  // on behalf of `user` BY this agent — record the attribution as structured,
+  // queryable columns (agent client_id, the flattened `act` delegation chain,
+  // and the effective agent scope mode) on top of the existing metadata. Only
+  // public identifiers are stored; no subject/actor token, secret, or scope
+  // secret is ever persisted.
   await fastify.repositories.auditLogs.create({
     userId: user.id,
     oauthClientId: client.id,
+    actorClientId: client.clientId,
+    delegationChain: flattenActChain(act),
+    scopeMode: highestAgentModeInScopes(grantedScopes),
     event: 'oauth.token.exchange.success',
     eventType: 'token',
     success: true,

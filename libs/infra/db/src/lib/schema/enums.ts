@@ -102,4 +102,12 @@ export const auditEventTypeEnum = pgEnum('audit_event_type', [
   'security', // Security events (failed login, suspicious activity)
   'user', // User management events
   'realm', // Realm management events
+  // Reserved (ADR-007 §2, #186) for a future DEDICATED agent-action event type.
+  // The current agent-native emit sites (token-exchange, step-up elevation,
+  // client_credentials) keep their existing `token`/`auth` category and carry
+  // agent attribution via the `actor_client_id` / `delegation_chain` /
+  // `scope_mode` COLUMNS — not by changing `event_type` — so existing queries
+  // filtering on those categories stay unaffected. This value lets a
+  // purpose-built agent event be added later without a second enum migration.
+  'agent',
 ]);

@@ -669,6 +669,83 @@ describe('UI /ui/consent — step-up authentication (ADR-007 §2, #185)', () => 
     expect(events).toContain('oauth.consent.granted');
   });
 
+  it('per-agent audit (#186): elevation by an agent client attributes actor + scope mode', async () => {
+    const { fastify, ctx } = makeFastify();
+    await consentRoute(fastify);
+    const { signSessionId } = await import('../../helpers/session-cookie');
+    const signed = signSessionId('sid-su');
+    (fastify.sessionUtils.getSession as unknown as Mock).mockResolvedValue(
+      session(Date.now() - 5000)
+    );
+    // An EXEC-capped agent elevating to the dangerous `agent:exec` scope.
+    const EXEC_AGENT = {
+      ...DANGEROUS_CLIENT,
+      isAgent: true,
+      maxAgentMode: 'exec' as const,
+      scopes: ['read:foo', 'agent:exec', 'email'],
+    };
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(
+      EXEC_AGENT
+    );
+
+    const { reply, state } = createReply();
+    await ctx.post!(
+      {
+        body: postBody({ scope: 'agent:exec' }),
+        headers: { cookie: `__Host-qauth_session=${signed}` },
+        ip: '127.0.0.1',
+      },
+      reply
+    );
+
+    expect(state.redirected).toContain('code=');
+    const elevation = (fastify.repositories.auditLogs.create as unknown as Mock).mock.calls
+      .map((c) => c[0])
+      .find((a) => a?.event === 'oauth.stepup.elevation');
+    expect(elevation).toMatchObject({
+      userId: 'user-1',
+      actorClientId: 'app-123',
+      scopeMode: 'exec',
+    });
+    // No-leak: the step-up elevation row must carry no session/CSRF secret,
+    // no minted code, and no token material — only public identifiers.
+    const serialized = JSON.stringify(elevation);
+    expect(serialized).not.toContain('csrf-su');
+    expect(serialized).not.toContain('sid-su');
+    expect(serialized).not.toContain(signed);
+    expect(serialized).not.toContain('code=');
+  });
+
+  it('per-agent audit (#186): elevation by a NON-agent client records no agent attribution', async () => {
+    const { fastify, ctx } = makeFastify();
+    await consentRoute(fastify);
+    const { signSessionId } = await import('../../helpers/session-cookie');
+    const signed = signSessionId('sid-su');
+    (fastify.sessionUtils.getSession as unknown as Mock).mockResolvedValue(
+      session(Date.now() - 5000)
+    );
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(
+      DANGEROUS_CLIENT
+    );
+
+    const { reply, state } = createReply();
+    await ctx.post!(
+      {
+        body: postBody(),
+        headers: { cookie: `__Host-qauth_session=${signed}` },
+        ip: '127.0.0.1',
+      },
+      reply
+    );
+
+    expect(state.redirected).toContain('code=');
+    const elevation = (fastify.repositories.auditLogs.create as unknown as Mock).mock.calls
+      .map((c) => c[0])
+      .find((a) => a?.event === 'oauth.stepup.elevation');
+    // Non-agent client: the elevation is still audited, but with no agent fields.
+    expect(elevation).toMatchObject({ actorClientId: null, scopeMode: null });
+  });
+
   it('forces fresh auth for prompt=login on a stale session even with a non-dangerous scope', async () => {
     const { fastify, ctx } = makeFastify();
     await consentRoute(fastify);

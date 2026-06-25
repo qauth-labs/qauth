@@ -807,6 +807,110 @@ describe('POST /oauth/token route — client_credentials grant', () => {
       );
     });
 
+    it('per-agent audit (#186): agent client_credentials success attributes actor + scope mode', async () => {
+      const { fastify, ctx } = createFastifyStub();
+      await tokenRoute(fastify);
+      const handler = ctx.handler;
+      (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(
+        ccAgentClient({ maxAgentMode: 'exec' })
+      );
+      (fastify.passwordHasher.verifyPassword as unknown as Mock).mockResolvedValue(true);
+      (fastify.jwtUtils.signAccessToken as unknown as Mock).mockResolvedValue('jwt');
+
+      if (!handler) throw new Error('Handler missing');
+      await handler(ccRequest('agent:exec'), createReply());
+
+      // No subject user (machine token) and no delegation chain, but the agent
+      // and its effective scope mode are attributed for the agent-activity view.
+      expect(fastify.repositories.auditLogs.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          event: 'oauth.token.exchange.success',
+          success: true,
+          userId: null,
+          actorClientId: 'cc-agent',
+          scopeMode: 'exec',
+        })
+      );
+    });
+
+    it('per-agent audit (#186): client_credentials success persists no secret/token material', async () => {
+      const { fastify, ctx } = createFastifyStub();
+      await tokenRoute(fastify);
+      const handler = ctx.handler;
+      (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(
+        ccAgentClient({ maxAgentMode: 'exec' })
+      );
+      (fastify.passwordHasher.verifyPassword as unknown as Mock).mockResolvedValue(true);
+      (fastify.jwtUtils.signAccessToken as unknown as Mock).mockResolvedValue('cc-access.jwt');
+
+      if (!handler) throw new Error('Handler missing');
+      await handler(
+        {
+          body: {
+            grant_type: 'client_credentials',
+            client_id: 'cc-agent',
+            client_secret: 'cc-super-secret',
+            scope: 'agent:exec',
+          },
+          ip: '127.0.0.1',
+          headers: { 'user-agent': 'vitest' },
+        },
+        createReply()
+      );
+
+      const successCall = (
+        fastify.repositories.auditLogs.create as unknown as Mock
+      ).mock.calls.find(([arg]) => arg?.event === 'oauth.token.exchange.success');
+      expect(successCall).toBeDefined();
+      const serialized = JSON.stringify(successCall?.[0]);
+      expect(serialized).not.toContain('cc-super-secret');
+      expect(serialized).not.toContain('cc-access.jwt');
+    });
+
+    it('per-agent audit (#186): NON-agent client_credentials success records no agent attribution', async () => {
+      const { fastify, ctx } = createFastifyStub();
+      await tokenRoute(fastify);
+      const handler = ctx.handler;
+      const plainClient = {
+        id: 'plain-uuid',
+        clientId: 'plain-machine',
+        clientSecretHash: 'hash',
+        enabled: true,
+        grantTypes: ['client_credentials'],
+        scopes: ['read:foo'],
+        audience: null,
+        isAgent: false,
+      };
+      (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(
+        plainClient
+      );
+      (fastify.passwordHasher.verifyPassword as unknown as Mock).mockResolvedValue(true);
+      (fastify.jwtUtils.signAccessToken as unknown as Mock).mockResolvedValue('jwt');
+
+      if (!handler) throw new Error('Handler missing');
+      await handler(
+        {
+          body: {
+            grant_type: 'client_credentials',
+            client_id: 'plain-machine',
+            client_secret: 'secret',
+            scope: 'read:foo',
+          },
+          ip: '127.0.0.1',
+          headers: { 'user-agent': 'vitest' },
+        },
+        createReply()
+      );
+
+      expect(fastify.repositories.auditLogs.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          event: 'oauth.token.exchange.success',
+          actorClientId: null,
+          scopeMode: null,
+        })
+      );
+    });
+
     it('rejects an agent-mode scope above the cap (exec > readonly) with invalid_scope', async () => {
       const { fastify, ctx } = createFastifyStub();
       await tokenRoute(fastify);
@@ -1675,6 +1779,50 @@ describe('POST /oauth/token route — token-exchange grant (RFC 8693, ADR-007 §
     const { fastify, ctx } = setupExchangeStub({ subjectAct: deepAct });
     await expect(invoke(fastify, ctx, exchangeRequest())).rejects.toThrow(InvalidRequestError);
     expect(fastify.jwtUtils.signAccessToken).not.toHaveBeenCalled();
+  });
+
+  it('per-agent audit (#186): success row carries actor + subject + act chain + scope mode', async () => {
+    // Agent capped at exec, subject token grants agent:exec; on-behalf-of of the
+    // end-user with a prior actor already in the chain.
+    const { fastify, ctx, client, user } = setupExchangeStub({
+      maxAgentMode: 'exec',
+      subjectScope: 'read:docs agent:exec',
+      subjectAct: { sub: 'prior-agent' },
+    });
+
+    await invoke(fastify, ctx, exchangeRequest());
+
+    expect(fastify.repositories.auditLogs.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: 'oauth.token.exchange.success',
+        eventType: 'token',
+        success: true,
+        // Subject = the end-user the agent acted on behalf of.
+        userId: user.id,
+        // Actor = the authenticated agent's client_id (denormalized, queryable).
+        actorClientId: client.clientId,
+        // Flattened RFC 8693 `act` chain: outermost (this agent) first.
+        delegationChain: [client.clientId, 'prior-agent'],
+        // Highest agent scope mode present in the granted set.
+        scopeMode: 'exec',
+      })
+    );
+  });
+
+  it('per-agent audit (#186): never persists token/secret material in audit fields', async () => {
+    const { fastify, ctx } = setupExchangeStub({ subjectScope: 'read:docs' });
+
+    await invoke(fastify, ctx, exchangeRequest({ client_secret: 'super-secret' }));
+
+    const successCall = (fastify.repositories.auditLogs.create as unknown as Mock).mock.calls.find(
+      ([arg]) => arg?.event === 'oauth.token.exchange.success'
+    );
+    expect(successCall).toBeDefined();
+    const serialized = JSON.stringify(successCall?.[0]);
+    // No subject/actor token, no client secret, no raw delegated token.
+    expect(serialized).not.toContain('subject.jwt.token');
+    expect(serialized).not.toContain('super-secret');
+    expect(serialized).not.toContain('delegated.jwt');
   });
 
   it('narrows scope to a subset of the subject token scope', async () => {
