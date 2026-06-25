@@ -19,9 +19,11 @@ vi.mock('../../config/env', () => ({
 
 import {
   authenticateClient,
+  enforceAgentScopeCap,
   extractClientCredentials,
   type OAuthClientLike,
   resolveAudience,
+  toAgentScopeContext,
   validateScopes,
 } from './client-auth';
 
@@ -218,6 +220,86 @@ describe('validateScopes', () => {
 
   it('collapses runs of whitespace between scopes', () => {
     expect(validateScopes('read    write', ['read', 'write'])).toEqual(['read', 'write']);
+  });
+
+  // ADR-007 §2 (#184): the optional agent context enforces the scope-mode cap
+  // through the SAME validateScopes path the token endpoint already uses.
+  describe('agent scope-mode cap (ADR-007 §2)', () => {
+    it('permits an in-cap agent-mode scope that is also allowlisted', () => {
+      expect(
+        validateScopes('agent:readonly', ['agent:readonly', 'agent:admin'], {
+          isAgent: true,
+          maxAgentMode: 'admin',
+        })
+      ).toEqual(['agent:readonly']);
+    });
+
+    it('rejects an agent-mode scope above the cap even if allowlisted', () => {
+      expect(() =>
+        validateScopes('agent:exec', ['agent:exec'], { isAgent: true, maxAgentMode: 'admin' })
+      ).toThrow(InvalidScopeError);
+    });
+
+    it('rejects any agent-mode scope for a non-agent client (untrusted is_agent)', () => {
+      expect(() =>
+        validateScopes('agent:readonly', ['agent:readonly'], {
+          isAgent: false,
+          maxAgentMode: 'exec',
+        })
+      ).toThrow(InvalidScopeError);
+    });
+
+    it('rejects any agent-mode scope when the cap is null (default-deny)', () => {
+      expect(() =>
+        validateScopes('agent:readonly', ['agent:readonly'], { isAgent: true, maxAgentMode: null })
+      ).toThrow(InvalidScopeError);
+    });
+
+    it('leaves ordinary scopes unaffected when an agent context is supplied', () => {
+      expect(
+        validateScopes('read write', ['read', 'write'], { isAgent: true, maxAgentMode: 'exec' })
+      ).toEqual(['read', 'write']);
+    });
+  });
+});
+
+describe('toAgentScopeContext — fail-closed derivation', () => {
+  it('reflects a verified agent with a parsed cap', () => {
+    expect(toAgentScopeContext({ isAgent: true, maxAgentMode: 'admin' })).toEqual({
+      isAgent: true,
+      maxAgentMode: 'admin',
+    });
+  });
+
+  it('treats a missing / null cap as no cap', () => {
+    expect(toAgentScopeContext({ isAgent: true, maxAgentMode: null })).toEqual({
+      isAgent: true,
+      maxAgentMode: null,
+    });
+    expect(toAgentScopeContext({ isAgent: true })).toEqual({ isAgent: true, maxAgentMode: null });
+  });
+
+  it('fails closed for omitted is_agent and unknown cap values', () => {
+    expect(toAgentScopeContext({})).toEqual({ isAgent: false, maxAgentMode: null });
+    expect(toAgentScopeContext(null)).toEqual({ isAgent: false, maxAgentMode: null });
+    expect(toAgentScopeContext({ isAgent: true, maxAgentMode: 'superuser' })).toEqual({
+      isAgent: true,
+      maxAgentMode: null,
+    });
+  });
+});
+
+describe('enforceAgentScopeCap', () => {
+  it('does not throw when every agent-mode scope is within policy', () => {
+    expect(() =>
+      enforceAgentScopeCap(['agent:readonly', 'read:foo'], { isAgent: true, maxAgentMode: 'admin' })
+    ).not.toThrow();
+  });
+
+  it('throws InvalidScopeError listing scopes that exceed the cap', () => {
+    expect(() =>
+      enforceAgentScopeCap(['agent:exec'], { isAgent: true, maxAgentMode: 'readonly' })
+    ).toThrow(InvalidScopeError);
   });
 });
 

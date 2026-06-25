@@ -7,12 +7,13 @@ import { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { env } from '../../../config/env';
 import { AUTHORIZATION_CODE_TTL_MS } from '../../constants';
 import { resolveBrowserSession } from '../../helpers/browser-session';
-import { resolveAudience } from '../../helpers/client-auth';
+import { resolveAudience, toAgentScopeContext } from '../../helpers/client-auth';
 import { resolveClient } from '../../helpers/client-resolution';
 import { canSkipConsent, filterRequestedScopes } from '../../helpers/consent';
 import { getOrCreateSystemClient } from '../../helpers/oauth-client';
 import { buildRedirectUrl } from '../../helpers/oauth-redirect';
 import { getOrCreateDefaultRealm } from '../../helpers/realm';
+import { findExceedingAgentScopes } from '../../helpers/scope-modes';
 import { type AuthorizeQuery, authorizeQuerySchema } from '../../schemas/oauth';
 
 /**
@@ -224,6 +225,46 @@ export default async function (fastify: FastifyInstance) {
             302
           );
         }
+      }
+
+      // ADR-007 §2 (#184): deny-by-default agent scope-mode cap. A reserved
+      // agent-mode scope (`agent:readonly|admin|exec`) is permitted ONLY for a
+      // verified agent within its server-side `maxAgentMode`. A non-agent
+      // client (incl. one that omitted `is_agent`) or one over its cap is
+      // rejected up front with `invalid_scope` (RFC 6749 §4.1.2.1) rather than
+      // having the offending scope silently dropped, so an over-asking agent
+      // gets a clear error. `filterRequestedScopes` then applies the ordinary
+      // allowlist to whatever survives.
+      const agentScopeCtx = toAgentScopeContext(client);
+      const exceedingAgentScopes = findExceedingAgentScopes(
+        (query.scope ?? '').split(/\s+/).filter((s) => s.length > 0),
+        agentScopeCtx.isAgent,
+        agentScopeCtx.maxAgentMode
+      );
+      if (exceedingAgentScopes.length > 0) {
+        await fastify.repositories.auditLogs.create({
+          userId: null,
+          oauthClientId: client.id,
+          event: 'oauth.authorize.failure',
+          eventType: 'token',
+          success: false,
+          ipAddress: request.ip,
+          userAgent: request.headers['user-agent'] || null,
+          metadata: {
+            error: 'invalid_scope',
+            reason: 'agent_scope_mode_exceeded',
+            client_id: query.client_id,
+            exceeding: exceedingAgentScopes.join(' '),
+          },
+        });
+        return reply.redirect(
+          buildRedirectUrl(redirectUri, {
+            error: 'invalid_scope',
+            error_description: 'requested scope exceeds the agent scope mode for this client',
+            state: state ?? undefined,
+          }),
+          302
+        );
       }
 
       // Deny-by-default: when a client has no scope allowlist configured we

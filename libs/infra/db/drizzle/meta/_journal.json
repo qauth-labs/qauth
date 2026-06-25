@@ -36,6 +36,13 @@
       "when": 1782369732705,
       "tag": "0004_agent_client_type",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1782381503568,
+      "tag": "0005_agent_scope_mode",
+      "breakpoints": true
     }
   ]
 }

@@ -12,7 +12,13 @@ import {
   varchar,
 } from 'drizzle-orm/pg-core';
 
-import { GrantType, ResponseType, sslRequiredEnum, tokenEndpointAuthMethodEnum } from './enums';
+import {
+  agentModeEnum,
+  GrantType,
+  ResponseType,
+  sslRequiredEnum,
+  tokenEndpointAuthMethodEnum,
+} from './enums';
 import { EPOCH_MS_NOW, JSONB_EMPTY_ARRAY } from './sql-helpers';
 
 /**
@@ -160,6 +166,23 @@ export const oauthClients = pgTable(
      * flag is truthful or present.
      */
     isAgent: boolean('is_agent').notNull().default(false),
+    /**
+     * Server-side MAXIMUM agent scope mode (ADR-007 §2, issue #184). Bounds
+     * the reserved `agent:*` scopes a client may request: ReadOnly ⊂ Admin ⊂
+     * Exec. NULL (the default) means NO agent mode is permitted — deny by
+     * default — so every existing row, and any client that never had a cap
+     * provisioned, can hold no `agent:*` scope.
+     *
+     * Unlike `is_agent` (self-asserted client input), this is OPERATOR-SET
+     * SERVER STATE — set via seed/admin provisioning, not by the client's own
+     * DCR/CIMD document. It is the independent server-side criterion the epic
+     * #181 security requirement calls for: agent-mode scopes require BOTH the
+     * agent classification AND this cap, never the client's self-declaration
+     * alone. A client omitting `is_agent` to dodge controls simply fails the
+     * classification and gets no agent scope; a client cannot raise its own
+     * cap because this column is not part of the registration request.
+     */
+    maxAgentMode: agentModeEnum('max_agent_mode'),
     /**
      * Set when the client was created via dynamic client registration (RFC 7591).
      * Null for hand-provisioned / first-party clients. Consumed by the consent

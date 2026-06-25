@@ -41,7 +41,12 @@ import { drizzle } from 'drizzle-orm/node-postgres';
 import { z } from 'zod';
 
 import { oauthClients, realms } from '../lib/schema';
-import { grantTypeEnum, responseTypeEnum, tokenEndpointAuthMethodEnum } from '../lib/schema/enums';
+import {
+  agentModeEnum,
+  grantTypeEnum,
+  responseTypeEnum,
+  tokenEndpointAuthMethodEnum,
+} from '../lib/schema/enums';
 
 dotenv.config({ path: '../../../.env' });
 
@@ -55,6 +60,7 @@ dotenv.config({ path: '../../../.env' });
 const grantTypeZ = z.enum(grantTypeEnum.enumValues);
 const responseTypeZ = z.enum(responseTypeEnum.enumValues);
 const tokenEndpointAuthMethodZ = z.enum(tokenEndpointAuthMethodEnum.enumValues);
+const agentModeZ = z.enum(agentModeEnum.enumValues);
 
 const clientSpecSchema = z
   .object({
@@ -72,6 +78,12 @@ const clientSpecSchema = z
     // Defaults to false (standard client) when omitted, mirroring the schema
     // column default so existing manifests are unaffected.
     is_agent: z.boolean().optional(),
+    // ADR-007 §2 (#184): operator-set MAXIMUM agent scope mode. This is the
+    // intended provisioning path for the cap — it is deliberately NOT
+    // accepted from a client's own DCR/CIMD registration (an escalation
+    // control must be server-set). Omitted ⇒ NULL ⇒ no agent mode permitted
+    // (deny-by-default). Only meaningful together with `is_agent: true`.
+    max_agent_mode: agentModeZ.optional(),
   })
   .strict();
 
@@ -226,6 +238,8 @@ function buildInsert(realmId: string, spec: ClientSpec, clientSecretHash: string
     grantTypes: spec.grant_types,
     responseTypes: spec.response_types ?? ['code'],
     isAgent: spec.is_agent ?? false,
+    // Operator-set agent scope-mode cap; null = deny-by-default (no agent mode).
+    maxAgentMode: spec.max_agent_mode ?? null,
     enabled: true,
   } as const;
 }
@@ -248,6 +262,8 @@ function buildUpdate(spec: ClientSpec, clientSecretHash: string) {
     grantTypes: spec.grant_types,
     responseTypes: spec.response_types ?? ['code'],
     isAgent: spec.is_agent ?? false,
+    // Operator-set agent scope-mode cap; null = deny-by-default (no agent mode).
+    maxAgentMode: spec.max_agent_mode ?? null,
     updatedAt: sql`(EXTRACT(EPOCH FROM now()) * 1000)::bigint`,
   } as const;
 }
