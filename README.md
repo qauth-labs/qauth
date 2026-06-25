@@ -19,7 +19,9 @@
   <h3>🇪🇺 Made in Europe · 🇪🇪 Made in Estonia · 🇹🇷 Made in Türkiye</h3>
 </div>
 
-> **Status:** Early. Core OAuth 2.1 / OIDC flows work end-to-end — including discovery, dynamic client registration, resource-indicator audience binding, and a consent screen — and the **near-term focus is MCP / AI-agent authentication** (the self-hostable OAuth 2.1 authorization server for MCP servers; see [ADR-007](./docs/adr/007-mcp-first-positioning.md)). Wallet federation and post-quantum signing remain the long-term platform. See [Current Status](#-current-status-june-2026) and the [MVP milestone](https://github.com/qauth-labs/qauth/milestone/1). Not yet recommended for production use.
+> 🎉 **June 2026 milestone — MVP complete, and agent-native authorization shipped end-to-end.** Agent client type, RFC 8693 on-behalf-of token exchange, scope modes (ReadOnly / Admin / Exec), step-up, and per-agent audit are all live and documented ([ADR-007 §2](./docs/adr/007-mcp-first-positioning.md) · [agent guide](./docs/agent-authorization.md)). Next up: production hardening (T3).
+
+> **Status:** Core OAuth 2.1 / OIDC **and** the MCP / agent-native authorization layer work end-to-end — discovery, dynamic client registration, resource-indicator audience binding, consent, and on-behalf-of agent delegation (the self-hostable OAuth 2.1 authorization server for MCP servers and AI agents; see [ADR-007](./docs/adr/007-mcp-first-positioning.md)). Wallet federation and post-quantum signing remain the long-term platform. See [Current Status](#-current-status-june-2026). **Production hardening (T3) is in progress — not yet recommended for production use.**
 
 ## 🎯 How to Use QAuth
 
@@ -132,9 +134,11 @@ A federated identity hub for the next generation of the internet:
 
 ## 📍 Current Status (June 2026)
 
-QAuth is **early and not yet production-ready**. An honest snapshot.
+> 🎉 **Milestone reached.** The **MVP is complete** and the **agent-native authorization track (ADR-007 §2) shipped** — QAuth now does OAuth 2.1 / OIDC, MCP authorization, **and** full on-behalf-of agent delegation, end to end and documented. The remaining gate to production is the T3 hardening track.
 
-Phase 1 core OAuth 2.1 / OIDC is architecturally complete and live-tested end-to-end; near-term work is MCP productization and agent-native features — so it is not yet production-ready.
+QAuth is **feature-complete for MCP / agent authentication, with production hardening (T3) in progress**. An honest snapshot.
+
+Phase 1 core OAuth 2.1 / OIDC plus the MCP and agent-native authorization layers are complete and live-tested end-to-end; the remaining near-term work is production hardening (T3 — CSRF, security headers, secure cookies, OIDC conformance detail, observability) — so it is not yet production-ready.
 
 > **Near-term focus — MCP / AI-agent auth.** Building OAuth 2.1 properly produced a working **authorization server for MCP servers and AI agents**, validated end-to-end with Claude Code against a live MCP server. That is now the near-term direction; wallet federation and post-quantum signing are the long-term platform, sequenced after. See [ADR-007](./docs/adr/007-mcp-first-positioning.md).
 
@@ -148,6 +152,9 @@ Phase 1 core OAuth 2.1 / OIDC is architecturally complete and live-tested end-to
 - Email/password registration + verification (Argon2id; Resend / SMTP / Mock), multi-tenancy via Realms
 - Developer portal: registration / login / verify + dashboard shell (server-side `__Host-` session)
 - PostgreSQL 18 + Redis 7 with Docker Compose; OpenAPI / Swagger UI at `/docs`
+- **Client-management API + developer-portal UI** — full `/api/clients` CRUD with one-time secrets
+- **Agent-native authorization (ADR-007 §2)** — agent client type, RFC 8693 on-behalf-of token exchange (`act` claim), scope modes (ReadOnly / Admin / Exec), step-up before dangerous operations, and per-agent audit
+- **Documentation** — [MCP quickstart](./docs/mcp-quickstart.md), [OAuth 2.1 flow](./docs/oauth-flow.md), [API reference](./docs/api-reference.md), and the [agent-authorization guide](./docs/agent-authorization.md)
 - `@qauth-labs/mcp-guard` — resource-server SDK: RFC 9728 protected-resource metadata + 401 challenge + token validation
 - Client ID Metadata Documents (CIMD) as the primary client-registration path (MCP 2025-11-25); RFC 7591 dynamic registration kept as the documented fallback
 - Trust floor: real-DB (testcontainers) repository tests + logout endpoint test + CI typecheck/coverage gate
