@@ -146,6 +146,10 @@ export function createOAuthClientsRepository(defaultDb: DbClient): OAuthClientsR
             grantTypes: data.grantTypes,
             responseTypes: data.responseTypes,
             tokenEndpointAuthMethod: data.tokenEndpointAuthMethod,
+            // Keep the agent classification in sync with the metadata document
+            // (ADR-007 §2) so a CIMD doc that flips `is_agent` is reflected on
+            // re-resolution, matching the other document-derived fields above.
+            isAgent: data.isAgent,
             metadata: data.metadata,
             enabled: data.enabled,
             updatedAt: Date.now(),

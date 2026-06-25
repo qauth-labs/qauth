@@ -29,6 +29,13 @@
       "when": 1777054812718,
       "tag": "0003_rfc8707_resource_indicators",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1782369732705,
+      "tag": "0004_agent_client_type",
+      "breakpoints": true
     }
   ]
 }

@@ -64,6 +64,14 @@ export const cimdDocumentSchema = z.object({
   logo_uri: z.string().max(2048).optional(),
   tos_uri: z.string().max(2048).optional(),
   policy_uri: z.string().max(2048).optional(),
+  /**
+   * QAuth extension metadata (ADR-007 §2): the document declares itself an
+   * autonomous AI-agent client. Unknown metadata fields are normally stripped
+   * (RFC 7591 §3.2), so we accept this one explicitly to recognise the
+   * indicator. Defaults to a standard (non-agent) client when absent.
+   * Persisted to `oauth_clients.is_agent`; nothing is gated on it yet.
+   */
+  is_agent: z.boolean().optional(),
 });
 
 export type CimdDocument = z.infer<typeof cimdDocumentSchema>;
@@ -94,6 +102,8 @@ export interface CimdClientInsert {
   enabled: true;
   developerId: null;
   scopes: string[];
+  /** ADR-007 §2 agent classification, mirrored from the metadata document. */
+  isAgent: boolean;
   metadata: Record<string, unknown>;
 }
 
@@ -218,6 +228,8 @@ export function toCimdClientInsert(
     enabled: true,
     developerId: null,
     scopes: [],
+    // ADR-007 §2: carry the agent classification from the metadata document.
+    isAgent: doc.is_agent ?? false,
     metadata: {
       registrationType: 'cimd',
       client_id_metadata_url: clientId,

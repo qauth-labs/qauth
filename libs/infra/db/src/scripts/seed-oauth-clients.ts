@@ -68,6 +68,10 @@ const clientSpecSchema = z
     redirect_uris: z.array(z.url()).optional(),
     require_pkce: z.boolean().optional(),
     token_endpoint_auth_method: tokenEndpointAuthMethodZ.optional(),
+    // ADR-007 §2: classify a seeded client as an autonomous AI agent.
+    // Defaults to false (standard client) when omitted, mirroring the schema
+    // column default so existing manifests are unaffected.
+    is_agent: z.boolean().optional(),
   })
   .strict();
 
@@ -221,6 +225,7 @@ function buildInsert(realmId: string, spec: ClientSpec, clientSecretHash: string
     tokenEndpointAuthMethod: spec.token_endpoint_auth_method ?? 'client_secret_basic',
     grantTypes: spec.grant_types,
     responseTypes: spec.response_types ?? ['code'],
+    isAgent: spec.is_agent ?? false,
     enabled: true,
   } as const;
 }
@@ -242,6 +247,7 @@ function buildUpdate(spec: ClientSpec, clientSecretHash: string) {
     tokenEndpointAuthMethod: spec.token_endpoint_auth_method ?? 'client_secret_basic',
     grantTypes: spec.grant_types,
     responseTypes: spec.response_types ?? ['code'],
+    isAgent: spec.is_agent ?? false,
     updatedAt: sql`(EXTRACT(EPOCH FROM now()) * 1000)::bigint`,
   } as const;
 }

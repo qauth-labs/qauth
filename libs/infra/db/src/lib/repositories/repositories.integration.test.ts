@@ -410,4 +410,36 @@ describe('repository integration (real Postgres)', () => {
       await expect(seedRealm('unique-realm')).rejects.toThrow(UniqueConstraintError);
     });
   });
+
+  // --- oauth_clients agent classification (ADR-007 §2) ----------------------
+
+  describe('oauth_clients — is_agent classification', () => {
+    it('defaults is_agent to false (backward-compatible migration)', async () => {
+      const realm = await seedRealm('agent-default-realm');
+      // seedClient does not set isAgent, so the column default applies.
+      const client = await seedClient(realm.id, 'standard-client');
+      expect(client.isAgent).toBe(false);
+    });
+
+    it('persists and round-trips an agent client', async () => {
+      const realm = await seedRealm('agent-realm');
+      const clients = createOAuthClientsRepository(db().database.db);
+
+      const created = await clients.create({
+        realmId: realm.id,
+        clientId: 'agent-client',
+        clientSecretHash: 'secret-hash',
+        name: 'Autonomous Agent',
+        redirectUris: ['https://agent.example.com/cb'],
+        scopes: ['read:foo'],
+        grantTypes: ['authorization_code', 'refresh_token'],
+        isAgent: true,
+      });
+      expect(created.isAgent).toBe(true);
+
+      // Reloads carry the flag through findByClientId (the path auth handlers use).
+      const reloaded = await clients.findByClientId(realm.id, 'agent-client');
+      expect(reloaded?.isAgent).toBe(true);
+    });
+  });
 });

@@ -42,12 +42,29 @@ export interface ResolvedClient {
   tokenEndpointAuthMethod?: string;
   name: string;
   dynamicRegisteredAt: number | null;
+  /**
+   * ADR-007 §2 first-class agent classification. Surfaced here so the
+   * authorize / token / consent handlers that already consume the resolved
+   * client can gate agent-native behaviour (delegation, scope modes,
+   * step-up) in later issues. Nothing is gated on it yet.
+   */
+  isAgent: boolean;
   metadata: Record<string, unknown> | null;
 }
 
 /** True iff the resolved client originated from a CIMD metadata document. */
 export function isCimdClient(client: { metadata: Record<string, unknown> | null }): boolean {
   return client.metadata?.registrationType === 'cimd';
+}
+
+/**
+ * True iff the client is classified as an autonomous AI agent (ADR-007 §2).
+ * A thin, intention-revealing accessor for the `is_agent` column so later
+ * agent-native gating reads `isAgentClient(client)` rather than poking the
+ * raw field. Nothing gates on it yet.
+ */
+export function isAgentClient(client: { isAgent: boolean }): boolean {
+  return client.isAgent === true;
 }
 
 /**

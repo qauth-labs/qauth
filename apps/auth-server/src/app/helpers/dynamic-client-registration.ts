@@ -105,6 +105,12 @@ export interface NormalizedRegistrationRequest {
   softwareVersion: string | null;
   /** Whether this is a public client (token_endpoint_auth_method = none). */
   isPublic: boolean;
+  /**
+   * Whether the client registered itself as an autonomous AI agent
+   * (ADR-007 §2). Orthogonal to `isPublic`. Persisted to
+   * `oauth_clients.is_agent`; defaults to false when the request omits it.
+   */
+  isAgent: boolean;
 }
 
 /**
@@ -217,5 +223,6 @@ export function validateAndNormalize(
     softwareId: body.software_id ?? null,
     softwareVersion: body.software_version ?? null,
     isPublic,
+    isAgent: body.is_agent ?? false,
   };
 }
