@@ -75,7 +75,13 @@ export const jwtPlugin = fp<JwtPluginOptions>(
 
     const jwtUtils: JwtUtils = {
       async signAccessToken(payload) {
-        return signAccessToken(payload, privateKey, options.issuer, options.accessTokenLifespan);
+        // `expiresInOverride` lets callers shorten a token below the configured
+        // lifespan (e.g. RFC 8693 token-exchange clamps to the subject token's
+        // remaining lifetime). It can only narrow — the value is passed through
+        // verbatim and callers compute the clamped seconds. Never widens here.
+        const { expiresInOverride, ...claims } = payload;
+        const expiresIn = expiresInOverride ?? options.accessTokenLifespan;
+        return signAccessToken(claims, privateKey, options.issuer, expiresIn);
       },
       generateRefreshToken() {
         return generateRefreshToken();

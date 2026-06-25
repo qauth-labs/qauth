@@ -41,6 +41,8 @@ describe('signAccessToken', () => {
     expect(decoded.iss).toBe('https://auth.example.com');
     expect(decoded.iat).toBeDefined();
     expect(decoded.exp).toBeDefined();
+    // Token-use marker is always stamped (token-confusion defence).
+    expect(decoded.token_use).toBe('access');
   });
 
   it('should set expiration time correctly', async () => {
@@ -65,6 +67,31 @@ describe('signAccessToken', () => {
       expect(actualExpiration).toBeGreaterThanOrEqual(expiresIn - 1);
       expect(actualExpiration).toBeLessThanOrEqual(expiresIn + 1);
     }
+  });
+
+  it('emits and round-trips a nested RFC 8693 act claim when provided', async () => {
+    const { privateKey, publicKey } = await generateEdDSAKeyPair();
+    const payload = {
+      sub: 'user-deleg',
+      clientId: 'agent-client',
+      act: { sub: 'agent-client', act: { sub: 'prior-agent' } },
+    };
+
+    const token = await signAccessToken(payload, privateKey, 'https://auth.example.com', 900);
+    const decoded = await verifyAccessToken(token, publicKey);
+
+    expect(decoded.sub).toBe('user-deleg');
+    expect(decoded.act).toEqual({ sub: 'agent-client', act: { sub: 'prior-agent' } });
+  });
+
+  it('omits the act claim when not provided (non-delegated token)', async () => {
+    const { privateKey, publicKey } = await generateEdDSAKeyPair();
+    const payload = { sub: 'user-plain', clientId: 'app-client' };
+
+    const token = await signAccessToken(payload, privateKey, 'https://auth.example.com', 900);
+    const decoded = await verifyAccessToken(token, publicKey);
+
+    expect(decoded.act).toBeUndefined();
   });
 });
 

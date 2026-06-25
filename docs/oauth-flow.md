@@ -43,11 +43,12 @@ curl -s http://localhost:3000/.well-known/oauth-authorization-server | jq
 
 ## Grant types
 
-| Grant                         | Subject (`sub`) | Refresh token?       | Use case                                   |
-| ----------------------------- | --------------- | -------------------- | ------------------------------------------ |
-| `authorization_code` (+ PKCE) | the end user    | yes                  | Apps acting **on behalf of a user**        |
-| `refresh_token`               | the end user    | yes (rotated)        | Renew an access token without re-prompting |
-| `client_credentials`          | the `client_id` | no (RFC 6749 §4.4.3) | **Machine-to-machine**, no user            |
+| Grant                                             | Subject (`sub`) | Refresh token?       | Use case                                            |
+| ------------------------------------------------- | --------------- | -------------------- | --------------------------------------------------- |
+| `authorization_code` (+ PKCE)                     | the end user    | yes                  | Apps acting **on behalf of a user**                 |
+| `refresh_token`                                   | the end user    | yes (rotated)        | Renew an access token without re-prompting          |
+| `client_credentials`                              | the `client_id` | no (RFC 6749 §4.4.3) | **Machine-to-machine**, no user                     |
+| `urn:ietf:params:oauth:grant-type:token-exchange` | the end user    | no                   | **Agent delegation** on behalf of a user (RFC 8693) |
 
 `response_type` is `code` only. There is no implicit or password grant
 (removed in OAuth 2.1).
@@ -228,6 +229,75 @@ curl -s -X POST http://localhost:3000/oauth/token \
 - Provision such clients with the seed script (it lets you set `scopes` and
   `audience` explicitly) — see the
   [MCP Quickstart, Option B](./mcp-quickstart.md#option-b--verify-the-handshake-with-curl-no-browser).
+
+---
+
+## Token Exchange — agent on-behalf-of delegation (RFC 8693)
+
+> ADR-007 §2 / agent-native authorization. On-behalf-of delegation is an MCP
+> auth **extension** ([ext-auth](https://github.com/modelcontextprotocol/ext-auth)),
+> not core MCP — QAuth provides it as a value-add.
+
+An **agent** client exchanges a user's access token (`subject_token`) for a
+delegated access token whose `sub` is the user and whose `act` (actor) claim
+identifies the agent. Chained delegation nests `act` (RFC 8693 §4.1).
+
+```bash
+curl -s -X POST http://localhost:3000/oauth/token \
+  -u "AGENT_CLIENT_ID:AGENT_CLIENT_SECRET" \
+  -H 'Content-Type: application/x-www-form-urlencoded' \
+  -d grant_type=urn:ietf:params:oauth:grant-type:token-exchange \
+  -d subject_token=USERS_ACCESS_TOKEN \
+  -d subject_token_type=urn:ietf:params:oauth:token-type:access_token \
+  -d 'scope=read:docs' | jq
+```
+
+Response (`issued_token_type` is required by RFC 8693 §2.2.1):
+
+```jsonc
+{
+  "access_token": "eyJ…", // sub = user, act = { "sub": "AGENT_CLIENT_ID" }
+  "issued_token_type": "urn:ietf:params:oauth:token-type:access_token",
+  "token_type": "Bearer",
+  "expires_in": 900,
+  "scope": "read:docs",
+}
+```
+
+Rules and guarantees:
+
+- **Agent-only, default-deny.** Only clients classified as agents
+  (`is_agent: true`) **and** granted the token-exchange grant type may use it.
+  Because `is_agent` is self-asserted, the server never trusts it alone.
+- **Confidential clients only.** The token-exchange grant requires confidential
+  client authentication (`client_secret_basic` / `client_secret_post`); a public
+  agent (`token_endpoint_auth_method=none`) is rejected with `invalid_client`.
+- **Subject token must be bound to the agent.** The `subject_token` must be a
+  QAuth-issued **access token** (verified EdDSA signature + `exp`, matching
+  issuer, and an `access`-use marker — ID tokens and other JWTs are rejected
+  with `invalid_request`) **and** its `aud` must contain the requesting agent's
+  `client_id` — i.e. the token was minted for this agent. Together with the
+  confidential-client requirement, this prevents an attacker from minting a
+  delegated token from any captured user token plus a known agent `client_id`.
+  The subject user must also exist and be enabled.
+- **Down-scoping only.** `scope` must be a subset of the subject token's scope
+  (else `invalid_scope`); omit it to inherit the full set. `resource` /
+  `audience` must fall within the subject token's `aud` (else `invalid_target`).
+  Scope and audience are preserved or narrowed — **never widened**.
+- **Lifetime never exceeds the subject token.** The delegated token's
+  `expires_in` is clamped to `min(configured_lifespan, subject_token_remaining)`,
+  so delegation can never outlast the authority it derives from.
+- **Token types.** Only
+  `urn:ietf:params:oauth:token-type:access_token` is supported for
+  `subject_token_type` / `actor_token_type` / `requested_token_type`; anything
+  else returns `invalid_request`. An optional `actor_token` (the acting party)
+  requires `actor_token_type` when present.
+- **Bounded delegation depth.** Chained re-exchanges are capped (the nested
+  `act` chain may not exceed 4 actors); deeper requests get `invalid_request`.
+- **No refresh token** is issued — a delegated token is short-lived; the agent
+  re-exchanges as needed.
+- Every exchange (success and failure) is written to `audit_logs`, including the
+  actor and delegation depth.
 
 ---
 

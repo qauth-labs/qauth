@@ -136,13 +136,13 @@ per-window caps).
 Full request/response detail and a worked end-to-end walkthrough live in the
 [OAuth 2.1 Flow](./oauth-flow.md) guide. Contract summary:
 
-| Endpoint                                                                    | Method | Body type | Purpose                                                       |
-| --------------------------------------------------------------------------- | ------ | --------- | ------------------------------------------------------------- |
-| [`/oauth/authorize`](./oauth-flow.md#2-redirect-the-user-to-oauthauthorize) | GET    | query     | Start `authorization_code` + PKCE (browser)                   |
-| [`/oauth/token`](./oauth-flow.md#3-exchange-the-code-for-tokens)            | POST   | form      | `authorization_code` / `refresh_token` / `client_credentials` |
-| [`/oauth/introspect`](./oauth-flow.md#token-introspection-rfc-7662)         | POST   | form      | Token introspection (RFC 7662) — confidential clients only    |
-| [`/oauth/userinfo`](./oauth-flow.md#userinfo-oidc)                          | GET    | —         | OIDC UserInfo (Bearer)                                        |
-| [`/oauth/register`](./oauth-flow.md#dynamic-client-registration-rfc-7591)   | POST   | JSON      | Dynamic Client Registration (RFC 7591, open mode)             |
+| Endpoint                                                                    | Method | Body type | Purpose                                                                                     |
+| --------------------------------------------------------------------------- | ------ | --------- | ------------------------------------------------------------------------------------------- |
+| [`/oauth/authorize`](./oauth-flow.md#2-redirect-the-user-to-oauthauthorize) | GET    | query     | Start `authorization_code` + PKCE (browser)                                                 |
+| [`/oauth/token`](./oauth-flow.md#3-exchange-the-code-for-tokens)            | POST   | form      | `authorization_code` / `refresh_token` / `client_credentials` / `token-exchange` (RFC 8693) |
+| [`/oauth/introspect`](./oauth-flow.md#token-introspection-rfc-7662)         | POST   | form      | Token introspection (RFC 7662) — confidential clients only                                  |
+| [`/oauth/userinfo`](./oauth-flow.md#userinfo-oidc)                          | GET    | —         | OIDC UserInfo (Bearer)                                                                      |
+| [`/oauth/register`](./oauth-flow.md#dynamic-client-registration-rfc-7591)   | POST   | JSON      | Dynamic Client Registration (RFC 7591, open mode)                                           |
 
 Key contract facts:
 
@@ -151,16 +151,23 @@ Key contract facts:
 - `client_credentials` tokens set `sub = client_id` and issue **no** refresh token.
 - Scopes are **deny-by-default** (client allowlist; DCR clients capped to the
   realm's `DEFAULT_DYNAMIC_REGISTRATION_SCOPES`).
+- The `urn:ietf:params:oauth:grant-type:token-exchange` grant (RFC 8693, ADR-007 §2)
+  lets an **agent** client delegate on behalf of a user: `sub` stays the user and
+  an `act` claim names the agent (nested for chained delegation). Agent-only and
+  default-deny; scope/audience are preserved or narrowed, never widened. See the
+  [Token Exchange](./oauth-flow.md#token-exchange--agent-on-behalf-of-delegation-rfc-8693)
+  section.
 
 ### Token response (`POST /oauth/token`, `200 OK`)
 
 ```json
 {
   "access_token": "eyJ…",
-  "refresh_token": "a1b2…", // omitted for client_credentials
+  "refresh_token": "a1b2…", // omitted for client_credentials and token-exchange
   "expires_in": 900,
   "token_type": "Bearer",
-  "scope": "openid profile email" // present when scopes granted
+  "scope": "openid profile email", // present when scopes granted
+  "issued_token_type": "urn:ietf:params:oauth:token-type:access_token" // token-exchange only (RFC 8693 §2.2.1)
 }
 ```
 

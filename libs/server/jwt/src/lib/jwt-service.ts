@@ -36,6 +36,11 @@ export async function signAccessToken(
   const claims: Record<string, unknown> = {
     sub: payload.sub,
     client_id: payload.clientId,
+    // Token-use marker (token-confusion defence): every token minted by this
+    // function is an OAuth access token. Consumers that must accept ONLY access
+    // tokens — e.g. RFC 8693 token-exchange subject tokens — assert this so a
+    // differently-purposed JWT signed with the same key cannot be substituted.
+    token_use: 'access',
   };
   if (payload.email !== undefined) {
     claims['email'] = payload.email;
@@ -45,6 +50,12 @@ export async function signAccessToken(
   }
   if (payload.scope !== undefined && payload.scope.length > 0) {
     claims['scope'] = payload.scope;
+  }
+  // RFC 8693 §4.1: emit the `act` (actor) claim only on delegated tokens minted
+  // via token-exchange. It is additive — `sub` stays the end-user; `act`
+  // identifies the acting agent (nested for chained delegation).
+  if (payload.act !== undefined) {
+    claims['act'] = payload.act;
   }
 
   let jwt = new SignJWT(claims)
@@ -106,9 +117,13 @@ export async function verifyAccessToken(
       clientId: payload['client_id'] as string,
       scope: payload['scope'] as string | undefined,
       aud: payload.aud as string | string[] | undefined,
+      // RFC 8693 §4.1: surface any existing `act` chain so a subject token
+      // already carrying a delegation can be nested under the new actor.
+      act: payload['act'] as JWTPayload['act'],
       iat: payload.iat as number | undefined,
       exp: payload.exp as number | undefined,
       iss: payload.iss as string | undefined,
+      token_use: payload['token_use'] as string | undefined,
     };
   } catch (error) {
     if (error instanceof Error) {

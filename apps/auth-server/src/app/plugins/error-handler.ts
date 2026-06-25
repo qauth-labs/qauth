@@ -5,6 +5,7 @@ import {
   InvalidClientError,
   InvalidCredentialsError,
   InvalidGrantError,
+  InvalidRequestError,
   InvalidScopeError,
   InvalidTargetError,
   InvalidTokenError,
@@ -69,6 +70,7 @@ export default fp(async function (fastify: FastifyInstance) {
       if (
         error instanceof InvalidScopeError ||
         error instanceof InvalidGrantError ||
+        error instanceof InvalidRequestError ||
         error instanceof InvalidTargetError
       ) {
         const response: ErrorResponse = {

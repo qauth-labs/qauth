@@ -36,7 +36,9 @@ export type OAuthClientLike = {
   /**
    * ADR-007 §2 (#182) self-asserted agent classification. Optional here so
    * the structural type stays a superset of older callers; absent ⇒ NOT an
-   * agent (fail-closed via {@link isAgentClient}).
+   * agent (fail-closed via {@link isAgentClient}). Read by the token-exchange
+   * grant (#183) via `isAgentClient` — one of several gates; never trusted on
+   * its own (subject-token verification + confidential auth also required).
    */
   isAgent?: boolean;
   /**
