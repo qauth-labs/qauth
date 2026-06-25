@@ -108,6 +108,28 @@ export function isModeWithinCap(mode: AgentMode, cap: AgentMode | null): boolean
 }
 
 /**
+ * The HIGHEST agent scope mode present in a granted scope set, or `null` when
+ * the set carries no reserved agent-mode scope. Used for audit attribution
+ * (#186): records the effective mode an agent acted under (e.g. a token
+ * granting both `agent:readonly` and `agent:exec` is attributed as `exec`).
+ *
+ * This is a read-only summarizer over an ALREADY-AUTHORISED scope set — it
+ * does not gate anything (the cap is enforced upstream); it only labels the
+ * audit row. Returns `null` (not a default mode) when no mode scope is present.
+ */
+export function highestAgentModeInScopes(scopes: readonly string[]): AgentMode | null {
+  let highest: AgentMode | null = null;
+  for (const scope of scopes) {
+    const mode = agentModeForScope(scope);
+    if (mode === null) continue;
+    if (highest === null || AGENT_MODE_RANK[mode] > AGENT_MODE_RANK[highest]) {
+      highest = mode;
+    }
+  }
+  return highest;
+}
+
+/**
  * Enforce the agent scope-mode cap against a set of already-parsed scopes,
  * BEFORE the ordinary allowlist machinery runs.
  *

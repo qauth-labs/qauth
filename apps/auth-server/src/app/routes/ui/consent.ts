@@ -9,7 +9,7 @@ import { env } from '../../../config/env';
 import { AUTHORIZATION_CODE_TTL_MS, STEP_UP_FRESH_AUTH_WINDOW_MS } from '../../constants';
 import { resolveBrowserSession } from '../../helpers/browser-session';
 import { findExceedingAgentScopesForClient } from '../../helpers/client-auth';
-import { resolveClient } from '../../helpers/client-resolution';
+import { isAgentClient, resolveClient } from '../../helpers/client-resolution';
 import {
   canSkipConsent,
   describeScope,
@@ -21,6 +21,7 @@ import {
 import { html, render, safe } from '../../helpers/html';
 import { buildRedirectUrl } from '../../helpers/oauth-redirect';
 import { getOrCreateDefaultRealm } from '../../helpers/realm';
+import { highestAgentModeInScopes } from '../../helpers/scope-modes';
 import {
   type BrowserSessionData,
   csrfTokensEqual,
@@ -669,9 +670,19 @@ export default async function (fastify: FastifyInstance) {
       // see the dangerous grant was minted right after a re-authentication.
       const dangerousGranted = scopes.filter(isDangerousScope);
       if (dangerousGranted.length > 0) {
+        // Per-agent action audit (ADR-007 §2, #186). When the elevating client
+        // is an agent (fail-closed `isAgentClient`), attribute the elevation to
+        // it and record the effective agent scope mode so the dangerous grant
+        // is accountable in the agent-activity view. A non-agent client records
+        // no agent fields (existing behavior unchanged). This is a user-driven
+        // consent elevation, not on-behalf-of delegation, so there is no `act`
+        // chain.
+        const elevatingAgent = isAgentClient(client);
         await fastify.repositories.auditLogs.create({
           userId: session.userId,
           oauthClientId: client.id,
+          actorClientId: elevatingAgent ? client.clientId : null,
+          scopeMode: elevatingAgent ? highestAgentModeInScopes(scopes) : null,
           event: 'oauth.stepup.elevation',
           eventType: 'auth',
           success: true,

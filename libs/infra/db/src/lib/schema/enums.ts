@@ -102,4 +102,5 @@ export const auditEventTypeEnum = pgEnum('audit_event_type', [
   'security', // Security events (failed login, suspicious activity)
   'user', // User management events
   'realm', // Realm management events
+  'agent', // Agent-attributable actions (delegated/on-behalf-of, ADR-007 §2 #186)
 ]);

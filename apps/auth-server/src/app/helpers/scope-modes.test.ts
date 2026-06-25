@@ -5,6 +5,7 @@ import {
   AGENT_MODES,
   agentModeForScope,
   findExceedingAgentScopes,
+  highestAgentModeInScopes,
   isAgentModeScope,
   isModeWithinCap,
   parseAgentMode,
@@ -117,5 +118,26 @@ describe('findExceedingAgentScopes — deny-by-default enforcement', () => {
       'agent:admin',
       'agent:exec',
     ]);
+  });
+});
+
+describe('highestAgentModeInScopes — audit attribution (ADR-007 §2, #186)', () => {
+  it('returns null when no agent-mode scope is present', () => {
+    expect(highestAgentModeInScopes(['read:foo', 'email'])).toBeNull();
+    expect(highestAgentModeInScopes([])).toBeNull();
+  });
+
+  it('returns the single mode present', () => {
+    expect(highestAgentModeInScopes(['read:foo', 'agent:readonly'])).toBe('readonly');
+    expect(highestAgentModeInScopes(['agent:admin'])).toBe('admin');
+  });
+
+  it('returns the HIGHEST mode when several are present', () => {
+    expect(highestAgentModeInScopes(['agent:readonly', 'agent:exec', 'agent:admin'])).toBe('exec');
+    expect(highestAgentModeInScopes(['agent:readonly', 'agent:admin'])).toBe('admin');
+  });
+
+  it('ignores non-reserved agent:* scopes', () => {
+    expect(highestAgentModeInScopes(['agent:other', 'read:foo'])).toBeNull();
   });
 });

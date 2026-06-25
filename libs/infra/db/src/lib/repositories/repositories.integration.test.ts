@@ -24,6 +24,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { oauthConsents, refreshTokens } from '../schema';
 import {
+  createAuditLogsRepository,
   createAuthorizationCodesRepository,
   createOAuthClientsRepository,
   createOAuthConsentsRepository,
@@ -470,6 +471,129 @@ describe('repository integration (real Postgres)', () => {
 
       const reloaded = await clients.findByClientId(realm.id, 'capped-agent-client');
       expect(reloaded?.maxAgentMode).toBe('admin');
+    });
+  });
+
+  // --- per-agent action audit (ADR-007 §2, #186) ---------------------------
+
+  describe('audit_logs — per-agent action audit (ADR-007 §2, #186)', () => {
+    it('round-trips agent attribution columns (actor, subject, act chain, mode)', async () => {
+      const realm = await seedRealm('agent-audit-realm');
+      const subject = await seedUser(realm.id, 'subject@example.com');
+      const agentClient = await seedClient(realm.id, 'agent-actor');
+      const audit = createAuditLogsRepository(db().database.db);
+
+      const row = await audit.create({
+        userId: subject.id,
+        oauthClientId: agentClient.id,
+        actorClientId: 'agent-actor',
+        delegationChain: ['agent-actor', 'prior-agent'],
+        scopeMode: 'exec',
+        event: 'oauth.token.exchange.success',
+        eventType: 'token',
+        success: true,
+        ipAddress: '127.0.0.1',
+        userAgent: 'vitest',
+        metadata: { grantType: 'token-exchange', delegationDepth: 2 },
+      });
+
+      expect(row.actorClientId).toBe('agent-actor');
+      expect(row.delegationChain).toEqual(['agent-actor', 'prior-agent']);
+      expect(row.scopeMode).toBe('exec');
+      // The subject of the on-behalf-of action is the end-user.
+      expect(row.userId).toBe(subject.id);
+    });
+
+    it('accepts the new "agent" event_type enum value', async () => {
+      const realm = await seedRealm('agent-event-type-realm');
+      const subject = await seedUser(realm.id, 'agent-evt@example.com');
+      const agentClient = await seedClient(realm.id, 'agent-evt-actor');
+      const audit = createAuditLogsRepository(db().database.db);
+
+      const row = await audit.create({
+        userId: subject.id,
+        oauthClientId: agentClient.id,
+        actorClientId: 'agent-evt-actor',
+        event: 'agent.action',
+        eventType: 'agent',
+        success: true,
+      });
+      expect(row.eventType).toBe('agent');
+    });
+
+    it('leaves agent columns null for ordinary (non-agent) entries — backward compatible', async () => {
+      const realm = await seedRealm('plain-audit-realm');
+      const user = await seedUser(realm.id, 'plain@example.com');
+      const audit = createAuditLogsRepository(db().database.db);
+
+      // An entry written exactly as pre-#186 callers do (no agent fields).
+      const row = await audit.create({
+        userId: user.id,
+        event: 'auth.login.success',
+        eventType: 'auth',
+        success: true,
+      });
+
+      expect(row.actorClientId).toBeNull();
+      expect(row.delegationChain).toBeNull();
+      expect(row.scopeMode).toBeNull();
+    });
+
+    it('findByActorClientId returns only an agent’s actions, newest first', async () => {
+      const realm = await seedRealm('agent-activity-realm');
+      const subject = await seedUser(realm.id, 'activity@example.com');
+      const agentA = await seedClient(realm.id, 'agent-a');
+      const agentB = await seedClient(realm.id, 'agent-b');
+      const audit = createAuditLogsRepository(db().database.db);
+
+      // Two actions by agent-a (different scope modes) and one by agent-b.
+      await audit.create({
+        userId: subject.id,
+        oauthClientId: agentA.id,
+        actorClientId: 'agent-a',
+        delegationChain: ['agent-a'],
+        scopeMode: 'readonly',
+        event: 'oauth.token.exchange.success',
+        eventType: 'token',
+        success: true,
+        createdAt: 1_000,
+      });
+      await audit.create({
+        userId: subject.id,
+        oauthClientId: agentA.id,
+        actorClientId: 'agent-a',
+        delegationChain: ['agent-a'],
+        scopeMode: 'exec',
+        event: 'oauth.stepup.elevation',
+        eventType: 'auth',
+        success: true,
+        createdAt: 2_000,
+      });
+      await audit.create({
+        userId: subject.id,
+        oauthClientId: agentB.id,
+        actorClientId: 'agent-b',
+        delegationChain: ['agent-b'],
+        scopeMode: 'readonly',
+        event: 'oauth.token.exchange.success',
+        eventType: 'token',
+        success: true,
+        createdAt: 1_500,
+      });
+
+      const activity = await audit.findByActorClientId('agent-a');
+      expect(activity).toHaveLength(2);
+      // Newest first (created_at desc).
+      expect(activity[0].event).toBe('oauth.stepup.elevation');
+      expect(activity[0].scopeMode).toBe('exec');
+      expect(activity[1].scopeMode).toBe('readonly');
+      // Strictly scoped to agent-a — agent-b's action is not returned.
+      expect(activity.every((r) => r.actorClientId === 'agent-a')).toBe(true);
+
+      // eventType filter narrows within the agent's activity.
+      const tokenOnly = await audit.findByActorClientId('agent-a', { eventType: 'token' });
+      expect(tokenOnly).toHaveLength(1);
+      expect(tokenOnly[0].event).toBe('oauth.token.exchange.success');
     });
   });
 });

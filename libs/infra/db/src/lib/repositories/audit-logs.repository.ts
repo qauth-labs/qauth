@@ -10,7 +10,7 @@ export type NewAuditLog = InferInsertModel<typeof auditLogs>;
 /**
  * Audit event type enum values
  */
-export type AuditEventType = 'auth' | 'token' | 'client' | 'security' | 'user' | 'realm';
+export type AuditEventType = 'auth' | 'token' | 'client' | 'security' | 'user' | 'realm' | 'agent';
 
 /**
  * Options for querying audit logs
@@ -184,6 +184,52 @@ export function createAuditLogsRepository(defaultDb: DbClient) {
 
       const result = await baseQuery;
       return result.map((row) => row.auditLog);
+    },
+
+    /**
+     * Find audit logs attributed to a specific agent (by its `client_id`
+     * STRING), newest first. This is the query foundation for the future
+     * developer-portal "agent activity" view (ADR-007 §2, #186): every entry
+     * an agent produced acting on behalf of a user, with the subject (`userId`),
+     * delegation chain (`delegationChain`), and scope mode (`scopeMode`)
+     * available on each row.
+     *
+     * Matches on the denormalized `actorClientId` (not the FK) so attribution
+     * survives deletion of the client row.
+     *
+     * @param actorClientId - The agent's `client_id` string
+     * @param options - Query options (pagination, filters)
+     * @param tx - Optional transaction client
+     * @returns Array of audit logs attributed to the agent
+     */
+    async findByActorClientId(
+      actorClientId: string,
+      options: FindAuditLogsOptions = {},
+      tx?: DbClient
+    ): Promise<AuditLog[]> {
+      const invoker = tx ?? defaultDb;
+      const { limit = 50, offset = 0, descending = true, eventType, success } = options;
+
+      const conditions = [eq(auditLogs.actorClientId, actorClientId)];
+      if (eventType !== undefined) {
+        conditions.push(eq(auditLogs.eventType, eventType));
+      }
+      if (success !== undefined) {
+        conditions.push(eq(auditLogs.success, success));
+      }
+
+      const baseQuery = invoker
+        .select()
+        .from(auditLogs)
+        .where(and(...conditions))
+        .limit(limit)
+        .offset(offset);
+
+      if (descending) {
+        return baseQuery.orderBy(desc(auditLogs.createdAt));
+      }
+
+      return baseQuery;
     },
   };
 }
