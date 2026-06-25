@@ -381,3 +381,180 @@ describe('UI /ui/consent POST — allow/deny', () => {
     expect(state.redirected).toContain('https://example.com/cb');
   });
 });
+
+describe('UI /ui/consent — agent scope-mode cap (ADR-007 §2, #184)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  // An agent capped at `readonly` whose ALLOWLIST contains `agent:exec`. This
+  // is the exact bypass the blocker described: the allowlist would permit
+  // agent:exec, but the cap must refuse to mint a code for it on the consent
+  // (code-issuing) path. `filterRequestedScopes` alone would have let it through.
+  const READONLY_AGENT = {
+    ...CLIENT,
+    scopes: ['agent:readonly', 'agent:exec', 'email'],
+    isAgent: true,
+    maxAgentMode: 'readonly' as const,
+  };
+
+  function agentSession(sid: string, csrf: string) {
+    return {
+      userId: 'user-1',
+      email: 'a@b.com',
+      sessionId: sid,
+      csrfToken: csrf,
+      createdAt: Date.now(),
+    };
+  }
+
+  it('POST rejects an over-cap scope with invalid_scope and issues NO code (blocker regression)', async () => {
+    const { fastify, ctx } = makeFastify();
+    await consentRoute(fastify);
+    const { signSessionId } = await import('../../helpers/session-cookie');
+    const signed = signSessionId('sid-cap-1');
+    const csrf = 'csrf-cap-1';
+    (fastify.sessionUtils.getSession as unknown as Mock).mockResolvedValue(
+      agentSession('sid-cap-1', csrf)
+    );
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(
+      READONLY_AGENT
+    );
+
+    const { reply, state } = createReply();
+    await ctx.post!(
+      {
+        body: {
+          decision: 'allow',
+          allow_forever: '1',
+          csrf_token: csrf,
+          client_id: 'app-123',
+          redirect_uri: 'https://example.com/cb',
+          state: 'xyz',
+          // Attacker-controlled hidden field — the allowlist permits it, the cap must not.
+          scope: 'agent:exec',
+          code_challenge: 'A'.repeat(43),
+          code_challenge_method: 'S256',
+          response_type: 'code',
+        },
+        headers: { cookie: `__Host-qauth_session=${signed}` },
+        ip: '127.0.0.1',
+      },
+      reply
+    );
+
+    expect(state.redirected).toContain('https://example.com/cb');
+    expect(state.redirected).toContain('error=invalid_scope');
+    expect(state.redirected).toContain('state=xyz');
+    expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
+    expect(fastify.repositories.oauthConsents.upsertGrant).not.toHaveBeenCalled();
+  });
+
+  it('POST allows an in-cap scope and issues a code', async () => {
+    const { fastify, ctx } = makeFastify();
+    await consentRoute(fastify);
+    const { signSessionId } = await import('../../helpers/session-cookie');
+    const signed = signSessionId('sid-cap-2');
+    const csrf = 'csrf-cap-2';
+    (fastify.sessionUtils.getSession as unknown as Mock).mockResolvedValue(
+      agentSession('sid-cap-2', csrf)
+    );
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(
+      READONLY_AGENT
+    );
+
+    const { reply, state } = createReply();
+    await ctx.post!(
+      {
+        body: {
+          decision: 'allow',
+          csrf_token: csrf,
+          client_id: 'app-123',
+          redirect_uri: 'https://example.com/cb',
+          state: 'xyz',
+          scope: 'agent:readonly',
+          code_challenge: 'A'.repeat(43),
+          code_challenge_method: 'S256',
+          response_type: 'code',
+        },
+        headers: { cookie: `__Host-qauth_session=${signed}` },
+        ip: '127.0.0.1',
+      },
+      reply
+    );
+
+    expect(fastify.repositories.authorizationCodes.create).toHaveBeenCalledOnce();
+    expect(state.redirected).toContain('code=');
+    expect(state.redirected).not.toContain('error=');
+  });
+
+  it('POST rejects ANY agent scope for a non-agent client even if allowlisted (untrusted is_agent)', async () => {
+    const nonAgent = { ...READONLY_AGENT, isAgent: false };
+    const { fastify, ctx } = makeFastify();
+    await consentRoute(fastify);
+    const { signSessionId } = await import('../../helpers/session-cookie');
+    const signed = signSessionId('sid-cap-3');
+    const csrf = 'csrf-cap-3';
+    (fastify.sessionUtils.getSession as unknown as Mock).mockResolvedValue(
+      agentSession('sid-cap-3', csrf)
+    );
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(
+      nonAgent
+    );
+
+    const { reply, state } = createReply();
+    await ctx.post!(
+      {
+        body: {
+          decision: 'allow',
+          csrf_token: csrf,
+          client_id: 'app-123',
+          redirect_uri: 'https://example.com/cb',
+          state: 'xyz',
+          scope: 'agent:readonly',
+          code_challenge: 'A'.repeat(43),
+          code_challenge_method: 'S256',
+          response_type: 'code',
+        },
+        headers: { cookie: `__Host-qauth_session=${signed}` },
+        ip: '127.0.0.1',
+      },
+      reply
+    );
+
+    expect(state.redirected).toContain('error=invalid_scope');
+    expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
+  });
+
+  it('GET fails fast with invalid_scope for an over-cap scope (no consent screen rendered)', async () => {
+    const { fastify, ctx } = makeFastify();
+    await consentRoute(fastify);
+    const { signSessionId } = await import('../../helpers/session-cookie');
+    const signed = signSessionId('sid-cap-4');
+    (fastify.sessionUtils.getSession as unknown as Mock).mockResolvedValue({
+      userId: 'user-1',
+      email: 'a@b.com',
+      sessionId: 'sid-cap-4',
+      createdAt: Date.now(),
+    });
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(
+      READONLY_AGENT
+    );
+
+    const { reply, state } = createReply();
+    await ctx.get!(
+      {
+        query: { ...BASE_QUERY, scope: 'agent:exec' },
+        url: '/ui/consent?scope=agent:exec',
+        headers: { cookie: `__Host-qauth_session=${signed}` },
+        ip: '127.0.0.1',
+      },
+      reply
+    );
+
+    expect(state.redirected).toContain('error=invalid_scope');
+    expect(state.redirected).toContain('state=xyz');
+    // No HTML consent page was rendered.
+    expect(state.body).toBeUndefined();
+  });
+});

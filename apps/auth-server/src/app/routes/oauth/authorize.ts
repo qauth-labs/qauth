@@ -7,13 +7,12 @@ import { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { env } from '../../../config/env';
 import { AUTHORIZATION_CODE_TTL_MS } from '../../constants';
 import { resolveBrowserSession } from '../../helpers/browser-session';
-import { resolveAudience, toAgentScopeContext } from '../../helpers/client-auth';
+import { findExceedingAgentScopesForClient, resolveAudience } from '../../helpers/client-auth';
 import { resolveClient } from '../../helpers/client-resolution';
 import { canSkipConsent, filterRequestedScopes } from '../../helpers/consent';
 import { getOrCreateSystemClient } from '../../helpers/oauth-client';
 import { buildRedirectUrl } from '../../helpers/oauth-redirect';
 import { getOrCreateDefaultRealm } from '../../helpers/realm';
-import { findExceedingAgentScopes } from '../../helpers/scope-modes';
 import { type AuthorizeQuery, authorizeQuerySchema } from '../../schemas/oauth';
 
 /**
@@ -235,15 +234,10 @@ export default async function (fastify: FastifyInstance) {
       // having the offending scope silently dropped, so an over-asking agent
       // gets a clear error. `filterRequestedScopes` then applies the ordinary
       // allowlist to whatever survives.
-      const agentScopeCtx = toAgentScopeContext(client);
-      const exceedingAgentScopes = findExceedingAgentScopes(
-        (query.scope ?? '').split(/\s+/).filter((s) => s.length > 0),
-        agentScopeCtx.isAgent,
-        agentScopeCtx.maxAgentMode
-      );
+      const exceedingAgentScopes = findExceedingAgentScopesForClient(query.scope, client);
       if (exceedingAgentScopes.length > 0) {
         await fastify.repositories.auditLogs.create({
-          userId: null,
+          userId,
           oauthClientId: client.id,
           event: 'oauth.authorize.failure',
           eventType: 'token',

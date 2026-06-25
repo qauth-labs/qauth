@@ -59,20 +59,29 @@ Consequences (all fail-closed):
 
 ## Enforcement points
 
-| Surface              | Path                                                                                         |
-| -------------------- | -------------------------------------------------------------------------------------------- |
-| Authorize endpoint   | `routes/oauth/authorize.ts` calls `findExceedingAgentScopes` → `invalid_scope` redirect      |
-| Scope validation     | `helpers/client-auth.ts` — `validateScopes(scope, allow, agentCtx)` + `enforceAgentScopeCap` |
-| Taxonomy + cap logic | `helpers/scope-modes.ts` — modes, ordering, `isModeWithinCap`, `findExceedingAgentScopes`    |
-| Persistence          | `oauth_clients.max_agent_mode` (`agent_mode` enum, nullable; migration `0005`)               |
-| Provisioning         | `seed-oauth-clients.ts` manifest field `max_agent_mode` (operator-only)                      |
+The `authorization_code` flow mints codes on **two** paths — the
+`/oauth/authorize` fast path (when a prior consent already covers the scopes)
+and `/ui/consent` (first-time consent, the common case). The cap is enforced on
+**both**, so the control holds wherever the code is actually issued.
+
+| Surface              | Path                                                                                                                             |
+| -------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| Authorize endpoint   | `routes/oauth/authorize.ts` — `findExceedingAgentScopesForClient` → `invalid_scope` redirect                                     |
+| Consent endpoint     | `routes/ui/consent.ts` — same gate on POST (code issuance) **and** GET (render)                                                  |
+| Scope validation     | `helpers/client-auth.ts` — `validateScopes(scope, allow, agentCtx)`, `enforceAgentScopeCap`, `findExceedingAgentScopesForClient` |
+| Taxonomy + cap logic | `helpers/scope-modes.ts` — modes, ordering, `isModeWithinCap`, `findExceedingAgentScopes`                                        |
+| Persistence          | `oauth_clients.max_agent_mode` (`agent_mode` enum, nullable; migration `0005`)                                                   |
+| Provisioning         | `seed-oauth-clients.ts` manifest field `max_agent_mode` (operator-only)                                                          |
 
 ## Follow-up
 
 The `client_credentials` grant validates scopes via `validateScopes` inside
 `routes/oauth/token.ts`. Wiring the cap there is a one-line change —
 `validateScopes(body.scope, client.scopes, toAgentScopeContext(client))` — left
-as a TODO(#184) because `token.ts` is owned by a parallel PR (#183). The
-user-facing agent flow (`authorization_code`) is fully enforced at the
-authorize endpoint, where the agent-mode scopes are bound into the
-authorization code.
+as **TODO(#184)** because `token.ts` is owned by the parallel token-exchange PR
+(#191, issue #183) and editing it here would collide. The helpers are ready
+(`validateScopes`'s optional agent arg + `toAgentScopeContext`), and a
+`it.todo('TODO(#184): …')` marker in `client-auth.test.ts` tracks it so it
+cannot ship forgotten. Until then, `client_credentials` agent tokens are **not**
+cap-enforced — only the user-facing `authorization_code` flow is (now on both
+the authorize and consent issuance paths).

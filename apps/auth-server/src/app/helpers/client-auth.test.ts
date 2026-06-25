@@ -301,6 +301,15 @@ describe('enforceAgentScopeCap', () => {
       enforceAgentScopeCap(['agent:exec'], { isAgent: true, maxAgentMode: 'readonly' })
     ).toThrow(InvalidScopeError);
   });
+
+  // Tracking marker so the client_credentials cap wiring cannot ship forgotten.
+  // token.ts is owned by the parallel token-exchange PR (#191, issue #183); the
+  // one-line integration is `validateScopes(body.scope, client.scopes,
+  // toAgentScopeContext(client))` on the client_credentials path. The helpers
+  // here (validateScopes' optional agent arg + toAgentScopeContext) are ready.
+  it.todo(
+    'TODO(#184): client_credentials grant must enforce the cap via validateScopes(..., toAgentScopeContext(client)) — wire in PR #191'
+  );
 });
 
 describe('resolveAudience', () => {

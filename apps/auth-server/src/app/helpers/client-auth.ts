@@ -248,6 +248,29 @@ export function enforceAgentScopeCap(
 }
 
 /**
+ * Compute the reserved agent-mode scopes (`agent:readonly|admin|exec`) in a
+ * raw, space-delimited scope string that a client may NOT hold (ADR-007 §2,
+ * #184). A thin façade over {@link toAgentScopeContext} + the cap check so the
+ * redirect-based issuance routes (`/oauth/authorize`, `/ui/consent`) enforce
+ * the cap identically without each re-implementing the split + deny logic —
+ * the consent route in particular MUST share this so the authorization_code
+ * path is enforced where the code is actually minted, not only pre-consent.
+ *
+ * Returns the offending scopes (empty ⇒ within policy). Does NOT throw —
+ * these routes signal failure with an `invalid_scope` redirect, not an
+ * exception. Fail-closed via `toAgentScopeContext` (non-agent / null / unknown
+ * cap ⇒ every `agent:*` scope is reported).
+ */
+export function findExceedingAgentScopesForClient(
+  requestedScopeString: string | undefined,
+  client: { isAgent?: boolean; maxAgentMode?: string | AgentMode | null } | null | undefined
+): string[] {
+  const requested = (requestedScopeString ?? '').split(/\s+/).filter((s) => s.length > 0);
+  const ctx = toAgentScopeContext(client);
+  return findExceedingAgentScopes(requested, ctx.isAgent, ctx.maxAgentMode);
+}
+
+/**
  * Validate that every requested scope is in the client's allowed list.
  * Empty allowed-list means "no custom scopes configured" — we accept nothing
  * (safer default for machine grants).

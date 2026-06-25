@@ -4,6 +4,7 @@ import { InvalidClientError } from '@qauth-labs/shared-errors';
 import type { FastifyInstance } from 'fastify';
 
 import { fetchAndValidateCimdDocument, isCimdClientId, toCimdClientInsert } from './cimd';
+import type { AgentMode } from './scope-modes';
 
 /**
  * Unified OAuth client resolution implementing the MCP 2025-11-25 client
@@ -57,7 +58,7 @@ export interface ResolvedClient {
    * input. Consumed by `toAgentScopeContext` / `findExceedingAgentScopes` to
    * bound the reserved `agent:*` scopes the client may request.
    */
-  maxAgentMode: 'readonly' | 'admin' | 'exec' | null;
+  maxAgentMode: AgentMode | null;
   metadata: Record<string, unknown> | null;
 }
 
