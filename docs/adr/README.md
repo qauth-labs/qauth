@@ -8,15 +8,16 @@ An ADR is a document that captures an important architectural decision made alon
 
 ## ADR Index
 
-| ID                                            | Title                                                                       | Status   | Date       |
-| --------------------------------------------- | --------------------------------------------------------------------------- | -------- | ---------- |
-| [001](./001-jwt-key-management.md)            | JWT Key Management Strategy                                                 | Accepted | 2026-01-15 |
-| [002](./002-identifier-abstraction.md)        | Identifier Abstraction — Email as Credential, Not Identity                  | Accepted | 2026-03-11 |
-| [003](./003-credential-provider-interface.md) | CredentialProvider Abstraction for Authentication Methods                   | Accepted | 2026-03-11 |
-| [004](./004-wallet-agnostic-federation.md)    | Wallet-Agnostic VC Federation via SIOPv2/OID4VP                             | Accepted | 2026-03-11 |
-| [005](./005-pqc-hybrid-signing.md)            | Post-Quantum Cryptography — Hybrid Signing Roadmap                          | Accepted | 2026-03-18 |
-| [006](./006-oauth-grants-and-audience.md)     | OAuth Grants — `client_credentials`, `client_secret_basic`, and `aud` Claim | Accepted | 2026-04-16 |
-| [007](./007-mcp-first-positioning.md)         | MCP-First Positioning — OAuth 2.1 Authorization Server for MCP / AI Agents  | Accepted | 2026-06-23 |
+| ID                                              | Title                                                                       | Status   | Date       |
+| ----------------------------------------------- | --------------------------------------------------------------------------- | -------- | ---------- |
+| [001](./001-jwt-key-management.md)              | JWT Key Management Strategy                                                 | Accepted | 2026-01-15 |
+| [002](./002-identifier-abstraction.md)          | Identifier Abstraction — Email as Credential, Not Identity                  | Accepted | 2026-03-11 |
+| [003](./003-credential-provider-interface.md)   | CredentialProvider Abstraction for Authentication Methods                   | Accepted | 2026-03-11 |
+| [004](./004-wallet-agnostic-federation.md)      | Wallet-Agnostic VC Federation via SIOPv2/OID4VP                             | Accepted | 2026-03-11 |
+| [005](./005-pqc-hybrid-signing.md)              | Post-Quantum Cryptography — Hybrid Signing Roadmap                          | Accepted | 2026-03-18 |
+| [006](./006-oauth-grants-and-audience.md)       | OAuth Grants — `client_credentials`, `client_secret_basic`, and `aud` Claim | Accepted | 2026-04-16 |
+| [007](./007-mcp-first-positioning.md)           | MCP-First Positioning — OAuth 2.1 Authorization Server for MCP / AI Agents  | Accepted | 2026-06-23 |
+| [008](./008-environment-aware-authorization.md) | Environment-Aware Authorization Posture                                     | Proposed | 2026-06-25 |
 
 ## ADR Template
 
