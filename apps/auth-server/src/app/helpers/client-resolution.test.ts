@@ -23,7 +23,12 @@ vi.mock('./ssrf-safe-fetch', async () => {
   return { ...actual, ssrfSafeGet };
 });
 
-import { cimdSentinelSecretHash, isCimdClient, resolveClient } from './client-resolution';
+import {
+  cimdSentinelSecretHash,
+  isAgentClient,
+  isCimdClient,
+  resolveClient,
+} from './client-resolution';
 
 const CIMD_ID = 'https://app.example.com/client.json';
 
@@ -173,5 +178,23 @@ describe('resolveClient — pre-registered → CIMD priority (MCP 2025-11-25)', 
     expect(client).toBeNull();
     expect(reason).toBe('invalid_client');
     expect(ssrfSafeGet).not.toHaveBeenCalled();
+  });
+});
+
+describe('isAgentClient — fail-closed agent classification (ADR-007 §2)', () => {
+  it('is true only for a strict isAgent === true', () => {
+    expect(isAgentClient({ isAgent: true })).toBe(true);
+  });
+
+  it('is false for a standard client', () => {
+    expect(isAgentClient({ isAgent: false })).toBe(false);
+  });
+
+  it('fails closed for missing / null / undefined (treats as non-agent, never throws)', () => {
+    // A client omitting the flag is the real escalation direction — it must
+    // read as NOT an agent, not as truthy and not as an error.
+    expect(isAgentClient({})).toBe(false);
+    expect(isAgentClient(null)).toBe(false);
+    expect(isAgentClient(undefined)).toBe(false);
   });
 });

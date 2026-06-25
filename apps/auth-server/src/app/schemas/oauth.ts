@@ -215,6 +215,11 @@ export const dynamicClientRegistrationRequestSchema = z.object({
    * standard (non-agent) client when omitted. Persisted as
    * `oauth_clients.is_agent` and echoed back per §3.2.1. Nothing is gated on
    * it yet — delegation / scope modes / step-up are later ADR-007 §2 issues.
+   *
+   * TRUST: this is self-asserted, unverified client input — the client sets
+   * it in its own registration request. Later gating must treat it as
+   * untrusted (verify, don't trust) and default-deny, since a client can
+   * also *omit* it to dodge agent-specific controls.
    */
   is_agent: z.boolean().optional(),
 });

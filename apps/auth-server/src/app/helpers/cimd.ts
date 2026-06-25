@@ -70,6 +70,13 @@ export const cimdDocumentSchema = z.object({
    * (RFC 7591 §3.2), so we accept this one explicitly to recognise the
    * indicator. Defaults to a standard (non-agent) client when absent.
    * Persisted to `oauth_clients.is_agent`; nothing is gated on it yet.
+   *
+   * TRUST: this is self-asserted, unverified client input — it comes from the
+   * client's own externally-fetched metadata document, not anything the AS
+   * established. The CIMD url==client_id binding authenticates *which* URL the
+   * document belongs to, NOT the truthfulness of `is_agent`. Later gating must
+   * treat it as untrusted (verify, don't trust) and default-deny, since a
+   * client can also *omit* it to dodge agent-specific controls.
    */
   is_agent: z.boolean().optional(),
 });

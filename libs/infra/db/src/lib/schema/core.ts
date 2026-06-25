@@ -148,6 +148,16 @@ export const oauthClients = pgTable(
      * Orthogonal to confidential/public: an agent client can be either.
      * Defaults to false so every existing row stays a standard client and
      * the migration is backward-compatible.
+     *
+     * TRUST BOUNDARY — this value is SELF-ASSERTED, UNVERIFIED client input.
+     * It is set by the client itself: in its own DCR request body, or in its
+     * own externally-fetched CIMD metadata document. It is NOT an
+     * authenticated property the AS established. Downstream agent gating
+     * (token exchange #183, scope modes #184, step-up #185) MUST treat it as
+     * untrusted (verify, don't trust). Note the real escalation direction is
+     * a client *omitting* the flag to dodge agent-specific controls, so any
+     * such gating must default-deny / fail-closed and must not assume the
+     * flag is truthful or present.
      */
     isAgent: boolean('is_agent').notNull().default(false),
     /**
