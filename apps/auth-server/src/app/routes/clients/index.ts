@@ -5,6 +5,7 @@ import type { FastifyInstance } from 'fastify';
 import { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 
+import { env } from '../../../config/env';
 import { validateRedirectUri } from '../../helpers/dynamic-client-registration';
 import { getOrCreateDefaultRealm } from '../../helpers/realm';
 import {
@@ -147,25 +148,30 @@ async function resolveOwnedClient(
 }
 
 /**
- * Enforce OAuth 2.1 / RFC 7591 grant_type ⇄ response_type consistency, the
- * same invariants `validateAndNormalize` applies to dynamic registration:
+ * Enforce OAuth 2.1 / RFC 7591 grant_type ⇄ response_type ⇄ redirect_uri
+ * consistency, the same invariants `validateAndNormalize` applies to dynamic
+ * registration:
  *
  * - `authorization_code` requires the `code` response type.
  * - `response_types` without `authorization_code` is unsupported.
  * - `client_credentials` cannot be a public client (`none`) — a public client
  *   holds no secret and so cannot authenticate at the token endpoint
  *   (RFC 6749 §4.4).
+ * - A user-involving grant (`authorization_code` / `refresh_token`) requires at
+ *   least one `redirect_uri`; without one the client can never complete a
+ *   user-agent flow (mirrors DCR's `redirect_uris is required …` rejection).
  *
  * Throws `BadRequestError` (→ HTTP 400) on any violation. Each call site has
- * already resolved the effective grant/response/auth values (request value or
- * persisted value for partial updates).
+ * already resolved the effective grant/response/auth/redirect values (request
+ * value or persisted value for partial updates).
  */
 function assertGrantResponseConsistency(input: {
   grantTypes: string[];
   responseTypes: string[];
   tokenEndpointAuthMethod: string;
+  redirectUris: string[];
 }): void {
-  const { grantTypes, responseTypes, tokenEndpointAuthMethod } = input;
+  const { grantTypes, responseTypes, tokenEndpointAuthMethod, redirectUris } = input;
 
   if (grantTypes.includes('authorization_code') && !responseTypes.includes('code')) {
     throw new BadRequestError('authorization_code grant requires the "code" response type');
@@ -177,6 +183,55 @@ function assertGrantResponseConsistency(input: {
     throw new BadRequestError(
       'client_credentials grant requires a confidential client (token_endpoint_auth_method must not be "none")'
     );
+  }
+  const userInvolving =
+    grantTypes.includes('authorization_code') || grantTypes.includes('refresh_token');
+  if (userInvolving && redirectUris.length === 0) {
+    throw new BadRequestError(
+      'redirect_uris is required for grants that involve a user-agent (authorization_code / refresh_token)'
+    );
+  }
+}
+
+/**
+ * Resolve the realm's effective dynamic-registration scope allowlist, seeding
+ * it from `DEFAULT_DYNAMIC_REGISTRATION_SCOPES` on first use exactly as
+ * `/oauth/register` does. The REST create/update paths reuse this same policy
+ * so a developer cannot self-grant a scope through the management API that the
+ * realm would refuse at dynamic registration — keeping the two
+ * client-creation paths consistent. Seeding is best-effort: a racing write
+ * never blocks the request.
+ */
+async function resolveRealmAllowedScopes(
+  fastify: FastifyInstance,
+  realm: { id: string; dynamicRegistrationAllowedScopes?: string[] | null }
+): Promise<string[]> {
+  let allowedScopes = realm.dynamicRegistrationAllowedScopes ?? [];
+  if (allowedScopes.length === 0 && env.DEFAULT_DYNAMIC_REGISTRATION_SCOPES.length > 0) {
+    allowedScopes = [...env.DEFAULT_DYNAMIC_REGISTRATION_SCOPES];
+    try {
+      await fastify.repositories.realms.update(realm.id, {
+        dynamicRegistrationAllowedScopes: allowedScopes,
+      });
+    } catch (err) {
+      fastify.log.warn(
+        { err, realmId: realm.id },
+        'Failed to persist default dynamic_registration_allowed_scopes'
+      );
+    }
+  }
+  return allowedScopes;
+}
+
+/**
+ * Cap requested `scopes` against the realm allowlist, rejecting anything
+ * outside it (RFC 7591 `invalid_client_metadata` equivalent). Empty allowlist
+ * means no custom scopes are permitted. Throws `BadRequestError` → HTTP 400.
+ */
+function assertScopesAllowed(requested: string[], realmAllowedScopes: string[]): void {
+  const disallowed = requested.filter((s) => !realmAllowedScopes.includes(s));
+  if (disallowed.length > 0) {
+    throw new BadRequestError(`scope not permitted: ${disallowed.join(' ')}`);
   }
 }
 
@@ -191,6 +246,32 @@ async function generateClientSecret(
   const plaintext = randomBytes(32).toString('hex');
   const hash = await fastify.passwordHasher.hashPassword(plaintext);
   return { plaintext, hash };
+}
+
+/**
+ * Audit log shape for a client-management event (subset of the audit_logs
+ * repository's create payload).
+ */
+type ClientAuditEntry = Parameters<FastifyInstance['repositories']['auditLogs']['create']>[0];
+
+/**
+ * Write an audit entry best-effort: a logging failure MUST NOT propagate.
+ *
+ * This matters most on the secret-bearing paths (create / regenerate): the
+ * client row (or rotated secret hash) is already committed, so throwing here
+ * would 500 *after* the only copy of the plaintext secret was generated,
+ * leaving the developer with a client they can never authenticate. We log the
+ * failure and continue so the one-time secret still reaches the response.
+ */
+async function auditBestEffort(fastify: FastifyInstance, entry: ClientAuditEntry): Promise<void> {
+  try {
+    await fastify.repositories.auditLogs.create(entry);
+  } catch (err) {
+    fastify.log.warn(
+      { err, event: entry.event, oauthClientId: entry.oauthClientId },
+      'Failed to write client-management audit log (non-fatal)'
+    );
+  }
 }
 
 export default async function (fastify: FastifyInstance) {
@@ -242,6 +323,18 @@ export default async function (fastify: FastifyInstance) {
         body: createClientRequestSchema,
         response: { 201: createClientResponseSchema },
       },
+      config: {
+        // Create runs an argon2id hash on every call (confidential clients hash
+        // the real secret; public clients hash a sentinel), so an authenticated
+        // caller could otherwise burn CPU at the global default rate. Cap it
+        // per-IP at the same budget as /oauth/register, whose comment notes the
+        // hash makes "a burst-proof cap mandatory".
+        rateLimit: {
+          max: env.REGISTER_CLIENT_RATE_LIMIT,
+          timeWindow: env.REGISTER_CLIENT_RATE_WINDOW * 1000,
+          keyGenerator: (req) => req.ip || 'unknown',
+        },
+      },
     },
     async (request, reply) => {
       const developerId = requireDeveloperId(request);
@@ -257,13 +350,28 @@ export default async function (fastify: FastifyInstance) {
       const grantTypes = body.grantTypes ?? ['authorization_code', 'refresh_token'];
       const responseTypes = body.responseTypes ?? ['code'];
       const tokenEndpointAuthMethod = body.tokenEndpointAuthMethod ?? 'none';
+      // Zod applies `.default([])`, but default defensively so the handler is
+      // also correct when invoked without the schema layer (unit tests).
+      const redirectUris = body.redirectUris ?? [];
+      const scopes = body.scopes ?? [];
 
-      for (const uri of body.redirectUris) {
+      for (const uri of redirectUris) {
         validateRedirectUri(uri);
       }
-      assertGrantResponseConsistency({ grantTypes, responseTypes, tokenEndpointAuthMethod });
+      assertGrantResponseConsistency({
+        grantTypes,
+        responseTypes,
+        tokenEndpointAuthMethod,
+        redirectUris,
+      });
 
       const realm = await getOrCreateDefaultRealm(fastify);
+
+      // Cap requested scopes against the realm policy *before* hashing — a
+      // policy-violating request must not pay the argon2id cost or persist.
+      const allowedScopes = await resolveRealmAllowedScopes(fastify, realm);
+      assertScopesAllowed(scopes, allowedScopes);
+
       const clientId = randomUUID();
 
       // Confidential clients get a real secret; public clients
@@ -289,8 +397,8 @@ export default async function (fastify: FastifyInstance) {
         clientSecretHash,
         name: body.name,
         description: body.description ?? null,
-        redirectUris: body.redirectUris,
-        scopes: body.scopes,
+        redirectUris,
+        scopes,
         grantTypes,
         responseTypes,
         tokenEndpointAuthMethod,
@@ -301,7 +409,9 @@ export default async function (fastify: FastifyInstance) {
         developerId,
       });
 
-      await fastify.repositories.auditLogs.create({
+      // Best-effort: the client (and its secret hash) is already committed, so
+      // a failing audit write must not 500 and lose the one-time plaintext.
+      await auditBestEffort(fastify, {
         userId: developerId,
         oauthClientId: created.id,
         event: 'oauth.client.created',
@@ -375,18 +485,34 @@ export default async function (fastify: FastifyInstance) {
       // Validate the *effective* configuration: take each field from the
       // request when present, else fall back to the persisted value. This
       // catches an update that would leave the client in an inconsistent
-      // state (e.g. removing authorization_code while keeping response_types).
+      // state (e.g. removing authorization_code while keeping response_types,
+      // or dropping the last redirect_uri from an authorization_code client).
       const grantTypes = body.grantTypes ?? existing.grantTypes;
       const responseTypes = body.responseTypes ?? existing.responseTypes;
       const tokenEndpointAuthMethod =
         body.tokenEndpointAuthMethod ?? existing.tokenEndpointAuthMethod;
+      const redirectUris = body.redirectUris ?? existing.redirectUris;
 
       if (body.redirectUris) {
         for (const uri of body.redirectUris) {
           validateRedirectUri(uri);
         }
       }
-      assertGrantResponseConsistency({ grantTypes, responseTypes, tokenEndpointAuthMethod });
+      assertGrantResponseConsistency({
+        grantTypes,
+        responseTypes,
+        tokenEndpointAuthMethod,
+        redirectUris,
+      });
+
+      // Cap newly requested scopes against the client's realm policy, the same
+      // allowlist dynamic registration enforces — a developer must not widen
+      // scopes via PATCH beyond what the realm permits.
+      if (body.scopes !== undefined) {
+        const realm = await fastify.repositories.realms.findById(existing.realmId);
+        const allowedScopes = realm ? await resolveRealmAllowedScopes(fastify, realm) : [];
+        assertScopesAllowed(body.scopes, allowedScopes);
+      }
 
       const updated = await fastify.repositories.oauthClients.update(id, {
         ...(body.name !== undefined ? { name: body.name } : {}),
@@ -401,7 +527,7 @@ export default async function (fastify: FastifyInstance) {
         ...(body.enabled !== undefined ? { enabled: body.enabled } : {}),
       });
 
-      await fastify.repositories.auditLogs.create({
+      await auditBestEffort(fastify, {
         userId: developerId,
         oauthClientId: updated.id,
         event: 'oauth.client.updated',
@@ -439,7 +565,7 @@ export default async function (fastify: FastifyInstance) {
 
       await fastify.repositories.oauthClients.delete(id);
 
-      await fastify.repositories.auditLogs.create({
+      await auditBestEffort(fastify, {
         userId: developerId,
         oauthClientId: existing.id,
         event: 'oauth.client.deleted',
@@ -468,6 +594,15 @@ export default async function (fastify: FastifyInstance) {
         params: clientIdParamsSchema,
         response: { 200: regenerateSecretResponseSchema },
       },
+      config: {
+        // Regeneration always runs an argon2id hash, so it carries the same
+        // CPU-DoS profile as create — cap it per-IP at the same budget.
+        rateLimit: {
+          max: env.REGISTER_CLIENT_RATE_LIMIT,
+          timeWindow: env.REGISTER_CLIENT_RATE_WINDOW * 1000,
+          keyGenerator: (req) => req.ip || 'unknown',
+        },
+      },
     },
     async (request, reply) => {
       const developerId = requireDeveloperId(request);
@@ -490,7 +625,10 @@ export default async function (fastify: FastifyInstance) {
         clientSecretHash: hash,
       });
 
-      await fastify.repositories.auditLogs.create({
+      // Best-effort: the new secret hash is already committed and the old one
+      // invalidated, so a failing audit write must not 500 and lose the
+      // one-time plaintext (the client would be locked out of its own secret).
+      await auditBestEffort(fastify, {
         userId: developerId,
         oauthClientId: updated.id,
         event: 'oauth.client.secret_regenerated',

@@ -11,6 +11,9 @@ vi.mock('../../../config/env', () => ({
     EMAIL_FROM_ADDRESS: 'noreply@example.com',
     EMAIL_BASE_URL: 'http://localhost:3000',
     DEFAULT_REALM_NAME: 'master',
+    REGISTER_CLIENT_RATE_LIMIT: 30,
+    REGISTER_CLIENT_RATE_WINDOW: 60,
+    DEFAULT_DYNAMIC_REGISTRATION_SCOPES: ['openid', 'profile', 'email', 'offline_access'],
   },
 }));
 
@@ -19,6 +22,13 @@ import clientsRoute, { autoPrefix } from './index';
 type RouteHandler = (request: FastifyRequest, reply: FastifyReply) => Promise<unknown>;
 interface RouteOptions {
   preHandler?: (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
+  config?: {
+    rateLimit?: {
+      max?: number;
+      timeWindow?: number;
+      keyGenerator?: (req: { ip?: string }) => string;
+    };
+  };
 }
 interface RegisteredRoute {
   handler: RouteHandler;
@@ -92,7 +102,21 @@ function makeFastify() {
         delete: vi.fn(),
       },
       realms: {
-        findByName: vi.fn(async () => ({ id: 'realm-1', name: 'default', enabled: true })),
+        // Realm already carries a seeded allowlist so scope-cap tests are
+        // deterministic and don't depend on the env-seeding write path.
+        findByName: vi.fn(async () => ({
+          id: 'realm-1',
+          name: 'default',
+          enabled: true,
+          dynamicRegistrationAllowedScopes: ['openid', 'profile', 'email', 'offline_access'],
+        })),
+        findById: vi.fn(async () => ({
+          id: 'realm-1',
+          name: 'default',
+          enabled: true,
+          dynamicRegistrationAllowedScopes: ['openid', 'profile', 'email', 'offline_access'],
+        })),
+        update: vi.fn(),
         create: vi.fn(),
       },
       auditLogs: {
@@ -662,5 +686,266 @@ describe('POST /api/clients/:id/regenerate-secret — #90', () => {
       NotFoundError
     );
     expect(fastify.repositories.oauthClients.update).not.toHaveBeenCalled();
+  });
+});
+
+describe('per-route rate limiting on argon2id endpoints', () => {
+  it('caps POST / (create) per-IP at the REGISTER_CLIENT budget', async () => {
+    const { fastify, ctx } = makeFastify();
+    await clientsRoute(fastify);
+
+    const rl = route(ctx, 'POST /').options.config?.rateLimit;
+    expect(rl).toBeDefined();
+    expect(rl?.max).toBe(30);
+    expect(rl?.timeWindow).toBe(60 * 1000);
+    // Keyed by IP so one developer's burst can't exhaust everyone's budget.
+    expect(rl?.keyGenerator?.({ ip: '203.0.113.7' })).toBe('203.0.113.7');
+    expect(rl?.keyGenerator?.({})).toBe('unknown');
+  });
+
+  it('caps POST /:id/regenerate-secret per-IP at the REGISTER_CLIENT budget', async () => {
+    const { fastify, ctx } = makeFastify();
+    await clientsRoute(fastify);
+
+    const rl = route(ctx, 'POST /:id/regenerate-secret').options.config?.rateLimit;
+    expect(rl).toBeDefined();
+    expect(rl?.max).toBe(30);
+    expect(rl?.timeWindow).toBe(60 * 1000);
+    expect(rl?.keyGenerator?.({ ip: '203.0.113.7' })).toBe('203.0.113.7');
+  });
+
+  it('does not rate-limit the read-only GET routes', async () => {
+    const { fastify, ctx } = makeFastify();
+    await clientsRoute(fastify);
+
+    expect(route(ctx, 'GET /').options.config?.rateLimit).toBeUndefined();
+    expect(route(ctx, 'GET /:id').options.config?.rateLimit).toBeUndefined();
+  });
+});
+
+describe('scope allowlist enforcement (#86/#88)', () => {
+  it('rejects create when a requested scope is outside the realm allowlist', async () => {
+    const { fastify, ctx } = makeFastify();
+    await clientsRoute(fastify);
+
+    const request = authedRequest({
+      body: {
+        name: 'Over-scoped',
+        redirectUris: ['https://app.example.com/cb'],
+        // `memory:admin` is not in the realm allowlist.
+        scopes: ['openid', 'memory:admin'],
+        tokenEndpointAuthMethod: 'client_secret_post',
+      },
+    });
+    const { reply } = createReply();
+
+    await expect(route(ctx, 'POST /').handler(request, reply)).rejects.toThrow(BadRequestError);
+    // Rejected before hashing or persisting.
+    expect(fastify.passwordHasher.hashPassword).not.toHaveBeenCalled();
+    expect(fastify.repositories.oauthClients.create).not.toHaveBeenCalled();
+  });
+
+  it('allows create when every requested scope is within the realm allowlist', async () => {
+    const { fastify, ctx } = makeFastify();
+    await clientsRoute(fastify);
+
+    (fastify.repositories.oauthClients.create as unknown as Mock).mockImplementation(
+      async (data: Record<string, unknown>) => makeClientRow({ ...data })
+    );
+
+    const request = authedRequest({
+      body: {
+        name: 'OK',
+        redirectUris: ['https://app.example.com/cb'],
+        scopes: ['openid', 'email'],
+        tokenEndpointAuthMethod: 'client_secret_post',
+      },
+    });
+    const { reply, state } = createReply();
+
+    await route(ctx, 'POST /').handler(request, reply);
+    expect(state.statusCode).toBe(201);
+  });
+
+  it('rejects a PATCH that widens scopes beyond the realm allowlist', async () => {
+    const { fastify, ctx } = makeFastify();
+    await clientsRoute(fastify);
+
+    (fastify.repositories.oauthClients.findById as unknown as Mock).mockResolvedValue(
+      makeClientRow({ developerId: DEV_A })
+    );
+
+    const request = authedRequest({
+      params: { id: '0190a000-0000-7000-8000-000000000001' },
+      body: { scopes: ['openid', 'akinon:write'] },
+    });
+    const { reply } = createReply();
+
+    await expect(route(ctx, 'PATCH /:id').handler(request, reply)).rejects.toThrow(BadRequestError);
+    expect(fastify.repositories.oauthClients.update).not.toHaveBeenCalled();
+  });
+});
+
+describe('redirect_uris required for user-involving grants (#86/#88)', () => {
+  it('rejects create of an authorization_code client with no redirect_uris', async () => {
+    const { fastify, ctx } = makeFastify();
+    await clientsRoute(fastify);
+
+    const request = authedRequest({
+      body: {
+        name: 'No redirects',
+        redirectUris: [],
+        grantTypes: ['authorization_code', 'refresh_token'],
+        responseTypes: ['code'],
+        tokenEndpointAuthMethod: 'client_secret_post',
+      },
+    });
+    const { reply } = createReply();
+
+    await expect(route(ctx, 'POST /').handler(request, reply)).rejects.toThrow(BadRequestError);
+    expect(fastify.repositories.oauthClients.create).not.toHaveBeenCalled();
+  });
+
+  it('rejects a PATCH that empties redirect_uris on an authorization_code client', async () => {
+    const { fastify, ctx } = makeFastify();
+    await clientsRoute(fastify);
+
+    (fastify.repositories.oauthClients.findById as unknown as Mock).mockResolvedValue(
+      makeClientRow({
+        developerId: DEV_A,
+        grantTypes: ['authorization_code', 'refresh_token'],
+        responseTypes: ['code'],
+        redirectUris: ['https://app.example.com/cb'],
+      })
+    );
+
+    const request = authedRequest({
+      params: { id: '0190a000-0000-7000-8000-000000000001' },
+      body: { redirectUris: [] },
+    });
+    const { reply } = createReply();
+
+    await expect(route(ctx, 'PATCH /:id').handler(request, reply)).rejects.toThrow(BadRequestError);
+    expect(fastify.repositories.oauthClients.update).not.toHaveBeenCalled();
+  });
+
+  it('allows a client_credentials-only client with no redirect_uris', async () => {
+    const { fastify, ctx } = makeFastify();
+    await clientsRoute(fastify);
+
+    (fastify.repositories.oauthClients.create as unknown as Mock).mockImplementation(
+      async (data: Record<string, unknown>) => makeClientRow({ ...data })
+    );
+
+    const request = authedRequest({
+      body: {
+        name: 'Service',
+        redirectUris: [],
+        grantTypes: ['client_credentials'],
+        responseTypes: [],
+        tokenEndpointAuthMethod: 'client_secret_post',
+      },
+    });
+    const { reply, state } = createReply();
+
+    await route(ctx, 'POST /').handler(request, reply);
+    expect(state.statusCode).toBe(201);
+  });
+});
+
+describe('audit logging is best-effort (one-time secret must survive #86/#90)', () => {
+  it('still returns the created client + secret when the audit write throws', async () => {
+    const { fastify, ctx } = makeFastify();
+    await clientsRoute(fastify);
+
+    (fastify.repositories.oauthClients.create as unknown as Mock).mockImplementation(
+      async (data: Record<string, unknown>) => makeClientRow({ ...data })
+    );
+    (fastify.repositories.auditLogs.create as unknown as Mock).mockRejectedValue(
+      new Error('audit sink down')
+    );
+
+    const request = authedRequest({
+      body: {
+        name: 'Resilient',
+        redirectUris: ['https://app.example.com/cb'],
+        tokenEndpointAuthMethod: 'client_secret_post',
+      },
+    });
+    const { reply, state } = createReply();
+
+    const body = (await route(ctx, 'POST /').handler(request, reply)) as Record<string, unknown>;
+
+    expect(state.statusCode).toBe(201);
+    expect(typeof body.clientSecret).toBe('string');
+    // The failure was swallowed and logged, not propagated.
+    expect(fastify.log.warn).toHaveBeenCalled();
+  });
+
+  it('still returns the rotated secret when the audit write throws', async () => {
+    const { fastify, ctx } = makeFastify();
+    await clientsRoute(fastify);
+
+    (fastify.repositories.oauthClients.findById as unknown as Mock).mockResolvedValue(
+      makeClientRow({ developerId: DEV_A, tokenEndpointAuthMethod: 'client_secret_post' })
+    );
+    (fastify.repositories.oauthClients.update as unknown as Mock).mockImplementation(
+      async (_id: string, data: Record<string, unknown>) =>
+        makeClientRow({ developerId: DEV_A, ...data })
+    );
+    (fastify.repositories.auditLogs.create as unknown as Mock).mockRejectedValue(
+      new Error('audit sink down')
+    );
+
+    const request = authedRequest({ params: { id: '0190a000-0000-7000-8000-000000000001' } });
+    const { reply } = createReply();
+
+    const body = (await route(ctx, 'POST /:id/regenerate-secret').handler(
+      request,
+      reply
+    )) as Record<string, unknown>;
+
+    expect(typeof body.clientSecret).toBe('string');
+    expect((body.clientSecret as string).length).toBe(64);
+    expect(fastify.log.warn).toHaveBeenCalled();
+  });
+});
+
+describe('PATCH silently drops immutable fields (#88, Nit 8)', () => {
+  it('never forwards developerId / clientId / clientSecretHash to the repository', async () => {
+    const { fastify, ctx } = makeFastify();
+    await clientsRoute(fastify);
+
+    (fastify.repositories.oauthClients.findById as unknown as Mock).mockResolvedValue(
+      makeClientRow({ developerId: DEV_A })
+    );
+    (fastify.repositories.oauthClients.update as unknown as Mock).mockImplementation(
+      async (_id: string, data: Record<string, unknown>) =>
+        makeClientRow({ developerId: DEV_A, ...data })
+    );
+
+    // Attempt a mass-assignment: the Zod schema strips unknown keys, and the
+    // handler only forwards the known mutable allowlist, so these are dropped.
+    const request = authedRequest({
+      params: { id: '0190a000-0000-7000-8000-000000000001' },
+      body: {
+        name: 'Renamed',
+        developerId: DEV_B,
+        clientId: 'attacker-chosen',
+        clientSecretHash: 'argon2id$attacker',
+      },
+    });
+    const { reply } = createReply();
+
+    // Handler is invoked with the raw body (Zod stripping is not exercised in
+    // this unit harness), so assert the handler's own allowlist drops them.
+    await route(ctx, 'PATCH /:id').handler(request, reply);
+
+    const updateArg = (fastify.repositories.oauthClients.update as unknown as Mock).mock
+      .calls[0][1];
+    expect(updateArg).toEqual({ name: 'Renamed' });
+    expect(updateArg.developerId).toBeUndefined();
+    expect(updateArg.clientId).toBeUndefined();
+    expect(updateArg.clientSecretHash).toBeUndefined();
   });
 });

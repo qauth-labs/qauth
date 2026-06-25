@@ -262,15 +262,19 @@ only** — only its argon2id hash is stored, so it is unrecoverable afterwards.
 
 **Body** (all besides `name` optional):
 
-| Field                     | Type     | Default                                  | Notes                                                                               |
-| ------------------------- | -------- | ---------------------------------------- | ----------------------------------------------------------------------------------- |
-| `name`                    | string   | —                                        | Required, 1–255 chars.                                                              |
-| `description`             | string   | `null`                                   |                                                                                     |
-| `redirectUris`            | string[] | `[]`                                     | Each validated (OAuth 2.1 §10.3 — `https` or loopback).                             |
-| `scopes`                  | string[] | `[]`                                     |                                                                                     |
-| `grantTypes`              | string[] | `["authorization_code","refresh_token"]` | `authorization_code` / `refresh_token` / `client_credentials`.                      |
-| `responseTypes`           | string[] | `["code"]`                               | OAuth 2.1 only supports `code`.                                                     |
-| `tokenEndpointAuthMethod` | string   | `"none"`                                 | `none` (public) / `client_secret_post` / `client_secret_basic` / `private_key_jwt`. |
+| Field                     | Type     | Default                                  | Notes                                                                                                                                         |
+| ------------------------- | -------- | ---------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| `name`                    | string   | —                                        | Required, 1–255 chars.                                                                                                                        |
+| `description`             | string   | `null`                                   |                                                                                                                                               |
+| `redirectUris`            | string[] | `[]`                                     | Each validated (OAuth 2.1 §10.3 — `https` or loopback). **Required (≥1) for user-involving grants** (`authorization_code` / `refresh_token`). |
+| `scopes`                  | string[] | `[]`                                     | Capped to the realm's allowed-scopes policy (same allowlist as dynamic registration); a scope outside it is rejected.                         |
+| `grantTypes`              | string[] | `["authorization_code","refresh_token"]` | `authorization_code` / `refresh_token` / `client_credentials`.                                                                                |
+| `responseTypes`           | string[] | `["code"]`                               | OAuth 2.1 only supports `code`.                                                                                                               |
+| `tokenEndpointAuthMethod` | string   | `"none"`                                 | `none` (public) / `client_secret_post` / `client_secret_basic` / `private_key_jwt`.                                                           |
+
+**Rate limit**: per-IP, shared budget with `POST /oauth/register`
+(`REGISTER_CLIENT_RATE_LIMIT` / `REGISTER_CLIENT_RATE_WINDOW`) — create runs an
+argon2id hash on every call, so the cap is mandatory (`429` on exceed).
 
 **`201 Created`** (`Cache-Control: no-store`)
 
@@ -295,8 +299,9 @@ only** — only its argon2id hash is stored, so it is unrecoverable afterwards.
 ```
 
 Public clients (`tokenEndpointAuthMethod: "none"`) get **no** `clientSecret`.
-Errors: `400` (invalid `redirectUri` or inconsistent grant/response types),
-`401` (missing/invalid bearer, or a non-user token).
+Errors: `400` (invalid `redirectUri`, inconsistent grant/response types, missing
+`redirectUris` for a user-involving grant, or a scope outside the realm policy),
+`401` (missing/invalid bearer, or a non-user token), `429` (rate limited).
 
 ### `GET /api/clients/:id`
 
@@ -309,16 +314,22 @@ Errors: `401`; `404` (not found or not owned).
 
 Partially update a client. Any subset of: `name`, `description`,
 `redirectUris`, `scopes`, `grantTypes`, `responseTypes`,
-`tokenEndpointAuthMethod`, `enabled`. `clientId` and the secret are
-**immutable** here. The _effective_ grant/response-type combination (request
-value or persisted value) is re-validated for consistency.
+`tokenEndpointAuthMethod`, `enabled`. `clientId`, the secret, and
+`developerId` are **immutable** here (unknown/immutable keys are ignored). The
+_effective_ configuration (request value or persisted value) is re-validated:
+grant/response-type consistency, a redirect URI for user-involving grants, and
+the realm scope cap when `scopes` is changed.
 
 **`200 OK`** — the updated client (safe fields, no secret).
-Errors: `400` (validation / inconsistent config), `401`, `404`.
+Errors: `400` (validation / inconsistent config / disallowed scope / missing
+redirect for a user-involving grant), `401`, `404`.
 
 ### `DELETE /api/clients/:id`
 
-Delete a client. After deletion the client can no longer authenticate.
+Delete a client. After deletion the client can no longer authenticate at the
+token endpoint and cannot start new authorization flows. Note: already-issued
+**access tokens are stateless JWTs** and remain valid until they expire;
+short access-token lifetimes bound this window.
 
 **`204 No Content`**. Errors: `401`; `404` (not found or not owned).
 
@@ -329,7 +340,7 @@ Issue a new `clientSecret`. The previous secret is invalidated immediately;
 
 **`200 OK`** (`Cache-Control: no-store`) — the client (safe fields) plus a
 `clientSecret` string. Errors: `400` (public client — no secret to rotate),
-`401`, `404`.
+`401`, `404`, `429` (rate limited — argon2id, same per-IP budget as create).
 
 Clients may also be registered via [Dynamic Client Registration](./oauth-flow.md#dynamic-client-registration-rfc-7591)
 (`POST /oauth/register`), CIMD, or the `seed-oauth-clients` script.
