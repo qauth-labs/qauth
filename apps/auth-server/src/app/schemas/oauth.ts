@@ -36,6 +36,13 @@ export const authorizeQuerySchema = z.object({
   state: z.string().max(255).optional(),
   scope: z.string().optional(),
   nonce: z.string().max(255).optional(),
+  // OIDC Core §3.1.2.1 step-up parameters (ADR-007 §2, #185). `prompt` forces
+  // a fresh authentication (`login`) or re-consent (`consent`); `max_age`
+  // bounds, in seconds, how old the existing authentication may be before a
+  // re-authentication is required (`0` ⇒ always re-authenticate). Only the
+  // values QAuth acts on are accepted; anything else is rejected at the edge.
+  prompt: z.enum(['none', 'login', 'consent']).optional(),
+  max_age: z.coerce.number().int().min(0).max(315360000).optional(),
   resource: resourceParamSchema,
 });
 

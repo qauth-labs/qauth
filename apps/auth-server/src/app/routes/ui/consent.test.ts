@@ -558,3 +558,163 @@ describe('UI /ui/consent — agent scope-mode cap (ADR-007 §2, #184)', () => {
     expect(state.body).toBeUndefined();
   });
 });
+
+describe('UI /ui/consent — step-up authentication (ADR-007 §2, #185)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  // Client whose allowlist includes a DANGEROUS scope (write:foo). Used to
+  // prove the mint path forces a fresh authentication before a dangerous grant.
+  const DANGEROUS_CLIENT = {
+    ...CLIENT,
+    scopes: ['read:foo', 'write:foo', 'email'],
+  };
+
+  const MINUTE = 60 * 1000;
+
+  function postBody(overrides: Record<string, unknown> = {}) {
+    return {
+      decision: 'allow',
+      allow_forever: '1',
+      csrf_token: 'csrf-su',
+      client_id: 'app-123',
+      redirect_uri: 'https://example.com/cb',
+      state: 'xyz',
+      scope: 'write:foo',
+      code_challenge: 'A'.repeat(43),
+      code_challenge_method: 'S256',
+      response_type: 'code',
+      ...overrides,
+    };
+  }
+
+  function session(createdAt: number) {
+    return {
+      userId: 'user-1',
+      email: 'a@b.com',
+      sessionId: 'sid-su',
+      csrfToken: 'csrf-su',
+      createdAt,
+    };
+  }
+
+  it('refuses to mint a code for a dangerous scope on a STALE session and bounces to /ui/login', async () => {
+    const { fastify, ctx } = makeFastify();
+    await consentRoute(fastify);
+    const { signSessionId } = await import('../../helpers/session-cookie');
+    const signed = signSessionId('sid-su');
+    // Session authenticated 10 minutes ago — outside the 2-minute fresh window.
+    (fastify.sessionUtils.getSession as unknown as Mock).mockResolvedValue(
+      session(Date.now() - 10 * MINUTE)
+    );
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(
+      DANGEROUS_CLIENT
+    );
+
+    const { reply, state } = createReply();
+    await ctx.post!(
+      {
+        body: postBody(),
+        headers: { cookie: `__Host-qauth_session=${signed}` },
+        ip: '127.0.0.1',
+      },
+      reply
+    );
+
+    // Bounced to login (fresh-auth required); NO code, NO grant persisted.
+    expect(state.redirected).toContain('/ui/login?return_to=');
+    // The dangerous scope survives the round-trip; the return_to is itself
+    // URL-encoded, so `scope=write:foo` appears doubly-encoded.
+    expect(decodeURIComponent(state.redirected as string)).toContain('scope=write%3Afoo');
+    expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
+    expect(fastify.repositories.oauthConsents.upsertGrant).not.toHaveBeenCalled();
+    // The step-up requirement is audited.
+    const events = (fastify.repositories.auditLogs.create as unknown as Mock).mock.calls.map(
+      (c) => (c[0] as { event: string }).event
+    );
+    expect(events).toContain('oauth.stepup.required');
+  });
+
+  it('mints a dangerous-scope code on a FRESH session and audits the elevation', async () => {
+    const { fastify, ctx } = makeFastify();
+    await consentRoute(fastify);
+    const { signSessionId } = await import('../../helpers/session-cookie');
+    const signed = signSessionId('sid-su');
+    // Authenticated 5 seconds ago — within the fresh-auth window.
+    (fastify.sessionUtils.getSession as unknown as Mock).mockResolvedValue(
+      session(Date.now() - 5000)
+    );
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(
+      DANGEROUS_CLIENT
+    );
+
+    const { reply, state } = createReply();
+    await ctx.post!(
+      {
+        body: postBody(),
+        headers: { cookie: `__Host-qauth_session=${signed}` },
+        ip: '127.0.0.1',
+      },
+      reply
+    );
+
+    expect(state.redirected).toContain('https://example.com/cb');
+    expect(state.redirected).toContain('code=');
+    expect(fastify.repositories.authorizationCodes.create).toHaveBeenCalledOnce();
+    const events = (fastify.repositories.auditLogs.create as unknown as Mock).mock.calls.map(
+      (c) => (c[0] as { event: string }).event
+    );
+    expect(events).toContain('oauth.stepup.elevation');
+    expect(events).toContain('oauth.consent.granted');
+  });
+
+  it('forces fresh auth for prompt=login on a stale session even with a non-dangerous scope', async () => {
+    const { fastify, ctx } = makeFastify();
+    await consentRoute(fastify);
+    const { signSessionId } = await import('../../helpers/session-cookie');
+    const signed = signSessionId('sid-su');
+    (fastify.sessionUtils.getSession as unknown as Mock).mockResolvedValue(
+      session(Date.now() - 10 * MINUTE)
+    );
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(CLIENT);
+
+    const { reply, state } = createReply();
+    await ctx.post!(
+      {
+        body: postBody({ scope: 'email', prompt: 'login' }),
+        headers: { cookie: `__Host-qauth_session=${signed}` },
+        ip: '127.0.0.1',
+      },
+      reply
+    );
+
+    expect(state.redirected).toContain('/ui/login?return_to=');
+    expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
+  });
+
+  it('mints a non-dangerous scope without step-up on a stale session (no over-gating)', async () => {
+    const { fastify, ctx } = makeFastify();
+    await consentRoute(fastify);
+    const { signSessionId } = await import('../../helpers/session-cookie');
+    const signed = signSessionId('sid-su');
+    (fastify.sessionUtils.getSession as unknown as Mock).mockResolvedValue(
+      session(Date.now() - 10 * MINUTE)
+    );
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(CLIENT);
+
+    const { reply, state } = createReply();
+    await ctx.post!(
+      {
+        body: postBody({ scope: 'email' }),
+        headers: { cookie: `__Host-qauth_session=${signed}` },
+        ip: '127.0.0.1',
+      },
+      reply
+    );
+
+    expect(state.redirected).toContain('https://example.com/cb');
+    expect(state.redirected).toContain('code=');
+    expect(fastify.repositories.authorizationCodes.create).toHaveBeenCalledOnce();
+  });
+});

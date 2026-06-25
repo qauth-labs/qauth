@@ -5,7 +5,7 @@ import type { FastifyInstance } from 'fastify';
 import { ZodTypeProvider } from 'fastify-type-provider-zod';
 
 import { env } from '../../../config/env';
-import { AUTHORIZATION_CODE_TTL_MS } from '../../constants';
+import { AUTHORIZATION_CODE_TTL_MS, STEP_UP_FRESH_AUTH_WINDOW_MS } from '../../constants';
 import { resolveBrowserSession } from '../../helpers/browser-session';
 import { findExceedingAgentScopesForClient, resolveAudience } from '../../helpers/client-auth';
 import { resolveClient } from '../../helpers/client-resolution';
@@ -13,6 +13,7 @@ import { canSkipConsent, filterRequestedScopes } from '../../helpers/consent';
 import { getOrCreateSystemClient } from '../../helpers/oauth-client';
 import { buildRedirectUrl } from '../../helpers/oauth-redirect';
 import { getOrCreateDefaultRealm } from '../../helpers/realm';
+import { evaluateStepUp, parsePromptMode } from '../../helpers/step-up';
 import { type AuthorizeQuery, authorizeQuerySchema } from '../../schemas/oauth';
 
 /**
@@ -276,7 +277,75 @@ export default async function (fastify: FastifyInstance) {
           userId,
           client.id
         );
-        if (!canSkipConsent(existingConsent, client, scopes)) {
+
+        // ADR-007 §2 (#185): step-up authentication before dangerous
+        // operations / on elevation. A request that widens the granted scope
+        // set (incremental consent, MCP 2025-11-25), or that asks for a
+        // dangerous scope (write:* / agent:admin / agent:exec), or that sends
+        // `prompt`/`max_age`, must NOT be served from the existing session +
+        // prior consent silently. We re-authenticate and/or re-consent. The
+        // decision is default-deny: a dangerous elevation forces a fresh login
+        // with no client opt-in required.
+        const prompt = parsePromptMode(query.prompt);
+        const stepUp = evaluateStepUp({
+          requestedScopes: scopes,
+          priorConsentScopes:
+            existingConsent && existingConsent.revokedAt === null ? existingConsent.scopes : [],
+          prompt,
+          maxAgeSeconds: query.max_age ?? null,
+          authTimeMs: browserSession.createdAt,
+          nowMs: Date.now(),
+          freshAuthWindowMs: STEP_UP_FRESH_AUTH_WINDOW_MS,
+        });
+
+        if (stepUp.requiresFreshLogin) {
+          // Force a fresh end-user authentication: bounce through /ui/login,
+          // which always mints a brand-new session (session-fixation defense),
+          // resetting auth_time so the elevation is granted only right after
+          // the user proves presence. The full authorize URL (incl. prompt /
+          // max_age / scope / PKCE) is preserved so the round-trip is lossless.
+          await fastify.repositories.auditLogs.create({
+            userId,
+            oauthClientId: client.id,
+            event: 'oauth.stepup.required',
+            eventType: 'auth',
+            success: false,
+            ipAddress: request.ip,
+            userAgent: request.headers['user-agent'] || null,
+            metadata: {
+              client_id: query.client_id,
+              reason: 'fresh_authentication_required',
+              elevated: stepUp.elevated,
+              dangerous: stepUp.dangerous,
+              prompt: prompt ?? null,
+              maxAge: query.max_age ?? null,
+            },
+          });
+          const returnTo = `${request.url}`;
+          return reply.redirect(`/ui/login?return_to=${encodeURIComponent(returnTo)}`, 302);
+        }
+
+        // Re-consent when the request elevates scope or explicitly asks for it,
+        // even if a prior grant would otherwise let us skip the screen — a
+        // wider scope set must be explicitly re-affirmed, never auto-widened.
+        if (stepUp.requiresConsent || !canSkipConsent(existingConsent, client, scopes)) {
+          if (stepUp.elevated.length > 0) {
+            await fastify.repositories.auditLogs.create({
+              userId,
+              oauthClientId: client.id,
+              event: 'oauth.stepup.required',
+              eventType: 'auth',
+              success: false,
+              ipAddress: request.ip,
+              userAgent: request.headers['user-agent'] || null,
+              metadata: {
+                client_id: query.client_id,
+                reason: 'incremental_consent_required',
+                elevated: stepUp.elevated,
+                dangerous: stepUp.dangerous,
+              },
+            });
+          }
           return reply.redirect(`/ui/consent${request.url.slice(request.url.indexOf('?'))}`, 302);
         }
       }
