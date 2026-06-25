@@ -1,12 +1,12 @@
 # ADR-008: Environment-Aware Authorization Posture
 
-**Status:** Proposed
+**Status:** Accepted
 **Date:** 2026-06-25
 **Authors:** QAuth Team
 
-> Proposed and ready for Accept. The decisions below deliberately take the
-> **fail-safe** option at every fork (default to the strictest posture;
-> relaxation is operator-controlled, never self-asserted).
+> **Accepted 2026-06-25.** Every fork below takes the **fail-safe** option
+> (default to the strictest posture; relaxation is operator-controlled, never
+> self-asserted). Implementation issues are derived from the sequencing section.
 
 ## Context
 
