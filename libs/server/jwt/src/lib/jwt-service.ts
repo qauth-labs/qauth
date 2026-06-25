@@ -46,6 +46,12 @@ export async function signAccessToken(
   if (payload.scope !== undefined && payload.scope.length > 0) {
     claims['scope'] = payload.scope;
   }
+  // RFC 8693 §4.1: emit the `act` (actor) claim only on delegated tokens minted
+  // via token-exchange. It is additive — `sub` stays the end-user; `act`
+  // identifies the acting agent (nested for chained delegation).
+  if (payload.act !== undefined) {
+    claims['act'] = payload.act;
+  }
 
   let jwt = new SignJWT(claims)
     .setProtectedHeader({ alg: 'EdDSA' })
@@ -106,6 +112,9 @@ export async function verifyAccessToken(
       clientId: payload['client_id'] as string,
       scope: payload['scope'] as string | undefined,
       aud: payload.aud as string | string[] | undefined,
+      // RFC 8693 §4.1: surface any existing `act` chain so a subject token
+      // already carrying a delegation can be nested under the new actor.
+      act: payload['act'] as JWTPayload['act'],
       iat: payload.iat as number | undefined,
       exp: payload.exp as number | undefined,
       iss: payload.iss as string | undefined,

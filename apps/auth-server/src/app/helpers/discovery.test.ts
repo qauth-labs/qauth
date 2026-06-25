@@ -29,6 +29,7 @@ describe('buildAuthorizationServerMetadata', () => {
       'authorization_code',
       'client_credentials',
       'refresh_token',
+      'urn:ietf:params:oauth:grant-type:token-exchange',
     ]);
     expect(meta['code_challenge_methods_supported']).toEqual(['S256']);
     expect(meta['token_endpoint_auth_methods_supported']).toEqual([

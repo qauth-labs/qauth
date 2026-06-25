@@ -1,11 +1,14 @@
 import { randomUUID } from 'node:crypto';
 
+import type { ActClaim } from '@qauth-labs/fastify-plugin-jwt';
 import {
   BadRequestError,
   InvalidClientError,
   InvalidGrantError,
   InvalidScopeError,
   InvalidTargetError,
+  JWTExpiredError,
+  JWTInvalidError,
   NotFoundError,
   UnauthorizedClientError,
 } from '@qauth-labs/shared-errors';
@@ -22,15 +25,19 @@ import {
   resolveAudience,
   validateScopes,
 } from '../../helpers/client-auth';
+import { isAgentClient } from '../../helpers/client-resolution';
 import { getOrCreateDefaultRealm } from '../../helpers/realm';
 import { ensureMinimumResponseTime } from '../../helpers/timing';
 import {
+  TOKEN_EXCHANGE_GRANT_TYPE,
+  TOKEN_TYPE_ACCESS_TOKEN,
   type TokenExchangeAuthCodeBody,
   tokenExchangeBodySchema,
   type TokenExchangeClientCredsBody,
   type TokenExchangeRefreshBody,
   type TokenExchangeResponse,
   tokenExchangeResponseSchema,
+  type TokenExchangeTokenExchangeBody,
 } from '../../schemas/oauth';
 
 /**
@@ -77,7 +84,8 @@ export default async function (fastify: FastifyInstance) {
       const body = request.body as
         | TokenExchangeAuthCodeBody
         | TokenExchangeClientCredsBody
-        | TokenExchangeRefreshBody;
+        | TokenExchangeRefreshBody
+        | TokenExchangeTokenExchangeBody;
 
       try {
         const realm = await getOrCreateDefaultRealm(fastify);
@@ -90,7 +98,15 @@ export default async function (fastify: FastifyInstance) {
         // 'none'`. client_credentials is confidential-only by definition.
         let client: OAuthClientLike;
         try {
-          if (body.grant_type === 'authorization_code' || body.grant_type === 'refresh_token') {
+          if (
+            body.grant_type === 'authorization_code' ||
+            body.grant_type === 'refresh_token' ||
+            body.grant_type === TOKEN_EXCHANGE_GRANT_TYPE
+          ) {
+            // token-exchange agents may be public (PKCE-registered, no secret)
+            // or confidential; this resolver accepts both. The agent
+            // classification + subject-token validation gate the grant in the
+            // handler — client auth alone never authorises an exchange.
             client = await authenticateClientPublicOrConfidential(
               fastify,
               realm.id,
@@ -154,6 +170,16 @@ export default async function (fastify: FastifyInstance) {
           return reply.send(responseBody);
         }
 
+        if (body.grant_type === TOKEN_EXCHANGE_GRANT_TYPE) {
+          const responseBody = await handleTokenExchange({
+            fastify,
+            request: request as FastifyRequest,
+            client,
+            body,
+          });
+          return reply.send(responseBody);
+        }
+
         // Schema validation should have rejected this already, but guard anyway.
         throw new BadRequestError('unsupported_grant_type');
       } catch (error) {
@@ -164,6 +190,8 @@ export default async function (fastify: FastifyInstance) {
           error instanceof InvalidScopeError ||
           error instanceof NotFoundError ||
           error instanceof BadRequestError ||
+          error instanceof JWTExpiredError ||
+          error instanceof JWTInvalidError ||
           error instanceof UnauthorizedClientError
         ) {
           await ensureMinimumResponseTime(startTime, MIN_RESPONSE_TIME_MS.TOKEN);
@@ -798,6 +826,286 @@ async function handleRefreshToken(
   return {
     access_token: accessToken,
     refresh_token: newRefreshToken,
+    expires_in: accessTokenExpiresIn,
+    token_type: 'Bearer' as const,
+    ...(scopeString ? { scope: scopeString } : {}),
+  };
+}
+
+/**
+ * Normalise a JWT `aud` claim (string | string[] | undefined) to a string[].
+ */
+function audToArray(aud: string | string[] | undefined): string[] {
+  if (aud === undefined) return [];
+  return Array.isArray(aud) ? aud : [aud];
+}
+
+/**
+ * Collapse a string[] back to the JWT `aud` shape (single → string).
+ */
+function arrayToAud(values: string[]): string | string[] {
+  return values.length === 1 ? values[0] : values;
+}
+
+/** Count the delegation depth of an `act` chain (1 = single actor). */
+function actDepth(act: ActClaim | undefined): number {
+  let depth = 0;
+  let cursor: ActClaim | undefined = act;
+  while (cursor) {
+    depth += 1;
+    cursor = cursor.act;
+  }
+  return depth;
+}
+
+/**
+ * Maximum delegation depth (number of nested `act` actors) we will mint. Each
+ * additional hop appends a nested `act`, growing the JWT unboundedly; an
+ * attacker chaining re-exchanges could otherwise inflate token size (DoS) and
+ * obscure provenance. A small cap bounds both. Re-exchanging an already-deep
+ * delegated token past the limit → `invalid_request`.
+ */
+const MAX_DELEGATION_DEPTH = 4;
+
+/**
+ * Handle the OAuth 2.0 Token Exchange grant (RFC 8693) — QAuth's agent
+ * on-behalf-of delegation (ADR-007 §2). An **agent** client presents a user's
+ * `subject_token` and receives a delegated access token whose `sub` is the
+ * user and whose `act` (actor) claim identifies the agent (nested for chained
+ * delegation). This is an MCP auth *extension* (ext-auth), not core MCP.
+ *
+ * Security invariants (epic #181 default-deny: `is_agent` is self-asserted and
+ * NEVER sufficient on its own):
+ *  - GATE 1 — agent classification: `isAgentClient(client)` must hold AND the
+ *    client must be allowed the token-exchange grant. Non-agent clients are
+ *    rejected with `unauthorized_client` (RFC 6749 §5.2). The client is
+ *    already authenticated + enabled at this point (client-auth path).
+ *  - GATE 2 — token-type support: only `urn:...:token-type:access_token` is
+ *    accepted for `subject_token_type` / `actor_token_type` /
+ *    `requested_token_type`. Anything else → `invalid_request` (RFC 8693
+ *    §2.2.2).
+ *  - GATE 3 — subject-token validity: the subject token is cryptographically
+ *    verified (EdDSA signature + `exp`) via `jwtUtils.verifyAccessToken`. Since
+ *    QAuth's own signing key is the only key that verifies, a valid signature
+ *    establishes provenance (the `iss` claim itself is not separately asserted
+ *    by `verifyAccessToken`). An unverifiable / expired token →
+ *    `invalid_request` (the presented token is unacceptable, RFC 8693 §2.2.2).
+ *    The subject user must still exist and be enabled (RFC 9700 §4.14).
+ *  - GATE 4 — no privilege escalation: scope and audience are PRESERVED or
+ *    NARROWED relative to the subject token, never widened (RFC 8707 §2.2 /
+ *    RFC 8693). Up-scoping → `invalid_scope`; out-of-set audience →
+ *    `invalid_target`. Delegation depth is bounded by `MAX_DELEGATION_DEPTH`.
+ *
+ * No refresh token is issued — a delegated token is intentionally short-lived
+ * and the agent re-exchanges as needed.
+ *
+ * TODO(#184): scope modes (ReadOnly / Admin / Exec) are owned by the parallel
+ * scope-mode PR. This handler does generic scope preservation/narrowing only;
+ * once #184 lands, the narrowed scope set should additionally be clamped to
+ * the agent's `max_agent_mode`. The two integrate at that point.
+ */
+async function handleTokenExchange(
+  ctx: HandlerContext<TokenExchangeTokenExchangeBody>
+): Promise<TokenExchangeResponse> {
+  const { fastify, request, client, body } = ctx;
+
+  const auditFailure = async (error: string, extra?: Record<string, unknown>): Promise<void> => {
+    await fastify.repositories.auditLogs.create({
+      userId: null,
+      oauthClientId: client.id,
+      event: 'oauth.token.exchange.failure',
+      eventType: 'token',
+      success: false,
+      ipAddress: request.ip,
+      userAgent: request.headers['user-agent'] || null,
+      metadata: { error, grantType: 'token-exchange', ...extra },
+    });
+  };
+
+  // GATE 1 — agent classification + grant authorisation (default-deny).
+  // `isAgentClient` is fail-closed; a client that omitted `is_agent` reads as
+  // a non-agent and is rejected here.
+  if (!isAgentClient(client)) {
+    await auditFailure('unauthorized_client: token-exchange is restricted to agent clients');
+    throw new UnauthorizedClientError();
+  }
+  if (!client.grantTypes.includes(TOKEN_EXCHANGE_GRANT_TYPE)) {
+    await auditFailure('unauthorized_client: client not allowed the token-exchange grant');
+    throw new UnauthorizedClientError();
+  }
+
+  // GATE 2 — token-type support. We only mint/consume OAuth access tokens.
+  if (body.subject_token_type !== TOKEN_TYPE_ACCESS_TOKEN) {
+    await auditFailure('invalid_request: unsupported subject_token_type', {
+      subjectTokenType: body.subject_token_type,
+    });
+    throw new BadRequestError('invalid_request: unsupported subject_token_type');
+  }
+  if (
+    body.requested_token_type !== undefined &&
+    body.requested_token_type !== TOKEN_TYPE_ACCESS_TOKEN
+  ) {
+    await auditFailure('invalid_request: unsupported requested_token_type', {
+      requestedTokenType: body.requested_token_type,
+    });
+    throw new BadRequestError('invalid_request: unsupported requested_token_type');
+  }
+  // RFC 8693 §2.1: actor_token_type is REQUIRED when actor_token is present.
+  if (body.actor_token !== undefined && body.actor_token_type === undefined) {
+    await auditFailure('invalid_request: actor_token_type required when actor_token present');
+    throw new BadRequestError('invalid_request: actor_token_type is required with actor_token');
+  }
+  if (body.actor_token !== undefined && body.actor_token_type !== TOKEN_TYPE_ACCESS_TOKEN) {
+    await auditFailure('invalid_request: unsupported actor_token_type', {
+      actorTokenType: body.actor_token_type,
+    });
+    throw new BadRequestError('invalid_request: unsupported actor_token_type');
+  }
+
+  // GATE 3 — verify the subject token (EdDSA signature + exp). Only QAuth's
+  // signing key verifies, so a valid signature establishes provenance; an
+  // unverifiable or expired token is "unacceptable" → invalid_request.
+  let subjectPayload: Awaited<ReturnType<typeof fastify.jwtUtils.verifyAccessToken>>;
+  try {
+    subjectPayload = await fastify.jwtUtils.verifyAccessToken(body.subject_token);
+  } catch {
+    await auditFailure('invalid_request: subject_token failed verification');
+    throw new BadRequestError('invalid_request: subject_token is not a valid access token');
+  }
+  if (!subjectPayload.sub) {
+    await auditFailure('invalid_request: subject_token missing sub');
+    throw new BadRequestError('invalid_request: subject_token has no subject');
+  }
+
+  // If an actor_token is supplied, verify it too. We do not trust the agent's
+  // self-declared identity from an unverified token — the actor identity used
+  // in the `act` claim is the authenticated agent's own client_id (below).
+  let actorPayload: Awaited<ReturnType<typeof fastify.jwtUtils.verifyAccessToken>> | undefined;
+  if (body.actor_token !== undefined) {
+    try {
+      actorPayload = await fastify.jwtUtils.verifyAccessToken(body.actor_token);
+    } catch {
+      await auditFailure('invalid_request: actor_token failed verification');
+      throw new BadRequestError('invalid_request: actor_token is not a valid access token');
+    }
+  }
+
+  // The subject user must still exist and be enabled (RFC 9700 §4.14). We bind
+  // the delegated token's `sub` to the *current* user record, not blindly to
+  // the token's `sub` string.
+  const user = await fastify.repositories.users.findById(subjectPayload.sub);
+  if (!user) {
+    await auditFailure('invalid_request: subject user not found');
+    throw new BadRequestError('invalid_request: subject_token subject is unknown');
+  }
+  if (!user.enabled) {
+    await auditFailure('invalid_request: subject user disabled', { userId: user.id });
+    throw new BadRequestError('invalid_request: subject_token subject is not active');
+  }
+
+  // GATE 4a — scope narrowing. The delegated token's scope is the subject
+  // token's scope, optionally narrowed by the request. Up-scoping is rejected.
+  const subjectScopes = subjectPayload.scope
+    ? subjectPayload.scope.split(/\s+/).filter((s) => s.length > 0)
+    : [];
+  let grantedScopes: string[];
+  if (body.scope !== undefined && body.scope.trim().length > 0) {
+    const requested = body.scope.split(/\s+/).filter((s) => s.length > 0);
+    const extraneous = requested.filter((s) => !subjectScopes.includes(s));
+    if (extraneous.length > 0) {
+      await auditFailure('invalid_scope: requested scope exceeds subject token', {
+        extraneous,
+        subjectScopes,
+      });
+      throw new InvalidScopeError(`${extraneous.join(' ')} not in subject_token scope`);
+    }
+    grantedScopes = requested;
+  } else {
+    grantedScopes = subjectScopes;
+  }
+
+  // GATE 4b — audience narrowing (RFC 8707 §2.2 + RFC 8693 `audience`). The
+  // delegated token's `aud` is the subject token's `aud`, optionally narrowed
+  // by `resource` and/or `audience`. Any value outside the subject token's
+  // audience set is rejected (`invalid_target`) — never widen.
+  const subjectAudience = audToArray(subjectPayload.aud);
+  const requestedTargets = [...(body.resource ?? []), ...(body.audience ?? [])];
+  let effectiveAudience: string[];
+  if (requestedTargets.length > 0) {
+    const extra = requestedTargets.filter((t) => !subjectAudience.includes(t));
+    if (extra.length > 0) {
+      await auditFailure('invalid_target: requested audience outside subject token audience', {
+        extra,
+        subjectAudience,
+      });
+      throw new InvalidTargetError('requested resource/audience is outside the subject token');
+    }
+    effectiveAudience = requestedTargets;
+  } else {
+    effectiveAudience = subjectAudience;
+  }
+
+  // Build the RFC 8693 §4.1 `act` claim. The current actor (the authenticated
+  // agent) is the outermost `act`; any pre-existing delegation chain on the
+  // subject token is nested beneath it. This reflects the *real* actor — the
+  // agent's own client_id — not an unverified self-declaration.
+  const act: ActClaim = {
+    sub: client.clientId,
+    ...(subjectPayload.act ? { act: subjectPayload.act } : {}),
+  };
+
+  // Bound delegation depth: each re-exchange nests another `act`, growing the
+  // JWT unboundedly. Reject once the chain would exceed MAX_DELEGATION_DEPTH.
+  const depth = actDepth(act);
+  if (depth > MAX_DELEGATION_DEPTH) {
+    await auditFailure('invalid_request: delegation chain too deep', {
+      depth,
+      max: MAX_DELEGATION_DEPTH,
+    });
+    throw new BadRequestError('invalid_request: delegation chain exceeds the maximum depth');
+  }
+
+  const scopeString = grantedScopes.length > 0 ? grantedScopes.join(' ') : undefined;
+  // Preserve the subject token's aud when no narrowing was requested; fall back
+  // to resolveAudience's client default only if the subject had no aud at all.
+  const aud =
+    effectiveAudience.length > 0 ? arrayToAud(effectiveAudience) : resolveAudience(client);
+
+  const accessToken = await fastify.jwtUtils.signAccessToken({
+    sub: user.id,
+    email: user.email,
+    email_verified: user.emailVerified,
+    clientId: client.clientId,
+    scope: scopeString,
+    aud,
+    act,
+  });
+
+  const accessTokenExpiresIn = fastify.jwtUtils.getAccessTokenLifespan();
+
+  await fastify.repositories.auditLogs.create({
+    userId: user.id,
+    oauthClientId: client.id,
+    event: 'oauth.token.exchange.success',
+    eventType: 'token',
+    success: true,
+    ipAddress: request.ip,
+    userAgent: request.headers['user-agent'] || null,
+    metadata: {
+      grantType: 'token-exchange',
+      actor: client.clientId,
+      delegationDepth: actDepth(act),
+      hasActorToken: body.actor_token !== undefined,
+      actorTokenSubject: actorPayload?.sub,
+      scope: scopeString,
+      audience: effectiveAudience,
+    },
+  });
+
+  // RFC 8693 §2.2.1: token-exchange responses MUST include `issued_token_type`.
+  return {
+    access_token: accessToken,
+    issued_token_type: TOKEN_TYPE_ACCESS_TOKEN,
     expires_in: accessTokenExpiresIn,
     token_type: 'Bearer' as const,
     ...(scopeString ? { scope: scopeString } : {}),

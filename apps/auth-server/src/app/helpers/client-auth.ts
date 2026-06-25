@@ -32,6 +32,17 @@ export type OAuthClientLike = {
    * When absent we conservatively treat the client as confidential.
    */
   tokenEndpointAuthMethod?: string;
+  /**
+   * ADR-007 §2 agent classification (`oauth_clients.is_agent`). Surfaced so
+   * the token-exchange grant can gate on it via `isAgentClient`. Optional /
+   * fail-closed: a missing value reads as a NON-agent client.
+   *
+   * TRUST: self-asserted, unverified client input — never sufficient on its
+   * own. The token-exchange handler treats it as one of several gates and
+   * still performs server-side checks (subject-token signature/iss/exp,
+   * client enabled, aud/scope subset). See epic #181's default-deny note.
+   */
+  isAgent?: boolean;
 };
 
 /**

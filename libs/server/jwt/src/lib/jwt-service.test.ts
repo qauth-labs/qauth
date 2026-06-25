@@ -66,6 +66,31 @@ describe('signAccessToken', () => {
       expect(actualExpiration).toBeLessThanOrEqual(expiresIn + 1);
     }
   });
+
+  it('emits and round-trips a nested RFC 8693 act claim when provided', async () => {
+    const { privateKey, publicKey } = await generateEdDSAKeyPair();
+    const payload = {
+      sub: 'user-deleg',
+      clientId: 'agent-client',
+      act: { sub: 'agent-client', act: { sub: 'prior-agent' } },
+    };
+
+    const token = await signAccessToken(payload, privateKey, 'https://auth.example.com', 900);
+    const decoded = await verifyAccessToken(token, publicKey);
+
+    expect(decoded.sub).toBe('user-deleg');
+    expect(decoded.act).toEqual({ sub: 'agent-client', act: { sub: 'prior-agent' } });
+  });
+
+  it('omits the act claim when not provided (non-delegated token)', async () => {
+    const { privateKey, publicKey } = await generateEdDSAKeyPair();
+    const payload = { sub: 'user-plain', clientId: 'app-client' };
+
+    const token = await signAccessToken(payload, privateKey, 'https://auth.example.com', 900);
+    const decoded = await verifyAccessToken(token, publicKey);
+
+    expect(decoded.act).toBeUndefined();
+  });
 });
 
 describe('verifyAccessToken', () => {

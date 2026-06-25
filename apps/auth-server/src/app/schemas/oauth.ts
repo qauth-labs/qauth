@@ -108,23 +108,86 @@ export const tokenExchangeRefreshBodySchema = z.object({
 });
 
 /**
+ * RFC 8693 OAuth 2.0 Token Exchange grant + token-type URIs.
+ *
+ * QAuth's agent-native on-behalf-of delegation (ADR-007 §2): an agent client
+ * exchanges a user's `subject_token` (and optionally an `actor_token`) for a
+ * delegated access token whose `sub` is the user and whose `act` claim
+ * identifies the agent. This is an MCP auth *extension* (ext-auth), not core.
+ */
+export const TOKEN_EXCHANGE_GRANT_TYPE = 'urn:ietf:params:oauth:grant-type:token-exchange';
+export const TOKEN_TYPE_ACCESS_TOKEN = 'urn:ietf:params:oauth:token-type:access_token';
+export const TOKEN_TYPE_REFRESH_TOKEN = 'urn:ietf:params:oauth:token-type:refresh_token';
+export const TOKEN_TYPE_JWT = 'urn:ietf:params:oauth:token-type:jwt';
+
+/**
+ * OAuth 2.0 Token Exchange body (POST /oauth/token, RFC 8693 §2.1).
+ *
+ * - `subject_token` / `subject_token_type` (REQUIRED): the token representing
+ *   the party on whose behalf the request is made (the end-user).
+ * - `actor_token` / `actor_token_type` (OPTIONAL): the token representing the
+ *   acting party. `actor_token_type` is REQUIRED when `actor_token` is present
+ *   (enforced in the handler so we can return a structured OAuth error).
+ * - `scope` / `resource` / `audience` (OPTIONAL): requested down-scoping /
+ *   audience targeting. Scope and audience are preserved or NARROWED, never
+ *   widened (handler-enforced).
+ * - `requested_token_type` (OPTIONAL): the desired issued-token type. Only
+ *   `...:access_token` is supported; validated in the handler.
+ *
+ * Token-type *values* are validated in the handler (not the schema) so an
+ * unsupported type surfaces as RFC 6749 §5.2 `invalid_request` rather than a
+ * generic Zod validation error, per RFC 8693 §2.2.2.
+ *
+ * `client_id` / `client_secret` are optional here for the same reason as the
+ * other grants — confidential clients may use `client_secret_basic`; agent
+ * public clients present only `client_id`. The handler authenticates the
+ * client and gates the grant on the agent classification (default-deny).
+ */
+export const tokenExchangeTokenExchangeBodySchema = z.object({
+  grant_type: z.literal(TOKEN_EXCHANGE_GRANT_TYPE),
+  subject_token: z.string().min(1).max(8192),
+  subject_token_type: z.string().min(1).max(256),
+  actor_token: z.string().min(1).max(8192).optional(),
+  actor_token_type: z.string().min(1).max(256).optional(),
+  requested_token_type: z.string().min(1).max(256).optional(),
+  client_id: z.string().min(1).optional(),
+  client_secret: z.string().min(1).optional(),
+  scope: z.string().max(2048).optional(),
+  // RFC 8693 §2.1 `audience` — logical target name(s). Accepted as string or
+  // array; the handler treats it together with `resource` for aud narrowing.
+  audience: z
+    .union([z.string().min(1).max(2048), z.array(z.string().min(1).max(2048)).max(10)])
+    .optional()
+    .transform((v) => (v === undefined ? undefined : Array.isArray(v) ? v : [v])),
+  // RFC 8707 §2: resource indicators; MUST be a subset of the subject token's
+  // audience. Enforced in the handler.
+  resource: resourceParamSchema,
+});
+
+/**
  * Discriminated union of supported token grant bodies.
  */
 export const tokenExchangeBodySchema = z.discriminatedUnion('grant_type', [
   tokenExchangeAuthCodeBodySchema,
   tokenExchangeClientCredsBodySchema,
   tokenExchangeRefreshBodySchema,
+  tokenExchangeTokenExchangeBodySchema,
 ]);
 
 export type TokenExchangeAuthCodeBody = z.infer<typeof tokenExchangeAuthCodeBodySchema>;
 export type TokenExchangeClientCredsBody = z.infer<typeof tokenExchangeClientCredsBodySchema>;
 export type TokenExchangeRefreshBody = z.infer<typeof tokenExchangeRefreshBodySchema>;
+export type TokenExchangeTokenExchangeBody = z.infer<typeof tokenExchangeTokenExchangeBodySchema>;
 export type TokenExchangeBody = z.infer<typeof tokenExchangeBodySchema>;
 
 /**
  * OAuth token response.
  * RFC 6749 5.1. `refresh_token` and `scope` are optional (client_credentials
  * grants MUST NOT include refresh_token per RFC 6749 4.4.3).
+ *
+ * `issued_token_type` (RFC 8693 §2.2.1) is REQUIRED in a token-exchange
+ * response and absent for the other grants; we always emit
+ * `...:access_token` for the delegated token-exchange path.
  */
 export const tokenExchangeResponseSchema = z.object({
   access_token: z.string(),
@@ -132,6 +195,7 @@ export const tokenExchangeResponseSchema = z.object({
   expires_in: z.number(),
   token_type: z.literal('Bearer'),
   scope: z.string().optional(),
+  issued_token_type: z.string().optional(),
 });
 
 export type TokenExchangeResponse = z.infer<typeof tokenExchangeResponseSchema>;

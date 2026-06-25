@@ -1,4 +1,4 @@
-import type { JWTPayload, PublicJwk } from '@qauth-labs/server-jwt';
+import type { ActClaim, JWTPayload, PublicJwk } from '@qauth-labs/server-jwt';
 import type { FastifyPluginOptions } from 'fastify';
 
 /**
@@ -30,10 +30,10 @@ export interface Jwks {
 }
 
 /**
- * JWT payload structure
+ * JWT payload structure and the RFC 8693 `act` (actor) claim shape.
  * Re-exported to avoid apps needing direct dependency on @qauth-labs/server-jwt
  */
-export type { JWTPayload };
+export type { ActClaim, JWTPayload };
 
 /**
  * JWT utilities interface
@@ -47,6 +47,10 @@ export interface JwtUtils {
    * login) pass `email` / `email_verified`. For client_credentials grants
    * omit them and set `sub` to the `clientId`. `scope` is space-separated
    * per RFC 6749. `aud` falls back to `clientId` when undefined.
+   *
+   * For the RFC 8693 token-exchange grant, pass `act` to stamp the acting
+   * agent into the delegated token (`sub` stays the end-user). `act` is
+   * omitted for every non-delegated token.
    */
   signAccessToken(payload: {
     sub: string;
@@ -55,6 +59,7 @@ export interface JwtUtils {
     clientId: string;
     scope?: string;
     aud?: string | string[];
+    act?: ActClaim;
   }): Promise<string>;
   /**
    * Generate a refresh token pair (token and hash)

@@ -69,7 +69,14 @@ export function buildAuthorizationServerMetadata(
     response_types_supported: ['code'],
     // refresh_token is advertised eagerly: a sibling branch is implementing
     // the grant handler. Token endpoint still rejects unsupported grants.
-    grant_types_supported: ['authorization_code', 'client_credentials', 'refresh_token'],
+    // The token-exchange grant (RFC 8693, ADR-007 §2) powers agent
+    // on-behalf-of delegation; only agent clients may use it (handler-gated).
+    grant_types_supported: [
+      'authorization_code',
+      'client_credentials',
+      'refresh_token',
+      'urn:ietf:params:oauth:grant-type:token-exchange',
+    ],
     code_challenge_methods_supported: ['S256'],
     token_endpoint_auth_methods_supported: ['client_secret_basic', 'client_secret_post', 'none'],
     introspection_endpoint_auth_methods_supported: ['client_secret_basic', 'client_secret_post'],

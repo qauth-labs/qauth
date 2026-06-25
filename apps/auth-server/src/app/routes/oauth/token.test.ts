@@ -1,4 +1,5 @@
 import {
+  BadRequestError,
   InvalidClientError,
   InvalidGrantError,
   InvalidScopeError,
@@ -94,6 +95,7 @@ function createFastifyStub() {
     },
     jwtUtils: {
       signAccessToken: vi.fn(),
+      verifyAccessToken: vi.fn(),
       generateRefreshToken: vi.fn(),
       hashRefreshToken: vi.fn().mockImplementation((t: string) => `hash:${t}`),
       getAccessTokenLifespan: vi.fn().mockReturnValue(900),
@@ -1407,5 +1409,261 @@ describe('POST /oauth/token route — refresh_token grant', () => {
     expect(
       fastify.repositories.refreshTokens.findByTokenHashIncludingRevoked
     ).not.toHaveBeenCalled();
+  });
+});
+
+describe('POST /oauth/token route — token-exchange grant (RFC 8693, ADR-007 §2)', () => {
+  const GRANT = 'urn:ietf:params:oauth:grant-type:token-exchange';
+  const ACCESS_TOKEN_TYPE = 'urn:ietf:params:oauth:token-type:access_token';
+
+  /**
+   * Set up a confidential AGENT client (is_agent: true) authorised for the
+   * token-exchange grant, plus a verifiable subject token and an enabled user.
+   */
+  function setupExchangeStub(
+    opts: {
+      isAgent?: boolean;
+      grantTypes?: string[];
+      subjectScope?: string;
+      subjectAud?: string | string[] | undefined;
+      subjectAct?: unknown;
+      userEnabled?: boolean;
+      userFound?: boolean;
+    } = {}
+  ) {
+    const { fastify, ctx } = createFastifyStub();
+
+    const client = {
+      id: 'client-uuid-agent-1',
+      clientId: 'agent-client',
+      clientSecretHash: 'hash',
+      enabled: true,
+      grantTypes: opts.grantTypes ?? [GRANT],
+      scopes: [] as string[],
+      audience: null,
+      isAgent: opts.isAgent ?? true,
+    };
+
+    const user = {
+      id: 'user-uuid-subject',
+      email: 'subject@example.com',
+      emailVerified: true,
+      enabled: opts.userEnabled ?? true,
+    };
+
+    const subjectPayload = {
+      sub: user.id,
+      clientId: 'original-app-client',
+      scope: opts.subjectScope ?? 'read:docs write:docs',
+      aud: opts.subjectAud === undefined ? 'https://api.example.com' : opts.subjectAud,
+      ...(opts.subjectAct ? { act: opts.subjectAct } : {}),
+    };
+
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(client);
+    (fastify.passwordHasher.verifyPassword as unknown as Mock).mockResolvedValue(true);
+    (fastify.jwtUtils.verifyAccessToken as unknown as Mock).mockResolvedValue(subjectPayload);
+    (fastify.repositories.users.findById as unknown as Mock).mockResolvedValue(
+      opts.userFound === false ? null : user
+    );
+    (fastify.jwtUtils.signAccessToken as unknown as Mock).mockResolvedValue('delegated.jwt');
+
+    return { fastify, ctx, client, user, subjectPayload };
+  }
+
+  function exchangeRequest(overrides: Record<string, unknown> = {}) {
+    return {
+      body: {
+        grant_type: GRANT,
+        client_id: 'agent-client',
+        client_secret: 'secret',
+        subject_token: 'subject.jwt.token',
+        subject_token_type: ACCESS_TOKEN_TYPE,
+        ...overrides,
+      },
+      ip: '127.0.0.1',
+      headers: { 'user-agent': 'vitest' },
+    };
+  }
+
+  async function invoke(fastify: FastifyInstance, ctx: TestContext, req: unknown) {
+    await tokenRoute(fastify);
+    const handler = ctx.handler;
+    if (!handler) throw new Error('Handler missing');
+    return handler(req, createReply());
+  }
+
+  it('mints a delegated token: sub=user, act.sub=agent, preserved scope+aud', async () => {
+    const { fastify, ctx, client, user } = setupExchangeStub();
+    const result = await invoke(fastify, ctx, exchangeRequest());
+
+    // sub is the end-user; act identifies the acting agent (RFC 8693 §4.1).
+    expect(fastify.jwtUtils.signAccessToken).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sub: user.id,
+        clientId: client.clientId,
+        scope: 'read:docs write:docs',
+        aud: 'https://api.example.com',
+        act: { sub: 'agent-client' },
+      })
+    );
+    expect(result).toMatchObject({
+      access_token: 'delegated.jwt',
+      issued_token_type: ACCESS_TOKEN_TYPE,
+      token_type: 'Bearer',
+      scope: 'read:docs write:docs',
+    });
+    // RFC 8693: no refresh token issued on delegation.
+    expect(result).not.toHaveProperty('refresh_token');
+  });
+
+  it('nests the prior act chain for chained delegation', async () => {
+    // Subject token already carries an act (a previous agent delegation).
+    const { fastify, ctx } = setupExchangeStub({ subjectAct: { sub: 'prior-agent' } });
+    await invoke(fastify, ctx, exchangeRequest());
+
+    expect(fastify.jwtUtils.signAccessToken).toHaveBeenCalledWith(
+      expect.objectContaining({
+        act: { sub: 'agent-client', act: { sub: 'prior-agent' } },
+      })
+    );
+  });
+
+  it('rejects an over-deep delegation chain (invalid_request)', async () => {
+    // Subject token already carries 4 nested actors; this exchange would make 5,
+    // exceeding MAX_DELEGATION_DEPTH (4) → invalid_request, no token minted.
+    const deepAct = { sub: 'a3', act: { sub: 'a2', act: { sub: 'a1', act: { sub: 'a0' } } } };
+    const { fastify, ctx } = setupExchangeStub({ subjectAct: deepAct });
+    await expect(invoke(fastify, ctx, exchangeRequest())).rejects.toThrow(BadRequestError);
+    expect(fastify.jwtUtils.signAccessToken).not.toHaveBeenCalled();
+  });
+
+  it('narrows scope to a subset of the subject token scope', async () => {
+    const { fastify, ctx } = setupExchangeStub({ subjectScope: 'read:docs write:docs' });
+    await invoke(fastify, ctx, exchangeRequest({ scope: 'read:docs' }));
+
+    expect(fastify.jwtUtils.signAccessToken).toHaveBeenCalledWith(
+      expect.objectContaining({ scope: 'read:docs' })
+    );
+  });
+
+  it('rejects scope widening beyond the subject token (invalid_scope)', async () => {
+    const { fastify, ctx } = setupExchangeStub({ subjectScope: 'read:docs' });
+    await expect(
+      invoke(fastify, ctx, exchangeRequest({ scope: 'read:docs admin:all' }))
+    ).rejects.toThrow(InvalidScopeError);
+    expect(fastify.jwtUtils.signAccessToken).not.toHaveBeenCalled();
+  });
+
+  it('narrows aud to a requested resource within the subject token audience', async () => {
+    const { fastify, ctx } = setupExchangeStub({
+      subjectAud: ['https://api.example.com/v1', 'https://api2.example.com/v1'],
+    });
+    await invoke(fastify, ctx, exchangeRequest({ resource: ['https://api.example.com/v1'] }));
+    expect(fastify.jwtUtils.signAccessToken).toHaveBeenCalledWith(
+      expect.objectContaining({ aud: 'https://api.example.com/v1' })
+    );
+  });
+
+  it('rejects a resource/audience outside the subject token audience (invalid_target)', async () => {
+    const { fastify, ctx } = setupExchangeStub({ subjectAud: 'https://api.example.com/v1' });
+    await expect(
+      invoke(fastify, ctx, exchangeRequest({ resource: ['https://evil.example.com/v1'] }))
+    ).rejects.toThrow(InvalidTargetError);
+    expect(fastify.jwtUtils.signAccessToken).not.toHaveBeenCalled();
+  });
+
+  it('rejects a non-agent client (unauthorized_client, default-deny)', async () => {
+    // Self-asserted is_agent omitted/false → fail-closed rejection (epic #181).
+    const { fastify, ctx } = setupExchangeStub({ isAgent: false });
+    await expect(invoke(fastify, ctx, exchangeRequest())).rejects.toThrow(UnauthorizedClientError);
+    expect(fastify.jwtUtils.verifyAccessToken).not.toHaveBeenCalled();
+    expect(fastify.jwtUtils.signAccessToken).not.toHaveBeenCalled();
+  });
+
+  it('rejects an agent client not allowed the token-exchange grant', async () => {
+    const { fastify, ctx } = setupExchangeStub({ grantTypes: ['authorization_code'] });
+    await expect(invoke(fastify, ctx, exchangeRequest())).rejects.toThrow(UnauthorizedClientError);
+    expect(fastify.jwtUtils.signAccessToken).not.toHaveBeenCalled();
+  });
+
+  it('rejects an unsupported subject_token_type (invalid_request)', async () => {
+    const { fastify, ctx } = setupExchangeStub();
+    await expect(
+      invoke(
+        fastify,
+        ctx,
+        exchangeRequest({ subject_token_type: 'urn:ietf:params:oauth:token-type:saml2' })
+      )
+    ).rejects.toThrow(BadRequestError);
+    expect(fastify.jwtUtils.verifyAccessToken).not.toHaveBeenCalled();
+  });
+
+  it('rejects an unsupported requested_token_type (invalid_request)', async () => {
+    const { fastify, ctx } = setupExchangeStub();
+    await expect(
+      invoke(
+        fastify,
+        ctx,
+        exchangeRequest({ requested_token_type: 'urn:ietf:params:oauth:token-type:refresh_token' })
+      )
+    ).rejects.toThrow(BadRequestError);
+  });
+
+  it('rejects an unverifiable subject_token (invalid_request)', async () => {
+    const { fastify, ctx } = setupExchangeStub();
+    (fastify.jwtUtils.verifyAccessToken as unknown as Mock).mockRejectedValue(
+      new Error('bad signature')
+    );
+    await expect(invoke(fastify, ctx, exchangeRequest())).rejects.toThrow(BadRequestError);
+    expect(fastify.jwtUtils.signAccessToken).not.toHaveBeenCalled();
+  });
+
+  it('rejects when actor_token is present without actor_token_type (invalid_request)', async () => {
+    const { fastify, ctx } = setupExchangeStub();
+    await expect(
+      invoke(fastify, ctx, exchangeRequest({ actor_token: 'actor.jwt' }))
+    ).rejects.toThrow(BadRequestError);
+  });
+
+  it('rejects when the subject user is disabled (invalid_request)', async () => {
+    const { fastify, ctx } = setupExchangeStub({ userEnabled: false });
+    await expect(invoke(fastify, ctx, exchangeRequest())).rejects.toThrow(BadRequestError);
+    expect(fastify.jwtUtils.signAccessToken).not.toHaveBeenCalled();
+  });
+
+  it('accepts and verifies an actor_token, recording the actor subject in audit', async () => {
+    const { fastify, ctx } = setupExchangeStub();
+    // Subject + actor tokens both verify; actor identity in `act` is still the
+    // authenticated agent's client_id, not the actor token's self-declaration.
+    (fastify.jwtUtils.verifyAccessToken as unknown as Mock)
+      .mockResolvedValueOnce({
+        sub: 'user-uuid-subject',
+        clientId: 'original-app-client',
+        scope: 'read:docs',
+        aud: 'https://api.example.com',
+      })
+      .mockResolvedValueOnce({ sub: 'actor-service', clientId: 'actor-service', aud: 'x' });
+
+    await invoke(
+      fastify,
+      ctx,
+      exchangeRequest({ actor_token: 'actor.jwt', actor_token_type: ACCESS_TOKEN_TYPE })
+    );
+
+    expect(fastify.jwtUtils.signAccessToken).toHaveBeenCalledWith(
+      expect.objectContaining({ act: { sub: 'agent-client' } })
+    );
+    expect(fastify.repositories.auditLogs.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: 'oauth.token.exchange.success',
+        success: true,
+        metadata: expect.objectContaining({
+          grantType: 'token-exchange',
+          actor: 'agent-client',
+          hasActorToken: true,
+          actorTokenSubject: 'actor-service',
+        }),
+      })
+    );
   });
 });
