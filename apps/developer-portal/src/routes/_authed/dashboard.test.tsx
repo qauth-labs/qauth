@@ -1,6 +1,14 @@
 import { RouterContextProvider } from '@tanstack/react-router';
 import { renderToString } from 'react-dom/server';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+
+vi.mock('@tanstack/react-router', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@tanstack/react-router')>();
+  return {
+    ...actual,
+    Link: ({ children }: { children: React.ReactNode }) => <span>{children}</span>,
+  };
+});
 
 import { Route } from './dashboard';
 
@@ -42,14 +50,14 @@ describe('DashboardPage component', () => {
     expect(html).toContain('Welcome');
   });
 
-  it('renders the OAuth Clients placeholder card', () => {
+  it('renders the OAuth Clients card with a link to manage clients', () => {
     const html = renderToString(
       <RouterContextProvider router={fakeRouter}>
         <PageComponent />
       </RouterContextProvider>
     );
     expect(html).toContain('OAuth Clients');
-    expect(html).toContain('Coming soon');
+    expect(html).toContain('Manage clients');
   });
 
   it('renders the API Keys placeholder card', () => {
