@@ -532,3 +532,273 @@ describe('GET /oauth/authorize — agent scope-mode cap (ADR-007 §2, #184)', ()
     expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
   });
 });
+
+describe('GET /oauth/authorize — step-up authentication (ADR-007 §2, #185)', () => {
+  // Client whose allowlist includes a dangerous (write:*) scope.
+  const DANGEROUS_CLIENT = {
+    ...CLIENT,
+    clientId: 'app-danger',
+    scopes: ['read:foo', 'write:foo', 'email'],
+  };
+
+  const MINUTE = 60 * 1000;
+
+  async function run(opts: {
+    client?: typeof CLIENT;
+    scope: string;
+    priorConsent?: string[] | null;
+    createdAt: number;
+    prompt?: string;
+    maxAge?: string;
+    sid: string;
+  }) {
+    const client = opts.client ?? DANGEROUS_CLIENT;
+    const { fastify, ctx } = makeFastify();
+    await authorizeRoute(fastify);
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(client);
+    (fastify.jwtUtils.extractFromHeader as unknown as Mock).mockReturnValue(null);
+    (fastify.repositories.oauthConsents.findActive as unknown as Mock).mockResolvedValue(
+      opts.priorConsent === null || opts.priorConsent === undefined
+        ? undefined
+        : { scopes: opts.priorConsent, revokedAt: null }
+    );
+    const { signSessionId } = await import('../../helpers/session-cookie');
+    const signed = signSessionId(opts.sid);
+    (fastify.sessionUtils.getSession as unknown as Mock).mockResolvedValue({
+      userId: 'user-1',
+      email: 'a@b.com',
+      sessionId: opts.sid,
+      createdAt: opts.createdAt,
+    });
+    const clientId = (client as { clientId: string }).clientId;
+    const query: Record<string, unknown> = {
+      ...BASE_QUERY,
+      client_id: clientId,
+      scope: opts.scope,
+    };
+    if (opts.prompt) query.prompt = opts.prompt;
+    if (opts.maxAge) query.max_age = Number(opts.maxAge);
+    const urlParams = new URLSearchParams({
+      response_type: 'code',
+      client_id: clientId,
+      scope: opts.scope,
+      ...(opts.prompt ? { prompt: opts.prompt } : {}),
+      ...(opts.maxAge ? { max_age: opts.maxAge } : {}),
+    });
+    const { reply, state } = createReply();
+    await ctx.handler!(
+      {
+        query,
+        url: `/oauth/authorize?${urlParams.toString()}`,
+        headers: { cookie: `__Host-qauth_session=${signed}` },
+        ip: '127.0.0.1',
+      },
+      reply
+    );
+    return { fastify, state };
+  }
+
+  it('forces a fresh login for a dangerous elevation on a stale session', async () => {
+    const { fastify, state } = await run({
+      scope: 'write:foo',
+      priorConsent: null,
+      createdAt: Date.now() - 10 * MINUTE,
+      sid: 'sid-su-1',
+    });
+    expect(state.redirected).toContain('/ui/login?return_to=');
+    expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
+    const events = (fastify.repositories.auditLogs.create as unknown as Mock).mock.calls.map(
+      (c) => (c[0] as { event: string }).event
+    );
+    expect(events).toContain('oauth.stepup.required');
+  });
+
+  it('sends a non-dangerous elevation to the consent screen (incremental consent), not silently widened', async () => {
+    // Prior consent covers read:foo; the request adds write:foo? No — use a
+    // non-dangerous widening: prior covers email, request adds read:foo.
+    const { fastify, state } = await run({
+      client: CLIENT,
+      scope: 'read:foo email',
+      priorConsent: ['email'],
+      createdAt: Date.now() - 10 * MINUTE,
+      sid: 'sid-su-2',
+    });
+    // read:foo is a NEW (elevated) scope → must re-consent, not skip.
+    expect(state.redirected).toContain('/ui/consent?');
+    expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
+  });
+
+  it('skips step-up when the request is fully within the prior grant and not dangerous', async () => {
+    const { fastify, state } = await run({
+      client: CLIENT,
+      scope: 'email',
+      priorConsent: ['email', 'read:foo'],
+      createdAt: Date.now() - 10 * MINUTE,
+      sid: 'sid-su-3',
+    });
+    // No elevation, no danger, no prompt → code issued directly.
+    expect(fastify.repositories.authorizationCodes.create).toHaveBeenCalledOnce();
+    expect(state.redirected).toContain('code=');
+  });
+
+  it('does NOT loop: a dangerous elevation on a FRESH session proceeds to consent', async () => {
+    const { fastify, state } = await run({
+      scope: 'write:foo',
+      priorConsent: null,
+      createdAt: Date.now() - 5000, // fresh
+      sid: 'sid-su-4',
+    });
+    // Fresh auth satisfies the login requirement; the elevation still needs
+    // consent (no prior grant), so we land on the consent screen — not login.
+    expect(state.redirected).toContain('/ui/consent?');
+    expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
+  });
+
+  it('prompt=login forces fresh auth even for a covered, non-dangerous scope', async () => {
+    const { fastify, state } = await run({
+      client: CLIENT,
+      scope: 'email',
+      priorConsent: ['email'],
+      createdAt: Date.now() - 10 * MINUTE,
+      prompt: 'login',
+      sid: 'sid-su-5',
+    });
+    expect(state.redirected).toContain('/ui/login?return_to=');
+    expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
+  });
+
+  it('max_age=0 forces fresh auth when the session is a second or more old', async () => {
+    const { fastify, state } = await run({
+      client: CLIENT,
+      scope: 'email',
+      priorConsent: ['email'],
+      createdAt: Date.now() - 5000, // 5s old → floor(5) = 5 > 0
+      maxAge: '0',
+      sid: 'sid-su-6',
+    });
+    expect(state.redirected).toContain('/ui/login?return_to=');
+    expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
+  });
+
+  // BLOCKER #1 regression: the authorize → login → authorize round-trip for
+  // max_age=0 MUST terminate. After login re-mints the session, the second
+  // authorize sees a sub-second-old auth_time; with OIDC second-granularity
+  // (floor), max_age=0 is satisfied (0 > 0 is false) and a code is minted
+  // rather than bouncing to /ui/login again forever.
+  it('max_age=0 TERMINATES: a just-logged-in (sub-second) session mints the code', async () => {
+    const { fastify, state } = await run({
+      client: CLIENT,
+      scope: 'email',
+      priorConsent: ['email'],
+      createdAt: Date.now() - 40, // 40ms old, simulating the post-login return trip
+      maxAge: '0',
+      sid: 'sid-su-6b',
+    });
+    expect(state.redirected).not.toContain('/ui/login');
+    expect(state.redirected).toContain('code=');
+    expect(fastify.repositories.authorizationCodes.create).toHaveBeenCalledOnce();
+  });
+
+  // Should-fix #2: a dangerous scope already covered by a remembered prior
+  // consent must STILL force fresh auth on the authorize skip-consent path — it
+  // cannot be replayed off a stale grant. (Previously this minted directly.)
+  it('forces fresh auth for a REMEMBERED dangerous scope on a stale session (no replay)', async () => {
+    const { fastify, state } = await run({
+      scope: 'write:foo',
+      priorConsent: ['write:foo'], // remembered → would otherwise skip consent
+      createdAt: Date.now() - 10 * MINUTE,
+      sid: 'sid-su-7',
+    });
+    expect(state.redirected).toContain('/ui/login?return_to=');
+    expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
+  });
+
+  // OIDC Core §3.1.2.1: prompt=none must NOT show UI; an interaction need is
+  // reported as the matching error to the client instead.
+  it('prompt=none returns login_required (no UI) when a dangerous scope needs fresh auth', async () => {
+    const { fastify, state } = await run({
+      scope: 'write:foo',
+      priorConsent: ['write:foo'],
+      createdAt: Date.now() - 10 * MINUTE,
+      prompt: 'none',
+      sid: 'sid-su-8',
+    });
+    expect(state.redirected).toContain('https://example.com/cb');
+    expect(state.redirected).toContain('error=login_required');
+    expect(state.redirected).not.toContain('/ui/login');
+    expect(state.redirected).not.toContain('/ui/consent');
+    expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
+  });
+
+  it('prompt=none returns consent_required (no UI) for a non-dangerous elevation', async () => {
+    const { fastify, state } = await run({
+      client: CLIENT,
+      scope: 'read:foo email',
+      priorConsent: ['email'], // read:foo is a new, non-dangerous elevation
+      createdAt: Date.now() - 1000,
+      prompt: 'none',
+      sid: 'sid-su-9',
+    });
+    expect(state.redirected).toContain('error=consent_required');
+    expect(state.redirected).not.toContain('/ui/consent');
+    expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
+  });
+
+  it('prompt=none proceeds (mints a code) when no interaction is required', async () => {
+    const { fastify, state } = await run({
+      client: CLIENT,
+      scope: 'email',
+      priorConsent: ['email'],
+      createdAt: Date.now() - 1000,
+      prompt: 'none',
+      sid: 'sid-su-10',
+    });
+    expect(state.redirected).toContain('code=');
+    expect(fastify.repositories.authorizationCodes.create).toHaveBeenCalledOnce();
+  });
+});
+
+describe('GET /oauth/authorize — Bearer path step-up (ADR-007 §2, #185)', () => {
+  // The Bearer (legacy first-party) path cannot run interactive step-up, so a
+  // dangerous scope on it is refused rather than minted with no fresh auth.
+  const DANGEROUS_CLIENT = {
+    ...CLIENT,
+    clientId: 'app-bearer',
+    scopes: ['read:foo', 'write:foo', 'email'],
+  };
+
+  async function runBearer(scope: string) {
+    const { fastify, ctx } = makeFastify();
+    await authorizeRoute(fastify);
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(
+      DANGEROUS_CLIENT
+    );
+    // No browser session; a valid Bearer token resolves the user.
+    (fastify.sessionUtils.getSession as unknown as Mock).mockResolvedValue(null);
+    (fastify.jwtUtils.extractFromHeader as unknown as Mock).mockReturnValue('bearer.token');
+    (fastify.jwtUtils.verifyAccessToken as unknown as Mock).mockResolvedValue({ sub: 'user-1' });
+    const { reply, state } = createReply();
+    await ctx.handler!(
+      {
+        query: { ...BASE_QUERY, client_id: 'app-bearer', scope },
+        url: `/oauth/authorize?response_type=code&client_id=app-bearer&scope=${encodeURIComponent(scope)}`,
+        headers: { authorization: 'Bearer bearer.token' },
+        ip: '127.0.0.1',
+      },
+      reply
+    );
+    return { fastify, state };
+  }
+
+  it('refuses a dangerous scope on the Bearer path with access_denied (no interactive step-up)', async () => {
+    const { fastify, state } = await runBearer('write:foo');
+    expect(state.redirected).toContain('error=access_denied');
+    expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
+  });
+
+  it('still mints a code for a non-dangerous scope on the Bearer path', async () => {
+    const { fastify, state } = await runBearer('email');
+    expect(state.redirected).toContain('code=');
+    expect(fastify.repositories.authorizationCodes.create).toHaveBeenCalledOnce();
+  });
+});

@@ -6,7 +6,7 @@ import { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 
 import { env } from '../../../config/env';
-import { AUTHORIZATION_CODE_TTL_MS } from '../../constants';
+import { AUTHORIZATION_CODE_TTL_MS, STEP_UP_FRESH_AUTH_WINDOW_MS } from '../../constants';
 import { resolveBrowserSession } from '../../helpers/browser-session';
 import { findExceedingAgentScopesForClient } from '../../helpers/client-auth';
 import { resolveClient } from '../../helpers/client-resolution';
@@ -26,6 +26,7 @@ import {
   csrfTokensEqual,
   generateCsrfToken,
 } from '../../helpers/session-cookie';
+import { evaluateStepUp, isDangerousScope, parsePromptMode } from '../../helpers/step-up';
 import { authorizeQuerySchema, resourceParamSchema } from '../../schemas/oauth';
 
 /**
@@ -68,6 +69,12 @@ const consentFormSchema = z.object({
   code_challenge: z.string().min(43).max(128),
   code_challenge_method: z.literal('S256'),
   response_type: z.literal('code'),
+  // ADR-007 §2 (#185): step-up params carried through so the POST mint path
+  // re-evaluates them server-side (the hidden `scope` field is
+  // attacker-controlled, so the dangerous-elevation re-auth gate must run HERE
+  // too, not only pre-consent). Empty string ⇒ treated as absent.
+  prompt: z.enum(['none', 'login', 'consent']).optional(),
+  max_age: z.coerce.number().int().min(0).max(315360000).optional(),
   // RFC 8707: carried through as hidden form field(s). POST body transforms
   // work (unlike GET querystrings), so `resourceParamSchema` populates an
   // array on `body.resource`.
@@ -76,7 +83,7 @@ const consentFormSchema = z.object({
 
 type ConsentForm = z.infer<typeof consentFormSchema>;
 
-function buildAuthorizeUrl(query: Record<string, string | string[] | undefined>): string {
+function buildAuthorizeUrl(query: Record<string, string | string[] | number | undefined>): string {
   const u = new URL('/oauth/authorize', 'http://placeholder');
   for (const [k, v] of Object.entries(query)) {
     if (v == null) continue;
@@ -86,8 +93,11 @@ function buildAuthorizeUrl(query: Record<string, string | string[] | undefined>)
       for (const entry of v) {
         if (entry !== '') u.searchParams.append(k, entry);
       }
-    } else if (v !== '') {
-      u.searchParams.set(k, v);
+    } else {
+      // `max_age` arrives as a number from the parsed query; stringify before
+      // appending. Empty strings are dropped to keep the URL clean.
+      const s = String(v);
+      if (s !== '') u.searchParams.set(k, s);
     }
   }
   // Return only the path + query portion; login's return_to rejects absolute.
@@ -394,6 +404,10 @@ export default async function (fastify: FastifyInstance) {
             code_challenge: query.code_challenge,
             code_challenge_method: query.code_challenge_method,
             response_type: query.response_type,
+            // ADR-007 §2 (#185): preserve the step-up params so the POST mint
+            // path re-evaluates them server-side.
+            prompt: query.prompt,
+            max_age: query.max_age !== undefined ? String(query.max_age) : undefined,
           },
           // RFC 8707: parsed directly from request.url (see
           // parseResourceFromUrl). Rendered as one hidden <input
@@ -448,6 +462,10 @@ export default async function (fastify: FastifyInstance) {
           code_challenge: body.code_challenge,
           code_challenge_method: body.code_challenge_method,
           response_type: body.response_type,
+          // ADR-007 §2 (#185): carry the step-up params back so /oauth/authorize
+          // re-applies them after the login round-trip.
+          prompt: body.prompt,
+          max_age: body.max_age !== undefined ? String(body.max_age) : undefined,
         });
         return reply.redirect(`/ui/login?return_to=${encodeURIComponent(returnTo)}`, 302);
       }
@@ -543,10 +561,69 @@ export default async function (fastify: FastifyInstance) {
         );
       }
 
+      const scopes = filterRequestedScopes(body.scope, client);
+
+      // ADR-007 §2 (#185): step-up gate on the mint path. Re-authentication is
+      // enforced HERE, not only pre-consent, because the hidden `scope`/`prompt`/
+      // `max_age` fields are attacker-controllable and the CSRF token binds the
+      // session, not the scope. A dangerous scope (write:* / agent:admin /
+      // agent:exec), `prompt=login`, or an exceeded `max_age` must be backed by
+      // a fresh authentication: if the session is stale we refuse to mint the
+      // code and bounce through /ui/login (which re-mints the session,
+      // resetting auth_time). Prior consent is intentionally NOT consulted here
+      // — every scope about to be minted is treated as needing the gate, so the
+      // dangerous-op re-auth cannot be skipped by a stale prior grant.
+      // Only `requiresFreshLogin` is consulted on this mint path: the user is
+      // actively consenting (this IS the consent screen submit), so
+      // `requiresConsent` — always true here given `priorConsentScopes: []` —
+      // is irrelevant. We just need to confirm the authentication is fresh
+      // enough for whatever (incl. dangerous) scopes are about to be granted.
+      const prompt = parsePromptMode(body.prompt);
+      const stepUp = evaluateStepUp({
+        requestedScopes: scopes,
+        priorConsentScopes: [],
+        prompt,
+        maxAgeSeconds: body.max_age ?? null,
+        authTimeMs: session.createdAt,
+        nowMs: Date.now(),
+        freshAuthWindowMs: STEP_UP_FRESH_AUTH_WINDOW_MS,
+      });
+      if (stepUp.requiresFreshLogin) {
+        await fastify.repositories.auditLogs.create({
+          userId: session.userId,
+          oauthClientId: client.id,
+          event: 'oauth.stepup.required',
+          eventType: 'auth',
+          success: false,
+          ipAddress: request.ip,
+          userAgent: request.headers['user-agent'] || null,
+          metadata: {
+            client_id: body.client_id,
+            reason: 'fresh_authentication_required',
+            dangerous: stepUp.dangerous,
+            prompt: prompt ?? null,
+            maxAge: body.max_age ?? null,
+          },
+        });
+        const returnTo = buildAuthorizeUrl({
+          client_id: body.client_id,
+          redirect_uri: body.redirect_uri,
+          state: body.state,
+          scope: body.scope,
+          nonce: body.nonce,
+          code_challenge: body.code_challenge,
+          code_challenge_method: body.code_challenge_method,
+          response_type: body.response_type,
+          prompt: body.prompt,
+          max_age: body.max_age !== undefined ? String(body.max_age) : undefined,
+          resource: body.resource,
+        });
+        return reply.redirect(`/ui/login?return_to=${encodeURIComponent(returnTo)}`, 302);
+      }
+
       // Allow: persist the grant if the user checked the box, then issue a
       // code. The grant upsert merges with any prior record so subsequent
       // requests with a subset of these scopes skip the screen.
-      const scopes = filterRequestedScopes(body.scope, client);
       if (body.allow_forever === '1') {
         await fastify.repositories.oauthConsents.upsertGrant(
           session.userId,
@@ -586,6 +663,29 @@ export default async function (fastify: FastifyInstance) {
       }
       if (!code) throw new Error('Unreachable');
 
+      // ADR-007 §2 (#185): every elevation that grants a dangerous scope is
+      // audited as a distinct step-up event (in addition to the normal
+      // consent.granted record), with the fresh `auth_time` so an operator can
+      // see the dangerous grant was minted right after a re-authentication.
+      const dangerousGranted = scopes.filter(isDangerousScope);
+      if (dangerousGranted.length > 0) {
+        await fastify.repositories.auditLogs.create({
+          userId: session.userId,
+          oauthClientId: client.id,
+          event: 'oauth.stepup.elevation',
+          eventType: 'auth',
+          success: true,
+          ipAddress: request.ip,
+          userAgent: request.headers['user-agent'] || null,
+          metadata: {
+            client_id: body.client_id,
+            dangerousScopes: dangerousGranted,
+            scopes,
+            authTime: session.createdAt,
+          },
+        });
+      }
+
       await fastify.repositories.auditLogs.create({
         userId: session.userId,
         oauthClientId: client.id,
@@ -598,6 +698,7 @@ export default async function (fastify: FastifyInstance) {
           client_id: body.client_id,
           scopes,
           remembered: body.allow_forever === '1',
+          dangerousScopes: dangerousGranted,
         },
       });
 
