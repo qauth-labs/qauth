@@ -5,6 +5,8 @@ servers and AI agents** (see [ADR-007](./adr/007-mcp-first-positioning.md)). Thi
 is the entry point to the guides; the canonical, always-current API surface is the
 interactive **Swagger UI at `/docs`** on any running instance.
 
+> 🎉 **June 2026 — MVP complete and the agent-native authorization layer shipped** (agent client type, RFC 8693 on-behalf-of delegation, scope modes, step-up, per-agent audit). Start with the [agent-authorization guide](./agent-authorization.md).
+
 ## Getting started
 
 | Guide                                     | What it covers                                                                                                                                                                      |
