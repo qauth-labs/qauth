@@ -118,6 +118,20 @@ export interface StepUpInput {
    * separately and exactly — it is NOT widened by this window.
    */
   freshAuthWindowMs: number;
+  /**
+   * Whether the AUTOMATIC dangerous-scope step-up is enforced (ADR-008 §5,
+   * #197 — the `agentStepUpEnforced` profile knob). True for `staging` /
+   * `production` (and the safe default when omitted); false ONLY for a
+   * `development`-profile client, where the server-driven "dangerous scope ⇒
+   * fresh login" rule is relaxed for local convenience.
+   *
+   * This relaxes ONLY the server's own dangerous-scope inference. The EXPLICIT
+   * client step-up requests — `prompt=login` and `max_age` — are honoured in
+   * EVERY environment (a relying party that asks for fresh auth always gets the
+   * gate), so an MCP resource server can still force step-up in development.
+   * Defaults to `true` so existing two-call sites keep the strict behaviour.
+   */
+  enforceDangerousStepUp?: boolean;
 }
 
 /** The step-up decision. */
@@ -189,11 +203,19 @@ export function evaluateStepUp(input: StepUpInput): StepUpDecision {
 
   const authAgeMs = input.nowMs - input.authTimeMs;
 
+  // ADR-008 §5 (#197): the AUTOMATIC dangerous-scope step-up is gated by the
+  // environment profile (`agentStepUpEnforced`). It is enforced for staging /
+  // production and when the flag is omitted (strict default); a `development`
+  // client relaxes ONLY this server-inferred rule. The EXPLICIT client requests
+  // (`prompt=login`, `max_age`) are always honoured regardless of environment.
+  const enforceDangerousStepUp = input.enforceDangerousStepUp ?? true;
+  const dangerousForcesLogin = enforceDangerousStepUp && dangerous.length > 0;
+
   // `prompt=login` and dangerous scopes demand a *fresh* authentication, but
   // one performed within the freshness window counts — otherwise the post-login
   // return trip would re-trigger the same requirement and loop.
   const authIsFresh = authAgeMs <= input.freshAuthWindowMs;
-  const loginRequirement = (dangerous.length > 0 || input.prompt === 'login') && !authIsFresh;
+  const loginRequirement = (dangerousForcesLogin || input.prompt === 'login') && !authIsFresh;
 
   // `max_age` is enforced exactly against the request value (not widened by the
   // freshness window) BUT at OIDC second-granularity: floor the age to whole

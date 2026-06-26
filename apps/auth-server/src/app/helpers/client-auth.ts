@@ -48,6 +48,15 @@ export type OAuthClientLike = {
    * criterion that, together with `isAgent`, gates agent-mode scopes.
    */
   maxAgentMode?: AgentMode | null;
+  /**
+   * ADR-008 §2 (#196/#197) the client's declared environment / policy profile.
+   * Optional + may arrive as a raw string from the DB column; the policy
+   * resolver fails safe to `production` for any absent / unknown value, so an
+   * older caller that omits it is treated as production (the hardened default).
+   * Consumed via `resolveEnvironmentPolicy(client, realm)` at the token-issuance
+   * checkpoint — never re-derived inline. OPERATOR-SET, never self-asserted.
+   */
+  environment?: string | null;
 };
 
 /**

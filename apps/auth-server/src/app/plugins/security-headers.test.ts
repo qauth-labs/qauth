@@ -16,7 +16,7 @@ vi.mock('../../config/env', () => ({
   },
 }));
 
-import { securityHeadersPlugin } from './security-headers';
+import { markRelaxedCsp, securityHeadersPlugin } from './security-headers';
 
 async function buildApp(): Promise<FastifyInstance> {
   const app = Fastify();
@@ -24,6 +24,13 @@ async function buildApp(): Promise<FastifyInstance> {
   app.get('/page', async (_req, reply) => {
     reply.header('content-type', 'text/html');
     return `<style nonce="${reply.cspNonce.style}">body{}</style>`;
+  });
+  // ADR-008 §5 (#197): stand-in for a development-profile consent screen that
+  // requests the relaxed CSP via markRelaxedCsp.
+  app.get('/dev-consent', async (_req, reply) => {
+    markRelaxedCsp(reply);
+    reply.header('content-type', 'text/html');
+    return '<style>body{}</style>';
   });
   // Stand-in for Swagger UI's served HTML at the /docs prefix.
   app.get('/docs', async (_req, reply) => {
@@ -111,6 +118,24 @@ describe('security-headers plugin (#113)', () => {
     // Non-/docs routes keep the strict policy (no unsafe-inline).
     const page = await app.inject({ method: 'GET', url: '/page' });
     expect(page.headers['content-security-policy']).not.toContain("'unsafe-inline'");
+  });
+
+  it('serves the relaxed development CSP when a route marks the reply (ADR-008 §5, #197)', async () => {
+    const res = await app.inject({ method: 'GET', url: '/dev-consent' });
+    const csp = res.headers['content-security-policy'] as string;
+    // Inline styles permitted without a nonce for the development consent screen.
+    expect(csp).toContain("style-src 'self' 'unsafe-inline'");
+    // Scripts stay strict — the dev relaxation never loosens script-src.
+    expect(csp).toContain("script-src 'self'");
+    expect(csp).not.toMatch(/script-src [^;]*'unsafe-inline'/);
+    // No nonce policy leaks onto the relaxed response.
+    expect(csp).not.toContain("'nonce-");
+
+    // An UNMARKED route still gets the strict nonce-based policy — relaxation is
+    // opt-in per reply and never bleeds across requests (default-to-strict).
+    const strict = await app.inject({ method: 'GET', url: '/page' });
+    expect(strict.headers['content-security-policy']).not.toContain("'unsafe-inline'");
+    expect(strict.headers['content-security-policy']).toMatch(/style-src [^;]*'nonce-/);
   });
 });
 

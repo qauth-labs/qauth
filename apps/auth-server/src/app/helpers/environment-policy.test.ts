@@ -5,7 +5,9 @@ import {
   ENVIRONMENT_PROFILES,
   ENVIRONMENTS,
   parseEnvironment,
+  resolveAccessTokenLifespanSeconds,
   resolveEnvironmentPolicy,
+  resolveRateLimitMax,
   stricterEnvironment,
 } from './environment-policy';
 
@@ -178,5 +180,131 @@ describe('environment-policy — resolveEnvironmentPolicy (effective profile)', 
         expect(policy).toBe(ENVIRONMENT_PROFILES[expected]);
       }
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Tier → concrete-value mappers (ADR-008 §5, #197). These are the single place
+// a tier label is turned into a number; checkpoints call them rather than
+// re-deriving `dev ? x : y`.
+// ---------------------------------------------------------------------------
+
+describe('environment-policy — resolveAccessTokenLifespanSeconds (#197)', () => {
+  const config = { shortSeconds: 900, longSeconds: 28800 };
+
+  it('maps the short tier (staging/production) to the baseline lifespan', () => {
+    expect(resolveAccessTokenLifespanSeconds('short', config)).toBe(900);
+  });
+
+  it('maps the long tier (development) to the dev-convenience lifespan', () => {
+    expect(resolveAccessTokenLifespanSeconds('long', config)).toBe(28800);
+  });
+
+  it('a production-effective policy always resolves the short baseline', () => {
+    const policy = resolveEnvironmentPolicy(
+      { environment: 'development' },
+      { maxEnvironmentLaxity: 'production' }
+    );
+    expect(resolveAccessTokenLifespanSeconds(policy.accessTokenLifespanTier, config)).toBe(900);
+  });
+
+  it('only a development-effective policy gets the longer lifespan', () => {
+    const dev = resolveEnvironmentPolicy(
+      { environment: 'development' },
+      { maxEnvironmentLaxity: 'development' }
+    );
+    const staging = resolveEnvironmentPolicy(
+      { environment: 'staging' },
+      { maxEnvironmentLaxity: 'staging' }
+    );
+    expect(resolveAccessTokenLifespanSeconds(dev.accessTokenLifespanTier, config)).toBe(28800);
+    expect(resolveAccessTokenLifespanSeconds(staging.accessTokenLifespanTier, config)).toBe(900);
+  });
+});
+
+describe('environment-policy — resolveRateLimitMax (#197)', () => {
+  const config = { lenientMax: 600, strictMax: 60 };
+
+  it('maps the strict tier (production) to the tight cap', () => {
+    expect(resolveRateLimitMax('strict', config)).toBe(60);
+  });
+
+  it('maps the lenient tier (development/staging) to the relaxed cap', () => {
+    expect(resolveRateLimitMax('lenient', config)).toBe(600);
+  });
+
+  it('a production realm forces the strict cap even for a development client', () => {
+    const policy = resolveEnvironmentPolicy(
+      { environment: 'development' },
+      { maxEnvironmentLaxity: 'production' }
+    );
+    expect(resolveRateLimitMax(policy.rateLimitTier, config)).toBe(60);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// HARD FLOORS (ADR-008 §5, #197): the resolver must NEVER relax these, in any
+// environment. The profile carries no field that could turn them off; this test
+// pins that contract so a future profile-table edit cannot smuggle one in.
+// ---------------------------------------------------------------------------
+
+describe('environment-policy — hard floors never relax (#197)', () => {
+  it('development relaxes ONLY the ADR-sanctioned knobs; no security floor is exposed', () => {
+    const dev = ENVIRONMENT_PROFILES.development;
+
+    // The exhaustive set of fields the profile is ALLOWED to carry. If a new
+    // field is added it must be listed here deliberately — a floor (hashed
+    // secrets, audience binding, signature/issuer validation, confidential-only
+    // grants) must NEVER become a profile knob, so it must never appear.
+    expect(Object.keys(dev).sort()).toEqual(
+      [
+        'accessTokenLifespanTier',
+        'agentStepUpEnforced',
+        'environment',
+        'localhostRedirectAllowed',
+        'openDynamicRegistration',
+        'pkceRequired',
+        'rateLimitTier',
+        'refreshRotationRequired',
+        'staticApiKeysAllowed',
+        't3SecurityEnforced',
+      ].sort()
+    );
+
+    // No floor-shaped key exists on ANY profile (a resolver can't disable them).
+    for (const env of ENVIRONMENTS) {
+      const keys = Object.keys(ENVIRONMENT_PROFILES[env]);
+      for (const forbidden of [
+        'hashClientSecret',
+        'audienceBindingEnforced',
+        'verifyTokenSignature',
+        'verifyIssuer',
+        'allowPublicConfidentialGrants',
+      ]) {
+        expect(keys).not.toContain(forbidden);
+      }
+    }
+  });
+
+  it('the difference between development and production is EXACTLY the sanctioned knobs', () => {
+    const dev = ENVIRONMENT_PROFILES.development;
+    const prod = ENVIRONMENT_PROFILES.production;
+    const differing = (Object.keys(prod) as (keyof typeof prod)[]).filter(
+      (k) => k !== 'environment' && dev[k] !== prod[k]
+    );
+    // Every relaxation development makes is one of these eight ADR-008 §5 rows.
+    expect(differing.sort()).toEqual(
+      [
+        'accessTokenLifespanTier',
+        'agentStepUpEnforced',
+        'localhostRedirectAllowed',
+        'openDynamicRegistration',
+        'pkceRequired',
+        'rateLimitTier',
+        'refreshRotationRequired',
+        'staticApiKeysAllowed',
+        't3SecurityEnforced',
+      ].sort()
+    );
   });
 });

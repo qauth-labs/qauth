@@ -28,6 +28,11 @@ import {
   validateScopes,
 } from '../../helpers/client-auth';
 import { isAgentClient } from '../../helpers/client-resolution';
+import {
+  type EnvironmentPolicy,
+  resolveAccessTokenLifespanSeconds,
+  resolveEnvironmentPolicy,
+} from '../../helpers/environment-policy';
 import { getOrCreateDefaultRealm } from '../../helpers/realm';
 import { highestAgentModeInScopes } from '../../helpers/scope-modes';
 import { ensureMinimumResponseTime } from '../../helpers/timing';
@@ -140,6 +145,14 @@ export default async function (fastify: FastifyInstance) {
         // RFC 6749 §5.1: token responses MUST NOT be cached by intermediaries.
         reply.header('Cache-Control', 'no-store').header('Pragma', 'no-cache');
 
+        // ADR-008 §5/§7 (#197): resolve the effective environment policy ONCE,
+        // here, where both the authenticated client and its realm are in scope.
+        // The grant handlers consult this `policy` (token TTL tier, PKCE
+        // requirement, refresh rotation) instead of re-deriving rules — the
+        // single-resolver pattern from ADR-008 §7. Fail-safe: an unset client
+        // or realm resolves to the `production` profile (hardened default).
+        const policy = resolveEnvironmentPolicy(client, realm);
+
         // Route by grant type.
         if (body.grant_type === 'authorization_code') {
           const responseBody = await handleAuthorizationCode({
@@ -147,6 +160,7 @@ export default async function (fastify: FastifyInstance) {
             request: request as FastifyRequest,
             client,
             body,
+            policy,
           });
           return reply.send(responseBody);
         }
@@ -157,6 +171,7 @@ export default async function (fastify: FastifyInstance) {
             request: request as FastifyRequest,
             client,
             body,
+            policy,
           });
           return reply.send(responseBody);
         }
@@ -167,6 +182,7 @@ export default async function (fastify: FastifyInstance) {
             request: request as FastifyRequest,
             client,
             body,
+            policy,
           });
           return reply.send(responseBody);
         }
@@ -177,6 +193,7 @@ export default async function (fastify: FastifyInstance) {
             request: request as FastifyRequest,
             client,
             body,
+            policy,
           });
           return reply.send(responseBody);
         }
@@ -223,7 +240,31 @@ type HandlerContext<TBody> = {
   request: FastifyRequest;
   client: OAuthClientLike;
   body: TBody;
+  /**
+   * The resolved environment policy for this (client, realm) (ADR-008 §7,
+   * #197). Carries the access-token lifespan tier, PKCE requirement, and
+   * refresh-rotation requirement the handler enforces. Always present — the
+   * dispatch resolves it fail-safe to `production` before calling any handler.
+   */
+  policy: EnvironmentPolicy;
 };
+
+/**
+ * Map the policy's access-token lifespan TIER to a concrete number of seconds,
+ * in ONE place (ADR-008 §5, #197). The concrete numbers stay in config: the
+ * `short` tier (staging/production) is `ACCESS_TOKEN_LIFESPAN`, the `long` tier
+ * (development) is `DEV_ACCESS_TOKEN_LIFESPAN`. `getAccessTokenLifespan()`
+ * remains the source of truth for the strict baseline; the dev relaxation only
+ * lengthens it for a `development`-profile token. Callers pass the returned
+ * value as `signAccessToken({ expiresInOverride })` AND as the response
+ * `expires_in` so the advertised lifetime matches the signed `exp`.
+ */
+function accessTokenLifespanForPolicy(fastify: FastifyInstance, policy: EnvironmentPolicy): number {
+  return resolveAccessTokenLifespanSeconds(policy.accessTokenLifespanTier, {
+    shortSeconds: fastify.jwtUtils.getAccessTokenLifespan(),
+    longSeconds: env.DEV_ACCESS_TOKEN_LIFESPAN,
+  });
+}
 
 /**
  * Handle the authorization_code grant (legacy flow from Phase 1).
@@ -232,7 +273,7 @@ type HandlerContext<TBody> = {
 async function handleAuthorizationCode(
   ctx: HandlerContext<TokenExchangeAuthCodeBody>
 ): Promise<TokenExchangeResponse> {
-  const { fastify, request, client, body } = ctx;
+  const { fastify, request, client, body, policy } = ctx;
 
   if (!client.grantTypes.includes('authorization_code')) {
     await fastify.repositories.auditLogs.create({
@@ -293,10 +334,60 @@ async function handleAuthorizationCode(
     throw new InvalidGrantError('Invalid or expired authorization code');
   }
 
-  const pkceValid = fastify.pkceUtils.verifyCodeChallenge(
-    body.code_verifier,
-    authCode.codeChallenge
-  );
+  // PKCE enforcement (RFC 7636, OAuth 2.1 §4.1.3) under the environment policy
+  // (ADR-008 §5, #197). The strict baseline — `production`/`staging`, and the
+  // OAuth 2.1 default — REQUIRES a bound S256 challenge; `development` only
+  // RECOMMENDS it. Two distinct cases:
+  //
+  //   1. No challenge bound to the code. Today the authorize endpoint always
+  //      binds one (the schema mandates `code_challenge`), so this is a defence-
+  //      in-depth guard for any future dev-only flow that mints a code without
+  //      PKCE: when `policy.pkceRequired` it is rejected; in `development` it is
+  //      allowed (with a warning) since PKCE is merely recommended there.
+  //   2. PKCE DOWNGRADE (RFC 9700 §2.1.1 / §4.5): a `code_verifier` presented
+  //      against a code that carries NO challenge must NEVER be silently
+  //      accepted — that is the downgrade attack. This is a HARD FLOOR enforced
+  //      in EVERY environment (including `development`): a verifier with no
+  //      bound challenge is always `invalid_grant`.
+  const hasBoundChallenge = authCode.codeChallenge.length > 0;
+  if (!hasBoundChallenge) {
+    // Downgrade defence first — a verifier with no bound challenge is rejected
+    // regardless of environment (the resolver can never relax this floor).
+    if (body.code_verifier.length > 0) {
+      await fastify.repositories.auditLogs.create({
+        userId: authCode.userId,
+        oauthClientId: client.id,
+        event: 'oauth.token.exchange.failure',
+        eventType: 'security',
+        success: false,
+        ipAddress: request.ip,
+        userAgent: request.headers['user-agent'] || null,
+        metadata: { error: 'pkce_downgrade: code_verifier presented without a bound challenge' },
+      });
+      throw new InvalidGrantError('Invalid or expired authorization code');
+    }
+    if (policy.pkceRequired) {
+      await fastify.repositories.auditLogs.create({
+        userId: authCode.userId,
+        oauthClientId: client.id,
+        event: 'oauth.token.exchange.failure',
+        eventType: 'token',
+        success: false,
+        ipAddress: request.ip,
+        userAgent: request.headers['user-agent'] || null,
+        metadata: { error: 'invalid_grant: PKCE is required for this environment' },
+      });
+      throw new InvalidGrantError('Invalid or expired authorization code');
+    }
+    fastify.log.warn(
+      { clientId: client.clientId, environment: policy.environment },
+      'authorization_code exchanged without PKCE (recommended in development, required otherwise)'
+    );
+  }
+
+  const pkceValid =
+    !hasBoundChallenge ||
+    fastify.pkceUtils.verifyCodeChallenge(body.code_verifier, authCode.codeChallenge);
   if (!pkceValid) {
     await fastify.repositories.auditLogs.create({
       userId: null,
@@ -356,6 +447,12 @@ async function handleAuthorizationCode(
 
   const scopeString = authCode.scopes.length > 0 ? authCode.scopes.join(' ') : undefined;
 
+  // Access-token lifespan under the environment policy (ADR-008 §5, #197):
+  // `short` (staging/production baseline) vs `long` (development convenience),
+  // mapped to concrete seconds in one place. Passed both as the signed `exp`
+  // override and the response `expires_in` so they always agree.
+  const accessTokenExpiresIn = accessTokenLifespanForPolicy(fastify, policy);
+
   const accessToken = await fastify.jwtUtils.signAccessToken({
     sub: user.id,
     email: user.email,
@@ -363,6 +460,7 @@ async function handleAuthorizationCode(
     clientId: client.clientId,
     scope: scopeString,
     aud: resolveAudience(client, effectiveResource),
+    expiresInOverride: accessTokenExpiresIn,
   });
 
   // OIDC Core §3.1.3.3: when the granted scope includes `openid`, the token
@@ -384,7 +482,6 @@ async function handleAuthorizationCode(
 
   const { token: refreshToken, tokenHash } = fastify.jwtUtils.generateRefreshToken();
 
-  const accessTokenExpiresIn = fastify.jwtUtils.getAccessTokenLifespan();
   const refreshTokenExpiresAt = Date.now() + fastify.jwtUtils.getRefreshTokenLifespan() * 1000;
 
   // Start a fresh refresh-token family. Every rotation (see
@@ -475,7 +572,7 @@ function resolveDisplayName(user: {
 async function handleClientCredentials(
   ctx: HandlerContext<TokenExchangeClientCredsBody>
 ): Promise<TokenExchangeResponse> {
-  const { fastify, request, client, body } = ctx;
+  const { fastify, request, client, body, policy } = ctx;
 
   if (!client.grantTypes.includes('client_credentials')) {
     await fastify.repositories.auditLogs.create({
@@ -572,14 +669,16 @@ async function handleClientCredentials(
     }
   }
 
+  // Access-token lifespan under the environment policy (ADR-008 §5, #197).
+  const accessTokenExpiresIn = accessTokenLifespanForPolicy(fastify, policy);
+
   const accessToken = await fastify.jwtUtils.signAccessToken({
     sub: client.clientId,
     clientId: client.clientId,
     scope: scopeString,
     aud: resolveAudience(client, requestedResource),
+    expiresInOverride: accessTokenExpiresIn,
   });
-
-  const accessTokenExpiresIn = fastify.jwtUtils.getAccessTokenLifespan();
 
   // Per-agent action audit (ADR-007 §2, #186). client_credentials has no
   // subject user and no on-behalf-of `act` chain — the agent acts as itself —
@@ -639,7 +738,19 @@ async function handleClientCredentials(
 async function handleRefreshToken(
   ctx: HandlerContext<TokenExchangeRefreshBody>
 ): Promise<TokenExchangeResponse> {
-  const { fastify, request, client, body } = ctx;
+  const { fastify, request, client, body, policy } = ctx;
+
+  // ADR-008 §5 (#197) refresh-token rotation. The profile knob
+  // `policy.refreshRotationRequired` is true for staging/production and false
+  // for development. QAuth ALWAYS rotates on every refresh — revoke-then-issue
+  // in a single transaction, with family-wide replay detection (see the
+  // rotation block below) — so the requirement is trivially SATISFIED in every
+  // environment, and `development` does NOT relax it below the implemented
+  // behaviour (rotation stays on; the dev knob would only permit a non-rotating
+  // implementation, which QAuth deliberately does not offer). The access-token
+  // LIFESPAN is the only refresh-path knob the environment actually moves
+  // (`policy.accessTokenLifespanTier`, applied below).
+  void policy.refreshRotationRequired;
 
   if (!client.grantTypes.includes('refresh_token')) {
     await fastify.repositories.auditLogs.create({
@@ -854,6 +965,9 @@ async function handleRefreshToken(
 
   const scopeString = grantedScopes.length > 0 ? grantedScopes.join(' ') : undefined;
 
+  // Access-token lifespan under the environment policy (ADR-008 §5, #197).
+  const accessTokenExpiresIn = accessTokenLifespanForPolicy(fastify, policy);
+
   const accessToken = await fastify.jwtUtils.signAccessToken({
     sub: user.id,
     email: user.email,
@@ -861,9 +975,8 @@ async function handleRefreshToken(
     clientId: client.clientId,
     scope: scopeString,
     aud: resolveAudience(client, effectiveResource),
+    expiresInOverride: accessTokenExpiresIn,
   });
-
-  const accessTokenExpiresIn = fastify.jwtUtils.getAccessTokenLifespan();
 
   await fastify.repositories.auditLogs.create({
     userId: user.id,
@@ -962,7 +1075,7 @@ function actDepth(act: ActClaim | undefined): number {
 async function handleTokenExchange(
   ctx: HandlerContext<TokenExchangeTokenExchangeBody>
 ): Promise<TokenExchangeResponse> {
-  const { fastify, request, client, body } = ctx;
+  const { fastify, request, client, body, policy } = ctx;
 
   const auditFailure = async (error: string, extra?: Record<string, unknown>): Promise<void> => {
     await fastify.repositories.auditLogs.create({
@@ -1190,7 +1303,11 @@ async function handleTokenExchange(
   // authority (and so it cannot be re-exchanged to extend it indefinitely).
   // `exp` is in seconds; verifyAccessToken already rejected an expired token,
   // so remaining is > 0 here, but we guard against the boundary defensively.
-  const configuredLifespan = fastify.jwtUtils.getAccessTokenLifespan();
+  // The configured ceiling is the environment-policy lifespan (ADR-008 §5,
+  // #197): a `development` delegated token may match the longer dev TTL, but is
+  // still clamped to the subject token's remaining lifetime (a HARD floor — the
+  // delegated token can never outlive the authority it was derived from).
+  const configuredLifespan = accessTokenLifespanForPolicy(fastify, policy);
   const subjectRemaining =
     subjectPayload.exp !== undefined
       ? subjectPayload.exp - Math.floor(Date.now() / 1000)

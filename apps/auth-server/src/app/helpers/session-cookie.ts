@@ -88,11 +88,41 @@ export function readCookie(request: FastifyRequest, name: string): string | unde
 }
 
 /**
+ * Resolve whether the session cookie's `Secure` attribute is set.
+ *
+ * ADR-008 §5 (#197) T3 relaxation seam, CLIENT-SCOPED. Secure cookies are a T3
+ * control. The session cookie is GLOBAL — it is minted at `/ui/login`, which
+ * carries NO `client_id` (only a `return_to`) — so there is no client whose
+ * environment could safely relax it there. We therefore DEFAULT TO STRICT:
+ * `env.SESSION_COOKIE_SECURE` (true in production) governs the attribute, and a
+ * caller may relax it ONLY by passing an explicit `secureOverride === false`
+ * derived from a resolved `development`-profile policy on a surface that
+ * unambiguously has a client in scope. No such caller exists today, so the
+ * cookie stays strict everywhere — the deliberate fail-safe for a global
+ * control. (Local plain-HTTP dev already relaxes it via `SESSION_COOKIE_SECURE`.)
+ *
+ * @param secureOverride When `false`, force-disable `Secure` (a deliberate
+ *   client-scoped development relaxation). When omitted/`true`, the strict
+ *   `env.SESSION_COOKIE_SECURE` default applies.
+ */
+function resolveCookieSecure(secureOverride?: boolean): boolean {
+  if (secureOverride === false) return false;
+  return env.SESSION_COOKIE_SECURE;
+}
+
+/**
  * Emit a Set-Cookie header for the signed session. Attributes match the
  * issue #150 spec: __Host-, Secure (configurable for local dev),
  * HttpOnly, SameSite=Lax, Path=/.
+ *
+ * @param secureOverride see {@link resolveCookieSecure} — a client-scoped
+ *   development relaxation of the `Secure` attribute (defaults to strict).
  */
-export function setSessionCookie(reply: FastifyReply, sessionId: string): void {
+export function setSessionCookie(
+  reply: FastifyReply,
+  sessionId: string,
+  secureOverride?: boolean
+): void {
   const attrs = [
     `${SESSION_COOKIE_NAME}=${signSessionId(sessionId)}`,
     'Path=/',
@@ -102,7 +132,7 @@ export function setSessionCookie(reply: FastifyReply, sessionId: string): void {
   ];
   // __Host- prefix requires Secure. Tests may turn this off for in-process
   // assertions but production must have it set.
-  if (env.SESSION_COOKIE_SECURE) attrs.push('Secure');
+  if (resolveCookieSecure(secureOverride)) attrs.push('Secure');
   reply.header('Set-Cookie', attrs.join('; '));
 }
 

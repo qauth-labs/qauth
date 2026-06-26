@@ -242,3 +242,66 @@ export function resolveEnvironmentPolicy(
   const effective = stricterEnvironment(clientEnv, realmCeiling);
   return ENVIRONMENT_PROFILES[effective];
 }
+
+// ---------------------------------------------------------------------------
+// Tier → concrete-value mappers (ADR-008 §5, issue #197).
+//
+// The profile table above is deliberately COARSE: it carries legible tier
+// labels (`accessTokenLifespanTier`, `rateLimitTier`), not magic numbers. The
+// concrete seconds / request caps stay in realm/env config so an operator
+// tunes one place. These two pure mappers are the SINGLE point where a tier is
+// turned into a number — every policy checkpoint (#197) calls them instead of
+// re-deriving its own `dev ? x : y` arithmetic, mirroring how
+// `enforceAgentScopeCap` centralises the agent cap decision.
+// ---------------------------------------------------------------------------
+
+/**
+ * Concrete access-token lifespans (seconds) the two tiers map to. Both numbers
+ * come from configuration — the resolver only SELECTS between them by tier:
+ *   - `short` — the production/staging baseline (`ACCESS_TOKEN_LIFESPAN`).
+ *   - `long`  — the `development` convenience (`DEV_ACCESS_TOKEN_LIFESPAN`).
+ */
+export interface AccessTokenLifespanConfig {
+  /** The `short` tier value in seconds (production/staging baseline). */
+  readonly shortSeconds: number;
+  /** The `long` tier value in seconds (development convenience). */
+  readonly longSeconds: number;
+}
+
+/**
+ * Map an {@link AccessTokenLifespanTier} to a concrete number of seconds using
+ * the supplied config (ADR-008 §5). `short` (production/staging) returns the
+ * baseline lifespan; `long` (development) returns the dev-convenience lifespan.
+ *
+ * FAIL-SAFE: the `long` value is clamped to be at LEAST the `short` baseline is
+ * NOT applied here on purpose — `long` is a development relaxation and a
+ * misconfigured `longSeconds < shortSeconds` simply yields a shorter dev token,
+ * which is the safe direction. The strict tiers always get exactly the baseline.
+ */
+export function resolveAccessTokenLifespanSeconds(
+  tier: AccessTokenLifespanTier,
+  config: AccessTokenLifespanConfig
+): number {
+  return tier === 'long' ? config.longSeconds : config.shortSeconds;
+}
+
+/**
+ * Concrete per-window request caps the two rate-limit tiers map to. Both come
+ * from configuration; the resolver only SELECTS by tier.
+ */
+export interface RateLimitTierConfig {
+  /** The `lenient` tier cap (development / staging, e.g. load testing). */
+  readonly lenientMax: number;
+  /** The `strict` tier cap (production). */
+  readonly strictMax: number;
+}
+
+/**
+ * Map a {@link RateLimitTier} to a concrete per-window request cap (ADR-008
+ * §5). `strict` (production) returns the tight cap; `lenient`
+ * (development/staging) returns the relaxed cap. The window itself is unchanged
+ * by environment — only the cap moves, matching the profile table.
+ */
+export function resolveRateLimitMax(tier: RateLimitTier, config: RateLimitTierConfig): number {
+  return tier === 'strict' ? config.strictMax : config.lenientMax;
+}

@@ -10,8 +10,9 @@ import { resolveBrowserSession } from '../../helpers/browser-session';
 import { findExceedingAgentScopesForClient, resolveAudience } from '../../helpers/client-auth';
 import { resolveClient } from '../../helpers/client-resolution';
 import { canSkipConsent, filterRequestedScopes } from '../../helpers/consent';
+import { resolveEnvironmentPolicy } from '../../helpers/environment-policy';
 import { getOrCreateSystemClient } from '../../helpers/oauth-client';
-import { buildRedirectUrl } from '../../helpers/oauth-redirect';
+import { buildRedirectUrl, isRedirectUriAllowedForPolicy } from '../../helpers/oauth-redirect';
 import { getOrCreateDefaultRealm } from '../../helpers/realm';
 import {
   evaluateStepUp,
@@ -119,6 +120,35 @@ export default async function (fastify: FastifyInstance) {
           metadata: { error: 'redirect_uri not registered', client_id: query.client_id },
         });
         throw new BadRequestError('redirect_uri not registered');
+      }
+
+      // ADR-008 §5/§7 (#197): resolve the effective environment policy now that
+      // both the client and its realm are in scope, and apply the localhost
+      // redirect gate. `http://localhost` (loopback) redirect URIs are a
+      // `development`-only convenience; `staging`/`production` are https-only.
+      // This is a SECOND gate after the exact-match check above — the URI is
+      // registered, but a plain-HTTP loopback target is withheld outside
+      // development. Fail-safe: an unset client/realm resolves to `production`,
+      // which rejects it. We reject BEFORE redirecting (the redirect target is
+      // the very thing under suspicion), matching the unregistered-URI handling.
+      const policy = resolveEnvironmentPolicy(client, realm);
+      if (!isRedirectUriAllowedForPolicy(redirectUri, policy)) {
+        await fastify.repositories.auditLogs.create({
+          userId: null,
+          oauthClientId: client.id,
+          event: 'oauth.authorize.failure',
+          eventType: 'token',
+          success: false,
+          ipAddress: request.ip,
+          userAgent: request.headers['user-agent'] || null,
+          metadata: {
+            error: 'redirect_uri not permitted for this environment',
+            reason: 'http_localhost_redirect_requires_development',
+            client_id: query.client_id,
+            environment: policy.environment,
+          },
+        });
+        throw new BadRequestError('redirect_uri not permitted for this environment');
       }
 
       if (!client.enabled) {
@@ -283,7 +313,13 @@ export default async function (fastify: FastifyInstance) {
       // browser flow (which enforces the dangerous-op re-auth gate). Bearer is
       // legacy first-party and not exposed to dynamically-registered clients,
       // so this only affects first-party callers requesting dangerous scopes.
-      if (!browserSession) {
+      // ADR-008 §5 (#197): the automatic dangerous-scope refusal is gated by the
+      // environment policy. Staging/production (and the fail-safe default) keep
+      // it; a `development` client relaxes it so local Bearer-path iteration
+      // with dangerous scopes is not forced through the browser flow. This only
+      // relaxes the SERVER-inferred dangerous gate — every other Bearer check
+      // (token validity, scope allowlist, agent cap) still applies.
+      if (!browserSession && policy.agentStepUpEnforced) {
         const bearerDangerous = scopes.filter(isDangerousScope);
         if (bearerDangerous.length > 0) {
           await fastify.repositories.auditLogs.create({
@@ -340,6 +376,9 @@ export default async function (fastify: FastifyInstance) {
           authTimeMs: browserSession.createdAt,
           nowMs: Date.now(),
           freshAuthWindowMs: STEP_UP_FRESH_AUTH_WINDOW_MS,
+          // ADR-008 §5 (#197): relax the automatic dangerous-scope fresh-login
+          // for a development client; explicit prompt/max_age still enforced.
+          enforceDangerousStepUp: policy.agentStepUpEnforced,
         });
 
         // OIDC Core §3.1.2.1: `prompt=none` forbids ANY user-facing UI. If

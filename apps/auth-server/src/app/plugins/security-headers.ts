@@ -42,6 +42,46 @@ import { env } from '../../config/env';
 /** Prefix served by Swagger UI; excluded from the strict CSP. */
 const SWAGGER_PREFIX = '/docs';
 
+/**
+ * Reply marker (ADR-008 §5, #197) requesting the relaxed development CSP. T3
+ * security headers are a GLOBAL control with no client in scope, so they
+ * DEFAULT TO STRICT everywhere; the only sanctioned relaxation is on the
+ * consent screen — the rare browser surface that unambiguously carries a
+ * `client_id` — for a `development`-profile client. That route MARKS its reply
+ * via {@link markRelaxedCsp}; the swap itself happens HERE, in the one place
+ * that already overrides helmet's CSP (Swagger, below), so the override logic
+ * stays centralised and route handlers need no onSend of their own.
+ */
+const RELAX_CSP_MARKER = Symbol('qauth.security.relaxCsp');
+
+/**
+ * Mark a reply so the security-headers onSend serves {@link DEVELOPMENT_CSP}
+ * instead of the strict global CSP (ADR-008 §5, #197). Called ONLY for a
+ * `development`-profile client on a client-scoped surface (the consent screen).
+ * Strict everywhere it is not called — the fail-safe default for a global control.
+ */
+export function markRelaxedCsp(reply: { header(...args: unknown[]): unknown }): void {
+  (reply as unknown as Record<symbol, unknown>)[RELAX_CSP_MARKER] = true;
+}
+
+/**
+ * Relaxed CSP for a `development` consent screen: permits inline `<style>`
+ * without a per-request nonce so a developer iterating on the page is not forced
+ * to nonce every style. Scripts stay `'self'` — the dev relaxation never
+ * loosens the script policy, only styles. Never served outside `development`.
+ */
+const DEVELOPMENT_CSP =
+  "default-src 'self'; " +
+  "base-uri 'self'; " +
+  "script-src 'self'; " +
+  "style-src 'self' 'unsafe-inline'; " +
+  "img-src 'self' data:; " +
+  "font-src 'self' data:; " +
+  "connect-src 'self'; " +
+  "form-action 'self'; " +
+  "object-src 'none'; " +
+  "frame-ancestors 'none'";
+
 /** Relaxed CSP for Swagger UI, which needs its own inline scripts/styles. */
 const SWAGGER_CSP =
   "default-src 'self'; " +
@@ -121,6 +161,12 @@ export const securityHeadersPlugin = fp<FastifyPluginOptions>(
       async (request: FastifyRequest, reply: FastifyReply, payload: unknown) => {
         if (isSwaggerRequest(request)) {
           reply.header('Content-Security-Policy', SWAGGER_CSP);
+        } else if ((reply as unknown as Record<symbol, unknown>)[RELAX_CSP_MARKER]) {
+          // ADR-008 §5 (#197): a `development`-profile consent screen asked for
+          // the relaxed CSP. Overwrite helmet's strict header (this onSend runs
+          // after helmet's). Swagger takes precedence — its own relaxed policy
+          // already covers that prefix.
+          reply.header('Content-Security-Policy', DEVELOPMENT_CSP);
         }
         return payload;
       }
