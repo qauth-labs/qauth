@@ -195,6 +195,10 @@ export type TokenExchangeBody = z.infer<typeof tokenExchangeBodySchema>;
  * `issued_token_type` (RFC 8693 §2.2.1) is REQUIRED in a token-exchange
  * response and absent for the other grants; we always emit
  * `...:access_token` for the delegated token-exchange path.
+ *
+ * `id_token` (OIDC Core §3.1.3.3) is present only on an authorization_code
+ * exchange whose granted scope includes `openid`. It is a signed JWT (EdDSA)
+ * asserting the end-user's authentication to the client; absent otherwise.
  */
 export const tokenExchangeResponseSchema = z.object({
   access_token: z.string(),
@@ -203,6 +207,7 @@ export const tokenExchangeResponseSchema = z.object({
   token_type: z.literal('Bearer'),
   scope: z.string().optional(),
   issued_token_type: z.string().optional(),
+  id_token: z.string().optional(),
 });
 
 export type TokenExchangeResponse = z.infer<typeof tokenExchangeResponseSchema>;
@@ -335,11 +340,16 @@ export type DynamicClientRegistrationResponse = z.infer<
 /**
  * OIDC userinfo response schema (GET /userinfo).
  * Returns selected claims for the authenticated end-user.
+ *
+ * Claims kept consistent with the ID token and discovery `claims_supported`
+ * (OIDC Core §5.3 / §5.1): `sub` always; `email`, `email_verified`, `name`
+ * when available.
  */
 export const userinfoResponseSchema = z.object({
   sub: z.string().min(1),
   email: z.email().optional(),
   email_verified: z.boolean().optional(),
+  name: z.string().optional(),
 });
 
 export type UserinfoResponse = z.infer<typeof userinfoResponseSchema>;

@@ -157,6 +157,44 @@ describe('GET /userinfo route', () => {
     });
   });
 
+  it('returns the name claim derived from first/last name', async () => {
+    const { fastify, ctx } = createFastifyStub();
+    await userinfoRoute(fastify);
+
+    const handler = ctx.handler;
+    expect(handler).toBeDefined();
+
+    const findByIdMock = fastify.repositories.users.findById as unknown as Mock;
+    findByIdMock.mockResolvedValue({
+      id: 'user-3',
+      email: 'ada@example.com',
+      emailVerified: true,
+      firstName: 'Ada',
+      lastName: 'Lovelace',
+    });
+
+    const request = {
+      jwtPayload: { sub: 'user-3' },
+      ip: '127.0.0.1',
+      headers: { authorization: 'Bearer token', 'user-agent': 'vitest' },
+    } as unknown as FastifyRequest;
+
+    const reply = { send: (body: unknown) => body } as unknown as FastifyReply;
+
+    if (!handler) {
+      throw new Error('Userinfo handler was not registered');
+    }
+
+    const result = await handler(request, reply);
+
+    expect(result).toEqual({
+      sub: 'user-3',
+      email: 'ada@example.com',
+      email_verified: true,
+      name: 'Ada Lovelace',
+    });
+  });
+
   it('throws NotFoundError when user is not found', async () => {
     const { fastify, ctx } = createFastifyStub();
     await userinfoRoute(fastify);
