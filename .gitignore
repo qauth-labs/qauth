@@ -24,7 +24,6 @@ coverage/
 .DS_Store
 Thumbs.db
 
-.cursor/plans/
 local-*
 
 vite.config.*.timestamp*

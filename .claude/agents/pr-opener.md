@@ -90,8 +90,9 @@ Closes #62
 
 ## Skills to Use
 
-- **create-pr**: `.claude/skills/create-pr/` — PR format, title, body, `gh pr create` command
-- **gh-issues**: `.claude/skills/gh-issues/` — view issue details when needed (`gh issue view N`)
+- **create-pr**: `.claude/skills/create-pr/` — the `gh pr create` command and pre-PR checklist
+- **github-conventions**: `.claude/skills/github-conventions/` — branch naming, Conventional Commits, PR/issue body templates, labels, milestones
+- **investigate-issue**: `.claude/skills/investigate-issue/` — view issue details when needed (`gh issue view N`)
 
 ## Command Reference
 

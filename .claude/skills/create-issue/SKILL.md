@@ -6,64 +6,8 @@ disable-model-invocation: true
 
 # Create GitHub Issue
 
-Create a new GitHub issue following the QAuth project conventions.
-
-## Your Task
-
-When the user describes a task or feature, create an issue using `gh issue create`.
-
-## Issue Title Format
-
-Use conventional commits style:
-
-- `feat: {description}` - New feature
-- `fix: {description}` - Bug fix
-- `refactor: {description}` - Code restructuring
-- `docs: {description}` - Documentation
-- `test: {description}` - Testing
-- `chore: {description}` - Maintenance
-
-## Issue Body Template
-
-```markdown
-## Summary
-
-{Brief description of the task - 1-2 sentences}
-
-## Tasks
-
-- [ ] Task 1
-- [ ] Task 2
-- [ ] Task 3
-
-## Technical Details
-
-{Code examples, configuration details, architecture notes}
-
-## Acceptance Criteria
-
-- [ ] Criterion 1
-- [ ] Criterion 2
-- [ ] Criterion 3
-
-## Additional Notes
-
-{Any limitations, warnings, or MVP considerations}
-
-## References
-
-- MVP-PRD.md - {relevant section}
-- {Links to relevant documentation}
-```
-
-## Labels
-
-- `enhancement` - For new features
-- `bug` - For bug fixes
-
-## Milestone
-
-All MVP issues should use milestone: `MVP`
+Create a GitHub issue with `gh issue create`. For title format, the issue body
+template, labels, and milestones, follow the `github-conventions` skill.
 
 ## Command Template
 
@@ -100,10 +44,9 @@ BODY
 
 ## Instructions
 
-1. Ask the user what they want to create if not clear
-2. Determine the appropriate phase (Phase 0-3)
-3. Write detailed tasks with checkboxes
-4. Include technical details with code examples where relevant
-5. Define clear acceptance criteria
-6. Create the issue using `gh issue create`
-7. Report the issue URL back to the user
+1. Ask the user what they want to create if it isn't clear.
+2. Determine the appropriate phase (see `github-conventions` for phases).
+3. Write detailed tasks with checkboxes and clear acceptance criteria; include
+   technical details/code examples where relevant.
+4. Create the issue with `gh issue create`.
+5. Report the issue URL back to the user.

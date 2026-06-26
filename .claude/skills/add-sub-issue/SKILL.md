@@ -93,25 +93,10 @@ gh api graphql \
 
 ## Workflow: Create Epic with Sub-Issues
 
-1. Create the parent (epic) issue
-2. Create child issues for each subtask
-3. Link children to parent using the GraphQL mutation
-
-```bash
-# Example: Create epic
-gh issue create \
-  --title "feat: User authentication system" \
-  --body "Epic for authentication implementation" \
-  --label "enhancement" \
-  --milestone "MVP"
-
-# Note the issue number, then create sub-issues
-gh issue create --title "feat: Add login endpoint" --label "enhancement" --milestone "MVP"
-gh issue create --title "feat: Add JWT validation" --label "enhancement" --milestone "MVP"
-gh issue create --title "feat: Add logout endpoint" --label "enhancement" --milestone "MVP"
-
-# Link them (get IDs first, then run addSubIssue for each)
-```
+1. Create the parent (epic) issue and the child issues with the `create-issue`
+   skill (which follows `github-conventions` for titles/labels/milestones).
+2. Fetch each issue's internal ID and link children to the parent with the
+   `addSubIssue` mutation above.
 
 ## Limits
 

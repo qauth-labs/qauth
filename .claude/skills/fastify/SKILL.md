@@ -1,18 +1,66 @@
 ---
-name: fastify-plugins
-description: Create and review Fastify plugins with correct encapsulation, decorators, and lifecycle. Use when adding or modifying @qauth-labs/fastify-plugin-* libraries, wrapping utilities for the auth server, or when the user asks about Fastify plugin patterns.
+name: fastify
+description: Fastify usage for QAuth — plugin authoring (encapsulation, decorators, lifecycle), route schemas with the Zod type provider, production/reverse-proxy setup, and the Fastify version/CVE requirement. Use when adding or modifying @qauth-labs/fastify-plugin-* libraries, auth-server routes, or deployment config.
 ---
 
-# Fastify Plugins (QAuth)
+# Fastify (QAuth)
 
-Standards-aligned Fastify plugin authoring for QAuth. Plugins extend the server with decorators and hooks while respecting encapsulation. Use this skill when creating new plugins, reviewing plugin code, or debugging encapsulation/order issues.
+Standards-aligned Fastify usage for QAuth: plugin authoring, route validation,
+and production deployment. Use this skill when creating plugins, wiring routes,
+reviewing Fastify code, or configuring the server for production.
 
 ## When to Use This Skill
 
 - Adding a new `@qauth-labs/fastify-plugin-*` library
 - Wrapping a shared utility (DB, cache, JWT, PKCE, etc.) as a Fastify plugin
+- Defining or reviewing routes (schemas, type provider, validation)
+- Configuring the server for production (reverse proxy, listen address, CVE/version)
 - Reviewing or refactoring plugin registration order or decorator availability
 - Questions about encapsulation, `fastify-plugin`, or lifecycle hooks
+
+## Production
+
+- **Use a reverse proxy** (e.g. Nginx, HAProxy). Do not expose the Fastify app
+  directly to the internet. Handle TLS, HTTP→HTTPS redirects, and static assets
+  at the proxy.
+- **Listen on `0.0.0.0`** in containers/Kubernetes so readiness/liveness probes
+  can reach the app (the default `127.0.0.1` is unreachable from the pod network).
+- **Trust proxy**: behind a reverse proxy, configure `trustProxy` so
+  `request.ip` and `X-Forwarded-*` headers are correct.
+
+## Routes and Validation
+
+- **Schema**: register `schema.body`, `schema.querystring`, `schema.params`, and
+  `schema.response` (e.g. `response: { 200: responseSchema }`). Fastify v5 uses
+  schemas for both validation and types.
+- **Type provider**: call `fastify.withTypeProvider<ZodTypeProvider>()` before
+  defining routes when using Zod schemas.
+- See the `validation` skill for schema organization and Zod v4 validators.
+
+```typescript
+fastify.withTypeProvider<ZodTypeProvider>().post(
+  '/login',
+  {
+    schema: {
+      body: loginSchema,
+      response: { 200: loginResponseSchema },
+    },
+    config: { rateLimit: { max: env.LOGIN_RATE_LIMIT, timeWindow: env.LOGIN_RATE_WINDOW * 1000 } },
+  },
+  async (request, reply) => {
+    /* ... */
+  }
+);
+```
+
+## Security and Dependencies
+
+- **Fastify version**: keep Fastify **≥ 5.3.2** to avoid **CVE-2025-32442**
+  (content-type parsing bypass in 5.0.0–5.3.0). Do not rely on
+  content-type-specific validation without normalizing the header.
+- **Audit**: run `pnpm audit` regularly; fix or document high/critical
+  vulnerabilities (see the `security` skill).
+- **Node**: Fastify v5 requires Node.js v20+; this project uses `>=24.7.0`.
 
 ## Quick Reference
 

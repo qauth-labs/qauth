@@ -6,7 +6,8 @@ disable-model-invocation: true
 
 # Investigate GitHub Issue
 
-Investigate a GitHub issue to understand requirements and context.
+Investigate a GitHub issue to understand requirements and context. See
+`github-conventions` for repo and `gh` CLI basics.
 
 ## Your Task
 
