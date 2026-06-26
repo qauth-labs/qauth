@@ -42,3 +42,42 @@ services:
         - action: sync
           path: ./tsconfig.base.json
           target: /app/tsconfig.base.json
+
+  developer-portal:
+    build:
+      context: .
+      dockerfile: apps/developer-portal/Dockerfile.dev
+    command: ['pnpm', 'nx', 'dev', 'developer-portal', '--', '--host', '0.0.0.0', '--port', '3001']
+    environment:
+      # Fix for NX finding config in monorepo structure inside container
+      NX_DAEMON: 'false'
+    develop:
+      watch:
+        # Sync source code changes immediately (Hot Reload)
+        - action: sync
+          path: ./apps/developer-portal
+          target: /app/apps/developer-portal
+          ignore:
+            - node_modules
+            - dist
+        - action: sync
+          path: ./libs
+          target: /app/libs
+          ignore:
+            - node_modules
+            - dist
+
+        # Sync config files but DO NOT trigger full rebuilds automatically.
+        # If dependencies change, run: docker compose down && docker compose up --build
+        - action: sync
+          path: ./package.json
+          target: /app/package.json
+        - action: sync
+          path: ./pnpm-lock.yaml
+          target: /app/pnpm-lock.yaml
+        - action: sync
+          path: ./nx.json
+          target: /app/nx.json
+        - action: sync
+          path: ./tsconfig.base.json
+          target: /app/tsconfig.base.json

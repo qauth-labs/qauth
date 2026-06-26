@@ -12,13 +12,17 @@ QAuth uses Docker Compose to orchestrate the following services:
 | **redis**            | `redis:7-alpine`     | Session cache and rate limiting                          |
 | **migration-runner** | Custom               | Runs database migrations via Nx                          |
 | **auth-server**      | Custom               | Main authentication API server                           |
+| **developer-portal** | Custom               | TanStack Start web UI for registration/login/consents    |
 
 ### Production vs development
 
-| Use case        | Compose file(s)                                 | Auth-server image                            | Watch                |
+| Use case        | Compose file(s)                                 | Service image                                | Watch                |
 | --------------- | ----------------------------------------------- | -------------------------------------------- | -------------------- |
 | **Production**  | `docker-compose.yml`                            | `Dockerfile` (multi-stage prod build)        | No                   |
-| **Development** | `docker-compose.yml` + `docker-compose.dev.yml` | `Dockerfile.dev` (deps + source, `nx serve`) | Yes (sync + rebuild) |
+| **Development** | `docker-compose.yml` + `docker-compose.dev.yml` | `Dockerfile.dev` (deps + source, dev server) | Yes (sync + rebuild) |
+
+Both `auth-server` and `developer-portal` follow this convention: a multi-stage
+`Dockerfile` for production and a `Dockerfile.dev` for the watch-based dev flow.
 
 ## Prerequisites
 
@@ -93,8 +97,12 @@ docker compose -f docker-compose.yml -f docker-compose.dev.yml up --watch
 # Check all services are healthy
 docker-compose ps
 
-# Test health endpoint
+# Test the auth-server health endpoint
 curl http://localhost:3000/health
+
+# Test the developer-portal liveness probe, then open it in a browser
+curl http://localhost:3001/healthz   # -> ok
+# http://localhost:3001
 ```
 
 Expected response:
@@ -129,6 +137,14 @@ Expected response:
 │  │                      :3000                              │  │
 │  │  Waits for: postgres (healthy), redis (healthy),       │  │
 │  │             migration-runner (completed)                │  │
+│  └───────────────────────────┬────────────────────────────┘  │
+│                              │ health check dependency        │
+│                              ▼                                 │
+│  ┌────────────────────────────────────────────────────────┐  │
+│  │                 developer-portal                        │  │
+│  │                      :3001                              │  │
+│  │  Waits for: auth-server (healthy). Calls it server-     │  │
+│  │  side at http://auth-server:3000 over the network.      │  │
 │  └────────────────────────────────────────────────────────┘  │
 └─────────────────────────────────────────────────────────────┘
 ```
@@ -183,6 +199,38 @@ The main authentication API server.
 - **Production**: `Dockerfile` → `docker-entrypoint.sh` runs `node main.js`.
 - **Development**: `Dockerfile.dev` → `pnpm nx serve auth-server --watch`; use with `docker-compose.dev.yml` and `--watch`.
 
+### Developer Portal
+
+The TanStack Start web UI for user registration, email verification, login, and
+OAuth consent management. It renders server-side and calls the auth-server only
+from its server functions — tokens never reach the browser.
+
+- **Port**: 3001 (mapped to host)
+- **Health Check**: `GET /healthz` (a lightweight liveness probe served by the
+  Node adapter; it does **not** depend on the auth-server being reachable)
+- **Production**: `Dockerfile` → `docker-entrypoint.sh` runs `node server.mjs`.
+- **Development**: `Dockerfile.dev` → `pnpm nx dev developer-portal` (Vite dev
+  server); use with `docker-compose.dev.yml` and `--watch`.
+- **Depends on**: `auth-server` (healthy).
+
+TanStack Start's Vite build emits a framework-agnostic fetch handler
+(`server/server.js`) plus static client assets (`client/`) rather than a
+self-listening server, so the production image runs a tiny Node adapter
+(`apps/developer-portal/server.mjs`) that pipes `node:http` requests into the
+fetch handler and serves the client assets. The image is built with the same
+`pnpm deploy --prod` strategy as the auth-server so the build output's bare
+imports resolve at runtime.
+
+> **Build context note:** the portal source is excluded from the auth-server /
+> migration-runner build contexts by the root `.dockerignore` (see the build
+> note below). The portal image lifts that exclusion for its own build via a
+> sibling `apps/developer-portal/Dockerfile.dockerignore`, which BuildKit
+> prefers over the root file when present. No action is needed — this is wired
+> up already.
+
+Open the portal at `http://localhost:3001` once the stack is up. Set a
+`PORTAL_SESSION_SECRET` in `.env` first (see Environment Variables).
+
 ## Common Operations
 
 ### Rebuild Images
@@ -191,8 +239,15 @@ The main authentication API server.
 
 ```bash
 docker compose up -d --build
-# Or rebuild only auth-server
+# Or rebuild a single service
 docker compose build auth-server && docker compose up -d auth-server
+docker compose build developer-portal && docker compose up -d developer-portal
+```
+
+Build the portal image directly (from the repo root, BuildKit on):
+
+```bash
+DOCKER_BUILDKIT=1 docker build -f apps/developer-portal/Dockerfile -t qauth-developer-portal .
 ```
 
 **Development:** use `docker compose -f docker-compose.yml -f docker-compose.dev.yml up --watch`; sync/rebuild is automatic. For dependency or config changes, the dev setup will rebuild the auth-server image when those files change.
@@ -258,22 +313,33 @@ See `.env.docker.example` for all available variables. Key variables:
 | `NODE_ENV`        | No       | `production` (default) or `development` for dev    |
 | `LOG_LEVEL`       | No       | `info` (default); use `debug` for development      |
 
+#### Developer Portal
+
+| Variable                 | Required | Default                   | Description                                                 |
+| ------------------------ | -------- | ------------------------- | ----------------------------------------------------------- |
+| `PORTAL_SESSION_SECRET`  | Yes      | —                         | 32+ char secret signing the portal session cookie           |
+| `PORTAL_SESSION_TTL`     | No       | `900`                     | Session cookie lifetime in seconds                          |
+| `PORTAL_AUTH_SERVER_URL` | No       | `http://auth-server:3000` | Base URL the portal uses (server-side) to reach auth-server |
+
+Generate a secret with `openssl rand -hex 32`. The portal will not start without
+`PORTAL_SESSION_SECRET`.
+
 For **development** with `docker-compose.dev.yml`, set `NODE_ENV=development` and `LOG_LEVEL=debug` in `.env`.
 
 ### Client ID Metadata Documents (CIMD)
 
 CIMD is the recommended MCP client-registration mechanism (see [ADR-007](./adr/007-mcp-first-positioning.md)). When a `client_id` is an HTTPS URL, the auth-server fetches and validates the client's metadata document on demand instead of persisting a registration record. All settings have safe defaults — none are required to run.
 
-| Variable                       | Required | Default              | Description                                                                                                   |
-| ------------------------------ | -------- | -------------------- | ------------------------------------------------------------------------------------------------------------- |
-| `CIMD_ENABLED`                 | No       | `true`               | Master switch. When `false`, URL-formatted `client_id`s are rejected with `invalid_client`.                   |
-| `CIMD_TRUST_POLICY`            | No       | `accept-any-https`   | `accept-any-https` (any validating HTTPS document) or `allowlist` (only hosts in `CIMD_TRUSTED_DOMAINS`).     |
-| `CIMD_TRUSTED_DOMAINS`         | No       | _(empty)_            | Comma/space-separated host allowlist for `allowlist` policy. A leading `*.` permits subdomains.               |
-| `CIMD_CACHE_DEFAULT_TTL`       | No       | `300`                | Cache TTL (seconds) when the document carries no usable `Cache-Control`/`Expires`.                            |
-| `CIMD_CACHE_MAX_TTL`           | No       | `3600`               | Hard upper bound (seconds) on any cached document, regardless of upstream `max-age`.                          |
-| `CIMD_MAX_DOCUMENT_BYTES`      | No       | `65536`              | Maximum document size in bytes.                                                                               |
-| `CIMD_FETCH_TIMEOUT_MS`        | No       | `5000`               | Per-fetch timeout in milliseconds.                                                                            |
-| `CIMD_ALLOW_PRIVATE_ADDRESSES` | No       | `false`              | Allow fetches to non-public IPs (loopback/private/link-local). **Keep `false` in production** — it disables the SSRF guard; for dev/integration harnesses only. |
+| Variable                       | Required | Default            | Description                                                                                                                                                     |
+| ------------------------------ | -------- | ------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `CIMD_ENABLED`                 | No       | `true`             | Master switch. When `false`, URL-formatted `client_id`s are rejected with `invalid_client`.                                                                     |
+| `CIMD_TRUST_POLICY`            | No       | `accept-any-https` | `accept-any-https` (any validating HTTPS document) or `allowlist` (only hosts in `CIMD_TRUSTED_DOMAINS`).                                                       |
+| `CIMD_TRUSTED_DOMAINS`         | No       | _(empty)_          | Comma/space-separated host allowlist for `allowlist` policy. A leading `*.` permits subdomains.                                                                 |
+| `CIMD_CACHE_DEFAULT_TTL`       | No       | `300`              | Cache TTL (seconds) when the document carries no usable `Cache-Control`/`Expires`.                                                                              |
+| `CIMD_CACHE_MAX_TTL`           | No       | `3600`             | Hard upper bound (seconds) on any cached document, regardless of upstream `max-age`.                                                                            |
+| `CIMD_MAX_DOCUMENT_BYTES`      | No       | `65536`            | Maximum document size in bytes.                                                                                                                                 |
+| `CIMD_FETCH_TIMEOUT_MS`        | No       | `5000`             | Per-fetch timeout in milliseconds.                                                                                                                              |
+| `CIMD_ALLOW_PRIVATE_ADDRESSES` | No       | `false`            | Allow fetches to non-public IPs (loopback/private/link-local). **Keep `false` in production** — it disables the SSRF guard; for dev/integration harnesses only. |
 
 > **Note:** `.env.docker.example` does not yet list the `CIMD_*` variables. They are optional and default-safe, so the stack runs without them; add them to `.env` only to override the defaults above.
 
@@ -323,7 +389,9 @@ docker builder prune
 docker-compose build --no-cache
 ```
 
-If the build fails on `Cannot find module '@tailwindcss/vite'` or a similar dev-portal-scoped import: `apps/developer-portal` is intentionally excluded from the auth-server and migration-runner build contexts via `.dockerignore`. The exclusion keeps Nx's project-graph processor from trying to parse configs for an app that has no Dockerfile of its own yet. Developer-portal will ship with its own image when Phase 2 is ready; until then the exclusion is load-bearing and should not be removed.
+If the build fails on `Cannot find module '@tailwindcss/vite'` or a similar dev-portal-scoped import while building **auth-server** or **migration-runner**: `apps/developer-portal` is intentionally excluded from those build contexts via the root `.dockerignore`. The exclusion keeps Nx's project-graph processor from trying to parse the portal's configs (which import portal-scoped dev deps) during an auth-server build. This exclusion is load-bearing and should not be removed.
+
+The **developer-portal** image needs its own source, so it ships a sibling `apps/developer-portal/Dockerfile.dockerignore`. BuildKit prefers a `<dockerfile>.dockerignore` over the root `.dockerignore`, so that file applies to the portal build only and deliberately does **not** exclude `apps/developer-portal`. Build the portal image with BuildKit enabled (default on Docker 23+) so this per-Dockerfile ignore is honored.
 
 ### Watch: "no space left on device"
 

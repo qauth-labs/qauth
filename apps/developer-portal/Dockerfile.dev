@@ -1,0 +1,31 @@
+# Developer Portal – Development Dockerfile
+# Uses the Vite dev server via nx; pair with docker-compose.dev.yml +
+# Compose Watch (sync). Mirrors apps/auth-server/Dockerfile.dev.
+
+FROM node:24-alpine
+
+WORKDIR /app
+
+RUN corepack enable
+
+# Dependencies only (layer cache)
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY nx.json tsconfig.base.json ./
+COPY vitest.config.ts ./
+RUN pnpm install --frozen-lockfile
+
+# Workspace (Compose Watch will sync over these; writable for sync targets)
+COPY libs ./libs
+COPY apps ./apps
+
+RUN addgroup -g 1001 -S nodejs && adduser -S nodejs -u 1001 && \
+    chown -R nodejs:nodejs /app
+
+USER nodejs
+
+EXPOSE 3001
+
+# Vite dev server. The portal's vite.config sets server.port to 3000; override
+# to 3001 via --port so it does not collide with the auth-server dev server,
+# and bind 0.0.0.0 so it is reachable from the host.
+CMD ["pnpm", "nx", "dev", "developer-portal", "--", "--host", "0.0.0.0", "--port", "3001"]
