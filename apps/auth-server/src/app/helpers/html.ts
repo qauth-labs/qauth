@@ -69,3 +69,34 @@ export function html(strings: TemplateStringsArray, ...values: unknown[]): SafeH
 export function render(fragment: SafeHtml): string {
   return fragment.value;
 }
+
+/**
+ * Schemes permitted in a user-facing hyperlink. `javascript:`, `data:`,
+ * `vbscript:` and friends are deliberately excluded: HTML-escaping protects an
+ * attribute *value* against breaking out of its quotes, but it does NOT stop a
+ * `javascript:alert(1)` URL (which contains no quotes) from executing when the
+ * link is clicked. Any href/src built from client-supplied data MUST pass
+ * through `safeUrl()` first (issue #112).
+ */
+const SAFE_URL_SCHEMES = new Set(['http:', 'https:', 'mailto:']);
+
+/**
+ * Return `value` if it parses as an absolute URL with an allowlisted scheme,
+ * otherwise `undefined`. Use for any href/src interpolated from
+ * client-controlled metadata (e.g. an OAuth client's `homepage_uri`) so a
+ * `javascript:`/`data:` URL cannot be rendered as a clickable link.
+ *
+ * Note: a relative URL is rejected (returns undefined) because it has no
+ * parseable scheme — callers that need same-origin relative links should build
+ * those from trusted server-side values, not from user input.
+ */
+export function safeUrl(value: unknown): string | undefined {
+  if (typeof value !== 'string' || value.length === 0) return undefined;
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    return undefined;
+  }
+  return SAFE_URL_SCHEMES.has(parsed.protocol) ? value : undefined;
+}

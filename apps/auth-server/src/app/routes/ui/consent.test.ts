@@ -28,6 +28,9 @@ function createReply() {
     body?: unknown;
   } = { headers: {} };
   const reply: any = {
+    // Mirrors @fastify/helmet's enableCSPNonces decorator (issue #113): the
+    // consent/login renderers read reply.cspNonce.style for the inline <style>.
+    cspNonce: { script: 'test-script-nonce', style: 'test-style-nonce' },
     code(n: number) {
       state.statusCode = n;
       return reply;
@@ -165,7 +168,10 @@ describe('UI /ui/consent GET — rendering', () => {
     expect(html).toContain('Test App wants to access your account');
     expect(html).toContain('csrf_token');
     expect(state.headers['Content-Type']).toContain('text/html');
-    expect(state.headers['X-Frame-Options']).toBe('DENY');
+    // Clickjacking/MIME/Referrer/CSP hardening moved to the global
+    // security-headers plugin (#113) — covered in security-headers.test.ts.
+    // The page stamps the per-request CSP nonce onto its inline <style>.
+    expect(html).toContain('nonce="test-style-nonce"');
     expect(fastify.sessionUtils.setSession).toHaveBeenCalledOnce();
   });
 });

@@ -168,6 +168,29 @@ export const authEnvSchema = z.object({
     .transform((v) => v === 'true'),
 
   /**
+   * Whether to emit the `Strict-Transport-Security` (HSTS) response header
+   * (issue #113). Defaults true (strict-by-default, mirroring the
+   * `SESSION_COOKIE_SECURE` pattern); local dev over plain HTTP can set false
+   * so a browser does not pin the dev host to HTTPS for a year. Production
+   * MUST keep this true. HSTS is only honoured by browsers over HTTPS, so
+   * leaving it on is harmless behind a TLS-terminating reverse proxy.
+   */
+  SECURITY_HSTS_ENABLED: z
+    .enum(['true', 'false'])
+    .default('true')
+    .transform((v) => v === 'true'),
+
+  /**
+   * `max-age` (seconds) for the HSTS header (issue #113). Defaults to one
+   * year (31536000), the value required for HSTS preload-list inclusion.
+   */
+  SECURITY_HSTS_MAX_AGE: z.coerce
+    .number()
+    .int()
+    .min(0)
+    .default(365 * 24 * 60 * 60),
+
+  /**
    * Window (in days) after dynamic registration during which the consent
    * screen shows the "Newly registered" phishing-defense badge. Zero
    * disables the badge.

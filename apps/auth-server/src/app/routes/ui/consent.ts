@@ -18,7 +18,7 @@ import {
   isLoopbackRedirect,
   redirectHost,
 } from '../../helpers/consent';
-import { html, render, safe } from '../../helpers/html';
+import { html, render, safe, safeUrl } from '../../helpers/html';
 import { buildRedirectUrl } from '../../helpers/oauth-redirect';
 import { getOrCreateDefaultRealm } from '../../helpers/realm';
 import { highestAgentModeInScopes } from '../../helpers/scope-modes';
@@ -112,6 +112,8 @@ function consentPage(opts: {
   scopes: string[];
   badgeDynamic: boolean;
   csrfToken: string;
+  /** Per-request CSP nonce (issue #113) stamped onto the inline <style> tag. */
+  cspNonce: string;
   authorizeParams: Record<string, string | undefined>;
   /** RFC 8707 resource indicators — emitted as one hidden input per URI. */
   resources: string[];
@@ -159,11 +161,15 @@ function consentPage(opts: {
       </div>`
     : safe('');
 
-  const homepage = opts.clientHomepage
+  // #112: an OAuth client's homepage_uri is attacker-controlled (especially for
+  // CIMD/dynamically registered clients). HTML-escaping alone does not stop a
+  // `javascript:` URL from executing on click, so the href is gated through
+  // safeUrl(): only http(s)/mailto links are rendered clickable. The visible
+  // text is still escaped by the `html` tag so a rejected URL shows harmlessly.
+  const safeHomepage = safeUrl(opts.clientHomepage);
+  const homepage = safeHomepage
     ? html`<p class="homepage">
-        <a href="${opts.clientHomepage}" rel="noopener noreferrer" target="_blank"
-          >${opts.clientHomepage}</a
-        >
+        <a href="${safeHomepage}" rel="noopener noreferrer" target="_blank">${safeHomepage}</a>
       </p>`
     : safe('');
 
@@ -175,7 +181,7 @@ function consentPage(opts: {
           <meta name="viewport" content="width=device-width,initial-scale=1" />
           <meta name="robots" content="noindex" />
           <title>Authorize ${opts.clientName}</title>
-          <style>
+          <style nonce="${opts.cspNonce}">
             body {
               font-family:
                 system-ui,
@@ -381,10 +387,9 @@ export default async function (fastify: FastifyInstance) {
 
       reply.header('Content-Type', 'text/html; charset=utf-8');
       reply.header('Cache-Control', 'no-store');
-      // OWASP: tighten rendering context against clickjacking / MIME sniffing.
-      reply.header('X-Frame-Options', 'DENY');
-      reply.header('X-Content-Type-Options', 'nosniff');
-      reply.header('Referrer-Policy', 'no-referrer');
+      // Clickjacking / MIME-sniffing / referrer hardening are now applied
+      // globally by the security-headers plugin (issue #113), including the
+      // strict nonce-based CSP that this page's inline <style> relies on.
 
       return reply.send(
         consentPage({
@@ -396,6 +401,7 @@ export default async function (fastify: FastifyInstance) {
           scopes,
           badgeDynamic: isDynamicClientWithinBadgeWindow(client),
           csrfToken,
+          cspNonce: reply.cspNonce.style,
           authorizeParams: {
             client_id: query.client_id,
             redirect_uri: query.redirect_uri,

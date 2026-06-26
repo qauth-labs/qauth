@@ -35,8 +35,14 @@ function isSafeReturnTo(value: unknown): value is string {
   return true;
 }
 
-function loginPage(opts: { returnTo: string; error?: string; email?: string }): string {
-  const { returnTo, error, email } = opts;
+function loginPage(opts: {
+  returnTo: string;
+  /** Per-request CSP nonce (issue #113) stamped onto the inline <style> tag. */
+  cspNonce: string;
+  error?: string;
+  email?: string;
+}): string {
+  const { returnTo, cspNonce, error, email } = opts;
   return render(
     html`<!doctype html>
       <html lang="en">
@@ -45,7 +51,7 @@ function loginPage(opts: { returnTo: string; error?: string; email?: string }): 
           <meta name="viewport" content="width=device-width,initial-scale=1" />
           <meta name="robots" content="noindex" />
           <title>Sign in — QAuth</title>
-          <style>
+          <style nonce="${cspNonce}">
             body {
               font-family:
                 system-ui,
@@ -165,7 +171,7 @@ export default async function (fastify: FastifyInstance) {
       const returnTo = isSafeReturnTo(q.return_to) ? q.return_to : '/';
       reply.header('Content-Type', 'text/html; charset=utf-8');
       reply.header('Cache-Control', 'no-store');
-      return reply.send(loginPage({ returnTo, error: q.error }));
+      return reply.send(loginPage({ returnTo, cspNonce: reply.cspNonce.style, error: q.error }));
     }
   );
 
@@ -220,6 +226,7 @@ export default async function (fastify: FastifyInstance) {
         return reply.send(
           loginPage({
             returnTo,
+            cspNonce: reply.cspNonce.style,
             error: 'Invalid email or password.',
             email: body.email,
           })
