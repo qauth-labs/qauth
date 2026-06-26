@@ -92,6 +92,39 @@ export const agentModeEnum = pgEnum('agent_mode', AGENT_MODES);
 export type AgentMode = (typeof AGENT_MODES)[number];
 
 /**
+ * Deployment environment / policy profile (ADR-008, issue #196).
+ *
+ * Selects an environment-aware **policy profile** — a coordinated bundle of
+ * security and operational defaults — rather than N independent knobs. Ordered
+ * here laxest → strictest (`development` < `staging` < `production`); the
+ * effective profile for a client is always the STRICTER of the client's own
+ * value and its realm ceiling (see `resolveEnvironmentPolicy`).
+ *
+ * - `development` — relaxes security-relevant conveniences (static API keys,
+ *   localhost redirects, long token lifespans, lenient rate limits, open DCR,
+ *   relaxed agent step-up / T3 headers). Local work only.
+ * - `staging` — keeps PRODUCTION-GRADE security; relaxes only operational
+ *   conveniences (e.g. lenient rate limits for load testing). Promoting
+ *   dev→staging surfaces security posture before production.
+ * - `production` — the strict baseline and the T3 hardening bundle. This is the
+ *   FAIL-SAFE default everywhere: an unset client or realm value resolves to
+ *   `production`, so misconfiguration fails closed.
+ *
+ * The relaxation direction is OPERATOR-SET only — never self-asserted via DCR
+ * (`POST /oauth/register`) or a CIMD metadata document — mirroring how
+ * `max_agent_mode` and `dynamic_registration_allowed_scopes` are handled.
+ */
+const ENVIRONMENTS = [
+  'development', // laxest — local convenience, security relaxations apply here only
+  'staging', // production-grade security; operational conveniences relaxed
+  'production', // strictest — fail-safe default; the T3 hardening bundle
+] as const;
+
+export const environmentEnum = pgEnum('environment', ENVIRONMENTS);
+
+export type Environment = (typeof ENVIRONMENTS)[number];
+
+/**
  * Audit Log Event Types
  * Categorizes audit events for filtering and analysis
  */

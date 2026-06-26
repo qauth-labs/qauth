@@ -50,6 +50,13 @@
       "when": 1782388437344,
       "tag": "0006_open_wolfsbane",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1782449651385,
+      "tag": "0007_thankful_nova",
+      "breakpoints": true
     }
   ]
 }

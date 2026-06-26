@@ -14,6 +14,7 @@ import {
 
 import {
   agentModeEnum,
+  environmentEnum,
   GrantType,
   ResponseType,
   sslRequiredEnum,
@@ -69,6 +70,27 @@ export const realms = pgTable(
       .notNull()
       .default(JSONB_EMPTY_ARRAY)
       .$type<string[]>(),
+    /**
+     * Realm-level CEILING on how lax any client in this realm may be
+     * (ADR-008 §2, issue #196). A client's effective environment is the
+     * STRICTER of its own `oauth_clients.environment` and this ceiling, so a
+     * realm set to `production` forces every client to the production profile
+     * regardless of the client's own field — the ceiling can never be exceeded.
+     * This mirrors `dynamic_registration_allowed_scopes` as a realm-level hard
+     * cap on what a client may obtain.
+     *
+     * FAIL-SAFE DEFAULT: `production`. A fresh realm caps everything at the
+     * strictest profile until an operator deliberately widens it, so an
+     * unconfigured deployment is hardened and misconfiguration fails closed.
+     *
+     * OPERATOR-SET ONLY: the relaxation direction is set via seed/manifest,
+     * admin API, or realm config — never self-asserted by a client. The single
+     * resolver `resolveEnvironmentPolicy(client, realm)` consumes this value;
+     * policy checkpoints (#197/#97/#98) consult the resolver, not this column
+     * directly. Defaulting NOT NULL keeps the migration backward-compatible:
+     * every existing realm becomes `production` (the prior, strict behaviour).
+     */
+    maxEnvironmentLaxity: environmentEnum('max_environment_laxity').notNull().default('production'),
     metadata: jsonb('metadata').$type<Record<string, unknown> | null>(),
     createdAt: bigint('created_at', { mode: 'number' }).notNull().default(EPOCH_MS_NOW),
     updatedAt: bigint('updated_at', { mode: 'number' }).notNull().default(EPOCH_MS_NOW),
@@ -183,6 +205,33 @@ export const oauthClients = pgTable(
      * cap because this column is not part of the registration request.
      */
     maxAgentMode: agentModeEnum('max_agent_mode'),
+    /**
+     * The client's declared deployment environment / policy profile
+     * (ADR-008 §2, issue #196). Selects a coordinated bundle of security and
+     * operational defaults (static API keys, localhost redirects, PKCE, token
+     * lifespans, refresh rotation, rate limits, open DCR, agent step-up, T3
+     * headers — see ADR-008 §5) instead of a dozen independent switches.
+     *
+     * This is only the client's REQUESTED laxity; the effective profile is the
+     * STRICTER of this value and the realm's `max_environment_laxity` ceiling,
+     * computed by `resolveEnvironmentPolicy(client, realm)`. A realm pinned to
+     * `production` overrides a client that asks for `development`.
+     *
+     * FAIL-SAFE DEFAULT: `production`. An unconfigured client gets the strictest
+     * profile, never the laxest — the relaxed posture is opt-in and bounded, the
+     * default everywhere is the hardened one. NOT NULL keeps the migration
+     * backward-compatible: every existing row becomes `production`.
+     *
+     * OPERATOR-SET, NOT SELF-ASSERTED. Unlike `is_agent` (self-asserted client
+     * input), the relaxation direction here is set ONLY by an operator —
+     * seed/manifest, admin API, or realm config. It is NOT accepted from
+     * `POST /oauth/register` (DCR) or a CIMD metadata document: a client cannot
+     * declare itself `development` to escape production gates, exactly as a
+     * client cannot self-grant `max_agent_mode`. New clients created via
+     * DCR/CIMD therefore always get this column's `production` default. Mirror
+     * this guarantee at every future write path that persists a client.
+     */
+    environment: environmentEnum('environment').notNull().default('production'),
     /**
      * Set when the client was created via dynamic client registration (RFC 7591).
      * Null for hand-provisioned / first-party clients. Consumed by the consent

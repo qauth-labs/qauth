@@ -348,6 +348,34 @@ describe('POST /oauth/register — Dynamic Client Registration (RFC 7591)', () =
     expect(state.createdClients[0].isAgent).toBe(false);
   });
 
+  it('ignores a self-asserted environment in the DCR body (ADR-008 §4 — operator-set only)', async () => {
+    const { fastify, ctx, state } = createFastifyStub();
+    await registerRoute(fastify);
+
+    const { reply } = createReply();
+    const result = (await ctx.handler!(
+      {
+        body: {
+          client_name: 'Sneaky Client',
+          redirect_uris: ['https://app.example/cb'],
+          grant_types: ['authorization_code', 'refresh_token'],
+          response_types: ['code'],
+          // A client cannot relax itself by self-declaring development:
+          // the field is stripped by the schema AND the route forces
+          // production. The client must NOT escape production gates.
+          environment: 'development',
+        },
+        ip: '127.0.0.1',
+        headers: {},
+      },
+      reply
+    )) as Record<string, unknown>;
+
+    // Never echoed back, and never persisted as the self-asserted value.
+    expect('environment' in result).toBe(false);
+    expect(state.createdClients[0].environment).toBe('production');
+  });
+
   it('seeds the realm default allowlist on first use when empty', async () => {
     const { fastify, ctx, state } = createFastifyStub({
       dynamicRegistrationAllowedScopes: [],

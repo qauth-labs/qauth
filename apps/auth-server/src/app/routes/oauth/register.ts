@@ -130,6 +130,16 @@ export default async function (fastify: FastifyInstance) {
         // ADR-007 §2: first-class agent classification. Defaults to false
         // (standard client); nothing is gated on it yet.
         isAgent: normalized.isAgent,
+        // ADR-008 §4 (#196): `environment` is OPERATOR-SET, never self-asserted.
+        // We deliberately do NOT pass it here, so a self-declared
+        // `environment: development` in the DCR body cannot relax the client —
+        // the column keeps its `production` default (the strictest profile),
+        // exactly as `maxAgentMode` is omitted from self-registration. The DCR
+        // request schema strips unknown fields, so an `environment` key never
+        // reaches this handler in the first place; omitting it from the insert
+        // is the defence-in-depth that keeps that guarantee true even if the
+        // schema changes.
+        environment: 'production',
         // Stamp the dyn-reg timestamp so the consent screen (issue #150)
         // can surface the "Newly registered" phishing-defense badge
         // within DYNAMIC_CLIENT_BADGE_DAYS of registration.
