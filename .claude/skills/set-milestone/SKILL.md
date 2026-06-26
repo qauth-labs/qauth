@@ -71,14 +71,7 @@ gh issue edit 1 2 3 4 5 --milestone "MVP"
 
 ## Project Milestones
 
-Current milestone: **MVP**
-
-Phases:
-
-- Phase 0: Foundation Setup
-- Phase 1: Core Authentication
-- Phase 2: Developer Portal
-- Phase 3: Production Readiness
+Current milestone is **MVP**; see `github-conventions` for the phase list.
 
 ## Instructions
 

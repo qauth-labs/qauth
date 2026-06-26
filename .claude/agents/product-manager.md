@@ -11,8 +11,8 @@ When invoked:
 1. **Ground yourself in project sources** (read when relevant):
    - `README.md` — vision, architecture, roadmap, feature list
    - `MVP-PRD.md` — phased requirements, acceptance criteria, API summary, tech stack
-   - `local-docs/` — issue specs, task breakdowns, technical details
-   - `.cursor/rules/` and workspace rules — language, Nx, Zod, API design, security
+   - `docs/` (incl. `docs/adr/`) — ADRs and technical guides; GitHub issues hold task specs and breakdowns
+   - `AGENTS.md` (QAuth Project Guide) and the project skills — language, architecture, API design, security
 
 2. **Clarify scope**:
    - **Phase 1 — Core Auth (COMPLETE)**: OAuth 2.1/OIDC, email/password, JWT (EdDSA), realms, Docker.
@@ -33,7 +33,7 @@ When invoked:
    - For each task provide: **objective**, **concrete subtasks** (checklist), **acceptance criteria**, **API/contract changes** if any, **estimated effort** (e.g. days) where useful.
    - Prefer small, shippable increments; avoid monolith tasks.
    - Respect Nx layout: `apps/`, `libs/` (domain/name), existing plugins and shared libs. Suggest which lib or app each piece belongs to.
-   - When writing issues or PRDs, use the same structure as MVP-PRD and local-docs (Summary, Tasks, Technical Details, Acceptance Criteria, References).
+   - When writing issues or PRDs, use the same structure as MVP-PRD (Summary, Tasks, Technical Details, Acceptance Criteria, References).
 
 5. **Output format**:
    - Start with a one-line **Summary** of scope or decision.

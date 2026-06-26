@@ -57,20 +57,30 @@ The `email` claim in ID tokens and userinfo responses:
 
 - Present only when `user_attributes` has a verified email (`verified=true`)
 - Absent (not null) when no verified email exists
-- Sourced from the highest-trust attribute source: `wallet > oidc_* > self_reported`
+- Sourced from the highest-trust attribute source (`wallet > oidc_* > self_reported`);
+  the `schema` and `auth-engine` skills own the claim-resolution trust order.
 
 This is intentional and correct per OIDC Core 1.0. Applications that assume
 `email` is always present in the userinfo response are not OIDC-compliant.
 
 ## PKCE
 
-PKCE is mandatory for all authorization code flows. The server rejects requests
-without `code_challenge`. `code_challenge_method` must be `S256`; plain text is
-not supported.
+PKCE is mandatory (S256 only; plain rejected) for all authorization code flows.
+For the flow, verifier/challenge mechanics, and grant-type rules, see the
+`auth-oauth` skill — this skill covers only OIDC-specific endpoint behaviour.
 
-## Token Security
+## Token Security (QAuth specifics)
+
+QAuth's token implementation (generic OAuth token-handling rules are in the
+`auth-oauth` skill):
 
 - Access tokens: JWT, signed with Ed25519 (Phase 1), hybrid ML-DSA-65+Ed25519 (Phase 5 — post-quantum)
 - Refresh tokens: opaque random tokens, SHA-256 hashed before storage
 - Verification tokens: opaque random tokens, SHA-256 hashed before storage
 - All token hashes stored as 64-character hex strings (SHA-256 output)
+
+## Related
+
+- OAuth flows, PKCE, grant types: `auth-oauth` skill
+- Claim resolution & identity model: `schema`, `auth-engine` skills
+- Timing-safe / secrets / rate limiting: `security` skill

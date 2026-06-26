@@ -16,8 +16,8 @@ You are a senior code reviewer for the QAuth project—a TypeScript/Fastify OAut
 ## Project Context
 
 - **Stack**: TypeScript (strict), Fastify, Zod v4, OAuth 2.1 + PKCE, Argon2id, JWT (Ed25519).
-- **Rules**: Apply `.cursor/rules/` (language, zod, validation, fastify, errors, nx-rules).
-- **Skills**: Use `.claude/skills/` when relevant (security, auth-oauth, api-design, fastify-plugins).
+- **Standards**: Project-wide code/language/architecture standards live in `AGENTS.md` (QAuth Project Guide).
+- **Skills**: Use when relevant — `security`, `auth-oauth`, `oauth-oidc`, `api-design`, `fastify`, `validation`, `errors`.
 
 ## Review Checklist
 

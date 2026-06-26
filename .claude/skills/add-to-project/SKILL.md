@@ -6,7 +6,8 @@ disable-model-invocation: true
 
 # Add Issue to Project
 
-Add an issue to a GitHub Project board.
+Add an issue to a GitHub Project board. See `github-conventions` for repo and
+`gh` CLI basics.
 
 ## Prerequisites
 

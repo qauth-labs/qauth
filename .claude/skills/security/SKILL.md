@@ -93,6 +93,7 @@ Standards-aligned security for QAuth: authentication, authorization, rate limiti
 - **CVEs**: Check advisories for direct and transitive dependencies; upgrade or patch when fixes exist. Prefer official advisories (npm, GitHub, Snyk, etc.).
 - **Supply chain**: Prefer pinned or lockfile-based installs; review lifecycle scripts and new dependencies. Post-2025 supply-chain attacks (e.g. npm) underscore the need for continuous checks.
 - **CI**: Consider failing CI on high/critical vulnerabilities or on known-bad CVEs; allow override with justification.
+- **Framework pins**: Keep Fastify **≥ 5.3.2** (CVE-2025-32442); see the `fastify` skill for the rationale and other framework version requirements.
 
 ## Audit Logging
 
