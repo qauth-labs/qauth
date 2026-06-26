@@ -18,6 +18,7 @@ import {
   type UpdateClientRequest,
   updateClientRequestSchema,
 } from '../../schemas/clients';
+import { registerApiKeyRoutes } from './api-keys';
 
 /**
  * The shape of a single `oauth_clients` row as returned by the repository.
@@ -644,4 +645,9 @@ export default async function (fastify: FastifyInstance) {
       return reply.send({ ...toClientResponse(updated), clientSecret: plaintext });
     }
   );
+
+  // ── Static developer API keys (ADR-008 §6, issue #97) ───────────────────
+  // Registered here so they share this module's `/api/clients` autoPrefix,
+  // auth model (requireJwt + developer-id ownership), and error shapes.
+  await registerApiKeyRoutes(fastify);
 }

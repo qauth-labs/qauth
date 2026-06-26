@@ -1,5 +1,7 @@
 import {
+  type ApiKeysRepository,
   type AuthorizationCodesRepository,
+  createApiKeysRepository,
   createAuditLogsRepository,
   createAuthorizationCodesRepository,
   createDatabase,
@@ -37,6 +39,7 @@ declare module 'fastify' {
       refreshTokens: RefreshTokensRepository;
       authorizationCodes: AuthorizationCodesRepository;
       auditLogs: ReturnType<typeof createAuditLogsRepository>;
+      apiKeys: ApiKeysRepository;
     };
   }
 }
@@ -76,6 +79,7 @@ export const databasePlugin = fp<DatabasePluginOptions>(
       refreshTokens: createRefreshTokensRepository(database.db),
       authorizationCodes: createAuthorizationCodesRepository(database.db),
       auditLogs: createAuditLogsRepository(database.db),
+      apiKeys: createApiKeysRepository(database.db),
     });
 
     fastify.addHook('onReady', async () => {

@@ -1,4 +1,9 @@
-import { InvalidClientError, JWTExpiredError, JWTInvalidError } from '@qauth-labs/shared-errors';
+import {
+  ForbiddenError,
+  InvalidClientError,
+  JWTExpiredError,
+  JWTInvalidError,
+} from '@qauth-labs/shared-errors';
 import type { FastifyInstance } from 'fastify';
 import Fastify from 'fastify';
 import { describe, expect, it } from 'vitest';
@@ -19,6 +24,10 @@ async function buildTestApp(): Promise<FastifyInstance> {
 
   app.post('/test-invalid-client', async () => {
     throw new InvalidClientError();
+  });
+
+  app.post('/test-forbidden', async () => {
+    throw new ForbiddenError('Static API keys are disabled for production clients.');
   });
 
   return app;
@@ -60,6 +69,21 @@ describe('error-handler plugin', () => {
       statusCode: 401,
       error: 'Invalid JWT token',
       code: 'JWT_INVALID',
+    });
+
+    await app.close();
+  });
+
+  it('maps ForbiddenError to a 403 response (ADR-008 static-API-key gate)', async () => {
+    const app = await buildTestApp();
+
+    const response = await app.inject({ method: 'POST', url: '/test-forbidden' });
+
+    expect(response.statusCode).toBe(403);
+    expect(response.json()).toMatchObject({
+      statusCode: 403,
+      error: 'Static API keys are disabled for production clients.',
+      code: 'FORBIDDEN',
     });
 
     await app.close();

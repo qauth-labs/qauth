@@ -260,9 +260,103 @@ export const oauthClients = pgTable(
   ]
 );
 
+/**
+ * Static developer API keys (ADR-008 §6, issue #97).
+ *
+ * An API key is the **DX half** of ADR-008's environment-aware posture — an
+ * environment-gated developer convenience, NOT a parallel to OAuth
+ * `client_credentials` (which remains the production machine-to-machine path).
+ * A key is only ever issuable for a `development` (optionally `staging`) client;
+ * in `production` the API-key path is OFF. The gate is enforced at the route
+ * layer through `resolveEnvironmentPolicy(client, realm).staticApiKeysAllowed`
+ * (fail-safe: an unset / `production` client cannot mint a key) — this table
+ * only persists the issued material.
+ *
+ * SECRET HANDLING (mirrors `oauth_clients.client_secret_hash`):
+ *   - Only the argon2id `key_hash` is ever stored — never the plaintext.
+ *   - The plaintext key is returned exactly once, at creation.
+ *   - `prefix` is the public, indexed lookup handle embedded in the plaintext
+ *     (`qauth_<keyId>`); it is NOT secret and is safe to display/list. It lets
+ *     authentication resolve the single candidate row by an indexed equality
+ *     lookup, then verify the full presented key against the salted `key_hash`
+ *     with argon2's constant-time comparison (a salted hash is not itself
+ *     searchable, so a non-secret lookup handle is required).
+ *   - `last4` is the trailing 4 chars of the secret, for "•••• abcd" display.
+ *
+ * A key NEVER authenticates once `revoked_at` is set (soft delete: the row is
+ * retained for audit) or once its client is no longer `staticApiKeysAllowed`.
+ */
+export const apiKeys = pgTable(
+  'api_keys',
+  {
+    id: uuid('id')
+      .primaryKey()
+      .default(sql`uuidv7()`),
+    realmId: uuid('realm_id')
+      .notNull()
+      .references(() => realms.id, { onDelete: 'cascade' }),
+    /**
+     * The OAuth client this key is scoped to. The environment gate
+     * (`staticApiKeysAllowed`) is resolved from THIS client's `environment` and
+     * its realm ceiling, so the key inherits the client's environment posture.
+     * `cascade` so deleting the client removes its keys.
+     */
+    clientId: uuid('client_id')
+      .notNull()
+      .references(() => oauthClients.id, { onDelete: 'cascade' }),
+    /**
+     * The developer who created the key (`users.id`). Nullable + `set null` so
+     * a deleted developer does not orphan the historical key row (matches
+     * `oauth_clients.developer_id`).
+     */
+    developerId: uuid('developer_id').references(() => users.id, { onDelete: 'set null' }),
+    /** Human-readable label chosen by the developer (e.g. "local laptop"). */
+    name: varchar('name', { length: 255 }).notNull(),
+    /**
+     * argon2id hash of the FULL plaintext key. Hash only — the plaintext is
+     * never stored and is unrecoverable after creation (same contract as
+     * `oauth_clients.client_secret_hash`).
+     */
+    keyHash: text('key_hash').notNull(),
+    /**
+     * Public, NON-SECRET lookup handle embedded in the plaintext key
+     * (`qauth_<keyId>`). Unique so authentication resolves exactly one
+     * candidate row by an indexed equality lookup before the constant-time hash
+     * verification. Safe to display and to list.
+     */
+    prefix: varchar('prefix', { length: 64 }).notNull(),
+    /** Trailing 4 chars of the secret portion, for masked display only. */
+    last4: varchar('last4', { length: 4 }).notNull(),
+    createdAt: bigint('created_at', { mode: 'number' }).notNull().default(EPOCH_MS_NOW),
+    /** Last time this key successfully authenticated a request (best-effort). */
+    lastUsedAt: bigint('last_used_at', { mode: 'number' }),
+    /**
+     * Soft-delete / revocation marker. When set, the key MUST NOT authenticate.
+     * Retained (rather than hard-deleted) so the audit trail and `last_used_at`
+     * survive revocation.
+     */
+    revokedAt: bigint('revoked_at', { mode: 'number' }),
+  },
+  (t) => [
+    // Authentication resolves the candidate row by this handle, so it must be
+    // unique and indexed. The unique index doubles as the lookup index.
+    uniqueIndex('idx_api_keys_prefix_unique').on(t.prefix),
+    // "List this client's keys" (newest first) and "this developer's keys".
+    index('idx_api_keys_client_id').on(t.clientId),
+    index('idx_api_keys_developer_id').on(t.developerId),
+    index('idx_api_keys_realm_id').on(t.realmId),
+    // Partial index over live (non-revoked) keys — the hot path for both
+    // listing active keys and the authentication lookup.
+    index('idx_api_keys_active')
+      .on(t.clientId)
+      .where(sql`${t.revokedAt} IS NULL`),
+  ]
+);
+
 export const realmsRelations = relations(realms, ({ many }) => ({
   users: many(users),
   oauthClients: many(oauthClients),
+  apiKeys: many(apiKeys),
 }));
 
 export const usersRelations = relations(users, ({ one, many }) => ({
@@ -270,7 +364,14 @@ export const usersRelations = relations(users, ({ one, many }) => ({
   oauthClientsAsDeveloper: many(oauthClients),
 }));
 
-export const oauthClientsRelations = relations(oauthClients, ({ one }) => ({
+export const oauthClientsRelations = relations(oauthClients, ({ one, many }) => ({
   realm: one(realms, { fields: [oauthClients.realmId], references: [realms.id] }),
   developer: one(users, { fields: [oauthClients.developerId], references: [users.id] }),
+  apiKeys: many(apiKeys),
+}));
+
+export const apiKeysRelations = relations(apiKeys, ({ one }) => ({
+  realm: one(realms, { fields: [apiKeys.realmId], references: [realms.id] }),
+  client: one(oauthClients, { fields: [apiKeys.clientId], references: [oauthClients.id] }),
+  developer: one(users, { fields: [apiKeys.developerId], references: [users.id] }),
 }));

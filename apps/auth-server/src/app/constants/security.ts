@@ -42,4 +42,10 @@ export const MIN_RESPONSE_TIME_MS = {
   INTROSPECT: 300,
   /** Userinfo endpoint minimum response time (300ms) */
   USERINFO: 300,
+  /**
+   * API-key authentication minimum response time (300ms, ADR-008 §6 / #97).
+   * Pads the verify path so a present-but-wrong key, a revoked key, an unknown
+   * prefix, and a now-forbidden client are indistinguishable by timing.
+   */
+  API_KEY_AUTH: 300,
 } as const;
