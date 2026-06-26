@@ -3,6 +3,7 @@ import type { FastifyInstance } from 'fastify';
 import { ZodTypeProvider } from 'fastify-type-provider-zod';
 
 import { env } from '../../../config/env';
+import { logAuthEvent } from '../../helpers/auth-events';
 import { logoutHeadersSchema, logoutResponseSchema } from '../../schemas/auth';
 
 /**
@@ -91,11 +92,20 @@ export default async function (fastify: FastifyInstance) {
           },
         });
 
+        // Structured success log (#124).
+        logAuthEvent(request, 'user.logout.success', true, { userId: user.id });
+
         return reply.send({
           success: true as const,
           message: 'Successfully logged out' as const,
         });
       } catch (error) {
+        // Structured failure log (#124).
+        logAuthEvent(request, 'user.logout.failure', false, {
+          userId: userId ?? null,
+          reason: error instanceof Error ? error.name : 'unknown_error',
+        });
+
         // Log failed logout attempt
         await fastify.repositories.auditLogs.create({
           userId: userId ?? null,

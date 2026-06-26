@@ -1,3 +1,5 @@
+import { randomUUID } from 'node:crypto';
+
 import swagger from '@fastify/swagger';
 import swaggerUi from '@fastify/swagger-ui';
 import Fastify from 'fastify';
@@ -10,12 +12,22 @@ import {
 
 import { app } from './app/app';
 import { env } from './config/env';
+import { buildLoggerOptions } from './config/logger';
 
-// Instantiate Fastify with some config
+// Instantiate Fastify with structured logging + request-id tracking.
+//
+// - `logger`: pino with secret redaction and (optionally) pino-pretty in dev
+//   (#122). `LOG_LEVEL` is honoured via `buildLoggerOptions`.
+// - `genReqId` / `requestIdHeader`: a request id is taken from the inbound
+//   `REQUEST_ID_HEADER` when present and otherwise generated, then attached to
+//   the request-scoped logger as `reqId` so every log line for a request is
+//   correlated. The id is echoed back on the response by the request-id plugin
+//   (#128).
 const server = Fastify({
-  logger: {
-    level: env.LOG_LEVEL,
-  },
+  logger: buildLoggerOptions(env),
+  requestIdHeader: env.REQUEST_ID_HEADER,
+  requestIdLogLabel: 'reqId',
+  genReqId: () => randomUUID(),
   routerOptions: {
     ignoreTrailingSlash: true,
   },

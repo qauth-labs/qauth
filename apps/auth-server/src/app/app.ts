@@ -13,7 +13,9 @@ import type { FastifyInstance } from 'fastify';
 
 import { env } from '../config/env';
 import errorHandler from './plugins/error-handler';
+import { metricsPlugin } from './plugins/metrics';
 import { rateLimitPlugin } from './plugins/rate-limit';
+import { requestIdPlugin } from './plugins/request-id';
 import { securityHeadersPlugin } from './plugins/security-headers';
 
 export async function app(fastify: FastifyInstance, opts: object) {
@@ -114,6 +116,11 @@ export async function app(fastify: FastifyInstance, opts: object) {
   // carries the CSP, HSTS, frame-options and related hardening headers.
   await fastify.register(securityHeadersPlugin);
 
+  // Observability (T3): request-id propagation (#128) and the metrics registry
+  // (#123/#126) must be available before routes are loaded.
+  await fastify.register(requestIdPlugin);
+  await fastify.register(metricsPlugin);
+
   await fastify.register(cors, {
     origin: env.CORS_ORIGIN || '*',
   });
@@ -128,7 +135,8 @@ export async function app(fastify: FastifyInstance, opts: object) {
   fastify.register(AutoLoad, {
     dir: path.join(__dirname, 'plugins'),
     options: { ...opts },
-    ignorePattern: /(error-handler|rate-limit|security-headers)\.(ts|js)$|\.(test|spec)\.(ts|js)$/,
+    ignorePattern:
+      /(error-handler|rate-limit|security-headers|metrics|request-id)\.(ts|js)$|\.(test|spec)\.(ts|js)$/,
   });
 
   fastify.register(AutoLoad, {

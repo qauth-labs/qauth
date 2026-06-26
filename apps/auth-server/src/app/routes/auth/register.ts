@@ -4,6 +4,7 @@ import type { FastifyInstance } from 'fastify';
 import { ZodTypeProvider } from 'fastify-type-provider-zod';
 
 import { env } from '../../../config/env';
+import { logAuthEvent } from '../../helpers/auth-events';
 import { getOrCreateDefaultRealm } from '../../helpers/realm';
 import { type RegisterRequest, registerResponseSchema, registerSchema } from '../../schemas/auth';
 
@@ -99,6 +100,13 @@ export default async function (fastify: FastifyInstance) {
         );
         // Don't throw - registration succeeded, user can request resend
       }
+
+      // Structured log of the successful registration (#124). Email is included
+      // on the success path; no password or token is logged.
+      logAuthEvent(request, 'user.register.success', true, {
+        userId: user.id,
+        email: user.email,
+      });
 
       // Return user data without password_hash
       // Type is automatically inferred from registerResponseSchema
