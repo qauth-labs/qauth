@@ -22,11 +22,13 @@
     "@qauth-labs/shared-validation": "workspace:*",
     "@qauth-labs/shared-errors": "workspace:*",
     "fastify-plugin": "catalog:",
+    "prom-client": "catalog:",
     "zod": "catalog:"
   },
   "devDependencies": {
     "@vitest/coverage-v8": "catalog:",
     "@vitest/ui": "catalog:",
+    "pino-pretty": "catalog:",
     "typescript": "catalog:",
     "vitest": "catalog:"
   }

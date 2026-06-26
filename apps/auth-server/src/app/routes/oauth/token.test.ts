@@ -118,6 +118,10 @@ function createFastifyStub() {
       warn: vi.fn(),
       error: vi.fn(),
     },
+    metrics: {
+      loginAttempts: { inc: vi.fn() },
+      tokensIssued: { inc: vi.fn() },
+    },
   };
 
   return { fastify: fastify as FastifyInstance, ctx };

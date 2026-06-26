@@ -432,6 +432,10 @@ async function handleAuthorizationCode(
     metadata: { authCodeId: authCode.id, grantType: 'authorization_code' },
   });
 
+  // Token issuance metrics (#126).
+  fastify.metrics.tokensIssued.inc({ type: 'access', grant_type: 'authorization_code' });
+  fastify.metrics.tokensIssued.inc({ type: 'refresh', grant_type: 'authorization_code' });
+
   return {
     access_token: accessToken,
     refresh_token: refreshToken,
@@ -600,6 +604,9 @@ async function handleClientCredentials(
       resource: requestedResource,
     },
   });
+
+  // Token issuance metrics (#126). No refresh token on client_credentials.
+  fastify.metrics.tokensIssued.inc({ type: 'access', grant_type: 'client_credentials' });
 
   return {
     access_token: accessToken,
@@ -873,6 +880,10 @@ async function handleRefreshToken(
       scope: scopeString,
     },
   });
+
+  // Token issuance metrics (#126). Refresh-token rotation mints both.
+  fastify.metrics.tokensIssued.inc({ type: 'access', grant_type: 'refresh_token' });
+  fastify.metrics.tokensIssued.inc({ type: 'refresh', grant_type: 'refresh_token' });
 
   return {
     access_token: accessToken,
@@ -1229,6 +1240,9 @@ async function handleTokenExchange(
       expiresIn: accessTokenExpiresIn,
     },
   });
+
+  // Token issuance metrics (#126). Token-exchange mints an access token only.
+  fastify.metrics.tokensIssued.inc({ type: 'access', grant_type: 'token-exchange' });
 
   // RFC 8693 §2.2.1: token-exchange responses MUST include `issued_token_type`.
   return {

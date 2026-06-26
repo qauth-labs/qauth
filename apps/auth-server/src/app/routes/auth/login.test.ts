@@ -1,4 +1,4 @@
-import { InvalidCredentialsError } from '@qauth-labs/shared-errors';
+import { InvalidCredentialsError, TooManyRequestsError } from '@qauth-labs/shared-errors';
 import type { FastifyInstance } from 'fastify';
 import { describe, expect, it, type Mock, vi } from 'vitest';
 
@@ -14,6 +14,14 @@ vi.mock('../../../config/env', () => ({
     LOGIN_RATE_LIMIT: 60,
     LOGIN_RATE_WINDOW: 60,
     SYSTEM_CLIENT_ID: 'system',
+    // Failed-login tracking enabled; the redis stub's ttl defaults to -2 (not
+    // locked), so the credential-flow tests are unaffected. The lockout path is
+    // exercised by its own test below, and the helper internals in
+    // failed-login.test.ts.
+    FAILED_LOGIN_TRACKING_ENABLED: true,
+    FAILED_LOGIN_MAX_ATTEMPTS: 5,
+    FAILED_LOGIN_WINDOW: 900,
+    FAILED_LOGIN_LOCKOUT_DURATION: 900,
   },
 }));
 
@@ -92,10 +100,26 @@ function createFastifyStub() {
     sessionUtils: {
       setSession: vi.fn().mockResolvedValue(undefined),
     },
+    redis: {
+      ttl: vi.fn().mockResolvedValue(-2),
+      incr: vi.fn().mockResolvedValue(1),
+      expire: vi.fn().mockResolvedValue(1),
+      set: vi.fn().mockResolvedValue('OK'),
+      del: vi.fn().mockResolvedValue(0),
+    },
+    metrics: {
+      loginAttempts: { inc: vi.fn() },
+      tokensIssued: { inc: vi.fn() },
+    },
     log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
   };
 
   return { fastify: fastify as FastifyInstance, ctx };
+}
+
+/** A request-scoped logger stub for the structured auth-event helper. */
+function requestLog() {
+  return { info: vi.fn(), warn: vi.fn() };
 }
 
 describe('POST /auth/login', () => {
@@ -129,6 +153,7 @@ describe('POST /auth/login', () => {
       body: { email: 'user@example.com', password: 'p' },
       ip: '127.0.0.1',
       headers: { 'user-agent': 'vitest' },
+      log: requestLog(),
     };
     const reply = createReply();
     if (!handler) throw new Error('Handler missing');
@@ -166,6 +191,7 @@ describe('POST /auth/login', () => {
       body: { email: 'missing@example.com', password: 'p' },
       ip: '127.0.0.1',
       headers: { 'user-agent': 'vitest' },
+      log: requestLog(),
     };
     const reply = createReply();
     if (!handler) throw new Error('Handler missing');
@@ -193,10 +219,36 @@ describe('POST /auth/login', () => {
       body: { email: 'user@example.com', password: 'wrong' },
       ip: '127.0.0.1',
       headers: { 'user-agent': 'vitest' },
+      log: requestLog(),
     };
     const reply = createReply();
     if (!handler) throw new Error('Handler missing');
 
     await expect(handler(request, reply)).rejects.toThrow(InvalidCredentialsError);
+  });
+
+  it('rejects with TooManyRequestsError when the identifier is locked out (#115)', async () => {
+    const { fastify, ctx } = createFastifyStub();
+    await loginRoute(fastify);
+    const handler = ctx.handler;
+
+    // Simulate an active lockout: ttl > 0 on the lockout key.
+    (fastify.redis.ttl as unknown as Mock).mockResolvedValue(300);
+
+    const request = {
+      body: { email: 'user@example.com', password: 'p' },
+      ip: '127.0.0.1',
+      headers: { 'user-agent': 'vitest' },
+      log: requestLog(),
+    };
+    const reply = createReply();
+    if (!handler) throw new Error('Handler missing');
+
+    await expect(handler(request, reply)).rejects.toThrow(TooManyRequestsError);
+    // Locked out before any credential verification.
+    expect(fastify.passwordHasher.verifyPassword).not.toHaveBeenCalled();
+    expect(fastify.jwtUtils.signAccessToken).not.toHaveBeenCalled();
+    // Retry-After advertised.
+    expect(reply.headers['Retry-After']).toBe('300');
   });
 });

@@ -1,4 +1,4 @@
-import { InvalidCredentialsError } from '@qauth-labs/shared-errors';
+import { InvalidCredentialsError, TooManyRequestsError } from '@qauth-labs/shared-errors';
 import { normalizeEmail } from '@qauth-labs/shared-validation';
 import { randomUUID } from 'crypto';
 import type { FastifyInstance } from 'fastify';
@@ -6,7 +6,9 @@ import { ZodTypeProvider } from 'fastify-type-provider-zod';
 
 import { env } from '../../../config/env';
 import { MIN_RESPONSE_TIME_MS } from '../../constants';
+import { hashEmail, logAuthEvent } from '../../helpers/auth-events';
 import { resolveAudience } from '../../helpers/client-auth';
+import { checkLockout, recordFailedAttempt, resetFailedAttempts } from '../../helpers/failed-login';
 import { getOrCreateSystemClient } from '../../helpers/oauth-client';
 import { getOrCreateDefaultRealm } from '../../helpers/realm';
 import { ensureMinimumResponseTime } from '../../helpers/timing';
@@ -42,9 +44,29 @@ export default async function (fastify: FastifyInstance) {
       const startTime = Date.now();
       const { email, password } = request.body as LoginRequest;
 
+      // Normalize email up front so it is available to lockout tracking and
+      // structured logging on every code path (#115, #124, #125).
+      const normalizedEmail = normalizeEmail(email);
+      // Identifiers tracked for failed-login throttling (#115): the email is
+      // hashed so the cache never stores raw addresses, plus the source IP.
+      const emailHash = hashEmail(normalizedEmail);
+      const lockoutIdentifiers = [`email:${emailHash}`, `ip:${request.ip}`];
+
       try {
-        // Normalize email
-        const normalizedEmail = normalizeEmail(email);
+        // Reject early if this identifier is currently locked out (#115).
+        const lockout = await checkLockout(fastify.redis, lockoutIdentifiers);
+        if (lockout.locked) {
+          fastify.metrics.loginAttempts.inc({ result: 'failure', reason: 'locked_out' });
+          logAuthEvent(request, 'user.login.failure', false, {
+            emailHash,
+            reason: 'locked_out',
+          });
+          if (lockout.retryAfterSeconds !== undefined) {
+            reply.header('Retry-After', String(lockout.retryAfterSeconds));
+          }
+          await ensureMinimumResponseTime(startTime, MIN_RESPONSE_TIME_MS.LOGIN);
+          throw new TooManyRequestsError('Too many failed login attempts. Please try again later.');
+        }
 
         // Get default realm
         const realm = await getOrCreateDefaultRealm(fastify);
@@ -66,10 +88,21 @@ export default async function (fastify: FastifyInstance) {
 
         // If credentials are invalid, throw generic error
         if (!user || !passwordValid) {
+          // Record the failed attempt for throttling/lockout (#115).
+          await recordFailedAttempt(fastify.redis, lockoutIdentifiers);
+
+          // Structured log of the failed login (#125): IP + email *hash* only,
+          // never the password or the raw email.
+          fastify.metrics.loginAttempts.inc({ result: 'failure', reason: 'invalid_credentials' });
+          logAuthEvent(request, 'user.login.failure', false, {
+            emailHash,
+            reason: 'invalid_credentials',
+          });
+
           // Ensure minimum response time to prevent timing attacks
           await ensureMinimumResponseTime(startTime, MIN_RESPONSE_TIME_MS.LOGIN);
 
-          // Log failed login attempt
+          // Log failed login attempt (DB audit trail)
           await fastify.repositories.auditLogs.create({
             userId: null,
             oauthClientId: null,
@@ -153,6 +186,18 @@ export default async function (fastify: FastifyInstance) {
         // Update user lastLoginAt timestamp
         await fastify.repositories.users.updateLastLogin(user.id);
 
+        // Successful login: clear failed-attempt counters/lockout (#115) and
+        // emit structured success log + metrics (#123, #124, #126).
+        await resetFailedAttempts(fastify.redis, lockoutIdentifiers);
+        fastify.metrics.loginAttempts.inc({ result: 'success' });
+        fastify.metrics.tokensIssued.inc({ type: 'access', grant_type: 'password' });
+        fastify.metrics.tokensIssued.inc({ type: 'refresh', grant_type: 'password' });
+        logAuthEvent(request, 'user.login.success', true, {
+          userId: user.id,
+          clientId: systemClient.clientId,
+          email: user.email,
+        });
+
         // RFC 6749 §5.1: token responses MUST NOT be cached by intermediaries.
         reply.header('Cache-Control', 'no-store').header('Pragma', 'no-cache');
 
@@ -164,14 +209,18 @@ export default async function (fastify: FastifyInstance) {
           token_type: 'Bearer' as const,
         });
       } catch (error) {
-        // If error is already an InvalidCredentialsError, delay and logging were already handled
-        // Simply re-throw the error without additional processing
-        if (error instanceof InvalidCredentialsError) {
+        // InvalidCredentialsError (delay/logging already handled above) and
+        // TooManyRequestsError (lockout, handled above) are re-thrown as-is.
+        if (error instanceof InvalidCredentialsError || error instanceof TooManyRequestsError) {
           throw error;
         }
 
-        // Log other errors as failed login attempts
-        const normalizedEmail = normalizeEmail(email);
+        // Log other errors as failed login attempts (structured + DB audit).
+        fastify.metrics.loginAttempts.inc({ result: 'failure', reason: 'error' });
+        logAuthEvent(request, 'user.login.failure', false, {
+          emailHash,
+          reason: 'error',
+        });
 
         await fastify.repositories.auditLogs.create({
           userId: null,

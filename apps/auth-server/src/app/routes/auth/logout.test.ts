@@ -81,6 +81,8 @@ function logoutRequest(authHeader: string | undefined = 'Bearer valid.access.jwt
       'user-agent': 'vitest',
     },
     ip: '203.0.113.7',
+    // Request-scoped logger used by the structured auth-event helper (#124).
+    log: { info: vi.fn(), warn: vi.fn() },
   };
 }
 
