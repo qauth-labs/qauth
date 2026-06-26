@@ -19,9 +19,9 @@
   <h3>🇪🇺 Made in Europe · 🇪🇪 Made in Estonia · 🇹🇷 Made in Türkiye</h3>
 </div>
 
-> 🎉 **June 2026 milestone — MVP complete, agent-native authorization shipped, and production hardening (T3) done.** Agent client type, RFC 8693 on-behalf-of token exchange, scope modes (ReadOnly / Admin / Exec), step-up, and per-agent audit are all live and documented ([ADR-007 §2](./docs/adr/007-mcp-first-positioning.md) · [agent guide](./docs/agent-authorization.md)). The T3 hardening track also shipped end-to-end — security headers, CSRF, secure cookies, OIDC ID tokens, and observability. Next up: the environment-aware authorization posture (T5, [ADR-008](./docs/adr/008-environment-aware-authorization.md)).
+> 🎉 **June 2026 milestone — MVP complete, agent-native authorization shipped, and production hardening (T3) done.** Agent client type, RFC 8693 on-behalf-of token exchange, scope modes (ReadOnly / Admin / Exec), step-up, and per-agent audit are all live and documented ([ADR-007 §2](./docs/adr/007-mcp-first-positioning.md) · [agent guide](./docs/agent-authorization.md)). The T3 hardening track and the T5 environment-aware authorization posture ([ADR-008](./docs/adr/008-environment-aware-authorization.md)) also shipped end-to-end. The near-term roadmap is complete; remaining work is the long-term platform (wallet federation + post-quantum signing, T4).
 
-> **Status:** Core OAuth 2.1 / OIDC **and** the MCP / agent-native authorization layer work end-to-end — discovery, dynamic client registration, resource-indicator audience binding, consent, and on-behalf-of agent delegation (the self-hostable OAuth 2.1 authorization server for MCP servers and AI agents; see [ADR-007](./docs/adr/007-mcp-first-positioning.md)). Wallet federation and post-quantum signing remain the long-term platform. See [Current Status](#-current-status-june-2026). **Production hardening (T3) is complete** — security headers, CSRF, secure cookies, OIDC ID token/nonce/claims, and observability all ship; deploy with the documented production configuration. The environment-aware authorization posture (T5, [ADR-008](./docs/adr/008-environment-aware-authorization.md)) is the active near-term track.
+> **Status:** Core OAuth 2.1 / OIDC **and** the MCP / agent-native authorization layer work end-to-end — discovery, dynamic client registration, resource-indicator audience binding, consent, and on-behalf-of agent delegation (the self-hostable OAuth 2.1 authorization server for MCP servers and AI agents; see [ADR-007](./docs/adr/007-mcp-first-positioning.md)). Wallet federation and post-quantum signing remain the long-term platform. See [Current Status](#-current-status-june-2026). **Production hardening (T3) is complete** — security headers, CSRF, secure cookies, OIDC ID token/nonce/claims, and observability all ship; deploy with the documented production configuration. The environment-aware authorization posture (T5, [ADR-008](./docs/adr/008-environment-aware-authorization.md)) is **also complete** — `environment` selects a fail-safe policy profile, and the near-term roadmap is finished. Remaining work is the long-term platform (wallet federation + post-quantum signing, T4).
 
 ## 🎯 How to Use QAuth
 
@@ -138,7 +138,7 @@ A federated identity hub for the next generation of the internet:
 
 QAuth is **feature-complete for MCP / agent authentication, with the production-hardening track (T3) complete**. An honest snapshot.
 
-Phase 1 core OAuth 2.1 / OIDC, the MCP and agent-native authorization layers, **and the T3 production-hardening track** (CSRF, security headers, secure cookies, OIDC ID token/nonce/claims, structured logging + `/metrics`, failed-login lockout) are all complete and live-tested end-to-end. The active near-term track is now the environment-aware authorization posture (T5, [ADR-008](./docs/adr/008-environment-aware-authorization.md)).
+Phase 1 core OAuth 2.1 / OIDC, the MCP and agent-native authorization layers, the **T3 production-hardening track** (CSRF, security headers, secure cookies, OIDC ID token/nonce/claims, structured logging + `/metrics`, failed-login lockout), **and the T5 environment-aware authorization posture** ([ADR-008](./docs/adr/008-environment-aware-authorization.md) — environment as a fail-safe policy dimension + environment-gated developer API keys) are all complete and live-tested end-to-end. The near-term roadmap is finished; remaining work is the long-term platform (wallet federation + post-quantum signing, T4).
 
 > **Near-term focus — MCP / AI-agent auth.** Building OAuth 2.1 properly produced a working **authorization server for MCP servers and AI agents**, validated end-to-end with Claude Code against a live MCP server. That is now the near-term direction; wallet federation and post-quantum signing are the long-term platform, sequenced after. See [ADR-007](./docs/adr/007-mcp-first-positioning.md).
 
@@ -162,10 +162,11 @@ Phase 1 core OAuth 2.1 / OIDC, the MCP and agent-native authorization layers, **
 - **OIDC conformance (T3)** — ID token issuance (EdDSA) with `nonce`, and aligned `sub` / `email` / `email_verified` / `name` claims across ID token, userinfo, and discovery
 - **Observability (T3)** — structured pino logging with secret redaction, `X-Request-Id` propagation, Prometheus `/metrics` (login + token counters), and Redis-backed failed-login tracking with lockout
 - **developer-portal production Docker image** + Docker Compose service
+- **Environment-aware authorization (T5, [ADR-008](./docs/adr/008-environment-aware-authorization.md))** — `environment` (development / staging / production) as a fail-safe, operator-set policy dimension on clients/realms; a single `resolveEnvironmentPolicy` resolver drives token TTLs, PKCE, localhost redirects, rate-limit tier, agent step-up, and the T3 security bundle; plus environment-gated static developer API keys (backend + portal UI)
 
 **🚧 In progress / next**
 
-- Environment-aware authorization posture (T5, [ADR-008](./docs/adr/008-environment-aware-authorization.md)) — strict production defaults with documented dev relaxations
+- The near-term roadmap (T0–T3, T5) is complete. Next is the **long-term platform** — wallet federation and post-quantum signing (T4), gated on the [ADR-002](./docs/adr/002-identifier-abstraction.md) identifier-abstraction migration.
 
 **📋 Deferred — long-term platform** (designed, not yet implemented; resequenced per [ADR-007](./docs/adr/007-mcp-first-positioning.md))
 
@@ -525,7 +526,7 @@ docker compose up -d
 > - ✅ **T1 — MCP productization:** `@qauth-labs/mcp-guard` (RFC 9728 metadata + token validation + step-up scope challenges), Client ID Metadata Documents (CIMD) support, MCP quickstart + example, RFC 7009 revocation
 > - ✅ **T2 — Agent-native authZ (the Phase 9 substance, pulled forward):** agent client type, RFC 8693 token-exchange delegation, scope modes (ReadOnly/Admin/Exec), step-up, per-agent audit
 > - ✅ **T3 — OIDC conformance + hardening (done):** security (CSRF/Helmet/secure cookies/XSS), observability (pino/`/metrics`/request-id/failed-login lockout), ID token/nonce/claims, developer-portal Docker image
-> - 🚧 **T5 — Environment-aware authZ ([ADR-008](./docs/adr/008-environment-aware-authorization.md)):** strict production posture with documented dev relaxations (active near-term track)
+> - ✅ **T5 — Environment-aware authZ ([ADR-008](./docs/adr/008-environment-aware-authorization.md)) (done):** `environment` as a fail-safe, operator-set policy dimension; `resolveEnvironmentPolicy` driving token TTLs / PKCE / localhost redirects / rate-limit tier / agent step-up / T3 bundle; environment-gated developer API keys (backend + portal UI)
 > - 📋 **T4 — Federation + PQC (deferred long-term moat):** Phases 4–5 below, gated on the [ADR-002](./docs/adr/002-identifier-abstraction.md) migration
 
 ### Phase 1: Core Auth Server (complete)
@@ -750,7 +751,7 @@ Copyright © 2025–2026 QAuth Labs
 
 ---
 
-**Note:** This project is under active development. Core OAuth 2.1 / OIDC, MCP / AI-agent auth, and the T3 production-hardening track (security headers, CSRF, secure cookies, OIDC conformance, observability) all ship today; the near-term focus is the environment-aware authorization posture (T5, [ADR-008](./docs/adr/008-environment-aware-authorization.md)). Review the [production configuration](#self-hosted-mode-production) before deploying.
+**Note:** This project is under active development. Core OAuth 2.1 / OIDC, MCP / AI-agent auth, the T3 production-hardening track (security headers, CSRF, secure cookies, OIDC conformance, observability), and the T5 environment-aware authorization posture ([ADR-008](./docs/adr/008-environment-aware-authorization.md)) all ship today; the near-term roadmap is complete, and remaining work is the long-term platform (wallet federation + post-quantum signing, T4). Review the [production configuration](#self-hosted-mode-production) before deploying.
 
 ## 🤲 Acknowledgments
 
