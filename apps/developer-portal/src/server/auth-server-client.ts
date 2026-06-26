@@ -64,6 +64,13 @@ export type GrantType = 'authorization_code' | 'refresh_token' | 'client_credent
  * route except the secret-bearing responses. The plaintext `clientSecret` is
  * deliberately absent here — it only exists on {@link ClientWithSecret}.
  */
+/**
+ * A client's effective deployment environment (ADR-008). Resolved server-side
+ * as the stricter of the client's declared environment and its realm ceiling —
+ * the portal only reads it, never sets it.
+ */
+export type ClientEnvironment = 'development' | 'staging' | 'production';
+
 export interface OAuthClient {
   id: string;
   clientId: string;
@@ -76,9 +83,56 @@ export interface OAuthClient {
   tokenEndpointAuthMethod: TokenEndpointAuthMethod;
   enabled: boolean;
   requirePkce: boolean;
+  /** Effective environment (ADR-008); read-only, resolved by the auth-server. */
+  environment: ClientEnvironment;
+  /**
+   * Whether static developer API keys may be minted for this client (#97/#98).
+   * Resolved from the effective environment (`development` only). The portal
+   * gates the create form on this; the mint endpoint's `403` is the
+   * authoritative defense-in-depth check.
+   */
+  staticApiKeysAllowed: boolean;
   createdAt: number;
   updatedAt: number | null;
   lastUsedAt: number | null;
+}
+
+/**
+ * A static developer API key as returned by the management API — masked,
+ * non-secret fields only (issue #98 consumes #97). The full `key` is present
+ * ONLY on the create response (see {@link ApiKeyWithSecret}); the hash is never
+ * returned.
+ */
+export interface ApiKey {
+  id: string;
+  clientId: string;
+  name: string;
+  /** Public lookup handle (`qauth_<id>`); non-secret, safe to display. */
+  prefix: string;
+  /** Trailing 4 chars of the secret, for masked display. */
+  last4: string;
+  createdAt: number;
+  lastUsedAt: number | null;
+  /** Set once revoked; a revoked key never authenticates again. */
+  revokedAt: number | null;
+}
+
+/**
+ * Returned only by `POST /api/clients/:clientId/api-keys` (create). The
+ * plaintext `key` is shown once and is unrecoverable afterwards — never persist
+ * it beyond the one-time display modal.
+ */
+export interface ApiKeyWithSecret extends ApiKey {
+  /** Full plaintext key (`qauth_...`). Shown once; never recoverable. */
+  key: string;
+}
+
+export interface ApiKeyListData {
+  apiKeys: ApiKey[];
+}
+
+export interface CreateApiKeyInput {
+  name: string;
 }
 
 /**
@@ -132,10 +186,15 @@ function mapErrorCode(body: AuthServerErrorBody, httpStatus: number): string {
       return 'EMAIL_ALREADY_VERIFIED';
     case 'VALIDATION_ERROR':
       return 'VALIDATION_ERROR';
+    case 'FORBIDDEN':
+      // The environment gate on API-key minting (ADR-008 §6) — a staging /
+      // production client is refused here and steered to client_credentials.
+      return 'FORBIDDEN';
     default:
       // No domain code: classify by status. The `/api/clients` routes return
       // bare `401`/`400`s; login etc. carry a `code` handled above.
       if (httpStatus === 401) return 'UNAUTHENTICATED';
+      if (httpStatus === 403) return 'FORBIDDEN';
       if (httpStatus === 400) return 'VALIDATION_ERROR';
       return 'UNKNOWN';
   }
@@ -355,6 +414,41 @@ export const authServerClient = {
       `/api/clients/${encodeURIComponent(id)}/regenerate-secret`,
       {
         method: 'POST',
+        headers: { Authorization: `Bearer ${accessToken}` },
+        skipContentType: true,
+      }
+    );
+  },
+
+  // ── Static developer API keys (#97 backend, consumed by #98) ──────────────
+
+  listApiKeys(accessToken: string, clientId: string): Promise<Result<ApiKeyListData>> {
+    return apiRequest<ApiKeyListData>(`/api/clients/${encodeURIComponent(clientId)}/api-keys`, {
+      method: 'GET',
+      headers: { Authorization: `Bearer ${accessToken}` },
+      skipContentType: true,
+    });
+  },
+
+  createApiKey(
+    accessToken: string,
+    clientId: string,
+    input: CreateApiKeyInput
+  ): Promise<Result<ApiKeyWithSecret>> {
+    return apiRequest<ApiKeyWithSecret>(`/api/clients/${encodeURIComponent(clientId)}/api-keys`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${accessToken}` },
+      body: JSON.stringify(input),
+    });
+  },
+
+  // Revoke returns the masked key as a 200 JSON body (idempotent soft-delete),
+  // so this parses the response rather than using the no-content variant.
+  revokeApiKey(accessToken: string, clientId: string, keyId: string): Promise<Result<ApiKey>> {
+    return apiRequest<ApiKey>(
+      `/api/clients/${encodeURIComponent(clientId)}/api-keys/${encodeURIComponent(keyId)}`,
+      {
+        method: 'DELETE',
         headers: { Authorization: `Bearer ${accessToken}` },
         skipContentType: true,
       }

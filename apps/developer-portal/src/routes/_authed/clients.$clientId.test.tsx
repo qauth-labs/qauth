@@ -10,6 +10,15 @@ vi.mock('../../server/actions/clients', () => ({
   regenerateSecretFn: vi.fn(),
 }));
 
+// The detail page now renders ApiKeysSection, which imports the API-key server
+// actions; mock them so the import graph never reaches the real env-validated
+// config (and so no real fetch is attempted from this SSR test).
+vi.mock('../../server/actions/api-keys', () => ({
+  listApiKeysFn: vi.fn(() => pending),
+  createApiKeyFn: vi.fn(),
+  revokeApiKeyFn: vi.fn(),
+}));
+
 vi.mock('@tanstack/react-router', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@tanstack/react-router')>();
   return {

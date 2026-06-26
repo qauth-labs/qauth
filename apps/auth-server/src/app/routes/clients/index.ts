@@ -7,6 +7,7 @@ import { z } from 'zod';
 
 import { env } from '../../../config/env';
 import { validateRedirectUri } from '../../helpers/dynamic-client-registration';
+import { type EnvironmentPolicy, resolveEnvironmentPolicy } from '../../helpers/environment-policy';
 import { getOrCreateDefaultRealm } from '../../helpers/realm';
 import {
   clientSchema,
@@ -83,8 +84,15 @@ const uuidSubjectSchema = z.uuid();
  * management API. The client secret hash and any internal-only columns
  * (e.g. `dynamicRegisteredAt`, `metadata`, `realmId`) are intentionally
  * never serialized.
+ *
+ * `policy` is the EFFECTIVE environment policy (ADR-008 §7) resolved from the
+ * client's `environment` and its realm's `max_environment_laxity` ceiling via
+ * {@link resolveEnvironmentPolicy}. Its `environment` and `staticApiKeysAllowed`
+ * are surfaced read-only so the developer portal can label the client and gate
+ * the API-keys create form (#98) — they are NEVER read from the request body
+ * (create/update schemas omit them), so a developer cannot self-relax posture.
  */
-function toClientResponse(client: OAuthClientRow) {
+function toClientResponse(client: OAuthClientRow, policy: EnvironmentPolicy) {
   return {
     id: client.id,
     clientId: client.clientId,
@@ -97,6 +105,8 @@ function toClientResponse(client: OAuthClientRow) {
     tokenEndpointAuthMethod: client.tokenEndpointAuthMethod,
     enabled: client.enabled,
     requirePkce: client.requirePkce,
+    environment: policy.environment,
+    staticApiKeysAllowed: policy.staticApiKeysAllowed,
     createdAt: client.createdAt,
     updatedAt: client.updatedAt,
     lastUsedAt: client.lastUsedAt,
@@ -146,6 +156,21 @@ async function resolveOwnedClient(
     throw new NotFoundError('OAuthClient', id);
   }
   return client;
+}
+
+/**
+ * Resolve a client's EFFECTIVE environment policy (ADR-008 §7) by pairing it
+ * with its realm ceiling. Routes through {@link resolveEnvironmentPolicy} — the
+ * single source of truth — so the response's `environment` / `staticApiKeysAllowed`
+ * always agree with what the static-API-key gate (#97) enforces, including a
+ * realm pinned to `production`. A missing realm fails safe to `production`.
+ */
+async function resolveClientPolicy(
+  fastify: FastifyInstance,
+  client: OAuthClientRow
+): Promise<EnvironmentPolicy> {
+  const realm = await fastify.repositories.realms.findById(client.realmId);
+  return resolveEnvironmentPolicy(client, realm ?? null);
 }
 
 /**
@@ -307,7 +332,23 @@ export default async function (fastify: FastifyInstance) {
 
       const rows = await fastify.repositories.oauthClients.listByDeveloper(developerId);
 
-      return reply.send({ clients: rows.map(toClientResponse) });
+      // Resolve each client's effective policy against its realm ceiling. Realms
+      // are cached per id within the request so a developer's clients (which all
+      // share the default realm) cost a single realm lookup, not one per client.
+      const realmCache = new Map<
+        string,
+        Awaited<ReturnType<FastifyInstance['repositories']['realms']['findById']>>
+      >();
+      const clients = [];
+      for (const row of rows) {
+        if (!realmCache.has(row.realmId)) {
+          realmCache.set(row.realmId, await fastify.repositories.realms.findById(row.realmId));
+        }
+        const policy = resolveEnvironmentPolicy(row, realmCache.get(row.realmId) ?? null);
+        clients.push(toClientResponse(row, policy));
+      }
+
+      return reply.send({ clients });
     }
   );
 
@@ -428,10 +469,14 @@ export default async function (fastify: FastifyInstance) {
         },
       });
 
+      // Reuse the realm already loaded above so the response's effective
+      // environment respects the realm ceiling without a second lookup.
+      const policy = resolveEnvironmentPolicy(created, realm);
+
       // Response carries the plaintext secret once — MUST NOT be cached.
       reply.header('Cache-Control', 'no-store').header('Pragma', 'no-cache');
       return reply.code(201).send({
-        ...toClientResponse(created),
+        ...toClientResponse(created, policy),
         ...(plaintextSecret ? { clientSecret: plaintextSecret } : {}),
       });
     }
@@ -456,8 +501,9 @@ export default async function (fastify: FastifyInstance) {
       const { id } = request.params as { id: string };
 
       const client = await resolveOwnedClient(fastify, developerId, id);
+      const policy = await resolveClientPolicy(fastify, client);
 
-      return reply.send(toClientResponse(client));
+      return reply.send(toClientResponse(client, policy));
     }
   );
 
@@ -539,7 +585,8 @@ export default async function (fastify: FastifyInstance) {
         metadata: { clientId: updated.clientId, fields: Object.keys(body) },
       });
 
-      return reply.send(toClientResponse(updated));
+      const policy = await resolveClientPolicy(fastify, updated);
+      return reply.send(toClientResponse(updated, policy));
     }
   );
 
@@ -640,9 +687,11 @@ export default async function (fastify: FastifyInstance) {
         metadata: { clientId: updated.clientId },
       });
 
+      const policy = await resolveClientPolicy(fastify, updated);
+
       // Response carries the plaintext secret once — MUST NOT be cached.
       reply.header('Cache-Control', 'no-store').header('Pragma', 'no-cache');
-      return reply.send({ ...toClientResponse(updated), clientSecret: plaintext });
+      return reply.send({ ...toClientResponse(updated, policy), clientSecret: plaintext });
     }
   );
 

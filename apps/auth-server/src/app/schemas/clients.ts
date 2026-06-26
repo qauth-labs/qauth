@@ -29,6 +29,23 @@ export const clientSchema = z.object({
   tokenEndpointAuthMethod: z.string(),
   enabled: z.boolean(),
   requirePkce: z.boolean(),
+  /**
+   * The client's EFFECTIVE deployment environment (ADR-008 §7) — the stricter
+   * of the client's declared `environment` and its realm's
+   * `max_environment_laxity` ceiling, resolved server-side via
+   * `resolveEnvironmentPolicy`. Read-only: it is never accepted on create/update
+   * (those schemas omit it), so a developer cannot self-relax their posture
+   * through this API. The developer portal reads it to label the client.
+   */
+  environment: z.enum(['development', 'staging', 'production']),
+  /**
+   * Whether static developer API keys (#97/#98) may be minted for this client,
+   * resolved from the same effective-environment policy (`development` only).
+   * Read-only and derived — exposed so the portal can gate the API-keys create
+   * form without re-deriving the rule. A `403` from the mint endpoint remains
+   * the authoritative defense-in-depth check.
+   */
+  staticApiKeysAllowed: z.boolean(),
   createdAt: z.number(),
   updatedAt: z.number(),
   lastUsedAt: z.number().nullable(),
