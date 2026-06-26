@@ -9,7 +9,16 @@ import { env } from '../../../config/env';
 import { MIN_RESPONSE_TIME_MS } from '../../constants';
 import { html, render } from '../../helpers/html';
 import { getOrCreateDefaultRealm } from '../../helpers/realm';
-import { setSessionCookie } from '../../helpers/session-cookie';
+import {
+  clearLoginCsrfCookie,
+  csrfTokensEqual,
+  generateCsrfToken,
+  LOGIN_CSRF_COOKIE_NAME,
+  readCookie,
+  setLoginCsrfCookie,
+  setSessionCookie,
+  verifyLoginCsrfCookie,
+} from '../../helpers/session-cookie';
 import { ensureMinimumResponseTime } from '../../helpers/timing';
 
 /**
@@ -39,10 +48,12 @@ function loginPage(opts: {
   returnTo: string;
   /** Per-request CSP nonce (issue #113) stamped onto the inline <style> tag. */
   cspNonce: string;
+  /** Signed double-submit CSRF token; mirrored in the __Host- login cookie. */
+  csrfToken: string;
   error?: string;
   email?: string;
 }): string {
-  const { returnTo, cspNonce, error, email } = opts;
+  const { returnTo, cspNonce, csrfToken, error, email } = opts;
   return render(
     html`<!doctype html>
       <html lang="en">
@@ -123,6 +134,7 @@ function loginPage(opts: {
             <h1>Sign in to QAuth</h1>
             ${error ? html`<div class="error">${error}</div>` : ''}
             <input type="hidden" name="return_to" value="${returnTo}" />
+            <input type="hidden" name="csrf_token" value="${csrfToken}" />
             <label>
               Email
               <input
@@ -148,6 +160,9 @@ const loginFormSchema = z.object({
   email: z.string().min(1),
   password: z.string().min(1),
   return_to: z.string().optional(),
+  // Signed double-submit CSRF token (login CSRF defence). Compared against the
+  // value carried in the __Host- login-CSRF cookie.
+  csrf_token: z.string().min(1),
 });
 
 type LoginForm = z.infer<typeof loginFormSchema>;
@@ -169,9 +184,21 @@ export default async function (fastify: FastifyInstance) {
     async (request, reply) => {
       const q = request.query as { return_to?: string; error?: string };
       const returnTo = isSafeReturnTo(q.return_to) ? q.return_to : '/';
+
+      // Login CSRF defence (signed double-submit). Reuse an already-valid CSRF
+      // cookie if the browser sent one (keeps a refreshed/multi-tab login page
+      // consistent with its cookie); otherwise mint a fresh token and set it.
+      const existing = verifyLoginCsrfCookie(readCookie(request, LOGIN_CSRF_COOKIE_NAME));
+      const csrfToken = existing ?? generateCsrfToken();
+      if (!existing) {
+        setLoginCsrfCookie(reply, csrfToken);
+      }
+
       reply.header('Content-Type', 'text/html; charset=utf-8');
       reply.header('Cache-Control', 'no-store');
-      return reply.send(loginPage({ returnTo, cspNonce: reply.cspNonce.style, error: q.error }));
+      return reply.send(
+        loginPage({ returnTo, cspNonce: reply.cspNonce.style, csrfToken, error: q.error })
+      );
     }
   );
 
@@ -195,6 +222,41 @@ export default async function (fastify: FastifyInstance) {
       const startTime = Date.now();
       const body = request.body as LoginForm;
       const returnTo = isSafeReturnTo(body.return_to) ? body.return_to : '/';
+
+      // Login CSRF defence (signed double-submit). Verify the __Host- cookie's
+      // signature, then timing-compare its token against the submitted field.
+      // A forged cross-site POST cannot present a matching pair because the
+      // attacker can neither read the victim's cookie nor sign one. Checked
+      // BEFORE any credential work so a CSRF probe never reaches the DB.
+      const cookieCsrf = verifyLoginCsrfCookie(readCookie(request, LOGIN_CSRF_COOKIE_NAME));
+      if (!cookieCsrf || !csrfTokensEqual(cookieCsrf, body.csrf_token)) {
+        await fastify.repositories.auditLogs.create({
+          userId: null,
+          oauthClientId: null,
+          event: 'ui.login.csrf_failure',
+          eventType: 'auth',
+          success: false,
+          ipAddress: request.ip,
+          userAgent: request.headers['user-agent'] || null,
+          metadata: {},
+        });
+        // Re-render with a fresh token so the user can retry legitimately.
+        const freshCsrf = generateCsrfToken();
+        setLoginCsrfCookie(reply, freshCsrf);
+        reply.header('Content-Type', 'text/html; charset=utf-8');
+        reply.header('Cache-Control', 'no-store');
+        reply.code(403);
+        return reply.send(
+          loginPage({
+            returnTo,
+            cspNonce: reply.cspNonce.style,
+            csrfToken: freshCsrf,
+            error: 'Your session expired. Please try again.',
+            email: body.email,
+          })
+        );
+      }
+
       const normalizedEmail = normalizeEmail(body.email);
 
       const realm = await getOrCreateDefaultRealm(fastify);
@@ -227,6 +289,9 @@ export default async function (fastify: FastifyInstance) {
           loginPage({
             returnTo,
             cspNonce: reply.cspNonce.style,
+            // The CSRF cookie is still valid on a credential failure — reuse it
+            // so the re-rendered form keeps matching the cookie.
+            csrfToken: cookieCsrf,
             error: 'Invalid email or password.',
             email: body.email,
           })
@@ -260,6 +325,10 @@ export default async function (fastify: FastifyInstance) {
       });
 
       setSessionCookie(reply, sessionId);
+      // Burn the login-CSRF cookie now that authentication succeeded. Fastify
+      // accumulates multiple Set-Cookie headers into an array, so this does not
+      // clobber the session cookie set just above.
+      clearLoginCsrfCookie(reply);
       reply.header('Cache-Control', 'no-store');
       return reply.redirect(returnTo, 302);
     }

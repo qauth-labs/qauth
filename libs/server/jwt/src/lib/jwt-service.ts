@@ -1,3 +1,5 @@
+import { randomUUID } from 'node:crypto';
+
 import { JWTExpiredError, JWTInvalidError } from '@qauth-labs/shared-errors';
 import { jwtVerify, SignJWT } from 'jose';
 
@@ -36,6 +38,10 @@ export async function signAccessToken(
   const claims: Record<string, unknown> = {
     sub: payload.sub,
     client_id: payload.clientId,
+    // RFC 7519 §4.1.7 `jti` — a unique identifier per access token. Enables
+    // targeted revocation (RFC 7009): the auth-server maintains a denylist
+    // keyed by `jti` so a specific unexpired token can be invalidated.
+    jti: randomUUID(),
     // Token-use marker (token-confusion defence): every token minted by this
     // function is an OAuth access token. Consumers that must accept ONLY access
     // tokens — e.g. RFC 8693 token-exchange subject tokens — assert this so a
@@ -176,11 +182,15 @@ export async function signIdToken(
 export async function verifyAccessToken(
   token: string,
   publicKey: KeyLike,
-  options: { audience?: string | string[] } = {}
+  options: { audience?: string | string[]; issuer?: string } = {}
 ): Promise<JWTPayload> {
   try {
     const { payload } = await jwtVerify(token, publicKey, {
       algorithms: ['EdDSA'],
+      // RFC 9700 / mix-up defence: when the caller supplies the expected
+      // issuer, jose asserts the `iss` claim matches and rejects otherwise.
+      // The alg stays pinned to EdDSA so `none`/alg-confusion is impossible.
+      ...(options.issuer !== undefined ? { issuer: options.issuer } : {}),
       ...(options.audience !== undefined ? { audience: options.audience } : {}),
     });
 
@@ -197,6 +207,10 @@ export async function verifyAccessToken(
       iat: payload.iat as number | undefined,
       exp: payload.exp as number | undefined,
       iss: payload.iss as string | undefined,
+      // RFC 7009 revocation: surface the unique token id so the auth-server
+      // layer can denylist a specific access token. The lib stays pure — it
+      // never consults any revocation store itself.
+      jti: payload.jti as string | undefined,
       token_use: payload['token_use'] as string | undefined,
     };
   } catch (error) {

@@ -230,6 +230,22 @@ export const introspectRequestSchema = z.object({
 export type IntrospectRequest = z.infer<typeof introspectRequestSchema>;
 
 /**
+ * Token revocation request body (POST /oauth/revoke).
+ * RFC 7009 §2.1. The client authenticates with `client_secret_post` (body) or
+ * `client_secret_basic` (Authorization header); the route enforces that at
+ * least one auth method is used. `token_type_hint` is advisory only (§2.1):
+ * the server still determines the actual token type.
+ */
+export const revokeRequestSchema = z.object({
+  token: z.string().min(1),
+  token_type_hint: z.enum(['access_token', 'refresh_token']).optional(),
+  client_id: z.string().min(1).optional(),
+  client_secret: z.string().min(1).optional(),
+});
+
+export type RevokeRequest = z.infer<typeof revokeRequestSchema>;
+
+/**
  * Token introspection response body.
  * RFC 7662 2.2.
  */

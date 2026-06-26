@@ -20,6 +20,14 @@ export interface JwtPluginOptions extends FastifyPluginOptions {
    * Required once key rotation is enabled; absent for a single-active-key setup.
    */
   keyId?: string;
+  /**
+   * Optional revocation denylist check (RFC 7009). When provided, the
+   * `requireJwt` preHandler calls it AFTER a successful signature/issuer
+   * verification with the verified token's `jti`; a truthy result rejects the
+   * request as if the token were invalid. Kept as a callback so the JWT plugin
+   * stays store-agnostic — the auth-server supplies a Redis-backed denylist.
+   */
+  isTokenRevoked?: (jti: string | undefined) => Promise<boolean> | boolean;
 }
 
 /**
@@ -97,11 +105,17 @@ export interface JwtUtils {
   /**
    * Verify an access token and return payload.
    * When `audience` is provided, the token's `aud` claim MUST match
-   * (string or array intersection per RFC 7519 §4.1.3).
+   * (string or array intersection per RFC 7519 §4.1.3). When `issuer` is
+   * provided, the token's `iss` claim MUST equal it (RFC 9700 mix-up
+   * defence); omit it only when the caller deliberately accepts any issuer.
    * @throws JWTExpiredError if token has expired
-   * @throws JWTInvalidError if token is invalid or audience mismatches
+   * @throws JWTInvalidError if token is invalid, audience mismatches, or the
+   *   issuer mismatches
    */
-  verifyAccessToken(token: string, options?: { audience?: string | string[] }): Promise<JWTPayload>;
+  verifyAccessToken(
+    token: string,
+    options?: { audience?: string | string[]; issuer?: string }
+  ): Promise<JWTPayload>;
   /**
    * Extract JWT token from Authorization header
    * @param authHeader - Authorization header value (e.g., "Bearer <token>")

@@ -29,7 +29,6 @@ interface ErrorResponse {
   code?: string;
   statusCode: number;
   feedback?: string[];
-  constraint?: string;
   retryAfter?: number;
 }
 
@@ -121,13 +120,22 @@ export default fp(async function (fastify: FastifyInstance) {
         return reply.code(error.statusCode).send(response);
       }
 
-      // Handle UniqueConstraintError (includes constraint)
+      // Handle UniqueConstraintError. The offending constraint name is an
+      // account-enumeration oracle (a duplicate-email registration would
+      // otherwise reveal that the email is already registered), so it is logged
+      // for operators but NEVER returned to the caller. The wire `error`
+      // message is genericised for the same reason — `error.message` embeds the
+      // constraint name. `code` + `statusCode` are preserved so legitimate
+      // clients can still branch on the conflict.
       if (error instanceof UniqueConstraintError) {
+        fastify.log.warn(
+          { constraint: error.constraint, url: request.url },
+          'Unique constraint violation'
+        );
         const response: ErrorResponse = {
-          error: error.message,
+          error: 'Resource already exists',
           code: error.code,
           statusCode: error.statusCode,
-          constraint: error.constraint,
         };
         return reply.code(error.statusCode).send(response);
       }

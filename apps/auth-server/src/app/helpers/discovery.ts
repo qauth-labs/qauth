@@ -60,6 +60,7 @@ export function buildAuthorizationServerMetadata(
     authorization_endpoint: `${base}/oauth/authorize`,
     token_endpoint: `${base}/oauth/token`,
     introspection_endpoint: `${base}/oauth/introspect`,
+    revocation_endpoint: `${base}/oauth/revoke`,
     userinfo_endpoint: `${base}/oauth/userinfo`,
     // DCR (#149) lives on a sibling branch; advertise the URL so discovery
     // stays stable and clients can retry once the endpoint ships.
@@ -80,6 +81,7 @@ export function buildAuthorizationServerMetadata(
     code_challenge_methods_supported: ['S256'],
     token_endpoint_auth_methods_supported: ['client_secret_basic', 'client_secret_post', 'none'],
     introspection_endpoint_auth_methods_supported: ['client_secret_basic', 'client_secret_post'],
+    revocation_endpoint_auth_methods_supported: ['client_secret_basic', 'client_secret_post'],
     scopes_supported: Array.from(input.scopesSupported ?? DEFAULT_SCOPES_SUPPORTED),
     // Public subject identifiers — no pairwise salts today.
     subject_types_supported: ['public'],

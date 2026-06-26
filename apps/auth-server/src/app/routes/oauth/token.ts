@@ -1141,12 +1141,18 @@ async function handleTokenExchange(
     throw new InvalidRequestError('unsupported actor_token_type');
   }
 
-  // GATE 3 — verify the subject token (EdDSA signature + exp). Only QAuth's
-  // signing key verifies, so a valid signature establishes provenance; an
-  // unverifiable or expired token is "unacceptable" → invalid_request.
+  // GATE 3 — verify the subject token (EdDSA signature + exp + issuer). The
+  // issuer is pinned in `verifyAccessToken` (RFC 9700 mix-up defence), so a
+  // token minted by a different AS — even one sharing our signing key — fails
+  // verification here. Only QAuth's signing key + issuer verifies, so success
+  // establishes provenance; an unverifiable / expired / foreign-issuer token is
+  // "unacceptable" → invalid_request.
+  const expectedIssuer = fastify.jwtUtils.getIssuer();
   let subjectPayload: Awaited<ReturnType<typeof fastify.jwtUtils.verifyAccessToken>>;
   try {
-    subjectPayload = await fastify.jwtUtils.verifyAccessToken(body.subject_token);
+    subjectPayload = await fastify.jwtUtils.verifyAccessToken(body.subject_token, {
+      issuer: expectedIssuer,
+    });
   } catch {
     await auditFailure('invalid_request: subject_token failed verification');
     throw new InvalidRequestError('subject_token is not a valid access token');
@@ -1156,38 +1162,37 @@ async function handleTokenExchange(
     throw new InvalidRequestError('subject_token has no subject');
   }
 
-  // GATE 3b — token-confusion defence. `verifyAccessToken` proves the EdDSA
-  // signature + exp only; it does NOT assert issuer or token purpose. Without
-  // this check, ANY JWT QAuth signs with the same key (e.g. a future ID token)
-  // would verify and, if its `sub` resolved to a user, be accepted as a
-  // subject token. Require (a) our own issuer and (b) the access-token
-  // `token_use` marker. The marker is absent on legacy access tokens minted
-  // before it existed, so we accept its absence only when the structural
-  // access-token markers (`client_id` + `aud`) are present — never accept a
-  // token that positively declares a non-access `token_use`.
-  const expectedIssuer = fastify.jwtUtils.getIssuer();
-  const issuerOk = subjectPayload.iss === expectedIssuer;
+  // GATE 3b — token-confusion defence. Issuer is now asserted by
+  // `verifyAccessToken` above; the remaining check is token PURPOSE. Without
+  // it, ANY JWT QAuth signs with the same key (e.g. an ID token) would verify
+  // and, if its `sub` resolved to a user, be accepted as a subject token.
+  // Require the access-token `token_use` marker. The marker is absent on legacy
+  // access tokens minted before it existed, so we accept its absence only when
+  // the structural access-token markers (`client_id` + `aud`) are present —
+  // never accept a token that positively declares a non-access `token_use`.
   const tokenUse = subjectPayload.token_use;
   const isAccessToken =
     tokenUse === 'access' ||
     (tokenUse === undefined &&
       subjectPayload.clientId !== undefined &&
       subjectPayload.aud !== undefined);
-  if (!issuerOk || !isAccessToken) {
+  if (!isAccessToken) {
     await auditFailure('invalid_request: subject_token is not a QAuth access token', {
-      issuerOk,
       tokenUse: tokenUse ?? null,
     });
     throw new InvalidRequestError('subject_token is not a QAuth-issued access token');
   }
 
-  // If an actor_token is supplied, verify it too. We do not trust the agent's
-  // self-declared identity from an unverified token — the actor identity used
-  // in the `act` claim is the authenticated agent's own client_id (below).
+  // If an actor_token is supplied, verify it too (issuer pinned). We do not
+  // trust the agent's self-declared identity from an unverified token — the
+  // actor identity used in the `act` claim is the authenticated agent's own
+  // client_id (below).
   let actorPayload: Awaited<ReturnType<typeof fastify.jwtUtils.verifyAccessToken>> | undefined;
   if (body.actor_token !== undefined) {
     try {
-      actorPayload = await fastify.jwtUtils.verifyAccessToken(body.actor_token);
+      actorPayload = await fastify.jwtUtils.verifyAccessToken(body.actor_token, {
+        issuer: expectedIssuer,
+      });
     } catch {
       await auditFailure('invalid_request: actor_token failed verification');
       throw new InvalidRequestError('actor_token is not a valid access token');

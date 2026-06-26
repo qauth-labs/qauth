@@ -7,6 +7,7 @@ import { MIN_RESPONSE_TIME_MS } from '../../constants';
 import { authenticateClient, extractClientCredentials } from '../../helpers/client-auth';
 import { getOrCreateDefaultRealm } from '../../helpers/realm';
 import { ensureMinimumResponseTime } from '../../helpers/timing';
+import { isJtiRevoked } from '../../helpers/token-revocation';
 import {
   type IntrospectRequest,
   introspectRequestSchema,
@@ -114,9 +115,12 @@ export default async function (fastify: FastifyInstance) {
 
         let payload;
         try {
-          // Note: Currently checks signature and expiry only.
-          // TODO: integrate access token revocation (e.g. jti-based store) when available.
-          payload = await fastify.jwtUtils.verifyAccessToken(token);
+          // RFC 9700 mix-up defence: pin the issuer so a token minted by a
+          // different AS (even one sharing our signing key) is reported
+          // inactive rather than introspected as ours.
+          payload = await fastify.jwtUtils.verifyAccessToken(token, {
+            issuer: fastify.jwtUtils.getIssuer(),
+          });
         } catch (error) {
           if (error instanceof JWTExpiredError || error instanceof JWTInvalidError) {
             await fastify.repositories.auditLogs.create({
@@ -140,6 +144,28 @@ export default async function (fastify: FastifyInstance) {
           }
 
           throw error;
+        }
+
+        // RFC 7009 revocation: a signature-valid, unexpired token that has been
+        // explicitly revoked MUST be reported inactive. Checked before the
+        // authorization branch so a revoked token is never surfaced as active.
+        if (await isJtiRevoked(fastify, payload.jti)) {
+          await fastify.repositories.auditLogs.create({
+            userId: null,
+            oauthClientId: client.id,
+            event: 'oauth.introspect.failure',
+            eventType: 'token',
+            success: false,
+            ipAddress: request.ip,
+            userAgent: request.headers['user-agent'] || null,
+            metadata: { error: 'Token revoked' },
+          });
+
+          await ensureMinimumResponseTime(startTime, MIN_RESPONSE_TIME_MS.INTROSPECT);
+
+          return reply.send({
+            active: false as const,
+          });
         }
 
         // Authorize the introspection: same-client OR audience-authoritative.

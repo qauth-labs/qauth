@@ -1186,6 +1186,69 @@ describe('POST /oauth/token route — authorization_code grant', () => {
     ).rejects.toThrow(InvalidGrantError);
   });
 
+  it('rejects a used / expired / unknown code (findByCode filters them out → invalid_grant)', async () => {
+    // Single-use + expiry are enforced at the repository layer: findByCode
+    // returns ONLY codes that are `used = false` AND unexpired (see the
+    // repository integration tests for the markUsed CAS + expiry filter). So a
+    // second redemption of an already-used code — and an expired one — both
+    // surface to the route as `findByCode` → undefined. The token endpoint must
+    // map that to invalid_grant (RFC 6749 §5.2), not a 500.
+    const { fastify, ctx } = setupAuthCodeStub();
+    (fastify.repositories.authorizationCodes.findByCode as unknown as Mock).mockResolvedValue(
+      undefined
+    );
+    await tokenRoute(fastify);
+    const handler = ctx.handler;
+    if (!handler) throw new Error('Handler missing');
+
+    const reply = createReply();
+    await expect(handler(baseRequest(), reply)).rejects.toThrow(InvalidGrantError);
+    // No token issued, and the code was never (re-)marked used.
+    expect(fastify.jwtUtils.signAccessToken).not.toHaveBeenCalled();
+    expect(fastify.repositories.authorizationCodes.markUsed).not.toHaveBeenCalled();
+  });
+
+  it('marks the authorization code used before issuing tokens (single-use)', async () => {
+    // The route MUST consume the code via markUsed (the atomic CAS that makes a
+    // replay of the same code fail on the second exchange — see the repository
+    // integration test for the race). Assert the consume happens AND precedes
+    // token signing on a successful exchange.
+    const { fastify, ctx, authCode } = setupAuthCodeStub();
+    await tokenRoute(fastify);
+    const handler = ctx.handler;
+    if (!handler) throw new Error('Handler missing');
+
+    const reply = createReply();
+    await handler(baseRequest(), reply);
+
+    expect(fastify.repositories.authorizationCodes.markUsed).toHaveBeenCalledWith(authCode.id);
+    const markUsedOrder = (fastify.repositories.authorizationCodes.markUsed as unknown as Mock).mock
+      .invocationCallOrder[0];
+    const signOrder = (fastify.jwtUtils.signAccessToken as unknown as Mock).mock
+      .invocationCallOrder[0];
+    expect(markUsedOrder).toBeLessThan(signOrder);
+  });
+
+  it('rejects replay via the markUsed CAS losing the race (NotFoundError → no token)', async () => {
+    // Models the concurrent-redemption window: a code passes findByCode (it was
+    // still live when read), but a parallel exchange consumed it first, so the
+    // atomic markUsed CAS (`WHERE used = false`) matches no row and throws
+    // NotFoundError. The route must surface that and issue NO token, rather than
+    // minting a second access token for the same code.
+    const { fastify, ctx } = setupAuthCodeStub();
+    (fastify.repositories.authorizationCodes.markUsed as unknown as Mock).mockRejectedValue(
+      new NotFoundError('AuthorizationCode', 'authcode-uuid-1')
+    );
+    await tokenRoute(fastify);
+    const handler = ctx.handler;
+    if (!handler) throw new Error('Handler missing');
+
+    const reply = createReply();
+    await expect(handler(baseRequest(), reply)).rejects.toThrow(NotFoundError);
+    expect(fastify.jwtUtils.signAccessToken).not.toHaveBeenCalled();
+    expect(fastify.repositories.refreshTokens.create).not.toHaveBeenCalled();
+  });
+
   it('rejects when PKCE verification fails', async () => {
     const { fastify, ctx } = setupAuthCodeStub();
     (fastify.pkceUtils.verifyCodeChallenge as unknown as Mock).mockReturnValue(false);
@@ -1789,7 +1852,18 @@ describe('POST /oauth/token route — token-exchange grant (RFC 8693, ADR-007 §
 
     (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(client);
     (fastify.passwordHasher.verifyPassword as unknown as Mock).mockResolvedValue(true);
-    (fastify.jwtUtils.verifyAccessToken as unknown as Mock).mockResolvedValue(subjectPayload);
+    // Issuer is now enforced INSIDE verifyAccessToken (RFC 9700). Model that:
+    // when the route pins `issuer` and it does not match the token's `iss`, the
+    // mock rejects exactly as jose would, instead of the route doing a manual
+    // post-verification issuer comparison.
+    (fastify.jwtUtils.verifyAccessToken as unknown as Mock).mockImplementation(
+      (_token: string, options?: { issuer?: string }) => {
+        if (options?.issuer !== undefined && subjectPayload.iss !== options.issuer) {
+          return Promise.reject(new Error('unexpected "iss" claim value'));
+        }
+        return Promise.resolve(subjectPayload);
+      }
+    );
     (fastify.repositories.users.findById as unknown as Mock).mockResolvedValue(
       opts.userFound === false ? null : user
     );

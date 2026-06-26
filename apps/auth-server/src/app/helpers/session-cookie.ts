@@ -31,6 +31,13 @@ export interface BrowserSessionData {
   createdAt: number;
   /** Monotonic nonce for CSRF double-submit cookie (rotated on consent POST). */
   csrfToken?: string;
+  /**
+   * The exact scope set rendered on the most recent consent screen for a given
+   * client, keyed by `client_id`. The consent POST handler grants ONLY these
+   * scopes — the hidden `scope` form field is attacker-controllable, so the
+   * granted set is bound to what the user actually saw, not to what is POSTed.
+   */
+  consentScopes?: Record<string, string[]>;
   [key: string]: unknown;
 }
 
@@ -165,4 +172,66 @@ export function csrfTokensEqual(a: string | undefined, b: string | undefined): b
   const bb = Buffer.from(b);
   if (ab.length !== bb.length) return false;
   return timingSafeEqual(ab, bb);
+}
+
+/**
+ * Cookie carrying the CSRF token for the PRE-authentication login form.
+ *
+ * The login page has no session yet, so the consent screen's session-bound
+ * double-submit pattern cannot be reused. Instead we use a SIGNED double-submit
+ * cookie: this `__Host-`-prefixed cookie holds the HMAC-signed CSRF token, and
+ * the form's hidden field holds the same raw token. On POST the server verifies
+ * the cookie signature (so an attacker who cannot read the victim's cookie
+ * cannot forge a matching pair) and timing-compares the cookie token against
+ * the submitted one. This defends against login CSRF (forced login into an
+ * attacker-controlled account) without any server-side state.
+ */
+export const LOGIN_CSRF_COOKIE_NAME = '__Host-qauth_login_csrf';
+
+/**
+ * Emit the signed login-CSRF cookie. `Secure` follows the same global default
+ * as the session cookie (`env.SESSION_COOKIE_SECURE`); `__Host-` requires it in
+ * production. SameSite=Lax + HttpOnly mirror the session cookie. The value is
+ * `<token>.<hmac>` using the same secret/scheme as the session id.
+ */
+export function setLoginCsrfCookie(reply: FastifyReply, token: string): void {
+  const attrs = [
+    `${LOGIN_CSRF_COOKIE_NAME}=${token}${SEPARATOR}${hmac(token)}`,
+    'Path=/',
+    'HttpOnly',
+    'SameSite=Lax',
+    `Max-Age=${env.SESSION_COOKIE_TTL}`,
+  ];
+  if (env.SESSION_COOKIE_SECURE) attrs.push('Secure');
+  reply.header('Set-Cookie', attrs.join('; '));
+}
+
+/**
+ * Clear the login-CSRF cookie (burned after a successful login POST).
+ */
+export function clearLoginCsrfCookie(reply: FastifyReply): void {
+  const attrs = [`${LOGIN_CSRF_COOKIE_NAME}=`, 'Path=/', 'HttpOnly', 'SameSite=Lax', 'Max-Age=0'];
+  if (env.SESSION_COOKIE_SECURE) attrs.push('Secure');
+  reply.header('Set-Cookie', attrs.join('; '));
+}
+
+/**
+ * Verify the signed login-CSRF cookie value and return the embedded token if
+ * the signature is valid, otherwise null. Same `<token>.<hmac>` scheme +
+ * timing-safe verification as {@link verifySignedSessionId}.
+ */
+export function verifyLoginCsrfCookie(cookieValue: string | undefined | null): string | null {
+  if (!cookieValue) return null;
+  const idx = cookieValue.lastIndexOf(SEPARATOR);
+  if (idx <= 0 || idx === cookieValue.length - 1) return null;
+
+  const token = cookieValue.slice(0, idx);
+  const providedSig = cookieValue.slice(idx + 1);
+  const expectedSig = hmac(token);
+
+  const providedBuf = Buffer.from(providedSig, 'base64url');
+  const expectedBuf = Buffer.from(expectedSig, 'base64url');
+  if (providedBuf.length !== expectedBuf.length) return null;
+  if (!timingSafeEqual(providedBuf, expectedBuf)) return null;
+  return token;
 }

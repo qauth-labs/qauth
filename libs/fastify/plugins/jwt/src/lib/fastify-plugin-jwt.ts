@@ -130,7 +130,22 @@ export const jwtPlugin = fp<JwtPluginOptions>(
       if (!token) {
         throw new JWTInvalidError('Missing or malformed Authorization header');
       }
-      request.jwtPayload = await jwtUtils.verifyAccessToken(token);
+      // RFC 9700 mix-up defence: every bearer-protected route MUST only accept
+      // tokens this server issued. Pin the issuer here so the shared preHandler
+      // rejects a foreign-issuer token even if it verifies under the same key.
+      const payload = await jwtUtils.verifyAccessToken(token, {
+        issuer: options.issuer,
+      });
+
+      // RFC 7009 revocation: reject a signature-valid but explicitly revoked
+      // token. The denylist check runs only AFTER verification (so an attacker
+      // cannot probe the store with unsigned tokens) and only when the host app
+      // wired a denylist; otherwise behaviour is unchanged.
+      if (options.isTokenRevoked && (await options.isTokenRevoked(payload.jti))) {
+        throw new JWTInvalidError('Token has been revoked');
+      }
+
+      request.jwtPayload = payload;
     }
 
     fastify.decorate('requireJwt', requireJwt);

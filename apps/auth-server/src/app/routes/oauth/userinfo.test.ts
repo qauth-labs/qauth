@@ -120,6 +120,8 @@ describe('GET /userinfo route', () => {
         sub: 'user-1',
         email: 'user@example.com',
         email_verified: true,
+        // OIDC §5.4: email claims require the `email` scope on the token.
+        scope: 'openid email',
       },
       ip: '127.0.0.1',
       headers: {
@@ -174,7 +176,8 @@ describe('GET /userinfo route', () => {
     });
 
     const request = {
-      jwtPayload: { sub: 'user-3' },
+      // `profile` releases the name claim; `email` releases the email claims.
+      jwtPayload: { sub: 'user-3', scope: 'openid profile email' },
       ip: '127.0.0.1',
       headers: { authorization: 'Bearer token', 'user-agent': 'vitest' },
     } as unknown as FastifyRequest;
@@ -193,6 +196,92 @@ describe('GET /userinfo route', () => {
       email_verified: true,
       name: 'Ada Lovelace',
     });
+  });
+
+  it('omits email and name when the token grants only openid (OIDC §5.4)', async () => {
+    const { fastify, ctx } = createFastifyStub();
+    await userinfoRoute(fastify);
+
+    const handler = ctx.handler;
+    const findByIdMock = fastify.repositories.users.findById as unknown as Mock;
+    findByIdMock.mockResolvedValue({
+      id: 'user-4',
+      email: 'grace@example.com',
+      emailVerified: true,
+      firstName: 'Grace',
+      lastName: 'Hopper',
+    });
+
+    const request = {
+      jwtPayload: { sub: 'user-4', scope: 'openid' },
+      ip: '127.0.0.1',
+      headers: { authorization: 'Bearer token', 'user-agent': 'vitest' },
+    } as unknown as FastifyRequest;
+    const reply = { send: (body: unknown) => body } as unknown as FastifyReply;
+
+    if (!handler) throw new Error('Userinfo handler was not registered');
+    const result = await handler(request, reply);
+
+    // Only `sub` is released — no email, email_verified, or name.
+    expect(result).toEqual({ sub: 'user-4' });
+  });
+
+  it('includes email but not name when the token grants openid email only', async () => {
+    const { fastify, ctx } = createFastifyStub();
+    await userinfoRoute(fastify);
+
+    const handler = ctx.handler;
+    const findByIdMock = fastify.repositories.users.findById as unknown as Mock;
+    findByIdMock.mockResolvedValue({
+      id: 'user-5',
+      email: 'katherine@example.com',
+      emailVerified: false,
+      firstName: 'Katherine',
+      lastName: 'Johnson',
+    });
+
+    const request = {
+      jwtPayload: { sub: 'user-5', scope: 'openid email' },
+      ip: '127.0.0.1',
+      headers: { authorization: 'Bearer token', 'user-agent': 'vitest' },
+    } as unknown as FastifyRequest;
+    const reply = { send: (body: unknown) => body } as unknown as FastifyReply;
+
+    if (!handler) throw new Error('Userinfo handler was not registered');
+    const result = await handler(request, reply);
+
+    expect(result).toEqual({
+      sub: 'user-5',
+      email: 'katherine@example.com',
+      email_verified: false,
+    });
+  });
+
+  it('includes name but not email when the token grants openid profile only', async () => {
+    const { fastify, ctx } = createFastifyStub();
+    await userinfoRoute(fastify);
+
+    const handler = ctx.handler;
+    const findByIdMock = fastify.repositories.users.findById as unknown as Mock;
+    findByIdMock.mockResolvedValue({
+      id: 'user-6',
+      email: 'dorothy@example.com',
+      emailVerified: true,
+      firstName: 'Dorothy',
+      lastName: 'Vaughan',
+    });
+
+    const request = {
+      jwtPayload: { sub: 'user-6', scope: 'openid profile' },
+      ip: '127.0.0.1',
+      headers: { authorization: 'Bearer token', 'user-agent': 'vitest' },
+    } as unknown as FastifyRequest;
+    const reply = { send: (body: unknown) => body } as unknown as FastifyReply;
+
+    if (!handler) throw new Error('Userinfo handler was not registered');
+    const result = await handler(request, reply);
+
+    expect(result).toEqual({ sub: 'user-6', name: 'Dorothy Vaughan' });
   });
 
   it('throws NotFoundError when user is not found', async () => {
@@ -260,6 +349,9 @@ describe('GET /userinfo route', () => {
     const request = {
       jwtPayload: {
         sub: 'user-2',
+        // The `email` scope IS granted; the user simply has no email on record,
+        // so only `email_verified` is released (no `email` string).
+        scope: 'openid email',
       },
       ip: '127.0.0.1',
       headers: {

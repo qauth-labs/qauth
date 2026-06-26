@@ -3,6 +3,7 @@ import {
   InvalidClientError,
   JWTExpiredError,
   JWTInvalidError,
+  UniqueConstraintError,
 } from '@qauth-labs/shared-errors';
 import type { FastifyInstance } from 'fastify';
 import Fastify from 'fastify';
@@ -28,6 +29,12 @@ async function buildTestApp(): Promise<FastifyInstance> {
 
   app.post('/test-forbidden', async () => {
     throw new ForbiddenError('Static API keys are disabled for production clients.');
+  });
+
+  app.post('/test-unique-constraint', async () => {
+    // The DB layer surfaces the offending constraint name; the handler must NOT
+    // leak it (account-enumeration oracle, e.g. duplicate-email registration).
+    throw new UniqueConstraintError('users_email_realm_key');
   });
 
   return app;
@@ -126,6 +133,31 @@ describe('error-handler plugin', () => {
       code: 'INVALID_CLIENT',
       statusCode: 401,
     });
+
+    await app.close();
+  });
+
+  it('does not leak the constraint name on UniqueConstraintError (enumeration defence)', async () => {
+    const app = await buildTestApp();
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/test-unique-constraint',
+    });
+
+    expect(response.statusCode).toBe(409);
+
+    const json = response.json();
+    // Code + status preserved so legitimate clients can branch on the conflict.
+    expect(json).toMatchObject({
+      error: 'Resource already exists',
+      code: 'UNIQUE_CONSTRAINT_VIOLATION',
+      statusCode: 409,
+    });
+    // The constraint name must NOT appear anywhere in the response — not as a
+    // dedicated field, and not embedded in the generic error message.
+    expect(json.constraint).toBeUndefined();
+    expect(JSON.stringify(json)).not.toContain('users_email_realm_key');
 
     await app.close();
   });
