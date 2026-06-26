@@ -35,6 +35,7 @@ export interface IntegrationDb {
 
 /** Tables truncated by {@link IntegrationDb.reset}; child-first is irrelevant with CASCADE. */
 const DOMAIN_TABLES = [
+  'api_keys',
   'audit_logs',
   'oauth_consents',
   'refresh_tokens',

@@ -57,6 +57,13 @@
       "when": 1782449651385,
       "tag": "0007_thankful_nova",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1782450557771,
+      "tag": "0008_glossy_magik",
+      "breakpoints": true
     }
   ]
 }

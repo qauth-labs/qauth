@@ -1,7 +1,7 @@
 import type { InferInsertModel, InferSelectModel } from 'drizzle-orm';
 
 import type { oauthConsents } from '../lib/schema/consents';
-import type { oauthClients } from '../lib/schema/core';
+import type { apiKeys, oauthClients } from '../lib/schema/core';
 import type {
   authorizationCodes,
   emailVerificationTokens,
@@ -17,6 +17,12 @@ export type NewOAuthClient = InferInsertModel<typeof oauthClients>;
 export type UpdateOAuthClient = Partial<Omit<NewOAuthClient, 'id' | 'createdAt' | 'realmId'>> & {
   updatedAt?: number;
 };
+
+/**
+ * Static developer API key types (ADR-008 §6, issue #97).
+ */
+export type ApiKey = InferSelectModel<typeof apiKeys>;
+export type NewApiKey = InferInsertModel<typeof apiKeys>;
 
 /**
  * Email verification token types
@@ -262,4 +268,49 @@ export interface AuthorizationCodesRepository {
    * Returns count of deleted codes
    */
   deleteExpired(tx?: DbClient): Promise<number>;
+}
+
+/**
+ * Static developer API keys repository (ADR-008 §6, issue #97).
+ *
+ * Persists environment-gated developer API keys. The environment GATE itself
+ * (`resolveEnvironmentPolicy(...).staticApiKeysAllowed`) lives at the route
+ * layer — this repository is unconditional storage. The plaintext key is never
+ * persisted: callers pass a pre-computed argon2id `keyHash` plus the non-secret
+ * `prefix` / `last4` display handles, exactly as client secrets are stored.
+ */
+export interface ApiKeysRepository {
+  /**
+   * Create a new API key row. `keyHash` MUST be pre-hashed (argon2id); the
+   * plaintext is never handed to the repository.
+   *
+   * @throws UniqueConstraintError if `prefix` collides (astronomically unlikely)
+   */
+  create(data: NewApiKey, tx?: DbClient): Promise<ApiKey>;
+  /**
+   * Find an API key by its public lookup `prefix`. Returns the row regardless
+   * of revocation state — the caller checks `revokedAt` after the constant-time
+   * hash verification so a revoked vs unknown prefix are indistinguishable by
+   * timing. Returns undefined when no row matches.
+   */
+  findByPrefix(prefix: string, tx?: DbClient): Promise<ApiKey | undefined>;
+  /**
+   * List the API keys scoped to a client, newest first. Includes revoked keys
+   * (callers mask them); the route projects to non-secret fields only.
+   */
+  listByClient(clientId: string, tx?: DbClient): Promise<ApiKey[]>;
+  /**
+   * Find a single API key by id, or undefined.
+   */
+  findById(id: string, tx?: DbClient): Promise<ApiKey | undefined>;
+  /**
+   * Revoke a key by id (idempotent soft-delete): sets `revokedAt` if not
+   * already set. Returns the updated row, or undefined when no row matches.
+   */
+  revoke(id: string, tx?: DbClient): Promise<ApiKey | undefined>;
+  /**
+   * Best-effort touch of `lastUsedAt` after a successful authentication. Never
+   * throws on a missing row.
+   */
+  touchLastUsed(id: string, tx?: DbClient): Promise<void>;
 }

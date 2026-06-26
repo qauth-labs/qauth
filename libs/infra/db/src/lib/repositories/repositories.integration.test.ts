@@ -24,6 +24,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { oauthConsents, refreshTokens } from '../schema';
 import {
+  createApiKeysRepository,
   createAuditLogsRepository,
   createAuthorizationCodesRepository,
   createOAuthClientsRepository,
@@ -640,6 +641,90 @@ describe('repository integration (real Postgres)', () => {
       expect(activityB).toHaveLength(1);
       expect(activityB[0].userId).toBe(userB.id);
       expect(activityB[0].scopeMode).toBe('exec');
+    });
+  });
+
+  // --- static developer API keys (ADR-008 §6, #97) -------------------------
+
+  describe('api keys — create / lookup / revoke against real DDL', () => {
+    it('persists only the hash + display handles, enforces unique prefix, and revoke is an idempotent soft-delete', async () => {
+      const realm = await seedRealm();
+      const user = await seedUser(realm.id);
+      const client = await seedClient(realm.id);
+      const apiKeys = createApiKeysRepository(db().database.db);
+
+      const created = await apiKeys.create({
+        realmId: realm.id,
+        clientId: client.id,
+        developerId: user.id,
+        name: 'laptop',
+        keyHash: 'argon2id$opaque-hash',
+        prefix: 'qauth_0123456789abcdef',
+        last4: 'abcd',
+      });
+      expect(created.id).toBeTypeOf('string');
+      expect(created.revokedAt).toBeNull();
+      expect(created.lastUsedAt).toBeNull();
+
+      // Lookup by the public prefix resolves the row; the stored value is the
+      // hash, never any plaintext.
+      const found = await apiKeys.findByPrefix('qauth_0123456789abcdef');
+      expect(found?.id).toBe(created.id);
+      expect(found?.keyHash).toBe('argon2id$opaque-hash');
+
+      // The prefix is unique — a second row reusing it is rejected.
+      await expect(
+        apiKeys.create({
+          realmId: realm.id,
+          clientId: client.id,
+          developerId: user.id,
+          name: 'dup',
+          keyHash: 'argon2id$other',
+          prefix: 'qauth_0123456789abcdef',
+          last4: 'efgh',
+        })
+      ).rejects.toBeInstanceOf(UniqueConstraintError);
+
+      // listByClient returns the live key.
+      const listed = await apiKeys.listByClient(client.id);
+      expect(listed.map((k) => k.id)).toContain(created.id);
+
+      // Revoke stamps revokedAt; a second revoke is idempotent (revokedAt unchanged).
+      const revoked = await apiKeys.revoke(created.id);
+      expect(revoked?.revokedAt).toBeTypeOf('number');
+      const firstRevokedAt = revoked?.revokedAt;
+      const again = await apiKeys.revoke(created.id);
+      expect(again?.revokedAt).toBe(firstRevokedAt);
+    });
+
+    it('cascades on client delete and survives developer delete (developerId set null)', async () => {
+      const realm = await seedRealm();
+      const user = await seedUser(realm.id);
+      const client = await seedClient(realm.id);
+      const users = createUsersRepository(db().database.db);
+      const clients = createOAuthClientsRepository(db().database.db);
+      const apiKeys = createApiKeysRepository(db().database.db);
+
+      await apiKeys.create({
+        realmId: realm.id,
+        clientId: client.id,
+        developerId: user.id,
+        name: 'k',
+        keyHash: 'argon2id$h',
+        prefix: 'qauth_aaaaaaaaaaaaaaaa',
+        last4: 'aaaa',
+      });
+
+      // Deleting the developer nulls developerId but keeps the key row.
+      await users.delete(user.id);
+      const afterUserDelete = await apiKeys.findByPrefix('qauth_aaaaaaaaaaaaaaaa');
+      expect(afterUserDelete).toBeDefined();
+      expect(afterUserDelete?.developerId).toBeNull();
+
+      // Deleting the client cascades the key away.
+      await clients.delete(client.id);
+      const afterClientDelete = await apiKeys.findByPrefix('qauth_aaaaaaaaaaaaaaaa');
+      expect(afterClientDelete).toBeUndefined();
     });
   });
 });
