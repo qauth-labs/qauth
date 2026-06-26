@@ -5,7 +5,7 @@
 > **Author**: Muhammed Taha Ayan
 > **Status**: MCP-first re-baseline — see [ADR-007](./docs/adr/007-mcp-first-positioning.md). Phase 1 complete; near-term focus is MCP / AI-agent authentication.
 
-> 🎉 **MVP delivered (June 2026).** The MVP milestone is complete and closed — core OAuth 2.1 / OIDC, the MCP authorization surface, client management, and the agent-native authorization track ([ADR-007 §2](./docs/adr/007-mcp-first-positioning.md)) all shipped. **Production hardening (T3) is now complete too** — security headers, CSRF, secure cookies, XSS-safe output, OIDC ID token/nonce/claims, structured logging + `/metrics`, failed-login lockout, and the developer-portal Docker image. Remaining near-term work is the environment-aware posture ([ADR-008](./docs/adr/008-environment-aware-authorization.md) / T5).
+> 🎉 **MVP delivered (June 2026).** The MVP milestone is complete and closed — core OAuth 2.1 / OIDC, the MCP authorization surface, client management, and the agent-native authorization track ([ADR-007 §2](./docs/adr/007-mcp-first-positioning.md)) all shipped. **Production hardening (T3) is now complete too** — security headers, CSRF, secure cookies, XSS-safe output, OIDC ID token/nonce/claims, structured logging + `/metrics`, failed-login lockout, and the developer-portal Docker image. **The environment-aware posture ([ADR-008](./docs/adr/008-environment-aware-authorization.md) / T5) is now complete too** — `environment` as a fail-safe policy dimension plus environment-gated developer API keys. The near-term roadmap is finished; remaining work is the long-term platform (wallet federation + post-quantum signing, T4).
 
 ## Executive Summary
 

@@ -1,12 +1,19 @@
 # ADR-008: Environment-Aware Authorization Posture
 
-**Status:** Accepted
+**Status:** Accepted · **Implemented (June 2026)**
 **Date:** 2026-06-25
 **Authors:** QAuth Team
 
 > **Accepted 2026-06-25.** Every fork below takes the **fail-safe** option
 > (default to the strictest posture; relaxation is operator-controlled, never
 > self-asserted). Implementation issues are derived from the sequencing section.
+
+> **Implemented (June 2026, T5 milestone).** All four sequencing items shipped:
+> the environment schema + `resolveEnvironmentPolicy` resolver (#196), the
+> production profile wired as the T3 hardening bundle (#197), and the
+> environment-gated developer API keys — backend (#97) and portal UI (#98).
+> The rate-limit tier was wired to the live `/oauth/token` and `/oauth/authorize`
+> limits as a realm-level seam in the #209 follow-up.
 
 ## Context
 
