@@ -8,6 +8,7 @@
     "@fastify/autoload": "catalog:",
     "@fastify/cors": "catalog:",
     "@fastify/formbody": "catalog:",
+    "@fastify/helmet": "catalog:",
     "@fastify/rate-limit": "catalog:",
     "@fastify/swagger": "catalog:",
     "@fastify/swagger-ui": "catalog:",

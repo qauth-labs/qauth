@@ -62,6 +62,25 @@ describe('session cookie helpers', () => {
     expect(cookie).toContain('Path=/');
     expect(cookie).toContain('HttpOnly');
     expect(cookie).toContain('SameSite=Lax');
+    // __Host- prefix is the only safe cookie-name prefix and implies the
+    // browser-enforced Secure + Path=/ + no-Domain contract (#109).
+    expect(SESSION_COOKIE_NAME.startsWith('__Host-')).toBe(true);
+    expect(cookie).not.toContain('Domain=');
+  });
+
+  it('omits Secure only when SESSION_COOKIE_SECURE is false (local-dev override)', () => {
+    // The module-level env mock sets SESSION_COOKIE_SECURE: false. The default
+    // in the schema is true (#109) — this asserts the dev override path works
+    // and that Secure is gated solely by that flag.
+    const headers: Record<string, string> = {};
+    const reply = {
+      header: (k: string, v: string) => {
+        headers[k] = v;
+        return reply;
+      },
+    } as never;
+    setSessionCookie(reply, 'sid');
+    expect(headers['Set-Cookie']).not.toContain('Secure');
   });
 
   it('clearSessionCookie emits Max-Age=0', () => {

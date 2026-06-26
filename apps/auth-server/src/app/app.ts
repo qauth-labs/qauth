@@ -14,6 +14,7 @@ import type { FastifyInstance } from 'fastify';
 import { env } from '../config/env';
 import errorHandler from './plugins/error-handler';
 import { rateLimitPlugin } from './plugins/rate-limit';
+import { securityHeadersPlugin } from './plugins/security-headers';
 
 export async function app(fastify: FastifyInstance, opts: object) {
   await fastify.register(databasePlugin, {
@@ -108,6 +109,11 @@ export async function app(fastify: FastifyInstance, opts: object) {
 
   await fastify.register(rateLimitPlugin);
 
+  // Security headers (issue #113): register before routes so every response —
+  // including the server-rendered login/consent pages and error responses —
+  // carries the CSP, HSTS, frame-options and related hardening headers.
+  await fastify.register(securityHeadersPlugin);
+
   await fastify.register(cors, {
     origin: env.CORS_ORIGIN || '*',
   });
@@ -122,7 +128,7 @@ export async function app(fastify: FastifyInstance, opts: object) {
   fastify.register(AutoLoad, {
     dir: path.join(__dirname, 'plugins'),
     options: { ...opts },
-    ignorePattern: /(error-handler|rate-limit)\.(ts|js)$|\.(test|spec)\.(ts|js)$/,
+    ignorePattern: /(error-handler|rate-limit|security-headers)\.(ts|js)$|\.(test|spec)\.(ts|js)$/,
   });
 
   fastify.register(AutoLoad, {
