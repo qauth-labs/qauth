@@ -2,6 +2,7 @@ import { Button, Card, CardContent, CardHeader, CardTitle } from '@qauth-labs/ui
 import { createFileRoute, Link, useRouter } from '@tanstack/react-router';
 import { useEffect, useState } from 'react';
 
+import { ApiKeysSection } from '../../components/api-keys-section';
 import { clientErrorMessage } from '../../components/client-error';
 import { ClientForm, type ClientFormValues } from '../../components/client-form';
 import { CopyField } from '../../components/copy-field';
@@ -146,76 +147,85 @@ function ClientDetailsPage() {
       ) : null}
 
       {load.status === 'ready' && !editing ? (
-        <Card>
-          <CardHeader className="flex-row items-start justify-between space-y-0">
-            <CardTitle>{load.client.name}</CardTitle>
-            <div className="flex gap-2">
-              <Button type="button" variant="outline" onClick={() => setEditing(true)}>
-                Edit
-              </Button>
-              <Button
-                type="button"
-                className="bg-red-600 hover:bg-red-700"
-                onClick={() => {
-                  setActionError(undefined);
-                  setConfirmDelete(true);
-                }}
-              >
-                Delete
-              </Button>
-            </div>
-          </CardHeader>
-          <CardContent>
-            <dl className="divide-y divide-gray-100">
-              <Field label="Client ID">
-                <CopyField label="Client ID" value={load.client.clientId} />
-              </Field>
-              <Field label="Description">{load.client.description ?? '—'}</Field>
-              <Field label="Redirect URIs">
-                {load.client.redirectUris.length > 0 ? (
-                  <ul className="list-disc space-y-0.5 pl-5">
-                    {load.client.redirectUris.map((u) => (
-                      <li key={u} className="font-mono text-xs break-all">
-                        {u}
-                      </li>
-                    ))}
-                  </ul>
-                ) : (
-                  '—'
-                )}
-              </Field>
-              <Field label="Scopes">
-                {load.client.scopes.length > 0 ? load.client.scopes.join(', ') : '—'}
-              </Field>
-              <Field label="Grant types">{load.client.grantTypes.join(', ')}</Field>
-              <Field label="Token endpoint auth method">
-                {load.client.tokenEndpointAuthMethod}
-              </Field>
-              <Field label="Status">{load.client.enabled ? 'Enabled' : 'Disabled'}</Field>
-              <Field label="Client secret">
-                <div className="flex items-center justify-between gap-4">
-                  <span className="text-sm text-gray-500">
-                    {load.client.tokenEndpointAuthMethod === 'none'
-                      ? 'Public client — no secret.'
-                      : 'Hidden. Secrets are shown only once, at creation or regeneration.'}
-                  </span>
-                  {load.client.tokenEndpointAuthMethod !== 'none' ? (
-                    <Button
-                      type="button"
-                      variant="outline"
-                      onClick={() => {
-                        setActionError(undefined);
-                        setConfirmRegenerate(true);
-                      }}
-                    >
-                      Regenerate
-                    </Button>
-                  ) : null}
-                </div>
-              </Field>
-            </dl>
-          </CardContent>
-        </Card>
+        <>
+          <Card>
+            <CardHeader className="flex-row items-start justify-between space-y-0">
+              <CardTitle>{load.client.name}</CardTitle>
+              <div className="flex gap-2">
+                <Button type="button" variant="outline" onClick={() => setEditing(true)}>
+                  Edit
+                </Button>
+                <Button
+                  type="button"
+                  className="bg-red-600 hover:bg-red-700"
+                  onClick={() => {
+                    setActionError(undefined);
+                    setConfirmDelete(true);
+                  }}
+                >
+                  Delete
+                </Button>
+              </div>
+            </CardHeader>
+            <CardContent>
+              <dl className="divide-y divide-gray-100">
+                <Field label="Client ID">
+                  <CopyField label="Client ID" value={load.client.clientId} />
+                </Field>
+                <Field label="Description">{load.client.description ?? '—'}</Field>
+                <Field label="Redirect URIs">
+                  {load.client.redirectUris.length > 0 ? (
+                    <ul className="list-disc space-y-0.5 pl-5">
+                      {load.client.redirectUris.map((u) => (
+                        <li key={u} className="font-mono text-xs break-all">
+                          {u}
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    '—'
+                  )}
+                </Field>
+                <Field label="Scopes">
+                  {load.client.scopes.length > 0 ? load.client.scopes.join(', ') : '—'}
+                </Field>
+                <Field label="Grant types">{load.client.grantTypes.join(', ')}</Field>
+                <Field label="Token endpoint auth method">
+                  {load.client.tokenEndpointAuthMethod}
+                </Field>
+                <Field label="Status">{load.client.enabled ? 'Enabled' : 'Disabled'}</Field>
+                <Field label="Client secret">
+                  <div className="flex items-center justify-between gap-4">
+                    <span className="text-sm text-gray-500">
+                      {load.client.tokenEndpointAuthMethod === 'none'
+                        ? 'Public client — no secret.'
+                        : 'Hidden. Secrets are shown only once, at creation or regeneration.'}
+                    </span>
+                    {load.client.tokenEndpointAuthMethod !== 'none' ? (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        onClick={() => {
+                          setActionError(undefined);
+                          setConfirmRegenerate(true);
+                        }}
+                      >
+                        Regenerate
+                      </Button>
+                    ) : null}
+                  </div>
+                </Field>
+              </dl>
+            </CardContent>
+          </Card>
+
+          <ApiKeysSection
+            client={load.client}
+            onUnauthenticated={() => {
+              void router.navigate({ to: '/login' });
+            }}
+          />
+        </>
       ) : null}
 
       {load.status === 'ready' && editing ? (

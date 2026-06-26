@@ -14,6 +14,10 @@ export function clientErrorMessage(error: ApiError): string {
       return 'This client was not found, or you do not have access to it.';
     case 'RATE_LIMITED':
       return 'Too many requests. Please wait a moment and try again.';
+    case 'FORBIDDEN':
+      // The static-API-key environment gate (ADR-008 §6): keys are a
+      // development-only convenience; production uses OAuth client_credentials.
+      return 'Static API keys are only available for development clients. Use the OAuth client_credentials grant for machine-to-machine access in staging and production.';
     case 'VALIDATION_ERROR': {
       if (Array.isArray(error.details) && error.details.length > 0) {
         return error.details.join(' ');
