@@ -5,7 +5,7 @@
 > **Author**: Muhammed Taha Ayan
 > **Status**: MCP-first re-baseline — see [ADR-007](./docs/adr/007-mcp-first-positioning.md). Phase 1 complete; near-term focus is MCP / AI-agent authentication.
 
-> 🎉 **MVP delivered (June 2026).** The MVP milestone is complete and closed — core OAuth 2.1 / OIDC, the MCP authorization surface, client management, and the agent-native authorization track ([ADR-007 §2](./docs/adr/007-mcp-first-positioning.md)) all shipped. Remaining near-term work is production hardening (T3) and the environment-aware posture ([ADR-008](./docs/adr/008-environment-aware-authorization.md) / T5).
+> 🎉 **MVP delivered (June 2026).** The MVP milestone is complete and closed — core OAuth 2.1 / OIDC, the MCP authorization surface, client management, and the agent-native authorization track ([ADR-007 §2](./docs/adr/007-mcp-first-positioning.md)) all shipped. **Production hardening (T3) is now complete too** — security headers, CSRF, secure cookies, XSS-safe output, OIDC ID token/nonce/claims, structured logging + `/metrics`, failed-login lockout, and the developer-portal Docker image. Remaining near-term work is the environment-aware posture ([ADR-008](./docs/adr/008-environment-aware-authorization.md) / T5).
 
 ## Executive Summary
 
@@ -672,7 +672,7 @@ POST   /api/clients/:id/regenerate-secret  # pending
 ## Phase 3: Production Readiness
 
 **Timeline**: 4-6 weeks  
-**Status**: In Progress (3.4 Docker complete; 3.1 partial — rate limiting, zod validation, Drizzle SQLi defence, audit logging done; helmet/CSRF/XSS pending)
+**Status**: ✅ Complete (T3 milestone — June 2026). Security hardening (3.1), OIDC 1.0 compliance (3.2), monitoring & logging (3.3), and Docker & deployment (3.4) all shipped.
 
 **Objective**: Make the system production-ready with security, monitoring, and OIDC compliance.
 
@@ -687,18 +687,18 @@ POST   /api/clients/:id/regenerate-secret  # pending
   - `/auth/login`: 5 requests/15min per IP
   - `/auth/resend-verification`: 3 requests/hour per email
   - `/oauth/token`: 10 requests/min per client
-- [ ] Add CSRF protection
-- [ ] Secure cookie settings (HttpOnly, Secure, SameSite)
+- [x] Add CSRF protection (session-bound double-submit token on the consent flow; #108)
+- [x] Secure cookie settings (HttpOnly, Secure, SameSite) — `__Host-` session cookie, Secure default-on (#109)
 - [x] Input validation and sanitization (zod via `ZodTypeProvider` on every route)
 - [x] SQL injection prevention (Drizzle parameterized queries throughout)
-- [ ] XSS protection
-- [ ] Security headers (helmet)
-  - Content-Security-Policy
+- [x] XSS protection (`safeUrl()` allowlist + HTML escaping on server-rendered pages; #112)
+- [x] Security headers (helmet) — via `@fastify/helmet` (#113)
+  - Content-Security-Policy (nonce-based, no `unsafe-inline` scripts)
   - Strict-Transport-Security
   - X-Frame-Options
   - X-Content-Type-Options
 - [x] Audit logging (all auth events via `auditLogs.create`)
-- [ ] Failed login attempt tracking
+- [x] Failed login attempt tracking (Redis-backed per identifier/IP, with lockout; #115)
 
 **Security Headers**:
 
@@ -738,12 +738,12 @@ fastify.register(helmet, {
 
 **Tasks**:
 
-- [ ] Implement OIDC discovery endpoint (`/.well-known/openid-configuration`)
-- [ ] Implement JWKS endpoint (`/.well-known/jwks.json`)
-- [ ] Add ID token support
-- [ ] Add nonce parameter support
-- [ ] Implement OIDC claims (sub, email, email_verified)
-- [ ] Test with OIDC validator
+- [x] Implement OIDC discovery endpoint (`/.well-known/openid-configuration`)
+- [x] Implement JWKS endpoint (`/.well-known/jwks.json`)
+- [x] Add ID token support (EdDSA, issued on `openid` scope; #118)
+- [x] Add nonce parameter support (echoed from `/authorize` into the ID token; #119)
+- [x] Implement OIDC claims (sub, email, email_verified, name) — aligned across ID token, userinfo, and discovery (#120)
+- [x] Test with OIDC validator (self-contained conformance suite; #121)
 
 **OIDC Discovery Response**:
 
@@ -797,13 +797,13 @@ const idToken = await new SignJWT({
 
 **Tasks**:
 
-- [ ] Set up structured logging (pino)
-- [ ] Add metrics endpoint (`/metrics`) - Prometheus format
-- [ ] Log all authentication events
-- [ ] Log failed login attempts
-- [ ] Monitor token generation rate
-- [ ] Set up basic alerts (optional)
-- [ ] Add request ID tracking
+- [x] Set up structured logging (pino) — secret redaction, JSON in prod, `pino-pretty` in dev (#122)
+- [x] Add metrics endpoint (`/metrics`) - Prometheus format via `prom-client` (#123)
+- [x] Log all authentication events (#124)
+- [x] Log failed login attempts (email hashed, never the password; #125)
+- [x] Monitor token generation rate (access/refresh issuance counters; #126)
+- [x] Set up basic alerts (optional) — documented Alertmanager rules in `docs/observability.md` (#127)
+- [x] Add request ID tracking (`X-Request-Id` propagation, in every log line; #128)
 
 **Structured Logging**:
 
@@ -868,7 +868,7 @@ auth_token_issued_total{type="refresh"} 3456
 
 - [x] Create Dockerfile for auth-server
 - [x] Create Dockerfile for migration-runner (separate service for DB migrations)
-- [ ] Create Dockerfile for developer-portal (Phase 2)
+- [x] Create Dockerfile for developer-portal (prod + dev images, compose service; #129)
 - [x] Create docker-compose.yml (PostgreSQL 18 + Redis 7 + QAuth)
 - [x] Write deployment documentation (README.md, docs/docker.md)
 - [x] Environment variable configuration (.env.docker.example)
