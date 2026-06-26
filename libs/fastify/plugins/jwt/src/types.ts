@@ -70,6 +70,23 @@ export interface JwtUtils {
     expiresInOverride?: number;
   }): Promise<string>;
   /**
+   * Sign an OIDC ID token (OpenID Connect Core 1.0 §2).
+   *
+   * Issued by the token endpoint when the granted scope includes `openid`.
+   * Uses the same EdDSA signing key and lifespan as access tokens; `aud` is
+   * the client identifier, `nonce` is echoed when the client supplied one in
+   * the authorization request. Identity claims (`email`, `email_verified`,
+   * `name`) are included when available.
+   */
+  signIdToken(payload: {
+    sub: string;
+    audience: string;
+    email?: string;
+    email_verified?: boolean;
+    name?: string;
+    nonce?: string;
+  }): Promise<string>;
+  /**
    * Generate a refresh token pair (token and hash)
    */
   generateRefreshToken(): { token: string; tokenHash: string };

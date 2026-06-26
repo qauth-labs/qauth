@@ -54,6 +54,40 @@ export interface SignAccessTokenPayload {
 }
 
 /**
+ * Payload for signing an OIDC ID token (OpenID Connect Core 1.0 §2).
+ *
+ * An ID token is a security token asserting the authentication of an end-user
+ * to a Relying Party (the OAuth client). It is distinct from an access token:
+ * its audience (`aud`) is the client itself, and it carries identity claims
+ * about the authenticated subject — not authorization scopes.
+ *
+ * Issued only when the granted scope includes `openid` (OIDC Core §3.1.3.3).
+ * Signed with the same EdDSA key as access tokens; `iss`, `aud`, `exp`, `iat`
+ * are set by `signIdToken`.
+ */
+export interface SignIdTokenPayload {
+  /** Subject — the stable user identifier (OIDC Core §2, `sub`). */
+  sub: string;
+  /**
+   * Audience — the OAuth client identifier the token is issued for
+   * (OIDC Core §2, `aud` = `client_id`).
+   */
+  audience: string;
+  /** End-user email, when available. Mapped to the `email` claim. */
+  email?: string;
+  /** Whether the email is verified. Mapped to the `email_verified` claim. */
+  email_verified?: boolean;
+  /** End-user display name, when available. Mapped to the `name` claim. */
+  name?: string;
+  /**
+   * The `nonce` value from the original authorization request, echoed verbatim
+   * (OIDC Core §3.1.3.6). Present only when the client supplied one; binds the
+   * ID token to the client's authorization request to defend against replay.
+   */
+  nonce?: string;
+}
+
+/**
  * JWT payload structure, including standard claims
  */
 export interface JWTPayload extends SignAccessTokenPayload {

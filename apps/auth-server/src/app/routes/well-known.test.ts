@@ -108,8 +108,10 @@ describe('GET /.well-known/openid-configuration', () => {
       expect(body['jwks_uri']).toBe(`${ISSUER}/.well-known/jwks.json`);
       expect(body['subject_types_supported']).toEqual(['public']);
       expect(body['claims_supported']).toEqual(
-        expect.arrayContaining(['sub', 'email', 'email_verified'])
+        expect.arrayContaining(['sub', 'email', 'email_verified', 'name', 'nonce'])
       );
+      // EdDSA is the only ID-token signing algorithm advertised (OIDC Core §16).
+      expect(body['id_token_signing_alg_values_supported']).toEqual(['EdDSA']);
     } finally {
       await app.close();
     }

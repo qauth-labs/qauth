@@ -8,6 +8,7 @@ import {
   importPrivateKey,
   importPublicKey,
   signAccessToken,
+  signIdToken,
   verifyAccessToken,
 } from '@qauth-labs/server-jwt';
 import { JWTInvalidError } from '@qauth-labs/shared-errors';
@@ -82,6 +83,13 @@ export const jwtPlugin = fp<JwtPluginOptions>(
         const { expiresInOverride, ...claims } = payload;
         const expiresIn = expiresInOverride ?? options.accessTokenLifespan;
         return signAccessToken(claims, privateKey, options.issuer, expiresIn);
+      },
+      async signIdToken(payload) {
+        // OIDC ID tokens share the access-token signing key (one JWKS verifies
+        // both) and lifespan. `aud` is the client_id; identity claims + nonce
+        // are passed through verbatim. Crypto stays in the plugin, never the
+        // route, per the project's security-first plugin boundary.
+        return signIdToken(payload, privateKey, options.issuer, options.accessTokenLifespan);
       },
       generateRefreshToken() {
         return generateRefreshToken();

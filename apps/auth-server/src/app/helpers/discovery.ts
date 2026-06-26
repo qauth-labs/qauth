@@ -107,8 +107,21 @@ export function buildOpenIdConfiguration(input: DiscoveryMetadataInput): Record<
 
   return {
     ...asMetadata,
-    // OIDC Core §5.1 — `sub` is always emitted.
-    claims_supported: ['sub', 'iss', 'aud', 'exp', 'iat', 'email', 'email_verified'],
+    // OIDC Core §5.1 — `sub` is always emitted. `nonce` is echoed in the ID
+    // token when the client supplies it (OIDC Core §3.1.3.6). `name` is emitted
+    // when the user has a display name set. This list MUST stay consistent with
+    // the ID token (token endpoint) and the userinfo response.
+    claims_supported: [
+      'sub',
+      'iss',
+      'aud',
+      'exp',
+      'iat',
+      'nonce',
+      'email',
+      'email_verified',
+      'name',
+    ],
     // We only issue compact-serialized JWT access tokens; IdP-signed userinfo
     // JWTs are not yet supported, so userinfo_signing_alg_values_supported
     // is intentionally omitted rather than emitted as `['none']`.

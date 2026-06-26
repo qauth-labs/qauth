@@ -60,6 +60,7 @@ export default async function (fastify: FastifyInstance) {
           sub: string;
           email?: string;
           email_verified?: boolean;
+          name?: string;
         } = {
           sub: user.id,
         };
@@ -70,6 +71,16 @@ export default async function (fastify: FastifyInstance) {
 
         if (typeof user.emailVerified === 'boolean') {
           responseBody.email_verified = user.emailVerified;
+        }
+
+        // OIDC Core §5.1 `name` — the end-user display name, derived from the
+        // stored first/last name parts. Omitted when neither is set, keeping
+        // the claim set consistent with the ID token.
+        const nameParts = [user.firstName, user.lastName].filter(
+          (p): p is string => typeof p === 'string' && p.trim().length > 0
+        );
+        if (nameParts.length > 0) {
+          responseBody.name = nameParts.join(' ');
         }
 
         await fastify.repositories.auditLogs.create({

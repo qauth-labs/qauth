@@ -365,6 +365,23 @@ async function handleAuthorizationCode(
     aud: resolveAudience(client, effectiveResource),
   });
 
+  // OIDC Core §3.1.3.3: when the granted scope includes `openid`, the token
+  // response also carries an ID token asserting the end-user's authentication
+  // to this client. `aud` is the client_id (NOT the resource audience used for
+  // the access token), and the authorization request's `nonce` is echoed when
+  // present (OIDC Core §3.1.3.6). Signed with the same EdDSA key as the access
+  // token so a single JWKS verifies both.
+  const idToken = authCode.scopes.includes('openid')
+    ? await fastify.jwtUtils.signIdToken({
+        sub: user.id,
+        audience: client.clientId,
+        email: user.email,
+        email_verified: user.emailVerified,
+        name: resolveDisplayName(user),
+        nonce: authCode.nonce ?? undefined,
+      })
+    : undefined;
+
   const { token: refreshToken, tokenHash } = fastify.jwtUtils.generateRefreshToken();
 
   const accessTokenExpiresIn = fastify.jwtUtils.getAccessTokenLifespan();
@@ -421,7 +438,26 @@ async function handleAuthorizationCode(
     expires_in: accessTokenExpiresIn,
     token_type: 'Bearer' as const,
     ...(scopeString ? { scope: scopeString } : {}),
+    ...(idToken ? { id_token: idToken } : {}),
   };
+}
+
+/**
+ * Derive the OIDC `name` claim from a user record.
+ *
+ * OIDC Core §5.1 defines `name` as the end-user's full display name. QAuth
+ * stores `firstName` / `lastName` separately (both optional), so we join the
+ * present parts. Returns `undefined` when neither is set so the claim is
+ * omitted entirely rather than emitted as an empty string.
+ */
+function resolveDisplayName(user: {
+  firstName?: string | null;
+  lastName?: string | null;
+}): string | undefined {
+  const parts = [user.firstName, user.lastName].filter(
+    (p): p is string => typeof p === 'string' && p.trim().length > 0
+  );
+  return parts.length > 0 ? parts.join(' ') : undefined;
 }
 
 /**

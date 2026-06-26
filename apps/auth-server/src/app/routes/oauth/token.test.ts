@@ -95,6 +95,7 @@ function createFastifyStub() {
     },
     jwtUtils: {
       signAccessToken: vi.fn(),
+      signIdToken: vi.fn(),
       verifyAccessToken: vi.fn(),
       generateRefreshToken: vi.fn(),
       hashRefreshToken: vi.fn().mockImplementation((t: string) => `hash:${t}`),
@@ -980,6 +981,8 @@ describe('POST /oauth/token route — authorization_code grant', () => {
       id: 'user-uuid-1',
       email: 'user@example.com',
       emailVerified: true,
+      firstName: 'Ada',
+      lastName: 'Lovelace',
     };
 
     const authCode = {
@@ -989,6 +992,7 @@ describe('POST /oauth/token route — authorization_code grant', () => {
       redirectUri: 'https://app.example.com/callback',
       codeChallenge: 'challenge-value',
       scopes: ['read:foo'],
+      nonce: null,
     };
 
     (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(client);
@@ -1003,6 +1007,7 @@ describe('POST /oauth/token route — authorization_code grant', () => {
     (fastify.repositories.refreshTokens.create as unknown as Mock).mockResolvedValue(undefined);
     (fastify.pkceUtils.verifyCodeChallenge as unknown as Mock).mockReturnValue(true);
     (fastify.jwtUtils.signAccessToken as unknown as Mock).mockResolvedValue('signed.jwt.token');
+    (fastify.jwtUtils.signIdToken as unknown as Mock).mockResolvedValue('signed.id.token');
     (fastify.jwtUtils.generateRefreshToken as unknown as Mock).mockReturnValue({
       token: 'refresh-token-plain',
       tokenHash: 'refresh-token-hash',
@@ -1066,6 +1071,85 @@ describe('POST /oauth/token route — authorization_code grant', () => {
       token_type: 'Bearer',
       scope: 'read:foo',
     });
+
+    // No `openid` scope was granted → no ID token issued (OIDC Core §3.1.3.3).
+    expect(fastify.jwtUtils.signIdToken).not.toHaveBeenCalled();
+    expect(result).not.toHaveProperty('id_token');
+  });
+
+  it('issues an id_token when the granted scope includes openid (OIDC Core §3.1.3.3)', async () => {
+    const { fastify, ctx, client, user, authCode } = setupAuthCodeStub();
+    (fastify.repositories.authorizationCodes.findByCode as unknown as Mock).mockResolvedValue({
+      ...authCode,
+      scopes: ['openid', 'email'],
+      nonce: 'n-0S6_WzA2Mj',
+    });
+    await tokenRoute(fastify);
+    const handler = ctx.handler;
+    if (!handler) throw new Error('Handler missing');
+
+    const reply = createReply();
+    const result = await handler(baseRequest(), reply);
+
+    // ID token `aud` is the client_id (NOT the resource audience). Nonce from
+    // the authorization request is echoed; name derives from first/last name.
+    expect(fastify.jwtUtils.signIdToken).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sub: user.id,
+        audience: client.clientId,
+        email: user.email,
+        email_verified: user.emailVerified,
+        name: 'Ada Lovelace',
+        nonce: 'n-0S6_WzA2Mj',
+      })
+    );
+    expect(result).toMatchObject({
+      access_token: 'signed.jwt.token',
+      id_token: 'signed.id.token',
+      scope: 'openid email',
+    });
+  });
+
+  it('issues an id_token with no nonce when the authorization request omitted it', async () => {
+    const { fastify, ctx, authCode } = setupAuthCodeStub();
+    (fastify.repositories.authorizationCodes.findByCode as unknown as Mock).mockResolvedValue({
+      ...authCode,
+      scopes: ['openid'],
+      nonce: null,
+    });
+    await tokenRoute(fastify);
+    const handler = ctx.handler;
+    if (!handler) throw new Error('Handler missing');
+
+    const reply = createReply();
+    const result = await handler(baseRequest(), reply);
+
+    expect(fastify.jwtUtils.signIdToken).toHaveBeenCalledWith(
+      expect.objectContaining({ nonce: undefined })
+    );
+    expect(result).toHaveProperty('id_token', 'signed.id.token');
+  });
+
+  it('omits the name claim from the id_token when the user has no name set', async () => {
+    const { fastify, ctx, authCode, user } = setupAuthCodeStub();
+    (fastify.repositories.users.findById as unknown as Mock).mockResolvedValue({
+      ...user,
+      firstName: null,
+      lastName: null,
+    });
+    (fastify.repositories.authorizationCodes.findByCode as unknown as Mock).mockResolvedValue({
+      ...authCode,
+      scopes: ['openid'],
+    });
+    await tokenRoute(fastify);
+    const handler = ctx.handler;
+    if (!handler) throw new Error('Handler missing');
+
+    const reply = createReply();
+    await handler(baseRequest(), reply);
+
+    const call = (fastify.jwtUtils.signIdToken as unknown as Mock).mock.calls[0][0];
+    expect(call.name).toBeUndefined();
   });
 
   it('rejects when authorization code was issued to a different client', async () => {

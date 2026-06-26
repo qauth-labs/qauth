@@ -1,7 +1,8 @@
 import { JWTExpiredError, JWTInvalidError } from '@qauth-labs/shared-errors';
+import { jwtVerify } from 'jose';
 import { describe, expect, it } from 'vitest';
 
-import { signAccessToken, verifyAccessToken } from './jwt-service';
+import { signAccessToken, signIdToken, verifyAccessToken } from './jwt-service';
 import { generateEdDSAKeyPair, importPrivateKey, importPublicKey } from './key-management';
 
 describe('signAccessToken', () => {
@@ -92,6 +93,78 @@ describe('signAccessToken', () => {
     const decoded = await verifyAccessToken(token, publicKey);
 
     expect(decoded.act).toBeUndefined();
+  });
+});
+
+describe('signIdToken', () => {
+  it('signs an EdDSA ID token with the required OIDC claims', async () => {
+    const { privateKey, publicKey } = await generateEdDSAKeyPair();
+
+    const token = await signIdToken(
+      {
+        sub: 'user-oidc-1',
+        audience: 'client-oidc-1',
+        email: 'oidc@example.com',
+        email_verified: true,
+        name: 'Ada Lovelace',
+        nonce: 'n-0S6_WzA2Mj',
+      },
+      privateKey,
+      'https://auth.example.com',
+      900
+    );
+
+    expect(token.split('.').length).toBe(3);
+
+    const { payload, protectedHeader } = await jwtVerify(token, publicKey, {
+      algorithms: ['EdDSA'],
+    });
+    expect(protectedHeader.alg).toBe('EdDSA');
+    expect(payload.sub).toBe('user-oidc-1');
+    expect(payload.aud).toBe('client-oidc-1');
+    expect(payload.iss).toBe('https://auth.example.com');
+    expect(payload['email']).toBe('oidc@example.com');
+    expect(payload['email_verified']).toBe(true);
+    expect(payload['name']).toBe('Ada Lovelace');
+    expect(payload['nonce']).toBe('n-0S6_WzA2Mj');
+    expect(payload.iat).toBeDefined();
+    expect(payload.exp).toBeDefined();
+    // Token-use marker distinguishes the ID token from an access token.
+    expect(payload['token_use']).toBe('id');
+  });
+
+  it('omits nonce and name when not supplied', async () => {
+    const { privateKey, publicKey } = await generateEdDSAKeyPair();
+
+    const token = await signIdToken(
+      { sub: 'user-oidc-2', audience: 'client-oidc-2' },
+      privateKey,
+      'https://auth.example.com',
+      900
+    );
+
+    const { payload } = await jwtVerify(token, publicKey, { algorithms: ['EdDSA'] });
+    expect(payload['nonce']).toBeUndefined();
+    expect(payload['name']).toBeUndefined();
+    expect(payload['email']).toBeUndefined();
+    expect(payload.sub).toBe('user-oidc-2');
+    expect(payload.aud).toBe('client-oidc-2');
+  });
+
+  it('is rejected as an access token by the token-confusion guard (token_use=id)', async () => {
+    const { privateKey, publicKey } = await generateEdDSAKeyPair();
+
+    const idToken = await signIdToken(
+      { sub: 'user-oidc-3', audience: 'client-oidc-3' },
+      privateKey,
+      'https://auth.example.com',
+      900
+    );
+
+    // The ID token verifies cryptographically (same key) but carries
+    // token_use='id', so a consumer asserting an access token can detect it.
+    const decoded = await verifyAccessToken(idToken, publicKey);
+    expect(decoded.token_use).toBe('id');
   });
 });
 

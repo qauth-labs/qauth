@@ -1,7 +1,7 @@
 import { JWTExpiredError, JWTInvalidError } from '@qauth-labs/shared-errors';
 import { jwtVerify, SignJWT } from 'jose';
 
-import type { JWTPayload, SignAccessTokenPayload } from '../types/jwt-service';
+import type { JWTPayload, SignAccessTokenPayload, SignIdTokenPayload } from '../types/jwt-service';
 import type { KeyLike } from '../types/key-management';
 
 /**
@@ -70,6 +70,80 @@ export async function signAccessToken(
   jwt = jwt.setAudience(audience);
 
   return jwt.sign(privateKey);
+}
+
+/**
+ * Sign an OIDC ID token (OpenID Connect Core 1.0 §2).
+ *
+ * Creates a JWT ID token with the EdDSA algorithm, using the same signing key
+ * as access tokens so a single JWKS verifies both. The ID token asserts the
+ * authentication of the end-user to the Relying Party (the OAuth client):
+ *
+ * - `iss` — the authorization server issuer identifier.
+ * - `aud` — the client identifier the token was issued for (OIDC Core §2).
+ * - `sub` — the stable subject (user) identifier.
+ * - `exp` / `iat` — expiry / issued-at, set from `expiresIn`.
+ * - `email`, `email_verified`, `name` — identity claims, when available.
+ * - `nonce` — echoed verbatim from the authorization request, when supplied
+ *   (OIDC Core §3.1.3.6).
+ *
+ * A `token_use: 'id'` marker is stamped so an ID token can never be mistaken
+ * for an access token (token-confusion defence — e.g. it must not be accepted
+ * as an RFC 8693 token-exchange `subject_token`, which requires
+ * `token_use: 'access'` or the structural access-token markers).
+ *
+ * @param payload - ID token claims (sub, audience, optional identity claims)
+ * @param privateKey - EdDSA private key for signing
+ * @param issuer - JWT issuer (iss claim)
+ * @param expiresIn - Expiration time in seconds
+ * @returns Promise resolving to the signed ID token string
+ *
+ * @example
+ * ```typescript
+ * const idToken = await signIdToken(
+ *   { sub: 'user-123', audience: 'client-abc', email: 'u@example.com',
+ *     email_verified: true, nonce: 'n-0S6_WzA2Mj' },
+ *   privateKey,
+ *   'https://auth.example.com',
+ *   900
+ * );
+ * ```
+ */
+export async function signIdToken(
+  payload: SignIdTokenPayload,
+  privateKey: KeyLike,
+  issuer: string,
+  expiresIn: number
+): Promise<string> {
+  const claims: Record<string, unknown> = {
+    sub: payload.sub,
+    // Token-use marker: this is an OIDC ID token, never an access token.
+    // Consumers that must accept ONLY access tokens (e.g. the token-exchange
+    // subject_token) reject this value, closing the token-confusion gap.
+    token_use: 'id',
+  };
+  if (payload.email !== undefined) {
+    claims['email'] = payload.email;
+  }
+  if (payload.email_verified !== undefined) {
+    claims['email_verified'] = payload.email_verified;
+  }
+  if (payload.name !== undefined) {
+    claims['name'] = payload.name;
+  }
+  // OIDC Core §3.1.3.6: when a `nonce` was present in the authorization request
+  // it MUST be echoed unmodified in the ID token. Omitted entirely otherwise.
+  if (payload.nonce !== undefined) {
+    claims['nonce'] = payload.nonce;
+  }
+
+  return new SignJWT(claims)
+    .setProtectedHeader({ alg: 'EdDSA' })
+    .setIssuedAt()
+    .setExpirationTime(`${expiresIn}s`)
+    .setIssuer(issuer)
+    .setAudience(payload.audience)
+    .sign(privateKey);
 }
 
 /**
