@@ -98,6 +98,13 @@ export interface JWTPayload extends SignAccessTokenPayload {
   /** Issuer */
   iss?: string;
   /**
+   * JWT ID (RFC 7519 §4.1.7). `signAccessToken` stamps a unique value on every
+   * access token so a specific token can be revoked (RFC 7009) by adding its
+   * `jti` to the auth-server's denylist. Absent on legacy tokens minted before
+   * this claim existed.
+   */
+  jti?: string;
+  /**
    * Token-use marker. `signAccessToken` always stamps `'access'` so consumers
    * can distinguish a genuine access token from any other JWT signed with the
    * same key (token-confusion defence — e.g. an ID token must not be accepted

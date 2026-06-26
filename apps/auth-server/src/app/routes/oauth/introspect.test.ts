@@ -64,6 +64,12 @@ function createFastifyStub() {
     },
     jwtUtils: {
       verifyAccessToken: vi.fn(),
+      getIssuer: () => 'https://auth.example.com',
+    },
+    redis: {
+      // Default: nothing is revoked. Individual tests override `exists`.
+      exists: vi.fn().mockResolvedValue(0),
+      setex: vi.fn().mockResolvedValue('OK'),
     },
     log: {
       debug: vi.fn(),
@@ -156,6 +162,47 @@ describe('POST /oauth/introspect route', () => {
     // `tokenSub` is only added when `sub` is not UUID-shaped.
     const auditCall = auditLogMock.mock.calls[0][0];
     expect(auditCall.metadata).not.toHaveProperty('tokenSub');
+  });
+
+  it('returns active: false for a signature-valid token whose jti is revoked (RFC 7009)', async () => {
+    const { fastify, ctx } = createFastifyStub();
+    await introspectRoute(fastify);
+
+    const client = {
+      id: 'client-1',
+      clientId: 'client-123',
+      clientSecretHash: 'hashed-secret',
+      enabled: true,
+      audience: null,
+    };
+
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(client);
+    (fastify.passwordHasher.verifyPassword as unknown as Mock).mockResolvedValue(true);
+    (fastify.jwtUtils.verifyAccessToken as unknown as Mock).mockResolvedValue({
+      sub: '019dbc24-7a2d-724d-bf26-1923f21f2234',
+      clientId: client.clientId,
+      jti: 'revoked-jti',
+      exp: 1234567890,
+      iat: 1234567800,
+      iss: 'https://auth.example.com',
+    });
+    // The token's jti is on the denylist.
+    (fastify.redis.exists as unknown as Mock).mockResolvedValue(1);
+
+    const replyBody: any[] = [];
+    const reply = { send: (b: unknown) => (replyBody.push(b), b) };
+
+    const result = await ctx.handler!(
+      {
+        body: { token: 'revoked-token', client_id: client.clientId, client_secret: 'secret' },
+        ip: '127.0.0.1',
+        headers: { 'user-agent': 'vitest' },
+      },
+      reply
+    );
+
+    expect(fastify.redis.exists).toHaveBeenCalledWith('revoked-access-token:revoked-jti');
+    expect(result).toEqual({ active: false });
   });
 
   it('nulls out user_id on the audit row when sub is not UUID-shaped (client_credentials)', async () => {

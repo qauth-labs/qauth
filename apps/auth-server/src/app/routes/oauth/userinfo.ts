@@ -56,6 +56,15 @@ export default async function (fastify: FastifyInstance) {
           throw new NotFoundError('User', userId);
         }
 
+        // OIDC Core §5.4: userinfo claims are gated by the scopes the access
+        // token was granted. `sub` is ALWAYS returned; `email`/`email_verified`
+        // require the `email` scope; `name` (a profile claim) requires
+        // `profile`. Parsing the space-delimited `scope` claim into a set is the
+        // same convention used across the token/authorize paths.
+        const grantedScopes = new Set(
+          (payload.scope ?? '').split(/\s+/).filter((s) => s.length > 0)
+        );
+
         const responseBody: {
           sub: string;
           email?: string;
@@ -65,22 +74,26 @@ export default async function (fastify: FastifyInstance) {
           sub: user.id,
         };
 
-        if (typeof user.email === 'string' && user.email.length > 0) {
-          responseBody.email = user.email;
-        }
-
-        if (typeof user.emailVerified === 'boolean') {
-          responseBody.email_verified = user.emailVerified;
+        if (grantedScopes.has('email')) {
+          if (typeof user.email === 'string' && user.email.length > 0) {
+            responseBody.email = user.email;
+          }
+          if (typeof user.emailVerified === 'boolean') {
+            responseBody.email_verified = user.emailVerified;
+          }
         }
 
         // OIDC Core §5.1 `name` — the end-user display name, derived from the
-        // stored first/last name parts. Omitted when neither is set, keeping
-        // the claim set consistent with the ID token.
-        const nameParts = [user.firstName, user.lastName].filter(
-          (p): p is string => typeof p === 'string' && p.trim().length > 0
-        );
-        if (nameParts.length > 0) {
-          responseBody.name = nameParts.join(' ');
+        // stored first/last name parts. Released only under the `profile` scope;
+        // omitted when neither part is set, keeping the claim set consistent
+        // with the ID token.
+        if (grantedScopes.has('profile')) {
+          const nameParts = [user.firstName, user.lastName].filter(
+            (p): p is string => typeof p === 'string' && p.trim().length > 0
+          );
+          if (nameParts.length > 0) {
+            responseBody.name = nameParts.join(' ');
+          }
         }
 
         await fastify.repositories.auditLogs.create({

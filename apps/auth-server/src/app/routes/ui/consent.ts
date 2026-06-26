@@ -45,6 +45,18 @@ function parseResourceFromUrl(url: string): string[] {
 }
 
 /**
+ * Order-independent equality of two scope sets. Used by the consent POST to
+ * confirm the POSTed (allowlist-filtered) scopes match exactly the set bound to
+ * the session on the GET render — defence against a tampered hidden `scope`
+ * field. Both inputs are already de-duplicated by `filterRequestedScopes`.
+ */
+function scopeSetsEqual(a: readonly string[], b: readonly string[]): boolean {
+  if (a.length !== b.length) return false;
+  const set = new Set(a);
+  return b.every((s) => set.has(s));
+}
+
+/**
  * Consent screen & Allow/Deny POST handler (issue #150).
  *
  * GET  /ui/consent — server-renders the consent page given the same query
@@ -390,13 +402,20 @@ export default async function (fastify: FastifyInstance) {
       // The token is still burned on successful POST, and a new session
       // (re-login) always mints a new one.
       const csrfToken = session.csrfToken ?? generateCsrfToken();
-      if (!session.csrfToken) {
-        await fastify.sessionUtils.setSession<BrowserSessionData>(
-          session.sessionId,
-          { ...session, csrfToken },
-          env.SESSION_COOKIE_TTL
-        );
-      }
+
+      // Scope-presentation integrity (#150 hardening): bind the EXACT scope set
+      // the user is about to see to the session, keyed by client_id. The POST
+      // handler grants only these scopes — the hidden `scope` form field is
+      // attacker-controllable, so the persisted grant must match what was
+      // rendered, not what is submitted. Always persisted (the scope set can
+      // change between GETs for the same client), so this write also covers the
+      // first-time CSRF-token mint above.
+      const consentScopes = { ...(session.consentScopes ?? {}), [client.clientId]: scopes };
+      await fastify.sessionUtils.setSession<BrowserSessionData>(
+        session.sessionId,
+        { ...session, csrfToken, consentScopes },
+        env.SESSION_COOKIE_TTL
+      );
 
       reply.header('Content-Type', 'text/html; charset=utf-8');
       reply.header('Cache-Control', 'no-store');
@@ -608,7 +627,45 @@ export default async function (fastify: FastifyInstance) {
         );
       }
 
-      const scopes = filterRequestedScopes(body.scope, client);
+      // Scope-presentation integrity (#150 hardening). The hidden `scope` field
+      // is attacker-controllable, so we do NOT trust it to determine the granted
+      // set. The GET render bound the EXACT scopes shown to the user into the
+      // session, keyed by client_id. We grant those. As defence-in-depth we
+      // still re-filter the POSTed scopes against the client allowlist and
+      // require them to match the bound set: any divergence (a tampered hidden
+      // field that survived the allowlist intersection) is refused rather than
+      // silently granting a set the user never saw. A missing binding (a POST
+      // with no preceding GET in this session) is likewise refused.
+      const boundScopes = session.consentScopes?.[client.clientId];
+      const postedScopes = filterRequestedScopes(body.scope, client);
+      if (boundScopes === undefined || !scopeSetsEqual(boundScopes, postedScopes)) {
+        await fastify.repositories.auditLogs.create({
+          userId: session.userId,
+          oauthClientId: client.id,
+          event: 'oauth.consent.denied',
+          eventType: 'auth',
+          success: false,
+          ipAddress: request.ip,
+          userAgent: request.headers['user-agent'] || null,
+          metadata: {
+            error: 'invalid_scope',
+            reason: 'consent_scope_mismatch',
+            client_id: body.client_id,
+            bound: boundScopes ?? null,
+            posted: postedScopes,
+          },
+        });
+        return reply.redirect(
+          buildRedirectUrl(body.redirect_uri, {
+            error: 'invalid_scope',
+            error_description: 'consent scope does not match the rendered authorization request',
+            state: body.state ?? undefined,
+          }),
+          302
+        );
+      }
+      // Grant the bound (user-visible) scopes — never the raw POST body.
+      const scopes = boundScopes;
 
       // ADR-007 §2 (#185): step-up gate on the mint path. Re-authentication is
       // enforced HERE, not only pre-consent, because the hidden `scope`/`prompt`/

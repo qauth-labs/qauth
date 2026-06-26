@@ -1789,7 +1789,18 @@ describe('POST /oauth/token route — token-exchange grant (RFC 8693, ADR-007 §
 
     (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(client);
     (fastify.passwordHasher.verifyPassword as unknown as Mock).mockResolvedValue(true);
-    (fastify.jwtUtils.verifyAccessToken as unknown as Mock).mockResolvedValue(subjectPayload);
+    // Issuer is now enforced INSIDE verifyAccessToken (RFC 9700). Model that:
+    // when the route pins `issuer` and it does not match the token's `iss`, the
+    // mock rejects exactly as jose would, instead of the route doing a manual
+    // post-verification issuer comparison.
+    (fastify.jwtUtils.verifyAccessToken as unknown as Mock).mockImplementation(
+      (_token: string, options?: { issuer?: string }) => {
+        if (options?.issuer !== undefined && subjectPayload.iss !== options.issuer) {
+          return Promise.reject(new Error('unexpected "iss" claim value'));
+        }
+        return Promise.resolve(subjectPayload);
+      }
+    );
     (fastify.repositories.users.findById as unknown as Mock).mockResolvedValue(
       opts.userFound === false ? null : user
     );

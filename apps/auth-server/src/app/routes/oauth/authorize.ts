@@ -247,6 +247,8 @@ export default async function (fastify: FastifyInstance) {
           const systemClient = await getOrCreateSystemClient(realm.id, fastify);
           const payload = await fastify.jwtUtils.verifyAccessToken(bearer as string, {
             audience: resolveAudience(systemClient),
+            // RFC 9700 mix-up defence: only accept a token this AS issued.
+            issuer: fastify.jwtUtils.getIssuer(),
           });
           userId = payload.sub;
         } catch {

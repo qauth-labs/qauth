@@ -257,4 +257,60 @@ describe('verifyAccessToken', () => {
     expect(decoded.sub).toBe(payload.sub);
     expect(decoded.email).toBe(payload.email);
   });
+
+  it('rejects a token whose issuer does not match the expected issuer', async () => {
+    const { privateKey, publicKey } = await generateEdDSAKeyPair();
+    const token = await signAccessToken(
+      { sub: 'user-iss', email: 'iss@example.com', email_verified: true, clientId: 'client-iss' },
+      privateKey,
+      'https://attacker.example.com',
+      900
+    );
+
+    // RFC 9700 mix-up defence: a valid signature is NOT sufficient — the issuer
+    // must also match. A token from a different AS (even under the same key) is
+    // rejected when the expected issuer is supplied.
+    await expect(
+      verifyAccessToken(token, publicKey, { issuer: 'https://auth.example.com' })
+    ).rejects.toThrow(JWTInvalidError);
+  });
+
+  it('accepts a token whose issuer matches the expected issuer', async () => {
+    const { privateKey, publicKey } = await generateEdDSAKeyPair();
+    const token = await signAccessToken(
+      { sub: 'user-iss-ok', email: 'ok@example.com', email_verified: true, clientId: 'client-ok' },
+      privateKey,
+      'https://auth.example.com',
+      900
+    );
+
+    const decoded = await verifyAccessToken(token, publicKey, {
+      issuer: 'https://auth.example.com',
+    });
+    expect(decoded.sub).toBe('user-iss-ok');
+    expect(decoded.iss).toBe('https://auth.example.com');
+  });
+});
+
+describe('access token jti claim (RFC 7009 revocation support)', () => {
+  it('stamps a unique jti on every access token and surfaces it on verify', async () => {
+    const { privateKey, publicKey } = await generateEdDSAKeyPair();
+    const payload = {
+      sub: 'user-jti',
+      email: 'jti@example.com',
+      email_verified: true,
+      clientId: 'client-jti',
+    };
+
+    const tokenA = await signAccessToken(payload, privateKey, 'https://auth.example.com', 900);
+    const tokenB = await signAccessToken(payload, privateKey, 'https://auth.example.com', 900);
+
+    const decodedA = await verifyAccessToken(tokenA, publicKey);
+    const decodedB = await verifyAccessToken(tokenB, publicKey);
+
+    expect(decodedA.jti).toBeDefined();
+    expect(decodedB.jti).toBeDefined();
+    // Each token gets its own id so a single token can be revoked individually.
+    expect(decodedA.jti).not.toBe(decodedB.jti);
+  });
 });

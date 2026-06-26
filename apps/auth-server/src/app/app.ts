@@ -12,6 +12,7 @@ import { pkcePlugin } from '@qauth-labs/fastify-plugin-pkce';
 import type { FastifyInstance } from 'fastify';
 
 import { env } from '../config/env';
+import { isJtiRevoked } from './helpers/token-revocation';
 import errorHandler from './plugins/error-handler';
 import { metricsPlugin } from './plugins/metrics';
 import { rateLimitPlugin } from './plugins/rate-limit';
@@ -107,6 +108,11 @@ export async function app(fastify: FastifyInstance, opts: object) {
     issuer: env.JWT_ISSUER,
     accessTokenLifespan: env.ACCESS_TOKEN_LIFESPAN,
     refreshTokenLifespan: env.REFRESH_TOKEN_LIFESPAN,
+    // RFC 7009 revocation: the shared `requireJwt` preHandler consults this
+    // Redis-backed denylist after verification so a revoked access token is
+    // rejected everywhere it is used as a bearer credential. Resolved lazily
+    // via the `fastify.redis` decorator (cache plugin registered above).
+    isTokenRevoked: (jti) => isJtiRevoked(fastify, jti),
   });
 
   await fastify.register(rateLimitPlugin);

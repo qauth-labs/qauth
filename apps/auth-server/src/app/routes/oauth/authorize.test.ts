@@ -98,6 +98,7 @@ function makeFastify() {
     jwtUtils: {
       extractFromHeader: vi.fn(),
       verifyAccessToken: vi.fn(),
+      getIssuer: () => 'https://auth.example.com',
     },
     sessionUtils: {
       getSession: vi.fn(),
@@ -390,7 +391,11 @@ describe('GET /oauth/authorize — CIMD (Client ID Metadata Documents)', () => {
         authorizationCodes: { create: vi.fn().mockResolvedValue({ id: 'code-1' }) },
         auditLogs: { create: vi.fn().mockResolvedValue(undefined) },
       },
-      jwtUtils: { extractFromHeader: vi.fn(), verifyAccessToken: vi.fn() },
+      jwtUtils: {
+        extractFromHeader: vi.fn(),
+        verifyAccessToken: vi.fn(),
+        getIssuer: () => 'https://auth.example.com',
+      },
       sessionUtils: { getSession: vi.fn() },
       log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
     };

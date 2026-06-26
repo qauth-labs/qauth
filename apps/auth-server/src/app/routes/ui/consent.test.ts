@@ -268,6 +268,7 @@ describe('UI /ui/consent POST — allow/deny', () => {
       sessionId: 'sid-a',
       csrfToken: csrf,
       createdAt: Date.now(),
+      consentScopes: { 'app-123': ['email'] },
     });
     (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(CLIENT);
 
@@ -316,6 +317,7 @@ describe('UI /ui/consent POST — allow/deny', () => {
       sessionId: 'sid-res',
       csrfToken: csrf,
       createdAt: Date.now(),
+      consentScopes: { 'app-123': ['email'] },
     });
     (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(CLIENT);
 
@@ -360,6 +362,7 @@ describe('UI /ui/consent POST — allow/deny', () => {
       sessionId: 'sid-once',
       csrfToken: csrf,
       createdAt: Date.now(),
+      consentScopes: { 'app-123': ['email'] },
     });
     (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(CLIENT);
 
@@ -386,6 +389,55 @@ describe('UI /ui/consent POST — allow/deny', () => {
     expect(fastify.repositories.authorizationCodes.create).toHaveBeenCalledOnce();
     expect(state.redirected).toContain('https://example.com/cb');
   });
+
+  it('refuses to grant scopes the hidden field tampered beyond what was rendered (#150 binding)', async () => {
+    const { fastify, ctx } = makeFastify();
+    await consentRoute(fastify);
+    const { signSessionId } = await import('../../helpers/session-cookie');
+    const signed = signSessionId('sid-tamper');
+    const csrf = 'csrf-tamper';
+    // The GET render bound only `email` (what the user saw). Both `email` and
+    // `read:foo` are in the client allowlist, so a tampered `scope=email
+    // read:foo` survives the allowlist filter — the binding check is what stops
+    // the grant of the unseen `read:foo`.
+    (fastify.sessionUtils.getSession as unknown as Mock).mockResolvedValue({
+      userId: 'user-1',
+      email: 'a@b.com',
+      sessionId: 'sid-tamper',
+      csrfToken: csrf,
+      createdAt: Date.now(),
+      consentScopes: { 'app-123': ['email'] },
+    });
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(CLIENT);
+
+    const { reply, state } = createReply();
+    await ctx.post!(
+      {
+        body: {
+          decision: 'allow',
+          allow_forever: '1',
+          csrf_token: csrf,
+          client_id: 'app-123',
+          redirect_uri: 'https://example.com/cb',
+          state: 'xyz',
+          // Tampered: user only saw `email`.
+          scope: 'email read:foo',
+          code_challenge: 'A'.repeat(43),
+          code_challenge_method: 'S256',
+          response_type: 'code',
+        },
+        headers: { cookie: `__Host-qauth_session=${signed}` },
+        ip: '127.0.0.1',
+      },
+      reply
+    );
+
+    // No code minted, no grant persisted — redirected with invalid_scope.
+    expect(state.redirected).toContain('error=invalid_scope');
+    expect(state.redirected).toContain('state=xyz');
+    expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
+    expect(fastify.repositories.oauthConsents.upsertGrant).not.toHaveBeenCalled();
+  });
 });
 
 describe('UI /ui/consent — agent scope-mode cap (ADR-007 §2, #184)', () => {
@@ -411,6 +463,10 @@ describe('UI /ui/consent — agent scope-mode cap (ADR-007 §2, #184)', () => {
       sessionId: sid,
       csrfToken: csrf,
       createdAt: Date.now(),
+      // The over-cap / non-agent tests reject at the agent-cap gate BEFORE the
+      // scope-presentation binding check; the in-cap success test POSTs
+      // `agent:readonly`, so bind that so its grant matches what was rendered.
+      consentScopes: { 'app-123': ['agent:readonly'] },
     };
   }
 
@@ -595,13 +651,18 @@ describe('UI /ui/consent — step-up authentication (ADR-007 §2, #185)', () => 
     };
   }
 
-  function session(createdAt: number) {
+  // Scope-presentation binding (#150 hardening): the consent GET render binds the
+  // visible scope set to the session; the POST grants ONLY that set. The bound
+  // set must equal what the test POSTs, so callers pass the scope they submit
+  // (default `write:foo`, the dangerous scope these step-up tests exercise).
+  function session(createdAt: number, boundScope = 'write:foo') {
     return {
       userId: 'user-1',
       email: 'a@b.com',
       sessionId: 'sid-su',
       csrfToken: 'csrf-su',
       createdAt,
+      consentScopes: { 'app-123': boundScope.split(/\s+/).filter((s) => s.length > 0) },
     };
   }
 
@@ -681,7 +742,7 @@ describe('UI /ui/consent — step-up authentication (ADR-007 §2, #185)', () => 
     const { signSessionId } = await import('../../helpers/session-cookie');
     const signed = signSessionId('sid-su');
     (fastify.sessionUtils.getSession as unknown as Mock).mockResolvedValue(
-      session(Date.now() - 5000)
+      session(Date.now() - 5000, 'agent:exec')
     );
     // An EXEC-capped agent elevating to the dangerous `agent:exec` scope.
     const EXEC_AGENT = {
@@ -758,7 +819,7 @@ describe('UI /ui/consent — step-up authentication (ADR-007 §2, #185)', () => 
     const { signSessionId } = await import('../../helpers/session-cookie');
     const signed = signSessionId('sid-su');
     (fastify.sessionUtils.getSession as unknown as Mock).mockResolvedValue(
-      session(Date.now() - 10 * MINUTE)
+      session(Date.now() - 10 * MINUTE, 'email')
     );
     (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(CLIENT);
 
@@ -782,7 +843,7 @@ describe('UI /ui/consent — step-up authentication (ADR-007 §2, #185)', () => 
     const { signSessionId } = await import('../../helpers/session-cookie');
     const signed = signSessionId('sid-su');
     (fastify.sessionUtils.getSession as unknown as Mock).mockResolvedValue(
-      session(Date.now() - 10 * MINUTE)
+      session(Date.now() - 10 * MINUTE, 'email')
     );
     (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(CLIENT);
 
