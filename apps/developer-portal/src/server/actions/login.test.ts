@@ -34,7 +34,7 @@ vi.mock('@tanstack/react-start/server', () => ({
 
 import { authServerClient } from '../auth-server-client';
 import { setSessionCookieHeader } from '../session-cookie';
-import { loginHandler } from './login';
+import { loginHandler } from './login.server';
 
 describe('loginHandler', () => {
   it('sets session cookie and returns expiresAt on success', async () => {

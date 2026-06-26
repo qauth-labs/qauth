@@ -1,17 +1,20 @@
 import { createServerFn } from '@tanstack/react-start';
-import { getRequestHeader, setResponseHeader } from '@tanstack/react-start/server';
 
 import {
-  authServerClient,
-  type ClientWithSecret,
   type CreateClientInput,
   type GrantType,
-  type OAuthClient,
   type Result,
   type TokenEndpointAuthMethod,
   type UpdateClientInput,
 } from '../auth-server-client';
-import { readSessionCookie } from '../session-cookie';
+import {
+  createClientHandler,
+  deleteClientHandler,
+  getClientHandler,
+  listClientsHandler,
+  regenerateSecretHandler,
+  updateClientHandler,
+} from './clients.server';
 
 /**
  * Result returned to the browser when the portal session is missing or
@@ -26,17 +29,6 @@ export const UNAUTHENTICATED: Result<never> = {
     status: 401,
   },
 };
-
-/**
- * Read the developer's access token from the signed, HttpOnly session cookie.
- * The token never leaves the server — every `/api/clients` call is proxied
- * through these server functions with `Authorization: Bearer <token>`.
- */
-function readAccessToken(): string | null {
-  const session = readSessionCookie(getRequestHeader('cookie'));
-  if (!session || Date.now() >= session.expiresAt) return null;
-  return session.accessToken;
-}
 
 const VALID_GRANT_TYPES: GrantType[] = [
   'authorization_code',
@@ -114,34 +106,14 @@ function validateAuthMethod(value: unknown): TokenEndpointAuthMethod {
 // List
 // ---------------------------------------------------------------------------
 
-export async function listClientsHandler(): Promise<Result<{ clients: OAuthClient[] }>> {
-  const token = readAccessToken();
-  if (!token) return UNAUTHENTICATED;
-  // Client config is not secret, but it is per-developer; keep it out of any
-  // shared/proxy cache for consistency with the secret-bearing responses.
-  setResponseHeader('Cache-Control', 'no-store');
-  return authServerClient.listClients(token);
-}
-
 export const listClientsFn = createServerFn({ method: 'GET' }).handler(listClientsHandler);
 
 // ---------------------------------------------------------------------------
 // Get one
 // ---------------------------------------------------------------------------
 
-export async function getClientHandler({
-  data,
-}: {
-  data: { id: string };
-}): Promise<Result<OAuthClient>> {
-  const token = readAccessToken();
-  if (!token) return UNAUTHENTICATED;
-  setResponseHeader('Cache-Control', 'no-store');
-  return authServerClient.getClient(token, data.id);
-}
-
 export const getClientFn = createServerFn({ method: 'GET' })
-  .inputValidator((data: unknown): { id: string } => {
+  .validator((data: unknown): { id: string } => {
     if (
       typeof data !== 'object' ||
       data === null ||
@@ -190,21 +162,8 @@ export function normalizeCreateInput(data: unknown): CreateClientInput {
   return input;
 }
 
-export async function createClientHandler({
-  data,
-}: {
-  data: CreateClientInput;
-}): Promise<Result<ClientWithSecret>> {
-  const token = readAccessToken();
-  if (!token) return UNAUTHENTICATED;
-  const result = await authServerClient.createClient(token, data);
-  // Secret-bearing responses are no-store; the browser must never cache them.
-  if (result.ok) setResponseHeader('Cache-Control', 'no-store');
-  return result;
-}
-
 export const createClientFn = createServerFn({ method: 'POST' })
-  .inputValidator(normalizeCreateInput)
+  .validator(normalizeCreateInput)
   .handler(createClientHandler);
 
 // ---------------------------------------------------------------------------
@@ -253,36 +212,16 @@ export function normalizeUpdateInput(data: unknown): { id: string; patch: Update
   return { id: d['id'] as string, patch };
 }
 
-export async function updateClientHandler({
-  data,
-}: {
-  data: { id: string; patch: UpdateClientInput };
-}): Promise<Result<OAuthClient>> {
-  const token = readAccessToken();
-  if (!token) return UNAUTHENTICATED;
-  return authServerClient.updateClient(token, data.id, data.patch);
-}
-
 export const updateClientFn = createServerFn({ method: 'POST' })
-  .inputValidator(normalizeUpdateInput)
+  .validator(normalizeUpdateInput)
   .handler(updateClientHandler);
 
 // ---------------------------------------------------------------------------
 // Delete
 // ---------------------------------------------------------------------------
 
-export async function deleteClientHandler({
-  data,
-}: {
-  data: { id: string };
-}): Promise<Result<null>> {
-  const token = readAccessToken();
-  if (!token) return UNAUTHENTICATED;
-  return authServerClient.deleteClient(token, data.id);
-}
-
 export const deleteClientFn = createServerFn({ method: 'POST' })
-  .inputValidator((data: unknown): { id: string } => {
+  .validator((data: unknown): { id: string } => {
     if (
       typeof data !== 'object' ||
       data === null ||
@@ -298,20 +237,8 @@ export const deleteClientFn = createServerFn({ method: 'POST' })
 // Regenerate secret
 // ---------------------------------------------------------------------------
 
-export async function regenerateSecretHandler({
-  data,
-}: {
-  data: { id: string };
-}): Promise<Result<ClientWithSecret>> {
-  const token = readAccessToken();
-  if (!token) return UNAUTHENTICATED;
-  const result = await authServerClient.regenerateClientSecret(token, data.id);
-  if (result.ok) setResponseHeader('Cache-Control', 'no-store');
-  return result;
-}
-
 export const regenerateSecretFn = createServerFn({ method: 'POST' })
-  .inputValidator((data: unknown): { id: string } => {
+  .validator((data: unknown): { id: string } => {
     if (
       typeof data !== 'object' ||
       data === null ||

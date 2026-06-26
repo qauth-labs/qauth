@@ -9,6 +9,7 @@ export default [
   {
     ignores: [
       '**/.expo/**',
+      '**/.nitro/**',
       '**/.nx/**',
       '**/.cache/**',
       '**/coverage/**',

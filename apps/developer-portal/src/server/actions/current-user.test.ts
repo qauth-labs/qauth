@@ -34,7 +34,7 @@ vi.mock('@tanstack/react-start/server', () => ({
 
 import { authServerClient } from '../auth-server-client';
 import { readSessionCookie } from '../session-cookie';
-import { currentUserHandler } from './current-user';
+import { currentUserHandler } from './current-user.server';
 
 describe('currentUserHandler', () => {
   beforeEach(() => {

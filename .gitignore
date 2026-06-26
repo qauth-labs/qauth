@@ -12,6 +12,9 @@ dist/
 build/
 out-tsc/
 coverage/
+# Nitro build cache / generated types (TanStack Start + Nitro)
+.nitro/
+.output/
 
 # Test outputs
 .vitest/

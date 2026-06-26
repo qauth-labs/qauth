@@ -36,16 +36,15 @@ vi.mock('@tanstack/react-start/server', () => ({
 
 import { authServerClient } from '../auth-server-client';
 import { readSessionCookie } from '../session-cookie';
+import { normalizeCreateInput, normalizeUpdateInput } from './clients';
 import {
   createClientHandler,
   deleteClientHandler,
   getClientHandler,
   listClientsHandler,
-  normalizeCreateInput,
-  normalizeUpdateInput,
   regenerateSecretHandler,
   updateClientHandler,
-} from './clients';
+} from './clients.server';
 
 const validSession = {
   accessToken: 'dev-token',

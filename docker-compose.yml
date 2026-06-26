@@ -184,12 +184,15 @@ services:
       auth-server:
         condition: service_healthy
     healthcheck:
+      # Liveness only: confirm the Nitro server is accepting connections without
+      # depending on SSR or the upstream auth-server. (The Nitro build has no
+      # dedicated /healthz route, unlike the old custom Node adapter.)
       test:
         [
           'CMD',
           'node',
           '-e',
-          "require('http').get('http://localhost:3001/healthz', (r) => {process.exit(r.statusCode === 200 ? 0 : 1)}).on('error', () => process.exit(1))",
+          "require('net').connect(3001, 'localhost').on('connect', () => process.exit(0)).on('error', () => process.exit(1))",
         ]
       interval: 30s
       timeout: 10s

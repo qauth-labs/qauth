@@ -23,7 +23,12 @@ overrides:
   '@tanstack/start-server-core': '>=1.167.30'
   esbuild: '>=0.28.1'
   form-data: '>=4.0.6'
-  h3: '>=2.0.1'
+  # h3's only consumers are the Nitro v2 subtree (nitropack/listhen/unstorage),
+  # which require h3 1.x (Nitro v2 imports `send`, removed in h3 2.x). Floor at
+  # the patched 1.x line — 1.15.11 clears GHSA-4hxc-9384-m385 (fixed in 1.15.9).
+  # The earlier `>=2.0.1` floor was inert (nothing pulled h3) and would force
+  # the wrong major onto Nitro. Revisit if anything ever needs h3 2.x.
+  h3: '^1.15.11'
   js-yaml: '>=4.1.2'
   tmp: '>=0.2.7'
   # Dedupe commitlint's loose TS resolution onto the workspace TS; cap <6.1 to
@@ -43,8 +48,13 @@ catalog:
   '@swc-node/register': '~1.11.1'
   '@swc/core': '~1.15.43'
   '@swc/helpers': '~0.5.23'
-  '@tanstack/react-start': '^1.166.1'
-  '@tanstack/react-router': '^1.163.3'
+  '@tanstack/nitro-v2-vite-plugin': '^1.155.0'
+  # Keep the Start/Router suite in lockstep: react-start 1.168.26 pins exact
+  # tanstack deps including start-server-core 1.169.15 (the security floor below)
+  # and react-router 1.170.16. Mismatched lines load two router-cores and crash
+  # SSR dehydrate, so bump these together.
+  '@tanstack/react-start': '^1.168.26'
+  '@tanstack/react-router': '^1.170.16'
   '@testcontainers/postgresql': '^11.12.0'
   '@testcontainers/redis': '^11.12.0'
   '@types/node': '^26.0.0'
@@ -119,6 +129,8 @@ catalog:
 # script (it no longer infers them from onlyBuiltDependencies). Mirror the
 # approved set; cpu-features is an optional ssh2 native accel we don't build.
 allowBuilds:
+  # Nitro's dev file-watcher; ships prebuilt binaries, so skip the native build.
+  '@parcel/watcher': false
   '@swc/core': true
   cpu-features: false
   esbuild: true

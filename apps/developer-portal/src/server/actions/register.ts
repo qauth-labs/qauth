@@ -11,7 +11,7 @@ export async function registerHandler({
 }
 
 export const registerFn = createServerFn({ method: 'POST' })
-  .inputValidator((data: unknown): { email: string; password: string } => {
+  .validator((data: unknown): { email: string; password: string } => {
     if (
       typeof data !== 'object' ||
       data === null ||

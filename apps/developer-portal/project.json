@@ -5,6 +5,18 @@
   "projectType": "application",
   "tags": ["scope:app"],
   "targets": {
+    "build": {
+      "outputs": ["{workspaceRoot}/dist/apps/developer-portal"]
+    },
+    "start": {
+      "executor": "nx:run-commands",
+      "continuous": true,
+      "dependsOn": ["build"],
+      "options": {
+        "comment": "Serve the production build. Nitro emits a self-listening Node server with its deps bundled, so this is just `node server/index.mjs` (mirrors the Docker entrypoint). Honours PORT (default 3000); requires AUTH_SERVER_URL + PORTAL_SESSION_SECRET in the environment.",
+        "command": "node dist/apps/developer-portal/server/index.mjs"
+      }
+    },
     "test": {
       "executor": "@nx/vitest:test",
       "outputs": ["{workspaceRoot}/coverage/{projectRoot}"],

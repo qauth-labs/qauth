@@ -11,7 +11,7 @@ export async function resendVerificationHandler({
 }
 
 export const resendVerificationFn = createServerFn({ method: 'POST' })
-  .inputValidator((data: unknown): { email: string } => {
+  .validator((data: unknown): { email: string } => {
     if (
       typeof data !== 'object' ||
       data === null ||
