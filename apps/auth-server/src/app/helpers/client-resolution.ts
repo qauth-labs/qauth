@@ -59,6 +59,16 @@ export interface ResolvedClient {
    * bound the reserved `agent:*` scopes the client may request.
    */
   maxAgentMode: AgentMode | null;
+  /**
+   * ADR-008 §2 (#196/#197) the client's declared environment / policy profile.
+   * Surfaced here so the authorize / token / consent handlers that already
+   * consume the resolved client can resolve the effective environment policy
+   * via `resolveEnvironmentPolicy(client, realm)` without a second DB read.
+   * OPERATOR-SET, never self-asserted; the resolver fails safe to `production`
+   * for any absent / unknown value. Persisted rows and CIMD-materialised rows
+   * both carry the NOT NULL `production`-default column.
+   */
+  environment: string;
   metadata: Record<string, unknown> | null;
 }
 

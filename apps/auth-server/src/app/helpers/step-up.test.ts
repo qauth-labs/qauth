@@ -196,6 +196,55 @@ describe('evaluateStepUp', () => {
     const within = evaluateStepUp({ ...base, maxAgeSeconds: 60, authTimeMs: NOW - 30 * 1000 });
     expect(within.requiresFreshLogin).toBe(false);
   });
+
+  // ADR-008 §5 (#197): `enforceDangerousStepUp` gates ONLY the automatic
+  // dangerous-scope fresh-login. Explicit client requests (prompt/max_age) are
+  // always honoured. Defaults to true (strict) when omitted.
+  describe('enforceDangerousStepUp (environment-gated automatic step-up)', () => {
+    const staleDangerous: StepUpInput = {
+      ...base,
+      requestedScopes: ['agent:exec'],
+      priorConsentScopes: [],
+      authTimeMs: NOW - 10 * 60 * 1000, // stale, outside the freshness window
+    };
+
+    it('defaults to enforced (omitted ⇒ dangerous scope forces fresh login)', () => {
+      const d = evaluateStepUp(staleDangerous);
+      expect(d.dangerous).toEqual(['agent:exec']);
+      expect(d.requiresFreshLogin).toBe(true);
+    });
+
+    it('enforced (staging/production): dangerous scope forces fresh login', () => {
+      const d = evaluateStepUp({ ...staleDangerous, enforceDangerousStepUp: true });
+      expect(d.requiresFreshLogin).toBe(true);
+    });
+
+    it('relaxed (development): the AUTOMATIC dangerous-scope step-up is not forced', () => {
+      const d = evaluateStepUp({ ...staleDangerous, enforceDangerousStepUp: false });
+      // The scope is still classified dangerous (for audit), but the server no
+      // longer forces a fresh login off that classification in development.
+      expect(d.dangerous).toEqual(['agent:exec']);
+      expect(d.requiresFreshLogin).toBe(false);
+    });
+
+    it('relaxed development STILL honours an explicit prompt=login (client opt-in always wins)', () => {
+      const d = evaluateStepUp({
+        ...staleDangerous,
+        enforceDangerousStepUp: false,
+        prompt: 'login',
+      });
+      expect(d.requiresFreshLogin).toBe(true);
+    });
+
+    it('relaxed development STILL honours an explicit max_age (client opt-in always wins)', () => {
+      const d = evaluateStepUp({
+        ...staleDangerous,
+        enforceDangerousStepUp: false,
+        maxAgeSeconds: 0, // demand a brand-new authentication
+      });
+      expect(d.requiresFreshLogin).toBe(true);
+    });
+  });
 });
 
 describe('stepUpErrorForPromptNone', () => {

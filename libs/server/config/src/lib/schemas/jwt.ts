@@ -89,9 +89,29 @@ export const jwtEnvSchema = z
     JWT_ISSUER: z.url('JWT issuer must be a valid URL'),
 
     /**
-     * Access token expiration in seconds (default: 900 = 15 minutes)
+     * Access token expiration in seconds (default: 900 = 15 minutes).
+     *
+     * This is the `short` tier baseline used by the `staging` and `production`
+     * environment profiles (ADR-008 §5, issue #197). The `development` profile
+     * uses {@link DEV_ACCESS_TOKEN_LIFESPAN} instead so local tokens can be
+     * long-lived for convenience without ever loosening production.
      */
     ACCESS_TOKEN_LIFESPAN: z.coerce.number().int().positive().default(900),
+
+    /**
+     * Access token expiration in seconds for the `development` environment
+     * profile only (ADR-008 §5, issue #197 — the `long` lifespan tier). Default
+     * 28800 = 8 hours: a comfortable local-dev session that never applies to a
+     * `staging`/`production` client (their effective tier is always `short`,
+     * resolved via `resolveEnvironmentPolicy`). FAIL-SAFE: a client whose
+     * environment is unset resolves to `production` and therefore NEVER receives
+     * this longer lifespan.
+     */
+    DEV_ACCESS_TOKEN_LIFESPAN: z.coerce
+      .number()
+      .int()
+      .positive()
+      .default(8 * 60 * 60),
 
     /**
      * Refresh token expiration in seconds (default: 604800 = 7 days)
@@ -132,6 +152,7 @@ export const jwtEnvSchema = z
       JWT_PUBLIC_KEY: publicKey,
       JWT_ISSUER: data.JWT_ISSUER,
       ACCESS_TOKEN_LIFESPAN: data.ACCESS_TOKEN_LIFESPAN,
+      DEV_ACCESS_TOKEN_LIFESPAN: data.DEV_ACCESS_TOKEN_LIFESPAN,
       REFRESH_TOKEN_LIFESPAN: data.REFRESH_TOKEN_LIFESPAN,
     };
   });

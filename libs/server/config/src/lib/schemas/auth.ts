@@ -100,22 +100,44 @@ export const authEnvSchema = z.object({
   LOGOUT_RATE_WINDOW: z.coerce.number().int().min(1).default(60),
 
   /**
-   * Maximum authorize attempts per window
+   * Maximum authorize attempts per window. This is the `strict` rate-limit tier
+   * cap (ADR-008 §5, issue #197), applied to `production`-profile realms.
    */
   AUTHORIZE_RATE_LIMIT: z.coerce.number().int().min(1).default(60),
 
   /**
-   * Authorize rate limit window in seconds (default: 60 = 1 minute)
+   * Maximum authorize attempts per window for the `lenient` rate-limit tier
+   * (ADR-008 §5, issue #197) — `development` / `staging` realms. Defaults
+   * higher than the strict cap so local iteration and load testing are not
+   * throttled. Selected per-request via `resolveRateLimitMax` only when the
+   * realm's effective profile is non-production; an unset realm resolves to
+   * `production` and therefore gets the strict cap (fail-safe).
+   */
+  AUTHORIZE_RATE_LIMIT_LENIENT: z.coerce.number().int().min(1).default(600),
+
+  /**
+   * Authorize rate limit window in seconds (default: 60 = 1 minute). Shared by
+   * both tiers — environment moves the cap, not the window (ADR-008 §5).
    */
   AUTHORIZE_RATE_WINDOW: z.coerce.number().int().min(1).default(60),
 
   /**
-   * Maximum token exchange attempts per window
+   * Maximum token exchange attempts per window. This is the `strict`
+   * rate-limit tier cap (ADR-008 §5, issue #197), applied to `production`.
    */
   TOKEN_RATE_LIMIT: z.coerce.number().int().min(1).default(30),
 
   /**
-   * Token rate limit window in seconds (default: 60 = 1 minute)
+   * Maximum token exchange attempts per window for the `lenient` tier
+   * (ADR-008 §5, issue #197) — `development` / `staging` realms. See
+   * AUTHORIZE_RATE_LIMIT_LENIENT for the selection rationale (fail-safe to
+   * the strict cap for an unset/production realm).
+   */
+  TOKEN_RATE_LIMIT_LENIENT: z.coerce.number().int().min(1).default(300),
+
+  /**
+   * Token rate limit window in seconds (default: 60 = 1 minute). Shared by
+   * both tiers.
    */
   TOKEN_RATE_WINDOW: z.coerce.number().int().min(1).default(60),
 

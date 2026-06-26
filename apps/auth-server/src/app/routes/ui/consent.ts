@@ -18,8 +18,9 @@ import {
   isLoopbackRedirect,
   redirectHost,
 } from '../../helpers/consent';
+import { resolveEnvironmentPolicy } from '../../helpers/environment-policy';
 import { html, render, safe, safeUrl } from '../../helpers/html';
-import { buildRedirectUrl } from '../../helpers/oauth-redirect';
+import { buildRedirectUrl, isRedirectUriAllowedForPolicy } from '../../helpers/oauth-redirect';
 import { getOrCreateDefaultRealm } from '../../helpers/realm';
 import { highestAgentModeInScopes } from '../../helpers/scope-modes';
 import {
@@ -28,6 +29,7 @@ import {
   generateCsrfToken,
 } from '../../helpers/session-cookie';
 import { evaluateStepUp, isDangerousScope, parsePromptMode } from '../../helpers/step-up';
+import { markRelaxedCsp } from '../../plugins/security-headers';
 import { authorizeQuerySchema, resourceParamSchema } from '../../schemas/oauth';
 
 /**
@@ -348,6 +350,17 @@ export default async function (fastify: FastifyInstance) {
         throw new BadRequestError('redirect_uri not registered');
       }
 
+      // ADR-008 §5/§7 (#197): effective environment policy for this (client,
+      // realm). The consent screen is one of the FEW browser surfaces that
+      // unambiguously carries a `client_id`, so it is where a client-scoped T3
+      // relaxation (below) is safe to apply. The localhost redirect gate also
+      // applies on the render path so we never show a consent screen for a
+      // redirect the POST handler will (correctly) refuse.
+      const policy = resolveEnvironmentPolicy(client, realm);
+      if (!isRedirectUriAllowedForPolicy(query.redirect_uri, policy)) {
+        throw new BadRequestError('redirect_uri not permitted for this environment');
+      }
+
       // ADR-007 §2 (#184): fail fast on the render path too — don't show a
       // consent screen for an over-cap agent scope that the POST handler will
       // (correctly) refuse to mint a code for. Same deny-by-default gate;
@@ -387,9 +400,29 @@ export default async function (fastify: FastifyInstance) {
 
       reply.header('Content-Type', 'text/html; charset=utf-8');
       reply.header('Cache-Control', 'no-store');
-      // Clickjacking / MIME-sniffing / referrer hardening are now applied
-      // globally by the security-headers plugin (issue #113), including the
-      // strict nonce-based CSP that this page's inline <style> relies on.
+      // Clickjacking / MIME-sniffing / referrer hardening are applied globally
+      // by the security-headers plugin (issue #113), including the strict
+      // nonce-based CSP that this page's inline <style> relies on.
+      //
+      // ADR-008 §5 (#197) T3 relaxation, CLIENT-SCOPED. T3 security headers /
+      // CSRF / secure cookies are largely GLOBAL controls with NO client in
+      // scope, so they DEFAULT TO STRICT (production) everywhere — see the
+      // security-headers plugin and session-cookie helper, which stay strict.
+      // The consent screen is the rare browser surface that unambiguously
+      // carries a `client_id`, so it is the one place we may safely relax the
+      // CSP for a `development` client: it permits `'unsafe-inline'` styles so a
+      // developer iterating on this page is not forced to nonce every style.
+      // `t3SecurityEnforced` is true for staging/production (and fail-safe for
+      // an unset client/realm), so this NEVER loosens a hardened deployment.
+      //
+      // The actual header swap is owned by the GLOBAL security-headers plugin's
+      // onSend (the one place that already overrides helmet's CSP, for Swagger):
+      // here we only MARK the reply. That keeps the CSP-override logic in a
+      // single location and means this route needs no onSend of its own (so the
+      // unit-test harness, which mocks a bare `fastify`, is unaffected).
+      if (!policy.t3SecurityEnforced) {
+        markRelaxedCsp(reply);
+      }
 
       return reply.send(
         consentPage({
@@ -508,6 +541,13 @@ export default async function (fastify: FastifyInstance) {
         throw new BadRequestError('redirect_uri not registered');
       }
 
+      // ADR-008 §5/§7 (#197): effective environment policy for this (client,
+      // realm). Gates the localhost redirect and the automatic step-up below.
+      const policy = resolveEnvironmentPolicy(client, realm);
+      if (!isRedirectUriAllowedForPolicy(body.redirect_uri, policy)) {
+        throw new BadRequestError('redirect_uri not permitted for this environment');
+      }
+
       // Deny path: redirect with error=access_denied, state preserved
       // (RFC 6749 §4.1.2.1).
       if (body.decision === 'deny') {
@@ -594,6 +634,10 @@ export default async function (fastify: FastifyInstance) {
         authTimeMs: session.createdAt,
         nowMs: Date.now(),
         freshAuthWindowMs: STEP_UP_FRESH_AUTH_WINDOW_MS,
+        // ADR-008 §5 (#197): relax the automatic dangerous-scope fresh-login on
+        // the mint path for a development client; explicit prompt/max_age still
+        // force step-up in every environment.
+        enforceDangerousStepUp: policy.agentStepUpEnforced,
       });
       if (stepUp.requiresFreshLogin) {
         await fastify.repositories.auditLogs.create({

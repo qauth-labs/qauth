@@ -802,3 +802,77 @@ describe('GET /oauth/authorize — Bearer path step-up (ADR-007 §2, #185)', () 
     expect(fastify.repositories.authorizationCodes.create).toHaveBeenCalledOnce();
   });
 });
+
+describe('GET /oauth/authorize — environment localhost redirect gate (ADR-008 §5, #197)', () => {
+  // A client that has registered an http://localhost redirect (exact-matched).
+  const LOCALHOST_CLIENT = {
+    ...CLIENT,
+    redirectUris: ['http://localhost:3000/cb'],
+  };
+  const LOCALHOST_QUERY = {
+    ...BASE_QUERY,
+    redirect_uri: 'http://localhost:3000/cb',
+  };
+
+  async function run(realmEnv: string, clientEnv: string) {
+    const { fastify, ctx } = makeFastify();
+    (fastify.repositories.realms.findByName as unknown as Mock).mockResolvedValue({
+      id: 'realm-1',
+      name: 'master',
+      enabled: true,
+      maxEnvironmentLaxity: realmEnv,
+    });
+    await authorizeRoute(fastify);
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue({
+      ...LOCALHOST_CLIENT,
+      environment: clientEnv,
+    });
+    (fastify.jwtUtils.extractFromHeader as unknown as Mock).mockReturnValue(null);
+    (fastify.sessionUtils.getSession as unknown as Mock).mockResolvedValue(null);
+
+    const { reply, state } = createReply();
+    return {
+      fastify,
+      state,
+      call: () =>
+        ctx.handler!(
+          {
+            query: LOCALHOST_QUERY,
+            url: '/oauth/authorize?response_type=code&client_id=app-123',
+            headers: {},
+            ip: '127.0.0.1',
+          },
+          reply
+        ),
+    };
+  }
+
+  it('production realm/client REJECTS an http://localhost redirect (https-only)', async () => {
+    const { fastify, call } = await run('production', 'production');
+    await expect(call()).rejects.toThrow(/redirect_uri/);
+    expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
+  });
+
+  it('staging client REJECTS an http://localhost redirect (https-only)', async () => {
+    const { call } = await run('staging', 'staging');
+    await expect(call()).rejects.toThrow(/redirect_uri/);
+  });
+
+  it('an UNSET environment fails safe to production and REJECTS http://localhost', async () => {
+    const { call } = await run('bogus', 'also-bogus');
+    await expect(call()).rejects.toThrow(/redirect_uri/);
+  });
+
+  it('development realm/client PERMITS http://localhost (passes the gate, proceeds to login)', async () => {
+    const { state, call } = await run('development', 'development');
+    // Not rejected by the gate — flows on to the unauthenticated login redirect
+    // (the request carries no session), proving the localhost URI was allowed.
+    await call();
+    expect(state.redirected).toContain('/ui/login?return_to=');
+  });
+
+  it('a production realm caps a development client and REJECTS http://localhost (ceiling wins)', async () => {
+    const { call } = await run('production', 'development');
+    await expect(call()).rejects.toThrow(/redirect_uri/);
+  });
+});
