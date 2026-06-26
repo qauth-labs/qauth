@@ -167,6 +167,11 @@ services:
     build:
       context: .
       dockerfile: apps/developer-portal/Dockerfile
+      args:
+        # Browser-reachable auth-server URL for client-side fetches (consents
+        # page). Baked at build time (VITE_ var). Defaults to the host-published
+        # auth-server port; override for non-local deployments.
+        VITE_AUTH_SERVER_URL: ${PORTAL_PUBLIC_AUTH_SERVER_URL:-http://localhost:3000}
     container_name: qauth-developer-portal
     environment:
       # Server

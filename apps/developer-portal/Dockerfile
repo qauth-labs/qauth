@@ -27,6 +27,13 @@ COPY apps ./apps
 RUN --mount=type=cache,id=pnpm,target=/pnpm/store \
     pnpm install --frozen-lockfile --store-dir /pnpm/store
 
+# Browser-reachable auth-server URL. Unlike the server-side AUTH_SERVER_URL
+# (the internal compose host), this is used by client-side fetches (e.g. the
+# consents page) and is a VITE_ var, so Vite inlines it at BUILD time — it must
+# be present before `nx build`, not at runtime.
+ARG VITE_AUTH_SERVER_URL=http://localhost:3000
+ENV VITE_AUTH_SERVER_URL=$VITE_AUTH_SERVER_URL
+
 # Build the TanStack Start + Nitro app. Output (server/ with bundled
 # node_modules, public/) lands in dist/apps/developer-portal.
 RUN pnpm nx build developer-portal
