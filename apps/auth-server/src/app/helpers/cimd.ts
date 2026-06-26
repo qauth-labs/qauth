@@ -117,6 +117,13 @@ export interface CimdClientInsert {
   // default) — deny-by-default — so it can hold no `agent:*` scope until an
   // operator provisions a cap out of band. This is the epic #181 requirement:
   // never trust the client's own document for an escalation control.
+  //
+  // NOTE (ADR-008 §4, #196): likewise NO `environment` here, by design. The
+  // environment policy profile is OPERATOR-SET and MUST NOT be self-asserted via
+  // a CIMD document. `cimdDocumentSchema` defines no `environment` field (and
+  // strips unknowns per RFC 7591 §3.2), so a document cannot declare itself
+  // `development`. A CIMD client therefore takes the DB column's `production`
+  // default — the strictest profile — until an operator widens it out of band.
   metadata: Record<string, unknown>;
 }
 
