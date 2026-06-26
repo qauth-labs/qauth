@@ -14,6 +14,7 @@ import { resolveEnvironmentPolicy } from '../../helpers/environment-policy';
 import { getOrCreateSystemClient } from '../../helpers/oauth-client';
 import { buildRedirectUrl, isRedirectUriAllowedForPolicy } from '../../helpers/oauth-redirect';
 import { getOrCreateDefaultRealm } from '../../helpers/realm';
+import { resolveRealmRateLimitMax } from '../../helpers/realm-rate-limit';
 import {
   evaluateStepUp,
   isDangerousScope,
@@ -70,7 +71,15 @@ export default async function (fastify: FastifyInstance) {
       },
       config: {
         rateLimit: {
-          max: env.AUTHORIZE_RATE_LIMIT,
+          // Environment-aware cap (ADR-008 §5, #209): a production realm ceiling
+          // forces the strict cap; a development/staging ceiling permits the
+          // lenient cap. Resolved at the realm level because rate limiting runs
+          // before the client is authenticated. Fail-safe to strict.
+          max: () =>
+            resolveRealmRateLimitMax(fastify, {
+              lenientMax: env.AUTHORIZE_RATE_LIMIT_LENIENT,
+              strictMax: env.AUTHORIZE_RATE_LIMIT,
+            }),
           timeWindow: env.AUTHORIZE_RATE_WINDOW * 1000,
           keyGenerator: (req) => req.ip || 'unknown',
         },

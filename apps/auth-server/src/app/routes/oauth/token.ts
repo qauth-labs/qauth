@@ -34,6 +34,7 @@ import {
   resolveEnvironmentPolicy,
 } from '../../helpers/environment-policy';
 import { getOrCreateDefaultRealm } from '../../helpers/realm';
+import { resolveRealmRateLimitMax } from '../../helpers/realm-rate-limit';
 import { highestAgentModeInScopes } from '../../helpers/scope-modes';
 import { ensureMinimumResponseTime } from '../../helpers/timing';
 import {
@@ -81,7 +82,15 @@ export default async function (fastify: FastifyInstance) {
       },
       config: {
         rateLimit: {
-          max: env.TOKEN_RATE_LIMIT,
+          // Environment-aware cap (ADR-008 §5, #209): a production realm ceiling
+          // forces the strict cap; a development/staging ceiling permits the
+          // lenient cap. Resolved at the realm level because rate limiting runs
+          // before the client is authenticated. Fail-safe to strict.
+          max: () =>
+            resolveRealmRateLimitMax(fastify, {
+              lenientMax: env.TOKEN_RATE_LIMIT_LENIENT,
+              strictMax: env.TOKEN_RATE_LIMIT,
+            }),
           timeWindow: env.TOKEN_RATE_WINDOW * 1000,
           keyGenerator: (req) => req.ip || 'unknown',
         },
