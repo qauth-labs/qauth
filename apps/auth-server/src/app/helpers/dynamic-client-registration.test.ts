@@ -54,28 +54,39 @@ describe('validateAndNormalize', () => {
     expect(n.scopeString).toBe('openid email');
   });
 
-  it('rejects scopes outside the realm allowlist', () => {
-    expect(() =>
-      validateAndNormalize(
-        {
-          redirect_uris: ['https://app.example/cb'],
-          scope: 'openid memory:admin',
-        },
-        allowedScopes
-      )
-    ).toThrow(/invalid_client_metadata.*memory:admin/);
+  it('caps out scopes outside the realm allowlist instead of rejecting (RFC 7591 §2)', () => {
+    const n = validateAndNormalize(
+      {
+        redirect_uris: ['https://app.example/cb'],
+        scope: 'openid memory:admin',
+      },
+      allowedScopes
+    );
+    expect(n.scopes).toEqual(['openid']);
+    expect(n.scopeString).toBe('openid');
   });
 
-  it('rejects all scopes when the realm allowlist is empty', () => {
-    expect(() =>
-      validateAndNormalize(
-        {
-          redirect_uris: ['https://app.example/cb'],
-          scope: 'openid',
-        },
-        []
-      )
-    ).toThrow(BadRequestError);
+  it('de-dupes requested scopes while capping', () => {
+    const n = validateAndNormalize(
+      {
+        redirect_uris: ['https://app.example/cb'],
+        scope: 'openid openid email memory:admin',
+      },
+      allowedScopes
+    );
+    expect(n.scopes).toEqual(['openid', 'email']);
+  });
+
+  it('drops all scopes when the realm allowlist is empty', () => {
+    const n = validateAndNormalize(
+      {
+        redirect_uris: ['https://app.example/cb'],
+        scope: 'openid',
+      },
+      []
+    );
+    expect(n.scopes).toEqual([]);
+    expect(n.scopeString).toBeUndefined();
   });
 
   it('requires redirect_uris for authorization_code grants', () => {
