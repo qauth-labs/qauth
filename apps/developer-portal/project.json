@@ -5,6 +5,31 @@
   "projectType": "application",
   "tags": ["scope:app"],
   "targets": {
+    "build": {
+      "outputs": ["{workspaceRoot}/dist/apps/developer-portal"]
+    },
+    "dev": {
+      "executor": "nx:run-commands",
+      "continuous": true,
+      "metadata": {
+        "description": "Vite dev server with HMR + SSR (TanStack Start) on the vite.config.mts port (3000). Reads AUTH_SERVER_URL + PORTAL_SESSION_SECRET from the environment for the server functions."
+      },
+      "options": {
+        "command": "vite dev",
+        "cwd": "apps/developer-portal"
+      }
+    },
+    "start": {
+      "executor": "nx:run-commands",
+      "continuous": true,
+      "dependsOn": ["build"],
+      "metadata": {
+        "description": "Serve the production build. Nitro emits a self-listening Node server with deps bundled, so this is just `node server/index.mjs` (mirrors the Docker entrypoint). Honours PORT (default 3000); requires AUTH_SERVER_URL + PORTAL_SESSION_SECRET."
+      },
+      "options": {
+        "command": "node dist/apps/developer-portal/server/index.mjs"
+      }
+    },
     "test": {
       "executor": "@nx/vitest:test",
       "outputs": ["{workspaceRoot}/coverage/{projectRoot}"],

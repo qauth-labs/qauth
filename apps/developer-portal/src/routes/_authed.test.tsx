@@ -44,13 +44,20 @@ const PageComponent = Route.options.component as NonNullable<typeof Route.option
 const testUser = { sub: 'u1', email: 'dev@example.com', email_verified: true };
 
 // Minimal fake router for SSR-mode rendering via RouterContextProvider.
-// Route.useRouteContext() → useMatch({ from: '/_authed' }) → useRouterState() →
-// the internal useRouter.js reads React context → returns this fakeRouter.
+// Route.useRouteContext() → useMatch({ from: '/_authed' }) →
+// router.stores.getRouteMatchStore(from).get() when router.isServer === true (1.170+).
+const authedMatch = {
+  id: '/_authed',
+  routeId: '/_authed',
+  search: {},
+  context: { user: testUser },
+};
 const fakeRouter = {
   isServer: true,
   options: {},
-  state: {
-    matches: [{ id: '/_authed', routeId: '/_authed', search: {}, context: { user: testUser } }],
+  stores: {
+    getRouteMatchStore: () => ({ get: () => authedMatch }),
+    matchStores: new Map(),
   },
 } as unknown as Parameters<typeof RouterContextProvider>[0]['router'];
 

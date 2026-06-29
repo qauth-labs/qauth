@@ -37,13 +37,8 @@ vi.mock('@tanstack/react-start/server', () => ({
 
 import { authServerClient } from '../auth-server-client';
 import { readSessionCookie } from '../session-cookie';
-import {
-  createApiKeyHandler,
-  listApiKeysHandler,
-  normalizeCreateApiKeyInput,
-  normalizeRevokeInput,
-  revokeApiKeyHandler,
-} from './api-keys';
+import { normalizeCreateApiKeyInput, normalizeRevokeInput } from './api-keys';
+import { createApiKeyHandler, listApiKeysHandler, revokeApiKeyHandler } from './api-keys.server';
 
 const validSession = {
   accessToken: 'dev-token',

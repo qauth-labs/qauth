@@ -11,7 +11,7 @@ export async function verifyHandler({
 }
 
 export const verifyFn = createServerFn({ method: 'POST' })
-  .inputValidator((data: unknown): { token: string } => {
+  .validator((data: unknown): { token: string } => {
     if (
       typeof data !== 'object' ||
       data === null ||

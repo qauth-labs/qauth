@@ -37,7 +37,7 @@ vi.mock('@tanstack/react-start/server', () => ({
 
 import { authServerClient } from '../auth-server-client';
 import { clearSessionCookieHeader, readSessionCookie } from '../session-cookie';
-import { logoutHandler } from './logout';
+import { logoutHandler } from './logout.server';
 
 describe('logoutHandler', () => {
   beforeEach(() => {
