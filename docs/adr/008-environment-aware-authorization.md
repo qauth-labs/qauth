@@ -24,9 +24,22 @@ Two needs collided while finishing the MVP and planning T3:
    ergonomics.
 2. **Production safety.** A static, non-expiring bearer is exactly what you do
    **not** want facing the internet. The same tension applies across the board:
-   `http://localhost` redirect URIs, long token lifespans, lenient rate limits,
-   open dynamic registration, and relaxed agent step-up are all fine for local
-   work and dangerous in production.
+   static API keys, long token lifespans, lenient rate limits, open dynamic
+   registration, and relaxed agent step-up are all fine for local work and
+   dangerous in production.
+
+> **Loopback redirect carve-out (revised).** `http://` loopback redirect URIs
+> (`127.0.0.1` / `[::1]` / `localhost`) were originally `development`-only.
+> They are now permitted in any environment that **enforces PKCE** (i.e.
+> `staging`/`production`). Loopback redirects are the RFC 8252 standard for
+> native / CLI clients — including every discover-then-register MCP client —
+> and the traffic never leaves the device; PKCE (S256) is precisely what
+> backstops loopback authorization-code interception on a shared host. Gating
+> loopback on `https` (rather than on PKCE) only blocked the legitimate
+> native-app flow without adding security, since `validateRedirectUri` already
+> rejects all non-loopback plain-HTTP redirects. The fail-safe still holds: a
+> non-`development` profile that drops PKCE would once again reject plain-HTTP
+> loopback. See `isRedirectUriAllowedForPolicy`.
 
 Today these are scattered, mostly-global knobs. T3 (OIDC conformance &
 hardening — #108 CSRF, #109 secure cookies, #113 helmet, …) is about to add more.
@@ -105,17 +118,17 @@ laxer profiles relax specific knobs. Security-relevant relaxations apply to
 only operational conveniences (so promoting dev→staging surfaces security
 posture before production).
 
-| Knob                                          | development         | staging                    | production |
-| --------------------------------------------- | ------------------- | -------------------------- | ---------- |
-| **Static API keys (#97/#98)**                 | allowed, long-lived | off (or short-TTL, opt-in) | off        |
-| `http://localhost` redirect URIs              | allowed             | https-only                 | https-only |
-| PKCE (`S256`)                                 | recommended         | required                   | required   |
-| Access-token lifespan                         | long                | short                      | short      |
-| Refresh-token rotation                        | optional            | required                   | required   |
-| Rate limits                                   | lenient             | lenient (load testing)     | strict     |
-| Open DCR / CIMD                               | open                | gated                      | gated      |
-| Agent step-up before dangerous ops            | relaxed             | enforced                   | enforced   |
-| Security headers / CSRF / secure cookies (T3) | relaxed             | enforced                   | enforced   |
+| Knob                                          | development         | staging                    | production                 |
+| --------------------------------------------- | ------------------- | -------------------------- | -------------------------- |
+| **Static API keys (#97/#98)**                 | allowed, long-lived | off (or short-TTL, opt-in) | off                        |
+| `http://localhost` (loopback) redirect URIs   | allowed             | allowed (PKCE-backstopped) | allowed (PKCE-backstopped) |
+| PKCE (`S256`)                                 | recommended         | required                   | required                   |
+| Access-token lifespan                         | long                | short                      | short                      |
+| Refresh-token rotation                        | optional            | required                   | required                   |
+| Rate limits                                   | lenient             | lenient (load testing)     | strict                     |
+| Open DCR / CIMD                               | open                | gated                      | gated                      |
+| Agent step-up before dangerous ops            | relaxed             | enforced                   | enforced                   |
+| Security headers / CSRF / secure cookies (T3) | relaxed             | enforced                   | enforced                   |
 
 Each row is a default; an operator may override a single knob, but **only within
 the realm ceiling** and never below the hard security floors (e.g. a client
