@@ -43,16 +43,23 @@ export function isHttpLocalhostRedirect(redirectUri: string): boolean {
  * Whether a (already registered, exact-matched) `redirect_uri` is permitted
  * under the effective environment policy (ADR-008 §5, #197).
  *
- * The ONLY environment-gated case is an `http://localhost` (loopback) redirect:
- * permitted for a `development` client (`localhostRedirectAllowed`), rejected as
- * https-only for `staging`/`production`. Everything else — any https URI, any
+ * The ONLY environment-gated case is an `http://localhost` (loopback) redirect.
+ * It is permitted when EITHER the environment opts in
+ * (`localhostRedirectAllowed`, i.e. `development`) OR PKCE is enforced
+ * (`pkceRequired`, i.e. `staging`/`production`). Loopback redirects are the
+ * RFC 8252 standard for native / CLI clients — including every discover-then-
+ * register MCP client — and the traffic never leaves the device; PKCE (S256)
+ * is precisely what backstops loopback authorization-code interception on a
+ * shared host. So loopback + PKCE is safe in any environment, and gating it
+ * on PKCE (rather than https-only) is what lets native clients complete the
+ * auth-code flow against a production AS. Everything else — any https URI, any
  * custom-scheme native redirect — is unaffected and returns true; this gate
- * never widens what is allowed, it only withholds the plain-HTTP-loopback
- * convenience outside development.
+ * never widens what is allowed.
  *
- * FAIL-SAFE: an unset client/realm resolves to the `production` profile, whose
- * `localhostRedirectAllowed` is false, so a misconfigured deployment rejects
- * plain-HTTP loopback redirects (the hardened direction).
+ * FAIL-SAFE: a future non-`development` profile that ALSO drops `pkceRequired`
+ * would once again reject plain-HTTP loopback (no PKCE → interceptable), the
+ * hardened direction. An unset client/realm still resolves to `production`,
+ * which requires PKCE and therefore now permits loopback + PKCE.
  *
  * NB: this is a SECOND gate, layered after the existing exact-match check
  * (`client.redirectUris.includes(redirect_uri)`) — it does not replace it. A
@@ -63,7 +70,7 @@ export function isRedirectUriAllowedForPolicy(
   policy: EnvironmentPolicy
 ): boolean {
   if (!isHttpLocalhostRedirect(redirectUri)) return true;
-  return policy.localhostRedirectAllowed;
+  return policy.localhostRedirectAllowed || policy.pkceRequired;
 }
 
 /**

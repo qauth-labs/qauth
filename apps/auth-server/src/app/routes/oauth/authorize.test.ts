@@ -852,20 +852,28 @@ describe('GET /oauth/authorize — environment localhost redirect gate (ADR-008 
     };
   }
 
-  it('production realm/client REJECTS an http://localhost redirect (https-only)', async () => {
-    const { fastify, call } = await run('production', 'production');
-    await expect(call()).rejects.toThrow(/redirect_uri/);
-    expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
+  // ADR-008 (revised): http://localhost (loopback) redirects are the RFC 8252
+  // standard for native / CLI clients (incl. MCP clients). They pass the gate
+  // whenever PKCE is enforced — true for staging/production — so loopback +
+  // PKCE works against a production AS. "Passing the gate" means the request
+  // is not rejected and flows on to the unauthenticated login redirect (these
+  // requests carry no session).
+  it('production realm/client PERMITS http://localhost (PKCE enforced — RFC 8252)', async () => {
+    const { state, call } = await run('production', 'production');
+    await call();
+    expect(state.redirected).toContain('/ui/login?return_to=');
   });
 
-  it('staging client REJECTS an http://localhost redirect (https-only)', async () => {
-    const { call } = await run('staging', 'staging');
-    await expect(call()).rejects.toThrow(/redirect_uri/);
+  it('staging client PERMITS http://localhost (PKCE enforced)', async () => {
+    const { state, call } = await run('staging', 'staging');
+    await call();
+    expect(state.redirected).toContain('/ui/login?return_to=');
   });
 
-  it('an UNSET environment fails safe to production and REJECTS http://localhost', async () => {
-    const { call } = await run('bogus', 'also-bogus');
-    await expect(call()).rejects.toThrow(/redirect_uri/);
+  it('an UNSET environment fails safe to production, which PERMITS http://localhost (PKCE enforced)', async () => {
+    const { state, call } = await run('bogus', 'also-bogus');
+    await call();
+    expect(state.redirected).toContain('/ui/login?return_to=');
   });
 
   it('development realm/client PERMITS http://localhost (passes the gate, proceeds to login)', async () => {
@@ -876,8 +884,9 @@ describe('GET /oauth/authorize — environment localhost redirect gate (ADR-008 
     expect(state.redirected).toContain('/ui/login?return_to=');
   });
 
-  it('a production realm caps a development client and REJECTS http://localhost (ceiling wins)', async () => {
-    const { call } = await run('production', 'development');
-    await expect(call()).rejects.toThrow(/redirect_uri/);
+  it('a production realm caps a development client but still PERMITS http://localhost (PKCE enforced)', async () => {
+    const { state, call } = await run('production', 'development');
+    await call();
+    expect(state.redirected).toContain('/ui/login?return_to=');
   });
 });

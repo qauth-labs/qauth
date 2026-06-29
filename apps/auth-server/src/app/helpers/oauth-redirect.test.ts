@@ -39,13 +39,25 @@ describe('oauth-redirect — isRedirectUriAllowedForPolicy (ADR-008 §5, #197)',
     ).toBe(true);
   });
 
-  it('staging and production reject http://localhost (https-only)', () => {
+  it('staging and production permit http://localhost because PKCE is enforced (RFC 8252 native/CLI)', () => {
     expect(
       isRedirectUriAllowedForPolicy('http://localhost:3000/cb', ENVIRONMENT_PROFILES.staging)
-    ).toBe(false);
+    ).toBe(true);
     expect(
       isRedirectUriAllowedForPolicy('http://127.0.0.1/cb', ENVIRONMENT_PROFILES.production)
-    ).toBe(false);
+    ).toBe(true);
+  });
+
+  it('rejects http://localhost for a hypothetical non-dev profile without PKCE (fail-safe)', () => {
+    // Guards the invariant: loopback is only conceded when PKCE backstops
+    // code interception. A non-`development` profile that drops pkceRequired
+    // must still reject plain-HTTP loopback.
+    const noPkceNonDev = {
+      ...ENVIRONMENT_PROFILES.production,
+      localhostRedirectAllowed: false,
+      pkceRequired: false,
+    };
+    expect(isRedirectUriAllowedForPolicy('http://localhost:3000/cb', noPkceNonDev)).toBe(false);
   });
 
   it('https redirects are permitted in every environment (the gate never widens)', () => {
