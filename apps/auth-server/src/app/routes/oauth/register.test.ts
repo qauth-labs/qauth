@@ -199,27 +199,32 @@ describe('POST /oauth/register — Dynamic Client Registration (RFC 7591)', () =
     expect(result.client_secret_expires_at).toBe(0);
   });
 
-  it('rejects scopes outside the realm allowlist (scope cap)', async () => {
+  it('caps scopes outside the realm allowlist instead of rejecting (RFC 7591 §2)', async () => {
     const { fastify, ctx } = createFastifyStub();
     await registerRoute(fastify);
 
     const { reply } = createReply();
 
-    await expect(
-      ctx.handler!(
-        {
-          body: {
-            redirect_uris: ['https://app.example/cb'],
-            grant_types: ['authorization_code'],
-            response_types: ['code'],
-            scope: 'openid memory:admin',
-          },
-          ip: '127.0.0.1',
-          headers: {},
+    // A discover-then-register MCP client echoes back the resource's full
+    // advertised `scopes_supported`, which can include privileged scopes a
+    // public dynamic client may not hold (here `memory:admin`). Rather than
+    // failing the whole registration, we register the permitted subset.
+    const result = (await ctx.handler!(
+      {
+        body: {
+          redirect_uris: ['https://app.example/cb'],
+          grant_types: ['authorization_code'],
+          response_types: ['code'],
+          scope: 'openid memory:admin',
         },
-        reply
-      )
-    ).rejects.toBeInstanceOf(BadRequestError);
+        ip: '127.0.0.1',
+        headers: {},
+      },
+      reply
+    )) as Record<string, unknown>;
+
+    expect(result.client_id).toBeDefined();
+    expect(result.scope).toBe('openid');
   });
 
   it('rejects http:// redirect_uris for non-loopback hosts (OAuth 2.1 §10.3)', async () => {

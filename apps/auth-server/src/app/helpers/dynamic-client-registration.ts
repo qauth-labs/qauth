@@ -169,20 +169,21 @@ export function validateAndNormalize(
     validateRedirectUri(uri);
   }
 
-  // Scope cap: intersect with the realm's allowlist. An empty allowlist
-  // means "no custom scopes allowed" and we reject any requested scope.
+  // Scope cap: intersect requested scopes with the realm's allowlist. Per
+  // RFC 7591 §2, the authorization server MAY register the client with a
+  // narrower scope than requested rather than rejecting — and we do, so
+  // discover-then-register MCP clients register cleanly. Such clients echo
+  // back the protected resource's full advertised `scopes_supported`
+  // (RFC 9728), which routinely includes privileged scopes a public dynamic
+  // client can't hold; hard-rejecting the whole registration on those would
+  // break every standards-compliant MCP client. We drop the disallowed
+  // scopes and register the permitted subset (empty allowlist → no scopes).
+  // De-dupe while preserving request order.
   let scopes: string[] = [];
   const scopeString = body.scope;
   if (scopeString && scopeString.trim().length > 0) {
     const requested = scopeString.split(/\s+/).filter((s) => s.length > 0);
-    const disallowed = requested.filter((s) => !realmAllowedScopes.includes(s));
-    if (disallowed.length > 0) {
-      rejectRegistration(
-        'invalid_client_metadata',
-        `scope not permitted for dynamic registration: ${disallowed.join(' ')}`
-      );
-    }
-    scopes = requested;
+    scopes = [...new Set(requested.filter((s) => realmAllowedScopes.includes(s)))];
   }
 
   // Auth method gating.
