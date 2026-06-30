@@ -21,7 +21,7 @@ import {
   parsePromptMode,
   stepUpErrorForPromptNone,
 } from '../../helpers/step-up';
-import { type AuthorizeQuery, authorizeQuerySchema } from '../../schemas/oauth';
+import { authorizeQuerySchema } from '../../schemas/oauth';
 
 /**
  * RFC 8707: parse every `resource=` query param directly from the request
@@ -86,7 +86,9 @@ export default async function (fastify: FastifyInstance) {
       },
     },
     async (request, reply) => {
-      const query = request.query as AuthorizeQuery;
+      // `request.query` is already typed by the Zod type provider from the
+      // route's `querystring: authorizeQuerySchema` schema — no cast needed.
+      const query = request.query;
       const redirectUri = query.redirect_uri;
       const state = query.state;
 
