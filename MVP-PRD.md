@@ -1,7 +1,7 @@
 # QAuth - Product Requirements Document (PRD)
 
-> **Version**: 2.2
-> **Last Updated**: 2026-06-23
+> **Version**: 2.3
+> **Last Updated**: 2026-06-30
 > **Author**: Muhammed Taha Ayan
 > **Status**: MCP-first re-baseline — see [ADR-007](./docs/adr/007-mcp-first-positioning.md). Phase 1 complete; near-term focus is MCP / AI-agent authentication.
 
@@ -540,7 +540,7 @@ Response:
 ## Phase 2: Developer Portal
 
 **Timeline**: 3-4 weeks
-**Status**: In Progress
+**Status**: In Progress — the **client-management REST API** fully shipped (list/create/get/update/delete + regenerate-secret, issues #86–#90), the **environment-gated developer API keys** backend + UI shipped (ADR-008 §6, #97/#98), and the **developer-portal Docker image** shipped (T3). The TanStack Start pages (register/login/dashboard) remain in progress.
 
 **Objective**: Allow developers to register and manage OAuth clients without manual intervention via a web UI. Machine clients (`client_credentials`) can already be provisioned from a JSON manifest using `nx run db:db:seed-oauth-clients` — the portal is the user-facing equivalent for developer-registered clients.
 
@@ -578,24 +578,27 @@ Response:
 
 **Tasks**:
 
-- [ ] Create REST API for client management — partial: `GET /api/clients` (list) shipped; create/update/delete/regenerate still pending
-- [ ] Create "New Client" form
-- [ ] Generate client_id and client_secret
-- [ ] Store client credentials securely (hash client_secret)
-- [ ] Display client details
-- [ ] Edit client (redirect URIs, name)
-- [ ] Delete/revoke client
+- [x] Create REST API for client management (issues #86–#90) — list/create/get/update/delete + regenerate-secret all shipped
+- [ ] Create "New Client" form (portal UI in progress)
+- [x] Generate client_id and client_secret (backend, 32-byte secrets, Argon2id-hashed)
+- [x] Store client credentials securely (hash client_secret)
+- [ ] Display client details (portal UI in progress)
+- [ ] Edit client (redirect URIs, name) (portal UI in progress)
+- [ ] Delete/revoke client (portal UI in progress)
 - [x] List all clients for a developer — `GET /api/clients`, scoped by developer, secret never returned
 
-**REST API Endpoints**:
+**REST API Endpoints** (all shipped in [ADR-006](./docs/adr/006-oauth-grants-and-audience.md)):
 
 ```typescript
-GET    /api/clients                     # shipped
-POST   /api/clients                     # pending
-GET    /api/clients/:id                 # pending
-PATCH  /api/clients/:id                 # pending
-DELETE /api/clients/:id                 # pending
-POST   /api/clients/:id/regenerate-secret  # pending
+GET    /api/clients                        # shipped (#86)
+POST   /api/clients                        # shipped (#86)
+GET    /api/clients/:id                    # shipped (#87)
+PATCH  /api/clients/:id                    # shipped (#88)
+DELETE /api/clients/:id                    # shipped (#89)
+POST   /api/clients/:id/regenerate-secret  # shipped (#90)
+POST   /api/clients/:id/api-keys           # shipped (#97, env-gated)
+GET    /api/clients/:id/api-keys           # shipped (#97)
+DELETE /api/clients/:id/api-keys/:keyId    # shipped (#97)
 ```
 
 **UI Features**:
@@ -655,9 +658,9 @@ POST   /api/clients/:id/regenerate-secret  # pending
 **Deliverables**:
 
 - ⏳ Developer portal (TanStack Start) — scaffolded & typecheck-clean; pages still in progress
-- ⏳ Self-service client registration
-- ⏳ REST API for client management — partial: `GET /api/clients` (list) shipped; create/update/delete/regenerate pending
-- ⏳ API key management
+- ⏳ Self-service client registration (portal UI in progress)
+- ✅ REST API for client management — list/create/get/update/delete + regenerate-secret all shipped (#86–#90)
+- ✅ API key management — environment-gated developer API keys (ADR-008 §6, #97/#98)
 - ⏳ Basic documentation
 
 **What You Can Do After Phase 2**:
@@ -1112,15 +1115,15 @@ These features are NOT part of Phases 1–5:
 
 ## 📊 Development Timeline
 
-| Phase                             | Duration  | Status       |
-| --------------------------------- | --------- | ------------ |
-| Phase 0: Foundation Setup         | 1-2 weeks | ✅ Completed |
-| Phase 1: Core Auth Server         | 6-8 weeks | ✅ Completed |
-| Phase 2: Developer Portal         | 3-4 weeks | In Progress  |
-| Phase 3: Production Hardening     | 4-6 weeks | In Progress  |
-| Phase 4: Wallet Federation Bridge | 6-8 weeks | Not Started  |
-| Phase 5: Post-Quantum Crypto      | 4-6 weeks | Not Started  |
-| Phase 6+: Enterprise & Scale      | TBD       | Not Started  |
+| Phase                             | Duration  | Status                      |
+| --------------------------------- | --------- | --------------------------- |
+| Phase 0: Foundation Setup         | 1-2 weeks | ✅ Completed                |
+| Phase 1: Core Auth Server         | 6-8 weeks | ✅ Completed                |
+| Phase 2: Developer Portal         | 3-4 weeks | In Progress (API ✅, UI ⏳) |
+| Phase 3: Production Hardening     | 4-6 weeks | ✅ Complete (T3)            |
+| Phase 4: Wallet Federation Bridge | 6-8 weeks | Not Started                 |
+| Phase 5: Post-Quantum Crypto      | 4-6 weeks | Not Started                 |
+| Phase 6+: Enterprise & Scale      | TBD       | Not Started                 |
 
 ---
 
@@ -1245,7 +1248,7 @@ These features are NOT part of Phases 1–5:
 
 ## Appendix A: Database Schema
 
-> **Note**: This is a simplified SQL representation. The actual implementation uses Drizzle ORM with TypeScript schemas. For the complete, up-to-date schema, see `libs/infra/db/src/lib/schema/` or the DBML file at `libs/infra/db/src/qauth-schema.dbml`.
+> **Note**: This is a simplified SQL representation reflecting the **Phase 1 tables only**. The actual implementation uses Drizzle ORM with TypeScript schemas and has since been extended with agent-auth (`is_agent`, `max_agent_mode`), environment-aware authorization (`environment`, `max_environment_laxity`), API keys, refresh-token families (`family_id`, `previous_token_hash`, `revoked_reason`), RFC 8707 `resource`, and per-agent audit attribution — none of which are shown here. For the complete, up-to-date schema, see `libs/infra/db/src/lib/schema/` or the DBML file at `libs/infra/db/src/qauth-schema.dbml`.
 
 ### Key Design Decisions
 
@@ -1403,11 +1406,14 @@ CREATE TABLE sessions (
 | `/.well-known/jwks.json`             | GET    | JWKS public keys                                                                                                     | 3.2   |
 | `/metrics`                           | GET    | Prometheus metrics                                                                                                   | 3.3   |
 | `/api/clients`                       | GET    | List OAuth clients (shipped) — scoped by developer, secret never returned                                            | 2.2   |
-| `/api/clients`                       | POST   | Create OAuth client (pending)                                                                                        | 2.2   |
-| `/api/clients/:id`                   | GET    | Get client details (pending)                                                                                         | 2.2   |
-| `/api/clients/:id`                   | PATCH  | Update client (pending)                                                                                              | 2.2   |
-| `/api/clients/:id`                   | DELETE | Delete client (pending)                                                                                              | 2.2   |
-| `/api/clients/:id/regenerate-secret` | POST   | Regenerate client secret (pending)                                                                                   | 2.2   |
+| `/api/clients`                       | POST   | Create OAuth client (shipped #86)                                                                                    | 2.2   |
+| `/api/clients/:id`                   | GET    | Get client details (shipped #87)                                                                                     | 2.2   |
+| `/api/clients/:id`                   | PATCH  | Update client (shipped #88)                                                                                          | 2.2   |
+| `/api/clients/:id`                   | DELETE | Delete client (shipped #89)                                                                                          | 2.2   |
+| `/api/clients/:id/regenerate-secret` | POST   | Regenerate client secret (shipped #90)                                                                               | 2.2   |
+| `/api/clients/:id/api-keys`          | POST   | Mint developer API key (shipped #97, env-gated per ADR-008)                                                          | 2.2   |
+| `/api/clients/:id/api-keys`          | GET    | List masked developer API keys (shipped #97)                                                                         | 2.2   |
+| `/api/clients/:id/api-keys/:keyId`   | DELETE | Revoke developer API key (shipped #97)                                                                               | 2.2   |
 
 ---
 

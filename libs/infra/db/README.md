@@ -58,25 +58,29 @@ CREATE DATABASE qauth_dev;
 
 ### Basic Database Connection
 
+`@qauth-labs/infra-db` exports a **factory**, not singletons. Call
+`createDatabase(config)` to build a `{ db, pool, close, testConnection }`
+instance, then pass `db` to the repository factories.
+
 ```typescript
-import { db, pool, testConnection, schema } from '@qauth-labs/infra-db';
+import { createDatabase, schema } from '@qauth-labs/infra-db';
+
+const database = createDatabase({
+  connectionString: 'postgresql://user:pass@host:5432/db',
+  pool: { max: 20, min: 2 },
+});
+
 const { users, oauthClients, realms } = schema;
+const isConnected = await database.testConnection();
 
-// Test database connection
-const isConnected = await testConnection();
-console.log('Database connected:', isConnected);
-
-// Use Drizzle ORM with schemas
-import { db, schema } from '@qauth-labs/infra-db';
-const { users, realms, oauthClients } = schema;
-
-const allUsers = await db.select().from(users);
-const realm = await db.query.realms.findFirst({
+// Use the Drizzle client directly
+const allUsers = await database.db.select().from(users);
+const realm = await database.db.query.realms.findFirst({
   where: (realms, { eq }) => eq(realms.name, 'my-realm'),
 });
 
 // Create a new OAuth client
-const newClient = await db
+const [newClient] = await database.db
   .insert(oauthClients)
   .values({
     realmId: realm.id,
@@ -88,26 +92,38 @@ const newClient = await db
     responseTypes: ['code'],
   })
   .returning();
+
+await database.close(); // graceful shutdown
 ```
+
+> **Fastify app:** prefer the `@qauth-labs/fastify-plugin-db` plugin (below),
+> which builds the database instance once and decorates
+> `fastify.db` / `fastify.dbPool` / `fastify.repositories.*`. Route code should
+> use those decorators rather than calling `createDatabase` directly.
 
 ### Repository Pattern
 
-The library provides a repository pattern for type-safe database operations with transaction support and proper error handling.
+The library provides a repository pattern for type-safe database operations with
+transaction support and proper error handling. Repositories are created via
+**factory functions** that take the database client; there are **no singleton
+repository exports**.
 
 #### Using Repositories
 
 ```typescript
+import { createDatabase } from '@qauth-labs/infra-db';
 import {
-  usersRepository,
-  realmsRepository,
-  auditLogsRepository,
-  emailVerificationTokensRepository,
+  createUsersRepository,
+  createEmailVerificationTokensRepository,
 } from '@qauth-labs/infra-db';
 import { NotFoundError, UniqueConstraintError } from '@qauth-labs/shared-errors';
 
+const { db } = createDatabase({ connectionString: 'postgresql://…' });
+const usersRepo = createUsersRepository(db);
+
 // Create a new user
 try {
-  const user = await usersRepository.create({
+  const user = await usersRepo.create({
     realmId: 'realm-123',
     email: 'user@example.com',
     passwordHash: 'argon2id_hash',
@@ -123,8 +139,7 @@ try {
 
 // Find user by ID (throws NotFoundError if not found)
 try {
-  const user = await usersRepository.findByIdOrThrow('user-123');
-  console.log('User found:', user);
+  const user = await usersRepo.findByIdOrThrow('user-123');
 } catch (error) {
   if (error instanceof NotFoundError) {
     console.error('User not found');
@@ -132,93 +147,84 @@ try {
 }
 
 // Find user by email (returns undefined if not found)
-const user = await usersRepository.findByEmail('realm-123', 'user@example.com');
-if (user) {
-  console.log('User found:', user);
-}
+const user = await usersRepo.findByEmail('realm-123', 'user@example.com');
 
-// Update user
-const updatedUser = await usersRepository.update('user-123', {
-  emailVerified: true,
-  updatedAt: Date.now(),
-});
-
-// Delete user
-const deleted = await usersRepository.delete('user-123');
-console.log('User deleted:', deleted);
+// Update / delete
+const updatedUser = await usersRepo.update('user-123', { emailVerified: true });
+const deleted = await usersRepo.delete('user-123');
 ```
 
 #### Repository Factory Functions
 
-Repositories are created using factory functions that accept an optional default database client:
+Each repository is a factory taking a default database client (required):
 
 ```typescript
+import { createDatabase } from '@qauth-labs/infra-db';
 import { createUsersRepository, createRealmsRepository } from '@qauth-labs/infra-db';
-import { db } from '@qauth-labs/infra-db';
 
-// Create repository with default db instance
+const { db } = createDatabase({ connectionString: 'postgresql://…' });
+
 const usersRepo = createUsersRepository(db);
-
-// Or use the default instance
-const usersRepo = createUsersRepository();
+const realmsRepo = createRealmsRepository(db);
 ```
 
 #### Transaction Support
 
-All repository methods accept an optional transaction parameter:
+All repository methods accept an optional transaction client (`tx?`) that
+overrides the default `db`. Drive transactions through the Drizzle client:
 
 ```typescript
-import { db } from '@qauth-labs/infra-db';
-import { usersRepository, realmsRepository } from '@qauth-labs/infra-db';
+const { db } = createDatabase({ connectionString: 'postgresql://…' });
+const usersRepo = createUsersRepository(db);
+const realmsRepo = createRealmsRepository(db);
 
-// Use transactions
 await db.transaction(async (tx) => {
-  // Create realm
-  const realm = await realmsRepository.create({ name: 'my-realm' }, tx);
-
-  // Create user in the same transaction
-  const user = await usersRepository.create(
-    {
-      realmId: realm.id,
-      email: 'user@example.com',
-      passwordHash: 'hash',
-    },
+  const realm = await realmsRepo.create({ name: 'my-realm' }, tx);
+  const user = await usersRepo.create(
+    { realmId: realm.id, email: 'user@example.com', passwordHash: 'hash' },
     tx
   );
-
-  // Both operations succeed or both fail
-  return { realm, user };
+  return { realm, user }; // both commit, or both roll back
 });
 ```
 
 #### Available Repositories
 
-- **`usersRepository`**: User CRUD operations
+Each factory takes a `defaultDb: DbClient`. Methods below take an optional
+`tx?: DbClient`.
+
+- **`createUsersRepository(db)`**: User CRUD
   - `create()`, `findById()`, `findByIdOrThrow()`, `findByEmail()`, `findByEmailNormalized()`, `update()`, `updateLastLogin()`, `verifyEmail()`, `delete()`
-
-- **`realmsRepository`**: Realm CRUD operations
+- **`createRealmsRepository(db)`**: Realm CRUD
   - `create()`, `findById()`, `findByIdOrThrow()`, `findByName()`, `update()`, `delete()`
-
-- **`oauthClientsRepository`** (`createOAuthClientsRepository`): OAuth client CRUD operations
+- **`createOAuthClientsRepository(db)`**: OAuth client CRUD
   - `create()`, `findById()`, `findByIdOrThrow()`, `findByClientId()`, `listByDeveloper()`, `upsertCimdClient()`, `update()`, `delete()`
   - `listByDeveloper(developerId, tx?)`: lists a developer's own clients, scoped strictly by `developer_id` and ordered newest-first. Dynamically registered (RFC 7591 / DCR) clients carry a null `developer_id` and are excluded.
   - `upsertCimdClient(data, tx?)`: idempotent `INSERT ... ON CONFLICT` for Client ID Metadata Document (CIMD) clients keyed by `(realm_id, client_id)`. On conflict it refreshes only the document-derived fields (name, description, redirect URIs, grant/response types, auth method, metadata, enabled) and bumps `updatedAt`; identity columns and the secret sentinel are left untouched, so concurrent authorize requests for the same metadata-document `client_id` collapse onto a single row instead of racing a find-then-create.
-
-- **`auditLogsRepository`**: Audit log operations
-  - `create()`, `findByUserId()`, `findByRealmId()`, `findByRealmAndUserId()`
-
-- **`emailVerificationTokensRepository`**: Email verification token operations
-  - `create()`, `findByToken()`, `markUsed()`, `deleteExpired()`
+- **`createApiKeysRepository(db)`**: Static developer API-key CRUD (ADR-008 §6)
+- **`createAuditLogsRepository(db)`**: Audit-log operations
+  - `create()`, `findByUserId()`, `findByRealmId()`, `findByRealmAndUserId()`, plus realm-isolated filters
+- **`createAuthorizationCodesRepository(db)`**: Authorization code lifecycle
+  - `create()`, `findByCode()`, `markUsed()`
+- **`createRefreshTokensRepository(db)`**: Refresh-token lifecycle + family revocation
+  - `create()`, `findByTokenHashIncludingRevoked()`, `revoke()`, `revokeFamily(familyId, reason)`
+- **`createEmailVerificationTokensRepository(db)`**: Verification tokens
+  - `create()`, `findByTokenHash()`, `markUsed()`, `deleteExpired()`
 
 #### Error Handling
 
 Repositories use error classes from `@qauth-labs/shared-errors` with HTTP status codes:
 
 ```typescript
+import { createDatabase } from '@qauth-labs/infra-db';
+import { createUsersRepository } from '@qauth-labs/infra-db';
 import { NotFoundError, UniqueConstraintError } from '@qauth-labs/shared-errors';
 
+const { db } = createDatabase({ connectionString: 'postgresql://…' });
+const usersRepo = createUsersRepository(db);
+
 try {
-  const user = await usersRepository.findByIdOrThrow('invalid-id');
+  const user = await usersRepo.findByIdOrThrow('invalid-id');
 } catch (error) {
   if (error instanceof NotFoundError) {
     // Handle not found
@@ -228,7 +234,11 @@ try {
 }
 
 try {
-  await usersRepository.create({ email: 'existing@example.com', ... });
+  await usersRepo.create({
+    realmId: 'realm-1',
+    email: 'existing@example.com',
+    passwordHash: '…',
+  });
 } catch (error) {
   if (error instanceof UniqueConstraintError) {
     // Handle unique constraint violation
@@ -243,17 +253,21 @@ try {
 For security and multi-tenancy, audit logs can be filtered by realm:
 
 ```typescript
-import { auditLogsRepository } from '@qauth-labs/infra-db';
+import { createDatabase } from '@qauth-labs/infra-db';
+import { createAuditLogsRepository } from '@qauth-labs/infra-db';
+
+const { db } = createDatabase({ connectionString: 'postgresql://…' });
+const auditLogsRepo = createAuditLogsRepository(db);
 
 // Get all audit logs for a realm (security: ensures realm isolation)
-const realmLogs = await auditLogsRepository.findByRealmId('realm-123', {
+const realmLogs = await auditLogsRepo.findByRealmId('realm-123', {
   limit: 50,
   eventType: 'auth',
   success: true,
 });
 
 // Get audit logs for a specific user within a realm
-const userLogs = await auditLogsRepository.findByRealmAndUserId('realm-123', 'user-456', {
+const userLogs = await auditLogsRepo.findByRealmAndUserId('realm-123', 'user-456', {
   limit: 20,
   descending: true,
 });
@@ -282,11 +296,16 @@ This interface ensures consistency across all repositories and reduces code dupl
 
 ### Connection Pool Management
 
+Pool access comes from the instance returned by `createDatabase`, not a
+singleton:
+
 ```typescript
-import { pool, closeDatabase } from '@qauth-labs/infra-db';
+import { createDatabase } from '@qauth-labs/infra-db';
+
+const database = createDatabase({ connectionString: 'postgresql://…' });
 
 // Direct pool access if needed
-const client = await pool.connect();
+const client = await database.pool.connect();
 try {
   const result = await client.query('SELECT NOW()');
   console.log(result.rows[0]);
@@ -295,7 +314,7 @@ try {
 }
 
 // Graceful shutdown
-await closeDatabase();
+await database.close();
 ```
 
 ## Available Nx Commands
@@ -365,34 +384,38 @@ The target realm must already exist. See `src/scripts/seed-oauth-clients.ts` for
 libs/infra/db/
 ├── src/
 │   ├── lib/
-│   │   ├── db.ts              # Database connection and utilities
+│   │   ├── db.ts              # createDatabase factory + pool/Drizzle client
 │   │   ├── repositories/      # Repository pattern implementations
-│   │   │   ├── index.ts        # Repository exports
+│   │   │   ├── index.ts        # Factory exports
 │   │   │   ├── base.repository.ts  # Base repository interface
 │   │   │   ├── users.repository.ts
 │   │   │   ├── realms.repository.ts
+│   │   │   ├── oauth-clients.repository.ts
+│   │   │   ├── oauth-consents.repository.ts
+│   │   │   ├── refresh-tokens.repository.ts
+│   │   │   ├── authorization-codes.repository.ts
+│   │   │   ├── email-verification-tokens.repository.ts
+│   │   │   ├── api-keys.repository.ts
 │   │   │   ├── audit-logs.repository.ts
-│   │   │   └── email-verification-tokens.repository.ts
+│   │   │   └── integration-setup.ts
 │   │   ├── schema/
 │   │   │   ├── index.ts        # Main schema exports
-│   │   │   ├── core.ts         # Core tables: realms, users, oauth_clients
-│   │   │   ├── tokens.ts       # Token tables: email_verification, authorization_codes, refresh_tokens
-│   │   │   ├── sessions.ts     # Session management
-│   │   │   ├── audit.ts        # Audit logging
-│   │   │   ├── roles.ts        # Roles and permissions
+│   │   │   ├── core.ts         # Core tables: realms, users, oauth_clients, api_keys
+│   │   │   ├── tokens.ts       # email_verification_tokens, authorization_codes, refresh_tokens
+│   │   │   ├── consents.ts     # oauth_consents
+│   │   │   ├── sessions.ts     # sessions (Phase 5+, currently unused — Redis holds sessions)
+│   │   │   ├── audit.ts        # audit_logs (with agent attribution)
+│   │   │   ├── roles.ts        # roles, user_roles (Phase 5+, currently unused)
 │   │   │   ├── enums.ts        # PostgreSQL enum types
-│   │   │   └── sql-helpers.ts  # SQL helper functions
-│   │   └── utils/
-│   │       ├── index.ts        # Utility exports
-│   │       └── email.ts        # Email normalization utilities
+│   │   │   └── sql-helpers.ts  # EPOCH_MS_NOW, JSONB_EMPTY_ARRAY
+│   │   └── types/              # Repository/database type definitions
 │   ├── scripts/
 │   │   ├── seed.ts                    # Dev-fixture seeder (drizzle-seed)
 │   │   └── seed-oauth-clients.ts      # Idempotent client provisioner
-│   └── index.ts               # Public API exports
+│   ├── index.ts               # Public API: createDatabase, schema, factories, types
 │   └── qauth-schema.dbml      # Database schema visualization (DBML format)
-├── drizzle/                   # Migration files
-│   ├── 0000_glamorous_valkyrie.sql  # Initial migration
-│   └── meta/                  # Migration metadata
+├── drizzle/                   # Migration files (0000_young_vermin.sql … 00NN)
+│   └── meta/                  # Migration metadata / snapshots
 ├── drizzle.config.ts          # Drizzle configuration
 ├── project.json               # Nx project configuration
 └── README.md                  # This file
@@ -448,10 +471,10 @@ The database schema is available in DBML format at `src/qauth-schema.dbml`. You 
 ### Testing Database Connection
 
 ```typescript
-import { testConnection } from '@qauth-labs/infra-db';
+import { createDatabase } from '@qauth-labs/infra-db';
 
-// Test in your application startup
-const isConnected = await testConnection();
+const database = createDatabase({ connectionString: 'postgresql://…' });
+const isConnected = await database.testConnection();
 if (!isConnected) {
   throw new Error('Failed to connect to database');
 }
@@ -493,7 +516,7 @@ fastify.get('/health', async (request, reply) => {
 });
 ```
 
-The Fastify plugin automatically manages the database connection lifecycle, so you don't need to manually call `closeDatabase()` when using the plugin.
+The Fastify plugin automatically manages the database connection lifecycle, so you don't need to manually call `database.close()` when using the plugin.
 
 ## Schema Design Principles
 
