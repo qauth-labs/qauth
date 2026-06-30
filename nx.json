@@ -1,6 +1,5 @@
 {
   "$schema": "./node_modules/nx/schemas/nx-schema.json",
-  "nxCloudId": "68ed5766d0a8584639447f54",
   "plugins": [
     {
       "plugin": "@nx/eslint/plugin",
@@ -109,5 +108,6 @@
   },
   "sync": {
     "disabledTaskSyncGenerators": ["@nx/js:typescript-sync"]
-  }
+  },
+  "analytics": false
 }

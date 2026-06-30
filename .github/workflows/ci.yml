@@ -51,7 +51,3 @@ jobs:
       # the whole fast unit suite. The Docker-backed integration suite (#167,
       # `*.integration.test.ts`) is excluded, so no Postgres/Redis is needed.
       - run: pnpm exec vitest run --coverage
-
-      # Nx Cloud recommends fixes for failures to help you get CI green faster. Learn more: https://nx.dev/ci/features/self-healing-ci
-      - run: pnpm exec nx fix-ci
-        if: always()
