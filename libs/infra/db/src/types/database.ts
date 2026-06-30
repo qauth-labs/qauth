@@ -24,6 +24,21 @@ export interface DatabasePoolConfig {
 }
 
 /**
+ * Minimal logger interface (pino-compatible).
+ *
+ * Lets callers inject a structured logger (e.g. `fastify.log`) so infra
+ * messages flow through proper log levels and request-id correlation instead
+ * of `console`. The global `console` object satisfies this shape, so it is the
+ * default when no logger is provided.
+ */
+export interface Logger {
+  info(...args: unknown[]): void;
+  warn(...args: unknown[]): void;
+  error(...args: unknown[]): void;
+  debug(...args: unknown[]): void;
+}
+
+/**
  * Database configuration interface
  */
 export interface DatabaseConfig {
@@ -31,6 +46,12 @@ export interface DatabaseConfig {
   connectionString: string;
   /** Pool configuration options (optional) */
   pool?: DatabasePoolConfig;
+  /**
+   * Optional logger for diagnostic messages. Defaults to `console`.
+   * Inject `fastify.log` (or any pino-compatible logger) for structured,
+   * level-aware, request-correlated logging.
+   */
+  logger?: Logger;
 }
 
 /**

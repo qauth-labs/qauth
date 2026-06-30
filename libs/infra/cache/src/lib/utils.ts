@@ -1,6 +1,9 @@
+import type { ZodType } from 'zod';
+
 import type {
   CacheClient,
   CacheUtilsInstance,
+  Logger,
   RateLimitResult,
   RateLimitStatus,
   RateLimitUtilsInstance,
@@ -13,6 +16,7 @@ import type {
 
 export type {
   CacheUtilsInstance,
+  Logger,
   RateLimitResult,
   RateLimitStatus,
   RateLimitUtilsInstance,
@@ -22,6 +26,57 @@ export type {
   UserData,
   UserUtilsInstance,
 };
+
+/**
+ * Safely deserialize a raw cache string into a typed value.
+ *
+ * Without a schema this preserves the historical behaviour (`JSON.parse` cast
+ * to `T`) but no longer lets a malformed JSON string throw an uncaught error:
+ * a parse failure is treated as a cache MISS (returns `null`) and logged.
+ *
+ * With a schema the parsed value is validated; on failure the entry is treated
+ * as a cache MISS so corrupted or attacker-injected values can never surface as
+ * a wrong-shaped object.
+ *
+ * @param raw - Raw string read from the cache (or `null` for a miss)
+ * @param key - Cache key, used only for diagnostic logging
+ * @param logger - Logger used to warn on malformed/invalid entries
+ * @param schema - Optional Zod schema to validate the parsed value
+ * @returns The typed value, or `null` on a miss/parse/validation failure
+ */
+function parseCached<T>(
+  raw: string | null,
+  key: string,
+  logger: Logger,
+  schema?: ZodType<T>
+): T | null {
+  if (raw === null) {
+    return null;
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (error) {
+    logger.warn(`Cache: malformed JSON for key "${key}", treating as miss`, error);
+    return null;
+  }
+
+  if (!schema) {
+    return parsed as T;
+  }
+
+  const result = schema.safeParse(parsed);
+  if (!result.success) {
+    logger.warn(
+      `Cache: value for key "${key}" failed schema validation, treating as miss`,
+      result.error.issues
+    );
+    return null;
+  }
+
+  return result.data;
+}
 
 /**
  * Key prefixes for different data types
@@ -49,9 +104,13 @@ export const DEFAULT_TTL = {
  * Create session utilities with the given Redis client
  *
  * @param client - Redis client instance
+ * @param logger - Optional logger for diagnostics (defaults to `console`)
  * @returns Session utilities object
  */
-export function createSessionUtils(client: CacheClient): SessionUtilsInstance {
+export function createSessionUtils(
+  client: CacheClient,
+  logger: Logger = console
+): SessionUtilsInstance {
   return {
     async setSession<T extends SessionData>(
       sessionId: string,
@@ -62,10 +121,13 @@ export function createSessionUtils(client: CacheClient): SessionUtilsInstance {
       await client.setex(key, ttl, JSON.stringify(data));
     },
 
-    async getSession<T extends SessionData>(sessionId: string): Promise<T | null> {
+    async getSession<T extends SessionData>(
+      sessionId: string,
+      schema?: ZodType<T>
+    ): Promise<T | null> {
       const key = `${KEY_PREFIXES.SESSION}${sessionId}`;
       const data = await client.get(key);
-      return data ? (JSON.parse(data) as T) : null;
+      return parseCached(data, key, logger, schema);
     },
 
     async deleteSession(sessionId: string): Promise<void> {
@@ -138,19 +200,23 @@ export function createRateLimitUtils(client: CacheClient): RateLimitUtilsInstanc
  * Create cache utilities with the given Redis client
  *
  * @param client - Redis client instance
+ * @param logger - Optional logger for diagnostics (defaults to `console`)
  * @returns Cache utilities object
  */
-export function createCacheUtils(client: CacheClient): CacheUtilsInstance {
+export function createCacheUtils(
+  client: CacheClient,
+  logger: Logger = console
+): CacheUtilsInstance {
   const utils: CacheUtilsInstance = {
     async setCache<T>(key: string, data: T, ttl: number = DEFAULT_TTL.CACHE): Promise<void> {
       const cacheKey = `${KEY_PREFIXES.CACHE}${key}`;
       await client.setex(cacheKey, ttl, JSON.stringify(data));
     },
 
-    async getCache<T>(key: string): Promise<T | null> {
+    async getCache<T>(key: string, schema?: ZodType<T>): Promise<T | null> {
       const cacheKey = `${KEY_PREFIXES.CACHE}${key}`;
       const data = await client.get(cacheKey);
-      return data ? (JSON.parse(data) as T) : null;
+      return parseCached(data, cacheKey, logger, schema);
     },
 
     async deleteCache(key: string): Promise<void> {
@@ -166,9 +232,10 @@ export function createCacheUtils(client: CacheClient): CacheUtilsInstance {
     async getOrSetCache<T>(
       key: string,
       fallback: () => Promise<T>,
-      ttl: number = DEFAULT_TTL.CACHE
+      ttl: number = DEFAULT_TTL.CACHE,
+      schema?: ZodType<T>
     ): Promise<T> {
-      const cached = await utils.getCache<T>(key);
+      const cached = await utils.getCache<T>(key, schema);
       if (cached !== null) {
         return cached;
       }
@@ -186,9 +253,10 @@ export function createCacheUtils(client: CacheClient): CacheUtilsInstance {
  * Create user data utilities with the given Redis client
  *
  * @param client - Redis client instance
+ * @param logger - Optional logger for diagnostics (defaults to `console`)
  * @returns User utilities object
  */
-export function createUserUtils(client: CacheClient): UserUtilsInstance {
+export function createUserUtils(client: CacheClient, logger: Logger = console): UserUtilsInstance {
   return {
     async setUserData<T extends UserData>(
       userId: string,
@@ -199,10 +267,10 @@ export function createUserUtils(client: CacheClient): UserUtilsInstance {
       await client.setex(key, ttl, JSON.stringify(data));
     },
 
-    async getUserData<T extends UserData>(userId: string): Promise<T | null> {
+    async getUserData<T extends UserData>(userId: string, schema?: ZodType<T>): Promise<T | null> {
       const key = `${KEY_PREFIXES.USER}${userId}`;
       const data = await client.get(key);
-      return data ? (JSON.parse(data) as T) : null;
+      return parseCached(data, key, logger, schema);
     },
 
     async deleteUserData(userId: string): Promise<void> {

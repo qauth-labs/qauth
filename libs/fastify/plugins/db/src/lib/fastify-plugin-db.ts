@@ -65,8 +65,10 @@ declare module 'fastify' {
  */
 export const databasePlugin = fp<DatabasePluginOptions>(
   async (fastify: FastifyInstance, options: DatabasePluginOptions) => {
-    // Create database instance using factory
-    const database = createDatabase(options.config);
+    // Create database instance using factory. Inject the Fastify logger so DB
+    // diagnostics flow through pino (levels + request-id correlation) instead
+    // of bare `console`.
+    const database = createDatabase({ ...options.config, logger: fastify.log });
 
     fastify.decorate('db', database.db);
     fastify.decorate('dbPool', database.pool);
