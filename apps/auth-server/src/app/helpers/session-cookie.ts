@@ -32,6 +32,16 @@ export interface BrowserSessionData {
   /** Monotonic nonce for CSRF double-submit cookie (rotated on consent POST). */
   csrfToken?: string;
   /**
+   * CSRF token for the cookie-authed JSON API (e.g. `DELETE /consents/:id`).
+   * Distinct from {@link csrfToken} (which the consent screen burns after use)
+   * so the two flows don't invalidate each other. Long-lived per session —
+   * minted lazily by the GET that lists consents, validated via the
+   * `X-CSRF-Token` header on state-changing JSON requests. The custom header
+   * forces a CORS preflight, so naive cross-site CSRF is blocked even before
+   * the token comparison runs.
+   */
+  apiCsrfToken?: string;
+  /**
    * The exact scope set rendered on the most recent consent screen for a given
    * client, keyed by `client_id`. The consent POST handler grants ONLY these
    * scopes — the hidden `scope` form field is attacker-controllable, so the
