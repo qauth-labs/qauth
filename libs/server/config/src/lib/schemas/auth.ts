@@ -17,6 +17,21 @@ export const authEnvSchema = z.object({
   SYSTEM_CLIENT_ID: z.string().optional().default('system'),
 
   /**
+   * Require a verified email before password login succeeds.
+   *
+   * MVP posture is `false` (unverified-email login is allowed) to match
+   * the PRD's "optional for MVP" stance. Operators who need a verified-email
+   * guarantee — e.g. so the OIDC `email_verified` claim is always trustworthy —
+   * flip this to `true`. The login route then throws `EmailNotVerifiedError`
+   * before issuing tokens.
+   *
+   * This is a DECISION flag, not an auto-fix: do not default to `true`
+   * without acknowledging the MVP tradeoff (existing unverified users would
+   * be locked out).
+   */
+  REQUIRE_EMAIL_VERIFIED: z.coerce.boolean().default(false),
+
+  /**
    * Maximum registration attempts per window
    */
   REGISTRATION_RATE_LIMIT: z.coerce.number().int().min(1).default(3),

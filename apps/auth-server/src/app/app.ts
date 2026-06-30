@@ -127,8 +127,14 @@ export async function app(fastify: FastifyInstance, opts: object) {
   await fastify.register(requestIdPlugin);
   await fastify.register(metricsPlugin);
 
+  // CORS (F-06): fail-closed in production when CORS_ORIGIN is unset — the
+  // auth-server's own browser flows (login/consent) are same-origin and do
+  // not need CORS, and the JSON API is called by the same-origin developer
+  // portal. Denying cross-origin by default is the safe posture; an operator
+  // who needs cross-origin access sets CORS_ORIGIN explicitly. In
+  // non-production the wildcard fallback is kept for local dev convenience.
   await fastify.register(cors, {
-    origin: env.CORS_ORIGIN || '*',
+    origin: env.CORS_ORIGIN || (env.NODE_ENV === 'production' ? false : '*'),
   });
 
   // RFC 6749 §3.2 (token endpoint) and RFC 7662 §2.1 (introspection)

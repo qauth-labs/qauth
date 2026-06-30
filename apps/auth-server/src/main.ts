@@ -55,7 +55,12 @@ process.on('SIGINT', () => shutdown('SIGINT'));
 // Start server
 async function start() {
   try {
-    // Swagger must be registered BEFORE routes for route discovery (see @fastify/swagger README)
+    // Swagger UI + OpenAPI spec registration. Gated behind `ENABLE_SWAGGER`
+    // (F-07): defaults to `true` in non-production and `false` in production
+    // so the API surface is not advertised to unauthenticated callers in a
+    // hardened deployment. The spec is still registered (so routes are
+    // discoverable for the Zod type provider) even when the UI is off — the
+    // gate only suppresses the `/docs` route.
     await server.register(swagger, {
       openapi: {
         openapi: '3.1.0',
@@ -81,10 +86,12 @@ async function start() {
         zodToJsonConfig: { target: 'draft-2020-12' },
       }),
     });
-    await server.register(swaggerUi, {
-      routePrefix: '/docs',
-      uiConfig: { docExpansion: 'list', filter: true },
-    });
+    if (env.ENABLE_SWAGGER) {
+      await server.register(swaggerUi, {
+        routePrefix: '/docs',
+        uiConfig: { docExpansion: 'list', filter: true },
+      });
+    }
 
     // Register app (routes) after swagger so they appear in OpenAPI spec
     await server.register(app);
