@@ -5,7 +5,8 @@
   "main": "src/index.ts",
   "dependencies": {
     "@qauth-labs/shared-errors": "workspace:*",
-    "jose": "catalog:"
+    "jose": "catalog:",
+    "zod": "catalog:"
   },
   "devDependencies": {
     "@vitest/coverage-v8": "catalog:",
