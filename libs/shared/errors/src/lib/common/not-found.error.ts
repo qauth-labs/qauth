@@ -4,6 +4,7 @@
  */
 export class NotFoundError extends Error {
   readonly statusCode = 404;
+  readonly code = 'NOT_FOUND';
 
   constructor(entity: string, id: string) {
     super(`${entity} with id ${id} not found`);
