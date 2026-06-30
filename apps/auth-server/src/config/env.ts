@@ -2,6 +2,7 @@ import {
   authEnvSchema,
   baseEnvSchema,
   databaseEnvSchema,
+  DEV_SESSION_COOKIE_SECRET_DEFAULT,
   emailEnvSchema,
   jwtEnvSchema,
   observabilityEnvSchema,
@@ -11,14 +12,6 @@ import {
   redisEnvSchema,
 } from '@qauth-labs/server-config';
 import { z } from 'zod';
-
-/**
- * The dev-only default for SESSION_COOKIE_SECRET (defined in
- * `@qauth-labs/server-config`'s `authEnvSchema`). Mirrored here so the
- * production guard below can reject the leaked default without importing
- * the schema's private constant.
- */
-const DEV_SESSION_COOKIE_SECRET_DEFAULT = 'dev-only-session-secret-change-me-1234567890abcdef';
 
 /**
  * Auth server environment schema
