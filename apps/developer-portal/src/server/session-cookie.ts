@@ -13,7 +13,16 @@ export interface PortalSessionPayload {
 const SEPARATOR = '.';
 
 function hmac(value: string): string {
-  return createHmac('sha256', env.PORTAL_SESSION_SECRET).update(value).digest('base64url');
+  // `config.ts` throws on startup (SSR) if this is unset, but the exported type
+  // stays `string | undefined` because the bundler can pull this server-only
+  // module into a client chunk where process.env is empty. This module is only
+  // reached on the server, so re-assert here to satisfy the type checker and
+  // fail loudly rather than HMAC with an undefined key.
+  const secret = env.PORTAL_SESSION_SECRET;
+  if (!secret) {
+    throw new Error('PORTAL_SESSION_SECRET is not configured');
+  }
+  return createHmac('sha256', secret).update(value).digest('base64url');
 }
 
 export function signSession(payload: PortalSessionPayload): string {
