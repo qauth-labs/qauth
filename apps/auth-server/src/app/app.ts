@@ -133,8 +133,18 @@ export async function app(fastify: FastifyInstance, opts: object) {
   // portal. Denying cross-origin by default is the safe posture; an operator
   // who needs cross-origin access sets CORS_ORIGIN explicitly. In
   // non-production the wildcard fallback is kept for local dev convenience.
+  //
+  // CORS_ORIGIN accepts a single origin or a comma-separated list (as the env
+  // examples document). Split + trim it into an array so @fastify/cors matches
+  // each origin; passing the raw comma string would be treated as one literal
+  // origin and never match. Empty entries (e.g. a trailing comma) are dropped.
+  const corsOrigins = env.CORS_ORIGIN
+    ? env.CORS_ORIGIN.split(',')
+        .map((origin) => origin.trim())
+        .filter(Boolean)
+    : [];
   await fastify.register(cors, {
-    origin: env.CORS_ORIGIN || (env.NODE_ENV === 'production' ? false : '*'),
+    origin: corsOrigins.length > 0 ? corsOrigins : env.NODE_ENV === 'production' ? false : '*',
   });
 
   // RFC 6749 §3.2 (token endpoint) and RFC 7662 §2.1 (introspection)
