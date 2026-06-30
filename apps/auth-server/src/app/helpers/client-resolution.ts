@@ -84,9 +84,8 @@ export function isCimdClient(client: { metadata: Record<string, unknown> | null 
  * raw field. Nothing gates on it yet.
  *
  * Fail-closed by design: returns true ONLY for a strict `isAgent === true`,
- * so a missing / null / undefined field (e.g. an object built via the
- * `as unknown as ResolvedClient` casts above, or a partially-shaped object)
- * reads as NOT an agent rather than throwing. This is the safe default for a
+ * so a missing / null / undefined field (e.g. a partially-shaped object that
+ * omits the flag) reads as NOT an agent rather than throwing. This is the safe default for a
  * classification gate. It does NOT make `is_agent` trustworthy — the value is
  * self-asserted client input (see the schema column note); downstream gating
  * must still verify rather than trust, and the escalation risk is a client
@@ -139,7 +138,7 @@ export async function resolveClient(
   //    CIMD client also lives here once its first authorize succeeded.
   const persisted = await fastify.repositories.oauthClients.findByClientId(realmId, clientId);
   if (persisted) {
-    return { client: persisted as unknown as ResolvedClient };
+    return { client: persisted };
   }
 
   // 2. CIMD — URL-formatted client_id resolved + materialised on demand.
@@ -155,7 +154,7 @@ export async function resolveClient(
 
       const insert = toCimdClientInsert(realmId, clientId, doc, sentinelSecretHash);
       const row = await fastify.repositories.oauthClients.upsertCimdClient(insert);
-      return { client: row as unknown as ResolvedClient };
+      return { client: row };
     } catch (err) {
       const reason = err instanceof InvalidClientError ? err.message : 'cimd_resolution_failed';
       return { client: null, reason };

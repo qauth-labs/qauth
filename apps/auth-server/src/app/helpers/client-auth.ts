@@ -206,7 +206,9 @@ export async function authenticateClientPublicOrConfidential(
     // Confidential client missing its secret.
     throw new InvalidClientError();
   }
-  return client as unknown as OAuthClientLike;
+  // `ResolvedClient` is a structural superset of `OAuthClientLike`, so the
+  // resolved row is assignable directly — no cast required.
+  return client;
 }
 
 /**
