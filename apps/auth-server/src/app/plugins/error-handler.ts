@@ -23,6 +23,8 @@ import {
 import type { FastifyError, FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import fp from 'fastify-plugin';
 
+import { env } from '../../config/env';
+
 interface ErrorResponse {
   error: string;
   error_description?: string;
@@ -160,8 +162,11 @@ export default fp(async function (fastify: FastifyInstance) {
         return reply.code(statusCode).send(response);
       }
 
-      // Handle unknown errors
-      const isDevelopment = process.env.NODE_ENV !== 'production';
+      // Handle unknown errors. Use the validated `env.NODE_ENV` (not the raw
+      // `process.env.NODE_ENV`) so a misconfigured environment can't silently
+      // flip this branch — the schema defaults to `development` and rejects
+      // anything outside the enum.
+      const isDevelopment = env.NODE_ENV !== 'production';
       const response: ErrorResponse = {
         error: isDevelopment ? error.message : 'Internal server error',
         statusCode: 500,

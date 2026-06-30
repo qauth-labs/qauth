@@ -7,7 +7,16 @@ import {
 } from '@qauth-labs/shared-errors';
 import type { FastifyInstance } from 'fastify';
 import Fastify from 'fastify';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+
+// F-05: error-handler now reads the validated `env.NODE_ENV` instead of the
+// raw `process.env.NODE_ENV`. Mock the env module so the test doesn't trigger
+// full env parsing (DATABASE_URL etc. are not set in the test environment).
+vi.mock('../../config/env', () => ({
+  env: {
+    NODE_ENV: 'development',
+  },
+}));
 
 import errorHandler from './error-handler';
 

@@ -88,6 +88,14 @@ services:
       # Auth
       DEFAULT_REALM_NAME: ${DEFAULT_REALM_NAME:-master}
       SYSTEM_CLIENT_ID: ${SYSTEM_CLIENT_ID:-system}
+      # HMAC secret signing the __Host-qauth_session cookie. REQUIRED in
+      # production (the env schema rejects the dev default when NODE_ENV=production).
+      # Generate with: openssl rand -base64 48
+      SESSION_COOKIE_SECRET: ${SESSION_COOKIE_SECRET}
+      SESSION_COOKIE_TTL: ${SESSION_COOKIE_TTL:-86400}
+      SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-true}
+      # Require a verified email before password login (default: false, MVP).
+      REQUIRE_EMAIL_VERIFIED: ${REQUIRE_EMAIL_VERIFIED:-false}
       REGISTRATION_RATE_LIMIT: ${REGISTRATION_RATE_LIMIT:-3}
       REGISTRATION_RATE_WINDOW: ${REGISTRATION_RATE_WINDOW:-3600}
       LOGIN_RATE_LIMIT: ${LOGIN_RATE_LIMIT:-5}
@@ -115,8 +123,9 @@ services:
       # SMTP_USER: ${SMTP_USER}
       # SMTP_PASSWORD: ${SMTP_PASSWORD}
 
-      # CORS
-      CORS_ORIGIN: ${CORS_ORIGIN:-*}
+      # CORS — fail-closed in production when unset (no wildcard default). Set
+      # CORS_ORIGIN explicitly to allow cross-origin callers (e.g. the portal).
+      CORS_ORIGIN: ${CORS_ORIGIN:-}
 
       # Rate Limiting (Global)
       RATE_LIMIT_ENABLED: ${RATE_LIMIT_ENABLED:-true}

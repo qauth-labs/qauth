@@ -1,6 +1,20 @@
 import { z } from 'zod';
 
 /**
+ * The development-only default for {@link SESSION_COOKIE_SECRET}.
+ *
+ * Exported so downstream apps (e.g. the auth-server) can reference the
+ * SAME constant in a production-rejection `superRefine` rather than
+ * hand-copying the literal — if this default ever changes, every guard
+ * stays in sync automatically. Production deployments MUST set
+ * `SESSION_COOKIE_SECRET` to a strong, unique secret; relying on this
+ * default in production is insecure and the auth-server's env schema
+ * actively rejects it when `NODE_ENV='production'`.
+ */
+export const DEV_SESSION_COOKIE_SECRET_DEFAULT =
+  'dev-only-session-secret-change-me-1234567890abcdef';
+
+/**
  * Authentication environment configuration schema
  * Auth-specific settings
  */
@@ -15,6 +29,31 @@ export const authEnvSchema = z.object({
    * Used for direct login operations (not OAuth flow)
    */
   SYSTEM_CLIENT_ID: z.string().optional().default('system'),
+
+  /**
+   * Require a verified email before password login succeeds.
+   *
+   * MVP posture is `false` (unverified-email login is allowed) to match
+   * the PRD's "optional for MVP" stance. Operators who need a verified-email
+   * guarantee — e.g. so the OIDC `email_verified` claim is always trustworthy —
+   * flip this to `true`. The login route then throws `EmailNotVerifiedError`
+   * before issuing tokens.
+   *
+   * This is a DECISION flag, not an auto-fix: do not default to `true`
+   * without acknowledging the MVP tradeoff (existing unverified users would
+   * be locked out).
+   *
+   * NB: uses the `z.enum(['true', 'false'])` pattern, NOT `z.coerce.boolean()`
+   * — `coerce.boolean` treats ANY non-empty string as `true` (so `"false"` →
+   * `true`), which would invert operator intent and silently lock out every
+   * unverified user. The enum also rejects malformed values instead of
+   * coercing them. Mirrors `SESSION_COOKIE_SECURE` / `SECURITY_HSTS_ENABLED`
+   * below.
+   */
+  REQUIRE_EMAIL_VERIFIED: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((v) => v === 'true'),
 
   /**
    * Maximum registration attempts per window
@@ -168,7 +207,7 @@ export const authEnvSchema = z.object({
   SESSION_COOKIE_SECRET: z
     .string()
     .min(32, 'SESSION_COOKIE_SECRET must be at least 32 characters')
-    .default('dev-only-session-secret-change-me-1234567890abcdef'),
+    .default(DEV_SESSION_COOKIE_SECRET_DEFAULT),
 
   /**
    * Browser session TTL in seconds (default 86400 = 24 hours, per issue #150).

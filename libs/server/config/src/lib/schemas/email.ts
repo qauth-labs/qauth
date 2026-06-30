@@ -13,8 +13,15 @@ export const emailEnvSchema = z.object({
    * Whether to invalidate existing tokens when resending verification email
    * If true, only the latest token is valid (more secure)
    * If false, multiple tokens can be active (user can use any valid token)
+   *
+   * Uses `z.enum(['true', 'false'])` rather than `z.coerce.boolean()`, which
+   * treats ANY non-empty string as `true` (so `"false"` → `true`, inverting
+   * operator intent). Mirrors the boolean-flag pattern in `auth.ts`.
    */
-  EMAIL_VERIFICATION_INVALIDATE_EXISTING_ON_RESEND: z.coerce.boolean().default(true),
+  EMAIL_VERIFICATION_INVALIDATE_EXISTING_ON_RESEND: z
+    .enum(['true', 'false'])
+    .default('true')
+    .transform((v) => v === 'true'),
 
   /**
    * Email provider type
@@ -52,9 +59,16 @@ export const emailEnvSchema = z.object({
   SMTP_PORT: z.coerce.number().int().min(1).max(65535).optional(),
 
   /**
-   * SMTP secure connection (TLS/SSL)
+   * SMTP secure connection (TLS/SSL).
+   *
+   * Uses `z.enum(['true', 'false'])` rather than `z.coerce.boolean()`, which
+   * treats ANY non-empty string as `true` (so `"false"` → `true`) — here that
+   * would force TLS on even when an operator explicitly disabled it.
    */
-  SMTP_SECURE: z.coerce.boolean().default(true),
+  SMTP_SECURE: z
+    .enum(['true', 'false'])
+    .default('true')
+    .transform((v) => v === 'true'),
 
   /**
    * SMTP username (required if EMAIL_PROVIDER is 'smtp')

@@ -1,4 +1,8 @@
-import { InvalidCredentialsError, TooManyRequestsError } from '@qauth-labs/shared-errors';
+import {
+  EmailNotVerifiedError,
+  InvalidCredentialsError,
+  TooManyRequestsError,
+} from '@qauth-labs/shared-errors';
 import { normalizeEmail } from '@qauth-labs/shared-validation';
 import { randomUUID } from 'crypto';
 import type { FastifyInstance } from 'fastify';
@@ -80,11 +84,32 @@ export default async function (fastify: FastifyInstance) {
           passwordValid = await fastify.passwordHasher.verifyPassword(user.passwordHash, password);
         }
 
-        // Check email verified (optional for MVP - can be configurable)
-        // For MVP, we allow unverified logins, but this can be enabled later
-        // if (user && passwordValid && !user.emailVerified) {
-        //   throw new EmailNotVerifiedError('Email address not verified');
-        // }
+        // Email-verified gate (F-08): config-driven, MVP default is `false`
+        // (unverified-email login allowed per PRD "optional for MVP"). An
+        // operator who needs a verified-email guarantee flips
+        // `REQUIRE_EMAIL_VERIFIED=true`; the login then fails closed with
+        // `EmailNotVerifiedError` BEFORE tokens are issued, so the OIDC
+        // `email_verified` claim is always trustworthy when that flag is on.
+        if (user && passwordValid && !user.emailVerified && env.REQUIRE_EMAIL_VERIFIED) {
+          await recordFailedAttempt(fastify.redis, lockoutIdentifiers);
+          fastify.metrics.loginAttempts.inc({ result: 'failure', reason: 'email_not_verified' });
+          logAuthEvent(request, 'user.login.failure', false, {
+            emailHash,
+            reason: 'email_not_verified',
+          });
+          await fastify.repositories.auditLogs.create({
+            userId: user.id,
+            oauthClientId: null,
+            event: 'user.login.failure',
+            eventType: 'auth',
+            success: false,
+            ipAddress: request.ip,
+            userAgent: request.headers['user-agent'] || null,
+            metadata: { email: normalizedEmail, error: 'Email address not verified' },
+          });
+          await ensureMinimumResponseTime(startTime, MIN_RESPONSE_TIME_MS.LOGIN);
+          throw new EmailNotVerifiedError('Email address not verified. Check your inbox.');
+        }
 
         // If credentials are invalid, throw generic error
         if (!user || !passwordValid) {
