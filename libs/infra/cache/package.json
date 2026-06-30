@@ -4,6 +4,7 @@
   "private": true,
   "main": "src/index.ts",
   "dependencies": {
-    "ioredis": "catalog:"
+    "ioredis": "catalog:",
+    "zod": "catalog:"
   }
 }

@@ -7,9 +7,17 @@ import type {
   DatabasePool,
   DatabasePoolConfig,
   DbClient,
+  Logger,
 } from '../types';
 
-export type { DatabaseConfig, DatabaseInstance, DatabasePool, DatabasePoolConfig, DbClient };
+export type {
+  DatabaseConfig,
+  DatabaseInstance,
+  DatabasePool,
+  DatabasePoolConfig,
+  DbClient,
+  Logger,
+};
 
 /**
  * Default pool configuration values
@@ -45,6 +53,9 @@ export const DEFAULT_POOL_CONFIG: Required<DatabasePoolConfig> = {
  * ```
  */
 export function createDatabase(config: DatabaseConfig): DatabaseInstance {
+  // Logger defaults to `console` so existing callers keep working unchanged.
+  const logger: Logger = config.logger ?? console;
+
   // Merge pool config with defaults
   const poolConfig = {
     ...DEFAULT_POOL_CONFIG,
@@ -78,7 +89,7 @@ export function createDatabase(config: DatabaseConfig): DatabaseInstance {
         client.release();
         return true;
       } catch (error) {
-        console.error('Database connection test failed:', error);
+        logger.error('Database connection test failed:', error);
         return false;
       }
     },

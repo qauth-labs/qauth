@@ -7,6 +7,21 @@ import type Redis from 'ioredis';
 export type CacheClient = Redis;
 
 /**
+ * Minimal logger interface (pino-compatible).
+ *
+ * Lets callers inject a structured logger (e.g. `fastify.log`) so cache
+ * messages flow through proper log levels and request-id correlation instead
+ * of `console`. The global `console` object satisfies this shape, so it is the
+ * default when no logger is provided.
+ */
+export interface Logger {
+  info(...args: unknown[]): void;
+  warn(...args: unknown[]): void;
+  error(...args: unknown[]): void;
+  debug(...args: unknown[]): void;
+}
+
+/**
  * Redis connection configuration interface
  */
 export interface RedisConfig {
@@ -28,4 +43,10 @@ export interface RedisConfig {
   commandTimeout?: number;
   /** Whether to use lazy connection (connect on first command) @default true */
   lazyConnect?: boolean;
+  /**
+   * Optional logger for connection diagnostics. Defaults to `console`.
+   * Inject `fastify.log` (or any pino-compatible logger) for structured,
+   * level-aware, request-correlated logging.
+   */
+  logger?: Logger;
 }
