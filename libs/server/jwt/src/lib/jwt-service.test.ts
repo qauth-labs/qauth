@@ -1,5 +1,5 @@
 import { JWTExpiredError, JWTInvalidError } from '@qauth-labs/shared-errors';
-import { jwtVerify } from 'jose';
+import { jwtVerify, SignJWT } from 'jose';
 import { describe, expect, it } from 'vitest';
 
 import { signAccessToken, signIdToken, verifyAccessToken } from './jwt-service';
@@ -289,6 +289,70 @@ describe('verifyAccessToken', () => {
     });
     expect(decoded.sub).toBe('user-iss-ok');
     expect(decoded.iss).toBe('https://auth.example.com');
+  });
+});
+
+describe('verifyAccessToken runtime claim-shape validation (F-10)', () => {
+  /**
+   * Mint a JWT directly via jose (bypassing signAccessToken) so we can forge an
+   * arbitrary — including malformed — claim set that is still correctly SIGNED.
+   * This models a token whose signature verifies but whose claim shape is wrong.
+   */
+  async function signRawClaims(
+    claims: Record<string, unknown>,
+    privateKey: Parameters<typeof signAccessToken>[1]
+  ): Promise<string> {
+    return new SignJWT(claims)
+      .setProtectedHeader({ alg: 'EdDSA' })
+      .setIssuedAt()
+      .setExpirationTime('900s')
+      .setIssuer('https://auth.example.com')
+      .setAudience('client-mal')
+      .sign(privateKey);
+  }
+
+  it('rejects a correctly-signed token whose sub is not a string', async () => {
+    const { privateKey, publicKey } = await generateEdDSAKeyPair();
+    // `sub` is numeric — jose verifies the signature, but the claim shape is
+    // invalid, so the previous `as string` cast would have silently mis-typed it.
+    const token = await signRawClaims({ sub: 12345, client_id: 'client-mal' }, privateKey);
+
+    await expect(verifyAccessToken(token, publicKey)).rejects.toThrow(JWTInvalidError);
+  });
+
+  it('rejects a correctly-signed token whose email is not a valid email', async () => {
+    const { privateKey, publicKey } = await generateEdDSAKeyPair();
+    const token = await signRawClaims(
+      { sub: 'user-mal', client_id: 'client-mal', email: 'not-an-email' },
+      privateKey
+    );
+
+    await expect(verifyAccessToken(token, publicKey)).rejects.toThrow(JWTInvalidError);
+  });
+
+  it('rejects a correctly-signed token whose email_verified is not a boolean', async () => {
+    const { privateKey, publicKey } = await generateEdDSAKeyPair();
+    const token = await signRawClaims(
+      { sub: 'user-mal', client_id: 'client-mal', email_verified: 'yes' },
+      privateKey
+    );
+
+    await expect(verifyAccessToken(token, publicKey)).rejects.toThrow(JWTInvalidError);
+  });
+
+  it('accepts a well-formed client_credentials token without email claims', async () => {
+    const { privateKey, publicKey } = await generateEdDSAKeyPair();
+    const token = await signAccessToken(
+      { sub: 'service-client', clientId: 'service-client' },
+      privateKey,
+      'https://auth.example.com',
+      900
+    );
+
+    const decoded = await verifyAccessToken(token, publicKey);
+    expect(decoded.sub).toBe('service-client');
+    expect(decoded.email).toBeUndefined();
+    expect(decoded.email_verified).toBeUndefined();
   });
 });
 

@@ -5,6 +5,7 @@ import { jwtVerify, SignJWT } from 'jose';
 
 import type { JWTPayload, SignAccessTokenPayload, SignIdTokenPayload } from '../types/jwt-service';
 import type { KeyLike } from '../types/key-management';
+import { accessTokenClaimsSchema } from './access-token-claims';
 
 /**
  * Sign an access token
@@ -184,35 +185,16 @@ export async function verifyAccessToken(
   publicKey: KeyLike,
   options: { audience?: string | string[]; issuer?: string } = {}
 ): Promise<JWTPayload> {
+  let payload: Awaited<ReturnType<typeof jwtVerify>>['payload'];
   try {
-    const { payload } = await jwtVerify(token, publicKey, {
+    ({ payload } = await jwtVerify(token, publicKey, {
       algorithms: ['EdDSA'],
       // RFC 9700 / mix-up defence: when the caller supplies the expected
       // issuer, jose asserts the `iss` claim matches and rejects otherwise.
       // The alg stays pinned to EdDSA so `none`/alg-confusion is impossible.
       ...(options.issuer !== undefined ? { issuer: options.issuer } : {}),
       ...(options.audience !== undefined ? { audience: options.audience } : {}),
-    });
-
-    return {
-      sub: payload.sub as string,
-      email: payload['email'] as string | undefined,
-      email_verified: payload['email_verified'] as boolean | undefined,
-      clientId: payload['client_id'] as string,
-      scope: payload['scope'] as string | undefined,
-      aud: payload.aud as string | string[] | undefined,
-      // RFC 8693 §4.1: surface any existing `act` chain so a subject token
-      // already carrying a delegation can be nested under the new actor.
-      act: payload['act'] as JWTPayload['act'],
-      iat: payload.iat as number | undefined,
-      exp: payload.exp as number | undefined,
-      iss: payload.iss as string | undefined,
-      // RFC 7009 revocation: surface the unique token id so the auth-server
-      // layer can denylist a specific access token. The lib stays pure — it
-      // never consults any revocation store itself.
-      jti: payload.jti as string | undefined,
-      token_use: payload['token_use'] as string | undefined,
-    };
+    }));
   } catch (error) {
     if (error instanceof Error) {
       // 'jose' errors have a `code` property, and `JWTExpired` is a specific error name.
@@ -230,4 +212,37 @@ export async function verifyAccessToken(
     // Fallback for unknown errors
     throw new JWTInvalidError('Invalid JWT token');
   }
+
+  // `jose` verifies the SIGNATURE and the registered temporal/issuer/audience
+  // claims only — it does not assert the SHAPE of application claims. Without
+  // this step a signed-but-malformed token (e.g. a numeric `sub` or a non-string
+  // `email`) would be blindly cast and silently mis-typed downstream. Validate
+  // the claim shape at runtime and reject anything that does not match the token
+  // claim model before returning typed claims. Runs OUTSIDE the verify try/catch
+  // so the malformed-claims error is not re-wrapped with the jose-error message.
+  const result = accessTokenClaimsSchema.safeParse(payload);
+  if (!result.success) {
+    throw new JWTInvalidError('Invalid JWT token: malformed claims');
+  }
+  const claims = result.data;
+
+  return {
+    sub: claims.sub,
+    email: claims.email,
+    email_verified: claims.email_verified,
+    clientId: claims.client_id as string,
+    scope: claims.scope,
+    aud: claims.aud,
+    // RFC 8693 §4.1: surface any existing `act` chain so a subject token already
+    // carrying a delegation can be nested under the new actor.
+    act: claims.act,
+    iat: claims.iat,
+    exp: claims.exp,
+    iss: claims.iss,
+    // RFC 7009 revocation: surface the unique token id so the auth-server layer
+    // can denylist a specific access token. The lib stays pure — it never
+    // consults any revocation store itself.
+    jti: claims.jti,
+    token_use: claims.token_use,
+  };
 }

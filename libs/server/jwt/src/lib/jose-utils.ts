@@ -29,18 +29,21 @@ export function decodeJwtUnsafe(token: string) {
   try {
     const decoded = joseDecodeJwt(token);
 
-    if (
-      typeof decoded.sub !== 'string' ||
-      typeof decoded['email'] !== 'string' ||
-      typeof decoded['email_verified'] !== 'boolean'
-    ) {
+    // `sub` is the only claim every token this server mints is guaranteed to
+    // carry. `email` / `email_verified` are deliberately OMITTED from
+    // client_credentials access tokens (no end-user) — see `signAccessToken` —
+    // so they are treated as optional here and surfaced only when present and
+    // well-typed. Requiring them would make this util unable to decode a valid
+    // client_credentials token.
+    if (typeof decoded.sub !== 'string') {
       throw new JWTInvalidError('Invalid JWT payload claims');
     }
 
     return {
       sub: decoded.sub,
-      email: decoded['email'],
-      email_verified: decoded['email_verified'],
+      email: typeof decoded['email'] === 'string' ? decoded['email'] : undefined,
+      email_verified:
+        typeof decoded['email_verified'] === 'boolean' ? decoded['email_verified'] : undefined,
       clientId: typeof decoded['client_id'] === 'string' ? decoded['client_id'] : 'unknown-client',
       iat: decoded.iat,
       exp: decoded.exp,
