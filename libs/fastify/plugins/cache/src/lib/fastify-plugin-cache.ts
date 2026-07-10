@@ -42,17 +42,19 @@ export const CACHE_PLUGIN_NAME = packageJson.name;
  */
 export const cachePlugin = fp<CachePluginOptions>(
   async (fastify: FastifyInstance, options: CachePluginOptions) => {
-    // Create Redis instance using factory
-    const redis = createRedisConnection(options.config);
+    // Create Redis instance using factory. Inject the Fastify logger so cache
+    // diagnostics flow through pino (levels + request-id correlation) instead
+    // of bare `console`.
+    const redis = createRedisConnection({ ...options.config, logger: fastify.log });
 
-    // Create session utilities
-    const sessionUtils = createSessionUtils(redis);
+    // Create session utilities (same injected logger for validation warnings)
+    const sessionUtils = createSessionUtils(redis, fastify.log);
 
     fastify.decorate('redis', redis);
     fastify.decorate('sessionUtils', sessionUtils);
 
     fastify.addHook('onReady', async () => {
-      const isConnected = await testRedisConnection(redis);
+      const isConnected = await testRedisConnection(redis, fastify.log);
       if (!isConnected) {
         fastify.log.warn('Redis connection test failed on ready');
       } else {

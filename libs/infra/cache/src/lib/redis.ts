@@ -1,8 +1,8 @@
 import Redis, { RedisOptions } from 'ioredis';
 
-import type { CacheClient, RedisConfig } from '../types';
+import type { CacheClient, Logger, RedisConfig } from '../types';
 
-export type { CacheClient, RedisConfig };
+export type { CacheClient, Logger, RedisConfig };
 
 /**
  * Default Redis configuration values
@@ -53,6 +53,9 @@ export function createRedisConnection(config: RedisConfig): CacheClient {
     ...config,
   };
 
+  // Logger defaults to `console` so existing callers keep working unchanged.
+  const logger: Logger = mergedConfig.logger ?? console;
+
   // Build ioredis options
   const redisOptions: RedisOptions = {};
 
@@ -87,27 +90,27 @@ export function createRedisConnection(config: RedisConfig): CacheClient {
 
   // Connection event handlers for logging
   redis.on('connect', () => {
-    console.log('Redis: Connected');
+    logger.info('Redis: Connected');
   });
 
   redis.on('ready', () => {
-    console.log('Redis: Ready to accept commands');
+    logger.info('Redis: Ready to accept commands');
   });
 
   redis.on('error', (error) => {
-    console.error('Redis: Connection error:', error);
+    logger.error('Redis: Connection error:', error);
   });
 
   redis.on('close', () => {
-    console.log('Redis: Connection closed');
+    logger.info('Redis: Connection closed');
   });
 
   redis.on('reconnecting', () => {
-    console.log('Redis: Reconnecting...');
+    logger.info('Redis: Reconnecting...');
   });
 
   redis.on('end', () => {
-    console.log('Redis: Connection ended');
+    logger.info('Redis: Connection ended');
   });
 
   return redis;
@@ -117,9 +120,13 @@ export function createRedisConnection(config: RedisConfig): CacheClient {
  * Test Redis connection
  *
  * @param redis - Redis client instance to test
+ * @param logger - Optional logger for diagnostics (defaults to `console`)
  * @returns true if connection is successful, false otherwise
  */
-export async function testRedisConnection(redis: CacheClient): Promise<boolean> {
+export async function testRedisConnection(
+  redis: CacheClient,
+  logger: Logger = console
+): Promise<boolean> {
   try {
     // Connect if not already connected (lazyConnect: true)
     if (redis.status === 'wait') {
@@ -128,7 +135,7 @@ export async function testRedisConnection(redis: CacheClient): Promise<boolean> 
     await redis.ping();
     return true;
   } catch (error) {
-    console.error('Redis connection test failed:', error);
+    logger.error('Redis connection test failed:', error);
     return false;
   }
 }
