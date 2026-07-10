@@ -4,6 +4,7 @@
  */
 export class BadRequestError extends Error {
   readonly statusCode = 400;
+  readonly code = 'BAD_REQUEST';
 
   constructor(message: string) {
     super(message);

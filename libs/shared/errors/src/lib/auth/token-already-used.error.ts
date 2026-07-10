@@ -3,6 +3,7 @@
  */
 export class TokenAlreadyUsedError extends Error {
   readonly statusCode = 409;
+  readonly code = 'TOKEN_ALREADY_USED';
 
   constructor(message = 'Token has already been used') {
     super(message);

@@ -4,6 +4,7 @@
  */
 export class TooManyRequestsError extends Error {
   readonly statusCode = 429;
+  readonly code = 'TOO_MANY_REQUESTS';
 
   constructor(message = 'Too many requests') {
     super(message);
