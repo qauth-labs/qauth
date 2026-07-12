@@ -36,6 +36,7 @@
         "libs/shared/testing/*",
         "libs/server/jwt/*",
         "libs/server/pkce/*",
+        "libs/server/federation/*",
         "libs/fastify/plugins/pkce/*"
       ]
     },
@@ -57,6 +58,7 @@
         "libs/shared/testing/*",
         "libs/server/jwt/*",
         "libs/server/pkce/*",
+        "libs/server/federation/*",
         "libs/fastify/plugins/pkce/*"
       ],
       "options": {
