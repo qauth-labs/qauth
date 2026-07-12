@@ -100,17 +100,16 @@ Table "user_credentials" {
   "id" uuid [pk, default: `uuidv7()`]
   "user_id" uuid [not null, ref: > users.id]
   "realm_id" uuid [not null, ref: > realms.id]
-  "provider_type" varchar(50) [not null, note: "'password' | 'wallet' | 'oidc_google' | 'oidc_github' | 'did'"]
+  "provider_type" text [not null, note: "'password' | 'wallet' | 'oidc_*' | 'did' — plain text (not enum) so the open-ended oidc_* family needs no schema migration"]
   "external_sub" text [not null, note: "'password': normalized email | 'wallet': DID or issuer subject | 'oidc_*': upstream sub claim"]
-  "credential_data" jsonb [not null, default: `'{}'::jsonb`, note: "'password': { password_hash, email_verified, email_verified_at? } | 'wallet': { wallet_provider, assurance_level, vc_types, last_vp_verified_at? } | 'oidc_*': { iss, email?, email_verified? }"]
+  "credential_data" jsonb [not null, default: `'{}'::jsonb`, note: "'password': { password_hash, email_verified } | 'wallet': wallet/VC metadata | 'oidc_*': upstream claims. CHECK jsonb_typeof = 'object'"]
   "created_at" bigint [not null, default: `EXTRACT(EPOCH FROM NOW())::bigint * 1000`]
-  "last_used_at" bigint
+  "updated_at" bigint [not null, default: `EXTRACT(EPOCH FROM NOW())::bigint * 1000`]
 
   Indexes {
     (realm_id, provider_type, external_sub) [unique, name: "idx_user_credentials_realm_provider_sub_unique"]
     user_id [name: "idx_user_credentials_user_id"]
     realm_id [name: "idx_user_credentials_realm_id"]
-    provider_type [name: "idx_user_credentials_provider_type"]
   }
 }
 
@@ -122,18 +121,16 @@ Table "user_credentials" {
 Table "user_attributes" {
   "id" uuid [pk, default: `uuidv7()`]
   "user_id" uuid [not null, ref: > users.id]
-  "source" varchar(50) [not null, note: "'self_reported' (user-entered) | 'wallet' (from Verifiable Credential) | 'oidc_google' | 'oidc_github'"]
-  "attr_key" varchar(100) [not null, note: "Attribute name, e.g. 'email', 'name', 'birthdate', 'phone_number'"]
+  "source" text [not null, note: "'self_reported' | 'wallet' | 'oidc_google' — plain text (not enum). Trust order wallet > oidc_* > self_reported is enforced in app code (#229), not the DB"]
+  "attr_key" text [not null, note: "Attribute name, e.g. 'email', 'name', 'birthdate', 'phone_number'"]
   "attr_value" text [not null]
   "verified" boolean [not null, default: false]
-  "verified_at" bigint
   "expires_at" bigint [note: "For VC-derived attributes — null for self-reported attributes"]
   "created_at" bigint [not null, default: `EXTRACT(EPOCH FROM NOW())::bigint * 1000`]
+  "updated_at" bigint [not null, default: `EXTRACT(EPOCH FROM NOW())::bigint * 1000`]
 
   Indexes {
-    (user_id, source, attr_key) [unique, name: "idx_user_attributes_user_source_key_unique"]
     user_id [name: "idx_user_attributes_user_id"]
-    attr_key [name: "idx_user_attributes_attr_key"]
   }
 }
 
