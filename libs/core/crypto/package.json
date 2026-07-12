@@ -1,13 +1,10 @@
 {
-  "name": "@qauth-labs/server-jwt",
+  "name": "@qauth-labs/core-crypto",
   "version": "0.0.0",
   "private": true,
   "main": "src/index.ts",
   "dependencies": {
-    "@qauth-labs/core-crypto": "workspace:*",
-    "@qauth-labs/shared-errors": "workspace:*",
-    "jose": "catalog:",
-    "zod": "catalog:"
+    "jose": "catalog:"
   },
   "devDependencies": {
     "@vitest/coverage-v8": "catalog:",

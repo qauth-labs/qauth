@@ -36,7 +36,8 @@
         "libs/shared/testing/*",
         "libs/server/jwt/*",
         "libs/server/pkce/*",
-        "libs/fastify/plugins/pkce/*"
+        "libs/fastify/plugins/pkce/*",
+        "libs/core/crypto/*"
       ]
     },
     {
@@ -57,7 +58,8 @@
         "libs/shared/testing/*",
         "libs/server/jwt/*",
         "libs/server/pkce/*",
-        "libs/fastify/plugins/pkce/*"
+        "libs/fastify/plugins/pkce/*",
+        "libs/core/crypto/*"
       ],
       "options": {
         "typecheck": {
