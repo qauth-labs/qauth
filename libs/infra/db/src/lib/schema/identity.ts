@@ -109,6 +109,14 @@ export const userCredentials = pgTable(
  * reason as `user_credentials.provider_type`. The claim-resolution trust order
  * (`wallet > oidc_* > self_reported`) is enforced in application code (issue
  * #229), NOT as a DB constraint.
+ *
+ * A unique constraint on `(user_id, source, attr_key)` IS enforced at the DB
+ * level: one value per attribute per source per user (e.g. at most one
+ * `source='wallet', attr_key='email'` row). This makes the write path an
+ * upsert (`ON CONFLICT (user_id, source, attr_key) DO UPDATE`), not a bare
+ * insert, once #226/#229 start writing here. Multiple *sources* can still
+ * each hold their own value for the same `attr_key` — trust-order resolution
+ * across those rows is the application-code concern noted above.
  */
 export const userAttributes = pgTable(
   'user_attributes',
@@ -135,7 +143,10 @@ export const userAttributes = pgTable(
     createdAt: bigint('created_at', { mode: 'number' }).notNull().default(EPOCH_MS_NOW),
     updatedAt: bigint('updated_at', { mode: 'number' }).notNull().default(EPOCH_MS_NOW),
   },
-  (t) => [index('idx_user_attributes_user_id').on(t.userId)]
+  (t) => [
+    uniqueIndex('idx_user_attributes_user_source_key_unique').on(t.userId, t.source, t.attrKey),
+    index('idx_user_attributes_user_id').on(t.userId),
+  ]
 );
 
 export const userCredentialsRelations = relations(userCredentials, ({ one }) => ({

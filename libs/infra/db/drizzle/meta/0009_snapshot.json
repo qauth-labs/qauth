@@ -1,5 +1,5 @@
 {
-  "id": "9086b77a-1068-4d47-b17c-364b30dfc810",
+  "id": "964b35de-113e-4724-a056-91ae85103002",
   "prevId": "19f028e4-7d8c-4b8c-94e4-790bf0cd3438",
   "version": "7",
   "dialect": "postgresql",
@@ -1382,6 +1382,33 @@
         }
       },
       "indexes": {
+        "idx_user_attributes_user_source_key_unique": {
+          "name": "idx_user_attributes_user_source_key_unique",
+          "columns": [
+            {
+              "expression": "user_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "source",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "attr_key",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
         "idx_user_attributes_user_id": {
           "name": "idx_user_attributes_user_id",
           "columns": [

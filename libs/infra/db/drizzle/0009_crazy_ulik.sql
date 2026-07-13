@@ -25,6 +25,7 @@ CREATE TABLE "user_credentials" (
 ALTER TABLE "user_attributes" ADD CONSTRAINT "user_attributes_user_id_users_id_fk" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "user_credentials" ADD CONSTRAINT "user_credentials_user_id_users_id_fk" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "user_credentials" ADD CONSTRAINT "user_credentials_realm_id_realms_id_fk" FOREIGN KEY ("realm_id") REFERENCES "public"."realms"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+CREATE UNIQUE INDEX "idx_user_attributes_user_source_key_unique" ON "user_attributes" USING btree ("user_id","source","attr_key");--> statement-breakpoint
 CREATE INDEX "idx_user_attributes_user_id" ON "user_attributes" USING btree ("user_id");--> statement-breakpoint
 CREATE UNIQUE INDEX "idx_user_credentials_realm_provider_sub_unique" ON "user_credentials" USING btree ("realm_id","provider_type","external_sub");--> statement-breakpoint
 CREATE INDEX "idx_user_credentials_user_id" ON "user_credentials" USING btree ("user_id");--> statement-breakpoint

@@ -130,6 +130,7 @@ Table "user_attributes" {
   "updated_at" bigint [not null, default: `EXTRACT(EPOCH FROM NOW())::bigint * 1000`]
 
   Indexes {
+    (user_id, source, attr_key) [unique, name: "idx_user_attributes_user_source_key_unique"]
     user_id [name: "idx_user_attributes_user_id"]
   }
 }
