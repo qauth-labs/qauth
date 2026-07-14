@@ -24,11 +24,18 @@
 
 # QAuth Project Guide
 
-QAuth is an open-source **federated identity platform**: a TypeScript/Fastify
-OAuth 2.1 authorization server. Upstream identity sources (email/password, OIDC
-providers, and — later — Verifiable Credential wallets) plug in through the
-`CredentialProvider` interface; downstream apps receive standard OAuth 2.1 access
-tokens and OIDC ID tokens.
+QAuth is an open-source **OAuth 2.1 / OIDC identity server** (TypeScript/Fastify).
+Its **near-term identity is an authorization server for MCP servers and AI agents**
+(see [ADR-007](./docs/adr/007-mcp-first-positioning.md)) — the MCP/agent-native
+authorization layer (agent client type, RFC 8693 on-behalf-of delegation, scope
+modes, step-up), the T3 production-hardening bundle, and the T5 environment-aware
+posture ([ADR-008](./docs/adr/008-environment-aware-authorization.md)) all ship
+today. By design it is also a **federation hub**: upstream identity sources
+(email/password, OIDC providers, and — long-term — Verifiable Credential wallets)
+plug in through the `CredentialProvider` interface, and downstream apps receive
+standard OAuth 2.1 access tokens and OIDC ID tokens. The crypto layer is
+**crypto-agile** for a post-quantum transition. Wallet federation and post-quantum
+signing are the resequenced long-term platform (track T4).
 
 ## Architecture Principles
 
