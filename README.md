@@ -23,6 +23,10 @@
 
 > **Status:** Core OAuth 2.1 / OIDC **and** the MCP / agent-native authorization layer work end-to-end — discovery, dynamic client registration, resource-indicator audience binding, consent, and on-behalf-of agent delegation (the self-hostable OAuth 2.1 authorization server for MCP servers and AI agents; see [ADR-007](./docs/adr/007-mcp-first-positioning.md)). Wallet federation and post-quantum signing remain the long-term platform. See [Current Status](#-current-status-june-2026). **Production hardening (T3) is complete** — security headers, CSRF, secure cookies, OIDC ID token/nonce/claims, and observability all ship; deploy with the documented production configuration. The environment-aware authorization posture (T5, [ADR-008](./docs/adr/008-environment-aware-authorization.md)) is **also complete** — `environment` selects a fail-safe policy profile, and the near-term roadmap is finished. Remaining work is the long-term platform (wallet federation + post-quantum signing, T4).
 
+## ⚠️ AI-Assisted Development & Security Notice
+
+> This project is developed **with extensive AI assistance**. Every change goes through human review before it is merged; even so, at this stage we cannot yet promise a high level of security assurance — **use it with care** and run your own evaluation before trusting it in sensitive or production deployments. Our long-term goal is enterprise-grade security with the lightest possible processing footprint: to that end, we are rewriting QAuth **module by module in Rust**.
+
 ## 🎯 How to Use QAuth
 
 ### 1. 🏠 Self-hosted (today)
