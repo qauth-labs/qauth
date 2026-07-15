@@ -245,3 +245,55 @@ describe('toCimdClientInsert — agent classification (ADR-007 §2)', () => {
     expect(insert.isAgent).toBe(true);
   });
 });
+
+describe('toCimdClientInsert — grant/response type tolerance (RFC 7591 §2)', () => {
+  const REALM = 'realm-1';
+  const SENTINEL = '$argon2id$v=19$m=65536,t=3,p=4$c2FsdA$ZGlnZXN0';
+
+  it('accepts unknown grant_types and keeps only the supported ones (claude.ai shape)', () => {
+    // Real-world shape: claude.ai's metadata document declares jwt-bearer
+    // alongside the grants QAuth implements. The document must validate and
+    // the unknown grant must be dropped, not rejected.
+    const doc = cimdDocumentSchema.parse(
+      validDoc({
+        grant_types: [
+          'authorization_code',
+          'refresh_token',
+          'urn:ietf:params:oauth:grant-type:jwt-bearer',
+        ],
+        response_types: ['code'],
+        token_endpoint_auth_method: 'none',
+      })
+    );
+    const insert = toCimdClientInsert(REALM, CLIENT_ID, doc, SENTINEL);
+    expect(insert.grantTypes).toEqual(['authorization_code', 'refresh_token']);
+    expect(insert.responseTypes).toEqual(['code']);
+  });
+
+  it('rejects a document whose declared grant_types contain nothing QAuth supports', () => {
+    const doc = cimdDocumentSchema.parse(
+      validDoc({ grant_types: ['urn:ietf:params:oauth:grant-type:jwt-bearer'] })
+    );
+    expect(() => toCimdClientInsert(REALM, CLIENT_ID, doc, SENTINEL)).toThrow(InvalidClientError);
+  });
+
+  it('rejects a document whose declared response_types contain nothing QAuth supports', () => {
+    const doc = cimdDocumentSchema.parse(validDoc({ response_types: ['id_token'] }));
+    expect(() => toCimdClientInsert(REALM, CLIENT_ID, doc, SENTINEL)).toThrow(InvalidClientError);
+  });
+
+  it('falls back to the default grants when the document declares none', () => {
+    const doc = cimdDocumentSchema.parse(validDoc());
+    const insert = toCimdClientInsert(REALM, CLIENT_ID, doc, SENTINEL);
+    expect(insert.grantTypes).toEqual(['authorization_code', 'refresh_token']);
+    expect(insert.responseTypes).toEqual(['code']);
+  });
+
+  it('accepts an unrecognised token_endpoint_auth_method (CIMD clients are forced to none)', () => {
+    const doc = cimdDocumentSchema.parse(
+      validDoc({ token_endpoint_auth_method: 'private_key_jwt' })
+    );
+    const insert = toCimdClientInsert(REALM, CLIENT_ID, doc, SENTINEL);
+    expect(insert.tokenEndpointAuthMethod).toBe('none');
+  });
+});
