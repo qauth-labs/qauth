@@ -10,10 +10,16 @@
 <br /><br />
 
 <div align="center">
-  <h2>Open-source federated identity platform.<br />OAuth 2.1 · OIDC 1.0 · eIDAS 2.0 bridge · Post-quantum ready.</h2>
+  <h2>Open-source identity for the agent era.<br />OAuth 2.1 · OIDC 1.0 · MCP &amp; AI-agent authorization · federation-ready · post-quantum ready.</h2>
 </div>
 
-**QAuth** is an open-source identity server, designed from day one as a federation hub. Today it ships OAuth 2.1 / OIDC 1.0 with email/password authentication, both `authorization_code` (PKCE) and `client_credentials` grants, and per-client audience (`aud`) on issued JWTs. The architecture — documented across [ADR-003](./docs/adr/003-credential-provider-interface.md), [ADR-004](./docs/adr/004-wallet-agnostic-federation.md), [ADR-005](./docs/adr/005-pqc-hybrid-signing.md), and [ADR-006](./docs/adr/006-oauth-grants-and-audience.md) — is built so that wallet-based upstreams (EUDI Wallets via OID4VC / SIOPv2), external OIDC providers, and post-quantum signing algorithms slot in behind stable interfaces without changes to downstream applications. Applications integrate against QAuth's OIDC layer once.
+**QAuth** is an open-source OAuth 2.1 / OIDC 1.0 identity server built for three horizons at once:
+
+- **Agent era (today)** — a working authorization server for **MCP servers and AI agents**: email/password auth, `authorization_code` (PKCE) and `client_credentials` grants, per-client audience (`aud`) binding, and agent-native, on-behalf-of delegation with scope modes and step-up ([ADR-007](./docs/adr/007-mcp-first-positioning.md)).
+- **Federation (by design)** — a federation hub from day one: wallet-based upstreams (EUDI Wallets via OID4VC / SIOPv2) and external OIDC providers slot in behind the `CredentialProvider` interface ([ADR-003](./docs/adr/003-credential-provider-interface.md), [ADR-004](./docs/adr/004-wallet-agnostic-federation.md)), so downstream applications integrate against QAuth's OIDC layer once and never change.
+- **Post-quantum (for the long haul)** — crypto-agile by construction: JWTs sign behind algorithm-agnostic interfaces today, with a clear hybrid ML-DSA-65 + Ed25519 transition path ([ADR-005](./docs/adr/005-pqc-hybrid-signing.md), [ADR-006](./docs/adr/006-oauth-grants-and-audience.md)) that never touches application business logic.
+
+The near-term focus is MCP / AI-agent authorization; wallet federation and post-quantum signing are the resequenced long-term platform. One server, one integration, across all three.
 
 <div align="center">
   <h3>🇪🇺 Made in Europe · 🇪🇪 Made in Estonia · 🇹🇷 Made in Türkiye</h3>
@@ -127,8 +133,9 @@ ML-DSA-65 signatures are 3,309 bytes vs. Ed25519's 64 bytes. QAuth's architectur
 
 ## 🎯 Vision
 
-A federated identity hub for the next generation of the internet:
+An identity hub for the next generation of the internet — humans, agents, and wallets on one server:
 
+- **Agent-native** — first-class authorization for MCP servers and AI agents: an agent client type, RFC 8693 on-behalf-of delegation, scope modes, and step-up, so agents act for users under least privilege and full audit
 - **Federation-first** — a single `federation-core` layer will normalise upstream identity (Verifiable Credential wallets, email/password, external OIDC providers, W3C DIDs) into a common internal model; downstream applications see standard OIDC tokens regardless of source
 - **Wallet-agnostic** — any standards-compliant VC wallet (OID4VC / SIOPv2) will be a valid upstream; EUDI Wallet under eIDAS 2.0 is one concrete deployment target, not the only one
 - **Post-quantum ready** — crypto-agile architecture with a clear ML-DSA-65 hybrid transition path, designed so algorithm upgrades never touch application business logic
@@ -241,7 +248,7 @@ Legend: ✅ implemented · 🚧 in progress · 📋 planned
 qauth/
 ├── apps/
 │   ├── auth-server/          ✅ Fastify OAuth 2.1 / OIDC 1.0 server
-│   ├── developer-portal/     🚧 skeleton scaffolded (PR #137); Phase 2
+│   ├── developer-portal/     ✅ TanStack Start portal — auth, client CRUD, API keys
 │   ├── migration-runner/     ✅ Drizzle migrations runner
 │   ├── auth-ui/              📋 planned — brandable login UI, Phase 2/4
 │   └── admin-panel/          📋 planned — Phase 6+
@@ -309,30 +316,31 @@ qauth/
 - PostgreSQL 18 + Redis 7
 - Docker deployment with automated migrations and health checks
 - Structured audit logging (basic)
-- Scriptable machine-client provisioning (`nx run db:db:seed-oauth-clients`) — JSON-manifest-driven, idempotent, argon2id-hashed secrets; useful for bootstrapping `client_credentials` clients at deploy time before the developer portal ships
+- Scriptable machine-client provisioning (`nx run db:db:seed-oauth-clients`) — JSON-manifest-driven, idempotent, argon2id-hashed secrets; useful for bootstrapping `client_credentials` clients at deploy time, independently of the developer portal
 
 **Developer tools:**
 
 - REST API (OAuth 2.1 / OIDC endpoints) ✅
 - OpenAPI / Swagger UI at `/docs` ✅
-- Self-service developer portal 🚧 (Phase 2)
+- Self-service developer portal ✅ (auth, client CRUD, API keys)
 - TypeScript / React / Node.js SDKs 📋 (Phase 3)
 
-### Post-MVP
+### Delivered post-MVP (near-term tracks)
 
-**Phase 2 — Developer Portal:**
+**Developer Portal (Phase 2 — shipped):**
 
-- Self-service OAuth client registration and management
-- API key management
-- Federation provider configuration UI
+- Self-service OAuth client registration and management ✅ (`/api/clients` + portal UI)
+- API key management ✅ (environment-gated developer API keys, ADR-008)
+- Federation provider configuration UI 📋 (deferred with wallet federation, T4)
 
-**Phase 3 — Production Hardening:**
+**Production Hardening (Phase 3 / T3 — shipped):**
 
-- OIDC 1.0 conformance (OpenID Foundation test suite)
-- OIDC discovery + JWKS endpoint, ID tokens, nonce, scopes
-- Rate limiting (Redis token bucket, per-IP and per-email)
-- Security headers (Helmet: HSTS, CSP, X-Frame-Options)
-- Prometheus metrics, Kubernetes manifests
+- OIDC discovery + JWKS endpoint, ID tokens, nonce, scopes ✅
+- Rate limiting (Redis token bucket) ✅ (with the T5 environment rate-limit tier)
+- Security headers (Helmet: HSTS, CSP, X-Frame-Options) ✅
+- Prometheus metrics ✅
+- OIDC 1.0 formal conformance (OpenID Foundation certification suite) 📋
+- Kubernetes manifests 📋
 
 **Phase 4 — Wallet Federation Bridge (OID4VC / SIOPv2):**
 
@@ -548,22 +556,22 @@ docker compose up -d
 - [x] PostgreSQL + Redis setup
 - [x] Docker deployment with automated migrations
 - [x] OpenAPI / Swagger UI docs
-- [ ] OIDC 1.0 ID tokens, nonce, scope/claims handling
-- [ ] Structured logging (pino) + Prometheus metrics
-- [ ] Rate limiting (Redis token bucket)
+- [x] OIDC 1.0 ID tokens, nonce, scope/claims handling (T3)
+- [x] Structured logging (pino) + Prometheus metrics (T3)
+- [x] Rate limiting (Redis token bucket) (T3 + T5 environment tier)
 
-### Phase 2: Developer Portal (registration/login/verify shipped; client management → track T2)
+### Phase 2: Developer Portal (registration/login/verify + client management + API keys shipped)
 
-- [ ] Developer registration / login
-- [ ] Self-service OAuth client management (CRUD)
-- [ ] API key management
-- [ ] Federation provider configuration UI
+- [x] Developer registration / login
+- [x] Self-service OAuth client management (CRUD — `/api/clients` + portal UI)
+- [x] API key management (environment-gated developer API keys, ADR-008)
+- [ ] Federation provider configuration UI (deferred with wallet federation, T4)
 
 ### Phase 3: Production Hardening & SDKs
 
-- [ ] OIDC 1.0 conformance (OpenID Foundation test suite)
-- [ ] OIDC discovery (`/.well-known/openid-configuration`) + JWKS endpoint
-- [ ] CSRF protection, security headers (Helmet)
+- [x] OIDC discovery (`/.well-known/openid-configuration`) + JWKS endpoint (T3)
+- [x] CSRF protection, security headers (Helmet) (T3)
+- [ ] OIDC 1.0 formal conformance (OpenID Foundation certification suite)
 - [ ] Kubernetes manifests
 - [ ] JavaScript / React / Node.js SDKs (`@qauth-labs/core`, `@qauth-labs/react`, `@qauth-labs/node`)
 
@@ -706,7 +714,11 @@ function Dashboard() {
 
 - [MCP Quickstart](./docs/mcp-quickstart.md) — run QAuth + a `mcp-guard`-protected MCP server and complete the full OAuth handshake end-to-end
 - [OAuth 2.1 Flow](./docs/oauth-flow.md) — every endpoint with copy-paste `curl` (PKCE, authorize, token, refresh, client_credentials, introspection)
+- [Agent Authorization](./docs/agent-authorization.md) — the agent client type, RFC 8693 on-behalf-of delegation, scope modes, and step-up
 - [API Reference](./docs/api-reference.md) — hand-written contract for `/auth/*`, `/oauth/*`, discovery, and `/api/clients`
+- [Environment-Aware Authorization](./docs/environment-authorization.md) — the `environment` policy profile (dev/staging/prod) and environment-gated API keys
+- [Browser Security](./docs/browser-security.md) — T3 hardening: security headers, CSRF, secure cookies, XSS-safe output
+- [Observability](./docs/observability.md) — structured logging, `/metrics`, request-id, failed-login lockout
 - [Code Examples](./docs/code-examples.md) — copy-paste Node/TS and browser (PKCE) clients
 - [Docker Development Guide](./docs/docker.md) — local development with Docker
 
