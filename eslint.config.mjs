@@ -40,6 +40,16 @@ export default [
               sourceTag: 'scope:shared',
               onlyDependOnLibsWithTags: [],
             },
+            // Core layer (foundational primitives - the true bottom layer)
+            // Core libraries provide low-level, framework-agnostic primitives
+            // (crypto, encoding). Like the shared layer, they depend on nothing
+            // internal (leaf) and are consumable by every layer above (infra,
+            // server, fastify, app). Kept a strict leaf on purpose: a crypto
+            // primitive must not reach up into domain/error libs.
+            {
+              sourceTag: 'scope:core',
+              onlyDependOnLibsWithTags: [],
+            },
             // UI layer
             // UI libraries contain React components and utilities
             // They can only depend on external npm packages, not other workspace libs
@@ -50,6 +60,7 @@ export default [
             {
               sourceTag: 'type:testing',
               onlyDependOnLibsWithTags: [
+                'scope:core',
                 'scope:shared',
                 'scope:ui',
                 'scope:infra',
@@ -63,7 +74,7 @@ export default [
             // Cannot depend on: server, fastify, app layers
             {
               sourceTag: 'scope:infra',
-              onlyDependOnLibsWithTags: ['scope:infra', 'scope:shared'],
+              onlyDependOnLibsWithTags: ['scope:core', 'scope:infra', 'scope:shared'],
             },
             // Server utilities layer
             // Server libraries contain business logic utilities (password, config, etc.)
@@ -71,7 +82,7 @@ export default [
             // Cannot depend on: infra, fastify, app layers
             {
               sourceTag: 'scope:server',
-              onlyDependOnLibsWithTags: ['scope:server', 'scope:shared'],
+              onlyDependOnLibsWithTags: ['scope:core', 'scope:server', 'scope:shared'],
             },
             // Fastify plugins layer
             // Fastify plugins wrap infrastructure and server utilities for Fastify
@@ -80,6 +91,7 @@ export default [
             {
               sourceTag: 'scope:fastify',
               onlyDependOnLibsWithTags: [
+                'scope:core',
                 'scope:fastify',
                 'scope:server',
                 'scope:infra',
@@ -92,6 +104,7 @@ export default [
             {
               sourceTag: 'scope:app',
               onlyDependOnLibsWithTags: [
+                'scope:core',
                 'scope:fastify',
                 'scope:shared',
                 'scope:server-config',
