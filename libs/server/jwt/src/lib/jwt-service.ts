@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 
+import { CryptoVerificationError, sign, verify } from '@qauth-labs/core-crypto';
 import { JWTExpiredError, JWTInvalidError } from '@qauth-labs/shared-errors';
-import { jwtVerify, SignJWT } from 'jose';
 
 import type { JWTPayload, SignAccessTokenPayload, SignIdTokenPayload } from '../types/jwt-service';
 import type { KeyLike } from '../types/key-management';
@@ -65,18 +65,13 @@ export async function signAccessToken(
     claims['act'] = payload.act;
   }
 
-  let jwt = new SignJWT(claims)
-    .setProtectedHeader({ alg: 'EdDSA' })
-    .setIssuedAt()
-    .setExpirationTime(`${expiresIn}s`)
-    .setIssuer(issuer);
-
   // `aud` claim: array → multi-audience, string → single, otherwise fall back
   // to the client_id (OAuth 2.1 RFC 8707 light-mode default).
   const audience = payload.aud ?? payload.clientId;
-  jwt = jwt.setAudience(audience);
 
-  return jwt.sign(privateKey);
+  // The claims shaping above is business logic and stays here; only the JWS
+  // signing crosses into the algorithm-agnostic crypto abstraction (ADR-005).
+  return sign(claims, privateKey, 'EdDSA', { issuer, expiresIn, audience });
 }
 
 /**
@@ -144,13 +139,11 @@ export async function signIdToken(
     claims['nonce'] = payload.nonce;
   }
 
-  return new SignJWT(claims)
-    .setProtectedHeader({ alg: 'EdDSA' })
-    .setIssuedAt()
-    .setExpirationTime(`${expiresIn}s`)
-    .setIssuer(issuer)
-    .setAudience(payload.audience)
-    .sign(privateKey);
+  return sign(claims, privateKey, 'EdDSA', {
+    issuer,
+    expiresIn,
+    audience: payload.audience,
+  });
 }
 
 /**
@@ -185,27 +178,30 @@ export async function verifyAccessToken(
   publicKey: KeyLike,
   options: { audience?: string | string[]; issuer?: string } = {}
 ): Promise<JWTPayload> {
-  let payload: Awaited<ReturnType<typeof jwtVerify>>['payload'];
+  let payload: Record<string, unknown>;
   try {
-    ({ payload } = await jwtVerify(token, publicKey, {
+    payload = await verify(token, publicKey, {
       algorithms: ['EdDSA'],
       // RFC 9700 / mix-up defence: when the caller supplies the expected
-      // issuer, jose asserts the `iss` claim matches and rejects otherwise.
-      // The alg stays pinned to EdDSA so `none`/alg-confusion is impossible.
+      // issuer, the abstraction asserts the `iss` claim matches and rejects
+      // otherwise. The alg stays pinned to EdDSA so `none`/alg-confusion is
+      // impossible.
       ...(options.issuer !== undefined ? { issuer: options.issuer } : {}),
       ...(options.audience !== undefined ? { audience: options.audience } : {}),
-    }));
+    });
   } catch (error) {
-    if (error instanceof Error) {
-      // 'jose' errors have a `code` property, and `JWTExpired` is a specific error name.
-      if (error.name === 'JWTExpired') {
+    // The crypto abstraction normalizes the backend (jose) failure shape into a
+    // backend-neutral `CryptoVerificationError`. Mapping that onto QAuth's JWT
+    // domain errors is a server-layer concern, so it stays here — the crypto lib
+    // never depends on `@qauth-labs/shared-errors`.
+    if (error instanceof CryptoVerificationError) {
+      if (error.reason === 'expired') {
         throw new JWTExpiredError('JWT token has expired');
       }
-
-      // Any other error from `jose` can be considered an invalid token error.
-      // We can identify them by checking for the `code` property, which is a pattern in `jose`.
-      if ('code' in error && typeof error.code === 'string') {
-        throw new JWTInvalidError(`Invalid JWT token: ${error.message}`);
+      // A backend-supplied diagnostic is surfaced verbatim, preserving the
+      // previous `Invalid JWT token: <reason>` message for invalid tokens.
+      if (error.detail !== undefined) {
+        throw new JWTInvalidError(`Invalid JWT token: ${error.detail}`);
       }
     }
 

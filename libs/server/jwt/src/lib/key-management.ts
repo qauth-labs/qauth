@@ -1,4 +1,8 @@
-import { generateKeyPair, importPKCS8, importSPKI } from 'jose';
+import {
+  generateSigningKeyPair,
+  importPrivateSigningKey,
+  importPublicSigningKey,
+} from '@qauth-labs/core-crypto';
 
 import type { KeyLike } from '../types/key-management';
 
@@ -19,7 +23,7 @@ export async function generateEdDSAKeyPair(extractable = false): Promise<{
   privateKey: KeyLike;
   publicKey: KeyLike;
 }> {
-  return generateKeyPair('EdDSA', { extractable });
+  return generateSigningKeyPair('EdDSA', { extractable });
 }
 
 /**
@@ -36,7 +40,7 @@ export async function generateEdDSAKeyPair(extractable = false): Promise<{
  * ```
  */
 export async function importPrivateKey(pem: string): Promise<KeyLike> {
-  return importPKCS8(pem, 'EdDSA');
+  return importPrivateSigningKey(pem, 'EdDSA');
 }
 
 /**
@@ -53,5 +57,5 @@ export async function importPrivateKey(pem: string): Promise<KeyLike> {
  * ```
  */
 export async function importPublicKey(pem: string): Promise<KeyLike> {
-  return importSPKI(pem, 'EdDSA');
+  return importPublicSigningKey(pem, 'EdDSA');
 }

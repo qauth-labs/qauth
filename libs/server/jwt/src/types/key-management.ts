@@ -1,6 +1,11 @@
-import type { CryptoKey } from 'jose';
+import type { SigningKey } from '@qauth-labs/core-crypto';
 
 /**
- * Type for cryptographic keys used by jose library
+ * Cryptographic key type used across the JWT layer.
+ *
+ * Sourced from the crypto abstraction ({@link SigningKey}) so the JWT layer
+ * depends on the algorithm-agnostic seam (ADR-005) rather than a specific
+ * crypto backend. Retained under the `KeyLike` name for continuity with
+ * existing call sites.
  */
-export type KeyLike = CryptoKey;
+export type KeyLike = SigningKey;

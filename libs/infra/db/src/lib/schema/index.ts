@@ -2,6 +2,7 @@ export * from './audit';
 export * from './consents';
 export * from './core';
 export * from './enums';
+export * from './identity';
 export * from './roles';
 export * from './sessions';
 export * from './sql-helpers';

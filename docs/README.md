@@ -5,15 +5,16 @@ servers and AI agents** (see [ADR-007](./adr/007-mcp-first-positioning.md)). Thi
 is the entry point to the guides; the canonical, always-current API surface is the
 interactive **Swagger UI at `/docs`** on any running instance.
 
-> 🎉 **June 2026 — MVP complete and the agent-native authorization layer shipped** (agent client type, RFC 8693 on-behalf-of delegation, scope modes, step-up, per-agent audit). Start with the [agent-authorization guide](./agent-authorization.md).
+> 🎉 **June 2026 — MVP complete and the agent-native authorization layer shipped** (agent client type, RFC 8693 on-behalf-of delegation, scope modes, step-up, per-agent audit), alongside the T3 production-hardening track and the T5 environment-aware authorization posture ([ADR-008](./adr/008-environment-aware-authorization.md)). Start with the [agent-authorization guide](./agent-authorization.md).
 
 ## Getting started
 
-| Guide                                     | What it covers                                                                                                                                                                      |
-| ----------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| [**MCP Quickstart**](./mcp-quickstart.md) | End-to-end: run QAuth, run a `mcp-guard`-protected MCP resource server, and complete the full discovery → register → `authorization_code` + PKCE → token handshake. **Start here.** |
-| [**Docker Guide**](./docker.md)           | Running the stack (auth-server + Postgres + Redis) in development and production; environment variables; CIMD configuration.                                                        |
-| [**Observability**](./observability.md)   | Structured logging + secret redaction, request-id tracking, auth-event logging, failed-login lockout, the Prometheus `GET /metrics` endpoint, and recommended Alertmanager rules.   |
+| Guide                                         | What it covers                                                                                                                                                                      |
+| --------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [**MCP Quickstart**](./mcp-quickstart.md)     | End-to-end: run QAuth, run a `mcp-guard`-protected MCP resource server, and complete the full discovery → register → `authorization_code` + PKCE → token handshake. **Start here.** |
+| [**Docker Guide**](./docker.md)               | Running the stack (auth-server + Postgres + Redis) in development and production; environment variables; CIMD configuration.                                                        |
+| [**Observability**](./observability.md)       | Structured logging + secret redaction, request-id tracking, auth-event logging, failed-login lockout, the Prometheus `GET /metrics` endpoint, and recommended Alertmanager rules.   |
+| [**Browser Security**](./browser-security.md) | The browser-facing hardening (T3): security headers (nonce-based CSP, HSTS, X-Frame-Options), CSRF double-submit protection, `__Host-` secure cookies, and XSS-safe HTML output.    |
 
 ## OAuth 2.1 / OIDC
 
@@ -54,10 +55,20 @@ The authoritative, always-current surface is the live OpenAPI / Swagger UI at
 - Copy-paste `curl` for every OAuth step in the [OAuth 2.1 Flow](./oauth-flow.md)
   guide.
 
+## Environment-aware authorization
+
+| Guide                                                                                        | What it covers                                                                                                                                                                                          |
+| -------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [**Environment-Aware Authorization**](./environment-authorization.md)                        | Operator/how-to guide: the `environment` (development / staging / production) policy dimension on clients/realms, the profile table, fail-safe defaults, and environment-gated developer API keys (T5). |
+| [**ADR-008: Environment-aware authorization**](./adr/008-environment-aware-authorization.md) | The design decision behind the above — fail-safe reasoning, the `resolveEnvironmentPolicy` resolver, and prior-art comparison.                                                                          |
+
 ## Architecture & decisions
 
 - [Architecture Decision Records](./adr/README.md) — the design decisions behind
-  QAuth, including [ADR-007: MCP-First Positioning](./adr/007-mcp-first-positioning.md).
+  QAuth, including [ADR-007: MCP-First Positioning](./adr/007-mcp-first-positioning.md)
+  and [ADR-008: Environment-aware authorization](./adr/008-environment-aware-authorization.md).
 - [MVP-PRD](../MVP-PRD.md) — product requirements, phase breakdown, schema.
-- [Milestones](https://github.com/qauth-labs/qauth/milestones) — current track
-  status (T0–T4).
+- [Milestones](https://github.com/qauth-labs/qauth/milestones) — track status:
+  **T0–T3 and T5 complete** (trust floor, MCP productization, agent-native authZ,
+  OIDC conformance + hardening, environment-aware authZ); **T4 (wallet federation +
+  post-quantum signing) deferred** as the long-term platform.

@@ -37,7 +37,8 @@
         "libs/server/jwt/*",
         "libs/server/pkce/*",
         "libs/server/federation/*",
-        "libs/fastify/plugins/pkce/*"
+        "libs/fastify/plugins/pkce/*",
+        "libs/core/crypto/*"
       ]
     },
     {
@@ -59,7 +60,8 @@
         "libs/server/jwt/*",
         "libs/server/pkce/*",
         "libs/server/federation/*",
-        "libs/fastify/plugins/pkce/*"
+        "libs/fastify/plugins/pkce/*",
+        "libs/core/crypto/*"
       ],
       "options": {
         "typecheck": {

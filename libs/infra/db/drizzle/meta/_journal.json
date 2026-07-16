@@ -64,6 +64,13 @@
       "when": 1782450557771,
       "tag": "0008_glossy_magik",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1783900978442,
+      "tag": "0009_crazy_ulik",
+      "breakpoints": true
     }
   ]
 }

@@ -49,17 +49,19 @@ export const cimdDocumentSchema = z.object({
   client_name: z.string().min(1).max(255),
   redirect_uris: z.array(z.string().min(1).max(2048)).min(1).max(20),
   scope: z.string().max(2048).optional(),
-  grant_types: z
-    .array(z.enum(['authorization_code', 'refresh_token', 'client_credentials']))
-    .max(8)
-    .optional(),
-  response_types: z
-    .array(z.enum(['code']))
-    .max(4)
-    .optional(),
-  token_endpoint_auth_method: z
-    .enum(['none', 'client_secret_basic', 'client_secret_post'])
-    .optional(),
+  /**
+   * RFC 7591 §2 tolerance: `grant_types` / `response_types` /
+   * `token_endpoint_auth_method` accept ANY string values, not just the ones
+   * QAuth implements. A CIMD document describes the client's capabilities
+   * across every AS it talks to (e.g. claude.ai declares
+   * `urn:ietf:params:oauth:grant-type:jwt-bearer`), so an unknown value is
+   * not an error — rejecting the whole document over it breaks interop.
+   * Materialisation (`toCimdClientInsert`) intersects with what QAuth
+   * supports and fails only when nothing usable remains.
+   */
+  grant_types: z.array(z.string().min(1).max(128)).max(16).optional(),
+  response_types: z.array(z.string().min(1).max(64)).max(8).optional(),
+  token_endpoint_auth_method: z.string().min(1).max(64).optional(),
   client_uri: z.string().max(2048).optional(),
   logo_uri: z.string().max(2048).optional(),
   tos_uri: z.string().max(2048).optional(),
@@ -94,6 +96,16 @@ export type CimdDocument = z.infer<typeof cimdDocumentSchema>;
  * ones; there is no record to spam.
  */
 export type CimdGrantType = 'authorization_code' | 'refresh_token' | 'client_credentials';
+
+const SUPPORTED_CIMD_GRANT_TYPES: readonly CimdGrantType[] = [
+  'authorization_code',
+  'refresh_token',
+  'client_credentials',
+];
+
+function isSupportedCimdGrantType(value: string): value is CimdGrantType {
+  return (SUPPORTED_CIMD_GRANT_TYPES as readonly string[]).includes(value);
+}
 
 export interface CimdClientInsert {
   realmId: string;
@@ -227,12 +239,25 @@ export function toCimdClientInsert(
   doc: CimdDocument,
   sentinelSecretHash: string
 ): CimdClientInsert {
+  // The schema tolerates unknown grant/response types (RFC 7591 §2 — the
+  // document describes the client's capabilities across every AS it talks
+  // to); here we keep only what QAuth implements. A document that declares
+  // values but none QAuth supports is unusable — invalid_client, so the
+  // audit log says why instead of a code/token failing later.
+  const declaredGrants = doc.grant_types ?? [];
+  const supportedGrants = declaredGrants.filter(isSupportedCimdGrantType);
+  if (declaredGrants.length > 0 && supportedGrants.length === 0) {
+    throw new InvalidClientError('CIMD document declares no supported grant types');
+  }
   const grantTypes: CimdGrantType[] =
-    doc.grant_types && doc.grant_types.length > 0
-      ? doc.grant_types
-      : ['authorization_code', 'refresh_token'];
-  const responseTypes: 'code'[] =
-    doc.response_types && doc.response_types.length > 0 ? doc.response_types : ['code'];
+    supportedGrants.length > 0 ? supportedGrants : ['authorization_code', 'refresh_token'];
+
+  const declaredResponses = doc.response_types ?? [];
+  const supportedResponses = declaredResponses.filter((value): value is 'code' => value === 'code');
+  if (declaredResponses.length > 0 && supportedResponses.length === 0) {
+    throw new InvalidClientError('CIMD document declares no supported response types');
+  }
+  const responseTypes: 'code'[] = supportedResponses.length > 0 ? supportedResponses : ['code'];
 
   return {
     realmId,
