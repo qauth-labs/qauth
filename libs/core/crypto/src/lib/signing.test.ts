@@ -57,21 +57,61 @@ describe('sign / verify (EdDSA)', () => {
     ).rejects.toBeInstanceOf(CryptoVerificationError);
   });
 
-  it('throws CryptoVerificationError(reason="expired") for an expired token', async () => {
+  it('enforces the audience when supplied (rejects a mismatched audience)', async () => {
     const { privateKey, publicKey } = await generateSigningKeyPair('EdDSA');
     const token = await sign({ sub: 'u' }, privateKey, 'EdDSA', {
       issuer: ISSUER,
-      expiresIn: 1,
+      expiresIn: 900,
       audience: 'client-1',
     });
 
-    await new Promise((resolve) => setTimeout(resolve, 1100));
+    await expect(
+      verify(token, publicKey, { algorithms: ['EdDSA'], audience: 'other-client' })
+    ).rejects.toMatchObject({
+      name: 'CryptoVerificationError',
+      reason: 'invalid',
+    });
+  });
 
-    await expect(verify(token, publicKey, { algorithms: ['EdDSA'] })).rejects.toMatchObject({
+  it('throws CryptoVerificationError(reason="expired") for an expired token', async () => {
+    const { privateKey, publicKey } = await generateSigningKeyPair('EdDSA');
+    const expiresIn = 900;
+    const token = await sign({ sub: 'u' }, privateKey, 'EdDSA', {
+      issuer: ISSUER,
+      expiresIn,
+      audience: 'client-1',
+    });
+
+    // Evaluate temporal claims one second past expiry — deterministic, no sleep.
+    const pastExpiry = new Date(Date.now() + (expiresIn + 1) * 1000);
+
+    await expect(
+      verify(token, publicKey, { algorithms: ['EdDSA'], currentDate: pastExpiry })
+    ).rejects.toMatchObject({
       name: 'CryptoVerificationError',
       reason: 'expired',
     });
-  }, 10000);
+  });
+
+  it('accepts a just-expired token within the clock tolerance', async () => {
+    const { privateKey, publicKey } = await generateSigningKeyPair('EdDSA');
+    const expiresIn = 900;
+    const token = await sign({ sub: 'u' }, privateKey, 'EdDSA', {
+      issuer: ISSUER,
+      expiresIn,
+      audience: 'client-1',
+    });
+
+    const pastExpiry = new Date(Date.now() + (expiresIn + 1) * 1000);
+
+    await expect(
+      verify(token, publicKey, {
+        algorithms: ['EdDSA'],
+        currentDate: pastExpiry,
+        clockTolerance: 5,
+      })
+    ).resolves.toMatchObject({ sub: 'u' });
+  });
 
   it('throws CryptoVerificationError(reason="invalid") with backend detail for a bad signature', async () => {
     const { privateKey } = await generateSigningKeyPair('EdDSA');

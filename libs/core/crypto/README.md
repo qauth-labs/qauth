@@ -49,9 +49,11 @@ const jwt = await sign({ sub: 'user-1', scope: 'openid' }, privateKey, 'EdDSA', 
 ### `verify(token, publicKey, options): Promise<Record<string, unknown>>`
 
 Verifies the signature, algorithm, and (when supplied) issuer/audience, and
-returns the raw claims. Application-level claim-shape validation is **not**
-done here — the caller validates the returned claims. On failure it throws a
-`CryptoVerificationError`.
+returns the raw claims. Temporal-claim evaluation can be tuned with
+`clockTolerance` (allowed skew in seconds) and `currentDate` (reference time,
+useful for deterministic tests). Application-level claim-shape validation is
+**not** done here — the caller validates the returned claims. On failure it
+throws a `CryptoVerificationError`.
 
 ```typescript
 const claims = await verify(jwt, publicKey, {

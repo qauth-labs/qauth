@@ -36,8 +36,12 @@ export class CryptoVerificationError extends Error {
     reason: CryptoVerificationErrorReason,
     options: { detail?: string; cause?: unknown } = {}
   ) {
+    // The detail is appended to the message so an unmapped error is still
+    // diagnosable from raw logs; consumers branch on `reason` / `detail`.
     super(
-      `Token verification failed (${reason})`,
+      options.detail !== undefined
+        ? `Token verification failed (${reason}): ${options.detail}`
+        : `Token verification failed (${reason})`,
       options.cause !== undefined ? { cause: options.cause } : undefined
     );
     this.name = 'CryptoVerificationError';

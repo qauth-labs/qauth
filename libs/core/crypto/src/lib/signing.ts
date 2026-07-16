@@ -25,6 +25,16 @@ export interface VerifyOptions {
   issuer?: string;
   /** When set, the token's `aud` must include this value. */
   audience?: string | string[];
+  /**
+   * Allowed clock skew in seconds when validating temporal claims (`exp`,
+   * `nbf`). Defaults to zero — no tolerance.
+   */
+  clockTolerance?: number;
+  /**
+   * Reference time used to evaluate temporal claims. Defaults to the current
+   * time; primarily useful for deterministic testing of expiry behaviour.
+   */
+  currentDate?: Date;
 }
 
 /**
@@ -82,6 +92,8 @@ export async function verify(
       algorithms: options.algorithms,
       ...(options.issuer !== undefined ? { issuer: options.issuer } : {}),
       ...(options.audience !== undefined ? { audience: options.audience } : {}),
+      ...(options.clockTolerance !== undefined ? { clockTolerance: options.clockTolerance } : {}),
+      ...(options.currentDate !== undefined ? { currentDate: options.currentDate } : {}),
     });
     return payload;
   } catch (error) {
