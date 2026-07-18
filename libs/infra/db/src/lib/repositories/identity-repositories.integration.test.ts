@@ -169,6 +169,31 @@ describe('identity repositories integration (real Postgres)', () => {
     expect(walletRow[0].id).not.toBe(inserted[0].id);
   });
 
+  it('upsertMany collapses duplicate (source, attr_key) inputs last-wins', async () => {
+    const { user } = await seedUser();
+
+    // Without the pre-statement dedup, Postgres rejects this with
+    // "ON CONFLICT DO UPDATE command cannot affect row a second time".
+    const rows = await attributes.upsertMany(user.id, [
+      {
+        source: 'self_reported',
+        attrKey: 'email',
+        attrValue: 'first@example.com',
+        verified: false,
+      },
+      {
+        source: 'self_reported',
+        attrKey: 'email',
+        attrValue: 'second@example.com',
+        verified: true,
+      },
+    ]);
+
+    expect(rows).toHaveLength(1);
+    expect(rows[0].attrValue).toBe('second@example.com');
+    expect(rows[0].verified).toBe(true);
+  });
+
   it('setVerified targets exactly one (user_id, source, attr_key) row', async () => {
     const { user } = await seedUser();
     await attributes.upsertMany(user.id, [

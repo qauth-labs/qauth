@@ -274,6 +274,14 @@ export default async function (fastify: FastifyInstance) {
         check.status === 'ok'
           ? await fastify.repositories.users.findById(check.credential.userId)
           : undefined;
+      if (check.status === 'ok' && !user) {
+        // FK-impossible in normal operation — same operator-alerting log line
+        // as the API login; the wire stays the generic 401 render below.
+        fastify.log.error(
+          { credentialId: check.credential.id },
+          'password credential without a users row'
+        );
+      }
 
       if (check.status !== 'ok' || !user || !user.enabled) {
         await ensureMinimumResponseTime(startTime, MIN_RESPONSE_TIME_MS.LOGIN);

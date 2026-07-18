@@ -126,6 +126,14 @@ export default async function (fastify: FastifyInstance) {
         credential && parsed?.success
           ? await fastify.repositories.users.findById(credential.userId)
           : undefined;
+      if (credential && parsed?.success && !user) {
+        // FK-impossible in normal operation — same operator-alerting log line
+        // as the login surfaces; the wire stays the generic 200.
+        fastify.log.error(
+          { credentialId: credential.id },
+          'password credential without a users row'
+        );
+      }
 
       // If the credential exists and its email is not verified, send the mail
       if (credential && parsed?.success && !parsed.data.email_verified && user) {

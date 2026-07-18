@@ -220,7 +220,6 @@ describe('POST /auth/login', () => {
   it('emits byte-identical JWT claims sourced from the users row (pre-#229 fixture)', async () => {
     const { fastify, ctx } = createFastifyStub();
     await loginRoute(fastify);
-    const handler = ctx.handler;
 
     // The two candidate claim sources DIVERGE on purpose: the users row says
     // canonical@example.com / verified while credential_data says

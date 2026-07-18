@@ -22,6 +22,11 @@ export function createUserAttributesRepository(defaultDb: DbClient): UserAttribu
      * (`ON CONFLICT (user_id, source, attr_key) DO UPDATE`). Array-shaped to
      * match `CredentialProvider.extractAttributes()` output; `expiresAt` is
      * epoch-ms per the schema's bigint convention.
+     *
+     * Duplicate `(source, attrKey)` pairs in the input collapse LAST-WINS
+     * before the statement is built: Postgres rejects one INSERT whose
+     * ON CONFLICT DO UPDATE would touch the same row twice ("cannot affect
+     * row a second time"), and a provider bug must not become a 500.
      */
     async upsertMany(
       userId: string,
@@ -32,7 +37,12 @@ export function createUserAttributesRepository(defaultDb: DbClient): UserAttribu
       const invoker = tx ?? defaultDb;
       const now = Date.now();
 
-      const rows = attrs.map((attr) => ({
+      const bySourceKey = new Map<string, UpsertUserAttributeInput>();
+      for (const attr of attrs) {
+        bySourceKey.set(`${attr.source}\u0000${attr.attrKey}`, attr);
+      }
+
+      const rows = [...bySourceKey.values()].map((attr) => ({
         userId,
         source: attr.source,
         attrKey: attr.attrKey,
