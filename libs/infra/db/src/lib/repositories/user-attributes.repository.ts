@@ -69,6 +69,31 @@ export function createUserAttributesRepository(defaultDb: DbClient): UserAttribu
     },
 
     /**
+     * All VERIFIED rows for one `(user_id, attr_key)` — the claim-resolution
+     * read (#229). Deliberately policy-free: no ORDER BY and no expiry
+     * filter here; trust ordering and expiry exclusion live in the pure
+     * `selectTrustedAttribute` selector (`@qauth-labs/server-federation`) so
+     * the whole assertion policy is unit-testable in one place.
+     */
+    async findVerifiedByUserIdAndKey(
+      userId: string,
+      attrKey: string,
+      tx?: DbClient
+    ): Promise<UserAttributeRow[]> {
+      const invoker = tx ?? defaultDb;
+      return invoker
+        .select()
+        .from(userAttributes)
+        .where(
+          and(
+            eq(userAttributes.userId, userId),
+            eq(userAttributes.attrKey, attrKey),
+            eq(userAttributes.verified, true)
+          )
+        );
+    },
+
+    /**
      * Targeted `verified` flip for one `(user_id, source, attr_key)` row
      * (email-verification completion). Returns the updated row, or undefined
      * when no such attribute exists — callers decide whether that is

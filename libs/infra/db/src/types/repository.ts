@@ -84,6 +84,11 @@ export interface UserAttributesRepository {
     attrs: readonly UpsertUserAttributeInput[],
     tx?: DbClient
   ): Promise<UserAttributeRow[]>;
+  findVerifiedByUserIdAndKey(
+    userId: string,
+    attrKey: string,
+    tx?: DbClient
+  ): Promise<UserAttributeRow[]>;
   setVerified(
     userId: string,
     source: string,

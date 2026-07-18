@@ -13,6 +13,7 @@ import { MIN_RESPONSE_TIME_MS } from '../../constants';
 import { hashEmail, logAuthEvent } from '../../helpers/auth-events';
 import { resolveAudience } from '../../helpers/client-auth';
 import { verifyPasswordCredential } from '../../helpers/credential-auth';
+import { resolveEmailClaims } from '../../helpers/email-claims';
 import { checkLockout, recordFailedAttempt, resetFailedAttempts } from '../../helpers/failed-login';
 import { getOrCreateSystemClient } from '../../helpers/oauth-client';
 import { getOrCreateDefaultRealm } from '../../helpers/realm';
@@ -114,9 +115,10 @@ export default async function (fastify: FastifyInstance) {
           throw new EmailNotVerifiedError('Email address not verified. Check your inbox.');
         }
 
-        // JWT claims still come from the users row so token output stays
-        // byte-identical (claim re-sourcing is #229). The row must exist for
-        // any live credential (FK), so a miss is treated as invalid below.
+        // The users row supplies the stable subject id plus session/audit/log
+        // fields; email claims are resolved separately from verified
+        // user_attributes (#229). The row must exist for any live credential
+        // (FK), so a miss is treated as invalid below.
         const user =
           check.status === 'ok'
             ? await fastify.repositories.users.findById(check.credential.userId)
@@ -165,11 +167,15 @@ export default async function (fastify: FastifyInstance) {
         // Get or create system OAuth client
         const systemClient = await getOrCreateSystemClient(realm.id, fastify);
 
+        // BREAKING (#229, ADR-002): email/email_verified resolve from verified
+        // user_attributes via the trust order; both OMITTED when no verified
+        // email exists. Post-gate placement keeps failure-path timing intact.
+        const emailClaims = await resolveEmailClaims(fastify, user.id);
+
         // Generate access token (JWT) using JWT plugin
         const accessToken = await fastify.jwtUtils.signAccessToken({
           sub: user.id,
-          email: user.email,
-          email_verified: user.emailVerified,
+          ...emailClaims,
           clientId: systemClient.clientId,
           aud: resolveAudience(systemClient),
         });

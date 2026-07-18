@@ -28,6 +28,7 @@ import {
   validateScopes,
 } from '../../helpers/client-auth';
 import { isAgentClient } from '../../helpers/client-resolution';
+import { resolveEmailClaims } from '../../helpers/email-claims';
 import {
   type EnvironmentPolicy,
   resolveAccessTokenLifespanSeconds,
@@ -462,10 +463,15 @@ async function handleAuthorizationCode(
   // override and the response `expires_in` so they always agree.
   const accessTokenExpiresIn = accessTokenLifespanForPolicy(fastify, policy);
 
+  // BREAKING (#229, ADR-002): ONE trust-ordered resolution shared by the
+  // access token AND the ID token, so the two can never disagree about the
+  // email within a single issuance. Both claims are omitted entirely when no
+  // verified email attribute exists.
+  const emailClaims = await resolveEmailClaims(fastify, user.id);
+
   const accessToken = await fastify.jwtUtils.signAccessToken({
     sub: user.id,
-    email: user.email,
-    email_verified: user.emailVerified,
+    ...emailClaims,
     clientId: client.clientId,
     scope: scopeString,
     aud: resolveAudience(client, effectiveResource),
@@ -482,8 +488,7 @@ async function handleAuthorizationCode(
     ? await fastify.jwtUtils.signIdToken({
         sub: user.id,
         audience: client.clientId,
-        email: user.email,
-        email_verified: user.emailVerified,
+        ...emailClaims,
         name: resolveDisplayName(user),
         nonce: authCode.nonce ?? undefined,
       })
@@ -977,10 +982,12 @@ async function handleRefreshToken(
   // Access-token lifespan under the environment policy (ADR-008 §5, #197).
   const accessTokenExpiresIn = accessTokenLifespanForPolicy(fastify, policy);
 
+  // BREAKING (#229): trust-ordered resolution; omitted when unverified.
+  const emailClaims = await resolveEmailClaims(fastify, user.id);
+
   const accessToken = await fastify.jwtUtils.signAccessToken({
     sub: user.id,
-    email: user.email,
-    email_verified: user.emailVerified,
+    ...emailClaims,
     clientId: client.clientId,
     scope: scopeString,
     aud: resolveAudience(client, effectiveResource),
@@ -1332,10 +1339,12 @@ async function handleTokenExchange(
     throw new InvalidRequestError('subject_token has expired');
   }
 
+  // BREAKING (#229): trust-ordered resolution; omitted when unverified.
+  const emailClaims = await resolveEmailClaims(fastify, user.id);
+
   const accessToken = await fastify.jwtUtils.signAccessToken({
     sub: user.id,
-    email: user.email,
-    email_verified: user.emailVerified,
+    ...emailClaims,
     clientId: client.clientId,
     scope: scopeString,
     aud,

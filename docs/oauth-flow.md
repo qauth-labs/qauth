@@ -346,6 +346,11 @@ curl -s http://localhost:3000/oauth/userinfo \
 # → { "sub": "…", "email": "…", "email_verified": true }
 ```
 
+> `email`/`email_verified` require the `email` scope AND a **verified** email
+> attribute (ADR-002 trust order). With no verified email on record, **both
+> claims are omitted entirely** — treat `email` as optional. When present,
+> `email_verified` is always `true`.
+
 ---
 
 ## Dynamic Client Registration (RFC 7591)

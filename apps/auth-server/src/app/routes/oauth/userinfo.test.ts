@@ -44,6 +44,9 @@ function createFastifyStub() {
       users: {
         findById: Mock;
       };
+      userAttributes: {
+        findVerifiedByUserIdAndKey: Mock;
+      };
       auditLogs: {
         create: Mock;
       };
@@ -65,6 +68,23 @@ function createFastifyStub() {
       users: {
         findById: vi.fn() as unknown as Mock,
       },
+      // #229: email claims resolve from verified attributes under the email
+      // scope; the default fixture mirrors the pre-#229 user values.
+      userAttributes: {
+        findVerifiedByUserIdAndKey: vi.fn().mockResolvedValue([
+          {
+            id: 'attr-1',
+            userId: 'user-1',
+            source: 'self_reported',
+            attrKey: 'email',
+            attrValue: 'user@example.com',
+            verified: true,
+            expiresAt: null,
+            createdAt: 1,
+            updatedAt: 1,
+          },
+        ]) as unknown as Mock,
+      },
       auditLogs: {
         create: vi.fn() as unknown as Mock,
       },
@@ -81,6 +101,9 @@ function createFastifyStub() {
     repositories: {
       users: {
         findById: Mock;
+      };
+      userAttributes: {
+        findVerifiedByUserIdAndKey: Mock;
       };
       auditLogs: {
         create: Mock;
@@ -174,6 +197,20 @@ describe('GET /userinfo route', () => {
       firstName: 'Ada',
       lastName: 'Lovelace',
     });
+    // #229: the email claim is resolver-sourced from the verified attribute.
+    (fastify.repositories.userAttributes.findVerifiedByUserIdAndKey as Mock).mockResolvedValue([
+      {
+        id: 'attr-3',
+        userId: 'user-3',
+        source: 'self_reported',
+        attrKey: 'email',
+        attrValue: 'ada@example.com',
+        verified: true,
+        expiresAt: null,
+        createdAt: 1,
+        updatedAt: 1,
+      },
+    ]);
 
     const request = {
       // `profile` releases the name claim; `email` releases the email claims.
@@ -224,6 +261,8 @@ describe('GET /userinfo route', () => {
 
     // Only `sub` is released — no email, email_verified, or name.
     expect(result).toEqual({ sub: 'user-4' });
+    // #229: without the `email` scope the resolver query is skipped entirely.
+    expect(fastify.repositories.userAttributes.findVerifiedByUserIdAndKey).not.toHaveBeenCalled();
   });
 
   it('includes email but not name when the token grants openid email only', async () => {
@@ -235,10 +274,23 @@ describe('GET /userinfo route', () => {
     findByIdMock.mockResolvedValue({
       id: 'user-5',
       email: 'katherine@example.com',
-      emailVerified: false,
+      emailVerified: true,
       firstName: 'Katherine',
       lastName: 'Johnson',
     });
+    (fastify.repositories.userAttributes.findVerifiedByUserIdAndKey as Mock).mockResolvedValue([
+      {
+        id: 'attr-5',
+        userId: 'user-5',
+        source: 'self_reported',
+        attrKey: 'email',
+        attrValue: 'katherine@example.com',
+        verified: true,
+        expiresAt: null,
+        createdAt: 1,
+        updatedAt: 1,
+      },
+    ]);
 
     const request = {
       jwtPayload: { sub: 'user-5', scope: 'openid email' },
@@ -250,10 +302,11 @@ describe('GET /userinfo route', () => {
     if (!handler) throw new Error('Userinfo handler was not registered');
     const result = await handler(request, reply);
 
+    // #229: email present implies verified (presence IS the signal).
     expect(result).toEqual({
       sub: 'user-5',
       email: 'katherine@example.com',
-      email_verified: false,
+      email_verified: true,
     });
   });
 
@@ -332,7 +385,7 @@ describe('GET /userinfo route', () => {
     });
   });
 
-  it('handles user without email gracefully', async () => {
+  it('omits BOTH email claims when no verified email attribute exists (email scope granted) — BREAKING #229', async () => {
     const { fastify, ctx } = createFastifyStub();
     await userinfoRoute(fastify);
 
@@ -345,12 +398,16 @@ describe('GET /userinfo route', () => {
       email: null,
       emailVerified: false,
     });
+    // No verified email attribute (covers both the unverified-only and the
+    // zero-attribute user — the verified=true SQL filter is proven at the
+    // repository integration layer).
+    (fastify.repositories.userAttributes.findVerifiedByUserIdAndKey as Mock).mockResolvedValue([]);
 
     const request = {
       jwtPayload: {
         sub: 'user-2',
-        // The `email` scope IS granted; the user simply has no email on record,
-        // so only `email_verified` is released (no `email` string).
+        // The `email` scope IS granted, but with no verified attribute BOTH
+        // claims are omitted entirely (never null) — OIDC Core §5.3.2.
         scope: 'openid email',
       },
       ip: '127.0.0.1',
@@ -370,10 +427,10 @@ describe('GET /userinfo route', () => {
 
     const result = await handler(request, reply);
 
-    expect(result).toEqual({
-      sub: 'user-2',
-      email_verified: false,
-    });
+    expect(result).toEqual({ sub: 'user-2' });
+    // Omitted means the KEYS are absent, not undefined/null-valued.
+    expect('email' in (result as Record<string, unknown>)).toBe(false);
+    expect('email_verified' in (result as Record<string, unknown>)).toBe(false);
   });
 
   it('throws JWTInvalidError when jwt payload is missing', async () => {

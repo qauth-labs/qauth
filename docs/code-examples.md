@@ -220,7 +220,11 @@ async function callApi(accessToken) {
   const res = await fetch(`${QAUTH}/oauth/userinfo`, {
     headers: { Authorization: `Bearer ${accessToken}` },
   });
-  return res.json(); // { sub, email, email_verified }
+  // { sub, email?, email_verified? } — email claims are OMITTED when the
+  // user has no verified email attribute. Always handle absence:
+  //   const { sub, email } = await callApi(token);
+  //   if (email === undefined) { /* no verified email on record */ }
+  return res.json();
 }
 
 // Wire up: run handleCallback() on /callback, login() on a button click.

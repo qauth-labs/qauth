@@ -199,6 +199,11 @@ An inactive/expired/unknown/wrong-audience token returns `{ "active": false }`.
 { "sub": "...", "email": "dev@example.com", "email_verified": true }
 ```
 
+`email`/`email_verified` are conditional: released only under the `email`
+scope and only when a **verified** email attribute exists (ADR-002 trust
+order `wallet > oidc_* > self_reported`). Otherwise both keys are **absent**
+(never `null`). When present, `email_verified` is always `true`.
+
 ---
 
 ## Discovery

@@ -54,20 +54,28 @@ join — password auth reads `users.password_hash` directly.
    the verification token references `users.id`, NOT a credential id.
 3. On email verification: set `users.email_verified=true` and `users.email_verified_at=now()`.
 
-## OIDC Claims (shipped behaviour)
+## OIDC Claims (shipped behaviour — #229, BREAKING)
 
 - `sub` — always `users.id` (UUIDv7). Never the email.
-- `email` — `users.email`. **Present even when unverified** today; the login
-  route does NOT block unverified emails (the check is commented out at
-  `apps/auth-server/src/app/routes/auth/login.ts:85`). This is an MVP posture
-  — see finding F-08 and the planned `REQUIRE_EMAIL_VERIFIED` config flag.
-- `email_verified` — `users.email_verified`.
+- `email` — resolved from **verified** `user_attributes` rows
+  (`attr_key='email' AND verified=true`, non-expired) via the ADR-002 trust
+  order `wallet > oidc_* > self_reported` (app-code policy:
+  `selectTrustedAttribute` in `libs/server/federation`; ties within a rank
+  break lexicographically by `source`). **Omitted entirely when no verified
+  email attribute exists** — never `null`. Applies to ID tokens, userinfo,
+  AND the non-standard access-token convenience claims (all six user-bound
+  emission sites go through `resolveEmailClaims` in
+  `apps/auth-server/src/app/helpers/email-claims.ts`).
+- `email_verified` — always `true` when `email` is present (presence IS the
+  verification signal); omitted together with `email` otherwise. The
+  email-present-plus-verified-false shape no longer exists.
 - `name` — derived from `users.first_name` + `users.last_name` (omitted when
-  both are empty, never an empty string).
+  both are empty, never an empty string). Still users-row-sourced (#230+
+  territory).
 
-> NOTE: OIDC Core 1.0 says `email` should be **omitted** when unverified. The
-> planned identifier-abstraction model (ADR-002) tightens this; today QAuth
-> emits it. Document this trade-off rather than silently changing it.
+> The login-time `REQUIRE_EMAIL_VERIFIED` gate (F-08) is a SEPARATE control:
+> it blocks unverified logins pre-token when enabled, and does not affect
+> claim resolution.
 
 ## Core Tables (shipped)
 

@@ -80,6 +80,25 @@ function createFastifyStub() {
       users: {
         findById: vi.fn(),
       },
+      userAttributes: {
+        // #229 claim resolution: default fixture is ONE verified self_reported
+        // email attribute matching the auth-code user fixture, so pre-#229
+        // presence assertions keep their exact values. Omission / trust-order
+        // cases override this mock per test.
+        findVerifiedByUserIdAndKey: vi.fn().mockResolvedValue([
+          {
+            id: 'attr-1',
+            userId: 'user-1',
+            source: 'self_reported',
+            attrKey: 'email',
+            attrValue: 'user@example.com',
+            verified: true,
+            expiresAt: null,
+            createdAt: 1,
+            updatedAt: 1,
+          },
+        ]),
+      },
       refreshTokens: {
         create: vi.fn(),
         findByTokenHashIncludingRevoked: vi.fn(),
@@ -1114,6 +1133,110 @@ describe('POST /oauth/token route — authorization_code grant', () => {
     });
   });
 
+  it('omits BOTH email claims from access AND id token when no verified attribute exists — BREAKING #229', async () => {
+    const { fastify, ctx, authCode } = setupAuthCodeStub();
+    (fastify.repositories.authorizationCodes.findByCode as unknown as Mock).mockResolvedValue({
+      ...authCode,
+      scopes: ['openid', 'email'],
+    });
+    (
+      fastify.repositories.userAttributes.findVerifiedByUserIdAndKey as unknown as Mock
+    ).mockResolvedValue([]);
+    await tokenRoute(fastify);
+    const handler = ctx.handler;
+    if (!handler) throw new Error('Handler missing');
+
+    await handler(baseRequest(), createReply());
+
+    // Omitted means the KEYS are absent — never null (proof standard: `in`).
+    const accessClaims = (fastify.jwtUtils.signAccessToken as unknown as Mock).mock
+      .calls[0][0] as Record<string, unknown>;
+    expect('email' in accessClaims).toBe(false);
+    expect('email_verified' in accessClaims).toBe(false);
+    const idClaims = (fastify.jwtUtils.signIdToken as unknown as Mock).mock.calls[0][0] as Record<
+      string,
+      unknown
+    >;
+    expect('email' in idClaims).toBe(false);
+    expect('email_verified' in idClaims).toBe(false);
+  });
+
+  it('omits the email claims when the only verified attribute has expired (#229)', async () => {
+    const { fastify, ctx } = setupAuthCodeStub();
+    (
+      fastify.repositories.userAttributes.findVerifiedByUserIdAndKey as unknown as Mock
+    ).mockResolvedValue([
+      {
+        id: 'attr-expired',
+        userId: 'user-1',
+        source: 'wallet',
+        attrKey: 'email',
+        attrValue: 'expired@example.com',
+        verified: true,
+        expiresAt: Date.now() - 1000,
+        createdAt: 1,
+        updatedAt: 1,
+      },
+    ]);
+    await tokenRoute(fastify);
+    const handler = ctx.handler;
+    if (!handler) throw new Error('Handler missing');
+
+    await handler(baseRequest(), createReply());
+
+    const accessClaims = (fastify.jwtUtils.signAccessToken as unknown as Mock).mock
+      .calls[0][0] as Record<string, unknown>;
+    expect('email' in accessClaims).toBe(false);
+    expect('email_verified' in accessClaims).toBe(false);
+  });
+
+  it('applies the ADR-002 trust order across sources at emission (#229)', async () => {
+    const attrRow = (source: string, attrValue: string) => ({
+      id: `attr-${source}`,
+      userId: 'user-1',
+      source,
+      attrKey: 'email',
+      attrValue,
+      verified: true,
+      expiresAt: null,
+      createdAt: 1,
+      updatedAt: 1,
+    });
+    const wallet = attrRow('wallet', 'wallet@example.com');
+    const oidc = attrRow('oidc_google', 'oidc@example.com');
+    const self = attrRow('self_reported', 'self@example.com');
+
+    // Real selector, mocked storage: the chain walks down as higher-trust
+    // sources disappear (the repository's verified-only SQL filter is proven
+    // separately at the integration layer).
+    for (const [rows, expected] of [
+      [[self, oidc, wallet], 'wallet@example.com'],
+      [[self, oidc], 'oidc@example.com'],
+      [[self], 'self@example.com'],
+    ] as const) {
+      const { fastify, ctx, authCode } = setupAuthCodeStub();
+      (fastify.repositories.authorizationCodes.findByCode as unknown as Mock).mockResolvedValue({
+        ...authCode,
+        scopes: ['openid', 'email'],
+      });
+      (
+        fastify.repositories.userAttributes.findVerifiedByUserIdAndKey as unknown as Mock
+      ).mockResolvedValue(rows);
+      await tokenRoute(fastify);
+      if (!ctx.handler) throw new Error('Handler missing');
+
+      await ctx.handler(baseRequest(), createReply());
+
+      // ONE shared resolution: access token and ID token agree by construction.
+      expect(fastify.jwtUtils.signAccessToken).toHaveBeenCalledWith(
+        expect.objectContaining({ email: expected, email_verified: true })
+      );
+      expect(fastify.jwtUtils.signIdToken).toHaveBeenCalledWith(
+        expect.objectContaining({ email: expected, email_verified: true })
+      );
+    }
+  });
+
   it('issues an id_token with no nonce when the authorization request omitted it', async () => {
     const { fastify, ctx, authCode } = setupAuthCodeStub();
     (fastify.repositories.authorizationCodes.findByCode as unknown as Mock).mockResolvedValue({
@@ -1393,6 +1516,24 @@ describe('POST /oauth/token route — refresh_token grant', () => {
       emailVerified: true,
       enabled: true,
     };
+    // #229: the attribute fixture DELIBERATELY diverges from the users-row
+    // email (rt@example.com) so the rotation assertion is sourcing-decisive —
+    // a revert to users-row claim sourcing emits the wrong value and fails.
+    (
+      fastify.repositories.userAttributes.findVerifiedByUserIdAndKey as unknown as Mock
+    ).mockResolvedValue([
+      {
+        id: 'attr-rt',
+        userId: user.id,
+        source: 'self_reported',
+        attrKey: 'email',
+        attrValue: 'rt-attr@example.com',
+        verified: true,
+        expiresAt: null,
+        createdAt: 1,
+        updatedAt: 1,
+      },
+    ]);
     const storedToken = {
       id: 'token-uuid-rt-1',
       userId: user.id,
@@ -1463,13 +1604,19 @@ describe('POST /oauth/token route — refresh_token grant', () => {
       }),
       expect.anything()
     );
+    // #229: the emitted email is the ATTRIBUTE value, not the users row's.
     expect(fastify.jwtUtils.signAccessToken).toHaveBeenCalledWith(
       expect.objectContaining({
         sub: user.id,
-        email: user.email,
+        email: 'rt-attr@example.com',
+        email_verified: true,
         scope: 'read:foo write:foo',
         aud: 'https://api.example.com',
       })
+    );
+    expect(fastify.repositories.userAttributes.findVerifiedByUserIdAndKey).toHaveBeenCalledWith(
+      user.id,
+      'email'
     );
     expect(result).toMatchObject({
       access_token: 'new.access.jwt',
@@ -1903,10 +2050,15 @@ describe('POST /oauth/token route — token-exchange grant (RFC 8693, ADR-007 §
     const result = await invoke(fastify, ctx, exchangeRequest());
 
     // sub is the end-user; act identifies the acting agent (RFC 8693 §4.1).
+    // #229 sourcing-decisive email check: the default attribute fixture
+    // resolves user@example.com while the subject users row carries
+    // subject@example.com — a users-row revert emits the wrong value.
     expect(fastify.jwtUtils.signAccessToken).toHaveBeenCalledWith(
       expect.objectContaining({
         sub: user.id,
         clientId: client.clientId,
+        email: 'user@example.com',
+        email_verified: true,
         scope: 'read:docs write:docs',
         aud: ['https://api.example.com', AGENT_CLIENT_ID],
         act: { sub: AGENT_CLIENT_ID },
@@ -1920,6 +2072,24 @@ describe('POST /oauth/token route — token-exchange grant (RFC 8693, ADR-007 §
     });
     // RFC 8693: no refresh token issued on delegation.
     expect(result).not.toHaveProperty('refresh_token');
+  });
+
+  it('omits BOTH email claims from the delegated token when no verified attribute exists — BREAKING #229', async () => {
+    const { fastify, ctx } = setupExchangeStub({
+      subjectAud: ['https://api.example.com', AGENT_CLIENT_ID],
+    });
+    (
+      fastify.repositories.userAttributes.findVerifiedByUserIdAndKey as unknown as Mock
+    ).mockResolvedValue([]);
+
+    await invoke(fastify, ctx, exchangeRequest());
+
+    const claims = (fastify.jwtUtils.signAccessToken as unknown as Mock).mock.calls[0][0] as Record<
+      string,
+      unknown
+    >;
+    expect('email' in claims).toBe(false);
+    expect('email_verified' in claims).toBe(false);
   });
 
   it('nests the prior act chain for chained delegation', async () => {

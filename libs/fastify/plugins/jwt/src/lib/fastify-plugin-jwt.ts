@@ -42,11 +42,12 @@ declare module 'fastify' {
  *   refreshTokenLifespan: env.REFRESH_TOKEN_LIFESPAN,
  * });
  *
- * // Use in routes
+ * // Use in routes. email/email_verified MUST come from the trust-ordered
+ * // resolver (resolveEmailClaims, ADR-002/#229) — never from the users row;
+ * // both are omitted entirely when the user has no verified email.
  * const token = await fastify.jwtUtils.signAccessToken({
  *   sub: user.id,
- *   email: user.email,
- *   email_verified: user.emailVerified,
+ *   ...(await resolveEmailClaims(fastify, user.id)),
  * });
  * ```
  */

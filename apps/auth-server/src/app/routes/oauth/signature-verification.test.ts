@@ -105,6 +105,22 @@ async function buildApp(): Promise<FastifyInstance> {
       }),
     },
     auditLogs: { create: vi.fn().mockResolvedValue(undefined) },
+    // #229: userinfo resolves email claims from verified attributes.
+    userAttributes: {
+      findVerifiedByUserIdAndKey: vi.fn().mockResolvedValue([
+        {
+          id: 'attr-1',
+          userId: USER_ID,
+          source: 'self_reported',
+          attrKey: 'email',
+          attrValue: 'user@example.com',
+          verified: true,
+          expiresAt: null,
+          createdAt: 1,
+          updatedAt: 1,
+        },
+      ]),
+    },
   } as unknown as FastifyInstance['repositories']);
 
   app.decorate('passwordHasher', {

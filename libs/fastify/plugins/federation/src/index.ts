@@ -8,6 +8,7 @@ export type {
   AssuranceLevel,
   CredentialProvider,
   PasswordCredentialData,
+  TrustRankedAttribute,
   UserAttribute,
   VerifiedIdentity,
 } from '@qauth-labs/server-federation';
@@ -17,5 +18,7 @@ export {
   EMAIL_ATTR_KEY,
   PASSWORD_PROVIDER_TYPE,
   passwordCredentialDataSchema,
+  rankAttributeSource,
+  selectTrustedAttribute,
   SELF_REPORTED_SOURCE,
 } from '@qauth-labs/server-federation';

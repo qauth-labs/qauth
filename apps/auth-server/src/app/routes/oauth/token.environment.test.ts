@@ -115,6 +115,22 @@ function makeAuthCodeStub(opts: {
       refreshTokens: {
         create: vi.fn().mockResolvedValue(undefined),
       },
+      // #229: token issuance resolves email claims from verified attributes.
+      userAttributes: {
+        findVerifiedByUserIdAndKey: vi.fn().mockResolvedValue([
+          {
+            id: 'attr-1',
+            userId: 'user-1',
+            source: 'self_reported',
+            attrKey: 'email',
+            attrValue: 'u@example.com',
+            verified: true,
+            expiresAt: null,
+            createdAt: 1,
+            updatedAt: 1,
+          },
+        ]),
+      },
       auditLogs: { create: vi.fn().mockResolvedValue(undefined) },
     },
     passwordHasher: {
