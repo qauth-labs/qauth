@@ -2,6 +2,7 @@ import type { InferInsertModel, InferSelectModel } from 'drizzle-orm';
 
 import type { oauthConsents } from '../lib/schema/consents';
 import type { apiKeys, oauthClients } from '../lib/schema/core';
+import type { userAttributes, userCredentials } from '../lib/schema/identity';
 import type {
   authorizationCodes,
   emailVerificationTokens,
@@ -29,6 +30,68 @@ export type NewApiKey = InferInsertModel<typeof apiKeys>;
  */
 export type EmailVerificationToken = InferSelectModel<typeof emailVerificationTokens>;
 export type NewEmailVerificationToken = InferInsertModel<typeof emailVerificationTokens>;
+
+/**
+ * Identity-model types (ADR-002, #228). The attribute row types carry a `Row`
+ * suffix to avoid colliding with the federation lib's `UserAttribute`
+ * interface (the provider-facing shape) at shared import sites.
+ */
+export type UserCredential = InferSelectModel<typeof userCredentials>;
+export type NewUserCredential = InferInsertModel<typeof userCredentials>;
+export type UserAttributeRow = InferSelectModel<typeof userAttributes>;
+export type NewUserAttributeRow = InferInsertModel<typeof userAttributes>;
+
+/**
+ * Input shape for {@link UserAttributesRepository.upsertMany} — mirrors the
+ * federation `UserAttribute` interface but speaks DB units (`expiresAt` as
+ * epoch-ms) and lives here so infra-db never imports from server libs.
+ */
+export interface UpsertUserAttributeInput {
+  source: string;
+  attrKey: string;
+  attrValue: string;
+  verified: boolean;
+  expiresAt?: number | null;
+}
+
+/**
+ * Repository for `user_credentials` (one row per authentication method per
+ * user; ADR-002 §Decision.2).
+ */
+export interface UserCredentialsRepository {
+  create(data: NewUserCredential, tx?: DbClient): Promise<UserCredential>;
+  findById(id: string, tx?: DbClient): Promise<UserCredential | undefined>;
+  findByRealmProviderSub(
+    realmId: string,
+    providerType: string,
+    externalSub: string,
+    tx?: DbClient
+  ): Promise<UserCredential | undefined>;
+  findByUserIdAndType(
+    userId: string,
+    providerType: string,
+    tx?: DbClient
+  ): Promise<UserCredential | undefined>;
+  setEmailVerified(id: string, tx?: DbClient): Promise<UserCredential>;
+}
+
+/**
+ * Repository for `user_attributes` (claims as data; ADR-002 §Decision.3).
+ */
+export interface UserAttributesRepository {
+  upsertMany(
+    userId: string,
+    attrs: readonly UpsertUserAttributeInput[],
+    tx?: DbClient
+  ): Promise<UserAttributeRow[]>;
+  setVerified(
+    userId: string,
+    source: string,
+    attrKey: string,
+    verified: boolean,
+    tx?: DbClient
+  ): Promise<UserAttributeRow | undefined>;
+}
 
 /**
  * Refresh token types inferred from schema

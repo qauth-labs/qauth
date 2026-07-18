@@ -12,6 +12,7 @@ import { env } from '../../../config/env';
 import { MIN_RESPONSE_TIME_MS } from '../../constants';
 import { hashEmail, logAuthEvent } from '../../helpers/auth-events';
 import { resolveAudience } from '../../helpers/client-auth';
+import { verifyPasswordCredential } from '../../helpers/credential-auth';
 import { checkLockout, recordFailedAttempt, resetFailedAttempts } from '../../helpers/failed-login';
 import { getOrCreateSystemClient } from '../../helpers/oauth-client';
 import { getOrCreateDefaultRealm } from '../../helpers/realm';
@@ -75,14 +76,14 @@ export default async function (fastify: FastifyInstance) {
         // Get default realm
         const realm = await getOrCreateDefaultRealm(fastify);
 
-        // Find user by email (realm scoped)
-        const user = await fastify.repositories.users.findByEmail(realm.id, normalizedEmail);
-
-        // Verify password (always perform verification to prevent timing attacks)
-        let passwordValid = false;
-        if (user) {
-          passwordValid = await fastify.passwordHasher.verifyPassword(user.passwordHash, password);
-        }
+        // Password check via the user_credentials read path (#228): lookup on
+        // (realm_id, 'password', external_sub), argon2 against
+        // credential_data.password_hash, provider-normalized identity.
+        const check = await verifyPasswordCredential(fastify, {
+          realmId: realm.id,
+          email: normalizedEmail,
+          password,
+        });
 
         // Email-verified gate (F-08): config-driven, MVP default is `false`
         // (unverified-email login allowed per PRD "optional for MVP"). An
@@ -90,7 +91,9 @@ export default async function (fastify: FastifyInstance) {
         // `REQUIRE_EMAIL_VERIFIED=true`; the login then fails closed with
         // `EmailNotVerifiedError` BEFORE tokens are issued, so the OIDC
         // `email_verified` claim is always trustworthy when that flag is on.
-        if (user && passwordValid && !user.emailVerified && env.REQUIRE_EMAIL_VERIFIED) {
+        // Since #228 the gate reads credential_data.email_verified — kept
+        // equal to users.email_verified by the dual-write transactions.
+        if (check.status === 'ok' && !check.emailVerified && env.REQUIRE_EMAIL_VERIFIED) {
           await recordFailedAttempt(fastify.redis, lockoutIdentifiers);
           fastify.metrics.loginAttempts.inc({ result: 'failure', reason: 'email_not_verified' });
           logAuthEvent(request, 'user.login.failure', false, {
@@ -98,7 +101,7 @@ export default async function (fastify: FastifyInstance) {
             reason: 'email_not_verified',
           });
           await fastify.repositories.auditLogs.create({
-            userId: user.id,
+            userId: check.credential.userId,
             oauthClientId: null,
             event: 'user.login.failure',
             eventType: 'auth',
@@ -111,8 +114,22 @@ export default async function (fastify: FastifyInstance) {
           throw new EmailNotVerifiedError('Email address not verified. Check your inbox.');
         }
 
+        // JWT claims still come from the users row so token output stays
+        // byte-identical (claim re-sourcing is #229). The row must exist for
+        // any live credential (FK), so a miss is treated as invalid below.
+        const user =
+          check.status === 'ok'
+            ? await fastify.repositories.users.findById(check.credential.userId)
+            : undefined;
+        if (check.status === 'ok' && !user) {
+          fastify.log.error(
+            { credentialId: check.credential.id },
+            'password credential without a users row'
+          );
+        }
+
         // If credentials are invalid, throw generic error
-        if (!user || !passwordValid) {
+        if (check.status !== 'ok' || !user) {
           // Record the failed attempt for throttling/lockout (#115).
           await recordFailedAttempt(fastify.redis, lockoutIdentifiers);
 

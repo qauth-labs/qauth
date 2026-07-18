@@ -38,6 +38,7 @@
         "libs/server/pkce/*",
         "libs/server/federation/*",
         "libs/fastify/plugins/pkce/*",
+        "libs/fastify/plugins/federation/*",
         "libs/core/crypto/*"
       ]
     },
@@ -61,6 +62,7 @@
         "libs/server/pkce/*",
         "libs/server/federation/*",
         "libs/fastify/plugins/pkce/*",
+        "libs/fastify/plugins/federation/*",
         "libs/core/crypto/*"
       ],
       "options": {

@@ -21,13 +21,15 @@ import { EPOCH_MS_NOW, JSONB_EMPTY_OBJECT } from './sql-helpers';
  * identity anchor, `user_credentials` holds one row per authentication method,
  * and `user_attributes` holds claims as data (with source-based trust ordering).
  *
- * This module is PURELY ADDITIVE. The legacy `users.email` /
- * `users.email_normalized` / `users.password_hash` columns remain untouched and
- * are still the live read path. The idempotent backfill (#226,
- * `../backfill/backfill-identity.ts`) populates these two tables from the
- * legacy columns; no runtime code reads them until the auth-engine refactor
- * (#228). Attribute/claim resolution (#229) and legacy column removal (#230)
- * are separate, later issues.
+ * As of the auth-engine refactor (#228) these two tables ARE the live runtime
+ * path: login resolves password credentials via
+ * `(realm_id, provider_type, external_sub)`, and register/verify/resend write
+ * both tables. The legacy `users.email` / `users.email_normalized` /
+ * `users.password_hash` columns are dual-written rollback shims until #230
+ * removes them; the idempotent backfill (#226,
+ * `../backfill/backfill-identity.ts`) populated existing rows from those
+ * columns. Attribute/claim trust-order resolution (#229) and legacy column
+ * removal (#230) are separate, later issues.
  */
 
 /**
@@ -116,7 +118,7 @@ export const userCredentials = pgTable(
  * `source='wallet', attr_key='email'` row). Writers must account for it: the
  * #226 backfill (`../backfill/backfill-identity.ts`) inserts with
  * `ON CONFLICT DO NOTHING` as a race guard and keys its skip/refresh logic on
- * `user_id`, while the runtime writer (#229) is expected to upsert
+ * `user_id`, while the runtime writer (`upsertMany`, shipped in #228) upserts
  * (`ON CONFLICT (user_id, source, attr_key) DO UPDATE`). Multiple *sources*
  * can still each hold their own value for the same `attr_key` — trust-order
  * resolution across those rows is the application-code concern noted above.
