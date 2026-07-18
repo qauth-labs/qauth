@@ -45,6 +45,10 @@ catalog:
   '@nx/js': '23.0.0'
   '@nx/node': '23.0.0'
   '@nx/vitest': '23.0.0'
+  # Pure-TS FIPS 204 (ML-DSA) signing backend for the PQC roadmap (ADR-005,
+  # #243). EXACT pin (pre-1.0 signing-path dependency): security fixes do NOT
+  # flow automatically — upgrade only via a deliberate, reviewed bump.
+  '@noble/post-quantum': '0.6.1'
   '@swc-node/register': '~1.11.1'
   '@swc/core': '~1.15.43'
   '@swc/helpers': '~0.5.23'

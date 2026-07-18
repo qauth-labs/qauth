@@ -4,6 +4,7 @@
   "private": true,
   "main": "src/index.ts",
   "dependencies": {
+    "@qauth-labs/core-crypto": "workspace:*",
     "dotenv": "catalog:",
     "zod": "catalog:"
   }
