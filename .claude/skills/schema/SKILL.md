@@ -22,11 +22,9 @@ Three tables (see `libs/infra/db/src/lib/schema/core.ts` + `identity.ts`):
 
 - **`users`** — identity anchor ONLY: `id` (uuidv7 PK — the stable OIDC `sub`),
   `realm_id`, `enabled`, `first_name`/`last_name` (→ OIDC `name` claim),
-  `metadata`, timestamps, `last_login_at`. Plus two **vestigial** columns —
-  `email_verified`, `email_verified_at` — no writers since #230; the single
-  sanctioned reader is the register 201 response surfacing the column's
-  default (always false). Verified state lives in
-  `credential_data`/`user_attributes`; drop tracked in #261 (migration 0012).
+  `metadata`, timestamps, `last_login_at`. (The vestigial
+  `email_verified`/`email_verified_at` columns were dropped in #261,
+  migration 0012; verified state lives in `credential_data`/`user_attributes`.)
 - **`user_credentials`** — one row per authentication method per user.
   `provider_type` (`'password' | 'wallet' | 'oidc_*'`, plain text — no enum),
   `external_sub` (normalized email for password; DID/upstream sub later),

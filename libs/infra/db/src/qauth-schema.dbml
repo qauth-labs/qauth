@@ -80,7 +80,6 @@ Table "realms" {
 Table "users" {
   "id" uuid [pk, default: `uuidv7()`]
   "realm_id" uuid [not null, ref: > realms.id]
-  "email_verified" boolean [not null, default: false, note: "VESTIGIAL since #230: no writers and one sanctioned reader (the register 201 response surfaces the RETURNING'd default, always false); drop tracked in #261 (migration 0012); verified state lives in credential_data/user_attributes"]
   "enabled" boolean [not null, default: true]
   "first_name" varchar(255) [note: "Sourced into the OIDC name claim"]
   "last_name" varchar(255)
@@ -88,7 +87,6 @@ Table "users" {
   "created_at" bigint [not null, default: `EXTRACT(EPOCH FROM NOW())::bigint * 1000`]
   "updated_at" bigint [not null, default: `EXTRACT(EPOCH FROM NOW())::bigint * 1000`]
   "last_login_at" bigint
-  "email_verified_at" bigint [note: "VESTIGIAL since #230 — see email_verified; drop tracked in #261"]
 
   Indexes {
     realm_id [name: "idx_users_realm_id"]

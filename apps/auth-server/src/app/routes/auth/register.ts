@@ -161,13 +161,14 @@ export default async function (fastify: FastifyInstance) {
         email: normalizedEmail,
       });
 
-      // Response email is the request-derived normalized address — the value
-      // the dropped users.email column held for every post-#228 row; the
-      // emailVerified field reads the vestigial column's default (false).
+      // Response email is the request-derived normalized address; a fresh
+      // registration is always unverified (#261: the vestigial users column
+      // this used to surface is dropped — the literal keeps the wire byte-
+      // identical).
       return reply.code(201).send({
         id: user.id,
         email: normalizedEmail,
-        emailVerified: user.emailVerified,
+        emailVerified: false,
         realmId: user.realmId,
         createdAt: user.createdAt,
         updatedAt: user.updatedAt,
