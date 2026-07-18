@@ -121,6 +121,13 @@ export async function app(fastify: FastifyInstance, opts: object) {
     // rejected everywhere it is used as a bearer credential. Resolved lazily
     // via the `fastify.redis` decorator (cache plugin registered above).
     isTokenRevoked: (jti) => isJtiRevoked(fastify, jti),
+    // #246: when hybrid signing is enabled, publish the ML-DSA public key as an
+    // AKP JWK on /.well-known/jwks.json alongside the Ed25519 OKP key. The
+    // config's fail-fast coupling guarantees the seed is present when the flag
+    // is on. No ML-DSA-signed token is issued yet (that awaits #247/#248).
+    ...(env.HYBRID_SIGNING_ENABLED
+      ? { mlDsaSeed: env.JWT_MLDSA_PRIVATE_KEY, mlDsaKeyId: env.JWT_MLDSA_KID }
+      : {}),
   });
 
   await fastify.register(rateLimitPlugin);

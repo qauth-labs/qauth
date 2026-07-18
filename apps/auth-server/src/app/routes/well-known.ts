@@ -75,6 +75,12 @@ export default async function (fastify: FastifyInstance) {
     async (_request, reply) => {
       // Public keys can be served by any cache; see RFC 7517 §8.5.1.
       // `application/jwk-set+json` is the registered media type.
+      //
+      // MIXED KEY TYPES (#246, ADR-005): the `keys` array is EdDSA-only (`kty:
+      // "OKP"`) by default. When hybrid signing is enabled it ALSO includes the
+      // ML-DSA-65 public key as `kty: "AKP"` (with a base64url `pub` member).
+      // A classical Ed25519-only verifier does not understand `AKP` and simply
+      // ignores that entry — mixed-key clients pick the key they need by `kty`.
       reply
         .header('Cache-Control', DISCOVERY_CACHE_CONTROL)
         .header('Content-Type', 'application/jwk-set+json; charset=utf-8');

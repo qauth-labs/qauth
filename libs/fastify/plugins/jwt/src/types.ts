@@ -1,4 +1,4 @@
-import type { ActClaim, JWTPayload, PublicJwk } from '@qauth-labs/server-jwt';
+import type { ActClaim, AkpJwk, JWTPayload, PublicJwk } from '@qauth-labs/server-jwt';
 import type { FastifyPluginOptions } from 'fastify';
 
 /**
@@ -21,6 +21,17 @@ export interface JwtPluginOptions extends FastifyPluginOptions {
    */
   keyId?: string;
   /**
+   * Optional ML-DSA-65 private key as a base64url 32-byte seed (#246). When
+   * present, `getJwks()` additionally publishes the derived ML-DSA PUBLIC key
+   * as an `AKP` JWK alongside the Ed25519 `OKP` entry, so PQC-capable verifiers
+   * can retrieve it. Supplied by the auth-server only when hybrid signing is
+   * enabled (`HYBRID_SIGNING_ENABLED`); no ML-DSA-signed token is issued by
+   * this plugin. Absent → JWKS is EdDSA-only, exactly as before.
+   */
+  mlDsaSeed?: string;
+  /** Stable `kid` for the ML-DSA key published in the AKP JWK (#246). */
+  mlDsaKeyId?: string;
+  /**
    * Optional revocation denylist check (RFC 7009). When provided, the
    * `requireJwt` preHandler calls it AFTER a successful signature/issuer
    * verification with the verified token's `jti`; a truthy result rejects the
@@ -34,7 +45,8 @@ export interface JwtPluginOptions extends FastifyPluginOptions {
  * JWKS envelope as served by `/.well-known/jwks.json` (RFC 7517 §5).
  */
 export interface Jwks {
-  keys: PublicJwk[];
+  /** Ed25519 `OKP` keys and, when hybrid signing is configured, ML-DSA `AKP` keys (#246). */
+  keys: (PublicJwk | AkpJwk)[];
 }
 
 /**

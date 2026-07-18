@@ -1,6 +1,7 @@
 import {
   authEnvSchema,
   baseEnvSchema,
+  cryptoEnvSchema,
   databaseEnvSchema,
   DEV_SESSION_COOKIE_SECRET_DEFAULT,
   emailEnvSchema,
@@ -67,9 +68,14 @@ const envSchema = z
  * Validated environment configuration
  */
 const parsedEnv = parseEnv(envSchema);
-export const env: z.infer<typeof envSchema> & z.infer<typeof jwtEnvSchema> = {
+export const env: z.infer<typeof envSchema> &
+  z.infer<typeof jwtEnvSchema> &
+  z.infer<typeof cryptoEnvSchema> = {
   ...parsedEnv,
   ...parseEnv(jwtEnvSchema),
+  // Crypto / PQC signing config (ADR-005): SIGNING_ALGORITHM_MODE (#243),
+  // HYBRID_SIGNING_ENABLED + ML-DSA key (#245), with fail-fast coupling.
+  ...parseEnv(cryptoEnvSchema),
   // resolved after parse: ENABLE_SWAGGER defaults to NODE_ENV !== 'production'
   ENABLE_SWAGGER: parsedEnv.ENABLE_SWAGGER ?? parsedEnv.NODE_ENV !== 'production',
 };
