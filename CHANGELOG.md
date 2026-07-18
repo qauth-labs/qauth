@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **BREAKING**: ID tokens now release `email`/`email_verified` only when the
+  granted scope includes `email`, matching the userinfo endpoint's gating
+  (OIDC Core §5.4 data minimization). Clients requesting only `openid` no
+  longer receive the user's email in the ID token — request the `email`
+  scope. Access-token convenience claims and userinfo behavior are
+  unchanged. ([#259])
+
+[#259]: https://github.com/qauth-labs/qauth/issues/259
+
 - **BREAKING (schema)**: migration 0011 completes ADR-002 — it **drops**
   `users.email`, `users.email_normalized`, and `users.password_hash` (and
   their indexes), drops `email_verification_tokens.user_id`, and promotes

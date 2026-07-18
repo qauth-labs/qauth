@@ -84,7 +84,9 @@ On email verification (one transaction): mark the token used, set
   email attribute exists** — never `null`. Applies to ID tokens, userinfo,
   AND the non-standard access-token convenience claims (all six user-bound
   emission sites go through `resolveEmailClaims` in
-  `apps/auth-server/src/app/helpers/email-claims.ts`).
+  `apps/auth-server/src/app/helpers/email-claims.ts`). Additionally (#259,
+  BREAKING): ID tokens and userinfo release the pair only when the `email`
+  SCOPE was granted; the access-token convenience claims are not scope-gated.
 - `email_verified` — always `true` when `email` is present (presence IS the
   verification signal); omitted together with `email` otherwise. The
   email-present-plus-verified-false shape no longer exists.

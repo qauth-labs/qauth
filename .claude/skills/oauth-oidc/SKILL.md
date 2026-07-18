@@ -55,6 +55,9 @@ Do not add these fields until `WalletProvider` is implemented and tested (Phase 
 
 The `email` claim in ID tokens and userinfo responses:
 
+- Released only when the `email` scope was granted — userinfo since #229,
+  ID tokens since #259; without the scope the claims are omitted even for a
+  verified email (access-token convenience claims are not scope-gated)
 - Present only when `user_attributes` has a verified email (`verified=true`)
 - Absent (not null) when no verified email exists
 - Sourced from the highest-trust attribute source (`wallet > oidc_* > self_reported`);
