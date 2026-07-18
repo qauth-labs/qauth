@@ -12,6 +12,15 @@ export interface SignOptions {
   expiresIn: number;
   /** `aud` (audience) claim value — a single audience or a list. */
   audience: string | string[];
+  /**
+   * Extra protected-header members merged in alongside `alg` (#245 hybrid
+   * signing uses this to stamp `kid` / `pqc_alg` / `pqc_kid`). Defaults to
+   * empty — when omitted the header is exactly `{ alg }`, so existing EdDSA
+   * callers emit byte-identical tokens. Do NOT put anything in `crit` here: a
+   * critical member a classical verifier does not understand makes it reject
+   * the token, breaking the hybrid design's compatibility guarantee.
+   */
+  header?: Record<string, unknown>;
 }
 
 /** Constraints applied when verifying a token. */
@@ -58,7 +67,7 @@ export async function sign(
   options: SignOptions
 ): Promise<string> {
   return new SignJWT(claims)
-    .setProtectedHeader({ alg })
+    .setProtectedHeader({ alg, ...(options.header ?? {}) })
     .setIssuedAt()
     .setExpirationTime(`${options.expiresIn}s`)
     .setIssuer(options.issuer)

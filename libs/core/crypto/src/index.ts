@@ -2,6 +2,20 @@ export type { JwsAlgorithm, SignatureAlgorithm } from './lib/algorithms';
 export { getSignatureBackend } from './lib/backend-registry';
 export { CryptoVerificationError, type CryptoVerificationErrorReason } from './lib/errors';
 export {
+  PQC_ALG_ML_DSA_65,
+  PQC_HEADER_ALG_MEMBER,
+  PQC_HEADER_KID_MEMBER,
+  PQC_JOSE_COMPOSITE_DRAFT,
+} from './lib/hybrid-constants';
+export {
+  extractJwsSigningInput,
+  type HybridSignedToken,
+  type HybridSigningKey,
+  type HybridVerifyKey,
+  signHybrid,
+  verifyHybrid,
+} from './lib/hybrid-signing';
+export {
   generateSigningKeyPair,
   type GenerateSigningKeyPairOptions,
   importPrivateSigningKey,
