@@ -169,6 +169,31 @@ describe('identity repositories integration (real Postgres)', () => {
     expect(walletRow[0].id).not.toBe(inserted[0].id);
   });
 
+  it('findVerifiedByUserIdAndKey returns only verified rows scoped to (user, key)', async () => {
+    const { user } = await seedUser('claims@example.com');
+    const { user: otherUser } = await seedUser('other@example.com');
+    await attributes.upsertMany(user.id, [
+      { source: 'self_reported', attrKey: 'email', attrValue: 'self@example.com', verified: true },
+      { source: 'wallet', attrKey: 'email', attrValue: 'wallet@example.com', verified: true },
+      // Unverified — must be filtered by the SQL, not the caller.
+      { source: 'oidc_google', attrKey: 'email', attrValue: 'oidc@example.com', verified: false },
+      // Different key — out of scope.
+      { source: 'self_reported', attrKey: 'name', attrValue: 'Someone', verified: true },
+    ]);
+    await attributes.upsertMany(otherUser.id, [
+      { source: 'wallet', attrKey: 'email', attrValue: 'not-yours@example.com', verified: true },
+    ]);
+
+    const rows = await attributes.findVerifiedByUserIdAndKey(user.id, 'email');
+
+    expect(rows.map((r) => r.attrValue).sort()).toEqual(['self@example.com', 'wallet@example.com']);
+    expect(rows.every((r) => r.verified)).toBe(true);
+
+    // No verified rows → empty array, never undefined.
+    const none = await attributes.findVerifiedByUserIdAndKey(otherUser.id, 'name');
+    expect(none).toEqual([]);
+  });
+
   it('upsertMany collapses duplicate (source, attr_key) inputs last-wins', async () => {
     const { user } = await seedUser();
 

@@ -4,6 +4,7 @@ import { ZodTypeProvider } from 'fastify-type-provider-zod';
 
 import { env } from '../../../config/env';
 import { MIN_RESPONSE_TIME_MS } from '../../constants';
+import { resolveEmailClaims } from '../../helpers/email-claims';
 import { ensureMinimumResponseTime } from '../../helpers/timing';
 import { userinfoResponseSchema } from '../../schemas/oauth';
 
@@ -74,13 +75,13 @@ export default async function (fastify: FastifyInstance) {
           sub: user.id,
         };
 
+        // BREAKING (#229, ADR-002): under the `email` scope, the claims
+        // resolve from verified user_attributes via the trust order; both are
+        // OMITTED (never null) when no verified email exists — OIDC Core
+        // §5.3.2 permits omission of unavailable claims. The resolver query
+        // is skipped entirely when the scope was not granted.
         if (grantedScopes.has('email')) {
-          if (typeof user.email === 'string' && user.email.length > 0) {
-            responseBody.email = user.email;
-          }
-          if (typeof user.emailVerified === 'boolean') {
-            responseBody.email_verified = user.emailVerified;
-          }
+          Object.assign(responseBody, await resolveEmailClaims(fastify, user.id));
         }
 
         // OIDC Core §5.1 `name` — the end-user display name, derived from the

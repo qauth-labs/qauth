@@ -113,6 +113,10 @@ export function buildOpenIdConfiguration(input: DiscoveryMetadataInput): Record<
     // token when the client supplies it (OIDC Core §3.1.3.6). `name` is emitted
     // when the user has a display name set. This list MUST stay consistent with
     // the ID token (token endpoint) and the userinfo response.
+    // Discovery §3 lists claims the OP "MAY be able to supply" — conditional
+    // emission is compliant. Since #229, email/email_verified are released
+    // only when a VERIFIED email attribute exists (omitted entirely
+    // otherwise), so they stay listed here unchanged.
     claims_supported: [
       'sub',
       'iss',

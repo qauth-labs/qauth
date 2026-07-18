@@ -83,6 +83,24 @@ function createFastifyStub() {
         findByRealmProviderSub: vi.fn(),
         findById: vi.fn(),
       },
+      userAttributes: {
+        // #229 claim resolution default: one verified self_reported email
+        // attribute matching the user fixture. Overridden per test for the
+        // divergent-source and omission cases.
+        findVerifiedByUserIdAndKey: vi.fn().mockResolvedValue([
+          {
+            id: 'attr-1',
+            userId: 'user-1',
+            source: 'self_reported',
+            attrKey: 'email',
+            attrValue: 'user@example.com',
+            verified: true,
+            expiresAt: null,
+            createdAt: 1,
+            updatedAt: 1,
+          },
+        ]),
+      },
       oauthClients: {
         findByClientId: vi.fn(),
         create: vi.fn(),
@@ -217,14 +235,15 @@ describe('POST /auth/login', () => {
     });
   });
 
-  it('emits byte-identical JWT claims sourced from the users row (pre-#229 fixture)', async () => {
+  it('emits trust-resolved email claims sourced from user_attributes — BREAKING #229', async () => {
     const { fastify, ctx } = createFastifyStub();
     await loginRoute(fastify);
 
-    // The two candidate claim sources DIVERGE on purpose: the users row says
-    // canonical@example.com / verified while credential_data says
-    // user@example.com / unverified. Only users-row sourcing produces the
-    // asserted claims — a regression to credential-sourced claims fails here.
+    // All THREE candidate sources diverge on purpose: users row says
+    // canonical@example.com, credential external_sub says user@example.com,
+    // and the verified attribute says attr@example.com. Only attribute
+    // sourcing (the #229 resolver) produces the asserted claims — a
+    // regression to either legacy source fails here.
     (
       fastify.repositories.userCredentials.findByRealmProviderSub as unknown as Mock
     ).mockResolvedValue(
@@ -235,6 +254,21 @@ describe('POST /auth/login', () => {
     (fastify.repositories.users.findById as unknown as Mock).mockResolvedValue(
       userFixture({ email: 'canonical@example.com', emailVerified: true })
     );
+    (
+      fastify.repositories.userAttributes.findVerifiedByUserIdAndKey as unknown as Mock
+    ).mockResolvedValue([
+      {
+        id: 'attr-1',
+        userId: 'user-1',
+        source: 'self_reported',
+        attrKey: 'email',
+        attrValue: 'attr@example.com',
+        verified: true,
+        expiresAt: null,
+        createdAt: 1,
+        updatedAt: 1,
+      },
+    ]);
     (fastify.passwordHasher.verifyPassword as unknown as Mock).mockResolvedValue(true);
     (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue({
       id: 'sc-uuid',
@@ -254,12 +288,15 @@ describe('POST /auth/login', () => {
       createReply()
     );
 
-    // Deep-equal against the pre-refactor claims shape: sub/email/email_verified
-    // still come from the users row — claim re-sourcing is #229's entire job.
-    expect(fastify.repositories.users.findById).toHaveBeenCalledWith('user-1');
+    // Full-payload strictness kept from the #228 before-fixture: exact object,
+    // with email from the verified attribute and email_verified literally true.
+    expect(fastify.repositories.userAttributes.findVerifiedByUserIdAndKey).toHaveBeenCalledWith(
+      'user-1',
+      'email'
+    );
     expect(fastify.jwtUtils.signAccessToken).toHaveBeenCalledWith({
       sub: 'user-1',
-      email: 'canonical@example.com',
+      email: 'attr@example.com',
       email_verified: true,
       clientId: 'system',
       aud: 'https://auth.example.com',
@@ -267,6 +304,45 @@ describe('POST /auth/login', () => {
     // The provider is resolved from the registry — it is load-bearing, not
     // decorative (ADR-003).
     expect(fastify.providerRegistry.resolve).toHaveBeenCalledWith('password');
+  });
+
+  it('omits BOTH email claims from the access token when no verified attribute exists — BREAKING #229', async () => {
+    const { fastify, ctx } = createFastifyStub();
+    await loginRoute(fastify);
+
+    (
+      fastify.repositories.userCredentials.findByRealmProviderSub as unknown as Mock
+    ).mockResolvedValue(credentialFixture());
+    (fastify.repositories.users.findById as unknown as Mock).mockResolvedValue(userFixture());
+    (
+      fastify.repositories.userAttributes.findVerifiedByUserIdAndKey as unknown as Mock
+    ).mockResolvedValue([]);
+    (fastify.passwordHasher.verifyPassword as unknown as Mock).mockResolvedValue(true);
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue({
+      id: 'sc-uuid',
+      clientId: 'system',
+      audience: ['https://auth.example.com'],
+    });
+    (fastify.jwtUtils.signAccessToken as unknown as Mock).mockResolvedValue('jwt');
+
+    if (!ctx.handler) throw new Error('Handler missing');
+    const result = await ctx.handler(
+      {
+        body: { email: 'user@example.com', password: 'p' },
+        ip: '127.0.0.1',
+        headers: { 'user-agent': 'vitest' },
+        log: requestLog(),
+      },
+      createReply()
+    );
+
+    // Login itself still succeeds (the F-08 gate is a separate control).
+    expect(result).toMatchObject({ access_token: 'jwt', token_type: 'Bearer' });
+    // Omitted means the KEYS are absent from the signed claims — never null.
+    const signedClaims = (fastify.jwtUtils.signAccessToken as unknown as Mock).mock
+      .calls[0][0] as Record<string, unknown>;
+    expect('email' in signedClaims).toBe(false);
+    expect('email_verified' in signedClaims).toBe(false);
   });
 
   it('throws InvalidCredentialsError for unknown email and skips token minting', async () => {

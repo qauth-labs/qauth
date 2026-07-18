@@ -237,6 +237,33 @@ describe('OIDC conformance — ID token validation against the published key', (
     }
   });
 
+  it('BREAKING #229: a user with no verified email gets an ID token with the claim keys ABSENT, never null (OIDC Core §5.3.2)', async () => {
+    const app = await buildApp();
+    try {
+      // Post-#229 the token endpoint passes NO email pair to the signer when
+      // trust-ordered resolution finds no verified attribute (route-level
+      // coverage lives in token.test.ts). Conformance locks the wire shape:
+      // the serialized ID token must not contain the keys at all — an
+      // explicit-null or present-but-false emission would pass a
+      // toBeUndefined() check but violates the omitted-entirely contract.
+      const idToken = await app.jwtUtils.signIdToken({
+        sub: 'user-uuid-3',
+        audience: CLIENT_ID,
+        name: 'No Verified Email',
+      });
+
+      const claims = decodeClaims(idToken);
+      expect('email' in claims).toBe(false);
+      expect('email_verified' in claims).toBe(false);
+      // The rest of the token is unaffected by the omission.
+      expect(claims['sub']).toBe('user-uuid-3');
+      expect(claims['name']).toBe('No Verified Email');
+      expect(claims['token_use']).toBe('id');
+    } finally {
+      await app.close();
+    }
+  });
+
   it('rejects an ID token whose audience does not match the relying party', async () => {
     const app = await buildApp();
     try {
