@@ -57,7 +57,7 @@ function createFastifyStub() {
     repositories: {
       emailVerificationTokens: {
         findByTokenHash: vi.fn(),
-        markUsed: vi.fn().mockResolvedValue({}),
+        markUsed: vi.fn().mockResolvedValue({ id: 'token-1' }),
       },
       userCredentials: {
         findById: vi.fn(),
@@ -129,6 +129,27 @@ describe('GET /auth/verify', () => {
 
     await expect(ctx.handler(request)).rejects.toThrow(InvalidTokenError);
     expect(fastify.db.transaction).not.toHaveBeenCalled();
+  });
+
+  it('maps a lost single-use race (CAS returns undefined) to the generic token error — #258', async () => {
+    const { fastify, ctx } = createFastifyStub();
+    await verifyRoute(fastify);
+    if (!ctx.handler) throw new Error('Handler missing');
+
+    (
+      fastify.repositories.emailVerificationTokens.findByTokenHash as unknown as Mock
+    ).mockResolvedValue(tokenFixture());
+    (fastify.repositories.userCredentials.findById as unknown as Mock).mockResolvedValue(
+      credentialFixture()
+    );
+    // A concurrent attempt consumed the token between the read and the CAS.
+    (fastify.repositories.emailVerificationTokens.markUsed as unknown as Mock).mockResolvedValue(
+      undefined
+    );
+
+    await expect(ctx.handler(request)).rejects.toThrow(InvalidTokenError);
+    // The loser's transaction rolled back — no verified-state writes land.
+    expect(fastify.repositories.userCredentials.setEmailVerified).toHaveBeenCalledTimes(0);
   });
 
   it('fails closed with InvalidTokenError when no credential resolves', async () => {

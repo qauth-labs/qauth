@@ -96,7 +96,16 @@ export default async function (fastify: FastifyInstance) {
       // the authoritative verified state since #228 (the legacy users
       // dual-write ended with #230).
       await fastify.db.transaction(async (tx) => {
-        await fastify.repositories.emailVerificationTokens.markUsed(verificationToken.id, tx);
+        // Single-use CAS (#258): losing the race to a concurrent attempt with
+        // the same token rolls the whole completion back and surfaces the
+        // same generic error as an invalid/expired token — no state leak.
+        const consumed = await fastify.repositories.emailVerificationTokens.markUsed(
+          verificationToken.id,
+          tx
+        );
+        if (!consumed) {
+          throw new InvalidTokenError('Invalid or expired token');
+        }
         await fastify.repositories.userCredentials.setEmailVerified(credential.id, tx);
         const attribute = await fastify.repositories.userAttributes.setVerified(
           credential.userId,

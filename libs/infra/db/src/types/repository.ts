@@ -182,7 +182,8 @@ export interface EmailVerificationTokensRepository {
   /**
    * Mark a token as used
    */
-  markUsed(id: string, tx?: DbClient): Promise<EmailVerificationToken>;
+  /** CAS single-use (#258): undefined when the token was already used. */
+  markUsed(id: string, tx?: DbClient): Promise<EmailVerificationToken | undefined>;
   /**
    * Invalidate all active tokens for a credential (#230: credential-keyed)
    */
