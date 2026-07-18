@@ -1,0 +1,23 @@
+[package]
+name = "qauth-crypto-native"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+# napi-rs bindings for the Node addon surface.
+napi = { version = "2", default-features = false, features = ["napi8"] }
+napi-derive = "2"
+# aws-lc-rs ML-DSA-65 (FIPS 204) via the `unstable` PQC surface. EXACT-pinned:
+# a pre-1.x-stable PQC API on the signing path — upgrade only deliberately.
+aws-lc-rs = { version = "=1.17.3", features = ["unstable"] }
+
+[build-dependencies]
+napi-build = "2"
+
+[profile.release]
+lto = true
+strip = "symbols"
