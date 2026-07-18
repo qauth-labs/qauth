@@ -93,8 +93,8 @@ export default async function (fastify: FastifyInstance) {
         // `EmailNotVerifiedError` BEFORE tokens are issued, so the OIDC
         // `email_verified` claim is always trustworthy when that flag is on.
         // Since #228 the gate reads credential_data.email_verified — the
-        // authoritative source (users.email_verified is vestigial since #230
-        // and no longer written).
+        // authoritative source (the legacy users.email_verified column was
+        // dropped in #261).
         if (check.status === 'ok' && !check.emailVerified && env.REQUIRE_EMAIL_VERIFIED) {
           await recordFailedAttempt(fastify.redis, lockoutIdentifiers);
           fastify.metrics.loginAttempts.inc({ result: 'failure', reason: 'email_not_verified' });
