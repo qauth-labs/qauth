@@ -1,4 +1,5 @@
 export * from './lib/header-utils';
+export * from './lib/hybrid-jwt-service';
 export * from './lib/jose-utils';
 export * from './lib/jwks';
 export * from './lib/jwt-service';

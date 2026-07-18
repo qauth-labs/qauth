@@ -28,14 +28,18 @@ import { accessTokenClaimsSchema } from './access-token-claims';
  * );
  * ```
  */
-export async function signAccessToken(
-  payload: SignAccessTokenPayload,
-  privateKey: KeyLike,
-  issuer: string,
-  expiresIn: number
-): Promise<string> {
-  // Build claims. Omit email/email_verified for client_credentials tokens where
-  // there is no end-user. Include scope only when granted.
+/**
+ * Build the access-token claim set + resolved audience (business logic; no
+ * signing). Extracted so the classical {@link signAccessToken} and the hybrid
+ * signer (#245) share ONE claim-shaping source and can never drift. Each call
+ * mints a fresh `jti`.
+ */
+export function buildAccessTokenClaims(payload: SignAccessTokenPayload): {
+  claims: Record<string, unknown>;
+  audience: string | string[];
+} {
+  // Omit email/email_verified for client_credentials tokens where there is no
+  // end-user. Include scope only when granted.
   const claims: Record<string, unknown> = {
     sub: payload.sub,
     client_id: payload.clientId,
@@ -68,7 +72,16 @@ export async function signAccessToken(
   // `aud` claim: array → multi-audience, string → single, otherwise fall back
   // to the client_id (OAuth 2.1 RFC 8707 light-mode default).
   const audience = payload.aud ?? payload.clientId;
+  return { claims, audience };
+}
 
+export async function signAccessToken(
+  payload: SignAccessTokenPayload,
+  privateKey: KeyLike,
+  issuer: string,
+  expiresIn: number
+): Promise<string> {
+  const { claims, audience } = buildAccessTokenClaims(payload);
   // The claims shaping above is business logic and stays here; only the JWS
   // signing crosses into the algorithm-agnostic crypto abstraction (ADR-005).
   return sign(claims, privateKey, 'EdDSA', { issuer, expiresIn, audience });
@@ -111,12 +124,14 @@ export async function signAccessToken(
  * );
  * ```
  */
-export async function signIdToken(
-  payload: SignIdTokenPayload,
-  privateKey: KeyLike,
-  issuer: string,
-  expiresIn: number
-): Promise<string> {
+/**
+ * Build the ID-token claim set + audience (business logic; no signing).
+ * Shared by the classical {@link signIdToken} and the hybrid signer (#245).
+ */
+export function buildIdTokenClaims(payload: SignIdTokenPayload): {
+  claims: Record<string, unknown>;
+  audience: string | string[];
+} {
   const claims: Record<string, unknown> = {
     sub: payload.sub,
     // Token-use marker: this is an OIDC ID token, never an access token.
@@ -138,12 +153,17 @@ export async function signIdToken(
   if (payload.nonce !== undefined) {
     claims['nonce'] = payload.nonce;
   }
+  return { claims, audience: payload.audience };
+}
 
-  return sign(claims, privateKey, 'EdDSA', {
-    issuer,
-    expiresIn,
-    audience: payload.audience,
-  });
+export async function signIdToken(
+  payload: SignIdTokenPayload,
+  privateKey: KeyLike,
+  issuer: string,
+  expiresIn: number
+): Promise<string> {
+  const { claims, audience } = buildIdTokenClaims(payload);
+  return sign(claims, privateKey, 'EdDSA', { issuer, expiresIn, audience });
 }
 
 /**
