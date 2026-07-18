@@ -1,6 +1,6 @@
 import { jwtVerify, SignJWT } from 'jose';
 
-import type { SignatureAlgorithm } from './algorithms';
+import type { JwsAlgorithm } from './algorithms';
 import { CryptoVerificationError } from './errors';
 import type { SigningKey } from './keys';
 
@@ -20,7 +20,7 @@ export interface VerifyOptions {
    * Permitted signature algorithms. A token whose header `alg` is not in this
    * list is rejected (algorithm-confusion defence).
    */
-  algorithms: SignatureAlgorithm[];
+  algorithms: JwsAlgorithm[];
   /** When set, the token's `iss` must equal this value (RFC 9700 mix-up defence). */
   issuer?: string;
   /** When set, the token's `aud` must include this value. */
@@ -54,7 +54,7 @@ export interface VerifyOptions {
 export async function sign(
   claims: Record<string, unknown>,
   privateKey: SigningKey,
-  alg: SignatureAlgorithm,
+  alg: JwsAlgorithm,
   options: SignOptions
 ): Promise<string> {
   return new SignJWT(claims)

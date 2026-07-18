@@ -6,6 +6,10 @@
  *   prompt a token refresh) rather than as a generic failure.
  * - `invalid` — any other verification failure: bad signature, malformed token,
  *   issuer/audience mismatch, unsupported algorithm, etc.
+ *
+ * `expired` is exclusively a TOKEN-LAYER reason (it needs temporal claims). The
+ * byte-level {@link import('./primitives').SignatureBackend} verify — which has
+ * no notion of `exp` — only ever throws with `reason: 'invalid'`.
  */
 export type CryptoVerificationErrorReason = 'expired' | 'invalid';
 
