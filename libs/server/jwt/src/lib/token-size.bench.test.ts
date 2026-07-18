@@ -117,5 +117,18 @@ describe('token size (ADR-005 / #247)', () => {
     // Invariant 3: a naive inline/compound token would blow the cookie budget,
     // which is exactly the failure #247's reference-token default prevents.
     expect(compound).toBeGreaterThan(COOKIE_BUDGET);
+
+    // EXACT figures — these ARE the numbers documented in
+    // docs/adr/005-pqc-hybrid-signing.md. They are deterministic for the fixed
+    // representative payload above: the ML-DSA-65 signature is a constant 3309
+    // bytes (FIPS 204) → 4412 base64url chars, and the Ed25519 JWS length is
+    // fixed because every claim is fixed-length (36-char jti, 10-digit iat/exp).
+    // Pinning them keeps AC#1 ("measured, not estimated") SELF-ENFORCING: if a
+    // change here moves a number, CI fails until the ADR-005 table is updated to
+    // match. Update BOTH together.
+    expect(pqcSig).toBe(4412);
+    expect(bearer).toBe(716);
+    expect(idBearer).toBe(576);
+    expect(compound).toBe(5128);
   });
 });
