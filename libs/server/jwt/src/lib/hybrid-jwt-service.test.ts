@@ -11,7 +11,7 @@ import {
   signHybridIdToken,
   verifyHybridAccessToken,
 } from './hybrid-jwt-service';
-import { buildAccessTokenClaims, signAccessToken } from './jwt-service';
+import { buildAccessTokenClaims, signAccessToken, verifyAccessToken } from './jwt-service';
 
 const ISSUER = 'https://auth.example.com';
 const noble = getSignatureBackend('ML-DSA-65', ['ML-DSA-65']);
@@ -85,6 +85,23 @@ describe('hybrid jwt-service (#245)', () => {
     const { payload } = await jwtVerify(hybrid.token, edPublic, { algorithms: ['EdDSA'] });
     expect(payload['token_use']).toBe('id');
     expect(payload['nonce']).toBe('n-1');
+  });
+
+  it('introspection path accepts a hybrid bearer as a reference token (#247 AC#4)', async () => {
+    // When hybrid is on, the bearer (`.token`) is still a plain Ed25519 JWS, so
+    // the EXACT function introspection calls (`verifyAccessToken`, wired as
+    // `fastify.jwtUtils.verifyAccessToken` at introspect.ts) validates it with
+    // no PQC awareness. The ~4.4 KB PQC signature is delivered out-of-band.
+    const { signing, edPublic } = await hybridKeys();
+    const hybrid = await signHybridAccessToken(
+      { sub: 'user-1', clientId: 'client-1', scope: 'read' },
+      signing,
+      ISSUER,
+      900
+    );
+    const claims = await verifyAccessToken(hybrid.token, edPublic, { issuer: ISSUER });
+    expect(claims.sub).toBe('user-1');
+    expect(claims.scope).toBe('read');
   });
 
   it('zero-regression: the classical signAccessToken is unchanged (no pqc header member)', async () => {
