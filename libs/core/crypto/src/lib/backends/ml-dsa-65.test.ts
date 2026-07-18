@@ -106,7 +106,7 @@ describe('ML-DSA-65 backend — properties', () => {
     expect(() => mlDsa65Backend.verify(b.publicKey, message, sig)).toThrow(CryptoVerificationError);
   });
 
-  it('normalizes a malformed-length signature to CryptoVerificationError (not a raw noble error)', () => {
+  it('rejects a wrong-length signature (noble returns false → the !ok branch)', () => {
     const { publicKey } = mlDsa65Backend.generateKeyPair();
     let thrown: unknown;
     try {
@@ -116,6 +116,23 @@ describe('ML-DSA-65 backend — properties', () => {
     }
     expect(thrown).toBeInstanceOf(CryptoVerificationError);
     expect((thrown as CryptoVerificationError).reason).toBe('invalid');
+  });
+
+  it('normalizes a raw noble throw to CryptoVerificationError (the catch path)', () => {
+    // A wrong-length public key makes noble's decode throw a RangeError; the
+    // sanctioned importKey path blocks this, so build the bad key directly to
+    // exercise the catch-block normalization (not the `!ok` branch).
+    const badPub = new MlDsaKey({ kind: 'public', material: new Uint8Array(100) });
+    let thrown: unknown;
+    try {
+      mlDsa65Backend.verify(badPub, bytes('m'), new Uint8Array(ML_DSA_65_LENGTHS.signature));
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(CryptoVerificationError);
+    expect((thrown as CryptoVerificationError).reason).toBe('invalid');
+    // The raw noble RangeError is preserved as the cause, not leaked to the wire.
+    expect((thrown as CryptoVerificationError).cause).toBeInstanceOf(Error);
   });
 
   it('rejects an import with a wrong-length public key or seed', () => {

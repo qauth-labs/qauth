@@ -77,9 +77,12 @@ export const mlDsa65Backend: SignatureBackend = {
     }
     let ok: boolean;
     try {
-      // noble: verify(signature, message, publicKey). Throws on malformed
-      // lengths; returns false on a well-formed-but-forged signature. Both
-      // normalize to the SAME error so no oracle distinguishes them.
+      // noble: verify(signature, message, publicKey). Returns false for a
+      // forged OR wrong-length signature; it throws (RangeError) only for a
+      // wrong-length public key (which importKey already rejects, so this
+      // catch guards only a directly-constructed bad key). The catch and the
+      // `!ok` branch normalize to the SAME CryptoVerificationError, so no
+      // oracle distinguishes forged from malformed.
       ok = ml_dsa65.verify(signature, message, publicKey.material());
     } catch (cause) {
       throw new CryptoVerificationError('invalid', {
