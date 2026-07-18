@@ -10,6 +10,8 @@ import {
   createOAuthConsentsRepository,
   createRealmsRepository,
   createRefreshTokensRepository,
+  createUserAttributesRepository,
+  createUserCredentialsRepository,
   createUsersRepository,
   type Database,
   type DatabasePool,
@@ -18,6 +20,8 @@ import {
   type OAuthConsentsRepository,
   type RealmsRepository,
   type RefreshTokensRepository,
+  type UserAttributesRepository,
+  type UserCredentialsRepository,
   type UsersRepository,
 } from '@qauth-labs/infra-db';
 import type { FastifyInstance } from 'fastify';
@@ -40,6 +44,8 @@ declare module 'fastify' {
       authorizationCodes: AuthorizationCodesRepository;
       auditLogs: ReturnType<typeof createAuditLogsRepository>;
       apiKeys: ApiKeysRepository;
+      userCredentials: UserCredentialsRepository;
+      userAttributes: UserAttributesRepository;
     };
   }
 }
@@ -82,6 +88,8 @@ export const databasePlugin = fp<DatabasePluginOptions>(
       authorizationCodes: createAuthorizationCodesRepository(database.db),
       auditLogs: createAuditLogsRepository(database.db),
       apiKeys: createApiKeysRepository(database.db),
+      userCredentials: createUserCredentialsRepository(database.db),
+      userAttributes: createUserAttributesRepository(database.db),
     });
 
     fastify.addHook('onReady', async () => {

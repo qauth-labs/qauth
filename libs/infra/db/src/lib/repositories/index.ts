@@ -10,4 +10,6 @@ export * from './oauth-clients.repository';
 export * from './oauth-consents.repository';
 export * from './realms.repository';
 export * from './refresh-tokens.repository';
+export * from './user-attributes.repository';
+export * from './user-credentials.repository';
 export * from './users.repository';

@@ -113,6 +113,11 @@ export function createUsersRepository(defaultDb: DbClient): UsersRepository {
      * Find a user by email (case-insensitive lookup)
      * Normalizes the email before querying
      *
+     * @deprecated Since #228 the credential lookup path is
+     * `userCredentials.findByRealmProviderSub(realmId, 'password', email)`;
+     * this method has no production callers and is removed in #230 together
+     * with the legacy email columns.
+     *
      * @param realmId - Realm ID
      * @param email - Email address (will be normalized)
      * @param tx - Optional transaction client
@@ -125,6 +130,9 @@ export function createUsersRepository(defaultDb: DbClient): UsersRepository {
 
     /**
      * Find a user by normalized email
+     *
+     * @deprecated See {@link findByEmail} — removed in #230 with the legacy
+     * email columns.
      *
      * @param realmId - Realm ID
      * @param emailNormalized - Normalized email address

@@ -6,6 +6,7 @@ import formbody from '@fastify/formbody';
 import { cachePlugin } from '@qauth-labs/fastify-plugin-cache';
 import { databasePlugin } from '@qauth-labs/fastify-plugin-db';
 import { emailPlugin, type EmailProviderConfig } from '@qauth-labs/fastify-plugin-email';
+import { createPasswordProvider, federationPlugin } from '@qauth-labs/fastify-plugin-federation';
 import { jwtPlugin } from '@qauth-labs/fastify-plugin-jwt';
 import { passwordPlugin } from '@qauth-labs/fastify-plugin-password';
 import { pkcePlugin } from '@qauth-labs/fastify-plugin-pkce';
@@ -58,6 +59,13 @@ export async function app(fastify: FastifyInstance, opts: object) {
   });
 
   await fastify.register(pkcePlugin);
+
+  // Credential-provider registry (ADR-003, #228). Providers are seeded here —
+  // the bootstrap is the single registration point; adding an upstream (e.g.
+  // WalletProvider, #231) means appending to this list, never touching routes.
+  await fastify.register(federationPlugin, {
+    providers: [createPasswordProvider()],
+  });
 
   // Configure email provider from environment variables
   const emailProvider = env.EMAIL_PROVIDER;

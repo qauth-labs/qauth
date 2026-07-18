@@ -1,3 +1,4 @@
+import { createPasswordProvider } from '@qauth-labs/fastify-plugin-federation';
 import { InvalidCredentialsError, TooManyRequestsError } from '@qauth-labs/shared-errors';
 import type { FastifyInstance } from 'fastify';
 import { describe, expect, it, type Mock, vi } from 'vitest';
@@ -22,9 +23,12 @@ vi.mock('../../../config/env', () => ({
     FAILED_LOGIN_MAX_ATTEMPTS: 5,
     FAILED_LOGIN_WINDOW: 900,
     FAILED_LOGIN_LOCKOUT_DURATION: 900,
+    // Off by default (MVP posture); the gate test flips it per-case.
+    REQUIRE_EMAIL_VERIFIED: false,
   },
 }));
 
+import { env } from '../../../config/env';
 import loginRoute from './login';
 
 interface TestContext {
@@ -72,9 +76,12 @@ function createFastifyStub() {
         create: vi.fn(),
       },
       users: {
-        findByEmail: vi.fn(),
         findById: vi.fn(),
         updateLastLogin: vi.fn().mockResolvedValue(undefined),
+      },
+      userCredentials: {
+        findByRealmProviderSub: vi.fn(),
+        findById: vi.fn(),
       },
       oauthClients: {
         findByClientId: vi.fn(),
@@ -90,6 +97,13 @@ function createFastifyStub() {
     passwordHasher: {
       verifyPassword: vi.fn(),
       hashPassword: vi.fn(),
+    },
+    // The real provider (pure, framework-free): the registry is load-bearing —
+    // the route resolves 'password' through it, and one test pins that.
+    providerRegistry: {
+      resolve: vi.fn().mockReturnValue(createPasswordProvider()),
+      has: vi.fn().mockReturnValue(true),
+      register: vi.fn(),
     },
     jwtUtils: {
       signAccessToken: vi.fn(),
@@ -122,6 +136,32 @@ function requestLog() {
   return { info: vi.fn(), warn: vi.fn() };
 }
 
+/** The #228 credential-row fixture the login lookup returns. */
+function credentialFixture(overrides: Record<string, unknown> = {}) {
+  return {
+    id: 'cred-1',
+    userId: 'user-1',
+    realmId: 'realm-1',
+    providerType: 'password',
+    externalSub: 'user@example.com',
+    credentialData: { password_hash: 'hash', email_verified: true },
+    createdAt: 1_600_000_000_000,
+    updatedAt: 1_600_000_000_000,
+    ...overrides,
+  };
+}
+
+function userFixture(overrides: Record<string, unknown> = {}) {
+  return {
+    id: 'user-1',
+    email: 'user@example.com',
+    emailVerified: true,
+    passwordHash: 'hash',
+    enabled: true,
+    ...overrides,
+  };
+}
+
 describe('POST /auth/login', () => {
   it('signs access token with aud resolved from the system client and sets Cache-Control: no-store', async () => {
     const { fastify, ctx } = createFastifyStub();
@@ -129,20 +169,17 @@ describe('POST /auth/login', () => {
     const handler = ctx.handler;
     expect(handler).toBeDefined();
 
-    const user = {
-      id: 'user-1',
-      email: 'user@example.com',
-      emailVerified: true,
-      passwordHash: 'hash',
-      enabled: true,
-    };
+    const user = userFixture();
     const systemClient = {
       id: 'sc-uuid',
       clientId: 'system',
       audience: ['https://auth.example.com'],
     };
 
-    (fastify.repositories.users.findByEmail as unknown as Mock).mockResolvedValue(user);
+    (
+      fastify.repositories.userCredentials.findByRealmProviderSub as unknown as Mock
+    ).mockResolvedValue(credentialFixture());
+    (fastify.repositories.users.findById as unknown as Mock).mockResolvedValue(user);
     (fastify.passwordHasher.verifyPassword as unknown as Mock).mockResolvedValue(true);
     (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(
       systemClient
@@ -180,12 +217,67 @@ describe('POST /auth/login', () => {
     });
   });
 
+  it('emits byte-identical JWT claims sourced from the users row (pre-#229 fixture)', async () => {
+    const { fastify, ctx } = createFastifyStub();
+    await loginRoute(fastify);
+    const handler = ctx.handler;
+
+    // The two candidate claim sources DIVERGE on purpose: the users row says
+    // canonical@example.com / verified while credential_data says
+    // user@example.com / unverified. Only users-row sourcing produces the
+    // asserted claims — a regression to credential-sourced claims fails here.
+    (
+      fastify.repositories.userCredentials.findByRealmProviderSub as unknown as Mock
+    ).mockResolvedValue(
+      credentialFixture({
+        credentialData: { password_hash: 'hash', email_verified: false },
+      })
+    );
+    (fastify.repositories.users.findById as unknown as Mock).mockResolvedValue(
+      userFixture({ email: 'canonical@example.com', emailVerified: true })
+    );
+    (fastify.passwordHasher.verifyPassword as unknown as Mock).mockResolvedValue(true);
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue({
+      id: 'sc-uuid',
+      clientId: 'system',
+      audience: ['https://auth.example.com'],
+    });
+    (fastify.jwtUtils.signAccessToken as unknown as Mock).mockResolvedValue('jwt');
+
+    if (!ctx.handler) throw new Error('Handler missing');
+    await ctx.handler(
+      {
+        body: { email: 'user@example.com', password: 'p' },
+        ip: '127.0.0.1',
+        headers: { 'user-agent': 'vitest' },
+        log: requestLog(),
+      },
+      createReply()
+    );
+
+    // Deep-equal against the pre-refactor claims shape: sub/email/email_verified
+    // still come from the users row — claim re-sourcing is #229's entire job.
+    expect(fastify.repositories.users.findById).toHaveBeenCalledWith('user-1');
+    expect(fastify.jwtUtils.signAccessToken).toHaveBeenCalledWith({
+      sub: 'user-1',
+      email: 'canonical@example.com',
+      email_verified: true,
+      clientId: 'system',
+      aud: 'https://auth.example.com',
+    });
+    // The provider is resolved from the registry — it is load-bearing, not
+    // decorative (ADR-003).
+    expect(fastify.providerRegistry.resolve).toHaveBeenCalledWith('password');
+  });
+
   it('throws InvalidCredentialsError for unknown email and skips token minting', async () => {
     const { fastify, ctx } = createFastifyStub();
     await loginRoute(fastify);
     const handler = ctx.handler;
 
-    (fastify.repositories.users.findByEmail as unknown as Mock).mockResolvedValue(null);
+    (
+      fastify.repositories.userCredentials.findByRealmProviderSub as unknown as Mock
+    ).mockResolvedValue(undefined);
 
     const request = {
       body: { email: 'missing@example.com', password: 'p' },
@@ -199,6 +291,9 @@ describe('POST /auth/login', () => {
     await expect(handler(request, reply)).rejects.toThrow(InvalidCredentialsError);
     expect(fastify.jwtUtils.signAccessToken).not.toHaveBeenCalled();
     expect(fastify.repositories.refreshTokens.create).not.toHaveBeenCalled();
+    // Timing-profile parity with the legacy path: no argon2 burn when the
+    // credential is missing (the fixed response-time floor is the equalizer).
+    expect(fastify.passwordHasher.verifyPassword).not.toHaveBeenCalled();
   });
 
   it('throws InvalidCredentialsError for wrong password', async () => {
@@ -206,13 +301,10 @@ describe('POST /auth/login', () => {
     await loginRoute(fastify);
     const handler = ctx.handler;
 
-    (fastify.repositories.users.findByEmail as unknown as Mock).mockResolvedValue({
-      id: 'user-1',
-      email: 'user@example.com',
-      emailVerified: true,
-      passwordHash: 'hash',
-      enabled: true,
-    });
+    (
+      fastify.repositories.userCredentials.findByRealmProviderSub as unknown as Mock
+    ).mockResolvedValue(credentialFixture());
+    (fastify.repositories.users.findById as unknown as Mock).mockResolvedValue(userFixture());
     (fastify.passwordHasher.verifyPassword as unknown as Mock).mockResolvedValue(false);
 
     const request = {
@@ -225,6 +317,74 @@ describe('POST /auth/login', () => {
     if (!handler) throw new Error('Handler missing');
 
     await expect(handler(request, reply)).rejects.toThrow(InvalidCredentialsError);
+  });
+
+  it('treats malformed credential_data as invalid credentials (401), logs for operators, skips argon2', async () => {
+    const { fastify, ctx } = createFastifyStub();
+    await loginRoute(fastify);
+    const handler = ctx.handler;
+
+    (
+      fastify.repositories.userCredentials.findByRealmProviderSub as unknown as Mock
+    ).mockResolvedValue(credentialFixture({ credentialData: { passwordHash: 'camelCase-drift' } }));
+
+    const request = {
+      body: { email: 'user@example.com', password: 'p' },
+      ip: '127.0.0.1',
+      headers: { 'user-agent': 'vitest' },
+      log: requestLog(),
+    };
+    const reply = createReply();
+    if (!handler) throw new Error('Handler missing');
+
+    // Generic 401 — a distinct status would leak account state (enumeration).
+    await expect(handler(request, reply)).rejects.toThrow(InvalidCredentialsError);
+    expect(fastify.passwordHasher.verifyPassword).not.toHaveBeenCalled();
+    // The error-level log line is the operator alerting hook for corruption.
+    expect(fastify.log.error).toHaveBeenCalledWith(
+      expect.objectContaining({ credentialId: 'cred-1' }),
+      expect.stringContaining('malformed credential_data')
+    );
+  });
+
+  it('REQUIRE_EMAIL_VERIFIED gate reads credential_data.email_verified', async () => {
+    const { fastify, ctx } = createFastifyStub();
+    await loginRoute(fastify);
+    const handler = ctx.handler;
+
+    (
+      fastify.repositories.userCredentials.findByRealmProviderSub as unknown as Mock
+    ).mockResolvedValue(
+      credentialFixture({ credentialData: { password_hash: 'hash', email_verified: false } })
+    );
+    // users row says VERIFIED — the gate must read credential_data (false),
+    // not user.emailVerified; a regression to the users-row source lets this
+    // login through and fails the test.
+    (fastify.repositories.users.findById as unknown as Mock).mockResolvedValue(
+      userFixture({ emailVerified: true })
+    );
+    (fastify.passwordHasher.verifyPassword as unknown as Mock).mockResolvedValue(true);
+
+    (env as { REQUIRE_EMAIL_VERIFIED: boolean }).REQUIRE_EMAIL_VERIFIED = true;
+    try {
+      const request = {
+        body: { email: 'user@example.com', password: 'p' },
+        ip: '127.0.0.1',
+        headers: { 'user-agent': 'vitest' },
+        log: requestLog(),
+      };
+      const reply = createReply();
+      if (!handler) throw new Error('Handler missing');
+
+      await expect(handler(request, reply)).rejects.toThrow(
+        'Email address not verified. Check your inbox.'
+      );
+      expect(fastify.jwtUtils.signAccessToken).not.toHaveBeenCalled();
+      // The gate fires before the user lookup — its source is the credential.
+      expect(fastify.repositories.users.findById).not.toHaveBeenCalled();
+    } finally {
+      (env as { REQUIRE_EMAIL_VERIFIED: boolean }).REQUIRE_EMAIL_VERIFIED = false;
+    }
   });
 
   it('rejects with TooManyRequestsError when the identifier is locked out (#115)', async () => {

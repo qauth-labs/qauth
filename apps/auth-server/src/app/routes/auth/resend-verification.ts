@@ -1,3 +1,7 @@
+import {
+  PASSWORD_PROVIDER_TYPE,
+  passwordCredentialDataSchema,
+} from '@qauth-labs/fastify-plugin-federation';
 import { TooManyRequestsError } from '@qauth-labs/shared-errors';
 import { normalizeEmail } from '@qauth-labs/shared-validation';
 import type { FastifyInstance } from 'fastify';
@@ -95,18 +99,43 @@ export default async function (fastify: FastifyInstance) {
         }
       }
 
-      // Get default realm for user lookup
+      // Get default realm for credential lookup
       const realm = await getOrCreateDefaultRealm(fastify);
 
-      // Find user by email (don't expose if not found - prevent enumeration)
-      // Note: findByEmail internally normalizes email, but we already have it normalized
-      const user = await fastify.repositories.users.findByEmail(realm.id, normalizedEmail);
+      // Find the password credential (don't expose if not found — prevent
+      // enumeration). Since #228 this is the credential read path; malformed
+      // credential_data is operator-alerting corruption and behaves exactly
+      // like an unknown email on the wire (generic 200).
+      const credential = await fastify.repositories.userCredentials.findByRealmProviderSub(
+        realm.id,
+        PASSWORD_PROVIDER_TYPE,
+        normalizedEmail
+      );
+      const parsed = credential
+        ? passwordCredentialDataSchema.safeParse(credential.credentialData)
+        : undefined;
+      if (credential && parsed && !parsed.success) {
+        fastify.log.error(
+          { credentialId: credential.id },
+          'malformed credential_data on password credential'
+        );
+      }
+      // The users row still supplies the outbound email address + log fields
+      // (byte-identical behavior; claim/address re-sourcing is #229).
+      const user =
+        credential && parsed?.success
+          ? await fastify.repositories.users.findById(credential.userId)
+          : undefined;
 
-      // If user exists and email is not verified, send verification email
-      if (user && !user.emailVerified) {
-        // Invalidate existing tokens if config is enabled
+      // If the credential exists and its email is not verified, send the mail
+      if (credential && parsed?.success && !parsed.data.email_verified && user) {
+        // Invalidate existing tokens if config is enabled. Deliberately keyed
+        // on user_id, NOT credential_id: rollback-window tokens minted by a
+        // pre-#228 binary carry a NULL credential_id and must be caught too.
         if (env.EMAIL_VERIFICATION_INVALIDATE_EXISTING_ON_RESEND) {
-          await fastify.repositories.emailVerificationTokens.invalidateUserTokens(user.id);
+          await fastify.repositories.emailVerificationTokens.invalidateUserTokens(
+            credential.userId
+          );
         }
 
         // Generate new verification token
@@ -116,9 +145,10 @@ export default async function (fastify: FastifyInstance) {
         // Calculate expiration time
         const expiresAt = Date.now() + env.EMAIL_VERIFICATION_TOKEN_EXPIRY * 1000;
 
-        // Store token hash in database
+        // Store token hash in database (dual-id write; user_id stays until #230)
         await fastify.repositories.emailVerificationTokens.create({
-          userId: user.id,
+          userId: credential.userId,
+          credentialId: credential.id,
           tokenHash,
           expiresAt,
           used: false,

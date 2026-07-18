@@ -15,6 +15,7 @@
     "@qauth-labs/fastify-plugin-cache": "workspace:*",
     "@qauth-labs/fastify-plugin-db": "workspace:*",
     "@qauth-labs/fastify-plugin-email": "workspace:*",
+    "@qauth-labs/fastify-plugin-federation": "workspace:*",
     "@qauth-labs/fastify-plugin-jwt": "workspace:*",
     "@qauth-labs/fastify-plugin-password": "workspace:*",
     "@qauth-labs/fastify-plugin-pkce": "workspace:*",

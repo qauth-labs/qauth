@@ -3,6 +3,7 @@ import { bigint, boolean, index, jsonb, pgTable, text, uuid, varchar } from 'dri
 
 import { oauthClients, users } from './core';
 import { codeChallengeMethodEnum } from './enums';
+import { userCredentials } from './identity';
 import { EPOCH_MS_NOW, JSONB_EMPTY_ARRAY } from './sql-helpers';
 
 export const emailVerificationTokens = pgTable(
@@ -16,6 +17,19 @@ export const emailVerificationTokens = pgTable(
     userId: uuid('user_id')
       .notNull()
       .references(() => users.id, { onDelete: 'cascade' }),
+    /**
+     * Password credential this verification targets (ADR-002: email
+     * verification is a property of the password authentication method, not
+     * of the abstract identity). Dual-written alongside `user_id` since #228.
+     *
+     * NULLABLE by design until #230: tokens minted by a pre-#228 binary (or
+     * during a rollback window) carry only `user_id`; readers fall back to
+     * resolving the user's password credential. #230 promotes this to
+     * NOT NULL and drops `user_id` — do NOT tighten it earlier.
+     */
+    credentialId: uuid('credential_id').references(() => userCredentials.id, {
+      onDelete: 'cascade',
+    }),
     expiresAt: bigint('expires_at', { mode: 'number' }).notNull(),
     used: boolean('used').notNull().default(false),
     usedAt: bigint('used_at', { mode: 'number' }),
@@ -23,6 +37,7 @@ export const emailVerificationTokens = pgTable(
   },
   (t) => [
     index('idx_email_verification_tokens_user_id').on(t.userId),
+    index('idx_email_verification_tokens_credential_id').on(t.credentialId),
     index('idx_email_verification_tokens_active')
       .on(t.tokenHash, t.expiresAt)
       .where(sql`${t.used} = false`),

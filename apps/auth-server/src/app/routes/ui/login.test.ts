@@ -1,3 +1,4 @@
+import { createPasswordProvider } from '@qauth-labs/fastify-plugin-federation';
 import type { FastifyInstance } from 'fastify';
 import { beforeEach, describe, expect, it, type Mock, vi } from 'vitest';
 
@@ -78,8 +79,12 @@ function makeFastify() {
         create: vi.fn(),
       },
       users: {
-        findByEmail: vi.fn(),
+        findById: vi.fn(),
         updateLastLogin: vi.fn().mockResolvedValue(undefined),
+      },
+      userCredentials: {
+        findByRealmProviderSub: vi.fn(),
+        findById: vi.fn(),
       },
       auditLogs: {
         create: vi.fn().mockResolvedValue(undefined),
@@ -88,12 +93,30 @@ function makeFastify() {
     passwordHasher: {
       verifyPassword: vi.fn(),
     },
+    providerRegistry: {
+      resolve: vi.fn().mockReturnValue(createPasswordProvider()),
+      has: vi.fn().mockReturnValue(true),
+      register: vi.fn(),
+    },
     sessionUtils: {
       setSession: vi.fn().mockResolvedValue(undefined),
     },
     log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
   };
   return { fastify: fastify as FastifyInstance, ctx };
+}
+
+/** The #228 credential-row fixture the login lookup returns. */
+function credentialFixture(overrides: Record<string, unknown> = {}) {
+  return {
+    id: 'cred-1',
+    userId: 'user-1',
+    realmId: 'realm-1',
+    providerType: 'password',
+    externalSub: 'user@example.com',
+    credentialData: { password_hash: 'hash', email_verified: true },
+    ...overrides,
+  };
 }
 
 /** Extract the raw login-CSRF token from the Set-Cookie header rendered on GET. */
@@ -140,7 +163,7 @@ describe('UI /ui/login — CSRF defence', () => {
 
     expect(state.statusCode).toBe(403);
     // The DB / password path must never be reached on a CSRF failure.
-    expect(fastify.repositories.users.findByEmail).not.toHaveBeenCalled();
+    expect(fastify.repositories.userCredentials.findByRealmProviderSub).not.toHaveBeenCalled();
     expect(fastify.passwordHasher.verifyPassword).not.toHaveBeenCalled();
     const events = (fastify.repositories.auditLogs.create as unknown as Mock).mock.calls.map(
       (c) => (c[0] as { event: string }).event
@@ -158,7 +181,10 @@ describe('UI /ui/login — CSRF defence', () => {
     const cookieValue = csrfCookieValue(getReply.state.setCookies);
     const rawToken = cookieValue.split('.')[0];
 
-    (fastify.repositories.users.findByEmail as unknown as Mock).mockResolvedValue({
+    (
+      fastify.repositories.userCredentials.findByRealmProviderSub as unknown as Mock
+    ).mockResolvedValue(credentialFixture());
+    (fastify.repositories.users.findById as unknown as Mock).mockResolvedValue({
       id: 'user-1',
       email: 'user@example.com',
       passwordHash: 'hash',
@@ -184,6 +210,41 @@ describe('UI /ui/login — CSRF defence', () => {
       (c) => c.startsWith('__Host-qauth_login_csrf=') && c.includes('Max-Age=0')
     );
     expect(cleared).toBeDefined();
+  });
+
+  it('POST rejects a disabled user (401 re-render) even with valid credentials', async () => {
+    const { fastify, ctx } = makeFastify();
+    await loginRoute(fastify);
+
+    const getReply = createReply();
+    await ctx.get!({ query: {}, headers: {}, ip: '127.0.0.1' }, getReply.reply);
+    const cookieValue = csrfCookieValue(getReply.state.setCookies);
+    const rawToken = cookieValue.split('.')[0];
+
+    (
+      fastify.repositories.userCredentials.findByRealmProviderSub as unknown as Mock
+    ).mockResolvedValue(credentialFixture());
+    // The enabled gate still reads the users row (#228 keeps it there).
+    (fastify.repositories.users.findById as unknown as Mock).mockResolvedValue({
+      id: 'user-1',
+      email: 'user@example.com',
+      passwordHash: 'hash',
+      enabled: false,
+    });
+    (fastify.passwordHasher.verifyPassword as unknown as Mock).mockResolvedValue(true);
+
+    const { reply, state } = createReply();
+    await ctx.post!(
+      {
+        body: { email: 'user@example.com', password: 'correct', csrf_token: rawToken },
+        headers: { cookie: `__Host-qauth_login_csrf=${cookieValue}` },
+        ip: '127.0.0.1',
+      },
+      reply
+    );
+
+    expect(state.statusCode).toBe(401);
+    expect(fastify.sessionUtils.setSession).not.toHaveBeenCalled();
   });
 
   it('POST with a tampered token whose signature does not validate is rejected (403)', async () => {

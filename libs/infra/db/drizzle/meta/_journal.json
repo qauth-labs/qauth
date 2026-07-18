@@ -71,6 +71,13 @@
       "when": 1783900978442,
       "tag": "0009_crazy_ulik",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1784360005529,
+      "tag": "0010_clever_hulk",
+      "breakpoints": true
     }
   ]
 }

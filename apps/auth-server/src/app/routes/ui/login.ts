@@ -7,6 +7,7 @@ import { z } from 'zod';
 
 import { env } from '../../../config/env';
 import { MIN_RESPONSE_TIME_MS } from '../../constants';
+import { verifyPasswordCredential } from '../../helpers/credential-auth';
 import { html, render } from '../../helpers/html';
 import { getOrCreateDefaultRealm } from '../../helpers/realm';
 import {
@@ -260,17 +261,21 @@ export default async function (fastify: FastifyInstance) {
       const normalizedEmail = normalizeEmail(body.email);
 
       const realm = await getOrCreateDefaultRealm(fastify);
-      const user = await fastify.repositories.users.findByEmail(realm.id, normalizedEmail);
 
-      let passwordValid = false;
-      if (user) {
-        passwordValid = await fastify.passwordHasher.verifyPassword(
-          user.passwordHash,
-          body.password
-        );
-      }
+      // Password check via the user_credentials read path (#228); the enabled
+      // gate below still reads the users row, which is fetched for the
+      // session payload anyway.
+      const check = await verifyPasswordCredential(fastify, {
+        realmId: realm.id,
+        email: normalizedEmail,
+        password: body.password,
+      });
+      const user =
+        check.status === 'ok'
+          ? await fastify.repositories.users.findById(check.credential.userId)
+          : undefined;
 
-      if (!user || !passwordValid || !user.enabled) {
+      if (check.status !== 'ok' || !user || !user.enabled) {
         await ensureMinimumResponseTime(startTime, MIN_RESPONSE_TIME_MS.LOGIN);
         await fastify.repositories.auditLogs.create({
           userId: null,
