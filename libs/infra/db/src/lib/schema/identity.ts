@@ -23,10 +23,11 @@ import { EPOCH_MS_NOW, JSONB_EMPTY_OBJECT } from './sql-helpers';
  *
  * This module is PURELY ADDITIVE. The legacy `users.email` /
  * `users.email_normalized` / `users.password_hash` columns remain untouched and
- * are still the live read path; nothing reads or writes these two tables yet.
- * Population (backfill #226), the CredentialProvider that writes them (#227),
- * the auth-engine refactor (#228), attribute/claim resolution (#229) and legacy
- * column removal (#230) are separate, later issues.
+ * are still the live read path. The idempotent backfill (#226,
+ * `../backfill/backfill-identity.ts`) populates these two tables from the
+ * legacy columns; no runtime code reads them until the auth-engine refactor
+ * (#228). Attribute/claim resolution (#229) and legacy column removal (#230)
+ * are separate, later issues.
  */
 
 /**
@@ -112,11 +113,13 @@ export const userCredentials = pgTable(
  *
  * A unique constraint on `(user_id, source, attr_key)` IS enforced at the DB
  * level: one value per attribute per source per user (e.g. at most one
- * `source='wallet', attr_key='email'` row). This makes the write path an
- * upsert (`ON CONFLICT (user_id, source, attr_key) DO UPDATE`), not a bare
- * insert, once #226/#229 start writing here. Multiple *sources* can still
- * each hold their own value for the same `attr_key` — trust-order resolution
- * across those rows is the application-code concern noted above.
+ * `source='wallet', attr_key='email'` row). Writers must account for it: the
+ * #226 backfill (`../backfill/backfill-identity.ts`) inserts with
+ * `ON CONFLICT DO NOTHING` as a race guard and keys its skip/refresh logic on
+ * `user_id`, while the runtime writer (#229) is expected to upsert
+ * (`ON CONFLICT (user_id, source, attr_key) DO UPDATE`). Multiple *sources*
+ * can still each hold their own value for the same `attr_key` — trust-order
+ * resolution across those rows is the application-code concern noted above.
  */
 export const userAttributes = pgTable(
   'user_attributes',

@@ -69,6 +69,15 @@
         "forwardAllArgs": true
       },
       "description": "Idempotent OAuth-client provisioner — pass `-- --manifest=<path> [--rotate]`"
+    },
+    "db:backfill-identity": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "tsx src/scripts/backfill-identity.ts",
+        "cwd": "libs/infra/db",
+        "forwardAllArgs": true
+      },
+      "description": "Idempotent ADR-002 identity backfill — populate user_credentials/user_attributes from the legacy users columns (#226). Pass `-- --help` for flags."
     }
   }
 }
