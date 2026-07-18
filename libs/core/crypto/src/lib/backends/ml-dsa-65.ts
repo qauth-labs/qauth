@@ -47,6 +47,19 @@ function privateKeyFromSeed(seed: Uint8Array, extractable: boolean): MlDsaKey {
   return new MlDsaKey({ kind: 'private', material: secretKey, seed, extractable });
 }
 
+/**
+ * Derive the ML-DSA-65 public key from a private key (its seed). FIPS 204 keys
+ * expand deterministically, so this is exact and backend-agnostic — used to
+ * publish the public half in JWKS (#246) from a configured private seed.
+ */
+export function deriveMlDsaPublicKey(privateKey: MlDsaKey): MlDsaKey {
+  if (privateKey.alg !== 'ML-DSA-65' || privateKey.kind !== 'private') {
+    throw new Error('deriveMlDsaPublicKey requires a private ML-DSA-65 key');
+  }
+  const { publicKey } = ml_dsa65.keygen(privateKey.seed());
+  return new MlDsaKey({ kind: 'public', material: publicKey });
+}
+
 export const mlDsa65Backend: SignatureBackend = {
   algorithm: 'ML-DSA-65',
 

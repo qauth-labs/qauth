@@ -1,3 +1,4 @@
+import { getSignatureBackend } from '@qauth-labs/core-crypto';
 import { generateEdDSAKeyPair, importPrivateKey, signAccessToken } from '@qauth-labs/server-jwt';
 import { JWTExpiredError, JWTInvalidError } from '@qauth-labs/shared-errors';
 import type { FastifyInstance } from 'fastify';
@@ -236,6 +237,58 @@ describe('requireJwt middleware', () => {
       const key = await importJWK(jwk, 'EdDSA');
       const { payload } = await jwtVerify(token, key, { algorithms: ['EdDSA'] });
       expect(payload.sub).toBe('user-1');
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('getJwks() is EdDSA-only (single OKP key) when no ML-DSA seed is configured (#246)', async () => {
+    const { app } = await buildTestApp();
+    try {
+      const jwks = await app.jwtUtils.getJwks();
+      expect(jwks.keys).toHaveLength(1);
+      expect(jwks.keys.every((k) => (k as { kty?: string }).kty !== 'AKP')).toBe(true);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('getJwks() publishes an AKP key beside the OKP key when an ML-DSA seed is configured (#246)', async () => {
+    const { privateKey, publicKey } = await generateEdDSAKeyPair(true);
+    const privateKeyPem = await exportPKCS8(privateKey);
+    const publicKeyPem = await exportSPKI(publicKey);
+    const mlDsa = getSignatureBackend('ML-DSA-65', ['ML-DSA-65']).generateKeyPair({
+      extractable: true,
+    });
+    const seed = getSignatureBackend('ML-DSA-65', ['ML-DSA-65']).exportKey(mlDsa.privateKey);
+
+    const app = Fastify({ logger: false });
+    await app.register(jwtPlugin, {
+      privateKey: privateKeyPem,
+      publicKey: publicKeyPem,
+      issuer: 'https://auth.test.example.com',
+      accessTokenLifespan: 900,
+      refreshTokenLifespan: 86400,
+      keyId: 'ed-1',
+      mlDsaSeed: seed,
+      mlDsaKeyId: 'ed-1-mldsa',
+    });
+    try {
+      const jwks = await app.jwtUtils.getJwks();
+      expect(jwks.keys).toHaveLength(2);
+
+      const okp = jwks.keys.find((k) => (k as { kty?: string }).kty === 'OKP') as
+        | Record<string, unknown>
+        | undefined;
+      const akp = jwks.keys.find((k) => (k as { kty?: string }).kty === 'AKP') as
+        | Record<string, unknown>
+        | undefined;
+      expect(okp?.['alg']).toBe('EdDSA');
+      expect(akp?.['alg']).toBe('ML-DSA-65');
+      expect(akp?.['kid']).toBe('ed-1-mldsa');
+      // The AKP entry carries only the public key, never private material.
+      expect(akp).not.toHaveProperty('priv');
+      expect(akp).not.toHaveProperty('d');
     } finally {
       await app.close();
     }

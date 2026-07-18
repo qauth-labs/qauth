@@ -1,5 +1,8 @@
+import { deriveMlDsaPublicKey, getSignatureBackend, type MlDsaKey } from '@qauth-labs/core-crypto';
 import {
+  type AkpJwk,
   decodeJwtUnsafe,
+  exportMlDsaPublicJwk,
   exportPublicJwk,
   exportPublicKeyPem,
   extractJWTFromHeader,
@@ -7,6 +10,7 @@ import {
   hashRefreshToken,
   importPrivateKey,
   importPublicKey,
+  type PublicJwk,
   signAccessToken,
   signIdToken,
   verifyAccessToken,
@@ -75,6 +79,16 @@ export const jwtPlugin = fp<JwtPluginOptions>(
       }
     }
 
+    // ML-DSA public key for JWKS publication (#246). Derived once at boot from
+    // the configured seed; only the PUBLIC key is retained. Absent → JWKS stays
+    // EdDSA-only.
+    let mlDsaPublicKey: MlDsaKey | undefined;
+    if (options.mlDsaSeed) {
+      const backend = getSignatureBackend('ML-DSA-65', ['ML-DSA-65']);
+      const mlDsaPrivate = backend.importKey(options.mlDsaSeed, 'private');
+      mlDsaPublicKey = deriveMlDsaPublicKey(mlDsaPrivate);
+    }
+
     const jwtUtils: JwtUtils = {
       async signAccessToken(payload) {
         // `expiresInOverride` lets callers shorten a token below the configured
@@ -117,10 +131,16 @@ export const jwtPlugin = fp<JwtPluginOptions>(
         return options.issuer;
       },
       async getJwks() {
-        // Single active key for now. When we add rotation, push retired keys
-        // with their own `kid` here so in-flight tokens keep verifying.
-        const jwk = await exportPublicJwk(publicKey, options.keyId);
-        return { keys: [jwk] };
+        // Single active Ed25519 key for now. When we add rotation, push retired
+        // keys with their own `kid` here so in-flight tokens keep verifying.
+        const keys: (PublicJwk | AkpJwk)[] = [await exportPublicJwk(publicKey, options.keyId)];
+        // #246: publish the ML-DSA public key as an AKP JWK alongside the OKP
+        // key when hybrid signing is configured. Classical verifiers ignore the
+        // AKP entry they don't understand; PQC verifiers use it.
+        if (mlDsaPublicKey) {
+          keys.push(exportMlDsaPublicJwk(mlDsaPublicKey, options.mlDsaKeyId));
+        }
+        return { keys };
       },
     };
 

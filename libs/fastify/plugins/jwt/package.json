@@ -4,6 +4,7 @@
   "private": true,
   "main": "src/index.ts",
   "dependencies": {
+    "@qauth-labs/core-crypto": "workspace:*",
     "@qauth-labs/server-jwt": "workspace:*",
     "@qauth-labs/shared-errors": "workspace:*",
     "fastify": "catalog:",

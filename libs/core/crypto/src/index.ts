@@ -1,5 +1,6 @@
 export type { JwsAlgorithm, SignatureAlgorithm } from './lib/algorithms';
 export { getSignatureBackend } from './lib/backend-registry';
+export { deriveMlDsaPublicKey } from './lib/backends/ml-dsa-65';
 export { CryptoVerificationError, type CryptoVerificationErrorReason } from './lib/errors';
 export {
   PQC_ALG_ML_DSA_65,
