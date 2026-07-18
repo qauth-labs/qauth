@@ -318,7 +318,8 @@ export default async function (fastify: FastifyInstance) {
         sessionId,
         {
           userId: user.id,
-          email: user.email,
+          // #230: the credential's external_sub is the authenticated address.
+          email: check.credential.externalSub,
           sessionId,
           createdAt: Date.now(),
         },

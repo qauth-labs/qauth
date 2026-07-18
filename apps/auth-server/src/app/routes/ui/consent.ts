@@ -473,7 +473,9 @@ export default async function (fastify: FastifyInstance) {
           // name="resource" value="<uri>" /> per entry so the POST body
           // carries every requested resource URI back to the handler.
           resources: parseResourceFromUrl(request.url),
-          userEmail: session.email,
+          // #230: session email is optional (future non-email credentials);
+          // fall back to the stable subject id for display.
+          userEmail: session.email ?? session.userId,
           redirectHost: redirectHost(query.redirect_uri),
           redirectIsLoopback: isLoopbackRedirect(query.redirect_uri),
           isCimd,

@@ -92,14 +92,17 @@ export function createEmailVerificationTokensRepository(
     },
 
     /**
-     * Invalidate all active tokens for a user
-     * Marks all unused, non-expired tokens for the user as used
+     * Invalidate all active tokens for a credential
+     * Marks all unused, non-expired tokens targeting the credential as used
      *
-     * @param userId - User ID whose tokens should be invalidated
+     * Keyed on `credential_id` since #230 (`user_id` no longer exists on this
+     * table); the caller holds the credential from its own lookup.
+     *
+     * @param credentialId - Credential whose tokens should be invalidated
      * @param tx - Optional transaction client
      * @returns Number of tokens invalidated
      */
-    async invalidateUserTokens(userId: string, tx?: DbClient): Promise<number> {
+    async invalidateCredentialTokens(credentialId: string, tx?: DbClient): Promise<number> {
       const invoker = tx ?? defaultDb;
       const now = Date.now();
 
@@ -111,7 +114,7 @@ export function createEmailVerificationTokensRepository(
         })
         .where(
           and(
-            eq(emailVerificationTokens.userId, userId),
+            eq(emailVerificationTokens.credentialId, credentialId),
             eq(emailVerificationTokens.used, false),
             gt(emailVerificationTokens.expiresAt, now)
           )

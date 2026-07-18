@@ -21,15 +21,14 @@ import { EPOCH_MS_NOW, JSONB_EMPTY_OBJECT } from './sql-helpers';
  * identity anchor, `user_credentials` holds one row per authentication method,
  * and `user_attributes` holds claims as data (with source-based trust ordering).
  *
- * As of the auth-engine refactor (#228) these two tables ARE the live runtime
- * path: login resolves password credentials via
- * `(realm_id, provider_type, external_sub)`, and register/verify/resend write
- * both tables. The legacy `users.email` / `users.email_normalized` /
- * `users.password_hash` columns are dual-written rollback shims until #230
- * removes them; the idempotent backfill (#226,
- * `../backfill/backfill-identity.ts`) populated existing rows from those
- * columns. Attribute/claim trust-order resolution (#229) and legacy column
- * removal (#230) are separate, later issues.
+ * These two tables ARE the identity model (ADR-002, implemented via Epic
+ * #224): `users` is a pure identity anchor, login resolves password
+ * credentials via `(realm_id, provider_type, external_sub)`,
+ * register/verify/resend write both tables, and OIDC email claims resolve
+ * from verified attributes with trust ordering (#229). The legacy
+ * `users.email` / `users.email_normalized` / `users.password_hash` columns
+ * were dropped in migration 0011 (#230); the credentials unique index below
+ * is the sole duplicate-registration guard.
  */
 
 /**
@@ -115,10 +114,8 @@ export const userCredentials = pgTable(
  *
  * A unique constraint on `(user_id, source, attr_key)` IS enforced at the DB
  * level: one value per attribute per source per user (e.g. at most one
- * `source='wallet', attr_key='email'` row). Writers must account for it: the
- * #226 backfill (`../backfill/backfill-identity.ts`) inserts with
- * `ON CONFLICT DO NOTHING` as a race guard and keys its skip/refresh logic on
- * `user_id`, while the runtime writer (`upsertMany`, shipped in #228) upserts
+ * `source='wallet', attr_key='email'` row). The runtime writer (`upsertMany`,
+ * shipped in #228) upserts on it
  * (`ON CONFLICT (user_id, source, attr_key) DO UPDATE`). Multiple *sources*
  * can still each hold their own value for the same `attr_key` — trust-order
  * resolution across those rows is the application-code concern noted above.

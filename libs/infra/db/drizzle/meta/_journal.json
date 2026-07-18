@@ -78,6 +78,13 @@
       "when": 1784360005529,
       "tag": "0010_clever_hulk",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1784369097144,
+      "tag": "0011_striped_brother_voodoo",
+      "breakpoints": true
     }
   ]
 }

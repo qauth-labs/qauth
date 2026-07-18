@@ -184,9 +184,9 @@ export interface EmailVerificationTokensRepository {
    */
   markUsed(id: string, tx?: DbClient): Promise<EmailVerificationToken>;
   /**
-   * Invalidate all active tokens for a user
+   * Invalidate all active tokens for a credential (#230: credential-keyed)
    */
-  invalidateUserTokens(userId: string, tx?: DbClient): Promise<number>;
+  invalidateCredentialTokens(credentialId: string, tx?: DbClient): Promise<number>;
   /**
    * Delete expired tokens
    */

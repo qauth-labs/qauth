@@ -1,11 +1,5 @@
-import {
-  extractConstraintName,
-  isUniqueConstraintError,
-  NotFoundError,
-  UniqueConstraintError,
-} from '@qauth-labs/shared-errors';
-import { normalizeEmail } from '@qauth-labs/shared-validation';
-import { and, eq, InferInsertModel, InferSelectModel } from 'drizzle-orm';
+import { NotFoundError } from '@qauth-labs/shared-errors';
+import { eq, InferInsertModel, InferSelectModel } from 'drizzle-orm';
 
 import { DbClient } from '../db';
 import { users } from '../schema/core';
@@ -22,25 +16,9 @@ export type UpdateUser = Partial<Omit<NewUser, 'id' | 'createdAt' | 'realmId'>> 
  */
 export interface UsersRepository extends BaseRepository<User, NewUser, UpdateUser> {
   /**
-   * Find a user by email (case-insensitive lookup)
-   */
-  findByEmail(realmId: string, email: string, tx?: DbClient): Promise<User | undefined>;
-  /**
-   * Find a user by normalized email
-   */
-  findByEmailNormalized(
-    realmId: string,
-    emailNormalized: string,
-    tx?: DbClient
-  ): Promise<User | undefined>;
-  /**
    * Update the last login timestamp for a user
    */
   updateLastLogin(id: string, tx?: DbClient): Promise<User>;
-  /**
-   * Mark a user's email as verified
-   */
-  verifyEmail(id: string, tx?: DbClient): Promise<User>;
 }
 
 /**
@@ -52,32 +30,19 @@ export interface UsersRepository extends BaseRepository<User, NewUser, UpdateUse
 export function createUsersRepository(defaultDb: DbClient): UsersRepository {
   return {
     /**
-     * Create a new user
-     * Note: Password should be pre-hashed before calling this method
+     * Create a new identity anchor. Since #230 the users table carries no
+     * email or password fields — credentials go through `user_credentials`,
+     * and duplicate registration is guarded by the credentials unique index,
+     * not by this insert.
      *
-     * @param data - User data to create (emailNormalized will be auto-generated if not provided)
+     * @param data - Identity-anchor data (realmId + optional profile fields)
      * @param tx - Optional transaction client
      * @returns Created user
-     * @throws UniqueConstraintError if user with same email in realm already exists
      */
     async create(data: NewUser, tx?: DbClient): Promise<User> {
       const invoker = tx ?? defaultDb;
-      const userData = {
-        ...data,
-        emailNormalized: data.emailNormalized ?? normalizeEmail(data.email),
-      };
-
-      try {
-        const [user] = await invoker.insert(users).values(userData).returning();
-        return user;
-      } catch (error) {
-        if (isUniqueConstraintError(error)) {
-          const constraint =
-            extractConstraintName(error) || 'idx_users_realm_email_normalized_unique';
-          throw new UniqueConstraintError(constraint, error);
-        }
-        throw error;
-      }
+      const [user] = await invoker.insert(users).values(data).returning();
+      return user;
     },
 
     /**
@@ -110,58 +75,13 @@ export function createUsersRepository(defaultDb: DbClient): UsersRepository {
     },
 
     /**
-     * Find a user by email (case-insensitive lookup)
-     * Normalizes the email before querying
-     *
-     * @deprecated Since #228 the credential lookup path is
-     * `userCredentials.findByRealmProviderSub(realmId, 'password', email)`;
-     * this method has no production callers and is removed in #230 together
-     * with the legacy email columns.
-     *
-     * @param realmId - Realm ID
-     * @param email - Email address (will be normalized)
-     * @param tx - Optional transaction client
-     * @returns User if found, undefined otherwise
-     */
-    async findByEmail(realmId: string, email: string, tx?: DbClient): Promise<User | undefined> {
-      const emailNormalized = normalizeEmail(email);
-      return this.findByEmailNormalized(realmId, emailNormalized, tx);
-    },
-
-    /**
-     * Find a user by normalized email
-     *
-     * @deprecated See {@link findByEmail} — removed in #230 with the legacy
-     * email columns.
-     *
-     * @param realmId - Realm ID
-     * @param emailNormalized - Normalized email address
-     * @param tx - Optional transaction client
-     * @returns User if found, undefined otherwise
-     */
-    async findByEmailNormalized(
-      realmId: string,
-      emailNormalized: string,
-      tx?: DbClient
-    ): Promise<User | undefined> {
-      const invoker = tx ?? defaultDb;
-      const [user] = await invoker
-        .select()
-        .from(users)
-        .where(and(eq(users.realmId, realmId), eq(users.emailNormalized, emailNormalized)))
-        .limit(1);
-      return user;
-    },
-
-    /**
      * Update a user by ID
      *
      * @param id - User ID
-     * @param data - Fields to update (emailNormalized will be auto-updated if email is provided)
+     * @param data - Fields to update
      * @param tx - Optional transaction client
      * @returns Updated user
      * @throws NotFoundError if user is not found
-     * @throws UniqueConstraintError if email would violate uniqueness
      */
     async update(id: string, data: UpdateUser, tx?: DbClient): Promise<User> {
       const invoker = tx ?? defaultDb;
@@ -169,34 +89,20 @@ export function createUsersRepository(defaultDb: DbClient): UsersRepository {
         ...data,
       };
 
-      // Auto-update emailNormalized if email is being updated
-      if (data.email) {
-        updateData.emailNormalized = normalizeEmail(data.email);
-      }
-
       // Set updatedAt timestamp
       updateData.updatedAt = data.updatedAt ?? Date.now();
 
-      try {
-        const [user] = await invoker
-          .update(users)
-          .set(updateData)
-          .where(eq(users.id, id))
-          .returning();
+      const [user] = await invoker
+        .update(users)
+        .set(updateData)
+        .where(eq(users.id, id))
+        .returning();
 
-        if (!user) {
-          throw new NotFoundError('User', id);
-        }
-
-        return user;
-      } catch (error) {
-        if (isUniqueConstraintError(error)) {
-          const constraint =
-            extractConstraintName(error) || 'idx_users_realm_email_normalized_unique';
-          throw new UniqueConstraintError(constraint, error);
-        }
-        throw error;
+      if (!user) {
+        throw new NotFoundError('User', id);
       }
+
+      return user;
     },
 
     /**
@@ -215,35 +121,6 @@ export function createUsersRepository(defaultDb: DbClient): UsersRepository {
         .update(users)
         .set({
           lastLoginAt: now,
-          updatedAt: now,
-        })
-        .where(eq(users.id, id))
-        .returning();
-
-      if (!user) {
-        throw new NotFoundError('User', id);
-      }
-
-      return user;
-    },
-
-    /**
-     * Mark a user's email as verified
-     *
-     * @param id - User ID
-     * @param tx - Optional transaction client
-     * @returns Updated user
-     * @throws NotFoundError if user is not found
-     */
-    async verifyEmail(id: string, tx?: DbClient): Promise<User> {
-      const invoker = tx ?? defaultDb;
-      const now = Date.now();
-
-      const [user] = await invoker
-        .update(users)
-        .set({
-          emailVerified: true,
-          emailVerifiedAt: now,
           updatedAt: now,
         })
         .where(eq(users.id, id))

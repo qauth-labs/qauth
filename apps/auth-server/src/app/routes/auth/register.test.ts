@@ -120,17 +120,8 @@ describe('POST /auth/register', () => {
     // Single transaction wraps the whole identity write set.
     expect(fastify.db.transaction).toHaveBeenCalledOnce();
 
-    // Identity anchor first (legacy columns dual-written until #230).
-    expect(fastify.repositories.users.create).toHaveBeenCalledWith(
-      {
-        email: 'user@example.com',
-        emailNormalized: 'user@example.com',
-        passwordHash: '$argon2id$hashed',
-        realmId: 'realm-1',
-        emailVerified: false,
-      },
-      TX
-    );
+    // Pure identity anchor (#230): realmId only — no credential fields.
+    expect(fastify.repositories.users.create).toHaveBeenCalledWith({ realmId: 'realm-1' }, TX);
 
     // Credential row: exact snake_case credential_data shape, normalized sub.
     expect(fastify.repositories.userCredentials.create).toHaveBeenCalledWith(
@@ -159,10 +150,9 @@ describe('POST /auth/register', () => {
       TX
     );
 
-    // Verification token targets the credential; user_id kept until #230.
+    // Verification token targets the credential — its only identity link.
     expect(fastify.repositories.emailVerificationTokens.create).toHaveBeenCalledWith(
       expect.objectContaining({
-        userId: 'user-1',
         credentialId: 'cred-1',
         tokenHash: 'hashed',
         used: false,
@@ -194,19 +184,22 @@ describe('POST /auth/register', () => {
     );
   });
 
-  it('duplicate email surfaces the users-index UniqueConstraintError before any credential write', async () => {
+  it('duplicate email surfaces the credentials-index UniqueConstraintError (#230: the sole guard)', async () => {
     const { fastify, ctx } = createFastifyStub();
     await registerRoute(fastify);
     if (!ctx.handler) throw new Error('Handler missing');
 
-    (fastify.repositories.users.create as unknown as Mock).mockRejectedValue(
-      new UniqueConstraintError('idx_users_realm_email_normalized_unique')
+    // Since #230 the users table has no email unique index — the duplicate
+    // surfaces from the CREDENTIAL insert and the transaction rolls the
+    // anchor row back. Same wire 409 (genericized by the error handler).
+    (fastify.repositories.userCredentials.create as unknown as Mock).mockRejectedValue(
+      new UniqueConstraintError('idx_user_credentials_realm_provider_sub_unique')
     );
 
     await expect(ctx.handler(requestFixture(), createReply())).rejects.toThrow(
       UniqueConstraintError
     );
-    expect(fastify.repositories.userCredentials.create).not.toHaveBeenCalled();
+    expect(fastify.repositories.emailVerificationTokens.create).not.toHaveBeenCalled();
     expect(fastify.emailService.sendVerificationEmail).not.toHaveBeenCalled();
   });
 

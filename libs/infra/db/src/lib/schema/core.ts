@@ -111,9 +111,13 @@ export const users = pgTable(
     realmId: uuid('realm_id')
       .notNull()
       .references(() => realms.id, { onDelete: 'cascade' }),
-    email: varchar('email', { length: 255 }).notNull(),
-    emailNormalized: varchar('email_normalized', { length: 255 }).notNull(),
-    passwordHash: text('password_hash').notNull(),
+    /**
+     * @deprecated Vestigial since #230: the verified state lives in
+     * `user_credentials.credential_data.email_verified` and
+     * `user_attributes.verified`. No writers remain; the single sanctioned
+     * reader is the register 201 response surfacing this column's RETURNING'd
+     * default (always false). Drop tracked in #261 (migration 0012).
+     */
     emailVerified: boolean('email_verified').notNull().default(false),
     enabled: boolean('enabled').notNull().default(true),
     firstName: varchar('first_name', { length: 255 }),
@@ -122,16 +126,17 @@ export const users = pgTable(
     createdAt: bigint('created_at', { mode: 'number' }).notNull().default(EPOCH_MS_NOW),
     updatedAt: bigint('updated_at', { mode: 'number' }).notNull().default(EPOCH_MS_NOW),
     lastLoginAt: bigint('last_login_at', { mode: 'number' }),
+    /**
+     * @deprecated Vestigial since #230 — see {@link users.emailVerified};
+     * dropped together in #261 (migration 0012).
+     */
     emailVerifiedAt: bigint('email_verified_at', { mode: 'number' }),
   },
   (t) => [
-    uniqueIndex('idx_users_realm_email_normalized_unique').on(t.realmId, t.emailNormalized),
-    index('idx_users_email').on(t.email),
     index('idx_users_realm_id').on(t.realmId),
     index('idx_users_enabled')
       .on(t.enabled)
       .where(sql`${t.enabled} = true`),
-    index('idx_users_realm_email_enabled').on(t.realmId, t.emailNormalized, t.enabled),
   ]
 );
 

@@ -80,6 +80,18 @@ function createFastifyStub() {
       users: {
         findById: vi.fn(),
       },
+      userCredentials: {
+        // #230: the authorization_code session block fetches the password
+        // credential for the session display address.
+        findByUserIdAndType: vi.fn().mockResolvedValue({
+          id: 'cred-1',
+          userId: 'user-1',
+          realmId: 'realm-1',
+          providerType: 'password',
+          externalSub: 'user@example.com',
+          credentialData: { password_hash: 'hash', email_verified: true },
+        }),
+      },
       userAttributes: {
         // #229 claim resolution: default fixture is ONE verified self_reported
         // email attribute matching the auth-code user fixture, so pre-#229

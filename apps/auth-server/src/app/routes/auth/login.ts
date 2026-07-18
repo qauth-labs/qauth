@@ -92,8 +92,9 @@ export default async function (fastify: FastifyInstance) {
         // `REQUIRE_EMAIL_VERIFIED=true`; the login then fails closed with
         // `EmailNotVerifiedError` BEFORE tokens are issued, so the OIDC
         // `email_verified` claim is always trustworthy when that flag is on.
-        // Since #228 the gate reads credential_data.email_verified — kept
-        // equal to users.email_verified by the dual-write transactions.
+        // Since #228 the gate reads credential_data.email_verified — the
+        // authoritative source (users.email_verified is vestigial since #230
+        // and no longer written).
         if (check.status === 'ok' && !check.emailVerified && env.REQUIRE_EMAIL_VERIFIED) {
           await recordFailedAttempt(fastify.redis, lockoutIdentifiers);
           fastify.metrics.loginAttempts.inc({ result: 'failure', reason: 'email_not_verified' });
@@ -210,7 +211,10 @@ export default async function (fastify: FastifyInstance) {
           sessionId,
           {
             userId: user.id,
-            email: user.email,
+            // The address the user just authenticated with (#230:
+            // users.email no longer exists; external_sub is the normalized
+            // registered address of the password credential).
+            email: check.credential.externalSub,
             sessionId,
             createdAt: Date.now(),
           },
@@ -243,7 +247,7 @@ export default async function (fastify: FastifyInstance) {
         logAuthEvent(request, 'user.login.success', true, {
           userId: user.id,
           clientId: systemClient.clientId,
-          email: user.email,
+          email: check.credential.externalSub,
         });
 
         // RFC 6749 §5.1: token responses MUST NOT be cached by intermediaries.

@@ -120,29 +120,15 @@ export default async function (fastify: FastifyInstance) {
           'malformed credential_data on password credential'
         );
       }
-      // The users row still supplies the outbound email address + log fields
-      // (byte-identical behavior; claim/address re-sourcing is #229).
-      const user =
-        credential && parsed?.success
-          ? await fastify.repositories.users.findById(credential.userId)
-          : undefined;
-      if (credential && parsed?.success && !user) {
-        // FK-impossible in normal operation — same operator-alerting log line
-        // as the login surfaces; the wire stays the generic 200.
-        fastify.log.error(
-          { credentialId: credential.id },
-          'password credential without a users row'
-        );
-      }
-
-      // If the credential exists and its email is not verified, send the mail
-      if (credential && parsed?.success && !parsed.data.email_verified && user) {
-        // Invalidate existing tokens if config is enabled. Deliberately keyed
-        // on user_id, NOT credential_id: rollback-window tokens minted by a
-        // pre-#228 binary carry a NULL credential_id and must be caught too.
+      // If the credential exists and its email is not verified, send the mail.
+      // The credential's external_sub IS the registered normalized address —
+      // no users-row fetch needed since #230.
+      if (credential && parsed?.success && !parsed.data.email_verified) {
+        // Invalidate existing tokens if config is enabled (credential-keyed
+        // since #230 — user_id no longer exists on the tokens table).
         if (env.EMAIL_VERIFICATION_INVALIDATE_EXISTING_ON_RESEND) {
-          await fastify.repositories.emailVerificationTokens.invalidateUserTokens(
-            credential.userId
+          await fastify.repositories.emailVerificationTokens.invalidateCredentialTokens(
+            credential.id
           );
         }
 
@@ -153,9 +139,8 @@ export default async function (fastify: FastifyInstance) {
         // Calculate expiration time
         const expiresAt = Date.now() + env.EMAIL_VERIFICATION_TOKEN_EXPIRY * 1000;
 
-        // Store token hash in database (dual-id write; user_id stays until #230)
+        // Store token hash in database
         await fastify.repositories.emailVerificationTokens.create({
-          userId: credential.userId,
           credentialId: credential.id,
           tokenHash,
           expiresAt,
@@ -164,7 +149,7 @@ export default async function (fastify: FastifyInstance) {
 
         // Send verification email (don't fail if email send fails)
         try {
-          await fastify.emailService.sendVerificationEmail(user.email, token);
+          await fastify.emailService.sendVerificationEmail(credential.externalSub, token);
         } catch (error) {
           fastify.log.error(error, 'Failed to send verification email');
           // Don't fail the request - user can try again later
