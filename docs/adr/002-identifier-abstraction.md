@@ -10,9 +10,8 @@
 > 0009–0011). The `users` table is a pure identity anchor; credentials live in
 > `user_credentials`, claims in `user_attributes`; the legacy
 > `email`/`email_normalized`/`password_hash` columns no longer exist.
-> (`users.email_verified`/`email_verified_at` remain as vestigial columns —
-> no writers, one sanctioned reader (the register 201 response's default
-> surface); their drop is tracked in #261, migration 0012.)
+> (The vestigial `users.email_verified`/`email_verified_at` columns were
+> subsequently dropped in #261, migration 0012.)
 
 ## Context
 

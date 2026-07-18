@@ -105,3 +105,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   _verified_ address for that user, not that the user has no address.
 
 [#229]: https://github.com/qauth-labs/qauth/issues/229
+
+- **Schema**: migration 0012 drops the vestigial
+  `users.email_verified`/`email_verified_at` columns kept out of 0011's
+  issue-literal scope. No behavior change: they had no writers since #230,
+  and the register 201 response's `emailVerified: false` is now a literal
+  (byte-identical wire value). No guard or special deploy ordering needed.
+  ([#261])
