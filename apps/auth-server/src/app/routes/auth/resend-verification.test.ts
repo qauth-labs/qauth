@@ -66,7 +66,7 @@ function createFastifyStub() {
           .mockResolvedValue({ id: 'user-1', email: 'User@Example.com', emailVerified: false }),
       },
       emailVerificationTokens: {
-        invalidateUserTokens: vi.fn().mockResolvedValue(1),
+        invalidateCredentialTokens: vi.fn().mockResolvedValue(1),
         create: vi.fn().mockResolvedValue({ id: 'token-2' }),
       },
     },
@@ -106,17 +106,18 @@ describe('POST /auth/resend-verification', () => {
       'password',
       'user@example.com'
     );
-    // Invalidation stays keyed on user_id so rollback-window tokens with a
-    // NULL credential_id are caught too (removable only in #230).
-    expect(fastify.repositories.emailVerificationTokens.invalidateUserTokens).toHaveBeenCalledWith(
-      'user-1'
-    );
+    // #230: invalidation is credential-keyed (user_id no longer exists on
+    // the tokens table).
+    expect(
+      fastify.repositories.emailVerificationTokens.invalidateCredentialTokens
+    ).toHaveBeenCalledWith('cred-1');
     expect(fastify.repositories.emailVerificationTokens.create).toHaveBeenCalledWith(
-      expect.objectContaining({ userId: 'user-1', credentialId: 'cred-1', tokenHash: 'hashed' })
+      expect.objectContaining({ credentialId: 'cred-1', tokenHash: 'hashed' })
     );
-    // Outbound address still comes from the users row (byte-identical).
+    // #230: the outbound address is the credential's external_sub — the
+    // registered normalized form (users.email no longer exists).
     expect(fastify.emailService.sendVerificationEmail).toHaveBeenCalledWith(
-      'User@Example.com',
+      'user@example.com',
       'plain'
     );
     expect(result).toEqual({ message: SUCCESS_MESSAGES.RESEND_VERIFICATION });

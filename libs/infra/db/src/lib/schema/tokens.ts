@@ -14,29 +14,23 @@ export const emailVerificationTokens = pgTable(
       .default(sql`uuidv7()`),
     /** SHA-256 hash of the verification token (64 hex characters) */
     tokenHash: varchar('token_hash', { length: 64 }).notNull().unique(),
-    userId: uuid('user_id')
-      .notNull()
-      .references(() => users.id, { onDelete: 'cascade' }),
     /**
      * Password credential this verification targets (ADR-002: email
      * verification is a property of the password authentication method, not
-     * of the abstract identity). Dual-written alongside `user_id` since #228.
-     *
-     * NULLABLE by design until #230: tokens minted by a pre-#228 binary (or
-     * during a rollback window) carry only `user_id`; readers fall back to
-     * resolving the user's password credential. #230 promotes this to
-     * NOT NULL and drops `user_id` — do NOT tighten it earlier.
+     * of the abstract identity). NOT NULL since #230 — the token's identity
+     * link is the credential; user resolution goes through
+     * `user_credentials.user_id`. Cascade covers both levels
+     * (user → credential → token).
      */
-    credentialId: uuid('credential_id').references(() => userCredentials.id, {
-      onDelete: 'cascade',
-    }),
+    credentialId: uuid('credential_id')
+      .notNull()
+      .references(() => userCredentials.id, { onDelete: 'cascade' }),
     expiresAt: bigint('expires_at', { mode: 'number' }).notNull(),
     used: boolean('used').notNull().default(false),
     usedAt: bigint('used_at', { mode: 'number' }),
     createdAt: bigint('created_at', { mode: 'number' }).notNull().default(EPOCH_MS_NOW),
   },
   (t) => [
-    index('idx_email_verification_tokens_user_id').on(t.userId),
     index('idx_email_verification_tokens_credential_id').on(t.credentialId),
     index('idx_email_verification_tokens_active')
       .on(t.tokenHash, t.expiresAt)
@@ -145,7 +139,10 @@ export const refreshTokens = pgTable(
 );
 
 export const emailVerificationTokensRelations = relations(emailVerificationTokens, ({ one }) => ({
-  user: one(users, { fields: [emailVerificationTokens.userId], references: [users.id] }),
+  credential: one(userCredentials, {
+    fields: [emailVerificationTokens.credentialId],
+    references: [userCredentials.id],
+  }),
 }));
 
 export const authorizationCodesRelations = relations(authorizationCodes, ({ one }) => ({

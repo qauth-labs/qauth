@@ -86,25 +86,19 @@ export default async function (fastify: FastifyInstance) {
       const expiresAt = Date.now() + env.EMAIL_VERIFICATION_TOKEN_EXPIRY * 1000;
 
       // One transaction for the whole identity write set (#228, ADR-002): a
-      // users row without its credential row would be unloginable on the new
-      // read path AND block re-registration, so the four writes commit
-      // together.
+      // users row without its credential row would be unloginable AND block
+      // re-registration, so the writes commit together.
       //
-      // DO NOT REORDER: the users insert must precede the credentials insert
-      // so a duplicate registration surfaces the SAME UniqueConstraintError
-      // (users realm/email index) as before — API error parity.
+      // Ordering: users first because user_credentials.user_id FKs users.id.
+      // Since #230 the credentials unique index (realm_id, provider_type,
+      // external_sub) is the SOLE duplicate-registration guard — a duplicate
+      // surfaces from the credential insert and rolls the anchor back.
       const user = await fastify.db.transaction(async (tx) => {
-        // Identity anchor. The email/email_normalized/password_hash columns
-        // are #230-removal shims: NOT NULL until then, dual-written so the
-        // legacy binary stays fully functional for rollback; user_credentials
-        // is the authoritative copy for the new read path.
+        // Pure identity anchor (#230): no email or password fields exist on
+        // users; credential data lives only in user_credentials.
         const created = await fastify.repositories.users.create(
           {
-            email: normalizedEmail,
-            emailNormalized: normalizedEmail,
-            passwordHash,
             realmId: realm.id,
-            emailVerified: false,
           },
           tx
         );
@@ -132,12 +126,11 @@ export default async function (fastify: FastifyInstance) {
           tx
         );
 
-        // Store tokenHash in database (NOT plain token). Dual-id write: the
-        // verification targets the password credential (ADR-002); user_id
-        // stays for rollback-window readers until #230.
+        // Store tokenHash in database (NOT plain token). The verification
+        // targets the password credential (ADR-002); credential_id is the
+        // token's only identity link since #230.
         await fastify.repositories.emailVerificationTokens.create(
           {
-            userId: created.id,
             credentialId: credential.id,
             tokenHash,
             expiresAt,
@@ -151,11 +144,11 @@ export default async function (fastify: FastifyInstance) {
 
       // Send verification email (don't fail registration if this fails)
       try {
-        await fastify.emailService.sendVerificationEmail(user.email, token);
-        fastify.log.info({ userId: user.id, email: user.email }, 'Verification email sent');
+        await fastify.emailService.sendVerificationEmail(normalizedEmail, token);
+        fastify.log.info({ userId: user.id, email: normalizedEmail }, 'Verification email sent');
       } catch (error) {
         fastify.log.error(
-          { err: error, userId: user.id, email: user.email },
+          { err: error, userId: user.id, email: normalizedEmail },
           'Failed to send verification email during registration'
         );
         // Don't throw - registration succeeded, user can request resend
@@ -165,14 +158,15 @@ export default async function (fastify: FastifyInstance) {
       // on the success path; no password or token is logged.
       logAuthEvent(request, 'user.register.success', true, {
         userId: user.id,
-        email: user.email,
+        email: normalizedEmail,
       });
 
-      // Return user data without password_hash
-      // Type is automatically inferred from registerResponseSchema
+      // Response email is the request-derived normalized address — the value
+      // the dropped users.email column held for every post-#228 row; the
+      // emailVerified field reads the vestigial column's default (false).
       return reply.code(201).send({
         id: user.id,
-        email: user.email,
+        email: normalizedEmail,
         emailVerified: user.emailVerified,
         realmId: user.realmId,
         createdAt: user.createdAt,

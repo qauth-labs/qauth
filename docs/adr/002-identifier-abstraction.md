@@ -4,7 +4,15 @@
 **Date:** 2026-03-11
 **Authors:** QAuth Team
 
-> **Implementation status (2026-06-23):** Accepted as a design, **not yet implemented**. The `users` table still carries `email` / `email_normalized` / `password_hash`; the `user_credentials` and `user_attributes` tables do not exist; password auth reads `users.password_hash` directly. Per [ADR-007](./007-mcp-first-positioning.md) (MCP-first positioning), this migration is **deferred** and re-scoped as the gate for Phase 4 (wallet federation) — it is required only when a second human-identity upstream is added. MCP authorization runs on the current schema.
+> **Implementation status (2026-07-18): IMPLEMENTED** — Epic #224, PRs
+> #225–#230 (schema #225, backfill #226, CredentialProvider #227, auth-engine
+> cutover #228, trust-ordered claims #229, legacy column drop #230; migrations
+> 0009–0011). The `users` table is a pure identity anchor; credentials live in
+> `user_credentials`, claims in `user_attributes`; the legacy
+> `email`/`email_normalized`/`password_hash` columns no longer exist.
+> (`users.email_verified`/`email_verified_at` remain as vestigial columns —
+> no writers, one sanctioned reader (the register 201 response's default
+> surface); their drop is tracked in #261, migration 0012.)
 
 ## Context
 

@@ -1,8 +1,4 @@
-import {
-  EmailAlreadyVerifiedError,
-  InvalidTokenError,
-  NotFoundError,
-} from '@qauth-labs/shared-errors';
+import { EmailAlreadyVerifiedError, InvalidTokenError } from '@qauth-labs/shared-errors';
 import type { FastifyInstance } from 'fastify';
 import { describe, expect, it, type Mock, vi } from 'vitest';
 
@@ -71,14 +67,6 @@ function createFastifyStub() {
       userAttributes: {
         setVerified: vi.fn().mockResolvedValue({ id: 'attr-1' }),
       },
-      users: {
-        findById: vi.fn().mockResolvedValue({
-          id: 'user-1',
-          email: 'user@example.com',
-          emailVerified: false,
-        }),
-        verifyEmail: vi.fn().mockResolvedValue({}),
-      },
     },
     emailVerificationTokenUtils: {
       hashToken: vi.fn().mockReturnValue('hashed'),
@@ -91,7 +79,7 @@ function createFastifyStub() {
 const request = { query: { token: 'a'.repeat(64) } };
 
 describe('GET /auth/verify', () => {
-  it('completes verification with the four-write set in one transaction and exact body', async () => {
+  it('completes verification with the completion write set in one transaction and exact body', async () => {
     const { fastify, ctx } = createFastifyStub();
     await verifyRoute(fastify);
     if (!ctx.handler) throw new Error('Handler missing');
@@ -122,39 +110,12 @@ describe('GET /auth/verify', () => {
       true,
       TX
     );
-    // Legacy dual-write keeps REQUIRE_EMAIL_VERIFIED, current JWT claims, and
-    // a rolled-back binary truthful until #230.
-    expect(fastify.repositories.users.verifyEmail).toHaveBeenCalledWith('user-1', TX);
 
+    // #230: the response email is the credential's external_sub.
     expect(result).toEqual({
       message: 'Email verified successfully',
       email: 'user@example.com',
     });
-  });
-
-  it('falls back to the user password credential for rollback-window tokens (NULL credentialId)', async () => {
-    const { fastify, ctx } = createFastifyStub();
-    await verifyRoute(fastify);
-    if (!ctx.handler) throw new Error('Handler missing');
-
-    (
-      fastify.repositories.emailVerificationTokens.findByTokenHash as unknown as Mock
-    ).mockResolvedValue(tokenFixture({ credentialId: null }));
-    (fastify.repositories.userCredentials.findByUserIdAndType as unknown as Mock).mockResolvedValue(
-      credentialFixture()
-    );
-
-    await ctx.handler(request);
-
-    expect(fastify.repositories.userCredentials.findByUserIdAndType).toHaveBeenCalledWith(
-      'user-1',
-      'password'
-    );
-    expect(fastify.repositories.userCredentials.findById).not.toHaveBeenCalled();
-    expect(fastify.repositories.userCredentials.setEmailVerified).toHaveBeenCalledWith(
-      'cred-1',
-      TX
-    );
   });
 
   it('throws InvalidTokenError for an unknown/expired/used token', async () => {
@@ -177,10 +138,8 @@ describe('GET /auth/verify', () => {
 
     (
       fastify.repositories.emailVerificationTokens.findByTokenHash as unknown as Mock
-    ).mockResolvedValue(tokenFixture({ credentialId: null }));
-    (fastify.repositories.userCredentials.findByUserIdAndType as unknown as Mock).mockResolvedValue(
-      undefined
-    );
+    ).mockResolvedValue(tokenFixture());
+    (fastify.repositories.userCredentials.findById as unknown as Mock).mockResolvedValue(undefined);
 
     await expect(ctx.handler(request)).rejects.toThrow(InvalidTokenError);
     expect(fastify.repositories.emailVerificationTokens.markUsed).not.toHaveBeenCalled();
@@ -220,22 +179,6 @@ describe('GET /auth/verify', () => {
 
     await expect(ctx.handler(request)).rejects.toThrow(EmailAlreadyVerifiedError);
     expect(fastify.repositories.emailVerificationTokens.markUsed).not.toHaveBeenCalled();
-    expect(fastify.repositories.users.verifyEmail).not.toHaveBeenCalled();
-  });
-
-  it('throws NotFoundError when the credential has no users row', async () => {
-    const { fastify, ctx } = createFastifyStub();
-    await verifyRoute(fastify);
-    if (!ctx.handler) throw new Error('Handler missing');
-
-    (
-      fastify.repositories.emailVerificationTokens.findByTokenHash as unknown as Mock
-    ).mockResolvedValue(tokenFixture());
-    (fastify.repositories.userCredentials.findById as unknown as Mock).mockResolvedValue(
-      credentialFixture()
-    );
-    (fastify.repositories.users.findById as unknown as Mock).mockResolvedValue(undefined);
-
-    await expect(ctx.handler(request)).rejects.toThrow(NotFoundError);
+    expect(fastify.repositories.userCredentials.setEmailVerified).not.toHaveBeenCalled();
   });
 });

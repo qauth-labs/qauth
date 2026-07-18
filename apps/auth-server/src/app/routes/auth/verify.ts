@@ -1,14 +1,9 @@
 import {
   EMAIL_ATTR_KEY,
-  PASSWORD_PROVIDER_TYPE,
   passwordCredentialDataSchema,
   SELF_REPORTED_SOURCE,
 } from '@qauth-labs/fastify-plugin-federation';
-import {
-  EmailAlreadyVerifiedError,
-  InvalidTokenError,
-  NotFoundError,
-} from '@qauth-labs/shared-errors';
+import { EmailAlreadyVerifiedError, InvalidTokenError } from '@qauth-labs/shared-errors';
 import type { FastifyInstance } from 'fastify';
 import { ZodTypeProvider } from 'fastify-type-provider-zod';
 
@@ -70,29 +65,20 @@ export default async function (fastify: FastifyInstance) {
       }
 
       // 3. Resolve the password credential this token targets (#228,
-      // ADR-002). Tokens minted before #228 (or during a rollback window)
-      // carry only user_id — fall back to the user's password credential so
-      // in-flight verification links keep working. Both paths gone missing is
-      // fail-closed: generic InvalidTokenError, no enumeration signal.
-      const credential = verificationToken.credentialId
-        ? await fastify.repositories.userCredentials.findById(verificationToken.credentialId)
-        : await fastify.repositories.userCredentials.findByUserIdAndType(
-            verificationToken.userId,
-            PASSWORD_PROVIDER_TYPE
-          );
+      // ADR-002). credential_id is NOT NULL since #230, so the lookup is
+      // unconditional; a genuinely missing credential fails closed with the
+      // generic token error (no enumeration signal).
+      const credential = await fastify.repositories.userCredentials.findById(
+        verificationToken.credentialId
+      );
       if (!credential) {
         throw new InvalidTokenError('Invalid or expired token');
       }
 
-      const user = await fastify.repositories.users.findById(credential.userId);
-      if (!user) {
-        throw new NotFoundError('User', credential.userId);
-      }
-
-      // 4. Check if email already verified — sourced from credential_data
-      // since #228 (kept equal to users.email_verified by the dual-write
-      // below). Malformed credential_data is operator-alerting data
-      // corruption; the wire stays the generic token error.
+      // 4. Check if email already verified — credential_data is the sole
+      // authoritative source (the legacy users.email_verified dual-write
+      // ended with #230). Malformed credential_data is operator-alerting
+      // data corruption; the wire stays the generic token error.
       const parsed = passwordCredentialDataSchema.safeParse(credential.credentialData);
       if (!parsed.success) {
         fastify.log.error(
@@ -105,10 +91,10 @@ export default async function (fastify: FastifyInstance) {
         throw new EmailAlreadyVerifiedError();
       }
 
-      // 5.-6. Completion write set (one transaction): consume the token, flip
-      // credential_data.email_verified + the attribute's verified flag, and
-      // dual-write users.email_verified so REQUIRE_EMAIL_VERIFIED, today's
-      // JWT claims, and a rolled-back binary all stay truthful (until #230).
+      // 5.-6. Completion write set (one transaction): consume the token and
+      // flip credential_data.email_verified + the attribute's verified flag —
+      // the authoritative verified state since #228 (the legacy users
+      // dual-write ended with #230).
       await fastify.db.transaction(async (tx) => {
         await fastify.repositories.emailVerificationTokens.markUsed(verificationToken.id, tx);
         await fastify.repositories.userCredentials.setEmailVerified(credential.id, tx);
@@ -127,13 +113,13 @@ export default async function (fastify: FastifyInstance) {
             'no self_reported email attribute to mark verified'
           );
         }
-        await fastify.repositories.users.verifyEmail(credential.userId, tx);
       });
 
-      // 7. Return success response
+      // 7. Return success response. The credential's external_sub IS the
+      // registered normalized address (#230: users.email no longer exists).
       return {
         message: 'Email verified successfully',
-        email: user.email,
+        email: credential.externalSub,
       };
     }
   );

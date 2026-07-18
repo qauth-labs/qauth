@@ -51,16 +51,7 @@ describe('identity repositories integration (real Postgres)', () => {
       .insert(realms)
       .values({ name: `realm-${email}` })
       .returning({ id: realms.id });
-    const [user] = await db
-      .insert(users)
-      .values({
-        realmId: realm.id,
-        email,
-        emailNormalized: email.toLowerCase(),
-        passwordHash: '$argon2id$fake',
-        emailVerified: false,
-      })
-      .returning();
+    const [user] = await db.insert(users).values({ realmId: realm.id }).returning();
     return { realmId: realm.id, user };
   }
 

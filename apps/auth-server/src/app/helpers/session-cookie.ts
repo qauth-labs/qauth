@@ -26,7 +26,13 @@ export const SESSION_COOKIE_NAME = '__Host-qauth_session';
  */
 export interface BrowserSessionData {
   userId: string;
-  email: string;
+  /**
+   * Normalized address of the credential used to authenticate (#230:
+   * `credential.externalSub`). Optional — future non-email credentials
+   * (wallet, #231) have none; consumers fall back to `userId`. Pre-#230
+   * Redis sessions carry the field and remain readable.
+   */
+  email?: string;
   sessionId: string;
   createdAt: number;
   /** Monotonic nonce for CSRF double-submit cookie (rotated on consent POST). */

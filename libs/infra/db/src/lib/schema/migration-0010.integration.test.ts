@@ -29,7 +29,7 @@ interface JournalEntry {
   tag: string;
 }
 
-function migrationFiles(): string[] {
+function migrationFiles(): { idx: number; file: string }[] {
   const journal = JSON.parse(
     readFileSync(path.join(DRIZZLE_DIR, 'meta/_journal.json'), 'utf8')
   ) as {
@@ -37,7 +37,7 @@ function migrationFiles(): string[] {
   };
   return journal.entries
     .sort((a, b) => a.idx - b.idx)
-    .map((e) => path.join(DRIZZLE_DIR, `${e.tag}.sql`));
+    .map((e) => ({ idx: e.idx, file: path.join(DRIZZLE_DIR, `${e.tag}.sql`) }));
 }
 
 async function applyMigrationFile(pool: Pool, file: string): Promise<void> {
@@ -74,9 +74,11 @@ describe('migration 0010 — email_verification_tokens.credential_id (seed-then-
     }
 
     const files = migrationFiles();
-    const file0010 = files.find((f) => f.includes('0010'));
+    const file0010 = files.find((f) => f.idx === 10)?.file;
     expect(file0010).toBeDefined();
-    const preFiles = files.filter((f) => f !== file0010);
+    // STRICTLY idx < 10: later migrations (0011+) must NOT be applied here —
+    // this harness seeds and asserts against the historic pre-0010 schema.
+    const preFiles = files.filter((f) => f.idx < 10).map((f) => f.file);
 
     // 1. Apply 0000-0009 — the pre-#228 schema.
     for (const file of preFiles) {

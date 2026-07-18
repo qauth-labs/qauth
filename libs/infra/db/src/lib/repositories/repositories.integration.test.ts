@@ -31,6 +31,7 @@ import {
   createOAuthConsentsRepository,
   createRealmsRepository,
   createRefreshTokensRepository,
+  createUserCredentialsRepository,
   createUsersRepository,
 } from './index';
 import { type IntegrationDb, setupIntegrationDb } from './integration-setup';
@@ -74,17 +75,21 @@ describe('repository integration (real Postgres)', () => {
     return realms.create({ name });
   }
 
-  async function seedUser(realmId: string, email = 'user@example.com') {
+  async function seedUser(realmId: string) {
     const users = createUsersRepository(db().database.db);
-    return users.create({
+    // #230: users is a pure identity anchor — realmId is the only required
+    // field; credential data goes through user_credentials (seedCredential).
+    return users.create({ realmId });
+  }
+
+  async function seedCredential(realmId: string, userId: string, email = 'user@example.com') {
+    const credentials = createUserCredentialsRepository(db().database.db);
+    return credentials.create({
+      userId,
       realmId,
-      email,
-      // The repo derives emailNormalized when omitted, but NewUser types it as
-      // required; pass the lowercased form so the realm-scoped unique index is
-      // exercised deterministically.
-      emailNormalized: email.toLowerCase(),
-      passwordHash: 'argon2-hash',
-      emailVerified: true,
+      providerType: 'password',
+      externalSub: email.toLowerCase(),
+      credentialData: { password_hash: 'argon2-hash', email_verified: true },
     });
   }
 
@@ -292,8 +297,8 @@ describe('repository integration (real Postgres)', () => {
 
     it('revokeAllForUser revokes only that user’s active tokens (logout-all)', async () => {
       const realm = await seedRealm();
-      const userA = await seedUser(realm.id, 'a@example.com');
-      const userB = await seedUser(realm.id, 'b@example.com');
+      const userA = await seedUser(realm.id);
+      const userB = await seedUser(realm.id);
       const client = await seedClient(realm.id);
       const tokens = createRefreshTokensRepository(db().database.db);
 
@@ -376,23 +381,31 @@ describe('repository integration (real Postgres)', () => {
   // --- realm-scoped unique constraints --------------------------------------
 
   describe('realm-scoped unique constraints', () => {
-    it('rejects a duplicate normalized email within the same realm', async () => {
+    it('rejects a duplicate credential (realm, password, email) within the same realm — the #230 registration guard', async () => {
       const realm = await seedRealm();
-      await seedUser(realm.id, 'dup@example.com');
+      const userA = await seedUser(realm.id);
+      const userB = await seedUser(realm.id);
+      await seedCredential(realm.id, userA.id, 'dup@example.com');
 
-      await expect(seedUser(realm.id, 'dup@example.com')).rejects.toThrow(UniqueConstraintError);
+      // Since #230 the credentials unique index is the SOLE duplicate-
+      // registration guard (the users email index dropped with the column).
+      await expect(seedCredential(realm.id, userB.id, 'dup@example.com')).rejects.toThrow(
+        UniqueConstraintError
+      );
     });
 
-    it('allows the same email across DIFFERENT realms (uniqueness is realm-scoped)', async () => {
+    it('allows the same credential email across DIFFERENT realms (uniqueness is realm-scoped)', async () => {
       const realmA = await seedRealm('realm-a');
       const realmB = await seedRealm('realm-b');
+      const userA = await seedUser(realmA.id);
+      const userB = await seedUser(realmB.id);
 
-      const a = await seedUser(realmA.id, 'same@example.com');
-      const b = await seedUser(realmB.id, 'same@example.com');
+      const a = await seedCredential(realmA.id, userA.id, 'same@example.com');
+      const b = await seedCredential(realmB.id, userB.id, 'same@example.com');
 
       expect(a.realmId).toBe(realmA.id);
       expect(b.realmId).toBe(realmB.id);
-      expect(a.id).not.toBe(b.id);
+      expect(a.userId).not.toBe(b.userId);
     });
 
     it('rejects a duplicate client_id within a realm but allows it across realms', async () => {
@@ -480,7 +493,7 @@ describe('repository integration (real Postgres)', () => {
   describe('audit_logs — per-agent action audit (ADR-007 §2, #186)', () => {
     it('round-trips agent attribution columns (actor, subject, act chain, mode)', async () => {
       const realm = await seedRealm('agent-audit-realm');
-      const subject = await seedUser(realm.id, 'subject@example.com');
+      const subject = await seedUser(realm.id);
       const agentClient = await seedClient(realm.id, 'agent-actor');
       const audit = createAuditLogsRepository(db().database.db);
 
@@ -507,7 +520,7 @@ describe('repository integration (real Postgres)', () => {
 
     it('accepts the new "agent" event_type enum value', async () => {
       const realm = await seedRealm('agent-event-type-realm');
-      const subject = await seedUser(realm.id, 'agent-evt@example.com');
+      const subject = await seedUser(realm.id);
       const agentClient = await seedClient(realm.id, 'agent-evt-actor');
       const audit = createAuditLogsRepository(db().database.db);
 
@@ -524,7 +537,7 @@ describe('repository integration (real Postgres)', () => {
 
     it('leaves agent columns null for ordinary (non-agent) entries — backward compatible', async () => {
       const realm = await seedRealm('plain-audit-realm');
-      const user = await seedUser(realm.id, 'plain@example.com');
+      const user = await seedUser(realm.id);
       const audit = createAuditLogsRepository(db().database.db);
 
       // An entry written exactly as pre-#186 callers do (no agent fields).
@@ -542,7 +555,7 @@ describe('repository integration (real Postgres)', () => {
 
     it('findByRealmAndActorClientId returns only an agent’s actions, newest first', async () => {
       const realm = await seedRealm('agent-activity-realm');
-      const subject = await seedUser(realm.id, 'activity@example.com');
+      const subject = await seedUser(realm.id);
       const agentA = await seedClient(realm.id, 'agent-a');
       const agentB = await seedClient(realm.id, 'agent-b');
       const audit = createAuditLogsRepository(db().database.db);
@@ -605,8 +618,8 @@ describe('repository integration (real Postgres)', () => {
       // return ONLY realm A's row, never realm B's.
       const realmA = await seedRealm('iso-realm-a');
       const realmB = await seedRealm('iso-realm-b');
-      const userA = await seedUser(realmA.id, 'a@example.com');
-      const userB = await seedUser(realmB.id, 'b@example.com');
+      const userA = await seedUser(realmA.id);
+      const userB = await seedUser(realmB.id);
       const clientA = await seedClient(realmA.id, 'agent-shared');
       const clientB = await seedClient(realmB.id, 'agent-shared');
       const audit = createAuditLogsRepository(db().database.db);
