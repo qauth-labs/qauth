@@ -1145,6 +1145,32 @@ describe('POST /oauth/token route — authorization_code grant', () => {
     });
   });
 
+  it('gates ID-token email claims on the email scope: openid-only omits them even for a verified user — BREAKING #259', async () => {
+    const { fastify, ctx, authCode } = setupAuthCodeStub();
+    (fastify.repositories.authorizationCodes.findByCode as unknown as Mock).mockResolvedValue({
+      ...authCode,
+      // openid WITHOUT email: the default stub fixture has a VERIFIED email
+      // attribute, so only the scope gate can explain the omission.
+      scopes: ['openid'],
+    });
+    await tokenRoute(fastify);
+    const handler = ctx.handler;
+    if (!handler) throw new Error('Handler missing');
+
+    await handler(baseRequest(), createReply());
+
+    const idClaims = (fastify.jwtUtils.signIdToken as unknown as Mock).mock.calls[0][0] as Record<
+      string,
+      unknown
+    >;
+    expect('email' in idClaims).toBe(false);
+    expect('email_verified' in idClaims).toBe(false);
+    // The access-token convenience claims are NOT scope-gated (unchanged).
+    const accessClaims = (fastify.jwtUtils.signAccessToken as unknown as Mock).mock
+      .calls[0][0] as Record<string, unknown>;
+    expect(accessClaims['email']).toBe('user@example.com');
+  });
+
   it('omits BOTH email claims from access AND id token when no verified attribute exists — BREAKING #229', async () => {
     const { fastify, ctx, authCode } = setupAuthCodeStub();
     (fastify.repositories.authorizationCodes.findByCode as unknown as Mock).mockResolvedValue({

@@ -489,7 +489,11 @@ async function handleAuthorizationCode(
     ? await fastify.jwtUtils.signIdToken({
         sub: user.id,
         audience: client.clientId,
-        ...emailClaims,
+        // BREAKING (#259, data minimization): email claims are released in
+        // the ID token only under the `email` scope, matching userinfo's
+        // gating (OIDC Core §5.4). The shared resolution keeps the access
+        // token and ID token consistent when both carry the claims.
+        ...(authCode.scopes.includes('email') ? emailClaims : {}),
         name: resolveDisplayName(user),
         nonce: authCode.nonce ?? undefined,
       })
