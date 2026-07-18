@@ -1,0 +1,21 @@
+{
+  "name": "@qauth-labs/crypto-native",
+  "version": "0.0.0",
+  "private": true,
+  "main": "src/index.ts",
+  "napi": {
+    "name": "qauth-crypto-native",
+    "triples": {
+      "defaults": true
+    }
+  },
+  "dependencies": {
+    "@qauth-labs/core-crypto": "workspace:*"
+  },
+  "devDependencies": {
+    "@napi-rs/cli": "^3.7.3",
+    "@vitest/coverage-v8": "catalog:",
+    "@vitest/ui": "catalog:",
+    "vitest": "catalog:"
+  }
+}

@@ -39,7 +39,8 @@
         "libs/server/federation/*",
         "libs/fastify/plugins/pkce/*",
         "libs/fastify/plugins/federation/*",
-        "libs/core/crypto/*"
+        "libs/core/crypto/*",
+        "libs/core/crypto-native/*"
       ]
     },
     {
@@ -63,7 +64,8 @@
         "libs/server/federation/*",
         "libs/fastify/plugins/pkce/*",
         "libs/fastify/plugins/federation/*",
-        "libs/core/crypto/*"
+        "libs/core/crypto/*",
+        "libs/core/crypto-native/*"
       ],
       "options": {
         "typecheck": {

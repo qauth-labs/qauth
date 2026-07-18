@@ -1,0 +1,8 @@
+# napi-rs / Rust build artifacts — the native addon is built locally and (in
+# the deferred CI half of #244) by a per-platform prebuild matrix; it is never
+# committed.
+target/
+*.node
+# napi CLI JS/d.ts glue (regenerated on build)
+index.js
+index.d.ts

@@ -1,0 +1,17 @@
+{
+  "name": "crypto-native",
+  "$schema": "../../../node_modules/nx/schemas/project-schema.json",
+  "sourceRoot": "libs/core/crypto-native/src",
+  "projectType": "library",
+  "tags": ["scope:server", "type:utility"],
+  "targets": {
+    "build-native": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "napi build --platform --release",
+        "cwd": "libs/core/crypto-native"
+      },
+      "description": "Build the native ML-DSA-65 addon (.node) for the current platform. Requires a Rust toolchain + cmake."
+    }
+  }
+}
