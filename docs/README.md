@@ -23,6 +23,14 @@ interactive **Swagger UI at `/docs`** on any running instance.
 | [**OAuth 2.1 Flow**](./oauth-flow.md)                                          | Every endpoint with copy-paste `curl`: PKCE generation, `/oauth/authorize`, token exchange, refresh-token rotation, `client_credentials`, introspection, UserInfo, and Dynamic Client Registration. |
 | [**ADR-006: OAuth grants & audience**](./adr/006-oauth-grants-and-audience.md) | Why `client_credentials` + `client_secret_basic` and per-client `aud` binding work the way they do.                                                                                                 |
 
+## Post-quantum signing
+
+| Guide                                                                     | What it covers                                                                                                                                                                                                                                                                                |
+| ------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [**Hybrid Signing — Verifier Guide**](./hybrid-signing-verifier-guide.md) | How token verifiers behave during the ADR-005 hybrid (Ed25519 + ML-DSA-65) rollout: the mixed `OKP`+`AKP` JWKS, the reference-token/introspection delivery default, the draft-revision churn risk, and a migration checklist. **No action is required for classical Ed25519-only verifiers.** |
+| [**ADR-005: PQC Hybrid Signing**](./adr/005-pqc-hybrid-signing.md)        | The post-quantum roadmap, the detached-parallel construction, and the #243–248 implementation amendments.                                                                                                                                                                                     |
+| [**Security Gate Review**](./security/005-pqc-hybrid-signing-review.md)   | The three-dimension security review of the merged PQC surface (CONDITIONAL PASS) and the pre-default-on checklist.                                                                                                                                                                            |
+
 ## Agent authorization
 
 | Guide                                               | What it covers                                                                                                                                                                                                                                                                         |
