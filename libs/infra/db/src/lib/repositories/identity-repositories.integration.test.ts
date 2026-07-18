@@ -14,6 +14,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import type { UserAttributesRepository, UserCredentialsRepository } from '../../types';
 import { realms, users } from '../schema';
+import { createEmailVerificationTokensRepository } from './email-verification-tokens.repository';
 import { type IntegrationDb, setupIntegrationDb } from './integration-setup';
 import { createUserAttributesRepository } from './user-attributes.repository';
 import { createUserCredentialsRepository } from './user-credentials.repository';
@@ -208,6 +209,33 @@ describe('identity repositories integration (real Postgres)', () => {
     expect(rows).toHaveLength(1);
     expect(rows[0].attrValue).toBe('second@example.com');
     expect(rows[0].verified).toBe(true);
+  });
+
+  it('email-verification markUsed is single-use: the second CAS attempt loses (#258)', async () => {
+    if (!ctx) throw new Error('no ctx');
+    const db = ctx.database.db;
+    const { realmId, user } = await seedUser('cas@example.com');
+    const cred = await credentials.create({
+      userId: user.id,
+      realmId,
+      providerType: 'password',
+      externalSub: 'cas@example.com',
+      credentialData: { password_hash: 'h', email_verified: false },
+    });
+    const evt = createEmailVerificationTokensRepository(db);
+    const token = await evt.create({
+      credentialId: cred.id,
+      tokenHash: 'f'.repeat(64),
+      expiresAt: Date.now() + 3_600_000,
+      used: false,
+    });
+
+    const first = await evt.markUsed(token.id);
+    expect(first?.used).toBe(true);
+
+    // Same real row, second attempt: the used=false predicate fails the CAS.
+    const second = await evt.markUsed(token.id);
+    expect(second).toBeUndefined();
   });
 
   it('setVerified targets exactly one (user_id, source, attr_key) row', async () => {

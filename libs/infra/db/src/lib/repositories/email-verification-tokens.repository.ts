@@ -1,4 +1,3 @@
-import { NotFoundError } from '@qauth-labs/shared-errors';
 import { and, eq, gt, lt } from 'drizzle-orm';
 
 import type {
@@ -64,14 +63,18 @@ export function createEmailVerificationTokensRepository(
     },
 
     /**
-     * Mark a token as used
+     * Mark a token as used — a COMPARE-AND-SET (#258, mirroring the
+     * authorization-code single-use guard from #167): the UPDATE only wins
+     * when `used` is still false, so two concurrent verification attempts
+     * with the same token serialize on the row and exactly one succeeds.
      *
      * @param id - Token ID
      * @param tx - Optional transaction client
-     * @returns Updated token
-     * @throws NotFoundError if token is not found
+     * @returns The updated token, or undefined when the token was already
+     * used (or does not exist) — an expected race outcome, not an exception;
+     * callers map it to their surface's generic error.
      */
-    async markUsed(id: string, tx?: DbClient): Promise<EmailVerificationToken> {
+    async markUsed(id: string, tx?: DbClient): Promise<EmailVerificationToken | undefined> {
       const invoker = tx ?? defaultDb;
       const now = Date.now();
 
@@ -81,12 +84,8 @@ export function createEmailVerificationTokensRepository(
           used: true,
           usedAt: now,
         })
-        .where(eq(emailVerificationTokens.id, id))
+        .where(and(eq(emailVerificationTokens.id, id), eq(emailVerificationTokens.used, false)))
         .returning();
-
-      if (!token) {
-        throw new NotFoundError('EmailVerificationToken', id);
-      }
 
       return token;
     },
