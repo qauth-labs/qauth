@@ -41,3 +41,28 @@ export function missingScopes(granted: string[], required: string[]): string[] {
 export function hasRequiredScopes(granted: string[], required: string[]): boolean {
   return missingScopes(granted, required).length === 0;
 }
+
+/**
+ * Scopes that describe the client's relationship with the *authorization
+ * server* rather than anything this resource will authorize, and which must
+ * therefore never be advertised as a resource requirement (#284).
+ *
+ * MCP Authorization ("Scope Selection Strategy") names `offline_access`
+ * explicitly: it only governs whether the AS issues a refresh token, so putting
+ * it in a challenge or in PRM `scopes_supported` would tell a client to obtain
+ * consent that has no bearing on the call it is trying to make.
+ */
+const NON_RESOURCE_SCOPES: ReadonlySet<string> = new Set(['offline_access']);
+
+/**
+ * Filter a scope list down to what is meaningful to advertise as a resource
+ * requirement — see {@link NON_RESOURCE_SCOPES}.
+ *
+ * This is applied at the two *advertisement* surfaces only (the
+ * `WWW-Authenticate` challenge and PRM `scopes_supported`), never to
+ * enforcement: a host that configures such a scope still has it checked
+ * against the token, so this cannot widen access.
+ */
+export function advertisableScopes(scopes: string[]): string[] {
+  return scopes.filter((scope) => !NON_RESOURCE_SCOPES.has(scope));
+}

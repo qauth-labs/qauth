@@ -6,6 +6,7 @@ import { mcpGuardPlugin } from './fastify-plugin-mcp-guard';
 
 const ISSUER = 'https://auth.example.com';
 const RESOURCE = 'https://mcp.example.com';
+const METADATA_URL = `${RESOURCE}/.well-known/oauth-protected-resource`;
 
 let privateKey: CryptoKey;
 let publicJwk: JWK;
@@ -93,6 +94,45 @@ describe('mcp-guard Fastify plugin — 401 challenge', () => {
     );
     // Bare challenge: no error code when credentials are simply absent.
     expect(challenge).not.toContain('error=');
+    // No required scopes configured for this route, so no `scope` at all —
+    // never an empty `scope=""` (#284).
+    expect(challenge).toBe(`Bearer resource_metadata="${METADATA_URL}"`);
+  });
+
+  // #284 — MCP Authorization ("Scope Selection Strategy").
+  it('advertises the route required scopes on the 401, still with no error code', async () => {
+    app = await buildApp(['mcp:read']);
+    const res = await app.inject({ method: 'GET', url: '/data' });
+    expect(res.statusCode).toBe(401);
+    expect(res.headers['www-authenticate']).toBe(
+      `Bearer scope="mcp:read", resource_metadata="${METADATA_URL}"`
+    );
+  });
+
+  it('advertises defaults plus step-up scopes on the 401 of a privileged route', async () => {
+    app = await buildApp(['mcp:read']);
+    const res = await app.inject({ method: 'POST', url: '/admin' });
+    expect(res.statusCode).toBe(401);
+    // The full set the operation needs, so the client authorizes in one round
+    // instead of coming back for a 403 step-up.
+    expect(res.headers['www-authenticate']).toBe(
+      `Bearer scope="mcp:read mcp:admin", resource_metadata="${METADATA_URL}"`
+    );
+  });
+
+  it('keeps offline_access out of both the 401 challenge and PRM scopes_supported', async () => {
+    app = await buildApp(['mcp:read', 'offline_access']);
+
+    const challenge = await app.inject({ method: 'GET', url: '/data' });
+    expect(challenge.headers['www-authenticate']).toBe(
+      `Bearer scope="mcp:read", resource_metadata="${METADATA_URL}"`
+    );
+
+    const prm = await app.inject({
+      method: 'GET',
+      url: '/.well-known/oauth-protected-resource',
+    });
+    expect(prm.json().scopes_supported).toEqual(['mcp:read']);
   });
 
   it('returns 401 invalid_token for a wrong-audience token (no passthrough)', async () => {
