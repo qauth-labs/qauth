@@ -53,7 +53,7 @@ export interface DiscoveryMetadataInput {
 export function buildAuthorizationServerMetadata(
   input: DiscoveryMetadataInput
 ): Record<string, unknown> {
-  const base = stripTrailingSlash(input.issuer);
+  const base = resolveIssuerIdentifier(input.issuer);
 
   return {
     issuer: base,
@@ -89,6 +89,15 @@ export function buildAuthorizationServerMetadata(
     // RFC 8707 §3: advertise Resource Indicator support. Clients that want
     // audience-scoped tokens can rely on this metadata flag.
     resource_indicators_supported: true,
+    // RFC 9207 §3 (#282): an AS that emits `iss` in authorization responses
+    // MUST advertise it, so clients know they can (and should) validate the
+    // parameter instead of ignoring an unrecognised one. Hard-coded true
+    // rather than configurable: /oauth/authorize emits `iss` unconditionally
+    // — a deployment cannot turn it off, so the flag cannot go stale. Set on
+    // the AS metadata so `buildOpenIdConfiguration` inherits it too. The
+    // upcoming MCP authorization revision requires this validation, and
+    // RFC 9207 signals a future SHOULD→MUST upgrade.
+    authorization_response_iss_parameter_supported: true,
     // CIMD (draft-ietf-oauth-client-id-metadata-document-00 / MCP
     // 2025-11-25): advertise that an https-URL `client_id` resolves to a
     // metadata document fetched on demand. Only emitted when enabled so a
@@ -134,6 +143,23 @@ export function buildOpenIdConfiguration(input: DiscoveryMetadataInput): Record<
   };
 }
 
-function stripTrailingSlash(url: string): string {
+/**
+ * Canonicalise a configured issuer URL into THE authorization server's issuer
+ * identifier — the exact string published as `issuer` in discovery metadata.
+ *
+ * The only transformation is dropping a trailing slash (RFC 8414 §2). It is
+ * deliberately NOT a URL normalisation: the value is never round-tripped
+ * through `new URL(...)`, which would case-fold the authority, elide default
+ * ports and rewrite percent-encoding.
+ *
+ * This is the shared choke point for #282: `/oauth/authorize` derives the
+ * RFC 9207 `iss` response parameter from the SAME function over the SAME
+ * source (`fastify.jwtUtils.getIssuer()`), so the redirect value is
+ * byte-identical to the advertised `issuer`. Clients compare the two by simple
+ * string comparison (RFC 9207 §2.4, RFC 3986 §6.2.1) and MUST NOT normalise
+ * before comparing — a one-character divergence is a failed authorization, so
+ * this must stay the only place the issuer string is shaped.
+ */
+export function resolveIssuerIdentifier(url: string): string {
   return url.endsWith('/') ? url.slice(0, -1) : url;
 }

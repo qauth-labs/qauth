@@ -33,6 +33,8 @@ vi.mock('../../helpers/ssrf-safe-fetch', async () => {
   return { ...actual, ssrfSafeGet };
 });
 
+import { STEP_UP_FRESH_AUTH_WINDOW_MS } from '../../constants';
+import { buildAuthorizationServerMetadata } from '../../helpers/discovery';
 import authorizeRoute from './authorize';
 
 interface TestContext {
@@ -888,5 +890,191 @@ describe('GET /oauth/authorize — environment localhost redirect gate (ADR-008 
     const { state, call } = await run('production', 'development');
     await call();
     expect(state.redirected).toContain('/ui/login?return_to=');
+  });
+});
+
+describe('GET /oauth/authorize — RFC 9207 `iss` on every authorization response (#282)', () => {
+  // The issuer this suite's makeFastify() advertises via jwtUtils.getIssuer().
+  const RAW_ISSUER = 'https://auth.example.com';
+
+  /**
+   * The value discovery publishes as `issuer`. Every assertion below compares
+   * the redirect's `iss` against THIS rather than a hard-coded literal: the
+   * acceptance criterion is byte-equality between the two documents, so the
+   * test must break if either side starts shaping the issuer differently.
+   */
+  function discoveryIssuer(raw: string): string {
+    return buildAuthorizationServerMetadata({ issuer: raw })['issuer'] as string;
+  }
+
+  /** The `iss` a redirect actually carried, percent-decoded as a client reads it. */
+  function issOf(redirected: string | undefined): string | null {
+    expect(redirected).toBeDefined();
+    return new URL(redirected as string).searchParams.get('iss');
+  }
+
+  interface RunOptions {
+    client?: Record<string, unknown>;
+    query?: Record<string, unknown>;
+    /** Browser session (default: fresh, valid). `null` drops the cookie entirely. */
+    session?: Record<string, unknown> | null;
+    /** Prior consent used to reach the consent-skip / code-issuance path. */
+    consent?: Record<string, unknown> | null;
+    /** Present a Bearer token instead of a cookie; `false` makes verification fail. */
+    bearer?: 'valid' | 'invalid';
+    /** Override the configured issuer to prove `iss` tracks it verbatim. */
+    issuer?: string;
+  }
+
+  async function run(opts: RunOptions = {}) {
+    const { fastify, ctx } = makeFastify();
+    if (opts.issuer !== undefined) {
+      (fastify.jwtUtils as unknown as { getIssuer: () => string }).getIssuer = () =>
+        opts.issuer as string;
+    }
+    await authorizeRoute(fastify);
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(
+      opts.client ?? CLIENT
+    );
+    (fastify.repositories.oauthConsents.findActive as unknown as Mock).mockResolvedValue(
+      opts.consent === undefined ? { scopes: ['email', 'read:foo'], revokedAt: null } : opts.consent
+    );
+
+    const headers: Record<string, string> = {};
+    if (opts.bearer) {
+      (fastify.sessionUtils.getSession as unknown as Mock).mockResolvedValue(null);
+      (fastify.jwtUtils.extractFromHeader as unknown as Mock).mockReturnValue('bearer.token');
+      if (opts.bearer === 'valid') {
+        (fastify.jwtUtils.verifyAccessToken as unknown as Mock).mockResolvedValue({
+          sub: 'user-1',
+        });
+      } else {
+        (fastify.jwtUtils.verifyAccessToken as unknown as Mock).mockRejectedValue(
+          new Error('expired')
+        );
+      }
+      headers['authorization'] = 'Bearer bearer.token';
+    } else {
+      (fastify.jwtUtils.extractFromHeader as unknown as Mock).mockReturnValue(null);
+      const { signSessionId } = await import('../../helpers/session-cookie');
+      const sid = `sid-iss-${Math.random().toString(36).slice(2)}`;
+      (fastify.sessionUtils.getSession as unknown as Mock).mockResolvedValue(
+        opts.session === null
+          ? null
+          : {
+              userId: 'user-1',
+              email: 'a@b.com',
+              sessionId: sid,
+              createdAt: Date.now(),
+              ...opts.session,
+            }
+      );
+      headers['cookie'] = `__Host-qauth_session=${signSessionId(sid)}`;
+    }
+
+    const query = { ...BASE_QUERY, ...opts.query };
+    const { reply, state } = createReply();
+    await ctx.handler!(
+      {
+        query,
+        url: `/oauth/authorize?response_type=code&client_id=${query.client_id}&scope=${encodeURIComponent(String(query.scope))}`,
+        headers,
+        ip: '127.0.0.1',
+      },
+      reply
+    );
+    return { fastify, state };
+  }
+
+  it('success response carries `iss` alongside the code (RFC 9207 §2)', async () => {
+    const { fastify, state } = await run();
+    expect(fastify.repositories.authorizationCodes.create).toHaveBeenCalledOnce();
+    expect(state.redirected).toContain('code=');
+    expect(issOf(state.redirected)).toBe(discoveryIssuer(RAW_ISSUER));
+  });
+
+  it('unauthorized_client (client disabled) carries `iss`', async () => {
+    const { state } = await run({ client: { ...CLIENT, enabled: false } });
+    expect(state.redirected).toContain('error=unauthorized_client');
+    expect(issOf(state.redirected)).toBe(discoveryIssuer(RAW_ISSUER));
+  });
+
+  it('unauthorized_client (grant type not allowed) carries `iss`', async () => {
+    const { state } = await run({ client: { ...CLIENT, grantTypes: ['client_credentials'] } });
+    expect(state.redirected).toContain('error=unauthorized_client');
+    expect(issOf(state.redirected)).toBe(discoveryIssuer(RAW_ISSUER));
+  });
+
+  it('unauthorized_client (response type not allowed) carries `iss`', async () => {
+    const { state } = await run({ client: { ...CLIENT, responseTypes: [] } });
+    expect(state.redirected).toContain('error=unauthorized_client');
+    expect(issOf(state.redirected)).toBe(discoveryIssuer(RAW_ISSUER));
+  });
+
+  it('access_denied (invalid/expired Bearer token) carries `iss`', async () => {
+    const { fastify, state } = await run({ bearer: 'invalid' });
+    expect(state.redirected).toContain('error=access_denied');
+    expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
+    expect(issOf(state.redirected)).toBe(discoveryIssuer(RAW_ISSUER));
+  });
+
+  it('access_denied (Bearer path dangerous-scope step-up refusal) carries `iss`', async () => {
+    const { state } = await run({
+      client: { ...CLIENT, clientId: 'app-bearer', scopes: ['read:foo', 'write:foo', 'email'] },
+      query: { client_id: 'app-bearer', scope: 'write:foo' },
+      bearer: 'valid',
+    });
+    expect(state.redirected).toContain('error=access_denied');
+    expect(issOf(state.redirected)).toBe(discoveryIssuer(RAW_ISSUER));
+  });
+
+  it('invalid_scope (agent scope-mode cap exceeded) carries `iss`', async () => {
+    const { state } = await run({
+      client: {
+        ...CLIENT,
+        clientId: 'agent-ro',
+        scopes: ['agent:readonly', 'agent:exec', 'email'],
+        isAgent: true,
+        maxAgentMode: 'readonly',
+      },
+      query: { client_id: 'agent-ro', scope: 'agent:exec' },
+      consent: { scopes: ['agent:readonly', 'agent:exec', 'email'], revokedAt: null },
+    });
+    expect(state.redirected).toContain('error=invalid_scope');
+    expect(issOf(state.redirected)).toBe(discoveryIssuer(RAW_ISSUER));
+  });
+
+  it('prompt=none interaction_required-class errors carry `iss` (OIDC Core §3.1.2.1 path)', async () => {
+    // A dangerous scope on a stale session would normally bounce to /ui/login;
+    // prompt=none converts that into a bare error redirect, which is still an
+    // authorization response and so still needs the mix-up defence.
+    const { state } = await run({
+      client: { ...CLIENT, clientId: 'app-danger', scopes: ['read:foo', 'write:foo', 'email'] },
+      query: { client_id: 'app-danger', scope: 'write:foo', prompt: 'none' },
+      session: { createdAt: Date.now() - STEP_UP_FRESH_AUTH_WINDOW_MS * 10 },
+      consent: { scopes: ['read:foo', 'write:foo', 'email'], revokedAt: null },
+    });
+    expect(state.redirected).toContain('error=login_required');
+    expect(issOf(state.redirected)).toBe(discoveryIssuer(RAW_ISSUER));
+  });
+
+  it('emits `iss` VERBATIM — a trailing-slash/mixed-case issuer matches discovery byte for byte', async () => {
+    // Guards the acceptance criterion directly: whatever shaping discovery
+    // applies (trailing-slash strip and nothing else), the redirect applies the
+    // same. `new URL(...)` would have lower-cased the host and dropped :443.
+    const RAW = 'https://Auth.EXAMPLE.com:8443/idp/';
+    const { state } = await run({ issuer: RAW });
+    expect(state.redirected).toContain('code=');
+    expect(discoveryIssuer(RAW)).toBe('https://Auth.EXAMPLE.com:8443/idp');
+    expect(issOf(state.redirected)).toBe(discoveryIssuer(RAW));
+  });
+
+  it('does NOT attach `iss` to internal /ui redirects (they are not authorization responses)', async () => {
+    // /ui/login and /ui/consent are same-origin UI hops, not RFC 6749 §4.1.2
+    // responses to the client. Emitting `iss` there would be meaningless noise
+    // and would leak into the return_to round-trip.
+    const { state } = await run({ session: null });
+    expect(state.redirected).toContain('/ui/login?return_to=');
+    expect(state.redirected).not.toContain('iss=');
   });
 });
