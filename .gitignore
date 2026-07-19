@@ -31,3 +31,9 @@ local-*
 
 vite.config.*.timestamp*
 vitest.config.*.timestamp*
+# Cursor. The project standardised on Claude Code in #199, which migrated
+# .cursor/rules into .claude/skills and deleted .cursor/ along with this
+# entry. The directory has since reappeared in working trees and was
+# re-committed by accident, so the ignore is restored as a guard. Drop this
+# block if Cursor is ever adopted.
+.cursor/
