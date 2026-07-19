@@ -1,5 +1,15 @@
-import { getSignatureBackend } from '@qauth-labs/core-crypto';
-import { generateEdDSAKeyPair, importPrivateKey, signAccessToken } from '@qauth-labs/server-jwt';
+import {
+  getSignatureBackend,
+  type MlDsaKey,
+  registerSignatureBackend,
+  resetSignatureBackends,
+} from '@qauth-labs/core-crypto';
+import {
+  generateEdDSAKeyPair,
+  importPrivateKey,
+  selectJwksKey,
+  signAccessToken,
+} from '@qauth-labs/server-jwt';
 import { JWTExpiredError, JWTInvalidError } from '@qauth-labs/shared-errors';
 import type { FastifyInstance } from 'fastify';
 import Fastify from 'fastify';
@@ -7,6 +17,9 @@ import { exportPKCS8, exportSPKI, importJWK, jwtVerify, SignJWT } from 'jose';
 import { describe, expect, it } from 'vitest';
 
 import { jwtPlugin } from './fastify-plugin-jwt';
+
+/** Operator-enabled algorithm set (SIGNING_ALGORITHM_MODE=ed25519+ml-dsa-65). */
+const PQC_ENABLED = ['EdDSA', 'ML-DSA-65'] as const;
 
 /**
  * Sign an already-expired token (avoids flaky setTimeout-based tests).
@@ -257,10 +270,10 @@ describe('requireJwt middleware', () => {
     const { privateKey, publicKey } = await generateEdDSAKeyPair(true);
     const privateKeyPem = await exportPKCS8(privateKey);
     const publicKeyPem = await exportSPKI(publicKey);
-    const mlDsa = getSignatureBackend('ML-DSA-65', ['ML-DSA-65']).generateKeyPair({
+    const mlDsa = getSignatureBackend('ML-DSA-65', PQC_ENABLED).generateKeyPair({
       extractable: true,
     });
-    const seed = getSignatureBackend('ML-DSA-65', ['ML-DSA-65']).exportKey(mlDsa.privateKey);
+    const seed = getSignatureBackend('ML-DSA-65', PQC_ENABLED).exportKey(mlDsa.privateKey);
 
     const app = Fastify({ logger: false });
     await app.register(jwtPlugin, {
@@ -272,6 +285,7 @@ describe('requireJwt middleware', () => {
       keyId: 'ed-1',
       mlDsaSeed: seed,
       mlDsaKeyId: 'ed-1-mldsa',
+      enabledSignatureAlgorithms: PQC_ENABLED,
     });
     try {
       const jwks = await app.jwtUtils.getJwks();
@@ -312,6 +326,218 @@ describe('requireJwt middleware', () => {
         code: 'JWT_INVALID',
         error: 'Missing or malformed Authorization header',
       });
+    } finally {
+      await app.close();
+    }
+  });
+});
+
+describe('jwtPlugin — PQC backend gating, rotation, and seed hygiene (#248 F7/F9/F10)', () => {
+  const mlDsaBackend = getSignatureBackend('ML-DSA-65', PQC_ENABLED);
+
+  async function edPems() {
+    const { privateKey, publicKey } = await generateEdDSAKeyPair(true);
+    return {
+      privateKeyPem: await exportPKCS8(privateKey),
+      publicKeyPem: await exportSPKI(publicKey),
+    };
+  }
+
+  function freshMlDsa() {
+    const pair = mlDsaBackend.generateKeyPair({ extractable: true });
+    return {
+      seed: mlDsaBackend.exportKey(pair.privateKey),
+      publicKey: mlDsaBackend.exportKey(pair.publicKey),
+    };
+  }
+
+  function baseOptions(pems: { privateKeyPem: string; publicKeyPem: string }) {
+    return {
+      privateKey: pems.privateKeyPem,
+      publicKey: pems.publicKeyPem,
+      issuer: 'https://auth.test.example.com',
+      accessTokenLifespan: 900,
+      refreshTokenLifespan: 86400,
+    };
+  }
+
+  it('F7: fails boot when an ML-DSA seed is set without the operator allowlist', async () => {
+    const pems = await edPems();
+    const app = Fastify({ logger: false });
+    // Omitting the allowlist is exactly the hardcoded-['ML-DSA-65'] bypass the
+    // finding is about — it must be impossible to configure, not defaulted.
+    await expect(
+      app.register(jwtPlugin, {
+        ...baseOptions(pems),
+        keyId: 'ed-1',
+        mlDsaSeed: freshMlDsa().seed,
+        mlDsaKeyId: 'mldsa-1',
+      })
+    ).rejects.toThrow(/enabledSignatureAlgorithms.*is required/s);
+    await app.close();
+  });
+
+  it('F7: fails boot when SIGNING_ALGORITHM_MODE has not enabled ML-DSA-65', async () => {
+    const pems = await edPems();
+    const app = Fastify({ logger: false });
+    await expect(
+      app.register(jwtPlugin, {
+        ...baseOptions(pems),
+        keyId: 'ed-1',
+        mlDsaSeed: freshMlDsa().seed,
+        mlDsaKeyId: 'mldsa-1',
+        // Classical-only deployment: the ML-DSA key must not be publishable.
+        enabledSignatureAlgorithms: ['EdDSA'],
+      })
+    ).rejects.toThrow(/'ML-DSA-65' is not enabled/);
+    await app.close();
+  });
+
+  it('F10: zeroizes the transient private key right after boot-time derivation', async () => {
+    const pems = await edPems();
+    const { seed } = freshMlDsa();
+    // Capture the exact MlDsaKey the plugin derives from, via the backend seam,
+    // so zeroization is observable rather than merely assumed.
+    let imported: MlDsaKey | undefined;
+    registerSignatureBackend({
+      ...mlDsaBackend,
+      importKey(encoded, kind, options) {
+        const key = mlDsaBackend.importKey(encoded, kind, options);
+        if (kind === 'private') imported = key;
+        return key;
+      },
+    });
+    const app = Fastify({ logger: false });
+    try {
+      await app.register(jwtPlugin, {
+        ...baseOptions(pems),
+        keyId: 'ed-1',
+        mlDsaSeed: seed,
+        mlDsaKeyId: 'mldsa-1',
+        enabledSignatureAlgorithms: PQC_ENABLED,
+      });
+
+      expect(imported).toBeDefined();
+      // The seed is overwritten and the key marked dead the moment boot-time
+      // derivation completes — it must not stay resident for the process life.
+      expect(() => imported?.seed()).toThrow(/destroyed/);
+      expect(() => imported?.material()).toThrow(/destroyed/);
+
+      // ...and the JWKS it produced is still correct.
+      const { keys } = await app.jwtUtils.getJwks();
+      expect(selectJwksKey(keys, { kid: 'mldsa-1', alg: 'ML-DSA-65' })).toBeDefined();
+    } finally {
+      resetSignatureBackends();
+      await app.close();
+    }
+  });
+
+  it('F10: the configured seed is not retained — JWKS exposes public material only', async () => {
+    const pems = await edPems();
+    const { seed } = freshMlDsa();
+    const app = Fastify({ logger: false });
+    await app.register(jwtPlugin, {
+      ...baseOptions(pems),
+      keyId: 'ed-1',
+      mlDsaSeed: seed,
+      mlDsaKeyId: 'mldsa-1',
+      enabledSignatureAlgorithms: PQC_ENABLED,
+    });
+    try {
+      const jwks = await app.jwtUtils.getJwks();
+      const serialized = JSON.stringify(jwks);
+      // The transient private key is zeroized right after derivation, so the
+      // seed exists nowhere in what the server can still serve.
+      expect(serialized).not.toContain(seed);
+      expect(serialized).not.toContain('priv');
+      expect(serialized).not.toContain('"d"');
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('F9: publishes retired Ed25519 and ML-DSA keys under their own kids', async () => {
+    const pems = await edPems();
+    const retiredEd = await generateEdDSAKeyPair(true);
+    const retiredMlDsa = freshMlDsa();
+    const app = Fastify({ logger: false });
+    await app.register(jwtPlugin, {
+      ...baseOptions(pems),
+      keyId: 'ed-2026',
+      mlDsaSeed: freshMlDsa().seed,
+      mlDsaKeyId: 'mldsa-2026',
+      enabledSignatureAlgorithms: PQC_ENABLED,
+      retiredKeys: [{ publicKey: await exportSPKI(retiredEd.publicKey), keyId: 'ed-2025' }],
+      retiredMlDsaPublicKeys: [{ publicKey: retiredMlDsa.publicKey, keyId: 'mldsa-2025' }],
+    });
+    try {
+      const { keys } = await app.jwtUtils.getJwks();
+      expect(keys).toHaveLength(4);
+
+      // Every published key resolves by its OWN (kid, alg) — the rotation
+      // property that lets tokens signed before the rotation keep verifying.
+      for (const [kid, alg] of [
+        ['ed-2026', 'EdDSA'],
+        ['ed-2025', 'EdDSA'],
+        ['mldsa-2026', 'ML-DSA-65'],
+        ['mldsa-2025', 'ML-DSA-65'],
+      ] as const) {
+        expect(selectJwksKey(keys, { kid, alg })).toBeDefined();
+      }
+      // ...and never under the wrong algorithm.
+      expect(selectJwksKey(keys, { kid: 'mldsa-2025', alg: 'EdDSA' })).toBeUndefined();
+      expect(selectJwksKey(keys, { kid: 'ed-2025', alg: 'ML-DSA-65' })).toBeUndefined();
+
+      // Retired ML-DSA keys are public material only.
+      expect(JSON.stringify(keys)).not.toContain('priv');
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('F9: refuses to SERVE a JWKS whose kids collide across OKP and AKP', async () => {
+    const pems = await edPems();
+    const app = Fastify({ logger: false });
+    await app.register(jwtPlugin, {
+      ...baseOptions(pems),
+      // Same kid for the Ed25519 and the ML-DSA key: a stock verifier selecting
+      // on kid alone could land on the wrong algorithm's key.
+      keyId: 'shared-kid',
+      mlDsaSeed: freshMlDsa().seed,
+      mlDsaKeyId: 'shared-kid',
+      enabledSignatureAlgorithms: PQC_ENABLED,
+    });
+    try {
+      await expect(app.jwtUtils.getJwks()).rejects.toThrow(/duplicate kid 'shared-kid'/);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('F9: refuses to SERVE a JWKS whose retired kid collides with the active one', async () => {
+    const pems = await edPems();
+    const retiredEd = await generateEdDSAKeyPair(true);
+    const app = Fastify({ logger: false });
+    await app.register(jwtPlugin, {
+      ...baseOptions(pems),
+      keyId: 'ed-2026',
+      retiredKeys: [{ publicKey: await exportSPKI(retiredEd.publicKey), keyId: 'ed-2026' }],
+    });
+    try {
+      await expect(app.jwtUtils.getJwks()).rejects.toThrow(/duplicate kid 'ed-2026'/);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('leaves the classical EdDSA-only JWKS untouched (no PQC config, no behaviour change)', async () => {
+    const pems = await edPems();
+    const app = Fastify({ logger: false });
+    await app.register(jwtPlugin, { ...baseOptions(pems), keyId: 'ed-1' });
+    try {
+      const { keys } = await app.jwtUtils.getJwks();
+      expect(keys).toHaveLength(1);
+      expect(selectJwksKey(keys, { kid: 'ed-1', alg: 'EdDSA' })).toBeDefined();
     } finally {
       await app.close();
     }

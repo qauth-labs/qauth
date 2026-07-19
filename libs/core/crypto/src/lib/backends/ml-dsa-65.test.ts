@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 
 import { CryptoVerificationError } from '../errors';
 import { isMlDsaKey, ML_DSA_65_LENGTHS, MlDsaKey } from '../keys';
-import { mlDsa65Backend } from './ml-dsa-65';
+import { deriveMlDsaPublicKeyAndZeroize, mlDsa65Backend } from './ml-dsa-65';
 import kat from './ml-dsa-65.kat.json';
 
 const sha256 = (bytes: Uint8Array) => createHash('sha256').update(bytes).digest('hex');
@@ -189,5 +189,86 @@ describe('ML-DSA-65 backend — key export/import + hygiene', () => {
       material: new Uint8Array(ML_DSA_65_LENGTHS.publicKey),
     });
     expect(key.alg).toBe('ML-DSA-65');
+  });
+});
+
+describe('ML-DSA-65 backend tagging (#248 F2)', () => {
+  it('tags every private key it produces with the noble backend', () => {
+    const { privateKey, publicKey } = mlDsa65Backend.generateKeyPair({ extractable: true });
+    expect(privateKey.backend).toBe('noble');
+    // Public keys are byte-identical across backends, so they stay portable
+    // (untagged) on purpose.
+    expect(publicKey.backend).toBeUndefined();
+    expect(mlDsa65Backend.importKey(mlDsa65Backend.exportKey(privateKey), 'private').backend).toBe(
+      'noble'
+    );
+  });
+
+  it('REFUSES a native-backend key object (the cross-backend footgun)', () => {
+    // A native-backend private key stores the 32-byte SEED in material(); noble
+    // signs from the 4032-byte EXPANDED secret key. Without the tag this key
+    // would be fed to the primitive as the wrong byte string.
+    const { privateKey: real } = mlDsa65Backend.generateKeyPair({ extractable: true });
+    const nativeShaped = new MlDsaKey({
+      kind: 'private',
+      material: real.seed(),
+      seed: real.seed(),
+      backend: 'native',
+    });
+
+    expect(() => mlDsa65Backend.sign(nativeShaped, bytes('m'))).toThrow(
+      /requires a key produced by the 'noble' backend, got 'native'/
+    );
+  });
+
+  it('REFUSES an untagged private key (fail closed on unknown provenance)', () => {
+    const { privateKey: real } = mlDsa65Backend.generateKeyPair({ extractable: true });
+    const untagged = new MlDsaKey({
+      kind: 'private',
+      material: real.material(),
+      seed: real.seed(),
+    });
+
+    expect(() => mlDsa65Backend.sign(untagged, bytes('m'))).toThrow(/got 'untagged'/);
+  });
+
+  it('still refuses a public key offered for signing', () => {
+    const { publicKey } = mlDsa65Backend.generateKeyPair();
+    expect(() => mlDsa65Backend.sign(publicKey, bytes('m'))).toThrow(
+      /requires a private ML-DSA-65 key/
+    );
+  });
+
+  it('redacts material but surfaces the backend tag in JSON (diagnosability)', () => {
+    const { privateKey } = mlDsa65Backend.generateKeyPair({ extractable: true });
+    const json = JSON.parse(JSON.stringify(privateKey)) as Record<string, unknown>;
+    expect(json['backend']).toBe('noble');
+    expect(json['material']).toBe('[redacted]');
+  });
+});
+
+describe('deriveMlDsaPublicKeyAndZeroize (#248 F10)', () => {
+  it('derives the correct public key and destroys the transient private key', () => {
+    const { privateKey, publicKey } = mlDsa65Backend.generateKeyPair({ extractable: true });
+
+    const derived = deriveMlDsaPublicKeyAndZeroize(privateKey);
+
+    // Same public key the pair carried — derivation is exact (FIPS 204 keys
+    // expand deterministically from the seed).
+    expect(Buffer.from(derived.material())).toEqual(Buffer.from(publicKey.material()));
+    expect(derived.kind).toBe('public');
+
+    // The seed is gone: the key is unusable for every private operation.
+    expect(() => privateKey.seed()).toThrow(/destroyed/);
+    expect(() => privateKey.material()).toThrow(/destroyed/);
+    expect(() => mlDsa65Backend.sign(privateKey, bytes('m'))).toThrow(/destroyed/);
+  });
+
+  it('zeroizes even when derivation throws (no seed survives a failure path)', () => {
+    const { publicKey } = mlDsa65Backend.generateKeyPair();
+    // A public key has no seed, so derivation throws — the `finally` must still
+    // destroy the key rather than leaking it on the error path.
+    expect(() => deriveMlDsaPublicKeyAndZeroize(publicKey)).toThrow();
+    expect(() => publicKey.material()).toThrow(/destroyed/);
   });
 });

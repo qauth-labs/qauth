@@ -1,10 +1,12 @@
 import { randomBytes } from 'node:crypto';
 
 import {
+  assertMlDsaSigningKey,
   CryptoVerificationError,
   type GenerateRawKeyPairOptions,
   type ImportRawKeyOptions,
   ML_DSA_65_LENGTHS,
+  type MlDsaBackendId,
   MlDsaKey,
   type RawSigningKeyPair,
   type SignatureBackend,
@@ -39,6 +41,13 @@ function base64urlDecode(encoded: string): Uint8Array {
   return new Uint8Array(Buffer.from(encoded, 'base64url'));
 }
 
+/**
+ * Backend tag stamped on every private key this backend produces (#248 F2).
+ * The native backend signs from the 32-byte SEED, so a key object from the
+ * expanded-secret-key noble backend must never reach `sign()`.
+ */
+const NATIVE_BACKEND: MlDsaBackendId = 'native';
+
 function privateKeyFromSeed(seed: Uint8Array, extractable: boolean): MlDsaKey {
   if (seed.length !== ML_DSA_65_LENGTHS.seed) {
     throw new CryptoVerificationError('invalid', {
@@ -47,7 +56,13 @@ function privateKeyFromSeed(seed: Uint8Array, extractable: boolean): MlDsaKey {
   }
   // Native signs from the seed (aws-lc-rs from_seed); `material` mirrors the
   // seed so `material()` never throws, but the native sign path reads seed().
-  return new MlDsaKey({ kind: 'private', material: seed, seed, extractable });
+  return new MlDsaKey({
+    kind: 'private',
+    material: seed,
+    seed,
+    extractable,
+    backend: NATIVE_BACKEND,
+  });
 }
 
 export const mlDsaNativeBackend: SignatureBackend = {
@@ -64,9 +79,8 @@ export const mlDsaNativeBackend: SignatureBackend = {
   },
 
   sign(privateKey: MlDsaKey, message: Uint8Array): Uint8Array {
-    if (privateKey.alg !== 'ML-DSA-65' || privateKey.kind !== 'private') {
-      throw new Error('ML-DSA-65 sign requires a private ML-DSA-65 key');
-    }
+    // #248 F2: also refuses a noble-backend (expanded-secret-key) key object.
+    assertMlDsaSigningKey(privateKey, NATIVE_BACKEND);
     return requireAddon().mldsa65Sign(privateKey.seed(), message);
   },
 

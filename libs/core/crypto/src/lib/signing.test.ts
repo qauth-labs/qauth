@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { CryptoVerificationError } from './errors';
 import { generateSigningKeyPair } from './key-management';
-import { sign, verify } from './signing';
+import { RESERVED_PROTECTED_HEADER_MEMBERS, sign, verify } from './signing';
 
 const ISSUER = 'https://auth.example.com';
 
@@ -138,5 +138,87 @@ describe('sign / verify (EdDSA)', () => {
     );
     expect(error).toBeInstanceOf(CryptoVerificationError);
     expect((error as CryptoVerificationError).reason).toBe('invalid');
+  });
+});
+
+describe('sign() protected-header invariant (#248 F6)', () => {
+  const baseOpts = { issuer: ISSUER, expiresIn: 900, audience: 'client-1' };
+
+  /** Decode a compact JWS protected header without verifying (test-only). */
+  function decodeHeader(token: string): Record<string, unknown> {
+    const [encodedHeader] = token.split('.');
+    return JSON.parse(Buffer.from(encodedHeader, 'base64url').toString('utf-8')) as Record<
+      string,
+      unknown
+    >;
+  }
+
+  it('merges non-reserved header members alongside the canonical alg', async () => {
+    const { privateKey } = await generateSigningKeyPair('EdDSA');
+
+    const token = await sign({ sub: 'u' }, privateKey, 'EdDSA', {
+      ...baseOpts,
+      header: { kid: 'ed-1', pqc_alg: 'ML-DSA-65', pqc_kid: 'mldsa-1' },
+    });
+
+    const header = decodeHeader(token);
+    expect(header['alg']).toBe('EdDSA');
+    expect(header['kid']).toBe('ed-1');
+    expect(header['pqc_alg']).toBe('ML-DSA-65');
+    expect(header['pqc_kid']).toBe('mldsa-1');
+  });
+
+  // Each reserved member gets its own case: they defend different invariants
+  // (algorithm confusion, classical-verifier compatibility, payload encoding),
+  // so a regression in any one of them must fail on its own.
+  for (const member of RESERVED_PROTECTED_HEADER_MEMBERS) {
+    it(`throws when options.header carries the reserved member '${member}'`, async () => {
+      const { privateKey } = await generateSigningKeyPair('EdDSA');
+
+      await expect(
+        sign({ sub: 'u' }, privateKey, 'EdDSA', {
+          ...baseOpts,
+          // A realistic hostile value per member; the rejection is by NAME, so
+          // the value is irrelevant — no reserved member may be caller-set.
+          header: { [member]: member === 'crit' ? ['pqc_alg'] : member === 'b64' ? false : 'none' },
+        })
+      ).rejects.toThrow(new RegExp(`'${member}' is reserved`));
+    });
+  }
+
+  it('lists every reserved member in the rejection message (operator diagnosability)', async () => {
+    const { privateKey } = await generateSigningKeyPair('EdDSA');
+
+    await expect(
+      sign({ sub: 'u' }, privateKey, 'EdDSA', { ...baseOpts, header: { alg: 'none' } })
+    ).rejects.toThrow(/alg, crit, b64/);
+  });
+
+  it('rejects an alg override rather than silently honouring it (algorithm confusion)', async () => {
+    const { privateKey, publicKey } = await generateSigningKeyPair('EdDSA');
+
+    // The attack this closes: a caller-supplied `alg: 'none'` reaching the
+    // protected header. It must never be merged, and it must never be silently
+    // dropped either — the caller has to learn it was refused.
+    await expect(
+      sign({ sub: 'u' }, privateKey, 'EdDSA', { ...baseOpts, header: { alg: 'none' } })
+    ).rejects.toThrow(/reserved/);
+
+    // Sanity: without the reserved member the canonical alg is what verifies.
+    const token = await sign({ sub: 'u' }, privateKey, 'EdDSA', baseOpts);
+    expect(decodeHeader(token)['alg']).toBe('EdDSA');
+    await expect(verify(token, publicKey, { algorithms: ['EdDSA'] })).resolves.toBeDefined();
+  });
+
+  it('ignores a reserved member inherited from the prototype chain', async () => {
+    const { privateKey } = await generateSigningKeyPair('EdDSA');
+
+    // `Object.hasOwn` (not `in`) means a prototype-polluted Object.prototype
+    // cannot make an innocent header spuriously fail closed.
+    const header = Object.create({ alg: 'none' }) as Record<string, unknown>;
+    header['kid'] = 'ed-1';
+
+    const token = await sign({ sub: 'u' }, privateKey, 'EdDSA', { ...baseOpts, header });
+    expect(decodeHeader(token)['alg']).toBe('EdDSA');
   });
 });

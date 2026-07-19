@@ -14,7 +14,10 @@ import {
 import { buildAccessTokenClaims, signAccessToken, verifyAccessToken } from './jwt-service';
 
 const ISSUER = 'https://auth.example.com';
-const noble = getSignatureBackend('ML-DSA-65', ['ML-DSA-65']);
+// Operator-enabled algorithm set (#248 F7/F11) — threaded into every hybrid call.
+const PQC_ENABLED = ['EdDSA', 'ML-DSA-65'] as const;
+const PQC_BACKEND = { enabledSignatureAlgorithms: PQC_ENABLED };
+const noble = getSignatureBackend('ML-DSA-65', PQC_ENABLED);
 
 async function hybridKeys() {
   const ed = await generateSigningKeyPair('EdDSA', { extractable: true });
@@ -33,7 +36,8 @@ describe('hybrid jwt-service (#245)', () => {
       { sub: 'user-1', clientId: 'client-1', scope: 'read' },
       signing,
       ISSUER,
-      900
+      900,
+      PQC_BACKEND
     );
     const { payload } = await jwtVerify(hybrid.token, edPublic, { algorithms: ['EdDSA'] });
     expect(payload['sub']).toBe('user-1');
@@ -49,7 +53,7 @@ describe('hybrid jwt-service (#245)', () => {
 
     // Classical claim builder (the shared source) vs the decoded hybrid token.
     const { claims: expected } = buildAccessTokenClaims(payload);
-    const hybrid = await signHybridAccessToken(payload, signing, ISSUER, 900);
+    const hybrid = await signHybridAccessToken(payload, signing, ISSUER, 900, PQC_BACKEND);
     const { payload: got } = await jwtVerify(hybrid.token, edPublic, { algorithms: ['EdDSA'] });
 
     for (const key of ['sub', 'client_id', 'token_use', 'email', 'email_verified'] as const) {
@@ -65,11 +69,13 @@ describe('hybrid jwt-service (#245)', () => {
       { sub: 'user-1', clientId: 'client-1' },
       signing,
       ISSUER,
-      900
+      900,
+      PQC_BACKEND
     );
     const claims = await verifyHybridAccessToken(hybrid, verify, {
       requirePqc: true,
       issuer: ISSUER,
+      ...PQC_BACKEND,
     });
     expect(claims['sub']).toBe('user-1');
   });
@@ -80,7 +86,8 @@ describe('hybrid jwt-service (#245)', () => {
       { sub: 'user-1', audience: 'client-1', nonce: 'n-1' },
       signing,
       ISSUER,
-      900
+      900,
+      PQC_BACKEND
     );
     const { payload } = await jwtVerify(hybrid.token, edPublic, { algorithms: ['EdDSA'] });
     expect(payload['token_use']).toBe('id');
@@ -97,7 +104,8 @@ describe('hybrid jwt-service (#245)', () => {
       { sub: 'user-1', clientId: 'client-1', scope: 'read' },
       signing,
       ISSUER,
-      900
+      900,
+      PQC_BACKEND
     );
     const claims = await verifyAccessToken(hybrid.token, edPublic, { issuer: ISSUER });
     expect(claims.sub).toBe('user-1');

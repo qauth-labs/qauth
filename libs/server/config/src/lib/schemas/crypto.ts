@@ -43,6 +43,36 @@ function resolveMlDsaSeed(directValue?: string, filePath?: string): string | und
   return undefined;
 }
 
+/** FIPS 204 ML-DSA-65 seed (ξ) length in bytes — the canonical private form. */
+const ML_DSA_65_SEED_BYTES = 32;
+
+/** base64url alphabet, unpadded (RFC 4648 §5) — what `exportKey` emits. */
+const BASE64URL_PATTERN = /^[A-Za-z0-9_-]+$/;
+
+/**
+ * Why a configured ML-DSA seed is unusable, or `null` when it is valid (#248 F8).
+ *
+ * The config layer previously checked only PRESENCE, so a truncated, padded, or
+ * standard-base64 seed sailed through startup and failed much later — deep in
+ * the crypto layer, at first signing, in production. Validating the DECODED
+ * length here keeps the fail-fast promise the rest of this schema makes.
+ *
+ * `Buffer.from(_, 'base64url')` is lenient (it silently ignores characters
+ * outside the alphabet and truncates a trailing partial group), so the alphabet
+ * is checked explicitly BEFORE decoding — otherwise `"AAAA...!!"` would decode
+ * to a plausible-looking 32 bytes.
+ */
+function describeInvalidMlDsaSeed(seed: string): string | null {
+  if (!BASE64URL_PATTERN.test(seed)) {
+    return 'it is not unpadded base64url (allowed characters: A-Z a-z 0-9 - _; no "=" padding, no "+" or "/")';
+  }
+  const decoded = Buffer.from(seed, 'base64url');
+  if (decoded.length !== ML_DSA_65_SEED_BYTES) {
+    return `it decodes to ${decoded.length} bytes, expected exactly ${ML_DSA_65_SEED_BYTES}`;
+  }
+  return null;
+}
+
 export const cryptoEnvSchema = z
   .object({
     SIGNING_ALGORITHM_MODE: z.enum(['ed25519', 'ed25519+ml-dsa-65']).default('ed25519'),
@@ -75,6 +105,29 @@ export const cryptoEnvSchema = z
       .transform((v) => v === 'true' || v === '1'),
   })
   .superRefine((data, ctx) => {
+    // #248 F8: a CONFIGURED seed must be well-formed whether or not hybrid is
+    // on — a deployment that stages the key before flipping the flag should
+    // learn about a bad seed now, not at the moment it enables PQC signing.
+    // The seed value itself is NEVER echoed into the issue message.
+    const configuredSeed = resolveMlDsaSeed(
+      data.JWT_MLDSA_PRIVATE_KEY,
+      data.JWT_MLDSA_PRIVATE_KEY_PATH
+    );
+    if (configuredSeed !== undefined) {
+      const problem = describeInvalidMlDsaSeed(configuredSeed);
+      if (problem !== null) {
+        ctx.addIssue({
+          code: 'custom',
+          path: [
+            data.JWT_MLDSA_PRIVATE_KEY_PATH
+              ? 'JWT_MLDSA_PRIVATE_KEY_PATH'
+              : 'JWT_MLDSA_PRIVATE_KEY',
+          ],
+          message: `The ML-DSA-65 private key must be a base64url-encoded ${ML_DSA_65_SEED_BYTES}-byte seed, but ${problem}.`,
+        });
+      }
+    }
+
     if (!data.HYBRID_SIGNING_ENABLED) return;
     if (data.SIGNING_ALGORITHM_MODE !== 'ed25519+ml-dsa-65') {
       ctx.addIssue({
@@ -83,9 +136,7 @@ export const cryptoEnvSchema = z
         message: "HYBRID_SIGNING_ENABLED=true requires SIGNING_ALGORITHM_MODE='ed25519+ml-dsa-65'.",
       });
     }
-    if (
-      resolveMlDsaSeed(data.JWT_MLDSA_PRIVATE_KEY, data.JWT_MLDSA_PRIVATE_KEY_PATH) === undefined
-    ) {
+    if (configuredSeed === undefined) {
       ctx.addIssue({
         code: 'custom',
         path: ['JWT_MLDSA_PRIVATE_KEY'],

@@ -99,3 +99,35 @@ suite('native ↔ noble interoperability (the ADR-005 backend-swap promise)', ()
     }
   });
 });
+
+describe('backend tagging across the native/noble seam (#248 F2)', () => {
+  it('REFUSES a noble-backend key object at the native sign()', () => {
+    // Independent of addon availability: the tag is checked before any key
+    // bytes are read, so this holds even where the .node is not built.
+    const nobleKey = noble.generateKeyPair({ extractable: true }).privateKey;
+    expect(nobleKey.backend).toBe('noble');
+    expect(() => mlDsaNativeBackend.sign(nobleKey, bytes('m'))).toThrow(
+      /requires a key produced by the 'native' backend, got 'noble'/
+    );
+  });
+
+  it('REFUSES a native-backend key object at the noble sign()', () => {
+    // The mirror direction, constructed from a seed so it needs no addon.
+    const seed = noble.exportKey(noble.generateKeyPair({ extractable: true }).privateKey);
+    const nativeKey = mlDsaNativeBackend.importKey(seed, 'private', { extractable: true });
+    expect(nativeKey.backend).toBe('native');
+    expect(() => noble.sign(nativeKey, bytes('m'))).toThrow(
+      /requires a key produced by the 'noble' backend, got 'native'/
+    );
+  });
+
+  it('keeps the SEED-level swap promise intact despite the object-level refusal', () => {
+    // #248 F2 constrains key OBJECTS only. The ADR-005 backend-swap guarantee
+    // is at the seed/wire level, and re-importing through the target backend is
+    // the supported (and now the only) path.
+    const seed = noble.exportKey(noble.generateKeyPair({ extractable: true }).privateKey);
+    const asNative = mlDsaNativeBackend.importKey(seed, 'private', { extractable: true });
+    const asNoble = noble.importKey(seed, 'private', { extractable: true });
+    expect(mlDsaNativeBackend.exportKey(asNative)).toBe(noble.exportKey(asNoble));
+  });
+});

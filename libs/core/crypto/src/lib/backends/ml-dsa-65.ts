@@ -3,7 +3,13 @@ import { randomBytes } from 'node:crypto';
 import { ml_dsa65 } from '@noble/post-quantum/ml-dsa.js';
 
 import { CryptoVerificationError } from '../errors';
-import { ML_DSA_65_LENGTHS, MlDsaKey, type RawSigningKeyPair } from '../keys';
+import {
+  assertMlDsaSigningKey,
+  ML_DSA_65_LENGTHS,
+  type MlDsaBackendId,
+  MlDsaKey,
+  type RawSigningKeyPair,
+} from '../keys';
 import type {
   GenerateRawKeyPairOptions,
   ImportRawKeyOptions,
@@ -36,6 +42,13 @@ function base64urlDecode(encoded: string): Uint8Array {
   return new Uint8Array(Buffer.from(encoded, 'base64url'));
 }
 
+/**
+ * Backend tag stamped on every private key this backend produces (#248 F2).
+ * The noble backend signs from the EXPANDED secret key in `material()`, so a
+ * key object from the seed-signing native backend must never reach `sign()`.
+ */
+const NOBLE_BACKEND: MlDsaBackendId = 'noble';
+
 /** Build a private key from a 32-byte seed by re-expanding it. */
 function privateKeyFromSeed(seed: Uint8Array, extractable: boolean): MlDsaKey {
   if (seed.length !== ML_DSA_65_LENGTHS.seed) {
@@ -44,7 +57,13 @@ function privateKeyFromSeed(seed: Uint8Array, extractable: boolean): MlDsaKey {
     });
   }
   const { secretKey } = ml_dsa65.keygen(seed);
-  return new MlDsaKey({ kind: 'private', material: secretKey, seed, extractable });
+  return new MlDsaKey({
+    kind: 'private',
+    material: secretKey,
+    seed,
+    extractable,
+    backend: NOBLE_BACKEND,
+  });
 }
 
 /**
@@ -58,6 +77,31 @@ export function deriveMlDsaPublicKey(privateKey: MlDsaKey): MlDsaKey {
   }
   const { publicKey } = ml_dsa65.keygen(privateKey.seed());
   return new MlDsaKey({ kind: 'public', material: publicKey });
+}
+
+/**
+ * Derive the ML-DSA-65 public key from a private key and immediately ZEROIZE
+ * the private key (#248 F10).
+ *
+ * Boot-time JWKS publication needs the private seed for exactly one operation —
+ * deriving the public half — and has no reason to keep it resident for the
+ * process lifetime. This pairs the derivation with
+ * {@link MlDsaKey.destroy}, so the transient seed is overwritten and the key
+ * object is marked unusable before the caller ever sees the public key.
+ *
+ * Zeroization is best-effort (a managed runtime may retain GC copies), and the
+ * private key is destroyed even if it is the caller's only reference — pass a
+ * key you own, typically one freshly produced by `importKey(seed, 'private')`.
+ *
+ * @param privateKey - Transient private key; DESTROYED before this returns.
+ * @returns The derived public {@link MlDsaKey}.
+ */
+export function deriveMlDsaPublicKeyAndZeroize(privateKey: MlDsaKey): MlDsaKey {
+  try {
+    return deriveMlDsaPublicKey(privateKey);
+  } finally {
+    privateKey.destroy();
+  }
 }
 
 export const mlDsa65Backend: SignatureBackend = {
@@ -75,9 +119,8 @@ export const mlDsa65Backend: SignatureBackend = {
   },
 
   sign(privateKey: MlDsaKey, message: Uint8Array): Uint8Array {
-    if (privateKey.alg !== 'ML-DSA-65' || privateKey.kind !== 'private') {
-      throw new Error('ML-DSA-65 sign requires a private ML-DSA-65 key');
-    }
+    // #248 F2: also refuses a native-backend (seed-material) key object.
+    assertMlDsaSigningKey(privateKey, NOBLE_BACKEND);
     // noble: sign(message, secretKey).
     return ml_dsa65.sign(message, privateKey.material());
   },

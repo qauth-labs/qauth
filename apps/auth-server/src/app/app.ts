@@ -125,8 +125,15 @@ export async function app(fastify: FastifyInstance, opts: object) {
     // AKP JWK on /.well-known/jwks.json alongside the Ed25519 OKP key. The
     // config's fail-fast coupling guarantees the seed is present when the flag
     // is on. No ML-DSA-signed token is issued yet (that awaits #247/#248).
+    // #248 F7/F11: the plugin resolves the ML-DSA backend through
+    // `getSignatureBackend`, so it must see the operator's SIGNING_ALGORITHM_MODE
+    // allowlist rather than a hardcoded literal.
     ...(env.HYBRID_SIGNING_ENABLED
-      ? { mlDsaSeed: env.JWT_MLDSA_PRIVATE_KEY, mlDsaKeyId: env.JWT_MLDSA_KID }
+      ? {
+          mlDsaSeed: env.JWT_MLDSA_PRIVATE_KEY,
+          mlDsaKeyId: env.JWT_MLDSA_KID,
+          enabledSignatureAlgorithms: env.enabledSignatureAlgorithms,
+        }
       : {}),
   });
 

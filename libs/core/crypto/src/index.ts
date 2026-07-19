@@ -1,6 +1,10 @@
 export type { JwsAlgorithm, SignatureAlgorithm } from './lib/algorithms';
-export { getSignatureBackend } from './lib/backend-registry';
-export { deriveMlDsaPublicKey } from './lib/backends/ml-dsa-65';
+export {
+  getSignatureBackend,
+  registerSignatureBackend,
+  resetSignatureBackends,
+} from './lib/backend-registry';
+export { deriveMlDsaPublicKey, deriveMlDsaPublicKeyAndZeroize } from './lib/backends/ml-dsa-65';
 export { CryptoVerificationError, type CryptoVerificationErrorReason } from './lib/errors';
 export {
   PQC_AKP_PUBLIC_JWK_MEMBERS,
@@ -15,6 +19,7 @@ export {
   type HybridSignedToken,
   type HybridSigningKey,
   type HybridVerifyKey,
+  type PqcBackendSelection,
   signHybrid,
   verifyHybrid,
 } from './lib/hybrid-signing';
@@ -25,8 +30,10 @@ export {
   importPublicSigningKey,
 } from './lib/key-management';
 export {
+  assertMlDsaSigningKey,
   isMlDsaKey,
   ML_DSA_65_LENGTHS,
+  type MlDsaBackendId,
   MlDsaKey,
   type RawSigningKeyPair,
   type SigningKey,
@@ -37,4 +44,10 @@ export type {
   ImportRawKeyOptions,
   SignatureBackend,
 } from './lib/primitives';
-export { sign, type SignOptions, verify, type VerifyOptions } from './lib/signing';
+export {
+  RESERVED_PROTECTED_HEADER_MEMBERS,
+  sign,
+  type SignOptions,
+  verify,
+  type VerifyOptions,
+} from './lib/signing';
