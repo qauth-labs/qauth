@@ -75,6 +75,11 @@ The NLnet / NGI grant narrative is treated as **reframable**: an MCP framing ("s
 
 ## Spec tracking
 
+> **Refresh 2026-07-19:** MCP has published a **2026-07-28** revision (release
+> candidate; final 2026-07-28). See [Delta: 2025-11-25 to 2026-07-28](#delta-2025-11-25-to-2026-07-28)
+> below. The section immediately following remains the 2025-11-25 review, kept
+> for the audit trail.
+
 Reviewed against MCP Authorization **revision 2025-11-25** (the revision this ADR targets; the implementation in PR #156 was built to 2025-06-18). Auth-relevant deltas and QAuth's posture:
 
 - **Client ID Metadata Documents (CIMD)** — now the _recommended_ client-registration mechanism (client priority: pre-registered → CIMD → DCR → manual). **RFC 7591 Dynamic Client Registration is explicitly demoted to a backwards-compatibility fallback.** → Reshapes T1: adopt CIMD (Decision §1); it supersedes the earlier "DCR abuse controls" framing because there are no persistent registration records to abuse.
@@ -83,6 +88,65 @@ Reviewed against MCP Authorization **revision 2025-11-25** (the revision this AD
 - **Delegation / on-behalf-of is not core MCP auth** — it lives in the separate [ext-auth extensions](https://github.com/modelcontextprotocol/ext-auth) repo, so QAuth's RFC 8693 token-exchange work (Decision §2 / T2) is an _extension_, not a core requirement.
 
 Unchanged core QAuth already meets: OAuth 2.1 (public + confidential), PKCE S256 (advertised), RFC 9728 PRM discovery, RFC 8707 resource indicators + audience-bound tokens + audience-validated introspection, public-client refresh-token rotation, and consent.
+
+## Delta: 2025-11-25 to 2026-07-28
+
+Reviewed 2026-07-19 against the [2026-07-28 release candidate](https://blog.modelcontextprotocol.io/posts/2026-07-28-release-candidate/)
+and the [draft authorization spec](https://modelcontextprotocol.io/specification/draft/basic/authorization).
+Only auth-relevant deltas are listed; the release also adds a stateless protocol
+core, an Extensions framework, Tasks, and MCP Apps.
+
+- **RFC 9207 issuer identification — NEW, and QAuth does not implement it.** The
+  AS **SHOULD** include `iss` in authorization responses _including error
+  responses_, and an AS that does **MUST** advertise
+  `authorization_response_iss_parameter_supported: true` in its metadata. The
+  spec states a future revision is expected to upgrade this to **MUST**.
+  QAuth emits neither. → Tracked as **#282**. This is the one hard gap in the
+  delta.
+- **Scope guidance on the 401.** Resources **SHOULD** include a `scope` parameter
+  in the `WWW-Authenticate` header of the 401, not only on `insufficient_scope`
+  (403). `mcp-guard` attaches `scope` to the 403 path only; clients currently
+  fall back to PRM `scopes_supported`. → Tracked as **#284**.
+- **`offline_access` is a resource anti-pattern.** MCP servers **SHOULD NOT**
+  advertise `offline_access` in `WWW-Authenticate` scope or PRM
+  `scopes_supported`, since refresh tokens are not a resource requirement. This
+  constrains `mcp-guard`; the AS advertising it in `scopes_supported` is
+  unaffected and remains correct.
+- **CIMD is now SHOULD; DCR is MAY and explicitly deprecated.** In 2025-11-25 CIMD
+  was "recommended" and DCR a "backwards-compatibility fallback". The normative
+  strength has firmed in the direction ADR-007 already chose. → **No change
+  required**; QAuth's client-resolution priority (pre-registered → CIMD → DCR)
+  already matches.
+- **Both discovery mechanisms remain acceptable** (RFC 8414 _or_ OIDC Discovery),
+  with clients required to support both. → **Already satisfied**, unchanged.
+- **RFC 8707 resource indicators remain MUST for clients**, with audience
+  validation MUST for servers. → **Already satisfied**, unchanged.
+- **Extensions moved to a formal framework** with reverse-DNS IDs, capability
+  negotiation, independent versioning, and an Extensions Track in the SEP
+  process. QAuth's RFC 8693 token-exchange delegation work remains an
+  _extension_ (`ext-auth`), not core — the position ADR-007 already took. The
+  formalisation makes that boundary firmer, not weaker.
+
+### Underlying spec drift
+
+- **OAuth 2.1 is at `draft-ietf-oauth-v2-1-15`** and is still not an RFC. The MCP
+  draft cites `-13` and `-14`. QAuth's "OAuth 2.1" positioning is accurate but
+  the base is still moving.
+- **CIMD is at `draft-ietf-oauth-client-id-metadata-document-02`** (6 July 2026);
+  QAuth and the MCP spec both still cite `-00`. No interop break — but note that
+  `-01` added SSRF hardening and required HTTP 200, and `-02` clarified that URL
+  comparison is simple string comparison without default-port normalisation.
+  **QAuth's implementation already satisfies all of these** (DNS-pinned IP
+  validation, no redirect following, https-only, size bounds, non-200 rejection,
+  byte-for-byte `client_id` match). The citation lags the code, not the reverse.
+
+### Process note
+
+This refresh, the ADR-004 refresh, and the #274 PQC draft re-pin are the same
+failure mode: QAuth's implementation is repeatedly _more_ current than its own
+spec citations. The decaying artefacts are the pin constants and ADR
+spec-tracking sections, not the code. A standing quarterly re-pin pass would
+catch this earlier than an ad-hoc audit does.
 
 ## Related
 
