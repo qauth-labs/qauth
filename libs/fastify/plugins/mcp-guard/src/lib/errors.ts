@@ -42,13 +42,26 @@ export abstract class McpGuardError extends Error {
  * No bearer credentials were presented. RFC 6750 §3: respond 401 with a bare
  * `WWW-Authenticate: Bearer` challenge (no `error` code), pointing the client
  * at the resource metadata so it can discover the AS and authenticate.
+ *
+ * The error carries the scopes the attempted route requires so the challenge
+ * can advertise them (#284). MCP Authorization ("Scope Selection Strategy")
+ * says the RS SHOULD do this, letting a client authorize correctly on its
+ * first attempt instead of fetching the PRM document and guessing.
  */
 export class MissingTokenError extends McpGuardError {
   readonly statusCode = 401 as const;
   readonly bearerError = undefined;
+  /**
+   * Scopes the attempted operation requires (guard defaults + any per-route
+   * step-up), for the `scope` challenge parameter. Empty when the route
+   * requires none — the challenge then omits `scope` entirely rather than
+   * emitting a meaningless `scope=""`.
+   */
+  readonly requiredScopes: string[];
 
-  constructor(message = 'No bearer token presented') {
+  constructor(requiredScopes: string[] = [], message = 'No bearer token presented') {
     super(message);
+    this.requiredScopes = requiredScopes;
   }
 }
 

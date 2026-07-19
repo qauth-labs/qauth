@@ -168,7 +168,11 @@ export class McpGuard {
   ): Promise<ValidatedToken> {
     const token = extractBearerToken(authorization);
     if (!token) {
-      throw new MissingTokenError();
+      // Advertise the FULL requirement for THIS route (guard defaults plus the
+      // per-call step-up scopes) on the 401 challenge — #284. Same set the 403
+      // step-up would advertise, so an unauthenticated client and a
+      // under-scoped one are told the same thing.
+      throw new MissingTokenError(dedupe([...this.requiredScopes, ...scopes]));
     }
     const validated = await this.validator.validate(token);
     this.assertScopes(validated, scopes);

@@ -8,6 +8,8 @@
  * with — the entry point of the MCP authorization handshake.
  */
 
+import { advertisableScopes } from './scope';
+
 /** Well-known suffix for Protected Resource Metadata (RFC 9728 §3.1). */
 export const PRM_WELL_KNOWN_PREFIX = '/.well-known/oauth-protected-resource';
 
@@ -56,8 +58,15 @@ export function buildProtectedResourceMetadata(
     authorization_servers: [stripTrailingSlash(input.authorizationServer)],
     bearer_methods_supported: ['header'],
   };
-  if (input.scopesSupported && input.scopesSupported.length > 0) {
-    metadata.scopes_supported = [...input.scopesSupported];
+  // Advertise only scopes that are genuinely a requirement of THIS resource:
+  // `offline_access` and friends concern refresh-token issuance at the AS, not
+  // resource authorization, and the MCP spec says they must not appear here
+  // (#284). Filtering can empty the list, in which case the key is omitted —
+  // RFC 9728 §3.2 makes `scopes_supported` OPTIONAL, and an empty array would
+  // wrongly assert the resource understands no scopes at all.
+  const scopesSupported = advertisableScopes(input.scopesSupported ?? []);
+  if (scopesSupported.length > 0) {
+    metadata.scopes_supported = scopesSupported;
   }
   if (input.resourceDocumentation) {
     metadata.resource_documentation = input.resourceDocumentation;

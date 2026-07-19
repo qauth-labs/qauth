@@ -126,6 +126,18 @@ describe('McpGuard.authenticate (JWT mode)', () => {
     await expect(guard().authenticate(undefined)).rejects.toBeInstanceOf(MissingTokenError);
   });
 
+  // #284 — the 401 challenge advertises what the route needs, so the error has
+  // to carry the defaults plus any per-call step-up scopes, de-duplicated.
+  it('carries the full required scope set on MissingTokenError', async () => {
+    await expect(
+      guard(['mcp:read']).authenticate(undefined, ['mcp:read', 'mcp:admin'])
+    ).rejects.toMatchObject({ requiredScopes: ['mcp:read', 'mcp:admin'] });
+  });
+
+  it('carries an empty required set when the route requires no scopes', async () => {
+    await expect(guard().authenticate(undefined)).rejects.toMatchObject({ requiredScopes: [] });
+  });
+
   it('validates a good token and returns claims', async () => {
     const token = await signToken({ sub: 'u', client_id: 'c', scope: 'mcp:read' }, RESOURCE);
     const claims = await guard(['mcp:read']).authenticate(`Bearer ${token}`);

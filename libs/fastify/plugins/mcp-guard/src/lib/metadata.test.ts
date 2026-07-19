@@ -46,6 +46,26 @@ describe('buildProtectedResourceMetadata', () => {
     });
     expect(doc.scopes_supported).toBeUndefined();
   });
+
+  // #284 — `offline_access` governs refresh-token issuance at the AS, not what
+  // this resource authorizes, so the MCP spec keeps it out of scopes_supported.
+  it('excludes offline_access from scopes_supported', () => {
+    const doc = buildProtectedResourceMetadata({
+      resource: 'https://mcp.example.com',
+      authorizationServer: 'https://auth.example.com',
+      scopesSupported: ['mcp:read', 'offline_access', 'mcp:write'],
+    });
+    expect(doc.scopes_supported).toEqual(['mcp:read', 'mcp:write']);
+  });
+
+  it('omits scopes_supported when filtering leaves nothing to advertise', () => {
+    const doc = buildProtectedResourceMetadata({
+      resource: 'https://mcp.example.com',
+      authorizationServer: 'https://auth.example.com',
+      scopesSupported: ['offline_access'],
+    });
+    expect(doc.scopes_supported).toBeUndefined();
+  });
 });
 
 describe('metadataPathForResource (RFC 9728 §3.1)', () => {
