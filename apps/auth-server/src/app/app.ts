@@ -6,7 +6,7 @@ import formbody from '@fastify/formbody';
 import { cachePlugin } from '@qauth-labs/fastify-plugin-cache';
 import { databasePlugin } from '@qauth-labs/fastify-plugin-db';
 import { emailPlugin, type EmailProviderConfig } from '@qauth-labs/fastify-plugin-email';
-import { createPasswordProvider, federationPlugin } from '@qauth-labs/fastify-plugin-federation';
+import { createConfiguredProviders, federationPlugin } from '@qauth-labs/fastify-plugin-federation';
 import { jwtPlugin } from '@qauth-labs/fastify-plugin-jwt';
 import { passwordPlugin } from '@qauth-labs/fastify-plugin-password';
 import { pkcePlugin } from '@qauth-labs/fastify-plugin-pkce';
@@ -60,11 +60,20 @@ export async function app(fastify: FastifyInstance, opts: object) {
 
   await fastify.register(pkcePlugin);
 
-  // Credential-provider registry (ADR-003, #228). Providers are seeded here —
-  // the bootstrap is the single registration point; adding an upstream (e.g.
-  // WalletProvider, #231) means appending to this list, never touching routes.
+  // Credential-provider registry (ADR-003, #228). The bootstrap remains the
+  // single registration point, but WHICH providers exist is now a pure function
+  // of config (`createConfiguredProviders`) so the decision is unit-testable
+  // without booting this app. Adding an upstream still means extending that
+  // list, never touching routes.
+  //
+  // WalletProvider (ADR-004, #232) joins the set only when
+  // WALLET_FEDERATION_ENABLED is on — default OFF while epic #231 (#233–#238)
+  // is incomplete, and inert even when on, because the skeleton's methods fail
+  // closed and nothing resolves 'wallet' yet.
   await fastify.register(federationPlugin, {
-    providers: [createPasswordProvider()],
+    providers: createConfiguredProviders({
+      walletFederationEnabled: env.WALLET_FEDERATION_ENABLED,
+    }),
   });
 
   // Configure email provider from environment variables
