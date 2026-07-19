@@ -1,0 +1,59 @@
+# cargo-deny policy for the native ML-DSA-65 addon (#277, F4).
+#
+# This crate compiles C (aws-lc-sys drives cmake/cc) and is loaded into the auth
+# server as a shared object, so its dependency tree — including BUILD-time deps —
+# is part of the signing path's trust base. CI runs `cargo deny check` and
+# `cargo audit` on every change to this tree and on every aws-lc-rs bump.
+
+[graph]
+# Build-time deps (cc, cmake, pkg-config, ...) are in scope on purpose: they run
+# arbitrary code on the builder.
+all-features = false
+no-default-features = false
+
+[advisories]
+version = 2
+db-urls = ["https://github.com/rustsec/advisory-db"]
+# A yanked crate in the lockfile means the pin must be revisited, not ignored.
+yanked = "deny"
+# Every entry here MUST carry a justification and an expiry plan. Empty is the
+# only acceptable steady state for a crypto signing dependency.
+ignore = []
+
+[licenses]
+version = 2
+# Exactly the licences the current graph needs — nothing speculative, so a bump
+# that pulls in a new licence class is a reviewed decision, not a silent pass.
+# aws-lc-sys is "ISC AND (Apache-2.0 OR ISC) AND Apache-2.0 AND MIT AND
+# BSD-3-Clause AND ..."; napi/cc/cmake are MIT; unicode-ident needs Unicode-3.0.
+allow = [
+  "Apache-2.0",
+  "BSD-3-Clause",
+  "ISC",
+  "MIT",
+  "Unicode-3.0",
+]
+confidence-threshold = 0.9
+exceptions = []
+
+[bans]
+multiple-versions = "warn"
+# No `*` or unpinned-by-policy requirements anywhere in the signing path.
+wildcards = "deny"
+allow-wildcard-paths = false
+deny = [
+  # aws-lc-sys 0.43.0 ships PREGENERATED bindings. If a bump reintroduces
+  # bindgen, the build-time surface grows a libclang dependency and the
+  # generated FFI stops being reviewable from the lockfile alone — that must be
+  # an explicit, reviewed decision, not a silent transitive change.
+  { name = "bindgen", reason = "reintroduces libclang at build time; re-review before allowing" },
+  # OpenSSL-sys would mean a second, unpinned C crypto stack next to aws-lc.
+  { name = "openssl-sys", reason = "no second C crypto stack on the signing path" },
+]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+# crates.io only. No git or path sources may enter the signing path.
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

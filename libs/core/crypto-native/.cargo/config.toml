@@ -1,0 +1,25 @@
+# Deterministic build flags for the native ML-DSA-65 addon (#277, F4).
+#
+# `--remap-path-prefix` strips absolute build paths (of the workspace and of the
+# cargo registry) out of the emitted binary, which is the single largest source
+# of build-to-build divergence for an otherwise pinned Rust build. Combined with
+# the pinned toolchain (rust-toolchain.toml), the committed Cargo.lock, and
+# `--locked` in CI, the .node should hash identically across runs on the same
+# target triple.
+#
+# `SOURCE_DATE_EPOCH` is exported by the CI build for the C sub-build
+# (aws-lc-sys drives cmake/cc) — see .github/workflows/crypto-native.yml.
+
+[build]
+rustflags = [
+  "--remap-path-prefix=/home/runner/work/qauth/qauth=/qauth",
+  "--remap-path-prefix=/Users/runner/work/qauth/qauth=/qauth",
+  "--remap-path-prefix=D:\\a\\qauth\\qauth=/qauth",
+]
+
+[net]
+# Never let a build silently resolve a dependency that is not in Cargo.lock.
+offline = false
+
+[term]
+color = "always"

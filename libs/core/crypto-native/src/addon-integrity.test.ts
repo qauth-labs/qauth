@@ -1,0 +1,166 @@
+import { createHash } from 'node:crypto';
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+
+import {
+  ADDON_INTEGRITY_ENV,
+  CHECKSUM_SIDECAR_SUFFIX,
+  parseChecksumManifest,
+  resolveIntegrityMode,
+  verifyAddonIntegrity,
+} from './addon-integrity';
+
+const ADDON_BYTES = Buffer.from('pretend this is a compiled ML-DSA-65 .node');
+const ADDON_NAME = 'qauth-crypto-native.linux-x64-gnu.node';
+
+let dir: string;
+let addonPath: string;
+
+const sha256 = (data: Buffer) => createHash('sha256').update(data).digest('hex');
+
+/** Write the addon file plus (optionally) its checksum sidecar. */
+function writeAddon(bytes: Buffer, sidecar?: string): void {
+  writeFileSync(addonPath, bytes);
+  if (sidecar !== undefined) {
+    writeFileSync(`${addonPath}${CHECKSUM_SIDECAR_SUFFIX}`, sidecar, 'utf8');
+  }
+}
+
+beforeEach(() => {
+  dir = mkdtempSync(join(tmpdir(), 'qauth-addon-integrity-'));
+  addonPath = join(dir, ADDON_NAME);
+});
+
+afterEach(() => {
+  rmSync(dir, { recursive: true, force: true });
+});
+
+describe('resolveIntegrityMode', () => {
+  it('defaults to enforce when unset or empty', () => {
+    expect(resolveIntegrityMode({})).toBe('enforce');
+    expect(resolveIntegrityMode({ [ADDON_INTEGRITY_ENV]: '' })).toBe('enforce');
+  });
+
+  it('honours the two documented modes', () => {
+    expect(resolveIntegrityMode({ [ADDON_INTEGRITY_ENV]: 'enforce' })).toBe('enforce');
+    expect(resolveIntegrityMode({ [ADDON_INTEGRITY_ENV]: 'permissive' })).toBe('permissive');
+  });
+
+  it('fails closed and loud on an unknown value (a typo must not disable the check)', () => {
+    expect(() => resolveIntegrityMode({ [ADDON_INTEGRITY_ENV]: 'off' })).toThrow(
+      /must be 'enforce' or 'permissive'/
+    );
+    // Case-sensitivity is deliberate: near-misses are errors, not silent modes.
+    expect(() => resolveIntegrityMode({ [ADDON_INTEGRITY_ENV]: 'Permissive' })).toThrow();
+  });
+});
+
+describe('parseChecksumManifest', () => {
+  const digest = 'a'.repeat(64);
+
+  it('accepts a bare hex digest and the sha256sum format', () => {
+    expect(parseChecksumManifest(digest)).toBe(digest);
+    expect(parseChecksumManifest(`${digest}  ${ADDON_NAME}\n`)).toBe(digest);
+    expect(parseChecksumManifest(`${digest.toUpperCase()}\n`)).toBe(digest);
+  });
+
+  it('rejects malformed digests', () => {
+    expect(parseChecksumManifest('')).toBeNull();
+    expect(parseChecksumManifest('not-a-digest')).toBeNull();
+    // Truncated / over-long / non-hex must never be accepted.
+    expect(parseChecksumManifest('a'.repeat(63))).toBeNull();
+    expect(parseChecksumManifest('a'.repeat(65))).toBeNull();
+    expect(parseChecksumManifest(`${'z'.repeat(64)}\n`)).toBeNull();
+  });
+});
+
+describe('verifyAddonIntegrity', () => {
+  it('verifies an addon whose sidecar matches', () => {
+    writeAddon(ADDON_BYTES, `${sha256(ADDON_BYTES)}  ${ADDON_NAME}\n`);
+    const result = verifyAddonIntegrity(addonPath, 'enforce');
+    expect(result.status).toBe('verified');
+    expect(result).toMatchObject({ digest: sha256(ADDON_BYTES) });
+  });
+
+  it('REJECTS a tampered addon whose bytes no longer match the manifest', () => {
+    // The core attack: a substituted .node with the original checksum sidecar.
+    writeAddon(Buffer.from('malicious replacement addon'), `${sha256(ADDON_BYTES)}\n`);
+    const result = verifyAddonIntegrity(addonPath, 'enforce');
+    expect(result.status).toBe('rejected');
+    expect(result).toMatchObject({ reason: expect.stringContaining('checksum mismatch') });
+  });
+
+  it('REJECTS a tampered addon even under permissive (mismatch is never tolerated)', () => {
+    writeAddon(Buffer.from('malicious replacement addon'), `${sha256(ADDON_BYTES)}\n`);
+    expect(verifyAddonIntegrity(addonPath, 'permissive').status).toBe('rejected');
+  });
+
+  it('REJECTS a single-byte flip in the addon', () => {
+    const flipped = Buffer.from(ADDON_BYTES);
+    flipped[0] ^= 0x01;
+    writeAddon(flipped, `${sha256(ADDON_BYTES)}\n`);
+    expect(verifyAddonIntegrity(addonPath, 'enforce').status).toBe('rejected');
+  });
+
+  it('REJECTS a missing manifest under enforce', () => {
+    writeAddon(ADDON_BYTES);
+    const result = verifyAddonIntegrity(addonPath, 'enforce');
+    expect(result.status).toBe('rejected');
+    expect(result).toMatchObject({ reason: expect.stringContaining('no checksum manifest') });
+  });
+
+  it('allows an unverified load under permissive when no manifest exists', () => {
+    writeAddon(ADDON_BYTES);
+    const result = verifyAddonIntegrity(addonPath, 'permissive');
+    expect(result.status).toBe('unverified');
+    expect(result).toMatchObject({
+      digest: sha256(ADDON_BYTES),
+      reason: expect.stringContaining('without provenance'),
+    });
+  });
+
+  it('REJECTS a malformed manifest rather than skipping the check', () => {
+    // An attacker who can write the sidecar must not be able to disable
+    // verification by emptying or corrupting it.
+    for (const sidecar of ['', 'deadbeef\n', 'not-a-digest  addon.node\n']) {
+      writeAddon(ADDON_BYTES, sidecar);
+      const result = verifyAddonIntegrity(addonPath, 'enforce');
+      expect(result.status).toBe('rejected');
+      expect(result).toMatchObject({
+        reason: expect.stringMatching(/malformed checksum manifest/),
+      });
+    }
+  });
+
+  it('REJECTS a malformed manifest under permissive too', () => {
+    writeAddon(ADDON_BYTES, 'not-a-digest\n');
+    expect(verifyAddonIntegrity(addonPath, 'permissive').status).toBe('rejected');
+  });
+
+  it('REJECTS an unreadable addon file', () => {
+    const result = verifyAddonIntegrity(join(dir, 'does-not-exist.node'), 'permissive');
+    expect(result.status).toBe('rejected');
+    expect(result).toMatchObject({ reason: expect.stringContaining('cannot read addon') });
+  });
+
+  it('REJECTS an unreadable (non-ENOENT) manifest instead of treating it as absent', () => {
+    writeAddon(ADDON_BYTES, `${sha256(ADDON_BYTES)}\n`);
+    const manifest = `${addonPath}${CHECKSUM_SIDECAR_SUFFIX}`;
+    chmodSync(manifest, 0o000);
+    try {
+      const result = verifyAddonIntegrity(addonPath, 'permissive');
+      // Running as root defeats the mode bits; only assert when it took effect.
+      if (result.status !== 'verified') {
+        expect(result).toMatchObject({
+          status: 'rejected',
+          reason: expect.stringContaining('cannot read checksum manifest'),
+        });
+      }
+    } finally {
+      chmodSync(manifest, 0o600);
+    }
+  });
+});

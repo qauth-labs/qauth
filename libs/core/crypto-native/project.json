@@ -8,10 +8,27 @@
     "build-native": {
       "executor": "nx:run-commands",
       "options": {
-        "command": "napi build --platform --release",
+        "commands": [
+          "cargo fetch --locked",
+          "napi build --platform --release",
+          "node scripts/write-addon-checksums.mjs"
+        ],
+        "parallel": false,
         "cwd": "libs/core/crypto-native"
       },
-      "description": "Build the native ML-DSA-65 addon (.node) for the current platform. Requires a Rust toolchain + cmake."
+      "description": "Build the native ML-DSA-65 addon (.node) for the current platform from locked deps and the pinned toolchain, then write its .sha256 sidecar (verified before dlopen). Requires a Rust toolchain + cmake."
+    },
+    "audit-native": {
+      "executor": "nx:run-commands",
+      "options": {
+        "commands": [
+          "cargo audit --deny warnings --file Cargo.lock",
+          "cargo deny --all-features check advisories bans licenses sources"
+        ],
+        "parallel": false,
+        "cwd": "libs/core/crypto-native"
+      },
+      "description": "Rust supply-chain gates for the native addon (#277): RustSec advisories plus cargo-deny bans/licenses/sources, covering the aws-lc-sys cmake/cc build-time surface. Requires cargo-audit + cargo-deny."
     }
   }
 }

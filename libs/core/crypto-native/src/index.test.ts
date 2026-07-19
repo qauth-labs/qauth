@@ -1,6 +1,7 @@
 import { getSignatureBackend, type SignatureBackend } from '@qauth-labs/core-crypto';
 import { describe, expect, it } from 'vitest';
 
+import { nativeAddonLoadDiagnostics } from './addon';
 import { isNativeAddonAvailable, mlDsaNativeBackend } from './index';
 
 // The native addon is built locally (crypto-native:build-native) but NOT in
@@ -18,6 +19,25 @@ describe('native ML-DSA-65 backend availability', () => {
   it('reports availability consistently (skips the interop suites when absent)', () => {
     expect(typeof isNativeAddonAvailable()).toBe('boolean');
   });
+
+  // The interop suites below `describe.skip` themselves when the addon is
+  // absent, so a green run is NOT by itself proof that noble<->native
+  // cross-verification executed. The supply-chain workflow (#277) sets
+  // QAUTH_REQUIRE_NATIVE_ADDON=1 after downloading the freshly built,
+  // checksum-verified artifact, turning a vacuous pass into a hard failure —
+  // which is the gate that must hold on every aws-lc-rs bump.
+  it.runIf(process.env['QAUTH_REQUIRE_NATIVE_ADDON'] === '1')(
+    'loaded an integrity-verified addon when CI demands one',
+    () => {
+      const diagnostics = nativeAddonLoadDiagnostics();
+      expect(
+        isNativeAddonAvailable(),
+        `native addon required but not loaded: ${diagnostics.join('; ')}`
+      ).toBe(true);
+      // A `permissive` unverified load must not satisfy the CI gate either.
+      expect(diagnostics.filter((reason) => reason.includes('without provenance'))).toEqual([]);
+    }
+  );
 });
 
 suite('native ML-DSA-65 backend — SignatureBackend conformance', () => {

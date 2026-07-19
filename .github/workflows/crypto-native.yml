@@ -1,0 +1,285 @@
+name: crypto-native supply chain
+
+# Trustworthy native-build channel for the ML-DSA-65 addon (#277, finding F4 of
+# the #248 security gate). The addon is dlopen-ed into the auth server on the
+# signing path, so before the native backend may be enabled anywhere it needs:
+#   1. a reproducible build from pinned source (pinned toolchain + locked deps),
+#   2. a published checksum + SLSA provenance attestation,
+#   3. load-time integrity verification (src/addon-integrity.ts), and
+#   4. cargo audit + cargo deny over the crate AND its cmake/cc build surface.
+#
+# Path-filtered rather than Nx-affected: the artefact is a Rust/C build, not an
+# Nx task, and nothing outside this tree can change its bytes.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'libs/core/crypto-native/**'
+      - '.github/workflows/crypto-native.yml'
+  pull_request:
+    paths:
+      - 'libs/core/crypto-native/**'
+      - '.github/workflows/crypto-native.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CRATE_DIR: libs/core/crypto-native
+  CARGO_TERM_COLOR: always
+  # Determinism: no incremental artefacts, no build-host paths in the binary.
+  CARGO_INCREMENTAL: '0'
+
+concurrency:
+  group: crypto-native-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # 1. Pin hygiene. Fails a bump that loosens the exact pin or desyncs the lock.
+  # ---------------------------------------------------------------------------
+  pins:
+    name: pin + lockfile hygiene
+    runs-on: ubuntu-latest
+    outputs:
+      aws-lc-rs: ${{ steps.pins.outputs.aws-lc-rs }}
+      aws-lc-sys: ${{ steps.pins.outputs.aws-lc-sys }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: aws-lc-rs must stay EXACT-pinned
+        working-directory: ${{ env.CRATE_DIR }}
+        run: |
+          set -euo pipefail
+          # A pre-1.x-stable PQC API on the signing path may only move
+          # deliberately: the requirement must be `=x.y.z`, never a caret range.
+          if ! grep -Eq '^aws-lc-rs = \{ version = "=[0-9]+\.[0-9]+\.[0-9]+"' Cargo.toml; then
+            echo "::error file=${CRATE_DIR}/Cargo.toml::aws-lc-rs must be exact-pinned (version = \"=x.y.z\")"
+            exit 1
+          fi
+
+      - name: Cargo.lock is committed and in sync
+        working-directory: ${{ env.CRATE_DIR }}
+        run: |
+          set -euo pipefail
+          test -f Cargo.lock || { echo "::error::Cargo.lock must be committed"; exit 1; }
+          # --locked fails if the lockfile would need to change: no silent
+          # dependency resolution at build time.
+          cargo metadata --locked --format-version 1 > /dev/null
+
+      - name: Record resolved pins
+        id: pins
+        working-directory: ${{ env.CRATE_DIR }}
+        run: |
+          set -euo pipefail
+          version() {
+            cargo metadata --locked --format-version 1 \
+              | python3 -c "import json,sys;print(next(p['version'] for p in json.load(sys.stdin)['packages'] if p['name']=='$1'))"
+          }
+          echo "aws-lc-rs=$(version aws-lc-rs)" >> "$GITHUB_OUTPUT"
+          echo "aws-lc-sys=$(version aws-lc-sys)" >> "$GITHUB_OUTPUT"
+
+      - name: Summarise
+        run: |
+          {
+            echo "### crypto-native pins"
+            echo "- aws-lc-rs \`${{ steps.pins.outputs.aws-lc-rs }}\`"
+            echo "- aws-lc-sys \`${{ steps.pins.outputs.aws-lc-sys }}\` (cmake/cc build-time surface)"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # ---------------------------------------------------------------------------
+  # 2. Rust supply-chain gates: advisories, licences, sources, banned crates.
+  #    Covers BUILD dependencies (cc / cmake / pkg-config) on purpose — they run
+  #    arbitrary code on the builder.
+  # ---------------------------------------------------------------------------
+  audit:
+    name: cargo audit + cargo deny
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit,cargo-deny
+
+      - name: cargo audit (RustSec advisories, incl. build deps)
+        working-directory: ${{ env.CRATE_DIR }}
+        run: cargo audit --deny warnings --file Cargo.lock
+
+      - name: cargo deny (advisories, bans, licenses, sources)
+        working-directory: ${{ env.CRATE_DIR }}
+        run: cargo deny --all-features check advisories bans licenses sources
+
+  # ---------------------------------------------------------------------------
+  # 3. Reproducible build of the .node from pinned source, + checksum, + SLSA
+  #    provenance attestation of the exact bytes.
+  # ---------------------------------------------------------------------------
+  build:
+    name: build ${{ matrix.target }}
+    needs: [pins, audit]
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+      id-token: write # SLSA provenance (OIDC)
+      attestations: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: linux-x64-gnu
+            determinism: true
+          - os: macos-14
+            target: darwin-arm64
+            determinism: false
+          - os: windows-latest
+            target: win32-x64-msvc
+            determinism: false
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      # rust-toolchain.toml pins the exact compiler; rustup honours it here.
+      - name: Show pinned toolchain
+        working-directory: ${{ env.CRATE_DIR }}
+        shell: bash
+        run: |
+          rustup show active-toolchain
+          rustc --version
+          cargo --version
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.4.0
+          run_install: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: 'pnpm'
+      - run: pnpm install --frozen-lockfile
+
+      - name: Set SOURCE_DATE_EPOCH from the commit
+        shell: bash
+        run: echo "SOURCE_DATE_EPOCH=$(git log -1 --pretty=%ct)" >> "$GITHUB_ENV"
+
+      # The napi CLI has NO cargo passthrough — a trailing `-- --locked` is
+      # silently dropped (verified), so the lock is enforced around the build
+      # instead: resolve strictly from Cargo.lock up front, build with the
+      # network off so nothing new can be resolved, then fail if the build
+      # mutated the lock anyway.
+      - name: Resolve dependencies strictly from Cargo.lock
+        working-directory: ${{ env.CRATE_DIR }}
+        shell: bash
+        run: cargo fetch --locked
+
+      # Deterministic build: pinned toolchain, locked+offline deps, no
+      # incremental artefacts, build paths remapped via .cargo/config.toml, and
+      # SOURCE_DATE_EPOCH for the aws-lc-sys cmake/cc sub-build.
+      - name: Build addon (reproducible flags)
+        working-directory: ${{ env.CRATE_DIR }}
+        shell: bash
+        env:
+          CARGO_NET_OFFLINE: 'true'
+        run: pnpm exec napi build --platform --release
+
+      - name: Cargo.lock must be unchanged by the build
+        working-directory: ${{ env.CRATE_DIR }}
+        shell: bash
+        run: git diff --exit-code -- Cargo.lock
+
+      - name: Checksum
+        working-directory: ${{ env.CRATE_DIR }}
+        shell: bash
+        run: node scripts/write-addon-checksums.mjs
+
+      # Reproducibility probe: rebuild from scratch into a differently-located
+      # target directory and require byte-identical output. Catches build-path
+      # leakage, embedded timestamps, and non-deterministic codegen. Verified
+      # byte-identical locally on this triple. Linux only — the macOS/Windows C
+      # sub-builds are not yet confirmed byte-stable (see README).
+      - name: Verify determinism (rebuild + compare)
+        if: matrix.determinism
+        working-directory: ${{ env.CRATE_DIR }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          first=$(ls qauth-crypto-native.*.node)
+          cp "$first" "${RUNNER_TEMP}/first.node"
+          rm -rf target
+          CARGO_TARGET_DIR="${RUNNER_TEMP}/rebuild-target" CARGO_NET_OFFLINE=true \
+            pnpm exec napi build --platform --release
+          if ! cmp -s "${RUNNER_TEMP}/first.node" "$first"; then
+            echo "::error::non-reproducible build: rebuild of $first differs byte-for-byte"
+            sha256sum "${RUNNER_TEMP}/first.node" "$first"
+            exit 1
+          fi
+          echo "reproducible: $(sha256sum "$first")" >> "$GITHUB_STEP_SUMMARY"
+
+      # Provenance is only attestable for trusted (non-fork) runs; PRs from
+      # forks still get the build + determinism + audit gates.
+      - name: Attest build provenance (SLSA)
+        if: github.event_name != 'pull_request'
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: ${{ env.CRATE_DIR }}/qauth-crypto-native.*.node
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: crypto-native-${{ matrix.target }}
+          # The sidecar travels WITH the binary: it is what addon-integrity.ts
+          # checks before dlopen.
+          path: |
+            ${{ env.CRATE_DIR }}/qauth-crypto-native.*.node
+            ${{ env.CRATE_DIR }}/qauth-crypto-native.*.node.sha256
+          if-no-files-found: error
+          retention-days: 14
+
+  # ---------------------------------------------------------------------------
+  # 4. Re-run the noble<->native cross-verification suite against the freshly
+  #    built artefact. This is the gate that must pass on ANY aws-lc-rs bump:
+  #    a new C crypto core must still produce byte-identical keys/signatures.
+  # ---------------------------------------------------------------------------
+  cross-verify:
+    name: noble <-> native cross-verification
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.4.0
+          run_install: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: 'pnpm'
+      - run: pnpm install --frozen-lockfile
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: crypto-native-linux-x64-gnu
+          path: ${{ env.CRATE_DIR }}
+
+      - name: Independently verify the published checksum
+        working-directory: ${{ env.CRATE_DIR }}
+        run: sha256sum -c qauth-crypto-native.*.node.sha256
+
+      # Integrity stays in ENFORCE mode: if the sidecar did not travel with the
+      # binary, the addon refuses to load. QAUTH_REQUIRE_NATIVE_ADDON makes the
+      # suite FAIL in that case instead of silently skipping its interop tests,
+      # so this gate cannot pass vacuously on an aws-lc-rs bump.
+      - name: Cross-verification suite (native addon present)
+        env:
+          QAUTH_NATIVE_ADDON_INTEGRITY: enforce
+          QAUTH_REQUIRE_NATIVE_ADDON: '1'
+        run: pnpm exec nx test crypto-native --skip-nx-cache
