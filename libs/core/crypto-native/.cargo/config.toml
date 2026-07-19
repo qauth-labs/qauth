@@ -1,0 +1,22 @@
+# Deterministic build flags for the native ML-DSA-65 addon (#277, F4).
+#
+# Absolute build paths in the emitted binary are the single largest source of
+# build-to-build divergence for an otherwise pinned Rust build. They are
+# stripped with `--remap-path-prefix`, but that flag is set by CI rather than
+# here: the workspace path contains the runner OS, the org and the REPO NAME,
+# so hardcoding it would silently stop remapping — and stop being reproducible
+# — for any fork, rename, or self-hosted runner. CI derives it from
+# `$GITHUB_WORKSPACE`; see the `RUSTFLAGS` export in
+# .github/workflows/crypto-native.yml.
+#
+# `SOURCE_DATE_EPOCH` is likewise exported by the CI build for the C sub-build
+# (aws-lc-sys drives cmake/cc).
+#
+# Everything below is host-independent and therefore safe to commit.
+
+[net]
+# Never let a build silently resolve a dependency that is not in Cargo.lock.
+offline = false
+
+[term]
+color = "always"

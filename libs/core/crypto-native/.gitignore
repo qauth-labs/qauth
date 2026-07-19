@@ -3,6 +3,9 @@
 # committed.
 target/
 *.node
+# Checksum sidecar written next to each built addon (#277). Verified before
+# dlopen; produced by the build, never committed.
+*.node.sha256
 # napi CLI JS/d.ts glue (regenerated on build)
 index.js
 index.d.ts

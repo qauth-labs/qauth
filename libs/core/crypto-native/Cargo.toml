@@ -3,6 +3,9 @@ name = "qauth-crypto-native"
 version = "0.0.0"
 edition = "2021"
 publish = false
+# Matches the workspace licence. Required so `cargo deny check licenses` can
+# evaluate the FULL graph (an unlicensed root fails the gate) — #277.
+license = "Apache-2.0"
 
 [lib]
 crate-type = ["cdylib"]

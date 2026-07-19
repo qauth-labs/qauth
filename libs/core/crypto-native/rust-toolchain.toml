@@ -1,0 +1,10 @@
+# Pinned Rust toolchain for the native ML-DSA-65 addon (#277, F4).
+#
+# The toolchain is part of the build's trust base: a reproducible artifact is
+# only reproducible against a FIXED compiler. Pin an exact version (never
+# "stable", which floats), and bump it deliberately in the same PR that re-runs
+# the noble<->native cross-verification suite.
+[toolchain]
+channel = "1.94.1"
+components = ["rustfmt", "clippy"]
+profile = "minimal"
