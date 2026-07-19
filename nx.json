@@ -99,20 +99,23 @@
       "cache": true,
       "dependsOn": ["^build"],
       "inputs": ["default", "^default"]
-    },
-    "@nx/vitest:test": {
-      "cache": true,
-      "inputs": [
-        "default",
-        "^default",
-        "{workspaceRoot}/vitest.config.ts",
-        "{workspaceRoot}/vitest.workspace.ts"
-      ]
     }
   },
   "namedInputs": {
-    "sharedGlobals": ["{workspaceRoot}/.github/workflows/ci.yml"],
-    "default": ["sharedGlobals"]
+    "sharedGlobals": [
+      "{workspaceRoot}/.github/workflows/ci.yml",
+      // Every project's vitest.config.ts mergeConfig()s the root one, so a
+      // change there (exclude globs, coverage thresholds) must invalidate every
+      // test target. The @nx/vitest inferred targets do not list it themselves.
+      "{workspaceRoot}/vitest.config.ts"
+    ],
+    // #285: this was `["sharedGlobals"]`, dropping Nx's built-in
+    // `{projectRoot}/**/*` entry. Every `default`-hashed target (test, build)
+    // therefore hashed only ci.yml and ignored the project's own sources, so a
+    // cached green `test` result was replayed even after a failing spec was
+    // added. Keep `{projectRoot}/**/*` first — it is what makes a source edit
+    // invalidate the task.
+    "default": ["{projectRoot}/**/*", "sharedGlobals"]
   },
   "sync": {
     "disabledTaskSyncGenerators": ["@nx/js:typescript-sync"]
