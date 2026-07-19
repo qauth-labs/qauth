@@ -19,6 +19,7 @@ export {
   type HybridSignedToken,
   type HybridSigningKey,
   type HybridVerifyKey,
+  type MlDsaKeyResolver,
   type PqcBackendSelection,
   signHybrid,
   verifyHybrid,
@@ -48,6 +49,8 @@ export {
   RESERVED_PROTECTED_HEADER_MEMBERS,
   sign,
   type SignOptions,
+  type VerifiedToken,
   verify,
   type VerifyOptions,
+  verifyWithHeader,
 } from './lib/signing';

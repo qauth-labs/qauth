@@ -1,4 +1,4 @@
-import type { SignatureAlgorithm } from '@qauth-labs/core-crypto';
+import type { HybridSignedToken, SignatureAlgorithm } from '@qauth-labs/core-crypto';
 import type { ActClaim, AkpJwk, JWTPayload, PublicJwk } from '@qauth-labs/server-jwt';
 import type { FastifyPluginOptions } from 'fastify';
 
@@ -32,6 +32,17 @@ export interface JwtPluginOptions extends FastifyPluginOptions {
   mlDsaSeed?: string;
   /** Stable `kid` for the ML-DSA key published in the AKP JWK (#246). */
   mlDsaKeyId?: string;
+  /**
+   * Turn on LIVE hybrid (Ed25519 + ML-DSA-65) token issuance (#275). Sourced
+   * from `HYBRID_SIGNING_ENABLED`, default off.
+   *
+   * When true the plugin retains the ML-DSA PRIVATE key and exposes
+   * {@link JwtUtils.signHybridAccessToken}; when false only the derived public
+   * key is kept (JWKS publication, #246) and no hybrid token can be minted.
+   * Enabling it without `mlDsaSeed` throws at registration — a half-configured
+   * hybrid deployment must fail fast, never silently degrade to classical-only.
+   */
+  hybridSigningEnabled?: boolean;
   /**
    * Operator-enabled signature algorithms (`SIGNING_ALGORITHM_MODE`, threaded
    * from `cryptoEnv.enabledSignatureAlgorithms`).
@@ -79,7 +90,7 @@ export interface Jwks {
  * JWT payload structure and the RFC 8693 `act` (actor) claim shape.
  * Re-exported to avoid apps needing direct dependency on @qauth-labs/server-jwt
  */
-export type { ActClaim, JWTPayload };
+export type { ActClaim, HybridSignedToken, JWTPayload };
 
 /**
  * JWT utilities interface
@@ -115,6 +126,47 @@ export interface JwtUtils {
      */
     expiresInOverride?: number;
   }): Promise<string>;
+  /**
+   * Whether LIVE hybrid issuance is enabled on this server (#275). Routes
+   * branch on this to decide between a classical and a hybrid access token.
+   */
+  isHybridSigningEnabled(): boolean;
+  /**
+   * Sign a HYBRID access token (ADR-005 / #275): an ordinary Ed25519 compact
+   * JWS plus a detached ML-DSA-65 signature over the identical signing-input.
+   *
+   * Claim shaping is byte-identical to {@link signAccessToken} (both go through
+   * `buildAccessTokenClaims`), so the bearer token a client receives is
+   * indistinguishable from the classical one — the PQC material is delivered
+   * out-of-band via introspection (`reference` delivery, #247).
+   *
+   * @throws Error if hybrid signing is not enabled on this server.
+   */
+  signHybridAccessToken(payload: {
+    sub: string;
+    email?: string;
+    email_verified?: boolean;
+    clientId: string;
+    scope?: string;
+    aud?: string | string[];
+    act?: ActClaim;
+    /** Narrow the lifespan below the configured default (never widens). */
+    expiresInOverride?: number;
+  }): Promise<HybridSignedToken>;
+  /**
+   * Verify a hybrid access token: the Ed25519 component always, plus the
+   * ML-DSA-65 component whenever the ISSUER-SIGNED `pqc_alg` header asserts it
+   * (binding regardless of `requirePqc`, #248 F1). The ML-DSA key is resolved
+   * from the signed `pqc_kid` (#248 F5).
+   *
+   * @throws JWTInvalidError if PQC verification is not configured here.
+   * @throws CryptoVerificationError on any verification failure, including a
+   *   stripped detached signature on a token whose header asserts `pqc_alg`.
+   */
+  verifyHybridAccessToken(
+    hybrid: HybridSignedToken,
+    options: { audience?: string | string[]; issuer?: string; requirePqc: boolean }
+  ): Promise<JWTPayload>;
   /**
    * Sign an OIDC ID token (OpenID Connect Core 1.0 §2).
    *

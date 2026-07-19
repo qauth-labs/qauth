@@ -65,11 +65,15 @@ function createFastifyStub() {
     jwtUtils: {
       verifyAccessToken: vi.fn(),
       getIssuer: () => 'https://auth.example.com',
+      // Classical deployment by default (#275): no PQC material is looked up
+      // and no `pqc_signature` appears in the response.
+      isHybridSigningEnabled: () => false,
     },
     redis: {
       // Default: nothing is revoked. Individual tests override `exists`.
       exists: vi.fn().mockResolvedValue(0),
       setex: vi.fn().mockResolvedValue('OK'),
+      get: vi.fn().mockResolvedValue(null),
     },
     log: {
       debug: vi.fn(),
@@ -868,5 +872,131 @@ describe('POST /oauth/introspect route', () => {
     } finally {
       await app.close();
     }
+  });
+});
+
+describe('POST /oauth/introspect — PQC reference delivery (ADR-005 / #275)', () => {
+  const userUuid = '019dbc24-7a2d-724d-bf26-1923f21f2234';
+
+  /** Drive the route handler for an authorized, valid-token introspection. */
+  /**
+   * A compact JWS whose PROTECTED HEADER advertises `pqc_alg`. The PQC lookup
+   * is gated on the token's (already-verified) header rather than on the
+   * server's current issuance posture, so a stub token must carry a realistic
+   * header for the hybrid path to be exercised at all.
+   */
+  function tokenWithHeader(header: Record<string, unknown>): string {
+    const encode = (o: unknown) => Buffer.from(JSON.stringify(o)).toString('base64url');
+    return `${encode(header)}.${encode({ sub: userUuid })}.c2ln`;
+  }
+
+  const HYBRID_TOKEN = tokenWithHeader({ alg: 'EdDSA', pqc_alg: 'ML-DSA-65', pqc_kid: 'mldsa-1' });
+
+  async function introspectValidToken(
+    fastify: FastifyInstance,
+    ctx: TestContext,
+    token = 'valid-token'
+  ) {
+    const client = {
+      id: 'client-1',
+      clientId: 'client-123',
+      clientSecretHash: 'hashed-secret',
+      enabled: true,
+    };
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(client);
+    (fastify.passwordHasher.verifyPassword as unknown as Mock).mockResolvedValue(true);
+    (fastify.jwtUtils.verifyAccessToken as unknown as Mock).mockResolvedValue({
+      sub: userUuid,
+      clientId: client.clientId,
+      jti: 'jti-1',
+      exp: 1234567890,
+      iat: 1234567800,
+      iss: 'https://auth.example.com',
+    });
+
+    const request = {
+      body: { token, client_id: client.clientId, client_secret: 'secret' },
+      ip: '127.0.0.1',
+      headers: { 'user-agent': 'vitest' },
+    };
+    const reply = { send: (body: unknown) => body };
+    if (!ctx.handler) throw new Error('Introspect handler was not registered');
+    return (await ctx.handler(request, reply)) as Record<string, unknown>;
+  }
+
+  it('returns the detached pqcSignature when the server issues hybrid tokens', async () => {
+    const { fastify, ctx } = createFastifyStub();
+    (fastify as any).jwtUtils.isHybridSigningEnabled = () => true;
+    (fastify.redis.get as unknown as Mock).mockResolvedValue(
+      JSON.stringify({ pqcSignature: 'BASE64URL_ML_DSA_SIG', pqcAlg: 'ML-DSA-65' })
+    );
+    await introspectRoute(fastify);
+
+    const result = await introspectValidToken(fastify, ctx, HYBRID_TOKEN);
+
+    expect(result['active']).toBe(true);
+    expect(result['pqc_signature']).toBe('BASE64URL_ML_DSA_SIG');
+    expect(result['pqc_alg']).toBe('ML-DSA-65');
+    // Looked up by the VERIFIED token's jti, never by client-supplied input.
+    expect(fastify.redis.get).toHaveBeenCalledWith('pqc-signature:jti-1');
+  });
+
+  it('omits the PQC fields entirely on a classical deployment', async () => {
+    const { fastify, ctx } = createFastifyStub();
+    (fastify.redis.get as unknown as Mock).mockResolvedValue(null);
+    await introspectRoute(fastify);
+
+    const result = await introspectValidToken(fastify, ctx);
+
+    expect(result['active']).toBe(true);
+    expect(result).not.toHaveProperty('pqc_signature');
+    expect(result).not.toHaveProperty('pqc_alg');
+  });
+
+  it('still serves stored PQC material after HYBRID_SIGNING_ENABLED is turned OFF', async () => {
+    // Rollback safety. Since #248 F1 a signed `pqc_alg` is BINDING, so a token
+    // minted while the flag was on is REJECTED by every PQC-aware verifier if
+    // introspection stops returning its detached signature. Gating retrieval on
+    // the current issuance posture would therefore make flipping the flag off a
+    // hard outage for one full token lifetime, rather than a graceful rollback.
+    // The TTL-bounded store drains on its own; retrieval must not be gated.
+    const { fastify, ctx } = createFastifyStub();
+    // Issuance is OFF...
+    (fastify as any).jwtUtils.isHybridSigningEnabled = () => false;
+    // ...but a token minted before the flip still has its signature stored.
+    (fastify.redis.get as unknown as Mock).mockResolvedValue(
+      JSON.stringify({ pqcSignature: 'BASE64URL_ML_DSA_SIG', pqcAlg: 'ML-DSA-65' })
+    );
+    await introspectRoute(fastify);
+
+    const result = await introspectValidToken(fastify, ctx, HYBRID_TOKEN);
+
+    expect(result['active']).toBe(true);
+    expect(result['pqc_signature']).toBe('BASE64URL_ML_DSA_SIG');
+    expect(result['pqc_alg']).toBe('ML-DSA-65');
+  });
+
+  it('a store miss degrades gracefully: still active, just no PQC material', async () => {
+    const { fastify, ctx } = createFastifyStub();
+    (fastify as any).jwtUtils.isHybridSigningEnabled = () => true;
+    (fastify.redis.get as unknown as Mock).mockResolvedValue(null);
+    await introspectRoute(fastify);
+
+    const result = await introspectValidToken(fastify, ctx);
+
+    expect(result['active']).toBe(true);
+    expect(result).not.toHaveProperty('pqc_signature');
+  });
+
+  it('a corrupt store entry is treated as a miss, never surfaced', async () => {
+    const { fastify, ctx } = createFastifyStub();
+    (fastify as any).jwtUtils.isHybridSigningEnabled = () => true;
+    (fastify.redis.get as unknown as Mock).mockResolvedValue('{not json');
+    await introspectRoute(fastify);
+
+    const result = await introspectValidToken(fastify, ctx);
+
+    expect(result['active']).toBe(true);
+    expect(result).not.toHaveProperty('pqc_signature');
   });
 });

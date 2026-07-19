@@ -45,6 +45,12 @@ export function decodeJwtUnsafe(token: string) {
       email_verified:
         typeof decoded['email_verified'] === 'boolean' ? decoded['email_verified'] : undefined,
       clientId: typeof decoded['client_id'] === 'string' ? decoded['client_id'] : 'unknown-client',
+      // `jti` (RFC 7519 §4.1.7) is surfaced because the declared `JWTPayload`
+      // return type has always promised it and callers need it to key
+      // per-token side stores (revocation denylist; the #275 hybrid PQC
+      // signature store). Optional: tokens minted before the claim existed
+      // legitimately lack it.
+      jti: typeof decoded.jti === 'string' ? decoded.jti : undefined,
       iat: decoded.iat,
       exp: decoded.exp,
       iss: decoded.iss,

@@ -121,6 +121,62 @@ export async function sign(
 }
 
 /**
+ * A successfully verified compact JWS: its claims set AND the protected header
+ * that the signature actually covers.
+ *
+ * The header is returned SEPARATELY and only after verification succeeds, so a
+ * caller can never confuse it with the attacker-controlled, unauthenticated
+ * header of an unverified token. Every security decision that depends on a
+ * header member (algorithm negotiation, key resolution) MUST read it from here.
+ */
+export interface VerifiedToken {
+  /** The verified raw claims set (JWS payload). */
+  claims: Record<string, unknown>;
+  /**
+   * The JWS PROTECTED header, authenticated by the verified signature. Includes
+   * `alg`, `kid`, and any extra members the issuer stamped (e.g. the hybrid
+   * `pqc_alg` / `pqc_kid` of ADR-005). Trustworthy: a mutation of any member
+   * invalidates the signature, so verification would have thrown first.
+   */
+  protectedHeader: Record<string, unknown>;
+}
+
+/**
+ * Verify a compact JWT and return BOTH its claims and its signature-protected
+ * header.
+ *
+ * Identical checking to {@link verify} — this is the full-fidelity form. Use it
+ * whenever a downstream decision must be bound to something the ISSUER signed
+ * rather than to an unauthenticated transport field (ADR-005 / #248 F1: the
+ * hybrid `pqc_alg` downgrade check; #248 F5: ML-DSA key resolution from the
+ * signed `pqc_kid`).
+ *
+ * @param token - Compact JWT to verify.
+ * @param publicKey - Public verification key.
+ * @param options - Verification constraints — see {@link VerifyOptions}.
+ * @returns The verified claims set and the authenticated protected header.
+ * @throws CryptoVerificationError if the token is expired or otherwise invalid.
+ */
+export async function verifyWithHeader(
+  token: string,
+  publicKey: SigningKey,
+  options: VerifyOptions
+): Promise<VerifiedToken> {
+  try {
+    const { payload, protectedHeader } = await jwtVerify(token, publicKey, {
+      algorithms: options.algorithms,
+      ...(options.issuer !== undefined ? { issuer: options.issuer } : {}),
+      ...(options.audience !== undefined ? { audience: options.audience } : {}),
+      ...(options.clockTolerance !== undefined ? { clockTolerance: options.clockTolerance } : {}),
+      ...(options.currentDate !== undefined ? { currentDate: options.currentDate } : {}),
+    });
+    return { claims: payload, protectedHeader: { ...protectedHeader } };
+  } catch (error) {
+    throw toCryptoVerificationError(error);
+  }
+}
+
+/**
  * Verify a compact JWT's signature and registered claims, returning its raw
  * claims set.
  *
@@ -129,6 +185,9 @@ export async function sign(
  * performed here — that is the caller's concern. On any failure a
  * {@link CryptoVerificationError} is thrown, normalizing the backend's error
  * shape into this library's stable vocabulary.
+ *
+ * Thin wrapper over {@link verifyWithHeader} that discards the protected
+ * header; callers needing the signed header must use `verifyWithHeader`.
  *
  * @param token - Compact JWT to verify.
  * @param publicKey - Public verification key.
@@ -141,18 +200,8 @@ export async function verify(
   publicKey: SigningKey,
   options: VerifyOptions
 ): Promise<Record<string, unknown>> {
-  try {
-    const { payload } = await jwtVerify(token, publicKey, {
-      algorithms: options.algorithms,
-      ...(options.issuer !== undefined ? { issuer: options.issuer } : {}),
-      ...(options.audience !== undefined ? { audience: options.audience } : {}),
-      ...(options.clockTolerance !== undefined ? { clockTolerance: options.clockTolerance } : {}),
-      ...(options.currentDate !== undefined ? { currentDate: options.currentDate } : {}),
-    });
-    return payload;
-  } catch (error) {
-    throw toCryptoVerificationError(error);
-  }
+  const { claims } = await verifyWithHeader(token, publicKey, options);
+  return claims;
 }
 
 /**

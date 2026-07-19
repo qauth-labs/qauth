@@ -126,6 +126,8 @@ function createFastifyStub() {
     },
     jwtUtils: {
       signAccessToken: vi.fn(),
+      // #275: classical posture — issueAccessToken takes the non-hybrid branch.
+      isHybridSigningEnabled: () => false,
       signIdToken: vi.fn(),
       verifyAccessToken: vi.fn(),
       generateRefreshToken: vi.fn(),

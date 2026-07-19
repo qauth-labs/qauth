@@ -259,6 +259,25 @@ export const introspectResponseSchema = z.object({
   aud: z.union([z.string(), z.array(z.string())]).optional(),
   scope: z.string().optional(),
   token_type: z.literal('Bearer').optional(),
+  /**
+   * ADR-005 / #275 — reference delivery of the post-quantum component.
+   *
+   * When the server issues hybrid (Ed25519 + ML-DSA-65) tokens, the bearer
+   * itself stays a small Ed25519 compact JWS and the ~4.4 KB detached ML-DSA-65
+   * signature is delivered HERE, in the introspection body (no header/cookie
+   * ceiling). A PQC-capable resource server verifies it over the token's JWS
+   * signing-input using the `AKP` key published in JWKS.
+   *
+   * Present only for `active: true` hybrid tokens; omitted entirely on a
+   * classical deployment, so existing RFC 7662 consumers are unaffected.
+   *
+   * SECURITY: `pqc_alg` here is informational. The authoritative algorithm and
+   * key id are the `pqc_alg` / `pqc_kid` members of the token's Ed25519-SIGNED
+   * protected header (#248 F1/F5) — a verifier MUST negotiate and resolve keys
+   * from those, never from this body.
+   */
+  pqc_signature: z.string().optional(),
+  pqc_alg: z.string().optional(),
 });
 
 export type IntrospectResponse = z.infer<typeof introspectResponseSchema>;

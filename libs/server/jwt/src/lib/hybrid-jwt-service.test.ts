@@ -44,7 +44,11 @@ describe('hybrid jwt-service (#245)', () => {
     expect(payload['token_use']).toBe('access');
     expect(payload['scope']).toBe('read');
     expect(hybrid.pqcAlg).toBe('ML-DSA-65');
-    expect(hybrid.pqcKid).toBe('k1-mldsa');
+    // #275 / #248 F5: the key id is carried ONLY in the signed protected
+    // header, never as an unsigned transport field.
+    expect(hybrid).not.toHaveProperty('pqcKid');
+    const { protectedHeader } = await jwtVerify(hybrid.token, edPublic, { algorithms: ['EdDSA'] });
+    expect(protectedHeader['pqc_kid']).toBe('k1-mldsa');
   });
 
   it('shapes claims identically to the classical signer (modulo the per-token jti)', async () => {
