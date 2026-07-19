@@ -113,6 +113,9 @@ export class McpGuard {
       audience: this.resource,
       allowedAlgorithms: config.allowedAlgorithms,
       cacheTtlMs: config.jwksCacheTtlMs,
+      // #283 rollout switch. Default-off here mirrors the validator's own
+      // default; a wrong `typ` is rejected either way.
+      requireAccessTokenTyp: config.requireAccessTokenTyp === true,
       // The injectable FetchLike is API-compatible with what jose calls; the
       // cast is safe because we only use `(url, init) => Promise<Response-ish>`.
       fetch: config.fetch as never,

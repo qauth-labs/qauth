@@ -151,7 +151,7 @@ describe('signIdToken', () => {
     expect(payload.aud).toBe('client-oidc-2');
   });
 
-  it('is rejected as an access token by the token-confusion guard (token_use=id)', async () => {
+  it('is rejected as an access token by the token-confusion guard (typ + token_use=id)', async () => {
     const { privateKey, publicKey } = await generateEdDSAKeyPair();
 
     const idToken = await signIdToken(
@@ -161,10 +161,18 @@ describe('signIdToken', () => {
       900
     );
 
-    // The ID token verifies cryptographically (same key) but carries
-    // token_use='id', so a consumer asserting an access token can detect it.
-    const decoded = await verifyAccessToken(idToken, publicKey);
-    expect(decoded.token_use).toBe('id');
+    // The ID token verifies cryptographically — same key, same JWKS entry — but
+    // since #283 the SIGNED protected header says `typ: JWT`, so the access-token
+    // verifier refuses it outright rather than handing back claims a consumer
+    // has to remember to inspect. The payload-level `token_use: 'id'` marker is
+    // still there underneath as defence in depth.
+    await expect(verifyAccessToken(idToken, publicKey)).rejects.toThrow(JWTInvalidError);
+
+    const { payload, protectedHeader } = await jwtVerify(idToken, publicKey, {
+      algorithms: ['EdDSA'],
+    });
+    expect(protectedHeader['typ']).toBe('JWT');
+    expect(payload['token_use']).toBe('id');
   });
 });
 
@@ -376,5 +384,186 @@ describe('access token jti claim (RFC 7009 revocation support)', () => {
     expect(decodedB.jti).toBeDefined();
     // Each token gets its own id so a single token can be revoked individually.
     expect(decodedA.jti).not.toBe(decodedB.jti);
+  });
+});
+
+describe('RFC 9068 typ enforcement (#283)', () => {
+  const ISSUER = 'https://auth.example.com';
+  /**
+   * The resource an access token is bound to (RFC 8707). Used as the `aud` of
+   * BOTH tokens below so the audience check can never be the thing that rejects.
+   */
+  const RESOURCE = 'https://mcp.example.com';
+
+  /** Decode a compact JWS protected header without verifying (test-only). */
+  function decodeHeader(token: string): Record<string, unknown> {
+    const [encodedHeader] = token.split('.');
+    return JSON.parse(Buffer.from(encodedHeader, 'base64url').toString('utf-8')) as Record<
+      string,
+      unknown
+    >;
+  }
+
+  it('stamps typ: at+jwt on access tokens (RFC 9068 §2.1)', async () => {
+    const { privateKey, publicKey } = await generateEdDSAKeyPair();
+
+    const token = await signAccessToken(
+      { sub: 'user-1', clientId: 'client-1' },
+      privateKey,
+      ISSUER,
+      900
+    );
+
+    // Assert on the SIGNATURE-PROTECTED header, not the raw decode, so this
+    // pins what a verifier actually authenticates.
+    const { protectedHeader } = await jwtVerify(token, publicKey, { algorithms: ['EdDSA'] });
+    expect(protectedHeader['typ']).toBe('at+jwt');
+  });
+
+  it('stamps typ: JWT on ID tokens, distinct from at+jwt', async () => {
+    const { privateKey, publicKey } = await generateEdDSAKeyPair();
+
+    const idToken = await signIdToken(
+      { sub: 'user-1', audience: 'client-1' },
+      privateKey,
+      ISSUER,
+      900
+    );
+
+    const { protectedHeader } = await jwtVerify(idToken, publicKey, { algorithms: ['EdDSA'] });
+    expect(protectedHeader['typ']).toBe('JWT');
+    expect(protectedHeader['typ']).not.toBe('at+jwt');
+  });
+
+  it('rejects an ID token presented as an access token on typ grounds ALONE', async () => {
+    const { privateKey, publicKey } = await generateEdDSAKeyPair();
+
+    // The whole point of issue #283's acceptance criterion. The ID token is
+    // minted with `aud` = the RESOURCE, not a client_id, so the RFC 8707
+    // audience binding — QAuth's existing, unrelated defence — PASSES. The only
+    // control left standing is the protected-header `typ`.
+    const idToken = await signIdToken(
+      { sub: 'user-1', audience: RESOURCE },
+      privateKey,
+      ISSUER,
+      900
+    );
+
+    // Prove the audience check is genuinely satisfied before asserting the
+    // rejection, otherwise this test could pass for the wrong reason forever.
+    const { payload } = await jwtVerify(idToken, publicKey, {
+      algorithms: ['EdDSA'],
+      issuer: ISSUER,
+      audience: RESOURCE,
+    });
+    expect(payload.aud).toBe(RESOURCE);
+
+    await expect(
+      verifyAccessToken(idToken, publicKey, { issuer: ISSUER, audience: RESOURCE })
+    ).rejects.toThrow(/typ is not at\+jwt/);
+  });
+
+  it('accepts a legitimate access token for the same issuer/audience (control)', async () => {
+    const { privateKey, publicKey } = await generateEdDSAKeyPair();
+
+    // Identical constraints to the case above; only the token type differs. This
+    // is what proves the rejection is attributable to `typ` and not to the
+    // issuer/audience pins.
+    const accessToken = await signAccessToken(
+      { sub: 'user-1', clientId: 'client-1', aud: RESOURCE },
+      privateKey,
+      ISSUER,
+      900
+    );
+
+    await expect(
+      verifyAccessToken(accessToken, publicKey, { issuer: ISSUER, audience: RESOURCE })
+    ).resolves.toMatchObject({ sub: 'user-1' });
+  });
+
+  it('accepts a legacy typ-less token by default (rollout phase 1)', async () => {
+    const { privateKey, publicKey } = await generateEdDSAKeyPair();
+
+    // A token minted by the build BEFORE #283: valid in every way, no `typ`.
+    // Rejecting it by default would invalidate every live token at deploy time.
+    const legacy = await new SignJWT({
+      sub: 'user-1',
+      client_id: 'client-1',
+      token_use: 'access',
+    })
+      .setProtectedHeader({ alg: 'EdDSA' })
+      .setIssuedAt()
+      .setExpirationTime('900s')
+      .setIssuer(ISSUER)
+      .setAudience(RESOURCE)
+      .sign(privateKey);
+
+    await expect(
+      verifyAccessToken(legacy, publicKey, { issuer: ISSUER, audience: RESOURCE })
+    ).resolves.toMatchObject({ sub: 'user-1' });
+  });
+
+  it('rejects a legacy typ-less token under requireTyp (rollout phase 2)', async () => {
+    const { privateKey, publicKey } = await generateEdDSAKeyPair();
+
+    const legacy = await new SignJWT({
+      sub: 'user-1',
+      client_id: 'client-1',
+      token_use: 'access',
+    })
+      .setProtectedHeader({ alg: 'EdDSA' })
+      .setIssuedAt()
+      .setExpirationTime('900s')
+      .setIssuer(ISSUER)
+      .setAudience(RESOURCE)
+      .sign(privateKey);
+
+    await expect(
+      verifyAccessToken(legacy, publicKey, { issuer: ISSUER, audience: RESOURCE, requireTyp: true })
+    ).rejects.toThrow(/missing typ header/);
+  });
+
+  it('rejects a WRONG typ even with requireTyp off — the flag never weakens this', async () => {
+    const { privateKey, publicKey } = await generateEdDSAKeyPair();
+
+    const idToken = await signIdToken(
+      { sub: 'user-1', audience: RESOURCE },
+      privateKey,
+      ISSUER,
+      900
+    );
+
+    await expect(
+      verifyAccessToken(idToken, publicKey, {
+        issuer: ISSUER,
+        audience: RESOURCE,
+        requireTyp: false,
+      })
+    ).rejects.toThrow(/typ is not at\+jwt/);
+  });
+
+  it('reads typ from the signed header, so rewriting it cannot smuggle a token through', async () => {
+    const { privateKey, publicKey } = await generateEdDSAKeyPair();
+
+    const idToken = await signIdToken(
+      { sub: 'user-1', audience: RESOURCE },
+      privateKey,
+      ISSUER,
+      900
+    );
+    const [, payload, signature] = idToken.split('.');
+
+    // Splice a forged `typ: at+jwt` header onto the genuine payload+signature.
+    // Because the header is part of the JWS signing input, this must fail at the
+    // SIGNATURE, never reach the typ check, and certainly never be accepted.
+    const forgedHeader = Buffer.from(JSON.stringify({ alg: 'EdDSA', typ: 'at+jwt' })).toString(
+      'base64url'
+    );
+    const forged = `${forgedHeader}.${payload}.${signature}`;
+    expect(decodeHeader(forged)['typ']).toBe('at+jwt');
+
+    await expect(
+      verifyAccessToken(forged, publicKey, { issuer: ISSUER, audience: RESOURCE })
+    ).rejects.toThrow(JWTInvalidError);
   });
 });

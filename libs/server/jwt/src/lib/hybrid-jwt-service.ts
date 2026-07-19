@@ -8,7 +8,12 @@ import {
 } from '@qauth-labs/core-crypto';
 
 import type { SignAccessTokenPayload, SignIdTokenPayload } from '../types/jwt-service';
-import { buildAccessTokenClaims, buildIdTokenClaims } from './jwt-service';
+import {
+  ACCESS_TOKEN_TYP,
+  buildAccessTokenClaims,
+  buildIdTokenClaims,
+  ID_TOKEN_TYP,
+} from './jwt-service';
 
 /**
  * Hybrid (Ed25519 + ML-DSA-65) JWT signing wrappers (ADR-005, #245).
@@ -39,7 +44,18 @@ export async function signHybridAccessToken(
   backend: PqcBackendSelection
 ): Promise<HybridSignedToken> {
   const { claims, audience } = buildAccessTokenClaims(payload);
-  return signHybrid(claims, keys, { issuer, expiresIn, audience, ...backend });
+  // #283: `typ` must be stamped on the hybrid path too, or a deployment that
+  // flips `HYBRID_SIGNING_ENABLED` on would silently start minting access
+  // tokens a `typ`-enforcing resource server rejects. It rides in the same
+  // Ed25519-SIGNED protected header as `pqc_alg`/`pqc_kid` (ADR-005) and is
+  // non-critical, so classical verifiers are unaffected.
+  return signHybrid(claims, keys, {
+    issuer,
+    expiresIn,
+    audience,
+    typ: ACCESS_TOKEN_TYP,
+    ...backend,
+  });
 }
 
 export async function signHybridIdToken(
@@ -50,7 +66,13 @@ export async function signHybridIdToken(
   backend: PqcBackendSelection
 ): Promise<HybridSignedToken> {
   const { claims, audience } = buildIdTokenClaims(payload);
-  return signHybrid(claims, keys, { issuer, expiresIn, audience, ...backend });
+  return signHybrid(claims, keys, {
+    issuer,
+    expiresIn,
+    audience,
+    typ: ID_TOKEN_TYP,
+    ...backend,
+  });
 }
 
 /**

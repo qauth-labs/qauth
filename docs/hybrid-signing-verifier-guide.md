@@ -76,12 +76,12 @@ The post-quantum signature is large. Measured on a representative token
 
 | Artifact                                 | Bytes    | Fits a 4 KB cookie? | Fits a 2 KB URL? |
 | ---------------------------------------- | -------- | ------------------- | ---------------- |
-| Access **bearer** JWS (`.token`)         | **716**  | ✅                  | ✅               |
-| ID-token bearer JWS                      | **576**  | ✅                  | ✅               |
+| Access **bearer** JWS (`.token`)         | **736**  | ✅                  | ✅               |
+| ID-token bearer JWS                      | **592**  | ✅                  | ✅               |
 | Detached **ML-DSA-65** signature         | **4412** | ❌                  | ❌               |
-| Compound (bearer + signature), if inline | **5128** | ❌                  | ❌               |
+| Compound (bearer + signature), if inline | **5148** | ❌                  | ❌               |
 
-Because the signature is detached, the **bearer token stays ~716 bytes** in
+Because the signature is detached, the **bearer token stays ~736 bytes** in
 every channel — it never balloons. The 4412-byte ML-DSA signature is delivered
 out-of-band. Accordingly:
 

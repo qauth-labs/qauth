@@ -129,9 +129,13 @@ describe('token size (ADR-005 / #247)', () => {
     // Pinning them keeps AC#1 ("measured, not estimated") SELF-ENFORCING: if a
     // change here moves a number, CI fails until the ADR-005 table is updated to
     // match. Update BOTH together.
+    //
+    // #283 moved the two bearer figures: the RFC 9068 `typ: at+jwt` member adds
+    // 20 base64url chars to every access token's protected header and `typ: JWT`
+    // adds 16 to every ID token. `compound` tracks `bearer`.
     expect(pqcSig).toBe(4412);
-    expect(bearer).toBe(716);
-    expect(idBearer).toBe(576);
-    expect(compound).toBe(5128);
+    expect(bearer).toBe(736);
+    expect(idBearer).toBe(592);
+    expect(compound).toBe(5148);
   });
 });

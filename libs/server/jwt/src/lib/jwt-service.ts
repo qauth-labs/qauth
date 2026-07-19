@@ -1,11 +1,37 @@
 import { randomUUID } from 'node:crypto';
 
-import { CryptoVerificationError, sign, verify } from '@qauth-labs/core-crypto';
+import { CryptoVerificationError, sign, verifyWithHeader } from '@qauth-labs/core-crypto';
 import { JWTExpiredError, JWTInvalidError } from '@qauth-labs/shared-errors';
 
 import type { JWTPayload, SignAccessTokenPayload, SignIdTokenPayload } from '../types/jwt-service';
 import type { KeyLike } from '../types/key-management';
 import { accessTokenClaimsSchema } from './access-token-claims';
+
+/**
+ * RFC 9068 §2.1 `typ` for a JWT OAuth 2.0 access token.
+ *
+ * Stamped into the SIGNATURE-PROTECTED header of every access token (#283).
+ * This is the standards-defined half of QAuth's cross-token-confusion defence;
+ * the `token_use: 'access'` payload claim is the other half. Both are needed:
+ * `typ` is what a third-party resource server (and every off-the-shelf RFC 9068
+ * verifier) will check, `token_use` is what QAuth's own token-exchange path
+ * already asserts.
+ *
+ * This matters concretely here because ID tokens and access tokens are signed
+ * with the SAME key and therefore verify against the same JWKS entry — see
+ * `signIdToken` below.
+ */
+export const ACCESS_TOKEN_TYP = 'at+jwt';
+
+/**
+ * RFC 7519 §5.1 `typ` for an OIDC ID token.
+ *
+ * `JWT` is the generic media type; OIDC Core defines no ID-token-specific one.
+ * Its job here is purely to be DISTINCT from {@link ACCESS_TOKEN_TYP}, so a
+ * resource server enforcing `at+jwt` rejects an ID token structurally rather
+ * than relying on the audience check happening to differ.
+ */
+export const ID_TOKEN_TYP = 'JWT';
 
 /**
  * Sign an access token
@@ -84,7 +110,12 @@ export async function signAccessToken(
   const { claims, audience } = buildAccessTokenClaims(payload);
   // The claims shaping above is business logic and stays here; only the JWS
   // signing crosses into the algorithm-agnostic crypto abstraction (ADR-005).
-  return sign(claims, privateKey, 'EdDSA', { issuer, expiresIn, audience });
+  return sign(claims, privateKey, 'EdDSA', {
+    issuer,
+    expiresIn,
+    audience,
+    typ: ACCESS_TOKEN_TYP,
+  });
 }
 
 /**
@@ -105,7 +136,10 @@ export async function signAccessToken(
  * A `token_use: 'id'` marker is stamped so an ID token can never be mistaken
  * for an access token (token-confusion defence — e.g. it must not be accepted
  * as an RFC 8693 token-exchange `subject_token`, which requires
- * `token_use: 'access'` or the structural access-token markers).
+ * `token_use: 'access'` or the structural access-token markers). Since #283 the
+ * SIGNED protected header carries {@link ID_TOKEN_TYP} for the same reason, one
+ * layer lower: a resource server can reject this token without parsing a single
+ * claim.
  *
  * @param payload - ID token claims (sub, audience, optional identity claims)
  * @param privateKey - EdDSA private key for signing
@@ -163,7 +197,15 @@ export async function signIdToken(
   expiresIn: number
 ): Promise<string> {
   const { claims, audience } = buildIdTokenClaims(payload);
-  return sign(claims, privateKey, 'EdDSA', { issuer, expiresIn, audience });
+  return sign(claims, privateKey, 'EdDSA', {
+    issuer,
+    expiresIn,
+    audience,
+    // #283: `JWT`, never `at+jwt`. Same signing key as the access token, so the
+    // protected-header `typ` is the only thing that distinguishes the two
+    // before any claim is inspected.
+    typ: ID_TOKEN_TYP,
+  });
 }
 
 /**
@@ -173,11 +215,34 @@ export async function signIdToken(
  * Throws JWTExpiredError if the token has expired.
  * Throws JWTInvalidError if the token is invalid or malformed.
  *
+ * ## RFC 9068 `typ` enforcement (#283) — two-phase, deliberately
+ *
+ * The `typ` checked here is read from the SIGNATURE-PROTECTED header returned
+ * by `verifyWithHeader`, never from an unverified decode: a header member that
+ * drives an accept/reject decision must be one the issuer signed, or an
+ * attacker simply rewrites it.
+ *
+ * The two cases are gated differently because only one of them is breaking:
+ *
+ * - **`typ` present but not `at+jwt`** → ALWAYS rejected. Not a compatibility
+ *   risk: no token QAuth issued before #283 carries any `typ` at all, so this
+ *   can only fire on a genuinely wrong-typed token — an ID token
+ *   ({@link ID_TOKEN_TYP}) being the case that matters, since it is signed with
+ *   the same key and verifies against the same JWKS entry.
+ * - **`typ` absent** → accepted unless `requireTyp` is set. Turning this on at
+ *   the same moment issuance starts stamping `typ` would reject every access
+ *   token minted by the previous build that is still inside its lifetime
+ *   (`ACCESS_TOKEN_LIFESPAN`, default 900s). Operators flip `requireTyp` on in
+ *   a SECOND deploy, at least one access-token lifespan after the first.
+ *
  * @param token - JWT token string to verify
  * @param publicKey - EdDSA public key for verification
+ * @param options - Verification constraints; `requireTyp` opts into strict
+ *   RFC 9068 `typ` enforcement (see above) and defaults to `false`.
  * @returns Promise resolving to decoded JWT payload
  * @throws JWTExpiredError if token has expired
- * @throws JWTInvalidError if token is invalid
+ * @throws JWTInvalidError if token is invalid, or its signed `typ` is not
+ *   {@link ACCESS_TOKEN_TYP}
  *
  * @example
  * ```typescript
@@ -193,14 +258,43 @@ export async function signIdToken(
  * }
  * ```
  */
+/**
+ * Assert that a SIGNED protected-header `typ` identifies an RFC 9068 access
+ * token (#283).
+ *
+ * @param signedTyp - The `typ` member of the signature-protected header. MUST
+ *   come from a verified header — a value lifted off an unverified decode is
+ *   attacker-controlled and asserting on it proves nothing.
+ * @param requireTyp - When `true`, an ABSENT `typ` is also rejected. See the
+ *   rollout note on {@link verifyAccessToken}.
+ * @throws JWTInvalidError when the `typ` is wrong, non-string, or (under
+ *   `requireTyp`) missing.
+ */
+function assertAccessTokenTyp(signedTyp: unknown, requireTyp: boolean): void {
+  if (signedTyp === undefined) {
+    if (requireTyp) {
+      throw new JWTInvalidError('Invalid JWT token: missing typ header (expected at+jwt)');
+    }
+    return;
+  }
+  // RFC 9068 §4 lets a verifier accept the `application/` prefix omitted; QAuth
+  // only ever issues the bare form, and accepting variants would widen what a
+  // wrong-typed token can look like for no benefit. Exact match, no
+  // case-folding.
+  if (signedTyp !== ACCESS_TOKEN_TYP) {
+    throw new JWTInvalidError('Invalid JWT token: not an access token (typ is not at+jwt)');
+  }
+}
+
 export async function verifyAccessToken(
   token: string,
   publicKey: KeyLike,
-  options: { audience?: string | string[]; issuer?: string } = {}
+  options: { audience?: string | string[]; issuer?: string; requireTyp?: boolean } = {}
 ): Promise<JWTPayload> {
   let payload: Record<string, unknown>;
+  let protectedHeader: Record<string, unknown>;
   try {
-    payload = await verify(token, publicKey, {
+    ({ claims: payload, protectedHeader } = await verifyWithHeader(token, publicKey, {
       algorithms: ['EdDSA'],
       // RFC 9700 / mix-up defence: when the caller supplies the expected
       // issuer, the abstraction asserts the `iss` claim matches and rejects
@@ -208,7 +302,7 @@ export async function verifyAccessToken(
       // impossible.
       ...(options.issuer !== undefined ? { issuer: options.issuer } : {}),
       ...(options.audience !== undefined ? { audience: options.audience } : {}),
-    });
+    }));
   } catch (error) {
     // The crypto abstraction normalizes the backend (jose) failure shape into a
     // backend-neutral `CryptoVerificationError`. Mapping that onto QAuth's JWT
@@ -228,6 +322,14 @@ export async function verifyAccessToken(
     // Fallback for unknown errors
     throw new JWTInvalidError('Invalid JWT token');
   }
+
+  // #283 RFC 9068 §2.1 `typ`. Read from the AUTHENTICATED header above, and
+  // asserted BEFORE the claim-shape parse so a wrong-typed token is rejected on
+  // `typ` grounds specifically — an ID token happens to also fail the claim
+  // schema, and we do not want that coincidence standing in for this control.
+  // See the two-phase rollout note in this function's TSDoc for why an ABSENT
+  // `typ` is gated on `requireTyp` but a WRONG one never is.
+  assertAccessTokenTyp(protectedHeader['typ'], options.requireTyp === true);
 
   // `jose` verifies the SIGNATURE and the registered temporal/issuer/audience
   // claims only — it does not assert the SHAPE of application claims. Without
