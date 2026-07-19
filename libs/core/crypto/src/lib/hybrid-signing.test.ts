@@ -318,4 +318,44 @@ describe('hybrid signing (#248 F7/F11) — the operator allowlist is authoritati
       resetSignatureBackends();
     }
   });
+
+  it('routes VERIFICATION through a REGISTERED backend rather than hardcoding noble', async () => {
+    const { ed, mlDsa } = await makeKeys();
+    const hybrid = await signHybrid(
+      { sub: 'u' },
+      { ed: ed.privateKey, mlDsa: mlDsa.privateKey },
+      signOpts
+    );
+
+    const calls: number[] = [];
+    // The verify path resolves its own backend independently of the sign path.
+    // Without this assertion, a call site that reverts to a hardcoded
+    // `mlDsa65Backend.verify(...)` still passes every other test in this file
+    // while silently ignoring the operator allowlist (#248 F7).
+    registerSignatureBackend({
+      ...noble,
+      verify(publicKey, message, signature) {
+        calls.push(message.length);
+        return noble.verify(publicKey, message, signature);
+      },
+    });
+    try {
+      await expect(
+        verifyHybrid(
+          hybrid,
+          { ed: ed.publicKey, mlDsa: mlDsa.publicKey },
+          {
+            requirePqc: true,
+            algorithms: ['EdDSA'],
+            issuer: ISSUER,
+            audience: AUDIENCE,
+            enabledSignatureAlgorithms: signOpts.enabledSignatureAlgorithms,
+          }
+        )
+      ).resolves.toMatchObject({ sub: 'u' });
+      expect(calls).toHaveLength(1);
+    } finally {
+      resetSignatureBackends();
+    }
+  });
 });
