@@ -1,7 +1,11 @@
 import { jwtVerify } from 'jose';
 import { describe, expect, it } from 'vitest';
 
-import { getSignatureBackend } from './backend-registry';
+import {
+  getSignatureBackend,
+  registerSignatureBackend,
+  resetSignatureBackends,
+} from './backend-registry';
 import { CryptoVerificationError } from './errors';
 import {
   PQC_ALG_ML_DSA_65,
@@ -13,7 +17,10 @@ import { generateSigningKeyPair } from './key-management';
 
 const ISSUER = 'https://auth.example.com';
 const AUDIENCE = 'client-1';
-const noble = getSignatureBackend('ML-DSA-65', ['ML-DSA-65']);
+// The operator-enabled set (#248 F7/F11). Every hybrid call site now resolves
+// its ML-DSA backend through this allowlist instead of reaching for noble.
+const PQC_ENABLED = ['EdDSA', 'ML-DSA-65'] as const;
+const noble = getSignatureBackend('ML-DSA-65', PQC_ENABLED);
 
 async function makeKeys() {
   const ed = await generateSigningKeyPair('EdDSA', { extractable: true });
@@ -21,7 +28,12 @@ async function makeKeys() {
   return { ed, mlDsa };
 }
 
-const signOpts = { issuer: ISSUER, expiresIn: 900, audience: AUDIENCE };
+const signOpts = {
+  issuer: ISSUER,
+  expiresIn: 900,
+  audience: AUDIENCE,
+  enabledSignatureAlgorithms: PQC_ENABLED,
+};
 
 describe('hybrid signing (#245) — carrier shape + AC#2 compatibility', () => {
   it('AC#2 GOLD PROOF: the hybrid token is a stock-jose-verifiable Ed25519 JWS', async () => {
@@ -73,7 +85,13 @@ describe('hybrid signing (#245) — PQC verification (AC#3)', () => {
     const claims = await verifyHybrid(
       hybrid,
       { ed: ed.publicKey, mlDsa: mlDsa.publicKey },
-      { requirePqc: true, algorithms: ['EdDSA' as const], issuer: ISSUER, audience: AUDIENCE }
+      {
+        requirePqc: true,
+        algorithms: ['EdDSA' as const],
+        issuer: ISSUER,
+        audience: AUDIENCE,
+        enabledSignatureAlgorithms: PQC_ENABLED,
+      }
     );
     expect(claims['sub']).toBe('user-1');
   });
@@ -105,6 +123,7 @@ describe('hybrid signing (#245) — PQC verification (AC#3)', () => {
       algorithms: ['EdDSA' as const],
       issuer: ISSUER,
       audience: AUDIENCE,
+      enabledSignatureAlgorithms: PQC_ENABLED,
     };
     await expect(verifyHybrid(a, vkeys, vopts)).resolves.toBeDefined();
     await expect(verifyHybrid(b, vkeys, vopts)).resolves.toBeDefined();
@@ -117,6 +136,7 @@ describe('hybrid signing (#245) — downgrade / stripping / mix-and-match', () =
     algorithms: ['EdDSA' as const],
     issuer: ISSUER,
     audience: AUDIENCE,
+    enabledSignatureAlgorithms: PQC_ENABLED,
   };
 
   it('rejects a stripped PQC signature when requirePqc is true', async () => {
@@ -198,5 +218,144 @@ describe('hybrid signing (#245/#274) — standards pinning', () => {
     // Case and hyphenation are load-bearing for interop: a verifier matches
     // this string literally against the AKP JWK `alg`.
     expect(PQC_ALG_ML_DSA_65).toBe('ML-DSA-65');
+  });
+});
+
+describe('hybrid signing (#248 F7/F11) — the operator allowlist is authoritative', () => {
+  const CLASSICAL_ONLY = ['EdDSA'] as const;
+
+  it('refuses to SIGN when SIGNING_ALGORITHM_MODE has not enabled ML-DSA-65', async () => {
+    const { ed, mlDsa } = await makeKeys();
+
+    await expect(
+      signHybrid(
+        { sub: 'u' },
+        { ed: ed.privateKey, mlDsa: mlDsa.privateKey },
+        {
+          ...signOpts,
+          enabledSignatureAlgorithms: CLASSICAL_ONLY,
+        }
+      )
+    ).rejects.toThrow(/'ML-DSA-65' is not enabled/);
+  });
+
+  it('names SIGNING_ALGORITHM_MODE so the operator knows which knob to turn', async () => {
+    const { ed, mlDsa } = await makeKeys();
+
+    await expect(
+      signHybrid(
+        { sub: 'u' },
+        { ed: ed.privateKey, mlDsa: mlDsa.privateKey },
+        {
+          ...signOpts,
+          enabledSignatureAlgorithms: CLASSICAL_ONLY,
+        }
+      )
+    ).rejects.toThrow(/SIGNING_ALGORITHM_MODE/);
+  });
+
+  it('aborts BEFORE producing a token — no silent classical-only downgrade', async () => {
+    const { ed, mlDsa } = await makeKeys();
+    // The gate is checked before the Ed25519 JWS is built, so a disabled
+    // ML-DSA-65 can never leave a half-hybrid (classical-only) token behind
+    // that a caller might mistake for a hybrid one.
+    const error = await signHybrid(
+      { sub: 'u' },
+      { ed: ed.privateKey, mlDsa: mlDsa.privateKey },
+      {
+        ...signOpts,
+        enabledSignatureAlgorithms: CLASSICAL_ONLY,
+      }
+    ).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(Error);
+    expect(error).not.toHaveProperty('token');
+  });
+
+  it('refuses to VERIFY a present PQC component when ML-DSA-65 is not enabled', async () => {
+    const { ed, mlDsa } = await makeKeys();
+    const hybrid = await signHybrid(
+      { sub: 'u' },
+      { ed: ed.privateKey, mlDsa: mlDsa.privateKey },
+      signOpts
+    );
+
+    await expect(
+      verifyHybrid(
+        hybrid,
+        { ed: ed.publicKey, mlDsa: mlDsa.publicKey },
+        {
+          requirePqc: true,
+          algorithms: ['EdDSA'],
+          issuer: ISSUER,
+          audience: AUDIENCE,
+          enabledSignatureAlgorithms: CLASSICAL_ONLY,
+        }
+      )
+    ).rejects.toThrow(/'ML-DSA-65' is not enabled/);
+  });
+
+  it('routes signing through a REGISTERED backend rather than hardcoding noble', async () => {
+    const { ed, mlDsa } = await makeKeys();
+    const calls: number[] = [];
+    // Proves the call site really goes through getSignatureBackend: a
+    // registered backend (as the native #244 backend would be) is what signs.
+    registerSignatureBackend({
+      ...noble,
+      sign(privateKey, message) {
+        calls.push(message.length);
+        return noble.sign(privateKey, message);
+      },
+    });
+    try {
+      const hybrid = await signHybrid(
+        { sub: 'u' },
+        { ed: ed.privateKey, mlDsa: mlDsa.privateKey },
+        signOpts
+      );
+      expect(calls).toHaveLength(1);
+      expect(hybrid.pqcSignature.length).toBeGreaterThan(0);
+    } finally {
+      resetSignatureBackends();
+    }
+  });
+
+  it('routes VERIFICATION through a REGISTERED backend rather than hardcoding noble', async () => {
+    const { ed, mlDsa } = await makeKeys();
+    const hybrid = await signHybrid(
+      { sub: 'u' },
+      { ed: ed.privateKey, mlDsa: mlDsa.privateKey },
+      signOpts
+    );
+
+    const calls: number[] = [];
+    // The verify path resolves its own backend independently of the sign path.
+    // Without this assertion, a call site that reverts to a hardcoded
+    // `mlDsa65Backend.verify(...)` still passes every other test in this file
+    // while silently ignoring the operator allowlist (#248 F7).
+    registerSignatureBackend({
+      ...noble,
+      verify(publicKey, message, signature) {
+        calls.push(message.length);
+        return noble.verify(publicKey, message, signature);
+      },
+    });
+    try {
+      await expect(
+        verifyHybrid(
+          hybrid,
+          { ed: ed.publicKey, mlDsa: mlDsa.publicKey },
+          {
+            requirePqc: true,
+            algorithms: ['EdDSA'],
+            issuer: ISSUER,
+            audience: AUDIENCE,
+            enabledSignatureAlgorithms: signOpts.enabledSignatureAlgorithms,
+          }
+        )
+      ).resolves.toMatchObject({ sub: 'u' });
+      expect(calls).toHaveLength(1);
+    } finally {
+      resetSignatureBackends();
+    }
   });
 });

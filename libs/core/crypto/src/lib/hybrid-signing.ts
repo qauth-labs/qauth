@@ -1,4 +1,5 @@
-import { mlDsa65Backend } from './backends/ml-dsa-65';
+import type { SignatureAlgorithm } from './algorithms';
+import { getSignatureBackend } from './backend-registry';
 import { CryptoVerificationError } from './errors';
 import {
   PQC_ALG_ML_DSA_65,
@@ -51,6 +52,22 @@ export interface HybridVerifyKey {
   mlDsa: MlDsaKey;
 }
 
+/**
+ * The operator-enabled signature algorithms (`SIGNING_ALGORITHM_MODE`, threaded
+ * from `cryptoEnv.enabledSignatureAlgorithms`) that gate the PQC component.
+ *
+ * REQUIRED, never defaulted (#248 F7/F11): the hybrid path previously reached
+ * for the noble backend directly, which both bypassed the operator allowlist —
+ * a deployment running `SIGNING_ALGORITHM_MODE=ed25519` would still emit ML-DSA
+ * signatures — and made the native backend unreachable. Routing through
+ * {@link getSignatureBackend} makes the allowlist authoritative and lets a
+ * registered native backend serve the same call sites.
+ */
+export interface PqcBackendSelection {
+  /** Operator-enabled algorithms; `ML-DSA-65` must be among them. */
+  enabledSignatureAlgorithms: readonly SignatureAlgorithm[];
+}
+
 export interface HybridSignedToken {
   /** The classical Ed25519 compact JWS — a complete, stock-verifiable token. */
   token: string;
@@ -84,8 +101,11 @@ export function extractJwsSigningInput(compactJws: string): Uint8Array {
 export async function signHybrid(
   claims: Record<string, unknown>,
   keys: HybridSigningKey,
-  options: SignOptions
+  options: SignOptions & PqcBackendSelection
 ): Promise<HybridSignedToken> {
+  // Resolve BEFORE signing: a disabled ML-DSA-65 must abort the whole
+  // operation, never leave a classical-only token behind as a silent downgrade.
+  const backend = getSignatureBackend('ML-DSA-65', options.enabledSignatureAlgorithms);
   const header: Record<string, unknown> = {
     [PQC_HEADER_ALG_MEMBER]: PQC_ALG_ML_DSA_65,
   };
@@ -94,9 +114,7 @@ export async function signHybrid(
 
   const token = await sign(claims, keys.ed, 'EdDSA', { ...options, header });
   const signingInput = extractJwsSigningInput(token);
-  const pqcSignature = Buffer.from(mlDsa65Backend.sign(keys.mlDsa, signingInput)).toString(
-    'base64url'
-  );
+  const pqcSignature = Buffer.from(backend.sign(keys.mlDsa, signingInput)).toString('base64url');
 
   return {
     token,
@@ -118,7 +136,7 @@ export async function signHybrid(
 export async function verifyHybrid(
   hybrid: HybridSignedToken,
   keys: HybridVerifyKey,
-  options: VerifyOptions & { requirePqc: boolean }
+  options: VerifyOptions & PqcBackendSelection & { requirePqc: boolean }
 ): Promise<Record<string, unknown>> {
   // 1. Classical Ed25519 — covers the header (incl. pqc_alg/pqc_kid) + payload.
   const claims = await verify(hybrid.token, keys.ed, { ...options, algorithms: ['EdDSA'] });
@@ -142,7 +160,11 @@ export async function verifyHybrid(
   const signingInput = extractJwsSigningInput(hybrid.token);
   const signatureBytes = new Uint8Array(Buffer.from(hybrid.pqcSignature, 'base64url'));
   // Throws CryptoVerificationError('invalid') on any failure.
-  mlDsa65Backend.verify(keys.mlDsa, signingInput, signatureBytes);
+  getSignatureBackend('ML-DSA-65', options.enabledSignatureAlgorithms).verify(
+    keys.mlDsa,
+    signingInput,
+    signatureBytes
+  );
 
   return claims;
 }

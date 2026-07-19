@@ -29,6 +29,25 @@ export const ML_DSA_65_LENGTHS = {
 } as const;
 
 /**
+ * Which {@link import('./primitives').SignatureBackend} produced a private
+ * {@link MlDsaKey} (#248 F2).
+ *
+ * The two shipped ML-DSA-65 backends store DIFFERENT bytes in
+ * {@link MlDsaKey.material}: the pure-TS `@noble/post-quantum` backend stores
+ * the expanded 4032-byte secret key and signs from it, while the native
+ * `aws-lc-rs` backend stores (and signs from) the 32-byte seed. The two are
+ * interoperable at the SEED/WIRE level, but a key OBJECT is not portable between
+ * them — handing a native key to the noble `sign()` would feed a 32-byte seed
+ * where a 4032-byte secret key is expected. This tag makes that mismatch a loud,
+ * fail-closed error instead of undefined byte-level behaviour.
+ *
+ * Only PRIVATE keys carry a backend tag. Public keys hold the raw 1952-byte
+ * FIPS 204 public key in both backends, so they are genuinely portable and are
+ * deliberately left untagged.
+ */
+export type MlDsaBackendId = 'noble' | 'native';
+
+/**
  * A raw ML-DSA-65 key (FIPS 204). ML-DSA keys are opaque byte strings, not
  * WebCrypto {@link CryptoKey}s, so they get their own type rather than widening
  * {@link SigningKey} (which would ripple into every jose call site).
@@ -37,7 +56,8 @@ export const ML_DSA_65_LENGTHS = {
  * `JSON.stringify` / `util.inspect`, so a stray log line can never dump the
  * 32-byte seed or the 4032-byte secret key. The `alg` literal is the dispatch
  * discriminant (structural algorithm-confusion defence: a key can only be used
- * with its own algorithm).
+ * with its own algorithm), and {@link backend} is the same defence across the
+ * noble/native backend seam (#248 F2).
  */
 export class MlDsaKey {
   /** Algorithm discriminant — always `'ML-DSA-65'`. */
@@ -45,6 +65,13 @@ export class MlDsaKey {
   readonly kind: 'public' | 'private';
   /** Whether the private key material may be exported (advisory — see docs). */
   readonly extractable: boolean;
+  /**
+   * Backend that produced this key's private material — see
+   * {@link MlDsaBackendId}. Always set by a backend for a private key; `undefined`
+   * on public keys (portable) and on directly-constructed private keys, which
+   * {@link assertMlDsaSigningKey} then refuses to sign with.
+   */
+  readonly backend?: MlDsaBackendId;
 
   #material: Uint8Array;
   /** Seed (ξ) — present only on private keys; the canonical export form. */
@@ -59,11 +86,14 @@ export class MlDsaKey {
     /** 32-byte seed — required for private keys, omitted for public keys. */
     seed?: Uint8Array;
     extractable?: boolean;
+    /** Producing backend — REQUIRED for private keys (#248 F2), omit for public. */
+    backend?: MlDsaBackendId;
   }) {
     this.kind = params.kind;
     this.#material = params.material;
     this.#seed = params.seed;
     this.extractable = params.extractable ?? false;
+    this.backend = params.backend;
   }
 
   #assertLive(): void {
@@ -100,12 +130,51 @@ export class MlDsaKey {
 
   /** Redact key material from JSON serialization. */
   toJSON(): Record<string, unknown> {
-    return { type: 'MlDsaKey', alg: this.alg, kind: this.kind, material: '[redacted]' };
+    return {
+      type: 'MlDsaKey',
+      alg: this.alg,
+      kind: this.kind,
+      ...(this.backend !== undefined ? { backend: this.backend } : {}),
+      material: '[redacted]',
+    };
   }
 
   /** Redact key material from `util.inspect` / console logging. */
   [Symbol.for('nodejs.util.inspect.custom')](): string {
     return `MlDsaKey<${this.alg} ${this.kind} [redacted]>`;
+  }
+}
+
+/**
+ * Gate a private {@link MlDsaKey} into a backend's `sign()` (#248 F2).
+ *
+ * Enforces three properties before ANY key bytes are read, so a mismatch can
+ * never reach the underlying primitive:
+ * 1. the algorithm discriminant is `ML-DSA-65`,
+ * 2. the key is a private key,
+ * 3. the key was produced by THIS backend.
+ *
+ * Property 3 closes the backend-portability footgun: `material()` means the
+ * expanded secret key under the noble backend and the seed under the native
+ * one, so a cross-backend key object would otherwise be interpreted as the
+ * wrong byte string. An UNTAGGED private key (constructed directly rather than
+ * via a backend) is also refused — fail-closed beats guessing a provenance.
+ *
+ * @param privateKey - Key offered for signing.
+ * @param backend - The calling backend's {@link MlDsaBackendId}.
+ * @throws Error if the key is not a private ML-DSA-65 key from `backend`.
+ */
+export function assertMlDsaSigningKey(privateKey: MlDsaKey, backend: MlDsaBackendId): void {
+  if (privateKey.alg !== 'ML-DSA-65' || privateKey.kind !== 'private') {
+    throw new Error('ML-DSA-65 sign requires a private ML-DSA-65 key');
+  }
+  if (privateKey.backend !== backend) {
+    throw new Error(
+      `ML-DSA-65 sign requires a key produced by the '${backend}' backend, got ` +
+        `'${privateKey.backend ?? 'untagged'}'. MlDsaKey objects are not portable across ` +
+        `backends (material() is the expanded secret key under 'noble' and the seed under ` +
+        `'native'); re-import the key via this backend's importKey() instead.`
+    );
   }
 }
 

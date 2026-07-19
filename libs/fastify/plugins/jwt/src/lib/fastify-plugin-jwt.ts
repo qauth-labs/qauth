@@ -1,6 +1,7 @@
-import { deriveMlDsaPublicKey, getSignatureBackend, type MlDsaKey } from '@qauth-labs/core-crypto';
+import { deriveMlDsaPublicKeyAndZeroize, getSignatureBackend } from '@qauth-labs/core-crypto';
 import {
   type AkpJwk,
+  assertDistinctJwksKeyIds,
   decodeJwtUnsafe,
   exportMlDsaPublicJwk,
   exportPublicJwk,
@@ -79,14 +80,46 @@ export const jwtPlugin = fp<JwtPluginOptions>(
       }
     }
 
-    // ML-DSA public key for JWKS publication (#246). Derived once at boot from
-    // the configured seed; only the PUBLIC key is retained. Absent → JWKS stays
+    // ML-DSA JWKS entries (#246), including retired keys for rotation (#248 F9).
+    // Built ONCE at boot: the configured seed is expanded, the public half is
+    // derived, and the transient private key is zeroized immediately (#248 F10)
+    // — nothing but public material survives this block. Absent → JWKS stays
     // EdDSA-only.
-    let mlDsaPublicKey: MlDsaKey | undefined;
+    const mlDsaJwks: AkpJwk[] = [];
     if (options.mlDsaSeed) {
-      const backend = getSignatureBackend('ML-DSA-65', ['ML-DSA-65']);
-      const mlDsaPrivate = backend.importKey(options.mlDsaSeed, 'private');
-      mlDsaPublicKey = deriveMlDsaPublicKey(mlDsaPrivate);
+      // #248 F7/F11: gate on the OPERATOR's enabled set, never a hardcoded
+      // literal, so `SIGNING_ALGORITHM_MODE` is authoritative and a registered
+      // native backend (#244) is selectable here. Defaulting the option would
+      // reintroduce the bypass, so an absent set is a boot failure.
+      if (!options.enabledSignatureAlgorithms) {
+        throw new Error(
+          'jwtPlugin: `enabledSignatureAlgorithms` is required when `mlDsaSeed` is set. ' +
+            'Pass cryptoEnv.enabledSignatureAlgorithms so SIGNING_ALGORITHM_MODE gates the ML-DSA backend.'
+        );
+      }
+      const backend = getSignatureBackend('ML-DSA-65', options.enabledSignatureAlgorithms);
+      mlDsaJwks.push(
+        exportMlDsaPublicJwk(
+          deriveMlDsaPublicKeyAndZeroize(backend.importKey(options.mlDsaSeed, 'private')),
+          options.mlDsaKeyId
+        )
+      );
+      // Retired ML-DSA keys are published under their OWN kid so tokens signed
+      // before a rotation keep verifying. Public material only — a retired key
+      // is configured as a public key, never as a seed.
+      for (const retired of options.retiredMlDsaPublicKeys ?? []) {
+        mlDsaJwks.push(
+          exportMlDsaPublicJwk(backend.importKey(retired.publicKey, 'public'), retired.keyId)
+        );
+      }
+    }
+
+    // Retired Ed25519 keys, each under its own kid (#248 F9).
+    const retiredEdJwks: PublicJwk[] = [];
+    for (const retired of options.retiredKeys ?? []) {
+      retiredEdJwks.push(
+        await exportPublicJwk(await importPublicKey(retired.publicKey), retired.keyId)
+      );
     }
 
     const jwtUtils: JwtUtils = {
@@ -131,15 +164,20 @@ export const jwtPlugin = fp<JwtPluginOptions>(
         return options.issuer;
       },
       async getJwks() {
-        // Single active Ed25519 key for now. When we add rotation, push retired
-        // keys with their own `kid` here so in-flight tokens keep verifying.
-        const keys: (PublicJwk | AkpJwk)[] = [await exportPublicJwk(publicKey, options.keyId)];
-        // #246: publish the ML-DSA public key as an AKP JWK alongside the OKP
-        // key when hybrid signing is configured. Classical verifiers ignore the
-        // AKP entry they don't understand; PQC verifiers use it.
-        if (mlDsaPublicKey) {
-          keys.push(exportMlDsaPublicJwk(mlDsaPublicKey, options.mlDsaKeyId));
-        }
+        // Active Ed25519 key, then retired Ed25519 keys under their own kids so
+        // in-flight tokens keep verifying across a rotation (#248 F9), then the
+        // ML-DSA AKP entries (#246 — classical verifiers ignore the `kty: 'AKP'`
+        // entries they don't understand; PQC verifiers resolve them by
+        // `(kid, alg)`, see `selectJwksKey`).
+        const keys: (PublicJwk | AkpJwk)[] = [
+          await exportPublicJwk(publicKey, options.keyId),
+          ...retiredEdJwks,
+          ...mlDsaJwks,
+        ];
+        // Every kid must be distinct across OKP/AKP and active/retired, or a
+        // verifier resolving by kid can land on the wrong algorithm's key.
+        // Serving an ambiguous JWKS is worse than serving none.
+        assertDistinctJwksKeyIds(keys);
         return { keys };
       },
     };

@@ -1,3 +1,4 @@
+import type { SignatureAlgorithm } from '@qauth-labs/core-crypto';
 import type { ActClaim, AkpJwk, JWTPayload, PublicJwk } from '@qauth-labs/server-jwt';
 import type { FastifyPluginOptions } from 'fastify';
 
@@ -31,6 +32,31 @@ export interface JwtPluginOptions extends FastifyPluginOptions {
   mlDsaSeed?: string;
   /** Stable `kid` for the ML-DSA key published in the AKP JWK (#246). */
   mlDsaKeyId?: string;
+  /**
+   * Operator-enabled signature algorithms (`SIGNING_ALGORITHM_MODE`, threaded
+   * from `cryptoEnv.enabledSignatureAlgorithms`).
+   *
+   * REQUIRED whenever {@link mlDsaSeed} is set (#248 F7/F11): boot-time ML-DSA
+   * key derivation resolves its backend through `getSignatureBackend`, so the
+   * operator allowlist — not a hardcoded literal — decides whether ML-DSA-65 is
+   * usable at all, and a registered native backend (#244) is selectable.
+   */
+  enabledSignatureAlgorithms?: readonly SignatureAlgorithm[];
+  /**
+   * Retired Ed25519 verification keys to keep publishing in the JWKS (#248 F9).
+   *
+   * After a signing-key rotation, tokens signed by the previous key stay valid
+   * until they expire; publishing the retired PUBLIC key under its OWN `kid`
+   * lets verifiers resolve them. Each `keyId` MUST be distinct from every other
+   * published `kid` (enforced at boot) — see `assertDistinctJwksKeyIds`.
+   */
+  retiredKeys?: readonly { publicKey: string; keyId: string }[];
+  /**
+   * Retired ML-DSA-65 verification keys, as base64url raw PUBLIC keys, published
+   * as `AKP` JWKs under their own `kid` (#248 F9). PUBLIC material only — a
+   * retired key is never configured as a seed.
+   */
+  retiredMlDsaPublicKeys?: readonly { publicKey: string; keyId: string }[];
   /**
    * Optional revocation denylist check (RFC 7009). When provided, the
    * `requireJwt` preHandler calls it AFTER a successful signature/issuer

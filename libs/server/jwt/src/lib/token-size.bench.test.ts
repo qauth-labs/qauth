@@ -32,7 +32,8 @@ const utf8 = (s: string): number => Buffer.byteLength(s, 'utf8');
 describe('token size (ADR-005 / #247)', () => {
   it('measures classical vs hybrid access/ID token sizes and prints the budget table', async () => {
     const { privateKey } = await generateEdDSAKeyPair(true);
-    const mlDsaBackend = getSignatureBackend('ML-DSA-65', ['ML-DSA-65']);
+    const enabledSignatureAlgorithms = ['EdDSA', 'ML-DSA-65'] as const;
+    const mlDsaBackend = getSignatureBackend('ML-DSA-65', enabledSignatureAlgorithms);
     const { privateKey: mlDsa } = mlDsaBackend.generateKeyPair({ extractable: true });
 
     const keys: HybridSigningKey = {
@@ -55,7 +56,8 @@ describe('token size (ADR-005 / #247)', () => {
       },
       keys,
       issuer,
-      900
+      900,
+      { enabledSignatureAlgorithms }
     );
     const id = await signHybridIdToken(
       {
@@ -68,7 +70,8 @@ describe('token size (ADR-005 / #247)', () => {
       },
       keys,
       issuer,
-      900
+      900,
+      { enabledSignatureAlgorithms }
     );
 
     const bearer = utf8(access.token);

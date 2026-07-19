@@ -16,9 +16,15 @@ export interface SignOptions {
    * Extra protected-header members merged in alongside `alg` (#245 hybrid
    * signing uses this to stamp `kid` / `pqc_alg` / `pqc_kid`). Defaults to
    * empty — when omitted the header is exactly `{ alg }`, so existing EdDSA
-   * callers emit byte-identical tokens. Do NOT put anything in `crit` here: a
-   * critical member a classical verifier does not understand makes it reject
-   * the token, breaking the hybrid design's compatibility guarantee.
+   * callers emit byte-identical tokens.
+   *
+   * The RESERVED members {@link RESERVED_PROTECTED_HEADER_MEMBERS} (`alg`,
+   * `crit`, `b64`) are REJECTED (#248 F6) — passing any of them throws rather
+   * than being silently dropped. `alg` is owned by the `alg` argument (a caller
+   * override would be algorithm confusion); `crit` would make a classical
+   * verifier reject the token, breaking the hybrid design's compatibility
+   * guarantee; `b64` (RFC 7797) would change the signing-input encoding out
+   * from under the detached PQC signature.
    */
   header?: Record<string, unknown>;
 }
@@ -47,6 +53,37 @@ export interface VerifyOptions {
 }
 
 /**
+ * Protected-header members a caller may NEVER supply via
+ * {@link SignOptions.header} (#248 F6).
+ *
+ * Each one, if attacker- or caller-controlled, subverts a signature invariant:
+ * `alg` is the algorithm-confusion lever, `crit` breaks classical-verifier
+ * compatibility (and can smuggle must-understand semantics past this layer),
+ * and `b64` (RFC 7797) redefines the payload encoding the signature covers.
+ */
+export const RESERVED_PROTECTED_HEADER_MEMBERS = ['alg', 'crit', 'b64'] as const;
+
+/**
+ * Reject a caller-supplied protected header that carries a reserved member.
+ *
+ * Fails CLOSED and LOUDLY: silently dropping a reserved member would leave the
+ * caller believing it took effect, which is exactly how a header-injection bug
+ * becomes invisible.
+ *
+ * @throws Error naming the offending member.
+ */
+function assertNoReservedHeaderMembers(header: Record<string, unknown>): void {
+  for (const member of RESERVED_PROTECTED_HEADER_MEMBERS) {
+    if (Object.hasOwn(header, member)) {
+      throw new Error(
+        `Protected-header member '${member}' is reserved and cannot be set via ` +
+          `SignOptions.header (reserved: ${RESERVED_PROTECTED_HEADER_MEMBERS.join(', ')}).`
+      );
+    }
+  }
+}
+
+/**
  * Sign a claims set into a compact JWS (JWT) using the given algorithm.
  *
  * This is a pure cryptographic operation. The caller owns all business/claims
@@ -59,6 +96,8 @@ export interface VerifyOptions {
  * @param alg - Signature algorithm (Phase 1: `EdDSA`).
  * @param options - Registered-claim inputs — see {@link SignOptions}.
  * @returns The signed compact JWT.
+ * @throws Error if `options.header` carries a reserved protected-header member
+ * ({@link RESERVED_PROTECTED_HEADER_MEMBERS}).
  */
 export async function sign(
   claims: Record<string, unknown>,
@@ -66,13 +105,19 @@ export async function sign(
   alg: JwsAlgorithm,
   options: SignOptions
 ): Promise<string> {
-  return new SignJWT(claims)
-    .setProtectedHeader({ alg, ...(options.header ?? {}) })
-    .setIssuedAt()
-    .setExpirationTime(`${options.expiresIn}s`)
-    .setIssuer(options.issuer)
-    .setAudience(options.audience)
-    .sign(privateKey);
+  const extraHeader = options.header ?? {};
+  assertNoReservedHeaderMembers(extraHeader);
+  return (
+    new SignJWT(claims)
+      // #248 F6: `alg` is spread LAST so the canonical algorithm always wins —
+      // belt-and-braces behind the reserved-member rejection above.
+      .setProtectedHeader({ ...extraHeader, alg })
+      .setIssuedAt()
+      .setExpirationTime(`${options.expiresIn}s`)
+      .setIssuer(options.issuer)
+      .setAudience(options.audience)
+      .sign(privateKey)
+  );
 }
 
 /**

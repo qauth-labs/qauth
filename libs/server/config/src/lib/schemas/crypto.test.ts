@@ -94,3 +94,95 @@ describe('cryptoEnvSchema (PQC_TOKEN_DELIVERY posture — #247)', () => {
     expect(parsed.PQC_TOKEN_DELIVERY).toBe('self-contained');
   });
 });
+
+describe('cryptoEnvSchema (ML-DSA seed validation — #248 F8)', () => {
+  const VALID_SEED = Buffer.alloc(32, 7).toString('base64url');
+  const HYBRID_ON = {
+    HYBRID_SIGNING_ENABLED: 'true',
+    SIGNING_ALGORITHM_MODE: 'ed25519+ml-dsa-65',
+  } as const;
+
+  it('accepts a base64url seed that decodes to exactly 32 bytes', () => {
+    const parsed = cryptoEnvSchema.parse({ ...HYBRID_ON, JWT_MLDSA_PRIVATE_KEY: VALID_SEED });
+    expect(parsed.JWT_MLDSA_PRIVATE_KEY).toBe(VALID_SEED);
+  });
+
+  it('rejects a seed that decodes to fewer than 32 bytes (truncated key)', () => {
+    expect(() =>
+      cryptoEnvSchema.parse({
+        ...HYBRID_ON,
+        JWT_MLDSA_PRIVATE_KEY: Buffer.alloc(31, 7).toString('base64url'),
+      })
+    ).toThrow(/decodes to 31 bytes, expected exactly 32/);
+  });
+
+  it('rejects a seed that decodes to more than 32 bytes', () => {
+    expect(() =>
+      cryptoEnvSchema.parse({
+        ...HYBRID_ON,
+        JWT_MLDSA_PRIVATE_KEY: Buffer.alloc(64, 7).toString('base64url'),
+      })
+    ).toThrow(/decodes to 64 bytes, expected exactly 32/);
+  });
+
+  it('rejects standard base64 (+ / =) — base64url is the required encoding', () => {
+    // `Buffer.from(_, 'base64url')` would happily decode this to ~32 bytes, so
+    // the alphabet has to be checked explicitly or the length check is a lie.
+    const standardBase64 = Buffer.alloc(32, 251).toString('base64');
+    expect(standardBase64).toMatch(/[+/=]/);
+    expect(() =>
+      cryptoEnvSchema.parse({ ...HYBRID_ON, JWT_MLDSA_PRIVATE_KEY: standardBase64 })
+    ).toThrow(/not unpadded base64url/);
+  });
+
+  it('rejects a seed containing characters outside the base64url alphabet', () => {
+    expect(() =>
+      cryptoEnvSchema.parse({ ...HYBRID_ON, JWT_MLDSA_PRIVATE_KEY: `${VALID_SEED.slice(0, -2)}!!` })
+    ).toThrow(/not unpadded base64url/);
+  });
+
+  it('validates a CONFIGURED seed even while hybrid signing is still off', () => {
+    // Staging the key before flipping the flag must surface a bad seed now,
+    // not at the moment PQC signing is enabled in production.
+    expect(() =>
+      cryptoEnvSchema.parse({ JWT_MLDSA_PRIVATE_KEY: Buffer.alloc(16, 7).toString('base64url') })
+    ).toThrow(/expected exactly 32/);
+  });
+
+  it('stays silent when no seed is configured at all', () => {
+    expect(() => cryptoEnvSchema.parse({})).not.toThrow();
+  });
+
+  it('never echoes the seed value into the error message', () => {
+    const badSeed = Buffer.alloc(31, 9).toString('base64url');
+    const error = (() => {
+      try {
+        cryptoEnvSchema.parse({ ...HYBRID_ON, JWT_MLDSA_PRIVATE_KEY: badSeed });
+        return null;
+      } catch (e: unknown) {
+        return e as Error;
+      }
+    })();
+    expect(error).not.toBeNull();
+    expect(error?.message).not.toContain(badSeed);
+  });
+
+  it('reports the PATH field when the bad seed came from a file', async () => {
+    const { mkdtemp, writeFile } = await import('node:fs/promises');
+    const { join } = await import('node:path');
+    const { tmpdir } = await import('node:os');
+    const dir = await mkdtemp(join(tmpdir(), 'qauth-mldsa-'));
+    const file = join(dir, 'seed');
+    await writeFile(file, Buffer.alloc(8, 3).toString('base64url'), 'utf-8');
+
+    const error = (() => {
+      try {
+        cryptoEnvSchema.parse({ ...HYBRID_ON, JWT_MLDSA_PRIVATE_KEY_PATH: file });
+        return null;
+      } catch (e: unknown) {
+        return e as Error;
+      }
+    })();
+    expect(error?.message).toContain('JWT_MLDSA_PRIVATE_KEY_PATH');
+  });
+});
