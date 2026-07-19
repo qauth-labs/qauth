@@ -19,9 +19,9 @@ export type SignatureAlgorithm = 'EdDSA' | 'ML-DSA-65';
  * (`sign` / `verify` / the key-management import/generate functions) can carry
  * in a compact JWS today.
  *
- * ML-DSA has no finalized JOSE `alg` identifier (draft-ietf-cose-dilithium and
- * the composite-signature drafts are still unstable) and jose cannot produce or
- * verify an ML-DSA JWS, so `'ML-DSA-65'` is intentionally EXCLUDED here.
+ * `ML-DSA-65` IS a registered JOSE `alg` identifier (RFC 9964), but the `jose`
+ * library cannot produce or verify an ML-DSA JWS, so `'ML-DSA-65'` is
+ * intentionally EXCLUDED here.
  * Handing a non-JWS algorithm to the token layer is therefore a COMPILE error,
  * not a runtime throw — the strongest algorithm-confusion defence at that
  * boundary. #245 (hybrid composite signing) widens this alias when it

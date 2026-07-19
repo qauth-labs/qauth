@@ -109,7 +109,7 @@ Defense in depth via composite dual-signing — tokens will carry both an ML-DSA
 ```typescript
 // ⚙️ Planned API — Phase 5 (2027 target, per ADR-005).
 // @qauth-labs/crypto is not yet published. The interface below is a design
-// sketch aligned with draft-prabel-jose-pq-composite-sigs.
+// sketch; ML-DSA JOSE key/alg identifiers follow RFC 9964.
 import { signHybrid } from '@qauth-labs/crypto';
 
 const token = await signHybrid(payload, { mlDsaKey, ed25519Key });
