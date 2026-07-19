@@ -76,7 +76,7 @@ The NLnet / NGI grant narrative is treated as **reframable**: an MCP framing ("s
 ## Spec tracking
 
 > **Refresh 2026-07-19:** MCP has published a **2026-07-28** revision (release
-> candidate; final 2026-07-28). See [Delta: 2025-11-25 → 2026-07-28](#delta-2025-11-25--2026-07-28)
+> candidate; final 2026-07-28). See [Delta: 2025-11-25 to 2026-07-28](#delta-2025-11-25-to-2026-07-28)
 > below. The section immediately following remains the 2025-11-25 review, kept
 > for the audit trail.
 
@@ -89,7 +89,7 @@ Reviewed against MCP Authorization **revision 2025-11-25** (the revision this AD
 
 Unchanged core QAuth already meets: OAuth 2.1 (public + confidential), PKCE S256 (advertised), RFC 9728 PRM discovery, RFC 8707 resource indicators + audience-bound tokens + audience-validated introspection, public-client refresh-token rotation, and consent.
 
-## Delta: 2025-11-25 → 2026-07-28
+## Delta: 2025-11-25 to 2026-07-28
 
 Reviewed 2026-07-19 against the [2026-07-28 release candidate](https://blog.modelcontextprotocol.io/posts/2026-07-28-release-candidate/)
 and the [draft authorization spec](https://modelcontextprotocol.io/specification/draft/basic/authorization).
