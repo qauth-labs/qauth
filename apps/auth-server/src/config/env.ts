@@ -5,6 +5,7 @@ import {
   databaseEnvSchema,
   DEV_SESSION_COOKIE_SECRET_DEFAULT,
   emailEnvSchema,
+  federationEnvSchema,
   jwtEnvSchema,
   observabilityEnvSchema,
   parseEnv,
@@ -28,6 +29,8 @@ const envSchema = z
     ...rateLimitEnvSchema.shape,
     ...emailEnvSchema.shape,
     ...observabilityEnvSchema.shape,
+    // Wallet federation (ADR-004, #232): WALLET_FEDERATION_ENABLED, default off.
+    ...federationEnvSchema.shape,
     /**
      * CORS allowed origin (app-specific). When unset in `production` the
      * server denies all cross-origin requests (fail-closed); in non-production

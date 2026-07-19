@@ -1,3 +1,4 @@
+export * from './lib/configured-providers';
 export * from './lib/federation-plugin';
 export type * from './types';
 
@@ -12,6 +13,12 @@ export type {
   UserAttribute,
   VerifiedIdentity,
 } from '@qauth-labs/server-federation';
+// Note the asymmetry with the password surface: `createWalletProvider` is
+// deliberately NOT re-exported. `createConfiguredProviders` is the only
+// sanctioned way for app code to put a wallet provider in the registry, so no
+// bootstrap can register one while bypassing WALLET_FEDERATION_ENABLED (#232).
+// The type/source constants ARE re-exported — #237/#238 route and claim code
+// needs them.
 export {
   buildPasswordCredentialData,
   createPasswordProvider,
@@ -21,4 +28,6 @@ export {
   rankAttributeSource,
   selectTrustedAttribute,
   SELF_REPORTED_SOURCE,
+  WALLET_PROVIDER_TYPE,
+  WALLET_SOURCE,
 } from '@qauth-labs/server-federation';
