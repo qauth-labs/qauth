@@ -437,6 +437,75 @@ describe('hybrid signing (#248 F7/F11) — the operator allowlist is authoritati
   });
 });
 
+describe('hybrid signing — error normalisation on the verify path', () => {
+  const vopts = {
+    requirePqc: true,
+    algorithms: ['EdDSA' as const],
+    issuer: ISSUER,
+    audience: AUDIENCE,
+    enabledSignatureAlgorithms: PQC_ENABLED,
+  };
+
+  it('normalises a THROWING key resolver into a CryptoVerificationError', async () => {
+    const { ed, mlDsa } = await makeKeys();
+    const hybrid = await signHybrid(
+      { sub: 'u' },
+      { ed: ed.privateKey, mlDsa: mlDsa.privateKey, mlDsaKid: 'mldsa-1' },
+      signOpts
+    );
+
+    // A resolver reaching a JWKS cache / DB / network can reject with anything.
+    // Callers catch CryptoVerificationError; an unresolvable key must not
+    // escape as a generic Error and turn a 401 into a 500.
+    const boom = new Error('jwks backend unreachable');
+    await expect(
+      verifyHybrid(
+        hybrid,
+        {
+          ed: ed.publicKey,
+          mlDsa: () => {
+            throw boom;
+          },
+        },
+        vopts
+      )
+    ).rejects.toBeInstanceOf(CryptoVerificationError);
+
+    const error = await verifyHybrid(
+      hybrid,
+      {
+        ed: ed.publicKey,
+        mlDsa: () => Promise.reject(boom),
+      },
+      vopts
+    ).catch((e: unknown) => e);
+    // The underlying failure stays attached for diagnosis.
+    expect((error as { cause?: unknown }).cause).toBe(boom);
+  });
+
+  it('lets an OPERATOR misconfiguration propagate as itself, not as a token error', async () => {
+    const { ed, mlDsa } = await makeKeys();
+    const hybrid = await signHybrid(
+      { sub: 'u' },
+      { ed: ed.privateKey, mlDsa: mlDsa.privateKey },
+      signOpts
+    );
+
+    // A disabled ML-DSA-65 is a SIGNING_ALGORITHM_MODE problem. Normalising it
+    // into "invalid token" would tell an operator their tokens are bad when
+    // their allowlist is wrong, and would defeat the F7/F11 refusal.
+    const error = await verifyHybrid(
+      hybrid,
+      { ed: ed.publicKey, mlDsa: mlDsa.publicKey },
+      { ...vopts, enabledSignatureAlgorithms: ['EdDSA'] as const }
+    ).catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(Error);
+    expect(error).not.toBeInstanceOf(CryptoVerificationError);
+    expect((error as Error).message).toMatch(/'ML-DSA-65' is not enabled/);
+  });
+});
+
 describe('hybrid signing (#275) — F5: key resolution binds to the SIGNED pqc_kid', () => {
   const vopts = {
     requirePqc: true,

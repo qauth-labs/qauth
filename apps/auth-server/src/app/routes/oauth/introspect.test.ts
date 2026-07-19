@@ -988,6 +988,25 @@ describe('POST /oauth/introspect — PQC reference delivery (ADR-005 / #275)', (
     expect(result).not.toHaveProperty('pqc_signature');
   });
 
+  it('a Redis OUTAGE degrades to a miss rather than failing introspection', async () => {
+    // The `active` decision does not depend on the store at all, so a store
+    // outage must not turn a valid introspection into a 500. The PQC-aware
+    // resource server still fails closed on its own: since #248 F1 a token
+    // whose signed header advertises `pqc_alg` is rejected when the detached
+    // signature is absent.
+    const { fastify, ctx } = createFastifyStub();
+    (fastify as any).jwtUtils.isHybridSigningEnabled = () => true;
+    (fastify.redis.get as unknown as Mock).mockRejectedValue(
+      new Error("READONLY You can't write against a read only replica.")
+    );
+    await introspectRoute(fastify);
+
+    const result = await introspectValidToken(fastify, ctx, HYBRID_TOKEN);
+
+    expect(result['active']).toBe(true);
+    expect(result).not.toHaveProperty('pqc_signature');
+  });
+
   it('a corrupt store entry is treated as a miss, never surfaced', async () => {
     const { fastify, ctx } = createFastifyStub();
     (fastify as any).jwtUtils.isHybridSigningEnabled = () => true;

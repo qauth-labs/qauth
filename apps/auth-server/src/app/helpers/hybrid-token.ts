@@ -159,10 +159,18 @@ export async function getPqcSignature(
   if (!jti) return undefined;
   if (!advertisesPqc(verifiedToken)) return undefined;
 
-  const raw = await fastify.redis.get(REDIS_KEYS.PQC_SIGNATURE(jti));
-  if (!raw) return undefined;
-
   try {
+    // The store READ is inside the try alongside the parse: a Redis outage
+    // must degrade exactly like a miss, not surface as a 500 from
+    // /oauth/introspect. Swallowing here does not weaken anything — since
+    // #248 F1 a token whose signed header advertises `pqc_alg` is REJECTED by
+    // a PQC-aware verifier when the detached signature is absent, so the
+    // failure still lands closed at the resource server. Failing the whole
+    // introspection instead would additionally break the classical `active`
+    // decision, which does not depend on the store at all.
+    const raw = await fastify.redis.get(REDIS_KEYS.PQC_SIGNATURE(jti));
+    if (!raw) return undefined;
+
     const parsed: unknown = JSON.parse(raw);
     if (
       typeof parsed === 'object' &&
@@ -175,7 +183,7 @@ export async function getPqcSignature(
       return parsed as StoredPqcSignature;
     }
   } catch {
-    // Corrupt entry — treat exactly as a miss.
+    // Corrupt entry or an unreachable store — treat both exactly as a miss.
   }
   return undefined;
 }

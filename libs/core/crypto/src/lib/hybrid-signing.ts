@@ -234,24 +234,50 @@ export async function verifyHybrid(
       detail: 'signed pqc_kid is not a string',
     });
   }
-  const mlDsaKey = typeof keys.mlDsa === 'function' ? await keys.mlDsa(signedPqcKid) : keys.mlDsa;
+  // The resolver is caller-supplied and may reach a JWKS cache, a database, or
+  // the network, so it can reject with anything. Normalise to a verification
+  // failure: an unresolvable key is a token we cannot verify, and callers must
+  // not have to distinguish that from any other verification error.
+  let mlDsaKey: MlDsaKey | undefined;
+  try {
+    mlDsaKey = typeof keys.mlDsa === 'function' ? await keys.mlDsa(signedPqcKid) : keys.mlDsa;
+  } catch (cause) {
+    throw new CryptoVerificationError('invalid', {
+      detail: 'failed to resolve an ML-DSA-65 key for the signed pqc_kid',
+      cause,
+    });
+  }
   if (mlDsaKey === undefined) {
     throw new CryptoVerificationError('invalid', {
       detail: 'no ML-DSA-65 key resolved for the signed pqc_kid',
     });
   }
 
+  // Resolved OUTSIDE the try below on purpose: a disabled ML-DSA-65 is an
+  // OPERATOR MISCONFIGURATION (SIGNING_ALGORITHM_MODE), not a bad token, and
+  // must keep propagating as itself. Normalising it into a verification error
+  // would tell an operator their tokens are invalid when their allowlist is
+  // wrong — and would silently defeat the F7/F11 refusal test.
+  const backend = getSignatureBackend('ML-DSA-65', options.enabledSignatureAlgorithms);
+
   const signingInput = extractJwsSigningInput(hybrid.token);
   const signatureBytes = new Uint8Array(Buffer.from(hybrid.pqcSignature, 'base64url'));
-  // Throws CryptoVerificationError('invalid') on any failure.
   // The cross product of #275 and #276: the key comes from the SIGNED pqc_kid
   // (F5), and the backend from the operator allowlist (F7/F11). Taking either
   // branch's line alone silently drops the other's control.
-  getSignatureBackend('ML-DSA-65', options.enabledSignatureAlgorithms).verify(
-    mlDsaKey,
-    signingInput,
-    signatureBytes
-  );
+  //
+  // The noble backend throws CryptoVerificationError already, but a REGISTERED
+  // backend (the native #244 addon, or any third-party one) is outside our
+  // control, so normalise anything else it throws.
+  try {
+    backend.verify(mlDsaKey, signingInput, signatureBytes);
+  } catch (cause) {
+    if (cause instanceof CryptoVerificationError) throw cause;
+    throw new CryptoVerificationError('invalid', {
+      detail: 'ML-DSA-65 signature verification failed',
+      cause,
+    });
+  }
 
   return claims;
 }
