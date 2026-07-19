@@ -13,6 +13,22 @@ export interface SignOptions {
   /** `aud` (audience) claim value — a single audience or a list. */
   audience: string | string[];
   /**
+   * `typ` (RFC 7515 §4.1.9) protected-header member — the MEDIA TYPE of what is
+   * being signed. Omitted entirely when absent, so callers that do not set it
+   * emit byte-identical tokens to before this field existed.
+   *
+   * Deliberately a TYPED, EXPLICIT field rather than a member smuggled through
+   * the free-form {@link SignOptions.header} bag (#283): the token type is a
+   * SEMANTIC property of what is being issued — `at+jwt` for an OAuth access
+   * token (RFC 9068 §2.1), `JWT` for an OIDC ID token — not an incidental
+   * header decoration like `kid`. Putting it in the typed contract lets the
+   * type system see it at every call site, so a new signer cannot forget it and
+   * a reviewer can grep the signature rather than the header literals. It is
+   * the sole supported way to set `typ`; see
+   * {@link assertTypNotSmuggledInHeader}.
+   */
+  typ?: string;
+  /**
    * Extra protected-header members merged in alongside `alg` (#245 hybrid
    * signing uses this to stamp `kid` / `pqc_alg` / `pqc_kid`). Defaults to
    * empty — when omitted the header is exactly `{ alg }`, so existing EdDSA
@@ -25,6 +41,10 @@ export interface SignOptions {
    * verifier reject the token, breaking the hybrid design's compatibility
    * guarantee; `b64` (RFC 7797) would change the signing-input encoding out
    * from under the detached PQC signature.
+   *
+   * `typ` is ALSO rejected here (#283), but for a different reason and via a
+   * separate guard — it is NOT a reserved member. See
+   * {@link assertTypNotSmuggledInHeader}.
    */
   header?: Record<string, unknown>;
 }
@@ -84,12 +104,41 @@ function assertNoReservedHeaderMembers(header: Record<string, unknown>): void {
 }
 
 /**
+ * Reject a `typ` supplied through the free-form {@link SignOptions.header} bag
+ * (#283).
+ *
+ * `typ` is deliberately NOT in {@link RESERVED_PROTECTED_HEADER_MEMBERS}: that
+ * list means "no caller may ever set this, at all", because each member there
+ * subverts a signature invariant. `typ` is different — it is legitimately
+ * caller-chosen (`at+jwt` vs `JWT`), it just has to come through the TYPED
+ * {@link SignOptions.typ} door so the type system can see it.
+ *
+ * The check is UNCONDITIONAL rather than "throw only when the two disagree".
+ * Value-dependent behaviour would mean a header-bag `typ` silently takes effect
+ * whenever the typed field happens to be unset — which is exactly the invisible
+ * escape hatch the typed field exists to close — and would make the outcome of
+ * a call depend on a string comparison a reviewer has to simulate in their
+ * head. One rule, no exceptions: `typ` comes from `SignOptions.typ`.
+ *
+ * @throws Error directing the caller at {@link SignOptions.typ}.
+ */
+function assertTypNotSmuggledInHeader(header: Record<string, unknown>): void {
+  if (Object.hasOwn(header, 'typ')) {
+    throw new Error(
+      "Protected-header member 'typ' cannot be set via SignOptions.header; " +
+        'use the typed SignOptions.typ field instead.'
+    );
+  }
+}
+
+/**
  * Sign a claims set into a compact JWS (JWT) using the given algorithm.
  *
  * This is a pure cryptographic operation. The caller owns all business/claims
  * shaping and passes a ready-to-sign claims record; the abstraction stamps only
  * the registered temporal/issuer/audience claims (`iat`, `exp`, `iss`, `aud`)
- * and the protected header (`alg`).
+ * and the protected header (`alg`, plus `typ` when {@link SignOptions.typ} is
+ * supplied).
  *
  * @param claims - Application + registered claims to embed (already shaped by the caller).
  * @param privateKey - Private signing key.
@@ -97,7 +146,8 @@ function assertNoReservedHeaderMembers(header: Record<string, unknown>): void {
  * @param options - Registered-claim inputs — see {@link SignOptions}.
  * @returns The signed compact JWT.
  * @throws Error if `options.header` carries a reserved protected-header member
- * ({@link RESERVED_PROTECTED_HEADER_MEMBERS}).
+ * ({@link RESERVED_PROTECTED_HEADER_MEMBERS}) or a `typ` member (#283 — use
+ * {@link SignOptions.typ}).
  */
 export async function sign(
   claims: Record<string, unknown>,
@@ -107,11 +157,21 @@ export async function sign(
 ): Promise<string> {
   const extraHeader = options.header ?? {};
   assertNoReservedHeaderMembers(extraHeader);
+  assertTypNotSmuggledInHeader(extraHeader);
   return (
     new SignJWT(claims)
       // #248 F6: `alg` is spread LAST so the canonical algorithm always wins —
       // belt-and-braces behind the reserved-member rejection above.
-      .setProtectedHeader({ ...extraHeader, alg })
+      //
+      // #283: `typ` is emitted ONLY when the typed field is set, so callers
+      // that omit it produce byte-identical tokens (the #245 hybrid header
+      // members `kid`/`pqc_alg`/`pqc_kid` are unaffected either way — `typ`
+      // simply joins them as one more non-critical member).
+      .setProtectedHeader({
+        ...extraHeader,
+        ...(options.typ !== undefined ? { typ: options.typ } : {}),
+        alg,
+      })
       .setIssuedAt()
       .setExpirationTime(`${options.expiresIn}s`)
       .setIssuer(options.issuer)

@@ -251,8 +251,14 @@ export const jwtPlugin = fp<JwtPluginOptions>(
       hashRefreshToken(token) {
         return hashRefreshToken(token);
       },
-      async verifyAccessToken(token, options) {
-        return verifyAccessToken(token, publicKey, options);
+      async verifyAccessToken(token, verifyOptions) {
+        return verifyAccessToken(token, publicKey, {
+          ...verifyOptions,
+          // #283: the operator's rollout switch is applied HERE, not left to
+          // each call site, so no route can accidentally verify with a weaker
+          // `typ` policy than the deployment was configured for.
+          requireTyp: options.requireAccessTokenTyp === true,
+        });
       },
       extractFromHeader(authHeader) {
         return extractJWTFromHeader(authHeader);

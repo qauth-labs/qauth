@@ -22,6 +22,22 @@ export interface JwtPluginOptions extends FastifyPluginOptions {
    */
   keyId?: string;
   /**
+   * Require the RFC 9068 `typ: at+jwt` protected header on every access token
+   * this server verifies (#283). Default `false`.
+   *
+   * PHASE 2 OF A TWO-DEPLOY ROLLOUT. Phase 1 (this build) starts STAMPING `typ`
+   * on issuance and already rejects a token whose signed `typ` is present but
+   * wrong — that is unconditional and needs no flag, because no token issued
+   * before #283 carries a `typ` at all. Only the "`typ` must be PRESENT" half
+   * is breaking: enabling it in the same deploy that begins stamping would
+   * reject every access token minted by the previous build that is still inside
+   * {@link accessTokenLifespan} (default 900s).
+   *
+   * Turn this on in a LATER deploy, at least one `ACCESS_TOKEN_LIFESPAN` after
+   * the build that introduced stamping has fully rolled out.
+   */
+  requireAccessTokenTyp?: boolean;
+  /**
    * Optional ML-DSA-65 private key as a base64url 32-byte seed (#246). When
    * present, `getJwks()` additionally publishes the derived ML-DSA PUBLIC key
    * as an `AKP` JWK alongside the Ed25519 `OKP` entry, so PQC-capable verifiers

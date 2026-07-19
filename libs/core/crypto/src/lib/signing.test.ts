@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { CryptoVerificationError } from './errors';
 import { generateSigningKeyPair } from './key-management';
-import { RESERVED_PROTECTED_HEADER_MEMBERS, sign, verify } from './signing';
+import { RESERVED_PROTECTED_HEADER_MEMBERS, sign, verify, verifyWithHeader } from './signing';
 
 const ISSUER = 'https://auth.example.com';
 
@@ -220,5 +220,108 @@ describe('sign() protected-header invariant (#248 F6)', () => {
 
     const token = await sign({ sub: 'u' }, privateKey, 'EdDSA', { ...baseOpts, header });
     expect(decodeHeader(token)['alg']).toBe('EdDSA');
+  });
+});
+
+describe('sign() typed typ member (#283, RFC 9068 §2.1)', () => {
+  const baseOpts = { issuer: ISSUER, expiresIn: 900, audience: 'client-1' };
+
+  /** Decode a compact JWS protected header without verifying (test-only). */
+  function decodeHeader(token: string): Record<string, unknown> {
+    const [encodedHeader] = token.split('.');
+    return JSON.parse(Buffer.from(encodedHeader, 'base64url').toString('utf-8')) as Record<
+      string,
+      unknown
+    >;
+  }
+
+  it('stamps the typed typ into the protected header', async () => {
+    const { privateKey } = await generateSigningKeyPair('EdDSA');
+
+    const token = await sign({ sub: 'u' }, privateKey, 'EdDSA', {
+      ...baseOpts,
+      typ: 'at+jwt',
+    });
+
+    expect(decodeHeader(token)['typ']).toBe('at+jwt');
+  });
+
+  it('emits NO typ member when the typed field is omitted (byte-identical legacy tokens)', async () => {
+    const { privateKey } = await generateSigningKeyPair('EdDSA');
+
+    const token = await sign({ sub: 'u' }, privateKey, 'EdDSA', baseOpts);
+
+    // Exact-match, not `toBeUndefined()`: the guarantee is that the header is
+    // still EXACTLY `{ alg }`, which is what makes the #283 rollout additive.
+    expect(decodeHeader(token)).toEqual({ alg: 'EdDSA' });
+  });
+
+  it('coexists with the #245 hybrid header members (ADR-005 pqc_alg / pqc_kid)', async () => {
+    const { privateKey, publicKey } = await generateSigningKeyPair('EdDSA', { extractable: true });
+
+    const token = await sign({ sub: 'u' }, privateKey, 'EdDSA', {
+      ...baseOpts,
+      typ: 'at+jwt',
+      header: { kid: 'ed-1', pqc_alg: 'ML-DSA-65', pqc_kid: 'mldsa-1' },
+    });
+
+    // `typ` is one more NON-CRITICAL member: it neither displaces the hybrid
+    // members nor makes the token unverifiable for a classical verifier, which
+    // is ADR-005's compatibility guarantee.
+    expect(decodeHeader(token)).toEqual({
+      alg: 'EdDSA',
+      typ: 'at+jwt',
+      kid: 'ed-1',
+      pqc_alg: 'ML-DSA-65',
+      pqc_kid: 'mldsa-1',
+    });
+    const { protectedHeader } = await verifyWithHeader(token, publicKey, { algorithms: ['EdDSA'] });
+    expect(protectedHeader['typ']).toBe('at+jwt');
+    expect(protectedHeader['pqc_alg']).toBe('ML-DSA-65');
+  });
+
+  it('rejects a typ smuggled through the free-form options.header bag', async () => {
+    const { privateKey } = await generateSigningKeyPair('EdDSA');
+
+    await expect(
+      sign({ sub: 'u' }, privateKey, 'EdDSA', { ...baseOpts, header: { typ: 'at+jwt' } })
+    ).rejects.toThrow(/'typ' cannot be set via SignOptions.header/);
+  });
+
+  it('rejects a header-bag typ even when it AGREES with the typed field', async () => {
+    const { privateKey } = await generateSigningKeyPair('EdDSA');
+
+    // The rule is deliberately value-INDEPENDENT: if agreement were tolerated,
+    // the behaviour of a call would depend on a string comparison a reviewer has
+    // to simulate, and the disagreeing case would be the only one anybody tests.
+    await expect(
+      sign({ sub: 'u' }, privateKey, 'EdDSA', {
+        ...baseOpts,
+        typ: 'at+jwt',
+        header: { typ: 'at+jwt' },
+      })
+    ).rejects.toThrow(/'typ' cannot be set via SignOptions.header/);
+  });
+
+  it('is NOT in the reserved-member list (typ is caller-chosen, just typed)', async () => {
+    // Guards the design decision itself: adding `typ` to the reserved list would
+    // make the legitimate at+jwt/JWT distinction unexpressible.
+    expect(RESERVED_PROTECTED_HEADER_MEMBERS).not.toContain('typ');
+  });
+
+  it('ignores a typ inherited from the prototype chain', async () => {
+    const { privateKey } = await generateSigningKeyPair('EdDSA');
+
+    // Same `Object.hasOwn` reasoning as the reserved-member guard: a polluted
+    // Object.prototype must not make an innocent header fail closed.
+    const header = Object.create({ typ: 'at+jwt' }) as Record<string, unknown>;
+    header['kid'] = 'ed-1';
+
+    const token = await sign({ sub: 'u' }, privateKey, 'EdDSA', {
+      ...baseOpts,
+      typ: 'JWT',
+      header,
+    });
+    expect(decodeHeader(token)['typ']).toBe('JWT');
   });
 });

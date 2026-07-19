@@ -640,3 +640,133 @@ describe('jwtPlugin — live hybrid issuance vs seed zeroization (#275 x #248 F1
     }
   });
 });
+
+describe('RFC 9068 typ rollout switch (#283)', () => {
+  const ISSUER = 'https://auth.test.example.com';
+
+  async function appWith(requireAccessTokenTyp: boolean | undefined) {
+    const { privateKey, publicKey } = await generateEdDSAKeyPair(true);
+    const privateKeyPem = await exportPKCS8(privateKey);
+    const app = Fastify({ logger: false });
+    await app.register(jwtPlugin, {
+      privateKey: privateKeyPem,
+      publicKey: await exportSPKI(publicKey),
+      issuer: ISSUER,
+      accessTokenLifespan: 900,
+      refreshTokenLifespan: 86400,
+      ...(requireAccessTokenTyp !== undefined ? { requireAccessTokenTyp } : {}),
+    });
+    return { app, privateKeyPem };
+  }
+
+  /** A token minted by a build that predates #283: valid, but no `typ`. */
+  async function signLegacyToken(privateKeyPem: string): Promise<string> {
+    return new SignJWT({ sub: 'user-legacy', client_id: 'client-1', token_use: 'access' })
+      .setProtectedHeader({ alg: 'EdDSA' })
+      .setIssuedAt()
+      .setExpirationTime('900s')
+      .setIssuer(ISSUER)
+      .setAudience('client-1')
+      .sign(await importPrivateKey(privateKeyPem));
+  }
+
+  /** Decode a compact JWS protected header without verifying (test-only). */
+  function decodeHeader(token: string): Record<string, unknown> {
+    return JSON.parse(Buffer.from(token.split('.')[0], 'base64url').toString('utf-8')) as Record<
+      string,
+      unknown
+    >;
+  }
+
+  it('signs access tokens with typ: at+jwt and ID tokens with typ: JWT', async () => {
+    const { app } = await appWith(undefined);
+    try {
+      // Both are signed with the SAME privateKey and verify against the SAME
+      // JWKS entry — the reason #283 exists. Assert them together so the pair
+      // can never drift into being indistinguishable.
+      const accessToken = await app.jwtUtils.signAccessToken({
+        sub: 'user-1',
+        clientId: 'client-1',
+      });
+      const idToken = await app.jwtUtils.signIdToken({ sub: 'user-1', audience: 'client-1' });
+
+      expect(decodeHeader(accessToken)['typ']).toBe('at+jwt');
+      expect(decodeHeader(idToken)['typ']).toBe('JWT');
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('rejects an ID token presented as an access token, audience held constant', async () => {
+    const { app } = await appWith(undefined);
+    try {
+      // `aud` is `client-1` on BOTH tokens, so the audience check is satisfied
+      // either way and cannot be what rejects — only `typ` can.
+      const idToken = await app.jwtUtils.signIdToken({ sub: 'user-1', audience: 'client-1' });
+      const accessToken = await app.jwtUtils.signAccessToken({
+        sub: 'user-1',
+        clientId: 'client-1',
+      });
+
+      await expect(
+        app.jwtUtils.verifyAccessToken(accessToken, { issuer: ISSUER, audience: 'client-1' })
+      ).resolves.toMatchObject({ sub: 'user-1' });
+      await expect(
+        app.jwtUtils.verifyAccessToken(idToken, { issuer: ISSUER, audience: 'client-1' })
+      ).rejects.toThrow(/typ is not at\+jwt/);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('accepts a legacy typ-less token when the switch is off (default)', async () => {
+    const { app, privateKeyPem } = await appWith(undefined);
+    try {
+      const legacy = await signLegacyToken(privateKeyPem);
+      await expect(
+        app.jwtUtils.verifyAccessToken(legacy, { issuer: ISSUER })
+      ).resolves.toMatchObject({ sub: 'user-legacy' });
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('rejects a legacy typ-less token when the operator flips the switch on', async () => {
+    const { app, privateKeyPem } = await appWith(true);
+    try {
+      const legacy = await signLegacyToken(privateKeyPem);
+      await expect(app.jwtUtils.verifyAccessToken(legacy, { issuer: ISSUER })).rejects.toThrow(
+        JWTInvalidError
+      );
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('applies the switch at the plugin seam, not per call site', async () => {
+    const { app, privateKeyPem } = await appWith(true);
+    try {
+      // A route cannot weaken the policy: `JwtUtils.verifyAccessToken` exposes
+      // only `{ audience, issuer }`, and the plugin sets `requireTyp` AFTER
+      // spreading whatever the caller passed. That is a compile-time guarantee
+      // (attempting `requireTyp: false` here is a type error), so what is left
+      // to assert at runtime is that the deployment-wide setting is the one in
+      // force on every call.
+      const legacy = await signLegacyToken(privateKeyPem);
+      await expect(app.jwtUtils.verifyAccessToken(legacy, { issuer: ISSUER })).rejects.toThrow(
+        JWTInvalidError
+      );
+
+      // ...and that strict mode does not over-reject: a properly typed token
+      // still passes under the same setting.
+      const good = await app.jwtUtils.signAccessToken({ sub: 'user-1', clientId: 'client-1' });
+      await expect(app.jwtUtils.verifyAccessToken(good, { issuer: ISSUER })).resolves.toMatchObject(
+        {
+          sub: 'user-1',
+        }
+      );
+    } finally {
+      await app.close();
+    }
+  });
+});

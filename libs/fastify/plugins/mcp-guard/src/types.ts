@@ -145,6 +145,20 @@ export interface McpGuardConfig {
   allowedAlgorithms?: string[];
 
   /**
+   * Require the RFC 9068 `typ: at+jwt` protected header to be PRESENT on every
+   * bearer token (#283). Defaults to `false`. Only used in `jwt` mode.
+   *
+   * A token whose `typ` is present but WRONG — an OIDC ID token, `typ: JWT`,
+   * signed by the same AS key — is rejected regardless of this flag. The flag
+   * governs only whether a `typ`-LESS token is tolerated, which matters when
+   * the upstream AS predates #283 or is still draining tokens its previous
+   * build minted (up to one `ACCESS_TOKEN_LIFESPAN`, default 900s).
+   *
+   * Set it to `true` once the AS you point at is known to stamp `typ`.
+   */
+  requireAccessTokenTyp?: boolean;
+
+  /**
    * Injectable `fetch`. Defaults to the global `fetch`. Override for tests or
    * to apply an SSRF-guarded / instrumented HTTP client.
    */

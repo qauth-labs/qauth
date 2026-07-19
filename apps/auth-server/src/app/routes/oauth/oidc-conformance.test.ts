@@ -26,14 +26,15 @@
  * `at_hash`/`c_hash` (OIDC Core §3.3.2.11, only required for hybrid/implicit
  * which QAuth does not support); userinfo signed-response JWTs are not offered
  * (`userinfo_signing_alg_values_supported` intentionally absent). ID token
- * signature verification is asserted via `jwtUtils.verifyAccessToken` (the
- * same EdDSA public key the JWKS publishes) plus a cross-key rejection test,
- * rather than re-importing the JWK in the test process.
+ * signature verification is asserted INDIRECTLY via `jwtUtils.verifyAccessToken`
+ * (the same EdDSA public key the JWKS publishes) plus a cross-key rejection
+ * test, rather than re-importing the JWK in the test process — since #283 that
+ * call rejects an ID token on its RFC 9068 `typ`, but only AFTER the signature
+ * has verified, so reaching the `typ` error is itself the signature assertion.
  */
 import { generateKeyPairSync } from 'node:crypto';
 
 import { jwtPlugin } from '@qauth-labs/fastify-plugin-jwt';
-import { JWTInvalidError } from '@qauth-labs/shared-errors';
 import Fastify, { type FastifyInstance } from 'fastify';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -100,6 +101,16 @@ async function fetchJwks(app: FastifyInstance): Promise<{ keys: Array<Record<str
 function decodeClaims(token: string): Record<string, unknown> {
   const [, payload] = token.split('.');
   return JSON.parse(Buffer.from(payload, 'base64url').toString('utf8'));
+}
+
+/**
+ * Decode the JWS protected header WITHOUT verifying (test-only). Same caveat as
+ * {@link decodeClaims}: only assert on it once the signature has been
+ * established by other means (#283 `typ` conformance).
+ */
+function decodeHeader(token: string): Record<string, unknown> {
+  const [header] = token.split('.');
+  return JSON.parse(Buffer.from(header, 'base64url').toString('utf8'));
 }
 
 describe('OIDC conformance — discovery document', () => {
@@ -189,30 +200,43 @@ describe('OIDC conformance — ID token validation against the published key', (
         nonce,
       });
 
-      // The JWKS publishes the public half of the signing key. Verify the
-      // token through jwtUtils (same EdDSA key) asserting the client's own
-      // client_id as the expected audience (OIDC Core §3.1.3.7.3).
+      // The JWKS publishes the public half of the signing key.
       const jwks = await fetchJwks(app);
       expect(jwks.keys).toHaveLength(1);
 
-      const payload = await app.jwtUtils.verifyAccessToken(idToken, { audience: CLIENT_ID });
+      // SIGNATURE, asserted indirectly (#283). `verifyAccessToken` runs the full
+      // EdDSA verification against this server's key BEFORE it inspects `typ`,
+      // so reaching the `at+jwt` rejection proves the signature validated — a
+      // foreign-key token dies earlier with a signature error, which the
+      // cross-key test below pins. This is the same key the JWKS publishes.
+      //
+      // The pre-#283 form of this test verified the ID token by calling the
+      // ACCESS-token verifier and reading its claims back, which is precisely
+      // the cross-token confusion RFC 9068 `typ` closes. It cannot be written
+      // that way any more, and that is the point.
+      await expect(
+        app.jwtUtils.verifyAccessToken(idToken, { audience: CLIENT_ID })
+      ).rejects.toThrow(/typ is not at\+jwt/);
 
-      // §3.1.3.7.6/7: iss + aud validated.
-      expect(payload.iss).toBe(ISSUER);
-      expect(payload.aud).toBe(CLIENT_ID);
-      expect(payload.sub).toBe('user-uuid-1');
-      // §3.1.3.7.9/10: exp present and in the future; iat present.
-      expect(typeof payload.exp).toBe('number');
-      expect(typeof payload.iat).toBe('number');
-      expect((payload.exp as number) > Math.floor(Date.now() / 1000)).toBe(true);
-      // §3.1.3.6: nonce echoed verbatim.
+      // CLAIMS, read from the token whose signature was just established.
       const claims = decodeClaims(idToken);
+      // §3.1.3.7.6/7: iss + aud.
+      expect(claims['iss']).toBe(ISSUER);
+      expect(claims['aud']).toBe(CLIENT_ID);
+      expect(claims['sub']).toBe('user-uuid-1');
+      // §3.1.3.7.9/10: exp present and in the future; iat present.
+      expect(typeof claims['exp']).toBe('number');
+      expect(typeof claims['iat']).toBe('number');
+      expect((claims['exp'] as number) > Math.floor(Date.now() / 1000)).toBe(true);
+      // §3.1.3.6: nonce echoed verbatim.
       expect(claims['nonce']).toBe(nonce);
-      // Identity claims + token-confusion marker.
-      expect(payload.email).toBe('user@example.com');
-      expect(payload.email_verified).toBe(true);
+      // Identity claims + token-confusion markers (header `typ` and payload
+      // `token_use`, the two layers of the #283 defence).
+      expect(claims['email']).toBe('user@example.com');
+      expect(claims['email_verified']).toBe(true);
       expect(claims['name']).toBe('Ada Lovelace');
       expect(claims['token_use']).toBe('id');
+      expect(decodeHeader(idToken)['typ']).toBe('JWT');
     } finally {
       await app.close();
     }
@@ -274,9 +298,13 @@ describe('OIDC conformance — ID token validation against the published key', (
 
       // A different client_id as the expected audience MUST fail (OIDC Core
       // §3.1.3.7.3 — the client MUST verify aud contains its own client_id).
+      //
+      // Asserted on the MESSAGE, not just the error class: since #283 the same
+      // call also rejects this token on `typ`, so a bare `toThrow(JWTInvalidError)`
+      // would keep passing even if the audience check were deleted.
       await expect(
         app.jwtUtils.verifyAccessToken(idToken, { audience: 'some-other-client' })
-      ).rejects.toThrow(JWTInvalidError);
+      ).rejects.toThrow(/"aud" claim/);
     } finally {
       await app.close();
     }
@@ -293,9 +321,11 @@ describe('OIDC conformance — ID token validation against the published key', (
         audience: CLIENT_ID,
       });
 
+      // Message-pinned for the same reason as the audience case above: the #283
+      // `typ` check must not be able to stand in for the signature check.
       await expect(
         app.jwtUtils.verifyAccessToken(foreignIdToken, { audience: CLIENT_ID })
-      ).rejects.toThrow(JWTInvalidError);
+      ).rejects.toThrow(/signature/i);
     } finally {
       await app.close();
       await otherApp.close();

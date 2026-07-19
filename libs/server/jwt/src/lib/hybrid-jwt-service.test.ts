@@ -120,6 +120,89 @@ describe('hybrid jwt-service (#245)', () => {
     const ed = await generateSigningKeyPair('EdDSA', { extractable: true });
     const token = await signAccessToken({ sub: 'u', clientId: 'c' }, ed.privateKey, ISSUER, 900);
     const { protectedHeader } = await jwtVerify(token, ed.publicKey, { algorithms: ['EdDSA'] });
-    expect(protectedHeader).toEqual({ alg: 'EdDSA' });
+    // `typ` (RFC 9068 §2.1, #283) is expected on EVERY access token, classical
+    // or hybrid. What this test guards is that the classical signer picks up no
+    // PQC members: an exact match, so a stray `pqc_alg`/`pqc_kid` fails here.
+    expect(protectedHeader).toEqual({ alg: 'EdDSA', typ: 'at+jwt' });
+  });
+});
+
+describe('hybrid jwt-service — RFC 9068 typ (#283 × ADR-005)', () => {
+  it('stamps typ: at+jwt alongside pqc_alg / pqc_kid in the SIGNED header', async () => {
+    const { signing, edPublic } = await hybridKeys();
+
+    const hybrid = await signHybridAccessToken(
+      { sub: 'user-1', clientId: 'client-1' },
+      signing,
+      ISSUER,
+      900,
+      PQC_BACKEND
+    );
+
+    // All four members must survive together in one Ed25519-signed header: the
+    // classical `alg`/`kid`, the #283 `typ`, and the ADR-005 PQC members. A
+    // stock jose verifier reads them all, which is the compatibility guarantee.
+    const { protectedHeader } = await jwtVerify(hybrid.token, edPublic, { algorithms: ['EdDSA'] });
+    expect(protectedHeader).toEqual({
+      alg: 'EdDSA',
+      typ: 'at+jwt',
+      kid: 'k1',
+      pqc_alg: 'ML-DSA-65',
+      pqc_kid: 'k1-mldsa',
+    });
+  });
+
+  it('stamps typ: JWT on hybrid ID tokens, keeping the two distinguishable', async () => {
+    const { signing, edPublic } = await hybridKeys();
+
+    const hybrid = await signHybridIdToken(
+      { sub: 'user-1', audience: 'client-1' },
+      signing,
+      ISSUER,
+      900,
+      PQC_BACKEND
+    );
+
+    const { protectedHeader } = await jwtVerify(hybrid.token, edPublic, { algorithms: ['EdDSA'] });
+    expect(protectedHeader['typ']).toBe('JWT');
+    expect(protectedHeader['pqc_alg']).toBe('ML-DSA-65');
+  });
+
+  it('leaves the detached ML-DSA signature valid over the typ-bearing header', async () => {
+    const { signing, verify } = await hybridKeys();
+
+    // `typ` is inside the JWS signing input, so the detached PQC signature
+    // covers it too: if the header and the signature could drift apart, this is
+    // where it would show.
+    const hybrid = await signHybridAccessToken(
+      { sub: 'user-1', clientId: 'client-1' },
+      signing,
+      ISSUER,
+      900,
+      PQC_BACKEND
+    );
+
+    await expect(
+      verifyHybridAccessToken(hybrid, verify, { requirePqc: true, ...PQC_BACKEND })
+    ).resolves.toMatchObject({ sub: 'user-1' });
+  });
+
+  it('a hybrid access token passes the classical typ-enforcing verifier', async () => {
+    const { signing, edPublic } = await hybridKeys();
+
+    const hybrid = await signHybridAccessToken(
+      { sub: 'user-1', clientId: 'client-1' },
+      signing,
+      ISSUER,
+      900,
+      PQC_BACKEND
+    );
+
+    // End-to-end for the case that would otherwise silently break on the day an
+    // operator flips HYBRID_SIGNING_ENABLED: strict `typ` enforcement ON, hybrid
+    // issuance ON, classical verify path.
+    await expect(
+      verifyAccessToken(hybrid.token, edPublic, { issuer: ISSUER, requireTyp: true })
+    ).resolves.toMatchObject({ sub: 'user-1' });
   });
 });

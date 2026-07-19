@@ -152,6 +152,35 @@ describe('McpGuard.authenticate (JWT mode)', () => {
   });
 });
 
+describe('McpGuard — requireAccessTokenTyp reaches the validator (#283)', () => {
+  // Exercised through `McpGuardConfig`, NOT by constructing `JwtValidator`
+  // directly as the validator's own suite does. The flag is inert unless the
+  // guard threads it, and a config field that is declared but never forwarded
+  // still type-checks — so only an end-to-end assertion proves the wiring.
+  function guard(requireAccessTokenTyp?: boolean) {
+    return new McpGuard({
+      resource: RESOURCE,
+      authorizationServer: ISSUER,
+      ...(requireAccessTokenTyp !== undefined ? { requireAccessTokenTyp } : {}),
+      fetch: jwksFetch({ keys: [publicJwk] }),
+    });
+  }
+
+  it('rejects a typ-less token when the guard config sets the flag', async () => {
+    // `signToken` stamps no `typ`, i.e. exactly what a pre-#283 AS mints.
+    const token = await signToken({ sub: 'u', client_id: 'c' }, RESOURCE);
+    await expect(guard(true).authenticate(`Bearer ${token}`)).rejects.toBeInstanceOf(
+      InvalidTokenError
+    );
+  });
+
+  it('accepts the same token when the flag is left at its default', async () => {
+    const token = await signToken({ sub: 'u', client_id: 'c' }, RESOURCE);
+    const claims = await guard().authenticate(`Bearer ${token}`);
+    expect(claims.sub).toBe('u');
+  });
+});
+
 describe('McpGuard.assertScopes', () => {
   const guard = new McpGuard({
     resource: RESOURCE,

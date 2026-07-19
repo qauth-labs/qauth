@@ -159,3 +159,145 @@ describe('JwtValidator', () => {
     }
   });
 });
+
+describe('JwtValidator — RFC 9068 typ enforcement (#283)', () => {
+  /**
+   * Like {@link signToken}, but lets a test control the protected header so it
+   * can mint an at+jwt access token, a `typ: JWT` ID token, or a hybrid header.
+   */
+  async function signWithHeader(
+    header: Record<string, unknown>,
+    claims: Record<string, unknown>,
+    opts: { audience?: string | string[] } = {}
+  ): Promise<string> {
+    let jwt = new SignJWT(claims)
+      .setProtectedHeader({ alg: 'EdDSA', ...header })
+      .setIssuedAt()
+      .setIssuer(ISSUER)
+      .setExpirationTime('300s');
+    if (opts.audience !== undefined) {
+      jwt = jwt.setAudience(opts.audience);
+    }
+    return jwt.sign(privateKey);
+  }
+
+  function strictValidator(fetchImpl: ReturnType<typeof jwksFetch>) {
+    return new JwtValidator({
+      jwksUri: JWKS_URI,
+      issuer: ISSUER,
+      audience: RESOURCE,
+      requireAccessTokenTyp: true,
+      fetch: fetchImpl as never,
+    });
+  }
+
+  it('accepts an access token carrying typ: at+jwt', async () => {
+    const fetchImpl = jwksFetch({ keys: [publicJwk] });
+    const token = await signWithHeader(
+      { typ: 'at+jwt' },
+      { sub: 'user-1', client_id: 'client-1', token_use: 'access' },
+      { audience: RESOURCE }
+    );
+    await expect(validator(fetchImpl).validate(token)).resolves.toMatchObject({ sub: 'user-1' });
+  });
+
+  it('rejects an ID token presented as an access token on typ grounds ALONE', async () => {
+    const fetchImpl = jwksFetch({ keys: [publicJwk] });
+    // #283 acceptance criterion. `aud` is set to the RESOURCE — not a client_id
+    // — so the RFC 8707 audience binding this guard normally leans on is
+    // SATISFIED. The `iss` matches and the signature verifies against the same
+    // JWKS entry, because the AS signs ID and access tokens with one key. `typ`
+    // is the only thing left that can reject this token.
+    const idToken = await signWithHeader(
+      { typ: 'JWT' },
+      { sub: 'user-1', token_use: 'id' },
+      { audience: RESOURCE }
+    );
+
+    // Same claims, same audience, only the header type changed → accepted. This
+    // pins the attribution: the failure below is `typ`, nothing else.
+    const asAccessToken = await signWithHeader(
+      { typ: 'at+jwt' },
+      { sub: 'user-1', token_use: 'id' },
+      { audience: RESOURCE }
+    );
+    await expect(validator(fetchImpl).validate(asAccessToken)).resolves.toMatchObject({
+      sub: 'user-1',
+    });
+
+    await expect(validator(fetchImpl).validate(idToken)).rejects.toThrow(InvalidTokenError);
+    await expect(validator(fetchImpl).validate(idToken)).rejects.toThrow(/typ is not at\+jwt/);
+  });
+
+  it('coexists with the ADR-005 hybrid header members (pqc_alg / pqc_kid)', async () => {
+    const fetchImpl = jwksFetch({ keys: [publicJwk] });
+    // A hybrid-signed access token is an ordinary Ed25519 JWS whose protected
+    // header additionally carries the non-critical PQC members (#245). A
+    // classical resource server must still verify it AND read its `typ`.
+    const token = await signWithHeader(
+      { typ: 'at+jwt', kid: 'test-key-1', pqc_alg: 'ML-DSA-65', pqc_kid: 'mldsa-1' },
+      { sub: 'user-hybrid', client_id: 'client-1', token_use: 'access' },
+      { audience: RESOURCE }
+    );
+    await expect(validator(fetchImpl).validate(token)).resolves.toMatchObject({
+      sub: 'user-hybrid',
+    });
+  });
+
+  it('rejects a hybrid-header ID token — pqc members do not launder a wrong typ', async () => {
+    const fetchImpl = jwksFetch({ keys: [publicJwk] });
+    const token = await signWithHeader(
+      { typ: 'JWT', kid: 'test-key-1', pqc_alg: 'ML-DSA-65', pqc_kid: 'mldsa-1' },
+      { sub: 'user-1', token_use: 'id' },
+      { audience: RESOURCE }
+    );
+    await expect(validator(fetchImpl).validate(token)).rejects.toThrow(/typ is not at\+jwt/);
+  });
+
+  it('accepts a typ-less token by default (AS not yet on #283, or still draining)', async () => {
+    const fetchImpl = jwksFetch({ keys: [publicJwk] });
+    const token = await signToken(
+      privateKey,
+      { sub: 'user-legacy', client_id: 'client-1' },
+      { audience: RESOURCE }
+    );
+    await expect(validator(fetchImpl).validate(token)).resolves.toMatchObject({
+      sub: 'user-legacy',
+    });
+  });
+
+  it('rejects a typ-less token under requireAccessTokenTyp (rollout phase 2)', async () => {
+    const fetchImpl = jwksFetch({ keys: [publicJwk] });
+    const token = await signToken(
+      privateKey,
+      { sub: 'user-legacy', client_id: 'client-1' },
+      { audience: RESOURCE }
+    );
+    await expect(strictValidator(fetchImpl).validate(token)).rejects.toThrow(
+      /missing the required at\+jwt type/
+    );
+  });
+
+  it('still rejects a wrong typ when requireAccessTokenTyp is off', async () => {
+    const fetchImpl = jwksFetch({ keys: [publicJwk] });
+    // The flag governs only the ABSENT case; it can never be used to tolerate a
+    // token that positively declares itself to be something else.
+    const token = await signWithHeader({ typ: 'JWT' }, { sub: 'user-1' }, { audience: RESOURCE });
+    await expect(validator(fetchImpl).validate(token)).rejects.toThrow(/typ is not at\+jwt/);
+  });
+
+  it('reads typ from the signed header — a spliced header fails at the signature', async () => {
+    const fetchImpl = jwksFetch({ keys: [publicJwk] });
+    const idToken = await signWithHeader({ typ: 'JWT' }, { sub: 'user-1' }, { audience: RESOURCE });
+    const [, payload, signature] = idToken.split('.');
+    const forgedHeader = Buffer.from(
+      JSON.stringify({ alg: 'EdDSA', typ: 'at+jwt', kid: 'test-key-1' })
+    ).toString('base64url');
+
+    // Rewriting the header to claim `at+jwt` changes the JWS signing input, so
+    // this dies on the signature check — never on (or past) the typ check.
+    await expect(
+      validator(fetchImpl).validate(`${forgedHeader}.${payload}.${signature}`)
+    ).rejects.toThrow(/signature verification failed/);
+  });
+});

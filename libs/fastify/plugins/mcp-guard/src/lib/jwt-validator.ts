@@ -34,11 +34,31 @@ export interface JwtValidatorOptions {
   audience: string;
   /** Permitted signature algorithms. Defaults to `['EdDSA']`. */
   allowedAlgorithms?: string[];
+  /**
+   * Require the RFC 9068 `typ: at+jwt` protected header to be PRESENT (#283).
+   * Defaults to `false`. See {@link ACCESS_TOKEN_TYP} for why a WRONG `typ` is
+   * rejected unconditionally while a MISSING one is gated on this flag.
+   */
+  requireAccessTokenTyp?: boolean;
   /** JWKS reuse window in ms (jose cooldown). Defaults to 300_000 (5m). */
   cacheTtlMs?: number;
   /** Injectable fetch passed through to jose's remote JWKS loader. */
   fetch?: FetchImplementation;
 }
+
+/**
+ * RFC 9068 §2.1 `typ` of a JWT OAuth 2.0 access token.
+ *
+ * A resource server is the party this defends: the AS signs access tokens AND
+ * OIDC ID tokens with the SAME key, so both resolve to the same JWKS entry and
+ * both pass signature verification here. `typ` is the standard structural
+ * discriminator between them, checked before any claim is read.
+ *
+ * Duplicated as a literal rather than imported from `@qauth-labs/server-jwt`
+ * on purpose: `mcp-guard` is the resource-server-side library and depends only
+ * on `jose`. Its value is fixed by RFC 9068, not by QAuth.
+ */
+const ACCESS_TOKEN_TYP = 'at+jwt';
 
 /**
  * Normalise a jose payload to {@link ValidatedToken}. `aud` is guaranteed
@@ -68,11 +88,13 @@ export class JwtValidator {
   private readonly issuer: string;
   private readonly audience: string;
   private readonly algorithms: string[];
+  private readonly requireAccessTokenTyp: boolean;
 
   constructor(options: JwtValidatorOptions) {
     this.issuer = options.issuer;
     this.audience = options.audience;
     this.algorithms = options.allowedAlgorithms ?? ['EdDSA'];
+    this.requireAccessTokenTyp = options.requireAccessTokenTyp === true;
     const ttl = options.cacheTtlMs ?? 300_000;
     this.jwks = createRemoteJWKSet(new URL(options.jwksUri), {
       // `cooldownDuration` is the minimum interval between JWKS refetches and
@@ -89,23 +111,57 @@ export class JwtValidator {
    * Verify a bearer token. Resolves to the normalised claims on success.
    *
    * @throws {InvalidTokenError} for any verification failure — bad signature,
-   * expiry, wrong issuer, wrong/absent audience, or disallowed algorithm. The
-   * reason is short and non-sensitive (safe for `error_description`/logs); the
-   * token is never included.
+   * expiry, wrong issuer, wrong/absent audience, disallowed algorithm, or a
+   * `typ` that is not `at+jwt` (#283). The reason is short and non-sensitive
+   * (safe for `error_description`/logs); the token is never included.
    */
   async validate(token: string): Promise<ValidatedToken> {
+    let payload: JoseJWTPayload;
+    let protectedHeader: Record<string, unknown>;
     try {
-      const { payload } = await jwtVerify(token, this.jwks, {
+      ({ payload, protectedHeader } = await jwtVerify(token, this.jwks, {
         algorithms: this.algorithms,
         issuer: this.issuer,
         // jose enforces audience membership: the token's `aud` (string or
         // array) MUST contain this resource. This is the RFC 8707 binding
         // that prevents accepting tokens minted for another audience.
         audience: this.audience,
-      });
-      return toValidatedToken(payload);
+      }));
     } catch (error) {
       throw new InvalidTokenError(describeJoseError(error));
+    }
+    // #283 RFC 9068 §2.1. `protectedHeader` is the header the verified
+    // SIGNATURE covers — never `decodeProtectedHeader`, whose output an
+    // attacker rewrites at will. Outside the try/catch above so this rejection
+    // is not laundered into a generic jose-error string.
+    this.assertAccessTokenTyp(protectedHeader['typ']);
+    return toValidatedToken(payload);
+  }
+
+  /**
+   * Reject a token that is not an RFC 9068 access token (#283).
+   *
+   * Two cases, gated differently because only one is a rollout hazard:
+   *
+   * - `typ` present but not `at+jwt` → ALWAYS rejected. This is the control
+   *   that stops an ID token (`typ: JWT`, same signing key, same JWKS entry)
+   *   being replayed as a bearer token, and it is safe to enforce immediately
+   *   because no token issued before #283 carries any `typ`.
+   * - `typ` absent → accepted unless `requireAccessTokenTyp` is set. An AS that
+   *   has not yet deployed #283, or one still draining tokens minted by its
+   *   previous build, emits `typ`-less access tokens that are otherwise
+   *   entirely valid; rejecting them by default would break every such
+   *   deployment on upgrade of THIS library.
+   */
+  private assertAccessTokenTyp(signedTyp: unknown): void {
+    if (signedTyp === undefined) {
+      if (this.requireAccessTokenTyp) {
+        throw new InvalidTokenError('token is missing the required at+jwt type');
+      }
+      return;
+    }
+    if (signedTyp !== ACCESS_TOKEN_TYP) {
+      throw new InvalidTokenError('token is not an access token (typ is not at+jwt)');
     }
   }
 }
