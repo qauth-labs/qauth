@@ -3,10 +3,12 @@ export { getSignatureBackend } from './lib/backend-registry';
 export { deriveMlDsaPublicKey } from './lib/backends/ml-dsa-65';
 export { CryptoVerificationError, type CryptoVerificationErrorReason } from './lib/errors';
 export {
+  PQC_AKP_PUBLIC_JWK_MEMBERS,
   PQC_ALG_ML_DSA_65,
   PQC_HEADER_ALG_MEMBER,
   PQC_HEADER_KID_MEMBER,
-  PQC_JOSE_COMPOSITE_DRAFT,
+  PQC_JOSE_ALG_POLICY_SPEC,
+  PQC_JOSE_MLDSA_SPEC,
 } from './lib/hybrid-constants';
 export {
   extractJwsSigningInput,

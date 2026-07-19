@@ -100,25 +100,37 @@ Post-quantum JOSE is still standardizing. QAuth pins the identifiers it emits so
 a draft revision cannot silently change the wire shape:
 
 - **ML-DSA public key in JWKS** (`kty: "AKP"`, `pub` member) and the
-  **`ML-DSA-65` algorithm spelling** follow the **`draft-ietf-cose-dilithium`**
-  ("ML-DSA for JOSE and COSE") key representation.
+  **`ML-DSA-65` algorithm spelling** follow **[RFC 9964](https://www.rfc-editor.org/rfc/rfc9964.html)**
+  ("ML-DSA for JOSE and COSE", Standards Track, May 2026 — the published
+  successor to `draft-ietf-cose-dilithium`, final revision `-11`). `ML-DSA-65`
+  is IANA-registered in the JOSE "JSON Web Signature and Encryption Algorithms"
+  registry, and is a _fully-specified_ identifier per
+  **[RFC 9864](https://www.rfc-editor.org/rfc/rfc9864.html)** — `alg` alone
+  determines the operation, with no companion parameter member.
 - The `pqc_alg` / `pqc_kid` protected-header members are **private, unregistered
   JOSE header parameters**, kept **non-critical** so classical verifiers ignore
   them.
 
-> ⚠️ **Known pin correction (tracked, #248).** The in-code constant is currently
-> named `PQC_JOSE_COMPOSITE_DRAFT = 'draft-prabel-jose-pq-composite-sigs-02'`.
-> That draft actually describes the _concatenated composite_ construction QAuth
-> deliberately does **not** implement; the shape QAuth emits matches
-> `draft-ietf-cose-dilithium`. **The emitted wire shape is correct** — there is
-> no live interop break — but the constant will be re-pinned to the right
-> document (and reconfirmed on the IETF datatracker) before hybrid is enabled by
-> default. See the [security review](./security/005-pqc-hybrid-signing-review.md)
-> checklist, item 1.
+> ✅ **Pin corrected (#274, closes review checklist item 1).** The in-code
+> constant was previously named `PQC_JOSE_COMPOSITE_DRAFT` and pointed at
+> `draft-prabel-jose-pq-composite-sigs-02` — a draft describing the
+> _concatenated composite_ construction QAuth deliberately does **not**
+> implement. The emitted wire shape was always correct (there was no interop
+> break); only the citation was wrong. The constant is now
+> `PQC_JOSE_MLDSA_SPEC = 'RFC 9964'`, with `PQC_JOSE_ALG_POLICY_SPEC = 'RFC 9864'`
+> for alg-identifier policy. See the
+> [security review](./security/005-pqc-hybrid-signing-review.md).
 
-**Because these identifiers may still change before default-on, treat the PQC
-member names as provisional** and re-check this guide (and the JWKS you fetch)
-when an operator turns hybrid on.
+**The AKP key members are now stable**: RFC 9964 is a published Standards Track
+RFC, so `kty`/`alg`/`pub` will not change under you. What remains provisional is
+the QAuth-private `pqc_alg` / `pqc_kid` header pair, which is unregistered and
+may change before default-on — re-check this guide when an operator turns hybrid
+on.
+
+If QAuth ever adds a true composite path, that is a _separate_ specification —
+[`draft-ietf-jose-pq-composite-sigs`](https://datatracker.ietf.org/doc/draft-ietf-jose-pq-composite-sigs/)
+("PQ/T Hybrid Composite Signatures for JOSE and COSE", the WG-adopted successor
+to the individual `-prabel-` draft) — and would be pinned under its own constant.
 
 ## 4. Migration checklist
 
@@ -143,7 +155,7 @@ Opt-in, for verifiers that want forward-secure assurance:
 - [ ] Obtain the detached ML-DSA-65 signature via **introspection** (the default
       delivery channel).
 - [ ] Recompute the JWS signing-input — `base64url(header) + "." +
-  base64url(payload)` — and verify the ML-DSA-65 signature over those exact
+base64url(payload)` — and verify the ML-DSA-65 signature over those exact
       bytes with the `AKP` public key. (This is the same preimage the Ed25519
       signature covers, so tampering breaks both.)
 - [ ] Decide your **downgrade policy**. Verifying the Ed25519 signature is the

@@ -23,14 +23,18 @@ export interface PublicJwk extends Record<string, unknown> {
 /**
  * An `AKP` (Algorithm Key Pair) JWK publishing an ML-DSA public key (#246).
  *
- * `kty: 'AKP'` and the `pub` member follow the JOSE PQC composite draft (the
- * same `PQC_JOSE_COMPOSITE_DRAFT` pinned for #245). A classical (Ed25519-only)
- * verifier does not understand `kty: 'AKP'` and simply IGNORES this entry —
- * exactly the mixed-key behaviour #246 requires. Only the public key is
- * emitted; there is no private (`priv`/seed) member.
+ * `kty: 'AKP'`, the `pub` member and the `ML-DSA-65` `alg` spelling follow
+ * **RFC 9964** ("ML-DSA for JOSE and COSE"), pinned as `PQC_JOSE_MLDSA_SPEC`
+ * (#274 — this was previously mis-attributed to the composite-signature draft,
+ * which specifies a construction QAuth does not implement; the emitted shape
+ * was and remains correct). RFC 9964 makes `kty`, `alg` and `pub` REQUIRED and
+ * forbids `priv` in a public key.
  *
- * @remarks the exact member names MUST be reconfirmed on the IETF datatracker
- * before the flag is enabled by default.
+ * A classical (Ed25519-only) verifier does not understand `kty: 'AKP'` and
+ * simply IGNORES this entry — exactly the mixed-key behaviour #246 requires.
+ * Only the public key is emitted; there is no private (`priv`/seed) member.
+ *
+ * @see https://www.rfc-editor.org/rfc/rfc9964.html
  */
 export interface AkpJwk extends Record<string, unknown> {
   kty: 'AKP';

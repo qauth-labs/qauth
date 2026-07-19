@@ -3,7 +3,11 @@ import { describe, expect, it } from 'vitest';
 
 import { getSignatureBackend } from './backend-registry';
 import { CryptoVerificationError } from './errors';
-import { PQC_ALG_ML_DSA_65, PQC_JOSE_COMPOSITE_DRAFT } from './hybrid-constants';
+import {
+  PQC_ALG_ML_DSA_65,
+  PQC_JOSE_ALG_POLICY_SPEC,
+  PQC_JOSE_MLDSA_SPEC,
+} from './hybrid-constants';
 import { extractJwsSigningInput, signHybrid, verifyHybrid } from './hybrid-signing';
 import { generateSigningKeyPair } from './key-management';
 
@@ -177,8 +181,22 @@ describe('hybrid signing (#245) — downgrade / stripping / mix-and-match', () =
   });
 });
 
-describe('hybrid signing (#245) — draft pinning', () => {
-  it('pins the exact governing draft revision (AC#4)', () => {
-    expect(PQC_JOSE_COMPOSITE_DRAFT).toBe('draft-prabel-jose-pq-composite-sigs-02');
+describe('hybrid signing (#245/#274) — standards pinning', () => {
+  it('pins the AKP JWK shape and ML-DSA-65 spelling to RFC 9964 (AC#4)', () => {
+    // #274: NOT the composite-signature draft — that specifies the concatenated
+    // construction QAuth deliberately does not implement.
+    expect(PQC_JOSE_MLDSA_SPEC).toBe('RFC 9964');
+    expect(PQC_JOSE_MLDSA_SPEC).not.toMatch(/composite/i);
+    expect(PQC_JOSE_MLDSA_SPEC).not.toMatch(/draft-/i);
+  });
+
+  it('pins the alg-identifier policy to RFC 9864 (fully-specified algorithms)', () => {
+    expect(PQC_JOSE_ALG_POLICY_SPEC).toBe('RFC 9864');
+  });
+
+  it('uses the exact IANA-registered ML-DSA-65 alg spelling from RFC 9964', () => {
+    // Case and hyphenation are load-bearing for interop: a verifier matches
+    // this string literally against the AKP JWK `alg`.
+    expect(PQC_ALG_ML_DSA_65).toBe('ML-DSA-65');
   });
 });

@@ -26,7 +26,8 @@ import { sign, type SignOptions, verify, type VerifyOptions } from './signing';
  * ## What this is NOT
  *
  * This deliberately deviates from the strict single-alg-id + concatenated
- * composite of the LAMPS/prabel drafts (which a stock verifier cannot parse,
+ * composite of the LAMPS / `draft-ietf-jose-pq-composite-sigs` line of drafts
+ * (which a stock verifier cannot parse,
  * violating AC#2). Downgrade resistance within a single bearer token is
  * therefore a VERIFIER-POLICY concern (`requirePqc`), not cryptographic — the
  * `pqc_alg` member must be non-critical to keep classical verifiers working, so
