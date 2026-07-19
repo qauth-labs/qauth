@@ -27,10 +27,18 @@ type LoadOutcome =
 /** Candidate module specifiers for this host, most specific first. */
 function addonCandidates(): readonly string[] {
   const abi = platform() === 'linux' ? 'gnu' : platform() === 'win32' ? 'msvc' : '';
-  return [
-    `../qauth-crypto-native.${platform()}-${arch()}${abi ? `-${abi}` : ''}.node`,
-    `../qauth-crypto-native.${platform()}-${arch()}.node`,
+  const triple = `${platform()}-${arch()}`;
+  const names = [
+    `qauth-crypto-native.${triple}${abi ? `-${abi}` : ''}.node`,
+    `qauth-crypto-native.${triple}.node`,
   ];
+  // `napi build` writes the .node to the package root, which is one level up
+  // from `src/`. The package is consumed directly as TypeScript today
+  // (`main: src/index.ts`), so `../` is correct — but a future compiled or
+  // bundled layout can sit at a different depth, and a MODULE_NOT_FOUND there
+  // would silently degrade to the pure-TS backend instead of failing loudly.
+  // Searching both depths costs one extra resolve attempt on the miss path.
+  return ['..', '../..'].flatMap((dir) => names.map((name) => `${dir}/${name}`));
 }
 
 /**
@@ -62,8 +70,14 @@ function loadAddon(mode: AddonIntegrityMode): LoadOutcome {
 
     const integrity = verifyAddonIntegrity(resolved, mode);
     if (integrity.status === 'rejected') {
+      // FAIL CLOSED, and stop. A rejection means a candidate was found and its
+      // checksum did not match (or its manifest was malformed) — that is a
+      // tampering signal about this installation, not a "wrong filename for
+      // this host" miss. Trying the next candidate could load a DIFFERENT
+      // addon and silently paper over the violation, so refuse the native
+      // backend outright and let the caller fall back to the pure-TS one.
       reasons.push(integrity.reason);
-      continue;
+      return { addon: null, reasons };
     }
     if (integrity.status === 'unverified') {
       reasons.push(integrity.reason);

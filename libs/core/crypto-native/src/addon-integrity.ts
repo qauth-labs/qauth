@@ -78,7 +78,14 @@ export function resolveIntegrityMode(env: NodeJS.ProcessEnv = process.env): Addo
  * @returns The lowercase hex digest, or `null` if the sidecar is malformed.
  */
 export function parseChecksumManifest(contents: string): string | null {
-  const first = contents.split('\n', 1)[0]?.trim() ?? '';
+  // Skip blank lines and `#` comments: both are ordinary in checksum manifests
+  // (sha256sum output concatenated with a header, for instance), and treating
+  // one as a malformed manifest would reject a perfectly good addon.
+  const first =
+    contents
+      .split('\n')
+      .map((line) => line.trim())
+      .find((line) => line.length > 0 && !line.startsWith('#')) ?? '';
   const digest = (first.split(/\s+/, 1)[0] ?? '').toLowerCase();
   return HEX_SHA256.test(digest) ? digest : null;
 }

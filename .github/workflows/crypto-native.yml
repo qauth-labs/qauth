@@ -179,8 +179,18 @@ jobs:
         shell: bash
         run: cargo fetch --locked
 
+      # Remap the workspace path out of the binary. Derived from the runner
+      # environment rather than committed to .cargo/config.toml, because the
+      # path embeds the runner OS, the org and the repo name — a hardcoded
+      # value stops remapping (and stops being reproducible) on any fork,
+      # rename, or self-hosted runner, silently.
+      - name: Set RUSTFLAGS path remapping
+        shell: bash
+        run: |
+          echo "RUSTFLAGS=--remap-path-prefix=${GITHUB_WORKSPACE}=/qauth" >> "$GITHUB_ENV"
+
       # Deterministic build: pinned toolchain, locked+offline deps, no
-      # incremental artefacts, build paths remapped via .cargo/config.toml, and
+      # incremental artefacts, build paths remapped via RUSTFLAGS above, and
       # SOURCE_DATE_EPOCH for the aws-lc-sys cmake/cc sub-build.
       - name: Build addon (reproducible flags)
         working-directory: ${{ env.CRATE_DIR }}
