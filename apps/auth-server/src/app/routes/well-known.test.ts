@@ -70,6 +70,9 @@ describe('GET /.well-known/oauth-authorization-server', () => {
       );
       expect(body['code_challenge_methods_supported']).toEqual(['S256']);
       expect(body['id_token_signing_alg_values_supported']).toEqual(['EdDSA']);
+      // RFC 9207 §3 (#282): /oauth/authorize emits `iss` on every
+      // authorization response, so the AS MUST advertise that it does.
+      expect(body['authorization_response_iss_parameter_supported']).toBe(true);
     } finally {
       await app.close();
     }
@@ -112,6 +115,9 @@ describe('GET /.well-known/openid-configuration', () => {
       );
       // EdDSA is the only ID-token signing algorithm advertised (OIDC Core §16).
       expect(body['id_token_signing_alg_values_supported']).toEqual(['EdDSA']);
+      // #282: the RFC 9207 flag is inherited from the AS metadata, so a client
+      // that reads only the OIDC document still learns `iss` is validatable.
+      expect(body['authorization_response_iss_parameter_supported']).toBe(true);
     } finally {
       await app.close();
     }

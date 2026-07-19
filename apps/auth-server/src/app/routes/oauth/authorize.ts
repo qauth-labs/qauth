@@ -10,6 +10,7 @@ import { resolveBrowserSession } from '../../helpers/browser-session';
 import { findExceedingAgentScopesForClient, resolveAudience } from '../../helpers/client-auth';
 import { resolveClient } from '../../helpers/client-resolution';
 import { canSkipConsent, filterRequestedScopes } from '../../helpers/consent';
+import { resolveIssuerIdentifier } from '../../helpers/discovery';
 import { resolveEnvironmentPolicy } from '../../helpers/environment-policy';
 import { getOrCreateSystemClient } from '../../helpers/oauth-client';
 import { buildRedirectUrl, isRedirectUriAllowedForPolicy } from '../../helpers/oauth-redirect';
@@ -91,6 +92,14 @@ export default async function (fastify: FastifyInstance) {
       const query = request.query;
       const redirectUri = query.redirect_uri;
       const state = query.state;
+
+      // RFC 9207 §2 (#282): the issuer identifier echoed as `iss` in EVERY
+      // authorization response below. Derived from the same `getIssuer()` +
+      // `resolveIssuerIdentifier()` pair that builds the `issuer` member of the
+      // discovery documents, so the value a client compares against its cached
+      // metadata is byte-identical. Resolved once, up front, so no branch can
+      // reach a redirect with a differently-shaped issuer.
+      const iss = resolveIssuerIdentifier(fastify.jwtUtils.getIssuer());
 
       const realm = await getOrCreateDefaultRealm(fastify);
 
@@ -177,6 +186,7 @@ export default async function (fastify: FastifyInstance) {
           buildRedirectUrl(redirectUri, {
             error: 'unauthorized_client',
             state: state ?? undefined,
+            iss,
           }),
           302
         );
@@ -197,6 +207,7 @@ export default async function (fastify: FastifyInstance) {
           buildRedirectUrl(redirectUri, {
             error: 'unauthorized_client',
             state: state ?? undefined,
+            iss,
           }),
           302
         );
@@ -217,6 +228,7 @@ export default async function (fastify: FastifyInstance) {
           buildRedirectUrl(redirectUri, {
             error: 'unauthorized_client',
             state: state ?? undefined,
+            iss,
           }),
           302
         );
@@ -269,6 +281,7 @@ export default async function (fastify: FastifyInstance) {
               error: 'access_denied',
               error_description: 'Invalid or expired token',
               state: state ?? undefined,
+              iss,
             }),
             302
           );
@@ -305,6 +318,7 @@ export default async function (fastify: FastifyInstance) {
             error: 'invalid_scope',
             error_description: 'requested scope exceeds the agent scope mode for this client',
             state: state ?? undefined,
+            iss,
           }),
           302
         );
@@ -355,6 +369,7 @@ export default async function (fastify: FastifyInstance) {
               error_description:
                 'dangerous scopes require interactive step-up; use the browser authorization flow',
               state: state ?? undefined,
+              iss,
             }),
             302
           );
@@ -421,6 +436,7 @@ export default async function (fastify: FastifyInstance) {
                 error: oidcError,
                 error_description: 'step-up interaction is required but prompt=none was requested',
                 state: state ?? undefined,
+                iss,
               }),
               302
             );
@@ -534,7 +550,7 @@ export default async function (fastify: FastifyInstance) {
       });
 
       return reply.redirect(
-        buildRedirectUrl(redirectUri, { code, state: state ?? undefined }),
+        buildRedirectUrl(redirectUri, { code, state: state ?? undefined, iss }),
         302
       );
     }

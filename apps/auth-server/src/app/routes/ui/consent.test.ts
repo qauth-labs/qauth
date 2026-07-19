@@ -13,7 +13,20 @@ vi.mock('../../../config/env', () => ({
   },
 }));
 
+import { buildAuthorizationServerMetadata } from '../../helpers/discovery';
 import consentRoute from './consent';
+
+/** Issuer the mock AS is configured with; discovery shapes it the same way. */
+const ISSUER = 'https://auth.example.com';
+
+/** The `issuer` value discovery publishes — what every `iss` must byte-match. */
+const DISCOVERY_ISSUER = buildAuthorizationServerMetadata({ issuer: ISSUER })['issuer'] as string;
+
+/** The `iss` a redirect carried, percent-decoded as a conforming client reads it. */
+function issOf(redirected: string | undefined): string | null {
+  expect(redirected).toBeDefined();
+  return new URL(redirected as string).searchParams.get('iss');
+}
 
 interface TestContext {
   get?: (request: any, reply: any) => Promise<unknown>;
@@ -82,6 +95,11 @@ function makeFastify() {
       auditLogs: {
         create: vi.fn().mockResolvedValue(undefined),
       },
+    },
+    jwtUtils: {
+      // #282: consent redirects are authorization responses and echo the
+      // RFC 9207 issuer sourced from here, the same as /oauth/authorize.
+      getIssuer: () => ISSUER,
     },
     sessionUtils: {
       getSession: vi.fn(),
@@ -219,6 +237,9 @@ describe('UI /ui/consent POST — allow/deny', () => {
     expect(state.redirected).toContain('https://example.com/cb');
     expect(state.redirected).toContain('error=access_denied');
     expect(state.redirected).toContain('state=xyz');
+    // RFC 9207 §2 (#282): a user-denied request is still an authorization
+    // response, so it identifies the AS exactly like a success does.
+    expect(issOf(state.redirected)).toBe(DISCOVERY_ISSUER);
     expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
   });
 
@@ -303,6 +324,8 @@ describe('UI /ui/consent POST — allow/deny', () => {
     expect(state.redirected).toContain('https://example.com/cb');
     expect(state.redirected).toContain('code=');
     expect(state.redirected).toContain('state=xyz');
+    // #282: consent Allow is the authorization success response.
+    expect(issOf(state.redirected)).toBe(DISCOVERY_ISSUER);
   });
 
   it('persists RFC 8707 resource on the code when POST body carries resource field(s)', async () => {
@@ -435,6 +458,8 @@ describe('UI /ui/consent POST — allow/deny', () => {
     // No code minted, no grant persisted — redirected with invalid_scope.
     expect(state.redirected).toContain('error=invalid_scope');
     expect(state.redirected).toContain('state=xyz');
+    // #282: consent-scope tamper refusal is an authorization error response.
+    expect(issOf(state.redirected)).toBe(DISCOVERY_ISSUER);
     expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
     expect(fastify.repositories.oauthConsents.upsertGrant).not.toHaveBeenCalled();
   });
@@ -508,6 +533,8 @@ describe('UI /ui/consent — agent scope-mode cap (ADR-007 §2, #184)', () => {
     expect(state.redirected).toContain('https://example.com/cb');
     expect(state.redirected).toContain('error=invalid_scope');
     expect(state.redirected).toContain('state=xyz');
+    // #282: over-cap agent scope refused at consent still identifies the AS.
+    expect(issOf(state.redirected)).toBe(DISCOVERY_ISSUER);
     expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
     expect(fastify.repositories.oauthConsents.upsertGrant).not.toHaveBeenCalled();
   });
@@ -585,6 +612,7 @@ describe('UI /ui/consent — agent scope-mode cap (ADR-007 §2, #184)', () => {
     );
 
     expect(state.redirected).toContain('error=invalid_scope');
+    expect(issOf(state.redirected)).toBe(DISCOVERY_ISSUER);
     expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
   });
 
@@ -616,6 +644,8 @@ describe('UI /ui/consent — agent scope-mode cap (ADR-007 §2, #184)', () => {
 
     expect(state.redirected).toContain('error=invalid_scope');
     expect(state.redirected).toContain('state=xyz');
+    // #282: non-agent client agent-scope refusal.
+    expect(issOf(state.redirected)).toBe(DISCOVERY_ISSUER);
     // No HTML consent page was rendered.
     expect(state.body).toBeUndefined();
   });
@@ -728,6 +758,7 @@ describe('UI /ui/consent — step-up authentication (ADR-007 §2, #185)', () => 
 
     expect(state.redirected).toContain('https://example.com/cb');
     expect(state.redirected).toContain('code=');
+    expect(issOf(state.redirected)).toBe(DISCOVERY_ISSUER);
     expect(fastify.repositories.authorizationCodes.create).toHaveBeenCalledOnce();
     const events = (fastify.repositories.auditLogs.create as unknown as Mock).mock.calls.map(
       (c) => (c[0] as { event: string }).event

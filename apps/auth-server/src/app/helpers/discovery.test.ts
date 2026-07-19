@@ -4,6 +4,7 @@ import {
   buildAuthorizationServerMetadata,
   buildOpenIdConfiguration,
   DEFAULT_SCOPES_SUPPORTED,
+  resolveIssuerIdentifier,
 } from './discovery';
 
 const ISSUER = 'https://auth.example.com';
@@ -72,6 +73,14 @@ describe('buildAuthorizationServerMetadata', () => {
     expect(meta['client_id_metadata_document_supported']).toBe(true);
   });
 
+  it('advertises authorization_response_iss_parameter_supported (RFC 9207 §3, #282)', () => {
+    const meta = buildAuthorizationServerMetadata({ issuer: ISSUER });
+
+    // Unconditional: /oauth/authorize emits `iss` on every authorization
+    // response, so the flag can never be a lie regardless of deployment config.
+    expect(meta['authorization_response_iss_parameter_supported']).toBe(true);
+  });
+
   it('omits the CIMD flag entirely when disabled (does not over-advertise)', () => {
     const enabledDefault = buildAuthorizationServerMetadata({ issuer: ISSUER });
     const explicitlyOff = buildAuthorizationServerMetadata({
@@ -106,5 +115,51 @@ describe('buildOpenIdConfiguration', () => {
     });
 
     expect(oidc['client_id_metadata_document_supported']).toBe(true);
+  });
+
+  it('carries authorization_response_iss_parameter_supported into the OIDC config (RFC 9207 §3, #282)', () => {
+    // RFC 9207 §3 requires the flag wherever the AS publishes metadata; an MCP
+    // client that only reads /.well-known/openid-configuration must still learn
+    // that `iss` is emitted and therefore worth validating.
+    const oidc = buildOpenIdConfiguration({ issuer: ISSUER });
+
+    expect(oidc['authorization_response_iss_parameter_supported']).toBe(true);
+  });
+});
+
+describe('resolveIssuerIdentifier (RFC 9207 §2 verbatim contract, #282)', () => {
+  it('strips exactly one trailing slash and nothing else (RFC 8414 §2)', () => {
+    expect(resolveIssuerIdentifier(ISSUER)).toBe(ISSUER);
+    expect(resolveIssuerIdentifier(`${ISSUER}/`)).toBe(ISSUER);
+  });
+
+  it('does NOT normalise the issuer — case, default port, and encoding survive', () => {
+    // These are precisely the rewrites `new URL(...).toString()` would apply.
+    // RFC 9207 §2.4 has clients compare `iss` to their configured issuer by
+    // simple string comparison (RFC 3986 §6.2.1) with NO normalisation, so any
+    // rewrite here silently breaks every conforming client.
+    expect(resolveIssuerIdentifier('https://Auth.EXAMPLE.com')).toBe('https://Auth.EXAMPLE.com');
+    expect(resolveIssuerIdentifier('https://auth.example.com:443')).toBe(
+      'https://auth.example.com:443'
+    );
+    expect(resolveIssuerIdentifier('https://auth.example.com/tenant%2Done')).toBe(
+      'https://auth.example.com/tenant%2Done'
+    );
+    expect(resolveIssuerIdentifier('https://auth.example.com/a/../b')).toBe(
+      'https://auth.example.com/a/../b'
+    );
+  });
+
+  it('is the exact function that produces the advertised `issuer` member', () => {
+    // The invariant #282 rests on: whatever /oauth/authorize puts in `iss` is
+    // byte-identical to discovery's `issuer` because both go through here.
+    for (const raw of [ISSUER, `${ISSUER}/`, 'https://Auth.EXAMPLE.com:8443/idp']) {
+      expect(buildAuthorizationServerMetadata({ issuer: raw })['issuer']).toBe(
+        resolveIssuerIdentifier(raw)
+      );
+      expect(buildOpenIdConfiguration({ issuer: raw })['issuer']).toBe(
+        resolveIssuerIdentifier(raw)
+      );
+    }
   });
 });

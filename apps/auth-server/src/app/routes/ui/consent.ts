@@ -18,6 +18,7 @@ import {
   isLoopbackRedirect,
   redirectHost,
 } from '../../helpers/consent';
+import { resolveIssuerIdentifier } from '../../helpers/discovery';
 import { resolveEnvironmentPolicy } from '../../helpers/environment-policy';
 import { html, render, safe, safeUrl } from '../../helpers/html';
 import { buildRedirectUrl, isRedirectUriAllowedForPolicy } from '../../helpers/oauth-redirect';
@@ -343,6 +344,13 @@ export default async function (fastify: FastifyInstance) {
     async (request, reply) => {
       const query = request.query as z.infer<typeof authorizeQuerySchema>;
 
+      // RFC 9207 §2 (#282): same issuer identifier the discovery documents
+      // advertise, echoed as `iss` on every authorization response this route
+      // emits. The consent screen terminates the authorization request on both
+      // Allow and Deny, so its redirects are authorization responses too and
+      // carry the mix-up defence exactly like /oauth/authorize's.
+      const iss = resolveIssuerIdentifier(fastify.jwtUtils.getIssuer());
+
       const session = await resolveBrowserSession(fastify, request, reply);
       if (!session) {
         const returnTo = buildAuthorizeUrl(query);
@@ -384,6 +392,7 @@ export default async function (fastify: FastifyInstance) {
             error: 'invalid_scope',
             error_description: 'requested scope exceeds the agent scope mode for this client',
             state: query.state ?? undefined,
+            iss,
           }),
           302
         );
@@ -508,6 +517,13 @@ export default async function (fastify: FastifyInstance) {
     async (request, reply) => {
       const body = request.body as ConsentForm;
 
+      // RFC 9207 §2 (#282): same issuer identifier the discovery documents
+      // advertise, echoed as `iss` on every authorization response this route
+      // emits. The consent screen terminates the authorization request on both
+      // Allow and Deny, so its redirects are authorization responses too and
+      // carry the mix-up defence exactly like /oauth/authorize's.
+      const iss = resolveIssuerIdentifier(fastify.jwtUtils.getIssuer());
+
       const session = await resolveBrowserSession(fastify, request, reply);
       if (!session) {
         // No session: re-route through login then come straight back to
@@ -587,6 +603,7 @@ export default async function (fastify: FastifyInstance) {
             error: 'access_denied',
             error_description: 'User denied the authorization request.',
             state: body.state ?? undefined,
+            iss,
           }),
           302
         );
@@ -624,6 +641,7 @@ export default async function (fastify: FastifyInstance) {
             error: 'invalid_scope',
             error_description: 'requested scope exceeds the agent scope mode for this client',
             state: body.state ?? undefined,
+            iss,
           }),
           302
         );
@@ -662,6 +680,7 @@ export default async function (fastify: FastifyInstance) {
             error: 'invalid_scope',
             error_description: 'consent scope does not match the rendered authorization request',
             state: body.state ?? undefined,
+            iss,
           }),
           302
         );
@@ -826,6 +845,7 @@ export default async function (fastify: FastifyInstance) {
         buildRedirectUrl(body.redirect_uri, {
           code,
           state: body.state ?? undefined,
+          iss,
         }),
         302
       );
