@@ -457,6 +457,12 @@ importers:
         specifier: 'catalog:'
         version: 4.2.1
     devDependencies:
+      '@qauth-labs/core-crypto':
+        specifier: workspace:*
+        version: link:../../libs/core/crypto
+      '@qauth-labs/server-jwt':
+        specifier: workspace:*
+        version: link:../../libs/server/jwt
       '@vitest/coverage-v8':
         specifier: 'catalog:'
         version: 4.1.9(vitest@4.1.9)

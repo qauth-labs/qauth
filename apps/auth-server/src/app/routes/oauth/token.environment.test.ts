@@ -138,6 +138,8 @@ function makeAuthCodeStub(opts: {
     },
     jwtUtils: {
       signAccessToken: vi.fn().mockResolvedValue('access.jwt'),
+      // #275: classical posture — issueAccessToken takes the non-hybrid branch.
+      isHybridSigningEnabled: () => false,
       signIdToken: vi.fn().mockResolvedValue('id.jwt'),
       generateRefreshToken: vi
         .fn()

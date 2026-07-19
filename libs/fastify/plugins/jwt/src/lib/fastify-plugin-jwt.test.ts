@@ -543,3 +543,100 @@ describe('jwtPlugin — PQC backend gating, rotation, and seed hygiene (#248 F7/
     }
   });
 });
+
+describe('jwtPlugin — live hybrid issuance vs seed zeroization (#275 x #248 F10)', () => {
+  const PQC_ENABLED_LOCAL = ['EdDSA', 'ML-DSA-65'] as const;
+
+  async function edPemsLocal() {
+    const { privateKey, publicKey } = await generateEdDSAKeyPair(true);
+    return {
+      privateKeyPem: await exportPKCS8(privateKey),
+      publicKeyPem: await exportSPKI(publicKey),
+    };
+  }
+
+  function baseOptionsLocal(pems: { privateKeyPem: string; publicKeyPem: string }) {
+    return {
+      privateKey: pems.privateKeyPem,
+      publicKey: pems.publicKeyPem,
+      issuer: 'https://auth.test.example.com',
+      accessTokenLifespan: 900,
+      refreshTokenLifespan: 86400,
+    };
+  }
+
+  function freshSeed() {
+    const backend = getSignatureBackend('ML-DSA-65', PQC_ENABLED_LOCAL);
+    return backend.exportKey(backend.generateKeyPair({ extractable: true }).privateKey);
+  }
+
+  // The regression guard for the #275/#276 merge: #276 zeroizes the ML-DSA
+  // private key right after deriving the public half (F10), while #275 needs
+  // that same key resident to sign. Collapsing the two arms boots cleanly and
+  // only fails on the FIRST token issuance — a total /token outage that no
+  // boot-time assertion catches. Issue *and* verify here, not just register.
+  it('retains the ML-DSA private key when hybrid issuance is ON, and round-trips a token', async () => {
+    const pems = await edPemsLocal();
+    const app = Fastify({ logger: false });
+    try {
+      await app.register(jwtPlugin, {
+        ...baseOptionsLocal(pems),
+        keyId: 'ed-1',
+        mlDsaSeed: freshSeed(),
+        mlDsaKeyId: 'mldsa-1',
+        hybridSigningEnabled: true,
+        enabledSignatureAlgorithms: PQC_ENABLED_LOCAL,
+      });
+
+      expect(app.jwtUtils.isHybridSigningEnabled()).toBe(true);
+
+      const hybrid = await app.jwtUtils.signHybridAccessToken({
+        sub: 'user-1',
+        clientId: 'client-1',
+      });
+      expect(hybrid.pqcSignature.length).toBeGreaterThan(0);
+
+      const claims = await app.jwtUtils.verifyHybridAccessToken(hybrid, {
+        requirePqc: true,
+        issuer: 'https://auth.test.example.com',
+        audience: 'client-1',
+      });
+      expect(claims.sub).toBe('user-1');
+    } finally {
+      await app.close();
+    }
+  });
+
+  // The other arm: with hybrid OFF the F10 property must still hold exactly as
+  // #276 asserts it — no signing material survives boot.
+  it('still zeroizes the seed when hybrid issuance is OFF (F10 unchanged)', async () => {
+    const pems = await edPemsLocal();
+    const mlDsaBackendLocal = getSignatureBackend('ML-DSA-65', PQC_ENABLED_LOCAL);
+    let imported: MlDsaKey | undefined;
+    registerSignatureBackend({
+      ...mlDsaBackendLocal,
+      importKey(encoded, kind, options) {
+        const key = mlDsaBackendLocal.importKey(encoded, kind, options);
+        if (kind === 'private') imported = key;
+        return key;
+      },
+    });
+    const app = Fastify({ logger: false });
+    try {
+      await app.register(jwtPlugin, {
+        ...baseOptionsLocal(pems),
+        keyId: 'ed-1',
+        mlDsaSeed: freshSeed(),
+        mlDsaKeyId: 'mldsa-1',
+        enabledSignatureAlgorithms: PQC_ENABLED_LOCAL,
+      });
+
+      expect(imported).toBeDefined();
+      expect(() => imported?.seed()).toThrow(/destroyed/);
+      expect(app.jwtUtils.isHybridSigningEnabled()).toBe(false);
+    } finally {
+      resetSignatureBackends();
+      await app.close();
+    }
+  });
+});

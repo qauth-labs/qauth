@@ -5,6 +5,7 @@ import { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { env } from '../../../config/env';
 import { MIN_RESPONSE_TIME_MS } from '../../constants';
 import { authenticateClient, extractClientCredentials } from '../../helpers/client-auth';
+import { getPqcSignature } from '../../helpers/hybrid-token';
 import { getOrCreateDefaultRealm } from '../../helpers/realm';
 import { ensureMinimumResponseTime } from '../../helpers/timing';
 import { isJtiRevoked } from '../../helpers/token-revocation';
@@ -215,10 +216,19 @@ export default async function (fastify: FastifyInstance) {
           },
         });
 
+        // ADR-005 / #275 reference delivery: hand the resource server the
+        // detached ML-DSA-65 signature it cannot receive in the bearer token
+        // itself. Only reached AFTER the token verified AND the client was
+        // authorized for it, so the PQC material is never disclosed to a caller
+        // that is not already entitled to the token's claims. A store miss
+        // simply omits the fields — it never affects the `active` decision.
+        const pqc = await getPqcSignature(fastify, payload.jti, token);
+
         await ensureMinimumResponseTime(startTime, MIN_RESPONSE_TIME_MS.INTROSPECT);
 
         return reply.send({
           active: true as const,
+          ...(pqc ? { pqc_signature: pqc.pqcSignature, pqc_alg: pqc.pqcAlg } : {}),
           sub: payload.sub,
           client_id: payload.clientId,
           exp: payload.exp,

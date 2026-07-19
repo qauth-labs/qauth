@@ -35,6 +35,7 @@ import {
   resolveAccessTokenLifespanSeconds,
   resolveEnvironmentPolicy,
 } from '../../helpers/environment-policy';
+import { issueAccessToken } from '../../helpers/hybrid-token';
 import { getOrCreateDefaultRealm } from '../../helpers/realm';
 import { resolveRealmRateLimitMax } from '../../helpers/realm-rate-limit';
 import { highestAgentModeInScopes } from '../../helpers/scope-modes';
@@ -470,7 +471,7 @@ async function handleAuthorizationCode(
   // verified email attribute exists.
   const emailClaims = await resolveEmailClaims(fastify, user.id);
 
-  const accessToken = await fastify.jwtUtils.signAccessToken({
+  const accessToken = await issueAccessToken(fastify, {
     sub: user.id,
     ...emailClaims,
     clientId: client.clientId,
@@ -701,7 +702,7 @@ async function handleClientCredentials(
   // Access-token lifespan under the environment policy (ADR-008 §5, #197).
   const accessTokenExpiresIn = accessTokenLifespanForPolicy(fastify, policy);
 
-  const accessToken = await fastify.jwtUtils.signAccessToken({
+  const accessToken = await issueAccessToken(fastify, {
     sub: client.clientId,
     clientId: client.clientId,
     scope: scopeString,
@@ -1000,7 +1001,7 @@ async function handleRefreshToken(
   // BREAKING (#229): trust-ordered resolution; omitted when unverified.
   const emailClaims = await resolveEmailClaims(fastify, user.id);
 
-  const accessToken = await fastify.jwtUtils.signAccessToken({
+  const accessToken = await issueAccessToken(fastify, {
     sub: user.id,
     ...emailClaims,
     clientId: client.clientId,
@@ -1357,7 +1358,7 @@ async function handleTokenExchange(
   // BREAKING (#229): trust-ordered resolution; omitted when unverified.
   const emailClaims = await resolveEmailClaims(fastify, user.id);
 
-  const accessToken = await fastify.jwtUtils.signAccessToken({
+  const accessToken = await issueAccessToken(fastify, {
     sub: user.id,
     ...emailClaims,
     clientId: client.clientId,

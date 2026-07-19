@@ -15,6 +15,7 @@ import { resolveAudience } from '../../helpers/client-auth';
 import { verifyPasswordCredential } from '../../helpers/credential-auth';
 import { resolveEmailClaims } from '../../helpers/email-claims';
 import { checkLockout, recordFailedAttempt, resetFailedAttempts } from '../../helpers/failed-login';
+import { issueAccessToken } from '../../helpers/hybrid-token';
 import { getOrCreateSystemClient } from '../../helpers/oauth-client';
 import { getOrCreateDefaultRealm } from '../../helpers/realm';
 import { ensureMinimumResponseTime } from '../../helpers/timing';
@@ -174,7 +175,7 @@ export default async function (fastify: FastifyInstance) {
         const emailClaims = await resolveEmailClaims(fastify, user.id);
 
         // Generate access token (JWT) using JWT plugin
-        const accessToken = await fastify.jwtUtils.signAccessToken({
+        const accessToken = await issueAccessToken(fastify, {
           sub: user.id,
           ...emailClaims,
           clientId: systemClient.clientId,

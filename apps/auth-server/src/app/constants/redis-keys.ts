@@ -16,4 +16,12 @@ export const REDIS_KEYS = {
    * it self-evicts once the token would have expired.
    */
   REVOKED_ACCESS_TOKEN: (jti: string) => `revoked-access-token:${jti}`,
+  /**
+   * Detached ML-DSA-65 signature of a hybrid access token, keyed by the
+   * token's `jti` (ADR-005 / #275, `PQC_TOKEN_DELIVERY='reference'`). The ~4.4
+   * KB PQC component cannot ride in the bearer token, so it is parked here and
+   * delivered via RFC 7662 introspection. Stored with the token's remaining
+   * lifetime as TTL so it never outlives the credential it describes.
+   */
+  PQC_SIGNATURE: (jti: string) => `pqc-signature:${jti}`,
 } as const;

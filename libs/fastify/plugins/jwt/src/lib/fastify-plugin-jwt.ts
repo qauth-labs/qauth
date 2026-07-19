@@ -1,4 +1,12 @@
-import { deriveMlDsaPublicKeyAndZeroize, getSignatureBackend } from '@qauth-labs/core-crypto';
+import {
+  deriveMlDsaPublicKey,
+  deriveMlDsaPublicKeyAndZeroize,
+  getSignatureBackend,
+  type HybridSigningKey,
+  type HybridVerifyKey,
+  type MlDsaKey,
+  type PqcBackendSelection,
+} from '@qauth-labs/core-crypto';
 import {
   type AkpJwk,
   assertDistinctJwksKeyIds,
@@ -13,8 +21,10 @@ import {
   importPublicKey,
   type PublicJwk,
   signAccessToken,
+  signHybridAccessToken,
   signIdToken,
   verifyAccessToken,
+  verifyHybridAccessToken,
 } from '@qauth-labs/server-jwt';
 import { JWTInvalidError } from '@qauth-labs/shared-errors';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
@@ -80,12 +90,32 @@ export const jwtPlugin = fp<JwtPluginOptions>(
       }
     }
 
-    // ML-DSA JWKS entries (#246), including retired keys for rotation (#248 F9).
-    // Built ONCE at boot: the configured seed is expanded, the public half is
-    // derived, and the transient private key is zeroized immediately (#248 F10)
-    // — nothing but public material survives this block. Absent → JWKS stays
-    // EdDSA-only.
+    // ML-DSA keys (#246 JWKS publication, #275 live hybrid issuance, #248
+    // F9/F10 rotation + zeroization). Built ONCE at boot from the configured
+    // seed.
+    //
+    // The PUBLIC key and its JWKS entries are always retained. The PRIVATE key
+    // is retained ONLY when hybrid issuance is actually enabled:
+    //
+    // - hybrid OFF (JWKS-only) → the transient private key is zeroized the
+    //   moment the public half is derived (#248 F10). Nothing but public
+    //   material survives this block, which is the property F10 asserts.
+    // - hybrid ON → the private key MUST stay resident; it is the ML-DSA
+    //   signing key every token issuance needs. Zeroizing it here would leave
+    //   `hybridSigningKey` holding a destroyed key, and every call to /token
+    //   would throw at signing time rather than at boot.
+    //
+    // Do not collapse these two arms. F10's guarantee is scoped to deployments
+    // that publish a JWKS without issuing hybrid tokens; hybrid issuance
+    // knowingly trades it for the ability to sign at all.
     const mlDsaJwks: AkpJwk[] = [];
+    let mlDsaPublicKey: MlDsaKey | undefined;
+    let mlDsaPrivateKey: MlDsaKey | undefined;
+    // Captured alongside the keys so the hybrid sign/verify call sites below
+    // thread the OPERATOR's allowlist rather than a literal (#248 F7/F11).
+    // Never substitute `['ML-DSA-65']` here to satisfy the type — that is
+    // precisely the bypass F7 closes, and nothing else would catch it.
+    let pqcBackend: PqcBackendSelection | undefined;
     if (options.mlDsaSeed) {
       // #248 F7/F11: gate on the OPERATOR's enabled set, never a hardcoded
       // literal, so `SIGNING_ALGORITHM_MODE` is authoritative and a registered
@@ -97,13 +127,16 @@ export const jwtPlugin = fp<JwtPluginOptions>(
             'Pass cryptoEnv.enabledSignatureAlgorithms so SIGNING_ALGORITHM_MODE gates the ML-DSA backend.'
         );
       }
+      pqcBackend = { enabledSignatureAlgorithms: options.enabledSignatureAlgorithms };
       const backend = getSignatureBackend('ML-DSA-65', options.enabledSignatureAlgorithms);
-      mlDsaJwks.push(
-        exportMlDsaPublicJwk(
-          deriveMlDsaPublicKeyAndZeroize(backend.importKey(options.mlDsaSeed, 'private')),
-          options.mlDsaKeyId
-        )
-      );
+      const mlDsaPrivate = backend.importKey(options.mlDsaSeed, 'private');
+      if (options.hybridSigningEnabled === true) {
+        mlDsaPublicKey = deriveMlDsaPublicKey(mlDsaPrivate);
+        mlDsaPrivateKey = mlDsaPrivate;
+      } else {
+        mlDsaPublicKey = deriveMlDsaPublicKeyAndZeroize(mlDsaPrivate);
+      }
+      mlDsaJwks.push(exportMlDsaPublicJwk(mlDsaPublicKey, options.mlDsaKeyId));
       // Retired ML-DSA keys are published under their OWN kid so tokens signed
       // before a rotation keep verifying. Public material only — a retired key
       // is configured as a public key, never as a seed.
@@ -122,6 +155,48 @@ export const jwtPlugin = fp<JwtPluginOptions>(
       );
     }
 
+    // Hybrid issuance is live only when the operator enabled it AND the key
+    // material is present. Fail fast: a half-configured hybrid deployment must
+    // never silently fall back to classical-only issuance.
+    const hybridSigningEnabled = options.hybridSigningEnabled === true;
+    if (hybridSigningEnabled && (mlDsaPrivateKey === undefined || mlDsaPublicKey === undefined)) {
+      throw new Error(
+        'hybridSigningEnabled requires mlDsaSeed: refusing to start with hybrid signing enabled but no ML-DSA key.'
+      );
+    }
+
+    /**
+     * Ed25519 + ML-DSA-65 signing key bundle. `mlDsaKeyId` is stamped into the
+     * SIGNED `pqc_kid` protected-header member — the only copy a verifier may
+     * resolve a key from (#248 F5).
+     */
+    const hybridSigningKey: HybridSigningKey | undefined =
+      hybridSigningEnabled && mlDsaPrivateKey
+        ? {
+            ed: privateKey,
+            mlDsa: mlDsaPrivateKey,
+            ...(options.keyId !== undefined ? { edKid: options.keyId } : {}),
+            ...(options.mlDsaKeyId !== undefined ? { mlDsaKid: options.mlDsaKeyId } : {}),
+          }
+        : undefined;
+
+    /**
+     * Verification bundle. The ML-DSA key is supplied as a RESOLVER keyed on
+     * the Ed25519-SIGNED `pqc_kid` (#248 F5): a token whose signed kid does not
+     * match this server's active ML-DSA key resolves to `undefined` and
+     * verification fails closed, rather than being checked against whichever
+     * key happens to be loaded.
+     */
+    const hybridVerifyKey: HybridVerifyKey | undefined = mlDsaPublicKey
+      ? {
+          ed: publicKey,
+          mlDsa: (signedPqcKid) => {
+            if (options.mlDsaKeyId === undefined) return mlDsaPublicKey;
+            return signedPqcKid === options.mlDsaKeyId ? mlDsaPublicKey : undefined;
+          },
+        }
+      : undefined;
+
     const jwtUtils: JwtUtils = {
       async signAccessToken(payload) {
         // `expiresInOverride` lets callers shorten a token below the configured
@@ -131,6 +206,37 @@ export const jwtPlugin = fp<JwtPluginOptions>(
         const { expiresInOverride, ...claims } = payload;
         const expiresIn = expiresInOverride ?? options.accessTokenLifespan;
         return signAccessToken(claims, privateKey, options.issuer, expiresIn);
+      },
+      isHybridSigningEnabled() {
+        return hybridSigningEnabled;
+      },
+      async signHybridAccessToken(payload) {
+        if (!hybridSigningKey || !pqcBackend) {
+          throw new Error('Hybrid signing is not enabled on this server.');
+        }
+        // Same lifespan semantics as the classical signer: `expiresInOverride`
+        // may only NARROW the configured lifespan (RFC 8693 clamping).
+        const { expiresInOverride, ...claims } = payload;
+        const expiresIn = expiresInOverride ?? options.accessTokenLifespan;
+        return signHybridAccessToken(
+          claims,
+          hybridSigningKey,
+          options.issuer,
+          expiresIn,
+          pqcBackend
+        );
+      },
+      async verifyHybridAccessToken(hybrid, verifyOptions) {
+        if (!hybridVerifyKey || !pqcBackend) {
+          throw new JWTInvalidError('PQC verification is not configured on this server');
+        }
+        // `requirePqc` is a FLOOR, not the downgrade control: verifyHybrid
+        // treats the issuer-signed `pqc_alg` as binding on its own (#248 F1).
+        const claims = await verifyHybridAccessToken(hybrid, hybridVerifyKey, {
+          ...verifyOptions,
+          ...pqcBackend,
+        });
+        return claims as unknown as JWTPayload;
       },
       async signIdToken(payload) {
         // OIDC ID tokens share the access-token signing key (one JWKS verifies

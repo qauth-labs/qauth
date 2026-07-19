@@ -14,6 +14,7 @@ import {
 } from './hybrid-constants';
 import { extractJwsSigningInput, signHybrid, verifyHybrid } from './hybrid-signing';
 import { generateSigningKeyPair } from './key-management';
+import { sign } from './signing';
 
 const ISSUER = 'https://auth.example.com';
 const AUDIENCE = 'client-1';
@@ -152,19 +153,95 @@ describe('hybrid signing (#245) — downgrade / stripping / mix-and-match', () =
     ).rejects.toThrow(/downgrade/);
   });
 
-  it('accepts a classical-only token when requirePqc is false', async () => {
+  // #275 / #248 F1 — THE downgrade-resistance test. Before this, stripping the
+  // detached signature off a token whose ISSUER signed `pqc_alg` was accepted
+  // whenever the verifier happened to pass requirePqc: false, making downgrade
+  // resistance a per-call policy flag. The signed header is now binding.
+  it('F1: rejects a stripped PQC signature EVEN WITH requirePqc=false when the signed header carries pqc_alg', async () => {
     const { ed, mlDsa } = await makeKeys();
     const hybrid = await signHybrid(
       { sub: 'u' },
       { ed: ed.privateKey, mlDsa: mlDsa.privateKey },
       signOpts
     );
+    // Sanity: the issuer really did sign the PQC assertion.
+    const { protectedHeader } = await jwtVerify(hybrid.token, ed.publicKey, {
+      algorithms: ['EdDSA'],
+    });
+    expect(protectedHeader['pqc_alg']).toBe(PQC_ALG_ML_DSA_65);
+
+    await expect(
+      verifyHybrid(
+        { ...hybrid, pqcSignature: '' },
+        { ed: ed.publicKey, mlDsa: mlDsa.publicKey },
+        { ...vopts, requirePqc: false }
+      )
+    ).rejects.toThrow(/downgrade attempt/);
+  });
+
+  it('F1: rejects when the transport pqcAlg contradicts the signed pqc_alg', async () => {
+    const { ed, mlDsa } = await makeKeys();
+    const hybrid = await signHybrid(
+      { sub: 'u' },
+      { ed: ed.privateKey, mlDsa: mlDsa.privateKey },
+      signOpts
+    );
+    const lying = { ...hybrid, pqcAlg: 'ML-DSA-44' as unknown as typeof PQC_ALG_ML_DSA_65 };
+    await expect(
+      verifyHybrid(lying, { ed: ed.publicKey, mlDsa: mlDsa.publicKey }, vopts)
+    ).rejects.toThrow(/does not match the signed pqc_alg/);
+  });
+
+  it('accepts a purely classical token (no signed pqc_alg) when requirePqc is false', async () => {
+    const { ed, mlDsa } = await makeKeys();
+    // A plain Ed25519 JWS with NO pqc_alg header — the issuer asserted nothing.
+    const token = await sign({ sub: 'u' }, ed.privateKey, 'EdDSA', signOpts);
     const claims = await verifyHybrid(
-      { ...hybrid, pqcSignature: '' },
+      { token, pqcSignature: '', pqcAlg: PQC_ALG_ML_DSA_65 },
       { ed: ed.publicKey, mlDsa: mlDsa.publicKey },
       { ...vopts, requirePqc: false }
     );
     expect(claims['sub']).toBe('u');
+  });
+
+  it('rejects a purely classical token when requirePqc is true', async () => {
+    const { ed, mlDsa } = await makeKeys();
+    const token = await sign({ sub: 'u' }, ed.privateKey, 'EdDSA', signOpts);
+    await expect(
+      verifyHybrid(
+        { token, pqcSignature: '', pqcAlg: PQC_ALG_ML_DSA_65 },
+        { ed: ed.publicKey, mlDsa: mlDsa.publicKey },
+        vopts
+      )
+    ).rejects.toThrow(/asserts no pqc_alg/);
+  });
+
+  it('ignores an unvouched-for PQC signature attached to a token with no signed pqc_alg', async () => {
+    const { ed, mlDsa } = await makeKeys();
+    // A real, cryptographically valid ML-DSA signature over this token's
+    // signing-input — but the issuer never signed a pqc_alg assertion, so the
+    // verifier must not treat the token as PQC-protected.
+    const token = await sign({ sub: 'u' }, ed.privateKey, 'EdDSA', signOpts);
+    const pqcSignature = Buffer.from(
+      noble.sign(mlDsa.privateKey, extractJwsSigningInput(token))
+    ).toString('base64url');
+
+    // requirePqc=false → verifies classically, PQC material disregarded.
+    await expect(
+      verifyHybrid(
+        { token, pqcSignature, pqcAlg: PQC_ALG_ML_DSA_65 },
+        { ed: ed.publicKey, mlDsa: mlDsa.publicKey },
+        { ...vopts, requirePqc: false }
+      )
+    ).resolves.toBeDefined();
+    // requirePqc=true → an unsigned assertion cannot satisfy the policy.
+    await expect(
+      verifyHybrid(
+        { token, pqcSignature, pqcAlg: PQC_ALG_ML_DSA_65 },
+        { ed: ed.publicKey, mlDsa: mlDsa.publicKey },
+        vopts
+      )
+    ).rejects.toThrow(/asserts no pqc_alg/);
   });
 
   it('rejects mix-and-match: token A body with token B PQC signature', async () => {
@@ -357,5 +434,161 @@ describe('hybrid signing (#248 F7/F11) — the operator allowlist is authoritati
     } finally {
       resetSignatureBackends();
     }
+  });
+});
+
+describe('hybrid signing — error normalisation on the verify path', () => {
+  const vopts = {
+    requirePqc: true,
+    algorithms: ['EdDSA' as const],
+    issuer: ISSUER,
+    audience: AUDIENCE,
+    enabledSignatureAlgorithms: PQC_ENABLED,
+  };
+
+  it('normalises a THROWING key resolver into a CryptoVerificationError', async () => {
+    const { ed, mlDsa } = await makeKeys();
+    const hybrid = await signHybrid(
+      { sub: 'u' },
+      { ed: ed.privateKey, mlDsa: mlDsa.privateKey, mlDsaKid: 'mldsa-1' },
+      signOpts
+    );
+
+    // A resolver reaching a JWKS cache / DB / network can reject with anything.
+    // Callers catch CryptoVerificationError; an unresolvable key must not
+    // escape as a generic Error and turn a 401 into a 500.
+    const boom = new Error('jwks backend unreachable');
+    await expect(
+      verifyHybrid(
+        hybrid,
+        {
+          ed: ed.publicKey,
+          mlDsa: () => {
+            throw boom;
+          },
+        },
+        vopts
+      )
+    ).rejects.toBeInstanceOf(CryptoVerificationError);
+
+    const error = await verifyHybrid(
+      hybrid,
+      {
+        ed: ed.publicKey,
+        mlDsa: () => Promise.reject(boom),
+      },
+      vopts
+    ).catch((e: unknown) => e);
+    // The underlying failure stays attached for diagnosis.
+    expect((error as { cause?: unknown }).cause).toBe(boom);
+  });
+
+  it('lets an OPERATOR misconfiguration propagate as itself, not as a token error', async () => {
+    const { ed, mlDsa } = await makeKeys();
+    const hybrid = await signHybrid(
+      { sub: 'u' },
+      { ed: ed.privateKey, mlDsa: mlDsa.privateKey },
+      signOpts
+    );
+
+    // A disabled ML-DSA-65 is a SIGNING_ALGORITHM_MODE problem. Normalising it
+    // into "invalid token" would tell an operator their tokens are bad when
+    // their allowlist is wrong, and would defeat the F7/F11 refusal.
+    const error = await verifyHybrid(
+      hybrid,
+      { ed: ed.publicKey, mlDsa: mlDsa.publicKey },
+      { ...vopts, enabledSignatureAlgorithms: ['EdDSA'] as const }
+    ).catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(Error);
+    expect(error).not.toBeInstanceOf(CryptoVerificationError);
+    expect((error as Error).message).toMatch(/'ML-DSA-65' is not enabled/);
+  });
+});
+
+describe('hybrid signing (#275) — F5: key resolution binds to the SIGNED pqc_kid', () => {
+  const vopts = {
+    requirePqc: true,
+    algorithms: ['EdDSA' as const],
+    issuer: ISSUER,
+    audience: AUDIENCE,
+    enabledSignatureAlgorithms: PQC_ENABLED,
+  };
+
+  it('never emits an unsigned pqcKid transport field', async () => {
+    const { ed, mlDsa } = await makeKeys();
+    const hybrid = await signHybrid(
+      { sub: 'u' },
+      { ed: ed.privateKey, mlDsa: mlDsa.privateKey, mlDsaKid: 'mldsa-1' },
+      signOpts
+    );
+    expect(hybrid).not.toHaveProperty('pqcKid');
+    // The kid lives ONLY in the Ed25519-signed protected header.
+    const { protectedHeader } = await jwtVerify(hybrid.token, ed.publicKey, {
+      algorithms: ['EdDSA'],
+    });
+    expect(protectedHeader['pqc_kid']).toBe('mldsa-1');
+  });
+
+  it('passes the SIGNED pqc_kid to the resolver and verifies with the key it returns', async () => {
+    const { ed, mlDsa } = await makeKeys();
+    const hybrid = await signHybrid(
+      { sub: 'u' },
+      { ed: ed.privateKey, mlDsa: mlDsa.privateKey, mlDsaKid: 'mldsa-1' },
+      signOpts
+    );
+    const seen: (string | undefined)[] = [];
+    const claims = await verifyHybrid(
+      hybrid,
+      {
+        ed: ed.publicKey,
+        mlDsa: (kid) => {
+          seen.push(kid);
+          return kid === 'mldsa-1' ? mlDsa.publicKey : undefined;
+        },
+      },
+      vopts
+    );
+    expect(seen).toEqual(['mldsa-1']);
+    expect(claims['sub']).toBe('u');
+  });
+
+  it('fails closed when the resolver cannot resolve the signed pqc_kid', async () => {
+    const { ed, mlDsa } = await makeKeys();
+    const hybrid = await signHybrid(
+      { sub: 'u' },
+      { ed: ed.privateKey, mlDsa: mlDsa.privateKey, mlDsaKid: 'mldsa-1' },
+      signOpts
+    );
+    await expect(
+      verifyHybrid(hybrid, { ed: ed.publicKey, mlDsa: () => undefined }, vopts)
+    ).rejects.toThrow(/no ML-DSA-65 key resolved/);
+  });
+
+  it('an attacker-supplied kid cannot steer key resolution — only the signed one is consulted', async () => {
+    const { ed, mlDsa } = await makeKeys();
+    const attacker = noble.generateKeyPair({ extractable: true });
+    const hybrid = await signHybrid(
+      { sub: 'u' },
+      { ed: ed.privateKey, mlDsa: mlDsa.privateKey, mlDsaKid: 'mldsa-1' },
+      signOpts
+    );
+    // Attach an unsigned kid hint pointing at the attacker's key. The resolver
+    // is a JWKS-like map; it must only ever be asked for the signed kid.
+    const tampered = { ...hybrid, pqcKid: 'attacker-key' } as typeof hybrid;
+    const resolve = (kid: string | undefined) =>
+      kid === 'attacker-key' ? attacker.publicKey : kid === 'mldsa-1' ? mlDsa.publicKey : undefined;
+
+    const claims = await verifyHybrid(tampered, { ed: ed.publicKey, mlDsa: resolve }, vopts);
+    expect(claims['sub']).toBe('u');
+
+    // Proof the attacker key would NOT have verified this signature.
+    expect(() =>
+      noble.verify(
+        attacker.publicKey,
+        extractJwsSigningInput(hybrid.token),
+        new Uint8Array(Buffer.from(hybrid.pqcSignature, 'base64url'))
+      )
+    ).toThrow();
   });
 });

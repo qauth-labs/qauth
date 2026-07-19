@@ -27,6 +27,8 @@
     "zod": "catalog:"
   },
   "devDependencies": {
+    "@qauth-labs/core-crypto": "workspace:*",
+    "@qauth-labs/server-jwt": "workspace:*",
     "@vitest/coverage-v8": "catalog:",
     "@vitest/ui": "catalog:",
     "pino-pretty": "catalog:",

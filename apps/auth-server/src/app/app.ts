@@ -121,10 +121,12 @@ export async function app(fastify: FastifyInstance, opts: object) {
     // rejected everywhere it is used as a bearer credential. Resolved lazily
     // via the `fastify.redis` decorator (cache plugin registered above).
     isTokenRevoked: (jti) => isJtiRevoked(fastify, jti),
-    // #246: when hybrid signing is enabled, publish the ML-DSA public key as an
-    // AKP JWK on /.well-known/jwks.json alongside the Ed25519 OKP key. The
-    // config's fail-fast coupling guarantees the seed is present when the flag
-    // is on. No ML-DSA-signed token is issued yet (that awaits #247/#248).
+    // ADR-005: when hybrid signing is enabled, publish the ML-DSA public key as
+    // an AKP JWK on /.well-known/jwks.json alongside the Ed25519 OKP key
+    // (#246), AND mint live hybrid access tokens (#275). The config's fail-fast
+    // coupling guarantees the seed is present when the flag is on; the plugin
+    // additionally refuses to start if it is not. Default OFF.
+    //
     // #248 F7/F11: the plugin resolves the ML-DSA backend through
     // `getSignatureBackend`, so it must see the operator's SIGNING_ALGORITHM_MODE
     // allowlist rather than a hardcoded literal.
@@ -132,6 +134,9 @@ export async function app(fastify: FastifyInstance, opts: object) {
       ? {
           mlDsaSeed: env.JWT_MLDSA_PRIVATE_KEY,
           mlDsaKeyId: env.JWT_MLDSA_KID,
+          hybridSigningEnabled: true,
+          // #248 F7/F11: honour the operator-enabled algorithm set at the live
+          // call site instead of a hardcoded allowlist.
           enabledSignatureAlgorithms: env.enabledSignatureAlgorithms,
         }
       : {}),

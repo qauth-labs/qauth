@@ -7,7 +7,7 @@ import {
   PQC_HEADER_KID_MEMBER,
 } from './hybrid-constants';
 import type { MlDsaKey, SigningKey } from './keys';
-import { sign, type SignOptions, verify, type VerifyOptions } from './signing';
+import { sign, type SignOptions, type VerifyOptions, verifyWithHeader } from './signing';
 
 /**
  * Hybrid PQC signing (ADR-005, #245): a DETACHED PARALLEL signature combining a
@@ -29,10 +29,15 @@ import { sign, type SignOptions, verify, type VerifyOptions } from './signing';
  * This deliberately deviates from the strict single-alg-id + concatenated
  * composite of the LAMPS / `draft-ietf-jose-pq-composite-sigs` line of drafts
  * (which a stock verifier cannot parse,
- * violating AC#2). Downgrade resistance within a single bearer token is
- * therefore a VERIFIER-POLICY concern (`requirePqc`), not cryptographic — the
- * `pqc_alg` member must be non-critical to keep classical verifiers working, so
- * it cannot force rejection. Documented for the #248 security review.
+ * violating AC#2). A CLASSICAL verifier cannot be forced to reject a stripped
+ * token, because `pqc_alg` must stay non-critical for it to keep working.
+ *
+ * A PQC-AWARE verifier, however, does not get that latitude: since #275 (#248
+ * finding F1) {@link verifyHybrid} treats a PRESENT, Ed25519-SIGNED `pqc_alg`
+ * as BINDING — the detached signature must then be present and valid
+ * regardless of the `requirePqc` flag. Downgrade resistance is therefore an
+ * ISSUER-SIGNED control on this code path, not a per-call policy toggle;
+ * `requirePqc` only governs tokens whose issuer made no PQC assertion at all.
  */
 export interface HybridSigningKey {
   /** Classical Ed25519 private key (existing JWT signing key). */
@@ -45,11 +50,31 @@ export interface HybridSigningKey {
   mlDsaKid?: string;
 }
 
+/**
+ * Resolves the ML-DSA-65 public key to verify with, from the key id the ISSUER
+ * SIGNED into the `pqc_kid` protected-header member (#248 F5).
+ *
+ * The argument is always the value read from the Ed25519-verified protected
+ * header — never an unauthenticated transport field — so an attacker cannot
+ * steer verification at a key of their choosing. Return `undefined` when the
+ * kid is unknown; {@link verifyHybrid} then fails closed.
+ *
+ * @param signedPqcKid - Verified `pqc_kid`, or `undefined` when the issuer
+ *   stamped no key id (single-active-key deployments).
+ */
+export type MlDsaKeyResolver = (
+  signedPqcKid: string | undefined
+) => MlDsaKey | undefined | Promise<MlDsaKey | undefined>;
+
 export interface HybridVerifyKey {
   /** Classical Ed25519 public key. */
   ed: SigningKey;
-  /** ML-DSA-65 public key. */
-  mlDsa: MlDsaKey;
+  /**
+   * ML-DSA-65 public key, or a {@link MlDsaKeyResolver} invoked with the SIGNED
+   * `pqc_kid`. Pass a resolver whenever more than one ML-DSA key may be active
+   * (rotation, multi-issuer JWKS); a bare key is the single-active-key case.
+   */
+  mlDsa: MlDsaKey | MlDsaKeyResolver;
 }
 
 /**
@@ -73,10 +98,17 @@ export interface HybridSignedToken {
   token: string;
   /** base64url detached ML-DSA-65 signature over `token`'s JWS signing-input. */
   pqcSignature: string;
-  /** The parallel PQC algorithm (`ML-DSA-65`); mirrors the `pqc_alg` header. */
+  /**
+   * The parallel PQC algorithm (`ML-DSA-65`). This is an UNAUTHENTICATED
+   * transport hint: {@link verifyHybrid} cross-checks it against the signed
+   * `pqc_alg` protected-header member and rejects on mismatch. Never use it to
+   * negotiate an algorithm on its own.
+   *
+   * There is deliberately NO `pqcKid` companion field (#248 F5): a key id that
+   * drives key resolution must come from the signed header, so carrying an
+   * unsigned copy would only invite misuse.
+   */
   pqcAlg: typeof PQC_ALG_ML_DSA_65;
-  /** The ML-DSA key id, if configured (for JWKS resolution, #246). */
-  pqcKid?: string;
 }
 
 /**
@@ -116,22 +148,38 @@ export async function signHybrid(
   const signingInput = extractJwsSigningInput(token);
   const pqcSignature = Buffer.from(backend.sign(keys.mlDsa, signingInput)).toString('base64url');
 
-  return {
-    token,
-    pqcSignature,
-    pqcAlg: PQC_ALG_ML_DSA_65,
-    ...(keys.mlDsaKid !== undefined ? { pqcKid: keys.mlDsaKid } : {}),
-  };
+  // The key id is deliberately NOT echoed as an unsigned transport field: the
+  // authoritative copy is the `pqc_kid` member inside the Ed25519-signed
+  // protected header, which is what verifyHybrid resolves keys from (#248 F5).
+  return { token, pqcSignature, pqcAlg: PQC_ALG_ML_DSA_65 };
 }
 
 /**
  * Verify a hybrid token. Always verifies the classical Ed25519 component
- * (`token`) via the stock {@link verify}. The ML-DSA-65 component is verified
- * when present; with `requirePqc: true` an absent or invalid PQC signature is
- * rejected. Returns the verified claims.
+ * (`token`), then applies the PQC policy below and returns the verified claims.
  *
- * @throws CryptoVerificationError if either verified component fails, or if
- * `requirePqc` is set and the PQC signature is missing.
+ * ## Downgrade resistance is ISSUER-SIGNED (#248 F1)
+ *
+ * Every PQC decision is driven by the Ed25519-AUTHENTICATED protected header,
+ * never by the unsigned transport fields of {@link HybridSignedToken}:
+ *
+ * - **Signed `pqc_alg` present** → BINDING, irrespective of `requirePqc`. The
+ *   detached signature MUST be present and valid, and `hybrid.pqcAlg` must
+ *   match the signed value. Stripping `pqcSignature` off such a token is
+ *   rejected even with `requirePqc: false` — an attacker cannot strip their way
+ *   back to classical-only.
+ * - **No signed `pqc_alg`** → the issuer asserted nothing post-quantum. With
+ *   `requirePqc: true` the token is rejected; otherwise it verifies as an
+ *   ordinary Ed25519 token. Any attached `pqcSignature` is IGNORED, because
+ *   nothing the issuer signed vouches for it.
+ *
+ * The ML-DSA key is resolved from the signed `pqc_kid` (#248 F5) when the
+ * caller supplies a {@link MlDsaKeyResolver}.
+ *
+ * @throws CryptoVerificationError if the classical component fails, if a signed
+ * PQC assertion is unsatisfied (absent/mismatched/invalid signature), if no
+ * ML-DSA key resolves for the signed `pqc_kid`, or if `requirePqc` is set on a
+ * token carrying no signed PQC assertion.
  */
 export async function verifyHybrid(
   hybrid: HybridSignedToken,
@@ -139,32 +187,97 @@ export async function verifyHybrid(
   options: VerifyOptions & PqcBackendSelection & { requirePqc: boolean }
 ): Promise<Record<string, unknown>> {
   // 1. Classical Ed25519 — covers the header (incl. pqc_alg/pqc_kid) + payload.
-  const claims = await verify(hybrid.token, keys.ed, { ...options, algorithms: ['EdDSA'] });
+  //    `algorithms` is pinned AFTER the spread so a caller cannot inject `none`.
+  const { claims, protectedHeader } = await verifyWithHeader(hybrid.token, keys.ed, {
+    ...options,
+    algorithms: ['EdDSA'],
+  });
 
-  // 2. PQC component.
-  const hasPqc = typeof hybrid.pqcSignature === 'string' && hybrid.pqcSignature.length > 0;
-  if (!hasPqc) {
+  // 2. Read the issuer's PQC assertion from the AUTHENTICATED header only.
+  const signedPqcAlg = protectedHeader[PQC_HEADER_ALG_MEMBER];
+  const hasPqcSignature = typeof hybrid.pqcSignature === 'string' && hybrid.pqcSignature.length > 0;
+
+  if (signedPqcAlg === undefined) {
+    // No issuer-signed PQC assertion. An attached signature is unvouched-for,
+    // so it can neither be trusted nor satisfy a `requirePqc` policy.
     if (options.requirePqc) {
       throw new CryptoVerificationError('invalid', {
-        detail: 'PQC signature required but absent (possible downgrade)',
+        detail: 'PQC signature required but the signed header asserts no pqc_alg',
       });
     }
     return claims;
   }
 
-  if (hybrid.pqcAlg !== PQC_ALG_ML_DSA_65) {
+  // From here the issuer SIGNED a PQC assertion: it is binding.
+  if (signedPqcAlg !== PQC_ALG_ML_DSA_65) {
     throw new CryptoVerificationError('invalid', {
-      detail: `unsupported pqc_alg: ${String(hybrid.pqcAlg)}`,
+      detail: `unsupported signed pqc_alg: ${String(signedPqcAlg)}`,
     });
   }
+  if (!hasPqcSignature) {
+    throw new CryptoVerificationError('invalid', {
+      detail: 'signed pqc_alg present but PQC signature absent (downgrade attempt)',
+    });
+  }
+  // Cross-check the unsigned transport hint against the signed truth: they must
+  // agree, so a mismatched hint can never route verification elsewhere.
+  if (hybrid.pqcAlg !== signedPqcAlg) {
+    throw new CryptoVerificationError('invalid', {
+      detail: 'pqcAlg does not match the signed pqc_alg header',
+    });
+  }
+
+  // 3. Resolve the ML-DSA key from the SIGNED pqc_kid (#248 F5).
+  const signedPqcKid = protectedHeader[PQC_HEADER_KID_MEMBER];
+  if (signedPqcKid !== undefined && typeof signedPqcKid !== 'string') {
+    throw new CryptoVerificationError('invalid', {
+      detail: 'signed pqc_kid is not a string',
+    });
+  }
+  // The resolver is caller-supplied and may reach a JWKS cache, a database, or
+  // the network, so it can reject with anything. Normalise to a verification
+  // failure: an unresolvable key is a token we cannot verify, and callers must
+  // not have to distinguish that from any other verification error.
+  let mlDsaKey: MlDsaKey | undefined;
+  try {
+    mlDsaKey = typeof keys.mlDsa === 'function' ? await keys.mlDsa(signedPqcKid) : keys.mlDsa;
+  } catch (cause) {
+    throw new CryptoVerificationError('invalid', {
+      detail: 'failed to resolve an ML-DSA-65 key for the signed pqc_kid',
+      cause,
+    });
+  }
+  if (mlDsaKey === undefined) {
+    throw new CryptoVerificationError('invalid', {
+      detail: 'no ML-DSA-65 key resolved for the signed pqc_kid',
+    });
+  }
+
+  // Resolved OUTSIDE the try below on purpose: a disabled ML-DSA-65 is an
+  // OPERATOR MISCONFIGURATION (SIGNING_ALGORITHM_MODE), not a bad token, and
+  // must keep propagating as itself. Normalising it into a verification error
+  // would tell an operator their tokens are invalid when their allowlist is
+  // wrong — and would silently defeat the F7/F11 refusal test.
+  const backend = getSignatureBackend('ML-DSA-65', options.enabledSignatureAlgorithms);
+
   const signingInput = extractJwsSigningInput(hybrid.token);
   const signatureBytes = new Uint8Array(Buffer.from(hybrid.pqcSignature, 'base64url'));
-  // Throws CryptoVerificationError('invalid') on any failure.
-  getSignatureBackend('ML-DSA-65', options.enabledSignatureAlgorithms).verify(
-    keys.mlDsa,
-    signingInput,
-    signatureBytes
-  );
+  // The cross product of #275 and #276: the key comes from the SIGNED pqc_kid
+  // (F5), and the backend from the operator allowlist (F7/F11). Taking either
+  // branch's line alone silently drops the other's control.
+  //
+  // The noble backend throws CryptoVerificationError already, but a REGISTERED
+  // backend (the native #244 addon, or any third-party one) is outside our
+  // control, so normalise anything else it throws.
+  try {
+    backend.verify(mlDsaKey, signingInput, signatureBytes);
+  } catch (cause) {
+    if (cause instanceof CryptoVerificationError) throw cause;
+    throw new CryptoVerificationError('invalid', {
+      detail: 'ML-DSA-65 signature verification failed',
+      cause,
+    });
+  }
 
   return claims;
 }
