@@ -58,13 +58,26 @@ describe('selectJwksKey — resolution is keyed on (kid, alg), never kid alone (
     ).toBeUndefined();
   });
 
-  it('resolves without a kid ONLY while one key of that algorithm exists', () => {
+  it('resolves an unkeyed selector to the unkeyed entry', () => {
     const single = [okp(), akp()];
     expect(selectJwksKey(single, { alg: 'EdDSA' })).toBe(single[0]);
     expect(selectJwksKey(single, { alg: 'ML-DSA-65' })).toBe(single[1]);
+  });
 
-    // Once rotation publishes a second EdDSA key, an unkeyed selector is
-    // ambiguous and must fail closed rather than guess the active one.
+  it('keeps unkeyed tokens verifiable once rotation publishes a kid-bearing key', () => {
+    // The rotation-compatibility case. An unkeyed selector must address ONLY
+    // the un-`kid`-ed entry — treating it as a wildcard over the algorithm
+    // would make the selector ambiguous the moment the first retired key is
+    // published, breaking every still-valid token signed before a `kid` was
+    // configured.
+    const rotating = [okp(), okp('ed-2025')];
+    expect(selectJwksKey(rotating, { alg: 'EdDSA' })).toBe(rotating[0]);
+
+    const rotatingPqc = [akp(), akp('mldsa-2025')];
+    expect(selectJwksKey(rotatingPqc, { alg: 'ML-DSA-65' })).toBe(rotatingPqc[0]);
+  });
+
+  it('fails closed for an unkeyed selector when every entry carries a kid', () => {
     expect(selectJwksKey([okp('ed-2026'), okp('ed-2025')], { alg: 'EdDSA' })).toBeUndefined();
   });
 

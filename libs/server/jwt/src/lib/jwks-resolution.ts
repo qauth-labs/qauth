@@ -37,9 +37,14 @@ function expectedKty(alg: string): string | undefined {
  * - the matched entry's `kty` contradicts its `alg` (a malformed or tampered
  *   JWKS trying to steer an ML-DSA key into the Ed25519 path, or vice versa).
  *
- * A selector without a `kid` matches only when the JWKS holds exactly one entry
- * of that algorithm — the legacy single-active-key case. As soon as rotation
- * publishes a retired key, `kid` becomes mandatory in practice.
+ * A selector without a `kid` addresses only the entry that itself has no `kid`
+ * — the legacy single-active-key shape. It is NOT a wildcard over that
+ * algorithm: matching every entry would mean that publishing the first retired
+ * (kid-bearing) key turns the selector ambiguous and breaks verification for
+ * every still-valid token signed before a `kid` was configured. Since
+ * {@link assertDistinctJwksKeyIds} permits at most one un-`kid`-ed entry per
+ * algorithm, this resolves deterministically, and rotation stays backwards
+ * compatible with unkeyed tokens.
  *
  * @param keys - Published JWKS entries.
  * @param selector - `(kid, alg)` to resolve; see {@link JwksKeySelector}.
@@ -51,8 +56,9 @@ export function selectJwksKey(
 ): PublishedJwk | undefined {
   const matches = keys.filter((key) => {
     if (key['alg'] !== selector.alg) return false;
-    // An entry without a `kid` is only addressable by an unkeyed selector.
-    return selector.kid === undefined ? true : key['kid'] === selector.kid;
+    // An entry without a `kid` is only addressable by an unkeyed selector, and
+    // an unkeyed selector addresses only that entry — never a kid-bearing one.
+    return selector.kid === undefined ? key['kid'] === undefined : key['kid'] === selector.kid;
   });
 
   if (matches.length !== 1) return undefined;
