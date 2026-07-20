@@ -62,7 +62,8 @@ Implementing Regulation (EU) 2024/2977 of 28 November 2024 (OJ L, 2024/2977,
 "Mandatory person identification data for the natural person", lists exactly five
 attributes: `family_name`, `given_name`, `birth_date`, `birth_place`,
 `nationality`. None is an identifier. (That is the position under the act
-currently in force; a pending amendment would add a sixth — see
+currently in force, re-confirmed 2026-07-20; a pending amendment would replace the
+Annex with a six-row Table 1 adding `portrait` — see
 [Citation notes](#citation-notes).)
 
 Table 5 (metadata about the person identification data) adds mandatory
@@ -295,10 +296,37 @@ credential as an assurance input rather than a session primitive.
    a technical specification containing a profile or extension of the [W3C
    WebAuthn] specification compliant with the HLRs specified in this Topic." The
    Commission's published technical-specification register (TS1–TS14) contains no
-   pseudonym TS. Note that the 2026 refinement round (18 May 2026) marks **both
-   PA_21 and PA_22 "Remove"** — so this gate may clear by the obligation being
-   deleted rather than discharged, which is a materially different outcome and
-   would leave the mechanism unspecified rather than specified.
+   pseudonym TS. Note that the 2026 refinement round (18 May 2026, still current at
+   v1.2 of 26 June 2026) marks **both PA_21 and PA_22 "Remove"** — so this gate may
+   clear by the obligation being deleted rather than discharged, which is a
+   materially different outcome and would leave the mechanism unspecified rather
+   than specified. Re-checked 2026-07-20: that marking sits in a discussion paper
+   whose §5 preamble calls its contents "draft proposals … up for further
+   discussion", and PA_21 remains a live SHALL in normative Annex 2 on both the
+   v2.9.0 tag and `main`. Nothing has been removed yet. But the deletion reading is
+   the better-supported one: PA_15–PA_17 in the same table are marked "Remove (as
+   covered by the new HLRs …)" while PA_21 and PA_22 carry a **bare "Remove" with
+   no substitution clause**, and no replacement obligation to produce a pseudonym
+   technical specification appears anywhere in the proposed PA_01–PA_31 set.
+
+   **Consequence for how this gate is written.** A gate keyed to PA*21's existence
+   would be satisfied \_vacuously* — it would report success at the moment the
+   obligation disappears, which inverts its purpose. When #300 implements
+   `SubjectResolutionStrategy`, key the `rp-pseudonym` gate to the substantive
+   condition PA_21 stands proxy for — a publicly available pseudonym technical
+   specification plus a binding unlinkability guarantee — not to the presence of
+   PA_21 in a document. The nearest proposed successors, PA_02a ("A Wallet Unit
+   SHALL ensure unlinkability of Pseudonyms") and PA_02b, do not close this: PA_02b
+   is only a SHOULD and is itself conditioned on "if a related technical
+   specification is publicly available". That conditioning is systemic — the
+   qualifier "if a common technical specification enabling this is available" is
+   newly attached to proposed PA_09 through PA_13, and the paper's own §4.2.2
+   records "No dedicated specification" for Attested Pseudonyms and "no
+   specification ready" for ZKP-based Pseudonyms. The direction of travel across
+   the whole topic is from firm obligation toward obligation contingent on
+   specifications that do not exist, so this dependency may never produce a hard,
+   checkable commitment.
+
 2. **The requirement is being weakened, not hardened.** ARF Annex 2 `PA_22` changed
    from SHALL to MAY between v2.5.0 and v2.9.0 — v2.5.0: "Wallet Providers SHALL
    ensure that their Wallet Solution supports the [W3C WebAuthn] specification…";
@@ -327,9 +355,10 @@ reasons differ from the ones assumed, and two prior claims do not survive.
 **ISO mDL does not prevent linking.** The standard (ISO/IEC 18013-5:2021) is
 paywalled and was not read; no clause of it is quoted here. What is publicly
 verifiable contradicts the assumption that mDL solves this. AAMVA's _Mobile
-Driver's License Implementation Guidelines_ r1.3 §4.6 "No tracking" (r1.3 is the
-release read end-to-end; r1.4 and a v1.6 for Digital Trust Service participants
-have since been published, and §4.6 numbering was not re-checked against them):
+Driver's License Implementation Guidelines_ r1.6 §4.6 "No tracking" (re-checked
+2026-07-20: r1.3 and r1.6 were both read end-to-end, the section number is stable
+at §4.6 across the range, and the sentence quoted below is byte-identical in
+both):
 
 > Tracking by an mDL verifier can be performed as soon as two different mDL
 > transactions can be linked to each other. This can be countered by designing the
@@ -344,6 +373,15 @@ notes that post-matched transactions have limited anonymity "since the portrait
 image is always shared". Session encryption uses ephemeral ECDH keys (per
 third-party analysis of the standard, whose body is paywalled), but that protects
 the channel; it is not a pairwise subject identifier.
+
+The position hardened rather than softened between releases. r1.6 contains no
+occurrence of "pairwise" and claims mitigation nowhere; the one substantive change
+since r1.3 is the removal of the server-retrieval tracking discussion, and that is
+a prohibition rather than a retraction — r1.5 (17 April 2025) "Changed the server
+retrieval method from being optional to being prohibited", and r1.6 §7 now states
+that "In support of the prohibition on tracking (see section 4.6), the server
+retrieval method is prohibited". AAMVA removed the hazard discussion by banning the
+feature that caused it.
 
 The prior claim that `document_number` rotates on renewal does not hold either:
 it is issuer-assigned and typically lifelong, and the one prominent
@@ -612,15 +650,18 @@ not a contradiction of this ADR.
 
 Claims above were verified on 2026-07-20 against the best available source for
 each — primarily EUR-Lex/CELLAR, the ARF and attestation-rulebook repositories,
-openid.net and the IETF Datatracker; non-EU claims rest on AAMVA r1.3, Japanese
+openid.net and the IETF Datatracker; non-EU claims rest on AAMVA r1.6, Japanese
 Law Translation and Digital Agency material, the BVerfG text at DFR/Universität
-Bern, the European Commission ESI factsheet, and 1EdTech. Three items could not be
+Bern, the European Commission ESI factsheet, and 1EdTech. Two items could not be
 verified against a primary source and are marked as such where they appear:
-**ISO/IEC 18013-5** (paywalled, never read), the **J-LIS previous-serial service**
-(HTTP 403), and the **adoption status of the draft act amending CIR 2025/848**
-(secondary tracker only). Recorded here because several widely-repeated
-formulations did not survive, and the corrections are worth keeping traceable —
-the same reasoning that kept the erroneous paragraph visible in ADR-004.
+**ISO/IEC 18013-5** (paywalled, never read) and the **J-LIS previous-serial
+service** (HTTP 403). A third — the **adoption status of the draft act amending
+CIR 2025/848** — rested on a secondary tracker when first written and was resolved
+against primary sources on 2026-07-20; see
+[Drift re-check (2026-07-20)](#drift-re-check-2026-07-20). Recorded here because
+several widely-repeated formulations did not survive, and the corrections are worth
+keeping traceable — the same reasoning that kept the erroneous paragraph visible in
+ADR-004.
 
 **The blocking citation conflict was a false contradiction.** #302 flagged
 CIR (EU) 2025/848 and CIR (EU) 2024/2977 as competing authorities for
@@ -688,22 +729,135 @@ neither was re-verified here — ADR-004's
 [Spec status (2026-07-20)](./004-wallet-agnostic-federation.md#spec-status-2026-07-20)
 already records the Client Identifier Prefix position against OID4VP 1.0.
 
-**Three live version-drift risks**, all of which should be re-checked before this
-ADR is relied on for implementation:
+### Drift re-check (2026-07-20)
 
-1. A draft act amending **CIR 2024/2977 itself** would add a sixth mandatory PID
-   attribute, `portrait`. PID Rulebook v1.7 already lists it, citing the amending
-   regulation (EUR-Lex PI_COM:Ares(2026)1286304, feedback closed March 2026); no
-   adopted counterpart was found in CELLAR as of 2026-07-20. This does not disturb
-   Finding 1 — a portrait is not an identifier — but the "exactly five attributes"
-   statement is the position under the act currently in force.
-2. A draft implementing regulation amending **Annex I of CIR 2025/848** (the
-   fields relying parties must supply to national registers) was in public
-   consultation 5 February – 5 March 2026; no adoption was located and CELLAR
-   holds no consolidated version, but adoption between March and July 2026 could
-   not be positively excluded. Nothing above enumerates Annex I fields.
-3. A draft act amending **Annex V of CIR 2024/2979** would touch the WebAuthn
-   Level 2 pin.
+Three live version-drift risks were recorded when this ADR was accepted and
+re-verified the same day against primary sources (#305). **All three remain
+pending: no act amending CIR 2024/2977, CIR 2024/2979 or CIR 2025/848 had been
+published in the Official Journal as of 2026-07-20.** No finding or decision above
+changes as a result. Two citations were refreshed and one framing was corrected.
+
+**Method, recorded because it is what unblocked the previously-blocked checks.**
+EUR-Lex web endpoints (`eur-lex.europa.eu/eli/…`, `/legal-content/…`, the search
+UI, and Have-your-say pages) return HTTP 202 with an empty body to every automated
+fetch. That is a method failure carrying **no information about whether a document
+exists** — demonstrated decisively by the ELI URL for CIR 2024/2977, a document
+retrievable in full through CELLAR, also returning 202/0 bytes. Two endpoints do
+work:
+
+- **CELLAR** — `http://publications.europa.eu/resource/celex/{CELEX}` with **both**
+  `Accept: application/xhtml+xml` **and** `Accept-Language: eng`. The language
+  header is not optional: without it CELLAR returns HTTP 400 "Invalid content type
+  CONTENT_STREAM for WORK … without language", which reads like "nothing there" and
+  is the most likely reason the earlier pass recorded item 2 as unverifiable.
+  Consolidated versions and corrigenda are not reachable this way at all; enumerate
+  manifestations via SPARQL and fetch `…/resource/cellar/{uuid}.{expr}.{man}/DOC_1`.
+- **SPARQL** — `http://publications.europa.eu/webapi/rdf/sparql`, which answers the
+  adoption question directly by querying `cdm:resource_legal_amends_resource_legal`
+  rather than guessing consolidated-version dates.
+
+**What the negative does and does not establish.** Each null was accepted only
+behind three controls: the amends-predicate pattern returns 2 rows for eIDAS
+(32014R0910), so it is not silently broken; CELLAR held acts published 2026-07-20,
+so the absence is not ingestion lag; and an independent title sweep across all 24
+language versions surfaces no act amending any of the three. For CIR 2024/2979 the
+graph carries a `corrects` edge to two corrigenda, proving the modification graph is
+populated — an absent `amends` edge beside a present `corrects` edge is substantive
+evidence, not an empty field. **This establishes non-publication, not
+non-adoption.** Comitology adoption routinely precedes OJ publication by weeks, so
+an act could be adopted and invisible to every method used here.
+
+1. **CIR 2024/2977 — `portrait` as a sixth mandatory PID attribute. Still pending
+   as of 2026-07-20.** CELLAR records no amending act, no consolidated version later
+   than `02024R2977-20241204`, and one inbound corrigendum (`32024R2977R(01)`,
+   16.5.2025) which is an Irish-language word-order fix touching no attribute table.
+   Table 1 carries five mandatory rows and `portrait` sits in Table 2 marked
+   optional, in both the as-published English text and the consolidated version.
+
+   **Correction to how this risk was framed.** The draft's ANNEX I does not add a
+   row — it **replaces the Annex**, and its Table 1 carries six rows including
+   `portrait` with the "Presence" column deleted entirely, membership in Table 1
+   having become the mandatory marker. So on entry into force the "exactly five"
+   sentence would be false **immediately**, not after a transition. PID Rulebook
+   v1.7 states that "Mandatory inclusion of the `portrait` attribute shall apply as
+   of 24 months after entry into force of the Regulation amending [CIR 2024/2977]",
+   but that clause appears **nowhere in the draft** (zero occurrences of "24 month"
+   across all 14 annex pages), and the Rulebook's portrait text does not match the
+   draft on two other points — it makes ISO/IEC 39794-5 primary and adds an explicit
+   user opt-out, neither of which the draft contains. Either a later draft revision
+   exists that nobody has retrieved, or the Rulebook is glossing. **Treat the
+   24-month transition as unsupported by any legal text**, and do not rely on it to
+   date when this sentence goes stale.
+
+   A further note for Finding 4 rather than Finding 1: a _mandatory_ facial image is
+   a biometric linkage vector, and AAMVA r1.6 §4.6 already records that post-matched
+   anonymity is limited "since the portrait image is always shared". The claim that
+   this amendment is neutral because "a portrait is not an identifier" holds for the
+   subject-identifier question and not for the linkability question.
+
+2. **CIR 2025/848 Annex I — relying-party register fields. Still pending as of
+   2026-07-20**, and now verified against the primary text rather than a secondary
+   tracker. The base act carries no amendment and no consolidation predicate; its
+   Article 1, Article 3(1), Article 11 ("It shall apply from the 24 December 2026",
+   as printed), recital 11 and Article 9(2)(c) were each re-confirmed verbatim.
+   Nothing above enumerates Annex I fields, so nothing here is exposed —
+   **operator-facing registration documentation would be.**
+
+   Forward-looking, and **secondary-sourced** (the draft's operative articles were
+   never retrievable; only its annexes, via an unofficial mirror): if adopted as
+   drafted it would do more than touch Annex I — inserting an obligation that a
+   wallet-relying party "shall accept WebAuthn as authentication mechanism for
+   pseudonyms", replacing Annex II and adding a new Annex VI. Its Article 2 gives
+   entry into force at publication + 20 days with **no deferred application date**,
+   so it would not wait for the base act's 24 December 2026 application date.
+   Re-check before that date.
+
+3. **CIR 2024/2979 Annex V — the WebAuthn pin. Still pending as of 2026-07-20.**
+   The act is in force and unamended; Annex V still reads "WebAuthn – W3C
+   Recommendation, 8 April 2021, Level 2". Two corrigenda exist (`R(01)` 2.4.2025,
+   Swedish; `R(02)` 16.5.2025, Irish) and one consolidation
+   (`02024R2979-20241204`) — recorded here so a future reviewer seeing "a
+   consolidated version exists" does not conclude the act was amended.
+
+   Two things worth carrying forward. First, the **same draft instrument**
+   (Ares(2026)1286304) amends 2977, 2979, 2980 and 2982 together; its Annex VIII
+   would replace Annex V such that the operative requirement becomes "a wallet unit
+   shall enable the user to store and generate a pseudonym by using **any WebAuthn
+   Authenticator of the user's choice**", with the Level 2 citation surviving only
+   in a non-normative NOTE. That is a change in the pin's legal character rather
+   than a version bump, and it cuts against the ARF direction of travel in Decision
+   §3 — the CIR would make WebAuthn more operationally central while ARF Topic E
+   proposes deleting the WebAuthn-specific HLRs. (Secondary-sourced, as above.)
+   Second, **W3C WebAuthn Level 3 is still a Candidate Recommendation Snapshot
+   (26 May 2026), so Level 2 (8 April 2021) remains the only operative
+   Recommendation as of 2026-07-20** — but its CR review period closed 23 June 2026,
+   so it may advance with little warning. Keep the legal pin and the W3C status as
+   two separate facts: Annex V is a hard citation to the 2021 Level 2 REC URL and
+   would not move automatically if Level 3 advanced.
+
+**A red herring, recorded so it is not re-investigated.** Commit `1259cc585a94`
+(3 July 2026) in the attestation-rulebooks catalog has the subject line "further
+consistency with amended CIR 2024_2979". It is a digit transposition for 2977: the
+commit touches only `pid-rulebook.md`, whose current text contains zero occurrences
+of "2979" and seventeen of "2977", and its own body bullet reads "Use full
+identifier CIR 2024/2977". It is not evidence that 2024/2979 was amended.
+
+**Also re-checked.** ARF **v2.9.0 (2026-05-21) remains the latest release** — no
+version has been published after it, and PA_21 remains normative on both the tag and
+`main` (see Decision §3). The **AAMVA** citation moved from r1.3 to **r1.6**: §4.6
+"No tracking" is stable across both releases and the quoted sentence is
+byte-identical, so Finding 4 is unchanged and slightly better supported.
+
+**Residual uncertainty, stated as of 2026-07-20 rather than resolved.** (a) Adopted-
+but-unpublished acts are invisible to every method above. (b) **No draft's operative
+articles were retrieved by any means** — the EUR-Lex 202 wall blocks them entirely,
+so all forward-looking statements about the three drafts rest on an unofficial
+mirror of their annexes and are marked secondary where they appear. (c) The PID
+Rulebook does not match that mirrored draft text, and the discrepancy is unresolved.
+(d) AAMVA r1.6's cover says "July 2026" while its own revision history says
+2026-05-18; cite it by version, not date. (e) AAMVA r1.4's internal numbering is
+unknown — its published URL returns HTML, not a PDF — but this is non-load-bearing,
+since r1.3 and r1.6 were both read end-to-end and agree.
 
 ## Related
 
@@ -726,16 +880,29 @@ ADR is relied on for implementation:
 - [CIR (EU) 2024/2977](https://eur-lex.europa.eu/eli/reg_impl/2024/2977/oj/eng) — PID and EAA attributes
 - [CIR (EU) 2024/2979](https://eur-lex.europa.eu/eli/reg_impl/2024/2979/oj/eng) — wallet integrity and core functionalities; Article 14 and Annex V (pseudonyms)
 - [CIR (EU) 2025/848](https://eur-lex.europa.eu/eli/reg_impl/2025/848/oj/eng) — relying-party registration; applies from 24 December 2026
-- [EUDI Architecture and Reference Framework](https://github.com/eu-digital-identity-wallet/eudi-doc-architecture-and-reference-framework) — v2.9.0 (2026-05-21), Annex 2 Topic 11
+- [EUDI Architecture and Reference Framework v2.9.0](https://github.com/eu-digital-identity-wallet/eudi-doc-architecture-and-reference-framework/tree/v2.9.0)
+  — 2026-05-21, Annex 2 Topic 11. Pinned to the tag: the repository's `main` carries
+  unreleased changes, and PA_21/PA_22 are under active revision (Decision §3).
+  Confirmed latest release as of 2026-07-20.
 - [EUDI PID Rulebook v1.7](https://github.com/eu-digital-identity-wallet/eudi-doc-attestation-rulebooks-catalog/blob/6d8f7f8422e5/rulebooks/pid/pid-rulebook.md)
   — pinned to commit `6d8f7f8422e5` (17 July 2026). **The catalog repository has
   no releases and no tags**, and the rulebook changed twice in July 2026 alone, so
   every §-pinpoint above is against that commit rather than `main`.
 - [OpenID for Verifiable Credential Issuance 1.0 (Final, 2025-09-16)](https://openid.net/specs/openid-4-verifiable-credential-issuance-1_0.html)
 - [SD-JWT VC draft-13](https://datatracker.ietf.org/doc/draft-ietf-oauth-sd-jwt-vc/13/) — the revision pinned by HAIP 1.0 §9.4
-- [W3C WebAuthn Level 2 (REC, 2021-04-08)](https://www.w3.org/TR/2021/REC-webauthn-2-20210408/) — named in CIR 2024/2979 Annex V
-- [AAMVA Mobile Driver's License Implementation Guidelines v1.3](https://www.aamva.org/getmedia/261ed16b-3f5c-4678-a2db-cc3016934234/MobileDLImplementationGuidelines-Version1-3.pdf)
-  — §4.6 "No tracking"; superseded by r1.4 / v1.6, not re-checked
+- [W3C WebAuthn Level 2 (REC, 2021-04-08)](https://www.w3.org/TR/2021/REC-webauthn-2-20210408/)
+  — named in CIR 2024/2979 Annex V. As of 2026-07-20 this is still the only
+  operative Recommendation:
+  [Level 3](https://www.w3.org/TR/webauthn-3/) remains a Candidate Recommendation
+  Snapshot (26 May 2026) whose CR review period closed 23 June 2026. Annex V pins
+  the dated Level 2 URL, so it would not follow Level 3 automatically.
+- [AAMVA Mobile Driver's License Implementation Guidelines r1.6](https://aamva.org/getmedia/1bc1f2b3-bc7b-4e44-8112-127a4110ad94/mDLImplementationGuidelines-16.pdf)
+  — §4.6 "No tracking". Cited by version, not date: the cover reads "July 2026"
+  while the revision history records 1.6 as 2026-05-18. Confirmed current as of
+  2026-07-20. Supersedes
+  [r1.3](https://www.aamva.org/getmedia/261ed16b-3f5c-4678-a2db-cc3016934234/MobileDLImplementationGuidelines-Version1-3.pdf),
+  which was the release originally read; both were read end-to-end and §4.6 is
+  stable across them.
 - [1EdTech Open Badges Specification 3.0](https://www.imsglobal.org/spec/ob/v3p0/) — Document Version 1.4.5 (29 June 2026), §3.10
 - [Japan Digital Agency — JPKI for private business](https://www.digital.go.jp/policies/myna_card_jpki) · [JPKI Portal FAQ](https://www.jpki.go.jp/faq/)
 - [My Number Act (Act No. 27 of 2013)](https://www.japaneselawtranslation.go.jp/en/laws/view/3120) — Japanese Law Translation
