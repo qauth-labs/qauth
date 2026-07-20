@@ -1,6 +1,6 @@
 # ADR-009: Wallet Account Resolution — `asserted-lookup` Default and the Subject-Identity Model
 
-**Status:** Proposed
+**Status:** Accepted
 **Date:** 2026-07-20
 **Authors:** QAuth Team
 
@@ -8,9 +8,9 @@
 > OID4VP wallets to OAuth 2.1, and its
 > [2026-07-20 correction](./004-wallet-agnostic-federation.md#spec-status-2026-07-20)
 > established that no stable wallet identifier exists — leaving the replacement
-> explicitly OPEN. **This ADR proposes to close that question.** It records which
-> account a presentation resolves to, and why keying on wallet cryptography is not
-> a fragile choice but a wrong one.
+> explicitly OPEN. **This ADR closes that question.** It records which account a
+> presentation resolves to, and why keying on wallet cryptography is not a
+> fragile choice but a wrong one.
 >
 > Answers Q3 of #296; supplies the strategy defaults for `SubjectResolutionStrategy`
 > (#300). Does **not** decide profile targeting, Client Identifier Prefixes,
