@@ -22,10 +22,11 @@ W3C Verifiable Credentials wallets — including EUDI-compliant wallets mandated
 > **Superseded in part (2026-07-20):** the "subject identifier is a pseudonymous
 > DID or issuer-assigned opaque identifier" premise does not survive the Final
 > specifications — there is no stable wallet subject identifier at all. See
-> [ADR-009](./009-wallet-account-resolution.md). **This ADR's decision is
-> unaffected, and arguably vindicated:** email-as-credential-not-identity is
-> precisely what lets the replacement strategy (`asserted-lookup`) fit the
-> three-table model without a migration.
+> [ADR-004 § Subject identity](./004-wallet-agnostic-federation.md#subject-identity-there-is-no-stable-wallet-identifier).
+> **This ADR's decision is unaffected, and arguably vindicated:**
+> email-as-credential-not-identity is precisely what lets the proposed
+> replacement strategy (`asserted-lookup`, [ADR-009](./009-wallet-account-resolution.md))
+> fit the three-table model without a migration.
 
 The eIDAS 2.0 regulation (EU 2024/1183) creates a firm deadline: by December 2027, regulated EU businesses must accept EUDI Wallet authentication. QAuth's role is to serve as the OAuth 2.1 bridge between any credential wallet and standard OAuth application stacks. That bridge must not be locked to email-based identity.
 

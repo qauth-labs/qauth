@@ -18,7 +18,7 @@ An ADR is a document that captures an important architectural decision made alon
 | [006](./006-oauth-grants-and-audience.md)       | OAuth Grants — `client_credentials`, `client_secret_basic`, and `aud` Claim          | Accepted | 2026-04-16 |
 | [007](./007-mcp-first-positioning.md)           | MCP-First Positioning — OAuth 2.1 Authorization Server for MCP / AI Agents           | Accepted | 2026-06-23 |
 | [008](./008-environment-aware-authorization.md) | Environment-Aware Authorization Posture                                              | Accepted | 2026-06-25 |
-| [009](./009-wallet-account-resolution.md)       | Wallet Account Resolution — `asserted-lookup` Default and the Subject-Identity Model | Accepted | 2026-07-20 |
+| [009](./009-wallet-account-resolution.md)       | Wallet Account Resolution — `asserted-lookup` Default and the Subject-Identity Model | Proposed | 2026-07-20 |
 
 ## ADR Template
 
