@@ -9,7 +9,7 @@
 
 ## Executive Summary
 
-QAuth is an open-source federated identity platform. It accepts identity from multiple upstream sources — Verifiable Credential wallets (OID4VC / SIOPv2), email/password, and external OIDC providers — normalises them through a common `federation-core` layer, and issues standard OAuth 2.1 access tokens and OIDC ID tokens to downstream applications.
+QAuth is an open-source federated identity platform. It accepts identity from multiple upstream sources — Verifiable Credential wallets (OID4VC / OID4VP), email/password, and external OIDC providers — normalises them through a common `federation-core` layer, and issues standard OAuth 2.1 access tokens and OIDC ID tokens to downstream applications.
 
 The project is built toward a future where digital identity is portable and user-controlled across services and platforms. Standards-compliant VC wallet support (Phase 4) means any application using QAuth gains wallet-based login without modifying its auth layer. The eIDAS 2.0 regulated-industry deployment (EUDI Wallet, EU member states) is a primary real-world target for Phase 4, but the federation architecture is wallet-agnostic.
 
@@ -1003,7 +1003,7 @@ ENTRYPOINT ["/bin/sh", "/app/docker-entrypoint.sh"]
 
 ---
 
-## Phase 4: Wallet Federation Bridge (OID4VC / SIOPv2)
+## Phase 4: Wallet Federation Bridge (OID4VC / OID4VP)
 
 **Timeline**: 6-8 weeks
 **Status**: Not Started — **deferred** (long-term platform per [ADR-007](./docs/adr/007-mcp-first-positioning.md)); **gated on the [ADR-002](./docs/adr/002-identifier-abstraction.md) identifier-abstraction migration**, which is the first task of this phase.
@@ -1012,12 +1012,12 @@ ENTRYPOINT ["/bin/sh", "/app/docker-entrypoint.sh"]
 
 **Tasks**:
 
-- [ ] SIOPv2 authentication request generation and handling
-- [ ] OID4VC Verifiable Presentation endpoint (`POST /oidc/credential-presentation`)
+- [ ] OID4VP authorization request generation (JAR + `request_uri`)
+- [ ] OID4VP response intake endpoint (`direct_post` to `response_uri`) — under HAIP the encrypted `direct_post.jwt` variant instead; see ADR-004 § Spec status (2026-07-20), #296/#298
 - [ ] Trust anchor validation (extensible registry: EU Trusted List + others)
 - [ ] `federation-core` library: normalise Verifiable Credentials → internal user model
-- [ ] Claims extraction from Verifiable Credentials (sub, email, age, nationality, professional credentials)
-- [ ] Create or link internal user record from VC subject
+- [ ] Claims extraction from Verifiable Credentials (email, age, nationality, professional credentials) — the subject-identity basis is an open decision; OID4VP 1.0 provides no stable wallet identifier (ADR-004 § Spec status (2026-07-20), #296)
+- [ ] Create or link internal user record from the presented credential — linking basis open, see #296
 - [ ] Issue standard OAuth 2.1 access token + OIDC ID token after VC validation
 - [ ] Wallet login UI flow in `auth-ui`
 - [ ] Inverse direction: QAuth as Verifiable Credential issuer (OID4VCI)

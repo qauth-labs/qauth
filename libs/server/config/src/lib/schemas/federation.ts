@@ -8,7 +8,8 @@ import { z } from 'zod';
  * bootstrap. It gates an INCOMPLETE epic and must stay OFF until #233–#238
  * have landed:
  *
- * - #233 SIOPv2 authorization request, #234 OID4VP presentation validation,
+ * - #233 OID4VP 1.0 authorization request generation + `direct_post` response
+ *   intake, #234 OID4VP presentation validation,
  *   #235 VC claims normalization, #236 trust registry, #237 `acr` propagation,
  *   #238 account linking.
  * - Until then the registered provider is a skeleton whose `verify()` and

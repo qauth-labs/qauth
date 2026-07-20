@@ -10,7 +10,7 @@
 
 Phase 1 authentication logic (password verification, email claim extraction) is implemented directly in the auth service routes. Login looks up a user by email, verifies the password hash, and builds JWT claims from the user record. This works for a single authentication method, but it cannot accommodate multiple methods without expanding the service layer with provider-specific conditionals.
 
-Phase 4 adds wallet federation (SIOPv2 / OID4VP). Phase 6+ adds external OIDC federation. Each addition would require changes to the authentication core — adding new conditionals, new lookup paths, new claim extraction rules — if the core is not abstracted.
+Phase 4 adds wallet federation (OID4VP). Phase 6+ adds external OIDC federation. Each addition would require changes to the authentication core — adding new conditionals, new lookup paths, new claim extraction rules — if the core is not abstracted.
 
 ## Decision
 

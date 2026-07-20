@@ -47,7 +47,11 @@ grant types, response types, and signing algorithms.
 When wallet federation (Phase 4) is implemented, update to advertise:
 
 - `subject_types_supported: ["public", "pairwise"]`
-- `request_object_signing_alg_values_supported` (for SIOPv2)
+- `request_object_signing_alg_values_supported` — still required, but for **JAR**
+  ([RFC 9101] signed requests), not SIOPv2. HAIP 1.0 §5.1 mandates signed
+  authorization requests via JAR with `request_uri`; SIOPv2 is not the mechanism
+  (see [ADR-004 § Spec status (2026-07-20)](../../../docs/adr/004-wallet-agnostic-federation.md)).
+  Note HAIP 1.0 §7 requires `ES256` at minimum, which QAuth does not support today (#298).
 
 Do not add these fields until `WalletProvider` is implemented and tested (Phase 4).
 
