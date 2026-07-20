@@ -340,6 +340,14 @@ is **OPEN** (#296). Note the tension to resolve there: any stable identifier
 QAuth derives is, by construction, the correlation vector §15.5 asks wallets to
 destroy.
 
+> **Closed (2026-07-20):** the replacement strategy is decided in
+> [ADR-009](./009-wallet-account-resolution.md) — `asserted-lookup` as the
+> default (the user asserts an identifier; the presentation proves entitlement),
+> with `issuer-scoped-claim` opt-in per named issuer and `rp-pseudonym` reserved
+> and gated. The tension noted above is resolved by observing that the
+> unlinkability machinery targets _unwanted_ correlation: a user asserting their
+> own identifier is participating in their own recognition.
+
 ### Assurance level derives from the credential, not from a wallet-signed token
 
 The `acr` propagation decision above stands; its input changes. With no
@@ -399,7 +407,8 @@ ADR — including the [2026-07-19 refresh](#spec-status-2026-07-19) above, whose
 HAIP subsection reads as a prescription — should be read as QAuth committing to
 HAIP conformance. Tracked in **#296**:
 which profile ships first and what the default posture is; which Client
-Identifier Prefixes to implement; the subject-identity strategy; and
+Identifier Prefixes to implement; the subject-identity strategy (closed
+2026-07-20 by [ADR-009](./009-wallet-account-resolution.md)); and
 confirmation that eIDAS RP registration is operator-documentation scope.
 
 ## Related
