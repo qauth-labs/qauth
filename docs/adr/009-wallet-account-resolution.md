@@ -299,13 +299,13 @@ credential as an assurance input rather than a session primitive.
    PA_21 and PA_22 "Remove"** — so this gate may clear by the obligation being
    deleted rather than discharged, which is a materially different outcome and
    would leave the mechanism unspecified rather than specified.
-2. **The requirement is being weakened, not hardened.** ARF Annex 2 PA*22 changed
+2. **The requirement is being weakened, not hardened.** ARF Annex 2 `PA_22` changed
    from SHALL to MAY between v2.5.0 and v2.9.0 — v2.5.0: "Wallet Providers SHALL
    ensure that their Wallet Solution supports the [W3C WebAuthn] specification…";
    v2.9.0: "Wallet Providers MAY ensure that their Wallet Solution supports the
    HLRs defined for this topic by letting their Wallet Units perform the role of a
    WebAuthn authenticator…" (emphasis on the modal verbs added). ARF Discussion
-   Paper Topic E proposes going further, "such that it becomes \_optional* for a
+   Paper Topic E proposes going further, "such that it becomes _optional_ for a
    Wallet Unit to also be a WebAuthn authenticator". A wallet may therefore
    conformantly not be an authenticator at all.
 3. **QAuth has no WebAuthn implementation.** `webauthn` and `passkey` appear only
