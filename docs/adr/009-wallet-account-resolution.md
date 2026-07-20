@@ -309,9 +309,9 @@ credential as an assurance input rather than a session primitive.
    no substitution clause**, and no replacement obligation to produce a pseudonym
    technical specification appears anywhere in the proposed PA_01–PA_31 set.
 
-   **Consequence for how this gate is written.** A gate keyed to PA*21's existence
-   would be satisfied \_vacuously* — it would report success at the moment the
-   obligation disappears, which inverts its purpose. When #300 implements
+   **Consequence for how this gate is written.** A gate keyed to `PA_21`'s
+   existence would be satisfied _vacuously_ — it would report success at the moment
+   the obligation disappears, which inverts its purpose. When #300 implements
    `SubjectResolutionStrategy`, key the `rp-pseudonym` gate to the substantive
    condition PA_21 stands proxy for — a publicly available pseudonym technical
    specification plus a binding unlinkability guarantee — not to the presence of
