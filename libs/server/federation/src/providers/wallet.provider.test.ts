@@ -27,12 +27,18 @@ describe('WalletProvider (ADR-004 skeleton, #232)', () => {
   });
 
   describe('verify (must fail closed)', () => {
-    /** Inputs a future SIOPv2/OID4VP caller might plausibly hand this provider. */
+    /** Inputs a future OID4VP caller might plausibly hand this provider. */
     const plausibleInputs: ReadonlyArray<readonly [string, unknown]> = [
       ['no input', undefined],
       ['empty object', {}],
       [
-        'SIOPv2-shaped id_token response',
+        // KEPT DELIBERATELY as a negative case. SIOPv2 is NOT the mechanism
+        // (ADR-004 § "Spec status (2026-07-20)", #295): HAIP 1.0 §5 mandates
+        // `response_type=vp_token`, which excludes the self-issued `id_token`.
+        // This fixture is the shape a contributor who read the pre-correction
+        // ADR would wire up, so it must keep failing closed rather than being
+        // deleted along with the error that inspired it.
+        'SIOPv2-shaped id_token response (superseded shape — must never be accepted)',
         {
           id_token: 'eyJhbGciOiJFZERTQSJ9.e30.sig',
           state: 'abc123',

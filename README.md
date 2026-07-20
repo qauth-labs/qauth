@@ -16,7 +16,7 @@
 **QAuth** is an open-source OAuth 2.1 / OIDC 1.0 identity server built for three horizons at once:
 
 - **Agent era (today)** — a working authorization server for **MCP servers and AI agents**: email/password auth, `authorization_code` (PKCE) and `client_credentials` grants, per-client audience (`aud`) binding, and agent-native, on-behalf-of delegation with scope modes and step-up ([ADR-007](./docs/adr/007-mcp-first-positioning.md)).
-- **Federation (by design)** — a federation hub from day one: wallet-based upstreams (EUDI Wallets via OID4VC / SIOPv2) and external OIDC providers slot in behind the `CredentialProvider` interface ([ADR-003](./docs/adr/003-credential-provider-interface.md), [ADR-004](./docs/adr/004-wallet-agnostic-federation.md)), so downstream applications integrate against QAuth's OIDC layer once and never change.
+- **Federation (by design)** — a federation hub from day one: wallet-based upstreams (EUDI Wallets via OID4VC / OID4VP) and external OIDC providers slot in behind the `CredentialProvider` interface ([ADR-003](./docs/adr/003-credential-provider-interface.md), [ADR-004](./docs/adr/004-wallet-agnostic-federation.md)), so downstream applications integrate against QAuth's OIDC layer once and never change.
 - **Post-quantum (for the long haul)** — crypto-agile by construction: JWTs sign behind algorithm-agnostic interfaces today, with a clear hybrid ML-DSA-65 + Ed25519 transition path ([ADR-005](./docs/adr/005-pqc-hybrid-signing.md), [ADR-006](./docs/adr/006-oauth-grants-and-audience.md)) that never touches application business logic.
 
 The near-term focus is MCP / AI-agent authorization; wallet federation and post-quantum signing are the resequenced long-term platform. One server, one integration, across all three.
@@ -137,10 +137,10 @@ An identity hub for the next generation of the internet — humans, agents, and 
 
 - **Agent-native** — first-class authorization for MCP servers and AI agents: an agent client type, RFC 8693 on-behalf-of delegation, scope modes, and step-up, so agents act for users under least privilege and full audit
 - **Federation-first** — a single `federation-core` layer will normalise upstream identity (Verifiable Credential wallets, email/password, external OIDC providers, W3C DIDs) into a common internal model; downstream applications see standard OIDC tokens regardless of source
-- **Wallet-agnostic** — any standards-compliant VC wallet (OID4VC / SIOPv2) will be a valid upstream; EUDI Wallet under eIDAS 2.0 is one concrete deployment target, not the only one
+- **Wallet-agnostic** — any standards-compliant VC wallet (OID4VC / OID4VP) will be a valid upstream; EUDI Wallet under eIDAS 2.0 is one concrete deployment target, not the only one
 - **Post-quantum ready** — crypto-agile architecture with a clear ML-DSA-65 hybrid transition path, designed so algorithm upgrades never touch application business logic
 - **Headless-first** — API-first, bring your own branded UI
-- **Standards compliant** — OAuth 2.1 (RFC 9700), OIDC 1.0, OID4VC, SIOPv2, W3C DID, NIST FIPS 204
+- **Standards compliant** — OAuth 2.1 (RFC 9700), OIDC 1.0, OID4VC, OID4VP, W3C DID, NIST FIPS 204
 - **Open and self-hostable** — Apache 2.0, no telemetry, runs anywhere
 
 ## 📍 Current Status (June 2026)
@@ -182,7 +182,7 @@ Phase 1 core OAuth 2.1 / OIDC, the MCP and agent-native authorization layers, th
 **📋 Deferred — long-term platform** (designed, not yet implemented; resequenced per [ADR-007](./docs/adr/007-mcp-first-positioning.md))
 
 - Identifier-abstraction migration — [ADR-002](./docs/adr/002-identifier-abstraction.md), now the gate for Phase 4
-- Wallet federation (OID4VC / SIOPv2) — [ADR-004](./docs/adr/004-wallet-agnostic-federation.md)
+- Wallet federation (OID4VC / OID4VP) — [ADR-004](./docs/adr/004-wallet-agnostic-federation.md)
 - Post-quantum hybrid signing + `@qauth-labs/crypto` — [ADR-005](./docs/adr/005-pqc-hybrid-signing.md)
 - SDKs (`@qauth-labs/core`, `@qauth-labs/react`, `@qauth-labs/node`), `auth-ui`, `admin-panel`
 
@@ -201,7 +201,7 @@ Phase 1 core OAuth 2.1 / OIDC, the MCP and agent-native authorization layers, th
 │  ┌────────────────────────────────────────────────┐  │
 │  │  API Layer (REST)                              │  │
 │  │  OAuth 2.1 · OIDC 1.0 (✅)                     │  │
-│  │  OID4VC · SIOPv2 (📋 Phase 4)                  │  │
+│  │  OID4VC · OID4VP (📋 Phase 4)                  │  │
 │  └────────────────────────────────────────────────┘  │
 │                          ↓                           │
 │  ┌────────────────────────────────────────────────┐  │
@@ -342,9 +342,9 @@ qauth/
 - OIDC 1.0 formal conformance (OpenID Foundation certification suite) 📋
 - Kubernetes manifests 📋
 
-**Phase 4 — Wallet Federation Bridge (OID4VC / SIOPv2):**
+**Phase 4 — Wallet Federation Bridge (OID4VC / OID4VP):**
 
-- SIOPv2 authentication request handling
+- OID4VP authorization request handling
 - OID4VC Verifiable Presentation endpoint
 - Trust anchor validation (extensible: EU Trusted List and other registries)
 - `federation-core`: normalises Verifiable Credentials → standard OAuth 2.1 tokens
@@ -575,9 +575,9 @@ docker compose up -d
 - [ ] Kubernetes manifests
 - [ ] JavaScript / React / Node.js SDKs (`@qauth-labs/core`, `@qauth-labs/react`, `@qauth-labs/node`)
 
-### Phase 4: Wallet Federation Bridge (OID4VC / SIOPv2) _(deferred — gated on [ADR-002](./docs/adr/002-identifier-abstraction.md) migration)_
+### Phase 4: Wallet Federation Bridge (OID4VC / OID4VP) _(deferred — gated on [ADR-002](./docs/adr/002-identifier-abstraction.md) migration)_
 
-- [ ] SIOPv2 authentication request handling
+- [ ] OID4VP authorization request handling
 - [ ] OID4VC Verifiable Presentation endpoint
 - [ ] Trust anchor validation (extensible: EU Trusted List and other registries)
 - [ ] `federation-core` library: VC wallet → standard OAuth 2.1 / OIDC tokens
@@ -773,4 +773,4 @@ Copyright © 2025–2026 QAuth Labs
 
 Inspired by: Keycloak, Ory, Auth0, Clerk, and Supabase Auth.
 
-Standards and prior art this project builds on: [OAuth 2.1 RFC 9700](https://datatracker.ietf.org/doc/rfc9700/), [OIDC Core 1.0](https://openid.net/specs/openid-connect-core-1_0.html), [OID4VC](https://openid.net/specs/openid-4-verifiable-credential-issuance-1_0.html), [SIOPv2](https://openid.net/specs/openid-connect-self-issued-v2-1_0.html), [NIST FIPS 204 (ML-DSA)](https://csrc.nist.gov/pubs/fips/204/final), [W3C DID v1.0](https://www.w3.org/TR/did-core/).
+Standards and prior art this project builds on: [OAuth 2.1 RFC 9700](https://datatracker.ietf.org/doc/rfc9700/), [OIDC Core 1.0](https://openid.net/specs/openid-connect-core-1_0.html), [OID4VC](https://openid.net/specs/openid-4-verifiable-credential-issuance-1_0.html), [OID4VP](https://openid.net/specs/openid-4-verifiable-presentations-1_0.html), [NIST FIPS 204 (ML-DSA)](https://csrc.nist.gov/pubs/fips/204/final), [W3C DID v1.0](https://www.w3.org/TR/did-core/).

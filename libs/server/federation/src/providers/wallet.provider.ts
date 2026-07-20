@@ -11,7 +11,8 @@ import type {
  * ## Why an unimplemented provider exists
  *
  * Epic #231 splits wallet federation across issues that must be developable in
- * parallel: #233 (SIOPv2 authorization request generation/handling), #234
+ * parallel: #233 (OID4VP 1.0 authorization request generation + `direct_post`
+ * response intake), #234
  * (OID4VP Verifiable Presentation validation, SD-JWT VC), #235 (VC claims
  * normalization into `user_attributes`), #236 (trust registry — per-realm
  * issuer allowlist), #237 (`acr` propagation) and #238 (account linking).
@@ -19,7 +20,7 @@ import type {
  * auth-engine change, so this module establishes the file, the `type`
  * discriminator and the registry entry up front and the follow-ups fill in the
  * two method bodies against a stable shell. It intentionally contains no
- * protocol logic — no SIOPv2, no OID4VP, no DCQL, no trust registry.
+ * protocol logic — no OID4VP, no DCQL, no trust registry.
  *
  * ## Fail-closed: both methods THROW, and must keep throwing
  *
@@ -41,12 +42,14 @@ import type {
  *
  * ## The ADR-004 model this shell will grow into
  *
- * Wallet-agnostic by construction — any SIOPv2 / OID4VP wallet (EUDI, Lissi,
- * Sphereon, walt-id, …), never EUDI-specific code. `externalSub` is the
- * holder's DID; extracted attributes carry `source = 'wallet'`
- * ({@link WALLET_SOURCE}), the highest ADR-002 trust rank, above the `oidc_*`
- * family and `self_reported`; `assuranceLevel` is the eIDAS LoA that
- * propagates downstream as the OIDC `acr` claim (#237).
+ * Wallet-agnostic by construction — any OID4VP wallet (EUDI, Lissi, Sphereon,
+ * walt-id, …), never EUDI-specific code. Extracted attributes carry
+ * `source = 'wallet'` ({@link WALLET_SOURCE}), the highest ADR-002 trust rank,
+ * above the `oidc_*` family and `self_reported`; `assuranceLevel` is the eIDAS
+ * LoA that propagates downstream as the OIDC `acr` claim (#237).
+ *
+ * NOTE: the 2026-03-11 model had `externalSub` = the holder's DID. That does not
+ * survive the 2026-07-20 corrections — see the forward constraints below.
  *
  * ## Forward constraint — ADR-004 spec refresh (2026-07-19)
  *
@@ -66,9 +69,45 @@ import type {
  *   (HAIP) 1.0 constrains credential formats, cryptographic suites and client
  *   authentication beyond base OID4VP, and is the profile the EUDI ecosystem
  *   aligns to. ADR-004's eIDAS claim should be re-stated against HAIP, which is
- *   its falsifiable form.
+ *   its falsifiable form — but re-stating the claim in HAIP's terms is not the
+ *   same as adopting HAIP, and whether QAuth targets it is OPEN (#296). Read
+ *   this as "what conformance would mean", not "conform".
  *
- * @see docs/adr/004-wallet-agnostic-federation.md — § "Spec status (2026-07-19)"
+ * ## Forward constraint — ADR-004 correction (2026-07-20)
+ *
+ * The 2026-07-19 refresh above also asserted that "SIOPv2 remains the
+ * self-issued-OP mechanism this ADR describes". **That is wrong** (#295) and is
+ * superseded. Three further constraints bind #233–#238:
+ *
+ * - **OID4VP 1.0 is the mechanism; SIOPv2 is not part of it.** HAIP 1.0 §5:
+ *   "The Response type MUST be `vp_token`" — which excludes the
+ *   `vp_token id_token` Response Type that carries a Self-Issued ID Token
+ *   (OID4VP 1.0 §8). The strings `SIOP`, `Self-Issued` and `id_token` occur zero
+ *   times in HAIP 1.0. SIOPv2 is draft 13 (2023-11-28) and never reached Final.
+ *   Do NOT implement a SIOPv2 authorization request or consume a self-issued
+ *   `id_token`. Note that the `direct_post` in #233's title is the BASE OID4VP
+ *   1.0 Response Mode; HAIP 1.0 §5.1 requires the encrypted `direct_post.jwt`
+ *   instead. Which one #233 implements follows #296 and the JWE work in #298.
+ * - **There is no stable wallet subject identifier.** OID4VP 1.0 §15.5 treats
+ *   the issuer signature and the credential-bound public key as linkability
+ *   defects that wallets are expected to rotate away; §15.6 tells Verifiers not
+ *   to fingerprint the End-User. So `externalSub` CANNOT be keyed on wallet
+ *   cryptography (no DID, no JWK thumbprint). The replacement basis for
+ *   `user_credentials.external_sub` and account linking (#238) is an OPEN
+ *   decision — see #296. Do not invent one here.
+ * - **The crypto layer cannot speak the profile yet.** `@qauth-labs/core-crypto`
+ *   is EdDSA-only; no signing backend produces `ES256` and there is no JWE
+ *   support. HAIP 1.0 §7 requires ES256 at minimum; §5.1 requires response
+ *   encryption via `direct_post.jwt`, and §5 constrains it to JWE `alg`
+ *   `ECDH-ES` on P-256, `enc` `A128GCM`/`A256GCM`.
+ *   Prerequisite, sequenced in #298 — federation code cannot compensate for it.
+ *
+ * Which profile QAuth targets, and which OID4VP Client Identifier Prefixes it
+ * implements, are NOT decided. Nothing above commits QAuth to HAIP conformance;
+ * it records what the profile would require. Tracked in #296.
+ *
+ * @see docs/adr/004-wallet-agnostic-federation.md — §§ "Spec status (2026-07-19)",
+ *   "Spec status (2026-07-20)"
  * @see docs/adr/003-credential-provider-interface.md
  */
 
@@ -133,7 +172,7 @@ export function createWalletProvider(): CredentialProvider {
     async verify(): Promise<VerifiedIdentity> {
       throw walletSkeletonError(
         'verify',
-        'Wallet verification lands in #233 (SIOPv2 authorization request) and #234 (OID4VP presentation validation), with issuer trust in #236.'
+        'Wallet verification lands in #233 (OID4VP 1.0 authorization request generation + direct_post response intake) and #234 (OID4VP presentation validation), with issuer trust in #236.'
       );
     },
 
