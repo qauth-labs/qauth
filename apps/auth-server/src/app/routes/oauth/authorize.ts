@@ -527,10 +527,14 @@ export default async function (fastify: FastifyInstance) {
             },
           });
         }
-        return reply.redirect(
-          `/ui/consent${requestUrlWithParams.slice(requestUrlWithParams.indexOf('?'))}`,
-          302
-        );
+        // Carry the authorize params to the consent screen. Guard the `?`
+        // index: `buildAuthorizeUrlWithParams` can return a query-less path
+        // (empty reconstructed POST body), and `slice(-1)` would yield a
+        // corrupt `/ui/consent<lastchar>` — same defensive check as
+        // `parseResourceFromUrl`.
+        const qIndex = requestUrlWithParams.indexOf('?');
+        const returnQuery = qIndex >= 0 ? requestUrlWithParams.slice(qIndex) : '';
+        return reply.redirect(`/ui/consent${returnQuery}`, 302);
       }
     }
 
