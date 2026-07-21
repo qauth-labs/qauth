@@ -73,9 +73,10 @@ the `passwordHasher` Fastify decorator. Do not call Argon2 directly.
 
 - Phase 1 (email/password + OAuth 2.1 / OIDC): COMPLETE after identifier-abstraction refactor
 - Phase 2 (Developer Portal): IN PROGRESS — no new providers
-- Phase 4 (WalletProvider + OID4VP 1.0): NOT YET STARTED. The mechanism is
+- T4 (WalletProvider + OID4VP 1.0): **ACTIVE** (Epic #231; skeleton shipped in
+  #232, transport layer #233 first). The mechanism is
   **OID4VP 1.0**, not SIOPv2 — HAIP 1.0 §5 mandates `response_type=vp_token`,
   which excludes the Self-Issued ID Token. Do not implement SIOPv2. See
   [ADR-004 § Spec status (2026-07-20)](../../../docs/adr/004-wallet-agnostic-federation.md);
-  profile targeting is an open decision (#296).
+  profile order is decided (#296 locked): `oid4vp-1.0-base` first, `haip-1.0` second.
 - The `PasswordProvider` is permanent infrastructure, not a legacy path to be deprecated
