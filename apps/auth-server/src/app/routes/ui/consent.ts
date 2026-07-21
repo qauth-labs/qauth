@@ -776,6 +776,11 @@ export default async function (fastify: FastifyInstance) {
             codeChallenge: body.code_challenge,
             codeChallengeMethod: 'S256',
             nonce: body.nonce ?? null,
+            // OIDC Core §2 `auth_time`: the REAL end-user authentication time
+            // (browser-session establishment, epoch MS), so /oauth/token can
+            // assert `auth_time` in the ID token and `max_age` evaluates the
+            // actual session age rather than this code's mint time.
+            authTime: session.createdAt,
             scopes,
             // RFC 8707: bind the requested resource(s) to this code so
             // /oauth/token can set the issued access token's `aud` claim.

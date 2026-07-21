@@ -85,6 +85,15 @@ export interface SignIdTokenPayload {
    * ID token to the client's authorization request to defend against replay.
    */
   nonce?: string;
+  /**
+   * Time of the end-user authentication, in epoch MILLISECONDS. Mapped to the
+   * OIDC `auth_time` claim (epoch SECONDS, floored) by {@link buildIdTokenClaims}.
+   * OIDC Core §2 requires `auth_time` when the authorization request included
+   * `max_age`; QAuth tracks it for every code-flow issuance and emits it whenever
+   * available. Omitted (claim absent) when unknown — e.g. in-flight codes minted
+   * before the auth-time column existed.
+   */
+  authTime?: number;
 }
 
 /**

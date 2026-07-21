@@ -92,6 +92,13 @@
       "when": 1784372752151,
       "tag": "0012_flat_morlocks",
       "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1784631611442,
+      "tag": "0013_lame_wiccan",
+      "breakpoints": true
     }
   ]
 }

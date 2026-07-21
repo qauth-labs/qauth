@@ -39,6 +39,7 @@ import authorizeRoute from './authorize';
 
 interface TestContext {
   handler?: (request: any, reply: any) => Promise<unknown>;
+  postHandler?: (request: any, reply: any) => Promise<unknown>;
 }
 
 function createReply() {
@@ -73,12 +74,19 @@ function createReply() {
 function makeFastify() {
   const ctx: TestContext = {};
   const fastify: any = {
-    withTypeProvider: () => ({
-      get: (_url: string, _opts: unknown, handler: any) => {
-        ctx.handler = handler;
-        return fastify;
-      },
-    }),
+    withTypeProvider: () => {
+      const route = {
+        get: (_url: string, _opts: unknown, handler: any) => {
+          ctx.handler = handler;
+          return route;
+        },
+        post: (_url: string, _opts: unknown, handler: any) => {
+          ctx.postHandler = handler;
+          return route;
+        },
+      };
+      return route;
+    },
     repositories: {
       realms: {
         findByName: vi.fn().mockResolvedValue({ id: 'realm-1', name: 'master', enabled: true }),
@@ -341,6 +349,116 @@ describe('GET /oauth/authorize — session-cookie integration', () => {
   });
 });
 
+describe('POST /oauth/authorize (OIDC Core §3.1.2.1)', () => {
+  it('issues a code from a form-encoded POST body, identically to GET', async () => {
+    const { fastify, ctx } = makeFastify();
+    await authorizeRoute(fastify);
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(CLIENT);
+    (fastify.jwtUtils.extractFromHeader as unknown as Mock).mockReturnValue(null);
+    (fastify.repositories.oauthConsents.findActive as unknown as Mock).mockResolvedValue({
+      scopes: ['email', 'read:foo'],
+      revokedAt: null,
+    });
+
+    const { signSessionId } = await import('../../helpers/session-cookie');
+    const signed = signSessionId('sid-post-1');
+    const createdAt = Date.now();
+    (fastify.sessionUtils.getSession as unknown as Mock).mockResolvedValue({
+      userId: 'user-1',
+      email: 'a@b.com',
+      sessionId: 'sid-post-1',
+      createdAt,
+    });
+
+    expect(ctx.postHandler).toBeDefined();
+    const { reply, state } = createReply();
+    await ctx.postHandler!(
+      {
+        method: 'POST',
+        body: { ...BASE_QUERY, scope: 'email' },
+        query: {},
+        url: '/oauth/authorize',
+        headers: { cookie: `__Host-qauth_session=${signed}` },
+        ip: '127.0.0.1',
+      },
+      reply
+    );
+
+    expect(fastify.repositories.authorizationCodes.create).toHaveBeenCalledOnce();
+    expect(state.redirected).toContain('https://example.com/cb');
+    expect(state.redirected).toContain('code=');
+    expect(state.redirected).toContain('state=xyz');
+
+    // OIDC Core §2: the REAL session auth-time (ms) is persisted on the code.
+    const createArg = (fastify.repositories.authorizationCodes.create as unknown as Mock).mock
+      .calls[0][0];
+    expect(createArg.authTime).toBe(createdAt);
+  });
+
+  it('reconstructs a lossless return_to from the POST body on the login round-trip', async () => {
+    const { fastify, ctx } = makeFastify();
+    await authorizeRoute(fastify);
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(CLIENT);
+    (fastify.jwtUtils.extractFromHeader as unknown as Mock).mockReturnValue(null);
+    (fastify.sessionUtils.getSession as unknown as Mock).mockResolvedValue(null);
+
+    const { reply, state } = createReply();
+    await ctx.postHandler!(
+      {
+        method: 'POST',
+        body: { ...BASE_QUERY, scope: 'email' },
+        query: {},
+        url: '/oauth/authorize',
+        headers: {},
+        ip: '127.0.0.1',
+      },
+      reply
+    );
+
+    expect(state.redirected).toContain('/ui/login?return_to=');
+    // The POST params are reconstructed into the return_to so the GET round-trip
+    // reproduces the request (PKCE challenge, scope, state, client_id survive).
+    expect(state.redirected).toContain(encodeURIComponent('client_id=app-123'));
+    expect(state.redirected).toContain(encodeURIComponent('code_challenge='));
+  });
+
+  it('binds RFC 8707 resource from the POST body onto the code', async () => {
+    const { fastify, ctx } = makeFastify();
+    await authorizeRoute(fastify);
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(CLIENT);
+    (fastify.jwtUtils.extractFromHeader as unknown as Mock).mockReturnValue(null);
+    (fastify.repositories.oauthConsents.findActive as unknown as Mock).mockResolvedValue({
+      scopes: ['email'],
+      revokedAt: null,
+    });
+    const { signSessionId } = await import('../../helpers/session-cookie');
+    const signed = signSessionId('sid-post-2');
+    (fastify.sessionUtils.getSession as unknown as Mock).mockResolvedValue({
+      userId: 'user-1',
+      email: 'a@b.com',
+      sessionId: 'sid-post-2',
+      createdAt: Date.now(),
+    });
+
+    const { reply } = createReply();
+    await ctx.postHandler!(
+      {
+        method: 'POST',
+        body: { ...BASE_QUERY, scope: 'email', resource: ['https://api.example.com/v1'] },
+        query: {},
+        url: '/oauth/authorize',
+        headers: { cookie: `__Host-qauth_session=${signed}` },
+        ip: '127.0.0.1',
+      },
+      reply
+    );
+
+    const createArg = (fastify.repositories.authorizationCodes.create as unknown as Mock).mock
+      .calls[0][0];
+    expect(createArg.resource).toEqual(['https://api.example.com/v1']);
+  });
+});
+
 describe('GET /oauth/authorize — CIMD (Client ID Metadata Documents)', () => {
   const CIMD_ID = 'https://app.example.com/client-metadata.json';
 
@@ -357,15 +475,25 @@ describe('GET /oauth/authorize — CIMD (Client ID Metadata Documents)', () => {
   }
 
   function makeCimdFastify() {
-    const ctx: { handler?: (req: any, reply: any) => Promise<unknown> } = {};
+    const ctx: {
+      handler?: (req: any, reply: any) => Promise<unknown>;
+      postHandler?: (req: any, reply: any) => Promise<unknown>;
+    } = {};
     const store = new Map<string, string>();
     const fastify: any = {
-      withTypeProvider: () => ({
-        get: (_url: string, _opts: unknown, handler: any) => {
-          ctx.handler = handler;
-          return fastify;
-        },
-      }),
+      withTypeProvider: () => {
+        const route = {
+          get: (_url: string, _opts: unknown, handler: any) => {
+            ctx.handler = handler;
+            return route;
+          },
+          post: (_url: string, _opts: unknown, handler: any) => {
+            ctx.postHandler = handler;
+            return route;
+          },
+        };
+        return route;
+      },
       redis: {
         get: vi.fn(async (k: string) => store.get(k) ?? null),
         set: vi.fn(async (k: string, v: string) => {

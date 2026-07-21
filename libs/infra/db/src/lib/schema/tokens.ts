@@ -56,6 +56,18 @@ export const authorizationCodes = pgTable(
     codeChallenge: text('code_challenge').notNull(),
     codeChallengeMethod: codeChallengeMethodEnum('code_challenge_method').notNull().default('S256'),
     nonce: varchar('nonce', { length: 255 }),
+    /**
+     * OIDC Core §2 `auth_time` (epoch MILLISECONDS): when the end-user
+     * authentication that backs this code actually occurred — the browser
+     * session's establishment time, captured at code-mint time so /oauth/token
+     * can assert `auth_time` (epoch seconds) in the ID token. Deliberately
+     * DISTINCT from `createdAt` (when THIS code row was minted): a code minted
+     * from a long-lived session MUST report when the user authenticated, not
+     * "now" — otherwise a stale session would silently pass a `max_age` check it
+     * should fail. Nullable for backward-compat with in-flight codes minted
+     * before this column existed (those simply omit the claim).
+     */
+    authTime: bigint('auth_time', { mode: 'number' }),
     scopes: jsonb('scopes').notNull().default(JSONB_EMPTY_ARRAY).$type<string[]>(),
     /**
      * RFC 8707 `resource` parameter(s) from /oauth/authorize. Absolute URIs

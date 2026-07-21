@@ -497,6 +497,11 @@ async function handleAuthorizationCode(
         ...(authCode.scopes.includes('email') ? emailClaims : {}),
         name: resolveDisplayName(user),
         nonce: authCode.nonce ?? undefined,
+        // OIDC Core §2 `auth_time`: the real end-user authentication time
+        // (session establishment), captured on the auth code at mint time. In
+        // epoch MS here; signIdToken floors to seconds. Nullable on in-flight
+        // codes minted before the column existed → omit the claim.
+        authTime: authCode.authTime ?? undefined,
       })
     : undefined;
 

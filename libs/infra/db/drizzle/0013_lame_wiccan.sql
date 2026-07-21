@@ -1,0 +1,1 @@
+ALTER TABLE "authorization_codes" ADD COLUMN "auth_time" bigint;

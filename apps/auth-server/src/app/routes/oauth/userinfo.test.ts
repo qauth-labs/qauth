@@ -1,4 +1,9 @@
-import { JWTExpiredError, JWTInvalidError, NotFoundError } from '@qauth-labs/shared-errors';
+import {
+  InvalidRequestError,
+  JWTExpiredError,
+  JWTInvalidError,
+  NotFoundError,
+} from '@qauth-labs/shared-errors';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import Fastify from 'fastify';
 import { serializerCompiler, validatorCompiler, ZodTypeProvider } from 'fastify-type-provider-zod';
@@ -26,19 +31,30 @@ interface TestContext {
   options?: {
     preHandler?: (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
   };
+  postHandler?: (request: FastifyRequest, reply: FastifyReply) => Promise<unknown>;
+  postOptions?: {
+    preHandler?: (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
+  };
 }
+
+type RouteRegistrar = {
+  get: (
+    url: string,
+    opts: TestContext['options'],
+    handler: (request: FastifyRequest, reply: FastifyReply) => Promise<unknown>
+  ) => RouteRegistrar;
+  post: (
+    url: string,
+    opts: TestContext['postOptions'],
+    handler: (request: FastifyRequest, reply: FastifyReply) => Promise<unknown>
+  ) => RouteRegistrar;
+};
 
 function createFastifyStub() {
   const ctx: TestContext = {};
 
   const fastify: FastifyInstance & {
-    withTypeProvider: () => {
-      get: (
-        url: string,
-        opts: TestContext['options'],
-        handler: (request: FastifyRequest, reply: FastifyReply) => Promise<unknown>
-      ) => FastifyInstance;
-    };
+    withTypeProvider: () => RouteRegistrar;
     requireJwt: (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
     repositories: {
       users: {
@@ -52,17 +68,29 @@ function createFastifyStub() {
       };
     };
   } = {
-    withTypeProvider: () => ({
-      get: (
-        _url: string,
-        opts: TestContext['options'],
-        handler: (request: FastifyRequest, reply: FastifyReply) => Promise<unknown>
-      ) => {
-        ctx.handler = handler;
-        ctx.options = opts;
-        return fastify;
-      },
-    }),
+    withTypeProvider: () => {
+      const route: RouteRegistrar = {
+        get: (
+          _url: string,
+          opts: TestContext['options'],
+          handler: (request: FastifyRequest, reply: FastifyReply) => Promise<unknown>
+        ) => {
+          ctx.handler = handler;
+          ctx.options = opts;
+          return route;
+        },
+        post: (
+          _url: string,
+          opts: TestContext['postOptions'],
+          handler: (request: FastifyRequest, reply: FastifyReply) => Promise<unknown>
+        ) => {
+          ctx.postHandler = handler;
+          ctx.postOptions = opts;
+          return route;
+        },
+      };
+      return route;
+    },
     requireJwt: vi.fn(),
     repositories: {
       users: {
@@ -90,13 +118,7 @@ function createFastifyStub() {
       },
     },
   } as unknown as FastifyInstance & {
-    withTypeProvider: () => {
-      get: (
-        url: string,
-        opts: TestContext['options'],
-        handler: (request: FastifyRequest, reply: FastifyReply) => Promise<unknown>
-      ) => FastifyInstance;
-    };
+    withTypeProvider: () => RouteRegistrar;
     requireJwt: (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
     repositories: {
       users: {
@@ -593,5 +615,181 @@ describe('GET /userinfo route', () => {
     } finally {
       await app.close();
     }
+  });
+});
+
+describe('POST /userinfo route (OIDC Core §5.3.1)', () => {
+  const FORM = 'application/x-www-form-urlencoded';
+
+  function withUser(fastify: FastifyInstance): void {
+    (fastify.repositories.users.findById as unknown as Mock).mockResolvedValue({
+      id: 'user-1',
+      firstName: null,
+      lastName: null,
+    });
+  }
+
+  it('registers a POST route with a token-resolution preHandler and the shared handler', async () => {
+    const { fastify, ctx } = createFastifyStub();
+    await userinfoRoute(fastify);
+
+    expect(ctx.postHandler).toBeDefined();
+    expect(typeof ctx.postOptions?.preHandler).toBe('function');
+    // The POST preHandler is NOT the bare requireJwt — it also accepts a
+    // form-encoded body token — so it must be a distinct function.
+    expect(ctx.postOptions?.preHandler).not.toBe(fastify.requireJwt);
+    // Both methods share ONE handler reference.
+    expect(ctx.postHandler).toBe(ctx.handler);
+  });
+
+  it('accepts the Bearer header and returns the same claims as GET', async () => {
+    const { fastify, ctx } = createFastifyStub();
+    (fastify as unknown as { jwtUtils: unknown }).jwtUtils = {
+      extractFromHeader: vi.fn().mockReturnValue('header.token'),
+    };
+    (fastify.requireJwt as unknown as Mock).mockImplementation(
+      async (req: { jwtPayload?: unknown }) => {
+        req.jwtPayload = { sub: 'user-1', scope: 'openid email' };
+      }
+    );
+    withUser(fastify);
+    await userinfoRoute(fastify);
+
+    const request = {
+      method: 'POST',
+      headers: { authorization: 'Bearer header.token', 'content-type': FORM },
+      body: {},
+      query: {},
+      ip: '127.0.0.1',
+    } as unknown as FastifyRequest;
+    const reply = { send: (body: unknown) => body } as unknown as FastifyReply;
+
+    await ctx.postOptions!.preHandler!(request, reply);
+    const result = await ctx.postHandler!(request, reply);
+
+    expect(fastify.requireJwt).toHaveBeenCalled();
+    expect(result).toEqual({ sub: 'user-1', email: 'user@example.com', email_verified: true });
+  });
+
+  it('accepts a form-encoded access_token body and returns the same claims (RFC 6750 §2.2)', async () => {
+    const { fastify, ctx } = createFastifyStub();
+    (fastify as unknown as { jwtUtils: unknown }).jwtUtils = {
+      // No Authorization header on the body-token path.
+      extractFromHeader: vi.fn().mockReturnValue(null),
+    };
+    (fastify.requireJwt as unknown as Mock).mockImplementation(
+      async (req: { headers: Record<string, string>; jwtPayload?: unknown }) => {
+        // The body token MUST be normalised to a Bearer credential so the
+        // shared verification path handles it identically to the header method.
+        expect(req.headers.authorization).toBe('Bearer body.token');
+        req.jwtPayload = { sub: 'user-1', scope: 'openid email' };
+      }
+    );
+    withUser(fastify);
+    await userinfoRoute(fastify);
+
+    const request = {
+      method: 'POST',
+      headers: { 'content-type': FORM },
+      body: { access_token: 'body.token' },
+      query: {},
+      ip: '127.0.0.1',
+    } as unknown as FastifyRequest;
+    const reply = { send: (body: unknown) => body } as unknown as FastifyReply;
+
+    await ctx.postOptions!.preHandler!(request, reply);
+    const result = await ctx.postHandler!(request, reply);
+
+    expect(result).toEqual({ sub: 'user-1', email: 'user@example.com', email_verified: true });
+  });
+
+  it('rejects when neither a header nor a body token is present (missing token → 401)', async () => {
+    const { fastify, ctx } = createFastifyStub();
+    (fastify as unknown as { jwtUtils: unknown }).jwtUtils = {
+      extractFromHeader: vi.fn().mockReturnValue(null),
+    };
+    (fastify.requireJwt as unknown as Mock).mockRejectedValue(
+      new JWTInvalidError('Missing or malformed Authorization header')
+    );
+    await userinfoRoute(fastify);
+
+    const request = {
+      method: 'POST',
+      headers: { 'content-type': FORM },
+      body: {},
+      query: {},
+      ip: '127.0.0.1',
+    } as unknown as FastifyRequest;
+    const reply = {} as unknown as FastifyReply;
+
+    await expect(ctx.postOptions!.preHandler!(request, reply)).rejects.toThrow(JWTInvalidError);
+  });
+
+  it('rejects the token being supplied by more than one method (RFC 6750 §2.2)', async () => {
+    const { fastify, ctx } = createFastifyStub();
+    (fastify as unknown as { jwtUtils: unknown }).jwtUtils = {
+      extractFromHeader: vi.fn().mockReturnValue('header.token'),
+    };
+    await userinfoRoute(fastify);
+
+    const request = {
+      method: 'POST',
+      headers: { authorization: 'Bearer header.token', 'content-type': FORM },
+      body: { access_token: 'body.token' },
+      query: {},
+      ip: '127.0.0.1',
+    } as unknown as FastifyRequest;
+    const reply = {} as unknown as FastifyReply;
+
+    await expect(ctx.postOptions!.preHandler!(request, reply)).rejects.toThrow(InvalidRequestError);
+    expect(fastify.requireJwt).not.toHaveBeenCalled();
+  });
+
+  it('does not accept a token from the query string (RFC 6750 §2.3)', async () => {
+    const { fastify, ctx } = createFastifyStub();
+    (fastify as unknown as { jwtUtils: unknown }).jwtUtils = {
+      extractFromHeader: vi.fn().mockReturnValue(null),
+    };
+    await userinfoRoute(fastify);
+
+    const request = {
+      method: 'POST',
+      headers: { 'content-type': FORM },
+      body: {},
+      query: { access_token: 'query.token' },
+      ip: '127.0.0.1',
+    } as unknown as FastifyRequest;
+    const reply = {} as unknown as FastifyReply;
+
+    await expect(ctx.postOptions!.preHandler!(request, reply)).rejects.toThrow(InvalidRequestError);
+    expect(fastify.requireJwt).not.toHaveBeenCalled();
+  });
+
+  it('ignores a body access_token when the content-type is not form-encoded', async () => {
+    const { fastify, ctx } = createFastifyStub();
+    (fastify as unknown as { jwtUtils: unknown }).jwtUtils = {
+      extractFromHeader: vi.fn().mockReturnValue(null),
+    };
+    // With no valid token source, requireJwt throws the missing-token error.
+    (fastify.requireJwt as unknown as Mock).mockImplementation(
+      async (req: { headers: Record<string, string> }) => {
+        // The JSON body token must NOT have been promoted to an Authorization
+        // header (RFC 6750 §2.2 restricts the body method to form-encoding).
+        expect(req.headers.authorization).toBeUndefined();
+        throw new JWTInvalidError('Missing or malformed Authorization header');
+      }
+    );
+    await userinfoRoute(fastify);
+
+    const request = {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: { access_token: 'body.token' },
+      query: {},
+      ip: '127.0.0.1',
+    } as unknown as FastifyRequest;
+    const reply = {} as unknown as FastifyReply;
+
+    await expect(ctx.postOptions!.preHandler!(request, reply)).rejects.toThrow(JWTInvalidError);
   });
 });
