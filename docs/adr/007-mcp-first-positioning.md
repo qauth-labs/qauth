@@ -5,6 +5,8 @@
 **Authors:** QAuth Team
 
 > **Implementation status (2026-06-24):** The near-term MCP track has **shipped**. CIMD client registration is live (config-gated via `CIMD_*`, with SSRF guards and an optional domain trust policy); `@qauth-labs/mcp-guard` ships as the resource-server SDK (PRM discovery, `401`/`403` challenges, JWKS/introspection token validation); the agent-facing `GET /api/clients` developer surface exists; and the T0 trust floor is in place — testcontainers-backed repository tests plus a CI gate running `lint typecheck test build` and a repo-wide coverage threshold. The long-term federation/PQC items below remain accepted designs only (see [ADR-002](./002-identifier-abstraction.md) / [ADR-003](./003-credential-provider-interface.md) / [ADR-004](./004-wallet-agnostic-federation.md) / [ADR-005](./005-pqc-hybrid-signing.md)).
+>
+> **Activation (2026-07-21, #304): T4 (Federation & PQC) is now the active track, and the "accepted designs only" line above is superseded.** This ADR planned exactly this — federation/PQC "retained as the **long-term platform**, resequenced to follow the MCP work" (§Decision); §Consequences records that "only the order changes." Reaching the "follow" step is fulfillment, not a reversal. Current status: **ADR-002 is IMPLEMENTED** (identifier-abstraction migration complete — Epic #224, PRs #225–#230, migrations 0009–0012); **ADR-003 is implemented** (`CredentialProvider` interface + registry, PR #227); **ADR-004 has shipped code** (`WalletProvider` skeleton, #232 — `verify()` throws by design until the OID4VP flow lands; base-profile flow in progress under Epic #231); **ADR-005 has shipped code** (native + noble ML-DSA-65 backends, #243/#244 — no ML-DSA-signed token emitted yet). The gate this deferral hinged on is therefore **cleared**: the "gated on the ADR-002 schema migration, which has not started" statement (§Context) and "**Defer the ADR-002 identifier-abstraction migration**" (§Decision 3) describe the 2026-06-23 posture and no longer hold. T4 re-activation was the maintainer decision recorded on #296 (2026-07-20).
 
 ## Context
 
@@ -23,7 +25,7 @@ Two facts make this strategically significant:
 
 1. **It was off-roadmap.** "MCP" appears nowhere in the MVP-PRD or README. The capability maps to the PRD's vaguest, furthest-out item — "Phase 9: Agent Authentication & Authorization (TBD)" — whose _protocol foundation_ we have now shipped years ahead of plan. The authorization-server side of the MCP authorization profile is essentially complete and live-tested.
 
-2. **The originally-pitched differentiators are still paper.** Wallet federation ([ADR-004](./004-wallet-agnostic-federation.md)), post-quantum hybrid signing ([ADR-005](./005-pqc-hybrid-signing.md)), and the identifier-abstraction model ([ADR-002](./002-identifier-abstraction.md) / [ADR-003](./003-credential-provider-interface.md)) remain accepted designs with no implementing code. All of Phase 4/5 is gated on the ADR-002 schema migration, which has not started.
+2. **The originally-pitched differentiators are still paper.** Wallet federation ([ADR-004](./004-wallet-agnostic-federation.md)), post-quantum hybrid signing ([ADR-005](./005-pqc-hybrid-signing.md)), and the identifier-abstraction model ([ADR-002](./002-identifier-abstraction.md) / [ADR-003](./003-credential-provider-interface.md)) remain accepted designs with no implementing code. All of Phase 4/5 is gated on the ADR-002 schema migration, which has not started. **[Superseded 2026-07-21, #304: the ADR-002 migration has since completed (Epic #224) and T4 is now active — see the Activation note at the top.]**
 
 Externally: the MCP authorization specification is new (2025), adoption is rising quickly, and there is little **self-hostable, open-source** tooling — the space is dominated by hosted identity vendors. A sovereign, OSS, OAuth-2.1-correct MCP authorization server is an underserved niche, and QAuth is already most of the way into it.
 
@@ -45,7 +47,7 @@ Wallet federation (ADR-004) and post-quantum signing (ADR-005) are retained as t
 
 2. **Build the agent-native authorization substance of Phase 9 as the differentiation.** Agent client type; on-behalf-of delegation via OAuth Token Exchange (RFC 8693, `act` claim — an additive MCP auth _extension_, not core; see the [ext-auth](https://github.com/modelcontextprotocol/ext-auth) repo); agent scope modes (ReadOnly / Admin / Exec); step-up authentication before dangerous operations; per-agent action audit (extending the existing `audit_logs` table). This is what makes QAuth _more_ than a generic OAuth server for agents.
 
-3. **Defer the ADR-002 identifier-abstraction migration.** It is re-scoped as the **gate for Phase 4 (wallet federation)**, not near-term work. MCP authorization is dominated by client identity, audience binding, and consent — not human multi-credential identity — and runs on the current schema. See the implementation-status note added to ADR-002.
+3. **Defer the ADR-002 identifier-abstraction migration.** It is re-scoped as the **gate for Phase 4 (wallet federation)**, not near-term work. **[Done, not deferred — superseded 2026-07-21, #304: the migration completed via Epic #224 (PRs #225–#230); the Phase 4 gate is cleared and T4 is active. See the Activation note at the top.]** MCP authorization is dominated by client identity, audience binding, and consent — not human multi-credential identity — and runs on the current schema. See the implementation-status note added to ADR-002.
 
 4. **Reprioritize the existing roadmap** (see Consequences) so the open issues map to the new track structure.
 
@@ -150,10 +152,10 @@ catch this earlier than an ad-hoc audit does.
 
 ## Related
 
-- [ADR-002: Identifier Abstraction](./002-identifier-abstraction.md) — deferred; re-scoped as the Phase 4 gate
-- [ADR-003: CredentialProvider Abstraction](./003-credential-provider-interface.md)
-- [ADR-004: Wallet-Agnostic VC Federation](./004-wallet-agnostic-federation.md) — long-term platform
-- [ADR-005: Post-Quantum Hybrid Signing](./005-pqc-hybrid-signing.md) — long-term platform
+- [ADR-002: Identifier Abstraction](./002-identifier-abstraction.md) — IMPLEMENTED (Epic #224); was the Phase 4 gate, now cleared
+- [ADR-003: CredentialProvider Abstraction](./003-credential-provider-interface.md) — implemented (PR #227)
+- [ADR-004: Wallet-Agnostic VC Federation](./004-wallet-agnostic-federation.md) — active (T4); `WalletProvider` skeleton shipped (#232), OID4VP flow in progress (Epic #231)
+- [ADR-005: Post-Quantum Hybrid Signing](./005-pqc-hybrid-signing.md) — active (T4); ML-DSA-65 backends shipped (#243/#244)
 - [ADR-006: OAuth Grants and Audience](./006-oauth-grants-and-audience.md) — the foundation this builds on
 - PR #156 — `integration/oauth-mcp-stack`; PR #159 — public-client `authorization_code`
 - [MCP Authorization specification (2025-11-25)](https://modelcontextprotocol.io/specification/2025-11-25/basic/authorization) · [changelog vs 2025-06-18](https://modelcontextprotocol.io/specification/2025-11-25/changelog) · [auth extensions (ext-auth)](https://github.com/modelcontextprotocol/ext-auth)

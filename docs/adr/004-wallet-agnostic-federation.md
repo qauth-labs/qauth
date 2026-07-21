@@ -9,6 +9,8 @@
 > **Spec refresh (2026-07-19): this ADR predates the finalisation of its own core specs and MUST NOT be implemented as originally written.** It was authored 2026-03-11, before OpenID for Verifiable Presentations reached Final. See [Spec status](#spec-status-2026-07-19) — the credential query mechanism changed, and an interoperability profile now exists that this ADR does not name.
 >
 > **Correction (2026-07-20): SIOPv2 is not the wallet authentication mechanism, and the 2026-07-19 refresh was wrong to say it was.** See [Spec status (2026-07-20)](#spec-status-2026-07-20), which supersedes that statement and records the OID4VP 1.0 / HAIP 1.0 corrections. Open questions arising from it are tracked in issue #296 and are **not** decided here.
+>
+> **Status (2026-07-21, #304): T4 is active and code has shipped — the "not implemented" note above is superseded for the skeleton.** The `WalletProvider` skeleton landed (#232, PR #294 — `provider_type: 'wallet'`; `verify()` throws by design until a validated presentation exists). The OID4VP 1.0 **base-profile** implementation is now in progress under Epic #231. The full presentation flow (#233–#240) is **not** yet complete. The [ADR-002](./002-identifier-abstraction.md) migration this ADR was gated on is cleared (ADR-002 IMPLEMENTED); track re-activation is the [ADR-007](./007-mcp-first-positioning.md) Activation note (decision #296).
 
 ## Context
 

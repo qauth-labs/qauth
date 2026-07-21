@@ -37,7 +37,9 @@ belongs only in the provider registry, not in service routes.
   - Located at `libs/server/federation/src/providers/password.provider.ts`
   - `externalSub` is the normalized email address
   - `assuranceLevel: 'low'` — no `acr` claim in tokens
-- `WalletProvider` (`provider_type: 'wallet'`) — Phase 4, NOT YET IMPLEMENTED
+- `WalletProvider` (`provider_type: 'wallet'`) — T4, IN PROGRESS (Epic #231)
+  - Skeleton shipped (#232): `libs/server/federation/src/providers/wallet.provider.ts`
+  - `verify()` throws by design until a validated OID4VP presentation exists — proving key possession is not authentication (see #233); do not wire it into a login path yet
 
 ## Token Claims
 

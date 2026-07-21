@@ -5,6 +5,8 @@
 **Authors:** QAuth Team
 
 > **Implementation status (2026-06-24):** Accepted as design; not yet implemented. Per [ADR-007](./007-mcp-first-positioning.md) (MCP-first), the CredentialProvider/federation work is deferred to Phase 4 (long-term).
+>
+> **Correction (2026-07-21, #304): IMPLEMENTED — the note above is superseded.** The `CredentialProvider` interface and provider registry landed in PR #227 (Epic #224): `libs/server/federation/src/providers/credential-provider.interface.ts` and `password.provider.ts` exist, and the auth engine calls `provider.verify()` in production. A second provider — `WalletProvider` (ADR-004) — has since shipped as a skeleton (#232). Federation (T4) is now the **active** track, not deferred; see the [ADR-007](./007-mcp-first-positioning.md) Activation note (decision #296).
 
 ## Context
 
