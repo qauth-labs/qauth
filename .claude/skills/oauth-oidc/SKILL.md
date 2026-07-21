@@ -44,7 +44,7 @@ for any unauthenticated request rather than an error, per RFC 7662.
 `/.well-known/openid-configuration` must always reflect the current set of supported
 grant types, response types, and signing algorithms.
 
-When wallet federation (Phase 4) is implemented, update to advertise:
+When the wallet-federation flow (T4, Epic #231 — now active) is implemented, update to advertise:
 
 - `subject_types_supported: ["public", "pairwise"]`
 - `request_object_signing_alg_values_supported` — still required, but for **JAR**
@@ -53,7 +53,7 @@ When wallet federation (Phase 4) is implemented, update to advertise:
   (see [ADR-004 § Spec status (2026-07-20)](../../../docs/adr/004-wallet-agnostic-federation.md)).
   Note HAIP 1.0 §7 requires `ES256` at minimum, which QAuth does not support today (#298).
 
-Do not add these fields until `WalletProvider` is implemented and tested (Phase 4).
+Do not add these fields until the `WalletProvider` presentation flow is implemented and tested (T4, Epic #231) — the skeleton (#232) does not authenticate anyone yet.
 
 ## Email Claim Behaviour
 

@@ -4,7 +4,7 @@
 **Date:** 2026-03-18
 **Authors:** QAuth Team
 
-> **Implementation status (2026-06-24):** Accepted as design; not implemented. Phase 1 signs JWTs with Ed25519; the hybrid ML-DSA transition is Phase 5 (long-term per [ADR-007](./007-mcp-first-positioning.md)).
+> **Implementation status (2026-06-24):** Accepted as design; not implemented. Phase 1 signs JWTs with Ed25519; the hybrid ML-DSA transition is Phase 5 (long-term per [ADR-007](./007-mcp-first-positioning.md)). **[Partly superseded — see the #243/#244 amendments below: ML-DSA-65 backends have since shipped, and PQC (T4) is now the active track per the [ADR-007](./007-mcp-first-positioning.md) Activation note (#304, 2026-07-21). QAuth still emits Ed25519-signed tokens — no ML-DSA-signed token yet.]**
 >
 > **Amendment (2026-07-18, #243):** The crypto-agile abstraction (`libs/core/crypto`, #242) now has a byte-level `SignatureBackend` seam with a pure-TypeScript **ML-DSA-65** (FIPS 204) backend over `@noble/post-quantum` — shipped _before_ the napi-rs native binding (#244), reversing this ADR's "native primary" framing to prioritize lower release risk. `SIGNING_ALGORITHM_MODE` is the runtime algorithm-selection flag (default `ed25519`, PQC opt-in). This delivers the ML-DSA-65 primitive _capability_ only: QAuth still issues Ed25519-signed JWTs — there is no finalized JOSE `alg` for ML-DSA, so the JWS carrier (#245), JWKS/AKP publication (#246), and introspection-first token posture (#247) remain future work. No ML-DSA-signed token is emitted yet.
 >

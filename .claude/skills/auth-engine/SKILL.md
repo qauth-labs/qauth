@@ -37,7 +37,9 @@ belongs only in the provider registry, not in service routes.
   - Located at `libs/server/federation/src/providers/password.provider.ts`
   - `externalSub` is the normalized email address
   - `assuranceLevel: 'low'` — no `acr` claim in tokens
-- `WalletProvider` (`provider_type: 'wallet'`) — Phase 4, NOT YET IMPLEMENTED
+- `WalletProvider` (`provider_type: 'wallet'`) — T4, IN PROGRESS (Epic #231)
+  - Skeleton shipped (#232): `libs/server/federation/src/providers/wallet.provider.ts`
+  - `verify()` throws by design until a validated OID4VP presentation exists — proving key possession is not authentication (see #233); do not wire it into a login path yet
 
 ## Token Claims
 
@@ -71,9 +73,10 @@ the `passwordHasher` Fastify decorator. Do not call Argon2 directly.
 
 - Phase 1 (email/password + OAuth 2.1 / OIDC): COMPLETE after identifier-abstraction refactor
 - Phase 2 (Developer Portal): IN PROGRESS — no new providers
-- Phase 4 (WalletProvider + OID4VP 1.0): NOT YET STARTED. The mechanism is
+- T4 (WalletProvider + OID4VP 1.0): **ACTIVE** (Epic #231; skeleton shipped in
+  #232, transport layer #233 first). The mechanism is
   **OID4VP 1.0**, not SIOPv2 — HAIP 1.0 §5 mandates `response_type=vp_token`,
   which excludes the Self-Issued ID Token. Do not implement SIOPv2. See
   [ADR-004 § Spec status (2026-07-20)](../../../docs/adr/004-wallet-agnostic-federation.md);
-  profile targeting is an open decision (#296).
+  profile order is decided (#296 locked): `oid4vp-1.0-base` first, `haip-1.0` second.
 - The `PasswordProvider` is permanent infrastructure, not a legacy path to be deprecated

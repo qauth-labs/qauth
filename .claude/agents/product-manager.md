@@ -21,14 +21,14 @@ When invoked:
      - **T2 — Agent-native authZ**: agent client type (`is_agent`), RFC 8693 on-behalf-of token exchange (`act` claim), scope modes (ReadOnly/Admin/Exec), step-up, per-agent audit.
      - **T3 — OIDC conformance + hardening**: CSRF/Helmet/secure cookies/XSS, pino logging + `/metrics` + request-id + failed-login lockout, ID token/nonce/claims, developer-portal Docker image.
      - **T5 — Environment-aware authZ** ([ADR-008](../../docs/adr/008-environment-aware-authorization.md)): `environment` as a fail-safe policy dimension driving TTLs/PKCE/localhost redirects/rate-limit tier/agent step-up/T3 bundle; environment-gated developer API keys.
-   - **T4 — Federation + PQC (DEFERRED, long-term platform):** the old **Phase 4 — Wallet Federation** (OID4VP 1.0 — _not_ SIOPv2, which HAIP 1.0 excludes; EUDI Wallet, trust anchors, `federation-core`) and **Phase 5 — Post-Quantum Crypto** (hybrid ML-DSA-65 + Ed25519, `@qauth-labs/crypto`). Gated on the [ADR-002](../../docs/adr/002-identifier-abstraction.md) identifier-abstraction migration.
+   - **T4 — Federation + PQC (ACTIVE — re-sequenced per [ADR-007](../../docs/adr/007-mcp-first-positioning.md), maintainer decision #296):** the old **Phase 4 — Wallet Federation** (OID4VP 1.0 — _not_ SIOPv2, which HAIP 1.0 excludes; EUDI Wallet, trust anchors, `federation-core`) and **Phase 5 — Post-Quantum Crypto** (hybrid ML-DSA-65 + Ed25519, `@qauth-labs/crypto`). The [ADR-002](../../docs/adr/002-identifier-abstraction.md) identifier-abstraction migration that gated this is **complete** (Epic #224). In progress: OID4VP 1.0 base profile (Epic #231; `WalletProvider` skeleton shipped in #232, transport layer #233 first). ML-DSA-65 backends already shipped (#243/#244); the JOSE carrier/JWKS/introspection posture is the remaining PQC work.
    - **Phase 6+ — Enterprise & Scale (future):** social login, MFA/WebAuthn/TOTP, SAML, LDAP, orgs/teams, GraphQL, multi-region.
    - Also complete: **Phase 1 — Core Auth** (OAuth 2.1/OIDC, email/password, JWT EdDSA, realms, Docker) and the **Phase 2 — Developer Portal** essentials (registration/login/verify, client CRUD, API keys). Federation provider config UI + SDKs remain future.
    - Call out when a request is ahead of the current focus (long-term platform / polish) and suggest deferring or scoping down.
 
 3. **Current vs future features**:
    - Summarize what exists today: core OAuth 2.1 / OIDC (register, login, refresh, logout, auth-code + PKCE, email verification, introspection, userinfo, discovery/JWKS, Docker), the MCP + agent-native authorization layer, the T3 hardening bundle, the T5 environment posture, and the developer portal (auth + client CRUD + API keys).
-   - Map any new ask to a track/phase and MVP-PRD subsection (e.g. 2.2 OAuth Client Management, 4.3 Trust Anchor Validation), noting whether it is shipped, deferred (T4), or future (Phase 6+).
+   - Map any new ask to a track/phase and MVP-PRD subsection (e.g. 2.2 OAuth Client Management, 4.3 Trust Anchor Validation), noting whether it is shipped, active (T4), or future (Phase 6+).
    - If the ask is not in MVP-PRD, classify as T4 / Phase 6+ / new requirement and state it clearly.
 
 4. **Split work properly**:
