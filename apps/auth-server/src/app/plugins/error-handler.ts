@@ -34,6 +34,17 @@ interface ErrorResponse {
   retryAfter?: number;
 }
 
+/**
+ * Sanitize a message for use as an RFC 6750 §3 `error_description` inside a
+ * `WWW-Authenticate` header. That grammar's quoted-string permits only
+ * `%x20-21 / %x23-5B / %x5D-7E` — i.e. no double-quote and no backslash — so we
+ * strip anything outside that set to keep the header well-formed and prevent a
+ * message from breaking out of the quoted value.
+ */
+function sanitizeChallengeDescription(message: string): string {
+  return message.replace(/[^\x20-\x21\x23-\x5b\x5d-\x7e]/g, ' ').slice(0, 200);
+}
+
 /** Simple errors that only need message and statusCode */
 const SimpleErrorClasses = [
   BadRequestError,
@@ -97,6 +108,24 @@ export default fp(async function (fastify: FastifyInstance) {
           code: error.code,
         };
         return reply.code(error.statusCode).send(response);
+      }
+
+      // RFC 6750 §3: a bearer-protected resource (e.g. /oauth/userinfo) that
+      // rejects an access token MUST answer with a `WWW-Authenticate: Bearer`
+      // challenge carrying the `invalid_token` error code. This is scoped to the
+      // JWT/access-token failures — thrown by `requireJwt` / access-token
+      // verification on bearer-protected routes — and is DISTINCT from the
+      // client-authentication Basic case above (`InvalidClientError`).
+      // `InvalidTokenError` (email-verification tokens, etc.) is intentionally
+      // NOT included: it is not a bearer resource failure. We only set the
+      // header here and fall through so the normal body/status handling runs.
+      if (error instanceof JWTInvalidError || error instanceof JWTExpiredError) {
+        reply.header(
+          'WWW-Authenticate',
+          `Bearer realm="OAuth", error="invalid_token", error_description="${sanitizeChallengeDescription(
+            error.message
+          )}"`
+        );
       }
 
       // Handle simple error types (message + statusCode + optional code)

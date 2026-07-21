@@ -133,6 +133,37 @@ describe('signIdToken', () => {
     expect(payload['token_use']).toBe('id');
   });
 
+  it('emits auth_time in epoch SECONDS (floored) when authTime (epoch ms) is supplied', async () => {
+    const { privateKey, publicKey } = await generateEdDSAKeyPair();
+    // A non-round millisecond value proves the floor-to-seconds conversion.
+    const authTimeMs = 1_700_000_123_456;
+
+    const token = await signIdToken(
+      { sub: 'user-oidc-at', audience: 'client-oidc-at', authTime: authTimeMs },
+      privateKey,
+      'https://auth.example.com',
+      900
+    );
+
+    const { payload } = await jwtVerify(token, publicKey, { algorithms: ['EdDSA'] });
+    // OIDC Core §2: auth_time is epoch SECONDS.
+    expect(payload['auth_time']).toBe(Math.floor(authTimeMs / 1000));
+  });
+
+  it('omits auth_time when authTime is not supplied (backward-compatible)', async () => {
+    const { privateKey, publicKey } = await generateEdDSAKeyPair();
+
+    const token = await signIdToken(
+      { sub: 'user-oidc-noat', audience: 'client-oidc-noat' },
+      privateKey,
+      'https://auth.example.com',
+      900
+    );
+
+    const { payload } = await jwtVerify(token, publicKey, { algorithms: ['EdDSA'] });
+    expect(payload['auth_time']).toBeUndefined();
+  });
+
   it('omits nonce and name when not supplied', async () => {
     const { privateKey, publicKey } = await generateEdDSAKeyPair();
 

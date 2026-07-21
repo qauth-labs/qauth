@@ -127,6 +127,58 @@ describe('error-handler plugin', () => {
     await app.close();
   });
 
+  it('sets WWW-Authenticate: Bearer with invalid_token on a JWT failure (RFC 6750 §3)', async () => {
+    const app = await buildTestApp();
+
+    const response = await app.inject({
+      method: 'GET',
+      url: '/test-jwt-invalid',
+      headers: { authorization: 'Bearer bad-token' },
+    });
+
+    expect(response.statusCode).toBe(401);
+    const challenge = response.headers['www-authenticate'];
+    expect(challenge).toContain('Bearer ');
+    expect(challenge).toContain('realm="OAuth"');
+    expect(challenge).toContain('error="invalid_token"');
+    expect(challenge).toContain('error_description="Invalid JWT token"');
+
+    await app.close();
+  });
+
+  it('sets WWW-Authenticate: Bearer with invalid_token on an expired token (RFC 6750 §3)', async () => {
+    const app = await buildTestApp();
+
+    const response = await app.inject({
+      method: 'GET',
+      url: '/test-jwt-expired',
+      headers: { authorization: 'Bearer expired-token' },
+    });
+
+    expect(response.statusCode).toBe(401);
+    const challenge = response.headers['www-authenticate'];
+    expect(challenge).toContain('Bearer ');
+    expect(challenge).toContain('error="invalid_token"');
+
+    await app.close();
+  });
+
+  it('does NOT set the Bearer challenge on the client-auth Basic case (scoping)', async () => {
+    const app = await buildTestApp();
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/test-invalid-client',
+      headers: { authorization: `Basic ${Buffer.from('cid:bad').toString('base64')}` },
+    });
+
+    // The Basic client-auth failure keeps its Basic challenge and never emits a
+    // Bearer one — the two paths are distinct (InvalidClientError vs JWT errors).
+    expect(response.headers['www-authenticate']).toBe('Basic realm="OAuth"');
+
+    await app.close();
+  });
+
   it('omits WWW-Authenticate on InvalidClientError when request did not use Basic auth', async () => {
     const app = await buildTestApp();
 

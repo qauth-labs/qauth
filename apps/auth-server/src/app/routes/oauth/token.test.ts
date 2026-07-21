@@ -1147,6 +1147,47 @@ describe('POST /oauth/token route — authorization_code grant', () => {
     });
   });
 
+  it('threads the code auth_time (epoch ms) into the id_token (OIDC Core §2)', async () => {
+    const { fastify, ctx, authCode } = setupAuthCodeStub();
+    // A fixed session establishment time captured on the code at authorize time.
+    const authTimeMs = 1_700_000_000_000;
+    (fastify.repositories.authorizationCodes.findByCode as unknown as Mock).mockResolvedValue({
+      ...authCode,
+      scopes: ['openid'],
+      authTime: authTimeMs,
+    });
+    await tokenRoute(fastify);
+    const handler = ctx.handler;
+    if (!handler) throw new Error('Handler missing');
+
+    await handler(baseRequest(), createReply());
+
+    // The route passes epoch ms; signIdToken (jwt plugin) floors to seconds.
+    expect(fastify.jwtUtils.signIdToken).toHaveBeenCalledWith(
+      expect.objectContaining({ authTime: authTimeMs })
+    );
+  });
+
+  it('omits auth_time when the code carries none (legacy in-flight code)', async () => {
+    const { fastify, ctx, authCode } = setupAuthCodeStub();
+    (fastify.repositories.authorizationCodes.findByCode as unknown as Mock).mockResolvedValue({
+      ...authCode,
+      scopes: ['openid'],
+      authTime: null,
+    });
+    await tokenRoute(fastify);
+    const handler = ctx.handler;
+    if (!handler) throw new Error('Handler missing');
+
+    await handler(baseRequest(), createReply());
+
+    const idClaims = (fastify.jwtUtils.signIdToken as unknown as Mock).mock.calls[0][0] as Record<
+      string,
+      unknown
+    >;
+    expect(idClaims['authTime']).toBeUndefined();
+  });
+
   it('gates ID-token email claims on the email scope: openid-only omits them even for a verified user — BREAKING #259', async () => {
     const { fastify, ctx, authCode } = setupAuthCodeStub();
     (fastify.repositories.authorizationCodes.findByCode as unknown as Mock).mockResolvedValue({

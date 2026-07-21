@@ -192,6 +192,14 @@ export function buildIdTokenClaims(payload: SignIdTokenPayload): {
   if (payload.nonce !== undefined) {
     claims['nonce'] = payload.nonce;
   }
+  // OIDC Core §2 `auth_time` — when the end-user authentication occurred, in
+  // epoch SECONDS (the claim's defined unit). The payload carries epoch MS
+  // (session establishment time), so floor to seconds. REQUIRED when the
+  // authorization request used `max_age`; emitted whenever tracked (always for
+  // the code flow) and omitted when unknown so nothing breaks for legacy codes.
+  if (payload.authTime !== undefined) {
+    claims['auth_time'] = Math.floor(payload.authTime / 1000);
+  }
   return { claims, audience: payload.audience };
 }
 

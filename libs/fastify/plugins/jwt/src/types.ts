@@ -231,6 +231,12 @@ export interface JwtUtils {
     email_verified?: boolean;
     name?: string;
     nonce?: string;
+    /**
+     * OIDC Core §2 `auth_time` — the end-user authentication time in epoch
+     * MILLISECONDS (session establishment). `signIdToken` maps it to the
+     * `auth_time` claim in epoch SECONDS (floored). Omitted when unknown.
+     */
+    authTime?: number;
   }): Promise<string>;
   /**
    * Generate a refresh token pair (token and hash)
