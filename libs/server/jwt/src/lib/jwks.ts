@@ -21,6 +21,85 @@ export interface PublicJwk extends Record<string, unknown> {
 }
 
 /**
+ * An `RSA` JWK publishing an RS256 public key on `/.well-known/jwks.json` (#309).
+ *
+ * `kty: 'RSA'` with the public modulus/exponent (`n`, `e`) per RFC 7518 §6.3.1.
+ * Emitted ONLY when an RS256 signing key is configured, alongside the EdDSA
+ * `OKP` entry, so an RP that requires `RS256` (OIDC Basic/Config certification,
+ * #286) can verify the ID token. It carries a `kid` DISTINCT from the EdDSA key
+ * so a verifier resolves `(kid, alg)` unambiguously.
+ *
+ * NEVER contains private members (`d`, `p`, `q`, `dp`, `dq`, `qi`) — RFC 7517
+ * §9.3. {@link exportRs256PublicJwk} constructs the entry from only the public
+ * members, so a private component cannot leak even if a private key is passed.
+ */
+export interface Rs256Jwk extends Record<string, unknown> {
+  kty: 'RSA';
+  /** base64url RSA public modulus (RFC 7518 §6.3.1.1). */
+  n: string;
+  /** base64url RSA public exponent (RFC 7518 §6.3.1.2). */
+  e: string;
+  use: 'sig';
+  alg: 'RS256';
+  kid?: string;
+}
+
+/**
+ * RSA JWK members that carry PRIVATE key material (RFC 7518 §6.3.2). None may
+ * ever appear in a published JWK; {@link exportRs256PublicJwk} builds its result
+ * from the public members only, and additionally asserts none of these leaked.
+ */
+const RSA_PRIVATE_JWK_MEMBERS = ['d', 'p', 'q', 'dp', 'dq', 'qi'] as const;
+
+/**
+ * Export an RS256 public key as an `RSA` JWK for `/.well-known/jwks.json` (#309).
+ *
+ * Sets `use: 'sig'` and `alg: 'RS256'` so verifiers match the key by algorithm
+ * without sniffing. `kid` is attached only when provided, enabling a distinct
+ * identifier from the EdDSA key.
+ *
+ * SECURITY: the returned JWK is constructed from ONLY the public members `n`/`e`
+ * read off `jose.exportJWK`. `exportJWK` on a public key already emits just
+ * `kty/n/e`, but this function never spreads the raw object — so no private
+ * member can ride along — and defensively THROWS if the source somehow carried
+ * one (a misconfigured caller passing a private key), rather than silently
+ * publishing it.
+ *
+ * @param publicKey - Imported RS256 public key (see `importRs256PublicKey`).
+ * @param kid - Optional stable key identifier; must be distinct from the EdDSA kid.
+ * @returns Promise resolving to a public RSA JWK.
+ */
+export async function exportRs256PublicJwk(publicKey: KeyLike, kid?: string): Promise<Rs256Jwk> {
+  const raw = (await exportJWK(publicKey)) as Record<string, unknown>;
+
+  // Fail closed: a private key would expose `d`/`p`/`q`/… here. Never publish it.
+  for (const member of RSA_PRIVATE_JWK_MEMBERS) {
+    if (member in raw) {
+      throw new Error(
+        'exportRs256PublicJwk received a key exposing private RSA members; refusing to publish.'
+      );
+    }
+  }
+
+  const { n, e } = raw;
+  if (typeof n !== 'string' || typeof e !== 'string') {
+    throw new Error('exportRs256PublicJwk requires an RSA public key with `n` and `e` members');
+  }
+
+  const jwk: Rs256Jwk = {
+    kty: 'RSA',
+    n,
+    e,
+    use: 'sig',
+    alg: 'RS256',
+  };
+  if (kid !== undefined && kid.length > 0) {
+    jwk.kid = kid;
+  }
+  return jwk;
+}
+
+/**
  * An `AKP` (Algorithm Key Pair) JWK publishing an ML-DSA public key (#246).
  *
  * `kty: 'AKP'`, the `pub` member and the `ML-DSA-65` `alg` spelling follow

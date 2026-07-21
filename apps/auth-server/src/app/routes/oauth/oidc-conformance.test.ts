@@ -32,7 +32,7 @@
  * call rejects an ID token on its RFC 9068 `typ`, but only AFTER the signature
  * has verified, so reaching the `typ` error is itself the signature assertion.
  */
-import { generateKeyPairSync } from 'node:crypto';
+import { createPublicKey, createVerify, generateKeyPairSync } from 'node:crypto';
 
 import { jwtPlugin } from '@qauth-labs/fastify-plugin-jwt';
 import Fastify, { type FastifyInstance } from 'fastify';
@@ -57,11 +57,27 @@ function generateEd25519Pem(): { privateKeyPem: string; publicKeyPem: string } {
   };
 }
 
+/** Generate a fresh RSA-2048 private key as a PKCS#8 PEM string (#309). */
+function generateRsaPrivatePem(): string {
+  const { privateKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
+  return privateKey.export({ type: 'pkcs8', format: 'pem' }).toString();
+}
+
+/** Kids used when RS256 is enabled so the EdDSA and RSA keys are distinguishable. */
+const ED_KID = 'ed25519-2026';
+const RS256_KID = 'rsa-2026';
+
+interface BuildAppOptions {
+  /** When set, configure an RS256 ID-token signing key (#309). */
+  rs256?: boolean;
+}
+
 /**
- * Build a Fastify app with the REAL jwt plugin (keyed by a fresh EdDSA pair)
- * and the production discovery routes.
+ * Build a Fastify app with the REAL jwt plugin (keyed by a fresh EdDSA pair,
+ * plus a fresh RS256 key when `rs256` is set) and the production discovery
+ * routes.
  */
-async function buildApp(): Promise<FastifyInstance> {
+async function buildApp(options: BuildAppOptions = {}): Promise<FastifyInstance> {
   const { privateKeyPem, publicKeyPem } = generateEd25519Pem();
 
   const app = Fastify({ logger: false });
@@ -71,6 +87,16 @@ async function buildApp(): Promise<FastifyInstance> {
     issuer: ISSUER,
     accessTokenLifespan: ACCESS_TOKEN_LIFESPAN,
     refreshTokenLifespan: 86400,
+    // #309: enable RS256 ID-token signing with a DISTINCT kid from the EdDSA key
+    // so the JWKS is unambiguously addressable and the certification suite can
+    // resolve the RSA key.
+    ...(options.rs256
+      ? {
+          keyId: ED_KID,
+          rs256PrivateKey: generateRsaPrivatePem(),
+          rs256KeyId: RS256_KID,
+        }
+      : {}),
   });
   await app.register(wellKnownRoutes);
   await app.ready();
@@ -128,7 +154,9 @@ describe('OIDC conformance — discovery document', () => {
     }
   });
 
-  it('declares EdDSA as the only ID token signing algorithm', async () => {
+  it('declares EdDSA as the only ID token signing algorithm when no RS256 key is configured (#309 backward-compat)', async () => {
+    // Baseline (no RS256 key): discovery MUST stay EdDSA-only, exactly as before
+    // RS256 support existed. The RS256-present case is covered separately below.
     const app = await buildApp();
     try {
       const doc = await fetchDiscovery(app);
@@ -165,7 +193,7 @@ describe('OIDC conformance — discovery document', () => {
 });
 
 describe('OIDC conformance — JWKS', () => {
-  it('publishes an EdDSA Ed25519 public verification key without the private component', async () => {
+  it('publishes a single EdDSA Ed25519 key (no private component) when RS256 is not configured', async () => {
     const app = await buildApp();
     try {
       const jwks = await fetchJwks(app);
@@ -179,6 +207,135 @@ describe('OIDC conformance — JWKS', () => {
       expect(jwk['d']).toBeUndefined();
       // The public component MUST be present so relying parties can verify.
       expect(typeof jwk['x']).toBe('string');
+    } finally {
+      await app.close();
+    }
+  });
+});
+
+/**
+ * RS256 ID-token signing (#309) — the surface OIDC Basic/Config OP
+ * certification (#286) hard-requires: discovery lists RS256, the JWKS publishes
+ * a distinct-kid RSA key with no private members, and the ID token is
+ * RS256-signed and verifies against that published RSA JWK.
+ *
+ * Verification here uses `node:crypto` only (importing the JWK via
+ * `createPublicKey({ format: 'jwk' })` and checking the RS256 signature with
+ * `createVerify`), preserving this suite's rule of not importing `jose` or
+ * `@qauth-labs/server-jwt` directly.
+ */
+describe('OIDC conformance — RS256 ID token signing (#309, cert #286)', () => {
+  it('advertises RS256 first, then EdDSA, in discovery when an RS256 key is configured', async () => {
+    const app = await buildApp({ rs256: true });
+    try {
+      const doc = await fetchDiscovery(app);
+      expect(doc['id_token_signing_alg_values_supported']).toEqual(['RS256', 'EdDSA']);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('publishes a distinct-kid RSA JWK with no private members alongside the EdDSA key', async () => {
+    const app = await buildApp({ rs256: true });
+    try {
+      const jwks = await fetchJwks(app);
+      // Two keys: the EdDSA OKP active key and the RS256 RSA key.
+      expect(jwks.keys).toHaveLength(2);
+
+      const okp = jwks.keys.find((k) => k['kty'] === 'OKP');
+      const rsa = jwks.keys.find((k) => k['kty'] === 'RSA');
+      expect(okp).toBeDefined();
+      expect(rsa).toBeDefined();
+
+      // The RSA key advertises RS256 for signature use.
+      expect(rsa?.['use']).toBe('sig');
+      expect(rsa?.['alg']).toBe('RS256');
+      expect(typeof rsa?.['n']).toBe('string');
+      expect(typeof rsa?.['e']).toBe('string');
+
+      // Distinct kids so a verifier resolves (kid, alg) unambiguously — the
+      // certification suite checks the RSA key's kid differs from the EdDSA one.
+      expect(okp?.['kid']).toBe(ED_KID);
+      expect(rsa?.['kid']).toBe(RS256_KID);
+      expect(rsa?.['kid']).not.toBe(okp?.['kid']);
+
+      // Private RSA members MUST never be exposed (RFC 7517 §9.3).
+      for (const member of ['d', 'p', 'q', 'dp', 'dq', 'qi']) {
+        expect(rsa).not.toHaveProperty(member);
+      }
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('signs the ID token with RS256 and it verifies against the published RSA JWK', async () => {
+    const app = await buildApp({ rs256: true });
+    try {
+      const nonce = 'n-rs256-conformance';
+      const idToken = await app.jwtUtils.signIdToken({
+        sub: 'user-rs256-1',
+        audience: CLIENT_ID,
+        email: 'rs256@example.com',
+        email_verified: true,
+        name: 'RS256 User',
+        nonce,
+      });
+
+      // The protected header must declare RS256 and carry the RSA key's kid, so
+      // an RP resolving by kid against the two-key JWKS lands on the RSA key
+      // (the OIDF suite's OP-IDToken-kid check).
+      const header = decodeHeader(idToken);
+      expect(header['alg']).toBe('RS256');
+      expect(header['typ']).toBe('JWT');
+      expect(header['kid']).toBe(RS256_KID);
+
+      // Resolve the RSA JWK the server publishes and verify the RS256 signature
+      // with node:crypto only (no jose / server-jwt import).
+      const jwks = await fetchJwks(app);
+      const rsaJwk = jwks.keys.find((k) => k['alg'] === 'RS256');
+      expect(rsaJwk).toBeDefined();
+      // The header kid resolves to exactly the published RSA JWK.
+      expect(header['kid']).toBe(rsaJwk?.['kid']);
+
+      const rsaKey = createPublicKey({
+        key: rsaJwk,
+        format: 'jwk',
+      } as unknown as Parameters<typeof createPublicKey>[0]);
+      const [h, p, s] = idToken.split('.');
+      const signatureValid = createVerify('RSA-SHA256')
+        .update(`${h}.${p}`)
+        .verify(rsaKey, Buffer.from(s, 'base64url'));
+      expect(signatureValid).toBe(true);
+
+      // Claims carried by the RS256-signed ID token.
+      const claims = decodeClaims(idToken);
+      expect(claims['iss']).toBe(ISSUER);
+      expect(claims['aud']).toBe(CLIENT_ID);
+      expect(claims['sub']).toBe('user-rs256-1');
+      expect(claims['nonce']).toBe(nonce);
+      expect(claims['email']).toBe('rs256@example.com');
+      expect(claims['email_verified']).toBe(true);
+      expect(claims['name']).toBe('RS256 User');
+      expect(claims['token_use']).toBe('id');
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('does NOT verify the RS256 ID token against the EdDSA key (algorithm separation)', async () => {
+    const app = await buildApp({ rs256: true });
+    try {
+      const idToken = await app.jwtUtils.signIdToken({
+        sub: 'user-rs256-2',
+        audience: CLIENT_ID,
+      });
+
+      // The RS256-signed ID token must not verify under the OKP (EdDSA) key —
+      // the access-token verifier is pinned to EdDSA and rejects it on the
+      // signature/algorithm before any claim is read.
+      await expect(
+        app.jwtUtils.verifyAccessToken(idToken, { audience: CLIENT_ID })
+      ).rejects.toThrow();
     } finally {
       await app.close();
     }

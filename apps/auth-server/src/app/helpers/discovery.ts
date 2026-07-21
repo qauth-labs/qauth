@@ -41,7 +41,22 @@ export interface DiscoveryMetadataInput {
    * to false here; the route layer passes the env-gated value.
    */
   clientIdMetadataDocumentSupported?: boolean;
+  /**
+   * `id_token_signing_alg_values_supported` to advertise (OIDC Discovery 1.0 /
+   * RFC 8414). Defaults to {@link DEFAULT_ID_TOKEN_SIGNING_ALG_VALUES} (`EdDSA`).
+   * The route passes the plugin's live value: `['RS256','EdDSA']` when an RS256
+   * signing key is configured (#309, needed for OIDC Basic/Config certification,
+   * #286), otherwise `['EdDSA']`. MUST reflect the keys actually published in the
+   * JWKS — advertising an algorithm with no matching key is a conformance failure.
+   */
+  idTokenSigningAlgValuesSupported?: readonly string[];
 }
+
+/**
+ * Default `id_token_signing_alg_values_supported`. EdDSA is always available;
+ * RS256 is added by the route only when an RS256 key is configured (#309).
+ */
+export const DEFAULT_ID_TOKEN_SIGNING_ALG_VALUES: readonly string[] = ['EdDSA'] as const;
 
 /**
  * OAuth 2.0 Authorization Server Metadata (RFC 8414).
@@ -85,7 +100,12 @@ export function buildAuthorizationServerMetadata(
     scopes_supported: Array.from(input.scopesSupported ?? DEFAULT_SCOPES_SUPPORTED),
     // Public subject identifiers — no pairwise salts today.
     subject_types_supported: ['public'],
-    id_token_signing_alg_values_supported: ['EdDSA'],
+    // #309: reflects the keys actually configured/published. `['EdDSA']` by
+    // default; `['RS256','EdDSA']` when an RS256 key is present (RS256 is the
+    // default ID-token signature then). MUST match the JWKS.
+    id_token_signing_alg_values_supported: Array.from(
+      input.idTokenSigningAlgValuesSupported ?? DEFAULT_ID_TOKEN_SIGNING_ALG_VALUES
+    ),
     // RFC 8707 §3: advertise Resource Indicator support. Clients that want
     // audience-scoped tokens can rely on this metadata flag.
     resource_indicators_supported: true,

@@ -125,6 +125,19 @@ export async function app(fastify: FastifyInstance, opts: object) {
     issuer: env.JWT_ISSUER,
     accessTokenLifespan: env.ACCESS_TOKEN_LIFESPAN,
     refreshTokenLifespan: env.REFRESH_TOKEN_LIFESPAN,
+    // RS256 ID-token signing (#309), OPTIONAL and env-provisioned. When the
+    // RS256 key is set, the plugin signs ID tokens with RS256 by default,
+    // publishes the RSA public key in the JWKS, and discovery advertises
+    // RS256 — unblocking OIDC Basic/Config OP certification (#286). Absent →
+    // EdDSA-only, exactly as before. Access tokens always stay EdDSA. Spread
+    // conditionally so unset keys never appear as `undefined` options.
+    ...(env.JWT_RS256_PRIVATE_KEY
+      ? {
+          rs256PrivateKey: env.JWT_RS256_PRIVATE_KEY,
+          ...(env.JWT_RS256_PUBLIC_KEY ? { rs256PublicKey: env.JWT_RS256_PUBLIC_KEY } : {}),
+          ...(env.JWT_RS256_KID ? { rs256KeyId: env.JWT_RS256_KID } : {}),
+        }
+      : {}),
     // RFC 7009 revocation: the shared `requireJwt` preHandler consults this
     // Redis-backed denylist after verification so a revoked access token is
     // rejected everywhere it is used as a bearer credential. Resolved lazily
