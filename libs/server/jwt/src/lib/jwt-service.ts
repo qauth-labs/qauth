@@ -1,6 +1,11 @@
 import { randomUUID } from 'node:crypto';
 
-import { CryptoVerificationError, sign, verifyWithHeader } from '@qauth-labs/core-crypto';
+import {
+  CryptoVerificationError,
+  type JwsAlgorithm,
+  sign,
+  verifyWithHeader,
+} from '@qauth-labs/core-crypto';
 import { JWTExpiredError, JWTInvalidError } from '@qauth-labs/shared-errors';
 
 import type { JWTPayload, SignAccessTokenPayload, SignIdTokenPayload } from '../types/jwt-service';
@@ -194,17 +199,31 @@ export async function signIdToken(
   payload: SignIdTokenPayload,
   privateKey: KeyLike,
   issuer: string,
-  expiresIn: number
+  expiresIn: number,
+  alg: JwsAlgorithm = 'EdDSA',
+  kid?: string
 ): Promise<string> {
   const { claims, audience } = buildIdTokenClaims(payload);
-  return sign(claims, privateKey, 'EdDSA', {
+  // #309: `alg` selects the ID-token signature algorithm. It defaults to
+  // `EdDSA` so every existing caller is byte-identical; the JWT plugin passes
+  // `'RS256'` (with the RSA key) when an RS256 key is configured, to unblock
+  // OIDC Basic/Config OP certification (#286) which requires an RS256-verifiable
+  // ID token. Access tokens are UNAFFECTED — they stay EdDSA.
+  //
+  // `kid` is stamped into the protected header when supplied: once an RS256 key
+  // is configured the JWKS publishes two keys, so an RP (and the certification
+  // suite's OP-IDToken-kid check) must resolve the signing key by `kid` rather
+  // than relying on `(alg, kty)` uniqueness. Omitted when absent, so the
+  // single-key EdDSA path is byte-identical to before.
+  return sign(claims, privateKey, alg, {
     issuer,
     expiresIn,
     audience,
-    // #283: `JWT`, never `at+jwt`. Same signing key as the access token, so the
-    // protected-header `typ` is the only thing that distinguishes the two
-    // before any claim is inspected.
+    // #283: `JWT`, never `at+jwt`. Same signing key as the access token (in the
+    // EdDSA case), so the protected-header `typ` is the only thing that
+    // distinguishes the two before any claim is inspected.
     typ: ID_TOKEN_TYP,
+    ...(kid !== undefined && kid.length > 0 ? { header: { kid } } : {}),
   });
 }
 

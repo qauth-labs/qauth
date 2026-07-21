@@ -1,5 +1,5 @@
 import type { HybridSignedToken, SignatureAlgorithm } from '@qauth-labs/core-crypto';
-import type { ActClaim, AkpJwk, JWTPayload, PublicJwk } from '@qauth-labs/server-jwt';
+import type { ActClaim, AkpJwk, JWTPayload, PublicJwk, Rs256Jwk } from '@qauth-labs/server-jwt';
 import type { FastifyPluginOptions } from 'fastify';
 
 /**
@@ -21,6 +21,35 @@ export interface JwtPluginOptions extends FastifyPluginOptions {
    * Required once key rotation is enabled; absent for a single-active-key setup.
    */
   keyId?: string;
+  /**
+   * Optional RS256 (RSASSA-PKCS1-v1_5 + SHA-256) private key in PKCS#8 PEM (#309).
+   *
+   * OPTIONAL and env-provisioned (`JWT_RS256_PRIVATE_KEY`/`_PATH`). When present:
+   * - `getJwks()` additionally publishes the derived RSA PUBLIC key as an `RSA`
+   *   JWK (with a `kid` distinct from the EdDSA key);
+   * - `signIdToken()` signs ID tokens with RS256 by DEFAULT (access tokens stay
+   *   EdDSA);
+   * - discovery advertises `id_token_signing_alg_values_supported: ['RS256','EdDSA']`.
+   *
+   * Absent → behaviour is exactly as before: EdDSA-only ID tokens, single JWKS
+   * key, discovery lists `['EdDSA']`. This unblocks OIDC Basic/Config OP
+   * certification (#286), which hard-fails an EdDSA-only OP. It is deliberately
+   * NOT generated at boot: a boot-generated RSA key would break JWKS stability
+   * across restarts and across instances.
+   */
+  rs256PrivateKey?: string;
+  /**
+   * Optional RS256 public key in SPKI PEM (#309). When omitted, the public key
+   * is derived from {@link rs256PrivateKey} (public material only). Provide it
+   * only when the private key is not available to this process.
+   */
+  rs256PublicKey?: string;
+  /**
+   * Stable `kid` for the RS256 key published in the RSA JWK (#309). Optional,
+   * but recommended so the RSA entry carries a `kid` DISTINCT from the EdDSA
+   * key; enforced distinct at boot via `assertDistinctJwksKeyIds`.
+   */
+  rs256KeyId?: string;
   /**
    * Require the RFC 9068 `typ: at+jwt` protected header on every access token
    * this server verifies (#283). Default `false`.
@@ -98,8 +127,11 @@ export interface JwtPluginOptions extends FastifyPluginOptions {
  * JWKS envelope as served by `/.well-known/jwks.json` (RFC 7517 §5).
  */
 export interface Jwks {
-  /** Ed25519 `OKP` keys and, when hybrid signing is configured, ML-DSA `AKP` keys (#246). */
-  keys: (PublicJwk | AkpJwk)[];
+  /**
+   * Ed25519 `OKP` keys; when an RS256 key is configured, the `RSA` key (#309);
+   * and, when hybrid signing is configured, ML-DSA `AKP` keys (#246).
+   */
+  keys: (PublicJwk | Rs256Jwk | AkpJwk)[];
 }
 
 /**
@@ -249,6 +281,13 @@ export interface JwtUtils {
    * Used by discovery endpoints (RFC 8414 / OIDC Discovery 1.0).
    */
   getIssuer(): string;
+  /**
+   * The `id_token_signing_alg_values_supported` values discovery must advertise
+   * (OIDC Discovery 1.0), reflecting the keys actually configured on this
+   * server: `['RS256','EdDSA']` when an RS256 key is present (#309, RS256 is the
+   * default ID-token signature then), otherwise `['EdDSA']`.
+   */
+  getIdTokenSigningAlgValuesSupported(): string[];
   /**
    * Export the server's active public key(s) as a JWKS document, ready to
    * serve at `/.well-known/jwks.json` (RFC 7517).

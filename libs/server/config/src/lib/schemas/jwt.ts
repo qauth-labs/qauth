@@ -83,6 +83,41 @@ export const jwtEnvSchema = z
     JWT_PUBLIC_KEY_PATH: z.string().optional(),
 
     /**
+     * RS256 (RSASSA-PKCS1-v1_5 + SHA-256) private key in PKCS#8 PEM (OPTIONAL,
+     * #309). When provided, ID tokens are signed with RS256 by default and the
+     * derived RSA public key is published in the JWKS — unblocking OIDC
+     * Basic/Config OP certification (#286), which hard-fails an EdDSA-only OP.
+     * Absent → EdDSA-only, exactly as before (backward compatible). Access
+     * tokens are unaffected (always EdDSA).
+     */
+    JWT_RS256_PRIVATE_KEY: z.string().optional(),
+
+    /**
+     * Path to the RS256 private key file in PKCS#8 PEM (OPTIONAL, #309). Takes
+     * precedence over {@link JWT_RS256_PRIVATE_KEY} (see {@link resolveKey}).
+     */
+    JWT_RS256_PRIVATE_KEY_PATH: z.string().optional(),
+
+    /**
+     * RS256 public key in SPKI PEM (OPTIONAL, #309). When omitted the public key
+     * is derived from the RS256 private key (public material only). Provide only
+     * when the private key is not available to this process.
+     */
+    JWT_RS256_PUBLIC_KEY: z.string().optional(),
+
+    /**
+     * Path to the RS256 public key file in SPKI PEM (OPTIONAL, #309).
+     */
+    JWT_RS256_PUBLIC_KEY_PATH: z.string().optional(),
+
+    /**
+     * Stable key identifier published in the RS256 RSA JWK `kid` (OPTIONAL,
+     * #309). Recommended so the RSA entry carries a `kid` distinct from the
+     * EdDSA key; distinctness is enforced at boot.
+     */
+    JWT_RS256_KID: z.string().optional(),
+
+    /**
      * JWT issuer URL (required)
      * Used as the 'iss' claim in JWT tokens
      */
@@ -146,10 +181,18 @@ export const jwtEnvSchema = z
     // Resolve public key only if private key exists: prefer file path, fallback to direct key
     const publicKey = resolveKey(data.JWT_PUBLIC_KEY, data.JWT_PUBLIC_KEY_PATH);
 
+    // Resolve the OPTIONAL RS256 key pair (#309). Undefined when unconfigured,
+    // which keeps the server EdDSA-only (backward compatible).
+    const rs256PrivateKey = resolveKey(data.JWT_RS256_PRIVATE_KEY, data.JWT_RS256_PRIVATE_KEY_PATH);
+    const rs256PublicKey = resolveKey(data.JWT_RS256_PUBLIC_KEY, data.JWT_RS256_PUBLIC_KEY_PATH);
+
     // Return resolved configuration
     return {
       JWT_PRIVATE_KEY: privateKey,
       JWT_PUBLIC_KEY: publicKey,
+      JWT_RS256_PRIVATE_KEY: rs256PrivateKey,
+      JWT_RS256_PUBLIC_KEY: rs256PublicKey,
+      JWT_RS256_KID: data.JWT_RS256_KID,
       JWT_ISSUER: data.JWT_ISSUER,
       ACCESS_TOKEN_LIFESPAN: data.ACCESS_TOKEN_LIFESPAN,
       DEV_ACCESS_TOKEN_LIFESPAN: data.DEV_ACCESS_TOKEN_LIFESPAN,

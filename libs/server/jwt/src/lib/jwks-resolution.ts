@@ -1,7 +1,10 @@
-import type { AkpJwk, PublicJwk } from './jwks';
+import type { AkpJwk, PublicJwk, Rs256Jwk } from './jwks';
 
-/** Any key entry publishable on `/.well-known/jwks.json` (OKP Ed25519 or AKP ML-DSA). */
-export type PublishedJwk = PublicJwk | AkpJwk;
+/**
+ * Any key entry publishable on `/.well-known/jwks.json`: OKP Ed25519, RSA
+ * RS256 (#309), or AKP ML-DSA.
+ */
+export type PublishedJwk = PublicJwk | Rs256Jwk | AkpJwk;
 
 /**
  * How a verifier asks for a key (#248 F9).
@@ -22,6 +25,7 @@ export interface JwksKeySelector {
 /** The `kty` a given `alg` must be published under (fully-specified, RFC 9864 spirit). */
 function expectedKty(alg: string): string | undefined {
   if (alg === 'EdDSA') return 'OKP';
+  if (alg === 'RS256') return 'RSA';
   if (alg === 'ML-DSA-65') return 'AKP';
   return undefined;
 }

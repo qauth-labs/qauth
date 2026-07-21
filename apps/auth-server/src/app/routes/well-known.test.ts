@@ -17,6 +17,7 @@ const ISSUER = 'https://auth.example.com';
 async function buildApp(overrides?: {
   jwks?: { keys: Array<Record<string, unknown>> };
   issuer?: string;
+  idTokenSigningAlgValuesSupported?: string[];
 }) {
   const app = Fastify({ logger: false });
 
@@ -36,6 +37,8 @@ async function buildApp(overrides?: {
   app.decorate('jwtUtils', {
     getIssuer: () => overrides?.issuer ?? ISSUER,
     getJwks: async () => jwks,
+    getIdTokenSigningAlgValuesSupported: () =>
+      overrides?.idTokenSigningAlgValuesSupported ?? ['EdDSA'],
   } as unknown as never);
 
   await app.register(wellKnownRoutes);
@@ -118,6 +121,22 @@ describe('GET /.well-known/openid-configuration', () => {
       // #282: the RFC 9207 flag is inherited from the AS metadata, so a client
       // that reads only the OIDC document still learns `iss` is validatable.
       expect(body['authorization_response_iss_parameter_supported']).toBe(true);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('advertises RS256 + EdDSA when the plugin reports an RS256 key is configured (#309)', async () => {
+    const app = await buildApp({ idTokenSigningAlgValuesSupported: ['RS256', 'EdDSA'] });
+    try {
+      const res = await app.inject({
+        method: 'GET',
+        url: '/.well-known/openid-configuration',
+      });
+      const body = res.json() as Record<string, unknown>;
+      // Discovery reflects exactly what the plugin can produce keys for; when an
+      // RS256 key is present RS256 is advertised (and listed first, the default).
+      expect(body['id_token_signing_alg_values_supported']).toEqual(['RS256', 'EdDSA']);
     } finally {
       await app.close();
     }

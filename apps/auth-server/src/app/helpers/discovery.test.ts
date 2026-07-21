@@ -42,6 +42,21 @@ describe('buildAuthorizationServerMetadata', () => {
     expect(meta['subject_types_supported']).toEqual(['public']);
   });
 
+  it('advertises the ID-token signing algorithms passed in (#309 RS256 + EdDSA)', () => {
+    const meta = buildAuthorizationServerMetadata({
+      issuer: ISSUER,
+      idTokenSigningAlgValuesSupported: ['RS256', 'EdDSA'],
+    });
+
+    expect(meta['id_token_signing_alg_values_supported']).toEqual(['RS256', 'EdDSA']);
+  });
+
+  it('defaults the ID-token signing algorithms to EdDSA-only when none is passed (#309)', () => {
+    const meta = buildAuthorizationServerMetadata({ issuer: ISSUER });
+
+    expect(meta['id_token_signing_alg_values_supported']).toEqual(['EdDSA']);
+  });
+
   it('falls back to the default scope list when none is provided', () => {
     const meta = buildAuthorizationServerMetadata({ issuer: ISSUER });
 
@@ -106,6 +121,15 @@ describe('buildOpenIdConfiguration', () => {
     expect(oidc['claims_supported']).toEqual(
       expect.arrayContaining(['sub', 'iss', 'aud', 'exp', 'iat', 'email', 'email_verified'])
     );
+  });
+
+  it('carries the RS256+EdDSA signing algorithms into the OIDC config (#309)', () => {
+    const oidc = buildOpenIdConfiguration({
+      issuer: ISSUER,
+      idTokenSigningAlgValuesSupported: ['RS256', 'EdDSA'],
+    });
+
+    expect(oidc['id_token_signing_alg_values_supported']).toEqual(['RS256', 'EdDSA']);
   });
 
   it('carries the CIMD flag into the OIDC config too (advertised on BOTH documents)', () => {

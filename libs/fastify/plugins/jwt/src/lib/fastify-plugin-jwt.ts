@@ -11,15 +11,20 @@ import {
   type AkpJwk,
   assertDistinctJwksKeyIds,
   decodeJwtUnsafe,
+  derivePublicKeyPemFromPrivate,
   exportMlDsaPublicJwk,
   exportPublicJwk,
   exportPublicKeyPem,
+  exportRs256PublicJwk,
   extractJWTFromHeader,
   generateRefreshToken,
   hashRefreshToken,
   importPrivateKey,
   importPublicKey,
+  importRs256PrivateKey,
+  importRs256PublicKey,
   type PublicJwk,
+  type Rs256Jwk,
   signAccessToken,
   signHybridAccessToken,
   signIdToken,
@@ -88,6 +93,26 @@ export const jwtPlugin = fp<JwtPluginOptions>(
           'Failed to derive public key from private key. Please provide JWT_PUBLIC_KEY in environment variables.'
         );
       }
+    }
+
+    // RS256 signing key (#309) — OPTIONAL, env-provisioned. Present only to
+    // unblock OIDC Basic/Config OP certification (#286), which hard-fails an
+    // EdDSA-only OP. When configured we sign ID tokens with RS256 by default
+    // (access tokens stay EdDSA) and publish the RSA public key in the JWKS.
+    //
+    // The public half is derived from the private key with `node:crypto`
+    // (public material only) unless an explicit public key is supplied. The
+    // key is NEVER generated at boot: a fresh RSA key each restart would break
+    // JWKS stability across restarts and instances.
+    let rs256PrivateKey: Awaited<ReturnType<typeof importRs256PrivateKey>> | undefined;
+    let rs256Jwk: Rs256Jwk | undefined;
+    if (options.rs256PrivateKey) {
+      rs256PrivateKey = await importRs256PrivateKey(options.rs256PrivateKey);
+      const rs256PublicPem = options.rs256PublicKey
+        ? options.rs256PublicKey
+        : derivePublicKeyPemFromPrivate(options.rs256PrivateKey);
+      const rs256PublicKey = await importRs256PublicKey(rs256PublicPem);
+      rs256Jwk = await exportRs256PublicJwk(rs256PublicKey, options.rs256KeyId);
     }
 
     // ML-DSA keys (#246 JWKS publication, #275 live hybrid issuance, #248
@@ -239,10 +264,28 @@ export const jwtPlugin = fp<JwtPluginOptions>(
         return claims as unknown as JWTPayload;
       },
       async signIdToken(payload) {
-        // OIDC ID tokens share the access-token signing key (one JWKS verifies
-        // both) and lifespan. `aud` is the client_id; identity claims + nonce
-        // are passed through verbatim. Crypto stays in the plugin, never the
-        // route, per the project's security-first plugin boundary.
+        // OIDC ID tokens share the lifespan of access tokens. `aud` is the
+        // client_id; identity claims + nonce are passed through verbatim. Crypto
+        // stays in the plugin, never the route, per the project's security-first
+        // plugin boundary.
+        //
+        // #309: when an RS256 key is configured, sign ID tokens with RS256 by
+        // default (RS256 is what the OIDC Basic/Config certification suite, #286,
+        // requires to verify). Otherwise use the EdDSA access-token key, exactly
+        // as before. Access tokens are UNAFFECTED — they always stay EdDSA.
+        if (rs256PrivateKey) {
+          return signIdToken(
+            payload,
+            rs256PrivateKey,
+            options.issuer,
+            options.accessTokenLifespan,
+            'RS256',
+            // Stamp the RSA key's kid so the ID token resolves unambiguously
+            // against the two-key JWKS (RSA + EdDSA) — the RSA JWK carries the
+            // same kid (`exportRs256PublicJwk(..., options.rs256KeyId)`).
+            options.rs256KeyId
+          );
+        }
         return signIdToken(payload, privateKey, options.issuer, options.accessTokenLifespan);
       },
       generateRefreshToken() {
@@ -275,14 +318,23 @@ export const jwtPlugin = fp<JwtPluginOptions>(
       getIssuer() {
         return options.issuer;
       },
+      getIdTokenSigningAlgValuesSupported() {
+        // #309: RS256 is advertised FIRST and is the default ID-token signature
+        // when an RS256 key is configured (what OIDC Basic/Config certification,
+        // #286, requires). EdDSA stays advertised so existing RPs keep working.
+        // No RS256 key → EdDSA-only, exactly as before.
+        return rs256Jwk ? ['RS256', 'EdDSA'] : ['EdDSA'];
+      },
       async getJwks() {
-        // Active Ed25519 key, then retired Ed25519 keys under their own kids so
-        // in-flight tokens keep verifying across a rotation (#248 F9), then the
-        // ML-DSA AKP entries (#246 — classical verifiers ignore the `kty: 'AKP'`
-        // entries they don't understand; PQC verifiers resolve them by
-        // `(kid, alg)`, see `selectJwksKey`).
-        const keys: (PublicJwk | AkpJwk)[] = [
+        // Active Ed25519 key, then (when configured) the RS256 RSA key (#309),
+        // then retired Ed25519 keys under their own kids so in-flight tokens keep
+        // verifying across a rotation (#248 F9), then the ML-DSA AKP entries
+        // (#246 — classical verifiers ignore the `kty: 'AKP'` entries they don't
+        // understand; PQC verifiers resolve them by `(kid, alg)`, see
+        // `selectJwksKey`).
+        const keys: (PublicJwk | Rs256Jwk | AkpJwk)[] = [
           await exportPublicJwk(publicKey, options.keyId),
+          ...(rs256Jwk ? [rs256Jwk] : []),
           ...retiredEdJwks,
           ...mlDsaJwks,
         ];

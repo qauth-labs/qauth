@@ -27,6 +27,11 @@ export default async function (fastify: FastifyInstance) {
     issuer: fastify.jwtUtils.getIssuer(),
     // CIMD (MCP 2025-11-25): advertise on BOTH AS metadata and OIDC config.
     clientIdMetadataDocumentSupported: env.CIMD_ENABLED,
+    // #309: advertise exactly the ID-token signing algorithms the plugin can
+    // produce keys for — `['RS256','EdDSA']` when an RS256 key is configured,
+    // else `['EdDSA']`. Sourced from the plugin so discovery never drifts from
+    // the JWKS the same plugin serves.
+    idTokenSigningAlgValuesSupported: fastify.jwtUtils.getIdTokenSigningAlgValuesSupported(),
   });
 
   fastify.get(
