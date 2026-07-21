@@ -117,7 +117,7 @@ Expect ≥2 entries: one `kty:"OKP"` (Ed25519) and one `kty:"RSA"` (`alg:"RS256"
 ```bash
 # 1. PKCE pair (S256 is hard-required — oauth.ts:35)
 VERIFIER=$(openssl rand -base64 32 | tr '+/' '-_' | tr -d '=')
-CHALLENGE=$(printf '%s' "$VERIFIER" | openssl dgst -binary -sha256 | openssl base64 | tr '+/' '-_' | tr -d '=')
+CHALLENGE=$(printf '%s' "$VERIFIER" | openssl dgst -binary -sha256 | openssl base64 -A | tr '+/' '-_' | tr -d '=')
 
 # 2. In a browser: log in at $ISSUER/ui/login, then visit:
 #    $ISSUER/oauth/authorize?response_type=code&client_id=<CID>&redirect_uri=<CB>
