@@ -13,7 +13,7 @@
     "@qauth-labs/core-crypto": "workspace:*"
   },
   "devDependencies": {
-    "@napi-rs/cli": "^3.7.3",
+    "@napi-rs/cli": "^3.7.4",
     "@vitest/coverage-v8": "catalog:",
     "@vitest/ui": "catalog:",
     "vitest": "catalog:"

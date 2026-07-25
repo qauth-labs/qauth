@@ -86,8 +86,7 @@ export function isRedirectUriAllowedForPolicy(
  * silently-downgraded security property.
  */
 export type AuthorizationResponseParams = (
-  | { code: string; state?: string }
-  | { error: string; error_description?: string; state?: string }
+  { code: string; state?: string } | { error: string; error_description?: string; state?: string }
 ) & {
   /**
    * The AS issuer identifier, VERBATIM as advertised in the `issuer` member of
