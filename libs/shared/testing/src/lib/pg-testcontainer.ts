@@ -26,8 +26,8 @@ const POSTGRES_DB = 'qauth_test';
  * pinned to the same `postgres:18-alpine` used by docker-compose so behaviour
  * matches local/CI Postgres exactly.
  *
- * Requires a running Docker daemon. Call {@link isDockerAvailable} first to skip
- * the suite gracefully where Docker is absent.
+ * Requires a running Docker daemon. Call {@link requireDockerOrSkip} first: it
+ * skips the suite gracefully where Docker is absent, but fails on CI.
  *
  * @example
  * ```ts
@@ -64,9 +64,11 @@ export async function startPostgresContainer(): Promise<StartedPostgres> {
 }
 
 /**
- * Best-effort check for a reachable Docker daemon. Integration suites use this
- * to `describe.skip` when Docker is unavailable (e.g. some CI lanes, sandboxes)
- * instead of failing the whole run.
+ * Best-effort check for a reachable Docker daemon.
+ *
+ * Prefer {@link requireDockerOrSkip} in test suites: this raw probe cannot tell
+ * a contributor's Docker-less laptop (skip is fine) from a misconfigured CI
+ * runner (skip is a silent loss of coverage).
  */
 export async function isDockerAvailable(): Promise<boolean> {
   try {
@@ -78,4 +80,48 @@ export async function isDockerAvailable(): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+/**
+ * True when running on a CI lane. GitHub Actions sets `CI=true`; the explicit
+ * falsey forms let a developer reproduce a local run inside a CI-ish shell.
+ */
+function isCiLane(): boolean {
+  const ci = process.env['CI'];
+  if (ci === undefined || ci === '') return false;
+  return ci !== '0' && ci.toLowerCase() !== 'false';
+}
+
+/**
+ * Docker gate for container-backed integration suites — the probe every suite
+ * should call in its `beforeAll`.
+ *
+ * Returns `true` when a daemon is reachable. When one is NOT reachable the
+ * behaviour deliberately differs by lane:
+ *
+ * - **Locally** it returns `false` so the suite can `skip()`, keeping the run
+ *   green for contributors without Docker.
+ * - **On CI** it THROWS. These suites are the only place some behaviour is
+ *   observable at all — notably the real generated DDL, since the auth-server
+ *   tests mock the repositories — so a daemon-less CI lane that skipped would
+ *   report green while asserting nothing, which is exactly how a regression
+ *   like qauth-labs/qauth#316 ships twice. A missing daemon on CI is a
+ *   misconfigured runner, not a supported environment.
+ *
+ * @returns `true` when Docker is reachable, `false` when the caller should skip.
+ * @throws When Docker is unreachable and `CI` is set.
+ */
+export async function requireDockerOrSkip(): Promise<boolean> {
+  if (await isDockerAvailable()) return true;
+
+  if (isCiLane()) {
+    throw new Error(
+      'Docker is not reachable but CI is set. Container-backed integration suites must never ' +
+        'skip on CI: they are the only coverage for the real migrated schema, so skipping ' +
+        'turns the run into a green no-op. Provision a Docker daemon on this runner ' +
+        '(GitHub-hosted runners have one) or stop running the `test-integration` target here.'
+    );
+  }
+
+  return false;
 }
