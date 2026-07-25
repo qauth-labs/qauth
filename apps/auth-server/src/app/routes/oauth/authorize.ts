@@ -275,6 +275,41 @@ export default async function (fastify: FastifyInstance) {
     const bearer = fastify.jwtUtils.extractFromHeader(request.headers.authorization);
 
     if (!browserSession && !bearer) {
+      // OIDC Core §3.1.2.1: `prompt=none` forbids ANY user-facing UI, so an
+      // unauthenticated silent-renewal request MUST come back as
+      // `error=login_required` on the client's redirect_uri rather than as a
+      // redirect to the login page — which, in the hidden iframe these requests
+      // are made from, renders a login form the user can never see and leaves
+      // the client hanging until its timeout. (`redirect_uri` and the client
+      // are already validated above, so this redirect is safe to emit.) The
+      // same check exists for the authenticated step-up path further down; this
+      // is the branch that runs BEFORE any session is resolved.
+      if (query.prompt === 'none') {
+        await fastify.repositories.auditLogs.create({
+          userId: null,
+          oauthClientId: client.id,
+          event: 'oauth.stepup.required',
+          eventType: 'auth',
+          success: false,
+          ipAddress: request.ip,
+          userAgent: request.headers['user-agent'] || null,
+          metadata: {
+            client_id: query.client_id,
+            reason: 'prompt_none_no_session',
+            error: 'login_required',
+          },
+        });
+        return reply.redirect(
+          buildRedirectUrl(redirectUri, {
+            error: 'login_required',
+            error_description: 'authentication is required but prompt=none was requested',
+            state: state ?? undefined,
+            iss,
+          }),
+          302
+        );
+      }
+
       // No auth at all → browser flow. Redirect to login, then the user
       // lands back on this very URL and the session cookie path takes
       // over. We preserve the exact query string so PKCE challenge,
