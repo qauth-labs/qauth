@@ -96,6 +96,18 @@ describe('buildAuthorizationServerMetadata', () => {
     expect(meta['authorization_response_iss_parameter_supported']).toBe(true);
   });
 
+  it('states request/request_uri support explicitly rather than inheriting the defaults (#286)', () => {
+    const meta = buildAuthorizationServerMetadata({ issuer: ISSUER });
+
+    // The members must be PRESENT, not merely falsy. RFC 8414 §2 defaults an
+    // omitted `request_uri_parameter_supported` to TRUE, so omission is what
+    // published the wrong claim in the first place.
+    expect('request_parameter_supported' in meta).toBe(true);
+    expect('request_uri_parameter_supported' in meta).toBe(true);
+    expect(meta['request_parameter_supported']).toBe(false);
+    expect(meta['request_uri_parameter_supported']).toBe(false);
+  });
+
   it('omits the CIMD flag entirely when disabled (does not over-advertise)', () => {
     const enabledDefault = buildAuthorizationServerMetadata({ issuer: ISSUER });
     const explicitlyOff = buildAuthorizationServerMetadata({
@@ -139,6 +151,17 @@ describe('buildOpenIdConfiguration', () => {
     });
 
     expect(oidc['client_id_metadata_document_supported']).toBe(true);
+  });
+
+  it('carries the explicit request/request_uri flags into the OIDC config (#286)', () => {
+    // OIDC Discovery §3 repeats RFC 8414's asymmetric defaults, so the same
+    // false-capability claim would appear on this document if the base builder
+    // stopped emitting them.
+    const oidc = buildOpenIdConfiguration({ issuer: ISSUER });
+
+    expect('request_uri_parameter_supported' in oidc).toBe(true);
+    expect(oidc['request_parameter_supported']).toBe(false);
+    expect(oidc['request_uri_parameter_supported']).toBe(false);
   });
 
   it('carries authorization_response_iss_parameter_supported into the OIDC config (RFC 9207 §3, #282)', () => {
