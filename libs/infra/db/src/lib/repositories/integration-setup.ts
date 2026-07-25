@@ -51,8 +51,9 @@ const DOMAIN_TABLES = [
  * connected {@link DatabaseInstance}. Intended for a `beforeAll`; pair with
  * `reset()` in `beforeEach` and `teardown()` in `afterAll`.
  *
- * Requires Docker. Suites should guard with `isDockerAvailable()` from
- * `@qauth-labs/shared-testing` and `describe.skip` when it is unavailable.
+ * Requires Docker. Suites should guard with `requireDockerOrSkip()` from
+ * `@qauth-labs/shared-testing`, which skips locally but fails on CI so a
+ * daemon-less runner cannot turn the suite into a green no-op.
  */
 export async function setupIntegrationDb(): Promise<IntegrationDb> {
   const container: StartedPostgres = await startPostgresContainer();

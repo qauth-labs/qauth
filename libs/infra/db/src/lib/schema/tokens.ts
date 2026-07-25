@@ -55,7 +55,16 @@ export const authorizationCodes = pgTable(
     redirectUri: text('redirect_uri').notNull(),
     codeChallenge: text('code_challenge').notNull(),
     codeChallengeMethod: codeChallengeMethodEnum('code_challenge_method').notNull().default('S256'),
-    nonce: varchar('nonce', { length: 255 }),
+    /**
+     * OIDC Core §3.1.2.1 `nonce` — opaque, client-owned, and replayed verbatim
+     * into the ID token. `text` rather than a bounded varchar because neither
+     * OIDC Core nor RFC 6749 places ANY length limit on it: the storage layer
+     * must never be the thing that truncates or rejects a value the client is
+     * entitled to choose. The DoS bound lives in the app layer
+     * (`OAUTH_OPAQUE_PARAM_MAX_LENGTH`), which is the single place it belongs.
+     * See qauth-labs/qauth#316.
+     */
+    nonce: text('nonce'),
     /**
      * OIDC Core §2 `auth_time` (epoch MILLISECONDS): when the end-user
      * authentication that backs this code actually occurred — the browser
@@ -77,7 +86,15 @@ export const authorizationCodes = pgTable(
      * client.audience / light-mode default" (backward-compatible path).
      */
     resource: jsonb('resource').notNull().default(JSONB_EMPTY_ARRAY).$type<string[]>(),
-    state: varchar('state', { length: 255 }),
+    /**
+     * RFC 6749 §4.1.1 `state` — opaque, client-owned, and round-tripped to the
+     * client verbatim on the authorization response. `text` for the same reason
+     * as `nonce`: the spec sets no length limit and real clients pack context
+     * in (Cursor's MCP client base64url-encodes ~275 chars of workspace state),
+     * so a varchar(255) here rejected the code-mint AFTER both schema layers
+     * had already accepted the request. See qauth-labs/qauth#316.
+     */
+    state: text('state'),
     expiresAt: bigint('expires_at', { mode: 'number' }).notNull(),
     used: boolean('used').notNull().default(false),
     usedAt: bigint('used_at', { mode: 'number' }),

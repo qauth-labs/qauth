@@ -9,7 +9,7 @@
  * Requires Docker; self-skips without it (same pattern as the sibling suites).
  */
 import { UniqueConstraintError } from '@qauth-labs/shared-errors';
-import { isDockerAvailable } from '@qauth-labs/shared-testing';
+import { requireDockerOrSkip } from '@qauth-labs/shared-testing';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import type { UserAttributesRepository, UserCredentialsRepository } from '../../types';
@@ -26,7 +26,7 @@ describe('identity repositories integration (real Postgres)', () => {
   let attributes: UserAttributesRepository;
 
   beforeAll(async () => {
-    dockerUp = await isDockerAvailable();
+    dockerUp = await requireDockerOrSkip();
     if (!dockerUp) return;
     ctx = await setupIntegrationDb();
     credentials = createUserCredentialsRepository(ctx.database.db);

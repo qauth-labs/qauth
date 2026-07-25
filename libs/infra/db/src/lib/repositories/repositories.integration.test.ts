@@ -10,15 +10,17 @@
  *   - consent revoke = soft-delete (row preserved) + upsertGrant scope union
  *   - realm-scoped unique constraints (users / oauth_clients)
  *
- * Requires Docker. When Docker is unavailable the whole suite is skipped
- * (see the top-level guard) rather than failing the run.
+ * Requires Docker. Locally the suite skips when no daemon is reachable; on CI
+ * it FAILS instead (see `requireDockerOrSkip`), because this file is the only
+ * coverage for the real migrated DDL and a silent skip there would be
+ * indistinguishable from a pass.
  *
  * Tagged via the `*.integration.test.ts` suffix so the fast unit run and the
  * coverage gate (vitest.config.ts) exclude it — CI runs it via the dedicated
- * `test-integration` target instead.
+ * `test-integration` target in the `integration` job of ci.yml.
  */
 import { UniqueConstraintError } from '@qauth-labs/shared-errors';
-import { isDockerAvailable } from '@qauth-labs/shared-testing';
+import { requireDockerOrSkip } from '@qauth-labs/shared-testing';
 import { eq } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
@@ -45,7 +47,7 @@ describe('repository integration (real Postgres)', () => {
 
   // Container startup is paid once for the whole suite.
   beforeAll(async () => {
-    dockerUp = await isDockerAvailable();
+    dockerUp = await requireDockerOrSkip();
     if (!dockerUp) return;
     ctx = await setupIntegrationDb();
   }, 180_000);
@@ -182,6 +184,93 @@ describe('repository integration (real Postgres)', () => {
       });
 
       expect(await codes.findByCode('expired-code')).toBeUndefined();
+    });
+  });
+
+  // --- opaque state/nonce are not length-bounded by the DDL (#316) ----------
+
+  describe('authorization codes — long opaque state/nonce (#316)', () => {
+    /**
+     * `state` and `nonce` are opaque and client-owned: RFC 6749 §4.1.1 and OIDC
+     * Core set NO length limit, and the values are round-tripped to the client
+     * verbatim. They were `varchar(255)`, so a real client (Cursor's MCP client
+     * base64url-encodes ~280 chars of workspace context into `state`) passed
+     * both Zod layers and then 500'd here at code-mint with
+     * "value too long for type character varying(255)".
+     *
+     * This is the ONLY place that failure is observable: the auth-server route
+     * tests mock the repositories, so they can assert the untruncated value
+     * reaches `create()` but never that Postgres accepts it. The columns are
+     * now `text`; the DoS bound lives in the app layer
+     * (`OAUTH_OPAQUE_PARAM_MAX_LENGTH`).
+     */
+    const LONG_STATE = Buffer.from(
+      JSON.stringify({
+        id: 7,
+        owner: { workspaceId: '9f2c1ab47de35608b1e4c7a09d5f3e21' },
+        attemptId: '3f6c2b18-9d47-4e5a-b0c1-7e2f8a4d9b63',
+        surface: 'mcp_process',
+        redirect: 'cursor://anysphere.cursor-mcp/oauth/user-qauth/callback',
+      })
+    ).toString('base64url');
+
+    const LONG_NONCE = 'n'.repeat(300);
+
+    it('stores and returns a ~280-char state and 300-char nonce untruncated', async () => {
+      // Fails against varchar(255) with a Postgres 22001 string_data_right_truncation.
+      expect(LONG_STATE.length).toBeGreaterThan(255);
+
+      const realm = await seedRealm();
+      const user = await seedUser(realm.id);
+      const client = await seedClient(realm.id);
+      const codes = createAuthorizationCodesRepository(db().database.db);
+
+      const created = await codes.create({
+        code: 'long-state-code',
+        oauthClientId: client.id,
+        userId: user.id,
+        redirectUri: 'https://app.example.com/cb',
+        codeChallenge: 'challenge',
+        codeChallengeMethod: 'S256',
+        state: LONG_STATE,
+        nonce: LONG_NONCE,
+        scopes: ['read:foo'],
+        expiresAt: Date.now() + 60_000,
+      });
+
+      // INSERT ... RETURNING reflects what the column actually holds.
+      expect(created.state).toBe(LONG_STATE);
+      expect(created.nonce).toBe(LONG_NONCE);
+
+      // And a full round-trip through a fresh SELECT — byte for byte, so the
+      // client's `state` comes back exactly as it was sent (RFC 6749 §4.1.2).
+      const found = await codes.findByCode('long-state-code');
+      expect(found?.state).toBe(LONG_STATE);
+      expect(found?.nonce).toBe(LONG_NONCE);
+    });
+
+    it('accepts a state at the app-layer DoS bound (2048 chars)', async () => {
+      // `text` has no length limit, so the 2048 app-layer cap is the only
+      // bound — nothing below it may be rejected by storage.
+      const realm = await seedRealm();
+      const user = await seedUser(realm.id);
+      const client = await seedClient(realm.id);
+      const codes = createAuthorizationCodesRepository(db().database.db);
+
+      const atBound = 'x'.repeat(2048);
+      const created = await codes.create({
+        code: 'bound-state-code',
+        oauthClientId: client.id,
+        userId: user.id,
+        redirectUri: 'https://app.example.com/cb',
+        codeChallenge: 'challenge',
+        codeChallengeMethod: 'S256',
+        state: atBound,
+        expiresAt: Date.now() + 60_000,
+      });
+
+      expect(created.state).toHaveLength(2048);
+      expect(created.state).toBe(atBound);
     });
   });
 
