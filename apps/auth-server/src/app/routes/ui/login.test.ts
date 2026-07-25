@@ -271,3 +271,90 @@ describe('UI /ui/login — CSRF defence', () => {
     expect(fastify.passwordHasher.verifyPassword).not.toHaveBeenCalled();
   });
 });
+
+/**
+ * `return_to` open-redirect guard (`isSafeReturnTo`).
+ *
+ * The value reaches `reply.redirect(returnTo, 302)` after a successful
+ * sign-in, so anything the guard accepts is a place this server will send a
+ * freshly-authenticated user. It is deliberately allowlist-shaped — "a single
+ * leading `/`" — and everything it rejects falls back to `/`.
+ */
+describe('UI /ui/login — return_to open-redirect guard', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  const UNSAFE = [
+    'https://evil.example/steal',
+    '//evil.example/steal',
+    // `\` folds to `/` for special schemes in the WHATWG URL parser, which is
+    // the algorithm browsers use to resolve a `Location` header. So
+    // `Location: /\evil.example` navigates to `https://evil.example` — the same
+    // cross-origin bounce as `//evil.example`, spelled differently.
+    '/\\evil.example/steal',
+    'javascript:alert(1)',
+    'relative/path',
+    '',
+  ];
+
+  it.each(UNSAFE)('GET falls back to "/" for return_to=%j', async (returnTo) => {
+    const { fastify, ctx } = makeFastify();
+    await loginRoute(fastify);
+
+    const { reply, state } = createReply();
+    await ctx.get!({ query: { return_to: returnTo }, headers: {}, ip: '127.0.0.1' }, reply);
+
+    expect(state.body as string).toContain('name="return_to" value="/"');
+  });
+
+  it.each(UNSAFE)('POST redirects to "/" rather than %j', async (returnTo) => {
+    const { fastify, ctx } = makeFastify();
+    await loginRoute(fastify);
+
+    const getReply = createReply();
+    await ctx.get!({ query: {}, headers: {}, ip: '127.0.0.1' }, getReply.reply);
+    const cookieValue = csrfCookieValue(getReply.state.setCookies);
+    const rawToken = cookieValue.split('.')[0];
+
+    (
+      fastify.repositories.userCredentials.findByRealmProviderSub as unknown as Mock
+    ).mockResolvedValue(credentialFixture());
+    (fastify.repositories.users.findById as unknown as Mock).mockResolvedValue({
+      id: 'user-1',
+      email: 'user@example.com',
+      passwordHash: 'hash',
+      enabled: true,
+    });
+    (fastify.passwordHasher.verifyPassword as unknown as Mock).mockResolvedValue(true);
+
+    const { reply, state } = createReply();
+    await ctx.post!(
+      {
+        body: {
+          email: 'user@example.com',
+          password: 'correct',
+          csrf_token: rawToken,
+          return_to: returnTo,
+        },
+        headers: { cookie: `__Host-qauth_login_csrf=${cookieValue}` },
+        ip: '127.0.0.1',
+      },
+      reply
+    );
+
+    expect(state.statusCode).toBe(302);
+    expect(state.redirected).toBe('/');
+  });
+
+  it('keeps accepting a deep multi-segment relative path', async () => {
+    const { fastify, ctx } = makeFastify();
+    await loginRoute(fastify);
+
+    const returnTo = `/ui/resume/${'A'.repeat(43)}`;
+    const { reply, state } = createReply();
+    await ctx.get!({ query: { return_to: returnTo }, headers: {}, ip: '127.0.0.1' }, reply);
+
+    expect(state.body as string).toContain(`name="return_to" value="${returnTo}"`);
+  });
+});
