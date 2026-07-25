@@ -133,9 +133,7 @@ export function validateAndNormalize(
   realmAllowedScopes: string[]
 ): NormalizedRegistrationRequest {
   const grantTypes = (body.grant_types ?? [...DYN_REG_DEFAULTS.grantTypes]) as (
-    | 'authorization_code'
-    | 'refresh_token'
-    | 'client_credentials'
+    'authorization_code' | 'refresh_token' | 'client_credentials'
   )[];
   const responseTypes = (body.response_types ?? [...DYN_REG_DEFAULTS.responseTypes]) as 'code'[];
 

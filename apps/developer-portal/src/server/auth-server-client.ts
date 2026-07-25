@@ -52,10 +52,7 @@ export interface UserInfoData {
 }
 
 export type TokenEndpointAuthMethod =
-  | 'none'
-  | 'client_secret_post'
-  | 'client_secret_basic'
-  | 'private_key_jwt';
+  'none' | 'client_secret_post' | 'client_secret_basic' | 'private_key_jwt';
 
 export type GrantType = 'authorization_code' | 'refresh_token' | 'client_credentials';
 

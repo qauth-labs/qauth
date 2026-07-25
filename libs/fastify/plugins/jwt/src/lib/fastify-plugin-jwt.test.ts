@@ -292,11 +292,9 @@ describe('requireJwt middleware', () => {
       expect(jwks.keys).toHaveLength(2);
 
       const okp = jwks.keys.find((k) => (k as { kty?: string }).kty === 'OKP') as
-        | Record<string, unknown>
-        | undefined;
+        Record<string, unknown> | undefined;
       const akp = jwks.keys.find((k) => (k as { kty?: string }).kty === 'AKP') as
-        | Record<string, unknown>
-        | undefined;
+        Record<string, unknown> | undefined;
       expect(okp?.['alg']).toBe('EdDSA');
       expect(akp?.['alg']).toBe('ML-DSA-65');
       expect(akp?.['kid']).toBe('ed-1-mldsa');

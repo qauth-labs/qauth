@@ -467,8 +467,7 @@ export default async function (fastify: FastifyInstance) {
         consentPage({
           clientName: client.name,
           clientHomepage: (client.metadata as Record<string, unknown> | null)?.homepage_uri as
-            | string
-            | undefined,
+            string | undefined,
           audience: client.audience ?? [],
           scopes,
           badgeDynamic: isDynamicClientWithinBadgeWindow(client),
