@@ -41,9 +41,10 @@ import { authorizeQuerySchema, resourceParamSchema } from '../../schemas/oauth';
 
 /**
  * RFC 8707: parse every `resource=` entry from a URL query string.
- * See authorize.ts's parseResourceFromUrl — fastify-type-provider-zod@6.1.0
- * drops the parsed `resource` from request.query for GET routes when the
- * schema is a union + transform. Reading request.url sidesteps that.
+ * See authorize.ts's parseResourceFromUrl — fastify-type-provider-zod drops
+ * the parsed `resource` from request.query for GET routes when the schema is
+ * a union + transform. Reading request.url sidesteps that. Still required on
+ * v7.0.0, which left `validatorCompiler` unchanged.
  */
 function parseResourceFromUrl(url: string): string[] {
   const q = url.indexOf('?');
