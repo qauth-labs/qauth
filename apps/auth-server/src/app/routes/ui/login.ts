@@ -42,6 +42,14 @@ function isSafeReturnTo(value: unknown): value is string {
   // start with a single `/`. This keeps us off the open-redirector list.
   if (!value.startsWith('/')) return false;
   if (value.startsWith('//')) return false;
+  // `/\evil.example` is protocol-relative too. The WHATWG URL parser folds `\`
+  // into `/` for special schemes, so a browser resolving
+  // `Location: /\evil.example` against `https://auth.example.com` navigates to
+  // `https://evil.example` — the exact bypass the `//` check above exists to
+  // stop, spelled differently. Verified against Node's URL implementation,
+  // which is the same algorithm browsers use:
+  // `new URL('/\\evil.example/x', 'https://auth.example.com').host === 'evil.example'`.
+  if (value.startsWith('/\\')) return false;
   return true;
 }
 
