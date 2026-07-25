@@ -10,15 +10,17 @@
  *   - consent revoke = soft-delete (row preserved) + upsertGrant scope union
  *   - realm-scoped unique constraints (users / oauth_clients)
  *
- * Requires Docker. When Docker is unavailable the whole suite is skipped
- * (see the top-level guard) rather than failing the run.
+ * Requires Docker. Locally the suite skips when no daemon is reachable; on CI
+ * it FAILS instead (see `requireDockerOrSkip`), because this file is the only
+ * coverage for the real migrated DDL and a silent skip there would be
+ * indistinguishable from a pass.
  *
  * Tagged via the `*.integration.test.ts` suffix so the fast unit run and the
  * coverage gate (vitest.config.ts) exclude it — CI runs it via the dedicated
- * `test-integration` target instead.
+ * `test-integration` target in the `integration` job of ci.yml.
  */
 import { UniqueConstraintError } from '@qauth-labs/shared-errors';
-import { isDockerAvailable } from '@qauth-labs/shared-testing';
+import { requireDockerOrSkip } from '@qauth-labs/shared-testing';
 import { eq } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
@@ -45,7 +47,7 @@ describe('repository integration (real Postgres)', () => {
 
   // Container startup is paid once for the whole suite.
   beforeAll(async () => {
-    dockerUp = await isDockerAvailable();
+    dockerUp = await requireDockerOrSkip();
     if (!dockerUp) return;
     ctx = await setupIntegrationDb();
   }, 180_000);

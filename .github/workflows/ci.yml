@@ -49,5 +49,43 @@ jobs:
       # separately from the affected per-project `test` targets (which write
       # per-project coverage dirs) so the threshold is evaluated once across
       # the whole fast unit suite. The Docker-backed integration suite (#167,
-      # `*.integration.test.ts`) is excluded, so no Postgres/Redis is needed.
+      # `*.integration.test.ts`) is excluded here, so no Postgres/Redis is
+      # needed — the `integration` job below runs it instead.
       - run: pnpm exec vitest run --coverage
+
+  # The `main` job above can never exercise real DDL: every unit suite mocks the
+  # repositories, and both vitest.config.ts and the coverage gate exclude
+  # `*.integration.test.ts`. So the testcontainers suites are the ONLY assertion
+  # that the generated migrations produce the schema the code expects — e.g. that
+  # `authorization_codes.state`/`.nonce` are unbounded `text` and not the
+  # varchar(255) that broke long opaque `state` (#316). Left unwired, a lost
+  # migration file or a re-narrowed column would sail through a fully green CI.
+  #
+  # GitHub-hosted runners ship a Docker daemon, and `requireDockerOrSkip()`
+  # fails rather than skips when `CI` is set, so this job cannot pass vacuously.
+  integration:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          filter: tree:0
+          fetch-depth: 0
+
+      - uses: pnpm/action-setup@v4
+        name: Install pnpm
+        with:
+          version: 11.4.0
+          run_install: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: 'pnpm'
+
+      - run: pnpm install --frozen-lockfile
+      - uses: nrwl/nx-set-shas@v4
+
+      # Affected-scoped like the main job: a change to the schema, the
+      # migrations or the repositories marks infra-db affected and runs this;
+      # a docs-only PR pays nothing.
+      - run: pnpm exec nx affected -t test-integration

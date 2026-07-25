@@ -19,7 +19,7 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 
 import {
-  isDockerAvailable,
+  requireDockerOrSkip,
   type StartedPostgres,
   startPostgresContainer,
 } from '@qauth-labs/shared-testing';
@@ -84,7 +84,7 @@ describe('migration 0011 — legacy column drop (seed-then-migrate)', () => {
   const preFiles = files.filter((f) => f.idx < 11).map((f) => f.file);
 
   beforeAll(async () => {
-    dockerUp = await isDockerAvailable();
+    dockerUp = await requireDockerOrSkip();
     if (!dockerUp) return;
     container = await startPostgresContainer();
     pool = new Pool({ connectionString: container.connectionString, max: 2 });

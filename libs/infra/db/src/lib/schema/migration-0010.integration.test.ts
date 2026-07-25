@@ -15,7 +15,7 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 
 import {
-  isDockerAvailable,
+  requireDockerOrSkip,
   type StartedPostgres,
   startPostgresContainer,
 } from '@qauth-labs/shared-testing';
@@ -56,7 +56,7 @@ describe('migration 0010 — email_verification_tokens.credential_id (seed-then-
   let dockerUp = false;
 
   beforeAll(async () => {
-    dockerUp = await isDockerAvailable();
+    dockerUp = await requireDockerOrSkip();
     if (!dockerUp) return;
     container = await startPostgresContainer();
     pool = new Pool({ connectionString: container.connectionString, max: 2 });
