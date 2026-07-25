@@ -108,4 +108,35 @@ describe('OpenAPI / Swagger', () => {
 
     await app.close();
   });
+
+  it('serves the swagger-ui static assets (#323)', async () => {
+    // Only swagger + swagger-ui are needed here — no route schemas, since this
+    // exercises the asset pipeline rather than the spec.
+    const app = Fastify({ logger: false });
+    await app.register(swagger, {
+      openapi: { openapi: '3.1.0', info: { title: 't', version: '1' } },
+    });
+    await app.register(swaggerUi, { routePrefix: '/docs' });
+    await app.ready();
+
+    // The assertion above only reaches swagger-ui's own HTML handler. The
+    // bundled assets are what actually goes through @fastify/static, which is
+    // pinned to ^10.1.2 by a pnpm-workspace.yaml override — swagger-ui itself
+    // still declares ^9.1.2, and the 9.x line has no fix for CVE-2026-15074.
+    // Nothing else in the repo exercises that plugin, so without this a broken
+    // major would surface as a 404 on /docs assets in a browser, not in CI.
+    const css = await app.inject({ method: 'GET', url: '/docs/static/index.css' });
+    expect(css.statusCode).toBe(200);
+
+    // v10.1.1 fixed a route-guard bypass by returning 403 on dot-dot segments
+    // rather than letting them fall through. Either a rejection or a plain
+    // not-found is acceptable; escaping the asset root is not.
+    const traversal = await app.inject({
+      method: 'GET',
+      url: '/docs/static/../../oauth/userinfo',
+    });
+    expect(traversal.statusCode).not.toBe(200);
+
+    await app.close();
+  });
 });
