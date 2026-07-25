@@ -284,10 +284,12 @@ describe('GET /oauth/authorize — session-cookie integration', () => {
   });
 
   it('parses RFC 8707 resource from request.url even when the validator does not populate request.query', async () => {
-    // Regression: fastify-type-provider-zod@6.1.0 does NOT put the Zod-parsed
+    // Regression: fastify-type-provider-zod does NOT put the Zod-parsed
     // `resource` back onto `request.query` for GET routes, so a real auth
     // flow had `query.resource === undefined` despite the URL carrying
     // `?resource=X`. We now parse the URL directly — testing that path.
+    // Still true on v7.0.0: that major rewrote the serializer and the OpenAPI
+    // generation, but `validatorCompiler` still calls `safeParse` unchanged.
     const { fastify, ctx } = makeFastify();
     await authorizeRoute(fastify);
     (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(CLIENT);
