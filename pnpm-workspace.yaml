@@ -21,7 +21,39 @@ onlyBuiltDependencies:
 # Each entry maps to a Dependabot/`pnpm audit` finding — prune once it clears.
 overrides:
   '@tanstack/start-server-core': '>=1.167.30'
+  # @fastify/static reaches the tree only via @fastify/swagger-ui, which pins
+  # '^9.1.2' — including on its own latest (6.1.0), so bumping the parent does
+  # NOT clear this. The 9.x line ends at 9.3.0 with no backport, so the caret
+  # major jump is the only route to the CVE-2026-15074 / CVE-2026-7120 fixes
+  # (patched 10.1.1 / 10.1.2). Caret, not '>=': v10's one breaking change is the
+  # `setHeaders` signature, exactly the kind of thing a v11 could move again.
+  # swagger-ui registers static with only { root, prefix, decorateReply: false }
+  # and never passes setHeaders, so the break does not reach us.
+  '@fastify/static': '^10.1.2'
+  axios: '>=1.18.0'
+  # Reaches the tree only via @nx/react's express dependency (dev tooling); the
+  # auth server does not use express. Floored to keep `pnpm audit` clean.
+  body-parser: '>=1.20.6 <2'
+  # Deliberately blanket rather than per-major, unlike the other floors here.
+  # CVE-2026-13149 alone would be satisfied by 1.1.16 / 2.1.2 / 5.0.7 on their
+  # respective lines, but GHSA-mh99-v99m-4gvg (OOM via unbounded expansion) has
+  # vulnerable range `<=5.0.7` — which by semver covers the whole 1.x and 2.x
+  # lines too — and is patched ONLY in 5.0.8. So there is no in-major fix for
+  # the 1.x/2.x consumers (minimatch@3, minimatch@5) and everything has to move
+  # to 5.x. Safe here: the module's surface is the single expand() function,
+  # unchanged across these majors, and the full suite passes on it.
+  brace-expansion: '>=5.0.8'
   esbuild: '>=0.28.1'
+  # Both host-confusion advisories (CVE-2026-13676, CVE-2026-16221). Inert today
+  # — main.ts sets a global Zod validator compiler so ajv never parses a request,
+  # and redirect_uri matching is an exact string comparison with no URI parser in
+  # the decision — but floored so that stops being load-bearing. Upper-bounded
+  # because a bare '>=3.1.4' resolves to 4.x, turning a security floor into an
+  # unreviewed major; same reasoning as h3 below.
+  fast-uri: '>=3.1.4 <4'
+  # Fastify's router. CVE-2026-47219 is HTTP/2-only and we serve HTTP/1.1, so
+  # this is a floor against a future http2 switch, not a live fix.
+  find-my-way: '>=9.7.0'
   form-data: '>=4.0.6'
   # h3's only consumers are the Nitro v2 subtree (nitropack/listhen/unstorage),
   # which require h3 1.x (Nitro v2 imports `send`, removed in h3 2.x). Floor at
@@ -29,7 +61,21 @@ overrides:
   # The earlier `>=2.0.1` floor was inert (nothing pulled h3) and would force
   # the wrong major onto Nitro. Revisit if anything ever needs h3 2.x.
   h3: '^1.15.11'
-  js-yaml: '>=4.1.2'
+  # Raised from the earlier '>=4.1.2' floor, which sat BELOW the fix for
+  # CVE-2026-59869 (patched 4.3.0) and so left resolution free to pick a still
+  # vulnerable 4.1.x/4.2.x.
+  js-yaml: '>=4.3.0 <5'
+  postcss: '>=8.5.18'
+  # Reaches the tree only through dockerode -> testcontainers (devDependency of
+  # @qauth-labs/shared-testing), so this is a floor for board hygiene rather
+  # than a shipped fix.
+  protobufjs: '>=7.6.5 <8'
+  svgo: '>=3.3.4 <4'
+  # Build-time only: @mapbox/node-pre-gyp -> @vercel/nft -> nitropack, i.e. the
+  # developer-portal build, and excluded from the auth-server image by
+  # `pnpm deploy --prod`. Every advisory here needs a hostile archive to parse
+  # and QAuth parses none, so the floor clears the board without shipping a fix.
+  tar: '>=7.5.21'
   tmp: '>=0.2.7'
   # Dedupe commitlint's loose TS resolution onto the workspace TS; cap <6.1 to
   # stay within typescript-eslint@8's `typescript <6.1.0` peer range.
