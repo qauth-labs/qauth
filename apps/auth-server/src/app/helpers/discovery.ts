@@ -118,6 +118,19 @@ export function buildAuthorizationServerMetadata(
     // upcoming MCP authorization revision requires this validation, and
     // RFC 9207 signals a future SHOULD→MUST upgrade.
     authorization_response_iss_parameter_supported: true,
+    // RFC 8414 §2 / OIDC Discovery §3 (#286). Both are OPTIONAL, but their
+    // OMITTED defaults disagree: `request_parameter_supported` defaults to
+    // false, `request_uri_parameter_supported` defaults to TRUE. QAuth
+    // supports neither — `authorizeQuerySchema` declares no `request` or
+    // `request_uri` field and uses Zod's default strip, so both params are
+    // silently dropped. Omitting `request_uri_parameter_supported` therefore
+    // published a FALSE capability claim: an RP would read discovery, believe
+    // it could pass a request object by reference, and have it ignored with no
+    // error. Stated explicitly — including the redundant-but-unambiguous
+    // `false` for `request` — so the document matches behaviour on both the
+    // OIDC and RFC 8414 endpoints.
+    request_parameter_supported: false,
+    request_uri_parameter_supported: false,
     // CIMD (draft-ietf-oauth-client-id-metadata-document-00 / MCP
     // 2025-11-25): advertise that an https-URL `client_id` resolves to a
     // metadata document fetched on demand. Only emitted when enabled so a

@@ -42,6 +42,7 @@ vi.mock('../../../config/env', () => ({
   env: { CIMD_ENABLED: false },
 }));
 
+import { authorizeQuerySchema } from '../../schemas/oauth';
 import wellKnownRoutes from '../well-known';
 
 const ISSUER = 'https://auth.test.example.com';
@@ -164,6 +165,37 @@ describe('OIDC conformance — discovery document', () => {
       expect(doc['response_types_supported']).toEqual(['code']);
       expect(doc['code_challenge_methods_supported']).toEqual(['S256']);
       expect(doc['subject_types_supported']).toEqual(['public']);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('advertises request/request_uri as unsupported, matching what the authorize parser does (#286)', async () => {
+    const app = await buildApp();
+    try {
+      const doc = await fetchDiscovery(app);
+
+      // Half of the assertion: the served document makes the claim.
+      expect(doc['request_parameter_supported']).toBe(false);
+      expect(doc['request_uri_parameter_supported']).toBe(false);
+
+      // The other half, and the reason this test lives beside the served
+      // document rather than only in the builder's unit test: the claim is only
+      // true because `authorizeQuerySchema` declares neither field and relies on
+      // Zod's default strip. If someone later adds `request_uri` handling, this
+      // fails and forces the metadata to be updated with it.
+      const parsed = authorizeQuerySchema.parse({
+        response_type: 'code',
+        client_id: 'conformance-client',
+        redirect_uri: 'https://rp.example.com/callback',
+        code_challenge: 'E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM',
+        code_challenge_method: 'S256',
+        request: 'eyJhbGciOiJub25lIn0.e30.',
+        request_uri: 'https://rp.example.com/request-object.jwt',
+      });
+
+      expect('request' in parsed).toBe(false);
+      expect('request_uri' in parsed).toBe(false);
     } finally {
       await app.close();
     }
