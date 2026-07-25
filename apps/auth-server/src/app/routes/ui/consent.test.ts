@@ -13,6 +13,7 @@ vi.mock('../../../config/env', () => ({
   },
 }));
 
+import { OAUTH_OPAQUE_PARAM_MAX_LENGTH } from '../../constants';
 import { buildAuthorizationServerMetadata } from '../../helpers/discovery';
 import consentRoute from './consent';
 
@@ -31,6 +32,13 @@ function issOf(redirected: string | undefined): string | null {
 interface TestContext {
   get?: (request: any, reply: any) => Promise<unknown>;
   post?: (request: any, reply: any) => Promise<unknown>;
+  /**
+   * Route options as registered, so tests can reach the schemas Fastify would
+   * apply. These handlers are invoked directly here, which BYPASSES Fastify's
+   * validation — the POST body schema is module-private, so #316's form-mirror
+   * regression is only observable through the registered options.
+   */
+  postOpts?: any;
 }
 
 function createReply() {
@@ -73,8 +81,9 @@ function makeFastify() {
         ctx.get = handler;
         return fastify;
       },
-      post: (_url: string, _opts: unknown, handler: any) => {
+      post: (_url: string, opts: any, handler: any) => {
         ctx.post = handler;
+        ctx.postOpts = opts;
         return fastify;
       },
     }),
@@ -721,9 +730,15 @@ describe('UI /ui/consent — step-up authentication (ADR-007 §2, #185)', () => 
 
     // Bounced to login (fresh-auth required); NO code, NO grant persisted.
     expect(state.redirected).toContain('/ui/login?return_to=');
-    // The dangerous scope survives the round-trip; the return_to is itself
-    // URL-encoded, so `scope=write:foo` appears doubly-encoded.
-    expect(decodeURIComponent(state.redirected as string)).toContain('scope=write%3Afoo');
+    // #316 follow-up: the authorize URL is no longer nested in `return_to` —
+    // `return_to` carries a short single-use handle and the URL itself is
+    // parked server-side. The dangerous scope must still survive the round-trip,
+    // so assert it on what was actually stashed.
+    expect(state.redirected).toContain(encodeURIComponent('/ui/resume/'));
+    const stashed = (fastify.sessionUtils.setSession as unknown as Mock).mock.calls
+      .map((c) => c[1] as { authorizeUrl?: string })
+      .find((d) => typeof d?.authorizeUrl === 'string');
+    expect(stashed?.authorizeUrl).toContain('scope=write%3Afoo');
     expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
     expect(fastify.repositories.oauthConsents.upsertGrant).not.toHaveBeenCalled();
     // The step-up requirement is audited.
@@ -891,5 +906,182 @@ describe('UI /ui/consent — step-up authentication (ADR-007 §2, #185)', () => 
     expect(state.redirected).toContain('https://example.com/cb');
     expect(state.redirected).toContain('code=');
     expect(fastify.repositories.authorizationCodes.create).toHaveBeenCalledOnce();
+  });
+});
+
+/**
+ * Regression suite for qauth-labs/qauth#316 — long opaque `state` / `nonce`.
+ *
+ * This is site 2 of three. `/oauth/authorize` redirects here carrying the
+ * client's `state`/`nonce`, the consent page re-emits them as hidden form
+ * inputs, and this POST body schema re-validates them. It mirrored the
+ * authorize query schema's 255 cap, so raising only the query cap moved the
+ * 400 one step later in the SAME authorization_code flow — which is exactly
+ * how the bug hid. See authorize.test.ts for site 1 and
+ * libs/infra/db repositories.integration.test.ts for site 3 (the varchar(255)
+ * columns, unobservable here because this harness mocks the repositories).
+ */
+describe('UI /ui/consent — long opaque state/nonce (#316)', () => {
+  /**
+   * A realistic Cursor-shaped `state`: base64url of a JSON blob carrying
+   * workspace + attempt context. 282 chars — over the old 255 cap, under
+   * OAUTH_OPAQUE_PARAM_MAX_LENGTH. Cursor's real payload only exceeds 255 when
+   * a workspace is actually open, which made the failure intermittent.
+   */
+  const LONG_STATE = Buffer.from(
+    JSON.stringify({
+      id: 7,
+      owner: { workspaceId: '9f2c1ab47de35608b1e4c7a09d5f3e21' },
+      attemptId: '3f6c2b18-9d47-4e5a-b0c1-7e2f8a4d9b63',
+      surface: 'mcp_process',
+      redirect: 'cursor://anysphere.cursor-mcp/oauth/user-qauth/callback',
+    })
+  ).toString('base64url');
+
+  const LONG_NONCE = 'n'.repeat(300);
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  /** The POST body schema exactly as registered on the route. */
+  async function bodySchema() {
+    const { fastify, ctx } = makeFastify();
+    await consentRoute(fastify);
+    return ctx.postOpts.schema.body;
+  }
+
+  it('the fixture state is genuinely over the old 255-char cap', () => {
+    expect(LONG_STATE.length).toBeGreaterThan(255);
+    expect(LONG_STATE.length).toBeLessThan(OAUTH_OPAQUE_PARAM_MAX_LENGTH);
+  });
+
+  it('site 2: the consent form schema accepts a ~280-char state and 300-char nonce', async () => {
+    const schema = await bodySchema();
+    const parsed = schema.parse({
+      decision: 'allow',
+      csrf_token: 'csrf',
+      client_id: 'app-123',
+      redirect_uri: 'https://example.com/cb',
+      state: LONG_STATE,
+      nonce: LONG_NONCE,
+      scope: 'email',
+      code_challenge: 'A'.repeat(43),
+      code_challenge_method: 'S256',
+      response_type: 'code',
+    });
+    expect(parsed.state).toBe(LONG_STATE);
+    expect(parsed.nonce).toBe(LONG_NONCE);
+  });
+
+  it('site 2: the consent form schema still rejects over the DoS bound', async () => {
+    const schema = await bodySchema();
+    const base = {
+      decision: 'allow',
+      csrf_token: 'csrf',
+      client_id: 'app-123',
+      redirect_uri: 'https://example.com/cb',
+      scope: 'email',
+      code_challenge: 'A'.repeat(43),
+      code_challenge_method: 'S256',
+      response_type: 'code',
+    };
+    const tooLong = 'x'.repeat(OAUTH_OPAQUE_PARAM_MAX_LENGTH + 1);
+    expect(schema.safeParse({ ...base, state: tooLong }).success).toBe(false);
+    expect(schema.safeParse({ ...base, nonce: tooLong }).success).toBe(false);
+    // Exactly at the bound is still valid (off-by-one guard).
+    expect(
+      schema.safeParse({ ...base, state: 'x'.repeat(OAUTH_OPAQUE_PARAM_MAX_LENGTH) }).success
+    ).toBe(true);
+  });
+
+  it('Allow mints a code with the FULL state/nonce and round-trips state verbatim', async () => {
+    const { fastify, ctx } = makeFastify();
+    await consentRoute(fastify);
+    const { signSessionId } = await import('../../helpers/session-cookie');
+    const signed = signSessionId('sid-316');
+    const csrf = 'csrf-316';
+    (fastify.sessionUtils.getSession as unknown as Mock).mockResolvedValue({
+      userId: 'user-1',
+      email: 'a@b.com',
+      sessionId: 'sid-316',
+      csrfToken: csrf,
+      createdAt: Date.now(),
+      consentScopes: { 'app-123': ['email'] },
+    });
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(CLIENT);
+
+    const { reply, state } = createReply();
+    await ctx.post!(
+      {
+        body: {
+          decision: 'allow',
+          csrf_token: csrf,
+          client_id: 'app-123',
+          redirect_uri: 'https://example.com/cb',
+          state: LONG_STATE,
+          nonce: LONG_NONCE,
+          scope: 'email',
+          code_challenge: 'A'.repeat(43),
+          code_challenge_method: 'S256',
+          response_type: 'code',
+        },
+        headers: { cookie: `__Host-qauth_session=${signed}` },
+        ip: '127.0.0.1',
+      },
+      reply
+    );
+
+    // Site 3 boundary: untruncated values reach the repository. The DDL that
+    // used to reject them is asserted against real Postgres in infra-db.
+    const createArg = (fastify.repositories.authorizationCodes.create as unknown as Mock).mock
+      .calls[0][0];
+    expect(createArg.state).toBe(LONG_STATE);
+    expect(createArg.nonce).toBe(LONG_NONCE);
+
+    // RFC 6749 §4.1.2: byte-for-byte round-trip to the client.
+    const redirected = new URL(state.redirected as string);
+    expect(redirected.searchParams.get('state')).toBe(LONG_STATE);
+    expect(redirected.searchParams.get('code')).toBeTruthy();
+  });
+
+  it('Deny also round-trips the full state verbatim', async () => {
+    const { fastify, ctx } = makeFastify();
+    await consentRoute(fastify);
+    const { signSessionId } = await import('../../helpers/session-cookie');
+    const signed = signSessionId('sid-316d');
+    const csrf = 'csrf-316d';
+    (fastify.sessionUtils.getSession as unknown as Mock).mockResolvedValue({
+      userId: 'user-1',
+      email: 'a@b.com',
+      sessionId: 'sid-316d',
+      csrfToken: csrf,
+      createdAt: Date.now(),
+    });
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(CLIENT);
+
+    const { reply, state } = createReply();
+    await ctx.post!(
+      {
+        body: {
+          decision: 'deny',
+          csrf_token: csrf,
+          client_id: 'app-123',
+          redirect_uri: 'https://example.com/cb',
+          state: LONG_STATE,
+          scope: 'email',
+          code_challenge: 'A'.repeat(43),
+          code_challenge_method: 'S256',
+          response_type: 'code',
+        },
+        headers: { cookie: `__Host-qauth_session=${signed}` },
+        ip: '127.0.0.1',
+      },
+      reply
+    );
+
+    const redirected = new URL(state.redirected as string);
+    expect(redirected.searchParams.get('error')).toBe('access_denied');
+    expect(redirected.searchParams.get('state')).toBe(LONG_STATE);
   });
 });

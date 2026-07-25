@@ -3,14 +3,19 @@ import { serializerCompiler, validatorCompiler } from 'fastify-type-provider-zod
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 /**
- * Routing-level tests for `/oauth/authorize`.
+ * Routing-level regressions for `/oauth/authorize` (issue #316 follow-up).
  *
  * Every other authorize test drives the handler function directly through a
  * hand-rolled Fastify double, which by construction cannot observe ROUTER
- * behaviour or the real redirect a client would actually receive. These tests
- * boot a REAL Fastify with the same `routerOptions` as `main.ts` and inject
- * real requests, so routing, validation and the emitted `Location` header are
- * all in the loop.
+ * behaviour. That blind spot hid a real one: `main.ts` starts Fastify with
+ * `routerOptions.ignoreTrailingSlash: true`, so `GET /oauth/authorize/?…`
+ * matches the route and `request.url` keeps the trailing slash. Any code that
+ * compares `request.url` byte-exactly against `/oauth/authorize` therefore sees
+ * a path the router deliberately accepted and rejects it — which turned the
+ * unauthenticated entry point of the whole OAuth flow into a 500.
+ *
+ * These tests boot a REAL Fastify with the same `routerOptions` as `main.ts`
+ * and inject real requests, so the router is in the loop.
  */
 
 vi.mock('../../../config/env', () => ({
@@ -110,11 +115,24 @@ describe('GET /oauth/authorize routing', () => {
     expect(response.headers.location).toMatch(/^\/ui\/login\?return_to=/);
   });
 
+  it('bounces identically when the path carries a trailing slash', async () => {
+    // `ignoreTrailingSlash: true` routes this to the same handler with
+    // `request.url === '/oauth/authorize/?…'`. Before the normalization fix the
+    // stash rejected that URL and the request 500'd — an unauthenticated 500 on
+    // the most common path in the whole server.
+    server = await buildServer();
+    const response = await server.inject({ method: 'GET', url: `/oauth/authorize/?${QUERY}` });
+
+    expect(response.statusCode).toBe(302);
+    expect(response.headers.location).toMatch(/^\/ui\/login\?return_to=/);
+  });
+
   it('returns login_required for an unauthenticated prompt=none instead of showing UI', async () => {
     // OIDC Core §3.1.2.1: `prompt=none` forbids any user-facing UI. These
     // requests come from a hidden silent-renewal iframe, where a redirect to
-    // the login page renders a form nobody can see and the client just hangs
-    // until its timeout.
+    // the login page renders a form nobody can see and the client just hangs.
+    // It also stopped a logged-out client's renewal polling from writing a
+    // pending-authorization stash on every poll.
     server = await buildServer();
     const response = await server.inject({
       method: 'GET',
@@ -132,5 +150,45 @@ describe('GET /oauth/authorize routing', () => {
       server as unknown as { sessionUtils: { setSession: ReturnType<typeof vi.fn> } }
     ).sessionUtils.setSession;
     expect(setSession).not.toHaveBeenCalled();
+  });
+
+  it('stashes the CANONICAL authorize path, so the resume redirect is slash-free', async () => {
+    server = await buildServer();
+    await server.inject({ method: 'GET', url: `/oauth/authorize/?${QUERY}` });
+
+    const setSession = (
+      server as unknown as { sessionUtils: { setSession: ReturnType<typeof vi.fn> } }
+    ).sessionUtils.setSession;
+    const stashed = setSession.mock.calls[0]?.[1] as { authorizeUrl: string };
+    expect(stashed.authorizeUrl.startsWith('/oauth/authorize?')).toBe(true);
+    // Every parameter still survives the normalization.
+    expect(new URL(stashed.authorizeUrl, 'http://placeholder').searchParams.get('state')).toBe(
+      'st-1'
+    );
+  });
+});
+
+describe('POST /oauth/authorize routing', () => {
+  it('bounces identically when the path carries a trailing slash', async () => {
+    // `buildAuthorizeUrlWithParams` reconstructs the URL from
+    // `request.url.split('?')[0]`, which yields `/oauth/authorize/` here.
+    server = await buildServer();
+    const response = await server.inject({
+      method: 'POST',
+      url: '/oauth/authorize/',
+      headers: { 'content-type': 'application/json' },
+      payload: {
+        response_type: 'code',
+        client_id: 'app-123',
+        redirect_uri: 'https://example.com/cb',
+        code_challenge: 'A'.repeat(43),
+        code_challenge_method: 'S256',
+        scope: 'email',
+        state: 'st-1',
+      },
+    });
+
+    expect(response.statusCode).toBe(302);
+    expect(response.headers.location).toMatch(/^\/ui\/login\?return_to=/);
   });
 });

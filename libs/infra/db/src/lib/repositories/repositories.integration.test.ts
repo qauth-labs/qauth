@@ -185,6 +185,93 @@ describe('repository integration (real Postgres)', () => {
     });
   });
 
+  // --- opaque state/nonce are not length-bounded by the DDL (#316) ----------
+
+  describe('authorization codes — long opaque state/nonce (#316)', () => {
+    /**
+     * `state` and `nonce` are opaque and client-owned: RFC 6749 §4.1.1 and OIDC
+     * Core set NO length limit, and the values are round-tripped to the client
+     * verbatim. They were `varchar(255)`, so a real client (Cursor's MCP client
+     * base64url-encodes ~280 chars of workspace context into `state`) passed
+     * both Zod layers and then 500'd here at code-mint with
+     * "value too long for type character varying(255)".
+     *
+     * This is the ONLY place that failure is observable: the auth-server route
+     * tests mock the repositories, so they can assert the untruncated value
+     * reaches `create()` but never that Postgres accepts it. The columns are
+     * now `text`; the DoS bound lives in the app layer
+     * (`OAUTH_OPAQUE_PARAM_MAX_LENGTH`).
+     */
+    const LONG_STATE = Buffer.from(
+      JSON.stringify({
+        id: 7,
+        owner: { workspaceId: '9f2c1ab47de35608b1e4c7a09d5f3e21' },
+        attemptId: '3f6c2b18-9d47-4e5a-b0c1-7e2f8a4d9b63',
+        surface: 'mcp_process',
+        redirect: 'cursor://anysphere.cursor-mcp/oauth/user-qauth/callback',
+      })
+    ).toString('base64url');
+
+    const LONG_NONCE = 'n'.repeat(300);
+
+    it('stores and returns a ~280-char state and 300-char nonce untruncated', async () => {
+      // Fails against varchar(255) with a Postgres 22001 string_data_right_truncation.
+      expect(LONG_STATE.length).toBeGreaterThan(255);
+
+      const realm = await seedRealm();
+      const user = await seedUser(realm.id);
+      const client = await seedClient(realm.id);
+      const codes = createAuthorizationCodesRepository(db().database.db);
+
+      const created = await codes.create({
+        code: 'long-state-code',
+        oauthClientId: client.id,
+        userId: user.id,
+        redirectUri: 'https://app.example.com/cb',
+        codeChallenge: 'challenge',
+        codeChallengeMethod: 'S256',
+        state: LONG_STATE,
+        nonce: LONG_NONCE,
+        scopes: ['read:foo'],
+        expiresAt: Date.now() + 60_000,
+      });
+
+      // INSERT ... RETURNING reflects what the column actually holds.
+      expect(created.state).toBe(LONG_STATE);
+      expect(created.nonce).toBe(LONG_NONCE);
+
+      // And a full round-trip through a fresh SELECT — byte for byte, so the
+      // client's `state` comes back exactly as it was sent (RFC 6749 §4.1.2).
+      const found = await codes.findByCode('long-state-code');
+      expect(found?.state).toBe(LONG_STATE);
+      expect(found?.nonce).toBe(LONG_NONCE);
+    });
+
+    it('accepts a state at the app-layer DoS bound (2048 chars)', async () => {
+      // `text` has no length limit, so the 2048 app-layer cap is the only
+      // bound — nothing below it may be rejected by storage.
+      const realm = await seedRealm();
+      const user = await seedUser(realm.id);
+      const client = await seedClient(realm.id);
+      const codes = createAuthorizationCodesRepository(db().database.db);
+
+      const atBound = 'x'.repeat(2048);
+      const created = await codes.create({
+        code: 'bound-state-code',
+        oauthClientId: client.id,
+        userId: user.id,
+        redirectUri: 'https://app.example.com/cb',
+        codeChallenge: 'challenge',
+        codeChallengeMethod: 'S256',
+        state: atBound,
+        expiresAt: Date.now() + 60_000,
+      });
+
+      expect(created.state).toHaveLength(2048);
+      expect(created.state).toBe(atBound);
+    });
+  });
+
   // --- refresh-token rotation + family-wide revocation ----------------------
 
   describe('refresh tokens — rotation + family-wide revoke on replay', () => {

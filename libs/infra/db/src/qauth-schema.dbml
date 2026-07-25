@@ -193,9 +193,9 @@ Table "authorization_codes" {
   "redirect_uri" text [not null]
   "code_challenge" text [not null, note: "PKCE code challenge"]
   "code_challenge_method" "code_challenge_method" [not null, default: 'S256']
-  "nonce" varchar(255) [note: "OIDC nonce parameter"]
+  "nonce" text [note: "OIDC nonce parameter — opaque, client-owned, no spec length limit (#316)"]
   "scopes" jsonb [not null, default: `'[]'::jsonb`]
-  "state" varchar(255) [note: "CSRF protection state parameter"]
+  "state" text [note: "CSRF protection state parameter — opaque, client-owned, no spec length limit (#316)"]
   "expires_at" bigint [not null, note: "TTL: 5 minutes"]
   "used" boolean [not null, default: false, note: "Single-use codes"]
   "used_at" bigint
