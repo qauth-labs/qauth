@@ -75,8 +75,14 @@ async function ensureApiCsrfToken(
 }
 
 export default async function (fastify: FastifyInstance) {
+  // Paths are relative to this module's directory. `@fastify/autoload` is
+  // registered without `dirNameRoutePrefix: false` (app.ts), so the `consents/`
+  // directory already contributes the `/consents` prefix — the same way
+  // `routes/oauth/authorize.ts` declares `/authorize` and is served at
+  // `/oauth/authorize`. Declaring `/consents` here would publish
+  // `/consents/consents`.
   fastify.withTypeProvider<ZodTypeProvider>().get(
-    '/consents',
+    '/',
     {
       schema: {
         description:
@@ -111,7 +117,7 @@ export default async function (fastify: FastifyInstance) {
   );
 
   fastify.withTypeProvider<ZodTypeProvider>().delete(
-    '/consents/:id',
+    '/:id',
     {
       schema: {
         description:
