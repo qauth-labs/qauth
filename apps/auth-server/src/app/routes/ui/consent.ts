@@ -6,7 +6,12 @@ import { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 
 import { env } from '../../../config/env';
-import { AUTHORIZATION_CODE_TTL_MS, STEP_UP_FRESH_AUTH_WINDOW_MS } from '../../constants';
+import {
+  AUTHORIZATION_CODE_TTL_MS,
+  OAUTH_OPAQUE_PARAM_MAX_LENGTH,
+  OAUTH_SCOPE_PARAM_MAX_LENGTH,
+  STEP_UP_FRESH_AUTH_WINDOW_MS,
+} from '../../constants';
 import { resolveBrowserSession } from '../../helpers/browser-session';
 import { findExceedingAgentScopesForClient } from '../../helpers/client-auth';
 import { isAgentClient, resolveClient } from '../../helpers/client-resolution';
@@ -22,6 +27,7 @@ import { resolveIssuerIdentifier } from '../../helpers/discovery';
 import { resolveEnvironmentPolicy } from '../../helpers/environment-policy';
 import { html, render, safe, safeUrl } from '../../helpers/html';
 import { buildRedirectUrl, isRedirectUriAllowedForPolicy } from '../../helpers/oauth-redirect';
+import { redirectToLoginWithPendingAuthorization } from '../../helpers/pending-authorization';
 import { getOrCreateDefaultRealm } from '../../helpers/realm';
 import { highestAgentModeInScopes } from '../../helpers/scope-modes';
 import {
@@ -62,8 +68,9 @@ function scopeSetsEqual(a: readonly string[], b: readonly string[]): boolean {
  *
  * GET  /ui/consent — server-renders the consent page given the same query
  *                    parameters as /oauth/authorize. Expects a signed
- *                    session cookie; otherwise redirects to the login
- *                    page with return_to=<original authorize url>.
+ *                    session cookie; otherwise redirects to the login page
+ *                    with `return_to=/ui/resume/<handle>`, the authorize URL
+ *                    itself being parked server-side (#316 follow-up).
  * POST /ui/consent — processes Allow / Deny; on Allow, issues an
  *                    authorization code and redirects to redirect_uri; on
  *                    Deny, redirects with error=access_denied (RFC 6749
@@ -79,9 +86,11 @@ const consentFormSchema = z.object({
   // in the session (keeps the session payload small + stateless enough).
   client_id: z.string().min(1),
   redirect_uri: z.string().url(),
-  state: z.string().max(255).optional(),
-  scope: z.string().optional(),
-  nonce: z.string().max(255).optional(),
+  state: z.string().max(OAUTH_OPAQUE_PARAM_MAX_LENGTH).optional(),
+  // Mirrors `authorizeQuerySchema`'s bound — the two silently drifted once
+  // (#316) and this form POST reaches the same pending-authorization stash.
+  scope: z.string().max(OAUTH_SCOPE_PARAM_MAX_LENGTH).optional(),
+  nonce: z.string().max(OAUTH_OPAQUE_PARAM_MAX_LENGTH).optional(),
   code_challenge: z.string().min(43).max(128),
   code_challenge_method: z.literal('S256'),
   response_type: z.literal('code'),
@@ -353,8 +362,10 @@ export default async function (fastify: FastifyInstance) {
 
       const session = await resolveBrowserSession(fastify, request, reply);
       if (!session) {
-        const returnTo = buildAuthorizeUrl(query);
-        return reply.redirect(`/ui/login?return_to=${encodeURIComponent(returnTo)}`, 302);
+        // #316 follow-up: the rebuilt authorize URL is parked server-side and
+        // the browser only carries a short handle, so a 2048-char `state` can
+        // no longer inflate this Location header past a proxy's header buffer.
+        return redirectToLoginWithPendingAuthorization(fastify, reply, buildAuthorizeUrl(query));
       }
 
       const realm = await getOrCreateDefaultRealm(fastify);
@@ -544,7 +555,8 @@ export default async function (fastify: FastifyInstance) {
           prompt: body.prompt,
           max_age: body.max_age !== undefined ? String(body.max_age) : undefined,
         });
-        return reply.redirect(`/ui/login?return_to=${encodeURIComponent(returnTo)}`, 302);
+        // #316 follow-up: short handle in the URL, full authorize URL in Redis.
+        return redirectToLoginWithPendingAuthorization(fastify, reply, returnTo);
       }
 
       if (!csrfTokensEqual(session.csrfToken, body.csrf_token)) {
@@ -747,7 +759,8 @@ export default async function (fastify: FastifyInstance) {
           max_age: body.max_age !== undefined ? String(body.max_age) : undefined,
           resource: body.resource,
         });
-        return reply.redirect(`/ui/login?return_to=${encodeURIComponent(returnTo)}`, 302);
+        // #316 follow-up: short handle in the URL, full authorize URL in Redis.
+        return redirectToLoginWithPendingAuthorization(fastify, reply, returnTo);
       }
 
       // Allow: persist the grant if the user checked the box, then issue a

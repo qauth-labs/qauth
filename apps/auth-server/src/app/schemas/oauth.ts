@@ -1,5 +1,7 @@
 import { z } from 'zod';
 
+import { OAUTH_OPAQUE_PARAM_MAX_LENGTH, OAUTH_SCOPE_PARAM_MAX_LENGTH } from '../constants';
+
 /**
  * RFC 8707 §2: `resource` is an absolute URI without fragment, identifying
  * the protected resource the access token is intended for. Clients MAY
@@ -33,9 +35,16 @@ export const authorizeQuerySchema = z.object({
     .max(128)
     .regex(/^[A-Za-z0-9._~-]+$/),
   code_challenge_method: z.literal('S256'),
-  state: z.string().max(255).optional(),
-  scope: z.string().optional(),
-  nonce: z.string().max(255).optional(),
+  // `state` / `nonce` are opaque, client-owned, round-tripped params. Bound
+  // centrally (OAUTH_OPAQUE_PARAM_MAX_LENGTH) so this schema and its
+  // /ui/consent form mirror can never drift apart again.
+  state: z.string().max(OAUTH_OPAQUE_PARAM_MAX_LENGTH).optional(),
+  // Bounded for the same reason (#316 follow-up): every parameter that
+  // round-trips through the login bounce is written to the pending-authorization
+  // stash BEFORE the user authenticates, so an unbounded one is an
+  // unauthenticated Redis write primitive. See OAUTH_SCOPE_PARAM_MAX_LENGTH.
+  scope: z.string().max(OAUTH_SCOPE_PARAM_MAX_LENGTH).optional(),
+  nonce: z.string().max(OAUTH_OPAQUE_PARAM_MAX_LENGTH).optional(),
   // OIDC Core §3.1.2.1 step-up parameters (ADR-007 §2, #185). `prompt` forces
   // a fresh authentication (`login`) or re-consent (`consent`); `max_age`
   // bounds, in seconds, how old the existing authentication may be before a

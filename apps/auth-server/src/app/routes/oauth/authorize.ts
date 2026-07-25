@@ -5,7 +5,11 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { ZodTypeProvider } from 'fastify-type-provider-zod';
 
 import { env } from '../../../config/env';
-import { AUTHORIZATION_CODE_TTL_MS, STEP_UP_FRESH_AUTH_WINDOW_MS } from '../../constants';
+import {
+  AUTHORIZATION_CODE_TTL_MS,
+  AUTHORIZE_BODY_LIMIT_BYTES,
+  STEP_UP_FRESH_AUTH_WINDOW_MS,
+} from '../../constants';
 import { resolveBrowserSession } from '../../helpers/browser-session';
 import { findExceedingAgentScopesForClient, resolveAudience } from '../../helpers/client-auth';
 import { resolveClient } from '../../helpers/client-resolution';
@@ -14,6 +18,7 @@ import { resolveIssuerIdentifier } from '../../helpers/discovery';
 import { resolveEnvironmentPolicy } from '../../helpers/environment-policy';
 import { getOrCreateSystemClient } from '../../helpers/oauth-client';
 import { buildRedirectUrl, isRedirectUriAllowedForPolicy } from '../../helpers/oauth-redirect';
+import { redirectToLoginWithPendingAuthorization } from '../../helpers/pending-authorization';
 import { getOrCreateDefaultRealm } from '../../helpers/realm';
 import { resolveRealmRateLimitMax } from '../../helpers/realm-rate-limit';
 import {
@@ -81,7 +86,9 @@ function buildAuthorizeUrlWithParams(request: FastifyRequest): string {
  *
  * Accepts two user-auth mechanisms:
  *   1. Browser-driven (issue #150): signed __Host-qauth_session cookie.
- *      No session → redirect to /ui/login with return_to. Session + no
+ *      No session → redirect to /ui/login with a `return_to` pointing at
+ *      `/ui/resume/<handle>`; the authorize URL itself is parked server-side
+ *      (see helpers/pending-authorization.ts, #316). Session + no
  *      prior consent covering the requested scopes → redirect to the
  *      consent screen at /ui/consent. Otherwise issue a code directly.
  *   2. Legacy/machine: Authorization: Bearer <access_token>. Retained for
@@ -283,7 +290,9 @@ export default async function (fastify: FastifyInstance) {
       // the client hanging until its timeout. (`redirect_uri` and the client
       // are already validated above, so this redirect is safe to emit.) The
       // same check exists for the authenticated step-up path further down; this
-      // is the branch that runs BEFORE any session is resolved.
+      // is the branch that runs BEFORE any session is resolved, and it also
+      // keeps a logged-out client's silent-renewal polling from creating a
+      // pending-authorization stash on every poll.
       if (query.prompt === 'none') {
         await fastify.repositories.auditLogs.create({
           userId: null,
@@ -312,10 +321,13 @@ export default async function (fastify: FastifyInstance) {
 
       // No auth at all → browser flow. Redirect to login, then the user
       // lands back on this very URL and the session cookie path takes
-      // over. We preserve the exact query string so PKCE challenge,
-      // scope, and state survive the round-trip.
-      const returnTo = `${requestUrlWithParams}`;
-      return reply.redirect(`/ui/login?return_to=${encodeURIComponent(returnTo)}`, 302);
+      // over. The exact query string is preserved so PKCE challenge, scope,
+      // state and nonce survive the round-trip — but it is parked SERVER-SIDE
+      // under a short handle rather than nested into `return_to` (#316
+      // follow-up): a 2048-char raw-JSON `state` nested into the login URL
+      // produced a ~10.4 KB Location header, which a reverse proxy rejects
+      // before the login page ever renders.
+      return redirectToLoginWithPendingAuthorization(fastify, reply, requestUrlWithParams);
     }
 
     let userId: string;
@@ -515,7 +527,9 @@ export default async function (fastify: FastifyInstance) {
         // which always mints a brand-new session (session-fixation defense),
         // resetting auth_time so the elevation is granted only right after
         // the user proves presence. The full authorize URL (incl. prompt /
-        // max_age / scope / PKCE) is preserved so the round-trip is lossless.
+        // max_age / scope / PKCE) is preserved so the round-trip is lossless —
+        // stashed server-side under a handle, same as the no-session branch
+        // above (#316 follow-up), so this path cannot regrow the header either.
         await fastify.repositories.auditLogs.create({
           userId,
           oauthClientId: client.id,
@@ -533,8 +547,7 @@ export default async function (fastify: FastifyInstance) {
             maxAge: query.max_age ?? null,
           },
         });
-        const returnTo = `${requestUrlWithParams}`;
-        return reply.redirect(`/ui/login?return_to=${encodeURIComponent(returnTo)}`, 302);
+        return redirectToLoginWithPendingAuthorization(fastify, reply, requestUrlWithParams);
       }
 
       // Re-consent when the request elevates scope or explicitly asks for it,
@@ -661,6 +674,13 @@ export default async function (fastify: FastifyInstance) {
         body: authorizeQuerySchema,
       },
       config,
+      // The authorize endpoint is unauthenticated and its body is a handful of
+      // short form fields, all individually bounded by `authorizeQuerySchema`.
+      // Fastify's 1 MB default has no purpose here and would let a caller push
+      // a megabyte through body parsing and Zod on every request before any of
+      // those bounds apply. Matches PENDING_AUTHORIZATION_MAX_URL_BYTES's
+      // reasoning: bound the pre-authentication surface at the edge.
+      bodyLimit: AUTHORIZE_BODY_LIMIT_BYTES,
     },
     handler
   );

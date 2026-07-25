@@ -33,8 +33,9 @@ vi.mock('../../helpers/ssrf-safe-fetch', async () => {
   return { ...actual, ssrfSafeGet };
 });
 
-import { STEP_UP_FRESH_AUTH_WINDOW_MS } from '../../constants';
+import { OAUTH_OPAQUE_PARAM_MAX_LENGTH, STEP_UP_FRESH_AUTH_WINDOW_MS } from '../../constants';
 import { buildAuthorizationServerMetadata } from '../../helpers/discovery';
+import { authorizeQuerySchema } from '../../schemas/oauth';
 import authorizeRoute from './authorize';
 
 interface TestContext {
@@ -112,6 +113,10 @@ function makeFastify() {
     },
     sessionUtils: {
       getSession: vi.fn(),
+      // #316 follow-up: the login bounce parks the pending authorize URL here
+      // instead of nesting it in `return_to`.
+      setSession: vi.fn().mockResolvedValue(undefined),
+      deleteSession: vi.fn().mockResolvedValue(undefined),
     },
     log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
   };
@@ -162,7 +167,15 @@ describe('GET /oauth/authorize — session-cookie integration', () => {
 
     expect(state.redirected).toBeDefined();
     expect(state.redirected).toContain('/ui/login?return_to=');
-    expect(state.redirected).toContain(encodeURIComponent('/oauth/authorize'));
+    // #316 follow-up: `return_to` carries a short single-use handle, NOT the
+    // nested authorize query string (which inflated the Location header past a
+    // reverse proxy's buffer once `state` was allowed up to 2048 chars). The
+    // authorize URL itself is parked in Redis.
+    expect(state.redirected).toContain(encodeURIComponent('/ui/resume/'));
+    expect(state.redirected).not.toContain(encodeURIComponent('/oauth/authorize'));
+    const pending = (fastify.sessionUtils.setSession as unknown as Mock).mock.calls[0];
+    expect(pending[0]).toMatch(/^pending-authz:[A-Za-z0-9_-]{43}$/);
+    expect((pending[1] as { authorizeUrl: string }).authorizeUrl).toContain('/oauth/authorize');
   });
 
   it('redirects to /ui/consent when session is valid but no prior consent', async () => {
@@ -416,10 +429,19 @@ describe('POST /oauth/authorize (OIDC Core §3.1.2.1)', () => {
     );
 
     expect(state.redirected).toContain('/ui/login?return_to=');
-    // The POST params are reconstructed into the return_to so the GET round-trip
-    // reproduces the request (PKCE challenge, scope, state, client_id survive).
-    expect(state.redirected).toContain(encodeURIComponent('client_id=app-123'));
-    expect(state.redirected).toContain(encodeURIComponent('code_challenge='));
+    // The POST params are reconstructed into an authorize URL so the GET
+    // round-trip reproduces the request (PKCE challenge, scope, state,
+    // client_id survive). #316 follow-up: that URL is parked server-side under
+    // a handle, so the losslessness is asserted on the stash, not on the header.
+    const stashed = (fastify.sessionUtils.setSession as unknown as Mock).mock.calls[0][1] as {
+      authorizeUrl: string;
+    };
+    const resumed = new URL(stashed.authorizeUrl, 'http://placeholder');
+    expect(resumed.pathname).toBe('/oauth/authorize');
+    expect(resumed.searchParams.get('client_id')).toBe('app-123');
+    expect(resumed.searchParams.get('code_challenge')).toBe(BASE_QUERY.code_challenge);
+    expect(resumed.searchParams.get('scope')).toBe('email');
+    expect(resumed.searchParams.get('state')).toBe(BASE_QUERY.state);
   });
 
   it('binds RFC 8707 resource from the POST body onto the code', async () => {
@@ -526,7 +548,11 @@ describe('GET /oauth/authorize — CIMD (Client ID Metadata Documents)', () => {
         verifyAccessToken: vi.fn(),
         getIssuer: () => 'https://auth.example.com',
       },
-      sessionUtils: { getSession: vi.fn() },
+      sessionUtils: {
+        getSession: vi.fn(),
+        setSession: vi.fn().mockResolvedValue(undefined),
+        deleteSession: vi.fn().mockResolvedValue(undefined),
+      },
       log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
     };
     return { fastify: fastify as FastifyInstance, ctx };
@@ -1204,5 +1230,165 @@ describe('GET /oauth/authorize — RFC 9207 `iss` on every authorization respons
     const { state } = await run({ session: null });
     expect(state.redirected).toContain('/ui/login?return_to=');
     expect(state.redirected).not.toContain('iss=');
+  });
+});
+
+/**
+ * Regression suite for qauth-labs/qauth#316 — long opaque `state` / `nonce`.
+ *
+ * `state` and `nonce` are opaque, client-owned params: RFC 6749 §4.1.1 and OIDC
+ * Core place NO length limit on them and they are round-tripped to the client
+ * verbatim. QAuth capped them at 255 in THREE independent places, so fixing one
+ * only moved the failure to the next step of the SAME flow:
+ *
+ *   1. this route's `authorizeQuerySchema` (400 "querystring/state Too big")
+ *   2. the /ui/consent form mirror  (400 "body/state Too big")  — consent.test.ts
+ *   3. `authorization_codes.state`/`.nonce` varchar(255) (500 at code-mint)
+ *      — covered in libs/infra/db repositories.integration.test.ts, since this
+ *        harness mocks the repositories and therefore cannot observe the DDL.
+ *
+ * The bug was INTERMITTENT: Cursor's MCP client base64url-encodes workspace
+ * context into `state`, which lands ~275 chars with a workspace open but under
+ * 255 with an empty window. LONG_STATE below reproduces the over-cap shape.
+ */
+describe('GET /oauth/authorize — long opaque state/nonce (#316)', () => {
+  /**
+   * A realistic Cursor-shaped `state`: base64url of a JSON blob carrying
+   * workspace + attempt context. 282 chars — comfortably over the old 255 cap
+   * and comfortably under OAUTH_OPAQUE_PARAM_MAX_LENGTH.
+   */
+  const LONG_STATE = Buffer.from(
+    JSON.stringify({
+      id: 7,
+      owner: { workspaceId: '9f2c1ab47de35608b1e4c7a09d5f3e21' },
+      attemptId: '3f6c2b18-9d47-4e5a-b0c1-7e2f8a4d9b63',
+      surface: 'mcp_process',
+      redirect: 'cursor://anysphere.cursor-mcp/oauth/user-qauth/callback',
+    })
+  ).toString('base64url');
+
+  /** A long OIDC `nonce`, same over-255 territory, different value. */
+  const LONG_NONCE = 'n'.repeat(300);
+
+  /** Drive the authorize handler with an existing consent so a code is minted. */
+  async function mintWith(query: Record<string, unknown>) {
+    const { fastify, ctx } = makeFastify();
+    await authorizeRoute(fastify);
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(CLIENT);
+    (fastify.jwtUtils.extractFromHeader as unknown as Mock).mockReturnValue(null);
+    (fastify.repositories.oauthConsents.findActive as unknown as Mock).mockResolvedValue({
+      scopes: ['email', 'read:foo'],
+      revokedAt: null,
+    });
+    const { signSessionId } = await import('../../helpers/session-cookie');
+    const signed = signSessionId('sid-316');
+    (fastify.sessionUtils.getSession as unknown as Mock).mockResolvedValue({
+      userId: 'user-1',
+      email: 'a@b.com',
+      sessionId: 'sid-316',
+      createdAt: Date.now(),
+    });
+
+    const { reply, state } = createReply();
+    await ctx.handler!(
+      {
+        query,
+        url: '/oauth/authorize?response_type=code&client_id=app-123&scope=email',
+        headers: { cookie: `__Host-qauth_session=${signed}` },
+        ip: '127.0.0.1',
+      },
+      reply
+    );
+    return { fastify, state };
+  }
+
+  it('the fixture state is genuinely over the old 255-char cap', () => {
+    // Guards the guard: if LONG_STATE ever shrank under 255 this whole suite
+    // would pass vacuously against a reintroduced varchar(255).
+    expect(LONG_STATE.length).toBeGreaterThan(255);
+    expect(LONG_STATE.length).toBeLessThan(OAUTH_OPAQUE_PARAM_MAX_LENGTH);
+  });
+
+  it('site 1: authorizeQuerySchema accepts a ~280-char state and a 300-char nonce', () => {
+    // Fastify validates the querystring with this exact schema before the
+    // handler runs, so the schema — not the handler — is the failure site.
+    const parsed = authorizeQuerySchema.parse({
+      ...BASE_QUERY,
+      state: LONG_STATE,
+      nonce: LONG_NONCE,
+    });
+    // Verbatim: no truncation, no re-encoding.
+    expect(parsed.state).toBe(LONG_STATE);
+    expect(parsed.nonce).toBe(LONG_NONCE);
+  });
+
+  it('site 1: authorizeQuerySchema still rejects state/nonce over the DoS bound', () => {
+    // The 2048 cap is a DoS guard, not a spec limit — it must stay enforced.
+    const tooLong = 'x'.repeat(OAUTH_OPAQUE_PARAM_MAX_LENGTH + 1);
+    expect(authorizeQuerySchema.safeParse({ ...BASE_QUERY, state: tooLong }).success).toBe(false);
+    expect(authorizeQuerySchema.safeParse({ ...BASE_QUERY, nonce: tooLong }).success).toBe(false);
+    // And exactly at the bound it is still accepted (off-by-one guard).
+    const atBound = 'x'.repeat(OAUTH_OPAQUE_PARAM_MAX_LENGTH);
+    expect(authorizeQuerySchema.safeParse({ ...BASE_QUERY, state: atBound }).success).toBe(true);
+  });
+
+  it('persists the full state/nonce onto the code and round-trips state VERBATIM', async () => {
+    const { fastify, state } = await mintWith({
+      ...BASE_QUERY,
+      state: LONG_STATE,
+      nonce: LONG_NONCE,
+      scope: 'email',
+    });
+
+    // Site 3 boundary: the values handed to the repository are untruncated.
+    // (The varchar(255) DDL that used to reject them lives in infra-db and is
+    // asserted against real Postgres in repositories.integration.test.ts.)
+    const createArg = (fastify.repositories.authorizationCodes.create as unknown as Mock).mock
+      .calls[0][0];
+    expect(createArg.state).toBe(LONG_STATE);
+    expect(createArg.nonce).toBe(LONG_NONCE);
+
+    // RFC 6749 §4.1.2: the client gets its `state` back byte for byte.
+    const redirected = new URL(state.redirected as string);
+    expect(redirected.searchParams.get('state')).toBe(LONG_STATE);
+    expect(redirected.searchParams.get('code')).toBeTruthy();
+  });
+
+  it('carries the full state through the /ui/consent hop when consent is required', async () => {
+    // The consent round-trip is where the flow used to die one step later: the
+    // authorize query schema accepted the value, then the form mirror rejected
+    // it. The return query must carry the state whole for that hop to work.
+    const { fastify, ctx } = makeFastify();
+    await authorizeRoute(fastify);
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(CLIENT);
+    (fastify.jwtUtils.extractFromHeader as unknown as Mock).mockReturnValue(null);
+    (fastify.repositories.oauthConsents.findActive as unknown as Mock).mockResolvedValue(undefined);
+    const { signSessionId } = await import('../../helpers/session-cookie');
+    const signed = signSessionId('sid-316c');
+    (fastify.sessionUtils.getSession as unknown as Mock).mockResolvedValue({
+      userId: 'user-1',
+      email: 'a@b.com',
+      sessionId: 'sid-316c',
+      createdAt: Date.now(),
+    });
+
+    const { reply, state } = createReply();
+    await ctx.handler!(
+      {
+        query: { ...BASE_QUERY, state: LONG_STATE, nonce: LONG_NONCE, scope: 'email' },
+        url: `/oauth/authorize?response_type=code&client_id=app-123&scope=email&state=${encodeURIComponent(
+          LONG_STATE
+        )}&nonce=${LONG_NONCE}`,
+        headers: { cookie: `__Host-qauth_session=${signed}` },
+        ip: '127.0.0.1',
+      },
+      reply
+    );
+
+    expect(state.redirected).toContain('/ui/consent?');
+    const consentUrl = new URL(state.redirected as string, 'https://auth.example.com');
+    expect(consentUrl.searchParams.get('state')).toBe(LONG_STATE);
+    expect(consentUrl.searchParams.get('nonce')).toBe(LONG_NONCE);
+    expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
   });
 });
