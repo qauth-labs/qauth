@@ -11,6 +11,12 @@ export default defineConfig({
       '**/coverage/**',
       '**/.{idea,git,cache,output,temp,nx}/**',
       '**/{karma,rollup,webpack,vite,vitest,jest,ava,babel,nyc,cypress,tsup,build,eslint,prettier}.config.*',
+      // Git worktrees are created under `.claude/worktrees/<id>/`, i.e. INSIDE
+      // the repo, so each one is a second full copy of the tree. Without this
+      // the root project globs every worktree's tests in alongside its own and
+      // registers duplicate Fastify routes ("Method 'POST' already declared for
+      // route '/register'"), failing a run that has nothing wrong with it.
+      '**/.claude/**',
       // Docker-backed repository integration suite (#167). Kept out of the
       // fast unit run so CI needs no Postgres/Redis; run it via the dedicated
       // `test-integration` target instead.

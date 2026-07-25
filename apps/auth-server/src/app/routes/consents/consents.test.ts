@@ -15,6 +15,8 @@ import consentsRoute from './index';
 interface TestContext {
   get?: (request: any, reply: any) => Promise<unknown>;
   delete?: (request: any, reply: any) => Promise<unknown>;
+  /** Declared route paths, in registration order — see the routing test below. */
+  urls: { method: string; url: string }[];
 }
 
 function createReply() {
@@ -41,14 +43,16 @@ function createReply() {
 }
 
 function makeFastify() {
-  const ctx: TestContext = {};
+  const ctx: TestContext = { urls: [] };
   const fastify: any = {
     withTypeProvider: () => ({
-      get: (_u: string, _o: unknown, h: any) => {
+      get: (u: string, _o: unknown, h: any) => {
+        ctx.urls.push({ method: 'GET', url: u });
         ctx.get = h;
         return fastify;
       },
-      delete: (_u: string, _o: unknown, h: any) => {
+      delete: (u: string, _o: unknown, h: any) => {
+        ctx.urls.push({ method: 'DELETE', url: u });
         ctx.delete = h;
         return fastify;
       },
@@ -82,6 +86,25 @@ function sessionWith(userId: string, sessionId: string, apiCsrfToken?: string) {
 }
 
 describe('/consents JSON API', () => {
+  it('declares paths relative to the autoload directory prefix', async () => {
+    const { fastify, ctx } = makeFastify();
+    await consentsRoute(fastify);
+
+    // `@fastify/autoload` is registered without `dirNameRoutePrefix: false`
+    // (app.ts), so the `consents/` directory supplies the `/consents` prefix and
+    // these paths must be relative to it. Declaring `/consents` here published
+    // `/consents/consents`, which is what the developer portal's consents page
+    // was failing against — it calls `${AUTH_SERVER_URL}/consents`.
+    //
+    // The rest of this file drives the captured handlers directly and never
+    // sees a URL, which is exactly why the doubled prefix went unnoticed.
+    expect(ctx.urls).toEqual([
+      { method: 'GET', url: '/' },
+      { method: 'DELETE', url: '/:id' },
+    ]);
+    expect(ctx.urls.some((r) => r.url.includes('consents'))).toBe(false);
+  });
+
   it('GET /consents returns 401 when no session', async () => {
     const { fastify, ctx } = makeFastify();
     await consentsRoute(fastify);

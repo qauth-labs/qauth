@@ -33,12 +33,16 @@ import { type AuthorizeQuery, authorizeQuerySchema } from '../../schemas/oauth';
  * RFC 8707: parse every `resource=` query param directly from the request
  * URL instead of relying on `request.query.resource`.
  *
- * Why: fastify-type-provider-zod@6.1.0 drops the `resource` field from the
- * parsed query when its Zod schema is a union + transform (e.g.
+ * Why: fastify-type-provider-zod drops the `resource` field from the parsed
+ * query when its Zod schema is a union + transform (e.g.
  * `z.union([z.url(), z.array(z.url())]).transform(...)`) — the raw-string
  * variant from Fastify's querystring parser does not survive the validator.
  * The field IS validated (invalid URIs fail the whole request), but the
  * validator does not write the parsed array back into request.query.
+ *
+ * Still true on v7.0.0: the v7 major rewrote the serializer (safeParse ->
+ * safeEncode) and OpenAPI generation, but left `validatorCompiler` on
+ * `safeParse` untouched, so this workaround is NOT obsolete.
  *
  * Reading from `request.url` sidesteps the validator entirely. Zod has
  * already rejected invalid inputs at schema time, so whatever reaches this

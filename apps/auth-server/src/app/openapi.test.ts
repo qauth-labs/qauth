@@ -4,10 +4,12 @@ import swaggerUi from '@fastify/swagger-ui';
 import Fastify from 'fastify';
 import {
   createJsonSchemaTransform,
+  isResponseSerializationError,
   serializerCompiler,
   validatorCompiler,
   ZodTypeProvider,
 } from 'fastify-type-provider-zod';
+import { z } from 'zod';
 
 import {
   introspectRequestSchema,
@@ -136,6 +138,83 @@ describe('OpenAPI / Swagger', () => {
       url: '/docs/static/../../oauth/userinfo',
     });
     expect(traversal.statusCode).not.toBe(200);
+
+    await app.close();
+  });
+
+  // ── fastify-type-provider-zod v7: responses serialize in the ENCODE direction
+  //
+  // v6's serializerCompiler ran `safeParse` over the outgoing payload, so a
+  // response schema could carry decode-side machinery — `.transform()`,
+  // `.pipe()`, `.default()` — and it would quietly run on the way OUT. v7
+  // switched to `safeEncode`, which walks the schema backwards: a unidirectional
+  // transform now throws, and `.default()` no longer fills a missing key.
+  //
+  // Every response schema in this repo was audited at bump time and none uses
+  // such a construct (the `.transform()` / `z.coerce` uses are all in REQUEST
+  // schemas, and `validatorCompiler` still uses `safeParse`, so the request path
+  // is untouched). The two tests below pin that contract down, because the
+  // failure mode is a runtime 500 on a single endpoint — invisible to a spec
+  // presence check like the one above, and invisible to typechecking.
+  it('serializes a plain response schema in the encode direction (v7)', async () => {
+    const app = Fastify({ logger: false }).withTypeProvider<ZodTypeProvider>();
+    app.setValidatorCompiler(validatorCompiler);
+    app.setSerializerCompiler(serializerCompiler);
+    app.get('/encode-ok', { schema: { response: { 200: userinfoResponseSchema } } }, async () => ({
+      sub: 'user-1',
+      email: 'user@example.com',
+      email_verified: true,
+    }));
+    await app.ready();
+
+    const res = await app.inject({ method: 'GET', url: '/encode-ok' });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ sub: 'user-1', email_verified: true });
+
+    await app.close();
+  });
+
+  it('rejects encode-hostile response schemas (v7)', async () => {
+    // Guard, not a behaviour we want: adding `.transform()` or `.default()` to
+    // a *response* schema must fail loudly rather than silently shipping a
+    // mangled body. Under v6 both of these produced a 200 with a rewritten
+    // payload (`{"n":"1"}` / `{"items":[]}`), which is exactly the kind of
+    // silent change this asserts against. If these ever start returning 200,
+    // the serializer has gone back to the decode direction and the response
+    // schemas need re-auditing.
+    const app = Fastify({ logger: false }).withTypeProvider<ZodTypeProvider>();
+    app.setSerializerCompiler(serializerCompiler);
+
+    const captured: Record<string, unknown> = {};
+    app.setErrorHandler((error, request, reply) => {
+      captured[request.url] = error;
+      return reply.status(500).send({ error: 'serialization' });
+    });
+    app.get(
+      '/one-way-transform',
+      { schema: { response: { 200: z.object({ n: z.number().transform(String) }) } } },
+      async () => ({ n: 1 }) as never
+    );
+    app.get(
+      '/response-default',
+      { schema: { response: { 200: z.object({ items: z.array(z.string()).default([]) }) } } },
+      async () => ({}) as never
+    );
+    await app.ready();
+
+    // A unidirectional transform is caught inside Zod itself, so it surfaces as
+    // a raw `$ZodEncodeError` rather than the provider's wrapper type.
+    const transformRes = await app.inject({ method: 'GET', url: '/one-way-transform' });
+    expect(transformRes.statusCode).toBe(500);
+    expect(String((captured['/one-way-transform'] as Error).message)).toMatch(
+      /unidirectional transform/i
+    );
+
+    // A missing key with a `.default()` fails the encode as an ordinary schema
+    // mismatch, which the provider does wrap.
+    const defaultRes = await app.inject({ method: 'GET', url: '/response-default' });
+    expect(defaultRes.statusCode).toBe(500);
+    expect(isResponseSerializationError(captured['/response-default'])).toBe(true);
 
     await app.close();
   });
