@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "QAuth Auth Server API",
-    "description": "OAuth 2.1 / OIDC authentication server API. Phase 1.7: userinfo and token introspection.",
+    "description": "OAuth 2.1 / OIDC 1.0 authorization server for MCP servers and AI agents: authorization_code + PKCE and client_credentials grants, RFC 8693 on-behalf-of agent delegation, and environment-aware authorization policy. Wallet federation (OID4VP) transport ships behind a default-off flag.",
     "version": "1.0.0"
   },
   "components": {

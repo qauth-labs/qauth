@@ -13,10 +13,11 @@ import { createJsonSchemaTransform } from 'fastify-type-provider-zod';
  * Swagger UI. A single shared constant removes that whole class of drift
  * instead of relying on a guard to notice it.
  *
- * PURE EXTRACTION: identical bytes to what both files carried before. In
- * particular, `info.description`'s "Phase 1.7: userinfo and token
- * introspection" wording is known-stale and is deliberately left as-is here —
- * correcting it is a later content task's call, not this one's.
+ * PURE EXTRACTION at the time this file was created: identical bytes to what
+ * both files carried before. `info.description`'s original "Phase 1.7:
+ * userinfo and token introspection" wording was known-stale and was
+ * deliberately left as-is by that extraction, pending a later content task
+ * (#351) to own the correction — that task has since updated it below.
  *
  * (`apps/auth-server/src/app/openapi.test.ts` carries its own separate copy
  * of this same object, for a minimal Fastify instance rather than the real
@@ -38,7 +39,7 @@ export const openapiOptions: SwaggerPlugin.FastifyDynamicSwaggerOptions = {
     info: {
       title: 'QAuth Auth Server API',
       description:
-        'OAuth 2.1 / OIDC authentication server API. Phase 1.7: userinfo and token introspection.',
+        'OAuth 2.1 / OIDC 1.0 authorization server for MCP servers and AI agents: authorization_code + PKCE and client_credentials grants, RFC 8693 on-behalf-of agent delegation, and environment-aware authorization policy. Wallet federation (OID4VP) transport ships behind a default-off flag.',
       version: '1.0.0',
     },
     servers: [{ url: '/', description: 'Default' }],
