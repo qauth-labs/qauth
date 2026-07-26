@@ -132,6 +132,16 @@ a draft revision cannot silently change the wire shape:
   JOSE header parameters**, kept **non-critical** so classical verifiers ignore
   them.
 
+> ✅ **Pin corrected (#274, closes review checklist item 1).** The in-code
+> constant was previously named `PQC_JOSE_COMPOSITE_DRAFT` and pointed at
+> `draft-prabel-jose-pq-composite-sigs-02` — a draft describing the
+> _concatenated composite_ construction QAuth deliberately does **not**
+> implement. The emitted wire shape was always correct (there was no interop
+> break); only the citation was wrong. The constant is now
+> `PQC_JOSE_MLDSA_SPEC = 'RFC 9964'`, with `PQC_JOSE_ALG_POLICY_SPEC = 'RFC 9864'`
+> for alg-identifier policy. See the
+> [security review](/docs/security/005-pqc-hybrid-signing-review.md).
+
 **The AKP key members are stable**: RFC 9964 is a published Standards Track
 RFC, so `kty`/`alg`/`pub` will not change under you. What remains provisional is
 the QAuth-private `pqc_alg` / `pqc_kid` header pair, which is unregistered and
