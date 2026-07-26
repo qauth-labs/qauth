@@ -1050,11 +1050,13 @@ in Decision §2. The security principle is untouched; the parameter names are no
 **New, and material for the T4 verifier track.** CIR 2024/2982's Annex II is
 replaced (CIR 2026/1731 Annex XII) and now incorporates clauses 4.1, 4.2, 5 and 6 of
 **ETSI TS 119 472-2 V1.2.1 (2026-03)** "with the following adaptations", which are
-set out in Annex XII itself. It defines an OpenID4VC-HAIP profile, and **one** of its
-requirements binds relying parties:
+set out in Annex XII itself. It defines an OpenID4VC-HAIP profile, **several of whose
+requirements bind relying parties**. The broadest is:
 
 > `OIDFVP-HAIP-SUPPORT-05`: A Relying Party shall meet the requirements specified in
 > clauses 6.5 of the present Annex.
+
+The complete set is enumerated in the third-reading correction below.
 
 **HAIP conformance for an EU relying party is now a legal requirement, not a best
 practice.** That sharpens Q4 of #296 (whether eIDAS relying-party registration is
@@ -1084,8 +1086,9 @@ and it now has a date: 24 December 2026.
 > "Wallet-relying party" in the identifier is the **object validated**, not the actor
 > validating. The sibling requirements follow the same pattern: `WRP-OVERASKING-01`
 > and `-02` bind **the EUDI Wallet**, `WRP-OVERASKING-03` the **wallet provider**, and
-> `OIDFVP-HAIP-SUPPORT-02`/`-03` **the EUDI Wallet**. `OIDFVP-HAIP-SUPPORT-05` is the
-> only clause in this Annex that binds the Relying Party.
+> `OIDFVP-HAIP-SUPPORT-02`/`-03` **the EUDI Wallet**. `OIDFVP-HAIP-SUPPORT-05` binds the
+> Relying Party — but it is **not** the only clause that does; see the third-reading
+> correction below, which was written because this sentence originally claimed it was.
 >
 > **Why the error was not harmless.** This passage is written to sharpen #296 Q4 and to
 > drive #236. As first written it would have put **registration-certificate chain
@@ -1101,6 +1104,75 @@ and it now has a date: 24 December 2026.
 > whether clause 4.4 originates there or is inserted by the CIR is not established here;
 > every requirement quoted is quoted from CIR 2026/1731 Annex XII, which binds either
 > way.
+
+> **Corrected 2026-07-26 (third reading) — `OIDFVP-HAIP-SUPPORT-05` is _not_ the only
+> RP-binding clause in Annex XII.** The second-reading correction above fixed a real
+> error (`WRP-VALIDATION-01`/`-02` do bind the Wallet) and then introduced a new one of
+> the same class in the opposite direction: it asserted that `OIDFVP-HAIP-SUPPORT-05`
+> was the sole clause binding the Relying Party. Scanning every requirement identifier
+> in Annex XII against the CELLAR full text of CELEX 32026R1731 shows otherwise.
+>
+> **Requirements whose sentence subject is the Relying Party:**
+>
+> > `OIDFVP-HAIP-SUPPORT-05`: A Relying Party shall meet the requirements specified in
+> > clauses 6.5 of the present Annex.
+> >
+> > `OIDFVP-HAIP-GEN-04`: When the format of the requested attestation complies with
+> > [10] Relying Parties and EUDI Wallets shall comply with the 'ISO mdocs' profile in
+> > [11] Section 6.
+> >
+> > `OIDFVP-HAIP-GEN-05`: When the format of the requested attestation complies with
+> > [2], Relying Parties and EUDI Wallets shall comply with the 'IETF SD-JWT VCs'
+> > profile in [11] Section 6.
+> >
+> > `ISO/IEC 18013-SUPPORT-01`: Wallet Units, PID Providers, Attestation Providers,
+> > Wallet Providers, and Relying Parties shall not support server retrieval as
+> > specified in ISO/IEC 18013-5 [10] for requesting and presenting PID or attestation
+> > attributes.
+> >
+> > `ISO/IEC 18013-SUPPORT-04`: A Relying Party **should** implement the profile defined
+> > in clause 5.4 of the present document.
+>
+> Note the identifier is `ISO/IEC 18013-SUPPORT-nn`, **not** `18013-5-SUPPORT-nn`.
+> `-04` is a **should**, not a shall; the other four are **shall**.
+>
+> **Requirements that constrain the Request Object.** These are written in the passive
+> voice and name no actor, so — applying this correction's own rule about reading the
+> subject of the sentence — they are **not** RP-binding by their grammar. They are
+> recorded here because in OID4VP the Request Object is authored by the Verifier, so in
+> practice they land on QAuth:
+>
+> > `OIDFVP-HAIP-COMMON-REQ-RO-13`: One of the elements of the `verifier_info` parameter
+> > shall include the registration certificate.
+> >
+> > `OIDFVP-HAIP-COMMON-REQ-RO-23`: The leaf certificate mentioned in OpenID4VP
+> > section 5.9.3 for use with the `x509_hash` Client Identifier Prefix shall be a RP
+> > access certificate as specified in ETSI TS 119 475 [14].
+>
+> Finally, `OIDFVP-HAIP-GEN-01` incorporates "all the mandatory requirements specified
+> in clauses 5, 5.3, 7, and 8 of HAIP [11]" wholesale, which carries RP-side HAIP
+> requirements in with it; and NOTE 3 under `OIDFVP-HAIP-SUPPORT-03` observes that
+> mitigating cross-device session-fixation "is up to relying parties" — a note, not a
+> normative requirement.
+>
+> **Why this error was also not harmless — it is the mirror image of the first.** The
+> first-reading error would have scoped wallet-side work into #236 on a false premise.
+> This one told the reader that genuine RP-side obligations do not exist. Two are
+> directly load-bearing for decisions already recorded: `OIDFVP-HAIP-GEN-05` binds the
+> RP to the HAIP "IETF SD-JWT VCs" profile, and SD-JWT VC (`dc+sd-jwt`) is epic #231's
+> chosen first credential format; `OIDFVP-HAIP-COMMON-REQ-RO-23` requires the
+> `x509_hash` leaf to be an ETSI TS 119 475 RP access certificate, and #299 already
+> records an `x509_hash` position for the `haip-1.0` profile. `ISO/IEC 18013-SUPPORT-01`
+> also forecloses ISO/IEC 18013-5 server retrieval outright, which is worth knowing
+> before the tracked `mso_mdoc` fast-follow is scoped.
+>
+> **Verification.** CELLAR full text of CELEX 32026R1731 retrieved 2026-07-26
+> (`http://publications.europa.eu/resource/celex/32026R1731`,
+> `Accept: application/xhtml+xml`), every requirement identifier in Annex XII
+> enumerated mechanically and each hit read in context. ETSI TS 119 472-2 V1.2.1 was
+> still not retrieved, so whether these clauses originate there or are inserted by the
+> CIR remains unestablished; every requirement quoted is quoted from the CIR, which
+> binds either way.
 
 **Also missed on the first reading — CIR 2026/1731 Article 1(1) inserts a new
 Article 3a into CIR 2024/2977, "Protection of the portrait", and its paragraph 3 binds

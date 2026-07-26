@@ -486,10 +486,13 @@ ADR-009's citation of SD-JWT VC **draft-13 §3.2.2.2** via HAIP 1.0 stands.
 replaced (CIR 2026/1731 Annex XII) and now incorporates clauses 4.1, 4.2, 5 and 6 of
 **ETSI TS 119 472-2 V1.2.1 (2026-03)** _"with the following adaptations"_, the
 adaptations being set out at length in Annex XII itself. The result defines an
-_OpenID4VC-HAIP profile_ and, in one clause, **binds relying parties directly**:
+_OpenID4VC-HAIP profile_ and, in **several** clauses, **binds relying parties
+directly**. The broadest is:
 
 > `OIDFVP-HAIP-SUPPORT-05`: A Relying Party shall meet the requirements specified in
 > clauses 6.5 of the present Annex.
+
+The complete set is enumerated in the third-reading correction below.
 
 HAIP conformance for an EU relying party is therefore a legal requirement rather than
 a best practice.
@@ -521,28 +524,91 @@ a best practice.
 > requirements in the same clause: `WRP-OVERASKING-01` and `-02` bind **the EUDI
 > Wallet**, `WRP-OVERASKING-03` binds **the wallet provider**.
 
-**Who is bound by what — clause 4.4 and clause 6.2, stated plainly.**
+**Who is bound by what, stated plainly.** Actor taken from the subject of each
+sentence, verified against the CELLAR full text of CELEX 32026R1731 on 2026-07-26.
 
-| Requirement                     | Actor bound         | Substance                                                            |
-| ------------------------------- | ------------------- | -------------------------------------------------------------------- |
-| `WRP-VALIDATION-01`, `-02`      | **EUDI Wallet**     | Validate the RP registration certificate; warn the user on failure   |
-| `WRP-VALIDATION-03`             | **Wallet provider** | Decide whether failed checks may be bypassed                         |
-| `WRP-OVERASKING-01`, `-02`      | **EUDI Wallet**     | Compare request against certificate; warn the user on overasking     |
-| `WRP-OVERASKING-03`             | **Wallet provider** | Decide whether the user may proceed despite the warning              |
-| `OIDFVP-HAIP-SUPPORT-02`, `-03` | **EUDI Wallet**     | Meet clause 6.5; should not use redirect-based cross-device flows    |
-| **`OIDFVP-HAIP-SUPPORT-05`**    | **Relying Party**   | **Meet the requirements of clause 6.5 — the only RP-binding clause** |
+| Requirement                     | Actor bound            | Substance                                                                         |
+| ------------------------------- | ---------------------- | --------------------------------------------------------------------------------- |
+| `WRP-VALIDATION-01`, `-02`      | **EUDI Wallet**        | Validate the RP registration certificate; warn the user on failure                |
+| `WRP-VALIDATION-03`             | **Wallet provider**    | Decide whether failed checks may be bypassed                                      |
+| `WRP-OVERASKING-01`, `-02`      | **EUDI Wallet**        | Compare request against certificate; warn the user on overasking                  |
+| `WRP-OVERASKING-03`             | **Wallet provider**    | Decide whether the user may proceed despite the warning                           |
+| `OIDFVP-HAIP-SUPPORT-02`, `-03` | **EUDI Wallet**        | Meet clause 6.5; should not use redirect-based cross-device flows                 |
+| **`OIDFVP-HAIP-SUPPORT-05`**    | **Relying Party**      | shall meet the requirements of clause 6.5                                         |
+| **`OIDFVP-HAIP-GEN-04`**        | **RP + EUDI Wallet**   | shall comply with the HAIP 'ISO mdocs' profile when the format is ISO/IEC mdoc    |
+| **`OIDFVP-HAIP-GEN-05`**        | **RP + EUDI Wallet**   | shall comply with the HAIP 'IETF SD-JWT VCs' profile when the format is SD-JWT VC |
+| **`ISO/IEC 18013-SUPPORT-01`**  | **RP + 4 others**      | shall **not** support ISO/IEC 18013-5 server retrieval                            |
+| `ISO/IEC 18013-SUPPORT-04`      | **Relying Party**      | _should_ implement the clause 5.4 profile (a should, not a shall)                 |
+| `OIDFVP-HAIP-COMMON-REQ-RO-13`  | _(passive — no actor)_ | `verifier_info` shall include the registration certificate                        |
+| `OIDFVP-HAIP-COMMON-REQ-RO-23`  | _(passive — no actor)_ | `x509_hash` leaf shall be an ETSI TS 119 475 RP access certificate                |
+
+The last two constrain the **Request Object**, which in OID4VP the Verifier authors —
+so they land on QAuth in practice even though their grammar names no actor. Separately,
+`OIDFVP-HAIP-GEN-01` incorporates "all the mandatory requirements specified in clauses
+5, 5.3, 7, and 8 of HAIP [11]" wholesale, carrying RP-side HAIP requirements with it.
 
 **What this changes for QAuth's backlog.** Certificate-chain validation, revocation
 checking and a "silence or pre-ticked boxes shall not suffice" consent screen are
 **wallet-side obligations**. They must **not** enter #236 or the T4 verifier track as
 QAuth work on the strength of this Annex. What Annex XII does put on a QAuth-shaped
-relying party is `OIDFVP-HAIP-SUPPORT-05`: conformance to clause 6.5. The RP-side
-consequence of clause 4.4 is indirect but real — a wallet **will** refuse or flag a
-request whose registration certificate does not validate or which overasks, so the
-operator-side duty to hold a correct, current registration certificate and to request
-only registered attributes is load-bearing. That is a registration and deployment
-concern, not a protocol feature, which is exactly the distinction #296 Q4 is asking
-about. This sharpens Q4; it does not answer it.
+relying party is the RP-subject block above — `OIDFVP-HAIP-SUPPORT-05` (clause 6.5
+conformance), `OIDFVP-HAIP-GEN-04`/`-05` (the HAIP format profiles), and
+`ISO/IEC 18013-SUPPORT-01` (no server retrieval) — plus the two Request-Object
+constraints. Two of these bear directly on decisions already taken: `GEN-05` binds the
+RP to the HAIP _IETF SD-JWT VCs_ profile and SD-JWT VC (`dc+sd-jwt`) is epic #231's
+chosen first format, while `RO-23` requires the `x509_hash` leaf to be an ETSI
+TS 119 475 RP access certificate and #299 already records an `x509_hash` position for
+`haip-1.0`. The RP-side consequence of clause 4.4 is separate, indirect, but real — a
+wallet **will** refuse or flag a request whose registration certificate does not
+validate or which overasks, so the operator-side duty to hold a correct, current
+registration certificate and to request only registered attributes is load-bearing.
+That last part is a registration and deployment concern, not a protocol feature, which
+is exactly the distinction #296 Q4 is asking about. This sharpens Q4; it does not
+answer it.
+
+> **Corrected 2026-07-26 (third reading) — `OIDFVP-HAIP-SUPPORT-05` is _not_ the only
+> RP-binding clause.** The second-reading correction above fixed a real error and then
+> introduced a new one of the same class in the opposite direction: this section
+> asserted, in the lead-in and in the table, that `OIDFVP-HAIP-SUPPORT-05` was the sole
+> RP-binding clause in Annex XII. It is not. Enumerating every requirement identifier in
+> Annex XII against the CELLAR full text turns up four more requirements whose sentence
+> subject is the Relying Party:
+>
+> > `OIDFVP-HAIP-GEN-04`: When the format of the requested attestation complies with
+> > [10] Relying Parties and EUDI Wallets shall comply with the 'ISO mdocs' profile in
+> > [11] Section 6.
+> >
+> > `OIDFVP-HAIP-GEN-05`: When the format of the requested attestation complies with
+> > [2], Relying Parties and EUDI Wallets shall comply with the 'IETF SD-JWT VCs'
+> > profile in [11] Section 6.
+> >
+> > `ISO/IEC 18013-SUPPORT-01`: Wallet Units, PID Providers, Attestation Providers,
+> > Wallet Providers, and Relying Parties shall not support server retrieval as
+> > specified in ISO/IEC 18013-5 [10] for requesting and presenting PID or attestation
+> > attributes.
+> >
+> > `ISO/IEC 18013-SUPPORT-04`: A Relying Party **should** implement the profile defined
+> > in clause 5.4 of the present document.
+>
+> The identifier is `ISO/IEC 18013-SUPPORT-nn`, **not** `18013-5-SUPPORT-nn`. `-04` is a
+> **should**; the rest are **shall**. Two further requirements — `RO-13` and `RO-23` —
+> constrain the Request Object in the passive voice and are recorded above as such
+> rather than being described as RP-binding, since naming no actor is exactly the
+> distinction this correction is about.
+>
+> **Why this error was also not harmless.** It is the mirror image of the first. The
+> first-reading error would have scoped wallet-side work into #236 on a false premise;
+> this one told the reader that genuine RP-side obligations do not exist —
+> `GEN-05` and `RO-23` both bear on positions QAuth has already recorded, and
+> `ISO/IEC 18013-SUPPORT-01` forecloses server retrieval before the tracked `mso_mdoc`
+> fast-follow is scoped. The table and the backlog paragraph above have been rewritten;
+> this note records what they said, so the next pass can see the failure mode rather
+> than only its repair.
+>
+> **Method note for future passes.** Both errors came from reading a passage rather than
+> enumerating the Annex. The check that caught this one — extract every requirement
+> identifier mechanically, then read each hit's sentence subject — is cheap and should
+> be the default for any "who is bound" claim.
 
 **Not verified.** ETSI TS 119 472-2 V1.2.1 itself was **not retrieved**. Annex XII's
 preamble incorporates clauses 4.1, 4.2, 5 and 6 of that document and then sets out
