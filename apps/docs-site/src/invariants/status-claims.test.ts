@@ -197,7 +197,22 @@ describe('findStaleStatusClaims — real tree', () => {
    * assertion. Its failure output IS Task 4's work order.
    */
   it('the site content tree, README.md, and docs/README.md make no stale status claims', () => {
-    const violations = findStaleStatusClaims(buildRealScanSet(), FEATURE_EVIDENCE, REPO_ROOT);
+    const scanSet = buildRealScanSet();
+
+    // Non-vacuity, asserted BEFORE the violations check below (deliberately
+    // — that check currently fails by design, so anything placed after it
+    // would never execute today, and the whole point is that these must be
+    // verified now, not merely planned for after Task 4 lands). Once
+    // README.md/docs/README.md are fixed, "zero violations" alone would
+    // look identical whether this scanned everything or nothing — assert
+    // instead that the scan actually covered both READMEs plus a
+    // non-trivial, growth-tolerant number of content pages.
+    const scannedIds = scanSet.map((page) => page.id);
+    expect(scannedIds).toContain('README.md');
+    expect(scannedIds).toContain('docs/README.md');
+    expect(scanSet.length).toBeGreaterThanOrEqual(7); // 5+ content pages today, plus the two READMEs
+
+    const violations = findStaleStatusClaims(scanSet, FEATURE_EVIDENCE, REPO_ROOT);
     expect(violations).toEqual([]);
   });
 });

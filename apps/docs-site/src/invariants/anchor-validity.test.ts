@@ -51,11 +51,24 @@ describe('findInvalidAnchors — fixtures', () => {
 describe('findInvalidAnchors — real content tree', () => {
   it('every anchor in the shipped docs-site content is valid', () => {
     const contentDir = join(REPO_ROOT, 'apps', 'docs-site', 'src', 'content', 'docs');
-    const pages = loadContentTree(contentDir).map((page): AnchorablePage => ({
+    const contentPages = loadContentTree(contentDir);
+
+    // Non-vacuity: the content tree may genuinely carry zero path:line
+    // anchors today (Task 5 is what adds anchor-heavy reference content), so
+    // "found at least N anchors" would be a lie that only later becomes
+    // true — not a real assertion. Assert instead that the scan actually
+    // VISITED a non-trivial, known set of content files: a lower bound that
+    // survives the tree growing, plus a specific file (the frontmatter
+    // contract this whole guard suite depends on) that must always be
+    // present. A wrong glob or a broken walker fails these even though the
+    // anchor count alone would stay silently at zero either way.
+    expect(contentPages.length).toBeGreaterThanOrEqual(5);
+    expect(contentPages.map((page) => page.slug)).toContain('extend/frontmatter');
+
+    const pages = contentPages.map((page): AnchorablePage => ({
       id: page.slug,
       content: page.body,
     }));
-
     expect(findInvalidAnchors(pages, REPO_ROOT)).toEqual([]);
   });
 });

@@ -86,6 +86,13 @@ describe('leg 1 — real route tree vs. the committed openapi.json', () => {
     // 28 paths already committed to openapi.json — proving the directory
     // prefix / autoPrefix / root-level reconciliation the brief asked for,
     // not just that no violation happened to slip through.
+    //
+    // This is also this leg's non-vacuity assertion, for free: it is SET
+    // EQUALITY against a fixed, non-empty 28-path list, not "no violations
+    // found". A broken walker returning zero routes would make
+    // `distinctExtractedPaths` `[]`, which fails equality against 28 known
+    // paths just as loudly as a real missing route would — unlike a
+    // "no violations" check, an empty extraction cannot pass this silently.
     const distinctExtractedPaths = [...new Set(routes.map((r) => r.path))].sort();
     expect(distinctExtractedPaths).toEqual(Object.keys(openApi.paths).sort());
   });

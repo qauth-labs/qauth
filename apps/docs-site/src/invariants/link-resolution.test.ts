@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
 import { loadContentTree } from './content-tree';
-import { findBrokenLinks, type LinkablePage } from './link-resolution';
+import { extractLinkTargets, findBrokenLinks, type LinkablePage } from './link-resolution';
 import { resolveWorkspaceRoot } from './workspace-root';
 
 /**
@@ -97,6 +97,20 @@ describe('findBrokenLinks — real content tree', () => {
       content: page.body,
       route: page.route,
     }));
+
+    // Non-vacuity: "zero violations" looks identical whether this scanned
+    // every page on the site or nothing at all — a wrong glob, a renamed
+    // directory, or a workspace-root resolution that lands somewhere
+    // unexpected would still leave the assertion below green. Lower bounds,
+    // not an exact count, so this survives the content tree growing (the
+    // whole point of every later docs task). Today there are 7 pages and
+    // `index.mdx` alone carries 4 `LinkCard` links.
+    expect(pages.length).toBeGreaterThanOrEqual(5);
+    const totalLinks = pages.reduce(
+      (sum, page) => sum + extractLinkTargets(page.content).length,
+      0
+    );
+    expect(totalLinks).toBeGreaterThan(0);
 
     const violations = findBrokenLinks(pages, { repoRoot: REPO_ROOT, routedPages: pages });
     expect(violations).toEqual([]);

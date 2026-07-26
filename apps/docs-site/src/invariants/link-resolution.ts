@@ -32,7 +32,12 @@ export interface LinkViolation {
 const MD_LINK_RE = /\[[^\]]*\]\(([^)]+)\)/g;
 const HREF_RE = /\bhref\s*=\s*["']([^"']+)["']/g;
 
-function extractLinkTargets(content: string): string[] {
+/**
+ * Exported only so the real-tree test can assert it actually found a
+ * non-trivial number of links — a "no violations" verdict looks identical
+ * whether the scan examined every link on the site or none at all.
+ */
+export function extractLinkTargets(content: string): string[] {
   const targets: string[] = [];
   for (const re of [MD_LINK_RE, HREF_RE]) {
     const pattern = new RegExp(re.source, re.flags);
