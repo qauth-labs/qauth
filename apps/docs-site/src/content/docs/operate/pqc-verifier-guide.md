@@ -37,10 +37,8 @@ The "If you want to validate the post-quantum signature" checklist below is
 something you implement yourself today.
 
 > The linked [Security Gate Review](/docs/security/005-pqc-hybrid-signing-review.md)
-> was written before live issuance (#275) landed and says hybrid "is not wired
-> into live routes yet" — that line predates this guide's "Current status"
-> above and no longer reflects `HEAD`; its findings and the default-off
-> posture are otherwise still current.
+> predates live issuance (#275); its own dated note explains the gap. Its
+> findings and the default-off posture are otherwise still current.
 
 ## The design in one paragraph
 
