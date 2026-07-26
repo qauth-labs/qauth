@@ -8,6 +8,7 @@ export default [
   ...nx.configs['flat/javascript'],
   {
     ignores: [
+      '**/.astro/**',
       '**/.expo/**',
       '**/.nitro/**',
       '**/.nx/**',

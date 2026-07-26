@@ -1,0 +1,10 @@
+{
+  "name": "@qauth-labs/docs-site",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "astro": "catalog:",
+    "@astrojs/starlight": "catalog:"
+  }
+}

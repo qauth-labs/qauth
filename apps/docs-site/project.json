@@ -1,0 +1,43 @@
+{
+  "name": "docs-site",
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "sourceRoot": "apps/docs-site/src",
+  "projectType": "application",
+  "tags": ["scope:app"],
+  "targets": {
+    "dev": {
+      "executor": "nx:run-commands",
+      "continuous": true,
+      "metadata": {
+        "description": "Astro dev server with HMR for the QAuth documentation site (Starlight)."
+      },
+      "options": {
+        "command": "astro dev",
+        "cwd": "apps/docs-site"
+      }
+    },
+    "build": {
+      "executor": "nx:run-commands",
+      "outputs": ["{workspaceRoot}/dist/apps/docs-site"],
+      "metadata": {
+        "description": "Static build of the QAuth documentation site. Output lands at dist/apps/docs-site via astro.config.mjs's outDir."
+      },
+      "options": {
+        "command": "astro build",
+        "cwd": "apps/docs-site"
+      }
+    },
+    "preview": {
+      "executor": "nx:run-commands",
+      "continuous": true,
+      "dependsOn": ["build"],
+      "metadata": {
+        "description": "Preview the static build of the QAuth documentation site (serves dist/apps/docs-site)."
+      },
+      "options": {
+        "command": "astro preview",
+        "cwd": "apps/docs-site"
+      }
+    }
+  }
+}
