@@ -61,10 +61,12 @@ import { issuerTrustRejection } from '../trust/issuer-trust-rejection';
  *   validity window (`exp` / `nbf`) excludes now.
  * - `disclosure-digest-mismatch` — a Disclosure did not hash to a digest present
  *   in the SD-JWT, a digest was claimed twice, or a Disclosure was altered.
- * - `forbidden-selective-disclosure` — a registered claim SD-JWT VC §3.2.2.2
- *   forbids from being selectively disclosable (`iss`, `nbf`, `exp`, `cnf`,
- *   `vct`, `vct#integrity`, `status`) arrived through a Disclosure instead of as
- *   a plain claim of the Issuer-signed JWT. Distinct from
+ * - `forbidden-selective-disclosure` — a claim that may not be selectively
+ *   disclosable arrived through a Disclosure instead of as a plain claim of the
+ *   Issuer-signed JWT. SD-JWT VC §3.2.2.2 forbids six (`iss`, `nbf`, `exp`,
+ *   `cnf`, `vct`, `status`) and this verifier adds `vct#integrity`; the set and
+ *   the reason for that one addition live on
+ *   `NON_SELECTIVELY_DISCLOSABLE_CLAIMS` in `sd-jwt-vc.ts`. Distinct from
  *   `disclosure-digest-mismatch` on purpose: every digest checked out, so this
  *   is not a holder tampering with a credential — it is an ISSUER that minted a
  *   non-compliant one, and an operator needs to be told which of the two it is.

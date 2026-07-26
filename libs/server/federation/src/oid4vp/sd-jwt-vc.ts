@@ -140,14 +140,15 @@ export const MAX_CLAIM_DEPTH = 32;
 const STRIPPED_CREDENTIAL_CLAIMS = Object.freeze(['_sd', '_sd_alg', 'cnf', 'iss']);
 
 /**
- * Registered claims SD-JWT VC §3.2.2.2 forbids from being selectively
- * disclosable.
+ * Claims this verifier refuses to accept through a Disclosure.
+ *
+ * SD-JWT VC §3.2.2.2 names SIX, and this is its exact wording:
  *
  * > The following registered JWT claims are used within the SD-JWT component of
  * > the SD-JWT VC and MUST NOT be included in the Disclosures, i.e., cannot be
- * > selectively disclosed.
+ * > selectively disclosed: iss, nbf, exp, cnf, vct, status
  *
- * These are exactly the claims a VERIFIER acts on, which is why the prohibition
+ * They are exactly the claims a VERIFIER acts on, which is why the prohibition
  * is a security rule rather than a formality. A credential with no plain `exp`
  * and a signed `exp` Disclosure would sail through {@link
  * assertWithinValidityWindow} — which reads the issuer-signed payload, where
@@ -157,6 +158,15 @@ const STRIPPED_CREDENTIAL_CLAIMS = Object.freeze(['_sd', '_sd_alg', 'cnf', 'iss'
  * checker never sees. `iss`, `cnf` and `vct` are mandatory plain claims here, so
  * a Disclosure of those is already refused as an overwrite — they are listed
  * anyway so the set is the spec's, not a subset that happens to be reachable.
+ *
+ * `vct#integrity` is the ONE entry the spec does not put in that list — it
+ * appears in §3.2.2.1 and §6.3.1 and is left unclassified by §3.2.2.2. QAuth
+ * refuses it anyway, because it is the integrity binding for the Type Metadata
+ * that governs how `vct` is interpreted: a selectively-disclosable one lets the
+ * holder decide whether that binding is checked at all, which is the same defect
+ * as a selectively-disclosable `vct`. Recorded here explicitly so a later reader
+ * does not "correct" the list against the draft and find behaviour changing:
+ * this is one claim STRICTER than §3.2.2.2, never looser.
  *
  * `sub` and `iat` are deliberately ABSENT: §3.2.2.2 explicitly permits both in
  * Disclosures, and refusing them would reject compliant credentials.
@@ -578,7 +588,8 @@ function resolveDisclosures(
 }
 
 /**
- * Refuse a credential that made a §3.2.2.2 claim selectively disclosable.
+ * Refuse a credential that made a {@link NON_SELECTIVELY_DISCLOSABLE_CLAIMS}
+ * claim selectively disclosable.
  *
  * Compares the two payloads rather than inspecting Disclosures directly: the
  * top-level keys of the disclosed payload are the signed payload's keys (less
@@ -603,7 +614,7 @@ function assertNoForbiddenSelectiveDisclosure(
 
     throw rejectPresentation(
       'forbidden-selective-disclosure',
-      `the credential makes '${claim}' selectively disclosable, which SD-JWT VC §3.2.2.2 forbids`
+      `the credential makes '${claim}' selectively disclosable, which this verifier does not accept (SD-JWT VC §3.2.2.2)`
     );
   }
 }

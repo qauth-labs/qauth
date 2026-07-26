@@ -27,6 +27,7 @@ import {
 import {
   MAX_CLAIM_DEPTH,
   MAX_DISCLOSURES,
+  NON_SELECTIVELY_DISCLOSABLE_CLAIMS,
   SD_JWT_VC_TYP,
   validateSdJwtVcPresentation,
 } from './sd-jwt-vc';
@@ -993,11 +994,13 @@ describe('validateSdJwtVcPresentation — structural refusals', () => {
 });
 
 describe('validateSdJwtVcPresentation — claims that may not be selectively disclosed', () => {
-  // SD-JWT VC §3.2.2.2: `iss`, `nbf`, `exp`, `cnf`, `vct`, `vct#integrity` and
-  // `status` "MUST NOT be included in the Disclosures, i.e., cannot be
-  // selectively disclosed". Requires a non-compliant ISSUER — the digest has to
-  // be signed — but the consequence is a credential whose validity window or
-  // revocation pointer is present in the claims and enforced by nobody.
+  // SD-JWT VC §3.2.2.2: `iss`, `nbf`, `exp`, `cnf`, `vct` and `status` "MUST NOT
+  // be included in the Disclosures, i.e., cannot be selectively disclosed".
+  // Requires a non-compliant ISSUER — the digest has to be signed — but the
+  // consequence is a credential whose validity window or revocation pointer is
+  // present in the claims and enforced by nobody. `vct#integrity` is NOT in the
+  // draft's list; QAuth refuses it too, one claim stricter than the spec, for
+  // the reason recorded on NON_SELECTIVELY_DISCLOSABLE_CLAIMS.
   it.each([
     ['exp', () => Math.floor(Date.now() / 1000) + 3600],
     ['nbf', () => Math.floor(Date.now() / 1000) - 3600],
@@ -1046,17 +1049,56 @@ describe('validateSdJwtVcPresentation — claims that may not be selectively dis
     // The forbidden claim is the only one revealed, so no unrelated check can
     // be the thing that fired.
     const issued = await issueSdJwtVc({
-      selectiveClaims: { status: { status_list: { idx: 3, uri: 'https://s.example/1' } } },
+      selectiveClaims: {
+        given_name: 'Alice',
+        status: { status_list: { idx: 3, uri: 'https://s.example/1' } },
+        family_name: 'Doe',
+      },
     });
+    // `disclosures` is in `selectiveClaims` order, so index 1 is `status`.
     const presentation = await presentSdJwtVc(issued, {
       nonce: NONCE,
-      disclosures: issued.disclosures,
+      disclosures: [issued.disclosures[1]],
     });
 
     await expectRejection(
       validate(presentation, fixtureValidationContext(issued, NONCE)),
       'forbidden-selective-disclosure'
     );
+  });
+
+  it('enforces the six claims §3.2.2.2 names, plus vct#integrity and nothing else', () => {
+    // Pinned because the set is the whole security property and one entry is
+    // deliberately NOT the draft's: a later reader reconciling this list against
+    // §3.2.2.2 must change the documented rationale, not just the array.
+    expect([...NON_SELECTIVELY_DISCLOSABLE_CLAIMS].sort()).toEqual([
+      'cnf',
+      'exp',
+      'iss',
+      'nbf',
+      'status',
+      'vct',
+      'vct#integrity',
+    ]);
+  });
+
+  it('cannot detect a forbidden Disclosure the holder simply never presents', async () => {
+    // The honest boundary, and load-bearing for revocation (#297): a withheld
+    // Disclosure is an opaque digest in `_sd`, so a non-compliant issuer's
+    // selectively-disclosable `status` that the holder omits is
+    // indistinguishable from a credential carrying no `status` at all. What this
+    // check guarantees is therefore "`claims.status`, when PRESENT, was signed
+    // in the clear by the issuer" — not "a credential with a status pointer
+    // always reveals it". A status checker must still fail closed on absence
+    // according to its own policy.
+    const issued = await issueSdJwtVc({
+      selectiveClaims: { status: { status_list: { idx: 3, uri: 'https://s.example/1' } } },
+    });
+    const presentation = await presentSdJwtVc(issued, { nonce: NONCE, disclosures: [] });
+
+    const validated = await validate(presentation, fixtureValidationContext(issued, NONCE));
+
+    expect(validated.claims).not.toHaveProperty('status');
   });
 
   it('accepts a selectively-disclosed sub, which §3.2.2.2 permits', async () => {
