@@ -12,6 +12,7 @@ import {
   passwordEnvSchema,
   rateLimitEnvSchema,
   redisEnvSchema,
+  trustRegistryEnvSchema,
 } from '@qauth-labs/server-config';
 import { z } from 'zod';
 
@@ -34,6 +35,19 @@ const envSchema = z
     // arrive through this spread, which is why federationEnvSchema must stay a
     // plain z.object — a `.superRefine()` on it would have no `.shape` here.
     ...federationEnvSchema.shape,
+    // Issuer trust registry (ADR-004): OID4VP_TRUSTED_ISSUERS (#236) — the
+    // per-realm allowlist of credential ISSUERS a realm accepts credentials
+    // from. Separate from the two above on purpose: those configure the
+    // VERIFIER direction (how QAuth proves it is the Verifier); this one is the
+    // opposite direction and must never share configuration with them.
+    //
+    // Spread, not parsed separately, for the same reason as federation: it
+    // stays a plain z.object whose per-FIELD transform turns the raw JSON into
+    // a frozen, prototype-less map. Unset and blank both yield an empty map, so
+    // an absent variable means "no realm trusts any issuer" rather than taking
+    // the boot down — the value `${OID4VP_TRUSTED_ISSUERS:-}` in
+    // docker-compose.yml expands to.
+    ...trustRegistryEnvSchema.shape,
     /**
      * CORS allowed origin (app-specific). When unset in `production` the
      * server denies all cross-origin requests (fail-closed); in non-production

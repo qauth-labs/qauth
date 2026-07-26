@@ -19,6 +19,13 @@ export type {
 // bootstrap can register one while bypassing WALLET_FEDERATION_ENABLED (#232).
 // The type/source constants ARE re-exported — #237/#238 route and claim code
 // needs them.
+// Re-exported for the bootstrap, which must run this check at startup and
+// cannot import `scope:server` libs beyond `server-config` (#236). It is the
+// only thing standing between an `OID4VP_TRUSTED_ISSUERS` entry the runtime
+// cannot canonicalize and a realm that silently trusts nobody — see
+// `assert-trusted-issuers.ts` for why that must fail the boot rather than
+// surface as "every presentation is rejected".
+export { assertTrustedIssuersUsable } from '@qauth-labs/server-federation';
 export {
   buildPasswordCredentialData,
   createPasswordProvider,

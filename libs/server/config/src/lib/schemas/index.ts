@@ -10,3 +10,8 @@ export { type ObservabilityEnv, observabilityEnvSchema } from './observability';
 export { type PasswordEnv, passwordEnvSchema } from './password';
 export { type RateLimitEnv, rateLimitEnvSchema } from './rate-limit';
 export { type RedisEnv, redisEnvSchema } from './redis';
+export {
+  type PerRealmIssuerAllowlist,
+  type TrustRegistryEnv,
+  trustRegistryEnvSchema,
+} from './trust-registry';

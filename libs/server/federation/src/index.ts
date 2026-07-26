@@ -8,3 +8,8 @@ export type * from './providers/credential-provider.interface';
 export * from './providers/password.provider';
 export * from './providers/provider-registry';
 export * from './providers/wallet.provider';
+export * from './trust/assert-trusted-issuers';
+export * from './trust/issuer-identity';
+export * from './trust/issuer-trust-rejection';
+export * from './trust/resolve-trust-registry';
+export * from './trust/trust-registry';
