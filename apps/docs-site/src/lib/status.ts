@@ -27,10 +27,17 @@ export interface DeliveryTrack {
 }
 
 /**
- * `shipped` — the described capability exists in the tree and is reachable
- * without special configuration (or is on by default).
- * `partial` — some of the described capability shipped; the rest is open
- * work, named in `summary`.
+ * `shipped` — the described capability's code is complete and present in
+ * the tree, in full. `partial` — only some of the described capability
+ * shipped; the rest is open work, named in `summary`.
+ *
+ * This says nothing about whether the feature is reachable by default: that
+ * is a separate axis, carried by the optional `flag` field below. A feature
+ * can be `shipped` and still be off by default behind a flag (PQC hybrid
+ * signing) — that is not a lesser degree of "shipped", it is an operator
+ * decision layered on top of complete code. Do not read `shipped` as
+ * "enabled" or `partial` as "flag-gated"; check `flag` for gating and
+ * `state` for completeness, independently.
  */
 export type FeatureState = 'shipped' | 'partial';
 

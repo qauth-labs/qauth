@@ -180,11 +180,11 @@ Phase 1 core OAuth 2.1 / OIDC, the MCP and agent-native authorization layers, th
 
 - The near-term roadmap (T0–T3, T5) is complete. Next is the **long-term platform** — wallet federation and post-quantum signing (T4); open work is the three pull requests named below, not a migration gate.
 
-**🔧 Partially shipped, flag-gated — long-term platform**
+**🔧 Long-term platform — mixed state**
 
 - Wallet federation (OID4VC / OID4VP) — [ADR-004](./docs/adr/004-wallet-agnostic-federation.md): `VerifierProfile` (#299), OID4VP 1.0 request generation and `direct_post` intake (#233), the per-realm issuer trust allowlist (#236), and ES256 + JWE crypto (#298) have merged. Open PRs: SD-JWT VC presentation validation (#342), Token Status List revocation (#343), the wallet login UI (#344). `WalletProvider.verify()` still throws unconditionally by design, so wallet login cannot complete end to end. Behind `WALLET_FEDERATION_ENABLED` (default off) and requires a configured `VerifierProfile`.
-- Post-quantum hybrid signing + `@qauth-labs/crypto` — [ADR-005](./docs/adr/005-pqc-hybrid-signing.md): hybrid ML-DSA-65 + Ed25519 signing, mixed AKP+OKP JWKS, a native aws-lc-rs backend via napi-rs, and an attested reproducible build channel have shipped. Behind `HYBRID_SIGNING_ENABLED` (default off).
-- SDKs (`@qauth-labs/core`, `@qauth-labs/react`, `@qauth-labs/node`), `auth-ui`, `admin-panel` — not started
+- Post-quantum hybrid signing + `@qauth-labs/crypto` — [ADR-005](./docs/adr/005-pqc-hybrid-signing.md): hybrid ML-DSA-65 + Ed25519 signing, mixed AKP+OKP JWKS, a native aws-lc-rs backend via napi-rs, and an attested reproducible build channel (byte-for-byte determinism verified on Linux only) have shipped. Behind `HYBRID_SIGNING_ENABLED` (default off).
+- SDKs (`@qauth-labs/core`, `@qauth-labs/react`, `@qauth-labs/node`), `auth-ui`, `admin-panel` — not started, no flag
 
 > [ADR-006](./docs/adr/006-oauth-grants-and-audience.md) (OAuth grants — `client_credentials` / `client_secret_basic` + `aud` claim) is **implemented and shipping today**, not deferred; the grants and audience binding above ship in the auth server now.
 
@@ -331,7 +331,7 @@ qauth/
 
 - Self-service OAuth client registration and management ✅ (`/api/clients` + portal UI)
 - API key management ✅ (environment-gated developer API keys, ADR-008)
-- Federation provider configuration UI 📋 not started — blocked on the wallet login UI, open PR #344 (T4)
+- Federation provider configuration UI 📋 not started (T4)
 
 **Production Hardening (Phase 3 / T3 — shipped):**
 
@@ -565,7 +565,7 @@ docker compose up -d
 - [x] Developer registration / login
 - [x] Self-service OAuth client management (CRUD — `/api/clients` + portal UI)
 - [x] API key management (environment-gated developer API keys, ADR-008)
-- [ ] Federation provider configuration UI — blocked on the wallet login UI, open PR #344 (T4)
+- [ ] Federation provider configuration UI — not started (T4)
 
 ### Phase 3: Production Hardening & SDKs
 
@@ -596,7 +596,7 @@ docker compose up -d
 - [x] Mixed `AKP` + `OKP` JWKS
 - [x] Reference-token architecture for PQC JWT size compatibility
 - [x] Crypto-agile abstraction layer (`sign` / `verify` / `generateKeyPair`)
-- [x] Attested reproducible build channel
+- [x] Attested reproducible build channel — byte-for-byte determinism verified on Linux only; macOS/Windows builds are attested (checksums + provenance) but not yet verified reproducible
 - [ ] `@noble/post-quantum` dev/CI fallback
 - [x] Security review of cryptographic implementation — [conditional pass](./docs/security/005-pqc-hybrid-signing-review.md), pre-default-on checklist tracked separately
 
