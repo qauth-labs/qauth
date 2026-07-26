@@ -3,13 +3,6 @@ import path from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
-import { VERIFIER_PROFILES } from '../profiles/verifier-profiles';
-import { buildOid4vpAuthorizationRequest } from './authorization-request';
-import { SD_JWT_VC_FORMAT, sdJwtVcAdapter } from './credential-format';
-import type { DcqlQuery } from './dcql';
-import { parseVpToken } from './direct-post';
-import { isPresentationValidationRejection } from './presentation-rejection';
-import { validatePresentations } from './presentation-validation';
 import {
   fixtureValidationContext,
   generateFixtureKeys,
@@ -17,7 +10,14 @@ import {
   presentSdJwtVc,
   TEST_CREDENTIAL_QUERY,
   TEST_VCT,
-} from './sd-jwt-vc.fixture';
+} from '../../testing/sd-jwt-vc.fixture';
+import { VERIFIER_PROFILES } from '../profiles/verifier-profiles';
+import { buildOid4vpAuthorizationRequest } from './authorization-request';
+import { SD_JWT_VC_FORMAT, sdJwtVcAdapter } from './credential-format';
+import type { DcqlQuery } from './dcql';
+import { parseVpToken } from './direct-post';
+import { isPresentationValidationRejection } from './presentation-rejection';
+import { validatePresentations } from './presentation-validation';
 
 const NONCE = 'Xb1s2v9QpM4rT7kLwZ0nCyHgEfDaUiOj3lRqSt8mVzY';
 

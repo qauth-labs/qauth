@@ -3,6 +3,12 @@ import path from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
+import {
+  fixtureValidationContext,
+  issueSdJwtVc,
+  presentSdJwtVc,
+  TEST_VCT,
+} from '../../testing/sd-jwt-vc.fixture';
 import { VERIFIER_PROFILES } from '../profiles/verifier-profiles';
 import { createWalletProvider } from '../providers/wallet.provider';
 import { assertIssuerTrusted } from '../trust/trust-registry';
@@ -10,12 +16,6 @@ import { buildOid4vpAuthorizationRequest } from './authorization-request';
 import { parseVpToken } from './direct-post';
 import { validatePresentations } from './presentation-validation';
 import { generateOid4vpRequestSecrets } from './request-state';
-import {
-  fixtureValidationContext,
-  issueSdJwtVc,
-  presentSdJwtVc,
-  TEST_VCT,
-} from './sd-jwt-vc.fixture';
 
 /**
  * The safety boundary of issue #233, asserted rather than merely documented.

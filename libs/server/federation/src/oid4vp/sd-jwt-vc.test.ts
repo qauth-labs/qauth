@@ -1,19 +1,5 @@
 import { describe, expect, it } from 'vitest';
 
-import { ValidatedIssuer } from '../trust/issuer-identity';
-import { SD_JWT_VC_FORMAT } from './credential-format';
-import { createStaticIssuerKeyResolver } from './issuer-key-resolution';
-import {
-  isPresentationValidationRejection,
-  type PresentationRejectionReason,
-  type PresentationValidationRejection,
-} from './presentation-rejection';
-import {
-  MAX_CLAIM_DEPTH,
-  MAX_DISCLOSURES,
-  SD_JWT_VC_TYP,
-  validateSdJwtVcPresentation,
-} from './sd-jwt-vc';
 import {
   arrayDisclosure,
   digestDisclosure,
@@ -29,7 +15,21 @@ import {
   TEST_CREDENTIAL_QUERY,
   TEST_ISSUER,
   TEST_VCT,
-} from './sd-jwt-vc.fixture';
+} from '../../testing/sd-jwt-vc.fixture';
+import { ValidatedIssuer } from '../trust/issuer-identity';
+import { SD_JWT_VC_FORMAT } from './credential-format';
+import { createStaticIssuerKeyResolver } from './issuer-key-resolution';
+import {
+  isPresentationValidationRejection,
+  type PresentationRejectionReason,
+  type PresentationValidationRejection,
+} from './presentation-rejection';
+import {
+  MAX_CLAIM_DEPTH,
+  MAX_DISCLOSURES,
+  SD_JWT_VC_TYP,
+  validateSdJwtVcPresentation,
+} from './sd-jwt-vc';
 import type { PresentationValidationContext } from './validated-credential';
 
 const NONCE = 'RRUxJfoAg1x5aQdBnhL3vjqZ4wMDx3iQ0K7ZaB0R0jU';

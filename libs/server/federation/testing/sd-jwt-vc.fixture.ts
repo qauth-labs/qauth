@@ -1,8 +1,13 @@
 /**
  * TEST SUPPORT — a working SD-JWT VC issuer and holder (issue #234).
  *
- * Deliberately NOT exported from `index.ts`, and never reachable from
- * production code: nothing in this file is imported by a non-test module.
+ * Lives in `testing/`, OUTSIDE `src/`, and that placement is load-bearing rather
+ * than tidy: this module mints real, correctly-signed credentials, so leaving it
+ * next to the validator it exists to attack would put a credential minter one
+ * careless import away from the package's shipped source (`package.json` `main`
+ * is `src/index.ts`). It is not exported from `index.ts` and nothing under
+ * `src/` may import it — `src/test-support-boundary.test.ts` asserts both, so
+ * the rule survives a future edit that does not read this comment.
  *
  * ## Why hand-constructed credentials rather than recorded ones
  *
@@ -36,11 +41,11 @@ import {
 } from '@qauth-labs/core-crypto';
 import { type CompactJWSHeaderParameters, CompactSign, type JWK } from 'jose';
 
-import type { CredentialFormat } from '../profiles/verifier-profile.types';
-import type { DcqlCredentialQuery } from './dcql';
-import { createStaticIssuerKeyResolver } from './issuer-key-resolution';
-import { KEY_BINDING_JWT_TYP, SD_JWT_VC_TYP } from './sd-jwt-vc';
-import type { PresentationValidationContext } from './validated-credential';
+import type { DcqlCredentialQuery } from '../src/oid4vp/dcql';
+import { createStaticIssuerKeyResolver } from '../src/oid4vp/issuer-key-resolution';
+import { KEY_BINDING_JWT_TYP, SD_JWT_VC_TYP } from '../src/oid4vp/sd-jwt-vc';
+import type { PresentationValidationContext } from '../src/oid4vp/validated-credential';
+import type { CredentialFormat } from '../src/profiles/verifier-profile.types';
 
 /** The issuer identity every fixture credential claims. */
 export const TEST_ISSUER = 'https://issuer.example.com';

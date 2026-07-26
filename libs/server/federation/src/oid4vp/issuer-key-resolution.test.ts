@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
+import { generateFixtureKeys, TEST_ISSUER } from '../../testing/sd-jwt-vc.fixture';
 import { createStaticIssuerKeyResolver } from './issuer-key-resolution';
-import { generateFixtureKeys, TEST_ISSUER } from './sd-jwt-vc.fixture';
 
 describe('createStaticIssuerKeyResolver — configuration', () => {
   it('refuses an issuer identifier that is not an https URL', async () => {
