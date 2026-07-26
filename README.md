@@ -27,7 +27,7 @@ The near-term focus is MCP / AI-agent authorization; wallet federation and post-
 
 > 🎉 **June 2026 milestone — MVP complete, agent-native authorization shipped, and production hardening (T3) done.** Agent client type, RFC 8693 on-behalf-of token exchange, scope modes (ReadOnly / Admin / Exec), step-up, and per-agent audit are all live and documented ([ADR-007 §2](./docs/adr/007-mcp-first-positioning.md) · [agent guide](./docs/agent-authorization.md)). The T3 hardening track and the T5 environment-aware authorization posture ([ADR-008](./docs/adr/008-environment-aware-authorization.md)) also shipped end-to-end. The near-term roadmap is complete; remaining work is the long-term platform (wallet federation + post-quantum signing, T4).
 
-> **Status:** Core OAuth 2.1 / OIDC **and** the MCP / agent-native authorization layer work end-to-end — discovery, dynamic client registration, resource-indicator audience binding, consent, and on-behalf-of agent delegation (the self-hostable OAuth 2.1 authorization server for MCP servers and AI agents; see [ADR-007](./docs/adr/007-mcp-first-positioning.md)). Wallet federation and post-quantum signing remain the long-term platform. See [Current Status](#-current-status-june-2026). **Production hardening (T3) is complete** — security headers, CSRF, secure cookies, OIDC ID token/nonce/claims, and observability all ship; deploy with the documented production configuration. The environment-aware authorization posture (T5, [ADR-008](./docs/adr/008-environment-aware-authorization.md)) is **also complete** — `environment` selects a fail-safe policy profile, and the near-term roadmap is finished. Remaining work is the long-term platform (wallet federation + post-quantum signing, T4).
+> **Status:** Core OAuth 2.1 / OIDC **and** the MCP / agent-native authorization layer work end-to-end — discovery, dynamic client registration, resource-indicator audience binding, consent, and on-behalf-of agent delegation (the self-hostable OAuth 2.1 authorization server for MCP servers and AI agents; see [ADR-007](./docs/adr/007-mcp-first-positioning.md)). Wallet federation and post-quantum signing remain the long-term platform. See [Current Status](#-current-status-july-2026). **Production hardening (T3) is complete** — security headers, CSRF, secure cookies, OIDC ID token/nonce/claims, and observability all ship; deploy with the documented production configuration. The environment-aware authorization posture (T5, [ADR-008](./docs/adr/008-environment-aware-authorization.md)) is **also complete** — `environment` selects a fail-safe policy profile, and the near-term roadmap is finished. Remaining work is the long-term platform (wallet federation + post-quantum signing, T4).
 
 ## ⚠️ AI-Assisted Development & Security Notice
 
@@ -143,7 +143,7 @@ An identity hub for the next generation of the internet — humans, agents, and 
 - **Standards compliant** — OAuth 2.1 (RFC 9700), OIDC 1.0, OID4VC, OID4VP, W3C DID, NIST FIPS 204
 - **Open and self-hostable** — Apache 2.0, no telemetry, runs anywhere
 
-## 📍 Current Status (June 2026)
+## 📍 Current Status (July 2026)
 
 > 🎉 **Milestone reached.** The **MVP is complete**, the **agent-native authorization track (ADR-007 §2) shipped**, and the **T3 production-hardening track is now done** — QAuth does OAuth 2.1 / OIDC, MCP authorization, full on-behalf-of agent delegation, **and** the security/observability hardening, end to end and documented.
 
@@ -174,17 +174,17 @@ Phase 1 core OAuth 2.1 / OIDC, the MCP and agent-native authorization layers, th
 - **Observability (T3)** — structured pino logging with secret redaction, `X-Request-Id` propagation, Prometheus `/metrics` (login + token counters), and Redis-backed failed-login tracking with lockout
 - **developer-portal production Docker image** + Docker Compose service
 - **Environment-aware authorization (T5, [ADR-008](./docs/adr/008-environment-aware-authorization.md))** — `environment` (development / staging / production) as a fail-safe, operator-set policy dimension on clients/realms; a single `resolveEnvironmentPolicy` resolver drives token TTLs, PKCE, localhost redirects, rate-limit tier, agent step-up, and the T3 security bundle; plus environment-gated static developer API keys (backend + portal UI)
+- **Identifier abstraction ([ADR-002](./docs/adr/002-identifier-abstraction.md))** — epic #224 closed; migrations 0010–0012 shipped, including the destructive 0011 that dropped `users.email`, `users.email_normalized`, and `users.password_hash`. `users` is now a pure identity anchor; credentials live in `user_credentials`. Done — not a gate for anything else.
 
 **🚧 In progress / next**
 
-- The near-term roadmap (T0–T3, T5) is complete. Next is the **long-term platform** — wallet federation and post-quantum signing (T4), gated on the [ADR-002](./docs/adr/002-identifier-abstraction.md) identifier-abstraction migration.
+- The near-term roadmap (T0–T3, T5) is complete. Next is the **long-term platform** — wallet federation and post-quantum signing (T4); open work is the three pull requests named below, not a migration gate.
 
-**📋 Deferred — long-term platform** (designed, not yet implemented; resequenced per [ADR-007](./docs/adr/007-mcp-first-positioning.md))
+**🔧 Partially shipped, flag-gated — long-term platform**
 
-- Identifier-abstraction migration — [ADR-002](./docs/adr/002-identifier-abstraction.md), now the gate for Phase 4
-- Wallet federation (OID4VC / OID4VP) — [ADR-004](./docs/adr/004-wallet-agnostic-federation.md)
-- Post-quantum hybrid signing + `@qauth-labs/crypto` — [ADR-005](./docs/adr/005-pqc-hybrid-signing.md)
-- SDKs (`@qauth-labs/core`, `@qauth-labs/react`, `@qauth-labs/node`), `auth-ui`, `admin-panel`
+- Wallet federation (OID4VC / OID4VP) — [ADR-004](./docs/adr/004-wallet-agnostic-federation.md): `VerifierProfile` (#299), OID4VP 1.0 request generation and `direct_post` intake (#233), the per-realm issuer trust allowlist (#236), and ES256 + JWE crypto (#298) have merged. Open PRs: SD-JWT VC presentation validation (#342), Token Status List revocation (#343), the wallet login UI (#344). `WalletProvider.verify()` still throws unconditionally by design, so wallet login cannot complete end to end. Behind `WALLET_FEDERATION_ENABLED` (default off) and requires a configured `VerifierProfile`.
+- Post-quantum hybrid signing + `@qauth-labs/crypto` — [ADR-005](./docs/adr/005-pqc-hybrid-signing.md): hybrid ML-DSA-65 + Ed25519 signing, mixed AKP+OKP JWKS, a native aws-lc-rs backend via napi-rs, and an attested reproducible build channel have shipped. Behind `HYBRID_SIGNING_ENABLED` (default off).
+- SDKs (`@qauth-labs/core`, `@qauth-labs/react`, `@qauth-labs/node`), `auth-ui`, `admin-panel` — not started
 
 > [ADR-006](./docs/adr/006-oauth-grants-and-audience.md) (OAuth grants — `client_credentials` / `client_secret_basic` + `aud` claim) is **implemented and shipping today**, not deferred; the grants and audience binding above ship in the auth server now.
 
@@ -296,7 +296,7 @@ qauth/
 
 ### Phase 1 — Core Auth Server (complete)
 
-> **Status:** Core OAuth 2.1 / OIDC flows work end-to-end with Ed25519 JWTs, Argon2id, PKCE, multi-tenancy via Realms, dynamic client registration, resource-indicator audience binding, and consent. The T3 hardening items — OIDC conformance detail (ID token, nonce, claims), structured logging + metrics, security headers, and the developer-portal Dockerfile — **shipped under the [T3 milestone](https://github.com/qauth-labs/qauth/milestones)** (see [ADR-007](./docs/adr/007-mcp-first-positioning.md)). For the full snapshot, see [Current Status](#-current-status-june-2026).
+> **Status:** Core OAuth 2.1 / OIDC flows work end-to-end with Ed25519 JWTs, Argon2id, PKCE, multi-tenancy via Realms, dynamic client registration, resource-indicator audience binding, and consent. The T3 hardening items — OIDC conformance detail (ID token, nonce, claims), structured logging + metrics, security headers, and the developer-portal Dockerfile — **shipped under the [T3 milestone](https://github.com/qauth-labs/qauth/milestones)** (see [ADR-007](./docs/adr/007-mcp-first-positioning.md)). For the full snapshot, see [Current Status](#-current-status-july-2026).
 
 **Core authentication (working today):**
 
@@ -331,7 +331,7 @@ qauth/
 
 - Self-service OAuth client registration and management ✅ (`/api/clients` + portal UI)
 - API key management ✅ (environment-gated developer API keys, ADR-008)
-- Federation provider configuration UI 📋 (deferred with wallet federation, T4)
+- Federation provider configuration UI 📋 not started — blocked on the wallet login UI, open PR #344 (T4)
 
 **Production Hardening (Phase 3 / T3 — shipped):**
 
@@ -539,7 +539,7 @@ docker compose up -d
 > - ✅ **T2 — Agent-native authZ (the Phase 9 substance, pulled forward):** agent client type, RFC 8693 token-exchange delegation, scope modes (ReadOnly/Admin/Exec), step-up, per-agent audit
 > - ✅ **T3 — OIDC conformance + hardening (done):** security (CSRF/Helmet/secure cookies/XSS), observability (pino/`/metrics`/request-id/failed-login lockout), ID token/nonce/claims, developer-portal Docker image
 > - ✅ **T5 — Environment-aware authZ ([ADR-008](./docs/adr/008-environment-aware-authorization.md)) (done):** `environment` as a fail-safe, operator-set policy dimension; `resolveEnvironmentPolicy` driving token TTLs / PKCE / localhost redirects / rate-limit tier / agent step-up / T3 bundle; environment-gated developer API keys (backend + portal UI)
-> - 📋 **T4 — Federation + PQC (deferred long-term moat):** Phases 4–5 below, gated on the [ADR-002](./docs/adr/002-identifier-abstraction.md) migration
+> - 🔧 **T4 — Federation + PQC (partially shipped, flag-gated):** wallet federation is merged core but cannot complete a login end to end yet (`WALLET_FEDERATION_ENABLED`, default off); PQC hybrid signing has shipped (`HYBRID_SIGNING_ENABLED`, default off). Phases 4–5 below.
 
 ### Phase 1: Core Auth Server (complete)
 
@@ -565,7 +565,7 @@ docker compose up -d
 - [x] Developer registration / login
 - [x] Self-service OAuth client management (CRUD — `/api/clients` + portal UI)
 - [x] API key management (environment-gated developer API keys, ADR-008)
-- [ ] Federation provider configuration UI (deferred with wallet federation, T4)
+- [ ] Federation provider configuration UI — blocked on the wallet login UI, open PR #344 (T4)
 
 ### Phase 3: Production Hardening & SDKs
 
@@ -575,24 +575,30 @@ docker compose up -d
 - [ ] Kubernetes manifests
 - [ ] JavaScript / React / Node.js SDKs (`@qauth-labs/core`, `@qauth-labs/react`, `@qauth-labs/node`)
 
-### Phase 4: Wallet Federation Bridge (OID4VC / OID4VP) _(deferred — gated on [ADR-002](./docs/adr/002-identifier-abstraction.md) migration)_
+### Phase 4: Wallet Federation Bridge (OID4VC / OID4VP) _(partially shipped, flag-gated: `WALLET_FEDERATION_ENABLED`, default off)_
 
-- [ ] OID4VP authorization request handling
-- [ ] OID4VC Verifiable Presentation endpoint
-- [ ] Trust anchor validation (extensible: EU Trusted List and other registries)
-- [ ] `federation-core` library: VC wallet → standard OAuth 2.1 / OIDC tokens
-- [ ] Wallet login UI flow in `auth-ui`
+- [x] OID4VP authorization request handling (#233)
+- [x] OID4VC Verifiable Presentation endpoint — `direct_post` intake (#233)
+- [x] Trust anchor validation — per-realm issuer trust allowlist (#236)
+- [x] ES256 + JWE presentation crypto (#298)
+- [x] `VerifierProfile` (#299)
+- [ ] SD-JWT VC presentation validation (open PR #342)
+- [ ] Token Status List revocation (open PR #343)
+- [ ] Wallet login UI flow in `auth-ui` (open PR #344)
+- [ ] `federation-core` library: VC wallet → standard OAuth 2.1 / OIDC tokens — `WalletProvider.verify()` still throws unconditionally by design, so wallet login cannot complete end to end yet
 - [ ] Inverse direction: QAuth as a Verifiable Credential issuer
 - [ ] Integration tests against EUDI reference wallet
 
-### Phase 5: Post-Quantum Crypto _(deferred — long-term platform)_
+### Phase 5: Post-Quantum Crypto _(shipped, flag-gated: `HYBRID_SIGNING_ENABLED`, default off)_
 
-- [ ] `@qauth-labs/crypto`: native Node.js binding (napi-rs + aws-lc-rs)
-- [ ] Hybrid composite ML-DSA-65 + Ed25519 JWT signing
-- [ ] Reference-token architecture for PQC JWT size compatibility
-- [ ] Crypto-agile abstraction layer (`sign` / `verify` / `generateKeyPair`)
+- [x] `@qauth-labs/crypto`: native Node.js binding (napi-rs + aws-lc-rs)
+- [x] Hybrid composite ML-DSA-65 + Ed25519 JWT signing
+- [x] Mixed `AKP` + `OKP` JWKS
+- [x] Reference-token architecture for PQC JWT size compatibility
+- [x] Crypto-agile abstraction layer (`sign` / `verify` / `generateKeyPair`)
+- [x] Attested reproducible build channel
 - [ ] `@noble/post-quantum` dev/CI fallback
-- [ ] Security review of cryptographic implementation
+- [x] Security review of cryptographic implementation — [conditional pass](./docs/security/005-pqc-hybrid-signing-review.md), pre-default-on checklist tracked separately
 
 ### Phase 6+: Enterprise & Scale
 

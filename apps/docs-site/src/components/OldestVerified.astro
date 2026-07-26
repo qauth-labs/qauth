@@ -1,0 +1,25 @@
+---
+import { getCollection } from 'astro:content';
+
+// Real content-collection query, not a hand-typed date: this is the
+// mechanism `extend/frontmatter.md` promises ("the Reference lane's status
+// page surfaces the oldest `lastVerified` date across the site, so rot is
+// visible rather than silently accumulating"). It reads every page's
+// schema-validated `lastVerified` at build time via `astro:content`, so a
+// page going stale shows up here without anyone maintaining a second list.
+const entries = await getCollection('docs');
+const oldest = entries.reduce((min, entry) =>
+  entry.data.lastVerified < min.data.lastVerified ? entry : min
+);
+
+function toRoute(id: string): string {
+  const segments = id.split('/').filter(Boolean);
+  if (segments[segments.length - 1] === 'index') segments.pop();
+  return '/' + segments.join('/') + (segments.length ? '/' : '');
+}
+---
+
+<p>
+  Oldest <code>lastVerified</code> across the site: <strong>{oldest.data.lastVerified}</strong> —
+  <a href={toRoute(oldest.id)}>{oldest.data.title}</a> ({entries.length} pages checked).
+</p>

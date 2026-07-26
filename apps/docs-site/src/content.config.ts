@@ -18,9 +18,10 @@ export const collections = {
         // extend/frontmatter.md).
         lastVerified: z.iso.date(),
         // The unbuilt-claim marker. Declares that this page intentionally
-        // describes something not yet built, so Task 3's unbuilt-claim
-        // guard skips it. A narrow, page-level escape hatch — not
-        // general-purpose suppression. See extend/frontmatter.md.
+        // describes something not yet built, so the status-claims drift
+        // guard (src/invariants/status-claims.ts, issue #349) skips it. A
+        // narrow, page-level escape hatch — not general-purpose
+        // suppression. See extend/frontmatter.md.
         unbuiltClaims: z.boolean().default(false),
       }),
     }),

@@ -87,4 +87,7 @@ The authoritative, always-current surface is the live OpenAPI / Swagger UI at
 - [Milestones](https://github.com/qauth-labs/qauth/milestones) — track status:
   **T0–T3 and T5 complete** (trust floor, MCP productization, agent-native authZ,
   OIDC conformance + hardening, environment-aware authZ); **T4 (wallet federation +
-  post-quantum signing) deferred** as the long-term platform.
+  post-quantum signing) partially shipped, flag-gated** — wallet federation is merged
+  core but `WalletProvider.verify()` still throws unconditionally by design, so wallet
+  login cannot complete end to end (`WALLET_FEDERATION_ENABLED`, default off); PQC
+  hybrid signing has shipped (`HYBRID_SIGNING_ENABLED`, default off).
