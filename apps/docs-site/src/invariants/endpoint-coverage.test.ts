@@ -23,6 +23,11 @@ import { resolveWorkspaceRoot } from './workspace-root';
  *
  * Legs 2 and 3 now have a real-tree assertion below, added by Task 5 (#351)
  * once `apps/docs-site/src/content/docs/integrate/api-reference.md` landed.
+ *
+ * Read `extractDocumentedPaths`'s own doc comment in `endpoint-coverage.ts`
+ * before over-trusting legs 2/3: they prove PATH-STRING set equality between
+ * the reference page and `openapi.json`, not method coverage and not that
+ * anything said about a path is accurate.
  */
 
 const FIXTURES = join(dirname(fileURLToPath(import.meta.url)), '__fixtures__', 'endpoint-coverage');

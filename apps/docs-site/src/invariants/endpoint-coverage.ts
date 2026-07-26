@@ -124,6 +124,21 @@ export function findRoutesMissingFromOpenApi(
  * optionally prefixed with the HTTP method — `` `/oauth/token` `` or
  * `` `POST /oauth/token` `` — matching the OpenAPI spec's own `{param}`
  * placeholder style for path parameters.
+ *
+ * The HTTP method, if present, is matched only to be skipped — it is NOT
+ * captured, and legs 2/3 below therefore check PATH coverage only, never
+ * method coverage. `` `GET /oauth/revoke` `` (revoke is POST-only) would
+ * satisfy leg 2 for `/oauth/revoke` exactly as well as the correct method
+ * would. This function also cannot tell a real explanation from a passing
+ * mention: a path named once in a "not yet supported" aside or a "see also"
+ * list counts as "documented" identically to a full request/response
+ * section. What legs 2/3 actually prove is narrow and worth stating
+ * plainly: the SET of path strings mentioned on the reference page is
+ * exactly equal to the SET of path keys in `openapi.json` — real anti-rot
+ * value (an endpoint added to the spec and never mentioned, or a documented
+ * endpoint removed from the spec, both get caught), but not a correctness
+ * check on what the page says about any one of them. (qauth-labs/qauth#351
+ * fix round 1.)
  */
 export function extractDocumentedPaths(referenceContent: string): string[] {
   const re = /`(?:[A-Z]+\s+)?(\/[^\s`]*)`/g;
