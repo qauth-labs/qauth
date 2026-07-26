@@ -13,7 +13,7 @@ import {
   WALLET_LOGIN_STATUS_RATE_LIMIT,
   WALLET_LOGIN_STATUS_RATE_WINDOW_S,
 } from '../../constants';
-import { html, render, safe, type SafeHtml } from '../../helpers/html';
+import { html, render, safe, safeCustomSchemeUrl, type SafeHtml } from '../../helpers/html';
 import { encodeQrCode, renderQrCodeSvg } from '../../helpers/qr-code';
 import { getOrCreateDefaultRealm } from '../../helpers/realm';
 import { resolveReturnTo } from '../../helpers/return-to';
@@ -288,11 +288,19 @@ function identifierPage(opts: {
  * The deep link is a plain anchor rather than a script-driven navigation: the
  * invocation URI is a custom scheme or a universal link, and letting the browser
  * decide what to do with it is what makes both work. `safeUrl()` from `html.ts`
- * is deliberately NOT applied to it — that helper allowlists http/https/mailto
- * for hrefs built from CLIENT-supplied metadata, and this href is
- * `openid4vp://…` by design and built entirely from the deployment's own
- * configuration plus server-minted secrets. It is still HTML-escaped, like every
- * other interpolation.
+ * cannot guard it — that helper allowlists http/https/mailto, and this href is
+ * `openid4vp://…` by design — so it goes through that file's denylist
+ * counterpart, `safeCustomSchemeUrl()`, instead: any scheme a wallet might
+ * register is fine, `javascript:`/`data:`/`vbscript:` and their encoded
+ * spellings are not. HTML-escaping alone would not help here, because
+ * `javascript:alert(1)` contains nothing `esc()` touches.
+ *
+ * `federationEnvSchema` already refuses to boot on such a value (#239), so this
+ * branch is unreachable through configuration. That is deliberate: neither check
+ * is load-bearing on its own, and the render path stays safe if a future caller
+ * feeds this screen a URI from somewhere other than `OID4VP_WALLET_INVOCATION_
+ * ENDPOINT`. When the link is refused the QR still renders — the page is
+ * unusable either way, but it must not emit an executable href.
  *
  * The QR code degrades rather than throws: a payload past the encoder's maximum
  * (`QR_MAX_BYTES`) renders the deep-link button and an explanation, because an
@@ -308,6 +316,7 @@ function pendingPage(opts: {
 }): string {
   const { handle, invocationUri, cspNonce, scriptNonce, returnTo } = opts;
   const qr = encodeQrCode(invocationUri);
+  const deepLink = safeCustomSchemeUrl(invocationUri);
   const statusPath = `/ui/wallet-login/${handle}/status`;
 
   return render(
@@ -334,7 +343,13 @@ function pendingPage(opts: {
                     ${safe(renderQrCodeSvg(qr, 'QR code containing the wallet sign-in request'))}
                   </div>`
             }
-            <a class="alt-action" href="${invocationUri}">Open my wallet</a>
+            ${
+              deepLink === undefined
+                ? html`<p class="hint">
+                    This deployment cannot offer an open-my-wallet link. Contact your administrator.
+                  </p>`
+                : html`<a class="alt-action" href="${deepLink}">Open my wallet</a>`
+            }
             <div class="status" id="wallet-status" role="status" aria-live="polite">
               Waiting for your wallet…
             </div>

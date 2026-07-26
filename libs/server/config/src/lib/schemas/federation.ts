@@ -1,3 +1,4 @@
+import { isScriptCapableUrl } from '@qauth-labs/shared-validation';
 import { z } from 'zod';
 
 /**
@@ -151,10 +152,27 @@ export const federationEnvSchema = z.object({
    * wallet the user actually has installed; a deployment targeting one wallet
    * vendor overrides it with that vendor's universal link.
    *
-   * Validated for SHAPE only — an absolute URI reference with a scheme, no
+   * Validated for SHAPE — an absolute URI reference with a scheme, no
    * whitespace and no fragment (a fragment would be dropped before the wallet
-   * ever saw the parameters). Which endpoint is CORRECT is an ecosystem
-   * question this layer cannot answer.
+   * ever saw the parameters). WHICH endpoint is correct is an ecosystem question
+   * this layer cannot answer.
+   *
+   * ...with ONE semantic exception: the scheme must not be script-capable. This
+   * value is rendered into an `href` on the wallet-login screen, so
+   * `javascript:alert(1)` here is a stored XSS payload served to every user who
+   * reaches that page — and it satisfies the shape regex above perfectly, being a
+   * well-formed absolute URI. "Operator-supplied" is not "trusted": a leaked CI
+   * variable, a mis-merged Helm value or a compromised secret store all write
+   * this string, and the boot is where that must fail.
+   *
+   * A scheme ALLOWLIST is impossible here — wallet schemes are open-ended
+   * (`openid4vp://`, `haip://`, `eudi-wallet://`, a vendor's own) and no registry
+   * enumerates them. It is also unnecessary: the schemes that EXECUTE are a small
+   * closed set, so `isScriptCapableUrl` refuses those instead, matching them the
+   * way a browser resolves a scheme rather than the way the string reads (see
+   * `@qauth-labs/shared-validation`'s url module). The render path applies the
+   * same check again via `html.ts#safeCustomSchemeUrl()`, so neither end is
+   * load-bearing alone.
    */
   OID4VP_WALLET_INVOCATION_ENDPOINT: z
     .string()
@@ -163,6 +181,11 @@ export const federationEnvSchema = z.object({
       /^[a-zA-Z][a-zA-Z0-9+.-]*:[^\s#]*$/,
       'OID4VP_WALLET_INVOCATION_ENDPOINT must be an absolute URI with a scheme and no fragment'
     )
+    .refine((value) => !isScriptCapableUrl(value), {
+      message:
+        'OID4VP_WALLET_INVOCATION_ENDPOINT must not use a script-capable scheme ' +
+        '(javascript:, data:, vbscript: and friends) — it is rendered as a link',
+    })
     .default('openid4vp://'),
 });
 

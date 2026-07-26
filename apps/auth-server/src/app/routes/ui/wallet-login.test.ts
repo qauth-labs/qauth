@@ -188,6 +188,7 @@ beforeEach(() => {
   envMock.WALLET_FEDERATION_ENABLED = true;
   envMock.OID4VP_VERIFIER_PROFILE = 'oid4vp-1.0-base';
   envMock.OID4VP_REQUESTED_VCT = ['urn:example:pid'];
+  envMock.OID4VP_WALLET_INVOCATION_ENDPOINT = 'openid4vp://';
   (resolveWalletPresentation as unknown as Mock).mockResolvedValue({ status: 'rejected' });
 });
 
@@ -353,6 +354,49 @@ describe('wallet login — the wallet invocation (QR + deep link)', () => {
     // The deep link is the same opaque URI, HTML-escaped into the href.
     expect(body).toContain('Open my wallet');
     expect(body).toContain('openid4vp://?');
+  });
+
+  it.each([
+    'openid4vp://',
+    'haip://',
+    'eudi-wallet://authorize',
+    'https://wallet.example/authorize',
+  ])('keeps the deep link for the genuine wallet scheme %j', async (endpoint) => {
+    envMock.OID4VP_WALLET_INVOCATION_ENDPOINT = endpoint;
+    const { postReply } = await startFlow();
+    const body = postReply.state.body as string;
+
+    // The point of the denylist: an open-ended set of wallet schemes still
+    // renders. A fix that only permitted https would delete the feature.
+    expect(body).toContain('Open my wallet');
+    expect(body).toContain(`href="${endpoint}`);
+  });
+
+  /**
+   * `OID4VP_WALLET_INVOCATION_ENDPOINT` is interpolated straight into this
+   * screen's `href`, and `esc()` does nothing to `javascript:alert(1)` — it
+   * contains no character HTML-escaping touches. `federationEnvSchema` refuses
+   * such a value at boot, so this can only be reached by feeding the screen a
+   * URI from elsewhere; the render path must refuse it on its own regardless.
+   */
+  it.each([
+    'javascript:alert(document.domain)//',
+    'JavaScript:alert(1)//',
+    'data:text/html,<script>alert(1)</script>',
+    'vbscript:msgbox(1)',
+    'java\tscript:alert(1)//',
+    '&#106;avascript:alert(1)//',
+    'javascript&colon;alert(1)//',
+  ])('never renders %j as a clickable href', async (endpoint) => {
+    envMock.OID4VP_WALLET_INVOCATION_ENDPOINT = endpoint;
+    const { postReply } = await startFlow();
+    const body = postReply.state.body as string;
+
+    expect(body).not.toContain('Open my wallet');
+    expect(body).not.toContain(`href="${endpoint}`);
+    expect(body).not.toMatch(/href="[^"]*(?:javascript|vbscript|data)/i);
+    // The screen still renders rather than 500ing — it just offers no link.
+    expect(body).toContain('Present a credential');
   });
 
   it('persists the request state hashed, with the profile and DCQL query it sent', async () => {

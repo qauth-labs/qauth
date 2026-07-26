@@ -152,10 +152,59 @@ describe('federationEnvSchema (OID4VP_WALLET_INVOCATION_ENDPOINT — #239)', () 
   });
 
   it.each([
+    'openid4vp://',
+    'openid4vp://authorize',
+    'haip://',
+    'eudi-wallet://authorize',
+    'mdoc-openid4vp://',
+    'x-wallet.vendor+v2://go',
+    'https://wallet.example/authorize?x=1',
+  ])('accepts the genuine wallet scheme %j', (raw) => {
+    expect(
+      federationEnvSchema.parse({ OID4VP_WALLET_INVOCATION_ENDPOINT: raw })
+        .OID4VP_WALLET_INVOCATION_ENDPOINT
+    ).toBe(raw);
+  });
+
+  it.each([
     ['no-scheme', 'a relative reference has no Authorization Endpoint to reach'],
     ['openid4vp://#frag', 'a fragment never reaches the wallet'],
     ['openid4vp:// spaced', 'whitespace cannot appear in a URI'],
   ])('rejects %o (%s)', (raw) => {
+    expect(() => federationEnvSchema.parse({ OID4VP_WALLET_INVOCATION_ENDPOINT: raw })).toThrow();
+  });
+
+  /**
+   * The value is rendered into an `href` (`routes/ui/wallet-login.ts`), so a
+   * script-capable scheme here is an XSS primitive handed to whoever writes the
+   * deployment's environment. Operator-supplied is not the same as trusted: a
+   * leaked CI variable, a copy-pasted Helm value or a compromised secrets store
+   * all reach this string, and config parsing is where a boot must fail rather
+   * than a login page shipping `javascript:` to every user.
+   *
+   * The shape regex above cannot carry this on its own — `javascript:alert(1)`
+   * is a perfectly well-formed absolute URI.
+   */
+  it.each([
+    'javascript:alert(1)',
+    'JavaScript:alert(1)',
+    'jAvAsCrIpT:alert(document.domain)',
+    'vbscript:msgbox(1)',
+    'livescript:alert(1)',
+    'mocha:alert(1)',
+    'data:text/html;base64,PHNjcmlwdD5hbGVydCgxKTwvc2NyaXB0Pg==',
+    'DATA:text/html,<script>alert(1)</script>',
+    'blob:https://evil.example/1234',
+    'java\tscript:alert(1)',
+    'java\u0000script:alert(1)',
+    'java script:alert(1)',
+    ' javascript:alert(1)',
+    'java&#9;script:alert(1)',
+    'java&Tab;script:alert(1)',
+    '&#106;avascript:alert(1)',
+    '&#x6A;avascript:alert(1)',
+    'javascript&colon;alert(1)',
+  ])('refuses to boot on the script-capable endpoint %j', (raw) => {
     expect(() => federationEnvSchema.parse({ OID4VP_WALLET_INVOCATION_ENDPOINT: raw })).toThrow();
   });
 });

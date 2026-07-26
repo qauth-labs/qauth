@@ -5,6 +5,7 @@
   "main": "src/index.ts",
   "dependencies": {
     "@qauth-labs/core-crypto": "workspace:*",
+    "@qauth-labs/shared-validation": "workspace:*",
     "dotenv": "catalog:",
     "zod": "catalog:"
   }

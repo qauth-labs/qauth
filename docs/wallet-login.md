@@ -103,6 +103,13 @@ button that fails:
 The `response_uri` is derived from `JWT_ISSUER`, so it is always the same origin
 the server publishes as its issuer identifier.
 
+`OID4VP_WALLET_INVOCATION_ENDPOINT` accepts any wallet scheme — `openid4vp://`,
+`haip://`, a vendor's `eudi-wallet://` or its `https://` universal link — but
+**refuses to boot on a script-capable one** (`javascript:`, `data:`,
+`vbscript:`, including case- and HTML-entity-encoded spellings). The value is
+rendered into an `href`, so such a scheme would be a stored XSS payload served
+to everyone who opens the sign-in screen; the render path re-checks it too.
+
 ## Security properties
 
 - **Login CSRF.** The identifier form carries the same signed double-submit
