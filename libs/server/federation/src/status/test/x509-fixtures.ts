@@ -21,9 +21,9 @@ import {
  * So the tests build certificates from `node:crypto` primitives plus about a
  * hundred lines of DER. Only what the tests exercise is implemented: ECDSA
  * P-256 keys, `ecdsa-with-SHA256`, a single-CN name, a validity window,
- * `basicConstraints` and `dNSName` SANs. It is a TEST helper and lives under
- * `test/` (excluded from coverage) — it is not, and must not become, a
- * certificate-issuing utility.
+ * `basicConstraints`, `keyUsage` and `dNSName` SANs. It is a TEST helper and
+ * lives under `test/` (excluded from coverage) — it is not, and must not
+ * become, a certificate-issuing utility.
  */
 
 /** ASN.1 tag numbers used below. */
@@ -138,6 +138,42 @@ function basicConstraints(isCa: boolean): Buffer {
   return extension('2.5.29.19', true, der(TAG.SEQUENCE, inner));
 }
 
+/** Bit positions in the `KeyUsage` BIT STRING (RFC 5280 §4.2.1.3). */
+const KEY_USAGE_BIT = {
+  digitalSignature: 0,
+  nonRepudiation: 1,
+  keyEncipherment: 2,
+  dataEncipherment: 3,
+  keyAgreement: 4,
+  keyCertSign: 5,
+  cRLSign: 6,
+} as const;
+
+/** A `keyUsage` bit name the fixtures can assert. */
+export type TestKeyUsage = keyof typeof KEY_USAGE_BIT;
+
+/**
+ * `keyUsage` as a DER BIT STRING (RFC 5280 §4.2.1.3).
+ *
+ * The named-bit-list form must carry no trailing zero bits under DER, so the
+ * "unused bits" count is derived from the HIGHEST bit actually asserted rather
+ * than fixed at zero. Getting that wrong would produce a certificate whose
+ * extension the production reader parses differently from OpenSSL, which is
+ * exactly the divergence these tests exist to catch.
+ */
+function keyUsageExtension(usages: readonly TestKeyUsage[]): Buffer {
+  let byte = 0;
+  let highest = -1;
+  for (const usage of usages) {
+    const bit = KEY_USAGE_BIT[usage];
+    byte |= 0x80 >> bit;
+    if (bit > highest) highest = bit;
+  }
+  // An empty BIT STRING is "no bits asserted": zero unused bits, zero content.
+  const content = highest < 0 ? Buffer.from([0x00]) : Buffer.from([7 - highest, byte]);
+  return extension('2.5.29.15', true, der(TAG.BIT_STRING, content));
+}
+
 /** `subjectAltName` holding `dNSName` entries (`[2] IMPLICIT IA5String`). */
 function subjectAltName(dnsNames: readonly string[]): Buffer {
   const names = dnsNames.map((name) => der(0x80 | 2, Buffer.from(name, 'ascii')));
@@ -181,6 +217,12 @@ export interface CreateTestCertificateOptions {
   readonly issuer?: TestCertificate;
   /** Whether `basicConstraints` marks this as a CA. Defaults to `false`. */
   readonly ca?: boolean;
+  /**
+   * `keyUsage` bits to assert. Omit for a certificate with NO `keyUsage`
+   * extension — the unconstrained case, which RFC 5280 §4.2.1.3 leaves
+   * permissible for every purpose.
+   */
+  readonly keyUsage?: readonly TestKeyUsage[];
   /** `dNSName` SAN entries. */
   readonly dnsNames?: readonly string[];
   readonly notBefore?: Date;
@@ -208,6 +250,9 @@ export function createTestCertificate(options: CreateTestCertificateOptions): Te
   const serial = options.serial ?? nextSerial++;
 
   const extensions: Buffer[] = [basicConstraints(options.ca === true)];
+  if (options.keyUsage !== undefined) {
+    extensions.push(keyUsageExtension(options.keyUsage));
+  }
   if (options.dnsNames !== undefined && options.dnsNames.length > 0) {
     extensions.push(subjectAltName(options.dnsNames));
   }

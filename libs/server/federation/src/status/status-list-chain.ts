@@ -34,9 +34,9 @@ import { summarizeConfiguredValue } from '../trust/configured-value';
  * Checked: chain bounds, strict base64, self-signed leaf refused, validity
  * window on every certificate INCLUDING the anchor, `cA` on every issuing
  * certificate, a real signature verification at every link, a path that
- * terminates at a configured anchor, the anchor absent from the chain, and an
+ * terminates at a configured anchor, the anchor absent from the chain, an
  * EC P-256 leaf key (so an `ES256` header cannot be satisfied by a key of
- * another type).
+ * another type), and the leaf's `keyUsage` (see below).
  *
  * NOT checked: certificate revocation of the chain itself (CRL/OCSP), name
  * constraints, and policy OIDs. Each is a real gap and each is called out here
@@ -44,6 +44,49 @@ import { summarizeConfiguredValue } from '../trust/configured-value';
  * to be a small, private, purpose-issued set, and the outer defence is that a
  * status list URI must already be on the operator's allowlist before any of
  * this runs.
+ *
+ * ## The leaf: `keyUsage` is enforced, `cA` deliberately is not
+ *
+ * draft-14 §10 models the Status List Token signer as an END ENTITY — *"[RFC5280]
+ * specifies the Extended Key Usage (EKU) X.509 certificate extension for use on
+ * end entity certificates … A certificate's issuer explicitly delegates Status
+ * List Token signing authority by issuing a X.509 certificate containing the
+ * KeyPurposeId"* — and §11.3 recommends the Status Issuer's certificate carry
+ * that EKU. The EKU's OID is still `TBD` in draft-14, so it cannot be required
+ * yet; the two adjacent constraints can be weighed on their own merits, and they
+ * come out differently.
+ *
+ * `keyUsage` IS enforced: when the extension is present it must assert
+ * `digitalSignature`. RFC 5280 §4.2.1.3 defines that bit as the one asserted
+ * *"when the subject public key is used for verifying digital signatures, other
+ * than signatures on certificates (bit 5) and CRLs (bit 6)"* — precisely this
+ * use. The rule cannot lock out a legitimate operator PKI because it is
+ * self-describing: a certificate with no `keyUsage` extension is unconstrained
+ * and still accepted, one that asserts `digitalSignature` is accepted, and the
+ * only certificates refused are those whose OWN ISSUER declared them unfit for
+ * this. In practice this is also what closes the "an anchored intermediate CA
+ * signs a Status List Token directly" case, since a conforming CA certificate
+ * carries `keyCertSign`/`cRLSign` without `digitalSignature`.
+ *
+ * A blanket `cA !== true` requirement on the leaf is deliberately NOT imposed.
+ * RFC 5280 §4.2.1.9 gives `cA` one meaning — *"whether the certified public key
+ * may be used to verify certificate signatures"* — and says nothing about
+ * forbidding other uses, so refusing every `cA:TRUE` leaf would reject
+ * certificates their issuer never declared unfit and would break single-tier
+ * operator layouts. It would also buy nothing: an anchored intermediate that can
+ * sign directly can equally mint itself an end-entity certificate bearing the
+ * same `dNSName` SAN and sign with that. The control that would actually bound a
+ * rogue anchored intermediate is name constraints, which is listed above as not
+ * checked; `cA` on the leaf is not a substitute for it.
+ *
+ * ## Reading `keyUsage` needs DER, because Node does not expose it
+ *
+ * `X509Certificate.keyUsage` returns the EXTENDED key usage OIDs, not the basic
+ * `keyUsage` bits, and `toLegacyObject()` exposes only `ext_key_usage` either.
+ * There is no accessor for the bit string, so it is read out of `raw` by the
+ * minimal TLV walk below rather than by adding a certificate library. The walk
+ * fails CLOSED: a leaf whose extensions cannot be traversed is refused, not
+ * waved through as "no `keyUsage` present".
  */
 
 /** Largest `x5c` chain accepted, in certificates. */
@@ -133,7 +176,8 @@ export type ChainRejectionReason =
   | 'broken-link'
   | 'anchor-in-chain'
   | 'no-path-to-anchor'
-  | 'unsupported-leaf-key';
+  | 'unsupported-leaf-key'
+  | 'leaf-not-signing-capable';
 
 /** The result of resolving a Status List Token's signing certificate. */
 export type ChainResolution =
@@ -223,6 +267,172 @@ function hasEs256LeafKey(leaf: X509Certificate): boolean {
   return key.asymmetricKeyDetails?.namedCurve === REQUIRED_LEAF_CURVE;
 }
 
+/** DER tags touched by the `keyUsage` walk. */
+const DER_TAG = {
+  BOOLEAN: 0x01,
+  BIT_STRING: 0x03,
+  OCTET_STRING: 0x04,
+  OID: 0x06,
+  SEQUENCE: 0x30,
+  /** `[3] EXPLICIT` — `tbsCertificate.extensions` (RFC 5280 §4.1). */
+  EXTENSIONS: 0xa3,
+} as const;
+
+/** `keyUsage` (2.5.29.15) as a complete DER OID element. */
+const KEY_USAGE_OID_DER = Buffer.from([0x06, 0x03, 0x55, 0x1d, 0x0f]);
+
+/** `digitalSignature` is bit 0, i.e. the most significant bit of the first byte. */
+const DIGITAL_SIGNATURE_MASK = 0x80;
+
+/** One decoded DER element: where its content lives and where it ends. */
+interface DerElement {
+  readonly tag: number;
+  readonly contentStart: number;
+  readonly contentEnd: number;
+}
+
+/**
+ * Decode one DER tag-length-value at `offset`.
+ *
+ * Deliberately minimal and strict. Multi-byte tags and indefinite lengths are
+ * refused rather than handled: neither is legal DER inside a certificate, and
+ * accepting BER constructs is how a parser ends up disagreeing with the parser
+ * that validated the signature.
+ */
+function readDerElement(buffer: Buffer, offset: number): DerElement | undefined {
+  if (offset < 0 || offset + 2 > buffer.length) return undefined;
+
+  const tag = buffer[offset] as number;
+  if ((tag & 0x1f) === 0x1f) return undefined;
+
+  const first = buffer[offset + 1] as number;
+  let contentStart: number;
+  let length: number;
+
+  if (first < 0x80) {
+    length = first;
+    contentStart = offset + 2;
+  } else {
+    const lengthBytes = first & 0x7f;
+    // Zero means indefinite length; more than four bytes cannot occur in a
+    // certificate this process already parsed and would risk precision loss.
+    if (lengthBytes === 0 || lengthBytes > 4) return undefined;
+    if (offset + 2 + lengthBytes > buffer.length) return undefined;
+    length = 0;
+    for (let index = 0; index < lengthBytes; index += 1) {
+      length = length * 256 + (buffer[offset + 2 + index] as number);
+    }
+    contentStart = offset + 2 + lengthBytes;
+  }
+
+  const contentEnd = contentStart + length;
+  if (contentEnd > buffer.length) return undefined;
+  return { tag, contentStart, contentEnd };
+}
+
+/** The outcome of looking for a certificate's `keyUsage` bits. */
+type KeyUsageReading =
+  | { readonly outcome: 'absent' }
+  | { readonly outcome: 'present'; readonly bits: number }
+  | { readonly outcome: 'unreadable' };
+
+/** Locate `tbsCertificate.extensions` within a certificate's DER. */
+function findExtensions(raw: Buffer): DerElement | undefined | 'unreadable' {
+  const certificate = readDerElement(raw, 0);
+  if (certificate === undefined || certificate.tag !== DER_TAG.SEQUENCE) return 'unreadable';
+
+  const tbs = readDerElement(raw, certificate.contentStart);
+  if (tbs === undefined || tbs.tag !== DER_TAG.SEQUENCE) return 'unreadable';
+
+  // Walk tbsCertificate's members by skipping whole elements. Their tags are
+  // not all distinct, but `extensions` is the only `[3]`, so no field-by-field
+  // model of the structure is needed.
+  let offset = tbs.contentStart;
+  while (offset < tbs.contentEnd) {
+    const member = readDerElement(raw, offset);
+    if (member === undefined) return 'unreadable';
+    if (member.tag === DER_TAG.EXTENSIONS) return member;
+    offset = member.contentEnd;
+  }
+  // A certificate with no extensions at all has no `keyUsage`.
+  return undefined;
+}
+
+/**
+ * Read the basic `keyUsage` bits (RFC 5280 §4.2.1.3) out of a certificate.
+ *
+ * Node exposes the EXTENDED key usage as `X509Certificate.keyUsage` and offers
+ * no accessor at all for these bits, so they are parsed from `raw`. See the
+ * module JSDoc for why that is preferred over adding a certificate library.
+ *
+ * Only the first content byte is returned: every bit this module cares about
+ * lives in it, and a `KeyUsage` BIT STRING never needs more than two.
+ */
+function readKeyUsageBits(certificate: X509Certificate): KeyUsageReading {
+  const raw = certificate.raw;
+
+  const extensions = findExtensions(raw);
+  if (extensions === 'unreadable') return { outcome: 'unreadable' };
+  if (extensions === undefined) return { outcome: 'absent' };
+
+  const sequence = readDerElement(raw, extensions.contentStart);
+  if (sequence === undefined || sequence.tag !== DER_TAG.SEQUENCE) return { outcome: 'unreadable' };
+
+  let offset = sequence.contentStart;
+  while (offset < sequence.contentEnd) {
+    const extension = readDerElement(raw, offset);
+    if (extension === undefined || extension.tag !== DER_TAG.SEQUENCE) {
+      return { outcome: 'unreadable' };
+    }
+
+    const oid = readDerElement(raw, extension.contentStart);
+    if (oid === undefined || oid.tag !== DER_TAG.OID) return { outcome: 'unreadable' };
+
+    if (raw.subarray(extension.contentStart, oid.contentEnd).equals(KEY_USAGE_OID_DER)) {
+      // Extension ::= SEQUENCE { extnID, critical BOOLEAN DEFAULT FALSE, extnValue }
+      let value = readDerElement(raw, oid.contentEnd);
+      if (value !== undefined && value.tag === DER_TAG.BOOLEAN) {
+        value = readDerElement(raw, value.contentEnd);
+      }
+      if (value === undefined || value.tag !== DER_TAG.OCTET_STRING) {
+        return { outcome: 'unreadable' };
+      }
+
+      const bitString = readDerElement(raw, value.contentStart);
+      if (bitString === undefined || bitString.tag !== DER_TAG.BIT_STRING) {
+        return { outcome: 'unreadable' };
+      }
+
+      // Content is a leading "unused bits" count followed by the bits, most
+      // significant first. The bounds guard keeps the read below in range for a
+      // BIT STRING carrying no value bytes, which asserts nothing; OpenSSL
+      // refuses such a certificate at `checkIssued` before it ever reaches
+      // here, so this is a guard rather than a reachable branch.
+      if (bitString.contentEnd - bitString.contentStart < 2) return { outcome: 'present', bits: 0 };
+      return { outcome: 'present', bits: raw[bitString.contentStart + 1] as number };
+    }
+
+    offset = extension.contentEnd;
+  }
+
+  return { outcome: 'absent' };
+}
+
+/**
+ * Whether `leaf` is authorised to sign a Status List Token.
+ *
+ * RFC 5280 §4.2.1.3: `digitalSignature` is the bit asserted when a key verifies
+ * signatures over objects other than certificates and CRLs. When the extension
+ * is absent the key is unconstrained and this passes — see the module JSDoc for
+ * why that asymmetry is the point rather than a hole.
+ */
+function leafMaySignTokens(leaf: X509Certificate): boolean {
+  const keyUsage = readKeyUsageBits(leaf);
+  if (keyUsage.outcome === 'absent') return true;
+  if (keyUsage.outcome === 'unreadable') return false;
+  return (keyUsage.bits & DIGITAL_SIGNATURE_MASK) !== 0;
+}
+
 /**
  * Resolve the Status List Token's signing key from its `x5c` header (#297).
  *
@@ -283,6 +493,14 @@ export function resolveStatusListSigningCertificate(
   if (!anchored) return { outcome: 'rejected', reason: 'no-path-to-anchor' };
 
   if (!hasEs256LeafKey(leaf)) return { outcome: 'rejected', reason: 'unsupported-leaf-key' };
+
+  // Applied to the LEAF only. The certificates above it are issuing
+  // certificates: they correctly assert `keyCertSign` and need not assert
+  // `digitalSignature`, so extending this up the chain would reject every
+  // conforming PKI.
+  if (!leafMaySignTokens(leaf)) {
+    return { outcome: 'rejected', reason: 'leaf-not-signing-capable' };
+  }
 
   return {
     outcome: 'resolved',

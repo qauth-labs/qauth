@@ -240,6 +240,92 @@ describe('resolveStatusListSigningCertificate (#297, HAIP §6.1.1)', () => {
     ).toEqual({ outcome: 'rejected', reason: 'unsupported-leaf-key' });
   });
 
+  describe('leaf keyUsage (RFC 5280 §4.2.1.3)', () => {
+    it('resolves a leaf with no keyUsage extension at all', () => {
+      // The unconstrained case. RFC 5280 §4.2.1.3 restricts a key only when the
+      // extension is PRESENT, so an operator PKI that omits it must keep
+      // working — this is the check that stops the tightening below from
+      // becoming a lockout.
+      expect(
+        resolveStatusListSigningCertificate([leaf.x5c, intermediate.x5c], anchors, now).outcome
+      ).toBe('resolved');
+    });
+
+    it('resolves a leaf whose keyUsage asserts digitalSignature', () => {
+      const signing = createTestCertificate({
+        subject: 'status.issuer.example',
+        issuer: intermediate,
+        dnsNames: ['status.issuer.example'],
+        keyUsage: ['digitalSignature'],
+        ...valid,
+      });
+      expect(
+        resolveStatusListSigningCertificate([signing.x5c, intermediate.x5c], anchors, now).outcome
+      ).toBe('resolved');
+    });
+
+    it('refuses a leaf whose keyUsage withholds digitalSignature', () => {
+      // RFC 5280 §4.2.1.3: the digitalSignature bit is what authorises a key to
+      // verify signatures over objects OTHER than certificates and CRLs. A
+      // certificate whose own issuer declared "certificate signing only" must
+      // not be accepted as a Status List Token signer.
+      const wrongPurpose = createTestCertificate({
+        subject: 'status.issuer.example',
+        issuer: intermediate,
+        dnsNames: ['status.issuer.example'],
+        keyUsage: ['keyCertSign', 'cRLSign'],
+        ...valid,
+      });
+      expect(
+        resolveStatusListSigningCertificate([wrongPurpose.x5c, intermediate.x5c], anchors, now)
+      ).toEqual({ outcome: 'rejected', reason: 'leaf-not-signing-capable' });
+    });
+
+    it('refuses an anchored intermediate CA that presents itself as the signer', () => {
+      // The scenario the review raised: `cA` is enforced on every ISSUING
+      // certificate but never negatively on the end entity, so an anchored
+      // intermediate could sign a Status List Token directly. A conforming CA
+      // certificate carries keyCertSign/cRLSign without digitalSignature, so
+      // the keyUsage rule is what closes it.
+      const signingCa = createTestCertificate({
+        subject: 'ca.issuer.example',
+        ca: true,
+        issuer: root,
+        dnsNames: ['ca.issuer.example'],
+        keyUsage: ['keyCertSign', 'cRLSign'],
+        ...valid,
+      });
+      expect(resolveStatusListSigningCertificate([signingCa.x5c], anchors, now)).toEqual({
+        outcome: 'rejected',
+        reason: 'leaf-not-signing-capable',
+      });
+    });
+
+    it('constrains only the leaf, not the issuing certificates above it', () => {
+      // An intermediate legitimately asserts keyCertSign and NOT
+      // digitalSignature. Applying the leaf rule up the chain would reject
+      // every correctly-issued PKI.
+      const strictIntermediate = createTestCertificate({
+        subject: 'Strict Intermediate',
+        ca: true,
+        issuer: root,
+        keyUsage: ['keyCertSign', 'cRLSign'],
+        ...valid,
+      });
+      const under = createTestCertificate({
+        subject: 'status.issuer.example',
+        issuer: strictIntermediate,
+        dnsNames: ['status.issuer.example'],
+        keyUsage: ['digitalSignature'],
+        ...valid,
+      });
+      expect(
+        resolveStatusListSigningCertificate([under.x5c, strictIntermediate.x5c], anchors, now)
+          .outcome
+      ).toBe('resolved');
+    });
+  });
+
   it.each([
     ['a non-array x5c', leaf.x5c],
     ['an empty x5c', []],
