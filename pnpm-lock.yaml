@@ -808,12 +808,18 @@ importers:
 
   libs/server/federation:
     dependencies:
+      '@qauth-labs/core-crypto':
+        specifier: workspace:*
+        version: link:../../core/crypto
       '@qauth-labs/shared-errors':
         specifier: workspace:*
         version: link:../../shared/errors
       '@qauth-labs/shared-validation':
         specifier: workspace:*
         version: link:../../shared/validation
+      jose:
+        specifier: 'catalog:'
+        version: 6.2.4
       zod:
         specifier: 'catalog:'
         version: 4.4.3
