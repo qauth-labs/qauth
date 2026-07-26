@@ -23,6 +23,13 @@ import { buildLoggerOptions } from './config/logger';
 //   the request-scoped logger as `reqId` so every log line for a request is
 //   correlated. The id is echoed back on the response by the request-id plugin
 //   (#128).
+//
+// SECURITY INVARIANT — HTTP/1.1 only. Do NOT add `http2: true` (or `http2SessionTimeout`,
+// or an HTTP/2 `serverFactory`) here without first clearing the `find-my-way` advisory.
+// Fastify's router is `find-my-way`, and CVE-2026-47219 (DoS) is HTTP/2-specific; serving
+// HTTP/1.1 is the only reason it is inert. The `find-my-way: '>=9.7.0'` floor in
+// `pnpm-workspace.yaml` guards this, so an HTTP/2 switch is safe only as long as that floor
+// (or a later fixed version) is what actually resolves — verify with `pnpm why find-my-way`.
 const server = Fastify({
   logger: buildLoggerOptions(env),
   requestIdHeader: env.REQUEST_ID_HEADER,
@@ -33,7 +40,20 @@ const server = Fastify({
   },
 }).withTypeProvider<ZodTypeProvider>();
 
-// Set up Zod validator and serializer
+// Set up Zod validator and serializer.
+//
+// SECURITY INVARIANT — this global Zod validator compiler is load-bearing beyond typing.
+// It replaces Fastify's default `ajv` compiler for *every* route, and `ajv` is what pulls
+// `fast-uri`, which carries two unfixed-in-tree host-confusion advisories (CVE-2026-13676,
+// CVE-2026-16221). Because no request is ever parsed by ajv, those advisories are inert.
+// Removing this line, scoping it to a subset of routes, or adding a route that opts back
+// into ajv validation (e.g. a raw JSON Schema `schema` on an instance without this
+// compiler) silently reactivates host confusion inside an OAuth server. The
+// `fast-uri: '>=3.1.4 <4'` floor in `pnpm-workspace.yaml` exists so this stops being the
+// only mitigation, but do not rely on it alone.
+// The second leg of the same invariant lives in the redirect_uri checks: matching is an
+// exact string comparison (`client.redirectUris.includes(...)`, RFC 9700) with no URI
+// parser in the security decision — see `app/helpers/oauth-redirect.ts`.
 server.setValidatorCompiler(validatorCompiler);
 server.setSerializerCompiler(serializerCompiler);
 
