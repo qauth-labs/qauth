@@ -136,7 +136,7 @@ export const FEATURE_STATUS: FeatureStatus[] = [
     feature: 'PQC / hybrid signing',
     state: 'shipped',
     summary:
-      'Epic #241 closed. Hybrid ML-DSA-65 + Ed25519 signing, mixed AKP+OKP JWKS, a native aws-lc-rs backend via napi-rs, and an attested reproducible build channel all shipped.',
+      'Epic #241 closed. Hybrid ML-DSA-65 + Ed25519 signing, mixed AKP+OKP JWKS, a native aws-lc-rs backend via napi-rs, and an attested reproducible build channel (byte-for-byte determinism verified on Linux only) all shipped.',
     flag: { name: 'HYBRID_SIGNING_ENABLED', default: 'off' },
   },
   {
