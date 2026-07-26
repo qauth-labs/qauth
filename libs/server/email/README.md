@@ -87,8 +87,17 @@ const provider = new MockEmailProvider();
 const emailService = createEmailService(provider, {
   defaultFrom: 'noreply@example.com',
   baseUrl: 'https://example.com',
+  // Same value the call site uses to compute `expiresAt`, so the copy in the
+  // email cannot drift from the lifetime actually enforced.
+  verificationTokenExpiry: config.EMAIL_VERIFICATION_TOKEN_EXPIRY, // seconds
 });
 ```
+
+The service formats `verificationTokenExpiry` once (via `formatDuration`) and
+passes the result to the template, so the email says "this link will expire in
+1 hour" when the server enforces 3600 seconds. Omitting the field falls back to
+`DEFAULT_VERIFICATION_TOKEN_EXPIRY_SECONDS` (86400 — "24 hours"), which mirrors
+the server-config default. Never hardcode the expiry copy.
 
 ### sendVerificationEmail()
 
@@ -208,13 +217,20 @@ await provider.sendEmail({
 The library includes React Email templates for type-safe, component-based email creation:
 
 ```typescript
-import { VerifyEmail, renderEmail, renderEmailText } from '@qauth-labs/server-email';
+import {
+  VerifyEmail,
+  renderEmail,
+  renderEmailText,
+  formatDuration,
+} from '@qauth-labs/server-email';
 import * as React from 'react';
 
-// Create template
+// Create template. `expiresIn` is prose rendered into the email body, so derive
+// it from the configured token lifetime rather than hardcoding a duration —
+// hardcoded copy silently lies as soon as the configured expiry changes.
 const template = React.createElement(VerifyEmail, {
   verificationUrl: 'https://example.com/auth/verify?token=abc123',
-  expiresIn: '24 hours',
+  expiresIn: formatDuration(tokenExpirySeconds), // e.g. 3600 -> "1 hour"
 });
 
 // Render to HTML
@@ -276,9 +292,33 @@ Creates an email service instance.
 **Parameters**:
 
 - `provider`: Email provider implementation
-- `config`: Optional service configuration
+- `config`: Optional service configuration (`EmailServiceConfig`)
 
 **Returns**: Email service instance
+
+#### `EmailServiceConfig`
+
+| Field                     | Type     | Default              | Description                                                                                                             |
+| ------------------------- | -------- | -------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| `defaultFrom`             | `string` | —                    | Default sender address, used when `options.from` is omitted.                                                            |
+| `baseUrl`                 | `string` | —                    | Base URL for verification links (`${baseUrl}/auth/verify?token=...`).                                                   |
+| `verificationTokenExpiry` | `number` | `86400` (`24 hours`) | Verification token lifetime **in seconds**. Only drives the expiry copy in the email; enforcement lives at the callers. |
+
+Pass the same value the caller uses to compute the token's `expiresAt`. The two
+are deliberately fed from one configuration key (`EMAIL_VERIFICATION_TOKEN_EXPIRY`)
+so the email cannot promise a window the server does not honour.
+
+#### `DEFAULT_VERIFICATION_TOKEN_EXPIRY_SECONDS: number`
+
+Fallback verification token lifetime (`86400`) used when
+`verificationTokenExpiry` is not configured. Mirrors the server-config default.
+
+#### `formatDuration(seconds: number): string`
+
+Formats a duration in seconds as English prose for email copy, e.g. `1 hour`,
+`24 hours`, `1 hour and 30 minutes`, `3 days`. Remainders are truncated rather
+than rounded up so an email never overstates how long a link stays valid.
+Non-finite or negative input is treated as zero.
 
 #### `emailService.sendVerificationEmail(to: string, token: string, options?: Partial<EmailOptions>): Promise<EmailResult>`
 

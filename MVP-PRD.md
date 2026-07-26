@@ -1178,7 +1178,8 @@ These features are NOT part of Phases 1–5:
 - **jose** - JWT generation (EdDSA)
 - **resend** - Email delivery (production)
 - **nodemailer** - SMTP email delivery
-- **@react-email/components** - Email templates
+- **@react-email/render** - Email template rendering (HTML + plain text); the
+  layout primitives are vendored in `libs/server/email/src/lib/templates/components`
 - **zod** - Schema validation
 
 **Frontend (Developer Portal)**:
