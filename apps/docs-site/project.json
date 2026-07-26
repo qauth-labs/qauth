@@ -27,6 +27,23 @@
         "cwd": "apps/docs-site"
       }
     },
+    "test": {
+      "cache": true,
+      "inputs": [
+        "default",
+        "^default",
+        { "json": "{workspaceRoot}/tsconfig.json", "fields": ["compilerOptions"] },
+        { "externalDependencies": ["vitest"] },
+        { "env": "CI" },
+        { "dependentTasksOutputFiles": "**/*.js", "transitive": true },
+        "{workspaceRoot}/README.md",
+        "{workspaceRoot}/docs/README.md",
+        "{workspaceRoot}/apps/auth-server/src/app/routes/**/*"
+      ],
+      "metadata": {
+        "description": "Overrides the @nx/vitest-inferred target's `inputs` (which only covers {projectRoot}/**/* — this project's own files). Three of this project's invariants tests read outside apps/docs-site at runtime: status-claims.test.ts reads README.md and docs/README.md, and endpoint-coverage.test.ts reads apps/auth-server/src/app/routes/**. Without declaring those here, editing any of them left this target's cache hash unchanged, so a fixed guard replayed a stale cached pass instead of re-running against the new content (issue #350 fix-round-1 finding). Setting `inputs` on an already-inferred target REPLACES the inferred array rather than merging into it, so the first six entries above are the inferred defaults re-declared, not new — drop one and its category of input silently stops being hashed."
+      }
+    },
     "typecheck": {
       "executor": "nx:run-commands",
       "cache": true,
