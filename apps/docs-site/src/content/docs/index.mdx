@@ -1,7 +1,33 @@
 ---
 title: QAuth
-description: Documentation for QAuth, a post-quantum ready, headless-first identity platform.
+description: An open-source, self-hostable OAuth 2.1 / OIDC authorization server whose near-term focus is authorization for MCP servers and AI agents.
+template: splash
+lastVerified: '2026-07-26'
 ---
 
-Documentation for QAuth is under construction. The information architecture,
-guides, and API reference land in a later task.
+import { CardGrid, LinkCard } from '@astrojs/starlight/components';
+
+QAuth is an open-source, self-hostable OAuth 2.1 / OIDC authorization server whose near-term focus is authorization for MCP servers and AI agents.
+
+<CardGrid>
+  <LinkCard
+    title="Integrating an app or MCP server"
+    description="Add QAuth-issued tokens to your application or MCP server."
+    href="/integrate/"
+  />
+  <LinkCard
+    title="Self-hosting QAuth"
+    description="Run and operate your own QAuth instance."
+    href="/operate/"
+  />
+  <LinkCard
+    title="Contributing to QAuth"
+    description="Set up a development environment and work on QAuth itself."
+    href="/extend/"
+  />
+  <LinkCard
+    title="Using the developer portal"
+    description="Manage clients and applications through the QAuth dashboard."
+    href="/portal/"
+  />
+</CardGrid>
