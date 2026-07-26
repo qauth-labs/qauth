@@ -1,5 +1,6 @@
 import {
   assertProfileUnchanged,
+  type DcqlQuery,
   hashOid4vpState,
   type Oid4vpDirectPostOutcome,
   Oid4vpTransportRejection,
@@ -56,11 +57,14 @@ import {
  *
  * ## Non-enumerating rejections
  *
- * Unknown `state`, expired `state`, already-redeemed `state`, changed posture
- * and malformed `vp_token` all produce the SAME 400 `invalid_request` with the
- * same description. The specific reason is logged server-side only. An attacker
- * holding a candidate `state` therefore learns nothing about whether it exists,
- * is still alive, or was already consumed.
+ * Unknown `state`, expired `state`, already-redeemed `state`, changed posture,
+ * an unusable stored `dcql_query` and a malformed `vp_token` all produce the
+ * SAME 400 `invalid_request` with the same description. The specific reason is
+ * logged server-side only. An attacker holding a candidate `state` therefore
+ * learns nothing about whether it exists, is still alive, or was already
+ * consumed — including from a deployment whose stored state is corrupt, since
+ * that failure is only reachable AFTER redemption and would otherwise be the one
+ * response shape a real `state` uniquely produces.
  */
 export default async function (fastify: FastifyInstance) {
   // Flag gate (#232 / #299). Checked at REGISTRATION, not per request: an
@@ -84,6 +88,20 @@ export default async function (fastify: FastifyInstance) {
         tags: ['OID4VP'],
         body: oid4vpDirectPostRequestSchema,
         response: { 200: oid4vpDirectPostResponseSchema },
+      },
+      config: {
+        // IP-scoped rate limit, in the shape every other unauthenticated surface
+        // in this app uses (/oauth/token, /oauth/register, /auth/login).
+        // Mandatory here for the same reason the rejections are uniform: the
+        // endpoint is unauthenticated by construction, so this cap is what bounds
+        // how fast an anonymous caller can throw candidate `state` values — and
+        // DB round-trips — at it. Defaults to /oauth/token's 30 per 60s; a real
+        // wallet posts once per presentation request.
+        rateLimit: {
+          max: env.OID4VP_RESPONSE_RATE_LIMIT,
+          timeWindow: env.OID4VP_RESPONSE_RATE_WINDOW * 1000,
+          keyGenerator: (request) => request.ip || 'unknown',
+        },
       },
     },
     async (request, reply) => {
@@ -118,6 +136,40 @@ export default async function (fastify: FastifyInstance) {
 
         assertProfileUnchanged(redeemed.verifierProfile, profile.id);
 
+        // A stored `dcql_query` that no longer parses is a SERVER data-integrity
+        // failure — the column is written by QAuth when the request is built, so
+        // no caller can influence it — and a 500 would be the semantically honest
+        // status for it in isolation. It is nevertheless rendered as the one
+        // uniform refusal, because of WHERE it is detectable: the state has
+        // ALREADY been redeemed by the time the row can be inspected, so a
+        // distinct status here would be a response shape that ONLY a real, live,
+        // unconsumed `state` can produce. That is precisely the oracle every other
+        // path on this endpoint is built to deny — an attacker sweeping candidate
+        // states would get "this one existed" for free, from a deployment already
+        // in a degraded state.
+        //
+        // The integrity failure is not swallowed: it is logged at `error` with the
+        // row that carries the bad column and the underlying parse message, which
+        // is the channel an operator can actually act on. The wire is not.
+        let dcqlQuery: DcqlQuery;
+
+        try {
+          dcqlQuery = parseStoredDcqlQuery(redeemed.dcqlQuery);
+        } catch (error) {
+          fastify.log.error(
+            {
+              err: error,
+              requestStateId: redeemed.id,
+              realmId: redeemed.realmId,
+            },
+            'OID4VP request state carries an unusable stored dcql_query — server data integrity failure, not a client error'
+          );
+
+          throw new Oid4vpTransportRejection(
+            'stored dcql_query failed structural validation (server data integrity)'
+          );
+        }
+
         // The DB row projected onto the transport view. An EXPLICIT projection,
         // not a cast: it is the contract #234 will consume, and writing it out
         // means a column added to the table cannot silently become part of it.
@@ -128,7 +180,7 @@ export default async function (fastify: FastifyInstance) {
           realmId: redeemed.realmId,
           nonce: redeemed.nonce,
           verifierProfile: redeemed.verifierProfile,
-          dcqlQuery: parseStoredDcqlQuery(redeemed.dcqlQuery),
+          dcqlQuery,
         };
 
         // (3) A wallet-reported error (§8.2). The state is already consumed

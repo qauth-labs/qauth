@@ -132,6 +132,21 @@ export function assertValidDcqlQuery(query: DcqlQuery): void {
  * `credentials` array of `{ id, format }` objects) and leaves format-specific
  * `meta` alone, which is the format adapter's business.
  *
+ * ## Caller contract on the response path
+ *
+ * A failure here is a SERVER data-integrity failure, not a client one — nothing
+ * a caller sends reaches this column. It is deliberately a plain `Error` rather
+ * than an {@link module:oid4vp/direct-post.Oid4vpTransportRejection}, because
+ * that is what it is.
+ *
+ * But the `direct_post` route can only reach it AFTER the `state` has been
+ * redeemed, so letting it surface as its own status would make it the one
+ * response shape a real, live, unconsumed `state` uniquely produces — an
+ * enumeration oracle on an otherwise uniformly-refusing endpoint. The route
+ * therefore logs it at `error` and re-throws it as the standard rejection. Any
+ * future caller on an unauthenticated path owes the same treatment: loud in the
+ * log, indistinguishable on the wire.
+ *
  * @param value - the deserialized `dcql_query` column.
  * @throws Error when the stored value is not a usable DCQL query.
  */

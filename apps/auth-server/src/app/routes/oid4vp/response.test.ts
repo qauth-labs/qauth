@@ -20,9 +20,20 @@ const VP_TOKEN = JSON.stringify({ pid: [PRESENTATION] });
 
 const STATE = 'state-value';
 
+interface RouteOptions {
+  config?: {
+    rateLimit?: {
+      max?: number;
+      timeWindow?: number;
+      keyGenerator?: (request: { ip?: string }) => string;
+    };
+  };
+}
+
 interface TestContext {
   handler?: (request: any, reply: any) => Promise<unknown>;
   routeUrl?: string;
+  routeOptions?: RouteOptions;
 }
 
 function createFastifyStub() {
@@ -30,8 +41,9 @@ function createFastifyStub() {
 
   const fastify: any = {
     withTypeProvider: () => ({
-      post: (url: string, _opts: unknown, handler: TestContext['handler']) => {
+      post: (url: string, opts: RouteOptions, handler: TestContext['handler']) => {
         ctx.routeUrl = url;
+        ctx.routeOptions = opts;
         ctx.handler = handler;
         return fastify;
       },
@@ -103,6 +115,8 @@ async function loadRoute(env: Record<string, unknown>) {
 const ENABLED_ENV = {
   WALLET_FEDERATION_ENABLED: true,
   OID4VP_VERIFIER_PROFILE: 'oid4vp-1.0-base',
+  OID4VP_RESPONSE_RATE_LIMIT: 30,
+  OID4VP_RESPONSE_RATE_WINDOW: 60,
 };
 
 async function register(env: Record<string, unknown> = ENABLED_ENV) {
@@ -134,6 +148,33 @@ describe('POST /oid4vp/response — registration gate', () => {
 
     expect(ctx.routeUrl).toBe('/response');
     expect(ctx.handler).toBeDefined();
+  });
+
+  it('carries an IP-scoped per-route rate limit (the endpoint is unauthenticated)', async () => {
+    // Without this the only bound on an anonymous caller sweeping candidate
+    // `state` values is the global default. Same shape as every other
+    // unauthenticated surface in this app (/oauth/token, /auth/login).
+    const { ctx } = await register();
+    const rateLimit = ctx.routeOptions?.config?.rateLimit;
+
+    expect(rateLimit).toBeDefined();
+    expect(rateLimit?.max).toBe(30);
+    // Configured in seconds, handed to @fastify/rate-limit in milliseconds.
+    expect(rateLimit?.timeWindow).toBe(60 * 1000);
+    expect(rateLimit?.keyGenerator?.({ ip: '203.0.113.7' })).toBe('203.0.113.7');
+    expect(rateLimit?.keyGenerator?.({ ip: undefined })).toBe('unknown');
+  });
+
+  it('takes the limit and window from configuration, not from a hardcoded literal', async () => {
+    const { ctx } = await register({
+      ...ENABLED_ENV,
+      OID4VP_RESPONSE_RATE_LIMIT: 7,
+      OID4VP_RESPONSE_RATE_WINDOW: 120,
+    });
+    const rateLimit = ctx.routeOptions?.config?.rateLimit;
+
+    expect(rateLimit?.max).toBe(7);
+    expect(rateLimit?.timeWindow).toBe(120 * 1000);
   });
 });
 
@@ -260,11 +301,52 @@ describe('POST /oid4vp/response — refusals are indistinguishable', () => {
 
   it('refuses when the deployment has no VerifierProfile selected (fail-closed)', async () => {
     const { error } = await refusalOf(good, pendingState(), {
-      WALLET_FEDERATION_ENABLED: true,
+      ...ENABLED_ENV,
       OID4VP_VERIFIER_PROFILE: undefined,
     });
 
     expect(error.errorDescription).toBe(OID4VP_REJECTION_DESCRIPTION);
+  });
+
+  it('refuses an unusable stored dcql_query with the SAME wire response, not a 500', async () => {
+    // The stored query is server-written, so a parse failure is a data-integrity
+    // bug rather than a client error — but it is only detectable AFTER the state
+    // has been redeemed. Letting it surface as a distinct status would make it
+    // the one response shape only a real, live, unconsumed `state` can produce,
+    // handing a state-sweeping attacker the oracle every other path denies.
+    const { error } = await refusalOf(
+      good,
+      pendingState({ dcqlQuery: { credentials: 'not-an-array' } })
+    );
+
+    expect(error.name).toBe('InvalidRequestError');
+    expect(error.statusCode).toBe(400);
+    expect(error.errorDescription).toBe(OID4VP_REJECTION_DESCRIPTION);
+  });
+
+  it('logs an unusable stored dcql_query at error level, with the row and the cause', async () => {
+    // Uniform on the wire must not mean silent: a corrupt row is an operator
+    // problem and has to be loud in the log, above the `warn` a routine refusal
+    // gets.
+    const { fastify } = await refusalOf(good, pendingState({ dcqlQuery: { credentials: 42 } }));
+
+    expect(fastify.log.error).toHaveBeenCalledWith(
+      expect.objectContaining({
+        err: expect.any(Error),
+        requestStateId: 'req-state-1',
+        realmId: 'realm-1',
+      }),
+      expect.stringContaining('dcql_query')
+    );
+  });
+
+  it('does not audit or authenticate anything when the stored dcql_query is unusable', async () => {
+    const { fastify } = await refusalOf(
+      good,
+      pendingState({ dcqlQuery: { credentials: [{ id: 'pid' }] } })
+    );
+
+    expect(fastify.repositories.auditLogs.create).not.toHaveBeenCalled();
   });
 
   it('refuses when the posture changed between request and response', async () => {
@@ -300,11 +382,10 @@ describe('POST /oid4vp/response — refusals are indistinguishable', () => {
       [good, pendingState({ verifierProfile: 'haip-1.0' }), ENABLED_ENV],
       [{ vp_token: '{not json', state: STATE }, pendingState(), ENABLED_ENV],
       [{ state: STATE }, pendingState(), ENABLED_ENV],
-      [
-        good,
-        pendingState(),
-        { WALLET_FEDERATION_ENABLED: true, OID4VP_VERIFIER_PROFILE: undefined },
-      ],
+      // Reached only after the state is redeemed — the case most likely to leak
+      // a distinguishable shape, and the reason it is in this set.
+      [good, pendingState({ dcqlQuery: { credentials: 'not-an-array' } }), ENABLED_ENV],
+      [good, pendingState(), { ...ENABLED_ENV, OID4VP_VERIFIER_PROFILE: undefined }],
     ];
 
     const wire = new Set<string>();
