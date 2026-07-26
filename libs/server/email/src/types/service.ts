@@ -8,6 +8,16 @@ export interface EmailServiceConfig {
   defaultFrom?: string;
   /** Base URL for verification links (optional) */
   baseUrl?: string;
+  /**
+   * Lifetime of an email verification token, in seconds.
+   *
+   * Only affects the copy rendered in the email ("this link expires in ...").
+   * Enforcement lives at the call sites, which derive `expiresAt` from the same
+   * configuration value; this exists so the two cannot drift.
+   *
+   * @default 86400 (24 hours)
+   */
+  verificationTokenExpiry?: number;
 }
 
 /**

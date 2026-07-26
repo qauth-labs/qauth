@@ -123,5 +123,62 @@ describe('EmailService', () => {
       const sentEmails = mockProvider.getSentEmails();
       expect(sentEmails[0]?.html).toBe('<p>Custom HTML</p>');
     });
+
+    describe('expiry copy (#334)', () => {
+      it('should state 24 hours when no expiry is configured', async () => {
+        await service.sendVerificationEmail('user@example.com', 'token123');
+
+        const sentEmails = mockProvider.getSentEmails();
+        expect(sentEmails[0]?.text).toContain('expire in 24 hours');
+        expect(sentEmails[0]?.html).toContain('24 hours');
+      });
+
+      it('should reflect a non-default configured expiry', async () => {
+        const customProvider = new MockEmailProvider();
+        const customService = createEmailService(customProvider, {
+          verificationTokenExpiry: 3600,
+        });
+        await customService.sendVerificationEmail('user@example.com', 'token123');
+
+        const sentEmails = customProvider.getSentEmails();
+        expect(sentEmails[0]?.text).toContain('expire in 1 hour');
+        expect(sentEmails[0]?.html).toContain('1 hour');
+        expect(sentEmails[0]?.text).not.toContain('24 hours');
+        expect(sentEmails[0]?.html).not.toContain('24 hours');
+      });
+
+      it('should render the default expiry copy unchanged when 86400 is configured', async () => {
+        const customProvider = new MockEmailProvider();
+        const customService = createEmailService(customProvider, {
+          verificationTokenExpiry: 86400,
+        });
+        await customService.sendVerificationEmail('user@example.com', 'token123');
+
+        const sentEmails = customProvider.getSentEmails();
+        expect(sentEmails[0]?.text).toContain('expire in 24 hours');
+      });
+
+      it('should humanize an expiry that is not a whole number of hours', async () => {
+        const customProvider = new MockEmailProvider();
+        const customService = createEmailService(customProvider, {
+          verificationTokenExpiry: 5400,
+        });
+        await customService.sendVerificationEmail('user@example.com', 'token123');
+
+        const sentEmails = customProvider.getSentEmails();
+        expect(sentEmails[0]?.text).toContain('expire in 1 hour and 30 minutes');
+      });
+
+      it('should express multi-day expiries in days', async () => {
+        const customProvider = new MockEmailProvider();
+        const customService = createEmailService(customProvider, {
+          verificationTokenExpiry: 259200,
+        });
+        await customService.sendVerificationEmail('user@example.com', 'token123');
+
+        const sentEmails = customProvider.getSentEmails();
+        expect(sentEmails[0]?.text).toContain('expire in 3 days');
+      });
+    });
   });
 });
