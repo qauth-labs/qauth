@@ -133,7 +133,7 @@ curl -s http://localhost:3000/.well-known/oauth-authorization-server | jq
 ```
 
 > Interactive API docs (Swagger UI) are served at `http://localhost:3000/docs`.
-> See the [Docker guide](/docs/docker.md) for development mode, CIMD settings, and
+> See the [Docker guide](/operate/docker/) for development mode, CIMD settings, and
 > production considerations.
 
 ---
@@ -292,7 +292,7 @@ advertised in discovery.
   default — `REGISTER_CLIENT_RATE_LIMIT` / `REGISTER_CLIENT_RATE_WINDOW`).
   Tighten or gate it for any internet-facing deployment. See
   [ADR-007 §1](/docs/adr/007-mcp-first-positioning.md) and the
-  [Docker guide CIMD section](/docs/docker.md#client-id-metadata-documents-cimd).
+  [Docker guide CIMD section](/operate/docker/#client-id-metadata-documents-cimd).
 
 ---
 
@@ -336,4 +336,4 @@ even if both trust the same QAuth instance.
   full configuration, `introspection` mode, and the framework-agnostic core.
 - [ADR-007: MCP-First Positioning](/docs/adr/007-mcp-first-positioning.md) — why this
   is QAuth's near-term product identity.
-- [Docker guide](/docs/docker.md) — development mode, CIMD configuration, production.
+- [Docker guide](/operate/docker/) — development mode, CIMD configuration, production.
