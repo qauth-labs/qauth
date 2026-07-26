@@ -3,7 +3,6 @@ import * as path from 'node:path';
 import AutoLoad from '@fastify/autoload';
 import cors from '@fastify/cors';
 import formbody from '@fastify/formbody';
-import type { JwsAlgorithm } from '@qauth-labs/core-crypto';
 import { cachePlugin } from '@qauth-labs/fastify-plugin-cache';
 import { databasePlugin } from '@qauth-labs/fastify-plugin-db';
 import { emailPlugin, type EmailProviderConfig } from '@qauth-labs/fastify-plugin-email';
@@ -18,34 +17,13 @@ import { pkcePlugin } from '@qauth-labs/fastify-plugin-pkce';
 import type { FastifyInstance } from 'fastify';
 
 import { env } from '../config/env';
+import { deriveCryptoCapabilities } from './crypto-capabilities';
 import { isJtiRevoked } from './helpers/token-revocation';
 import errorHandler from './plugins/error-handler';
 import { metricsPlugin } from './plugins/metrics';
 import { rateLimitPlugin } from './plugins/rate-limit';
 import { requestIdPlugin } from './plugins/request-id';
 import { securityHeadersPlugin } from './plugins/security-headers';
-
-/**
- * JOSE `alg` identifiers this build can actually put in a JWS, pinned
- * EXHAUSTIVELY to the crypto layer's own union (#299).
- *
- * `satisfies Record<JwsAlgorithm, true>` is the entire point of writing it as an
- * object: when the crypto layer widens `JwsAlgorithm`, this literal stops
- * compiling until the new algorithm is listed, so the `haip-1.0` refusal below
- * lifts in the same commit that makes it untrue. A hand-maintained array would
- * have gone stale silently, and a stale capability descriptor is worse than none
- * — it would let `haip-1.0` boot on a crypto layer that cannot sign for it. That
- * is exactly how `ES256` arrived here: #298 widened the union and this line
- * refused to compile until it was acknowledged.
- *
- * A TYPE-only import, so nothing from `@qauth-labs/core-crypto` reaches the
- * bundle: the bootstrap needs the crypto layer's answer, not its implementation.
- */
-const JWS_ALGORITHMS = {
-  EdDSA: true,
-  RS256: true,
-  ES256: true,
-} as const satisfies Record<JwsAlgorithm, true>;
 
 /**
  * What this deployment's crypto layer can do, handed to the VerifierProfile gate
@@ -55,22 +33,20 @@ const JWS_ALGORITHMS = {
  * Without this, `haip-1.0`'s `signingAlgs: ['ES256']` and
  * `responseEncryption: 'required'` (HAIP §7 / §5.1) were declared and enforced
  * nowhere: the only thing keeping that profile out was its missing certificate
- * chain, so the moment #298/#233 provisioned one it would have booted on an
+ * chain, so the moment #233 provisioned one it would have booted on an
  * EdDSA-only stack and every EUDI wallet would have rejected every request.
  *
- * `responseEncryption` is now `true`: #298 landed the `ECDH-ES` (P-256) /
- * `A128GCM`+`A256GCM` JWE stack (`encryptJwe` / `decryptJwe` and the per-request
- * ephemeral key material) that `direct_post.jwt` needs. It still carries no
- * compile-time pin — a boolean has no union to `satisfies` against — so unlike
- * `signingAlgs` it is a HAND-MAINTAINED claim: removing the JWE stack would not
- * break this line, and the gate would keep advertising an encrypter that is
- * gone. Treat it as a fact to re-check whenever `@qauth-labs/core-crypto`'s JWE
- * surface changes.
+ * The answer is DERIVED from the deployment's provisioned key material rather
+ * than written here, because the two questions "does the crypto library export
+ * this algorithm" and "can this deployment sign with it" are not the same
+ * question, and only the second one is what the gate is asking. See
+ * `./crypto-capabilities` for which key material each entry is derived from and
+ * why ES256 and the JWE stack are still answered `false` on a crypto layer that
+ * implements both.
  */
-const CRYPTO_CAPABILITIES: VerifierCryptoCapabilities = {
-  signingAlgs: Object.keys(JWS_ALGORITHMS),
-  responseEncryption: true,
-};
+const CRYPTO_CAPABILITIES: VerifierCryptoCapabilities = deriveCryptoCapabilities({
+  rs256PrivateKey: env.JWT_RS256_PRIVATE_KEY,
+});
 
 export async function app(fastify: FastifyInstance, opts: object) {
   await fastify.register(databasePlugin, {
@@ -136,9 +112,8 @@ export async function app(fastify: FastifyInstance, opts: object) {
       verifierProfileId: env.OID4VP_VERIFIER_PROFILE,
       cryptoCapabilities: CRYPTO_CAPABILITIES,
       // `provisionedVerifierMaterial` is deliberately not passed: no certificate
-      // configuration surface exists until #298/#233, and the option's default
-      // is the refusing one. Threading real material through here is that
-      // issue's job.
+      // configuration surface exists until #233, and the option's default is the
+      // refusing one. Threading real material through here is that issue's job.
     }),
   });
 

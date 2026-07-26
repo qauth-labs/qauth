@@ -83,14 +83,19 @@ export type IssuerKeyResolution = 'x5c' | 'issuer-metadata';
 /**
  * JOSE `alg` identifiers a profile may DECLARE.
  *
- * Deliberately NOT `@qauth-labs/core-crypto`'s `JwsAlgorithm` (`'EdDSA' | 'RS256'`).
- * That union is what the crypto layer can actually produce today; this one is what
- * a profile *requires*. `haip-1.0` requires `ES256` (HAIP §7) and no backend
- * produces it until #298 — declaring the requirement is precisely how that gap
- * becomes visible and fail-closed, rather than silently unrepresentable.
+ * Deliberately NOT `@qauth-labs/core-crypto`'s `JwsAlgorithm`
+ * (`'EdDSA' | 'RS256' | 'ES256'` since #298). That union is the crypto layer's
+ * vocabulary; this one is what a profile *requires*, and the two answer different
+ * questions — a profile may require an algorithm no deployment has a key for.
+ * `haip-1.0` requires `ES256` (HAIP §7), and declaring the requirement is
+ * precisely how that gap becomes visible and fail-closed rather than silently
+ * unrepresentable.
  *
- * #298 reconciles the two: when ES256 lands in the crypto layer, this type should
- * be re-derived from `JwsAlgorithm` instead of standing alone.
+ * #298 landed ES256 in the crypto layer and the two unions still do NOT merge:
+ * `JwsAlgorithm` also carries `RS256`, which no OID4VP profile may declare, and
+ * "the library can compute it" is not "this deployment can sign a request with
+ * it" — the second question is `VerifierCryptoCapabilities`', and the boot gate
+ * intersects the two.
  */
 export type VerifierSigningAlgorithm = 'EdDSA' | 'ES256';
 
