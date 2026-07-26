@@ -16,7 +16,7 @@ import {
 } from './status-list-spec';
 
 /**
- * Verifying a Status List Token (draft-14 §5 / §6, issue #297).
+ * Verifying a Status List Token (draft-14 §5.1 / §8.3, issue #297).
  *
  * ## The order of operations is the security property
  *
@@ -49,12 +49,44 @@ import {
  *
  * ## `sub` binding is what makes the fetch meaningful
  *
- * draft-14 §6: the token's `sub` MUST equal the credential's
- * `status_list.uri`. Without it, an attacker who can get QAuth to fetch ANY
- * anchored status list — their own, listing their own credential as valid —
- * can point every credential at it. The comparison is byte-exact against the
- * URI as the credential wrote it, which is why `StatusListReference.uri` is
- * kept verbatim.
+ * draft-14 §5.1, restated as the §8.3 step 4a validation rule: the token's
+ * `sub` MUST equal the credential's `status_list.uri`. Without it, an attacker
+ * who can get QAuth to fetch ANY anchored status list — their own, listing
+ * their own credential as valid — can point every credential at it. The
+ * comparison is byte-exact against the URI as the credential wrote it, which is
+ * why `StatusListReference.uri` is kept verbatim.
+ *
+ * ## Why `iss` is NOT compared to the credential's issuer
+ *
+ * A recurring review question, so the answer is recorded here rather than
+ * rediscovered. draft-14 does not require the two to match, and this is not an
+ * omission in the draft — the requirement existed and was deliberately removed
+ * in draft -04 (*"remove requirement for matching iss claim in Referenced Token
+ * and Status List Token"*). The §8.3 validation rules a Relying Party MUST
+ * apply list `sub`, `iat`, `exp` and `ttl`; there is no `iss` rule among them,
+ * and §5.1 does not even list `iss` as a claim of the Status List Token.
+ *
+ * Adding the comparison would be actively wrong, not merely redundant. §11.3
+ * treats *"the Issuer of the Referenced Token is a different entity than the
+ * Status Issuer"* as a first-class deployment and says the keys *"may be
+ * cryptographically linked, e.g. by a Certificate Authority through an x.509
+ * PKI … issued by the same Certificate Authority"* — which is exactly the
+ * anchored `x5c` path plus the `dNSName` SAN binding this module implements.
+ * Requiring `iss` equality would refuse precisely the topology the spec
+ * recommends, so the checker's API is deliberately NOT widened to take the
+ * credential's issuer.
+ *
+ * What stops cross-issuer impersonation instead is the pair of bindings that
+ * are checked: `sub` must equal the `status_list.uri` written inside the
+ * issuer-signed credential, so an attacker cannot redirect a revoked credential
+ * at a status list of their choosing; and the leaf certificate's `dNSName` SAN
+ * must cover the `iss` host, so an anchored certificate cannot sign for an
+ * issuer it does not speak for.
+ *
+ * `iss` is nonetheless REQUIRED here even though §5.1 does not require it: the
+ * SAN binding needs a name to bind against, and a token with no `iss` would
+ * silently skip that check. Refusing it is the fail-closed reading, and every
+ * real status issuer emits it — the draft's own example does.
  */
 
 /** Longest protected header accepted, in base64url characters. */
@@ -73,7 +105,7 @@ export interface VerifiedStatusList {
   readonly issuer: string;
   /**
    * `ttl` in seconds when the token carried one — the issuer's own cache
-   * budget (draft-14 §6).
+   * budget (draft-14 §5.1).
    */
   readonly ttlSeconds?: number;
   /** `exp` as epoch milliseconds when present. */
