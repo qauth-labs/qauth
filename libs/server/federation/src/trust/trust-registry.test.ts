@@ -1,5 +1,5 @@
-import { InvalidCredentialsError } from '@qauth-labs/shared-errors';
-import { describe, expect, it } from 'vitest';
+import { InvalidConfigurationError, InvalidCredentialsError } from '@qauth-labs/shared-errors';
+import { describe, expect, it, vi } from 'vitest';
 
 import { type IssuerKeyResolutionMethod, ValidatedIssuer } from './issuer-identity';
 import { ISSUER_TRUST_REJECTION_MESSAGE } from './issuer-trust-rejection';
@@ -90,16 +90,48 @@ describe('createStaticIssuerAllowlist (#236)', () => {
     // Dropping it would leave the operator believing an issuer is trusted when
     // it is not; returning a deny-all registry would be indistinguishable from
     // a correctly-empty configuration.
+    expect(() => createStaticIssuerAllowlist([entry])).toThrow(InvalidConfigurationError);
     expect(() => createStaticIssuerAllowlist([entry])).toThrow(/not a usable issuer identity/);
   });
 
-  it('names the offending entry in the operator-facing error, truncated', () => {
-    const long = `http://issuer.example/${'a'.repeat(400)}`;
+  it('keeps the offending entry OUT of the message and ON structured details', () => {
+    // This function is exported from the package index, so a future caller can
+    // reach it from a request path. A plain `Error` quoting the entry would
+    // escape as a non-domain fault, and its message reaches a 500 body in
+    // development and every log line regardless.
+    const entry = 'https://issuer.example?tenant=acme-secret';
 
-    expect(() => createStaticIssuerAllowlist([long])).toThrow(/…/);
+    try {
+      createStaticIssuerAllowlist(['https://a.example', entry]);
+      expect.unreachable('should have thrown');
+    } catch (error) {
+      const configError = error as InvalidConfigurationError;
+
+      expect(configError).toBeInstanceOf(InvalidConfigurationError);
+      expect(configError.message).not.toContain(entry);
+      expect(configError.details).toEqual({ index: 1, entry });
+    }
   });
 
-  it('throws when handed something that is not an array', () => {
+  it('truncates a long entry before putting it on details', () => {
+    const long = `http://issuer.example/${'a'.repeat(400)}`;
+
+    try {
+      createStaticIssuerAllowlist([long]);
+      expect.unreachable('should have thrown');
+    } catch (error) {
+      const reported = (error as InvalidConfigurationError).details?.['entry'] as string;
+
+      expect(reported).toHaveLength(121);
+      expect(reported).toMatch(/…$/);
+      expect((error as Error).message).not.toContain('issuer.example');
+    }
+  });
+
+  it('throws a domain error when handed something that is not an array', () => {
+    expect(() =>
+      createStaticIssuerAllowlist('https://issuer.example' as unknown as string[])
+    ).toThrow(InvalidConfigurationError);
     expect(() =>
       createStaticIssuerAllowlist('https://issuer.example' as unknown as string[])
     ).toThrow(/must be an array/);
@@ -197,6 +229,129 @@ describe('assertIssuerTrusted — the mandatory gate (#236)', () => {
       });
       expect(serialized).not.toContain('issuer.example');
       expect(serialized).not.toContain('other.example');
+    }
+  });
+
+  it('contains a backend that THROWS — the refusal shape must not change', () => {
+    // A backend is pluggable code: the HAIP §6.1.1 chain validator parses
+    // certificates and a federation backend does I/O. If the exception escaped,
+    // a route would answer 500 instead of 401 — which tells an attacker
+    // "the backend blew up on this credential", the exact distinction the
+    // single-refusal-shape guarantee removes.
+    const exploding: TrustRegistry = {
+      isTrusted: (): boolean => {
+        throw new TypeError('certificate parser blew up');
+      },
+    };
+    const onBackendError = vi.fn();
+
+    expect(() =>
+      assertIssuerTrusted(exploding, validated('https://issuer.example'), { onBackendError })
+    ).toThrow(InvalidCredentialsError);
+    expect(() =>
+      assertIssuerTrusted(exploding, validated('https://issuer.example'), { onBackendError })
+    ).toThrow(ISSUER_TRUST_REJECTION_MESSAGE);
+  });
+
+  it('reports a throwing backend so the failure is loud server-side', () => {
+    const thrown = new TypeError('certificate parser blew up');
+    const exploding: TrustRegistry = {
+      isTrusted: (): boolean => {
+        throw thrown;
+      },
+    };
+    const onBackendError = vi.fn();
+
+    expect(() =>
+      assertIssuerTrusted(exploding, validated('https://issuer.example'), { onBackendError })
+    ).toThrow(InvalidCredentialsError);
+    expect(onBackendError).toHaveBeenCalledWith(thrown);
+  });
+
+  it('falls back to console.error when the caller wired no reporter', () => {
+    // A silent default would make forgetting the reporter cost-free, and this
+    // is the one failure mode that is invisible on the wire by design.
+    const exploding: TrustRegistry = {
+      isTrusted: (): boolean => {
+        throw new Error('boom');
+      },
+    };
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    try {
+      expect(() => assertIssuerTrusted(exploding, validated('https://issuer.example'))).toThrow(
+        InvalidCredentialsError
+      );
+      expect(consoleError).toHaveBeenCalledTimes(1);
+    } finally {
+      consoleError.mockRestore();
+    }
+  });
+
+  it('a throwing backend is indistinguishable from an untrusted issuer', () => {
+    const exploding: TrustRegistry = {
+      isTrusted: (): boolean => {
+        throw new Error('boom');
+      },
+    };
+
+    const shapes = [
+      (): void => assertIssuerTrusted(registry, validated('https://other.example')),
+      (): void =>
+        assertIssuerTrusted(exploding, validated('https://issuer.example'), {
+          onBackendError: () => undefined,
+        }),
+    ].map((act) => {
+      try {
+        act();
+        return 'no-throw';
+      } catch (error) {
+        const domainError = error as InvalidCredentialsError;
+        return `${domainError.name}|${domainError.code}|${domainError.statusCode}|${domainError.message}`;
+      }
+    });
+
+    expect(new Set(shapes).size).toBe(1);
+  });
+
+  it('a reporter that throws does not become the fault', () => {
+    // The thing that reports a failure must never convert a contained 401 into
+    // an uncontained 500.
+    const exploding: TrustRegistry = {
+      isTrusted: (): boolean => {
+        throw new Error('boom');
+      },
+    };
+
+    expect(() =>
+      assertIssuerTrusted(exploding, validated('https://issuer.example'), {
+        onBackendError: () => {
+          throw new Error('the logger is down too');
+        },
+      })
+    ).toThrow(InvalidCredentialsError);
+  });
+
+  it('carries nothing from the backend failure in the thrown error', () => {
+    const exploding: TrustRegistry = {
+      isTrusted: (): boolean => {
+        throw new Error('certificate CN=secret-anchor.internal failed to parse');
+      },
+    };
+
+    try {
+      assertIssuerTrusted(exploding, validated('https://issuer.example'), {
+        onBackendError: () => undefined,
+      });
+      expect.unreachable('should have refused');
+    } catch (error) {
+      const serialized = JSON.stringify({
+        message: (error as Error).message,
+        ...(error as object),
+      });
+
+      expect(serialized).not.toContain('secret-anchor.internal');
+      expect(serialized).not.toContain('issuer.example');
     }
   });
 
