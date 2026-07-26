@@ -44,6 +44,52 @@ const identity = await provider.verify(input);
 `ProviderNotRegisteredError` for an unregistered `type`. Both come from
 `@qauth-labs/shared-errors`.
 
+## Credential revocation — Token Status List (#297)
+
+`src/status/` implements HAIP §6.1 credential revocation over the IETF Token
+Status List, pinned to **draft-14** (HAIP §9.4) in a single constant,
+`TOKEN_STATUS_LIST_DRAFT`.
+
+```typescript
+import {
+  createCredentialStatusChecker,
+  createStatusListTrustAnchors,
+  createStatusListUriAllowlist,
+  createStatusEndpointBreaker,
+} from '@qauth-labs/server-federation';
+
+const checker = createCredentialStatusChecker({
+  // x5c chains must terminate at one of these, and the anchor itself must NOT
+  // appear in the chain (HAIP §6.1.1).
+  trustAnchors: createStatusListTrustAnchors([operatorAnchorPem]),
+  // SSRF boundary: the status list URI comes off an unverified credential.
+  uriAllowlist: createStatusListUriAllowlist(['https://issuer.example/statuslists']),
+  breaker: createStatusEndpointBreaker(),
+  onAudit: (event) => request.log.info(event, 'credential status check'),
+});
+
+// Takes ONLY the credential's `status` claim. Throws the same non-enumerating
+// InvalidCredentialsError as the issuer-trust path on anything but VALID.
+await checker.assertCredentialNotRevoked(credentialClaims.status, {
+  statusRequired: profile.requireCredentialStatus,
+});
+```
+
+**Fail-closed, without exception.** An unreachable endpoint, an unverifiable
+Status List Token, an unanchored status issuer, an out-of-range index, an
+unknown status value and an open circuit are all _rejections_. There is no
+timeout fallback and no stale-on-error path — every one of those would let an
+attacker who can degrade a third party's availability un-revoke credentials.
+
+Verified lists are cached for `min(ttl, exp, maxCacheTtlSeconds)` (default
+ceiling 5 minutes), and concurrent lookups of the same URI are coalesced into
+one fetch, so a wallet login is not an outbound HTTP round-trip.
+
+Known limits, stated rather than implied: DNS rebinding against an allowlisted
+hostname is not defended here (supply your own `fetch` over an
+address-pinning agent); redirects are refused outright; the `x5c` chain is not
+checked for revocation (CRL/OCSP), name constraints or policy OIDs.
+
 ## Installation
 
 This library is part of the QAuth monorepo and is automatically available to
