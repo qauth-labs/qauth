@@ -144,9 +144,15 @@ export function createStatusEndpointBreaker(
       if (state === undefined || state.openUntilMs === 0) return true;
       if (now() < state.openUntilMs) return false;
 
-      // Half-open: let exactly one probe through. The counter is left at the
-      // threshold so a failing probe re-opens on its own `recordFailure`.
-      state.openUntilMs = 0;
+      // Half-open: let exactly ONE probe through. The open window is RE-ARMED
+      // rather than cleared, which is what makes "exactly one" true — clearing
+      // it would admit every caller that arrived before the probe reported
+      // back, i.e. deliver recovery as the thundering herd the probe exists to
+      // avoid, and would leave the circuit permanently closed if a probe never
+      // reported back at all. `recordSuccess` clears the window on a good
+      // probe; the counter is left at the threshold so a failing probe re-opens
+      // on its own `recordFailure`.
+      state.openUntilMs = now() + openDurationMs;
       return true;
     },
 

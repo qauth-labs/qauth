@@ -70,8 +70,32 @@ describe('createStatusEndpointBreaker (#297)', () => {
     // Half-open: one probe is admitted. A second call before the probe reports
     // back must NOT be, or recovery arrives as a thundering herd.
     expect(breaker.allows(A)).toBe(true);
+    expect(breaker.allows(A)).toBe(false);
+    expect(breaker.allows(A)).toBe(false);
+
     breaker.recordFailure(A);
     expect(breaker.allows(A)).toBe(false);
+  });
+
+  it('re-arms the open window when a probe never reports back', () => {
+    // A probe whose caller crashes (or is cancelled) must not leave the circuit
+    // stuck half-open forever, nor stuck closed: the window simply runs again.
+    let clock = 0;
+    const breaker = createStatusEndpointBreaker({
+      failureThreshold: 1,
+      openDurationMs: 1_000,
+      now: () => clock,
+    });
+
+    breaker.recordFailure(A);
+    clock = 1_000;
+    expect(breaker.allows(A)).toBe(true);
+
+    clock = 1_999;
+    expect(breaker.allows(A)).toBe(false);
+
+    clock = 2_000;
+    expect(breaker.allows(A)).toBe(true);
   });
 
   it('closes when the probe succeeds', () => {
