@@ -1,0 +1,1 @@
+The handler (`exampleHandler`, `apps/docs-site/src/invariants/__fixtures__/anchor-validity/target.ts:9999`) does X — the line number has drifted but the file and symbol are still correct, so this must still pass.
