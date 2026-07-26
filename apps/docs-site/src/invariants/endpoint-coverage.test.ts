@@ -18,14 +18,11 @@ import { resolveWorkspaceRoot } from './workspace-root';
  * Guard 3: three legs of endpoint documentation coverage.
  *
  *   1. Every route Fastify registers appears in the committed OpenAPI spec — LIVE.
- *   2. Every OpenAPI path is documented on the API reference page.
- *   3. The reference page documents no path the OpenAPI spec lacks.
+ *   2. Every OpenAPI path is documented on the API reference page — LIVE.
+ *   3. The reference page documents no path the OpenAPI spec lacks — LIVE.
  *
- * Legs 2 and 3 have no real-tree assertion here: the API reference page
- * does not exist in the site until Task 5 (#351). They are proven correct
- * against fixtures only — deliberately not `.skip`ped, per #285 (a skip
- * nobody unskips is how a suite ends up running zero tests while staying
- * green). Task 5 owns adding their real-tree test once the page lands.
+ * Legs 2 and 3 now have a real-tree assertion below, added by Task 5 (#351)
+ * once `apps/docs-site/src/content/docs/integrate/api-reference.md` landed.
  */
 
 const FIXTURES = join(dirname(fileURLToPath(import.meta.url)), '__fixtures__', 'endpoint-coverage');
@@ -95,6 +92,47 @@ describe('leg 1 — real route tree vs. the committed openapi.json', () => {
     // "no violations" check, an empty extraction cannot pass this silently.
     const distinctExtractedPaths = [...new Set(routes.map((r) => r.path))].sort();
     expect(distinctExtractedPaths).toEqual(Object.keys(openApi.paths).sort());
+  });
+});
+
+describe('legs 2 & 3 — real API reference page vs. the committed openapi.json', () => {
+  const REFERENCE_PATH = join(
+    REPO_ROOT,
+    'apps',
+    'docs-site',
+    'src',
+    'content',
+    'docs',
+    'integrate',
+    'api-reference.md'
+  );
+
+  it('the API reference page documents every openapi.json path, and nothing else', () => {
+    const openApi: OpenApiDocument = JSON.parse(
+      readFileSync(join(REPO_ROOT, 'apps', 'docs-site', 'public', 'openapi.json'), 'utf8')
+    );
+    const openApiPaths = Object.keys(openApi.paths);
+
+    // Non-vacuity: a missing or empty reference file must fail loudly rather
+    // than pass by vacuously satisfying both legs (no paths to be missing,
+    // no paths to be extra). readFileSync throws if the file doesn't exist,
+    // and this length check catches an empty (or near-empty) file — the
+    // same failure mode the other real-tree tests guard against.
+    const referenceContent = readFileSync(REFERENCE_PATH, 'utf8');
+    expect(referenceContent.length).toBeGreaterThan(500);
+
+    const documentedPaths = extractDocumentedPaths(referenceContent);
+    expect(documentedPaths.length).toBeGreaterThan(0);
+
+    expect(findOpenApiPathsMissingFromReference(openApiPaths, referenceContent)).toEqual([]);
+    expect(findReferencePathsMissingFromOpenApi(openApiPaths, referenceContent)).toEqual([]);
+
+    // Cross-check, as leg 1's real-tree test does above: exact set equality
+    // against the same 28 known paths, not just "no violations found". An
+    // extraction regex that silently stopped matching anything would make
+    // `documentedPaths` `[]`, which fails this equality just as loudly as a
+    // real coverage gap would.
+    expect([...new Set(documentedPaths)].sort()).toEqual([...new Set(openApiPaths)].sort());
   });
 });
 
