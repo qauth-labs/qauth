@@ -1,8 +1,25 @@
 # ADR-009: Wallet Account Resolution — `asserted-lookup` Default and the Subject-Identity Model
 
-**Status:** Accepted
-**Date:** 2026-07-20
+**Status:** Accepted — **findings partially superseded, see
+[Drift re-check (2026-07-26)](#drift-re-check-2026-07-26)**
+**Date:** 2026-07-20 (findings amended 2026-07-26)
 **Authors:** QAuth Team
+
+> ⚠️ **Regulatory drift landed on 2026-07-22 — one Decision needs a human call.**
+> Commission Implementing Regulations **(EU) 2026/1730** and **(EU) 2026/1731**
+> were adopted on 15 July 2026 and published in the Official Journal on 22 July
+> 2026, entering into force 11 August 2026. Factual corrections have been applied
+> to Findings 1 and 3 below, each marked inline. **No Decision has been changed.**
+>
+> The item requiring a decision: CIR 2026/1731 **deletes CIR 2024/2979 Article
+> 14(1) and Annex V**, removing WebAuthn as the named technical specification for
+> pseudonym generation from EU law, while leaving the relying-party-specific
+> pseudonym obligation in Article 14(2) intact. Finding 3's _"i.e. a passkey"_
+> equation loses its legal anchor. Decision §3's gates are unchanged and still not
+> cleared, so nothing is unsafe today — but the rationale beneath §3 is no longer
+> the rationale that was written. Superseding an ADR is an explicit act; this is
+> flagged, not performed. Full record:
+> [EUDI Regulatory Drift Log](../eudi-regulatory-drift-log.md).
 
 > [ADR-004](./004-wallet-agnostic-federation.md) established _that_ QAuth bridges
 > OID4VP wallets to OAuth 2.1, and its
@@ -58,29 +75,54 @@ specifications.
 
 **The mandatory PID attribute set contains no identifier.** Commission
 Implementing Regulation (EU) 2024/2977 of 28 November 2024 (OJ L, 2024/2977,
-4.12.2024; applicable since 24 December 2024), Annex, point 1, Table 1
-"Mandatory person identification data for the natural person", lists exactly five
-attributes: `family_name`, `given_name`, `birth_date`, `birth_place`,
-`nationality`. None is an identifier. (That is the position under the act
-currently in force, re-confirmed 2026-07-20; a pending amendment would replace the
-Annex with a six-row Table 1 adding `portrait` — see
-[Citation notes](#citation-notes).)
+4.12.2024; applicable since 24 December 2024), **as amended by CIR (EU) 2026/1731
+of 15 July 2026 (OJ L, 2026/1731, 22.7.2026; in force 11 August 2026)**, Annex,
+Section 1, Table 1 "Mandatory person identification data for the natural person
+for selective disclosure", lists six data identifiers: `family_name`,
+`given_name`, `birth_date`, `birth_place`, `nationality`, `portrait`. **None is an
+identifier**, which is the load-bearing point and is unchanged.
+
+> **Amended 2026-07-26 — CIR (EU) 2026/1731.** This paragraph read "lists exactly
+> five attributes" until the amending act replaced the Annex outright. Table 1 now
+> has six rows and no "Presence" column — membership in Table 1 is itself the
+> mandatory marker. `portrait` **applies only from 11 August 2028** (stated in the
+> row itself and in recital 3 of the amending act) and is subject to an explicit
+> user opt-out, so between 11 August 2026 and 11 August 2028 the accurate statement
+> is _five operative mandatory attributes out of six listed_. A `portrait` is a
+> biometric, not a subject identifier; the finding's conclusion is untouched, but
+> see the linkability note in [Drift re-check (2026-07-20)](#drift-re-check-2026-07-20).
 
 Table 5 (metadata about the person identification data) adds mandatory
-`expiry_date`, `issuing_authority` and `issuing_country`, plus an **optional**
-`document_number`. That last one is identifier-like and worth naming explicitly
-so it is not mistaken for an oversight — but it is optional, and Finding 4 shows
-why an issuer-assigned document number is the wrong thing to key on in any case.
+`issuing_authority` and `issuing_country`, plus **optional** `expiry_date`,
+`document_number`, `issuing_jurisdiction` and `issuance_date`. `document_number`
+is identifier-like and worth naming explicitly so it is not mistaken for an
+oversight — but it is optional, and Finding 4 shows why an issuer-assigned
+document number is the wrong thing to key on in any case.
 
-Two qualifications matter. Presence is not meaning — the sentence immediately
-below Table 1 reads:
+> **Amended 2026-07-26 — CIR (EU) 2026/1731.** `expiry_date` was mandatory in
+> Table 5 as originally published and is **optional** in the replaced Annex.
+> `issuing_jurisdiction` and `issuance_date` are new, both optional. Neither
+> change touches the finding: no new mandatory field is an identifier.
 
-> Where an attribute value is not known for the person or cannot otherwise be
-> issued as part of the person identification dataset, Member States shall use an
-> attribute value appropriate to the situation instead.
+Two qualifications matter. Presence is not meaning — where a value cannot be
+issued, the Annex still requires a substitute rather than an omission. For natural
+persons the amended Annex does this attribute-by-attribute: an appropriate value
+for an unknown `birth_date`, `'QU'` for unknown nationality, `'QS'` for
+statelessness, and an empty value where the user opts out of `portrait`. The
+general formulation survives for legal persons, below Table 3:
+
+> Where a data identifier is not known for the person or cannot otherwise be
+> issued as part of the person identification dataset, Member States shall instead
+> use an attribute value appropriate to the situation.
+
+> **Amended 2026-07-26 — CIR (EU) 2026/1731.** The general sentence was previously
+> quoted here as sitting "immediately below Table 1". In the replaced Annex it
+> appears **only below Table 3 (legal persons)**; Table 1's handling is now
+> specific, as described above. The substitute-don't-omit principle the finding
+> relies on is unchanged.
 
 And the CIR does impose a uniqueness duty, just not an attribute-level one.
-Article 3(4):
+Article 3(4) — not among the provisions amended in 2026 — reads:
 
 > Member States shall ensure that the person identification data issued to a
 > given wallet user is unique for the Member State.
@@ -106,6 +148,11 @@ uses "stable", "persistent" or any cognate here — and the drafters plainly kne
 how to require persistence, because Table 3 (legal persons) asks for an
 identifier "which is as persistent as possible in time". Its absence from Table 2
 is a choice, not an oversight.
+
+> **Re-verified 2026-07-26 — unchanged.** The `personal_administrative_number`
+> definition is byte-identical in the Annex as replaced by CIR (EU) 2026/1731, and
+> Table 3's "as persistent as possible in time" survives verbatim. The drafters
+> revisited the whole Annex and left both exactly as they were.
 
 **The user may refuse to present it.** EUDI PID Rulebook v1.7 (17 July 2026) §2.1:
 
@@ -260,15 +307,35 @@ behaviour; and it composes with attribute disclosure ("either standalone or in
 combination with"), so pseudonymity and attribute verification are not
 alternatives.
 
-**The named technical specification is WebAuthn.** CIR (EU) 2024/2979, Annex V
-"Technical specifications for pseudonym generation referred to in Article 14",
-has exactly one entry:
+**There is no longer any named technical specification.** Until 11 August 2026,
+CIR (EU) 2024/2979 Article 14(1) required wallet units to support pseudonym
+generation "in compliance with the technical specifications set out in Annex V",
+and Annex V "Technical specifications for pseudonym generation referred to in
+Article 14" had exactly one entry:
 
 > — WebAuthn – W3C Recommendation, 8 April 2021, Level 2,
 > https://www.w3.org/TR/2021/REC-webauthn-2-20210408/.
 
-The Level 2 pin remains current: WebAuthn Level 3 was still a Candidate
-Recommendation as of mid-2026.
+> ⚠️ **Superseded 2026-07-26 — CIR (EU) 2026/1731.** Article 2 of the amending act
+> **deletes Article 14(1)** (point (8)) and **deletes Annex V** (point (14)),
+> with effect from 11 August 2026. Neither amending act published on 22 July 2026
+> contains the string "WebAuthn" anywhere. **Article 14(2) — the
+> relying-party-specific pseudonym obligation quoted above — survives unamended.**
+>
+> So from 11 August 2026 EU law requires wallets to produce RP-specific pseudonyms
+> and names **no** technical specification for doing so. This paragraph's original
+> heading, "The named technical specification is WebAuthn", was true when written
+> and is now false. The consequence runs deeper than a citation: the
+> `rp-pseudonym` → passkey equation that gives this finding its shape drew its
+> force from EU law naming WebAuthn, and that naming is gone. **Decision §3 has
+> not been rewritten on the strength of this — see the banner at the top of this
+> ADR.** Full record and controls:
+> [EUDI Regulatory Drift Log § 3](../eudi-regulatory-drift-log.md#3-cir-eu-20242979-article-14-and-annex-v--pseudonyms--superseded).
+
+The W3C position is unchanged and is now a fact about W3C only: WebAuthn Level 3
+was still a Candidate Recommendation Snapshot (26 May 2026) when re-checked on
+2026-07-26, so Level 2 (8 April 2021) remains the only operative Recommendation.
+With Annex V deleted, no EU instrument pins a WebAuthn level at all.
 
 **And they must not be correlatable.** EUDI ARF v2.9.0 (2026-05-21), Annex 2,
 Topic 11 (Pseudonyms), PA_17:
@@ -326,6 +393,22 @@ credential as an assurance input rather than a session primitive.
    the whole topic is from firm obligation toward obligation contingent on
    specifications that do not exist, so this dependency may never produce a hard,
    checkable commitment.
+
+   > **Amended 2026-07-26 — ARF v3.0.0 (2026-07-23).** The forecast in the two
+   > paragraphs above did not hold. In the first ARF release after the refinement
+   > round, `PA_21` and `PA_22` are **both retained verbatim** in normative Annex 2,
+   > `PA_14`–`PA_17` survive, and the proposed relying-party HLRs `PA_10`–`PA_13`
+   > carry **no** "if a common technical specification enabling this is available"
+   > qualifier. The discussion paper is unchanged at v1.2 (26 June 2026) and its
+   > removals were simply not implemented — partially, in fact, since `PA_20`'s Note
+   > _was_ updated along the lines the paper proposed, so this is a decision not to
+   > delete rather than an oversight. The sentence "the deletion reading is the
+   > better-supported one" is withdrawn. **The gate itself is unchanged**: the
+   > Commission technical-specification register at the `v3.0.0` tag still runs
+   > TS1–TS14 with no pseudonym TS, so `PA_21` remains an undischarged forward
+   > obligation and the vacuous-clearing hazard described below has not
+   > materialised. Note the new tension this creates: the ARF keeps a WebAuthn-based
+   > obligation that CIR (EU) 2026/1731 has just deleted from the implementing act.
 
 2. **The requirement is being weakened, not hardened.** ARF Annex 2 `PA_22` changed
    from SHALL to MAY between v2.5.0 and v2.9.0 — v2.5.0: "Wallet Providers SHALL
@@ -505,6 +588,23 @@ since the holder may refuse it.
 Demoted from a plausible default to opt-in: no Member State policy guaranteeing
 `personal_administrative_number` stability was found, only the enabling clause.
 
+> ⚠️ **Flagged 2026-07-26 — the header-parameter names above are wrong for PID.**
+> The **security principle is untouched**: the issuer must come from a validated
+> chain anchored in a trusted list, never from an unverified `iss`. But the
+> amended CIR 2024/2977 Annex requires PID signatures to carry **`x5u` and
+> `x5t#S256`** (SD-JWT VC, per RFC 7515) and **`x5u` and `x5t`** (ISO/IEC-mdoc,
+> per RFC 9360, SHA-256) — not `x5c` or `x5chain`. Those two do still appear in
+> the amended acts, but for wallet instance attestations and key attestations
+> (`x5c`) and for MSO revocation lists (`x5chain`), so the parameter is
+> context-specific and this Decision generalised from the wrong context. `x5u` is a
+> **URI**, so a conforming PID verifier fetches and pins rather than reading an
+> embedded chain — a different, network-facing implementation shape with its own
+> SSRF and caching considerations. This is a correction for **#236**, and the
+> Decision text is left unchanged pending that work. The rules for **non-PID**
+> attestations now live in ETSI TS 119 472-1 V1.2.1 (2026-02), incorporated by
+> reference into the replaced Annex II of CIR 2024/2979; **that document was not
+> retrieved**, so nothing is asserted here about it.
+
 ### 3. `rp-pseudonym` is the intended endpoint, and is gated
 
 Reserved as a named strategy so the abstraction has a seat for it, with nothing
@@ -656,9 +756,11 @@ Bern, the European Commission ESI factsheet, and 1EdTech. Two items could not be
 verified against a primary source and are marked as such where they appear:
 **ISO/IEC 18013-5** (paywalled, never read) and the **J-LIS previous-serial
 service** (HTTP 403). A third — the **adoption status of the draft act amending
-CIR 2025/848** — rested on a secondary tracker when first written and was resolved
-against primary sources on 2026-07-20; see
-[Drift re-check (2026-07-20)](#drift-re-check-2026-07-20). Recorded here because
+CIR 2025/848** — rested on a secondary tracker when first written, was resolved
+against primary sources on 2026-07-20, and was **resolved definitively on
+2026-07-26**: the act was adopted as CIR (EU) 2026/1730 and every forward-looking
+claim the secondary source supported turned out to be wrong. See
+[Drift re-check (2026-07-26)](#drift-re-check-2026-07-26). Recorded here because
 several widely-repeated formulations did not survive, and the corrections are worth
 keeping traceable — the same reasoning that kept the erroneous paragraph visible in
 ADR-004.
@@ -729,7 +831,161 @@ neither was re-verified here — ADR-004's
 [Spec status (2026-07-20)](./004-wallet-agnostic-federation.md#spec-status-2026-07-20)
 already records the Client Identifier Prefix position against OID4VP 1.0.
 
+### Drift re-check (2026-07-26)
+
+**Outcome: the drift landed.** Two Commission Implementing Regulations amending
+the whole eIDAS 2 wallet package were **adopted on 15 July 2026 and published in
+the Official Journal on 22 July 2026** — two days after the pass below concluded
+"still pending", and five days after this ADR was accepted. Both enter into force
+on **11 August 2026** (publication + 20 days, no deferred application date).
+
+| CELEX        | Act                    | Amends                                              | In force    |
+| ------------ | ---------------------- | --------------------------------------------------- | ----------- |
+| `32026R1730` | CIR (EU) **2026/1730** | CIR (EU) 2025/848                                   | 11 Aug 2026 |
+| `32026R1731` | CIR (EU) **2026/1731** | CIR (EU) 2024/2977, 2024/2979, 2024/2980, 2024/2982 | 11 Aug 2026 |
+| `32026R1735` | CIR (EU) **2026/1735** | CIR (EU) 2025/1569 (catalogue of schemes)           | 11 Aug 2026 |
+
+`32026R1735` sits outside this ADR's drift set and was not read; it is named so a
+later pass does not treat it as newly discovered. The full re-verification record —
+method, controls, per-item verdicts, source URLs and the residual uncertainty —
+lives in the [EUDI Regulatory Drift Log](../eudi-regulatory-drift-log.md). Only the
+consequences for this ADR are recorded here.
+
+**Residual uncertainty (a) from the 2026-07-20 pass was the one that mattered.**
+That pass established non-publication and said so precisely, noting that comitology
+adoption routinely precedes publication and that an adopted act would be invisible
+to every method used. It was: the acts had been adopted five days earlier. The
+method was sound and the conclusion was correctly scoped; the caveat was doing real
+work and should not be trimmed from future passes.
+
+**Verdicts.**
+
+| Item                                            | Verdict                   | Consequence here                                           |
+| ----------------------------------------------- | ------------------------- | ---------------------------------------------------------- |
+| CIR 2024/2977 Annex (PID attribute set)         | **Drifted — amended**     | Finding 1 corrected inline; **conclusion survives**        |
+| CIR 2025/848 (RP registration)                  | **Drifted — amended**     | Finding 2 **strengthened**; no correction needed           |
+| CIR 2024/2979 Art. 14(1) + Annex V (pseudonyms) | **Superseded**            | Finding 3's WebAuthn anchor deleted — **human decision**   |
+| ARF release after v2.9.0                        | **Drifted — v3.0.0**      | `PA_21` / `PA_22` **retained**; Decision §3 gate unchanged |
+| W3C WebAuthn Level 3                            | **Confirmed — no change** | Still CR Snapshot, 26 May 2026                             |
+| OID4VP 1.0 · HAIP 1.0 · SD-JWT VC draft-13      | **Confirmed — no change** | All citations stand                                        |
+| PID Rulebook pin `6d8f7f8422e5`                 | **Confirmed — no change** | Still latest; its portrait text now **vindicated**         |
+| AAMVA mDL Guidelines r1.6                       | **Confirmed — no change** | Finding 4 unchanged, independently corroborated            |
+| PID issuer-chain header parameters              | **Drifted**               | Decision §2's `x5c` / `x5chain` wrong for PID — flagged    |
+
+**1. CIR 2024/2977 — amended; Finding 1's conclusion survives.** The Annex is
+replaced outright. Table 1 now carries six data identifiers including `portrait`,
+which applies only from **11 August 2028** and is subject to a user opt-out; the
+"Presence" column is gone; `expiry_date` moved from mandatory to optional in
+Table 5. **None of the new or changed fields is a subject identifier**,
+`personal_administrative_number` is byte-identical, and Table 3's "as persistent as
+possible in time" survives — so Finding 1 stands on corrected facts. Corrections are
+marked inline in Finding 1.
+
+This also **resolves residual uncertainty (c)**: the PID Rulebook was not glossing.
+The adopted text contains both things the Rulebook asserted and the mirrored draft
+lacked — ISO/IEC 39794-5 as primary and an explicit user opt-out — and 11 August
+2028 is exactly 24 months after entry into force. The Rulebook was tracking a later
+draft than the mirror. The instruction to "treat the 24-month transition as
+unsupported by any legal text" is withdrawn; it is now supported, as a hard date.
+
+**2. CIR 2025/848 — amended, and Finding 2 is better supported than when written.**
+Articles 1, 3(1), 9(2)(c), 11 and recital 11 are **untouched**, so
+"It shall apply from the 24 December 2026" stands and Finding 2 needs no
+correction. What changed strengthens it: new Article 8(2)(c)–(d) make the
+registration certificate carry a Union-harmonised **general access policy** and
+require wallet solutions to **inform users when a relying party requests data not
+specified in the certificate**. Finding 2's argument that a national identifier
+requested for "recognise returning users" will not survive the declaration step
+previously leaned on a discretionary, proportionality-gated registrar power; it now
+also leans on a mandatory, user-facing warning at request time.
+
+**3. CIR 2024/2979 — the WebAuthn pin is deleted. This is the item needing a human
+decision.** Article 2(8) deletes Article 14(1); Article 2(14) deletes Annex V.
+Article 14(2) — RP-specific pseudonyms — survives unamended. From 11 August 2026 EU
+law mandates the mechanism and specifies nothing about how to build it.
+
+What this does and does not do to Decision §3:
+
+- **It does not unblock anything.** All three gates stand. There is still no
+  published pseudonym technical specification, `PA_22` is still a MAY, and QAuth
+  still has no WebAuthn workstream. `rp-pseudonym` remains a reserved seat with
+  nothing in it, exactly as decided.
+- **It does not clear the gate vacuously either.** The gate was deliberately keyed
+  to a published specification rather than to `PA_21`'s existence. Annex V's
+  deletion is precisely the kind of event that would have fooled a badly-written
+  gate, and the gate as written is unaffected. That instruction to #300 was correct
+  and should be kept.
+- **It does invalidate the reasoning underneath.** Finding 3's shape — "the
+  sanctioned returning-user mechanism is an RP-scoped pseudonym, **i.e. a passkey**"
+  — came from EU law naming WebAuthn. It no longer does. The conclusion may well
+  survive on other grounds (ARF `PA_21` still names WebAuthn; nothing else has been
+  proposed), but "may well survive" is not a decision record.
+
+**No Decision has been rewritten.** ADR-009 exists so that changing one of these
+requires superseding an ADR rather than editing prose, and that constraint binds
+this re-check too. The call for a human: whether Finding 3 and Decision §3 need an
+amending ADR now, or whether the honest move is to wait for the Commission
+specification that `PA_21` still demands.
+
+**4. ARF v3.0.0 (2026-07-23) — `PA_21` and `PA_22` were _not_ removed.** The first
+release after v2.9.0 retains both verbatim in normative Annex 2, along with
+`PA_14`–`PA_17`, and the register still runs TS1–TS14 with no pseudonym TS. The
+Topic E revision-round paper is unchanged at v1.2 (26 June 2026) and its proposed
+removals were not implemented. The forecast in Decision §3 and Finding 3 that "the
+deletion reading is the better-supported one" is withdrawn; the substance of the
+gate is unchanged. Marked inline in Finding 3.
+
+**5–8. Confirmed, no change.** WebAuthn Level 3 is still a Candidate Recommendation
+Snapshot (26 May 2026) — now a fact about W3C only, since no EU instrument pins a
+WebAuthn level any more. OID4VP 1.0 (Final, 9 July 2025), OID4VCI 1.0 (Final,
+16 September 2025), HAIP 1.0 (Final, 24 December 2025) and its SD-JWT VC draft-13
+pin are all unchanged. The PID Rulebook is still at commit `6d8f7f8422e5`
+(17 July 2026). AAMVA r1.6 is still current, and Finding 4 gains independent
+corroboration: CIR 2026/1731 now prohibits ISO/IEC 18013-5 server retrieval for
+wallet units **and relying parties**, reaching AAMVA r1.5's conclusion by the same
+route — ban the feature that caused the tracking hazard.
+
+**9. Decision §2's certificate-chain parameters are wrong for PID.** Flagged inline
+in Decision §2. The security principle is untouched; the parameter names are not.
+
+**New, and material for the T4 verifier track.** CIR 2024/2982's Annex II is
+replaced and now incorporates **ETSI TS 119 472-2 V1.2.1 (2026-03)**, which defines
+an OpenID4VC-HAIP profile binding **relying parties** directly — `OIDFVP-HAIP-SUPPORT-05`
+("A Relying Party shall meet the requirements specified in clauses 6.5"), and
+`WRP-VALIDATION-01`/`-02` requiring registration-certificate validation before a
+request is shown to the user, with explicit approval and "Silence or pre-ticked
+boxes shall not suffice". **HAIP conformance for an EU relying party is now a legal
+requirement, not a best practice.** That sharpens Q4 of #296 (whether eIDAS
+relying-party registration is operator-documentation scope or product scope) without
+answering it — it remains open, and it now has a date: 24 December 2026.
+
+**What was not verified in this pass, stated rather than glossed.** ETSI
+TS 119 472-1/-2/-3 and TS 119 475 are now incorporated by reference into binding EU
+law and were **not retrieved**; every statement about them here comes from the CIRs'
+own adaptation clauses. ISO/IEC 18013-5 and 18013-7 remain paywalled and unread.
+Consolidated versions of the amended acts did not exist at the time of this pass, so
+the amendments were applied by hand from the base acts plus the amending
+instruments. And residual uncertainty (a) still stands unchanged: an act adopted
+since 22 July 2026 and not yet published is invisible to every method used.
+
 ### Drift re-check (2026-07-20)
+
+> **Superseded by [Drift re-check (2026-07-26)](#drift-re-check-2026-07-26).**
+> Kept in full — its method and controls are still the working procedure, its
+> caveats were correct and load-bearing, and its forward-looking secondary-sourced
+> predictions were wrong in an instructive way. Read the three numbered items below
+> as a snapshot of 2026-07-20, not as current status.
+>
+> **Every secondary-sourced prediction in item 2 is refuted by the adopted text.**
+> CIR (EU) 2026/1730 contains no WebAuthn-acceptance obligation (zero occurrences
+> of "WebAuthn" in the whole act), does not replace Annex II, and adds no Annex VI.
+> Only the entry-into-force reading held. In item 3, the prediction that Annex V of
+> CIR 2024/2979 would be _replaced_ with an "any WebAuthn Authenticator of the
+> user's choice" formulation is likewise refuted: **Annex V was deleted outright.**
+> The unofficial mirror of the draft annexes predicted the acts' subject matter
+> reasonably well and their operative content not at all. Marking those claims
+> secondary, and refusing to let them carry a decision, is what kept this ADR
+> correct while its inputs were wrong.
 
 Three live version-drift risks were recorded when this ADR was accepted and
 re-verified the same day against primary sources (#305). **All three remain
@@ -877,13 +1133,25 @@ since r1.3 and r1.6 were both read end-to-end and agree.
   #239 (login UI needs an identifier field) · #234 / #235 · epic #231
 - [Regulation (EU) No 910/2014](https://eur-lex.europa.eu/legal-content/EN/TXT/?uri=CELEX%3A32014R0910)
   as amended by [Regulation (EU) 2024/1183](https://eur-lex.europa.eu/legal-content/EN/TXT/?uri=CELEX%3A32024R1183) — Articles 5a, 5b
-- [CIR (EU) 2024/2977](https://eur-lex.europa.eu/eli/reg_impl/2024/2977/oj/eng) — PID and EAA attributes
-- [CIR (EU) 2024/2979](https://eur-lex.europa.eu/eli/reg_impl/2024/2979/oj/eng) — wallet integrity and core functionalities; Article 14 and Annex V (pseudonyms)
-- [CIR (EU) 2025/848](https://eur-lex.europa.eu/eli/reg_impl/2025/848/oj/eng) — relying-party registration; applies from 24 December 2026
-- [EUDI Architecture and Reference Framework v2.9.0](https://github.com/eu-digital-identity-wallet/eudi-doc-architecture-and-reference-framework/tree/v2.9.0)
-  — 2026-05-21, Annex 2 Topic 11. Pinned to the tag: the repository's `main` carries
-  unreleased changes, and PA_21/PA_22 are under active revision (Decision §3).
-  Confirmed latest release as of 2026-07-20.
+- [**EUDI Regulatory Drift Log**](../eudi-regulatory-drift-log.md) — the standing
+  re-verification record: every pass, its sources, controls and per-item verdicts.
+- [CIR (EU) 2024/2977](https://eur-lex.europa.eu/eli/reg_impl/2024/2977/oj/eng) — PID and EAA attributes. **Amended by CIR (EU) 2026/1731** (Annex replaced).
+- [CIR (EU) 2024/2979](https://eur-lex.europa.eu/eli/reg_impl/2024/2979/oj/eng) — wallet integrity and core functionalities; Article 14 (pseudonyms). **Amended by CIR (EU) 2026/1731: Article 14(1) and Annex V deleted.** Article 14(2) survives.
+- [CIR (EU) 2025/848](https://eur-lex.europa.eu/eli/reg_impl/2025/848/oj/eng) — relying-party registration; applies from 24 December 2026. **Amended by CIR (EU) 2026/1730.**
+- [**CIR (EU) 2026/1730**](https://data.europa.eu/eli/reg_impl/2026/1730/oj) —
+  of 15 July 2026, OJ L, 2026/1730, 22.7.2026; in force 11 August 2026. Amends
+  CIR 2025/848 (Articles 6 and 8; Annexes I, IV, V).
+- [**CIR (EU) 2026/1731**](https://data.europa.eu/eli/reg_impl/2026/1731/oj) —
+  of 15 July 2026, OJ L, 2026/1731, 22.7.2026; in force 11 August 2026. Amends
+  CIR 2024/2977, 2024/2979, 2024/2980 and 2024/2982. **The act that superseded
+  the pseudonym pin and replaced the PID Annex.**
+- [EUDI Architecture and Reference Framework v3.0.0](https://github.com/eu-digital-identity-wallet/eudi-doc-architecture-and-reference-framework/tree/v3.0.0)
+  — released 2026-07-23, Annex 2 §A.2.3.8 (Topic 11). `PA_17`, `PA_21` and `PA_22`
+  all retained verbatim; register still TS1–TS14 with no pseudonym TS. Pinned to
+  the tag: `main` carries unreleased changes. Supersedes
+  [v2.9.0](https://github.com/eu-digital-identity-wallet/eudi-doc-architecture-and-reference-framework/tree/v2.9.0)
+  (2026-05-21), against which Finding 3 was originally written; the quoted `PA_17`,
+  `PA_21` and `PA_22` text is identical across the two.
 - [EUDI PID Rulebook v1.7](https://github.com/eu-digital-identity-wallet/eudi-doc-attestation-rulebooks-catalog/blob/6d8f7f8422e5/rulebooks/pid/pid-rulebook.md)
   — pinned to commit `6d8f7f8422e5` (17 July 2026). **The catalog repository has
   no releases and no tags**, and the rulebook changed twice in July 2026 alone, so
@@ -891,11 +1159,13 @@ since r1.3 and r1.6 were both read end-to-end and agree.
 - [OpenID for Verifiable Credential Issuance 1.0 (Final, 2025-09-16)](https://openid.net/specs/openid-4-verifiable-credential-issuance-1_0.html)
 - [SD-JWT VC draft-13](https://datatracker.ietf.org/doc/draft-ietf-oauth-sd-jwt-vc/13/) — the revision pinned by HAIP 1.0 §9.4
 - [W3C WebAuthn Level 2 (REC, 2021-04-08)](https://www.w3.org/TR/2021/REC-webauthn-2-20210408/)
-  — named in CIR 2024/2979 Annex V. As of 2026-07-20 this is still the only
-  operative Recommendation:
-  [Level 3](https://www.w3.org/TR/webauthn-3/) remains a Candidate Recommendation
-  Snapshot (26 May 2026) whose CR review period closed 23 June 2026. Annex V pins
-  the dated Level 2 URL, so it would not follow Level 3 automatically.
+  — was named in CIR 2024/2979 Annex V until that Annex was deleted by
+  CIR (EU) 2026/1731 with effect from 11 August 2026. Still the only operative
+  Recommendation as of 2026-07-26: [Level 3](https://www.w3.org/TR/webauthn-3/)
+  remains a Candidate Recommendation Snapshot (26 May 2026) whose CR review period
+  closed 23 June 2026. **No EU instrument now pins a WebAuthn level**; the
+  remaining reference is ARF `PA_21`, which is an obligation to write a profile,
+  not a citation to one.
 - [AAMVA Mobile Driver's License Implementation Guidelines r1.6](https://aamva.org/getmedia/1bc1f2b3-bc7b-4e44-8112-127a4110ad94/mDLImplementationGuidelines-16.pdf)
   — §4.6 "No tracking". Cited by version, not date: the cover reads "July 2026"
   while the revision history records 1.6 as 2026-05-18. Confirmed current as of

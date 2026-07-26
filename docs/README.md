@@ -70,6 +70,14 @@ The authoritative, always-current surface is the live OpenAPI / Swagger UI at
 | [**Environment-Aware Authorization**](./environment-authorization.md)                        | Operator/how-to guide: the `environment` (development / staging / production) policy dimension on clients/realms, the profile table, fail-safe defaults, and environment-gated developer API keys (T5). |
 | [**ADR-008: Environment-aware authorization**](./adr/008-environment-aware-authorization.md) | The design decision behind the above — fail-safe reasoning, the `resolveEnvironmentPolicy` resolver, and prior-art comparison.                                                                          |
 
+## Wallet federation (T4)
+
+| Guide                                                                                 | What it covers                                                                                                                                                                                                                                                              |
+| ------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [**EUDI Regulatory Drift Log**](./eudi-regulatory-drift-log.md)                       | The standing re-verification record for the EU implementing regulations and specifications that ADR-004 and ADR-009 rest on: every pass, its sources and controls, and a verdict per item (confirmed / drifted / superseded).                                               |
+| [**ADR-009: Wallet Account Resolution**](./adr/009-wallet-account-resolution.md)      | Which account an OID4VP presentation resolves to, and why `asserted-lookup` is the default. ⚠️ Findings partially superseded by CIR (EU) 2026/1730 and 2026/1731 — see its [Drift re-check (2026-07-26)](./adr/009-wallet-account-resolution.md#drift-re-check-2026-07-26). |
+| [**ADR-004: Wallet-Agnostic VC Federation**](./adr/004-wallet-agnostic-federation.md) | How QAuth bridges OID4VP wallets to OAuth 2.1, and the spec-status corrections behind it.                                                                                                                                                                                   |
+
 ## Architecture & decisions
 
 - [Architecture Decision Records](./adr/README.md) — the design decisions behind
