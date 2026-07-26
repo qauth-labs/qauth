@@ -27,9 +27,25 @@ PID Rulebook pins those findings depend on.
 
 Two Commission Implementing Regulations amending the whole eIDAS 2 wallet
 package were **adopted on 15 July 2026 and published in the Official Journal on
-22 July 2026** — five days after the ADR-009 acceptance pass, and two days after
-its re-check concluded "still pending". Both enter into force on **11 August
-2026** (publication + 20 days, no deferred application date).
+22 July 2026**. Both enter into force on **11 August 2026** (publication + 20
+days, no deferred application date for the amending acts themselves).
+
+**The timeline, stated once so it is not garbled again.** ADR-009 carries
+`Date: 2026-07-20`, and the 2026-07-20 drift pass ran on that same date — the
+acceptance pass and the re-check are one event, not two. Against that single
+fixed point:
+
+| Date        | Event                                                  | Offset from 2026-07-20 |
+| ----------- | ------------------------------------------------------ | ---------------------- |
+| 15 Jul 2026 | Both CIRs adopted ("Done at Brussels, 15 July 2026")   | **five days before**   |
+| 20 Jul 2026 | ADR-009 accepted; drift pass concludes "still pending" | —                      |
+| 22 Jul 2026 | OJ publication                                         | **two days after**     |
+| 11 Aug 2026 | Entry into force (publication + 20 days)               | 22 days after          |
+
+So publication followed the pass by two days, and adoption preceded it by five.
+Earlier revisions of this log and of ADR-009 attached "five days" to publication
+and "two days" to acceptance; both offsets cannot be true of the same date, and
+the table above is the arithmetic.
 
 | CELEX        | Act                    | Amends                                              | In force    |
 | ------------ | ---------------------- | --------------------------------------------------- | ----------- |
@@ -52,27 +68,81 @@ load-bearing point. See [What the secondary source got wrong](#what-the-secondar
 
 ### Verdicts
 
-| #   | Item                                            | Verdict                   | Effect on ADR-009                                                             |
-| --- | ----------------------------------------------- | ------------------------- | ----------------------------------------------------------------------------- |
-| 1   | CIR 2024/2977 Annex (PID attribute set)         | **Drifted — act amended** | Finding 1 factual corrections; core conclusion **survives**                   |
-| 2   | CIR 2025/848 (relying-party registration)       | **Drifted — act amended** | Finding 2 **strengthened**; no correction needed to the ADR's claims          |
-| 3   | CIR 2024/2979 Art. 14 + Annex V (pseudonyms)    | **Superseded**            | Finding 3's WebAuthn anchor **deleted from EU law** — needs a human decision  |
-| 4   | ARF release after v2.9.0                        | **Drifted — v3.0.0**      | `PA_21` / `PA_22` **retained**, not removed; Decision §3 gate unchanged       |
-| 5   | W3C WebAuthn Level 3 advancement                | **Confirmed — no change** | Still Candidate Recommendation Snapshot, 26 May 2026                          |
-| 6   | OID4VP 1.0 / HAIP 1.0 / SD-JWT VC draft-13      | **Confirmed — no change** | ADR-004 and ADR-009 citations stand                                           |
-| 7   | EUDI PID Rulebook pin (`6d8f7f8422e5`)          | **Confirmed — no change** | Still the latest commit; its portrait text is now **vindicated**              |
-| 8   | AAMVA mDL Implementation Guidelines r1.6        | **Confirmed — no change** | Finding 4 unchanged, and corroborated by new CIR text                         |
-| 9   | SD-JWT VC / mdoc issuer-chain header parameters | **Drifted**               | Decision §2's `x5c` / `x5chain` instruction is wrong for PID — human decision |
+| #   | Item                                            | Verdict                   | Effect on ADR-009                                                                  |
+| --- | ----------------------------------------------- | ------------------------- | ---------------------------------------------------------------------------------- |
+| 1   | CIR 2024/2977 Annex (PID attribute set)         | **Drifted — act amended** | Finding 1 factual corrections; core conclusion **survives**                        |
+| 2   | CIR 2025/848 (relying-party registration)       | **Drifted — act amended** | Finding 2 **strengthened**; no correction needed to the ADR's claims               |
+| 3   | CIR 2024/2979 Art. 14 + Annex V (pseudonyms)    | **Superseded**            | Finding 3's WebAuthn anchor **deleted from EU law** — needs a human decision       |
+| 4   | ARF release after v2.9.0                        | **Drifted — v3.0.0**      | Topic 11 (`PA_01`–`PA_31`) **substantively unchanged**; Decision §3 gate unchanged |
+| 5   | W3C WebAuthn Level 3 advancement                | **Confirmed — no change** | Still Candidate Recommendation Snapshot, 26 May 2026                               |
+| 6   | OID4VP 1.0 / HAIP 1.0 / SD-JWT VC draft-13      | **Confirmed — no change** | ADR-004 and ADR-009 citations stand                                                |
+| 7   | EUDI PID Rulebook pin (`6d8f7f8422e5`)          | **Confirmed — no change** | Still the latest commit; its portrait text is now **vindicated**                   |
+| 8   | AAMVA mDL Implementation Guidelines r1.6        | **Confirmed — no change** | Finding 4 unchanged, and corroborated by new CIR text                              |
+| 9   | SD-JWT VC / mdoc issuer-chain header parameters | **Drifted**               | Decision §2's `x5c` / `x5chain` instruction is wrong for PID — human decision      |
 
 ---
 
 ### 1. CIR (EU) 2024/2977 — PID attribute set — **DRIFTED**
 
-**Source.** CIR (EU) 2026/1731, Article 1(4) and Annex I, replacing the Annex to
-CIR (EU) 2024/2977 in its entirety.
+**Source.** CIR (EU) 2026/1731, **Article 1, points (1) to (4)**, and Annex I.
+Point (4) plus Annex I replace the Annex to CIR (EU) 2024/2977 in its entirety;
+point (1) inserts a new **Article 3a**, read in full below. (Point (2) replaces
+Article 4(1), point (3) replaces Article 5(4)(b); neither bears on ADR-009.)
 Retrieved from CELLAR: `http://publications.europa.eu/resource/celex/32026R1731`
 (`Accept: application/xhtml+xml`, `Accept-Language: eng`).
 ELI: <http://data.europa.eu/eli/reg_impl/2026/1731/oj>
+
+#### New Article 3a — "Protection of the portrait" — **binds relying parties directly**
+
+This was missed by the first writing of this pass and is recorded here with the
+prominence it deserves: it is the **only provision in CIR 2026/1731's amendments
+to CIR 2024/2977 that imposes an obligation on wallet-relying parties**, i.e. on
+the role QAuth would occupy. Article 1(1) inserts, verbatim:
+
+> **Article 3a — Protection of the portrait**
+>
+> 1. In addition to information requirements pursuant to Regulation (EU) 2016/679,
+>    wallet providers shall ensure that the wallet solutions they provide issue
+>    warnings to wallet users where wallet-relying parties request the disclosure
+>    of the portrait, indicating that the request involves the sharing of biometric
+>    data and requires confirmation for the selective disclosure of the portrait.
+>
+> 2. For the implementation of selectively disclosing the portrait to a
+>    wallet-relying party, the wallet providers shall ensure the wallet solutions
+>    require the wallet user to explicitly and specifically confirm the presentation
+>    of the portrait.
+>
+> 3. The portrait shall not be retained by wallet-relying parties unless its
+>    processing is necessary for the purposes of identification and authentication
+>    in compliance with Union data protection law or where this is provided for by
+>    Union or national law, in compliance with Union data protection law. The
+>    portrait shall not be transferred to third countries or international
+>    organisations unless permitted by Union data protection law.
+
+**Who is bound by what.** Paragraphs 1 and 2 bind **wallet providers** (warning
+and explicit per-presentation confirmation). Paragraph 3 binds **wallet-relying
+parties** directly, and is the operative one for QAuth:
+
+- **Retention** — a relying party **shall not retain** the portrait unless
+  processing it is necessary for identification and authentication under Union
+  data protection law, or retention is provided for by Union or national law.
+  Note the shape: this is a prohibition with a narrow carve-out, not a permission.
+- **Third-country transfer** — the portrait **shall not be transferred** to third
+  countries or international organisations unless Union data protection law permits
+  it.
+
+**Why this is material now.** Article 3a is not deferred: it enters into force with
+the rest of CIR 2026/1731 on **11 August 2026**. Only the `portrait` attribute's
+_mandatory_ status in Table 1 waits until 11 August 2028. So the RP-side duty exists
+two years before the attribute becomes mandatory — a portrait presented voluntarily
+in the interim is already covered.
+
+For the T4 verifier track and for #236's claim mapping this means: a QAuth verifier
+that receives a `portrait` claim must be able to **not store it by default**, and any
+storage must be justifiable as necessary for identification/authentication. This is a
+data-handling default, not a protocol feature — but it is a legal obligation on the
+verifier, so it belongs in the same bucket as `OIDFVP-HAIP-SUPPORT-05` (see item 6)
+rather than in the wallet-side bucket.
 
 The new **Table 1 — "Mandatory person identification data for the natural person
 for selective disclosure"** has **two columns** (`Data identifier`, `Definition`;
@@ -246,7 +316,7 @@ primary legislation and still requires wallets to let users generate pseudonyms.
 
 ---
 
-### 4. EUDI ARF — **DRIFTED to v3.0.0, but `PA_21` / `PA_22` retained**
+### 4. EUDI ARF — **DRIFTED to v3.0.0, but Topic 11 is substantively unchanged**
 
 **Source.** ARF **v3.0.0**, released **2026-07-23** (GitHub release `v3.0.0`,
 `published_at 2026-07-23T19:10:17Z`) — the first release after v2.9.0. Its release
@@ -263,20 +333,122 @@ section A.2.3.8 _"Topic 11 — Pseudonyms"_.
 - **`PA_22` is present, still a MAY** (unchanged since v2.9.0).
 - **`PA_17` is present, verbatim as quoted in ADR-009 Finding 3**, including the
   non-normative colluding-relying-parties Note.
-- `PA_14`, `PA_15`, `PA_16` all survive. New `PA_23`–`PA_26` cover scope
-  rate-limited pseudonyms.
+- `PA_14`, `PA_15`, `PA_16` all survive.
 - The relying-party HLRs `PA_10`–`PA_13` carry **no** _"if a common technical
   specification enabling this is available"_ qualifier.
 - The Commission technical-specification register at `v3.0.0`
   (`docs/technical-specifications/`) contains **TS1–TS14 and still no pseudonym
   technical specification**.
 
+**Topic 11 is byte-for-byte stable across the release.** All 32 pseudonym HLRs
+(`PA_01`–`PA_09`, `PA_08a`, `PA_10`–`PA_31`) were compared mechanically between the
+`v2.9.0` and `v3.0.0` tags after whitespace normalisation. **Exactly one differs, and
+only in markup**: `PA_08a`'s cross-reference to Topic 19 changed from an inline
+markdown link to a reference-style link (`[Topic 19][topic-19]`). Its requirement text
+is unchanged. Every other HLR, `PA_20` included, is verbatim identical.
+
+#### Scope rate-limited pseudonyms — `PA_23`–`PA_31`, and a claim they refute
+
+**Correction to the first writing of this pass**, which said _"New `PA_23`–`PA_26`
+cover scope rate-limited pseudonyms"_. That was wrong twice over:
+
+1. **The range is `PA_23`–`PA_31`, not `PA_23`–`PA_26`** — nine HLRs, all normative
+   SHALL, under Annex 2 §A.2.3.8 heading _"E. HLRs related to scope rate-limited
+   pseudonyms"_.
+2. **They are not new.** The identical heading and the identical nine requirements
+   are present in **`v2.9.0`** — the release ADR-009 was written against — at lines
+   452–465 of the same annex file, differing only in that v2.9.0 renders HLRs as a
+   markdown table and v3.0.0 as `<div class="eudi-hlr">` blocks. Nothing about this
+   mechanism drifted in v3.0.0. It was there all along and this log, and ADR-009,
+   simply did not read that far down the topic.
+
+The five that were omitted, verbatim:
+
+> **`PA_27`** — A protocol enabling scope rate-limited pseudonyms SHALL NOT allow any
+> entity or collusion of entities not including the User, to link scope rate-limited
+> pseudonyms of the same User when used across several different Relying Parties. This
+> SHALL hold even if the scope and rate are identical across the different Relying
+> Parties and both for registration and authentication of the scope rate-limited
+> pseudonym
+>
+> **`PA_28`** — A protocol enabling scope rate-limited pseudonyms SHALL ensure that if
+> the rate is larger than 1, a User's different pseudonyms SHALL be unlinkable for the
+> same scope. This SHALL hold against any entity or collusion of entities, not
+> including the User. Further, such protocol SHALL ensure that during registration or
+> authentication with such a pseudonym, it SHALL NOT be possible for the Relying Party
+> to deduce any information about how many pseudonyms the User has already registered
+> (except that it does not exceed the predetermined rate).
+>
+> **`PA_29`** — A protocol enabling scope rate-limited pseudonyms SHALL ensure that no
+> entity or collusion of entities, not including a User, is able to authenticate or
+> register with a scope rate-limited pseudonym of this User.
+>
+> **`PA_30`** — A Wallet Unit SHALL store cryptographic material necessary for
+> authenticating as a scope rate-limited pseudonyms in either a WSCA/WSCD or in a
+> keystore.
+>
+> **`PA_31`** — A User's scope rate limited pseudonyms for a particular scope and rate
+> SHALL be persistent over time even if they start using another Wallet Unit.
+
+(`PA_23`–`PA_26`, already summarised above, require the protocol to use only
+ECCG Agreed Cryptographic Mechanisms v2.0 algorithms, to let a User generate and
+register such a pseudonym and prove it is within the restrictions, to let the Relying
+Party verify the rate is not exceeded, and to let the Relying Party choose the scope
+and rate.)
+
+**Why this matters more than a numbering slip.** `PA_31` is a normatively specified
+**persistence guarantee across Wallet Units**: the same scope and rate yields the same
+pseudonym for the same User even after the User migrates to a different wallet. That
+is precisely the property ADR-009 exists to interrogate — _can an RP-scoped pseudonym
+serve as a durable account key?_ — and it is stated in the ARF as a SHALL, not as a
+discussion proposal. `PA_27` and `PA_28` bound the answer from the other side: whatever
+mechanism delivers `PA_31` must **not** let colluding relying parties link a User's
+pseudonyms across RPs (`PA_27`), and must keep a User's several pseudonyms within one
+scope mutually unlinkable and their count unknowable to the RP (`PA_28`). `PA_29` adds
+impersonation resistance; `PA_30` puts the key material in a WSCA/WSCD or keystore.
+
+Note what section E does **not** say: **it never names WebAuthn.** It speaks throughout
+of _"a protocol enabling scope rate-limited pseudonyms"_, unnamed. And `PA_31`'s
+cross-Wallet-Unit persistence sits awkwardly with a plain WebAuthn credential, which is
+authenticator-bound by construction — delivering `PA_31` implies deriving the pseudonym
+from something the User carries between wallets rather than from a freshly generated
+key pair. So the ARF describes, in normative language, a **non-WebAuthn RP-scoped
+pseudonym mechanism with a durability guarantee**, alongside the WebAuthn profile
+`PA_21` still demands.
+
+**Two honest caveats, so this correction does not overreach.**
+
+- **`PA_21` nominally covers section E too.** It requires a WebAuthn profile
+  _"compliant with the HLRs specified in this Topic"_, and section E is in that Topic.
+  Whether the Commission reads `PA_21` as also having to satisfy `PA_23`–`PA_31`, or
+  treats scope rate-limited pseudonyms as a separate protocol family, is **not
+  resolved by any text read in this pass**. Both readings are open.
+- **No specification exists for it either.** Section E constrains a protocol that the
+  register (TS1–TS14) does not contain. `PA_23`–`PA_31` are requirements on a
+  specification yet to be written, exactly as `PA_21` is. Nothing here discharges any
+  gate in ADR-009 Decision §3.
+
+**Consequence for ADR-009.** Its re-check claimed Finding 3's conclusion "may well
+survive on other grounds (ARF `PA_21` still names WebAuthn; **nothing else has been
+proposed**)". The parenthetical is false, and was false when written: `PA_23`–`PA_31`
+had been normative since at least v2.9.0. Corrected in the ADR — see
+[ADR-009 § Drift re-check (2026-07-26)](./adr/009-wallet-account-resolution.md#drift-re-check-2026-07-26).
+
 **The Topic E revision-round paper is unchanged** — still
 `docs/discussion-topics/e-rr-pseudonyms-including-user-authentication-mechanism.md`,
 still _"Version 1.2, updated 26 June 2026"_, still proposing a bare "Remove" for
 `PA_21` and `PA_22`. One full release cycle later, **that proposal was not
-implemented**. Partial adoption is visible — `PA_20`'s Note was updated along the
-lines the paper proposed — so this is a decision not to delete, not an oversight.
+implemented**.
+
+> **Corrected 2026-07-26 (same pass, second reading).** This log previously added
+> _"Partial adoption is visible — `PA_20`'s Note was updated along the lines the paper
+> proposed — so this is a decision not to delete, not an oversight."_ **That is false.**
+> `PA_20`, Note included, is verbatim identical between `v2.9.0` and `v3.0.0`; see the
+> mechanical comparison above. **No** part of the Topic E paper was implemented in
+> v3.0.0. The inference built on it — that non-deletion was deliberate rather than an
+> oversight — therefore has **no evidential support** and is withdrawn. What can be
+> said is only the observable fact: one release after the paper, nothing it proposed
+> has been actioned. Whether that is a decision or a backlog is unknown.
 
 **Effect on ADR-009 Decision §3.** Gate 2 (_"publication of the Commission
 technical specification mandated by ARF `PA_21`"_) is **unchanged and still not
@@ -311,14 +483,73 @@ automatically?" question recorded in ADR-009 is moot.
 ADR-009's citation of SD-JWT VC **draft-13 §3.2.2.2** via HAIP 1.0 stands.
 
 **New, and material for the T4 verifier work:** CIR 2024/2982's Annex II is
-replaced (CIR 2026/1731 Annex XII) and now incorporates
-**ETSI TS 119 472-2 V1.2.1 (2026-03)**, which defines an _OpenID4VC-HAIP profile_
-and binds relying parties directly — e.g. `OIDFVP-HAIP-SUPPORT-05`
-(_"A Relying Party shall meet the requirements specified in clauses 6.5"_) and
-`WRP-VALIDATION-01`/`-02` (mandatory registration-certificate validation before
-presenting a request to the user, with explicit approval and _"Silence or
-pre-ticked boxes shall not suffice"_). HAIP conformance for an EU relying party is
-now a legal requirement rather than a best practice.
+replaced (CIR 2026/1731 Annex XII) and now incorporates clauses 4.1, 4.2, 5 and 6 of
+**ETSI TS 119 472-2 V1.2.1 (2026-03)** _"with the following adaptations"_, the
+adaptations being set out at length in Annex XII itself. The result defines an
+_OpenID4VC-HAIP profile_ and, in one clause, **binds relying parties directly**:
+
+> `OIDFVP-HAIP-SUPPORT-05`: A Relying Party shall meet the requirements specified in
+> clauses 6.5 of the present Annex.
+
+HAIP conformance for an EU relying party is therefore a legal requirement rather than
+a best practice.
+
+> **Corrected 2026-07-26 (same pass, second reading) — `WRP-VALIDATION-01`/`-02` bind
+> the Wallet, not the relying party.** This log previously listed them alongside
+> `OIDFVP-HAIP-SUPPORT-05` as obligations that "bind relying parties directly". They do
+> not. **Read who the subject of each sentence is** — in Annex XII clause 4.4,
+> _"Wallet-relying party validation and overasking checks"_:
+>
+> > `WRP-VALIDATION-01`: **The EUDI Wallet** shall validate the wallet-relying party
+> > registration certificate received in the request before presenting any requested PID
+> > or electronic attestation of attributes to the wallet user for approval.
+> >
+> > `WRP-VALIDATION-02`: Where the validation of the wallet-relying party registration
+> > certificate fails, including where the certificate is expired, revoked, not issued by
+> > a valid trusted provider of wallet-relying party registration certificates, malformed,
+> > or cannot be cryptographically verified, **the EUDI Wallet** shall warn the wallet user
+> > that the wallet-relying party could not be validated and shall not present the request
+> > as successfully validated. The wallet user shall explicitly approve the request of the
+> > relying party. Silence or pre-ticked boxes shall not suffice for explicit approval.
+> >
+> > `WRP-VALIDATION-03`: **The wallet provider** shall determine, based on its risk
+> > analysis and security policy, whether and under which conditions specific failed
+> > validation checks may be bypassed by the wallet user.
+>
+> The "wallet-relying party" in the identifier name is the **object** being validated,
+> not the actor doing the validating. The same pattern holds for the sibling
+> requirements in the same clause: `WRP-OVERASKING-01` and `-02` bind **the EUDI
+> Wallet**, `WRP-OVERASKING-03` binds **the wallet provider**.
+
+**Who is bound by what — clause 4.4 and clause 6.2, stated plainly.**
+
+| Requirement                     | Actor bound         | Substance                                                            |
+| ------------------------------- | ------------------- | -------------------------------------------------------------------- |
+| `WRP-VALIDATION-01`, `-02`      | **EUDI Wallet**     | Validate the RP registration certificate; warn the user on failure   |
+| `WRP-VALIDATION-03`             | **Wallet provider** | Decide whether failed checks may be bypassed                         |
+| `WRP-OVERASKING-01`, `-02`      | **EUDI Wallet**     | Compare request against certificate; warn the user on overasking     |
+| `WRP-OVERASKING-03`             | **Wallet provider** | Decide whether the user may proceed despite the warning              |
+| `OIDFVP-HAIP-SUPPORT-02`, `-03` | **EUDI Wallet**     | Meet clause 6.5; should not use redirect-based cross-device flows    |
+| **`OIDFVP-HAIP-SUPPORT-05`**    | **Relying Party**   | **Meet the requirements of clause 6.5 — the only RP-binding clause** |
+
+**What this changes for QAuth's backlog.** Certificate-chain validation, revocation
+checking and a "silence or pre-ticked boxes shall not suffice" consent screen are
+**wallet-side obligations**. They must **not** enter #236 or the T4 verifier track as
+QAuth work on the strength of this Annex. What Annex XII does put on a QAuth-shaped
+relying party is `OIDFVP-HAIP-SUPPORT-05`: conformance to clause 6.5. The RP-side
+consequence of clause 4.4 is indirect but real — a wallet **will** refuse or flag a
+request whose registration certificate does not validate or which overasks, so the
+operator-side duty to hold a correct, current registration certificate and to request
+only registered attributes is load-bearing. That is a registration and deployment
+concern, not a protocol feature, which is exactly the distinction #296 Q4 is asking
+about. This sharpens Q4; it does not answer it.
+
+**Not verified.** ETSI TS 119 472-2 V1.2.1 itself was **not retrieved**. Annex XII's
+preamble incorporates clauses 4.1, 4.2, 5 and 6 of that document and then sets out
+adaptations covering clauses 4.3 and 4.4 among others, so it is **not established here**
+whether clause 4.4 originates in the ETSI text or is inserted by the CIR. Every
+requirement quoted above is quoted from **CIR 2026/1731 Annex XII**, which is binding
+either way.
 
 ### 7. EUDI PID Rulebook — **CONFIRMED, no change**
 
