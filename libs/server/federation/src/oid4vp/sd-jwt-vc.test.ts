@@ -992,6 +992,101 @@ describe('validateSdJwtVcPresentation — structural refusals', () => {
   });
 });
 
+describe('validateSdJwtVcPresentation — claims that may not be selectively disclosed', () => {
+  // SD-JWT VC §3.2.2.2: `iss`, `nbf`, `exp`, `cnf`, `vct`, `vct#integrity` and
+  // `status` "MUST NOT be included in the Disclosures, i.e., cannot be
+  // selectively disclosed". Requires a non-compliant ISSUER — the digest has to
+  // be signed — but the consequence is a credential whose validity window or
+  // revocation pointer is present in the claims and enforced by nobody.
+  it.each([
+    ['exp', () => Math.floor(Date.now() / 1000) + 3600],
+    ['nbf', () => Math.floor(Date.now() / 1000) - 3600],
+    [
+      'status',
+      () => ({ status_list: { idx: 1, uri: 'https://issuer.example.com/statuslists/1' } }),
+    ],
+    ['vct#integrity', () => 'sha256-Ag2yQ0kMBBHRJvRqQ8dJlUqSlYd0e0dGz3xj0FZ0v5U='],
+  ])('refuses a credential whose %s arrives as a Disclosure', async (claim, value) => {
+    const issued = await issueSdJwtVc({ selectiveClaims: { [claim]: value() } });
+    const presentation = await presentSdJwtVc(issued, { nonce: NONCE });
+
+    await expectRejection(
+      validate(presentation, fixtureValidationContext(issued, NONCE)),
+      'forbidden-selective-disclosure'
+    );
+  });
+
+  it('refuses a selectively-disclosed exp rather than reporting an unenforced one', async () => {
+    // The precise trap: no plain `exp`, so `assertWithinValidityWindow` has
+    // nothing to enforce, while `claims.exp` would carry a value a downstream
+    // consumer would read as an expiry.
+    const expired = Math.floor(Date.now() / 1000) - 3600;
+    const issued = await issueSdJwtVc({ selectiveClaims: { exp: expired } });
+    const presentation = await presentSdJwtVc(issued, { nonce: NONCE });
+
+    const rejection = await rejectionOf(
+      validate(presentation, fixtureValidationContext(issued, NONCE))
+    );
+
+    expect(rejection.reason).toBe('forbidden-selective-disclosure');
+    // Byte-identical on the wire, like every other reason.
+    expect(rejection.toClientError().message).toBe(
+      (
+        await rejectionOf(
+          validate(
+            await presentSdJwtVc(await issueSdJwtVc(), { nonce: 'stale-nonce' }),
+            fixtureValidationContext(issued, NONCE)
+          )
+        )
+      ).toClientError().message
+    );
+  });
+
+  it('still refuses when the holder withholds every OTHER Disclosure', async () => {
+    // The forbidden claim is the only one revealed, so no unrelated check can
+    // be the thing that fired.
+    const issued = await issueSdJwtVc({
+      selectiveClaims: { status: { status_list: { idx: 3, uri: 'https://s.example/1' } } },
+    });
+    const presentation = await presentSdJwtVc(issued, {
+      nonce: NONCE,
+      disclosures: issued.disclosures,
+    });
+
+    await expectRejection(
+      validate(presentation, fixtureValidationContext(issued, NONCE)),
+      'forbidden-selective-disclosure'
+    );
+  });
+
+  it('accepts a selectively-disclosed sub, which §3.2.2.2 permits', async () => {
+    const issued = await issueSdJwtVc({ selectiveClaims: { sub: 'urn:uuid:holder-1' } });
+    const presentation = await presentSdJwtVc(issued, { nonce: NONCE });
+
+    const validated = await validate(presentation, fixtureValidationContext(issued, NONCE));
+
+    expect(validated.claims).toHaveProperty('sub', 'urn:uuid:holder-1');
+  });
+
+  it('constrains only the registered top-level claims, not a nested claim of the same name', async () => {
+    // `exp` inside `evidence` is an ordinary application claim; §3.2.2.2 speaks
+    // about the SD-JWT payload's registered claims. Over-broad enforcement here
+    // would refuse perfectly compliant credentials.
+    const nested = objectDisclosure('exp', 4102444800);
+    const issued = await issueSdJwtVc({
+      selectiveClaims: {},
+      extraDisclosures: [nested.encoded],
+      payloadOverrides: { _sd: undefined, evidence: { type: 'document', _sd: [nested.digest] } },
+    });
+    const presentation = await presentSdJwtVc(issued, { nonce: NONCE });
+
+    const validated = await validate(presentation, fixtureValidationContext(issued, NONCE));
+
+    expect(validated.claims).toHaveProperty('evidence', { type: 'document', exp: 4102444800 });
+    expect(validated.validity).not.toHaveProperty('expiresAt');
+  });
+});
+
 describe('SD_JWT_VC_TYP', () => {
   it('equals the Credential Format identifier', () => {
     // The media type and the OID4VP format identifier are the same string;

@@ -30,7 +30,11 @@
  *    correctly-signed credential intercepted anywhere would authenticate the
  *    interceptor.
  *  4. **Validity window.** An expired credential is a statement its issuer has
- *    stopped making.
+ *    stopped making. The window is read from the issuer-signed payload only, and
+ *    a credential that made `exp`/`nbf` (or any other §3.2.2.2 claim) selectively
+ *    disclosable is refused outright — see
+ *    {@link NON_SELECTIVELY_DISCLOSABLE_CLAIMS}, without which such a credential
+ *    would carry an expiry nobody enforced.
  *
  * ## Bounded before it is walked
  *
@@ -134,6 +138,40 @@ export const MAX_CLAIM_DEPTH = 32;
  *   read as an issuer identity while carrying none of #236's guarantees.
  */
 const STRIPPED_CREDENTIAL_CLAIMS = Object.freeze(['_sd', '_sd_alg', 'cnf', 'iss']);
+
+/**
+ * Registered claims SD-JWT VC §3.2.2.2 forbids from being selectively
+ * disclosable.
+ *
+ * > The following registered JWT claims are used within the SD-JWT component of
+ * > the SD-JWT VC and MUST NOT be included in the Disclosures, i.e., cannot be
+ * > selectively disclosed.
+ *
+ * These are exactly the claims a VERIFIER acts on, which is why the prohibition
+ * is a security rule rather than a formality. A credential with no plain `exp`
+ * and a signed `exp` Disclosure would sail through {@link
+ * assertWithinValidityWindow} — which reads the issuer-signed payload, where
+ * there is nothing to enforce — and then surface `claims.exp` to a consumer that
+ * would reasonably read it as an enforced expiry. `status` is the same trap for
+ * revocation (#297): a selectively-disclosable status pointer is one the status
+ * checker never sees. `iss`, `cnf` and `vct` are mandatory plain claims here, so
+ * a Disclosure of those is already refused as an overwrite — they are listed
+ * anyway so the set is the spec's, not a subset that happens to be reachable.
+ *
+ * `sub` and `iat` are deliberately ABSENT: §3.2.2.2 explicitly permits both in
+ * Disclosures, and refusing them would reject compliant credentials.
+ *
+ * @see https://datatracker.ietf.org/doc/draft-ietf-oauth-sd-jwt-vc/ §3.2.2.2
+ */
+export const NON_SELECTIVELY_DISCLOSABLE_CLAIMS: readonly string[] = Object.freeze([
+  'iss',
+  'nbf',
+  'exp',
+  'cnf',
+  'vct',
+  'vct#integrity',
+  'status',
+]);
 
 /** One Disclosure, decoded and digested. */
 interface ParsedDisclosure {
@@ -537,6 +575,37 @@ function resolveDisclosures(
   }
 
   return disclosed;
+}
+
+/**
+ * Refuse a credential that made a §3.2.2.2 claim selectively disclosable.
+ *
+ * Compares the two payloads rather than inspecting Disclosures directly: the
+ * top-level keys of the disclosed payload are the signed payload's keys (less
+ * the `_sd` machinery) plus whatever the top-level `_sd` digests resolved to, so
+ * a forbidden claim present AFTER the walk and absent BEFORE it can only have
+ * arrived through a Disclosure. Doing it this way also keeps the check at the
+ * top level only — the registered claims are properties of the SD-JWT payload,
+ * and an application claim that happens to be named `exp` three levels down is
+ * none of this rule's business.
+ *
+ * Runs on the verified payload, after the walk and before the returned claims
+ * are assembled: nothing that reaches a caller has ever passed through here
+ * unchecked.
+ */
+function assertNoForbiddenSelectiveDisclosure(
+  signedPayload: Record<string, unknown>,
+  disclosedPayload: Record<string, unknown>
+): void {
+  for (const claim of NON_SELECTIVELY_DISCLOSABLE_CLAIMS) {
+    if (!Object.hasOwn(disclosedPayload, claim)) continue;
+    if (Object.hasOwn(signedPayload, claim)) continue;
+
+    throw rejectPresentation(
+      'forbidden-selective-disclosure',
+      `the credential makes '${claim}' selectively disclosable, which SD-JWT VC §3.2.2.2 forbids`
+    );
+  }
 }
 
 /** Read a numeric registered claim, rejecting a non-numeric one. */
@@ -973,6 +1042,9 @@ export async function validateSdJwtVcPresentation(
   const confirmationJwk = readConfirmationJwk(verifiedPayload);
   const byDigest = parseDisclosures(split.disclosures, hashAlgorithm);
   const disclosedPayload = resolveDisclosures(verifiedPayload, byDigest);
+
+  assertNoForbiddenSelectiveDisclosure(verifiedPayload, disclosedPayload);
+
   const keyBinding = await verifyKeyBinding(
     split,
     confirmationJwk,

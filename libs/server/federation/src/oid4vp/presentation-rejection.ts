@@ -61,6 +61,16 @@ import { issuerTrustRejection } from '../trust/issuer-trust-rejection';
  *   validity window (`exp` / `nbf`) excludes now.
  * - `disclosure-digest-mismatch` — a Disclosure did not hash to a digest present
  *   in the SD-JWT, a digest was claimed twice, or a Disclosure was altered.
+ * - `forbidden-selective-disclosure` — a registered claim SD-JWT VC §3.2.2.2
+ *   forbids from being selectively disclosable (`iss`, `nbf`, `exp`, `cnf`,
+ *   `vct`, `vct#integrity`, `status`) arrived through a Disclosure instead of as
+ *   a plain claim of the Issuer-signed JWT. Distinct from
+ *   `disclosure-digest-mismatch` on purpose: every digest checked out, so this
+ *   is not a holder tampering with a credential — it is an ISSUER that minted a
+ *   non-compliant one, and an operator needs to be told which of the two it is.
+ *   Refusing matters because those claims are the ones the verifier ENFORCES:
+ *   an `exp` the validity window never saw, or a `status` the revocation check
+ *   never reads, would still surface in the claims and read as enforced.
  * - `holder-binding-invalid` — the Key Binding JWT is absent, unverifiable
  *   against the credential's `cnf` key, or carries the wrong `aud`, `nonce`,
  *   `sd_hash` or `iat`. One reason rather than four on purpose: they are all the
@@ -76,6 +86,7 @@ export type PresentationRejectionReason =
   | 'credential-expired'
   | 'credential-not-yet-valid'
   | 'disclosure-digest-mismatch'
+  | 'forbidden-selective-disclosure'
   | 'holder-binding-invalid';
 
 /**
