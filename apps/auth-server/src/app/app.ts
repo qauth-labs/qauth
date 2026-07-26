@@ -157,6 +157,9 @@ export async function app(fastify: FastifyInstance, opts: object) {
     serviceConfig: {
       defaultFrom: env.EMAIL_FROM_ADDRESS,
       baseUrl: env.EMAIL_BASE_URL,
+      // Same value the send routes use to compute `expiresAt`, so the copy in
+      // the email cannot drift from the lifetime actually enforced (#334).
+      verificationTokenExpiry: env.EMAIL_VERIFICATION_TOKEN_EXPIRY,
     },
   });
 

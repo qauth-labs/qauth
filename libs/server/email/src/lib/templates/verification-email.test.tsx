@@ -1,4 +1,4 @@
-import { render } from '@react-email/components';
+import { render } from '@react-email/render';
 import * as React from 'react';
 import { describe, expect, it } from 'vitest';
 
@@ -76,5 +76,48 @@ describe('VerifyEmail', () => {
     const html = await render(template);
 
     expect(html).toContain('https://different.com/verify?token=xyz789');
+  });
+
+  // The components below are vendored rather than imported from the deprecated
+  // `@react-email/components` barrel (#333). These assertions pin the markup
+  // those primitives produce, so a change to the vendored source shows up here
+  // instead of in someone's inbox.
+  describe('rendered markup', () => {
+    it('should produce a table-based layout with the expected structure', async () => {
+      const template = React.createElement(VerifyEmail, defaultProps);
+      const html = await render(template);
+
+      expect(html).toContain('<!DOCTYPE html');
+      expect(html).toContain('lang="en"');
+      expect(html).toContain('content="text/html; charset=UTF-8"');
+      expect(html).toContain('x-apple-disable-message-reformatting');
+      expect(html).toContain('role="presentation"');
+      expect(html).toContain('max-width:37.5em');
+      // Outlook conditional padding hack emitted by the Button primitive.
+      expect(html).toContain('<!--[if mso]>');
+      expect(html).toContain('mso-font-width:');
+    });
+
+    it('should keep the brand styling of the call-to-action button', async () => {
+      const template = React.createElement(VerifyEmail, defaultProps);
+      const html = await render(template);
+
+      expect(html).toContain('background-color:#2563eb');
+      expect(html).toContain('padding-top:12px');
+      expect(html).toContain('padding-left:24px');
+    });
+
+    it('should render a readable plain-text version', async () => {
+      const template = React.createElement(VerifyEmail, defaultProps);
+      const text = await render(template, { plainText: true });
+
+      expect(text).toContain('Verify Your Email Address');
+      expect(text).toContain('Thank you for registering with QAuth');
+      expect(text).toContain(defaultProps.verificationUrl);
+      expect(text).toContain(`This verification link will expire in ${defaultProps.expiresIn}.`);
+      // Plain text must not leak markup or the hidden preview padding.
+      expect(text).not.toContain('<');
+      expect(text).not.toMatch(/\u200C/);
+    });
   });
 });

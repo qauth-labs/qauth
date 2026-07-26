@@ -1,14 +1,6 @@
-import {
-  Body,
-  Button,
-  Container,
-  Head,
-  Html,
-  Preview,
-  Section,
-  Text,
-} from '@react-email/components';
 import * as React from 'react';
+
+import { Body, Button, Container, Head, Html, Preview, Section, Text } from './components';
 
 /**
  * Props for the VerifyEmail template
