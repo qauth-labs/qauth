@@ -1,5 +1,5 @@
 import type { FastifyInstance } from 'fastify';
-import Fastify from 'fastify';
+import Fastify, { LogController } from 'fastify';
 import { describe, expect, it, vi } from 'vitest';
 
 vi.mock('../../config/env', () => ({
@@ -17,7 +17,9 @@ async function buildApp(): Promise<FastifyInstance> {
   const app = Fastify({
     logger: false,
     requestIdHeader: 'x-request-id',
-    requestIdLogLabel: 'reqId',
+    // Mirrors main.ts: the top-level `requestIdLogLabel` is deprecated
+    // (FSTDEP024) and removed in Fastify 6.
+    logController: new LogController({ requestIdLogLabel: 'reqId' }),
     genReqId: () => 'generated-id',
   });
   await app.register(requestIdPlugin);
