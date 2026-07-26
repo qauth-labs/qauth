@@ -30,11 +30,13 @@ import { securityHeadersPlugin } from './plugins/security-headers';
  * EXHAUSTIVELY to the crypto layer's own union (#299).
  *
  * `satisfies Record<JwsAlgorithm, true>` is the entire point of writing it as an
- * object: when #298 widens `JwsAlgorithm` with `ES256`, this literal stops
+ * object: when the crypto layer widens `JwsAlgorithm`, this literal stops
  * compiling until the new algorithm is listed, so the `haip-1.0` refusal below
  * lifts in the same commit that makes it untrue. A hand-maintained array would
  * have gone stale silently, and a stale capability descriptor is worse than none
- * — it would let `haip-1.0` boot on a crypto layer that cannot sign for it.
+ * — it would let `haip-1.0` boot on a crypto layer that cannot sign for it. That
+ * is exactly how `ES256` arrived here: #298 widened the union and this line
+ * refused to compile until it was acknowledged.
  *
  * A TYPE-only import, so nothing from `@qauth-labs/core-crypto` reaches the
  * bundle: the bootstrap needs the crypto layer's answer, not its implementation.
@@ -42,6 +44,7 @@ import { securityHeadersPlugin } from './plugins/security-headers';
 const JWS_ALGORITHMS = {
   EdDSA: true,
   RS256: true,
+  ES256: true,
 } as const satisfies Record<JwsAlgorithm, true>;
 
 /**
@@ -55,14 +58,18 @@ const JWS_ALGORITHMS = {
  * chain, so the moment #298/#233 provisioned one it would have booted on an
  * EdDSA-only stack and every EUDI wallet would have rejected every request.
  *
- * `responseEncryption` is `false` and carries no compile-time pin because there
- * is no JWE type to pin it to — #298 lands the encrypter and flips this flag. It
- * is written down rather than omitted so the gap is visible at the call site
- * instead of implied by silence.
+ * `responseEncryption` is now `true`: #298 landed the `ECDH-ES` (P-256) /
+ * `A128GCM`+`A256GCM` JWE stack (`encryptJwe` / `decryptJwe` and the per-request
+ * ephemeral key material) that `direct_post.jwt` needs. It still carries no
+ * compile-time pin — a boolean has no union to `satisfies` against — so unlike
+ * `signingAlgs` it is a HAND-MAINTAINED claim: removing the JWE stack would not
+ * break this line, and the gate would keep advertising an encrypter that is
+ * gone. Treat it as a fact to re-check whenever `@qauth-labs/core-crypto`'s JWE
+ * surface changes.
  */
 const CRYPTO_CAPABILITIES: VerifierCryptoCapabilities = {
   signingAlgs: Object.keys(JWS_ALGORITHMS),
-  responseEncryption: false,
+  responseEncryption: true,
 };
 
 export async function app(fastify: FastifyInstance, opts: object) {

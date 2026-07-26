@@ -1,11 +1,35 @@
-export type { JwsAlgorithm, SignatureAlgorithm } from './lib/algorithms';
+export {
+  JOSE_P256_CURVE,
+  JWE_CONTENT_ENCRYPTION_ALGORITHMS,
+  JWE_KEY_AGREEMENT_ALGORITHMS,
+  type JweContentEncryptionAlgorithm,
+  type JweKeyAgreementAlgorithm,
+  type JwsAlgorithm,
+  type SignatureAlgorithm,
+} from './lib/algorithms';
 export {
   getSignatureBackend,
   registerSignatureBackend,
   resetSignatureBackends,
 } from './lib/backend-registry';
 export { deriveMlDsaPublicKey, deriveMlDsaPublicKeyAndZeroize } from './lib/backends/ml-dsa-65';
-export { CryptoVerificationError, type CryptoVerificationErrorReason } from './lib/errors';
+export {
+  type EncryptionKey,
+  EPHEMERAL_ENCRYPTION_KEY_MAX_AGE_SECONDS,
+  type EphemeralEncryptionKeyPair,
+  exportEncryptionPrivateJwk,
+  exportEncryptionPublicJwk,
+  generateEphemeralEncryptionKeyPair,
+  type GenerateEphemeralEncryptionKeyPairOptions,
+  importEncryptionPrivateJwk,
+  importEncryptionPublicJwk,
+  isEphemeralEncryptionKeyPairExpired,
+} from './lib/encryption-keys';
+export {
+  CryptoDecryptionError,
+  CryptoVerificationError,
+  type CryptoVerificationErrorReason,
+} from './lib/errors';
 export {
   PQC_AKP_PUBLIC_JWK_MEMBERS,
   PQC_ALG_ML_DSA_65,
@@ -25,9 +49,20 @@ export {
   verifyHybrid,
 } from './lib/hybrid-signing';
 export {
+  type DecryptedJwe,
+  decryptJwe,
+  type DecryptJweOptions,
+  encryptJwe,
+  type EncryptJweOptions,
+  RESERVED_JWE_PROTECTED_HEADER_MEMBERS,
+} from './lib/jwe';
+export {
+  exportPublicSigningJwk,
+  type ExportPublicSigningJwkOptions,
   generateSigningKeyPair,
   type GenerateSigningKeyPairOptions,
   importPrivateSigningKey,
+  importPublicSigningJwk,
   importPublicSigningKey,
 } from './lib/key-management';
 export {
