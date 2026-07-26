@@ -65,9 +65,6 @@ const HANDLE_BYTES = 32;
 /** Exactly what `randomBytes(32).toString('base64url')` produces. */
 const HANDLE_PATTERN = /^[A-Za-z0-9_-]{43}$/;
 
-/** Path prefix of the wallet-login flow pages. */
-export const WALLET_LOGIN_PATH_PREFIX = '/ui/wallet-login/';
-
 /**
  * What the wallet-side POST reports back to the waiting browser.
  *
