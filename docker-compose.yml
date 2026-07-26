@@ -138,6 +138,15 @@ services:
       # without setting this is a deliberate boot failure, not a misconfiguration
       # of this file.
       OID4VP_VERIFIER_PROFILE: ${OID4VP_VERIFIER_PROFILE:-}
+      # Per-realm issuer allowlist (#236) — the OTHER trust direction, and
+      # forwarded for the same reason as the two above: without it the container
+      # reads an empty map no matter what .env says, so every realm would trust
+      # nobody and the operator's configured trust policy would silently not
+      # exist. The `:-` expands to an empty string when unset, which the env
+      # schema reads as "no realm trusts any issuer" — the fail-closed default,
+      # and not a boot failure. A value that is present but malformed IS a boot
+      # failure, on purpose.
+      OID4VP_TRUSTED_ISSUERS: ${OID4VP_TRUSTED_ISSUERS:-}
 
       # Rate Limiting (Global)
       RATE_LIMIT_ENABLED: ${RATE_LIMIT_ENABLED:-true}

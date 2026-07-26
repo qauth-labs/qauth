@@ -57,6 +57,18 @@ import { z } from 'zod';
  * dependency on `server-federation` (config is the lowest layer), so duplicating
  * the canonicalizer here is how the two sides would drift apart.
  *
+ * **What passes here is therefore NOT the last word, and must not be read as
+ * one.** The canonicalizer refuses things this schema accepts — userinfo, a
+ * query string, a fragment — and a per-realm allowlist is all-or-nothing, so one
+ * such entry would make its realm trust NOBODY. That used to happen silently at
+ * request time. The agreement between the two rule sets is enforced at BOOT by
+ * `assertTrustedIssuersUsable` (`server-federation`), which runs the runtime
+ * reduction over this parsed value from `apps/auth-server`'s bootstrap and
+ * refuses to start. Anything loosened here without loosening the canonicalizer
+ * turns into a boot failure, which is the direction that fails safely; anything
+ * TIGHTENED here must stay a superset of what the canonicalizer accepts, or a
+ * legitimate issuer becomes unconfigurable.
+ *
  * HTTP is rejected: the base OID4VP 1.0 / SD-JWT VC issuer identity is an HTTPS
  * URI, and an issuer identity that can be reached in the clear is not one worth
  * pinning trust to.

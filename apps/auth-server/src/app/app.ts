@@ -8,6 +8,7 @@ import { cachePlugin } from '@qauth-labs/fastify-plugin-cache';
 import { databasePlugin } from '@qauth-labs/fastify-plugin-db';
 import { emailPlugin, type EmailProviderConfig } from '@qauth-labs/fastify-plugin-email';
 import {
+  assertTrustedIssuersUsable,
   createConfiguredProviders,
   federationPlugin,
   type VerifierCryptoCapabilities,
@@ -123,6 +124,20 @@ export async function app(fastify: FastifyInstance, opts: object) {
   // signing/encryption mandates exceed CRYPTO_CAPABILITIES above — throws here
   // and refuses to boot, rather than serving wallet flows with an unstated or
   // unmeetable posture.
+  // Issuer trust (#236), the OTHER trust direction: which credential ISSUERS a
+  // realm accepts credentials from. `OID4VP_TRUSTED_ISSUERS` is validated by
+  // the env schema for SHAPE, but the runtime additionally canonicalizes every
+  // entry, and a per-realm allowlist is all-or-nothing — so a single entry the
+  // canonicalizer refuses (userinfo, a query string, a fragment) would make
+  // that realm trust NOBODY, with no boot failure and no log, and every
+  // Verifiable Presentation to it rejected. This runs the runtime's own
+  // reduction at startup so that configuration fails the boot instead.
+  //
+  // NOT gated on WALLET_FEDERATION_ENABLED: the typo is a typo whether or not
+  // wallet flows are switched on today, and finding it at boot beats finding it
+  // when the first presentation arrives.
+  assertTrustedIssuersUsable(env.OID4VP_TRUSTED_ISSUERS);
+
   await fastify.register(federationPlugin, {
     providers: createConfiguredProviders({
       walletFederationEnabled: env.WALLET_FEDERATION_ENABLED,

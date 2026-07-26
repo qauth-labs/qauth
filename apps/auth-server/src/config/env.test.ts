@@ -126,6 +126,65 @@ describe('ENABLE_SWAGGER defaults (F-07)', () => {
 });
 
 /**
+ * `OID4VP_TRUSTED_ISSUERS` reaches the running server (#236).
+ *
+ * The variable existed in `server-config`'s schema but was never spread into
+ * this app's env, never listed in `.env.example` and never forwarded by
+ * `docker-compose.yml` — so an operator could configure a per-realm issuer
+ * allowlist, restart, and have the server read an empty map: every realm
+ * trusting nobody, with the configuration apparently accepted. These tests pin
+ * the wiring, including the "blank means unset" handling that keeps the
+ * `${VAR:-}` compose form from taking a deployment down at boot.
+ */
+describe('OID4VP_TRUSTED_ISSUERS reaches the app env (#236)', () => {
+  it('unset → an empty map, not undefined (fail-closed: no realm trusts anyone)', async () => {
+    setEnv({ NODE_ENV: 'development', OID4VP_TRUSTED_ISSUERS: undefined });
+    const mod = await import('./env');
+
+    expect(mod.env.OID4VP_TRUSTED_ISSUERS).toEqual({});
+  });
+
+  it.each([
+    ['an empty string', ''],
+    ['whitespace', '   '],
+  ])('%s is read as unset and does NOT fail the boot', async (_label, raw) => {
+    // This is what `${OID4VP_TRUSTED_ISSUERS:-}` in docker-compose.yml expands
+    // to. `parseEnv` validates the whole composed env in one `.parse()` at
+    // module import, so throwing here would take down password login,
+    // /authorize and /token for a deployment with no interest in wallets.
+    setEnv({ NODE_ENV: 'development', OID4VP_TRUSTED_ISSUERS: raw });
+    const mod = await import('./env');
+
+    expect(mod.env.OID4VP_TRUSTED_ISSUERS).toEqual({});
+  });
+
+  it('a configured allowlist arrives as a per-realm map', async () => {
+    setEnv({
+      NODE_ENV: 'development',
+      OID4VP_TRUSTED_ISSUERS: '{"master":["https://issuer.example"],"acme":[]}',
+    });
+    const mod = await import('./env');
+
+    expect(mod.env.OID4VP_TRUSTED_ISSUERS).toEqual({
+      master: ['https://issuer.example'],
+      acme: [],
+    });
+  });
+
+  it.each([
+    ['malformed JSON', '{not json'],
+    ['a bare array with no realm to attach trust to', '["https://issuer.example"]'],
+    ['a plain-http issuer', '{"master":["http://issuer.example"]}'],
+  ])('fails the boot on %s rather than degrading to "trusts nothing"', async (_label, raw) => {
+    // "Trusts nothing" is also the legitimate default, so a typo that degraded
+    // to it silently would be indistinguishable from a correct empty config.
+    setEnv({ NODE_ENV: 'development', OID4VP_TRUSTED_ISSUERS: raw });
+
+    await expect(import('./env')).rejects.toThrow(/OID4VP_TRUSTED_ISSUERS/);
+  });
+});
+
+/**
  * Cross-lib pin: `OID4VP_VERIFIER_PROFILE` ↔ the shipped VerifierProfile table
  * (#299).
  *
