@@ -5,7 +5,12 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
 import { loadContentTree } from './content-tree';
-import { extractLinkTargets, findBrokenLinks, type LinkablePage } from './link-resolution';
+import {
+  extractLinkTargets,
+  findBrokenLinks,
+  type LinkablePage,
+  resolveSiteOrigin,
+} from './link-resolution';
 import { resolveWorkspaceRoot } from './workspace-root';
 
 /**
@@ -21,6 +26,7 @@ import { resolveWorkspaceRoot } from './workspace-root';
 
 const FIXTURES = join(dirname(fileURLToPath(import.meta.url)), '__fixtures__', 'link-resolution');
 const REPO_ROOT = resolveWorkspaceRoot();
+const SITE_ORIGIN = resolveSiteOrigin(REPO_ROOT);
 
 function loadFixturePage(relativePath: string, route?: string): LinkablePage {
   const filePath = join(FIXTURES, relativePath);
@@ -37,6 +43,7 @@ describe('findBrokenLinks — fixtures', () => {
     const violations = findBrokenLinks([home, guide, okScan], {
       repoRoot: REPO_ROOT,
       routedPages,
+      siteOrigin: SITE_ORIGIN,
     });
     expect(violations).toEqual([]);
   });
@@ -46,6 +53,7 @@ describe('findBrokenLinks — fixtures', () => {
     const violations = findBrokenLinks([home, guide, brokenScan], {
       repoRoot: REPO_ROOT,
       routedPages,
+      siteOrigin: SITE_ORIGIN,
     });
     expect(violations).toHaveLength(2);
     expect(violations.map((v) => v.link).sort()).toEqual(['./nope.md', '/does-not-exist/']);
@@ -56,6 +64,7 @@ describe('findBrokenLinks — fixtures', () => {
     const violations = findBrokenLinks([home, guide, brokenAnchor], {
       repoRoot: REPO_ROOT,
       routedPages,
+      siteOrigin: SITE_ORIGIN,
     });
     expect(violations).toEqual([expect.objectContaining({ link: '/guide/#missing-heading' })]);
   });
@@ -69,6 +78,7 @@ describe('findBrokenLinks — fixtures', () => {
     const violations = findBrokenLinks([home, guide, gluedReal], {
       repoRoot: REPO_ROOT,
       routedPages,
+      siteOrigin: SITE_ORIGIN,
     });
     expect(violations).toEqual([]);
   });
@@ -82,6 +92,7 @@ describe('findBrokenLinks — fixtures', () => {
     const violations = findBrokenLinks([home, guide, gluedApproximated], {
       repoRoot: REPO_ROOT,
       routedPages,
+      siteOrigin: SITE_ORIGIN,
     });
     expect(violations).toEqual([
       expect.objectContaining({ link: '/guide/#redirect-to-oauth-authorize' }),
@@ -90,7 +101,11 @@ describe('findBrokenLinks — fixtures', () => {
 
   it('passes a pointer stub whose link resolves to a real route', () => {
     const stubOk = loadFixturePage('stub-ok.md');
-    const violations = findBrokenLinks([home, guide, stubOk], { repoRoot: REPO_ROOT, routedPages });
+    const violations = findBrokenLinks([home, guide, stubOk], {
+      repoRoot: REPO_ROOT,
+      routedPages,
+      siteOrigin: SITE_ORIGIN,
+    });
     expect(violations).toEqual([]);
   });
 
@@ -99,9 +114,42 @@ describe('findBrokenLinks — fixtures', () => {
     const violations = findBrokenLinks([home, guide, stubBroken], {
       repoRoot: REPO_ROOT,
       routedPages,
+      siteOrigin: SITE_ORIGIN,
     });
     expect(violations).toEqual([
       expect.objectContaining({ page: 'stub-broken.md', link: '/gone/' }),
+    ]);
+  });
+
+  it("resolves a link written as the site's own absolute production URL — the pointer-stub style (qauth-labs/qauth#351 fix round 2)", () => {
+    // Real docs/*.md stubs link with `https://docs.qauth.dev/...` rather
+    // than a site-relative path, because they're read on GitHub, where a
+    // site-relative link resolves against github.com and breaks for a
+    // human reader. That absolute form must still be checked, not skipped
+    // as an external link.
+    const siteOriginOk = loadFixturePage('site-origin-ok.md');
+    const violations = findBrokenLinks([home, guide, siteOriginOk], {
+      repoRoot: REPO_ROOT,
+      routedPages,
+      siteOrigin: SITE_ORIGIN,
+    });
+    expect(violations).toEqual([]);
+  });
+
+  it('MUTATION: fails a site-origin-absolute link aiming at a route that does not exist', () => {
+    // Before this fix, `isOutOfScope` matched ANY `https?:` link — including
+    // one on the site's own origin — and skipped it unconditionally. This
+    // is the exact bug qauth-labs/qauth#351 fix round 2 found: all four
+    // `docs/*.md` pointer stubs use this absolute form, so this guard was
+    // silently checking none of their forward links.
+    const siteOriginBroken = loadFixturePage('site-origin-broken.md');
+    const violations = findBrokenLinks([home, guide, siteOriginBroken], {
+      repoRoot: REPO_ROOT,
+      routedPages,
+      siteOrigin: SITE_ORIGIN,
+    });
+    expect(violations).toEqual([
+      expect.objectContaining({ link: `${SITE_ORIGIN}/does-not-exist/` }),
     ]);
   });
 
@@ -111,13 +159,23 @@ describe('findBrokenLinks — fixtures', () => {
       filePath: join(FIXTURES, 'external.md'),
       content: '[spec](https://example.com/rfc) and [mail](mailto:a@example.com)',
     };
-    const violations = findBrokenLinks([external], { repoRoot: REPO_ROOT, routedPages });
+    const violations = findBrokenLinks([external], {
+      repoRoot: REPO_ROOT,
+      routedPages,
+      siteOrigin: SITE_ORIGIN,
+    });
     expect(violations).toEqual([]);
   });
 });
 
 describe('findBrokenLinks — real content tree', () => {
-  it('every link in the shipped docs-site content resolves', () => {
+  /** The repo-root pointer stubs Task 5 left behind — scan-only, own no route. */
+  function loadStub(fileName: string): LinkablePage {
+    const filePath = join(REPO_ROOT, 'docs', fileName);
+    return { id: `docs/${fileName}`, filePath, content: readFileSync(filePath, 'utf8') };
+  }
+
+  it('every link in the shipped docs-site content resolves, INCLUDING the repo-root pointer stubs', () => {
     const contentDir = join(REPO_ROOT, 'apps', 'docs-site', 'src', 'content', 'docs');
     const pages = loadContentTree(contentDir).map((page): LinkablePage => ({
       id: page.slug,
@@ -140,7 +198,30 @@ describe('findBrokenLinks — real content tree', () => {
     );
     expect(totalLinks).toBeGreaterThan(0);
 
-    const violations = findBrokenLinks(pages, { repoRoot: REPO_ROOT, routedPages: pages });
+    // The four Task 5 pointer stubs — scanned here too (previously they
+    // were not: they link with the site's absolute production URL, which
+    // `isOutOfScope` treated as unconditionally external and skipped
+    // before qauth-labs/qauth#351 fix round 2). `routedPages` stays
+    // `pages` only: a stub owns no route of its own, so nothing should be
+    // able to link INTO one.
+    const stubs = [
+      loadStub('mcp-quickstart.md'),
+      loadStub('oauth-flow.md'),
+      loadStub('api-reference.md'),
+      loadStub('code-examples.md'),
+    ];
+    // Non-vacuity for the stub scan specifically: each stub must carry at
+    // least one link, or a broken stub loader would silently contribute
+    // nothing to the scan below.
+    for (const stub of stubs) {
+      expect(extractLinkTargets(stub.content).length).toBeGreaterThan(0);
+    }
+
+    const violations = findBrokenLinks([...pages, ...stubs], {
+      repoRoot: REPO_ROOT,
+      routedPages: pages,
+      siteOrigin: SITE_ORIGIN,
+    });
     expect(violations).toEqual([]);
   });
 });
