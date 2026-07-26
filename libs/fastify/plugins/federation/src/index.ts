@@ -31,3 +31,49 @@ export {
   WALLET_PROVIDER_TYPE,
   WALLET_SOURCE,
 } from '@qauth-labs/server-federation';
+
+// OID4VP 1.0 transport surface (#233), re-exported for the same boundary reason
+// as the provider API above: the `direct_post` response route lives in
+// `apps/auth-server` (`scope:app`), which may not depend on `scope:server` libs
+// directly.
+//
+// The `VerifierProfile` resolution surface comes with it — the route MUST resolve
+// a profile per request and refuse when none is selected (#296 fail-closed), and
+// it cannot import the resolver any other way.
+export type {
+  ClientIdPrefix,
+  CredentialFormat,
+  CredentialFormatAdapter,
+  CredentialRequestSpec,
+  DcqlClaimsQuery,
+  DcqlCredentialQuery,
+  DcqlQuery,
+  Oid4vpAuthorizationRequest,
+  Oid4vpDirectPostOutcome,
+  Oid4vpRequestSecrets,
+  PresentedCredential,
+  RedeemedOid4vpRequestState,
+  VerifierProfile,
+  VerifierProfileId,
+} from '@qauth-labs/server-federation';
+export {
+  assertNoRedirectUriParameter,
+  assertProfileUnchanged,
+  assertValidResponseUri,
+  buildOid4vpAuthorizationRequest,
+  buildRedirectUriClientId,
+  DEFAULT_OID4VP_REQUEST_TTL_MS,
+  DIRECT_POST_RESPONSE_MODE,
+  encodeOid4vpRequestUri,
+  generateOid4vpRequestSecrets,
+  hashOid4vpState,
+  MAX_VP_TOKEN_LENGTH,
+  OID4VP_REJECTION_DESCRIPTION,
+  OID4VP_RESPONSE_TYPE,
+  Oid4vpTransportRejection,
+  parseStoredDcqlQuery,
+  parseVpToken,
+  resolveOid4vpExpiry,
+  resolveVerifierProfile,
+  SD_JWT_VC_FORMAT,
+} from '@qauth-labs/server-federation';

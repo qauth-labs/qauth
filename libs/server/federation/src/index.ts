@@ -1,4 +1,5 @@
 export * from './claims/attribute-trust';
+export * from './oid4vp';
 export * from './profiles/resolve-verifier-profile';
 export * from './profiles/verifier-identity';
 export type * from './profiles/verifier-profile.types';
