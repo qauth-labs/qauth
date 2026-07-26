@@ -3,10 +3,15 @@ import * as path from 'node:path';
 import AutoLoad from '@fastify/autoload';
 import cors from '@fastify/cors';
 import formbody from '@fastify/formbody';
+import type { JwsAlgorithm } from '@qauth-labs/core-crypto';
 import { cachePlugin } from '@qauth-labs/fastify-plugin-cache';
 import { databasePlugin } from '@qauth-labs/fastify-plugin-db';
 import { emailPlugin, type EmailProviderConfig } from '@qauth-labs/fastify-plugin-email';
-import { createConfiguredProviders, federationPlugin } from '@qauth-labs/fastify-plugin-federation';
+import {
+  createConfiguredProviders,
+  federationPlugin,
+  type VerifierCryptoCapabilities,
+} from '@qauth-labs/fastify-plugin-federation';
 import { jwtPlugin } from '@qauth-labs/fastify-plugin-jwt';
 import { passwordPlugin } from '@qauth-labs/fastify-plugin-password';
 import { pkcePlugin } from '@qauth-labs/fastify-plugin-pkce';
@@ -19,6 +24,46 @@ import { metricsPlugin } from './plugins/metrics';
 import { rateLimitPlugin } from './plugins/rate-limit';
 import { requestIdPlugin } from './plugins/request-id';
 import { securityHeadersPlugin } from './plugins/security-headers';
+
+/**
+ * JOSE `alg` identifiers this build can actually put in a JWS, pinned
+ * EXHAUSTIVELY to the crypto layer's own union (#299).
+ *
+ * `satisfies Record<JwsAlgorithm, true>` is the entire point of writing it as an
+ * object: when #298 widens `JwsAlgorithm` with `ES256`, this literal stops
+ * compiling until the new algorithm is listed, so the `haip-1.0` refusal below
+ * lifts in the same commit that makes it untrue. A hand-maintained array would
+ * have gone stale silently, and a stale capability descriptor is worse than none
+ * — it would let `haip-1.0` boot on a crypto layer that cannot sign for it.
+ *
+ * A TYPE-only import, so nothing from `@qauth-labs/core-crypto` reaches the
+ * bundle: the bootstrap needs the crypto layer's answer, not its implementation.
+ */
+const JWS_ALGORITHMS = {
+  EdDSA: true,
+  RS256: true,
+} as const satisfies Record<JwsAlgorithm, true>;
+
+/**
+ * What this deployment's crypto layer can do, handed to the VerifierProfile gate
+ * (#299) so a profile is checked against REALITY rather than against its own
+ * declaration.
+ *
+ * Without this, `haip-1.0`'s `signingAlgs: ['ES256']` and
+ * `responseEncryption: 'required'` (HAIP §7 / §5.1) were declared and enforced
+ * nowhere: the only thing keeping that profile out was its missing certificate
+ * chain, so the moment #298/#233 provisioned one it would have booted on an
+ * EdDSA-only stack and every EUDI wallet would have rejected every request.
+ *
+ * `responseEncryption` is `false` and carries no compile-time pin because there
+ * is no JWE type to pin it to — #298 lands the encrypter and flips this flag. It
+ * is written down rather than omitted so the gap is visible at the call site
+ * instead of implied by silence.
+ */
+const CRYPTO_CAPABILITIES: VerifierCryptoCapabilities = {
+  signingAlgs: Object.keys(JWS_ALGORITHMS),
+  responseEncryption: false,
+};
 
 export async function app(fastify: FastifyInstance, opts: object) {
   await fastify.register(databasePlugin, {
@@ -70,9 +115,23 @@ export async function app(fastify: FastifyInstance, opts: object) {
   // WALLET_FEDERATION_ENABLED is on — default OFF while epic #231 (#233–#238)
   // is incomplete, and inert even when on, because the skeleton's methods fail
   // closed and nothing resolves 'wallet' yet.
+  //
+  // Turning the flag on additionally requires a VerifierProfile (#299): the flag
+  // decides WHETHER the wallet provider exists, the profile decides WHAT POSTURE
+  // it runs with. An enabled deployment carrying no profile — one whose Client
+  // Identifier Prefix needs unprovisioned X.509 material, or one whose declared
+  // signing/encryption mandates exceed CRYPTO_CAPABILITIES above — throws here
+  // and refuses to boot, rather than serving wallet flows with an unstated or
+  // unmeetable posture.
   await fastify.register(federationPlugin, {
     providers: createConfiguredProviders({
       walletFederationEnabled: env.WALLET_FEDERATION_ENABLED,
+      verifierProfileId: env.OID4VP_VERIFIER_PROFILE,
+      cryptoCapabilities: CRYPTO_CAPABILITIES,
+      // `provisionedVerifierMaterial` is deliberately not passed: no certificate
+      // configuration surface exists until #298/#233, and the option's default
+      // is the refusing one. Threading real material through here is that
+      // issue's job.
     }),
   });
 
