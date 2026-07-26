@@ -32,26 +32,41 @@ export { VERIFIER_PROFILE_IDS } from '@qauth-labs/server-federation';
  *
  * Handed in by the bootstrap rather than read from `@qauth-labs/core-crypto`
  * here, for two reasons. This lib has no business knowing how signing is
- * implemented, only what the answer is; and the answer is deployment-shaped —
- * #298 lands ES256 and the JWE stack, and an operator's `SIGNING_ALGORITHM_MODE`
- * allowlist can narrow it further. A declarative descriptor also keeps
+ * implemented, only what the answer is; and the answer is DEPLOYMENT-shaped, not
+ * library-shaped — it depends on which keys the operator provisioned and which
+ * code paths exist, and an operator's `SIGNING_ALGORITHM_MODE` allowlist can
+ * narrow it further. A declarative descriptor also keeps
  * {@link createConfiguredProviders} a pure function of config, which is the
  * property this whole module is built around.
  *
+ * The bootstrap must answer "can this deployment DO it", never "does the crypto
+ * library export it". The two diverge the moment an algorithm is implemented
+ * before it is provisionable — which is the state ES256 and the JWE stack are in
+ * after #298 — and answering the second question silently lifts the gate below.
+ *
  * `signingAlgs` is `readonly string[]` rather than either union in play, on
  * purpose: `VerifierSigningAlgorithm` (`'EdDSA' | 'ES256'`) is what a profile
- * may DECLARE and `JwsAlgorithm` (`'EdDSA' | 'RS256'`) is what the token layer
- * can EMIT. They are different vocabularies until #298 reconciles them, and a
- * descriptor forced to pick one would have to silently drop `'RS256'` or
- * `'ES256'`. JOSE `alg` identifiers are the vocabulary they share; the
- * comparison is by value.
+ * may DECLARE and `JwsAlgorithm` (`'EdDSA' | 'RS256' | 'ES256'`) is what the
+ * token layer can EMIT. They are different vocabularies — `RS256` is meaningless
+ * to a profile, and neither says anything about provisioning — and a descriptor
+ * forced to pick one would have to silently drop a member. JOSE `alg`
+ * identifiers are the vocabulary they share; the comparison is by value.
  */
 export interface VerifierCryptoCapabilities {
-  /** JOSE `alg` identifiers this deployment can sign a request with today. */
+  /**
+   * JOSE `alg` identifiers this deployment can sign a request with today —
+   * meaning a key for that algorithm is provisioned and reachable, NOT merely
+   * that the crypto layer implements it.
+   */
   readonly signingAlgs: readonly string[];
   /**
-   * Whether this deployment can encrypt an Authorization Response — the JWE
-   * behind the `direct_post.jwt` response mode HAIP §5.1 mandates. #298.
+   * Whether this deployment can operate an encrypted Authorization Response —
+   * the JWE behind the `direct_post.jwt` response mode HAIP §5.1 mandates.
+   *
+   * Same standard as above: the primitives shipping in `@qauth-labs/core-crypto`
+   * (#298) is not the question. The question is whether this deployment
+   * publishes an encryption key in `client_metadata` and has a response path
+   * that decrypts — which is #233/#234's work.
    */
   readonly responseEncryption: boolean;
 }
@@ -107,11 +122,11 @@ export interface ConfiguredProvidersOptions {
    *
    * The single exception to the required-fields rule above, and only because
    * omitting it is the fail-closed answer rather than an unstated one: nothing
-   * is provisionable until #298/#233 ship a certificate configuration surface,
-   * so the default is `NO_VERIFIER_MATERIAL` — the value that makes `haip-1.0`
+   * is provisionable until #233 ships a certificate configuration surface, so
+   * the default is `NO_VERIFIER_MATERIAL` — the value that makes `haip-1.0`
    * refuse. This mirrors `assertPrefixProvisioned`'s own defaulted parameter: a
    * caller that forgets to thread it through fails closed rather than sails past.
-   * When #298/#233 land, the bootstrap starts passing real material here and
+   * When #233 lands, the bootstrap starts passing real material here and
    * `haip-1.0` clears the certificate half of the gate without an edit to this
    * signature.
    */
@@ -159,13 +174,13 @@ function assertProfileWithinCryptoCapabilities(
 
   if (usable.length === 0) {
     throw new Error(
-      `Verifier profile '${profile.id}' accepts ${quoteList(profile.signingAlgs)} for request signing, but this deployment's crypto layer produces ${quoteList(capabilities.signingAlgs)}. Refusing to start rather than advertising the profile to wallets and then failing every presentation with a signature they will not accept (#299). ES256 lands with #298.`
+      `Verifier profile '${profile.id}' accepts ${quoteList(profile.signingAlgs)} for request signing, but this deployment's crypto layer produces ${quoteList(capabilities.signingAlgs)}. Refusing to start rather than advertising the profile to wallets and then failing every presentation with a signature they will not accept (#299). ES256 signing exists in the crypto layer (#298) but no key for it is provisionable until #233.`
     );
   }
 
   if (profile.responseEncryption === 'required' && !capabilities.responseEncryption) {
     throw new Error(
-      `Verifier profile '${profile.id}' requires encrypted Authorization Responses — the 'direct_post.jwt' response mode of HAIP §5.1 — and this deployment has no JWE stack. Refusing to start rather than asking a wallet for a response it cannot decrypt (#299). The JWE stack lands with #298.`
+      `Verifier profile '${profile.id}' requires encrypted Authorization Responses — the 'direct_post.jwt' response mode of HAIP §5.1 — and this deployment has no JWE stack. Refusing to start rather than asking a wallet for a response it cannot decrypt (#299). The JWE primitives exist in the crypto layer (#298) but the encrypted-response path lands with #233/#234.`
     );
   }
 }

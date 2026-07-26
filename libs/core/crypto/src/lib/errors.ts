@@ -53,3 +53,62 @@ export class CryptoVerificationError extends Error {
     this.detail = options.detail;
   }
 }
+
+/**
+ * The ONLY `message` a {@link CryptoDecryptionError} ever carries.
+ *
+ * A constant rather than a template, and that is the whole control — see the
+ * class docblock. Exported so a test can assert the invariant by identity
+ * instead of by comparing two failures that might happen to agree.
+ */
+export const CRYPTO_DECRYPTION_ERROR_MESSAGE = 'JWE decryption failed';
+
+/**
+ * Backend-neutral error thrown when a JWE fails to decrypt (#298).
+ *
+ * Deliberately has NO `reason` discriminant, unlike
+ * {@link CryptoVerificationError}, and its `message` is the FIXED constant
+ * {@link CRYPTO_DECRYPTION_ERROR_MESSAGE} — never interpolated with the
+ * backend's own text. Every failure, cryptographic or structural, is therefore
+ * one indistinguishable outcome: wrong recipient key, tampered ciphertext or
+ * authentication tag, a rejected `alg` / `enc`, a `zip` this library refuses, a
+ * malformed compact serialization, a plaintext that is not JSON. A caller that
+ * could tell "your key is wrong" from "your ciphertext is wrong" is an oracle,
+ * and JWE decryption oracles are the origin of the entire Bleichenbacher family.
+ * There is nothing to branch on, so nothing can be leaked by branching.
+ *
+ * Interpolating {@link detail} into the message is precisely what would break
+ * that: `jose` reports "decryption operation failed" for both a wrong key and a
+ * tampered ciphertext (which collide harmlessly), but "Invalid Compact JWE" for
+ * a malformed serialization and `'"alg" (Algorithm) Header Parameter value not
+ * allowed'` for a rejected pin — three distinguishable classes, and a caller
+ * that logged or echoed `error.message` would publish them.
+ *
+ * {@link detail} survives as a SEPARATE field for logs. It does distinguish the
+ * failure classes, which is exactly why it is off the message and must never be
+ * surfaced to a remote party — the OAuth error response for a failed
+ * `direct_post.jwt` decryption is a flat `invalid_request`. Same rule for
+ * `cause`.
+ */
+export class CryptoDecryptionError extends Error {
+  /**
+   * Backend-supplied or library-supplied diagnostic (e.g. `"decryption
+   * operation failed"`, `"payload is not valid JSON"`).
+   *
+   * DIAGNOSTIC ONLY, for local logs — never include it in a response to a
+   * remote party, and never let it reach {@link message}.
+   */
+  readonly detail?: string;
+
+  constructor(options: { detail?: string; cause?: unknown } = {}) {
+    // The message is the constant, ALWAYS. `detail` is carried alongside it, so
+    // an operator reading logs still gets the diagnostic while a caller reading
+    // `error.message` gets one value for every possible failure.
+    super(
+      CRYPTO_DECRYPTION_ERROR_MESSAGE,
+      options.cause !== undefined ? { cause: options.cause } : undefined
+    );
+    this.name = 'CryptoDecryptionError';
+    this.detail = options.detail;
+  }
+}

@@ -11,12 +11,16 @@ import { createConfiguredProviders, type VerifierCryptoCapabilities } from './co
 import { federationPlugin } from './federation-plugin';
 
 /**
- * The crypto layer as it exists TODAY, transcribed from `JwsAlgorithm`
- * (`libs/core/crypto/src/lib/algorithms.ts`) and from the absence of any JWE
- * encrypter in the workspace.
+ * What a deployment can actually sign and encrypt TODAY: an EdDSA key (required
+ * by the env schema), optionally an RS256 one (#309), and no way to sign with
+ * ES256 or to operate an encrypted Authorization Response.
  *
- * `apps/auth-server` builds the same descriptor and pins it to `JwsAlgorithm`
- * exhaustively with `satisfies`; this lib cannot (it does not depend on
+ * Note "can actually", not "the crypto library exports". `@qauth-labs/core-crypto`
+ * gained ES256 signing and the `ECDH-ES`/`A*GCM` JWE stack with #298, and this
+ * fixture is STILL the deployment's answer, because no config surface provisions
+ * a P-256 signing key and nothing calls the JWE stack. `apps/auth-server` derives
+ * the same descriptor from its provisioned key material and proves that claim
+ * there (`crypto-capabilities.test.ts`); this lib cannot (it does not depend on
  * `core-crypto`, and deliberately does not — see
  * {@link VerifierCryptoCapabilities}). Here the values are the fixture, and what
  * is under test is what the gate DOES with them.
@@ -26,20 +30,24 @@ const CRYPTO_TODAY: VerifierCryptoCapabilities = {
   responseEncryption: false,
 };
 
-/** The crypto layer once #298 lands ES256 and the JWE stack. */
+/**
+ * The deployment once #233 provisions an ES256 signing key AND wires the
+ * `direct_post.jwt` response path onto #298's JWE stack — i.e. the world in
+ * which `haip-1.0` finally becomes operable.
+ */
 const CRYPTO_AFTER_298: VerifierCryptoCapabilities = {
   signingAlgs: ['EdDSA', 'RS256', 'ES256'],
   responseEncryption: true,
 };
 
-/** #298 has landed ES256 but not the JWE stack — the halfway state. */
+/** An ES256 signing key exists but the encrypted response path does not — the halfway state. */
 const CRYPTO_ES256_WITHOUT_JWE: VerifierCryptoCapabilities = {
   signingAlgs: ['EdDSA', 'RS256', 'ES256'],
   responseEncryption: false,
 };
 
 /**
- * The certificate state #298/#233 will deliver for a HAIP deployment: a
+ * The certificate state #233 will deliver for a HAIP deployment: a
  * QTSP-issued WRPAC, i.e. the non-self-signed chain `x509_hash` requires.
  *
  * Nothing can produce this today; it is written down so the crypto gate can be

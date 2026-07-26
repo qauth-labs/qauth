@@ -203,12 +203,30 @@ export function buildIdTokenClaims(payload: SignIdTokenPayload): {
   return { claims, audience: payload.audience };
 }
 
+/**
+ * JOSE `alg` values QAuth may sign its OWN ID tokens with.
+ *
+ * A NARROWING of `JwsAlgorithm`, not the union itself. `JwsAlgorithm` is the
+ * jose-carried token-layer vocabulary and is widened by work that has nothing to
+ * do with QAuth's issuance — #298 added `ES256` for OID4VP wallet federation,
+ * where it is a WALLET's algorithm. Typing the parameter as `JwsAlgorithm` would
+ * have made every such widening immediately reachable from QAuth's own ID-token
+ * signer by default; this type means a new algorithm becomes issuable only by a
+ * deliberate edit here.
+ *
+ * Written with `Extract` rather than as a fresh literal union so the link to
+ * `JwsAlgorithm` survives: an algorithm REMOVED from the crypto layer collapses
+ * this to a smaller union (or `never`) and stops the callers compiling, instead
+ * of leaving a name behind that nothing can sign.
+ */
+export type IdTokenSigningAlgorithm = Extract<JwsAlgorithm, 'EdDSA' | 'RS256'>;
+
 export async function signIdToken(
   payload: SignIdTokenPayload,
   privateKey: KeyLike,
   issuer: string,
   expiresIn: number,
-  alg: JwsAlgorithm = 'EdDSA',
+  alg: IdTokenSigningAlgorithm = 'EdDSA',
   kid?: string
 ): Promise<string> {
   const { claims, audience } = buildIdTokenClaims(payload);
