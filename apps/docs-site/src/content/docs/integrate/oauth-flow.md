@@ -163,6 +163,7 @@ curl -s -X POST http://localhost:3000/oauth/token \
 {
   "access_token": "eyJ…",
   "refresh_token": "a1b2…(64 hex)",
+  "id_token": "eyJ…", // present because the request above granted `openid`
   "expires_in": 900,
   "token_type": "Bearer",
   "scope": "openid profile email"
@@ -178,6 +179,30 @@ Notes:
   `redirect_uri` and a PKCE-matching `code_verifier` are mandatory.
 - `resource` here must be a **subset** of the resource set bound at authorize
   time, or you get `invalid_target`. Omit it to inherit the code's binding.
+- **`id_token` is issued only for this grant** (`authorization_code`), and
+  only when the granted scope includes `openid`. It is a separate,
+  **client-audienced** EdDSA JWT (`aud` = your `client_id`, not the resource
+  `aud` the access token carries) asserting the sign-in event — see
+  [ID token claims](#id-token-claims-oidc) below. `client_credentials` has no
+  end user and never carries one; `refresh_token` does **not** reissue one
+  either (see [Refresh Token](#refresh-token-rotation)).
+
+### ID token claims (OIDC)
+
+Beyond the standard `iss` / `sub` / `aud` / `exp` / `iat`, `id_token` carries
+(all via `signIdToken`, `libs/server/jwt/src/lib/jwt-service.ts:170-204`):
+
+| Claim            | Present when                                                                             |
+| ---------------- | ---------------------------------------------------------------------------------------- |
+| `nonce`          | The authorize request sent one (OIDC Core §3.1.3.6) — echoed back unmodified.            |
+| `auth_time`      | Always for the code flow (the session's real authentication time, epoch seconds).        |
+| `name`           | The user has a `firstName` and/or `lastName` set — **not gated by the `profile` scope**. |
+| `email`          | The granted scope includes `email` **and** a verified email attribute exists.            |
+| `email_verified` | Same condition as `email`; always `true` when present.                                   |
+
+`email`/`email_verified` share the same trust-ordered resolution the access
+token and [UserInfo](#userinfo-oidc) use, so all three never disagree within
+one issuance.
 
 ### 4. Call a protected resource
 
@@ -212,6 +237,9 @@ curl -s -X POST http://localhost:3000/oauth/token \
   to the refresh token.
 - Confidential clients authenticate as in step 3; public clients send only
   `client_id` (ownership is enforced by refresh-token binding).
+- **No `id_token` is issued on refresh**, even when the original grant
+  included `openid` — only the `authorization_code` grant mints one. If your
+  client needs a fresh ID token, re-run the authorization flow.
 
 ---
 
@@ -341,6 +369,13 @@ An inactive, expired, unknown, or wrong-audience token returns
 `{ "active": false }` with no other fields. For most resource servers, **local
 JWT verification against the JWKS is preferred** (no per-request round-trip);
 use introspection when you need immediate revocation.
+
+> When `HYBRID_SIGNING_ENABLED=true` (default off — see the
+> [Status page](/reference/status/)), a successful response also carries
+> `pqc_signature` and `pqc_alg`: the token's detached ML-DSA-65 signature and
+> algorithm, delivered here because the bearer JWT itself has no room for a
+> second signature. Omitted whenever the flag is off or the signature record
+> isn't found; neither case affects the `active` decision.
 
 ---
 

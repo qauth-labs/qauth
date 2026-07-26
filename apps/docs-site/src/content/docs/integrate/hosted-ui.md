@@ -24,8 +24,13 @@ a hidden form field and a cookie.
 `POST /ui/login` verifies the CSRF pair, then the credentials. On success it
 mints a **fresh** session id (session-fixation defence — a pre-login session
 id is never reused), sets it as `__Host-qauth_session`, and redirects to
-`return_to`. On failure it re-renders the form with a `401` (bad credentials)
-or `403` (CSRF mismatch) and a fresh CSRF token.
+`return_to`. On failure it re-renders the form, and the two failure modes
+handle the CSRF token differently: a `403` (CSRF pair missing or mismatched,
+`apps/auth-server/src/app/routes/ui/login.ts:241`) mints and sets a **fresh**
+token so a legitimate retry can succeed; a `401` (bad credentials,
+`apps/auth-server/src/app/routes/ui/login.ts:294`) **reuses** the existing
+cookie's token unchanged, since that cookie is still valid — only the
+credentials were wrong.
 
 ## `/ui/consent`
 
@@ -69,7 +74,7 @@ it in the redirect:
 - An unauthenticated `GET /oauth/authorize` no longer nests the query. It
   stashes the normalized authorize URL in Redis under a fresh,
   **43-character CSPRNG handle** (`randomBytes(32).toString('base64url')`,
-  `apps/auth-server/src/app/helpers/pending-authorization.ts:97`) and
+  `apps/auth-server/src/app/helpers/pending-authorization.ts:191`) and
   redirects to `/ui/login?return_to=%2Fui%2Fresume%2F<handle>` — a ~60-byte
   path regardless of how large `state`, `nonce`, or `resource` are. The same
   stash-then-redirect helper
@@ -110,7 +115,7 @@ it in the redirect:
   primitive against the same Redis that holds live browser sessions and
   rate-limit counters. Exceeding it returns `400 invalid_request:
 authorization request is too large`
-  (`apps/auth-server/src/app/helpers/pending-authorization.ts:213`)
+  (`apps/auth-server/src/app/helpers/pending-authorization.ts:215`)
   rather than either a `500` or a `Location` header no proxy would forward.
 
 ### Redis is now on the pre-authentication path
@@ -122,7 +127,7 @@ handle is now the first Redis dependency an unauthenticated caller can
 trigger. QAuth degrades rather than fails when that write cannot complete —
 if Redis is unreachable, `redirectToLoginWithPendingAuthorization` catches
 the failure and falls back to the pre-#319 inline `return_to`
-(`apps/auth-server/src/app/helpers/pending-authorization.ts:296`). That
+(`apps/auth-server/src/app/helpers/pending-authorization.ts:299`). That
 inline fallback is correct for every request small enough to survive a
 proxy's header buffer — only the pathological multi-kilobyte `state` that
 motivated the stash would still be too large during a Redis outage, and for

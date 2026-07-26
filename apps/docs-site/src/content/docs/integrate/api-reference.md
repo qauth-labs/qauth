@@ -215,12 +215,23 @@ Key contract facts:
 {
   "access_token": "eyJ…",
   "refresh_token": "a1b2…", // omitted for client_credentials and token-exchange
+  "id_token": "eyJ…", // authorization_code grant only, when `openid` was granted
   "expires_in": 900,
   "token_type": "Bearer",
   "scope": "openid profile email", // present when scopes granted
   "issued_token_type": "urn:ietf:params:oauth:token-type:access_token" // token-exchange only (RFC 8693 §2.2.1)
 }
 ```
+
+`id_token` is a separate, client-audienced (`aud` = your `client_id`) EdDSA JWT
+asserting the sign-in event: `sub`, `nonce` (when sent), `auth_time`, `name`
+(when set on the user, not gated by the `profile` scope), and `email` /
+`email_verified` (only under the `email` scope, same trust-ordered resolution
+as the [UserInfo response](#userinfo-response-getpost-oauthuserinfo-200-ok)
+below). Only the `authorization_code` grant issues one; `refresh_token` does
+not reissue it. See
+[ID token claims](/integrate/oauth-flow/#id-token-claims-oidc) for the full
+list.
 
 ### Introspection response (`POST /oauth/introspect`, `200 OK`)
 
@@ -340,7 +351,10 @@ Revoke one consent owned by the signed-in user.
 
 **Headers**: `X-CSRF-Token: <csrfToken from GET /consents/>` (required).
 
-**`204 No Content`**. Errors: `401` (no/invalid session).
+**`204 No Content`**. Errors: `400` (`invalid_csrf_token` — missing or
+mismatched `X-CSRF-Token`; the first outcome you'll hit if the header isn't
+wired up yet), `401` (no/invalid session), `404` (consent does not exist or
+is not owned by the caller).
 
 ---
 
@@ -364,7 +378,7 @@ List the authenticated developer's OAuth clients.
   "clients": [
     {
       "id": "0190f7…",
-      "clientId": "my-app",
+      "clientId": "0190f7a0-…-uuid",
       "name": "My App",
       "description": null,
       "redirectUris": ["http://localhost:5173/callback"],

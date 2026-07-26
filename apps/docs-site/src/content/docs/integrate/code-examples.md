@@ -218,7 +218,9 @@ async function handleCallback() {
 
   sessionStorage.removeItem('pkce_verifier');
   sessionStorage.removeItem('oauth_state');
-  return tokens; // { access_token, refresh_token, expires_in, token_type, scope }
+  return tokens; // { access_token, refresh_token, id_token, expires_in, token_type, scope }
+  // id_token is present because SCOPE above includes `openid` — see
+  // https://docs.qauth.dev/integrate/oauth-flow/#id-token-claims-oidc
 }
 
 // --- 3. Call a protected API with the access token ---
