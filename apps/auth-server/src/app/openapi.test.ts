@@ -3,7 +3,6 @@ import swagger from '@fastify/swagger';
 import swaggerUi from '@fastify/swagger-ui';
 import Fastify from 'fastify';
 import {
-  createJsonSchemaTransform,
   isResponseSerializationError,
   serializerCompiler,
   validatorCompiler,
@@ -11,6 +10,7 @@ import {
 } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 
+import { openapiOptions } from './openapi-options';
 import {
   introspectRequestSchema,
   introspectResponseSchema,
@@ -28,31 +28,12 @@ describe('OpenAPI / Swagger', () => {
     app.setValidatorCompiler(validatorCompiler);
     app.setSerializerCompiler(serializerCompiler);
 
-    await app.register(swagger, {
-      openapi: {
-        openapi: '3.1.0',
-        info: {
-          title: 'QAuth Auth Server API',
-          description:
-            'OAuth 2.1 / OIDC authentication server API. Phase 1.7: userinfo and token introspection.',
-          version: '1.0.0',
-        },
-        servers: [{ url: '/', description: 'Default' }],
-        components: {
-          securitySchemes: {
-            bearerAuth: {
-              type: 'http',
-              scheme: 'bearer',
-              bearerFormat: 'JWT',
-              description: 'Access token obtained from login, refresh, or OAuth token endpoint.',
-            },
-          },
-        },
-      },
-      transform: createJsonSchemaTransform({
-        zodToJsonConfig: { target: 'draft-2020-12' },
-      }),
-    });
+    // Shared with `main.ts` (the running server) and `openapi-export.ts` (the
+    // offline exporter) via `openapi-options.ts`, rather than a third
+    // independent copy here — this file used to carry its own inline `info`/
+    // `components` block, which is exactly the kind of copy that drifted
+    // stale (qauth-labs/qauth#351 fix round 1).
+    await app.register(swagger, openapiOptions);
 
     await app.register(swaggerUi, {
       routePrefix: '/docs',
