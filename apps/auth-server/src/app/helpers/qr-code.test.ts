@@ -4,9 +4,63 @@ import {
   encodeQrCode,
   QR_MAX_BYTES,
   QR_QUIET_ZONE,
+  qrAlignmentPatternPositions,
   qrByteCapacity,
   renderQrCodeSvg,
 } from './qr-code';
+
+/**
+ * Alignment-pattern centres for every version, transcribed from ISO/IEC 18004
+ * Annex E (Table E.1).
+ *
+ * EXTERNAL DATA, and the reason this table is spelled out rather than derived:
+ * a reader that recomputes the centres the same way the encoder does agrees with
+ * the encoder about a wrong answer, and the symbol round-trips perfectly while
+ * scanning nowhere. This table is the only thing in the suite that can catch
+ * that, so it is pinned in full rather than sampled.
+ */
+const ISO_ALIGNMENT_POSITIONS: Readonly<Record<number, readonly number[]>> = {
+  1: [],
+  2: [6, 18],
+  3: [6, 22],
+  4: [6, 26],
+  5: [6, 30],
+  6: [6, 34],
+  7: [6, 22, 38],
+  8: [6, 24, 42],
+  9: [6, 26, 46],
+  10: [6, 28, 50],
+  11: [6, 30, 54],
+  12: [6, 32, 58],
+  13: [6, 34, 62],
+  14: [6, 26, 46, 66],
+  15: [6, 26, 48, 70],
+  16: [6, 26, 50, 74],
+  17: [6, 30, 54, 78],
+  18: [6, 30, 56, 82],
+  19: [6, 30, 58, 86],
+  20: [6, 34, 62, 90],
+  21: [6, 28, 50, 72, 94],
+  22: [6, 26, 50, 74, 98],
+  23: [6, 30, 54, 78, 102],
+  24: [6, 28, 54, 80, 106],
+  25: [6, 32, 58, 84, 110],
+  26: [6, 30, 58, 86, 114],
+  27: [6, 34, 62, 90, 118],
+  28: [6, 26, 50, 74, 98, 122],
+  29: [6, 30, 54, 78, 102, 126],
+  30: [6, 26, 52, 78, 104, 130],
+  31: [6, 30, 56, 82, 108, 134],
+  32: [6, 34, 60, 86, 112, 138],
+  33: [6, 30, 58, 86, 114, 142],
+  34: [6, 34, 62, 90, 118, 146],
+  35: [6, 30, 54, 78, 102, 126, 150],
+  36: [6, 24, 50, 76, 102, 128, 154],
+  37: [6, 28, 54, 80, 106, 132, 158],
+  38: [6, 32, 58, 84, 110, 136, 162],
+  39: [6, 26, 54, 82, 110, 138, 166],
+  40: [6, 30, 58, 86, 114, 142, 170],
+};
 
 /**
  * The encoder's failure mode is silent: a symbol built from a mistyped block
@@ -69,15 +123,14 @@ function rawDataModules(version: number): number {
   return result;
 }
 
-function alignmentPositions(version: number): number[] {
-  if (version === 1) return [];
-  const numAlign = Math.floor(version / 7) + 2;
-  const step = version === 32 ? 26 : Math.ceil((version * 4 + 4) / (numAlign * 2 - 2) / 2) * 2;
-  const result = [6];
-  for (let pos = version * 4 + 17 - 7; result.length < numAlign; pos -= step) {
-    result.splice(1, 0, pos);
-  }
-  return result;
+/**
+ * The reader takes its centres from the pinned standard table, NOT from a second
+ * copy of the encoder's derivation. A duplicated derivation is a duplicated bug:
+ * both sides would agree on the wrong centres and the round-trip would pass on a
+ * symbol no scanner can read.
+ */
+function alignmentPositions(version: number): readonly number[] {
+  return ISO_ALIGNMENT_POSITIONS[version];
 }
 
 /** Modules a decoder must skip: everything that is not payload. */
@@ -279,6 +332,37 @@ describe('qrByteCapacity — cross-checked against ISO/IEC 18004 level M', () =>
 
   it('QR_MAX_BYTES is the version-40 capacity', () => {
     expect(QR_MAX_BYTES).toBe(2331);
+  });
+});
+
+describe('qrAlignmentPatternPositions — pinned to ISO/IEC 18004 Annex E', () => {
+  const VERSIONS = Array.from({ length: 40 }, (_, i) => i + 1);
+
+  it.each(VERSIONS)('version %i places its alignment patterns where the standard says', (v) => {
+    expect(qrAlignmentPatternPositions(v)).toEqual([...ISO_ALIGNMENT_POSITIONS[v]]);
+  });
+
+  it('marks the alignment centres dark in a real (version >= 7) symbol', () => {
+    // 694 bytes is the size of a live OID4VP invocation URI, which lands around
+    // version 21 — the range where alignment patterns exist at all and where a
+    // wrong step first becomes observable.
+    const qr = encodeQrCode('openid4vp://?' + 'a'.repeat(680))!;
+    expect(qr.version).toBeGreaterThanOrEqual(7);
+    const centres = ISO_ALIGNMENT_POSITIONS[qr.version];
+    for (const cy of centres) {
+      for (const cx of centres) {
+        const corner =
+          (cx === 6 && cy === 6) ||
+          (cx === 6 && cy === centres[centres.length - 1]) ||
+          (cx === centres[centres.length - 1] && cy === 6);
+        if (corner) continue;
+        // A 5x5 alignment pattern: dark centre, light ring, dark border.
+        expect(qr.modules[cy][cx]).toBe(true);
+        expect(qr.modules[cy - 1][cx]).toBe(false);
+        expect(qr.modules[cy - 2][cx]).toBe(true);
+        expect(qr.modules[cy][cx + 2]).toBe(true);
+      }
+    }
   });
 });
 

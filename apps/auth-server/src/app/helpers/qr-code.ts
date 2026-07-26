@@ -242,11 +242,26 @@ function addEccAndInterleave(data: readonly number[], version: number): number[]
  * Symbol construction
  * ------------------------------------------------------------------------- */
 
-/** Centre coordinates of the alignment patterns for a version (§7.3.5). */
-function alignmentPatternPositions(version: number): number[] {
+/**
+ * Centre coordinates of the alignment patterns for a version (§7.3.5).
+ *
+ * Exported because it is the second table-shaped thing in this module whose
+ * failure mode is silent: wrong centres place the alignment patterns — and
+ * therefore every data module around them — somewhere no scanner looks, while
+ * the symbol still encodes and still round-trips through any reader that shares
+ * the same mistake. The tests pin it against ISO/IEC 18004 Annex E, which is
+ * external data, for exactly that reason.
+ *
+ * The spacing is derived, not tabulated: centres run from column/row 6 to
+ * `size - 7`, spaced by the smallest EVEN step that fits `numAlign` of them
+ * (§7.3.5 requires even spacing so the centres land on the timing pattern's
+ * parity). Version 32 is the one version the derivation does not produce and the
+ * standard tabulates separately.
+ */
+export function qrAlignmentPatternPositions(version: number): number[] {
   if (version === 1) return [];
   const numAlign = Math.floor(version / 7) + 2;
-  const step = version === 32 ? 26 : Math.ceil((version * 4 + 4) / (numAlign * 2 - 2) / 2) * 2;
+  const step = version === 32 ? 26 : Math.ceil((version * 4 + 4) / (numAlign * 2 - 2)) * 2;
   const result = [6];
   for (let pos = version * 4 + 17 - 7; result.length < numAlign; pos -= step) {
     result.splice(1, 0, pos);
@@ -344,7 +359,7 @@ function drawFunctionPatterns(canvas: Canvas): void {
   drawFinderPattern(canvas, size - 4, 3);
   drawFinderPattern(canvas, 3, size - 4);
 
-  const positions = alignmentPatternPositions(canvas.version);
+  const positions = qrAlignmentPatternPositions(canvas.version);
   for (let i = 0; i < positions.length; i++) {
     for (let j = 0; j < positions.length; j++) {
       // The three finder-pattern corners have no alignment pattern.
