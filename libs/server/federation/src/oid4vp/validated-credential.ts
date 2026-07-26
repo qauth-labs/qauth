@@ -82,12 +82,17 @@ export interface PresentationValidationContext {
    * QAuth's OID4VP `client_id`, exactly as it appeared in the Authorization
    * Request. The Key Binding JWT's `aud` MUST equal it — this is what stops a
    * Presentation made to a different Verifier from being replayed at QAuth.
+   *
+   * MUST be non-empty; validation refuses the whole Presentation otherwise,
+   * because an empty audience matches an empty `aud` and deletes the check.
    */
   readonly clientId: string;
   /**
    * The `nonce` from the redeemed request state (#233), VERBATIM. The Key
    * Binding JWT's `nonce` MUST equal it — this is what makes the Presentation
    * fresh and specific to this request (OID4VP 1.0 §14.1).
+   *
+   * MUST be non-empty, for the same reason as {@link clientId}.
    */
   readonly nonce: string;
   /**

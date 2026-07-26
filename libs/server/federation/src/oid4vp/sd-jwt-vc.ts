@@ -820,6 +820,21 @@ export async function validateSdJwtVcPresentation(
     );
   }
 
+  // The two holder-binding parameters are compared with `constantTimeEquals`,
+  // and two empty strings compare EQUAL. So an empty `client_id` or `nonce`
+  // would not weaken the audience/freshness checks — it would delete them, and
+  // any Presentation carrying an empty `aud`/`nonce` (or one a caller could
+  // simply omit from its own request) would pass them. A context that cannot
+  // bind is refused before anything is parsed, which is what makes
+  // `PresentationValidationContext`'s "no default can silently disable a check"
+  // true of the code rather than only of its documentation.
+  if (context.clientId.length === 0 || context.nonce.length === 0) {
+    throw rejectPresentation(
+      'holder-binding-invalid',
+      'the validation context carries an empty client_id or nonce, so the Key Binding JWT would be bound to nothing'
+    );
+  }
+
   const split = splitPresentation(presentation);
   const jwtSegments = split.issuerSignedJwt.split('.');
 

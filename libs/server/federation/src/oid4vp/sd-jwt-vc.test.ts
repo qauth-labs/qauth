@@ -911,6 +911,29 @@ describe('validateSdJwtVcPresentation — holder binding', () => {
     );
   });
 
+  it('refuses an EMPTY request nonce rather than binding the Presentation to nothing', async () => {
+    // `constantTimeEquals('', '')` is true, so an empty nonce does not weaken
+    // the freshness check — it deletes it, and a Presentation carrying an empty
+    // `nonce` would pass. The context must be refused before anything is parsed.
+    const issued = await issueSdJwtVc();
+    const presentation = await presentSdJwtVc(issued, { nonce: '' });
+
+    await expectRejection(
+      validate(presentation, fixtureValidationContext(issued, '')),
+      'holder-binding-invalid'
+    );
+  });
+
+  it('refuses an EMPTY client_id rather than accepting an empty aud', async () => {
+    const issued = await issueSdJwtVc();
+    const presentation = await presentSdJwtVc(issued, { nonce: NONCE, audience: '' });
+
+    await expectRejection(
+      validate(presentation, fixtureValidationContext(issued, NONCE, { clientId: '' })),
+      'holder-binding-invalid'
+    );
+  });
+
   it('rejects a Key Binding JWT that is not a compact JWS', async () => {
     const issued = await issueSdJwtVc();
     const prefix = `${issued.issuerSignedJwt}~${issued.disclosures.join('~')}~`;
