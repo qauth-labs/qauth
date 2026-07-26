@@ -271,6 +271,24 @@ export const authEnvSchema = z.object({
   REGISTER_CLIENT_RATE_WINDOW: z.coerce.number().int().min(1).default(60),
 
   /**
+   * Maximum OID4VP `direct_post` response submissions per window per-IP
+   * (`POST /oid4vp/response`, OID4VP 1.0 §8.1, issue #233).
+   *
+   * The endpoint is unauthenticated BY CONSTRUCTION — a wallet holds no client
+   * credentials and there is nothing to authenticate it with — so an IP-scoped
+   * cap is the only thing bounding how fast an anonymous caller can burn
+   * candidate `state` values against it. Matches /oauth/token and
+   * /oauth/register (30) rather than the far tighter login caps: a legitimate
+   * wallet posts exactly once per presentation request, so the default already
+   * sits well above real usage while keeping guessing bounded.
+   */
+  OID4VP_RESPONSE_RATE_LIMIT: z.coerce.number().int().min(1).default(30),
+  /**
+   * OID4VP `direct_post` response endpoint rate limit window in seconds.
+   */
+  OID4VP_RESPONSE_RATE_WINDOW: z.coerce.number().int().min(1).default(60),
+
+  /**
    * Comma-separated scopes allowed by default for dynamically registered
    * clients when a realm's `dynamic_registration_allowed_scopes` column is
    * empty. Used at /oauth/register time to seed the realm on first use.

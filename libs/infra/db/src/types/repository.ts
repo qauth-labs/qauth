@@ -3,6 +3,7 @@ import type { InferInsertModel, InferSelectModel } from 'drizzle-orm';
 import type { oauthConsents } from '../lib/schema/consents';
 import type { apiKeys, oauthClients } from '../lib/schema/core';
 import type { userAttributes, userCredentials } from '../lib/schema/identity';
+import type { oid4vpRequestStates } from '../lib/schema/oid4vp';
 import type {
   authorizationCodes,
   emailVerificationTokens,
@@ -382,4 +383,55 @@ export interface ApiKeysRepository {
    * throws on a missing row.
    */
   touchLastUsed(id: string, tx?: DbClient): Promise<void>;
+}
+
+/**
+ * Outbound OID4VP presentation-request state types (ADR-004, issue #233).
+ */
+export type Oid4vpRequestState = InferSelectModel<typeof oid4vpRequestStates>;
+export type NewOid4vpRequestState = InferInsertModel<typeof oid4vpRequestStates>;
+
+/**
+ * Repository for `oid4vp_request_states` — the single-use, expiring correlator
+ * behind the OID4VP `direct_post` response endpoint (ADR-004, issue #233).
+ *
+ * Deliberately NARROW. There is no `findByStateHash`, and adding one would be a
+ * regression: a read-then-write caller ("look it up, check it, then mark it
+ * used") is precisely the race this repository exists to make impossible, and an
+ * innocent-looking finder is how that pattern gets reintroduced. The only way to
+ * observe a row is to CONSUME it — see {@link Oid4vpRequestStatesRepository.redeem}.
+ */
+export interface Oid4vpRequestStatesRepository {
+  /**
+   * Persist a presentation request that is about to be sent to a wallet.
+   *
+   * `stateHash` MUST be the SHA-256 digest of the `state` that goes on the wire
+   * (`hashOid4vpState` in `@qauth-labs/server-federation`); the raw `state` is
+   * never handed to the repository. `nonce` IS stored in the clear — #234 has to
+   * compare it against the Key Binding JWT byte-for-byte.
+   */
+  create(data: NewOid4vpRequestState, tx?: DbClient): Promise<Oid4vpRequestState>;
+  /**
+   * ATOMICALLY consume a request state, exactly once.
+   *
+   * One guarded `UPDATE ... WHERE state_hash = $1 AND redeemed_at IS NULL AND
+   * expires_at > $now RETURNING *`. The guard lives in the statement, so two
+   * concurrent posts carrying the same `state` are serialized by the row lock
+   * and exactly one of them sees a returned row — no transaction, no advisory
+   * lock, and no window between a check and a write.
+   *
+   * @returns the redeemed row, or `undefined` when the state is unknown,
+   * expired, or already consumed. Those three are DELIBERATELY indistinguishable
+   * to the caller so the endpoint's rejection cannot be used to enumerate
+   * request states.
+   */
+  redeem(stateHash: string, tx?: DbClient): Promise<Oid4vpRequestState | undefined>;
+  /**
+   * Delete expired rows. Cleanup only — expiry is already enforced by
+   * {@link Oid4vpRequestStatesRepository.redeem}'s guard, so this never affects
+   * whether a state is accepted.
+   *
+   * @returns count of deleted rows.
+   */
+  deleteExpired(tx?: DbClient): Promise<number>;
 }

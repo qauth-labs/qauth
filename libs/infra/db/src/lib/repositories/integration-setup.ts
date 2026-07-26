@@ -37,6 +37,7 @@ export interface IntegrationDb {
 const DOMAIN_TABLES = [
   'api_keys',
   'audit_logs',
+  'oid4vp_request_states',
   'oauth_consents',
   'refresh_tokens',
   'authorization_codes',

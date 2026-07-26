@@ -8,6 +8,7 @@ import {
   createEmailVerificationTokensRepository,
   createOAuthClientsRepository,
   createOAuthConsentsRepository,
+  createOid4vpRequestStatesRepository,
   createRealmsRepository,
   createRefreshTokensRepository,
   createUserAttributesRepository,
@@ -18,6 +19,7 @@ import {
   type EmailVerificationTokensRepository,
   OAuthClientsRepository,
   type OAuthConsentsRepository,
+  type Oid4vpRequestStatesRepository,
   type RealmsRepository,
   type RefreshTokensRepository,
   type UserAttributesRepository,
@@ -46,6 +48,13 @@ declare module 'fastify' {
       apiKeys: ApiKeysRepository;
       userCredentials: UserCredentialsRepository;
       userAttributes: UserAttributesRepository;
+      /**
+       * OID4VP presentation-request states (ADR-004, #233). Decorated
+       * unconditionally like every other repository — the WALLET FLOW is gated
+       * (by `WALLET_FEDERATION_ENABLED` plus a resolved `VerifierProfile`), not
+       * the storage layer, so a disabled deployment simply never writes a row.
+       */
+      oid4vpRequestStates: Oid4vpRequestStatesRepository;
     };
   }
 }
@@ -90,6 +99,7 @@ export const databasePlugin = fp<DatabasePluginOptions>(
       apiKeys: createApiKeysRepository(database.db),
       userCredentials: createUserCredentialsRepository(database.db),
       userAttributes: createUserAttributesRepository(database.db),
+      oid4vpRequestStates: createOid4vpRequestStatesRepository(database.db),
     });
 
     fastify.addHook('onReady', async () => {
