@@ -143,7 +143,7 @@ catalog:
   '@fastify/swagger': '^9.8.1'
   '@fastify/swagger-ui': '^6.1.0'
   '@node-rs/argon2': '^2.0.2'
-  '@react-email/components': '^1.0.12'
+  '@react-email/render': '^2.1.0'
   dotenv: '^17.4.2'
   drizzle-orm: '^0.45.2'
   drizzle-seed: '^0.3.1'
