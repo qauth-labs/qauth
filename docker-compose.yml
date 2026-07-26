@@ -127,6 +127,18 @@ services:
       # CORS_ORIGIN explicitly to allow cross-origin callers (e.g. the portal).
       CORS_ORIGIN: ${CORS_ORIGIN:-}
 
+      # Wallet Federation (ADR-004, epic #231) — both forwarded so the
+      # fail-closed pairing actually reaches the container. Without them the flag
+      # would silently read false in here no matter what .env says, and the
+      # refusal-to-start that #299 exists to produce would never fire.
+      WALLET_FEDERATION_ENABLED: ${WALLET_FEDERATION_ENABLED:-false}
+      # No default, by design (#296 LOCKED — no permissive fallback). The `:-`
+      # expands to an empty string when unset, which the env schema reads as
+      # "no profile selected", the same as omitting it. Turning the flag above on
+      # without setting this is a deliberate boot failure, not a misconfiguration
+      # of this file.
+      OID4VP_VERIFIER_PROFILE: ${OID4VP_VERIFIER_PROFILE:-}
+
       # Rate Limiting (Global)
       RATE_LIMIT_ENABLED: ${RATE_LIMIT_ENABLED:-true}
       RATE_LIMIT_MAX: ${RATE_LIMIT_MAX:-100}

@@ -29,7 +29,10 @@ const envSchema = z
     ...rateLimitEnvSchema.shape,
     ...emailEnvSchema.shape,
     ...observabilityEnvSchema.shape,
-    // Wallet federation (ADR-004, #232): WALLET_FEDERATION_ENABLED, default off.
+    // Wallet federation (ADR-004): WALLET_FEDERATION_ENABLED (#232, default
+    // off) and OID4VP_VERIFIER_PROFILE (#299, deliberately no default). Both
+    // arrive through this spread, which is why federationEnvSchema must stay a
+    // plain z.object — a `.superRefine()` on it would have no `.shape` here.
     ...federationEnvSchema.shape,
     /**
      * CORS allowed origin (app-specific). When unset in `production` the
