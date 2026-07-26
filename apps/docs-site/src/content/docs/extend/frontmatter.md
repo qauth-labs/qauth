@@ -24,6 +24,19 @@ Starlight's built-in `docsSchema()` via its `extend` option.
 and `unbuiltClaims` are added by this project's `extend:` — without that extension, Zod would
 silently strip them from frontmatter instead of validating them.
 
+## Quote `lastVerified`
+
+YAML parses a bare `2026-07-26` as a date object, not a string, and the schema requires a
+string — an unquoted value fails the build. Always quote it:
+
+```yaml
+# Wrong — parses as a Date, fails the schema
+lastVerified: 2026-07-26
+
+# Right — a string
+lastVerified: '2026-07-26'
+```
+
 ## `lastVerified` is recorded, not enforced
 
 The schema requires every page to _set_ `lastVerified`; a page with no `lastVerified` field
