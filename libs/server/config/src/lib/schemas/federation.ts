@@ -97,6 +97,73 @@ export const federationEnvSchema = z.object({
     (value) => (typeof value === 'string' && value.trim() === '' ? undefined : value),
     z.enum(['oid4vp-1.0-base', 'haip-1.0']).optional()
   ),
+
+  /**
+   * `OID4VP_REQUESTED_VCT` (#239) — the Verifiable Credential Types the wallet
+   * login flow asks for, as a comma-separated list of `vct` values.
+   *
+   * **OPTIONAL WITH NO DEFAULT, and the wallet-login UI is not offered without
+   * it.** There is no safe default: a DCQL query carrying no type constraint
+   * asks a wallet for "any credential you hold", which OID4VP 1.0 §15.6 warns
+   * Verifiers against and which leaves the trust registry (#236) nothing to
+   * decide on. Inventing a plausible-looking default (`urn:eudi:pid:1`, say)
+   * would be worse than none: a deployment would silently request a credential
+   * its operator never chose to accept.
+   *
+   * Same empty-is-unset handling as `OID4VP_VERIFIER_PROFILE` above, for the
+   * same reason — `${VAR:-}` is how an orchestrator materialises an absent
+   * variable, and blanking one is how an operator says "not configured".
+   *
+   * A `vct` is an arbitrary string (SD-JWT VC draft-13 §3.2.2.2), so the shape
+   * check here is deliberately weak: non-empty entries with no whitespace. What
+   * makes a value ACCEPTABLE is the issuer trust decision, not its syntax.
+   */
+  OID4VP_REQUESTED_VCT: z.preprocess(
+    (value) => (typeof value === 'string' && value.trim() === '' ? undefined : value),
+    z
+      .string()
+      .max(2048)
+      .transform((value) =>
+        Object.freeze(
+          value
+            .split(',')
+            .map((entry) => entry.trim())
+            .filter((entry) => entry.length > 0)
+        )
+      )
+      .refine((values) => values.length > 0, {
+        message: 'OID4VP_REQUESTED_VCT must list at least one non-empty vct value',
+      })
+      .refine((values) => values.every((entry) => !/\s/.test(entry)), {
+        message: 'OID4VP_REQUESTED_VCT entries must not contain whitespace',
+      })
+      .optional()
+  ),
+
+  /**
+   * `OID4VP_WALLET_INVOCATION_ENDPOINT` (#239) — the wallet Authorization
+   * Endpoint the QR code and deep-link button target.
+   *
+   * OID4VP 1.0 §5 delivers the request as query parameters of the wallet's own
+   * Authorization Endpoint, which is either a custom scheme (`openid4vp://`) or
+   * a universal link belonging to a specific wallet. The default is the
+   * registered custom scheme, because that is the value that reaches whichever
+   * wallet the user actually has installed; a deployment targeting one wallet
+   * vendor overrides it with that vendor's universal link.
+   *
+   * Validated for SHAPE only — an absolute URI reference with a scheme, no
+   * whitespace and no fragment (a fragment would be dropped before the wallet
+   * ever saw the parameters). Which endpoint is CORRECT is an ecosystem
+   * question this layer cannot answer.
+   */
+  OID4VP_WALLET_INVOCATION_ENDPOINT: z
+    .string()
+    .max(512)
+    .regex(
+      /^[a-zA-Z][a-zA-Z0-9+.-]*:[^\s#]*$/,
+      'OID4VP_WALLET_INVOCATION_ENDPOINT must be an absolute URI with a scheme and no fragment'
+    )
+    .default('openid4vp://'),
 });
 
 /** Federation environment configuration type. */
