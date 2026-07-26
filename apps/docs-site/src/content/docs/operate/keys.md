@@ -24,16 +24,26 @@ Every private key QAuth imports — EdDSA and RS256 — goes through jose's
 `importPKCS8` (`libs/core/crypto/src/lib/key-management.ts:47-49`), which
 requires **PKCS#8** PEM: first line `-----BEGIN PRIVATE KEY-----`.
 
-`openssl genrsa` (and some older Ed25519 recipes) emit **PKCS#1**
-(`-----BEGIN RSA PRIVATE KEY-----`), which `importPKCS8` rejects outright. This
-is the single most common thing that wastes an afternoon setting QAuth up.
+**PKCS#1** (`-----BEGIN RSA PRIVATE KEY-----`) is what `importPKCS8` rejects
+outright — this is the single most common thing that wastes an afternoon
+setting QAuth up, if you hit it. Whether you _do_ hit it depends on your
+OpenSSL version:
 
-- Generate directly in the right format with `openssl genpkey` (used
-  throughout this page), **not** `openssl genrsa` / `openssl gen<alg>`.
-- Already have a PKCS#1 key? Convert it:
-  ```bash
-  openssl pkcs8 -topk8 -nocrypt -in old-rsa-key.pem -out jwt-rs256-private.pem
-  ```
+- **OpenSSL 3.0+** (check with `openssl version`): `openssl genrsa` now
+  defaults to PKCS#8 output too — you'd have to pass `-traditional` to get
+  PKCS#1. On a current OpenSSL, `openssl genrsa 2048 | head -1` already prints
+  `-----BEGIN PRIVATE KEY-----`, and this pitfall won't reproduce.
+- **OpenSSL 1.1.x and earlier**, or 3.x with `-traditional`: `openssl genrsa`
+  (and some older Ed25519 recipes) emit PKCS#1.
+
+Either way, generate directly with `openssl genpkey` (used throughout this
+page) — it always emits PKCS#8, regardless of OpenSSL version, so there's no
+need to track which behavior your installed version has. If you already have
+a PKCS#1 key from somewhere else, convert it:
+
+```bash
+openssl pkcs8 -topk8 -nocrypt -in old-rsa-key.pem -out jwt-rs256-private.pem
+```
 
 Public keys, where you supply one, must be **SPKI PEM**
 (`-----BEGIN PUBLIC KEY-----`) — `importSPKI`
@@ -95,11 +105,27 @@ hard-fails an EdDSA-only OP on its `id_token` signature test. When configured,
 ID tokens switch to RS256 by default; access tokens are unaffected (always
 EdDSA).
 
-**Must be ≥2048-bit.**
+**Must be ≥2048-bit — and QAuth does not check this at boot.** Nothing in the
+RS256 setup at `libs/fastify/plugins/jwt/src/lib/fastify-plugin-jwt.ts:109-115`
+signs anything; it only imports the key and exports its public JWK, so an
+undersized key **boots cleanly**. The floor
+is enforced by jose itself, in `checkKeyLength` — called from `sign()`/
+`verify()`, which only run when a token is actually signed or verified. QAuth
+reaches that through jose's `SignJWT`/`jwtVerify`, used by
+`libs/core/crypto/src/lib/signing.ts:152-166`. Concretely: an undersized
+RS256 key fails on the **first live sign-in that issues an RS256 ID token**,
+in whatever environment that first happens — not at startup, and not in a
+smoke test that only hits `/health` or the JWKS endpoint.
+
+Verify the size yourself before deploying, rather than trusting a clean boot:
 
 ```bash
 openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out jwt-rs256-private.pem
 openssl pkey -in jwt-rs256-private.pem -pubout -out jwt-rs256-public.pem
+
+# Confirm the size before you deploy — a clean boot does NOT confirm this:
+openssl rsa -in jwt-rs256-private.pem -noout -text | head -1
+# → "Private-Key: (2048 bit, 2 primes)" (or larger)
 ```
 
 Set `JWT_RS256_PRIVATE_KEY` (or `_PATH`); `JWT_RS256_PUBLIC_KEY` (or `_PATH`)

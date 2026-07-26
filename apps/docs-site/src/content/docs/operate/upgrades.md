@@ -182,10 +182,22 @@ above (guarded by migration 0011's own precheck), **this direction has no
 in-SQL guard** — nothing stops you from starting the new binary against an
 unmigrated database. Sequence your rollout so the migration completes first.
 
-**What you'll see on success:** the migration applies (indexes on the legacy
-columns dropped, `email_verification_tokens.credential_id` promoted to
-`NOT NULL`, then the three columns dropped), plus a `NOTICE` if any in-flight
-email-verification tokens were deleted (see Step 7).
+**What you'll see on success:** the migration applies, in this order (reading
+straight from `0011_striped_brother_voodoo.sql`):
+
+- `email_verification_tokens` drops its `email_verification_tokens_user_id_users_id_fk`
+  foreign-key constraint (the column it references is dropped last, below).
+- Four indexes on the legacy columns are dropped:
+  `idx_users_realm_email_normalized_unique`, `idx_users_email`,
+  `idx_users_realm_email_enabled`, `idx_email_verification_tokens_user_id`.
+- `email_verification_tokens.credential_id` is promoted to `NOT NULL`.
+- `users.email` is dropped.
+- `users.email_normalized` is dropped.
+- `users.password_hash` is dropped.
+- `email_verification_tokens.user_id` is dropped.
+
+Plus a `NOTICE` if any in-flight email-verification tokens were deleted — see
+[Step 7](#step-7-minor-operational-consequences-to-expect) below.
 
 **What you'll see on the guard firing:** a `RAISE EXCEPTION` naming the two
 counts above and telling you to deploy the backfill release and re-run
