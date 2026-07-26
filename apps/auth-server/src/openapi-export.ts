@@ -175,19 +175,24 @@ async function main(): Promise<void> {
   // Dynamic imports, not static ones: every one of these transitively
   // reaches `../config/env`, which validates `process.env` at import time.
   // Deferring them until after `setEphemeralEnv()` has run is what makes the
-  // ordering in the module doc comment true.
-  const [{ default: Fastify }, { default: swagger }, typeProviderZod, { app }] = await Promise.all([
-    import('fastify'),
-    import('@fastify/swagger'),
-    import('fastify-type-provider-zod'),
-    import('./app/app'),
-  ]);
-  const { createJsonSchemaTransform, serializerCompiler, validatorCompiler } = typeProviderZod;
+  // ordering in the module doc comment true. `./app/openapi-options` itself
+  // has no such dependency (it only imports `fastify-type-provider-zod`),
+  // but it's grouped here anyway to keep every import in one place.
+  const [{ default: Fastify }, { default: swagger }, typeProviderZod, { app }, { openapiOptions }] =
+    await Promise.all([
+      import('fastify'),
+      import('@fastify/swagger'),
+      import('fastify-type-provider-zod'),
+      import('./app/app'),
+      import('./app/openapi-options'),
+    ]);
+  const { serializerCompiler, validatorCompiler } = typeProviderZod;
 
   // No logger, no request-id/router options — this process never accepts a
   // request, so `main.ts`'s production Fastify constructor options do not
-  // apply here. Only the swagger registration below is duplicated from
-  // `main.ts`, per the brief.
+  // apply here. Only the swagger registration below is shared with
+  // `main.ts` (via `openapiOptions`), and deliberately so — see
+  // `./app/openapi-options.ts`.
   const server = Fastify({ logger: false }).withTypeProvider<ZodTypeProvider>();
   server.setValidatorCompiler(validatorCompiler);
   server.setSerializerCompiler(serializerCompiler);
@@ -202,35 +207,10 @@ async function main(): Promise<void> {
   // script is meant to run unattended (Task 3's guard, CI), so a hang is the
   // worst available outcome — worse than the failure itself.
   try {
-    // Duplicated from `apps/auth-server/src/main.ts` verbatim (same
-    // `openapi` object, same `transform`). Kept in sync by hand for now —
-    // see the Task 1 report for why this was not extracted into a shared
-    // helper in this task.
-    await server.register(swagger, {
-      openapi: {
-        openapi: '3.1.0',
-        info: {
-          title: 'QAuth Auth Server API',
-          description:
-            'OAuth 2.1 / OIDC authentication server API. Phase 1.7: userinfo and token introspection.',
-          version: '1.0.0',
-        },
-        servers: [{ url: '/', description: 'Default' }],
-        components: {
-          securitySchemes: {
-            bearerAuth: {
-              type: 'http',
-              scheme: 'bearer',
-              bearerFormat: 'JWT',
-              description: 'Access token obtained from login, refresh, or OAuth token endpoint.',
-            },
-          },
-        },
-      },
-      transform: createJsonSchemaTransform({
-        zodToJsonConfig: { target: 'draft-2020-12' },
-      }),
-    });
+    // Same shared `openapiOptions` `main.ts` registers — see
+    // `./app/openapi-options.ts` for why this is a single source of truth
+    // rather than each file's own copy (#347 fix round 3).
+    await server.register(swagger, openapiOptions);
 
     await server.register(app);
     await server.ready();
