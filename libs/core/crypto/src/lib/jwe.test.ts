@@ -12,7 +12,7 @@ import {
   generateEphemeralEncryptionKeyPair,
   importEncryptionPrivateJwk,
 } from './encryption-keys';
-import { CryptoDecryptionError } from './errors';
+import { CRYPTO_DECRYPTION_ERROR_MESSAGE, CryptoDecryptionError } from './errors';
 import { decryptJwe, encryptJwe, RESERVED_JWE_PROTECTED_HEADER_MEMBERS } from './jwe';
 
 /** The pins a `direct_post.jwt` recipient uses: both AES-GCM variants, ECDH-ES only. */
@@ -365,24 +365,159 @@ describe('decryptJwe negative cases', () => {
     });
   });
 
-  it('reports every cryptographic failure with the same message (no oracle)', async () => {
+  /**
+   * The no-oracle invariant, across the failure classes that `jose` reports
+   * DIFFERENTLY.
+   *
+   * The previous version of this test compared only "wrong key" against
+   * "tampered ciphertext", which `jose` happens to report identically
+   * ("decryption operation failed"). It therefore passed while the message was
+   * still interpolated with the backend's text, giving false assurance: a
+   * malformed serialization said "Invalid Compact JWE" and a rejected `alg` pin
+   * said `'"alg" (Algorithm) Header Parameter value not allowed'`. Those are the
+   * cases that have to be in here.
+   */
+  it('reports EVERY failure with the same message, including the classes jose distinguishes', async () => {
     const pair = await generateEphemeralEncryptionKeyPair();
     const other = await generateEphemeralEncryptionKeyPair();
     const jwe = await encryptedFor(pair);
 
-    const parts = jwe.split('.');
-    const ciphertext = base64url.decode(parts[3]);
+    const tamperedParts = jwe.split('.');
+    const ciphertext = base64url.decode(tamperedParts[3]);
     ciphertext[0] ^= 0xff;
-    parts[3] = base64url.encode(ciphertext);
+    tamperedParts[3] = base64url.encode(ciphertext);
 
+    const rewrittenAlgParts = jwe.split('.');
+    rewrittenAlgParts[0] = base64url.encode(JSON.stringify({ alg: 'dir', enc: 'A256GCM' }));
+
+    const compressed = await new CompactEncrypt(new TextEncoder().encode(JSON.stringify(RESPONSE)))
+      .setProtectedHeader({ alg: 'ECDH-ES', enc: 'A256GCM', zip: 'DEF' })
+      .encrypt(pair.publicKey);
+
+    const nonJsonPayload = await new CompactEncrypt(new TextEncoder().encode('plain bytes'))
+      .setProtectedHeader({ alg: 'ECDH-ES', enc: 'A256GCM' })
+      .encrypt(pair.publicKey);
+
+    const failures = await Promise.all(
+      (
+        [
+          ['wrong recipient key', () => decryptJwe(jwe, other.privateKey, HAIP_PINS)],
+          [
+            'tampered ciphertext',
+            () => decryptJwe(tamperedParts.join('.'), pair.privateKey, HAIP_PINS),
+          ],
+          [
+            'rejected alg pin',
+            () => decryptJwe(rewrittenAlgParts.join('.'), pair.privateKey, HAIP_PINS),
+          ],
+          ['malformed serialization', () => decryptJwe('not-a-jwe', pair.privateKey, HAIP_PINS)],
+          ['too few segments', () => decryptJwe('a.b.c.d', pair.privateKey, HAIP_PINS)],
+          ['refused zip header', () => decryptJwe(compressed, pair.privateKey, HAIP_PINS)],
+          ['non-JSON plaintext', () => decryptJwe(nonJsonPayload, pair.privateKey, HAIP_PINS)],
+        ] as const
+      ).map(async ([label, attempt]) => [label, await captureDecryptionError(attempt)] as const)
+    );
+
+    for (const [label, error] of failures) {
+      expect(error.name, label).toBe('CryptoDecryptionError');
+      // `toBe` against the exported constant, not against a sibling failure: two
+      // failures agreeing proves nothing about a third.
+      expect(error.message, label).toBe(CRYPTO_DECRYPTION_ERROR_MESSAGE);
+    }
+
+    // And the message really is the whole message — no backend text appended.
+    expect(new Set(failures.map(([, error]) => error.message)).size).toBe(1);
+  });
+
+  it('keeps the backend diagnostic on .detail, off .message', async () => {
+    // The invariant is "one message", not "no diagnostics": an operator reading
+    // local logs must still be able to tell the classes apart. `.detail` is
+    // where that lives, and it is the field the docs forbid surfacing.
+    const pair = await generateEphemeralEncryptionKeyPair();
+    const other = await generateEphemeralEncryptionKeyPair();
+
+    const jwe = await encryptedFor(pair);
     const wrongKey = await captureDecryptionError(() =>
       decryptJwe(jwe, other.privateKey, HAIP_PINS)
     );
-    const tampered = await captureDecryptionError(() =>
+
+    expect(wrongKey.detail).toBeDefined();
+    expect(wrongKey.message).not.toContain(wrongKey.detail);
+  });
+});
+
+/**
+ * `zip` on the INCOMING direction (RFC 8725 §3.5).
+ *
+ * `encryptJwe` refuses `zip` as a reserved protected-header member, but that
+ * governs only what this library emits. The recipient's per-request encryption
+ * public key is published in client metadata BY DESIGN, so any party that reads
+ * it can mint a well-formed `zip: 'DEF'` JWE — and `jose` honours `zip` on
+ * decrypt by default. Refusing it only on encrypt would have left the
+ * attacker-controlled direction wide open.
+ */
+describe('decryptJwe refuses compressed JWEs', () => {
+  async function compressedJwe(
+    publicKey: CryptoKey,
+    zip: string,
+    payload: Record<string, unknown> = RESPONSE
+  ): Promise<string> {
+    return new CompactEncrypt(new TextEncoder().encode(JSON.stringify(payload)))
+      .setProtectedHeader({ alg: 'ECDH-ES', enc: 'A256GCM', zip })
+      .encrypt(publicKey);
+  }
+
+  it("refuses a valid zip: 'DEF' JWE minted with the published encryption key", async () => {
+    const pair = await generateEphemeralEncryptionKeyPair();
+    // Everything about this JWE is correct: right recipient key, pinned `alg`
+    // and `enc`, intact AEAD tag. Only `zip` is wrong, and it must be enough.
+    const jwe = await compressedJwe(pair.publicKey, 'DEF');
+
+    await expect(decryptJwe(jwe, pair.privateKey, HAIP_PINS)).rejects.toBeInstanceOf(
+      CryptoDecryptionError
+    );
+  });
+
+  it('refuses ANY zip value, not just DEF — and before any key material is touched', async () => {
+    // `jose` will not MINT a JWE with a non-`DEF` zip, so this one is assembled
+    // by rewriting the protected header of a valid JWE. That also proves the
+    // refusal happens ahead of decryption: the rewrite invalidates the AEAD's
+    // Additional Authenticated Data, yet the reported reason is still `zip`.
+    const pair = await generateEphemeralEncryptionKeyPair();
+    const parts = (await encryptJwe(RESPONSE, pair.publicKey, { enc: 'A256GCM' })).split('.');
+    parts[0] = base64url.encode(
+      JSON.stringify({ alg: 'ECDH-ES', enc: 'A256GCM', zip: 'UNKNOWN-ALGORITHM' })
+    );
+
+    const error = await captureDecryptionError(() =>
       decryptJwe(parts.join('.'), pair.privateKey, HAIP_PINS)
     );
 
-    expect(wrongKey.message).toBe(tampered.message);
-    expect(wrongKey.name).toBe('CryptoDecryptionError');
+    expect(error.detail).toContain("'zip'");
+  });
+
+  it('does not inflate the compressed plaintext before refusing', async () => {
+    // The DoS half of the finding: the refusal has to happen instead of the
+    // decompression, not after it. A payload that inflates far past jose's
+    // 250 KB default limit is refused with the ordinary decryption error rather
+    // than jose's "Decompressed plaintext exceeded the configured limit" — which
+    // is what would surface if any inflation had been attempted.
+    const pair = await generateEphemeralEncryptionKeyPair();
+    const bomb = await compressedJwe(pair.publicKey, 'DEF', { padding: 'A'.repeat(2_000_000) });
+
+    const error = await captureDecryptionError(() => decryptJwe(bomb, pair.privateKey, HAIP_PINS));
+
+    expect(error.detail).toContain("'zip'");
+    expect(error.detail).not.toContain('exceeded');
+  });
+
+  it('still refuses zip on the encrypt side', async () => {
+    // The half that already worked — asserted alongside so the two directions
+    // are visibly one rule rather than two independent behaviours.
+    const pair = await generateEphemeralEncryptionKeyPair();
+
+    await expect(
+      encryptJwe(RESPONSE, pair.publicKey, { enc: 'A256GCM', header: { zip: 'DEF' } })
+    ).rejects.toThrow(/'zip' is reserved/);
   });
 });

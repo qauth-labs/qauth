@@ -124,10 +124,20 @@ const { payload } = await decryptJwe(jwe, pair.privateKey, {
 });
 ```
 
-Every cryptographic failure — wrong key, tampered ciphertext/tag/IV, rejected
-`alg`/`enc`, malformed input — throws the same `CryptoDecryptionError` with the
-same message. That uniformity is deliberate: a caller able to tell those apart is
-a decryption oracle.
+Every failure — wrong key, tampered ciphertext/tag/IV, rejected `alg`/`enc`, a
+`zip` header, malformed input, a non-JSON plaintext — throws a
+`CryptoDecryptionError` whose `message` is the fixed constant
+`CRYPTO_DECRYPTION_ERROR_MESSAGE`. That uniformity is deliberate: a caller able
+to tell those apart is a decryption oracle. The backend's own text is kept on the
+separate `.detail` field, which **does** distinguish them and is therefore for
+local logs only — never for a response to a remote party.
+
+`zip` is refused in **both** directions: `encryptJwe` rejects it as a reserved
+protected-header member, and `decryptJwe` rejects an incoming JWE that carries it
+(RFC 8725 §3.5, CRIME/BREACH). Decrypt is the attacker-controlled direction — the
+per-request encryption public key is published in client metadata by design — so
+refusing it only on encrypt would leave anyone who reads that key able to force
+decompression on every post.
 
 Ephemeral private keys are non-extractable by default. A multi-instance
 deployment that must carry one across HTTP requests generates it with

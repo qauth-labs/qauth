@@ -9,7 +9,12 @@
  * merely discouraged. A JWE stack is only as strong as its narrowest
  * allowlist.
  */
-import { compactDecrypt, CompactEncrypt, type CompactJWEHeaderParameters } from 'jose';
+import {
+  compactDecrypt,
+  CompactEncrypt,
+  type CompactJWEHeaderParameters,
+  decodeProtectedHeader,
+} from 'jose';
 
 import {
   JWE_CONTENT_ENCRYPTION_ALGORITHMS,
@@ -38,6 +43,9 @@ import { CryptoDecryptionError } from './errors';
  * - `crit` would impose must-understand semantics this layer does not implement.
  * - `zip` enables compression before encryption — the CRIME/BREACH shape, where
  *   ciphertext length leaks plaintext similarity. RFC 8725 §3.5 says do not.
+ *   Refusing it here covers only the direction this library CONTROLS; the
+ *   incoming direction is refused separately by {@link decryptJwe}, and that is
+ *   the one that matters against an adversary.
  */
 export const RESERVED_JWE_PROTECTED_HEADER_MEMBERS = ['alg', 'enc', 'epk', 'crit', 'zip'] as const;
 
@@ -201,10 +209,15 @@ export async function encryptJwe(
  * own `alg` / `enc` are attacker-controlled and are compared against those pins,
  * never consulted to choose a code path.
  *
- * Every failure throws {@link CryptoDecryptionError}. The CRYPTOGRAPHIC ones —
- * wrong key, tampered ciphertext or tag, rejected `alg`/`enc`, malformed
- * serialization — are mutually indistinguishable; see that class for why, and
- * for why the two post-decryption structural failures are allowed to differ.
+ * A `zip` (Compression Algorithm) header is REFUSED, before any key material is
+ * touched. `encryptJwe` already treats `zip` as reserved, but that governs only
+ * what this library emits; see the inline comment for why the incoming direction
+ * is the one that matters.
+ *
+ * Every failure throws {@link CryptoDecryptionError} with the SAME `message` —
+ * wrong key, tampered ciphertext or tag, rejected `alg`/`enc`, a `zip` header, a
+ * malformed serialization, a non-JSON plaintext. See that class for why. The
+ * failure class is recoverable from `.detail`, which is for local logs only.
  *
  * @param jwe - Compact JWE.
  * @param recipientPrivateKey - Recipient's `ECDH-ES` P-256 private key.
@@ -235,9 +248,32 @@ export async function decryptJwe(
   let plaintext: Uint8Array;
   let protectedHeader: Record<string, unknown>;
   try {
+    // `zip` is refused on the way IN as well as on the way out. `encryptJwe`
+    // rejecting it as a reserved header member only governs what THIS library
+    // emits; decrypt is the attacker-controlled direction, and the recipient's
+    // per-request encryption public key is published in client metadata BY
+    // DESIGN, so any party that reads it can mint a well-formed `zip: 'DEF'`
+    // JWE. `jose` honours `zip` on decrypt (up to a 250 KB default inflation
+    // limit), which would let that party force decompression on every post —
+    // the CRIME/BREACH shape RFC 8725 §3.5 forbids, plus an amplification
+    // primitive. Read from the UNVERIFIED header on purpose: this is a refusal,
+    // and refusing on unauthenticated input is fail-closed. A malformed
+    // serialization throws here and normalizes to the same
+    // `CryptoDecryptionError` as everything else.
+    if (decodeProtectedHeader(jwe).zip !== undefined) {
+      throw new Error(
+        `JWE protected-header member 'zip' (Compression Algorithm) is not accepted on decryption ` +
+          `(RFC 8725 §3.5).`
+      );
+    }
+
     const result = await compactDecrypt(jwe, recipientPrivateKey, {
       keyManagementAlgorithms: [...options.keyManagementAlgorithms],
       contentEncryptionAlgorithms: [...options.contentEncryptionAlgorithms],
+      // Belt-and-braces behind the check above: `0` makes `jose` itself refuse a
+      // compressed JWE, so a refactor that drops the explicit check cannot
+      // silently re-enable inflation.
+      maxDecompressedLength: 0,
     });
     plaintext = result.plaintext;
     protectedHeader = { ...result.protectedHeader };

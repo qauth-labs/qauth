@@ -26,6 +26,7 @@ export {
   isEphemeralEncryptionKeyPairExpired,
 } from './lib/encryption-keys';
 export {
+  CRYPTO_DECRYPTION_ERROR_MESSAGE,
   CryptoDecryptionError,
   CryptoVerificationError,
   type CryptoVerificationErrorReason,
