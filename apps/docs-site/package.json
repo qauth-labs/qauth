@@ -9,6 +9,7 @@
   },
   "devDependencies": {
     "@astrojs/check": "catalog:",
+    "github-slugger": "catalog:",
     "typescript": "catalog:"
   }
 }

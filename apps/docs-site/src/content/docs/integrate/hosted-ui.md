@@ -6,7 +6,7 @@ sidebar:
 lastVerified: '2026-07-27'
 ---
 
-`authorization_code` + PKCE ([OAuth 2.1 Flow, step 2](/integrate/oauth-flow/#2-redirect-the-user-to-oauth-authorize))
+`authorization_code` + PKCE ([OAuth 2.1 Flow, step 2](/integrate/oauth-flow/#2-redirect-the-user-to-oauthauthorize))
 sends the browser to QAuth itself for a stretch. Three server-rendered pages
 handle that stretch — `/ui/login`, `/ui/consent`, and `/ui/resume/{handle}` — and
 every integrator meets all three, even one that never renders its own login UI.
@@ -30,7 +30,7 @@ or `403` (CSRF mismatch) and a fresh CSRF token.
 ## `/ui/consent`
 
 `GET /ui/consent` takes the same query parameters as
-[`/oauth/authorize`](/integrate/api-reference/#oauth-2-1) and renders the scope
+[`/oauth/authorize`](/integrate/api-reference/#oauth-21) and renders the scope
 consent screen. It requires a valid `__Host-qauth_session` cookie; without one
 it redirects to `/ui/login` (via the pending-authorization mechanism below,
 not a raw inline redirect). `POST /ui/consent` submits the decision

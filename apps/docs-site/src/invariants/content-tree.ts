@@ -1,6 +1,11 @@
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
 
+// Aliased to avoid shadowing `ContentPage.slug` / `loadContentTree`'s local
+// `slug` variable (the content-collection slug, e.g. `extend/frontmatter`) —
+// an unrelated concept that happens to share the name.
+import GithubSlugger, { slug as githubSlug } from 'github-slugger';
+
 /** A single page loaded from the Starlight `docs` content collection. */
 export interface ContentPage {
   /** Absolute filesystem path to the source `.md`/`.mdx` file. */
@@ -90,23 +95,43 @@ export function loadContentTree(contentDocsDir: string): ContentPage[] {
 
 const HEADING_RE = /^#{1,6}\s+(.+)$/gm;
 
-/** Approximate the anchor slug rehype-slug/Starlight would give a heading. */
+/**
+ * The anchor slug Starlight's rendering pipeline actually gives a heading —
+ * via `github-slugger`, the SAME package `@astrojs/markdown-remark` (Astro's
+ * own markdown pipeline) depends on, not an approximation of it. An earlier
+ * hand-rolled approximation here (replace every run of non-`[a-z0-9]`
+ * characters with one hyphen) LOOKED plausible and passed this guard's own
+ * fixtures, but diverged from the real, rendered anchor whenever punctuation
+ * sat directly against a word with no space — e.g. a heading containing
+ * `` `/oauth/authorize` `` really renders to the id
+ * `...-oauthauthorize` (github-slugger deletes the `/` with nothing in its
+ * place), not `...-oauth-authorize` (what the hand-rolled version computed).
+ * Confirmed by diffing the guard's output against real `id="..."` attributes
+ * in a built `dist/apps/docs-site` — see the `punctuation-glued-to-word`
+ * fixture below and qauth-labs/qauth#351 fix round 1.
+ *
+ * Markdown code-span backticks are syntax, not content, so they're stripped
+ * before slugifying; the text INSIDE a code span (e.g. a path in
+ * `` `/oauth/authorize` ``) is real heading text and stays.
+ */
 export function slugifyHeading(text: string): string {
-  return text
-    .replace(/`/g, '')
-    .toLowerCase()
-    .trim()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '');
+  return githubSlug(text.replace(/`/g, ''));
 }
 
-/** Extract the set of heading anchors a page's body would render. */
+/**
+ * Extract the set of heading anchors a page's body would render, including
+ * `github-slugger`'s own duplicate-heading suffixing (`heading`, `heading-1`,
+ * `heading-2`, ...). Astro's markdown pipeline uses one slugger instance per
+ * file so repeated heading text gets distinct anchors within that file but
+ * not across files; a fresh `GithubSlugger` per call reproduces that.
+ */
 export function extractHeadingAnchors(body: string): Set<string> {
   const anchors = new Set<string>();
+  const slugger = new GithubSlugger();
   let match: RegExpExecArray | null;
   const re = new RegExp(HEADING_RE);
   while ((match = re.exec(body))) {
-    anchors.add(slugifyHeading(match[1]));
+    anchors.add(slugger.slug(match[1].replace(/`/g, '')));
   }
   return anchors;
 }

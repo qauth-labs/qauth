@@ -60,6 +60,34 @@ describe('findBrokenLinks — fixtures', () => {
     expect(violations).toEqual([expect.objectContaining({ link: '/guide/#missing-heading' })]);
   });
 
+  it('resolves an anchor whose heading has punctuation glued to a word, using the real github-slugger slug (qauth-labs/qauth#351 fix round 1)', () => {
+    // guide.md's "## Redirect to `/oauth/authorize`" heading really renders
+    // to id="redirect-to-oauthauthorize" (github-slugger deletes the `/`
+    // characters with nothing in their place) — a shape the old hand-rolled
+    // slugifyHeading approximation got wrong (see the next test).
+    const gluedReal = loadFixturePage('glued-punctuation-real-slug.md');
+    const violations = findBrokenLinks([home, guide, gluedReal], {
+      repoRoot: REPO_ROOT,
+      routedPages,
+    });
+    expect(violations).toEqual([]);
+  });
+
+  it("MUTATION: rejects the old approximation's wrong guess at the same anchor", () => {
+    // The hand-rolled approximation this guard used before #351 fix round 1
+    // would have computed "redirect-to-oauth-authorize" (an extra hyphen)
+    // for the same heading. That string is not a real anchor, so a link
+    // using it must still be reported broken.
+    const gluedApproximated = loadFixturePage('glued-punctuation-approximated-slug.md');
+    const violations = findBrokenLinks([home, guide, gluedApproximated], {
+      repoRoot: REPO_ROOT,
+      routedPages,
+    });
+    expect(violations).toEqual([
+      expect.objectContaining({ link: '/guide/#redirect-to-oauth-authorize' }),
+    ]);
+  });
+
   it('passes a pointer stub whose link resolves to a real route', () => {
     const stubOk = loadFixturePage('stub-ok.md');
     const violations = findBrokenLinks([home, guide, stubOk], { repoRoot: REPO_ROOT, routedPages });

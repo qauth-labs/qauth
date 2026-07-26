@@ -94,7 +94,7 @@ production.
 ## First-party authentication
 
 Email/password endpoints for **end users of your own application**. Third-party
-/ MCP clients use the [OAuth endpoints](#oauth-2-1) instead.
+/ MCP clients use the [OAuth endpoints](#oauth-21) instead.
 
 ### `POST /auth/register`
 
@@ -182,14 +182,14 @@ per-window caps).
 Full request/response detail and a worked end-to-end walkthrough live in the
 [OAuth 2.1 Flow](/integrate/oauth-flow/) guide. Contract summary:
 
-| Endpoint                                                                            | Method    | Body type    | Purpose                                                                                                                                            |
-| ----------------------------------------------------------------------------------- | --------- | ------------ | -------------------------------------------------------------------------------------------------------------------------------------------------- |
-| [`/oauth/authorize`](/integrate/oauth-flow/#2-redirect-the-user-to-oauth-authorize) | GET, POST | query / form | Start `authorization_code` + PKCE. POST mirrors GET with form-encoded params (OIDC Core §3.1.2.1) — browser-navigated either way, not an API call. |
-| [`/oauth/token`](/integrate/oauth-flow/#3-exchange-the-code-for-tokens)             | POST      | form         | `authorization_code` / `refresh_token` / `client_credentials` / `token-exchange` (RFC 8693)                                                        |
-| [`/oauth/introspect`](/integrate/oauth-flow/#token-introspection-rfc-7662)          | POST      | form         | Token introspection (RFC 7662) — confidential clients only                                                                                         |
-| [`/oauth/userinfo`](/integrate/oauth-flow/#userinfo-oidc)                           | GET, POST | —            | OIDC UserInfo (Bearer header, or POST with a form-encoded `access_token`, RFC 6750 §2.2)                                                           |
-| [`/oauth/register`](/integrate/oauth-flow/#dynamic-client-registration-rfc-7591)    | POST      | JSON         | Dynamic Client Registration (RFC 7591, open mode)                                                                                                  |
-| `/oauth/revoke`                                                                     | POST      | form         | Token revocation (RFC 7009)                                                                                                                        |
+| Endpoint                                                                           | Method    | Body type    | Purpose                                                                                                                                            |
+| ---------------------------------------------------------------------------------- | --------- | ------------ | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [`/oauth/authorize`](/integrate/oauth-flow/#2-redirect-the-user-to-oauthauthorize) | GET, POST | query / form | Start `authorization_code` + PKCE. POST mirrors GET with form-encoded params (OIDC Core §3.1.2.1) — browser-navigated either way, not an API call. |
+| [`/oauth/token`](/integrate/oauth-flow/#3-exchange-the-code-for-tokens)            | POST      | form         | `authorization_code` / `refresh_token` / `client_credentials` / `token-exchange` (RFC 8693)                                                        |
+| [`/oauth/introspect`](/integrate/oauth-flow/#token-introspection-rfc-7662)         | POST      | form         | Token introspection (RFC 7662) — confidential clients only                                                                                         |
+| [`/oauth/userinfo`](/integrate/oauth-flow/#userinfo-oidc)                          | GET, POST | —            | OIDC UserInfo (Bearer header, or POST with a form-encoded `access_token`, RFC 6750 §2.2)                                                           |
+| [`/oauth/register`](/integrate/oauth-flow/#dynamic-client-registration-rfc-7591)   | POST      | JSON         | Dynamic Client Registration (RFC 7591, open mode)                                                                                                  |
+| `/oauth/revoke`                                                                    | POST      | form         | Token revocation (RFC 7009)                                                                                                                        |
 
 Key contract facts:
 
@@ -348,7 +348,7 @@ Revoke one consent owned by the signed-in user.
 
 Developer-portal API for managing a developer's own OAuth clients. **JSON**,
 **camelCase**, and authenticated with a developer **`Authorization: Bearer`**
-access token (from [`POST /auth/login`](#post-auth-login)). Results are scoped to
+access token (from [`POST /auth/login`](#post-authlogin)). Results are scoped to
 the token subject's `developer_id`; the client secret is **never** returned.
 
 ### `GET /api/clients/`
