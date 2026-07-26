@@ -16,9 +16,12 @@ import { env } from '../../config/env';
  * `<style>` blocks. Rather than weaken the policy with `'unsafe-inline'`,
  * `@fastify/helmet`'s `enableCSPNonces` generates a fresh per-request nonce
  * exposed on `reply.cspNonce.style`; the page renderers stamp it onto each
- * `<style nonce>` tag. `script-src` stays `'self'` (plus its own unused nonce)
- * — the pages contain no JavaScript, so any injected `<script>` (reflected or
- * stored XSS) is refused by the browser.
+ * `<style nonce>` tag. `script-src` stays `'self'` plus its own per-request
+ * nonce, so an injected `<script>` (reflected or stored XSS) is refused by the
+ * browser: it cannot carry the nonce. Exactly one page emits a script — the
+ * wallet sign-in screen (#239), which has to poll for the wallet's
+ * `direct_post` response — and it stamps `reply.cspNonce.script` onto that one
+ * inline block. `'unsafe-inline'` is never listed.
  *
  * `'unsafe-inline'` is intentionally NOT listed for scripts. It IS effectively
  * neutralised for styles too: when a nonce is present, browsers ignore an
@@ -117,10 +120,10 @@ export const securityHeadersPlugin = fp<FastifyPluginOptions>(
         directives: {
           'default-src': ["'self'"],
           'base-uri': ["'self'"],
-          // No inline scripts: the rendered pages contain none, so an injected
-          // <script> is refused outright (defence-in-depth behind html.ts escaping).
-          // enableCSPNonces still appends a script nonce; we never emit it, so
-          // inline scripts remain effectively blocked.
+          // Inline <script> is allowed ONLY when carrying the per-request nonce
+          // enableCSPNonces appends. One page emits one (the wallet sign-in
+          // poller, #239); an injected <script> cannot guess the nonce, so it is
+          // still refused outright — defence-in-depth behind html.ts escaping.
           'script-src': ["'self'"],
           // Inline <style> is allowed ONLY when carrying the per-request nonce
           // (appended by enableCSPNonces).
