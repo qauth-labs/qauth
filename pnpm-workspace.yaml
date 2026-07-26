@@ -180,6 +180,14 @@ catalog:
   # workspace's existing `vite: 8.1.5` — no second Vite line introduced.
   astro: '7.1.3'
   '@astrojs/starlight': '0.41.4'
+  # `astro check` (Task 1 fix round 1, #347) — the real type-checking story
+  # for an Astro project: it type-checks `.astro` and MDX content through
+  # Astro's own language server, which `tsc --emitDeclarationOnly` (the
+  # @nx/js/typescript-inferred default) never does and which trips on
+  # Starlight's `docsSchema()` / Zod v4 combination under declaration-emit
+  # strictness for an unrelated reason. Peer `typescript: ^5.0.0 || ^6.0.0`
+  # matches the workspace's pinned `typescript: ~6.0.3`.
+  '@astrojs/check': '0.9.9'
 # pnpm 11 requires an explicit build decision per dependency with a postinstall
 # script (it no longer infers them from onlyBuiltDependencies). Mirror the
 # approved set; cpu-features is an optional ssh2 native accel we don't build.

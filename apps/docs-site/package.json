@@ -6,5 +6,9 @@
   "dependencies": {
     "astro": "catalog:",
     "@astrojs/starlight": "catalog:"
+  },
+  "devDependencies": {
+    "@astrojs/check": "catalog:",
+    "typescript": "catalog:"
   }
 }

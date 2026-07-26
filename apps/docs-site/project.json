@@ -27,6 +27,18 @@
         "cwd": "apps/docs-site"
       }
     },
+    "typecheck": {
+      "executor": "nx:run-commands",
+      "cache": true,
+      "inputs": ["default", "^default"],
+      "metadata": {
+        "description": "Type-check via `astro check` (checks .astro/.mdx content through Astro's language server, not just tsc). Overrides the @nx/js/typescript-inferred target, which fails on this project (see Task 1 report: TS5069 without composite/declaration, then TS2883 from docsSchema()/Zod v4 under declaration-emit)."
+      },
+      "options": {
+        "command": "astro check",
+        "cwd": "apps/docs-site"
+      }
+    },
     "preview": {
       "executor": "nx:run-commands",
       "continuous": true,

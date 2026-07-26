@@ -19,7 +19,9 @@
   "paths": {
     "/health": {
       "get": {
-        "tags": ["System"],
+        "tags": [
+          "System"
+        ],
         "description": "Health check endpoint. Returns database and Redis connectivity status. Used for liveness and readiness probes.",
         "responses": {
           "200": {
@@ -30,7 +32,9 @@
     },
     "/metrics": {
       "get": {
-        "tags": ["System"],
+        "tags": [
+          "System"
+        ],
         "description": "Prometheus metrics endpoint. Returns process/runtime metrics plus auth counters in Prometheus text exposition format.",
         "responses": {
           "200": {
@@ -41,7 +45,9 @@
     },
     "/": {
       "get": {
-        "tags": ["System"],
+        "tags": [
+          "System"
+        ],
         "description": "Root API endpoint. Returns a simple greeting to verify the auth server is running.",
         "responses": {
           "200": {
@@ -52,7 +58,9 @@
     },
     "/.well-known/oauth-authorization-server": {
       "get": {
-        "tags": ["Discovery"],
+        "tags": [
+          "Discovery"
+        ],
         "description": "OAuth 2.0 Authorization Server Metadata (RFC 8414). Unauthenticated, cacheable.",
         "responses": {
           "200": {
@@ -63,7 +71,9 @@
     },
     "/.well-known/openid-configuration": {
       "get": {
-        "tags": ["Discovery"],
+        "tags": [
+          "Discovery"
+        ],
         "description": "OpenID Connect Discovery 1.0 document. Superset of RFC 8414 AS metadata with OIDC-specific fields. Unauthenticated, cacheable.",
         "responses": {
           "200": {
@@ -74,7 +84,9 @@
     },
     "/.well-known/jwks.json": {
       "get": {
-        "tags": ["Discovery"],
+        "tags": [
+          "Discovery"
+        ],
         "description": "JSON Web Key Set (RFC 7517) containing the active EdDSA public signing key(s). Used by clients and resource servers to verify JWT signatures.",
         "responses": {
           "200": {
@@ -85,7 +97,9 @@
     },
     "/auth/login": {
       "post": {
-        "tags": ["Auth"],
+        "tags": [
+          "Auth"
+        ],
         "description": "Authenticate with email and password. Returns access token, refresh token, and expiration. Requires valid credentials.",
         "requestBody": {
           "required": true,
@@ -103,7 +117,10 @@
                     "type": "string"
                   }
                 },
-                "required": ["email", "password"]
+                "required": [
+                  "email",
+                  "password"
+                ]
               }
             }
           }
@@ -127,10 +144,17 @@
                     },
                     "token_type": {
                       "type": "string",
-                      "enum": ["Bearer"]
+                      "enum": [
+                        "Bearer"
+                      ]
                     }
                   },
-                  "required": ["access_token", "refresh_token", "expires_in", "token_type"],
+                  "required": [
+                    "access_token",
+                    "refresh_token",
+                    "expires_in",
+                    "token_type"
+                  ],
                   "additionalProperties": false
                 }
               }
@@ -141,7 +165,9 @@
     },
     "/auth/logout": {
       "post": {
-        "tags": ["Auth"],
+        "tags": [
+          "Auth"
+        ],
         "description": "Log out the current user. Revokes all refresh tokens for the user. Accepts expired access tokens.",
         "parameters": [
           {
@@ -164,14 +190,21 @@
                   "properties": {
                     "success": {
                       "type": "boolean",
-                      "enum": [true]
+                      "enum": [
+                        true
+                      ]
                     },
                     "message": {
                       "type": "string",
-                      "enum": ["Successfully logged out"]
+                      "enum": [
+                        "Successfully logged out"
+                      ]
                     }
                   },
-                  "required": ["success", "message"],
+                  "required": [
+                    "success",
+                    "message"
+                  ],
                   "additionalProperties": false
                 }
               }
@@ -182,7 +215,9 @@
     },
     "/auth/register": {
       "post": {
-        "tags": ["Auth"],
+        "tags": [
+          "Auth"
+        ],
         "description": "Register a new user account. Creates user, sends verification email, and returns user data. Password must meet strength requirements.",
         "requestBody": {
           "required": true,
@@ -205,7 +240,10 @@
                     "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                   }
                 },
-                "required": ["email", "password"]
+                "required": [
+                  "email",
+                  "password"
+                ]
               }
             }
           }
@@ -250,7 +288,14 @@
                       ]
                     }
                   },
-                  "required": ["id", "email", "emailVerified", "realmId", "createdAt", "updatedAt"],
+                  "required": [
+                    "id",
+                    "email",
+                    "emailVerified",
+                    "realmId",
+                    "createdAt",
+                    "updatedAt"
+                  ],
                   "additionalProperties": false
                 }
               }
@@ -261,7 +306,9 @@
     },
     "/auth/resend-verification": {
       "post": {
-        "tags": ["Auth"],
+        "tags": [
+          "Auth"
+        ],
         "description": "Request a new verification email. Rate limited per IP and per email. Always returns success to prevent email enumeration.",
         "requestBody": {
           "required": true,
@@ -276,7 +323,9 @@
                     "pattern": "^(?!\\.)(?!.*\\.\\.)([A-Za-z0-9_'+\\-\\.]*)[A-Za-z0-9_+-]@([A-Za-z0-9][A-Za-z0-9\\-]*\\.)+[A-Za-z]{2,}$"
                   }
                 },
-                "required": ["email"]
+                "required": [
+                  "email"
+                ]
               }
             }
           }
@@ -293,7 +342,9 @@
                       "type": "string"
                     }
                   },
-                  "required": ["message"],
+                  "required": [
+                    "message"
+                  ],
                   "additionalProperties": false
                 }
               }
@@ -313,7 +364,10 @@
                       "type": "number"
                     }
                   },
-                  "required": ["error", "statusCode"],
+                  "required": [
+                    "error",
+                    "statusCode"
+                  ],
                   "additionalProperties": false
                 }
               }
@@ -324,7 +378,9 @@
     },
     "/auth/verify": {
       "get": {
-        "tags": ["Auth"],
+        "tags": [
+          "Auth"
+        ],
         "description": "Verify email address using token sent via email. Single-use; marks token as used. Returns success message.",
         "parameters": [
           {
@@ -356,7 +412,10 @@
                       "pattern": "^(?!\\.)(?!.*\\.\\.)([A-Za-z0-9_'+\\-\\.]*)[A-Za-z0-9_+-]@([A-Za-z0-9][A-Za-z0-9\\-]*\\.)+[A-Za-z]{2,}$"
                     }
                   },
-                  "required": ["message", "email"],
+                  "required": [
+                    "message",
+                    "email"
+                  ],
                   "additionalProperties": false
                 }
               }
@@ -367,7 +426,9 @@
     },
     "/api/clients/": {
       "get": {
-        "tags": ["Clients"],
+        "tags": [
+          "Clients"
+        ],
         "description": "List the OAuth clients owned by the authenticated developer. Scoped by oauth_clients.developer_id. Requires a developer Bearer access token. Never returns the client secret. (Phase 2.2, issue #85.)",
         "security": [
           {
@@ -443,7 +504,11 @@
                           },
                           "environment": {
                             "type": "string",
-                            "enum": ["development", "staging", "production"]
+                            "enum": [
+                              "development",
+                              "staging",
+                              "production"
+                            ]
                           },
                           "staticApiKeysAllowed": {
                             "type": "boolean"
@@ -487,7 +552,9 @@
                       }
                     }
                   },
-                  "required": ["clients"],
+                  "required": [
+                    "clients"
+                  ],
                   "additionalProperties": false
                 }
               }
@@ -496,7 +563,9 @@
         }
       },
       "post": {
-        "tags": ["Clients"],
+        "tags": [
+          "Clients"
+        ],
         "description": "Create an OAuth client owned by the authenticated developer. The server generates the client_id and (for confidential clients) a client_secret; the plaintext secret is returned in THIS response only and never again. Requires a developer Bearer access token. (Phase 2.2, issue #86.)",
         "requestBody": {
           "required": true,
@@ -541,22 +610,35 @@
                     "type": "array",
                     "items": {
                       "type": "string",
-                      "enum": ["authorization_code", "refresh_token", "client_credentials"]
+                      "enum": [
+                        "authorization_code",
+                        "refresh_token",
+                        "client_credentials"
+                      ]
                     }
                   },
                   "responseTypes": {
                     "type": "array",
                     "items": {
                       "type": "string",
-                      "enum": ["code"]
+                      "enum": [
+                        "code"
+                      ]
                     }
                   },
                   "tokenEndpointAuthMethod": {
                     "type": "string",
-                    "enum": ["client_secret_post", "client_secret_basic", "private_key_jwt", "none"]
+                    "enum": [
+                      "client_secret_post",
+                      "client_secret_basic",
+                      "private_key_jwt",
+                      "none"
+                    ]
                   }
                 },
-                "required": ["name"]
+                "required": [
+                  "name"
+                ]
               }
             }
           }
@@ -630,7 +712,11 @@
                     },
                     "environment": {
                       "type": "string",
-                      "enum": ["development", "staging", "production"]
+                      "enum": [
+                        "development",
+                        "staging",
+                        "production"
+                      ]
                     },
                     "staticApiKeysAllowed": {
                       "type": "boolean"
@@ -683,7 +769,9 @@
     },
     "/api/clients/{id}": {
       "get": {
-        "tags": ["Clients"],
+        "tags": [
+          "Clients"
+        ],
         "description": "Get one of the authenticated developer's OAuth clients by id. Returns 404 if the client does not exist or is owned by another developer (no existence enumeration). Never returns the client secret. (Phase 2.2, issue #87.)",
         "parameters": [
           {
@@ -766,7 +854,11 @@
                     },
                     "environment": {
                       "type": "string",
-                      "enum": ["development", "staging", "production"]
+                      "enum": [
+                        "development",
+                        "staging",
+                        "production"
+                      ]
                     },
                     "staticApiKeysAllowed": {
                       "type": "boolean"
@@ -814,7 +906,9 @@
         }
       },
       "patch": {
-        "tags": ["Clients"],
+        "tags": [
+          "Clients"
+        ],
         "description": "Update mutable fields of one of the developer's OAuth clients (name, description, redirectUris, scopes, grantTypes, responseTypes, tokenEndpointAuthMethod, enabled). client_id and client_secret are immutable here. Returns 404 if the client does not exist or is owned by another developer. (Phase 2.2, issue #88.)",
         "requestBody": {
           "required": true,
@@ -857,19 +951,30 @@
                     "type": "array",
                     "items": {
                       "type": "string",
-                      "enum": ["authorization_code", "refresh_token", "client_credentials"]
+                      "enum": [
+                        "authorization_code",
+                        "refresh_token",
+                        "client_credentials"
+                      ]
                     }
                   },
                   "responseTypes": {
                     "type": "array",
                     "items": {
                       "type": "string",
-                      "enum": ["code"]
+                      "enum": [
+                        "code"
+                      ]
                     }
                   },
                   "tokenEndpointAuthMethod": {
                     "type": "string",
-                    "enum": ["client_secret_post", "client_secret_basic", "private_key_jwt", "none"]
+                    "enum": [
+                      "client_secret_post",
+                      "client_secret_basic",
+                      "private_key_jwt",
+                      "none"
+                    ]
                   },
                   "enabled": {
                     "type": "boolean"
@@ -960,7 +1065,11 @@
                     },
                     "environment": {
                       "type": "string",
-                      "enum": ["development", "staging", "production"]
+                      "enum": [
+                        "development",
+                        "staging",
+                        "production"
+                      ]
                     },
                     "staticApiKeysAllowed": {
                       "type": "boolean"
@@ -1008,7 +1117,9 @@
         }
       },
       "delete": {
-        "tags": ["Clients"],
+        "tags": [
+          "Clients"
+        ],
         "description": "Delete one of the developer's OAuth clients. Returns 404 if the client does not exist or is owned by another developer. After deletion the client can no longer authenticate. (Phase 2.2, issue #89.)",
         "parameters": [
           {
@@ -1036,7 +1147,9 @@
     },
     "/api/clients/{id}/regenerate-secret": {
       "post": {
-        "tags": ["Clients"],
+        "tags": [
+          "Clients"
+        ],
         "description": "Issue a new client_secret for one of the developer's OAuth clients. The previous secret is invalidated immediately and the new plaintext secret is returned in THIS response only. Returns 404 if the client does not exist or is owned by another developer; 400 for a public client that has no secret. (Phase 2.2, issue #90.)",
         "parameters": [
           {
@@ -1119,7 +1232,11 @@
                     },
                     "environment": {
                       "type": "string",
-                      "enum": ["development", "staging", "production"]
+                      "enum": [
+                        "development",
+                        "staging",
+                        "production"
+                      ]
                     },
                     "staticApiKeysAllowed": {
                       "type": "boolean"
@@ -1173,7 +1290,9 @@
     },
     "/api/clients/{clientId}/api-keys": {
       "post": {
-        "tags": ["API Keys"],
+        "tags": [
+          "API Keys"
+        ],
         "description": "Mint a static developer API key for one of the developer's OAuth clients. ENVIRONMENT-GATED (ADR-008 §6): permitted only while the client resolves to a development environment; a staging/production (or unset-environment) client is refused with 403 and must use the OAuth client_credentials grant. The plaintext key is returned in THIS response only and never again. Returns 404 if the client does not exist or is owned by another developer. (Issue #97.)",
         "requestBody": {
           "required": true,
@@ -1188,7 +1307,9 @@
                     "maxLength": 255
                   }
                 },
-                "required": ["name"]
+                "required": [
+                  "name"
+                ]
               }
             }
           }
@@ -1283,7 +1404,9 @@
         }
       },
       "get": {
-        "tags": ["API Keys"],
+        "tags": [
+          "API Keys"
+        ],
         "description": "List the static API keys for one of the developer's OAuth clients. Returns masked fields only (prefix + last4) — never the key or its hash. Includes revoked keys (with revokedAt set). Returns 404 if the client does not exist or is owned by another developer. (Issue #97.)",
         "parameters": [
           {
@@ -1372,7 +1495,9 @@
                       }
                     }
                   },
-                  "required": ["apiKeys"],
+                  "required": [
+                    "apiKeys"
+                  ],
                   "additionalProperties": false
                 }
               }
@@ -1383,7 +1508,9 @@
     },
     "/api/clients/{clientId}/api-keys/{keyId}": {
       "delete": {
-        "tags": ["API Keys"],
+        "tags": [
+          "API Keys"
+        ],
         "description": "Revoke one static API key for one of the developer's OAuth clients. Idempotent soft-delete: the row is retained with revokedAt set, and a revoked key never authenticates again. Returns 404 if the client or key does not exist or is owned by another developer. (Issue #97.)",
         "parameters": [
           {
@@ -1483,7 +1610,9 @@
     },
     "/consents/": {
       "get": {
-        "tags": ["Consents"],
+        "tags": [
+          "Consents"
+        ],
         "description": "List the active OAuth consents for the currently signed-in user. Drives the developer portal revocation screen (issue #150). The response also carries a per-session CSRF token that the caller MUST echo back as the `X-CSRF-Token` header on `DELETE /consents/:id`.",
         "responses": {
           "200": {
@@ -1517,7 +1646,13 @@
                             "type": "number"
                           }
                         },
-                        "required": ["id", "clientId", "clientName", "scopes", "grantedAt"],
+                        "required": [
+                          "id",
+                          "clientId",
+                          "clientName",
+                          "scopes",
+                          "grantedAt"
+                        ],
                         "additionalProperties": false
                       }
                     },
@@ -1525,7 +1660,10 @@
                       "type": "string"
                     }
                   },
-                  "required": ["consents", "csrfToken"],
+                  "required": [
+                    "consents",
+                    "csrfToken"
+                  ],
                   "additionalProperties": false
                 }
               }
@@ -1562,12 +1700,20 @@
                             "type": "number"
                           }
                         },
-                        "required": ["id", "clientId", "clientName", "scopes", "grantedAt"],
+                        "required": [
+                          "id",
+                          "clientId",
+                          "clientName",
+                          "scopes",
+                          "grantedAt"
+                        ],
                         "additionalProperties": false
                       }
                     }
                   },
-                  "required": ["consents"],
+                  "required": [
+                    "consents"
+                  ],
                   "additionalProperties": false
                 }
               }
@@ -1578,7 +1724,9 @@
     },
     "/consents/{id}": {
       "delete": {
-        "tags": ["Consents"],
+        "tags": [
+          "Consents"
+        ],
         "description": "Revoke an OAuth consent row owned by the currently signed-in user. Requires a valid `X-CSRF-Token` header whose value matches the session CSRF token returned by `GET /consents`.",
         "parameters": [
           {
@@ -1604,13 +1752,18 @@
     },
     "/oauth/authorize": {
       "get": {
-        "tags": ["OAuth", "Authorization"],
+        "tags": [
+          "OAuth",
+          "Authorization"
+        ],
         "description": "OAuth 2.1 authorization endpoint (GET). Issues an authorization code with PKCE and redirects to the client redirect_uri.",
         "parameters": [
           {
             "schema": {
               "type": "string",
-              "enum": ["code"]
+              "enum": [
+                "code"
+              ]
             },
             "in": "query",
             "name": "response_type",
@@ -1648,7 +1801,9 @@
           {
             "schema": {
               "type": "string",
-              "enum": ["S256"]
+              "enum": [
+                "S256"
+              ]
             },
             "in": "query",
             "name": "code_challenge_method",
@@ -1684,7 +1839,11 @@
           {
             "schema": {
               "type": "string",
-              "enum": ["none", "login", "consent"]
+              "enum": [
+                "none",
+                "login",
+                "consent"
+              ]
             },
             "in": "query",
             "name": "prompt",
@@ -1731,7 +1890,10 @@
         }
       },
       "post": {
-        "tags": ["OAuth", "Authorization"],
+        "tags": [
+          "OAuth",
+          "Authorization"
+        ],
         "description": "OAuth 2.1 authorization endpoint (POST). Identical to GET; parameters are form-encoded in the request body (OIDC Core §3.1.2.1).",
         "requestBody": {
           "required": true,
@@ -1742,7 +1904,9 @@
                 "properties": {
                   "response_type": {
                     "type": "string",
-                    "enum": ["code"]
+                    "enum": [
+                      "code"
+                    ]
                   },
                   "client_id": {
                     "type": "string",
@@ -1760,7 +1924,9 @@
                   },
                   "code_challenge_method": {
                     "type": "string",
-                    "enum": ["S256"]
+                    "enum": [
+                      "S256"
+                    ]
                   },
                   "state": {
                     "type": "string",
@@ -1776,7 +1942,11 @@
                   },
                   "prompt": {
                     "type": "string",
-                    "enum": ["none", "login", "consent"]
+                    "enum": [
+                      "none",
+                      "login",
+                      "consent"
+                    ]
                   },
                   "max_age": {
                     "type": "integer",
@@ -1822,7 +1992,10 @@
     },
     "/oauth/introspect": {
       "post": {
-        "tags": ["OAuth", "Introspection"],
+        "tags": [
+          "OAuth",
+          "Introspection"
+        ],
         "description": "RFC 7662 token introspection. Send access token and client credentials in application/x-www-form-urlencoded body. Returns active and claims when token is valid for the client.",
         "requestBody": {
           "required": true,
@@ -1848,7 +2021,9 @@
                     "minLength": 1
                   }
                 },
-                "required": ["token"]
+                "required": [
+                  "token"
+                ]
               }
             }
           }
@@ -1897,7 +2072,9 @@
                     },
                     "token_type": {
                       "type": "string",
-                      "enum": ["Bearer"]
+                      "enum": [
+                        "Bearer"
+                      ]
                     },
                     "pqc_signature": {
                       "type": "string"
@@ -1906,7 +2083,9 @@
                       "type": "string"
                     }
                   },
-                  "required": ["active"],
+                  "required": [
+                    "active"
+                  ],
                   "additionalProperties": false
                 }
               }
@@ -1917,7 +2096,10 @@
     },
     "/oauth/register": {
       "post": {
-        "tags": ["OAuth", "Registration"],
+        "tags": [
+          "OAuth",
+          "Registration"
+        ],
         "description": "OAuth 2.0 Dynamic Client Registration (RFC 7591). Open-mode — no initial_access_token required. Scope requests are capped to the realm's dynamic_registration_allowed_scopes list.",
         "requestBody": {
           "required": true,
@@ -1945,7 +2127,11 @@
                     "type": "array",
                     "items": {
                       "type": "string",
-                      "enum": ["authorization_code", "refresh_token", "client_credentials"]
+                      "enum": [
+                        "authorization_code",
+                        "refresh_token",
+                        "client_credentials"
+                      ]
                     }
                   },
                   "response_types": {
@@ -1953,12 +2139,18 @@
                     "type": "array",
                     "items": {
                       "type": "string",
-                      "enum": ["code"]
+                      "enum": [
+                        "code"
+                      ]
                     }
                   },
                   "token_endpoint_auth_method": {
                     "type": "string",
-                    "enum": ["none", "client_secret_basic", "client_secret_post"]
+                    "enum": [
+                      "none",
+                      "client_secret_basic",
+                      "client_secret_post"
+                    ]
                   },
                   "scope": {
                     "type": "string",
@@ -2106,7 +2298,10 @@
     },
     "/oauth/revoke": {
       "post": {
-        "tags": ["OAuth", "Revocation"],
+        "tags": [
+          "OAuth",
+          "Revocation"
+        ],
         "description": "RFC 7009 token revocation. Send the token and confidential client credentials in an application/x-www-form-urlencoded body. Always returns 200 with an empty body on success.",
         "requestBody": {
           "required": true,
@@ -2121,7 +2316,10 @@
                   },
                   "token_type_hint": {
                     "type": "string",
-                    "enum": ["access_token", "refresh_token"]
+                    "enum": [
+                      "access_token",
+                      "refresh_token"
+                    ]
                   },
                   "client_id": {
                     "type": "string",
@@ -2132,7 +2330,9 @@
                     "minLength": 1
                   }
                 },
-                "required": ["token"]
+                "required": [
+                  "token"
+                ]
               }
             }
           }
@@ -2146,7 +2346,10 @@
     },
     "/oauth/token": {
       "post": {
-        "tags": ["OAuth", "Token"],
+        "tags": [
+          "OAuth",
+          "Token"
+        ],
         "description": "OAuth 2.1 token endpoint. Supports authorization_code (with PKCE) and client_credentials grants. Client auth via client_secret_post or client_secret_basic.",
         "requestBody": {
           "required": true,
@@ -2159,7 +2362,9 @@
                     "properties": {
                       "grant_type": {
                         "type": "string",
-                        "enum": ["authorization_code"]
+                        "enum": [
+                          "authorization_code"
+                        ]
                       },
                       "code": {
                         "type": "string",
@@ -2202,14 +2407,21 @@
                         ]
                       }
                     },
-                    "required": ["grant_type", "code", "redirect_uri", "code_verifier"]
+                    "required": [
+                      "grant_type",
+                      "code",
+                      "redirect_uri",
+                      "code_verifier"
+                    ]
                   },
                   {
                     "type": "object",
                     "properties": {
                       "grant_type": {
                         "type": "string",
-                        "enum": ["client_credentials"]
+                        "enum": [
+                          "client_credentials"
+                        ]
                       },
                       "client_id": {
                         "type": "string",
@@ -2241,14 +2453,18 @@
                         ]
                       }
                     },
-                    "required": ["grant_type"]
+                    "required": [
+                      "grant_type"
+                    ]
                   },
                   {
                     "type": "object",
                     "properties": {
                       "grant_type": {
                         "type": "string",
-                        "enum": ["refresh_token"]
+                        "enum": [
+                          "refresh_token"
+                        ]
                       },
                       "refresh_token": {
                         "type": "string",
@@ -2286,14 +2502,19 @@
                         ]
                       }
                     },
-                    "required": ["grant_type", "refresh_token"]
+                    "required": [
+                      "grant_type",
+                      "refresh_token"
+                    ]
                   },
                   {
                     "type": "object",
                     "properties": {
                       "grant_type": {
                         "type": "string",
-                        "enum": ["urn:ietf:params:oauth:grant-type:token-exchange"]
+                        "enum": [
+                          "urn:ietf:params:oauth:grant-type:token-exchange"
+                        ]
                       },
                       "subject_token": {
                         "type": "string",
@@ -2369,7 +2590,11 @@
                         ]
                       }
                     },
-                    "required": ["grant_type", "subject_token", "subject_token_type"]
+                    "required": [
+                      "grant_type",
+                      "subject_token",
+                      "subject_token_type"
+                    ]
                   }
                 ]
               }
@@ -2395,7 +2620,9 @@
                     },
                     "token_type": {
                       "type": "string",
-                      "enum": ["Bearer"]
+                      "enum": [
+                        "Bearer"
+                      ]
                     },
                     "scope": {
                       "type": "string"
@@ -2407,7 +2634,11 @@
                       "type": "string"
                     }
                   },
-                  "required": ["access_token", "expires_in", "token_type"],
+                  "required": [
+                    "access_token",
+                    "expires_in",
+                    "token_type"
+                  ],
                   "additionalProperties": false
                 }
               }
@@ -2418,7 +2649,10 @@
     },
     "/oauth/userinfo": {
       "get": {
-        "tags": ["OAuth", "Userinfo"],
+        "tags": [
+          "OAuth",
+          "Userinfo"
+        ],
         "description": "OIDC userinfo endpoint (GET). Returns claims for the authenticated user. Requires a Bearer access token.",
         "security": [
           {
@@ -2449,7 +2683,9 @@
                       "type": "string"
                     }
                   },
-                  "required": ["sub"],
+                  "required": [
+                    "sub"
+                  ],
                   "additionalProperties": false
                 }
               }
@@ -2458,7 +2694,10 @@
         }
       },
       "post": {
-        "tags": ["OAuth", "Userinfo"],
+        "tags": [
+          "OAuth",
+          "Userinfo"
+        ],
         "description": "OIDC userinfo endpoint (POST). Returns claims for the authenticated user. Accepts a Bearer access token in the Authorization header or a form-encoded access_token body parameter (RFC 6750 §2.2).",
         "security": [
           {
@@ -2489,7 +2728,9 @@
                       "type": "string"
                     }
                   },
-                  "required": ["sub"],
+                  "required": [
+                    "sub"
+                  ],
                   "additionalProperties": false
                 }
               }
@@ -2500,7 +2741,9 @@
     },
     "/oid4vp/response": {
       "post": {
-        "tags": ["OID4VP"],
+        "tags": [
+          "OID4VP"
+        ],
         "description": "OID4VP 1.0 direct_post Response Endpoint. Accepts a wallet Authorization Response (vp_token + state, or error + state) as application/x-www-form-urlencoded. TRANSPORT ONLY: the response is correlated against a single-use presentation request and structurally parsed. No signature, credential or issuer validation is performed and no user is authenticated (that is #234/#236).",
         "requestBody": {
           "required": true,
@@ -2529,7 +2772,9 @@
                     "maxLength": 1024
                   }
                 },
-                "required": ["state"]
+                "required": [
+                  "state"
+                ]
               }
             }
           }
@@ -2553,13 +2798,17 @@
     },
     "/ui/consent": {
       "get": {
-        "tags": ["UI"],
+        "tags": [
+          "UI"
+        ],
         "description": "Render the OAuth consent screen. Requires a valid __Host-qauth_session cookie; otherwise redirects to /ui/login.",
         "parameters": [
           {
             "schema": {
               "type": "string",
-              "enum": ["code"]
+              "enum": [
+                "code"
+              ]
             },
             "in": "query",
             "name": "response_type",
@@ -2597,7 +2846,9 @@
           {
             "schema": {
               "type": "string",
-              "enum": ["S256"]
+              "enum": [
+                "S256"
+              ]
             },
             "in": "query",
             "name": "code_challenge_method",
@@ -2633,7 +2884,11 @@
           {
             "schema": {
               "type": "string",
-              "enum": ["none", "login", "consent"]
+              "enum": [
+                "none",
+                "login",
+                "consent"
+              ]
             },
             "in": "query",
             "name": "prompt",
@@ -2680,7 +2935,9 @@
         }
       },
       "post": {
-        "tags": ["UI"],
+        "tags": [
+          "UI"
+        ],
         "description": "Submit the consent decision. CSRF-protected; re-uses the authorize params to issue a code on Allow.",
         "requestBody": {
           "required": true,
@@ -2691,7 +2948,10 @@
                 "properties": {
                   "decision": {
                     "type": "string",
-                    "enum": ["allow", "deny"]
+                    "enum": [
+                      "allow",
+                      "deny"
+                    ]
                   },
                   "allow_forever": {
                     "type": "string"
@@ -2727,15 +2987,23 @@
                   },
                   "code_challenge_method": {
                     "type": "string",
-                    "enum": ["S256"]
+                    "enum": [
+                      "S256"
+                    ]
                   },
                   "response_type": {
                     "type": "string",
-                    "enum": ["code"]
+                    "enum": [
+                      "code"
+                    ]
                   },
                   "prompt": {
                     "type": "string",
-                    "enum": ["none", "login", "consent"]
+                    "enum": [
+                      "none",
+                      "login",
+                      "consent"
+                    ]
                   },
                   "max_age": {
                     "type": "integer",
@@ -2783,7 +3051,9 @@
     },
     "/ui/login": {
       "get": {
-        "tags": ["UI"],
+        "tags": [
+          "UI"
+        ],
         "description": "Renders the session-cookie login page. `return_to` is a relative path to redirect to after a successful sign-in. Issue #150.",
         "parameters": [
           {
@@ -2810,7 +3080,9 @@
         }
       },
       "post": {
-        "tags": ["UI"],
+        "tags": [
+          "UI"
+        ],
         "description": "Submit the session-cookie login form. Sets __Host-qauth_session on success.",
         "requestBody": {
           "required": true,
@@ -2835,7 +3107,11 @@
                     "minLength": 1
                   }
                 },
-                "required": ["email", "password", "csrf_token"]
+                "required": [
+                  "email",
+                  "password",
+                  "csrf_token"
+                ]
               }
             }
           }
@@ -2849,7 +3125,9 @@
     },
     "/ui/resume/{handle}": {
       "get": {
-        "tags": ["UI"],
+        "tags": [
+          "UI"
+        ],
         "description": "Resume a pending authorization request after login. The handle is single-use and resolves ONLY to an authorize URL this server minted. Issue #316.",
         "parameters": [
           {
