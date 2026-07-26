@@ -192,58 +192,84 @@ async function main(): Promise<void> {
   server.setValidatorCompiler(validatorCompiler);
   server.setSerializerCompiler(serializerCompiler);
 
-  // Duplicated from `apps/auth-server/src/main.ts` verbatim (same `openapi`
-  // object, same `transform`). Kept in sync by hand for now — see the Task 1
-  // report for why this was not extracted into a shared helper in this task.
-  await server.register(swagger, {
-    openapi: {
-      openapi: '3.1.0',
-      info: {
-        title: 'QAuth Auth Server API',
-        description:
-          'OAuth 2.1 / OIDC authentication server API. Phase 1.7: userinfo and token introspection.',
-        version: '1.0.0',
-      },
-      servers: [{ url: '/', description: 'Default' }],
-      components: {
-        securitySchemes: {
-          bearerAuth: {
-            type: 'http',
-            scheme: 'bearer',
-            bearerFormat: 'JWT',
-            description: 'Access token obtained from login, refresh, or OAuth token endpoint.',
+  // Everything from here on MUST close `server` on every exit path, success
+  // or failure. The cache plugin connects with `lazyConnect: true` and
+  // ioredis's default retry strategy; if registration or `ready()` throws
+  // after that connection attempt has started and nothing calls
+  // `server.close()` (which runs the cache plugin's `onClose` hook →
+  // `redis.quit()`), the live reconnect timers keep the event loop open and
+  // the process hangs instead of exiting with the logged failure. This
+  // script is meant to run unattended (Task 3's guard, CI), so a hang is the
+  // worst available outcome — worse than the failure itself.
+  try {
+    // Duplicated from `apps/auth-server/src/main.ts` verbatim (same
+    // `openapi` object, same `transform`). Kept in sync by hand for now —
+    // see the Task 1 report for why this was not extracted into a shared
+    // helper in this task.
+    await server.register(swagger, {
+      openapi: {
+        openapi: '3.1.0',
+        info: {
+          title: 'QAuth Auth Server API',
+          description:
+            'OAuth 2.1 / OIDC authentication server API. Phase 1.7: userinfo and token introspection.',
+          version: '1.0.0',
+        },
+        servers: [{ url: '/', description: 'Default' }],
+        components: {
+          securitySchemes: {
+            bearerAuth: {
+              type: 'http',
+              scheme: 'bearer',
+              bearerFormat: 'JWT',
+              description: 'Access token obtained from login, refresh, or OAuth token endpoint.',
+            },
           },
         },
       },
-    },
-    transform: createJsonSchemaTransform({
-      zodToJsonConfig: { target: 'draft-2020-12' },
-    }),
-  });
+      transform: createJsonSchemaTransform({
+        zodToJsonConfig: { target: 'draft-2020-12' },
+      }),
+    });
 
-  await server.register(app);
-  await server.ready();
+    await server.register(app);
+    await server.ready();
 
-  const spec = server.swagger() as OpenApiDocument;
-  const pathCount = Object.keys(spec.paths ?? {}).length;
+    const spec = server.swagger() as OpenApiDocument;
+    const pathCount = Object.keys(spec.paths ?? {}).length;
 
-  if (pathCount < MIN_EXPECTED_PATHS) {
-    await server.close();
-    console.error(
-      `openapi-export: refusing to write a near-empty spec — got ${pathCount} path(s), ` +
-        `expected at least ${MIN_EXPECTED_PATHS}. This usually means one of the maximal-surface ` +
-        'env flags did not take effect (WALLET_FEDERATION_ENABLED / OID4VP_VERIFIER_PROFILE) or a ' +
-        'route registration failed silently. Re-run with FASTIFY_DEBUG or inspect the app registration.'
-    );
-    process.exitCode = 1;
-    return;
+    if (pathCount < MIN_EXPECTED_PATHS) {
+      // Thrown, not just logged-and-returned, so this failure goes through
+      // the SAME `finally` below as every other failure — one close path,
+      // not two.
+      throw new Error(
+        `openapi-export: refusing to write a near-empty spec — got ${pathCount} path(s), ` +
+          `expected at least ${MIN_EXPECTED_PATHS}. This usually means one of the maximal-surface ` +
+          'env flags did not take effect (WALLET_FEDERATION_ENABLED / OID4VP_VERIFIER_PROFILE) or a ' +
+          'route registration failed silently. Re-run with FASTIFY_DEBUG or inspect the app registration.'
+      );
+    }
+
+    mkdirSync(dirname(OUTPUT_PATH), { recursive: true });
+    writeFileSync(OUTPUT_PATH, `${JSON.stringify(spec, null, 2)}\n`);
+    console.log(`openapi-export: wrote ${pathCount} path(s) to ${OUTPUT_PATH}`);
+  } finally {
+    // A `finally` block that itself throws REPLACES whatever error was
+    // already propagating — the original cause (a registration bug, a
+    // fail-closed profile assertion) is the useful one, and a close-time
+    // rejection must never win over it. Caught and logged here, deliberately
+    // not rethrown, so the original error (if any) keeps propagating to the
+    // `main().catch()` below unchanged.
+    try {
+      await server.close();
+    } catch (closeError) {
+      console.error(
+        'openapi-export: also failed to close the Fastify instance during cleanup ' +
+          '(the error above/below, if any, is the original failure and takes precedence)',
+        closeError
+      );
+    }
   }
-
-  mkdirSync(dirname(OUTPUT_PATH), { recursive: true });
-  writeFileSync(OUTPUT_PATH, `${JSON.stringify(spec, null, 2)}\n`);
-  console.log(`openapi-export: wrote ${pathCount} path(s) to ${OUTPUT_PATH}`);
-
-  await server.close();
 }
 
 main().catch((error) => {
