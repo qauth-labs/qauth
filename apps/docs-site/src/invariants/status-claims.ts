@@ -124,22 +124,36 @@ interface Segment {
  * form their own prose segment. Every list line starts a new segment even
  * when adjacent to another one — sibling bullets are independent claims,
  * not one blob (see `computeScope`).
+ *
+ * Splits with a CAPTURING `/(\r?\n)/` rather than a plain `/\r?\n/`, so each
+ * matched terminator survives in the output and its REAL length (1 for
+ * `\n`, 2 for `\r\n`) drives both the running `offset` and the text rebuilt
+ * for a continuation line. A flat `+1` here would silently drift every
+ * later segment's `start` — and therefore `computeScope`'s
+ * `localStart - segment.start` slicing — on CRLF input. `.gitattributes`
+ * forces LF for `*.md` (which covers `README.md`, `docs/README.md`, and
+ * every `.md` content page), but NOT `.mdx` — so this stays correct instead
+ * of resting on a guarantee that doesn't fully cover this function's real
+ * callers.
  */
 function splitSegments(paragraphText: string): Segment[] {
-  const lines = paragraphText.split(/\r?\n/);
+  const parts = paragraphText.split(/(\r?\n)/); // [line, terminator, line, terminator, ..., line]
   const segments: Segment[] = [];
   let offset = 0;
   let current: Segment | undefined;
-  for (const line of lines) {
+  for (let i = 0; i < parts.length; i += 2) {
+    const line = parts[i];
+    const precedingTerminator = i > 0 ? parts[i - 1] : '';
     if (LIST_LINE_RE.test(line)) {
       if (current) segments.push(current);
       current = { text: line, start: offset, isList: true };
     } else if (current) {
-      current.text += `\n${line}`;
+      current.text += precedingTerminator + line;
     } else {
       current = { text: line, start: offset, isList: false };
     }
-    offset += line.length + 1; // +1 for the newline split() consumed
+    const terminatorAfter = parts[i + 1] ?? '';
+    offset += line.length + terminatorAfter.length;
   }
   if (current) segments.push(current);
   return segments;

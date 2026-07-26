@@ -81,6 +81,59 @@ describe('findStaleStatusClaims — fixtures', () => {
     expect(violations).toEqual([]);
   });
 
+  /**
+   * Regression test for the actual failure mode that motivated `computeScope`
+   * (see the design-decisions section of the task report): a first
+   * implementation used a fixed character window around each status-phrase
+   * match, which reached sideways into an UNRELATED, already-shipped
+   * feature's bullet just because it shared a list with a genuinely deferred
+   * one. This fixture is modeled directly on the real README.md shape that
+   * produced that false positive — a plain bullet list where "API key
+   * management" (shipped) sits immediately above "Federation provider
+   * configuration UI ... deferred" (genuinely unbuilt). Only the deferred
+   * bullet's own feature may be flagged.
+   */
+  it('MUTATION regression: a shipped bullet next to a deferred one in the same list is not conflated', () => {
+    const violations = findStaleStatusClaims(
+      [loadFixturePage('roadmap-mixed-bullets.md')],
+      FEATURE_EVIDENCE,
+      REPO_ROOT
+    );
+    expect(violations).toEqual([
+      expect.objectContaining({
+        file: 'roadmap-mixed-bullets.md',
+        feature: 'Wallet federation / OID4VP',
+      }),
+    ]);
+  });
+
+  /**
+   * Same regression, harder shape: README.md's own blockquoted T0–T5 roadmap
+   * recap, where "environment-gated developer API keys" sits inside the
+   * SHIPPED `T5` bullet immediately above the genuinely deferred `T4` bullet
+   * — both inside one markdown paragraph (a `>` blockquote has no blank
+   * lines between its lines). `Environment-aware authorization` must not be
+   * flagged; `PQC / hybrid signing` and `Identifier abstraction (ADR-002)`
+   * (both named in the T4 bullet itself) must be, and nothing else.
+   */
+  it('MUTATION regression: a shipped T-item next to a deferred one in a blockquoted list is not conflated', () => {
+    const violations = findStaleStatusClaims(
+      [loadFixturePage('roadmap-mixed-blockquote.md')],
+      FEATURE_EVIDENCE,
+      REPO_ROOT
+    );
+    expect(violations).toEqual([
+      expect.objectContaining({
+        file: 'roadmap-mixed-blockquote.md',
+        feature: 'PQC / hybrid signing',
+      }),
+      expect.objectContaining({
+        file: 'roadmap-mixed-blockquote.md',
+        feature: 'Identifier abstraction (ADR-002)',
+      }),
+    ]);
+  });
+
   it('does not trust evidence that does not exist on disk', () => {
     const fakeEvidence: EvidenceEntry[] = [
       { feature: 'Ghost Feature', aliases: ['ghost feature'], evidencePaths: ['does/not/exist'] },
