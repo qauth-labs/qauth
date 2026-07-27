@@ -80,6 +80,41 @@ export function createUserCredentialsRepository(defaultDb: DbClient): UserCreden
     },
 
     /**
+     * Every credential in a realm holding this `external_sub`, ACROSS PROVIDER
+     * TYPES (#235, ADR-009 §1).
+     *
+     * The wallet-login account lookup, and the reason it is not
+     * {@link findByRealmProviderSub}: `asserted-lookup` must see the
+     * `'password'` row that already holds the asserted email, not only wallet
+     * rows. An account that exists without a wallet binding is ADR-009's second
+     * bootstrap case — a REFUSAL — and a query scoped to `provider_type='wallet'`
+     * would report it as "no account found", which the caller is allowed to turn
+     * into an enrolment. That is precisely the account takeover the bootstrap
+     * rule exists to prevent.
+     *
+     * Returns EVERY match rather than the first: the caller (`selectSoleAccount`)
+     * fails closed on ambiguity, and a `LIMIT` here would hide the second row and
+     * turn an ambiguous lookup into a confident one.
+     *
+     * Bounded by the unique index on `(realm_id, provider_type, external_sub)` —
+     * at most one row per provider type, so the result set is the size of the
+     * provider registry, not of the realm.
+     */
+    async findByRealmAndSub(
+      realmId: string,
+      externalSub: string,
+      tx?: DbClient
+    ): Promise<UserCredential[]> {
+      const invoker = tx ?? defaultDb;
+      return invoker
+        .select()
+        .from(userCredentials)
+        .where(
+          and(eq(userCredentials.realmId, realmId), eq(userCredentials.externalSub, externalSub))
+        );
+    },
+
+    /**
      * Resolve a user's credential for one provider type. Rollback-window
      * fallback for verification tokens whose `credential_id` is NULL (#228);
      * exactly one `'password'` row per user is guaranteed by #226/#228 writes.
