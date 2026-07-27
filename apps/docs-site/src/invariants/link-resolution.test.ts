@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 
 import { describe, expect, it } from 'vitest';
 
+import { RECORDS } from '../lib/records';
 import { loadContentTree } from './content-tree';
 import {
   extractLinkTargets,
@@ -168,11 +169,115 @@ describe('findBrokenLinks — fixtures', () => {
   });
 });
 
+/**
+ * Guard 1's blind spot (qauth-labs/qauth#[docs-astro-docs-site], the third
+ * time this exact shape of defect has hit this project): a repo-root-absolute
+ * link with a file extension (`/docs/adr/001-jwt-key-management.md`) used to
+ * fall straight to `existsAsRepoOrPublicFile`, which answers "does this file
+ * exist in the repository" — true, since the file is real — not "does the
+ * BUILT SITE serve this literal path" — false, always, for anything under
+ * `docs/`, since `astro.config.mjs` (`output: 'static'`, `outDir:
+ * dist/apps/docs-site`) never copies the raw `docs/` directory into what
+ * gets deployed. These fixtures use REAL files under the repo's `docs/adr`
+ * and `docs/` root (not fixture-local stand-ins) so the "the file genuinely
+ * exists" half of the defect is reproduced exactly, not merely simulated.
+ */
+describe('findBrokenLinks — /docs/* paths the built site never publishes', () => {
+  const home = loadFixturePage('content/index.md', '/');
+  const guide = loadFixturePage('content/guide.md', '/guide/');
+  const routedPages = [home, guide];
+
+  it('MUTATION: fails a link to a real repo file under docs/adr, naming the rendered route it should use instead', () => {
+    const page = loadFixturePage('docs-path-record.md');
+    const violations = findBrokenLinks([home, guide, page], {
+      repoRoot: REPO_ROOT,
+      routedPages,
+      siteOrigin: SITE_ORIGIN,
+    });
+    expect(violations).toEqual([
+      expect.objectContaining({
+        link: '/docs/adr/001-jwt-key-management.md',
+        reason: expect.stringContaining('/reference/records/adr/001-jwt-key-management/'),
+      }),
+    ]);
+  });
+
+  it('MUTATION: fails a link to a real docs/ file the records collection does not load, suggesting a GitHub blob link instead', () => {
+    const page = loadFixturePage('docs-path-non-record.md');
+    const violations = findBrokenLinks([home, guide, page], {
+      repoRoot: REPO_ROOT,
+      routedPages,
+      siteOrigin: SITE_ORIGIN,
+    });
+    expect(violations).toEqual([
+      expect.objectContaining({
+        link: '/docs/oidf-op-certification-runbook.md',
+        reason: expect.stringContaining('GitHub blob URL'),
+      }),
+    ]);
+  });
+
+  it('passes a legitimate repo-root-absolute file link the site actually serves (under apps/docs-site/public/)', () => {
+    const page = loadFixturePage('docs-path-public-ok.md');
+    const violations = findBrokenLinks([home, guide, page], {
+      repoRoot: REPO_ROOT,
+      routedPages,
+      siteOrigin: SITE_ORIGIN,
+    });
+    expect(violations).toEqual([]);
+  });
+
+  it('passes an external URL that merely looks like a /docs/*.md path', () => {
+    const page = loadFixturePage('docs-path-external-ok.md');
+    const violations = findBrokenLinks([home, guide, page], {
+      repoRoot: REPO_ROOT,
+      routedPages,
+      siteOrigin: SITE_ORIGIN,
+    });
+    expect(violations).toEqual([]);
+  });
+
+  it('passes a bare same-page anchor, unaffected by the new /docs/ rule', () => {
+    const page = loadFixturePage('docs-path-anchor-ok.md');
+    const violations = findBrokenLinks([home, guide, page], {
+      repoRoot: REPO_ROOT,
+      routedPages,
+      siteOrigin: SITE_ORIGIN,
+    });
+    expect(violations).toEqual([]);
+  });
+});
+
 describe('findBrokenLinks — real content tree', () => {
   /** The repo-root pointer stubs Task 5 left behind — scan-only, own no route. */
   function loadStub(fileName: string): LinkablePage {
     const filePath = join(REPO_ROOT, 'docs', fileName);
     return { id: `docs/${fileName}`, filePath, content: readFileSync(filePath, 'utf8') };
+  }
+
+  /**
+   * The `records` collection (`docs/adr/**`, `docs/security/**`) is loaded
+   * by Astro from OUTSIDE `apps/docs-site/src/content/docs` (see
+   * `content.config.ts`'s own comment: the physical-directory walk this
+   * guard's real-tree scan uses "therefore never appears in that walk"), so
+   * `loadContentTree` alone never contributes their routes. Built from
+   * `RECORDS` (`src/lib/records.ts`) — the SAME data `records.mdx` and the
+   * remark link rewriter use — rather than re-deriving the route shape here,
+   * so a rename in `records.ts` can't silently desynchronise this guard from
+   * what the site actually serves. Only added to `routedPages` (valid link
+   * TARGETS): scanning the records' own outgoing links is
+   * `remark-rewrite-record-links.test.ts`'s job, not this guard's.
+   */
+  function loadRecordPages(): LinkablePage[] {
+    return [...RECORDS.adr, ...RECORDS.security].map((record) => {
+      const filePath = join(REPO_ROOT, record.sourcePath);
+      return {
+        id: record.sourcePath,
+        filePath,
+        content: readFileSync(filePath, 'utf8'),
+        route: record.route,
+      };
+    });
   }
 
   it('every link in the shipped docs-site content resolves, INCLUDING the repo-root pointer stubs', () => {
@@ -183,6 +288,11 @@ describe('findBrokenLinks — real content tree', () => {
       content: page.body,
       route: page.route,
     }));
+    const recordPages = loadRecordPages();
+    // Non-vacuity: guards against `RECORDS` (or the `docs/adr` /
+    // `docs/security` directories it reads) coming back empty and this
+    // silently degrading to the old, records-blind route index.
+    expect(recordPages.length).toBeGreaterThanOrEqual(10);
 
     // Non-vacuity: "zero violations" looks identical whether this scanned
     // every page on the site or nothing at all — a wrong glob, a renamed
@@ -202,8 +312,8 @@ describe('findBrokenLinks — real content tree', () => {
     // were not: they link with the site's absolute production URL, which
     // `isOutOfScope` treated as unconditionally external and skipped
     // before qauth-labs/qauth#351 fix round 2). `routedPages` stays
-    // `pages` only: a stub owns no route of its own, so nothing should be
-    // able to link INTO one.
+    // `pages` + `recordPages` only: a stub owns no route of its own, so
+    // nothing should be able to link INTO one.
     const stubs = [
       loadStub('mcp-quickstart.md'),
       loadStub('oauth-flow.md'),
@@ -217,9 +327,10 @@ describe('findBrokenLinks — real content tree', () => {
       expect(extractLinkTargets(stub.content).length).toBeGreaterThan(0);
     }
 
+    const routedPages = [...pages, ...recordPages];
     const violations = findBrokenLinks([...pages, ...stubs], {
       repoRoot: REPO_ROOT,
-      routedPages: pages,
+      routedPages,
       siteOrigin: SITE_ORIGIN,
     });
     expect(violations).toEqual([]);
