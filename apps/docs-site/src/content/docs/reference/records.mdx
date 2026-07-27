@@ -1,0 +1,101 @@
+---
+title: Design records
+description: The ADRs and security review — dated historical documents, rendered from docs/adr/ and docs/security/ in place, plus how to read them.
+sidebar:
+  order: 2
+lastVerified: '2026-07-26'
+---
+
+import { GITHUB_REPO_BLOB_BASE, RECORDS, findRecord } from '../../../lib/records';
+
+export const adr009DriftRecheckHref = `${findRecord('adr/009-wallet-account-resolution').route}#drift-re-check-2026-07-26`;
+export const eudiDriftLogHref = `${GITHUB_REPO_BLOB_BASE}/docs/eudi-regulatory-drift-log.md`;
+export const oidfRunbookHref = `${GITHUB_REPO_BLOB_BASE}/docs/oidf-op-certification-runbook.md`;
+
+QAuth's architecture decision records (ADRs) and its post-quantum security review live at
+`docs/adr/` and `docs/security/` in the repository, not under this site's own content tree. They
+are cited by `file:line` from code comments and by path from dozens of closed issues and pull
+requests, so they stay exactly where those references expect them — this page reads them in
+place and links to the rendered result.
+
+## How to read them
+
+Unlike every other page on this site, these records carry **no frontmatter and never will**.
+They are dated historical documents, not living docs pages: an ADR's job is to record what was
+decided and why, as of the date at its top, not to stay a present-tense description of the
+system forever. When reality has moved on, the convention this project uses is a **dated
+blockquote note added to the top of the original file** — never a silent rewrite — so the
+original decision and every correction to it both stay on the record. Expect to see several such
+notes stacked in the ADRs below; read them in order, they are the changelog.
+
+Because these pages are historical rather than present-tense, they intentionally sit outside this
+site's own drift guards (`apps/docs-site/src/invariants/`), which assert that content matches the
+tree _today_. An ADR correctly saying a feature was "deferred" in March is not drift; a living
+docs page saying the same thing about a feature that has since shipped is. Keeping the records
+collection physically outside `src/content/docs` is what makes that distinction hold — see the
+Task 10 report for how this was verified.
+
+## Architecture Decision Records
+
+<ul>
+  {RECORDS.adr.map((record) => (
+    <li key={record.id}>
+      <a href={record.route}>{record.title}</a>
+    </li>
+  ))}
+</ul>
+
+### ADR-009 is partially superseded
+
+`docs/adr/README.md` records that CIR (EU) 2026/1730 and 2026/1731 — published 22 July 2026, in
+force 11 August 2026 — superseded part of ADR-009's findings. No Decision in ADR-009 has changed;
+one item is flagged as needing a human call. Read the dated re-check inside the ADR itself:
+
+<a href={adr009DriftRecheckHref}>ADR-009 § Drift re-check (2026-07-26)</a>.
+
+## Security reviews
+
+<ul>
+  {RECORDS.security.map((record) => (
+    <li key={record.id}>
+      <a href={record.route}>{record.title}</a>
+    </li>
+  ))}
+</ul>
+
+### The PQC review's core premise is superseded
+
+The PQC hybrid-signing security review's original scope statement said hybrid issuance "is not
+wired into live routes yet." That stopped being true after #275 wired
+`apps/auth-server/src/app/app.ts:216-218`'s `hybridSigningEnabled: true` into the JWT plugin
+whenever `HYBRID_SIGNING_ENABLED` is set — an operator flipping that flag now DOES depend on this
+code at runtime. A dated note at the top of the review records this; the review's actual findings
+and verdict are unaffected, only that one scope claim is superseded. Read the note in the review
+itself, not just here — it says exactly what changed and why the rest still holds.
+
+## What this page does not render
+
+Two more design records live at `docs/` root, outside both `docs/adr/` and `docs/security/`, and
+are linked out to rather than rendered on this site:
+
+<ul>
+  <li>
+    <a href={eudiDriftLogHref}>EUDI Regulatory Drift Log</a> — a living log of EU regulatory changes
+    affecting the wallet-federation design (ADR-004, ADR-009), updated as new implementing
+    regulations publish. Its whole purpose is to be read as a continuously-appended tracker rather
+    than a point-in-time decision, which is a different genre from the ADRs and security review this
+    page indexes.
+  </li>
+  <li>
+    <a href={oidfRunbookHref}>OIDF OP Certification Runbook</a> — an operational checklist, not a
+    decision record.
+  </li>
+</ul>
+
+Rendering them here would need widening the `records` collection's `glob()` pattern in
+`content.config.ts` beyond `docs/adr/` and `docs/security/`, which Task 10 did not do — these two
+files are actively-changing logs, not the kind of dated, closed-form record the guard question
+this page exists to answer is about. A GitHub link is also simply correct for them today: unlike
+the ADRs' and security review's own internal cross-links (rewritten to site routes by this
+project's remark plugin), nothing in this docs-site build machinery rewrites links to these files
+into working site routes, so a link straight to GitHub is the one that actually resolves.
