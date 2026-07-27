@@ -40,6 +40,11 @@ export const VERIFIER_PROFILES = Object.freeze({
     credentialFormats: Object.freeze(['dc+sd-jwt'] as const),
     issuerKeyResolution: Object.freeze(['x5c', 'issuer-metadata'] as const),
     requireCredentialStatus: false,
+    // Key attestations (HAIP §9.2, #308) are a high-assurance ecosystem's
+    // concern. Base OID4VP 1.0 says nothing about where a holder's key lives, so
+    // this profile neither asks for nor evaluates it — which is also what keeps
+    // the base profile runnable on today's crypto with no new operator config.
+    keyStorageAssurance: 'forbidden',
     verifierIdentity: Object.freeze({
       presentedPrefixes: Object.freeze([
         // Preferred: no certificate, runs today.
@@ -57,7 +62,7 @@ export const VERIFIER_PROFILES = Object.freeze({
    * `'x509_hash'`, an `'ES256'` floor or a `direct_post.jwt` requirement appearing
    * in protocol code is the regression this table exists to prevent (#299 AC).
    *
-   * Unusable today, and correctly so — on THREE counts, each refused by a named
+   * Unusable today, and correctly so — on FOUR counts, each refused by a named
    * guard, because a mandate no code reads is decoration rather than posture:
    * - `x509_hash` needs a WRPAC no deployment has provisioned →
    *   `assertVerifierIdentityProvisioned`, folded into `resolveVerifierProfile`
@@ -69,17 +74,24 @@ export const VERIFIER_PROFILES = Object.freeze({
    *   check lives in the bootstrap rather than here on purpose: what a build can
    *   actually SIGN is a property of the deployment, not of the profile, and
    *   this lib must not depend on the crypto layer to state a requirement.
+   * - `keyStorageAssurance: 'required'` needs an operator-provisioned
+   *   attesting-issuer registry or key-attestation trust anchors →
+   *   `assertKeyStorageAssuranceProvisioned` (#308), also in the bootstrap and
+   *   for the same reason: what an operator has configured is a property of the
+   *   deployment.
    *
    * Selecting this profile therefore fails closed at startup, and clearing only
-   * one of the three does not make it start.
+   * some of the four does not make it start.
    *
    * Mandates encoded here, each verified against HAIP 1.0:
    * - §5: response type MUST be `vp_token`; §5.1 response mode `direct_post.jwt`.
    * - §7: ES256 at minimum. EdDSA is NOT in HAIP's mandatory set, so QAuth's
    *   current algorithm does not satisfy the profile.
    * - §6.1: credential status via Token Status List (#297).
-   * - §9.2 key attestations (#308) sit outside this table — they validate wallet
-   *   material rather than declaring our posture.
+   * - §9.2 / §4.5.1: key attestations (#308). The normative mandate is on the
+   *   ISSUANCE path, so what this table declares is the Verifier's posture
+   *   towards it — assurance is required, at `iso_18045_high` — and the
+   *   attestation vocabulary itself lives in `attestation/attack-potential.ts`.
    */
   'haip-1.0': Object.freeze({
     id: 'haip-1.0',
@@ -91,6 +103,15 @@ export const VERIFIER_PROFILES = Object.freeze({
     credentialFormats: Object.freeze(['dc+sd-jwt', 'mso_mdoc'] as const),
     issuerKeyResolution: Object.freeze(['x5c'] as const),
     requireCredentialStatus: true,
+    // §4.5.1: "Wallets MUST support key attestations." The mandate is on the
+    // ISSUANCE path, so what a Verifier enforces is the reliance on it — see
+    // `attestation/attesting-issuers.ts`. Declared here as `required` with an
+    // explicit floor so the reliance is a posture the code reads rather than an
+    // assumption prose makes, and so a deployment that has provisioned neither
+    // an attesting-issuer registry nor key-attestation anchors is refused at
+    // boot instead of rejecting every presentation in production (#308).
+    keyStorageAssurance: 'required',
+    minimumKeyStorageAttackPotential: 'iso_18045_high',
     verifierIdentity: Object.freeze({
       presentedPrefixes: Object.freeze([
         Object.freeze({ prefix: 'x509_hash', requires: 'non-self-signed-chain' } as const),
