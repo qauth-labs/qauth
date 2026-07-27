@@ -209,21 +209,37 @@ rest of the sign-in copy.
 ## The authentication seam
 
 `apps/auth-server/src/app/helpers/wallet-presentation.ts` is the single point
-where a presentation would become a session, and today it refuses every time.
-Three things must land first:
+where a presentation becomes a session. Since #235 it is IMPLEMENTED — given a
+validated credential it applies every gate below and writes the account — and it
+still refuses in production, for one remaining reason.
 
-- **#234** — presentation validation. The `direct_post` endpoint parses a
-  `vp_token` structurally and stops; nothing checks the issuer signature, the
-  disclosure digests or the Key Binding JWT.
-- **#236** — issuer trust applied to a validated credential.
-- **#300** — subject resolution. ADR-009 §1 requires verifying that the presented
-  credential matches the binding stored for the **asserted** account; without that
-  check anyone holding any valid credential could sign in as anyone.
+The gates, in the order they run, because the order is the security property:
 
-Only that file changes when they land: the screens already handle both outcomes,
-including session minting, auditing and the uniform refusal.
+1. **#234 — presentation validation.** A `ValidatedCredential` means the issuer
+   signature verified, every disclosure digest matched, the validity window
+   includes now, and the holder proved possession of the bound key against this
+   request's `nonce` and QAuth's `client_id`.
+2. **#236 — issuer trust**, per realm, from `OID4VP_TRUSTED_ISSUERS`. A realm
+   with no allowlist trusts nobody.
+3. **#299 — verifier posture.** The credential's format must be one the active
+   `VerifierProfile` permits.
+4. **#300 / ADR-009 — subject resolution.** The user asserts an identifier and
+   the presentation proves entitlement to it; the strategy matches the presented
+   credential against the binding stored for the asserted account. Without that
+   check anyone holding any valid credential signs in as anyone.
+5. **#235 — enrolment and claims.** `helpers/wallet-account.ts` turns the
+   resolution into an account and writes the credential's claims as attributes.
 
-### Subject resolution (#300) — the strategy exists, the wiring does not
+### What still refuses, and why
+
+The `direct_post` route hands the seam no credential, because it cannot produce
+one: validation needs the issuer's verification key, and QAuth has no
+configuration that supplies key material (`createStaticIssuerKeyResolver` exists;
+`OID4VP_TRUSTED_ISSUERS` names issuers, not keys). So `resolveWalletPresentation`
+refuses on the first gate. When issuer keys become configurable, the route change
+is to validate and pass `credential` — the seam itself does not change.
+
+### Subject resolution (#300) and the account store
 
 `@qauth-labs/server-federation`'s `subject/` module ships the
 `SubjectResolutionStrategy` seam ADR-009 specifies: `asserted-lookup` (the
@@ -235,21 +251,51 @@ A deployment selects one with `OID4VP_SUBJECT_RESOLUTION` and configures the
 entitlement check with `OID4VP_SUBJECT_BINDING_CLAIMS`; unset means "the active
 `VerifierProfile`'s default", which is `asserted-lookup` for both shipped
 profiles. `resolveSubjectResolution` folds the fail-closed assertions in, so a
-half-configured selection throws rather than quietly building a weaker strategy.
+half-configured selection throws rather than quietly building a weaker strategy —
+and the seam turns that throw into the same uniform refusal, logging the reason.
 
-What is still missing is not the decision but its inputs. `resolve()` consumes a
-`ValidatedCredential` (#234, not reached from this flow yet) and a
-`SubjectAccountLookup` — the account-store port that answers "which accounts in
-this realm does this asserted identifier resolve to, and what wallet binding does
-each carry". No adapter over `user_credentials` exists, so nothing can call the
-strategy yet, and `resolveWalletPresentation` keeps refusing.
+The `SubjectAccountLookup` port is implemented in
+`apps/auth-server/src/app/helpers/wallet-account.ts` over `user_credentials`, as
+#235. It is realm-scoped and deliberately returns matches across **every**
+provider type: an account that already exists for the asserted identifier without
+a wallet binding — typically a password account on the same email — must be
+visible, or ADR-009's second bootstrap case would be reported as "no account
+found" and enrolled over.
 
-Note the boot posture, deliberately: selecting a strategy is **not** yet a
-startup gate. Wallet federation is enabled today only for the screens, and a
-gate that failed the boot for a capability nothing consumes would cost
-operability with no security benefit. The gate belongs with the first consumer.
+Note the boot posture, deliberately unchanged: selecting a strategy is still not
+a startup gate. A deployment that configures none refuses wallet logins at
+request time with the same refusal every other failure produces.
 
 The same function also resolves the assurance level (#237) — it returns an
 optional `assuranceLevel` alongside the user, and everything downstream of it (the
 browser session, the authorization code, the ID token's `acr` claim) is already
 wired for it.
+
+## VC claims normalization (#235)
+
+A validated credential's claims become `user_attributes` rows with
+`source='wallet'`, `verified=true`, and `expires_at` taken from the credential's
+own `exp` (NULL when it carries none, so an attribute never outlives the
+credential asserting it). `'wallet'` is the top of ADR-002's trust order, so a
+verified wallet email outranks any `self_reported` one in
+`helpers/email-claims.ts`.
+
+Three properties are worth knowing before extending it:
+
+- **The mapping is per credential format.** SD-JWT VC and ISO mdoc use different
+  names for the same attribute — the EUDI PID's SD-JWT VC encoding carries
+  `birthdate`, its mdoc encoding `birth_date` (ADR-009 Finding 1) — so
+  `libs/server/federation/src/claims/` carries a claim-adapter registry with one
+  adapter per format. `mso_mdoc` is deliberately absent and is REFUSED rather
+  than served by the SD-JWT path.
+- **The claim table is an allowlist.** `SD_JWT_VC_ATTRIBUTE_CLAIMS` names every
+  claim that may become an attribute; anything else produces no row. Issuer trust
+  bounds who may write, the table bounds what they may write. Claims left out on
+  purpose — `nationalities` (an array), `address` (structured), `portrait` (a
+  biometric), the attestation metadata — are recorded with their reason in
+  `SD_JWT_VC_UNMAPPED_CLAIMS`.
+- **`external_sub` is never derived from the credential.** It is whatever the
+  subject-resolution strategy resolved. The wallet `credential_data` row records
+  the format, the validated issuer, the credential type and the wallet binding —
+  a digest, so the account is matchable without a second copy of the person's
+  attributes sitting in the column.

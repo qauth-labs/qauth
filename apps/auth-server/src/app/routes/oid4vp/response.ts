@@ -205,11 +205,16 @@ export default async function (fastify: FastifyInstance) {
 
         // (4) Structural parse against the DCQL query we actually sent.
         //
-        // The outcome is built and then deliberately goes NOWHERE: nothing in
-        // this issue may consume a presentation. #234 picks it up from exactly
-        // here, binding each Presentation's Key Binding JWT to
-        // `outcome.state.nonce`. Assembling it now rather than leaving a bare
-        // array keeps that handoff a one-line change instead of a rewrite.
+        // The outcome is built and then deliberately goes NOWHERE. #234's
+        // validator and everything after it (#235's seam in
+        // `helpers/wallet-presentation.ts`) are implemented and wired — what is
+        // missing is the ISSUER KEY MATERIAL validation needs: nothing populates
+        // an `IssuerKeyResolver`, and `OID4VP_TRUSTED_ISSUERS` names issuers,
+        // not keys. Calling `validatePresentations` from here would therefore
+        // refuse every presentation with `issuer-key-unresolvable`. When key
+        // resolution becomes configurable, this is the one place that changes:
+        // validate against `outcome.state.nonce` and pass the credential to the
+        // seam. Assembling the outcome now keeps that a small change.
         const outcome: Oid4vpDirectPostOutcome = {
           state: correlated,
           presentations: parseVpToken(

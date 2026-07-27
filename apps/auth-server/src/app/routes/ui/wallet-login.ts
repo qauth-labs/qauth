@@ -530,8 +530,11 @@ async function advanceWalletLoginFlow(
     return { status: 'rejected' };
   }
 
-  // A presentation arrived. Everything from here is the seam that would turn it
-  // into a session — and refuses until #234/#236/#300 land.
+  // A presentation arrived. Everything from here is the seam that turns it into
+  // a session (#235). No `credential` is passed because the `direct_post` route
+  // cannot produce a validated one yet — issuer key material is not
+  // configurable — so the seam refuses on its first gate. See
+  // `helpers/wallet-presentation.ts`.
   const resolution = await resolveWalletPresentation(fastify, {
     realmId: flow.realmId,
     stateHash: flow.stateHash,
