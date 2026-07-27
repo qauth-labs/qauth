@@ -168,6 +168,36 @@ client (`tokenEndpointAuthMethod === 'none'`) has no secret to show at all
 **Regenerating** a secret (behind a confirmation modal warning that existing integrations break
 immediately) invalidates the old one and re-triggers the same one-time reveal.
 
+The absence of a "view again" button is a UI convenience, not the guarantee. "Never retrievable"
+is enforced two levels below it, and neither is client-side:
+
+- **At the type level**, the portal's own client for `/api/clients` distinguishes the two shapes.
+  `OAuthClient` (`apps/developer-portal/src/server/auth-server-client.ts:71`) — what every list
+  and get call returns — has no `clientSecret` field at all; the comment above it says why:
+  "deliberately absent here — it only exists on {@link ClientWithSecret}"
+  (`apps/developer-portal/src/server/auth-server-client.ts:62`). `ClientWithSecret`
+  (`apps/developer-portal/src/server/auth-server-client.ts:141`) is a distinct type, returned
+  **only** by the create and regenerate calls
+  (`apps/developer-portal/src/server/auth-server-client.ts:137`). There is no portal API call
+  that can ask for a client and get a secret back outside those two responses — the type the
+  other calls return cannot carry one.
+- **On the auth-server**, where the actual guarantee is enforced: `POST /api/clients` generates
+  the secret, hashes it with Argon2id, and keeps the plaintext only in a local variable
+  (`generateClientSecret`, `apps/auth-server/src/app/routes/clients/index.ts:269`). Only
+  `clientSecretHash` is passed to the repository's `create` call
+  (`apps/auth-server/src/app/routes/clients/index.ts:439`); the plaintext is spread into the
+  HTTP response once (`apps/auth-server/src/app/routes/clients/index.ts:480`) and then goes out
+  of scope. Regeneration is the same shape: only the new `hash` is persisted
+  (`apps/auth-server/src/app/routes/clients/index.ts:673`), and the plaintext is returned once
+  (`apps/auth-server/src/app/routes/clients/index.ts:694`). No code path — in the portal or the
+  auth-server — reads a plaintext secret back out of storage, because no plaintext secret is
+  ever stored.
+
+So a portal contributor who "improves" `SecretReveal` to add a persistence layer would not
+weaken this guarantee — they'd just be caching a value the auth-server never lets them fetch
+again. The enforcement that matters lives in the response shapes and the database column, not in
+this component.
+
 ### API keys
 
 Static developer API keys let a client authenticate without the full OAuth flow, and — per
@@ -233,10 +263,30 @@ had a `__Host-qauth_session` cookie set for the auth-server's origin, so a brows
 shows "Please sign in to manage authorized applications" — the signed-out message — to a
 developer who is, by every other page in this app, signed in.
 
-This page's data-loading design is sound for a deployment where the browser has separately
-authenticated against the auth-server's hosted UI (`/ui/login`). It does not describe how a
-developer gets to `/consents` through this portal, because nothing in this portal sends them
-through `/ui/login`.
+The portal never sending a developer through `/ui/login` is not the only blocker, and fixing just
+that would not make this page work. Two more hold independently, even for a browser that somehow
+already carries `__Host-qauth_session`:
+
+- **`SameSite=Lax`.** The auth-server's session cookie is set with `SameSite=Lax`
+  (`apps/auth-server/src/app/helpers/session-cookie.ts:153`). `Lax` cookies are not attached to
+  cross-site `fetch()` subresource requests — only to top-level navigations — regardless of
+  `credentials: 'include'`. A `fetch()` from the portal's origin to the auth-server's origin is
+  exactly the request shape `Lax` withholds the cookie from.
+- **CORS is fail-closed in production.** `cors` is registered with
+  `origin: corsOrigins.length > 0 ? corsOrigins : env.NODE_ENV === 'production' ? false : '*'`
+  (`apps/auth-server/src/app/app.ts:255`) — `false` unless an operator sets `CORS_ORIGIN`. The
+  comment immediately above it (`apps/auth-server/src/app/app.ts:238`) says the assumption
+  behind the default is that "the JSON API is called by the same-origin developer portal." This
+  page's direct browser `fetch()` is the one call site that isn't.
+
+And the shipped topology is cross-origin to begin with: [Docker](/operate/docker/#developer-portal)
+documents `auth-server` and `developer-portal` as separate Compose services on different ports.
+A same-origin deployment where all three of these happened to line up — same origin, so no CORS
+or `SameSite` boundary to cross, _and_ a browser that had separately visited `/ui/login` — is not
+impossible, but it is not the topology this repository's own docs describe, and it does not
+describe how a developer reaches `/consents` through this portal's own login flow. Treat
+`/consents` as not working from this portal as shipped, rather than working under an unstated
+deployment assumption.
 
 ## See also
 

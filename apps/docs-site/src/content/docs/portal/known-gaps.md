@@ -14,8 +14,9 @@ than a guess. No dates are implied for any fix below — none has been scheduled
 ## The dashboard misreports a shipped feature as unbuilt
 
 `/dashboard` (`apps/developer-portal/src/routes/_authed/dashboard.tsx`) is a 48-line component: a
-welcome heading and two cards (`apps/developer-portal/src/routes/_authed/dashboard.tsx:6`). The
-first card links to client management. The second reads:
+welcome heading (`apps/developer-portal/src/routes/_authed/dashboard.tsx:15`) and two cards
+(`apps/developer-portal/src/routes/_authed/dashboard.tsx:19`). The first card links to client
+management. The second reads:
 
 > Coming soon in Phase 2.3.
 > — `apps/developer-portal/src/routes/_authed/dashboard.tsx:42`
