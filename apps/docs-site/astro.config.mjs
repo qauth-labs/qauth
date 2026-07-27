@@ -1,6 +1,10 @@
 import starlight from '@astrojs/starlight';
 import { defineConfig } from 'astro/config';
 
+import { GITHUB_REPO_BLOB_BASE } from './src/lib/records.ts';
+import { resolveRepoRoot } from './src/lib/repo-root.ts';
+import { remarkRewriteRecordLinks } from './src/plugins/remark-rewrite-record-links.ts';
+
 // QAuth documentation site (docs.qauth.dev), #347.
 export default defineConfig({
   site: 'https://docs.qauth.dev',
@@ -11,6 +15,22 @@ export default defineConfig({
   // match — a declared Nx output that does not match reality breaks caching
   // silently.
   outDir: '../../dist/apps/docs-site',
+  markdown: {
+    // Task 10 (#356): rewrites the relative `.md` links inside the
+    // rendered records (docs/adr/*.md, docs/security/*.md) into working
+    // site routes at build time — see the plugin's own doc comment. Global
+    // rather than scoped to the `records` collection: Astro applies
+    // `markdown.remarkPlugins` to every collection's markdown/MDX (`docs`
+    // included), and no page in `docs` currently has a relative `.md` link
+    // for it to touch (verified — see the Task 10 report), so this is a
+    // true no-op there today and stays correct if that ever changes.
+    remarkPlugins: [
+      [
+        remarkRewriteRecordLinks,
+        { repoRoot: resolveRepoRoot(), githubBlobBaseUrl: GITHUB_REPO_BLOB_BASE },
+      ],
+    ],
+  },
   integrations: [
     starlight({
       title: 'QAuth',
