@@ -263,14 +263,20 @@ export function extractFlowHandle(html: string): string {
   return match[1];
 }
 
-/** The five entities `helpers/html.ts` escapes, reversed. */
+/**
+ * The five entities `helpers/html.ts` escapes, reversed.
+ *
+ * `&amp;` is decoded LAST, and that order is load-bearing: decoding it first
+ * would turn an escaped `&amp;lt;` into `&lt;` and then into `<`, unescaping a
+ * literal the page had deliberately escaped (CodeQL `js/double-escaping`).
+ */
 function decodeHtmlEntities(value: string): string {
   return value
-    .replace(/&amp;/g, '&')
     .replace(/&lt;/g, '<')
     .replace(/&gt;/g, '>')
     .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'");
+    .replace(/&#39;/g, "'")
+    .replace(/&amp;/g, '&');
 }
 
 /** A PKCE pair, S256 — the only method QAuth accepts. */
