@@ -121,19 +121,32 @@ the missing plugin.
 > default — without formbody, every OAuth-spec-compliant client gets 415 Unsupported Media Type.
 > Register before routes so /oauth/\* receives decoded form bodies.
 
-This is real, and it is the ordering mistake with the widest blast radius in the file. Content-type
+This is real, and it has the widest blast radius of any ordering mistake in the file. Content-type
 parsers belong to an encapsulation context: an encapsulated child plugin gets the parser set that
 existed when it was created, so a parser registered on the parent afterwards never reaches that
 child's routes. Move this line below the route sweep and the symptom is not a test failure — it is
 `415 Unsupported Media Type` for every client that follows the spec, while any client that happens
 to send JSON keeps working.
 
-One wrinkle worth knowing, because it makes the failure partial rather than total: a route file
-wrapped in `fastify-plugin` is _not_ encapsulated, so it shares the parent's parser set and would
-keep working. Most route files under `apps/auth-server/src/app/routes/` export a plain plugin
-function and would break; a handful (`apps/auth-server/src/app/routes/oauth/token.ts` among them)
-are `fp`-wrapped and would not. A half-broken token endpoint whose introspection sibling returns
-415 is a much worse debugging experience than a uniformly broken one.
+**The failure would be uniform, and that is the one merciful thing about it.** Every route file
+under `apps/auth-server/src/app/routes/` exports a plain plugin function
+(`export default async function (fastify: FastifyInstance)`), so `@fastify/autoload` encapsulates
+all of them and none would pick up a parser registered afterwards. Nothing in that tree is wrapped
+in `fastify-plugin` — the one file without a default export,
+`apps/auth-server/src/app/routes/clients/api-keys.ts`, is registered by hand from its sibling
+`index.ts` and shares that directory's context, so it is covered too.
+
+That uniformity is worth stating explicitly, because the alternative would be worse. If some route
+files were `fp`-wrapped they would be un-encapsulated, would share the parent's parser set, and
+would keep working — leaving `/oauth/token` healthy while `/oauth/introspect` returned 415, which
+is a far harder thing to diagnose than a server that rejects every form-encoded request. If you are
+adding a route and reaching for `fastify-plugin` to escape encapsulation, understand that you are
+also opting that route out of this failure mode, and out of the uniformity that makes it obvious.
+
+**Loud is not the same as safe.** This is the ordering constraint whose breakage is easiest to
+notice — the first spec-compliant client to call `/oauth/token` gets a 415 — and it is the only one
+of the three that announces itself. The other two are silent, which is what makes them more
+dangerous despite affecting less of the surface.
 
 The registration has a dedicated test at `apps/auth-server/src/app/plugins/formbody.test.ts` — but
 note it is a test of the _plugin's behaviour_, deliberately built on a bare `Fastify()` instance,
@@ -274,16 +287,21 @@ That third one is why this belongs in the same category as `formbody` rather tha
 An ordering mistake here does not break a feature; it disables a security control while leaving
 every visible behaviour intact.
 
-### The guard
+### The guard, which arrives with the fix
 
-`apps/auth-server/src/app/error-handler.wiring.test.ts` builds the **real assembled app** — not a
-hand-rolled Fastify instance — and asserts that the application's handler is the one answering. It
-is mutation-checked: it fails if the registration moves back below the route sweep. That makes this
-the one ordering constraint in `app.ts` a test will catch for you. `formbody` and `rateLimitPlugin`
-still have nothing equivalent.
+[#365] adds `apps/auth-server/src/app/error-handler.wiring.test.ts` alongside the reordering. It
+builds the **real assembled app** — not a hand-rolled Fastify instance — asserts that the
+application's handler is the one answering, and is mutation-checked, so it fails if the
+registration moves back below the route sweep.
 
-If you are adding a route whose contract includes a specific error body, assert that body
-end-to-end anyway. A passing unit test proves the handler _can_ produce the shape, not that your
+**Check that it is present in your checkout before relying on it.** The fix and its test land
+together, and this page describes the ordering rule rather than any one branch's state; if
+`error-handler.wiring.test.ts` is not in your tree, nothing is protecting this constraint for you
+and a regression will be silent. Once it is there, this becomes the only ordering constraint in
+`app.ts` that a test catches — `formbody` and `rateLimitPlugin` have nothing equivalent either way.
+
+Regardless: if you are adding a route whose contract includes a specific error body, assert that
+body end-to-end. A passing unit test proves the handler _can_ produce the shape, not that your
 route reaches it.
 
 ### Why it went unnoticed for so long
@@ -294,7 +312,7 @@ Every test that exercises the handler's mapping —
 `apps/auth-server/src/app/routes/oauth/signature-verification.test.ts` — builds its own Fastify
 instance and registers `errorHandler` **before** the routes under test. Each is a correct test of
 the mapping logic against a correctly composed app, so none of them could ever observe how the
-production app was composed. `error-handler.wiring.test.ts` is the answer to that specific gap.
+production app was composed. The wiring test [#365] adds is the answer to that specific gap.
 
 Generalise the lesson rather than the fix: a test that constructs its own wiring can only ever
 verify the wiring it constructs. See [Testing](/extend/testing/#the-honest-limitation) for how much
@@ -320,9 +338,10 @@ per-realm trust resolution is deliberately **all-or-nothing**, a single entry th
 refuses collapsed that realm's entire allowlist to deny-all. The module's own comment names the
 consequence precisely:
 
-> The result was the worst shape a security control can take: no boot failure, no log, no signal
-> of any kind, and every Verifiable Presentation to that realm rejected — indistinguishable, by
-> design, from an untrusted issuer.
+> The result was the worst shape a security control can take: no boot failure, no log, no signal of
+> any kind, and every Verifiable Presentation to that realm rejected — indistinguishable, by design
+> (`issuer-trust-rejection.ts`), from an untrusted issuer. The operator sees a realm that trusts
+> nobody and a configuration that says otherwise.
 
 So the check runs the runtime's own reduction at startup — the same function, not a second
 implementation that could drift. It is **not** gated on `WALLET_FEDERATION_ENABLED`: a typo is a

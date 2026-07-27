@@ -59,13 +59,16 @@ There are two stronger patterns in the tree, and the difference between them is 
   `apps/auth-server/src/app/routes/oauth/signature-verification.test.ts`, which registers `formbody`
   and the JWT plugin so it can exercise the same parsers production wires up. Better than a stub,
   but it still only proves the wiring the test itself built.
-- **The real assembled app** — `apps/auth-server/src/app/error-handler.wiring.test.ts`, added with
-  [#365]. It boots the actual application composition and asserts a property of it, and is
-  mutation-checked so it fails if the registration order regresses. This is currently the only test
-  of its kind.
+- **The real assembled app** — the pattern [#365] introduces as
+  `apps/auth-server/src/app/error-handler.wiring.test.ts`. It boots the actual application
+  composition, asserts a property of it, and is mutation-checked so it fails if the registration
+  order regresses. Check whether it is in your checkout: it lands with that fix, and until it does
+  there is no test in this repository of this kind.
 
 When you add a test whose subject is _wiring_ rather than _logic_, the second pattern is the one
-that would have caught #365; the first would not have.
+that would have caught #365; the first would not have. It is also the pattern that is still missing
+for `formbody` and `rateLimitPlugin`, both of which have real ordering requirements and no wiring
+test either way.
 
 [#365]: https://github.com/qauth-labs/qauth/issues/365
 
@@ -100,9 +103,9 @@ failure anywhere else.
 
 ### It cannot pass vacuously
 
-Locally, an integration suite skips when Docker is not running. On CI it does not:
-`requireDockerOrSkip` throws when the `CI` environment variable is set
-(`libs/shared/testing/src/lib/pg-testcontainer.ts:114`), with a message explaining that skipping
+Locally, an integration suite skips when Docker is not running. On CI it does not: inside
+`requireDockerOrSkip` there is a CI branch that throws instead of skipping
+(`libs/shared/testing/src/lib/pg-testcontainer.ts:117`), with a message explaining that skipping
 "turns the run into a green no-op". The `integration` job at `.github/workflows/ci.yml:66` runs on
 a GitHub-hosted runner, which ships a Docker daemon, so the throw is unreachable in practice — it
 exists so that a runner _without_ one fails loudly instead of reporting success.

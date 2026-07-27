@@ -137,8 +137,8 @@ consequence of this arrangement: because `server-config` carries no dependency o
 (config is the lowest server layer), the config schema's `OID4VP_VERIFIER_PROFILE` enum duplicates
 the federation lib's `VerifierProfileId` union, and `apps/auth-server` is the only place in the
 workspace that can see both — which is why the cross-lib pin between the two lists lives in the
-app's env test. Verified: nothing under `libs/server/config/src` imports `server-federation`; the
-two mentions of it there are comments.
+app's env test. Verified: nothing under `libs/server/config/src` imports `server-federation`. All
+seven references to it there are prose — six in comments, one in a test's description string.
 
 ### A directory is not a tag
 

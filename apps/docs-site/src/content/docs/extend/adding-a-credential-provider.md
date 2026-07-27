@@ -71,14 +71,15 @@ three methods and two deliberate throws:
 - `resolve()` throws `ProviderNotRegisteredError` for an unknown `type`
   (`libs/server/federation/src/providers/provider-registry.ts:58`).
 
-Seeding goes through the same `register()` call
-(`libs/server/federation/src/providers/provider-registry.ts:43`), so a duplicate in the configured
+Seeding is not a separate code path: `createProviderRegistry` loops the initial providers through
+that same `register()` method
+(`libs/server/federation/src/providers/provider-registry.ts:68`), so a duplicate in the configured
 list fails the boot rather than being silently deduplicated.
 
-`federationPlugin` (`libs/fastify/plugins/federation/src/lib/federation-plugin.ts:35`) builds the
-registry from its `providers` option and decorates the instance with it
-(`libs/fastify/plugins/federation/src/lib/federation-plugin.ts:39`), which is why routes can write
-`fastify.providerRegistry.resolve('password')`.
+`federationPlugin` builds the registry from its `providers` option
+(`libs/fastify/plugins/federation/src/lib/federation-plugin.ts:37`) and decorates the instance with
+it (`libs/fastify/plugins/federation/src/lib/federation-plugin.ts:39`), which is why routes can
+write `fastify.providerRegistry.resolve('password')`.
 
 ## The single registration point
 
@@ -92,7 +93,7 @@ Two properties make it worth understanding before you extend it:
   flag-to-registry contract unit-testable without booting the auth-server, which would need
   Postgres and Redis.
 - **Its option fields are required, not optional.**
-  `libs/fastify/plugins/federation/src/lib/configured-providers.ts:84` explains why: a bootstrap
+  `libs/fastify/plugins/federation/src/lib/configured-providers.ts:78` explains why: a bootstrap
   that gains a new upstream must make a deliberate decision about it rather than inheriting a
   default from the library, and **typecheck** — not code review — is what enforces that. The single
   exception is `provisionedVerifierMaterial`, and only because omitting it _is_ the fail-closed
@@ -173,7 +174,7 @@ async verify(input: unknown): Promise<VerifiedIdentity> {
   (`libs/server/federation/src/providers/password.provider.ts:121`) — self-asserted email and
   password is the lowest eIDAS LoA, and `'low'` emits no `acr`.
 - **`extractAttributes` throws rather than returning `[]`** when `rawClaims.email` is missing
-  (`libs/server/federation/src/providers/password.provider.ts:129`). An empty array would be
+  (`libs/server/federation/src/providers/password.provider.ts:132`). An empty array would be
   indistinguishable from a credential that legitimately carries no claims.
 
 ### Shape ownership
@@ -226,7 +227,7 @@ placeholder returns to make a caller compile or a test go green.
 
 ### The error type is chosen, too
 
-`walletSkeletonError` (`libs/server/federation/src/providers/wallet.provider.ts:144`) builds a
+`walletSkeletonError` (`libs/server/federation/src/providers/wallet.provider.ts:145`) builds a
 plain `Error`, not a `@qauth-labs/shared-errors` domain error. Domain errors carry
 `statusCode`/`code` and are mapped onto the wire by the global error handler, which would frame
 this as a reachable, client-facing outcome with a stable error contract. It is not one. Reaching it
