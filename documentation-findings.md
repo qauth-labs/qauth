@@ -2,7 +2,7 @@
 
 Defects surfaced while building `docs.qauth.dev`, July 2026.
 
-Seven issues, one of them a live security defect. None were found by looking for bugs — every
+Eight issues, one of them a live security defect. None were found by looking for bugs — every
 one surfaced because writing accurate documentation requires checking whether a claim is true,
 and several long-standing claims were not.
 
@@ -19,6 +19,7 @@ and several long-standing claims were not.
 | [#363](https://github.com/qauth-labs/qauth/issues/363) | `.gitattributes` omissions make `nx lint` fail locally on Windows with unexplainable CRLF errors | Medium   | Filed (`.mdx` half fixed on the docs branch)                     |
 | [#364](https://github.com/qauth-labs/qauth/issues/364) | The "`openssl genrsa` emits PKCS#1" pitfall has been stale since OpenSSL 3.0                     | Low      | Filed                                                            |
 | [#361](https://github.com/qauth-labs/qauth/issues/361) | Nx discovers every project twice while a worktree exists under `.claude/`                        | Low      | Filed (resolved in practice by removing the worktree)            |
+| [#374](https://github.com/qauth-labs/qauth/issues/374) | Dynamically registered clients have no owner, so no developer can see or manage them             | Medium   | Filed                                                            |
 
 ---
 
@@ -159,6 +160,32 @@ from the runbook it was extracted from. **Migrating a document migrates its erro
 automated guard could ever catch it — it is a claim about an external tool's behaviour, not
 about this repository, so the documentation invariants have no visibility into it by
 construction.
+
+---
+
+## #374 — Dynamically registered clients have no owner
+
+Both dynamic registration paths create clients with `developerId: null` —
+`routes/oauth/register.ts:129` (RFC 7591 DCR) and `helpers/cimd.ts:274` (CIMD). Every
+developer-facing query keys on that column: `GET /api/clients` lists by
+`listByDeveloper(developerId)`, and single-client access is gated by
+`client.developerId !== developerId`.
+
+So a dynamically registered client cannot be listed, viewed, edited, deleted, or have its
+secret regenerated from the developer portal. `README.md` describes CIMD as "the primary
+client-registration path (MCP 2025-11-25)" — so the registration route the project positions as
+primary produces clients no developer can administer through the product's own administration
+surface.
+
+**How it surfaced.** Specifying a developer-facing audit feed, whose ownership predicate is the
+same `developer_id` join. Enumerating which audit events could ever reach a developer turned up
+`oauth.client.registered` as permanently unreachable — not because of the event, but because no
+row from any dynamically registered client can match the predicate at all.
+
+It may well be intentional: a client that registers itself has no authenticated developer to
+attribute to, and inventing one would be wrong. If so, the gap is not `developerId: null` but the
+absence of any _other_ ownership signal, and the product should decide what happens to these
+clients rather than leaving them orphaned by default.
 
 ---
 
