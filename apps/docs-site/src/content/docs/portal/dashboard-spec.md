@@ -256,8 +256,10 @@ the consents endpoints are built around a browser session, and a server function
 2. **CSRF.** `DELETE /consents/:id` requires the caller to echo an `X-CSRF-Token` header whose value
    is a per-session token minted (or reused) by the `GET` and stored on the browser session
    (`apps/auth-server/src/app/routes/consents/index.ts:63`, `ensureApiCsrfToken`), then compared
-   timing-safely on the delete
-   (`apps/auth-server/src/app/routes/consents/index.ts:22`). The token is anchored to an
+   with `csrfTokensEqual` on the delete
+   (`apps/auth-server/src/app/routes/consents/index.ts:142`); the control and its timing-safe
+   comparison are described in the module doc comment
+   (`apps/auth-server/src/app/routes/consents/index.ts:30`). The token is anchored to an
    auth-server session that a Bearer-authenticated server function never establishes, so there is
    nothing to mint it against. **#366 must redesign this control, not merely relay the header.** The
    good news is that the control's own stated purpose — defending a cookie-authed, state-changing
@@ -397,13 +399,25 @@ is no false-y branch to render.
 **Decision — do not render `oauth_clients.require_pkce` either.** It is already in the response
 (`apps/auth-server/src/app/schemas/clients.ts:31`) and already typed in the portal
 (`apps/developer-portal/src/server/auth-server-client.ts:82`), which makes it the obvious thing for
-an implementer to reach for — and it would give the card two conflicting PKCE renderings. It is
-also **inert**: every write path sets it `true`
-(`apps/auth-server/src/app/routes/clients/index.ts:449`,
-`apps/auth-server/src/app/routes/oauth/register.ts:127`,
+an implementer to reach for — and it would give the card two conflicting PKCE renderings.
+
+The claim that matters is that **`requirePkce` is never read as an enforcement gate anywhere in
+`apps/auth-server`.** Every reference to it is a write, the response projection
+(`apps/auth-server/src/app/routes/clients/index.ts:107`), or a comment; no branch anywhere consults
+it. A stored, exposed, unenforced flag must not be presented as a security control.
+
+Do **not** reach instead for the weaker-sounding but tempting "and anyway it is always `true`" — it
+is not. The developer-facing write paths do set it `true`
+(`apps/auth-server/src/app/routes/clients/index.ts:449`, dynamic registration at
+`apps/auth-server/src/app/routes/oauth/register.ts:127`, CIMD at
 `apps/auth-server/src/app/helpers/cimd.ts:272`, and the column default at
-`libs/infra/db/src/lib/schema/core.ts:147`), and no code path in `apps/auth-server` reads it as a
-gate. A stored, exposed, unenforced flag must not be presented as a security control.
+`libs/infra/db/src/lib/schema/core.ts:147`), but `getOrCreateSystemClient` creates the internal
+system client with `requirePkce: false`
+(`apps/auth-server/src/app/helpers/oauth-client.ts:31`), reached from first-party login
+(`apps/auth-server/src/app/routes/auth/login.ts:170`) and the authorize route
+(`apps/auth-server/src/app/routes/oauth/authorize.ts:343`). The column genuinely varies. The
+conclusion is unchanged — it is unenforced either way — but the supporting claim has to be the one
+that is true.
 
 **Trap 2 — loopback redirects are permitted in all three environments, and
 `localhostRedirectAllowed` says otherwise.** The gate is `isRedirectUriAllowedForPolicy`, which
@@ -751,11 +765,13 @@ The leak is not hypothetical, and it is worth being precise about where it is an
 public client identifiers and a coarse mode label, and nothing else
 (`libs/infra/db/src/lib/schema/audit.ts:44`, `:51`). The vector is **an open event namespace plus a
 millisecond timestamp.** Client-attributed rows already describe end-user authentication behaviour:
-`oauth.stepup.required` is written with `oauthClientId: client.id` at four sites in the authorize
-route (`apps/auth-server/src/app/routes/oauth/authorize.ts:304`,
+`oauth.stepup.required` is written with `oauthClientId: client.id` at **six** sites — five in the
+authorize route (`apps/auth-server/src/app/routes/oauth/authorize.ts:304`,
 `apps/auth-server/src/app/routes/oauth/authorize.ts:437`,
 `apps/auth-server/src/app/routes/oauth/authorize.ts:503`,
-`apps/auth-server/src/app/routes/oauth/authorize.ts:540`), and `oauth.consent.revoked` likewise
+`apps/auth-server/src/app/routes/oauth/authorize.ts:540`,
+`apps/auth-server/src/app/routes/oauth/authorize.ts:569`) and one in the consent UI
+(`apps/auth-server/src/app/routes/ui/consent.ts:736`) — and `oauth.consent.revoked` likewise
 (`apps/auth-server/src/app/routes/consents/index.ts:181`). A developer holds their own application
 logs; joining "a step-up was demanded at 14:02:11.431" against their own request log identifies
 which of their users it was, and what that user was doing at the time. `user_id` being absent does
@@ -767,16 +783,9 @@ not help when the timestamp is the join key.
    structural rule as the column allowlist: **a row whose `event` is not on the list is not
    returned at all** — not returned with the event redacted, which would leak its existence and its
    timestamp. A new event name added to the tree is invisible to this endpoint until someone puts it
-   on the list, which is the same fail-closed direction as the column rule. The list starts with the
-   client-lifecycle and token-issuance events a developer needs to debug their own integration:
-   `oauth.client.created`, `oauth.client.updated`, `oauth.client.deleted`,
-   `oauth.client.secret_regenerated`, `oauth.client.registered`, `api_key.created`,
-   `api_key.revoked`, `oauth.token.exchange.success`, `oauth.token.exchange.failure`,
-   `oauth.authorize.success`, `oauth.authorize.failure`, `oauth.introspect.failure`,
-   `oauth.revoke.success`, `oauth.revoke.failure`. Deliberately **excluded**:
-   `oauth.stepup.required`, `oauth.stepup.elevation`, `oauth.consent.granted`,
-   `oauth.consent.denied`, `oauth.consent.revoked`, and every `user.*` / `ui.*` event — these
-   describe what an identified end user did, which is the operator's question, not the developer's.
+   on the list, which is the same fail-closed direction as the column rule. The complete list, and
+   the verdict for every other event in the tree, is
+   [enumerated below](#every-event-in-the-tree-classified).
 2. **`createdAt` is truncated to whole seconds on this surface.** Millisecond precision is what makes
    a log join a reliable identification, and no developer-facing use case here needs it: the feed is
    read by eye and the tiles count over a 24-hour window. Truncation happens in the projection, not
@@ -787,24 +796,128 @@ not help when the timestamp is the join key.
 server-minted, so this does not hand the precision back through the front door; it means only that
 the coarsening is a display-and-response concern, never a query-correctness one.
 
-**Consequence to accept knowingly:** the allowlist means the feed shows strictly less than "your
-clients' activity", on top of the two structural gaps below. The footnote under the feed must say
-so.
+##### Every event in the tree, classified
+
+An allowlist that names some events and leaves the rest to fail closed is not a decision — it is a
+decision deferred to whoever next reads the code and cannot tell whether an omission was reasoned or
+overlooked. So: **every `event` string written anywhere in `apps/auth-server/src` or `libs` appears
+exactly once below, with a verdict and a reason.** The enumeration is mechanical (all `event: '…'`
+audit writes, test files excluded) and gives **32 distinct names** at the `lastVerified` date.
+
+Three verdicts, not two — because a third category turned out to exist and matters:
+
+- **Allow** — client-attributed, and it is the developer's own integration activity.
+- **Exclude (policy)** — reachable, but it describes what an identified end user did. This is the
+  category with a real cost.
+- **Unreachable** — written with `oauth_client_id: null`, or attributed to a client whose
+  `developer_id` is `null`. The ownership predicate already excludes these; the allowlist never gets
+  a say. Recorded so nobody re-argues the policy for an event that cannot appear.
+
+| Event                             | Verdict           | Reason                                                                                                                                                        |
+| --------------------------------- | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `oauth.client.created`            | Allow             | The developer's own client lifecycle                                                                                                                          |
+| `oauth.client.updated`            | Allow             | ditto                                                                                                                                                         |
+| `oauth.client.deleted`            | Allow             | ditto                                                                                                                                                         |
+| `oauth.client.secret_regenerated` | Allow             | ditto                                                                                                                                                         |
+| `api_key.created`                 | Allow             | ditto                                                                                                                                                         |
+| `api_key.revoked`                 | Allow             | ditto                                                                                                                                                         |
+| `oauth.token.exchange.success`    | Allow             | The developer's own token traffic; 23 of 25 write sites are client-attributed                                                                                 |
+| `oauth.token.exchange.failure`    | Allow             | ditto — the single most useful event for debugging an integration                                                                                             |
+| `oauth.authorize.success`         | Allow             | The developer's own authorize traffic                                                                                                                         |
+| `oauth.authorize.failure`         | Allow             | ditto; 7 of 8 sites attributed                                                                                                                                |
+| `oauth.introspect.success`        | Allow             | The developer's own resource server introspecting a token (`apps/auth-server/src/app/routes/oauth/introspect.ts:207`)                                         |
+| `oauth.introspect.failure`        | Allow             | ditto                                                                                                                                                         |
+| `oauth.revoke.success`            | Allow             | The developer's own revocation call (`apps/auth-server/src/app/routes/oauth/revoke.ts:103`)                                                                   |
+| `oauth.revoke.failure`            | Allow (no effect) | Policy says allow, but every write site is `oauthClientId: null` (`apps/auth-server/src/app/routes/oauth/revoke.ts:76`) — written before client auth succeeds |
+| `oauth.stepup.required`           | Exclude (policy)  | Six attributed sites; describes an identified end user being challenged                                                                                       |
+| `oauth.stepup.elevation`          | Exclude (policy)  | Attributed; an identified end user re-authenticating for a dangerous scope                                                                                    |
+| `oauth.consent.granted`           | Exclude (policy)  | Attributed; an identified end user's consent decision                                                                                                         |
+| `oauth.consent.denied`            | Exclude (policy)  | ditto, 3 sites                                                                                                                                                |
+| `oauth.consent.revoked`           | Exclude (policy)  | ditto                                                                                                                                                         |
+| `user.login.success`              | Exclude (policy)  | End-user behaviour. Also unreachable — attributed to the system client, whose `developerId` is `null`                                                         |
+| `user.login.failure`              | Exclude (policy)  | End-user behaviour; `oauthClientId: null`                                                                                                                     |
+| `user.logout.success`             | Exclude (policy)  | ditto                                                                                                                                                         |
+| `user.logout.failure`             | Exclude (policy)  | ditto                                                                                                                                                         |
+| `ui.login.success`                | Exclude (policy)  | Hosted-UI end-user behaviour; `oauthClientId: null`                                                                                                           |
+| `ui.login.failure`                | Exclude (policy)  | ditto                                                                                                                                                         |
+| `ui.login.csrf_failure`           | Exclude (policy)  | ditto                                                                                                                                                         |
+| `oauth.userinfo.success`          | Unreachable       | `oauthClientId: null` (`apps/auth-server/src/app/routes/oauth/userinfo.ts:78`). Policy answer if that ever changes: allow                                     |
+| `oauth.userinfo.failure`          | Unreachable       | `oauthClientId: null` (`apps/auth-server/src/app/routes/oauth/userinfo.ts:96`). Policy answer if that ever changes: allow                                     |
+| `oauth.client.registered`         | Unreachable       | Attributed, but dynamic registration creates clients with `developerId: null` — see below                                                                     |
+| `oid4vp.response.received`        | Unreachable       | `oauthClientId: null` (`apps/auth-server/src/app/routes/oid4vp/response.ts:224`); also wallet federation behind a default-off flag                            |
+| `oauth.consent.csrf_failure`      | Unreachable       | `oauthClientId: null` (`apps/auth-server/src/app/routes/ui/consent.ts:565`)                                                                                   |
+| `consents.revoke.csrf_failure`    | Unreachable       | `oauthClientId: null` (`apps/auth-server/src/app/routes/consents/index.ts:145`)                                                                               |
+
+**On the three that prompted this enumeration.** `oauth.introspect.success` was a genuine omission —
+`oauth.introspect.failure` was already on the list, so excluding its success twin was an
+inconsistency, not a decision, and it is now allowed. `oauth.userinfo.success` / `.failure` are the
+developer's own resource-server traffic and would be allowed on the same reasoning — but both write
+`oauthClientId: null`, so allowlisting them would change nothing today and would misleadingly imply
+they appear. They are recorded as unreachable **with their policy answer written down**, so if
+userinfo ever becomes client-attributed the question does not have to be re-derived.
+`oid4vp.response.received` is settled twice over: unattributed, and wallet-federation transport
+behind a flag that is off by default.
+
+**A fourth structural gap, found while enumerating: dynamically registered clients are invisible to
+this feed entirely.** Both `POST /oauth/register`
+(`apps/auth-server/src/app/routes/oauth/register.ts:129`) and CIMD registration
+(`apps/auth-server/src/app/helpers/cimd.ts:274`) create clients with `developerId: null`. The
+ownership predicate is `oauth_clients.developer_id = :sub`, so **no** row belonging to a DCR or CIMD
+client can ever match it — not just `oauth.client.registered`, but every token exchange and
+authorize event those clients generate. A developer whose clients were all registered dynamically
+sees an empty feed and no explanation. This is a property of the ownership model, not of the
+allowlist, and it cannot be fixed here: `developer_id` is the only ownership signal the schema has.
+The feed's empty state must therefore say so rather than reading as "nothing happened" — see the
+footnote below.
+
+##### The allowlist's cost, stated in one place
+
+So that this never has to be reconstructed from two lists again, here is everything the feed does
+not show, complete:
+
+1. **End-user authentication and consent activity for the developer's own clients** — step-up
+   challenges, step-up elevations, and consent granted / denied / revoked. These are reachable,
+   client-attributed rows that are deliberately withheld. **This is the real cost of the policy
+   decision**, and it is larger than "consent and step-up were excluded" suggests in the abstract:
+   it means a developer cannot see, for their own application, that a user was challenged for
+   step-up or withdrew consent.
+2. **All first-party and hosted-UI login/logout activity** (`user.*`, `ui.*`) — excluded on the same
+   grounds, and unreachable anyway.
+3. **Anything belonging to a dynamically registered or CIMD client** — the whole client, not
+   selected events, per the structural gap above.
+4. **Anything recorded before a client was identified**, and **anything belonging to a client the
+   developer has since deleted**.
+5. **Millisecond precision on every timestamp** — the feed shows whole seconds.
+
+Items 1 and 5 are reversible policy choices and should be re-confirmed with the owner before
+implementation rather than after. Items 2, 3 and 4 are structural.
 
 #### What the feed structurally cannot show
 
-Three categories of row will never appear, and the UI must say so rather than leave an unexplained
-gap. The first is a policy choice, the other two are structural:
+Four categories of row will never appear, and the UI must say so rather than leave an unexplained
+gap. The first is a policy choice; the other three are structural. The complete cost is stated in
+[one place above](#the-allowlists-cost-stated-in-one-place); this section covers only the three
+structural causes and their code anchors.
 
 1. **Rows whose `event` is not on the allowlist** — see
-   [the event allowlist](#the-same-rule-applied-to-event-which-is-where-it-was-initially-missed).
-   A policy choice, and the largest of the three in practice.
+   [the classification table](#every-event-in-the-tree-classified). A policy choice.
 2. **Rows written before a client was resolved.** Many failure paths record `oauthClientId: null` —
    for example `apps/auth-server/src/app/routes/oauth/authorize.ts:158` and
    `apps/auth-server/src/app/routes/oauth/token.ts:146`. They have no client to be scoped to.
 3. **Rows belonging to a deleted client.** The FK is `set null` on delete
    (`libs/infra/db/src/lib/schema/audit.ts:30`), so deleting a client detaches its entire audit
    history from the ownership predicate.
+4. **Every row belonging to a dynamically registered or CIMD client**, because those clients carry
+   `developerId: null` (`apps/auth-server/src/app/routes/oauth/register.ts:129`,
+   `apps/auth-server/src/app/helpers/cimd.ts:274`) and the ownership predicate is
+   `developer_id = :sub`.
+
+**Decision — gap 4 gets its own empty state, not the generic one.** A developer whose clients were
+all registered dynamically would otherwise see the ordinary "No events yet", which reads as "nothing
+happened" when the truth is "this surface cannot show your clients at all". When the developer owns
+zero clients by `developer_id` **and** the feed is empty, the empty state says so explicitly and
+points at `/clients/new`. Distinguishing the two cases costs one extra count and prevents a bug
+report that would be impossible to reproduce.
 
 **Decision — an `event` or `eventType` filter naming something outside the allowlist is a `400`, not
 an empty result.** An empty result is an existence oracle: it lets a caller distinguish "no such
@@ -813,12 +926,12 @@ treat the filter as the authority instead of the allowlist. Reject the request a
 constraint.
 
 **Decision — a permanent footnote under the feed**, not a tooltip and not a documentation-only
-note: "This feed shows a defined set of client and token events for the clients you own. Events
-about your end users' sign-in and consent activity are not shown. Neither is anything recorded
-before a client was identified, or belonging to a client you have since deleted. Times are shown to
-the nearest second."
+note: "This feed shows a defined set of client and token events for the clients you own. Your end
+users' sign-in, step-up and consent activity is not shown. Neither is anything recorded before a
+client was identified, anything belonging to a client you have since deleted, or anything from a
+dynamically registered client. Times are shown to the nearest second."
 
-Say all four things. A feed that quietly omits a category is an audit-shaped surface making a
+Say all five things. A feed that quietly omits a category is an audit-shaped surface making a
 promise it does not keep, which is the failure mode this whole page is trying to avoid.
 
 #### Proposed — index migration
@@ -1024,7 +1137,7 @@ Ordered. Each step assumes every step above it has landed.
 7. **#366 — move the consent calls behind server functions.** Independent of 1–6; can run in
    parallel. Its own internal order: settle how a server function authenticates **and** what
    replaces the session-anchored `X-CSRF-Token` control
-   (`apps/auth-server/src/app/routes/consents/index.ts:22`) before writing the server functions —
+   (`apps/auth-server/src/app/routes/consents/index.ts:142`) before writing the server functions —
    both change the auth-server side, and discovering the CSRF problem after the portal side is
    written means writing it twice.
 8. **Link consents from the dashboard and the authed header.** Depends on 7, in the same pull
