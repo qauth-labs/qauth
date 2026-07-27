@@ -121,6 +121,11 @@ describe('validateSdJwtVcPresentation — the credential validates', () => {
       issuerSignatureAlgorithm: 'ES256',
       keyBindingAlgorithm: 'ES256',
       disclosedClaimCount: 2,
+      // Nothing was established about where the holder's key lives: this context
+      // carries no key-storage gate, which is the `oid4vp-1.0-base` posture
+      // (#308). Asserted as part of the whole object rather than separately, so
+      // a future change that starts inventing assurance here fails here.
+      keyStorageAssurance: { assurance: 'none' },
       statusChecked: false,
     });
     // #237 derives the eIDAS LoA; #297 flips `statusChecked`. Neither happens here.

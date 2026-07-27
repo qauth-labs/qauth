@@ -119,6 +119,28 @@ describe('VERIFIER_PROFILES (issue #299)', () => {
       }
     );
 
+    it.each(VERIFIER_PROFILE_IDS)("'%s' declares a key-storage posture (#308)", (id) => {
+      // Required rather than optional so a future profile must make the decision
+      // explicitly. An absent field would be read as "not evaluated", which is
+      // the permissive answer, and it would be reached by forgetting rather than
+      // by deciding.
+      expect(['required', 'permitted', 'forbidden']).toContain(
+        VERIFIER_PROFILES[id].keyStorageAssurance
+      );
+    });
+
+    it.each(VERIFIER_PROFILE_IDS)(
+      "'%s' declares a key-storage floor only where it requires assurance",
+      (id) => {
+        // A floor under a `forbidden` posture is a mandate no code reads — the
+        // decoration this table exists to prevent.
+        const profile: VerifierProfile = VERIFIER_PROFILES[id];
+        if (profile.keyStorageAssurance === 'forbidden') {
+          expect(profile.minimumKeyStorageAttackPotential).toBeUndefined();
+        }
+      }
+    );
+
     it('is itself frozen, so a profile cannot be added or replaced at runtime', () => {
       expect(Object.isFrozen(VERIFIER_PROFILES)).toBe(true);
     });
@@ -145,6 +167,18 @@ describe('VERIFIER_PROFILES (issue #299)', () => {
     it('does not mandate credential status checking', () => {
       // Token Status List (#297) is a HAIP §6.1 mandate.
       expect(base.requireCredentialStatus).toBe(false);
+    });
+
+    it('neither requires nor evaluates key-storage assurance (#308)', () => {
+      // Base OID4VP 1.0 says nothing about where a holder's key lives. Forbidding
+      // the capability is what keeps this profile runnable with no new operator
+      // configuration — and what makes a conveyed assurance signal unreadable
+      // rather than merely unused.
+      // Read through the declared interface: the table literal's type does not
+      // carry an absent optional member, and the point is what a CALLER holding
+      // a `VerifierProfile` sees.
+      expect((base as VerifierProfile).keyStorageAssurance).toBe('forbidden');
+      expect((base as VerifierProfile).minimumKeyStorageAttackPotential).toBeUndefined();
     });
 
     it('contains no HAIP-only constant (the leak this table exists to prevent)', () => {
@@ -188,6 +222,16 @@ describe('VERIFIER_PROFILES (issue #299)', () => {
 
     it('resolves issuer keys only via x5c', () => {
       expect([...haip.issuerKeyResolution]).toEqual(['x5c']);
+    });
+
+    it('requires key-storage assurance at iso_18045_high (HAIP §4.5.1 / §9.2, #308)', () => {
+      // The Verifier-side form of "Wallets MUST support key attestations": the
+      // mandate is on the ISSUANCE path, so what this profile declares is the
+      // reliance on it, at a stated floor. Encoding it as data is what makes
+      // `assertKeyStorageAssuranceProvisioned` refuse an unprovisioned
+      // deployment at boot rather than in production.
+      expect(haip.keyStorageAssurance).toBe('required');
+      expect(haip.minimumKeyStorageAttackPotential).toBe('iso_18045_high');
     });
   });
 

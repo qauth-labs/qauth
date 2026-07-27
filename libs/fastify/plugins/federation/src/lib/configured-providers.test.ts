@@ -362,8 +362,24 @@ describe('createConfiguredProviders (crypto-capability gate, #299 F12)', () => {
     ).toThrow(/requires encrypted Authorization Responses/);
   });
 
-  it('accepts haip-1.0 once ES256, the JWE stack and the WRPAC all exist', () => {
-    // Proves the gate is exactly these three requirements and not a hardcoded
+  it('still refuses haip-1.0 when key-storage assurance is provisioned by nothing', () => {
+    // The fourth requirement (#308). HAIP §4.5.1 makes key attestations a
+    // mandate, and QAuth's reliance on it is transitive — it needs an
+    // operator-recorded attesting-issuer registry or key-attestation anchors.
+    // With neither, the profile would accept wallet requests and then reject
+    // every single presentation.
+    expect(() =>
+      createConfiguredProviders({
+        walletFederationEnabled: true,
+        verifierProfileId: 'haip-1.0',
+        cryptoCapabilities: CRYPTO_AFTER_298,
+        provisionedVerifierMaterial: WRPAC_PROVISIONED,
+      })
+    ).toThrow(/requires key-storage assurance/);
+  });
+
+  it('accepts haip-1.0 once ES256, the JWE stack, the WRPAC and key-storage assurance all exist', () => {
+    // Proves the gate is exactly these four requirements and not a hardcoded
     // ban on `haip-1.0` — profiles are data (#299 AC), so the profile that is
     // unusable today must become usable with no edit to the gate.
     expect(() =>
@@ -372,6 +388,20 @@ describe('createConfiguredProviders (crypto-capability gate, #299 F12)', () => {
         verifierProfileId: 'haip-1.0',
         cryptoCapabilities: CRYPTO_AFTER_298,
         provisionedVerifierMaterial: WRPAC_PROVISIONED,
+        keyStorageAssuranceProvisioned: true,
+      })
+    ).not.toThrow();
+  });
+
+  it('leaves oid4vp-1.0-base untouched by the key-storage gate', () => {
+    // #308 acceptance criterion: the base profile is unaffected. It forbids the
+    // capability, so the gate has nothing to require and the omitted flag — the
+    // fail-closed default — must not refuse it.
+    expect(() =>
+      createConfiguredProviders({
+        walletFederationEnabled: true,
+        verifierProfileId: 'oid4vp-1.0-base',
+        cryptoCapabilities: CRYPTO_TODAY,
       })
     ).not.toThrow();
   });

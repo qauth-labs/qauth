@@ -42,6 +42,10 @@
 
 import type { JwsAlgorithm } from '@qauth-labs/core-crypto';
 
+import type {
+  KeyStorageAssuranceEvidence,
+  KeyStorageAssuranceGate,
+} from '../attestation/key-storage-assurance';
 import type { CredentialFormat } from '../profiles/verifier-profile.types';
 import type { ValidatedIssuer } from '../trust/issuer-identity';
 import type { IssuerKeyResolver } from './issuer-key-resolution';
@@ -115,6 +119,25 @@ export interface PresentationValidationContext {
    * assert about itself.
    */
   readonly permittedFormats: readonly CredentialFormat[];
+  /**
+   * The active profile's key-storage-assurance posture and this deployment's
+   * resolver for it (#308) — see
+   * {@link import('../attestation/key-storage-assurance').keyStorageAssuranceGateFor}.
+   *
+   * Optional, and its absence means the `oid4vp-1.0-base` posture: key storage
+   * is not evaluated and no conveyed signal is read. That is the honest default
+   * for a field whose only other reading would be a profile this context does
+   * not carry — every other profile-derived member here (`permittedFormats`,
+   * `signatureAlgorithms`) is supplied by the caller from the resolved profile,
+   * and this one is no different.
+   *
+   * Build it with `keyStorageAssuranceGateFor(profile, resolver)` rather than by
+   * hand: that helper keeps the profile's posture even when no resolver is
+   * provisioned, so a `required` profile with nothing wired refuses every
+   * presentation instead of silently downgrading itself. A deployment is
+   * additionally refused at BOOT by `assertKeyStorageAssuranceProvisioned`.
+   */
+  readonly keyStorageAssurance?: KeyStorageAssuranceGate;
   /** Clock skew tolerance; defaults to {@link DEFAULT_PRESENTATION_CLOCK_TOLERANCE_SECONDS}. */
   readonly clockToleranceSeconds?: number;
   /** KB-JWT age ceiling; defaults to {@link DEFAULT_KEY_BINDING_MAX_AGE_SECONDS}. */
@@ -165,6 +188,21 @@ export interface CredentialAssuranceSignal {
   readonly keyBindingAlgorithm: JwsAlgorithm;
   /** How many Disclosures the holder chose to reveal. */
   readonly disclosedClaimCount: number;
+  /**
+   * What was established about WHERE the holder's private key lives (#308).
+   *
+   * Evidence, like everything else on this type — `'none'` under a profile that
+   * does not evaluate key storage, and under one that does it is whatever a
+   * conveyed key attestation or the transitive trusted-issuer path proved. A
+   * profile REQUIRING assurance never produces a credential carrying `'none'`
+   * here: validation refuses first.
+   *
+   * Required rather than optional so every producer must state it, and so #237
+   * cannot read a missing field as "not applicable" when it means "nobody
+   * looked". No holder key material is carried — the `cnf` key is compared
+   * during resolution and dropped (OID4VP §15.5–§15.6, ADR-009).
+   */
+  readonly keyStorageAssurance: KeyStorageAssuranceEvidence;
   /**
    * Whether credential status (Token Status List, HAIP §6.1) was checked.
    *
