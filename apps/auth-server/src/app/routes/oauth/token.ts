@@ -17,6 +17,7 @@ import { ZodTypeProvider } from 'fastify-type-provider-zod';
 
 import { env } from '../../../config/env';
 import { MIN_RESPONSE_TIME_MS } from '../../constants';
+import { resolveAcrClaims } from '../../helpers/acr-claims';
 import { flattenActChain, MAX_DELEGATION_DEPTH } from '../../helpers/agent-audit';
 import {
   authenticateClient,
@@ -502,6 +503,13 @@ async function handleAuthorizationCode(
         // epoch MS here; signIdToken floors to seconds. Nullable on in-flight
         // codes minted before the column existed → omit the claim.
         authTime: authCode.authTime ?? undefined,
+        // OIDC Core §2 `acr` (#237, ADR-004/ADR-010): the eIDAS Level of
+        // Assurance of the authentication this code represents, rendered into
+        // the deployment's `acr` vocabulary here rather than at mint time. A
+        // NULL column — every password login, and every wallet login whose
+        // issuer the realm assures nothing about — spreads to NOTHING, so the
+        // claim is absent rather than present-and-low.
+        ...resolveAcrClaims(authCode.assuranceLevel),
       })
     : undefined;
 

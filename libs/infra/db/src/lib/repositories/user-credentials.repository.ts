@@ -101,6 +101,87 @@ export function createUserCredentialsRepository(defaultDb: DbClient): UserCreden
     },
 
     /**
+     * Every credential in a realm carrying this `external_sub`, ACROSS PROVIDER
+     * TYPES (#235/#238, ADR-009 §1).
+     *
+     * The read behind `SubjectAccountLookup.byAssertedIdentifier`, and the reason
+     * it is not {@link findByRealmProviderSub}: `asserted-lookup` must see the
+     * `'password'` row that already holds the asserted email, not only wallet
+     * rows. An account that exists without a wallet binding is ADR-009's second
+     * bootstrap case — a REFUSAL — and a query scoped to `provider_type='wallet'`
+     * would report it as "no account found", which the caller is allowed to turn
+     * into an enrolment. That is precisely the account takeover the bootstrap
+     * rule exists to prevent.
+     *
+     * No `limit`: the caller (`selectSoleAccount`) must SEE an ambiguity to fail
+     * closed on it, and a `limit(1)` here would silently pick the first row —
+     * exactly the "never pick one" rule #300's constraint 5 forbids.
+     *
+     * Bounded by the unique index on `(realm_id, provider_type, external_sub)` —
+     * at most one row per provider type, so the result set is the size of the
+     * provider registry, not of the realm.
+     */
+    async findAllByRealmAndExternalSub(
+      realmId: string,
+      externalSub: string,
+      tx?: DbClient
+    ): Promise<UserCredential[]> {
+      const invoker = tx ?? defaultDb;
+      return invoker
+        .select()
+        .from(userCredentials)
+        .where(
+          and(eq(userCredentials.realmId, realmId), eq(userCredentials.externalSub, externalSub))
+        );
+    },
+
+    /**
+     * Every credential a user holds for one provider type (#238).
+     *
+     * The plural sibling of {@link findByUserIdAndType}: an account may hold
+     * more than one wallet credential (a second device, a re-issued credential),
+     * and account linking has to see all of them rather than whichever the
+     * planner returned first.
+     */
+    async findAllByUserIdAndType(
+      userId: string,
+      providerType: string,
+      tx?: DbClient
+    ): Promise<UserCredential[]> {
+      const invoker = tx ?? defaultDb;
+      return invoker
+        .select()
+        .from(userCredentials)
+        .where(
+          and(eq(userCredentials.userId, userId), eq(userCredentials.providerType, providerType))
+        );
+    },
+
+    /**
+     * Replace `credential_data` wholesale (#238).
+     *
+     * @throws NotFoundError if the credential does not exist.
+     */
+    async updateCredentialData(
+      id: string,
+      credentialData: Record<string, unknown>,
+      tx?: DbClient
+    ): Promise<UserCredential> {
+      const invoker = tx ?? defaultDb;
+
+      const [credential] = await invoker
+        .update(userCredentials)
+        .set({ credentialData, updatedAt: Date.now() })
+        .where(eq(userCredentials.id, id))
+        .returning();
+
+      if (!credential) {
+        throw new NotFoundError('UserCredential', id);
+      }
+      return credential;
+    },
+
+    /**
      * Flip `credential_data.email_verified` to true in place.
      *
      * A single `jsonb_set` statement — no read-modify-write — so a concurrent

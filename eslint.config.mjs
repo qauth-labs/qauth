@@ -22,6 +22,11 @@ const NON_SHIPPED_FILES = [
   // src/ (so the typecheck input set picks it up) but is deliberately not
   // re-exported from the library's entry point, so its imports are test-scope.
   '{projectRoot}/**/integration-setup.ts',
+  // #240's E2E harness and reference mock wallet. Same shape as
+  // integration-setup.ts above: under src/ so the typecheck input set picks it
+  // up, but imported only by `*.integration.test.ts` and never reachable from
+  // main.ts, so its imports (jose) are test-scope.
+  '{projectRoot}/src/testing/**',
 ];
 
 /**

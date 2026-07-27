@@ -129,6 +129,37 @@ per-window caps).
 **`200 OK`**: `{ "message": "..." }` — returned even for unknown addresses
 (no account enumeration). Errors: `429` (too soon / over limit).
 
+### `POST /auth/link/wallet`
+
+Start linking a wallet credential to the **signed-in** account (issue #238,
+[ADR-004](./adr/004-wallet-agnostic-federation.md) /
+[ADR-009](./adr/009-wallet-account-resolution.md) §5). Registered only when
+`WALLET_FEDERATION_ENABLED` is on; otherwise the path does not exist (`404`).
+
+Requires a valid `__Host-qauth_session` cookie **and** an `X-CSRF-Token` header
+matching the per-session token returned by `GET /consents`.
+
+**`200 OK`**: `{ "handle": "...", "invocation_uri": "openid4vp://...", "expires_at": 1730000000000 }`
+— render `invocation_uri` as a QR code or deep link; it is opaque.
+Errors: `401` (no session), `400` (`invalid_csrf_token`), `404` (no usable
+`VerifierProfile`), `500`.
+
+### `GET /auth/link/wallet/:handle`
+
+Poll a linking flow, and complete it once the wallet has responded. Requires the
+session cookie and the browser-binder cookie minted by the `POST` above; the
+session must be the **same user** that started the flow.
+
+**`200 OK`**: `{ "status": "pending" | "linked" | "conflict" | "expired" | "rejected", "message"?: "..." }`
+
+On `linked`, a second `user_credentials` row (`provider_type='wallet'`) now
+exists under the same `users.id`, keyed on the identifier the account already
+owned — so a later wallet sign-in returns tokens with the identical `sub`.
+`conflict` is the one specific outcome (the credential belongs to another
+account) and is only reachable under the `issuer-scoped-claim` strategy; every
+other failure renders one uniform refusal. See
+[Wallet sign-in](./wallet-login.md#account-linking-238).
+
 ---
 
 ## OAuth 2.1

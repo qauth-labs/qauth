@@ -1,0 +1,2 @@
+ALTER TABLE "authorization_codes" ADD COLUMN "assurance_level" text;--> statement-breakpoint
+ALTER TABLE "authorization_codes" ADD CONSTRAINT "authorization_codes_assurance_level_valid" CHECK ("authorization_codes"."assurance_level" IS NULL OR "authorization_codes"."assurance_level" IN ('substantial', 'high'));

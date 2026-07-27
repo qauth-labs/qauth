@@ -87,7 +87,11 @@ jobs:
 
       # Affected-scoped like the main job: a change to the schema, the
       # migrations or the repositories marks infra-db affected and runs this;
-      # a docs-only PR pays nothing.
+      # a docs-only PR pays nothing. `auth-server` carries the same target since
+      # #240 — its wallet-federation E2E boots the real server against
+      # testcontainers Postgres + Redis, and it is the only place the OID4VP
+      # flow, `acr` propagation and the password-login invariant are asserted
+      # end to end.
       - run: pnpm exec nx affected -t test-integration
 
   # Container boot smoke test — the guard for #370.

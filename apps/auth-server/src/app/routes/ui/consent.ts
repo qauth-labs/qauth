@@ -12,6 +12,7 @@ import {
   OAUTH_SCOPE_PARAM_MAX_LENGTH,
   STEP_UP_FRESH_AUTH_WINDOW_MS,
 } from '../../constants';
+import { toStoredAssuranceLevel } from '../../helpers/acr-claims';
 import { resolveBrowserSession } from '../../helpers/browser-session';
 import { findExceedingAgentScopesForClient } from '../../helpers/client-auth';
 import { isAgentClient, resolveClient } from '../../helpers/client-resolution';
@@ -794,6 +795,10 @@ export default async function (fastify: FastifyInstance) {
             // assert `auth_time` in the ID token and `max_age` evaluates the
             // actual session age rather than this code's mint time.
             authTime: session.createdAt,
+            // #237 (ADR-004/ADR-010): the authentication's eIDAS LoA, bound to
+            // the code so /oauth/token can assert `acr`. NULL for a password
+            // login (`'low'`), which is the "omit the claim" outcome.
+            assuranceLevel: toStoredAssuranceLevel(session.assuranceLevel),
             scopes,
             // RFC 8707: bind the requested resource(s) to this code so
             // /oauth/token can set the issued access token's `aud` claim.

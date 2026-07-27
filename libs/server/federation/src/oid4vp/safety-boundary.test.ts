@@ -10,7 +10,11 @@ import {
   TEST_VCT,
 } from '../../testing/sd-jwt-vc.fixture';
 import { VERIFIER_PROFILES } from '../profiles/verifier-profiles';
-import { createWalletProvider } from '../providers/wallet.provider';
+import {
+  buildWalletVerifiedIdentity,
+  createWalletProvider,
+  extractWalletAttributes,
+} from '../providers/wallet.provider';
 import { assertIssuerTrusted } from '../trust/trust-registry';
 import { buildOid4vpAuthorizationRequest } from './authorization-request';
 import { parseVpToken } from './direct-post';
@@ -44,8 +48,19 @@ describe('#233 safety boundary — the transport authenticates nobody', () => {
     );
   });
 
-  it('WalletProvider.extractAttributes() still throws', () => {
-    expect(() => createWalletProvider().extractAttributes({} as never)).toThrow(/not implemented/);
+  it('WalletProvider.extractAttributes() refuses anything the transport produced', () => {
+    // Implemented in #235 — and it consumes an envelope only
+    // `buildWalletVerifiedIdentity` builds, from a credential #234 validated.
+    // Nothing this transport layer produces is such an envelope, so handing it
+    // a round-tripped response still yields no attributes at all.
+    expect(() => createWalletProvider().extractAttributes({} as never)).toThrow();
+    expect(() =>
+      createWalletProvider().extractAttributes({
+        externalSub: 'anything',
+        assuranceLevel: 'low',
+        rawClaims: { vp_token: { pid: ['eyJhbGciOiJFUzI1NiJ9.e30.c2ln~'] }, state: 'abc123' },
+      })
+    ).toThrow(/buildWalletVerifiedIdentity did not produce/);
   });
 
   it('a full request → response round-trip yields no identity of any kind', () => {
@@ -234,6 +249,46 @@ describe('#234 safety boundary — a VALID credential authenticates nobody', () 
 
     expect(error?.message).toContain('#236');
     expect(error?.message).toContain('#300');
+  });
+
+  /**
+   * #235 moved the boundary again, in the one direction that is safe.
+   *
+   * Claim normalization now turns a validated credential into `user_attributes`
+   * rows. That is a DATA mapping and nothing more: it produces no subject, no
+   * session and no token, and the rows it returns are only ever written against
+   * a `users.id` that #236 and #300 resolved. The two gates below prove it did
+   * not quietly become an authentication.
+   */
+  describe('#235 — normalizing claims is not authenticating', () => {
+    it('yields attributes for a fully valid credential and still no identity', async () => {
+      const { validated } = await validateRealPresentation();
+
+      const attributes = extractWalletAttributes(validated[0]);
+
+      expect(attributes.length).toBeGreaterThan(0);
+      for (const attribute of attributes) {
+        expect(attribute.source).toBe('wallet');
+        expect(attribute.verified).toBe(true);
+      }
+
+      const surface = JSON.stringify(attributes);
+
+      expect(surface).not.toContain('externalSub');
+      expect(surface).not.toContain('external_sub');
+      expect(surface).not.toContain('userId');
+    });
+
+    it('cannot produce an external_sub from the credential alone', async () => {
+      const { validated } = await validateRealPresentation();
+
+      // #300 resolves it, and there is nothing in a `ValidatedCredential` to
+      // resolve it FROM — that is ADR-009 Finding 1. So the packaging step
+      // refuses rather than substituting a wallet-cryptographic value.
+      expect(() => buildWalletVerifiedIdentity(validated[0], '')).toThrow(
+        /SubjectResolutionStrategy/
+      );
+    });
   });
 
   it('no module in oid4vp/ produces a VerifiedIdentity', () => {

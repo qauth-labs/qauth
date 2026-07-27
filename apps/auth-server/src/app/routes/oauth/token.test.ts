@@ -1188,6 +1188,73 @@ describe('POST /oauth/token route — authorization_code grant', () => {
     expect(idClaims['authTime']).toBeUndefined();
   });
 
+  it('threads the code assurance level into the id_token as acr (#237)', async () => {
+    const { fastify, ctx, authCode } = setupAuthCodeStub();
+    (fastify.repositories.authorizationCodes.findByCode as unknown as Mock).mockResolvedValue({
+      ...authCode,
+      scopes: ['openid'],
+      assuranceLevel: 'high',
+    });
+    await tokenRoute(fastify);
+    const handler = ctx.handler;
+    if (!handler) throw new Error('Handler missing');
+
+    await handler(baseRequest(), createReply());
+
+    // Rendered into the deployment's vocabulary at ISSUANCE, from the internal
+    // level stored on the code (ADR-010).
+    expect(fastify.jwtUtils.signIdToken).toHaveBeenCalledWith(
+      expect.objectContaining({ acr: 'http://eidas.europa.eu/LoA/high' })
+    );
+  });
+
+  it('omits acr entirely when the code records no assurance — the password-login invariant (#237/#240)', async () => {
+    const { fastify, ctx, authCode } = setupAuthCodeStub();
+    (fastify.repositories.authorizationCodes.findByCode as unknown as Mock).mockResolvedValue({
+      ...authCode,
+      scopes: ['openid'],
+      // What /oauth/authorize writes for a password session: ADR-003 makes a
+      // password credential `'low'`, and `'low'` bears no `acr`.
+      assuranceLevel: null,
+    });
+    await tokenRoute(fastify);
+    const handler = ctx.handler;
+    if (!handler) throw new Error('Handler missing');
+
+    await handler(baseRequest(), createReply());
+
+    const idClaims = (fastify.jwtUtils.signIdToken as unknown as Mock).mock.calls[0][0] as Record<
+      string,
+      unknown
+    >;
+    // Not "present and low" — ABSENT. An RP may gate on presence, so the two
+    // are not interchangeable.
+    expect('acr' in idClaims).toBe(false);
+  });
+
+  it.each([
+    ['low', 'low'],
+    ['an unreadable value', 'medium'],
+  ])('omits acr when the code carries %s', async (_label, assuranceLevel) => {
+    const { fastify, ctx, authCode } = setupAuthCodeStub();
+    (fastify.repositories.authorizationCodes.findByCode as unknown as Mock).mockResolvedValue({
+      ...authCode,
+      scopes: ['openid'],
+      assuranceLevel,
+    });
+    await tokenRoute(fastify);
+    const handler = ctx.handler;
+    if (!handler) throw new Error('Handler missing');
+
+    await handler(baseRequest(), createReply());
+
+    const idClaims = (fastify.jwtUtils.signIdToken as unknown as Mock).mock.calls[0][0] as Record<
+      string,
+      unknown
+    >;
+    expect('acr' in idClaims).toBe(false);
+  });
+
   it('gates ID-token email claims on the email scope: openid-only omits them even for a verified user — BREAKING #259', async () => {
     const { fastify, ctx, authCode } = setupAuthCodeStub();
     (fastify.repositories.authorizationCodes.findByCode as unknown as Mock).mockResolvedValue({

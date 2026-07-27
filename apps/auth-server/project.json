@@ -5,6 +5,14 @@
   "projectType": "application",
   "tags": ["scope:app"],
   "targets": {
+    "test-integration": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "vitest run --config vitest.integration.config.ts apps/auth-server",
+        "cwd": "{workspaceRoot}"
+      },
+      "description": "Run the Docker-backed wallet-federation E2E suite (testcontainers Postgres + Redis). Requires a running Docker daemon."
+    },
     "build": {
       "executor": "@nx/esbuild:esbuild",
       "outputs": ["{options.outputPath}"],

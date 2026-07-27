@@ -237,6 +237,17 @@ export interface JwtUtils {
      * `auth_time` claim in epoch SECONDS (floored). Omitted when unknown.
      */
     authTime?: number;
+    /**
+     * OIDC Core §2 `acr` — the authentication event's assurance level, already
+     * mapped to the deployment's vocabulary (#237). Omitted (claim absent)
+     * whenever no assurance above `low` was established, which is every password
+     * login.
+     *
+     * This payload type is structurally duplicated from `SignIdTokenPayload` in
+     * `@qauth-labs/server-jwt` (the decorator surface may not import it), so a
+     * new field must be added in BOTH places or the app cannot pass it.
+     */
+    acr?: string;
   }): Promise<string>;
   /**
    * Generate a refresh token pair (token and hash)

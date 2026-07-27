@@ -28,9 +28,12 @@
     "zod": "catalog:"
   },
   "devDependencies": {
+    "@qauth-labs/shared-testing": "workspace:*",
     "@vitest/coverage-v8": "catalog:",
     "@vitest/ui": "catalog:",
+    "jose": "catalog:",
     "pino-pretty": "catalog:",
+    "testcontainers": "^12.0.4",
     "typescript": "catalog:",
     "vitest": "catalog:"
   }
