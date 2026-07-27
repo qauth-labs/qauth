@@ -253,5 +253,5 @@ handleCallback().then((tokens) => {
 
 - [API Reference](/integrate/api-reference/) — full endpoint contracts.
 - [OAuth 2.1 Flow](/integrate/oauth-flow/) — protocol walkthrough with `curl`.
-- [`memory-mcp` example](/libs/fastify/plugins/mcp-guard/examples/memory-mcp/server.ts) —
+- [`memory-mcp` example](https://github.com/qauth-labs/qauth/blob/main/libs/fastify/plugins/mcp-guard/examples/memory-mcp/server.ts) —
   a runnable resource server protected by `@qauth-labs/mcp-guard`.

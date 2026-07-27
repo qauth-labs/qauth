@@ -211,7 +211,7 @@ curl -s http://localhost:8088/mcp/memory \
   -H "Authorization: Bearer ACCESS_TOKEN" | jq
 ```
 
-A resource server (e.g. one using [`mcp-guard`](/libs/fastify/plugins/mcp-guard/README.md))
+A resource server (e.g. one using [`mcp-guard`](https://github.com/qauth-labs/qauth/blob/main/libs/fastify/plugins/mcp-guard/README.md))
 verifies the signature against the JWKS and checks `iss`, `exp`, `aud`, and scope.
 
 ---
@@ -435,6 +435,6 @@ QAuth returns standard OAuth error codes (RFC 6749 §5.2):
 - [Hosted UI](/integrate/hosted-ui/) — the login, consent, and resume screens.
 - [Agent Authorization](/integrate/agent-authorization/) — the agent-native layer
   (`is_agent`, scope modes, step-up, per-agent audit) built on these grants.
-- [`@qauth-labs/mcp-guard`](/libs/fastify/plugins/mcp-guard/README.md) —
+- [`@qauth-labs/mcp-guard`](https://github.com/qauth-labs/qauth/blob/main/libs/fastify/plugins/mcp-guard/README.md) —
   resource-server SDK that validates these tokens.
 - [ADR-006: OAuth grants and audience](/reference/records/adr/006-oauth-grants-and-audience/).

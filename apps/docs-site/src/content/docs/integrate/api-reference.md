@@ -585,5 +585,5 @@ that any credential was verified or any user authenticated.
   (`is_agent`, Token Exchange, scope modes, step-up, audit).
 - [Code Examples](/integrate/code-examples/) — runnable Node/TS and browser clients.
 - [MCP Quickstart](/integrate/mcp-quickstart/) — protect an MCP server end-to-end.
-- [`@qauth-labs/mcp-guard`](/libs/fastify/plugins/mcp-guard/README.md) — the
+- [`@qauth-labs/mcp-guard`](https://github.com/qauth-labs/qauth/blob/main/libs/fastify/plugins/mcp-guard/README.md) — the
   resource-server SDK that validates the tokens these endpoints issue.

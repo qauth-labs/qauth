@@ -386,5 +386,5 @@ rollup over that detail.
 - [MCP Quickstart](/integrate/mcp-quickstart/) — end-to-end QAuth → MCP handshake.
 - [ADR-007: MCP-First Positioning](/reference/records/adr/007-mcp-first-positioning/) — why the
   agent-native layer is QAuth's differentiation.
-- [`@qauth-labs/mcp-guard`](/libs/fastify/plugins/mcp-guard/README.md) — the
+- [`@qauth-labs/mcp-guard`](https://github.com/qauth-labs/qauth/blob/main/libs/fastify/plugins/mcp-guard/README.md) — the
   resource-server SDK that emits the `403 insufficient_scope` step-up challenge.

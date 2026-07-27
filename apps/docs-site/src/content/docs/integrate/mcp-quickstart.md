@@ -11,7 +11,7 @@ your machine:
 
 1. Run **QAuth** — the OAuth 2.1 authorization server (AS).
 2. Run a **guarded MCP resource server** — the bundled `memory-mcp` example,
-   protected by [`@qauth-labs/mcp-guard`](/libs/fastify/plugins/mcp-guard/README.md).
+   protected by [`@qauth-labs/mcp-guard`](https://github.com/qauth-labs/qauth/blob/main/libs/fastify/plugins/mcp-guard/README.md).
 3. Obtain a valid, **audience-bound** access token and call the protected resource.
 
 By the end you will have reproduced the flow from
@@ -332,7 +332,7 @@ even if both trust the same QAuth instance.
 - [Agent Authorization](/integrate/agent-authorization/) — when an **AI agent** acts on
   behalf of a user: the `is_agent` client type, RFC 8693 token-exchange
   delegation, agent scope modes, and step-up before dangerous operations.
-- [`@qauth-labs/mcp-guard` README](/libs/fastify/plugins/mcp-guard/README.md) —
+- [`@qauth-labs/mcp-guard` README](https://github.com/qauth-labs/qauth/blob/main/libs/fastify/plugins/mcp-guard/README.md) —
   full configuration, `introspection` mode, and the framework-agnostic core.
 - [ADR-007: MCP-First Positioning](/reference/records/adr/007-mcp-first-positioning/) — why this
   is QAuth's near-term product identity.
