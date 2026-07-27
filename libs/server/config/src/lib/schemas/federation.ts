@@ -142,6 +142,153 @@ export const federationEnvSchema = z.object({
   ),
 
   /**
+   * `OID4VP_SUBJECT_RESOLUTION` (#300) — which `SubjectResolutionStrategy`
+   * decides WHICH ACCOUNT a validated presentation belongs to.
+   *
+   * ADR-009 Finding 1: there is no protocol-guaranteed stable wallet subject
+   * identifier, and the ecosystem is deliberately built to keep it that way. So
+   * account resolution is a deployment decision rather than a protocol
+   * consequence, and this is where a deployment states it.
+   *
+   * **OPTIONAL WITH NO DEFAULT here**, but — unlike
+   * `OID4VP_VERIFIER_PROFILE` — absence is not a refusal: the active
+   * `VerifierProfile` supplies the default (`asserted-lookup` for both shipped
+   * profiles, ADR-009 §1). Leaving this unset therefore means "whatever the
+   * profile says", which is a real answer; a *typo* is still a hard parse
+   * failure. Same empty-is-unset handling as the variables above, for the same
+   * `${VAR:-}` reason.
+   *
+   * The enum lists **every** strategy ADR-009 names, including the ones that are
+   * reserved rather than implemented (`key-thumbprint`, `rp-pseudonym`) and the
+   * one that is not a login strategy (`session-binding`). That is deliberate: a
+   * value this schema rejects produces a `ZodError` naming a list of strings,
+   * while a value it accepts and the federation gate then refuses produces
+   * `assertSubjectResolutionStrategySelectable`'s explanation of the actual gate
+   * — the WebAuthn workstream, the missing technical specification, the rotating
+   * key material. The operator needs the second message, not the first.
+   *
+   * Values are duplicated from `SubjectResolutionStrategyId` rather than
+   * imported, for the same layering reason as `OID4VP_VERIFIER_PROFILE` above,
+   * and pinned to `SUBJECT_RESOLUTION_STRATEGY_IDS` by `apps/auth-server`'s
+   * `src/config/env.test.ts`.
+   */
+  OID4VP_SUBJECT_RESOLUTION: z.preprocess(
+    (value) => (typeof value === 'string' && value.trim() === '' ? undefined : value),
+    z
+      .enum([
+        'asserted-lookup',
+        'issuer-scoped-claim',
+        'session-binding',
+        'key-thumbprint',
+        'rp-pseudonym',
+      ])
+      .optional()
+  ),
+
+  /**
+   * `OID4VP_SUBJECT_BINDING_CLAIMS` (#300) — the credential claims the wallet
+   * binding is derived from, as a comma-separated list of claim names.
+   *
+   * This is the ENTITLEMENT CHECK of `asserted-lookup`, and ADR-009 §1 restates
+   * why it is load-bearing *"because it is the likeliest way this gets built
+   * wrong"*: a validated, issuer-trusted presentation proves only that the
+   * holder has *a* valid credential. Without a binding to match, any valid
+   * credential would authenticate any account.
+   *
+   * **No default, and an unset value is not a soft failure.** The claim set is
+   * ecosystem-specific — an EUDI PID deployment binds on the mandatory attribute
+   * set, a workforce deployment on an employee number — and a plausible-looking
+   * default would silently be a weak binding nobody reviewed. A deployment that
+   * selects (or inherits) `asserted-lookup` and sets nothing here fails at the
+   * federation gate rather than serving an unchecked login.
+   *
+   * Shape only: claim names are non-empty and whitespace-free. WHICH claims
+   * constitute an identity is the operator's ecosystem knowledge, not this
+   * layer's — with one exception enforced downstream, that `iss` and `cnf` may
+   * never be named (ADR-009 §2 and OID4VP 1.0 §15.5–§15.6).
+   */
+  OID4VP_SUBJECT_BINDING_CLAIMS: z.preprocess(
+    (value) => (typeof value === 'string' && value.trim() === '' ? undefined : value),
+    z
+      .string()
+      .max(2048)
+      .transform((value) =>
+        Object.freeze(
+          value
+            .split(',')
+            .map((entry) => entry.trim())
+            .filter((entry) => entry.length > 0)
+        )
+      )
+      .refine((values) => values.length > 0, {
+        message: 'OID4VP_SUBJECT_BINDING_CLAIMS must list at least one non-empty claim name',
+      })
+      .refine((values) => values.every((entry) => !/\s/.test(entry)), {
+        message: 'OID4VP_SUBJECT_BINDING_CLAIMS entries must not contain whitespace',
+      })
+      .optional()
+  ),
+
+  /**
+   * `OID4VP_SUBJECT_CLAIM` (#300) — the claim carrying the issuer's stable
+   * subject identifier, for `issuer-scoped-claim` only (ADR-009 §2).
+   *
+   * Ignored by every other strategy. Required when
+   * `OID4VP_SUBJECT_RESOLUTION=issuer-scoped-claim`, which the federation gate
+   * enforces rather than this schema — the requirement is conditional on another
+   * variable, and expressing it here would need a `.superRefine()` that costs
+   * `federationEnvSchema` its `.shape` (see the module JSDoc).
+   */
+  OID4VP_SUBJECT_CLAIM: z.preprocess(
+    (value) => (typeof value === 'string' && value.trim() === '' ? undefined : value),
+    z
+      .string()
+      .max(256)
+      .refine((value) => !/\s/.test(value), {
+        message: 'OID4VP_SUBJECT_CLAIM must not contain whitespace',
+      })
+      .optional()
+  ),
+
+  /**
+   * `OID4VP_SUBJECT_CLAIM_ISSUERS` (#300) — the issuers `issuer-scoped-claim` is
+   * opted into, as a comma-separated list of `https://` issuer identifiers.
+   *
+   * ADR-009 §2 permits the strategy only *"where a specific, named issuer
+   * contractually guarantees a stable, disclosed claim"* — a guarantee QAuth
+   * cannot verify in code. So the operator names the issuers it holds that
+   * guarantee from, and a presentation from any other trusted issuer takes the
+   * mandatory `asserted-lookup` fallback instead.
+   *
+   * Distinct from `OID4VP_TRUSTED_ISSUERS` (#236) and never a substitute for it:
+   * that list decides whether a credential counts at all, this one decides
+   * whether one of those credentials may KEY an account. An issuer here that is
+   * not also trusted there is inert.
+   *
+   * Shape only. Entries are canonicalized and validated by
+   * `server-federation`'s `normalizeIssuerScopedIssuers`, which is the same
+   * reduction `ValidatedIssuer` applies to the identity being matched.
+   */
+  OID4VP_SUBJECT_CLAIM_ISSUERS: z.preprocess(
+    (value) => (typeof value === 'string' && value.trim() === '' ? undefined : value),
+    z
+      .string()
+      .max(4096)
+      .transform((value) =>
+        Object.freeze(
+          value
+            .split(',')
+            .map((entry) => entry.trim())
+            .filter((entry) => entry.length > 0)
+        )
+      )
+      .refine((values) => values.length > 0, {
+        message: 'OID4VP_SUBJECT_CLAIM_ISSUERS must list at least one non-empty issuer identifier',
+      })
+      .optional()
+  ),
+
+  /**
    * `OID4VP_WALLET_INVOCATION_ENDPOINT` (#239) — the wallet Authorization
    * Endpoint the QR code and deep-link button target.
    *

@@ -28,6 +28,8 @@
  * @see docs/adr/004-wallet-agnostic-federation.md
  */
 
+import type { SubjectResolutionStrategyId } from '../subject/subject-resolution.types';
+
 /**
  * Deployment profiles QAuth ships.
  *
@@ -166,5 +168,22 @@ export interface VerifierProfile {
   readonly issuerKeyResolution: readonly IssuerKeyResolution[];
   /** Whether credential revocation via Token Status List (#297) is mandatory. */
   readonly requireCredentialStatus: boolean;
+  /**
+   * The subject-resolution strategy a deployment gets when it selects none
+   * (#300, ADR-009).
+   *
+   * A DEFAULT, not a mandate: `OID4VP_SUBJECT_RESOLUTION` — and, later, a realm
+   * column — override it, and `resolveSubjectResolution` applies the same
+   * fail-closed gate to this value as to an operator-supplied one, so a profile
+   * cannot default a deployment into a strategy ADR-009 gates.
+   *
+   * It belongs on the profile for the reason ADR-009's Consequences give: *"The
+   * `VerifierProfile` abstraction (#299) gains a per-profile default strategy;
+   * the two abstractions compose without either changing shape."* A controlled
+   * ecosystem whose issuer guarantees a persistent identifier could default to
+   * `issuer-scoped-claim`; neither shipped profile does, because ADR-009 §1
+   * found no ecosystem where that guarantee holds.
+   */
+  readonly defaultSubjectResolution: SubjectResolutionStrategyId;
   readonly verifierIdentity: VerifierIdentityConfig;
 }
