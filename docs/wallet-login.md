@@ -5,12 +5,18 @@ step, and what is deliberately not built yet. Implements
 [ADR-004](./adr/004-wallet-agnostic-federation.md) and
 [ADR-009](./adr/009-wallet-account-resolution.md) (issue #239).
 
-> **Status: the screens ship, the sign-in does not complete.** Presentation
-> validation (#234), issuer trust application (#236) and subject resolution
-> (#300) are unbuilt, so the server refuses every presentation it receives — see
-> [The authentication seam](#the-authentication-seam). The flow, the fail-closed
-> gating and the refusal behaviour are real and tested; the final "you are signed
-> in" step is not reachable in a deployment today.
+> **Status (updated by #238): the sign-in completes, and a wallet credential can
+> be linked to an existing account.** Presentation validation (#234), issuer
+> trust (#236) and subject resolution (#300) are now wired end to end — see
+> [The authentication seam](#the-authentication-seam) and
+> [Account linking](#account-linking-238). A deployment additionally has to
+> configure `OID4VP_ISSUER_JWKS` (whose key each issuer signs with) and
+> `OID4VP_SUBJECT_BINDING_CLAIMS` (the entitlement check); with either missing,
+> every presentation is refused rather than accepted.
+>
+> Claims normalization into `user_attributes` (#235) is still unbuilt, so a
+> linked wallet credential establishes an authentication factor, not a set of
+> verified claims.
 
 ## Where it lives
 
@@ -24,6 +30,11 @@ password login they extend:
 | `POST /ui/wallet-login`               | Issues an OID4VP request and renders the QR code + deep link                      |
 | `GET /ui/wallet-login/:handle`        | Re-renders a flow in progress; the no-JavaScript refresh path                     |
 | `GET /ui/wallet-login/:handle/status` | Polled by the page; completes the sign-in when the wallet has responded           |
+| `GET /ui/wallet-link`                 | **Signed-in only.** Confirmation screen for linking a wallet credential (#238)    |
+| `POST /ui/wallet-link`                | Starts a linking flow and renders the QR code + deep link                         |
+| `GET /ui/wallet-link/:handle`         | Re-renders a linking flow; the no-JavaScript refresh path                         |
+| `POST /auth/link/wallet`              | JSON API: starts a linking flow (session cookie + `X-CSRF-Token`)                 |
+| `GET /auth/link/wallet/:handle`       | JSON API: polls, and completes the link when the wallet has responded             |
 | `POST /oid4vp/response`               | The `response_uri` the **wallet** posts to (issue #233) — not a browser surface   |
 
 `libs/ui` is the React primitive set used by the developer portal; it is not
@@ -92,15 +103,25 @@ button that fails:
 
 ## Configuration
 
-| Variable                            | Default        | Notes                                                            |
-| ----------------------------------- | -------------- | ---------------------------------------------------------------- |
-| `WALLET_FEDERATION_ENABLED`         | `false`        | Registers the wallet provider and these routes                   |
-| `OID4VP_VERIFIER_PROFILE`           | _(none)_       | `oid4vp-1.0-base` is the only value that works today             |
-| `OID4VP_REQUESTED_VCT`              | _(none)_       | Comma-separated `vct` values; **no wallet flow without it**      |
-| `OID4VP_WALLET_INVOCATION_ENDPOINT` | `openid4vp://` | The wallet Authorization Endpoint the QR and deep link target    |
-| `OID4VP_TRUSTED_ISSUERS`            | _(empty)_      | Per-realm issuer allowlist (#236) — the opposite trust direction |
-| `OID4VP_ISSUER_ASSURANCE`           | _(empty)_      | Per-realm issuer → eIDAS LoA (#237); drives the `acr` claim      |
-| `ACR_VALUE_STYLE`                   | `eidas-uri`    | Vocabulary the `acr` value is written in (#237)                  |
+| Variable                            | Default        | Notes                                                             |
+| ----------------------------------- | -------------- | ----------------------------------------------------------------- |
+| `WALLET_FEDERATION_ENABLED`         | `false`        | Registers the wallet provider and these routes                    |
+| `OID4VP_VERIFIER_PROFILE`           | _(none)_       | `oid4vp-1.0-base` is the only value that works today              |
+| `OID4VP_REQUESTED_VCT`              | _(none)_       | Comma-separated `vct` values; **no wallet flow without it**       |
+| `OID4VP_WALLET_INVOCATION_ENDPOINT` | `openid4vp://` | The wallet Authorization Endpoint the QR and deep link target     |
+| `OID4VP_TRUSTED_ISSUERS`            | _(empty)_      | Per-realm issuer allowlist (#236) — the opposite trust direction  |
+| `OID4VP_ISSUER_JWKS`                | _(empty)_      | Issuer public JWKs (#234) — **nothing verifies without it**       |
+| `OID4VP_SUBJECT_RESOLUTION`         | _(profile)_    | Account-resolution strategy (#300); defaults to `asserted-lookup` |
+| `OID4VP_SUBJECT_BINDING_CLAIMS`     | _(none)_       | The entitlement check (#300) — **required by `asserted-lookup`**  |
+| `OID4VP_ISSUER_ASSURANCE`           | _(empty)_      | Per-realm issuer → eIDAS LoA (#237); drives the `acr` claim       |
+| `ACR_VALUE_STYLE`                   | `eidas-uri`    | Vocabulary the `acr` value is written in (#237)                   |
+
+Three variables answer three different questions and must not be conflated:
+`OID4VP_VERIFIER_PROFILE` is _who are we, to a wallet?_, `OID4VP_TRUSTED_ISSUERS`
+is _which issuers does a realm accept?_, and `OID4VP_ISSUER_JWKS` is _which key
+does an issuer sign with?_. Configuring a key grants no trust, and allowlisting
+an issuer with no configured key can never verify anything — both directions fail
+closed.
 
 The `response_uri` is derived from `JWT_ISSUER`, so it is always the same origin
 the server publishes as its issuer identifier.
@@ -209,35 +230,121 @@ rest of the sign-in copy.
 ## The authentication seam
 
 `apps/auth-server/src/app/helpers/wallet-presentation.ts` is the single point
-where a presentation becomes a session. Since #235 it is IMPLEMENTED — given a
-validated credential it applies every gate below and writes the account — and it
-still refuses in production, for one remaining reason.
+where a presentation becomes a session or a linked credential. Five gates run,
+in this order, and none of them is optional:
 
-The gates, in the order they run, because the order is the security property:
-
-1. **#234 — presentation validation.** A `ValidatedCredential` means the issuer
-   signature verified, every disclosure digest matched, the validity window
-   includes now, and the holder proved possession of the bound key against this
-   request's `nonce` and QAuth's `client_id`.
-2. **#236 — issuer trust**, per realm, from `OID4VP_TRUSTED_ISSUERS`. A realm
-   with no allowlist trusts nobody.
-3. **#299 — verifier posture.** The credential's format must be one the active
-   `VerifierProfile` permits.
-4. **#300 / ADR-009 — subject resolution.** The user asserts an identifier and
-   the presentation proves entitlement to it; the strategy matches the presented
-   credential against the binding stored for the asserted account. Without that
-   check anyone holding any valid credential signs in as anyone.
+1. **#234 — presentation validation.** Issuer signature, every Disclosure digest,
+   the validity window, and the Key Binding JWT bound to this request's `nonce`
+   and this Verifier's `client_id`.
+2. **#236 — issuer trust.** A validated credential from an issuer the realm does
+   not trust is a forgery with extra steps.
+3. **#237 — assurance.** The realm's `OID4VP_ISSUER_ASSURANCE` policy is read
+   AFTER the trust gate, never before: an untrusted issuer and an unassured
+   trusted issuer both resolve to `low`, so reading a level first would say
+   "authenticated at low assurance" where the answer is "not authenticated".
+4. **#300 — subject resolution.** ADR-009 §1 requires verifying that the presented
+   credential matches the binding stored for the **asserted** account; without
+   that check anyone holding any valid credential could sign in as anyone.
 5. **#235 — enrolment and claims.** `helpers/wallet-account.ts` turns the
    resolution into an account and writes the credential's claims as attributes.
 
-### What still refuses, and why
+Steps 1 and 2 are composed in one function, `verifyWalletPresentations`
+(`@qauth-labs/fastify-plugin-federation`), precisely so a caller cannot wire up
+only the first — the first produces a plausible-looking `ValidatedCredential`
+with claims in it, which is exactly the object someone in a hurry would use.
 
-The `direct_post` route hands the seam no credential, because it cannot produce
-one: validation needs the issuer's verification key, and QAuth has no
-configuration that supplies key material (`createStaticIssuerKeyResolver` exists;
-`OID4VP_TRUSTED_ISSUERS` names issuers, not keys). So `resolveWalletPresentation`
-refuses on the first gate. When issuer keys become configurable, the route change
-is to validate and pass `credential` — the seam itself does not change.
+### Where the bytes come from, and what they are checked against
+
+The wallet posts to an endpoint nobody authenticated (`POST /oid4vp/response`,
+OID4VP 1.0 §8.2 — a wallet has no client credentials). That endpoint decides
+nothing: it redeems the single-use `state`, structurally parses the `vp_token`,
+and **parks** the presented bytes under the `state` digest. Validation then runs
+on the cookie-bound browser poll, where the session and the asserted identifier
+exist — and where the expensive signature work is not on an anonymous surface.
+
+Everything a presentation is CHECKED AGAINST — the `nonce`, the `client_id`, the
+DCQL query, the realm — lives on the browser-side flow record. A wallet can
+choose what it presents and nothing about what makes a presentation acceptable.
+
+## Account linking (#238)
+
+An existing user (typically a password account) can attach a wallet credential to
+the account they are **already signed in to**, producing a second
+`user_credentials` row (`provider_type='wallet'`) under the same `users.id`. That
+is ADR-004's account-linking model and ADR-009 §5's `session-binding` strategy.
+
+It has to be a separate, session-bound flow because ADR-009 §1's second bootstrap
+case forbids the alternative:
+
+> An account already exists without a wallet binding (typically a password
+> account on the same email) — the presentation MUST NOT silently create one.
+> Allowing it would let any holder of any trusted credential claim an existing
+> account by asserting its email.
+
+So `asserted-lookup` **refuses** such an account at login, and linking is how its
+owner — proven by their session, not by the presentation — opts in.
+
+Two entry points, both requiring a session: the server-rendered screens at
+`/ui/wallet-link` (confirmation → QR → outcome, the same chrome as the sign-in
+screens) and the JSON API at `POST /auth/link/wallet` for a first-party settings
+UI. QAuth ships no account-management page today, so `/ui/wallet-link` is the
+affordance a deployment links to from its own account screen.
+
+### What gets written
+
+| Column            | Value                                                                |
+| ----------------- | -------------------------------------------------------------------- |
+| `user_id`         | the session's `users.id`                                             |
+| `provider_type`   | `wallet`                                                             |
+| `external_sub`    | the identifier the account already owns — read from its password row |
+| `credential_data` | `{ wallet_binding, issuer, vct }`                                    |
+
+`external_sub` is deliberately the same value `PasswordProvider` fills (ADR-009
+§1), which is what makes a later wallet login resolve back to **this** account:
+both credentials key on one identifier, so either sign-in mints a token with the
+identical `sub`. Under `issuer-scoped-claim` it is instead the digest of
+`(validated issuer, disclosed claim)`.
+
+`wallet_binding` is a digest over the validated issuer, the `vct` and the
+configured `OID4VP_SUBJECT_BINDING_CLAIMS` values — never the claim values in the
+clear. It is what a later `asserted-lookup` login re-derives and compares in
+constant time.
+
+Re-linking a re-issued credential **updates** the row the account already owns; a
+row belonging to a different account is never overwritten.
+
+### Duplicate detection is strategy-scoped, and usually unavailable
+
+#238 originally asked for "reject linking a wallet already bound to a different
+`users.id`". ADR-009's Negative consequences record that this lost its premise:
+there is no stable, unique per-wallet identifier. So the check runs **only** under
+`issuer-scoped-claim`, where `(validated issuer, disclosed claim)` supplies one.
+Under `asserted-lookup` it is not performed, not approximated and not asserted —
+a check that keyed on the asserted account identifier would tell an operator
+their wallets are unique when they are not.
+
+The shipped `uniqueIndex(realm_id, provider_type, external_sub)` still prevents
+two rows sharing an `external_sub` under either strategy. That is a key
+collision, not wallet duplicate detection.
+
+### Security properties specific to linking
+
+- **A session is the entire authority.** Every linking surface requires a live
+  `__Host-qauth_session` cookie; there is no identifier field, because the account
+  is the session's and a second answer could disagree with the cookie.
+- **The session is re-read at completion**, and must be the SAME user who started
+  the flow — a handle captured from a shared screen cannot be finished by a
+  different signed-in user.
+- **Modes do not cross.** A flow is `login` or `link`, and each completion path
+  refuses the other's handle. Completing a link flow on the login path would sign
+  a browser in as the linking user with no credential of that account checked.
+- **CSRF.** The JSON `POST` takes the per-session `X-CSRF-Token` header (the same
+  token `GET /consents` returns); the UI form takes the signed double-submit
+  login-CSRF cookie.
+- **One exception to the uniform refusal.** `conflict` is reported distinctly,
+  because the caller is authenticated and acting on their own account, so it
+  enumerates nothing they could not already establish. Every other failure renders
+  the same sentence.
 
 ### Subject resolution (#300) and the account store
 
@@ -254,22 +361,38 @@ profiles. `resolveSubjectResolution` folds the fail-closed assertions in, so a
 half-configured selection throws rather than quietly building a weaker strategy —
 and the seam turns that throw into the same uniform refusal, logging the reason.
 
-The `SubjectAccountLookup` port is implemented in
-`apps/auth-server/src/app/helpers/wallet-account.ts` over `user_credentials`, as
-#235. It is realm-scoped and deliberately returns matches across **every**
-provider type: an account that already exists for the asserted identifier without
-a wallet binding — typically a password account on the same email — must be
-visible, or ADR-009's second bootstrap case would be reported as "no account
-found" and enrolled over.
+#238 supplied the inputs the strategy was waiting for: `resolve()` consumes a
+`ValidatedCredential` (now produced by the verification seam above) and a
+`SubjectAccountLookup` — the account-store port that answers "which accounts in
+this realm does this asserted identifier resolve to, and what wallet binding does
+each carry". The adapter over `user_credentials` is
+`apps/auth-server/src/app/helpers/wallet-account-lookup.ts`.
 
-Note the boot posture, deliberately unchanged: selecting a strategy is still not
-a startup gate. A deployment that configures none refuses wallet logins at
-request time with the same refusal every other failure produces.
+Two properties of that adapter are load-bearing. It returns rows across **every**
+provider type, so a password account with no wallet binding stays visible and is
+refused rather than looking like "no account" a caller might enrol over. And it
+lets a database failure propagate, because the strategy contains it and turns it
+into the same uniform refusal — swallowing it here would turn a broken database
+into "no such account".
 
-The same function also resolves the assurance level (#237) — it returns an
-optional `assuranceLevel` alongside the user, and everything downstream of it (the
-browser session, the authorization code, the ID token's `acr` claim) is already
-wired for it.
+Note the boot posture, deliberately unchanged: selecting a strategy is **not** a
+startup gate. A deployment that names a strategy and omits its settings fails at
+`resolveSubjectResolution` on the request path — logged as an operator error and
+rendered as a refusal, never as a distinct status an anonymous caller could
+drive.
+
+The login path **does** enrol, but only on `no-match`. That is ADR-009 §1's first
+bootstrap case: no account exists for the asserted identifier, so the
+presentation establishes the account and its wallet binding together
+(`helpers/wallet-account.ts`, #235). `ambiguous` and `rejected` never enrol —
+`rejected` in particular carries ADR-009's second bootstrap case, an account that
+exists for the identifier with no matching wallet binding, and enrolling there
+would be the account takeover the ADR names.
+
+The same seam also resolves the assurance level (#237) — it returns an optional
+`assuranceLevel` alongside the user, and everything downstream of it (the browser
+session, the authorization code, the ID token's `acr` claim) is already wired for
+it.
 
 ## VC claims normalization (#235)
 

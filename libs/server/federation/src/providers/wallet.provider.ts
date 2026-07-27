@@ -14,6 +14,7 @@ import type {
   UserAttribute,
   VerifiedIdentity,
 } from './credential-provider.interface';
+import { MAX_WALLET_BINDING_LENGTH } from './wallet-credential-data';
 
 /**
  * WalletProvider — the `type='wallet'` {@link CredentialProvider} (ADR-004).
@@ -267,13 +268,16 @@ export const walletRawClaimsSchema = z
  * nullable in the SCHEMA — a row from a future strategy that stores none must
  * still parse — while #235's enrolment path refuses to write a row without one.
  * A stored `null` therefore reads as "this account has no wallet binding", which
- * `selectSoleAccount` treats as ADR-009's second bootstrap case and refuses.
+ * `selectSoleAccount` treats as ADR-009's second bootstrap case and refuses. Its
+ * length bound is shared with `readWalletBinding` (#238), which is the ONLY
+ * reader: a writer and a reader that disagree about the cap would write rows the
+ * next login cannot see.
  */
 export const walletCredentialDataSchema = z.object({
   credential_format: z.string().min(1),
   credential_type: z.string().min(1),
   issuer: z.string().min(1),
-  wallet_binding: z.string().min(1).nullable(),
+  wallet_binding: z.string().min(1).max(MAX_WALLET_BINDING_LENGTH).nullable(),
   subject_resolution: z.string().min(1),
   enrolled_at: z.number().int().nonnegative(),
   credential_expires_at: z.number().int().positive().nullable().optional(),

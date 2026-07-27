@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
+import { NO_KEY_STORAGE_ASSURANCE } from '../attestation/key-storage-assurance';
 import type { ValidatedCredential } from '../oid4vp/validated-credential';
 import { ValidatedIssuer } from '../trust/issuer-identity';
 import {
@@ -36,6 +37,10 @@ function credential(
       keyBindingAlgorithm: 'ES256',
       disclosedClaimCount: 1,
       statusChecked: false,
+      // #308's evidence, and `'none'` is the honest value for this fixture: no
+      // key attestation was validated. Assurance policy must NOT read it — the
+      // two are independent inputs (see `AssuredKeyStorage`).
+      keyStorageAssurance: NO_KEY_STORAGE_ASSURANCE,
     },
   };
 }

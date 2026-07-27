@@ -161,6 +161,12 @@ services:
       # value to be. Only reached once a level has been established, so unlike
       # the profile above it has a safe default.
       ACR_VALUE_STYLE: ${ACR_VALUE_STYLE:-eidas-uri}
+      # Issuer VERIFICATION KEYS (#234/#238) — which key each issuer signs with.
+      # A separate question from the allowlist above: that one decides whether an
+      # issuer's credentials count, this one is what makes a signature checkable
+      # at all. Blank means no issuer key is configured, so every presentation is
+      # refused — the fail-closed state, not a permissive one.
+      OID4VP_ISSUER_JWKS: ${OID4VP_ISSUER_JWKS:-}
       # Wallet sign-in screen (#239). Both blank-by-default: an empty
       # OID4VP_REQUESTED_VCT means no credential type was chosen, and the UI
       # then offers no wallet flow at all — the same fail-closed posture as the

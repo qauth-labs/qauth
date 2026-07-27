@@ -1,5 +1,6 @@
 import { randomBytes } from 'node:crypto';
 
+import type { PresentedCredential } from '@qauth-labs/fastify-plugin-federation';
 import type { FastifyInstance } from 'fastify';
 
 import { WALLET_LOGIN_FLOW_TTL_MS } from '../constants';
@@ -50,6 +51,18 @@ import { WALLET_LOGIN_FLOW_TTL_MS } from '../constants';
 const WALLET_FLOW_KEY_PREFIX = 'wallet-login:';
 
 /**
+ * Redis namespace for the PRESENTED BYTES a wallet posted.
+ *
+ * Separate from the signal namespace below, and the separation is the point: the
+ * signal is a fixed-shape marker QAuth writes about itself, this is
+ * attacker-controlled text QAuth is merely holding. Sharing a key would make a
+ * shape mistake in one a way of writing the other, and would quietly turn the
+ * signal — which several code paths treat as trustworthy because QAuth authored
+ * it — into a channel a wallet can put content into.
+ */
+const WALLET_PRESENTATION_KEY_PREFIX = 'wallet-presentation:';
+
+/**
  * Redis namespace for the wallet-side signal.
  *
  * Distinct from the flow namespace because the two are written by different
@@ -77,6 +90,18 @@ const HANDLE_PATTERN = /^[A-Za-z0-9_-]{43}$/;
  */
 export type WalletPresentationSignal = 'received' | 'wallet_error';
 
+/**
+ * What a wallet flow is FOR (issue #238).
+ *
+ * A hard discriminator, not a hint. `login` mints a session for whichever
+ * account the presentation resolves to; `link` attaches a credential to an
+ * account that is ALREADY authenticated. Feeding a `link` flow to the login
+ * completion path would sign a browser in as the linking user without ever
+ * checking a password — so each path REFUSES the other's mode rather than
+ * tolerating it, and both refusals are tested.
+ */
+export type WalletFlowMode = 'login' | 'link';
+
 /** Browser-side flow record. Auth-flow state, never user state. */
 export interface WalletLoginFlow {
   /**
@@ -94,11 +119,50 @@ export interface WalletLoginFlow {
    */
   assertedIdentifier: string;
   /**
+   * What this flow is for. See {@link WalletFlowMode}.
+   *
+   * Optional in the TYPE only, because Redis holds records written by the
+   * previous binary. Readers treat an absent value as `'login'` — the mode that
+   * existed before #238 — and the linking path requires an explicit `'link'`,
+   * so an old record can never be advanced into a link.
+   */
+  mode?: WalletFlowMode;
+  /**
+   * `users.id` this flow will link a credential to. Present ONLY when
+   * {@link mode} is `'link'`, and written from a VERIFIED session — never from a
+   * request parameter. The completion path re-checks that the session at
+   * completion time is still this user, so a captured handle cannot be finished
+   * by someone else's browser even if they also hold the binder.
+   */
+  linkUserId?: string;
+  /**
    * The wallet invocation URI, OPAQUE to this layer. Under the base profile it
    * carries the request parameters inline; under HAIP it is a `request_uri`
    * reference to a signed JAR (#298). The UI renders whichever it is given.
    */
   invocationUri: string;
+  /**
+   * The request `nonce`, as sent. The Key Binding JWT is compared against it
+   * verbatim (#234), which is what makes a presentation answer THIS request and
+   * not a replay of an earlier one.
+   *
+   * Held on the BROWSER-side record rather than read back from the wallet-side
+   * stash: the wallet already holds this value (it is in the request it was
+   * given), but it must never be able to CHOOSE the value it is checked against.
+   * It is no more exposed here than in {@link invocationUri}, which embeds it.
+   */
+  nonce?: string;
+  /**
+   * The `client_id` the request carried (OID4VP 1.0 §5.9). Compared against the
+   * Key Binding JWT's `aud`, which is what binds the presentation to THIS
+   * Verifier. Same reasoning as {@link nonce} for why it lives here.
+   */
+  clientId?: string;
+  /**
+   * The DCQL query that was sent, as an object. `vp_token` is keyed by its
+   * Credential Query ids, so validation cannot proceed without it.
+   */
+  dcqlQuery?: Record<string, unknown>;
   /** Relative path to redirect to after a completed sign-in. */
   returnTo: string;
   /** Binder mirrored in the signed `__Host-` wallet-flow cookie. */
@@ -241,5 +305,91 @@ export async function deleteWalletPresentationSignal(
     await fastify.sessionUtils.deleteSession(`${WALLET_SIGNAL_KEY_PREFIX}${stateHash}`);
   } catch (error) {
     fastify.log.warn({ err: error }, 'failed to delete a wallet presentation signal');
+  }
+}
+
+/**
+ * The presented credentials a wallet posted, parked for the waiting browser
+ * (issue #238).
+ *
+ * ## Why the bytes are parked instead of validated on arrival
+ *
+ * The `direct_post` endpoint is UNAUTHENTICATED by construction (OID4VP 1.0
+ * §8.2 — a wallet has no client credentials), and it holds only half of what a
+ * decision needs: the request, but not the browser, the session or the asserted
+ * identifier. Validation also costs signature verification per Disclosure, so
+ * running it there would put the expensive part of the flow on the anonymous
+ * surface. So the endpoint stays what its own module JSDoc says it is —
+ * transport — and the cookie-bound browser poll does the validating.
+ *
+ * ## What this is, in trust terms
+ *
+ * Attacker-controlled bytes, held for minutes, addressed by the digest of a
+ * `state` the attacker had to redeem to write here at all. Nothing may read
+ * this record except the verification seam, and nothing in it is trusted: the
+ * `nonce`, the `client_id` and the DCQL query it is checked against all come
+ * from the BROWSER-side flow record, never from here.
+ */
+export interface StashedWalletPresentation {
+  /** What `parseVpToken` structurally parsed. Unvalidated. */
+  presentations: readonly PresentedCredential[];
+  at: number;
+  [key: string]: unknown;
+}
+
+/**
+ * Park the presented credentials for the browser that is waiting on this
+ * request.
+ *
+ * Never throws, for the same reason `publishWalletPresentationSignal` does not:
+ * the wallet's transport acknowledgement (§8.3) must not depend on a store the
+ * wallet has no relationship with. A failed write degrades to the browser timing
+ * out, which is what a wallet that never answered looks like.
+ */
+export async function stashWalletPresentation(
+  fastify: FastifyInstance,
+  stateHash: string,
+  presentations: StashedWalletPresentation['presentations']
+): Promise<void> {
+  try {
+    await fastify.sessionUtils.setSession<StashedWalletPresentation>(
+      `${WALLET_PRESENTATION_KEY_PREFIX}${stateHash}`,
+      { presentations, at: Date.now() },
+      Math.floor(WALLET_LOGIN_FLOW_TTL_MS / 1000)
+    );
+  } catch (error) {
+    fastify.log.warn(
+      { err: error },
+      'failed to stash a wallet presentation; the waiting browser will time out'
+    );
+  }
+}
+
+/** Read the parked presentations, or null when none arrived or the store failed. */
+export async function readWalletPresentationStash(
+  fastify: FastifyInstance,
+  stateHash: string
+): Promise<StashedWalletPresentation['presentations'] | null> {
+  try {
+    const record = await fastify.sessionUtils.getSession<StashedWalletPresentation>(
+      `${WALLET_PRESENTATION_KEY_PREFIX}${stateHash}`
+    );
+    if (!record || !Array.isArray(record.presentations)) return null;
+    return record.presentations;
+  } catch (error) {
+    fastify.log.warn({ err: error }, 'wallet presentation stash unavailable');
+    return null;
+  }
+}
+
+/** Delete parked presentations. Called on EVERY terminal outcome. */
+export async function deleteWalletPresentationStash(
+  fastify: FastifyInstance,
+  stateHash: string
+): Promise<void> {
+  try {
+    await fastify.sessionUtils.deleteSession(`${WALLET_PRESENTATION_KEY_PREFIX}${stateHash}`);
+  } catch (error) {
+    fastify.log.warn({ err: error }, 'failed to delete a stashed wallet presentation');
   }
 }

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
+import { NO_KEY_STORAGE_ASSURANCE } from '../attestation/key-storage-assurance';
 import type { ValidatedCredential } from '../oid4vp/validated-credential';
 import { ValidatedIssuer } from '../trust/issuer-identity';
 import {
@@ -28,6 +29,7 @@ function credential(identifier: string, credentialType: string = TEST_VCT): Vali
       keyBindingAlgorithm: 'ES256',
       disclosedClaimCount: 1,
       statusChecked: false,
+      keyStorageAssurance: NO_KEY_STORAGE_ASSURANCE,
     },
   };
 }

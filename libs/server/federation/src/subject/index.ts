@@ -24,3 +24,4 @@ export * from './subject-binding';
 export type * from './subject-resolution.types';
 export * from './subject-resolution-config';
 export * from './subject-resolution-strategies';
+export * from './wallet-link';

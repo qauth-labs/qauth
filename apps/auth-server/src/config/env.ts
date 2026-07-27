@@ -7,6 +7,7 @@ import {
   DEV_SESSION_COOKIE_SECRET_DEFAULT,
   emailEnvSchema,
   federationEnvSchema,
+  issuerKeysEnvSchema,
   jwtEnvSchema,
   observabilityEnvSchema,
   parseEnv,
@@ -63,6 +64,14 @@ const envSchema = z
     // an unset variable means "no realm assures any issuer" (hence no `acr`
     // claim anywhere) rather than taking the boot down.
     ...assuranceEnvSchema.shape,
+    // Issuer VERIFICATION KEYS (ADR-004): OID4VP_ISSUER_JWKS (#234/#238) — the
+    // public keys credential issuers sign with, pinned in configuration. A
+    // third, separate question from the two above: the profile says who WE are,
+    // the allowlist says which issuers a realm ACCEPTS, and this says which key
+    // an issuer SIGNS WITH. Configuring a key here grants no trust, and
+    // allowlisting an issuer with no key here can never verify anything — both
+    // directions fail closed, which is why they do not share a variable.
+    ...issuerKeysEnvSchema.shape,
     /**
      * CORS allowed origin (app-specific). When unset in `production` the
      * server denies all cross-origin requests (fail-closed); in non-production

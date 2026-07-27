@@ -2,16 +2,15 @@ import {
   buildWalletCredentialData,
   deriveEnrolmentWalletBinding,
   extractWalletAttributes,
-  type SubjectAccountCandidate,
-  type SubjectAccountLookup,
   type SubjectResolutionConfig,
   type SubjectResolutionStrategy,
   type ValidatedCredential,
   WALLET_PROVIDER_TYPE,
-  walletCredentialDataSchema,
 } from '@qauth-labs/fastify-plugin-federation';
 import { UniqueConstraintError } from '@qauth-labs/shared-errors';
 import type { FastifyInstance } from 'fastify';
+
+import { createWalletAccountLookup } from './wallet-account-lookup';
 
 /**
  * Wallet account resolution and enrolment (issue #235, ADR-009).
@@ -24,9 +23,9 @@ import type { FastifyInstance } from 'fastify';
  *     `SubjectResolutionStrategy` over the `SubjectAccountLookup` port.
  *
  * `server-federation` is `scope:server` and may not import `infra-db`, which is
- * why the port has no implementation there. This module is that implementation,
- * plus the write half #300 deliberately does not have (*"strategies never create
- * accounts"*).
+ * why the port has no implementation there. `helpers/wallet-account-lookup.ts`
+ * (#238) is that implementation; this module is the write half #300 deliberately
+ * does not have (*"strategies never create accounts"*).
  *
  * ## What is written, and what is NOT
  *
@@ -84,73 +83,6 @@ export interface WalletAccountInput {
   readonly strategy: SubjectResolutionStrategy;
   /** The resolved configuration — the enrolment binding is derived from it. */
   readonly config: SubjectResolutionConfig;
-}
-
-/**
- * Read the wallet binding a credential row carries, or `null`.
- *
- * `null` means "this account has no wallet binding", which `selectSoleAccount`
- * treats as ADR-009's second bootstrap case and refuses. Every non-wallet row
- * yields `null` by construction — a password credential cannot prove anything
- * about a wallet — and so does a wallet row whose `credential_data` does not
- * parse. Fail-closed in both directions: a corrupt row makes its account
- * unclaimable by a presentation, never claimable by any presentation.
- */
-function candidateBinding(credentialData: unknown, providerType: string): string | null {
-  if (providerType !== WALLET_PROVIDER_TYPE) return null;
-
-  const parsed = walletCredentialDataSchema.safeParse(credentialData);
-  if (!parsed.success) return null;
-
-  return parsed.data.wallet_binding;
-}
-
-/**
- * The `SubjectAccountLookup` port over `user_credentials` (#300).
- *
- * Realm-scoped on both lookups, and both return EVERY match across every
- * provider type — the port's two hard requirements, and the second is what makes
- * ADR-009's second bootstrap case visible at all.
- *
- * @param fastify - server instance, for its repositories.
- */
-export function createWalletAccountLookup(fastify: FastifyInstance): SubjectAccountLookup {
-  return {
-    async byAssertedIdentifier(
-      realmId: string,
-      identifier: string
-    ): Promise<readonly SubjectAccountCandidate[]> {
-      const rows = await fastify.repositories.userCredentials.findByRealmAndSub(
-        realmId,
-        identifier
-      );
-
-      return rows.map((row) => ({
-        userId: row.userId,
-        walletBinding: candidateBinding(row.credentialData, row.providerType),
-      }));
-    },
-
-    async byWalletSubject(
-      realmId: string,
-      externalSub: string
-    ): Promise<readonly SubjectAccountCandidate[]> {
-      const row = await fastify.repositories.userCredentials.findByRealmProviderSub(
-        realmId,
-        WALLET_PROVIDER_TYPE,
-        externalSub
-      );
-
-      if (row === undefined) return [];
-
-      return [
-        {
-          userId: row.userId,
-          walletBinding: candidateBinding(row.credentialData, row.providerType),
-        },
-      ];
-    },
-  };
 }
 
 /**

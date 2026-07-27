@@ -9,7 +9,8 @@ import { UniqueConstraintError } from '@qauth-labs/shared-errors';
 import type { FastifyInstance } from 'fastify';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { createWalletAccountLookup, resolveWalletAccount } from './wallet-account';
+import { resolveWalletAccount } from './wallet-account';
+import { createWalletAccountLookup } from './wallet-account-lookup';
 
 /**
  * Wallet account resolution and enrolment (#235, ADR-009).
@@ -55,6 +56,9 @@ function credentialFor(claims: Record<string, unknown>, expiresAt?: number): Val
       keyBindingAlgorithm: 'ES256',
       disclosedClaimCount: Object.keys(claims).length,
       statusChecked: false,
+      // #308's evidence. `'none'` is the honest value: nothing here validated a
+      // key attestation, and enrolment must not read it either way.
+      keyStorageAssurance: { assurance: 'none' },
     },
   };
 }
@@ -76,7 +80,7 @@ function credentialRow(overrides: Record<string, unknown> = {}) {
 
 function fakeFastify() {
   const userCredentials = {
-    findByRealmAndSub: vi.fn().mockResolvedValue([]),
+    findAllByRealmAndExternalSub: vi.fn().mockResolvedValue([]),
     findByRealmProviderSub: vi.fn().mockResolvedValue(undefined),
     create: vi
       .fn()
@@ -114,7 +118,7 @@ async function resolve(
 describe('createWalletAccountLookup (the SubjectAccountLookup port over user_credentials)', () => {
   it('returns every account the asserted identifier resolves to, across provider types', async () => {
     const { fastify, userCredentials } = fakeFastify();
-    userCredentials.findByRealmAndSub.mockResolvedValue([
+    userCredentials.findAllByRealmAndExternalSub.mockResolvedValue([
       credentialRow({
         userId: 'user-1',
         providerType: 'password',
@@ -131,12 +135,15 @@ describe('createWalletAccountLookup (the SubjectAccountLookup port over user_cre
     // report "no account" for an email that already has one, and the caller is
     // allowed to turn "no account" into an enrolment — ADR-009's takeover.
     expect(candidates).toEqual([{ userId: 'user-1', walletBinding: null }]);
-    expect(userCredentials.findByRealmAndSub).toHaveBeenCalledWith(REALM_ID, 'alice@example.com');
+    expect(userCredentials.findAllByRealmAndExternalSub).toHaveBeenCalledWith(
+      REALM_ID,
+      'alice@example.com'
+    );
   });
 
   it('reads the stored binding off a wallet row', async () => {
     const { fastify, userCredentials } = fakeFastify();
-    userCredentials.findByRealmAndSub.mockResolvedValue([
+    userCredentials.findAllByRealmAndExternalSub.mockResolvedValue([
       credentialRow({
         credentialData: {
           credential_format: 'dc+sd-jwt',
@@ -156,7 +163,7 @@ describe('createWalletAccountLookup (the SubjectAccountLookup port over user_cre
 
   it('treats a corrupt wallet credential_data as UNBOUND, never as matching', async () => {
     const { fastify, userCredentials } = fakeFastify();
-    userCredentials.findByRealmAndSub.mockResolvedValue([
+    userCredentials.findAllByRealmAndExternalSub.mockResolvedValue([
       credentialRow({ credentialData: { wallet_binding: 42 } }),
     ]);
 
@@ -261,7 +268,7 @@ describe('resolveWalletAccount — enrolment (ADR-009 §1, first bootstrap case)
     // The round trip that matters: replay the same credential against an
     // account carrying the binding that enrolment just wrote.
     const returning = fakeFastify();
-    returning.userCredentials.findByRealmAndSub.mockResolvedValue([
+    returning.userCredentials.findAllByRealmAndExternalSub.mockResolvedValue([
       credentialRow({ credentialData: stored }),
     ]);
 
@@ -358,7 +365,7 @@ describe('resolveWalletAccount — the refusals that must NEVER become an enrolm
     // typically a password account on the same email. Enrolling here would let
     // any holder of any trusted credential claim an existing account by
     // asserting its email. That path is linking (#238), under a session.
-    harness.userCredentials.findByRealmAndSub.mockResolvedValue([
+    harness.userCredentials.findAllByRealmAndExternalSub.mockResolvedValue([
       credentialRow({ providerType: 'password', credentialData: { password_hash: 'x' } }),
     ]);
 
@@ -386,7 +393,7 @@ describe('resolveWalletAccount — the refusals that must NEVER become an enrolm
       subject_resolution: 'asserted-lookup',
       enrolled_at: 1,
     });
-    harness.userCredentials.findByRealmAndSub.mockResolvedValue([
+    harness.userCredentials.findAllByRealmAndExternalSub.mockResolvedValue([
       credentialRow({ credentialData: victimBinding }),
     ]);
 
@@ -400,7 +407,7 @@ describe('resolveWalletAccount — the refusals that must NEVER become an enrolm
   });
 
   it('refuses an AMBIGUOUS lookup rather than picking an account', async () => {
-    harness.userCredentials.findByRealmAndSub.mockResolvedValue([
+    harness.userCredentials.findAllByRealmAndExternalSub.mockResolvedValue([
       credentialRow({ userId: 'user-1', providerType: 'password', credentialData: {} }),
       credentialRow({ id: 'cred-2', userId: 'user-2', providerType: 'wallet', credentialData: {} }),
     ]);
@@ -412,7 +419,9 @@ describe('resolveWalletAccount — the refusals that must NEVER become an enrolm
   });
 
   it('refuses when the account store throws, and says so to the operator only', async () => {
-    harness.userCredentials.findByRealmAndSub.mockRejectedValue(new Error('connection reset'));
+    harness.userCredentials.findAllByRealmAndExternalSub.mockRejectedValue(
+      new Error('connection reset')
+    );
 
     expect(
       await resolve(harness.fastify, credentialFor({ given_name: 'Alice', family_name: 'Doe' }))
@@ -433,7 +442,7 @@ describe('resolveWalletAccount — the refusals that must NEVER become an enrolm
       credentialFor({ given_name: 'Alice' })
     );
 
-    harness.userCredentials.findByRealmAndSub.mockResolvedValue([
+    harness.userCredentials.findAllByRealmAndExternalSub.mockResolvedValue([
       credentialRow({ providerType: 'password', credentialData: {} }),
     ]);
     const existingAccount = await resolve(

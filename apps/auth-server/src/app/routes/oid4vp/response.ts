@@ -13,7 +13,10 @@ import type { FastifyInstance } from 'fastify';
 import { ZodTypeProvider } from 'fastify-type-provider-zod';
 
 import { env } from '../../../config/env';
-import { publishWalletPresentationSignal } from '../../helpers/wallet-login-flow';
+import {
+  publishWalletPresentationSignal,
+  stashWalletPresentation,
+} from '../../helpers/wallet-login-flow';
 import {
   type Oid4vpDirectPostRequest,
   oid4vpDirectPostRequestSchema,
@@ -205,16 +208,13 @@ export default async function (fastify: FastifyInstance) {
 
         // (4) Structural parse against the DCQL query we actually sent.
         //
-        // The outcome is built and then deliberately goes NOWHERE. #234's
-        // validator and everything after it (#235's seam in
-        // `helpers/wallet-presentation.ts`) are implemented and wired — what is
-        // missing is the ISSUER KEY MATERIAL validation needs: nothing populates
-        // an `IssuerKeyResolver`, and `OID4VP_TRUSTED_ISSUERS` names issuers,
-        // not keys. Calling `validatePresentations` from here would therefore
-        // refuse every presentation with `issuer-key-unresolvable`. When key
-        // resolution becomes configurable, this is the one place that changes:
-        // validate against `outcome.state.nonce` and pass the credential to the
-        // seam. Assembling the outcome now keeps that a small change.
+        // STILL only a structural parse. #238 picks the outcome up from exactly
+        // here and PARKS it for the cookie-bound browser that is waiting on this
+        // request; validation (#234), issuer trust (#236), subject resolution
+        // (#300) and enrolment (#235) all happen on that side, where the session
+        // and the asserted identifier exist. Nothing about this endpoint's
+        // posture changed: it still authenticates nobody, still creates nothing,
+        // and still cannot name a browser, a user or an account.
         const outcome: Oid4vpDirectPostOutcome = {
           state: correlated,
           presentations: parseVpToken(
@@ -247,15 +247,24 @@ export default async function (fastify: FastifyInstance) {
           },
         });
 
+        // Park the presented bytes for the browser waiting on this request
+        // (#238). Attacker-controlled text, addressed by the digest of a `state`
+        // the caller had to redeem to get here at all, and read by nothing
+        // except the verification seam — which checks it against a `nonce`, a
+        // `client_id` and a DCQL query that come from the BROWSER's flow record,
+        // never from this stash. Written BEFORE the signal so a browser that
+        // sees `received` always finds the bytes it names.
+        await stashWalletPresentation(fastify, stateHash, outcome.presentations);
+
         // Wake the browser waiting on this request, if there is one (#239).
         //
         // This is a TRANSPORT signal and nothing else: it says a structurally
         // valid `vp_token` came back for a `state` we issued. It carries no
         // subject, no claims and no verdict, and the UI cannot turn it into a
         // session on its own — `helpers/wallet-presentation.ts` is the seam that
-        // would, and it refuses until #234/#236/#300 land. Deliberately AFTER
-        // the audit entry and best-effort: a wallet's acknowledgement must not
-        // depend on a store the wallet has no relationship with.
+        // does that, under a cookie-bound request. Deliberately AFTER the audit
+        // entry and best-effort: a wallet's acknowledgement must not depend on a
+        // store the wallet has no relationship with.
         await publishWalletPresentationSignal(fastify, stateHash, 'received');
 
         // OID4VP 1.0 §8.3 — a transport-level acknowledgement, nothing more.

@@ -48,7 +48,8 @@ import type { AcrBearingAssuranceLevel } from './acr-value';
  */
 
 /**
- * How the holder's credential-bound private key is stored.
+ * How the holder's credential-bound private key is stored, in the terms an
+ * eIDAS Level of Assurance is expressed in.
  *
  * **The seam for key attestations (HAIP §9.2, issue #308).** eIDAS LoA `high`
  * requires a secure cryptographic device, which is a property of the WALLET's
@@ -56,19 +57,25 @@ import type { AcrBearingAssuranceLevel } from './acr-value';
  * HAIP §9.2 key attestations are how a wallet proves it, and #308 implements
  * their validation.
  *
- * Until #308 lands nothing produces this value, which is why it reaches this
- * module as OPTIONAL {@link AssuranceEvidence} rather than as a field on
- * `ValidatedCredential`: adding it there would have required #234 to invent a
- * value it cannot observe. When #308 lands it fills
- * {@link AssuranceEvidence.keyStorage} at the call site and every policy entry
- * that demands a key store starts being satisfiable — with no change here and
- * none at any consumer.
+ * DISTINCT from #308's `KeyStorageAssurance`, deliberately, and the two names are
+ * not interchangeable. #308's type answers *which source established anything*
+ * (`'none' | 'issuer-attested' | 'key-attested'`) and carries an OID4VCI
+ * Appendix D attack-potential grade alongside it. This one answers *what the
+ * answer is worth to an eIDAS level*, which is a policy question an operator
+ * settles per issuer. Collapsing them would let an attestation's mere presence
+ * decide a Level of Assurance.
+ *
+ * It reaches this module as OPTIONAL {@link AssuranceEvidence} rather than as a
+ * field on `ValidatedCredential`, because #234 cannot observe it. A policy entry
+ * that demands a key store is satisfiable only once a caller fills
+ * {@link AssuranceEvidence.keyStorage} from #308's evidence — no wallet flow
+ * does that yet, so such an entry is fail-closed by construction.
  *
  * - `software` — the key lives in ordinary application storage.
  * - `hardware` — the key is held in a secure cryptographic device (secure
  *   element, TEE, or an equivalent the attestation vouches for).
  */
-export type KeyStorageAssurance = 'software' | 'hardware';
+export type AssuredKeyStorage = 'software' | 'hardware';
 
 /**
  * Evidence about the authentication that does NOT come from the credential.
@@ -86,7 +93,7 @@ export interface AssuranceEvidence {
    * Key storage as proven by a validated key attestation (#308). Absent means
    * unproven — see {@link IssuerAssuranceEntry.requiresKeyStorage}.
    */
-  readonly keyStorage?: KeyStorageAssurance;
+  readonly keyStorage?: AssuredKeyStorage;
 }
 
 /**
@@ -120,13 +127,16 @@ export interface IssuerAssuranceEntry {
    * Minimum key storage this entry demands (#308 seam).
    *
    * When set to `'hardware'`, the entry grants its level ONLY if
-   * {@link AssuranceEvidence.keyStorage} proves hardware storage. Until #308
-   * lands nothing produces that evidence, so such an entry can never grant —
-   * fail-closed by construction, and deliberately so: an eIDAS `high` claim
-   * that assumed a secure cryptographic device nobody verified would be exactly
-   * the unearned assertion this module exists to prevent.
+   * {@link AssuranceEvidence.keyStorage} proves hardware storage. No wallet flow
+   * fills that field yet — #308 validates attestations and reports its own
+   * evidence on `CredentialAssuranceSignal.keyStorageAssurance`, and translating
+   * that into an eIDAS key-storage claim is an operator policy nobody has
+   * written — so such an entry can never grant. Fail-closed by construction, and
+   * deliberately so: an eIDAS `high` claim that assumed a secure cryptographic
+   * device nobody verified would be exactly the unearned assertion this module
+   * exists to prevent.
    */
-  readonly requiresKeyStorage?: KeyStorageAssurance;
+  readonly requiresKeyStorage?: AssuredKeyStorage;
 }
 
 /**
@@ -166,8 +176,8 @@ export const LOW_ONLY_ASSURANCE_POLICY: AssurancePolicy = Object.freeze({
 
 /** Does the proven key storage satisfy what an entry demands? */
 function keyStorageSatisfied(
-  required: KeyStorageAssurance | undefined,
-  proven: KeyStorageAssurance | undefined
+  required: AssuredKeyStorage | undefined,
+  proven: AssuredKeyStorage | undefined
 ): boolean {
   if (required === undefined) return true;
   // Only an exact `hardware` proof satisfies a `hardware` requirement, and a
