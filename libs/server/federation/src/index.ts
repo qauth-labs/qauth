@@ -1,3 +1,7 @@
+export * from './assurance/acr-value';
+export * from './assurance/assurance-level';
+export * from './assurance/credential-assurance';
+export * from './assurance/resolve-assurance-policy';
 export * from './claims/attribute-trust';
 export * from './oid4vp';
 export * from './profiles/resolve-verifier-profile';

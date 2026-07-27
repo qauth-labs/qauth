@@ -99,6 +99,8 @@ button that fails:
 | `OID4VP_REQUESTED_VCT`              | _(none)_       | Comma-separated `vct` values; **no wallet flow without it**      |
 | `OID4VP_WALLET_INVOCATION_ENDPOINT` | `openid4vp://` | The wallet Authorization Endpoint the QR and deep link target    |
 | `OID4VP_TRUSTED_ISSUERS`            | _(empty)_      | Per-realm issuer allowlist (#236) — the opposite trust direction |
+| `OID4VP_ISSUER_ASSURANCE`           | _(empty)_      | Per-realm issuer → eIDAS LoA (#237); drives the `acr` claim      |
+| `ACR_VALUE_STYLE`                   | `eidas-uri`    | Vocabulary the `acr` value is written in (#237)                  |
 
 The `response_uri` is derived from `JWT_ISSUER`, so it is always the same origin
 the server publishes as its issuer identifier.
@@ -109,6 +111,64 @@ the server publishes as its issuer identifier.
 `vbscript:`, including case- and HTML-entity-encoded spellings). The value is
 rendered into an `href`, so such a scheme would be a stored XSS payload served
 to everyone who opens the sign-in screen; the render path re-checks it too.
+
+## Assurance level and the `acr` claim
+
+A wallet sign-in can tell a downstream application **how strong** the
+authentication was. QAuth carries that as the OIDC `acr` (Authentication Context
+Class Reference) claim of the ID token it issues to the client. The full decision
+— including the research showing that no registered `acr` value for an eIDAS
+Level of Assurance exists — is [ADR-010](./adr/010-acr-assurance-mapping.md).
+
+### What a downstream application sees
+
+| Authentication                                        | `acr` in the ID token                    |
+| ----------------------------------------------------- | ---------------------------------------- |
+| Password login                                        | **absent**                               |
+| Wallet login, issuer not in `OID4VP_ISSUER_ASSURANCE` | **absent**                               |
+| Wallet login, issuer assured `substantial`            | `http://eidas.europa.eu/LoA/substantial` |
+| Wallet login, issuer assured `high`                   | `http://eidas.europa.eu/LoA/high`        |
+
+(Values shown for the default `eidas-uri` style; under `loa-name` they are the
+bare strings `substantial` and `high`.)
+
+**The absence of `acr` is the signal for "no higher assurance was established".**
+It is never emitted with a "low" value, so an RP may treat presence alone as "this
+session came from an assured credential" and compare the value when it needs a
+specific level:
+
+```js
+// Require an eIDAS "high" wallet credential for a sensitive operation.
+if (idTokenClaims.acr !== 'http://eidas.europa.eu/LoA/high') {
+  // Re-authenticate, or refuse.
+}
+```
+
+`acr` is bound to the authorization code at `/oauth/authorize` time and rendered
+at `/oauth/token`, so it reflects the authentication that actually backs the code
+— not the moment the token was requested. Refresh rotation and RFC 8693 token
+exchange issue no ID token, so neither can launder an `acr` value.
+
+### Where the level comes from
+
+Not from the wallet. OID4VP 1.0 §5 fixes the response type to `vp_token`, so
+there is no wallet-signed assertion for a level to travel in, and HAIP 1.0 §1
+states that the profile alone does not reach LoA `high`. The level is a property
+of the **issuer**: which issuer signed the credential, under which trust anchor,
+and which credential type it is. An operator states that in
+`OID4VP_ISSUER_ASSURANCE`, per realm, and QAuth evaluates it against the
+credential #234 validated — **after** the #236 trust gate has already refused an
+untrusted issuer.
+
+Listing an issuer in `OID4VP_ISSUER_ASSURANCE` does **not** make it trusted. The
+two variables answer different questions and an issuer must appear in both.
+
+### Not yet reachable
+
+Because the authentication seam below still refuses every presentation, no wallet
+login can produce a level today, so no ID token carries `acr` yet. Everything from
+the seam onwards is wired and tested; the level appears the moment
+#234/#236/#300 let `resolveWalletPresentation` return an authenticated user.
 
 ## Security properties
 
@@ -188,3 +248,8 @@ Note the boot posture, deliberately: selecting a strategy is **not** yet a
 startup gate. Wallet federation is enabled today only for the screens, and a
 gate that failed the boot for a capability nothing consumes would cost
 operability with no security benefit. The gate belongs with the first consumer.
+
+The same function also resolves the assurance level (#237) — it returns an
+optional `assuranceLevel` alongside the user, and everything downstream of it (the
+browser session, the authorization code, the ID token's `acr` claim) is already
+wired for it.

@@ -200,6 +200,16 @@ export function buildIdTokenClaims(payload: SignIdTokenPayload): {
   if (payload.authTime !== undefined) {
     claims['auth_time'] = Math.floor(payload.authTime / 1000);
   }
+  // OIDC Core §2 `acr` (#237) — the assurance level of the authentication
+  // event, already rendered into the deployment's vocabulary by the federation
+  // layer. Emitted ONLY when a level above `low` was established, so a password
+  // login carries no `acr` claim at all (ADR-003/ADR-004) and an RP can gate on
+  // its presence. An empty string is treated as absent for the same reason a
+  // missing value is: `acr: ""` asserts an authentication context of "", which
+  // is a claim QAuth never means to make.
+  if (typeof payload.acr === 'string' && payload.acr.length > 0) {
+    claims['acr'] = payload.acr;
+  }
   return { claims, audience: payload.audience };
 }
 

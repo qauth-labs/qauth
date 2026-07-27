@@ -10,6 +10,7 @@ import {
   AUTHORIZE_BODY_LIMIT_BYTES,
   STEP_UP_FRESH_AUTH_WINDOW_MS,
 } from '../../constants';
+import { toStoredAssuranceLevel } from '../../helpers/acr-claims';
 import { resolveBrowserSession } from '../../helpers/browser-session';
 import { findExceedingAgentScopesForClient, resolveAudience } from '../../helpers/client-auth';
 import { resolveClient } from '../../helpers/client-resolution';
@@ -608,6 +609,11 @@ export default async function (fastify: FastifyInstance) {
         // check evaluates the actual session age. Null on the legacy Bearer
         // path (no interactive session) → the claim is simply omitted there.
         authTime: browserSession?.createdAt ?? null,
+        // #237 (ADR-004/ADR-010): bind the authentication's eIDAS LoA to the
+        // code so /oauth/token can assert `acr` in the ID token. NULL on the
+        // password path (`'low'`, no claim) and on the legacy Bearer path (no
+        // interactive session), which is the same "omit the claim" outcome.
+        assuranceLevel: toStoredAssuranceLevel(browserSession?.assuranceLevel),
         scopes,
         // RFC 8707: bind the resource indicator(s) to the authorization
         // code so /oauth/token can set the access token's `aud` claim to

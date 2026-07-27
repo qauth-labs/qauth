@@ -1,4 +1,11 @@
 // Schema exports
+export {
+  type AssuranceEnv,
+  assuranceEnvSchema,
+  type ConfiguredIssuerAssuranceStatement,
+  type IssuerAssuranceMap,
+  type PerRealmIssuerAssurance,
+} from './assurance';
 export { type AuthEnv, authEnvSchema, DEV_SESSION_COOKIE_SECRET_DEFAULT } from './auth';
 export { type BaseEnv, baseEnvSchema } from './base';
 export { type CryptoEnv, cryptoEnvSchema } from './crypto';

@@ -1,3 +1,4 @@
+import type { AssuranceLevel } from '@qauth-labs/fastify-plugin-federation';
 import type { FastifyInstance } from 'fastify';
 
 /**
@@ -55,6 +56,18 @@ import type { FastifyInstance } from 'fastify';
  * — so a failed lookup stays indistinguishable from a failed proof. Until the
  * validated presentation and the account-store adapter both exist this function
  * must keep returning `rejected`.
+ *
+ * TODO(#237): the same implementation resolves the assurance level. Once the
+ * three above yield a `ValidatedCredential`, call — in this order —
+ * `assertIssuerTrusted` (throws for an untrusted issuer) and then
+ * `resolveCredentialAssurance(resolveAssurancePolicy(realm, env), credential)`,
+ * and put the result on {@link WalletPresentationResolution.assuranceLevel}.
+ * Everything downstream of this function is already wired: the route stores the
+ * level on the browser session, `/oauth/authorize` copies it onto the
+ * authorization code, and `/oauth/token` renders it into the ID token's `acr`
+ * claim. Note the ORDER — an untrusted issuer and an unassured trusted issuer
+ * both resolve to `'low'`, so running the assurance step first would read
+ * "authenticated at low assurance" where the answer is "not authenticated".
  */
 
 /** What the UI knows when a presentation has arrived. */
@@ -88,6 +101,22 @@ export type WalletPresentationResolution =
       readonly userId: string;
       /** Value stored as `user_credentials.external_sub` for this credential. */
       readonly externalSub: string;
+      /**
+       * eIDAS Level of Assurance this presentation established (#237,
+       * ADR-004/ADR-010) — the value that becomes the ID token's `acr` claim.
+       *
+       * Derived from the CREDENTIAL and its ISSUER, never from anything the
+       * wallet signed: OID4VP 1.0 §5 fixes the response type to `vp_token`, so
+       * there is no wallet-signed assertion for a level to travel in.
+       * `resolveCredentialAssurance` (the federation lib) evaluates the realm's
+       * `resolveAssurancePolicy` against #234's `ValidatedCredential`, AFTER
+       * #236's trust gate has thrown for an untrusted issuer.
+       *
+       * Optional, and absent means `'low'` — no `acr` claim. Absence is the
+       * correct default for every path that has not positively established a
+       * level, which today is all of them.
+       */
+      readonly assuranceLevel?: AssuranceLevel;
     }
   | { readonly status: 'rejected' };
 

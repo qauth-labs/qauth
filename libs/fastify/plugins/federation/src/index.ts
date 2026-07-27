@@ -13,6 +13,40 @@ export type {
   UserAttribute,
   VerifiedIdentity,
 } from '@qauth-labs/server-federation';
+
+// Assurance → `acr` surface (#237). The auth-server needs all three halves and
+// can reach none of them directly:
+//
+//  - `resolveAcrValue` / `AcrValueStyle` render a level into the deployment's
+//    `acr` vocabulary at ID-token mint time (`helpers/acr-claims.ts`);
+//  - `parseAssuranceLevel` narrows the level back out of an authorization-code
+//    column or a Redis session payload, where it is an untrusted string;
+//  - `resolveAssurancePolicy` / `resolveCredentialAssurance` derive the level
+//    from a validated credential and its issuer — the call `resolveWalletPresentation`
+//    makes once #234/#236/#300 give it a `ValidatedCredential` to work with.
+//
+// `createIssuerAssurancePolicy` is deliberately NOT re-exported: like the trust
+// allowlist, a policy must be obtained through the realm-scoped resolver so no
+// call site can assemble a deployment-wide one by hand.
+export type {
+  AcrValueStyle,
+  AssuranceEvidence,
+  AssurancePolicy,
+  AssurancePolicyEnvLike,
+  AssurancePolicyRealmLike,
+  KeyStorageAssurance,
+} from '@qauth-labs/server-federation';
+export {
+  ACR_VALUE_STYLES,
+  DEFAULT_ACR_VALUE_STYLE,
+  LOW_ONLY_ASSURANCE_POLICY,
+  parseAcrValueStyle,
+  parseAssuranceLevel,
+  resolveAcrValue,
+  resolveAssurancePolicy,
+  resolveCredentialAssurance,
+  supportedAcrValues,
+} from '@qauth-labs/server-federation';
 // Note the asymmetry with the password surface: `createWalletProvider` is
 // deliberately NOT re-exported. `createConfiguredProviders` is the only
 // sanctioned way for app code to put a wallet provider in the registry, so no
