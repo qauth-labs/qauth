@@ -14,9 +14,14 @@ step, and what is deliberately not built yet. Implements
 > `OID4VP_SUBJECT_BINDING_CLAIMS` (the entitlement check); with either missing,
 > every presentation is refused rather than accepted.
 >
-> Claims normalization into `user_attributes` (#235) is still unbuilt, so a
-> linked wallet credential establishes an authentication factor, not a set of
-> verified claims.
+> Claims normalization into `user_attributes` (#235) landed too: a validated
+> credential's claims become `source='wallet'` attribute rows, and a first
+> presentation for an unknown identifier enrols the account (ADR-009 §1's first
+> bootstrap case).
+>
+> The whole flow is covered end to end against real containers and a mock wallet
+> (#240) — see [End-to-end tests](#end-to-end-tests-and-the-mock-wallet-240).
+> Interoperability with a REAL wallet remains **unverified**.
 
 ## Where it lives
 
@@ -422,3 +427,32 @@ Three properties are worth knowing before extending it:
   the format, the validated issuer, the credential type and the wallet binding —
   a digest, so the account is matchable without a second copy of the person's
   attributes sitting in the column.
+
+## End-to-end tests and the mock wallet (#240)
+
+The whole stack is exercised against a real Postgres, a real Redis and a mock
+wallet in `apps/auth-server/src/app/wallet-federation.integration.test.ts`, run
+by `pnpm nx test-integration auth-server` (Docker required) and by CI's
+`integration` job. It covers first-time login, a returning user, the ADR-009 §1
+takeover attempt, untrusted-issuer rejection, account linking, `acr` presence and
+absence, the password-login regression, the fail-closed posture with no
+`VerifierProfile`, and the `vp_token`-keyed-by-DCQL-id contract.
+
+The wallet is `apps/auth-server/src/testing/mock-wallet.ts`. It is built on
+`@qauth-labs/core-crypto` and `jose` and imports nothing from the verifier, so
+the E2E is an interoperability test rather than a round trip through QAuth's own
+encoder. It parses the authorization request off the wire, evaluates the DCQL
+query, and dispatches presentation building through a per-format table with
+`dc+sd-jwt` present and `mso_mdoc` deliberately absent — so an mdoc wallet is a
+new table entry, not a rewrite.
+
+A `haip-1.0` suite exists alongside it and is **pending #298**
+(`wallet-federation-haip.integration.test.ts`): signed `x509_hash` requests and
+encrypted `direct_post.jwt` responses need ES256 and JWE. What it asserts today
+is that selecting that profile takes the deployment DOWN rather than serving
+wallet flows under a weaker posture.
+
+Interoperability with a REAL wallet is unverified, and which wallets implement
+HAIP 1.0 is an open research question. The procedure for a manual pass — and the
+place to record findings — is
+[docs/wallet-interop-manual-validation.md](./wallet-interop-manual-validation.md).

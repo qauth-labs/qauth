@@ -18,6 +18,20 @@ export default defineConfig({
     environment: 'node',
     watch: false,
     include: ['**/*.integration.test.ts'],
+    server: {
+      deps: {
+        // `@fastify/autoload` discovers route modules at RUNTIME and imports
+        // them by absolute path. Left externalized, those `import()` calls go
+        // to Node's loader, which cannot resolve the extensionless relative
+        // imports TypeScript sources use — so booting the real auth-server
+        // (issue #240's E2E) fails on the first route file. Inlining puts
+        // autoload inside Vite's module graph, so its dynamic imports resolve
+        // through the same transform pipeline as everything else, and
+        // `vi.resetModules()` actually clears the routes between the several
+        // differently-configured deployments that suite boots.
+        inline: ['@fastify/autoload'],
+      },
+    },
     // Container-backed suites share a single Postgres per file; run files
     // serially to avoid N containers at once on constrained machines.
     fileParallelism: false,

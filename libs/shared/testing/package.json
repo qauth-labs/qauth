@@ -8,7 +8,10 @@
     "supertest": "catalog:"
   },
   "devDependencies": {
+    "@types/pg": "catalog:",
     "@types/supertest": "catalog:",
+    "drizzle-orm": "catalog:",
+    "pg": "catalog:",
     "testcontainers": "^12.0.4"
   }
 }
