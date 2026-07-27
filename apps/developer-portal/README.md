@@ -2,6 +2,11 @@
 
 TanStack Start application that lets QAuth users register, verify their email, log in, and manage OAuth consent grants.
 
+> For the user-facing guide to this app — the session model, every flow, and an honest account of
+> where it's still thin — see the [Portal guide](https://docs.qauth.dev/portal/guide/) on the docs
+> site. This README covers the code layout for someone already working in it; the site is for
+> someone deciding how the portal works.
+
 ## Architecture
 
 The portal owns its own session via an HttpOnly signed cookie `__Host-qauth_portal_session`. The cookie carries `{ accessToken, refreshToken, expiresAt }` signed with HMAC-SHA256. TanStack Start server functions are the only callers of auth-server endpoints — tokens never enter the browser.
