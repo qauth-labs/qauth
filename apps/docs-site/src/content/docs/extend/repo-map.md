@@ -77,7 +77,7 @@ import **from inside the workspace**; external npm packages are never restricted
 
 ### Why `scope:core` and `scope:shared` are strict leaves
 
-Both are declared `onlyDependOnLibsWithTags: []`, and the comment at `eslint.config.mjs:44`
+Both are declared `onlyDependOnLibsWithTags: []`, and the comment at `eslint.config.mjs:45`
 explains `scope:core`:
 
 > Core libraries provide low-level, framework-agnostic primitives (crypto, encoding). Like the
@@ -132,8 +132,8 @@ Three things worth understanding about that file before you add to it:
   of the allowed tags, so the extra tag is what makes `@qauth-labs/server-config` importable from
   an app while every other `libs/server/*` package stays out of reach.
 
-The `libs/fastify/plugins/federation/src/index.ts:19` comment records a real consequence of this
-arrangement: because `server-config` deliberately carries no dependency on `server-federation`
+The comment at `libs/fastify/plugins/federation/src/lib/configured-providers.ts:22` records a real
+consequence of this arrangement: because `server-config` carries no dependency on `server-federation`
 (config is the lowest server layer), the config schema's `OID4VP_VERIFIER_PROFILE` enum duplicates
 the federation lib's `VerifierProfileId` union, and `apps/auth-server` is the only place in the
 workspace that can see both — which is why the cross-lib pin between the two lists lives in the

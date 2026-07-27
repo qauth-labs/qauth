@@ -243,7 +243,8 @@ Note also that every test which exercises the handler's mapping —
 `apps/auth-server/src/app/routes/oauth/userinfo.test.ts`,
 `apps/auth-server/src/app/routes/oauth/signature-verification.test.ts` — registers `errorHandler`
 **before** the routes under test. Those tests prove the mapping logic; none of them reproduces the
-production composition.
+production composition — see [Testing](/extend/testing/#the-honest-limitation) for why that whole
+tier is blind to this class of problem.
 
 ## The fail-closed boot checks
 
@@ -418,8 +419,8 @@ even with the Zod compiler intact.
 - **Adding a plugin whose position genuinely does not matter:** drop it in
   `apps/auth-server/src/app/plugins/` and let the first `AutoLoad` sweep pick it up.
 - **Adding a route:** nothing in `app.ts` changes. The directory determines the prefix.
-- **Adding a credential provider:** nothing in `app.ts` changes either — the provider list is a
-  pure function of config, and routes resolve providers by `type`.
+- **Adding a credential provider:** nothing in `app.ts` changes either — see
+  [Adding a credential provider](/extend/adding-a-credential-provider/).
 - **Moving anything:** check the binding-time table above first. Two of this file's comments claim
   an ordering requirement Fastify does not enforce, and the one plugin with a real, undocumented
   requirement (`rateLimitPlugin`) fails silently.
@@ -428,6 +429,12 @@ even with the Zod compiler intact.
 
 ## See also
 
+- [Repository map](/extend/repo-map/) — where new code belongs, and the tag constraints that decide
+  it.
+- [Testing](/extend/testing/) — what each tier can and cannot catch, including why the route tests
+  would not notice a bootstrap-ordering regression.
+- [Adding a credential provider](/extend/adding-a-credential-provider/) — the ADR-003 extension
+  point that `createConfiguredProviders` gates.
 - [Frontmatter contract](/extend/frontmatter/) — the fields every page in this site sets.
 - [Status](/reference/status/) — what has shipped and what is flag-gated, rendered from the single
   status source.

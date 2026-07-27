@@ -207,7 +207,7 @@ the two method bodies against a stable shell. The module deliberately contains n
 
 ### Why throwing is a security property, not laziness
 
-`libs/server/federation/src/providers/wallet.provider.ts:27` states both halves:
+`libs/server/federation/src/providers/wallet.provider.ts:30` states both halves:
 
 > - A stub that resolved a placeholder `VerifiedIdentity` would be an authentication-bypass
 >   primitive the moment `WALLET_FEDERATION_ENABLED` is flipped or a route wires up
