@@ -68,6 +68,7 @@ export interface UserCredentialsRepository {
     externalSub: string,
     tx?: DbClient
   ): Promise<UserCredential | undefined>;
+  findByRealmAndSub(realmId: string, externalSub: string, tx?: DbClient): Promise<UserCredential[]>;
   findByUserIdAndType(
     userId: string,
     providerType: string,

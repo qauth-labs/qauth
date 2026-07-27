@@ -16,6 +16,7 @@
  */
 
 export * from './asserted-lookup.strategy';
+export * from './enrolment-binding';
 export * from './issuer-scoped-claim.strategy';
 export * from './resolve-subject-resolution';
 export * from './session-binding.strategy';
