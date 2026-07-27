@@ -40,6 +40,26 @@ import type {
  * compile or a test go green. The correct response to hitting one of these
  * throws is to implement #233–#235.
  *
+ * ## Still true after #234 (presentation validation landed)
+ *
+ * #233 shipped the OID4VP transport and #234 the SD-JWT VC validator, so QAuth
+ * can now take a `vp_token`, verify the issuer's signature, check every
+ * selective-disclosure digest, enforce the validity window, and verify the Key
+ * Binding JWT against the credential's `cnf` key with this request's `nonce` and
+ * QAuth's `client_id`. The result is a `ValidatedCredential` — and `verify()`
+ * still throws, because a validated credential is not an authenticated user:
+ *
+ * - **Whose credential is it worth anything from?** #236's per-realm issuer
+ *   allowlist decides, from the `ValidatedIssuer` #234 surfaces. Until that gate
+ *   runs, "validly signed" says nothing about "trusted".
+ * - **Which account is this?** ADR-009: there is no stable wallet subject
+ *   identifier, and wallet key material (`cnf`, the `x5c` chain) MUST NOT become
+ *   one — OID4VP §15.5–§15.6 treat it as a linkability defect wallets rotate
+ *   away. Subject resolution is #300.
+ *
+ * Both gates are absent here, so this method fails closed. `safety-boundary.test.ts`
+ * pins that a REAL, fully valid Presentation still authenticates nobody.
+ *
  * ## The ADR-004 model this shell will grow into
  *
  * Wallet-agnostic by construction — any OID4VP wallet (EUDI, Lissi, Sphereon,
@@ -162,17 +182,34 @@ export function createWalletProvider(): CredentialProvider {
     /**
      * NOT IMPLEMENTED — always rejects (see module JSDoc).
      *
-     * The `input` is not even inspected: there is no input schema to validate
-     * against until #234 fixes the presentation format (SD-JWT VC over OID4VP
-     * 1.0, queried with DCQL). Accepting a shape now would freeze the wrong
-     * contract for the issues that still have to choose it.
+     * The `input` is not even inspected, and — since #234 — that is now a
+     * DELIBERATE REFUSAL rather than a gap. Presentation validation exists:
+     * `oid4vp/presentation-validation.ts` will turn a `vp_token` into a
+     * `ValidatedCredential`, proving the issuer signature, the disclosure
+     * digests, the validity window and holder binding to this request. Calling
+     * it from here would still not authenticate anyone, and wiring it in would
+     * make it look as though it did:
+     *
+     * - A `ValidatedCredential` from an issuer this realm does not trust is a
+     *   forgery with extra steps. The gate is `assertIssuerTrusted` (#236),
+     *   which needs a per-realm registry this provider is not given.
+     * - There is no protocol-guaranteed stable wallet subject identifier
+     *   (ADR-009), so there is no `externalSub` to return. Resolving one is
+     *   `SubjectResolutionStrategy`'s job (#300), and under the
+     *   `asserted-lookup` default `verify()` must additionally check that the
+     *   presented credential matches the binding stored for the account the
+     *   user asserted — a check with no storage behind it yet.
+     *
+     * So the honest state is: QAuth can now VALIDATE a wallet credential and
+     * still cannot AUTHENTICATE a wallet user. Returning a placeholder identity
+     * to close that gap would be an authentication bypass, not progress.
      *
      * @throws Error always — never resolves a {@link VerifiedIdentity}.
      */
     async verify(): Promise<VerifiedIdentity> {
       throw walletSkeletonError(
         'verify',
-        'Wallet verification lands in #233 (OID4VP 1.0 authorization request generation + direct_post response intake) and #234 (OID4VP presentation validation), with issuer trust in #236.'
+        'The OID4VP transport landed in #233 and presentation validation in #234 (see oid4vp/presentation-validation.ts, which produces a ValidatedCredential — a cryptographic finding, not an identity). Authentication additionally requires issuer trust (#236) and subject resolution (#300, ADR-009), neither of which this provider is wired to.'
       );
     },
 

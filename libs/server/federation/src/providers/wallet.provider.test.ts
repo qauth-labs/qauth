@@ -66,6 +66,20 @@ describe('WalletProvider (ADR-004 skeleton, #232)', () => {
           rawClaims: { given_name: 'Alice' },
         },
       ],
+      [
+        // #234 landed presentation validation, so this is now a shape a caller
+        // could genuinely hold: a credential that verified in every respect.
+        // It still authenticates nobody — issuer trust (#236) and subject
+        // resolution (#300) have not run, and neither has anything here.
+        'a ValidatedCredential (#234) — validated is not authenticated',
+        {
+          queryId: 'pid',
+          format: 'dc+sd-jwt',
+          credentialType: 'https://credentials.example.com/pid',
+          claims: { given_name: 'Alice' },
+          assurance: { statusChecked: false },
+        },
+      ],
     ];
 
     it.each(plausibleInputs)('rejects for %s', async (_label, input) => {
@@ -95,6 +109,18 @@ describe('WalletProvider (ADR-004 skeleton, #232)', () => {
       expect(error?.message).toContain('#233');
       expect(error?.message).toContain('#234');
       expect(error?.message).toContain('WalletProvider.verify()');
+    });
+
+    it('names the gates that remain OPEN now that validation (#234) has landed', async () => {
+      const error = await provider.verify({}).then(
+        () => null,
+        (reason: unknown) => reason as Error
+      );
+
+      // Issuer trust and subject resolution. Until both are wired, a validated
+      // credential is a cryptographic finding and nothing more.
+      expect(error?.message).toContain('#236');
+      expect(error?.message).toContain('#300');
     });
   });
 
