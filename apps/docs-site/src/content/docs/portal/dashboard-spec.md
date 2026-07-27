@@ -174,6 +174,39 @@ the existing `client_credentials` guidance instead.
 route into the same component, not a replacement. Removing the embedded section would break the
 flow a developer already knows for the sake of tidiness.
 
+#### The fan-out's failure and scale behaviour
+
+A fan-out is n requests pretending to be one, and every one of them can fail independently. The
+universal rendering rules are written for a single surface; here is how they apply to n:
+
+- **Concurrent, bounded at 8 in flight.** Sequential would make page load linear in client count;
+  unbounded would let one developer with many clients open a connection burst against the
+  auth-server from a single page view.
+- **Partial failure renders per section, never as a silent gap.** If k of n sub-requests fail, the
+  n − k that succeeded render normally and each of the k renders its own inline "Couldn't load keys
+  for this client" with a retry that re-issues **only** that sub-request. The page does not fail
+  whole, and — per universal rule 2 — a failed section never renders as "no keys", which would read
+  as "nothing to revoke here."
+- **A page-level banner states the count** — "2 of 9 clients couldn't be loaded" — because a reader
+  scanning for a key they know exists needs to know the list is incomplete without finding the one
+  broken section.
+- **A `401` from any sub-request is different in kind** and short-circuits: it means the portal
+  session expired mid-fan-out, so the page routes to `/login` rather than rendering eight
+  successes and one auth error.
+- **Section order is the client list's own order**, so `/api-keys` and `/clients` agree; within a
+  section, keys are newest-first with revoked keys last.
+
+**The scale ceiling is real, not hypothetical.** `GET /api/clients` is unpaginated — it returns
+every row for the developer (`apps/auth-server/src/app/routes/clients/index.ts:333`) — so n is
+unbounded by anything except how many clients someone has made.
+
+**Decision — the design inverts at 25 clients.** Above that, `/api-keys` stops fanning out, renders
+a client picker plus one client's keys at a time, and the dashboard card links to the picker. 25 is
+chosen as roughly three screens of sections and, at 8 concurrent, about three round-trip waves —
+past that the page is neither fast nor readable and the fan-out has stopped paying for itself. An
+implementer hitting this ceiling in practice should read it as the signal to build the cross-client
+list endpoint this specification declined to add, not as a reason to raise the number.
+
 ### A3. Consents — linked, but only after #366
 
 **Shipped.** `/consents` exists and is functional in the sense that its code paths are written, but
@@ -211,11 +244,29 @@ pattern exactly: read the access token from the signed session cookie via a `rea
 equivalent (`apps/developer-portal/src/server/actions/clients.server.ts:19`), return the
 `UNAUTHENTICATED` result when it is missing or expired
 (`apps/developer-portal/src/server/actions/clients.ts:24`), and proxy with
-`Authorization: Bearer <token>`. Note the auth-server's consents endpoints authenticate by
-**session cookie**, not Bearer token, and have no Bearer path
-(`apps/auth-server/src/app/routes/consents/index.ts:17`) — so #366's implementation must also
-decide how a portal server function authenticates to them. That is #366's problem to solve; this
-specification records it as a dependency and does not pre-empt the answer.
+`Authorization: Bearer <token>`.
+
+**Two things #366 must solve that its task list does not name.** Both follow from the same fact —
+the consents endpoints are built around a browser session, and a server function does not have one:
+
+1. **Authentication.** They authenticate by **session cookie** and have no Bearer path at all
+   (`apps/auth-server/src/app/routes/consents/index.ts:17`); the handlers resolve the caller through
+   `resolveBrowserSession` (`apps/auth-server/src/app/routes/consents/index.ts:95`), which reads
+   `__Host-qauth_session`. A portal server function holds a Bearer access token instead.
+2. **CSRF.** `DELETE /consents/:id` requires the caller to echo an `X-CSRF-Token` header whose value
+   is a per-session token minted (or reused) by the `GET` and stored on the browser session
+   (`apps/auth-server/src/app/routes/consents/index.ts:63`, `ensureApiCsrfToken`), then compared
+   timing-safely on the delete
+   (`apps/auth-server/src/app/routes/consents/index.ts:22`). The token is anchored to an
+   auth-server session that a Bearer-authenticated server function never establishes, so there is
+   nothing to mint it against. **#366 must redesign this control, not merely relay the header.** The
+   good news is that the control's own stated purpose — defending a cookie-authed, state-changing
+   endpoint against cross-site and same-origin-XSS calls — largely evaporates once the caller is a
+   server function presenting a Bearer token from an `HttpOnly` cookie the browser cannot read; but
+   "largely" is doing work in that sentence and the decision belongs to #366 with security review,
+   not to this page.
+
+This specification records both as dependencies and pre-empts neither.
 
 ## Surface B — effective environment policy
 
@@ -268,6 +319,20 @@ Concretely: `environment`, `staticApiKeysAllowed`, `localhostRedirectAllowed`, `
 `accessTokenLifespanTier`, `refreshRotationRequired`, `rateLimitTier`, `openDynamicRegistration`,
 `agentStepUpEnforced`, `t3SecurityEnforced`.
 
+**Plus two fields that are not on `EnvironmentPolicy`,** for reasons given below:
+`declaredEnvironment` (the raw column, see [the effective-environment note](#the-policy-cards-two-traps))
+and `loopbackRedirectPermitted` (a server-computed answer, see the same section).
+
+**Decision — the widening cascades to two response schemas, deliberately.**
+`createClientResponseSchema` (`apps/auth-server/src/app/schemas/clients.ts:132`) and
+`regenerateSecretResponseSchema` (`apps/auth-server/src/app/schemas/clients.ts:177`) both
+`.extend()` `clientSchema`, so both grow the new fields automatically. That is correct rather than
+accidental: both are served through `toClientResponse`
+(`apps/auth-server/src/app/routes/clients/index.ts:479` and `:694`), so the data is already there
+and a client created or rotated through those paths gets the same policy view as one fetched later.
+Name them in the pull request anyway — a schema that changes by inheritance is the kind of thing a
+reviewer should be told about rather than discover.
+
 **Decision — keep the existing top-level `environment` and `staticApiKeysAllowed`, duplicated.**
 The shipped portal reads `client.staticApiKeysAllowed` to gate the API-key create form
 (`apps/developer-portal/src/components/api-keys-section.tsx:31`). Removing the top-level fields
@@ -288,21 +353,90 @@ On the client-detail page, a **Policy** card. On the client list card, a compact
 only. The detail card shows the six consequences an operator actually cares about, each as a
 labelled row with the value and a one-line explanation of what it means for this client:
 
-| Row                    | Source field               | Rendered as                                                                       |
-| ---------------------- | -------------------------- | --------------------------------------------------------------------------------- |
-| Access token lifetime  | `accessTokenLifespanTier`  | "Short" / "Long", with the tier name in the tooltip                               |
-| PKCE                   | `pkceRequired`             | "Required" / "Recommended, not forced"                                            |
-| Loopback redirect URIs | `localhostRedirectAllowed` | "Permitted" / "Rejected — https only"                                             |
-| Rate limit             | `rateLimitTier`            | "Strict" / "Lenient"                                                              |
-| Agent step-up          | `agentStepUpEnforced`      | "Enforced" / "Not enforced"                                                       |
-| T3 hardening bundle    | `t3SecurityEnforced`       | "Enforced" / "Relaxed", linking to [Browser security](/operate/browser-security/) |
+| Row                    | Source                                            | Rendered as                                                                       |
+| ---------------------- | ------------------------------------------------- | --------------------------------------------------------------------------------- |
+| Access token lifetime  | `policy.accessTokenLifespanTier`                  | "Short" / "Long", with the tier name in the tooltip                               |
+| PKCE                   | **Not a policy field — always "Required (S256)"** | See [the two traps](#the-policy-cards-two-traps) below                            |
+| Loopback redirect URIs | `policy.loopbackRedirectPermitted` (new)          | "Permitted" / "Rejected"                                                          |
+| Rate limit             | `policy.rateLimitTier`                            | "Strict" / "Lenient"                                                              |
+| Agent step-up          | `policy.agentStepUpEnforced`                      | "Enforced" / "Not enforced"                                                       |
+| T3 hardening bundle    | `policy.t3SecurityEnforced`                       | "Enforced" / "Relaxed", linking to [Browser security](/operate/browser-security/) |
 
-**Decision — `refreshRotationRequired` and `openDynamicRegistration` are carried in the response but
-not rendered on this card.** They are real policy outputs, but neither is a consequence a developer
-can act on from the portal: refresh rotation is transparent to a correctly implemented client, and
-dynamic registration is a realm-level posture that this client's own page cannot influence.
-Carrying them in the response and not rendering them is deliberate — it keeps the response the
-complete record of what the server decided while keeping the card to what a reader can use.
+### The Policy card's two traps
+
+Two rows in that table do **not** come from the obviously-named policy field, and both would be
+false security statements if they did. This section exists because the first draft of this
+specification got both of them wrong — which is the best evidence available that "render the
+response, never re-derive" is necessary but **not sufficient**. Faithfully rendering a field whose
+name reads like the answer, when it is only one input to the answer, produces exactly the drift the
+rule was written to prevent.
+
+**Trap 1 — PKCE is mandatory for every client in every environment, and `pkceRequired` does not say
+so.** `authorizeQuerySchema` declares `code_challenge` and
+`code_challenge_method: z.literal('S256')` as **required, non-optional** query parameters
+(`apps/auth-server/src/app/schemas/oauth.ts:32` and
+`apps/auth-server/src/app/schemas/oauth.ts:37`). No client can obtain an authorization code without
+an S256 challenge, whatever its environment. The token endpoint then enforces the downgrade floor
+unconditionally — a `code_verifier` presented against a code carrying no challenge is
+`invalid_grant` in **every** environment including `development` — the code calls it "a HARD FLOOR
+enforced in EVERY environment" (`apps/auth-server/src/app/routes/oauth/token.ts:361`), implemented
+at `apps/auth-server/src/app/routes/oauth/token.ts:368`. The surrounding comment states plainly
+that the no-challenge branch exists only as defence-in-depth "for any future dev-only flow"
+(`apps/auth-server/src/app/routes/oauth/token.ts:354`).
+
+`policy.pkceRequired` is therefore not "is PKCE required" — its own contract says it governs only
+whether the environment profile _additionally_ hard-requires it, on top of the project-wide floor
+(`apps/auth-server/src/app/helpers/environment-policy.ts:123`). Rendering it as the PKCE row would
+tell a `development` client's owner that PKCE is optional while `/oauth/authorize` rejects every
+request without it.
+
+**Decision — the PKCE row reads "Required (S256)", unconditionally, and is not sourced from any
+policy field.** Its tooltip names the enforcement point: the authorize endpoint's own schema. There
+is no false-y branch to render.
+
+**Decision — do not render `oauth_clients.require_pkce` either.** It is already in the response
+(`apps/auth-server/src/app/schemas/clients.ts:31`) and already typed in the portal
+(`apps/developer-portal/src/server/auth-server-client.ts:82`), which makes it the obvious thing for
+an implementer to reach for — and it would give the card two conflicting PKCE renderings. It is
+also **inert**: every write path sets it `true`
+(`apps/auth-server/src/app/routes/clients/index.ts:449`,
+`apps/auth-server/src/app/routes/oauth/register.ts:127`,
+`apps/auth-server/src/app/helpers/cimd.ts:272`, and the column default at
+`libs/infra/db/src/lib/schema/core.ts:147`), and no code path in `apps/auth-server` reads it as a
+gate. A stored, exposed, unenforced flag must not be presented as a security control.
+
+**Trap 2 — loopback redirects are permitted in all three environments, and
+`localhostRedirectAllowed` says otherwise.** The gate is `isRedirectUriAllowedForPolicy`, which
+permits an `http://localhost` redirect when **either** the environment opts in **or** PKCE is
+enforced: `policy.localhostRedirectAllowed || policy.pkceRequired`
+(`apps/auth-server/src/app/helpers/oauth-redirect.ts:73`). Across the three shipped profiles
+(`apps/auth-server/src/app/helpers/environment-policy.ts:158`) that disjunction is `true` every
+time — `development` via the first term, `staging` and `production` via the second. The reasoning is
+in the function's own doc comment: loopback plus S256 is safe on any host, and gating it on PKCE
+rather than https-only is what lets native and MCP clients complete the auth-code flow against a
+production authorization server (`apps/auth-server/src/app/helpers/oauth-redirect.ts:49`).
+
+So a card rendering `localhostRedirectAllowed` would print "Rejected — https only" for every
+staging and production client, while the server accepts their loopback URIs.
+
+**Decision — the server computes and sends the answer, as `policy.loopbackRedirectPermitted`.**
+`toClientResponse` evaluates the same disjunction the gate uses and puts the **result** in the
+response; the UI renders that boolean and never sees the two inputs as a choice. Both inputs stay in
+`policy` as well, because the response is the complete record of what the server decided — but the
+rendered row is sourced from the computed field.
+
+This is the general rule, stated once: **where an enforcement decision is a function of several
+policy fields, the server sends the decision, not the arguments.** A field named after an input is
+not an answer, and a UI that combines inputs is re-deriving policy no matter how simple the
+combination looks.
+
+**Decision — four `policy` fields are carried in the response and rendered nowhere.**
+`pkceRequired` and `localhostRedirectAllowed` for the reasons in the two traps above — they are
+inputs, not answers. `refreshRotationRequired` and `openDynamicRegistration` because neither is a
+consequence a developer can act on from the portal: refresh rotation is transparent to a correctly
+implemented client, and dynamic registration is a realm-level posture this client's page cannot
+influence. Carrying all four and rendering none is deliberate — it keeps the response the complete
+record of what the server decided while keeping the card to what a reader can use.
 
 **Decision — render tier names, not seconds.** `accessTokenLifespanTier` is a coarse label by
 design; the concrete seconds come from realm and environment configuration through
@@ -388,13 +522,24 @@ operator to change this."
 
 ## Surface D — activity feed and metrics tiles
 
-**Shipped foundation.** The audit-logs repository has four read methods, every one of them
-realm-guarded: `findByUserId` (`libs/infra/db/src/lib/repositories/audit-logs.repository.ts:73`),
+**Shipped foundation.** The audit-logs repository has four read methods.
 `findByRealmId` (`libs/infra/db/src/lib/repositories/audit-logs.repository.ts:112`),
 `findByRealmAndUserId` (`libs/infra/db/src/lib/repositories/audit-logs.repository.ts:155`) and
 `findByRealmAndActorClientId`
-(`libs/infra/db/src/lib/repositories/audit-logs.repository.ts:218`). What is missing is an HTTP
-surface and a developer-scoped query. Nothing here proposes a new data layer.
+(`libs/infra/db/src/lib/repositories/audit-logs.repository.ts:218`) are realm-guarded — each adds a
+realm predicate over an `innerJoin`. **`findByUserId` is not.** Its conditions are
+`[eq(auditLogs.userId, userId)]` alone, with no realm predicate and no join
+(`libs/infra/db/src/lib/repositories/audit-logs.repository.ts:81`); the guarded sibling
+`findByRealmAndUserId` is the one that adds `eq(users.realmId, realmId)`
+(`libs/infra/db/src/lib/repositories/audit-logs.repository.ts:164`).
+
+That distinction matters for what follows. It is tempting to describe these four as a ready-made,
+uniformly-safe base and reach for whichever one is closest — and one of them is not tenant-scoped at
+all. **None of the four answers the question this surface asks anyway**: the developer-scoped query
+is "rows whose owning client belongs to this developer", which is neither a user nor a realm nor an
+actor predicate. What is missing is an HTTP surface **and** a new developer-scoped repository
+method. Nothing here proposes a new data _layer_, but it does propose a fifth finder, and that
+finder must carry its ownership predicate itself rather than inheriting a guarantee from a sibling.
 
 Pagination in the existing options object is **offset-based**: `limit` and `offset`
 (`libs/infra/db/src/lib/repositories/audit-logs.repository.ts:18`, the `FindAuditLogsOptions`
@@ -445,8 +590,8 @@ when the client set is empty.
 
 **Cursor-based, keyset over `(created_at DESC, id DESC)`.**
 
-**Decision — the cursor is an opaque base64url string** encoding `{ t: <created_at>, i: <id>, f:
-<filter fingerprint> }`.
+**Decision — the cursor is an opaque base64url string** encoding
+`{ t: <created_at>, i: <id>, w: { from, to }, f: <filter fingerprint> }`.
 
 - **Why keyset, not the repository's existing offset.** `audit_logs` is append-heavy. Under
   offset paging, rows inserted between two requests shift the window, so page 2 re-shows rows from
@@ -459,10 +604,60 @@ when the client set is empty.
 - **Why opaque.** The encoding must stay free to change — adding a field to it later must not break
   callers who stored one. Opacity is not a security control here; ownership is enforced server-side
   on every request regardless of what a caller puts in the cursor.
-- **Why the filter fingerprint.** A cursor presented alongside a different filter set produces a
-  page that is wrong in a way that looks fine. The endpoint returns `400` when the fingerprint does
-  not match the request's normalized filters, rather than silently paginating across two different
-  queries.
+
+##### The window is resolved once and frozen in the cursor
+
+This is the part a naive reading gets wrong, and getting it wrong breaks "Load more" outright. The
+window has a default (`from` defaults to `to - 30 days`, and `to` defaults to **the time the first
+request was received**). The fingerprint check rejects a cursor whose filters do not match the
+request's. Put those two together carelessly and every Load-more either `400`s — because `to`
+re-defaults to a later "now" and the fingerprint no longer matches — or silently slides the window
+forward between pages and drops rows at the boundary. Both were latent in the first draft of this
+specification.
+
+**Decision — a pagination session is a snapshot, and the resolved window travels in the cursor.**
+
+1. **First request (no cursor).** The server resolves `to` (query value, else request-receipt time)
+   and `from` (query value, else `to - 30 days`), validates the span (`400` if wider than 90 days,
+   `400` if `from > to`), and runs the query against that resolved window.
+2. **`nextCursor` carries the resolved window** in `w`, alongside the position and the fingerprint.
+3. **Subsequent request (with a cursor).** The window comes **from the cursor**, never re-defaulted.
+   `to` is not re-evaluated against the clock, so the window cannot slide.
+4. **If a cursor request also sends `from` or `to` and either disagrees with the cursor's window, it
+   is a `400`** (`invalid_cursor`), not a silent override. Changing the window means starting a new
+   pagination session; pretending otherwise would hand back a page from a different query.
+
+The consequence, stated so the UI can be honest about it: **events written after a pagination
+session begins do not appear in it.** That is the correct behaviour for a paged feed and it is why
+"Refresh" (which discards the cursor and starts a fresh session) is a separate, explicit control —
+see [the feed UI](#proposed--the-feed-ui).
+
+##### The fingerprint, constructed
+
+**Decision — the fingerprint is computed over the _resolved_ filter set, after defaults are
+applied.** Because defaults are resolved before hashing on the first request and thereafter read
+from the cursor, "explicit value" and "same value arrived by default" produce the same fingerprint.
+There is no defaults-versus-explicit ambiguity left for the check to trip over; a mismatch means a
+caller genuinely changed a filter.
+
+Construction, exactly:
+
+1. Build an object from the resolved filters — `clientId`, `event`, `eventType`, `success`, `from`,
+   `to`. **Absent filters are omitted, never serialised as `null`**, so "not filtering by event" and
+   "filtering by a null event" cannot collide.
+2. Canonicalise: keys sorted lexicographically; booleans as `true`/`false`; integers in decimal with
+   no separators; UUIDs lowercased; strings verbatim. Serialise as compact JSON, no whitespace.
+3. `SHA-256` the UTF-8 bytes, take the **first 8 bytes**, encode base64url.
+
+Eight bytes is deliberate: this is a consistency check against a caller accidentally mixing filter
+sets across pages, not an adversarial control. Ownership and redaction are enforced server-side on
+every request from the JWT, independently of anything in the cursor, so a forged fingerprint buys an
+attacker nothing but their own rows in a confusing order.
+
+**Decision — `limit` does NOT participate in the fingerprint.** Under keyset pagination the cursor
+is a _position_, not an offset, so changing page size mid-session is harmless and correct. Making it
+a `400` would break a legitimate UI (dashboard preview of 10, then "see all" at 25) for no
+correctness gain.
 
 `limit` defaults to `25`, maximum `100`. **A `limit` above the maximum is a `400`, not a silent
 clamp** — a caller that asks for 500, receives 100, and sees no `nextCursor` will conclude it has
@@ -484,17 +679,20 @@ All optional, all `AND`-combined.
 | `from`, `to` | integer, epoch milliseconds                         | Matches the column's own units                                                      |
 
 **Decision — `clientId` is the row UUID, not the public `client_id` string.** Every other
-per-client path in this API takes the UUID (`apps/auth-server/src/app/routes/clients/index.ts:119`,
-and `apps/auth-server/src/app/routes/clients/api-keys.ts:86`). The two identifiers are easy to
-confuse; consistency with the existing surface is the tiebreaker. The response carries both so the
-UI never has to guess.
+per-client path in this API takes the UUID — `clientIdParamsSchema` is `z.object({ id: z.uuid() })`
+on the client routes (`apps/auth-server/src/app/routes/clients/index.ts:119`) and
+`z.object({ clientId: z.uuid() })` on the API-key routes
+(`apps/auth-server/src/app/routes/clients/api-keys.ts:47`). The two identifiers are easy to confuse;
+consistency with the existing surface is the tiebreaker. The response carries both so the UI never
+has to guess.
 
 **Decision — time bounds are epoch milliseconds, not ISO-8601.** `created_at` is a `bigint` in
 milliseconds (`libs/infra/db/src/lib/schema/audit.ts:62`). Accepting ISO strings would put a parse
 and a time-zone assumption between the caller and the column, and a boundary that is silently off
 by an offset is the worst kind of filter bug.
 
-**Decision — `from` defaults to `to - 30 days`; a range wider than 90 days is a `400`.** This
+**Decision — the default window is 30 days and the maximum span is 90 days**, resolved and frozen as
+described under [the window](#the-window-is-resolved-once-and-frozen-in-the-cursor). This
 bounds the keyset scan. There is no retention or pruning job for `audit_logs` anywhere in the tree
 (searched `libs/infra/db/src` and `apps/auth-server/src` for retention/prune/purge; nothing matches
 `audit_logs`), so the table only grows. This is an operational view, not an export.
@@ -541,22 +739,87 @@ Withheld, always, with no query parameter that can turn any of them on:
 This follows the data-minimisation precedent of **#259**, which gated ID-token email claims on
 scope rather than emitting them because they were available.
 
+##### The same rule applied to `event`, which is where it was initially missed
+
+The argument for withholding `metadata` — an open namespace that a future call site can extend
+without anyone revisiting this endpoint — applies verbatim to `event`, and the first draft of this
+specification returned `event` unrestricted. It is a `varchar(100)`
+(`libs/infra/db/src/lib/schema/audit.ts:33`) with no enum and no allowlist anywhere in the tree.
+
+The leak is not hypothetical, and it is worth being precise about where it is and is not.
+`delegation_chain`, `actor_client_id` and `scope_mode` are **not** the vector — those columns carry
+public client identifiers and a coarse mode label, and nothing else
+(`libs/infra/db/src/lib/schema/audit.ts:44`, `:51`). The vector is **an open event namespace plus a
+millisecond timestamp.** Client-attributed rows already describe end-user authentication behaviour:
+`oauth.stepup.required` is written with `oauthClientId: client.id` at four sites in the authorize
+route (`apps/auth-server/src/app/routes/oauth/authorize.ts:304`,
+`apps/auth-server/src/app/routes/oauth/authorize.ts:437`,
+`apps/auth-server/src/app/routes/oauth/authorize.ts:503`,
+`apps/auth-server/src/app/routes/oauth/authorize.ts:540`), and `oauth.consent.revoked` likewise
+(`apps/auth-server/src/app/routes/consents/index.ts:181`). A developer holds their own application
+logs; joining "a step-up was demanded at 14:02:11.431" against their own request log identifies
+which of their users it was, and what that user was doing at the time. `user_id` being absent does
+not help when the timestamp is the join key.
+
+**Decision — both halves: an event allowlist, and coarsened timestamps.**
+
+1. **`event` and `eventType` are served from an explicit allowlist**, applied with the same
+   structural rule as the column allowlist: **a row whose `event` is not on the list is not
+   returned at all** — not returned with the event redacted, which would leak its existence and its
+   timestamp. A new event name added to the tree is invisible to this endpoint until someone puts it
+   on the list, which is the same fail-closed direction as the column rule. The list starts with the
+   client-lifecycle and token-issuance events a developer needs to debug their own integration:
+   `oauth.client.created`, `oauth.client.updated`, `oauth.client.deleted`,
+   `oauth.client.secret_regenerated`, `oauth.client.registered`, `api_key.created`,
+   `api_key.revoked`, `oauth.token.exchange.success`, `oauth.token.exchange.failure`,
+   `oauth.authorize.success`, `oauth.authorize.failure`, `oauth.introspect.failure`,
+   `oauth.revoke.success`, `oauth.revoke.failure`. Deliberately **excluded**:
+   `oauth.stepup.required`, `oauth.stepup.elevation`, `oauth.consent.granted`,
+   `oauth.consent.denied`, `oauth.consent.revoked`, and every `user.*` / `ui.*` event — these
+   describe what an identified end user did, which is the operator's question, not the developer's.
+2. **`createdAt` is truncated to whole seconds on this surface.** Millisecond precision is what makes
+   a log join a reliable identification, and no developer-facing use case here needs it: the feed is
+   read by eye and the tiles count over a 24-hour window. Truncation happens in the projection, not
+   in storage — the column keeps full precision for operators.
+
+**The cursor keeps full millisecond precision**, because the keyset order depends on it
+(`(created_at, id)` is only a total order at the stored resolution). The cursor is opaque and
+server-minted, so this does not hand the precision back through the front door; it means only that
+the coarsening is a display-and-response concern, never a query-correctness one.
+
+**Consequence to accept knowingly:** the allowlist means the feed shows strictly less than "your
+clients' activity", on top of the two structural gaps below. The footnote under the feed must say
+so.
+
 #### What the feed structurally cannot show
 
-Two categories of row will never appear, and the UI must say so rather than leave an unexplained
-gap:
+Three categories of row will never appear, and the UI must say so rather than leave an unexplained
+gap. The first is a policy choice, the other two are structural:
 
-1. **Rows written before a client was resolved.** Many failure paths record `oauthClientId: null` —
+1. **Rows whose `event` is not on the allowlist** — see
+   [the event allowlist](#the-same-rule-applied-to-event-which-is-where-it-was-initially-missed).
+   A policy choice, and the largest of the three in practice.
+2. **Rows written before a client was resolved.** Many failure paths record `oauthClientId: null` —
    for example `apps/auth-server/src/app/routes/oauth/authorize.ts:158` and
    `apps/auth-server/src/app/routes/oauth/token.ts:146`. They have no client to be scoped to.
-2. **Rows belonging to a deleted client.** The FK is `set null` on delete
+3. **Rows belonging to a deleted client.** The FK is `set null` on delete
    (`libs/infra/db/src/lib/schema/audit.ts:30`), so deleting a client detaches its entire audit
    history from the ownership predicate.
 
+**Decision — an `event` or `eventType` filter naming something outside the allowlist is a `400`, not
+an empty result.** An empty result is an existence oracle: it lets a caller distinguish "no such
+events for me" from "that event is withheld" only by guessing, and it invites an implementer to
+treat the filter as the authority instead of the allowlist. Reject the request and name the
+constraint.
+
 **Decision — a permanent footnote under the feed**, not a tooltip and not a documentation-only
-note: "Events that could not be attributed to one of your clients — including anything recorded
-before the client was identified, and everything belonging to a client you have since deleted — are
-not shown here."
+note: "This feed shows a defined set of client and token events for the clients you own. Events
+about your end users' sign-in and consent activity are not shown. Neither is anything recorded
+before a client was identified, or belonging to a client you have since deleted. Times are shown to
+the nearest second."
+
+Say all four things. A feed that quietly omits a category is an audit-shaped surface making a
+promise it does not keep, which is the failure mode this whole page is trying to avoid.
 
 #### Proposed — index migration
 
@@ -564,9 +827,43 @@ The ownership predicate plus the keyset order needs a composite index. The shipp
 `idx_audit_logs_oauth_client_id` on the FK alone
 (`libs/infra/db/src/lib/schema/audit.ts:66`) and `idx_audit_logs_created_at` on the timestamp alone
 (`libs/infra/db/src/lib/schema/audit.ts:69`); neither supports "this client's rows, newest first"
-without a sort. **Add `idx_audit_logs_client_created_at` on `(oauth_client_id, created_at DESC)`,
-in the same migration that introduces the endpoint** — see
+without a sort. **Add exactly one index — `idx_audit_logs_client_created_at` on
+`(oauth_client_id, created_at DESC)` — in a migration that lands before the endpoint**; see
 [ordering](#implementation-order-and-dependencies).
+
+**Be honest about what that index does and does not do.** The common case is the feed with **no**
+`clientId` filter, which is not a single-value lookup: the predicate is
+`oauth_client_id = ANY(<the developer's clients>)`. Postgres serves that from this index as one
+index scan per array element, and it will generally **not** preserve the global
+`created_at DESC` ordering across them — expect a sort, or a merge, above the scans. The index still
+earns its place: it turns each per-client access into a range scan already ordered within that
+client and already bounded by the window, so the sort input is "this developer's rows in the last 30
+days" rather than the table. **That bound is the real protection, and it is why the window is
+mandatory and capped rather than optional.**
+
+**Decision — do not add a second index for the tiles.** The tile window is 24 hours against the
+feed's 30 days, so the same composite index reaches a set roughly thirty times smaller, and the
+event/`success` predicates are applied as a filter above it. One index that serves both surfaces
+adequately beats two that each serve one perfectly, on a table with no pruning where every index is
+a permanent write cost.
+
+**Retracted: two claims of index support that do not hold.** An earlier draft of this page credited
+the two existing partial indexes for the metrics tiles. Neither works, and the reasoning is worth
+keeping so it is not re-invented:
+
+- **`idx_audit_logs_failed`** is `(event, created_at) WHERE success = false`
+  (`libs/infra/db/src/lib/schema/audit.ts:71`). A partial index is only usable when the query's
+  predicate **implies** the index predicate, and Postgres cannot infer `success = false` from
+  `event = 'oauth.token.exchange.failure'` — the naming convention is a project convention, not a
+  constraint the planner knows about. The fix is in the query, below.
+- **`idx_audit_logs_actor_client_id`** is `(actor_client_id, created_at) WHERE actor_client_id IS
+NOT NULL` (`libs/infra/db/src/lib/schema/audit.ts:77`). The "agent actions" count constrains the
+  leading column only with `IS NOT NULL`, which is the index's own partial predicate — so there is
+  no range to seek to and the scan degenerates to reading the whole partial index. It also carries
+  no ownership column, so every row it returns still needs checking. It is the right index for
+  "this specific agent's activity, newest first", which is the query
+  `findByRealmAndActorClientId` was built for
+  (`libs/infra/db/src/lib/repositories/audit-logs.repository.ts:218`) — not for this tile.
 
 ### Proposed — `GET /api/audit/metrics`
 
@@ -586,19 +883,55 @@ durable. `audit_logs` is durable, attributable and indexed. See
 **Window: a rolling 24 hours** (`created_at >= now_ms - 86_400_000`), stated on the tile group, not
 implied.
 
-Four tiles, all scoped by the same ownership predicate as the feed:
+Four tiles, all scoped by the same ownership predicate and the same 24-hour window, all served from
+the one composite index above:
 
-| Tile           | Predicate                                | Index support                                                                                      |
-| -------------- | ---------------------------------------- | -------------------------------------------------------------------------------------------------- |
-| Tokens issued  | `event = 'oauth.token.exchange.success'` | the proposed composite index                                                                       |
-| Token failures | `event = 'oauth.token.exchange.failure'` | `idx_audit_logs_failed`, partial on `success = false` (`libs/infra/db/src/lib/schema/audit.ts:71`) |
-| Authorizations | `event = 'oauth.authorize.success'`      | the proposed composite index                                                                       |
-| Agent actions  | `actor_client_id IS NOT NULL`            | `idx_audit_logs_actor_client_id`, partial (`libs/infra/db/src/lib/schema/audit.ts:77`)             |
+| Tile                    | Predicate                                                    |
+| ----------------------- | ------------------------------------------------------------ |
+| Tokens issued           | `event = 'oauth.token.exchange.success'`                     |
+| Token failures          | `event = 'oauth.token.exchange.failure' AND success = false` |
+| Authorizations          | `event = 'oauth.authorize.success'`                          |
+| Agent-attributed events | `actor_client_id IS NOT NULL`                                |
+
+**Decision — the "Token failures" predicate carries `AND success = false` explicitly**, even though
+it is redundant against today's data. Every `.failure` event in the tree is written with
+`success: false` — verified by extracting all 45 `.failure` audit writes across
+`apps/auth-server/src` and checking each one's `success` field — so this changes no result. It is
+there because the redundancy is the _contract_: it documents at the query site that the naming
+convention and the boolean must agree, and it is the form a partial index on `success = false`
+could ever match. Without it the predicate silently depends on a convention nothing enforces.
+
+**Decision — one aggregate query with four `count(*) FILTER (WHERE ...)` clauses, not four
+queries.** All four share the ownership predicate, the window and the index access path; splitting
+them multiplies that work by four for no benefit. This is an assertion about query shape, not a
+benchmarked claim about performance — if it proves wrong under load, the tiles are independent
+enough to split without changing anything else in this specification.
+
+**Decision — the fourth tile is called "Agent-attributed events", not "Agent actions".** It counts
+audit rows that carry an `actor_client_id`, which is a narrower and more literal thing than "actions
+an agent took": today exactly three call sites write that column — `client_credentials` token
+issuance (`apps/auth-server/src/app/routes/oauth/token.ts:728`), delegated token exchange
+(`apps/auth-server/src/app/routes/oauth/token.ts:1385`), and consent step-up elevation
+(`apps/auth-server/src/app/routes/ui/consent.ts:830`). Whatever an agent then does against a
+resource server is invisible to this authorization server. "Agent actions" would promise the latter.
+
+**A note on what this tile counts, because it is easy to get backwards.** All three write sites set
+`oauthClientId` and `actorClientId` from the **same** client — the agent is both the row's owning
+client and its actor. So under an ownership predicate on `oauth_client_id`, this counts rows where
+**the developer's own agent client acted**, which is the intended question. It does not count rows
+where someone else's agent acted upon the developer's client; no such row exists, because nothing
+writes an `actor_client_id` that differs from the row's `oauth_client_id`. Delegation depth is
+recorded in `delegation_chain`, not by splitting the two columns
+(`libs/infra/db/src/lib/schema/audit.ts:54`).
 
 **Decision — "Token failures" is labelled "attributed to your clients" in its helper text.** It
 undercounts: failures recorded before the client is resolved carry no `oauth_client_id` (see
 [above](#what-the-feed-structurally-cannot-show)). A tile that undercounts without saying so is a
 tile that gets trusted for something it cannot do.
+
+**Decision — the tiles are not filtered by the feed's event allowlist.** They are aggregate counts
+over named events, and every event they count is on the allowlist anyway. Stating it prevents an
+implementer from wiring the allowlist in twice and quietly zeroing a tile.
 
 **Decision — cache for 60 seconds in Redis, keyed by `developerId` and window.** Redis, not
 in-process memory, for the same reason the Prometheus registry was rejected: a per-process cache
@@ -606,6 +939,31 @@ gives different replicas different answers. `fastify.redis` is already available
 set-with-TTL pattern is established (`apps/auth-server/src/app/helpers/cimd.ts:312`). Sixty seconds
 bounds the worst case to one aggregate query per developer per minute while staying visibly fresh
 for a surface that is a trend indicator, not a monitor.
+
+#### Rate limits for both endpoints
+
+`POST /api/clients` sets the precedent that an expensive authenticated handler gets its own per-route
+budget rather than riding the global default
+(`apps/auth-server/src/app/routes/clients/index.ts:374`, capped per-IP because create runs an
+argon2id hash). These two reads are the most expensive in this API for a different reason — an
+uncached keyset scan and an aggregate, both over a table with no pruning — so they need budgets too,
+but keyed differently.
+
+**Decision — both endpoints are rate-limited per authenticated developer, not per IP.** The
+argon2id routes cap by IP because the cost is inflicted before the caller is known to be legitimate.
+Here the caller is already authenticated by `requireJwt` and the cost scales with _their_ data, so
+`request.jwtPayload.sub` is the correct key; an IP key would throttle a whole office behind one NAT
+and would not throttle a single developer looping from many addresses.
+
+- **`GET /api/audit`** — 60 requests per minute per developer. Comfortably above a human clicking
+  "Load more" and far below a scripted export, which is not what this surface is for.
+- **`GET /api/audit/metrics`** — 30 requests per minute per developer. The 60-second cache already
+  absorbs repeat traffic, so this only bounds a caller deliberately missing the cache.
+
+Both are ordinary `config.rateLimit` blocks in the route definition, the same mechanism
+`POST /api/clients` uses. Neither is rate-limit-exempt: `GET /metrics` is exempt because a scraper
+polls it (`apps/auth-server/src/app/routes/metrics.ts:31`), and that reasoning does not transfer to a
+developer-facing endpoint.
 
 **Decision — the tiles render an "as of" relative timestamp.** A number that can be 60 seconds
 stale must say so, or it will be read as live and disbelieved when it disagrees with the feed
@@ -664,7 +1022,11 @@ Ordered. Each step assumes every step above it has landed.
      red-fails the docs-site suite, and merging the docs alone fails it in the other direction.
 6. **Ship the metrics tiles and the activity feed UI.** Depends on 5.
 7. **#366 — move the consent calls behind server functions.** Independent of 1–6; can run in
-   parallel.
+   parallel. Its own internal order: settle how a server function authenticates **and** what
+   replaces the session-anchored `X-CSRF-Token` control
+   (`apps/auth-server/src/app/routes/consents/index.ts:22`) before writing the server functions —
+   both change the auth-server side, and discovering the CSRF problem after the portal side is
+   written means writing it twice.
 8. **Link consents from the dashboard and the authed header.** Depends on 7, in the same pull
    request as 7. Never before.
 
@@ -682,9 +1044,10 @@ to ask "how did that survive?" has the answer.
 
 Stated plainly, so nobody mistakes silence for a decision:
 
-- **How a portal server function authenticates to the auth-server's consents endpoints.** They take
-  a session cookie and have no Bearer path (`apps/auth-server/src/app/routes/consents/index.ts:17`),
-  while every other portal server function holds a Bearer token. #366 owns this.
+- **How a portal server function authenticates to the auth-server's consents endpoints, and what
+  replaces their session-anchored CSRF token.** Both are set out under
+  [Surface A3](#a3-consents--linked-but-only-after-366); both are #366's to answer, and the CSRF
+  half is not on #366's task list today.
 - **Whether `environment-policy.ts` should move to a shared library.** Rejected for this change,
   with reasons, but the question is legitimate and will recur.
 - **Retention for `audit_logs`.** There is none today. The 90-day query cap bounds the read side;
