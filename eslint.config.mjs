@@ -1,6 +1,76 @@
 import nx from '@nx/eslint-plugin';
 import prettierPlugin from 'eslint-plugin-prettier';
 import simpleImportSort from 'eslint-plugin-simple-import-sort';
+import jsoncParser from 'jsonc-eslint-parser';
+
+/**
+ * Files inside a project that are NOT part of what it ships: build tooling and
+ * test code. Imports made only from these belong in devDependencies, so
+ * `@nx/dependency-checks` must not read them. Without this the rule would take
+ * the whole `{projectRoot}/src/**\/*.ts` typecheck input set at face value and
+ * demand vitest, testcontainers and friends in `dependencies`.
+ */
+const NON_SHIPPED_FILES = [
+  '{projectRoot}/vite.config.ts',
+  '{projectRoot}/vite.config.mts',
+  '{projectRoot}/vitest.config.ts',
+  '{projectRoot}/**/*.test.ts',
+  '{projectRoot}/**/*.test.tsx',
+  '{projectRoot}/**/*.spec.ts',
+  '{projectRoot}/**/*.spec.tsx',
+  // Vitest harness for infra-db's `*.integration.test.ts` suites. It sits under
+  // src/ (so the typecheck input set picks it up) but is deliberately not
+  // re-exported from the library's entry point, so its imports are test-scope.
+  '{projectRoot}/**/integration-setup.ts',
+];
+
+/**
+ * Builds the `@nx/dependency-checks` config blocks.
+ *
+ * `buildTargets: ['typecheck', ...]` is deliberate and load-bearing. The rule
+ * skips any project that has none of these targets, and only accepts a
+ * workspace package as a legitimate dependency when that package itself has
+ * one. Only four projects here have a `build` target; every project has
+ * `typecheck`. Under the default `['build']` the rule would skip most libs
+ * outright AND flag the genuinely-required `@qauth-labs/core-crypto` as
+ * obsolete on auth-server, because core-crypto is typecheck-only. Listing
+ * `typecheck` first makes the rule reason over the whole workspace.
+ *
+ * The per-project entries below are genuine false positives: real dependencies
+ * that reach the project through a channel the rule cannot see. They are scoped
+ * to a single package.json each rather than folded into a workspace-wide
+ * `ignoredDependencies`, so the guard stays sharp everywhere else.
+ */
+function dependencyChecksConfigs() {
+  /** @type {Array<{ files: string[]; ignoredDependencies?: string[] }>} */
+  const scopes = [
+    { files: ['**/package.json'] },
+    {
+      files: ['libs/ui/package.json'],
+      // Both are peerDependencies: requirements this component library places
+      // on its host, not packages it imports. `react-dom` renders the exported
+      // components (only the .test.tsx files import it directly); `tailwindcss`
+      // is the styling contract behind every utility class the components emit.
+      // Neither has an import site in shipped source, by design.
+      ignoredDependencies: ['react-dom', 'tailwindcss'],
+    },
+  ];
+
+  return scopes.map(({ files, ignoredDependencies }) => ({
+    files,
+    languageOptions: { parser: jsoncParser },
+    rules: {
+      '@nx/dependency-checks': [
+        'error',
+        {
+          buildTargets: ['typecheck', 'build'],
+          ignoredFiles: NON_SHIPPED_FILES,
+          ...(ignoredDependencies ? { ignoredDependencies } : {}),
+        },
+      ],
+    },
+  }));
+}
 
 export default [
   ...nx.configs['flat/base'],
@@ -130,6 +200,18 @@ export default [
     // Override or add rules here
     rules: {},
   },
+
+  // Phantom-dependency guard (#370).
+  //
+  // Every project's package.json must declare, in a *production* section, every
+  // package its shipped source actually imports. The auth-server image is built
+  // with `pnpm --filter @qauth-labs/auth-server deploy --prod` and then runs the
+  // TypeScript sources under tsx, so every import has to resolve at runtime from
+  // a tree that has had devDependencies stripped. In the dev workspace the root
+  // hoists everything and an undeclared import resolves anyway; in the image
+  // pnpm's isolated layout does not, and the container crash-loops on boot.
+  // This rule turns that runtime failure into a lint failure.
+  ...dependencyChecksConfigs(),
 
   {
     plugins: {

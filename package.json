@@ -76,6 +76,7 @@
     "husky": "catalog:",
     "jiti": "catalog:",
     "jsdom": "catalog:",
+    "jsonc-eslint-parser": "catalog:",
     "lint-staged": "catalog:",
     "nx": "catalog:",
     "prettier": "catalog:",

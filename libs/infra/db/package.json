@@ -6,17 +6,17 @@
   "dependencies": {
     "@node-rs/argon2": "catalog:",
     "@qauth-labs/shared-errors": "workspace:*",
-    "@qauth-labs/shared-validation": "workspace:*",
     "dotenv": "catalog:",
-    "drizzle-kit": "catalog:",
     "drizzle-orm": "catalog:",
     "drizzle-seed": "catalog:",
     "pg": "catalog:",
+    "tslib": "catalog:",
     "zod": "catalog:"
   },
   "devDependencies": {
     "@qauth-labs/shared-testing": "workspace:*",
     "@types/pg": "catalog:",
+    "drizzle-kit": "catalog:",
     "tsx": "catalog:"
   }
 }

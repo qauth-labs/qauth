@@ -8,6 +8,7 @@
     "@qauth-labs/shared-errors": "workspace:*",
     "@qauth-labs/shared-validation": "workspace:*",
     "jose": "catalog:",
+    "tslib": "catalog:",
     "zod": "catalog:"
   },
   "devDependencies": {

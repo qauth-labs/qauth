@@ -4,6 +4,7 @@
   "private": true,
   "main": "src/index.ts",
   "dependencies": {
+    "tslib": "catalog:",
     "zod": "catalog:",
     "zxcvbn": "catalog:"
   },

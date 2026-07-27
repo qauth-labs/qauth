@@ -7,6 +7,7 @@
     "@qauth-labs/core-crypto": "workspace:*",
     "@qauth-labs/shared-errors": "workspace:*",
     "jose": "catalog:",
+    "tslib": "catalog:",
     "zod": "catalog:"
   },
   "devDependencies": {
