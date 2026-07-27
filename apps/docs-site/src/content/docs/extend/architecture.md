@@ -79,9 +79,16 @@ Every line below is `await`ed except where noted, so the order in the file is th
 | 12  | `metricsPlugin`, `apps/auth-server/src/app/app.ts:236`              | Prometheus registry                                   |
 | 13  | `cors`, `apps/auth-server/src/app/app.ts:254`                       | Fail-closed in production when `CORS_ORIGIN` is unset |
 | 14  | `formbody`, `apps/auth-server/src/app/app.ts:263`                   | Form-encoded body parsing                             |
-| 15  | `AutoLoad` over `plugins/`, `apps/auth-server/src/app/app.ts:265`   | Not `await`ed; see below                              |
-| 16  | `AutoLoad` over `routes/`, `apps/auth-server/src/app/app.ts:272`    | Not `await`ed; every route in the app                 |
-| 17  | `errorHandler`, `apps/auth-server/src/app/app.ts:279`               | The global error handler                              |
+
+Then three registrations whose **relative** order is the subject of the rest of this page, so this
+table deliberately does not pin them to line numbers:
+
+- `errorHandler` — the global error handler, which must be registered **before** the route sweep
+  (issue [#365]).
+- `AutoLoad` over `plugins/` — not `await`ed; see [below](#the-two-autoload-calls).
+- `AutoLoad` over `routes/` — not `await`ed; every route in the app.
+
+[#365]: https://github.com/qauth-labs/qauth/issues/365
 
 ## Which orders are load-bearing, and why they differ
 
@@ -93,7 +100,7 @@ position matters:
 | ---------------------------------------------- | ------------------------------------------------------------------------- | ------------------------------------------------------------ |
 | Content-type parsers (`formbody`)              | Per encapsulation context, as each child plugin is created                | **Must precede routes**                                      |
 | `onRoute` hooks (`@fastify/rate-limit`)        | Fire only for routes registered after the hook exists                     | **Must precede routes**                                      |
-| The error handler                              | Captured into each route's context when that route's plugin finishes load | **Must precede routes** — and currently does not; see below  |
+| The error handler                              | Captured into each route's context when that route's plugin finishes load | **Must precede routes** — see [below](#the-error-handler)    |
 | Request/response hooks (`onRequest`, `onSend`) | Collected at Fastify's `preReady`, after every plugin has loaded          | Position does not change behaviour                           |
 | Decorators (`fastify.repositories`)            | Resolved through the prototype chain at request time                      | Matters only for code that reads them at _registration_ time |
 
@@ -117,7 +124,7 @@ the missing plugin.
 This is real, and it is the ordering mistake with the widest blast radius in the file. Content-type
 parsers belong to an encapsulation context: an encapsulated child plugin gets the parser set that
 existed when it was created, so a parser registered on the parent afterwards never reaches that
-child's routes. Move this line below step 16 and the symptom is not a test failure — it is
+child's routes. Move this line below the route sweep and the symptom is not a test failure — it is
 `415 Unsupported Media Type` for every client that follows the spec, while any client that happens
 to send JSON keeps working.
 
@@ -142,9 +149,10 @@ route registered before the hook exists is never seen. Routes across the app set
 this way — `apps/auth-server/src/app/routes/auth/login.ts:43` is the one that matters most — and
 `apps/auth-server/src/app/routes/metrics.ts:31` opts out with `config: { rateLimit: false }`.
 
-Move step 9 below step 16 and rate limiting stops applying to any of them. There is no error, no
-warning, and no failing test: the endpoints simply answer every request. Treat this line as being
-under the same "do not move" rule as `formbody`, even though it carries no comment saying so.
+Move step 9 below the route sweep and rate limiting stops applying to any of them. There is no
+error, no warning, and no failing test: the endpoints simply answer every request. Treat this line
+as being under the same "do not move" rule as `formbody`, even though it carries no comment saying
+so.
 
 ### Security headers, request-id, metrics, CORS — the comments overstate this
 
@@ -161,7 +169,7 @@ and `apps/auth-server/src/app/app.ts:234` says request-id propagation and the me
 every plugin in the boot has loaded, so a hook added to the parent instance applies to routes that
 were registered before it. All four of these plugins are `fastify-plugin`-wrapped — so whatever
 they add, hooks or decorators, lands on the app instance rather than in a private child scope — and
-moving any of them after step 16 changes nothing observable: the CSP header is still set,
+moving any of them after the route sweep changes nothing observable: the CSP header is still set,
 `reply.cspNonce` is still populated on the login and consent pages, the request id is still echoed,
 and CORS still applies. (`metricsPlugin` adds no hook at all; it only decorates.)
 
@@ -183,7 +191,7 @@ What genuinely matters about the security headers plugin is inside it, not aroun
 ## The two `AutoLoad` calls
 
 ```ts
-// apps/auth-server/src/app/app.ts:265
+// apps/auth-server/src/app/app.ts
 fastify.register(AutoLoad, {
   dir: path.join(__dirname, 'plugins'),
   options: { ...opts },
@@ -199,7 +207,7 @@ contains nothing else, so this first `AutoLoad` call registers zero plugins. It 
 hatch for a future plugin whose position does not matter, not a place to read the current plugin
 set from.
 
-The routes sweep at `apps/auth-server/src/app/app.ts:272` is the one that matters day to day.
+The routes sweep is the one that matters day to day.
 `@fastify/autoload` derives each plugin's URL prefix from its **directory**, not its filename —
 `routes/auth/login.ts` registering `'/login'` serves `/auth/login` — with one override: a
 directory whose entry file exports `autoPrefix` uses that string instead of the directory name,
@@ -207,18 +215,13 @@ and every file in that directory shares it (see
 `apps/auth-server/src/app/routes/clients/index.ts`). If you add a route file and it 404s, that
 mapping is the first thing to check.
 
-Neither `AutoLoad` call is `await`ed. That is harmless — `fastify.register` enqueues, and the
-`await` on the next registration flushes the queue in order — but it means the two sweeps and
-everything after them share one boot phase rather than completing one at a time.
+Neither `AutoLoad` call is `await`ed. That is harmless in itself — `fastify.register` enqueues, and
+the next `await`ed registration flushes the queue in order — but it is what makes the surrounding
+order easy to misread: an un-`await`ed `register` does not finish where it is written, so "the line
+below it runs afterwards" is true of the queue, not of the plugin's effects. That distinction is
+the whole of the next section.
 
 ## The error handler
-
-`apps/auth-server/src/app/app.ts:278` reads:
-
-```ts
-// Register error handler last to catch all unhandled errors
-await fastify.register(errorHandler);
-```
 
 `apps/auth-server/src/app/plugins/error-handler.ts` is what turns the domain errors from
 `@qauth-labs/shared-errors` into the wire shapes the rest of the docs describe: OAuth error codes,
@@ -227,24 +230,75 @@ weak passwords, `retryAfter` for rate limits, and — importantly — suppressio
 stack for unknown errors when `env.NODE_ENV === 'production'`. Routes throw
 (`throw new InvalidGrantError(...)` and friends) and never build these bodies themselves.
 
-> **⚠️ Registering last does not do what the comment says.** In Fastify 5 each route's context
-> captures the error handler of its enclosing instance in an `after()` callback that runs when
-> that route's plugin finishes loading (`errorHandler` in `node_modules/fastify/lib/route.js`),
-> and `context.errorHandler` is what `node_modules/fastify/lib/error-handler.js` reads at request
-> time. A `setErrorHandler` that runs _after_ a route plugin has loaded therefore does not reach
-> that plugin's routes — they keep whatever handler was in effect when they loaded. The comment
-> states an intent, not a mechanism Fastify provides. **This has been reported to the maintainers
-> and is deliberately not changed here.** Do not move this line in either direction without
-> reading that report first, and if you are adding a route whose contract includes a specific
-> error body, assert that body end-to-end rather than assuming this plugin shaped it.
+> **⚠️ This registration must come before the route sweep, and it is load-bearing.** It is the
+> third entry in the binding-time table above and the least obvious of the three, because a
+> misordering here produces error responses rather than no response — so it looks like it works.
+> Tracked, with the confirmation and the fix, in [#365].
 
-Note also that every test which exercises the handler's mapping —
+### The mechanism
+
+A route does not look the error handler up when a request throws. In Fastify 5, each route's
+context captures the error handler of its **enclosing instance** inside an `after()` callback that
+runs when that route's plugin finishes loading — `node_modules/fastify/lib/route.js`, where
+`context.errorHandler` is assigned from the instance's current handler — and
+`node_modules/fastify/lib/error-handler.js` reads that already-captured `context.errorHandler` at
+request time. There is no later re-resolution.
+
+The capture is therefore a **snapshot**, taken per route plugin, at load time. A `setErrorHandler`
+that runs after a route plugin has loaded does not reach that plugin's routes: they keep whichever
+handler was in effect at the moment they loaded, which — if the application's handler has not been
+registered yet — is Fastify's built-in default. Nothing throws, nothing warns, and the routes still
+return an error response. Just the wrong one.
+
+This is also why "register it last so it catches everything" is an appealing but wrong intuition.
+It is the correct instinct for a `catch` block and the wrong one for Fastify: `register` enqueues
+rather than executes, and the thing being ordered is not the moment errors are handled but the
+moment each route decides who will handle them.
+
+### What silently regresses when it is wrong
+
+`app.ts` registered the error handler after both `AutoLoad` sweeps for a long time, under a comment
+saying that was what made it catch everything. It did the opposite — the plugin reached no route in
+the application. Three consequences, all confirmed against the real assembled app in [#365]:
+
+- **Validation failures returned `FST_ERR_VALIDATION`**, Fastify's raw internal error code, instead
+  of the application's error shape.
+- **`GET /oauth/userinfo` answered 401 with no `WWW-Authenticate` header at all** — an RFC 6750 §3
+  violation, since a 401 rejecting a bearer token must carry the challenge.
+- **A duplicate `POST /auth/register` returned the database constraint name** in its `message`.
+  That is exactly the account-enumeration oracle `error-handler.ts` sanitizes — a control that
+  shipped as security finding F-01, was reviewed, was merged, and had been inert ever since,
+  because the sanitizing handler was never the one answering.
+
+That third one is why this belongs in the same category as `formbody` rather than in a style guide.
+An ordering mistake here does not break a feature; it disables a security control while leaving
+every visible behaviour intact.
+
+### The guard
+
+`apps/auth-server/src/app/error-handler.wiring.test.ts` builds the **real assembled app** — not a
+hand-rolled Fastify instance — and asserts that the application's handler is the one answering. It
+is mutation-checked: it fails if the registration moves back below the route sweep. That makes this
+the one ordering constraint in `app.ts` a test will catch for you. `formbody` and `rateLimitPlugin`
+still have nothing equivalent.
+
+If you are adding a route whose contract includes a specific error body, assert that body
+end-to-end anyway. A passing unit test proves the handler _can_ produce the shape, not that your
+route reaches it.
+
+### Why it went unnoticed for so long
+
+Every test that exercises the handler's mapping —
 `apps/auth-server/src/app/plugins/error-handler.test.ts`,
 `apps/auth-server/src/app/routes/oauth/userinfo.test.ts`,
-`apps/auth-server/src/app/routes/oauth/signature-verification.test.ts` — registers `errorHandler`
-**before** the routes under test. Those tests prove the mapping logic; none of them reproduces the
-production composition — see [Testing](/extend/testing/#the-honest-limitation) for why that whole
-tier is blind to this class of problem.
+`apps/auth-server/src/app/routes/oauth/signature-verification.test.ts` — builds its own Fastify
+instance and registers `errorHandler` **before** the routes under test. Each is a correct test of
+the mapping logic against a correctly composed app, so none of them could ever observe how the
+production app was composed. `error-handler.wiring.test.ts` is the answer to that specific gap.
+
+Generalise the lesson rather than the fix: a test that constructs its own wiring can only ever
+verify the wiring it constructs. See [Testing](/extend/testing/#the-honest-limitation) for how much
+of `apps/auth-server`'s suite is in that position.
 
 ## The fail-closed boot checks
 
@@ -413,17 +467,18 @@ even with the Zod compiler intact.
 
 ## Before you change the bootstrap
 
-- **Adding a plugin routes depend on:** register it before step 15, `await` it, and if the
-  dependency is hard, declare it with `dependencies:` in the plugin's `fastify-plugin` options
-  rather than relying on line order.
+- **Adding a plugin routes depend on:** register it before the `AutoLoad` sweeps, `await` it, and
+  if the dependency is hard, declare it with `dependencies:` in the plugin's `fastify-plugin`
+  options rather than relying on line order.
 - **Adding a plugin whose position genuinely does not matter:** drop it in
   `apps/auth-server/src/app/plugins/` and let the first `AutoLoad` sweep pick it up.
 - **Adding a route:** nothing in `app.ts` changes. The directory determines the prefix.
 - **Adding a credential provider:** nothing in `app.ts` changes either — see
   [Adding a credential provider](/extend/adding-a-credential-provider/).
-- **Moving anything:** check the binding-time table above first. Two of this file's comments claim
-  an ordering requirement Fastify does not enforce, and the one plugin with a real, undocumented
-  requirement (`rateLimitPlugin`) fails silently.
+- **Moving anything:** check the binding-time table above first, and do not trust the comment above
+  the line. Two of this file's comments claim an ordering requirement Fastify does not enforce; a
+  third claimed one it does enforce but described it backwards ([#365]); and `rateLimitPlugin`,
+  which has a real requirement, carries no comment at all and fails silently.
 - **Touching `main.ts`:** re-read both `SECURITY INVARIANT` comments in full first. They are there
   because the code they protect looks removable.
 

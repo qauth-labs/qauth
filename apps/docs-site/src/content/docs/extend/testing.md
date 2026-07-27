@@ -42,18 +42,32 @@ That design is fine for what it targets — it makes handler logic testable with
 or a valid environment — but be clear about what it therefore does **not** verify:
 
 - **Nothing about `app.ts`'s composition.** Plugin registration order, content-type parsing, the
-  active error handler, whether rate limiting applies to the route — none of it is exercised. See
-  [Request lifecycle](/extend/architecture/) for two ordering claims in that file that are not
-  what they appear, both of which this tier would report as green either way.
+  active error handler, whether rate limiting applies to the route — none of it is exercised. This
+  is not hypothetical: issue [#365] was a real ordering defect that left the application's error
+  handler unreachable from every route, and this tier reported green throughout, because each test
+  composes its own instance correctly before testing it. See
+  [Request lifecycle](/extend/architecture/#the-error-handler) for the mechanism and for two
+  further ordering claims in that file that are not what they appear.
 - **Nothing about schema validation.** The stub never runs Fastify's validator, so a route's Zod
   `schema` is not applied to the payload the test passes in.
 - **Nothing about the real environment schema.** `vi.mock('../../../config/env')` replaces it with
   an object literal, so a new required variable does not fail these tests.
 
-Some suites go further and build a real `Fastify()` instance — for example
-`apps/auth-server/src/app/routes/oauth/signature-verification.test.ts`, which registers `formbody`
-and the JWT plugin so it can exercise the same parsers production wires up. When you add a test
-whose subject is _wiring_ rather than _logic_, follow that pattern rather than the stub pattern.
+There are two stronger patterns in the tree, and the difference between them is worth knowing:
+
+- **A real `Fastify()` instance, composed by the test** — for example
+  `apps/auth-server/src/app/routes/oauth/signature-verification.test.ts`, which registers `formbody`
+  and the JWT plugin so it can exercise the same parsers production wires up. Better than a stub,
+  but it still only proves the wiring the test itself built.
+- **The real assembled app** — `apps/auth-server/src/app/error-handler.wiring.test.ts`, added with
+  [#365]. It boots the actual application composition and asserts a property of it, and is
+  mutation-checked so it fails if the registration order regresses. This is currently the only test
+  of its kind.
+
+When you add a test whose subject is _wiring_ rather than _logic_, the second pattern is the one
+that would have caught #365; the first would not have.
+
+[#365]: https://github.com/qauth-labs/qauth/issues/365
 
 ## Tier 2 — integration (testcontainers)
 
