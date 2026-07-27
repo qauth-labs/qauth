@@ -159,11 +159,11 @@ and `apps/auth-server/src/app/app.ts:234` says request-id propagation and the me
 
 **Fastify does not require this.** `onRequest` / `onSend` hooks are collected at `preReady`, after
 every plugin in the boot has loaded, so a hook added to the parent instance applies to routes that
-were registered before it. All four of these plugins are `fastify-plugin`-wrapped — meaning they
-install their hooks on the app instance rather than in a private child scope — so moving any of
-them after step 16 changes nothing observable: the CSP header is still set, `reply.cspNonce` is
-still populated on the login and consent pages, the request id is still echoed, and CORS still
-applies.
+were registered before it. All four of these plugins are `fastify-plugin`-wrapped — so whatever
+they add, hooks or decorators, lands on the app instance rather than in a private child scope — and
+moving any of them after step 16 changes nothing observable: the CSP header is still set,
+`reply.cspNonce` is still populated on the login and consent pages, the request id is still echoed,
+and CORS still applies. (`metricsPlugin` adds no hook at all; it only decorates.)
 
 The intent behind the comments is sound and the current order is the right convention — a reader
 should not have to reason about hook collection to be confident the headers are global. But the
