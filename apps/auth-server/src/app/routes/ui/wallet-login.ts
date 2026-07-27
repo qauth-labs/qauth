@@ -19,16 +19,17 @@ import { getOrCreateDefaultRealm } from '../../helpers/realm';
 import { resolveReturnTo } from '../../helpers/return-to';
 import {
   clearLoginCsrfCookie,
-  clearWalletFlowCookie,
   csrfTokensEqual,
+  dropWalletFlowBinding,
+  findWalletFlowBinder,
   generateCsrfToken,
   LOGIN_CSRF_COOKIE_NAME,
   readCookie,
+  readWalletFlowBindings,
   setLoginCsrfCookie,
   setSessionCookie,
   setWalletFlowCookie,
   verifyLoginCsrfCookie,
-  verifyWalletFlowCookie,
   WALLET_FLOW_COOKIE_NAME,
 } from '../../helpers/session-cookie';
 import {
@@ -504,9 +505,10 @@ async function advanceWalletLoginFlow(
 
   // Browser binding. Without it, an attacker could start a flow, present their
   // own credential and hand the victim the URL — the victim's browser would
-  // finish the flow and be signed in as the attacker. See
+  // finish the flow and be signed in as the attacker. Looked up BY HANDLE, so a
+  // second flow started in the same browser does not unbind this one. See
   // `WALLET_FLOW_COOKIE_NAME`.
-  const binder = verifyWalletFlowCookie(readCookie(request, WALLET_FLOW_COOKIE_NAME));
+  const binder = findWalletFlowBinder(readCookie(request, WALLET_FLOW_COOKIE_NAME), handle);
   if (!binder || !csrfTokensEqual(flow.binder, binder)) {
     fastify.log.warn(
       { ip: request.ip },
@@ -589,7 +591,9 @@ async function advanceWalletLoginFlow(
   });
 
   setSessionCookie(reply, sessionId);
-  clearWalletFlowCookie(reply);
+  // Burn only THIS flow's binding: another flow may still be pending in the
+  // same browser, and clearing the whole cookie would strand it.
+  dropWalletFlowBinding(request, reply, handle);
 
   return { status: 'complete', redirectTo: flow.returnTo };
 }
@@ -790,11 +794,13 @@ export default async function (fastify: FastifyInstance) {
         });
         invocationUri = invocation.invocationUri;
 
-        setWalletFlowCookie(
-          reply,
-          binder,
-          Math.max(1, Math.ceil((invocation.expiresAt - Date.now()) / 1000))
-        );
+        // ADDED to whatever this browser already holds rather than replacing
+        // it: a user who starts a second sign-in while the first QR is still on
+        // screen must keep both usable. See `WALLET_FLOW_COOKIE_NAME`.
+        setWalletFlowCookie(reply, [
+          ...readWalletFlowBindings(readCookie(request, WALLET_FLOW_COOKIE_NAME)),
+          { handle, binder, expiresAt: invocation.expiresAt },
+        ]);
       } catch (error) {
         // A profile that forbids what the request needs, an unreachable store, a
         // failed insert: all operator-visible, none of them the user's business.
@@ -818,7 +824,10 @@ export default async function (fastify: FastifyInstance) {
 
       // Rendered directly rather than redirected to: the invocation is already
       // in hand, and a redirect would cost the user a round trip before the QR
-      // appears. Reloading the same URL re-renders it from the flow record.
+      // appears. The price is that this page is a POST RESPONSE BODY — reloading
+      // it re-POSTs and starts a NEW flow. `GET /ui/wallet-login/:handle` is the
+      // URL that re-renders THIS flow from its record, which is why the noscript
+      // block links there.
       return sendHtml(
         reply,
         pendingPage({

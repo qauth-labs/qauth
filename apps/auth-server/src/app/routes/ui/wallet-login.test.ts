@@ -39,6 +39,10 @@ vi.mock('../../helpers/wallet-presentation', () => ({
   resolveWalletPresentation: vi.fn().mockResolvedValue({ status: 'rejected' }),
 }));
 
+import {
+  readWalletFlowBindings,
+  WALLET_FLOW_COOKIE_MAX_BINDINGS,
+} from '../../helpers/session-cookie';
 import { resolveWalletPresentation } from '../../helpers/wallet-presentation';
 import loginRoute from './login';
 import walletLoginRoute, { WALLET_LOGIN_EXPIRED, WALLET_LOGIN_REFUSAL } from './wallet-login';
@@ -137,9 +141,19 @@ function cookieValue(setCookies: string[], name: string): string {
 }
 
 /** Drive GET then POST to obtain a started flow, and return everything about it. */
-async function startFlow(overrides: { identifier?: string; returnTo?: string } = {}) {
-  const { fastify, routes, sessionUtils } = makeFastify();
-  await walletLoginRoute(fastify);
+async function startFlow(
+  overrides: {
+    identifier?: string;
+    returnTo?: string;
+    /** Reuse an already-registered server, to start a SECOND flow against it. */
+    context?: ReturnType<typeof makeFastify>;
+    /** The wallet-flow cookie this browser already holds, if any. */
+    walletFlowCookie?: string;
+  } = {}
+) {
+  const context = overrides.context ?? makeFastify();
+  const { fastify, routes, sessionUtils } = context;
+  if (overrides.context === undefined) await walletLoginRoute(fastify);
 
   const getReply = createReply();
   await routes.get('GET /wallet-login')!(
@@ -149,6 +163,12 @@ async function startFlow(overrides: { identifier?: string; returnTo?: string } =
   const csrfCookie = cookieValue(getReply.state.setCookies, '__Host-qauth_login_csrf');
   const csrfToken = csrfCookie.split('.')[0];
 
+  const cookies = [`__Host-qauth_login_csrf=${csrfCookie}`];
+  if (overrides.walletFlowCookie !== undefined) {
+    cookies.push(`__Host-qauth_wallet_flow=${overrides.walletFlowCookie}`);
+  }
+
+  const knownKeys = new Set(sessionUtils.store.keys());
   const postReply = createReply();
   await routes.get('POST /wallet-login')!(
     {
@@ -157,21 +177,21 @@ async function startFlow(overrides: { identifier?: string; returnTo?: string } =
         csrf_token: csrfToken,
         return_to: overrides.returnTo,
       },
-      headers: { cookie: `__Host-qauth_login_csrf=${csrfCookie}` },
+      headers: { cookie: cookies.join('; ') },
       ip: '127.0.0.1',
     },
     postReply.reply
   );
 
   const binderCookie = cookieValue(postReply.state.setCookies, '__Host-qauth_wallet_flow');
-  const flowEntry = [...sessionUtils.store.entries()].find(([key]) =>
-    key.startsWith('wallet-login:')
+  const flowEntry = [...sessionUtils.store.entries()].find(
+    ([key]) => key.startsWith('wallet-login:') && !knownKeys.has(key)
   );
   if (!flowEntry) throw new Error('no wallet-login flow was stored');
   const handle = flowEntry[0].slice('wallet-login:'.length);
   const flow = flowEntry[1] as Record<string, any>;
 
-  return { fastify, routes, sessionUtils, postReply, handle, flow, binderCookie };
+  return { context, fastify, routes, sessionUtils, postReply, handle, flow, binderCookie };
 }
 
 /** Simulate the direct_post endpoint publishing its transport signal. */
@@ -535,6 +555,99 @@ describe('wallet login — completion', () => {
   });
 });
 
+/**
+ * Two flows, one browser.
+ *
+ * The binder is per FLOW, not per browser. A single cookie value would be
+ * overwritten by the second `POST /ui/wallet-login` — and since a MISSING binder
+ * and a WRONG one are deliberately indistinguishable from an expiry, the first
+ * flow would then answer "this sign-in request has expired" while its QR was
+ * still on screen and its presentation request still live. Scanning that QR
+ * burns the single-use `state` for a flow no surface can read, so the user is
+ * never signed in and cannot retry the code in front of them.
+ */
+describe('wallet login — concurrent flows in one browser', () => {
+  it('leaves BOTH flows pollable, re-renderable and completable', async () => {
+    const first = await startFlow({ returnTo: '/first' });
+    const second = await startFlow({
+      context: first.context,
+      returnTo: '/second',
+      walletFlowCookie: first.binderCookie,
+    });
+
+    expect(second.handle).not.toBe(first.handle);
+    const { routes, sessionUtils } = first.context;
+    const cookie = `__Host-qauth_wallet_flow=${second.binderCookie}`;
+
+    // (1) The FIRST flow still polls as pending — it was not unbound.
+    for (const handle of [first.handle, second.handle]) {
+      const polled = createReply();
+      await routes.get('GET /wallet-login/:handle/status')!(
+        { params: { handle }, headers: { cookie }, ip: '127.0.0.1' },
+        polled.reply
+      );
+      expect(polled.state.body).toEqual({ status: 'pending' });
+    }
+
+    // (2) The noscript refresh path re-renders each of them from its record.
+    for (const handle of [first.handle, second.handle]) {
+      const rendered = createReply();
+      await routes.get('GET /wallet-login/:handle')!(
+        { params: { handle }, headers: { cookie }, ip: '127.0.0.1' },
+        rendered.reply
+      );
+      expect(rendered.state.body as string).toContain('Present a credential');
+      expect(rendered.state.body as string).toContain(`/ui/wallet-login/${handle}/status`);
+    }
+
+    // (3) Either wallet may answer first, and completing one must not strand
+    // the other: only the completed flow's binding is burned.
+    (resolveWalletPresentation as unknown as Mock).mockResolvedValue({
+      status: 'authenticated',
+      userId: 'user-1',
+      externalSub: 'user@example.com',
+    });
+
+    publishSignal(sessionUtils, first.flow.stateHash, 'received');
+    const firstDone = createReply();
+    await routes.get('GET /wallet-login/:handle/status')!(
+      { params: { handle: first.handle }, headers: { cookie }, ip: '127.0.0.1' },
+      firstDone.reply
+    );
+    expect(firstDone.state.body).toEqual({ status: 'complete', redirect_to: '/first' });
+
+    const survivingCookie = cookieValue(firstDone.state.setCookies, '__Host-qauth_wallet_flow');
+    publishSignal(sessionUtils, second.flow.stateHash, 'received');
+    const secondDone = createReply();
+    await routes.get('GET /wallet-login/:handle/status')!(
+      {
+        params: { handle: second.handle },
+        headers: { cookie: `__Host-qauth_wallet_flow=${survivingCookie}` },
+        ip: '127.0.0.1',
+      },
+      secondDone.reply
+    );
+    expect(secondDone.state.body).toEqual({ status: 'complete', redirect_to: '/second' });
+  });
+
+  it('bounds the cookie: the oldest binding is evicted, never appended forever', async () => {
+    let cookie: string | undefined;
+    const handles: string[] = [];
+    const context = makeFastify();
+    await walletLoginRoute(context.fastify);
+
+    for (let i = 0; i < WALLET_FLOW_COOKIE_MAX_BINDINGS + 1; i += 1) {
+      const started = await startFlow({ context, walletFlowCookie: cookie });
+      handles.push(started.handle);
+      cookie = started.binderCookie;
+    }
+
+    const bindings = readWalletFlowBindings(cookie);
+    expect(bindings).toHaveLength(WALLET_FLOW_COOKIE_MAX_BINDINGS);
+    expect(bindings.map((b) => b.handle)).toEqual(handles.slice(1));
+  });
+});
+
 describe('wallet login — refusals do not enumerate or leak (#236)', () => {
   it('gives an unresolvable presentation, a disabled user and a wallet error the same answer', async () => {
     const answers: string[] = [];
@@ -650,7 +763,20 @@ describe('wallet login — refusals do not enumerate or leak (#236)', () => {
 });
 
 describe('wallet login — return_to open-redirect guard', () => {
-  const UNSAFE = ['https://evil.example/steal', '//evil.example', '/\\evil.example', 'nope', ''];
+  const UNSAFE = [
+    'https://evil.example/steal',
+    '//evil.example',
+    '/\\evil.example',
+    // The URL parser strips tab/LF/CR before parsing, so these read as a single
+    // leading `/` here and are protocol-relative by the time a browser resolves
+    // them. See `helpers/return-to.test.ts`.
+    '/\t/evil.example',
+    '/\n/evil.example',
+    '/\r/evil.example',
+    '/\t\\evil.example',
+    'nope',
+    '',
+  ];
 
   it.each(UNSAFE)('falls back to "/" for return_to=%j', async (returnTo) => {
     const { flow } = await startFlow({ returnTo });
