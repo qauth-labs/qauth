@@ -36,7 +36,7 @@ QAuth's own resource-server SDK, verifies the classical Ed25519 signature only.
 The "If you want to validate the post-quantum signature" checklist below is
 something you implement yourself today.
 
-> The linked [Security Gate Review](/docs/security/005-pqc-hybrid-signing-review.md)
+> The linked [Security Gate Review](/reference/records/security/005-pqc-hybrid-signing-review/)
 > predates live issuance (#275); its own dated note explains the gap. Its
 > findings and the default-off posture are otherwise still current.
 
@@ -140,7 +140,7 @@ a draft revision cannot silently change the wire shape:
 > break); only the citation was wrong. The constant is now
 > `PQC_JOSE_MLDSA_SPEC = 'RFC 9964'`, with `PQC_JOSE_ALG_POLICY_SPEC = 'RFC 9864'`
 > for alg-identifier policy. See the
-> [security review](/docs/security/005-pqc-hybrid-signing-review.md).
+> [security review](/reference/records/security/005-pqc-hybrid-signing-review/).
 
 **The AKP key members are stable**: RFC 9964 is a published Standards Track
 RFC, so `kty`/`alg`/`pub` will not change under you. What remains provisional is
@@ -189,9 +189,9 @@ base64url(payload)` — and verify the ML-DSA-65 signature over those exact
 
 ## References
 
-- [ADR-005: Post-Quantum Hybrid Signing](/docs/adr/005-pqc-hybrid-signing.md) — the
+- [ADR-005: Post-Quantum Hybrid Signing](/reference/records/adr/005-pqc-hybrid-signing/) — the
   roadmap and the #243–248 implementation amendments.
-- [Security Gate Review](/docs/security/005-pqc-hybrid-signing-review.md) — the
+- [Security Gate Review](/reference/records/security/005-pqc-hybrid-signing-review/) — the
   reviewed behavior and the pre-default-on checklist.
 - [OAuth 2.1 Flow → Introspection](/integrate/oauth-flow/#token-introspection-rfc-7662) — the introspection endpoint
   used as the PQC delivery channel.

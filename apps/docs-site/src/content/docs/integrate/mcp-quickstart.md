@@ -15,7 +15,7 @@ your machine:
 3. Obtain a valid, **audience-bound** access token and call the protected resource.
 
 By the end you will have reproduced the flow from
-[ADR-007](/docs/adr/007-mcp-first-positioning.md): an MCP client, given only a server
+[ADR-007](/reference/records/adr/007-mcp-first-positioning/): an MCP client, given only a server
 URL, discovers the authorization server, registers, runs `authorization_code` +
 PKCE, and calls the resource with a token QAuth minted and `mcp-guard` validated.
 
@@ -291,7 +291,7 @@ advertised in discovery.
 - **DCR** open mode is rate-limited per IP (30 requests per 60-second window by
   default — `REGISTER_CLIENT_RATE_LIMIT` / `REGISTER_CLIENT_RATE_WINDOW`).
   Tighten or gate it for any internet-facing deployment. See
-  [ADR-007 §1](/docs/adr/007-mcp-first-positioning.md) and the
+  [ADR-007 §1](/reference/records/adr/007-mcp-first-positioning/) and the
   [Docker guide CIMD section](/operate/docker/#client-id-metadata-documents-cimd).
 
 ---
@@ -334,6 +334,6 @@ even if both trust the same QAuth instance.
   delegation, agent scope modes, and step-up before dangerous operations.
 - [`@qauth-labs/mcp-guard` README](/libs/fastify/plugins/mcp-guard/README.md) —
   full configuration, `introspection` mode, and the framework-agnostic core.
-- [ADR-007: MCP-First Positioning](/docs/adr/007-mcp-first-positioning.md) — why this
+- [ADR-007: MCP-First Positioning](/reference/records/adr/007-mcp-first-positioning/) — why this
   is QAuth's near-term product identity.
 - [Docker guide](/operate/docker/) — development mode, CIMD configuration, production.

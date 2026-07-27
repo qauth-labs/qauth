@@ -361,7 +361,7 @@ For **development** with `docker-compose.dev.yml`, set `NODE_ENV=development` an
 
 ### Client ID Metadata Documents (CIMD)
 
-CIMD is the recommended MCP client-registration mechanism (see [ADR-007](/docs/adr/007-mcp-first-positioning.md)). When a `client_id` is an HTTPS URL, the auth-server fetches and validates the client's metadata document on demand instead of persisting a registration record. All settings have safe defaults — none are required to run.
+CIMD is the recommended MCP client-registration mechanism (see [ADR-007](/reference/records/adr/007-mcp-first-positioning/)). When a `client_id` is an HTTPS URL, the auth-server fetches and validates the client's metadata document on demand instead of persisting a registration record. All settings have safe defaults — none are required to run.
 
 | Variable                       | Required | Default            | Description                                                                                                                                                     |
 | ------------------------------ | -------- | ------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -475,7 +475,7 @@ This Docker setup is designed for **local development**. For production:
 6. **Set up monitoring** (Prometheus, Grafana)
 7. **Enable logging aggregation** (ELK, Loki)
 
-See [ADR-001: JWT Key Management](/docs/adr/001-jwt-key-management.md) for production key management strategy, and the [Keys guide](/operate/keys/) for how to generate each key type today.
+See [ADR-001: JWT Key Management](/reference/records/adr/001-jwt-key-management/) for production key management strategy, and the [Keys guide](/operate/keys/) for how to generate each key type today.
 
 ## Testing the Setup
 

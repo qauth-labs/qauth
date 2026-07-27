@@ -13,7 +13,7 @@ setting a single value instead of getting a dozen independent switches right.
 
 This is the operator/how-to guide. For the design rationale, the fail-safe
 reasoning, and the prior-art comparison, see
-[ADR-008](/docs/adr/008-environment-aware-authorization.md). The resolver itself lives
+[ADR-008](/reference/records/adr/008-environment-aware-authorization/). The resolver itself lives
 in `apps/auth-server/src/app/helpers/environment-policy.ts`.
 
 ## The two knobs
@@ -130,7 +130,7 @@ one place:
 
 ## Related
 
-- [ADR-008: Environment-Aware Authorization Posture](/docs/adr/008-environment-aware-authorization.md) — rationale, fail-safe design, prior art.
-- [ADR-007: MCP-First Positioning](/docs/adr/007-mcp-first-positioning.md) — the operator-set `max_agent_mode` precedent this reuses.
+- [ADR-008: Environment-Aware Authorization Posture](/reference/records/adr/008-environment-aware-authorization/) — rationale, fail-safe design, prior art.
+- [ADR-007: MCP-First Positioning](/reference/records/adr/007-mcp-first-positioning/) — the operator-set `max_agent_mode` precedent this reuses.
 - [Agent Authorization](/integrate/agent-authorization/) — agent step-up, which this posture enforces in `staging`/`production`.
 - [Browser Security](/operate/browser-security/) — the T3 hardening bundle that the production profile turns on.

@@ -384,7 +384,7 @@ rollup over that detail.
 - [API Reference](/integrate/api-reference/) — endpoint contracts, including the
   `is_agent` DCR field and the token-exchange grant.
 - [MCP Quickstart](/integrate/mcp-quickstart/) — end-to-end QAuth → MCP handshake.
-- [ADR-007: MCP-First Positioning](/docs/adr/007-mcp-first-positioning.md) — why the
+- [ADR-007: MCP-First Positioning](/reference/records/adr/007-mcp-first-positioning/) — why the
   agent-native layer is QAuth's differentiation.
 - [`@qauth-labs/mcp-guard`](/libs/fastify/plugins/mcp-guard/README.md) — the
   resource-server SDK that emits the `403 insufficient_scope` step-up challenge.

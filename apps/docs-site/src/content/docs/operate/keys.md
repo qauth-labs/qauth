@@ -66,7 +66,7 @@ Set `JWT_PRIVATE_KEY` (or `JWT_PRIVATE_KEY_PATH`) to the private key, and
 
 ### The EdDSA public key is not actually optional (#359)
 
-`.env.example` and the [OIDF certification runbook](/docs/oidf-op-certification-runbook.md)
+`.env.example` and the [OIDF certification runbook](https://github.com/qauth-labs/qauth/blob/main/docs/oidf-op-certification-runbook.md)
 both describe `JWT_PUBLIC_KEY` as optional — "if not provided, can be derived
 from private key." **Today, omitting it fails at boot.** Set both keys.
 
@@ -140,7 +140,7 @@ gives the published RSA JWK a stable `kid`
 
 For the full certification flow — deploying, driving the conformance suite,
 and the residual-uncertainty checklist — see the
-[OIDF OP Certification Runbook](/docs/oidf-op-certification-runbook.md).
+[OIDF OP Certification Runbook](https://github.com/qauth-labs/qauth/blob/main/docs/oidf-op-certification-runbook.md).
 
 ## ML-DSA-65 seed — only with hybrid signing
 
@@ -171,7 +171,7 @@ tokens signed under it.
 
 See the [PQC Verifier Guide](/operate/pqc-verifier-guide/) for what changes
 for token verifiers once this is on, and the
-[Security Gate Review](/docs/security/005-pqc-hybrid-signing-review.md) for
+[Security Gate Review](/reference/records/security/005-pqc-hybrid-signing-review/) for
 the reviewed behavior and the pre-default-on checklist.
 
 ## Environment variables

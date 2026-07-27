@@ -12,7 +12,7 @@ promise is that adding one is a **registration**, not a change to the authentica
 new branch in a route, no `if (providerType === …)` anywhere.
 
 This page is the practical version of
-[ADR-003](/docs/adr/003-credential-provider-interface.md). Read the ADR for the decision and its
+[ADR-003](/reference/records/adr/003-credential-provider-interface/). Read the ADR for the decision and its
 alternatives; read this for what the code actually does at `HEAD`.
 
 ## The contract

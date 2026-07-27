@@ -437,4 +437,4 @@ QAuth returns standard OAuth error codes (RFC 6749 §5.2):
   (`is_agent`, scope modes, step-up, per-agent audit) built on these grants.
 - [`@qauth-labs/mcp-guard`](/libs/fastify/plugins/mcp-guard/README.md) —
   resource-server SDK that validates these tokens.
-- [ADR-006: OAuth grants and audience](/docs/adr/006-oauth-grants-and-audience.md).
+- [ADR-006: OAuth grants and audience](/reference/records/adr/006-oauth-grants-and-audience/).
