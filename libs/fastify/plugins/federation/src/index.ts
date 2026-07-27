@@ -1,5 +1,11 @@
 export * from './lib/configured-providers';
 export * from './lib/federation-plugin';
+// #234 + #236 composed for the app layer: validate a presentation, then decide
+// whether its issuer is worth anything to this realm. The two halves are NOT
+// re-exported individually — `validatePresentations` alone produces a
+// plausible-looking `ValidatedCredential` from an untrusted issuer, which is
+// precisely the object a caller in a hurry would use. See the module JSDoc.
+export * from './lib/wallet-credential-verification';
 export type * from './types';
 
 // Re-exported provider surface: app code (scope:app) may only depend on
@@ -28,15 +34,18 @@ export type {
 export { assertTrustedIssuersUsable } from '@qauth-labs/server-federation';
 export {
   buildPasswordCredentialData,
+  buildWalletCredentialData,
   createPasswordProvider,
   EMAIL_ATTR_KEY,
   PASSWORD_PROVIDER_TYPE,
   passwordCredentialDataSchema,
   rankAttributeSource,
+  readWalletBinding,
   selectTrustedAttribute,
   SELF_REPORTED_SOURCE,
   WALLET_PROVIDER_TYPE,
   WALLET_SOURCE,
+  walletCredentialDataSchema,
 } from '@qauth-labs/server-federation';
 
 // OID4VP 1.0 transport surface (#233), re-exported for the same boundary reason
@@ -55,11 +64,13 @@ export type {
   DcqlClaimsQuery,
   DcqlCredentialQuery,
   DcqlQuery,
+  IssuerKeyResolver,
   Oid4vpAuthorizationRequest,
   Oid4vpDirectPostOutcome,
   Oid4vpRequestSecrets,
   PresentedCredential,
   RedeemedOid4vpRequestState,
+  ValidatedCredential,
   VerifierProfile,
   VerifierProfileId,
 } from '@qauth-labs/server-federation';
@@ -105,6 +116,9 @@ export type {
   SubjectResolutionOutcome,
   SubjectResolutionStrategy,
   SubjectResolutionStrategyId,
+  WalletCredentialData,
+  WalletLinkContext,
+  WalletLinkOutcome,
 } from '@qauth-labs/server-federation';
 export {
   assertSubjectResolved,
@@ -114,3 +128,14 @@ export {
   resolveSubjectResolution,
   SUBJECT_RESOLUTION_STRATEGY_IDS,
 } from '@qauth-labs/server-federation';
+// Account linking (#238, ADR-009 §5). `prepareWalletLink` produces a WRITE PLAN
+// and touches no database — the app layer owns the transaction, because
+// `scope:server` may not import `infra-db`.
+export { prepareWalletLink } from '@qauth-labs/server-federation';
+
+// Issuer trust (#236) for the realm-scoped registry the verification seam above
+// consumes. `createStaticIssuerAllowlist` is deliberately NOT re-exported:
+// `resolveTrustRegistry` is the only supported way to obtain a live registry,
+// and it is fail-closed where the raw constructor throws on a bad entry.
+export type { TrustRegistry, ValidatedIssuer } from '@qauth-labs/server-federation';
+export { resolveTrustRegistry } from '@qauth-labs/server-federation';

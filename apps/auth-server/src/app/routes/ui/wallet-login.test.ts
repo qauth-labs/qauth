@@ -788,3 +788,61 @@ describe('wallet login — return_to open-redirect guard', () => {
     expect(flow.returnTo).toBe('/oauth/authorize?client_id=abc');
   });
 });
+
+describe('wallet login — a LINK flow may never complete here (#238)', () => {
+  it('refuses a link-mode flow instead of minting a session for its user', async () => {
+    // The mode discriminator, from the login side. A linking flow is started by
+    // an already-authenticated session, so its handle is not a login proof —
+    // completing it here would sign this browser in as the linking user with no
+    // credential of that account having been checked.
+    const { routes, sessionUtils, handle, flow, binderCookie } = await startFlow();
+    sessionUtils.store.set(`wallet-login:${handle}`, {
+      ...flow,
+      mode: 'link',
+      linkUserId: 'user-1',
+    });
+    publishSignal(sessionUtils, flow.stateHash, 'received');
+    (resolveWalletPresentation as unknown as Mock).mockResolvedValue({
+      status: 'authenticated',
+      userId: 'user-1',
+      externalSub: 'user@example.com',
+    });
+
+    const { reply, state } = createReply();
+    await routes.get('GET /wallet-login/:handle')!(
+      {
+        params: { handle },
+        headers: { cookie: `__Host-qauth_wallet_flow=${binderCookie}` },
+        ip: '127.0.0.1',
+      },
+      reply
+    );
+
+    expect(state.statusCode).toBe(401);
+    expect(resolveWalletPresentation).not.toHaveBeenCalled();
+    expect(state.setCookies.some((c) => c.startsWith('__Host-qauth_session='))).toBe(false);
+  });
+
+  it('still completes an ordinary login flow, so the guard refuses only what it should', async () => {
+    const { routes, sessionUtils, handle, flow, binderCookie } = await startFlow();
+    publishSignal(sessionUtils, flow.stateHash, 'received');
+    (resolveWalletPresentation as unknown as Mock).mockResolvedValue({
+      status: 'authenticated',
+      userId: 'user-1',
+      externalSub: 'user@example.com',
+    });
+
+    const { reply, state } = createReply();
+    await routes.get('GET /wallet-login/:handle')!(
+      {
+        params: { handle },
+        headers: { cookie: `__Host-qauth_wallet_flow=${binderCookie}` },
+        ip: '127.0.0.1',
+      },
+      reply
+    );
+
+    expect(state.statusCode).toBe(302);
+    expect(state.setCookies.some((c) => c.startsWith('__Host-qauth_session='))).toBe(true);
+  });
+});

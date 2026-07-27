@@ -8,6 +8,7 @@ export type * from './providers/credential-provider.interface';
 export * from './providers/password.provider';
 export * from './providers/provider-registry';
 export * from './providers/wallet.provider';
+export * from './providers/wallet-credential-data';
 export * from './status/credential-status-checker';
 export * from './status/credential-status-rejection';
 export * from './status/status-endpoint-breaker';

@@ -73,6 +73,45 @@ export interface UserCredentialsRepository {
     providerType: string,
     tx?: DbClient
   ): Promise<UserCredential | undefined>;
+  /**
+   * Every credential in a realm carrying this `external_sub`, ACROSS provider
+   * types (#238).
+   *
+   * The account-store read behind `SubjectAccountLookup.byAssertedIdentifier`
+   * (ADR-009 / #300). Deliberately not restricted to one provider type: an
+   * account may hold a password credential and a wallet credential under the
+   * same identifier, and returning only the wallet ones would hide ADR-009's
+   * second bootstrap case — an existing password account with no wallet
+   * binding — turning a takeover attempt into a "no account found" the caller
+   * might register over.
+   */
+  findAllByRealmAndExternalSub(
+    realmId: string,
+    externalSub: string,
+    tx?: DbClient
+  ): Promise<UserCredential[]>;
+  /** Every credential a user holds for one provider type (#238). */
+  findAllByUserIdAndType(
+    userId: string,
+    providerType: string,
+    tx?: DbClient
+  ): Promise<UserCredential[]>;
+  /**
+   * Replace a credential's `credential_data` wholesale (#238).
+   *
+   * Used by account linking to RE-bind an existing wallet credential row when
+   * the same account links a re-issued credential. A whole-object replace rather
+   * than a targeted `jsonb_set` because the wallet shape is written as a unit by
+   * `buildWalletCredentialData`, and a partial update could leave a binding and
+   * an issuer that came from two different credentials.
+   *
+   * @throws NotFoundError if the credential does not exist.
+   */
+  updateCredentialData(
+    id: string,
+    credentialData: Record<string, unknown>,
+    tx?: DbClient
+  ): Promise<UserCredential>;
   setEmailVerified(id: string, tx?: DbClient): Promise<UserCredential>;
 }
 

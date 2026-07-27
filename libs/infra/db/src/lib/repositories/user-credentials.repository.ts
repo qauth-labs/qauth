@@ -101,6 +101,75 @@ export function createUserCredentialsRepository(defaultDb: DbClient): UserCreden
     },
 
     /**
+     * Every credential in a realm carrying this `external_sub`, across every
+     * provider type (#238, ADR-009).
+     *
+     * The read behind `SubjectAccountLookup.byAssertedIdentifier`. No `limit`:
+     * the caller (`selectSoleAccount`) must SEE an ambiguity to fail closed on
+     * it, and a `limit(1)` here would silently pick the first row — which is
+     * exactly the "never pick one" rule #300's constraint 5 forbids.
+     */
+    async findAllByRealmAndExternalSub(
+      realmId: string,
+      externalSub: string,
+      tx?: DbClient
+    ): Promise<UserCredential[]> {
+      const invoker = tx ?? defaultDb;
+      return invoker
+        .select()
+        .from(userCredentials)
+        .where(
+          and(eq(userCredentials.realmId, realmId), eq(userCredentials.externalSub, externalSub))
+        );
+    },
+
+    /**
+     * Every credential a user holds for one provider type (#238).
+     *
+     * The plural sibling of {@link findByUserIdAndType}: an account may hold
+     * more than one wallet credential (a second device, a re-issued credential),
+     * and account linking has to see all of them rather than whichever the
+     * planner returned first.
+     */
+    async findAllByUserIdAndType(
+      userId: string,
+      providerType: string,
+      tx?: DbClient
+    ): Promise<UserCredential[]> {
+      const invoker = tx ?? defaultDb;
+      return invoker
+        .select()
+        .from(userCredentials)
+        .where(
+          and(eq(userCredentials.userId, userId), eq(userCredentials.providerType, providerType))
+        );
+    },
+
+    /**
+     * Replace `credential_data` wholesale (#238).
+     *
+     * @throws NotFoundError if the credential does not exist.
+     */
+    async updateCredentialData(
+      id: string,
+      credentialData: Record<string, unknown>,
+      tx?: DbClient
+    ): Promise<UserCredential> {
+      const invoker = tx ?? defaultDb;
+
+      const [credential] = await invoker
+        .update(userCredentials)
+        .set({ credentialData, updatedAt: Date.now() })
+        .where(eq(userCredentials.id, id))
+        .returning();
+
+      if (!credential) {
+        throw new NotFoundError('UserCredential', id);
+      }
+      return credential;
+    },
+
+    /**
      * Flip `credential_data.email_verified` to true in place.
      *
      * A single `jsonb_set` statement — no read-modify-write — so a concurrent

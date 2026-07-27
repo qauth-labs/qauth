@@ -298,6 +298,7 @@ describe('POST /oid4vp/response — accepted submission', () => {
  */
 describe('POST /oid4vp/response — the wallet-login transport signal (#239)', () => {
   const SIGNAL_KEY = `wallet-login-signal:${hashOid4vpState(STATE)}`;
+  const PRESENTATION_KEY = `wallet-presentation:${hashOid4vpState(STATE)}`;
 
   it('publishes `received` for an accepted vp_token, keyed by the state HASH', async () => {
     const { fastify, ctx, store } = await register();
@@ -309,8 +310,39 @@ describe('POST /oid4vp/response — the wallet-login transport signal (#239)', (
 
     expect(store.get(SIGNAL_KEY)).toMatchObject({ signal: 'received' });
     // The raw `state` is a bearer value and must never become a key — nor may
-    // anything else be written by an endpoint nobody authenticated.
-    expect([...store.keys()]).toEqual([SIGNAL_KEY]);
+    // anything be written by an endpoint nobody authenticated beyond the two
+    // digest-addressed records this exchange produces: the transport signal, and
+    // the presented bytes parked for the waiting browser (#238).
+    expect([...store.keys()].sort()).toEqual([SIGNAL_KEY, PRESENTATION_KEY].sort());
+    expect([...store.keys()].some((key) => key.includes(STATE))).toBe(false);
+  });
+
+  it('parks the presented credentials for the browser, unvalidated and digest-keyed (#238)', async () => {
+    // The endpoint's posture is unchanged by parking them: it decides nothing
+    // about the bytes, and everything they will be CHECKED against — the nonce,
+    // the client_id, the DCQL query — lives on the browser's flow record, which
+    // a wallet cannot reach. See `helpers/wallet-login-flow.ts`.
+    const { fastify, ctx, store } = await register();
+    fastify.repositories.oid4vpRequestStates.redeem.mockResolvedValue(pendingState());
+    const handler = ctx.handler as NonNullable<TestContext['handler']>;
+    const { reply } = makeReply();
+
+    await handler(makeRequest({ vp_token: VP_TOKEN, state: STATE }), reply);
+
+    expect(store.get(PRESENTATION_KEY)).toMatchObject({
+      presentations: [expect.objectContaining({ format: 'dc+sd-jwt' })],
+    });
+  });
+
+  it('parks nothing for a wallet-reported error — there are no bytes to hold', async () => {
+    const { fastify, ctx, store } = await register();
+    fastify.repositories.oid4vpRequestStates.redeem.mockResolvedValue(pendingState());
+    const handler = ctx.handler as NonNullable<TestContext['handler']>;
+    const { reply } = makeReply();
+
+    await handler(makeRequest({ error: 'access_denied', state: STATE }), reply);
+
+    expect(store.get(PRESENTATION_KEY)).toBeUndefined();
   });
 
   it('publishes `wallet_error` for a wallet-reported error, carrying none of its text', async () => {

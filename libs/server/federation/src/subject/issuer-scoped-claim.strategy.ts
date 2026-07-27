@@ -66,6 +66,35 @@ import {
  */
 
 /**
+ * The issuer-scoped subject for a presentation, or `undefined` when this
+ * presentation does not qualify and must take the `asserted-lookup` path.
+ *
+ * Exported because account linking (#238) has to answer the SAME question
+ * outside a strategy object: under `issuer-scoped-claim` a linked wallet
+ * credential's `external_sub` is the issuer-scoped subject, and the
+ * conflict check ADR-009 permits is enforceable only for the presentations
+ * this function answers for. Two implementations of "does this credential
+ * qualify?" would be two places for the opt-in list to be forgotten.
+ *
+ * @param credential - the validated presentation.
+ * @param subjectClaim - the configured claim name, already normalized.
+ * @param issuers - canonicalized issuer identifiers the deployment opted in.
+ * @returns the subject, or `undefined` when the issuer is unvalidated, not
+ * opted in, or the claim was withheld.
+ */
+export function deriveOptedInIssuerScopedSubject(
+  credential: ValidatedCredential,
+  subjectClaim: string,
+  issuers: ReadonlySet<string>
+): string | undefined {
+  const issuer: unknown = credential?.issuer;
+  if (!ValidatedIssuer.isValidated(issuer)) return undefined;
+  if (!issuers.has(issuer.identifier)) return undefined;
+
+  return deriveIssuerScopedSubject(credential, subjectClaim);
+}
+
+/**
  * Build the `issuer-scoped-claim` strategy.
  *
  * @param config - the subject claim, the opted-in issuers, and the mandatory
@@ -83,17 +112,8 @@ export function createIssuerScopedClaimStrategy(
   // with a permissive stub, or silently left unconfigured.
   const fallback = createAssertedLookupStrategy(config?.fallback ?? { bindingClaims: [] });
 
-  /**
-   * The issuer-scoped subject, or `undefined` when this presentation does not
-   * qualify for the strategy and must take the fallback path.
-   */
-  function issuerScopedSubject(credential: ValidatedCredential): string | undefined {
-    const issuer: unknown = credential?.issuer;
-    if (!ValidatedIssuer.isValidated(issuer)) return undefined;
-    if (!issuers.has(issuer.identifier)) return undefined;
-
-    return deriveIssuerScopedSubject(credential, subjectClaim);
-  }
+  const issuerScopedSubject = (credential: ValidatedCredential): string | undefined =>
+    deriveOptedInIssuerScopedSubject(credential, subjectClaim, issuers);
 
   return Object.freeze({
     id: 'issuer-scoped-claim' as const,
