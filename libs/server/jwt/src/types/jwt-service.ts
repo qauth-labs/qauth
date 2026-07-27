@@ -94,6 +94,25 @@ export interface SignIdTokenPayload {
    * before the auth-time column existed.
    */
   authTime?: number;
+  /**
+   * OIDC Core §2 `acr` — Authentication Context Class Reference, the assurance
+   * level of the authentication event this token asserts (#237, ADR-004,
+   * ADR-010).
+   *
+   * Passed as the FINAL claim value (e.g. `http://eidas.europa.eu/LoA/high`),
+   * already mapped from the internal `AssuranceLevel` by the federation layer's
+   * `resolveAcrValue`. This module deliberately does no mapping: the eIDAS LoA →
+   * `acr` vocabulary is a deployment choice and belongs where that configuration
+   * is read, not in the signer.
+   *
+   * **Omitted — claim absent — for every authentication that established no
+   * higher assurance,** which today means every password login (ADR-003:
+   * `assuranceLevel: 'low'` carries no `acr`). OIDC Core treats `acr` as an
+   * optional higher-assurance indicator, so its ABSENCE is meaningful: a Relying
+   * Party may gate on presence. Emitting a "low" value for ordinary logins would
+   * destroy that signal.
+   */
+  acr?: string;
 }
 
 /**

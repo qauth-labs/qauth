@@ -19,6 +19,7 @@ An ADR is a document that captures an important architectural decision made alon
 | [007](./007-mcp-first-positioning.md)           | MCP-First Positioning — OAuth 2.1 Authorization Server for MCP / AI Agents           | Accepted    | 2026-06-23 |
 | [008](./008-environment-aware-authorization.md) | Environment-Aware Authorization Posture                                              | Accepted    | 2026-06-25 |
 | [009](./009-wallet-account-resolution.md)       | Wallet Account Resolution — `asserted-lookup` Default and the Subject-Identity Model | Accepted ⚠️ | 2026-07-20 |
+| [010](./010-acr-assurance-mapping.md)           | eIDAS Level of Assurance → OIDC `acr` Value Mapping                                  | Accepted    | 2026-07-27 |
 
 ⚠️ **ADR-009** — findings partially superseded by CIR (EU) 2026/1730 and 2026/1731
 (published 22 July 2026, in force 11 August 2026). No Decision has been changed;

@@ -1,4 +1,5 @@
 import {
+  assuranceEnvSchema,
   authEnvSchema,
   baseEnvSchema,
   cryptoEnvSchema,
@@ -48,6 +49,20 @@ const envSchema = z
     // the boot down — the value `${OID4VP_TRUSTED_ISSUERS:-}` in
     // docker-compose.yml expands to.
     ...trustRegistryEnvSchema.shape,
+    // Assurance → `acr` (ADR-004/ADR-010, #237): OID4VP_ISSUER_ASSURANCE (which
+    // issuers a realm considers assured, and at what eIDAS LoA) and
+    // ACR_VALUE_STYLE (which vocabulary the emitted `acr` value is written in).
+    //
+    // A THIRD variable in the trust neighbourhood, kept separate from the two
+    // above on purpose: OID4VP_TRUSTED_ISSUERS decides whether an issuer may be
+    // accepted at all, this decides what its credentials are worth once
+    // accepted. Merging them would make one of the two answers implicit.
+    //
+    // Spread for the same reason as the others — a plain z.object whose
+    // per-FIELD transform turns raw JSON into a frozen, prototype-less map, so
+    // an unset variable means "no realm assures any issuer" (hence no `acr`
+    // claim anywhere) rather than taking the boot down.
+    ...assuranceEnvSchema.shape,
     /**
      * CORS allowed origin (app-specific). When unset in `production` the
      * server denies all cross-origin requests (fail-closed); in non-production

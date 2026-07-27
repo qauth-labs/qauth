@@ -514,6 +514,43 @@ describe('wallet login — completion', () => {
     expect(payload.email).toBe('user@example.com');
   });
 
+  it.each([
+    ['high', 'high', 'high'],
+    ['substantial', 'substantial', 'substantial'],
+    // Nothing established → the field must be ABSENT, so the session is
+    // indistinguishable from a password login and /oauth/authorize records
+    // NULL. Storing `'low'` would give "no assurance" two representations.
+    ['low', 'low', undefined],
+    ['no level at all', undefined, undefined],
+  ])(
+    'carries an assurance level of %s from the presentation onto the browser session (#237)',
+    async (_label, resolved, expected) => {
+      const { fastify, routes, sessionUtils, handle, flow, binderCookie } = await startFlow();
+      publishSignal(sessionUtils, flow.stateHash, 'received');
+      (resolveWalletPresentation as unknown as Mock).mockResolvedValue({
+        status: 'authenticated',
+        userId: 'user-1',
+        externalSub: 'user@example.com',
+        ...(resolved === undefined ? {} : { assuranceLevel: resolved }),
+      });
+
+      const { reply } = createReply();
+      await routes.get('GET /wallet-login/:handle/status')!(
+        {
+          params: { handle },
+          headers: { cookie: `__Host-qauth_wallet_flow=${binderCookie}` },
+          ip: '127.0.0.1',
+        },
+        reply
+      );
+
+      const [, payload] = (fastify.sessionUtils.setSession as unknown as Mock).mock.calls
+        .map((c) => [c[0], c[1]] as [string, any])
+        .find(([key]) => !key.startsWith('wallet-login'))!;
+      expect(payload.assuranceLevel).toBe(expected);
+    }
+  );
+
   it('redirects on the no-JavaScript refresh path instead of answering JSON', async () => {
     const { routes, sessionUtils, handle, flow, binderCookie } = await startFlow();
     publishSignal(sessionUtils, flow.stateHash, 'received');

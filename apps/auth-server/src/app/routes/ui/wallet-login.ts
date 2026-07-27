@@ -579,6 +579,15 @@ async function advanceWalletLoginFlow(
       email: resolution.externalSub,
       sessionId,
       createdAt: Date.now(),
+      // #237: the eIDAS LoA the presented credential and its issuer established,
+      // carried on the session so `/oauth/authorize` can bind it to the
+      // authorization code and `/oauth/token` can assert `acr` in the ID token.
+      // Spread conditionally so a resolution that established nothing leaves the
+      // field ABSENT rather than storing `'low'` — the password login stores
+      // nothing here either, and "no assurance" must have one representation.
+      ...(resolution.assuranceLevel !== undefined && resolution.assuranceLevel !== 'low'
+        ? { assuranceLevel: resolution.assuranceLevel }
+        : {}),
     },
     env.SESSION_COOKIE_TTL
   );
