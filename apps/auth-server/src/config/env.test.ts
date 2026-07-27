@@ -1,4 +1,7 @@
-import { VERIFIER_PROFILE_IDS } from '@qauth-labs/fastify-plugin-federation';
+import {
+  SUBJECT_RESOLUTION_STRATEGY_IDS,
+  VERIFIER_PROFILE_IDS,
+} from '@qauth-labs/fastify-plugin-federation';
 import { federationEnvSchema } from '@qauth-labs/server-config';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -245,5 +248,68 @@ describe('OID4VP_VERIFIER_PROFILE ↔ VERIFIER_PROFILE_IDS cross-lib pin (#299)'
     const parsed = federationEnvSchema.parse({ OID4VP_VERIFIER_PROFILE: profileId });
 
     expect(parsed.OID4VP_VERIFIER_PROFILE).toBe(profileId);
+  });
+});
+
+/**
+ * Cross-lib pin: `OID4VP_SUBJECT_RESOLUTION` ↔ the shipped strategy table
+ * (#300).
+ *
+ * The same drift hazard as the profile pin above, with one extra edge that makes
+ * it worth its own block. The enum deliberately accepts strategies a deployment
+ * may NOT select — `session-binding`, `key-thumbprint` and `rp-pseudonym` — so
+ * that the refusal an operator sees is
+ * `assertSubjectResolutionStrategySelectable`'s explanation of the actual gate
+ * (ADR-009 §§3–5) rather than a `ZodError` listing strings. A future edit that
+ * "tidies" the enum down to the selectable ids would silently replace a useful
+ * message with a useless one, and this pin fails when it does.
+ */
+describe('OID4VP_SUBJECT_RESOLUTION ↔ SUBJECT_RESOLUTION_STRATEGY_IDS cross-lib pin (#300)', () => {
+  function acceptedStrategyValues(): readonly string[] {
+    const result = federationEnvSchema.safeParse({
+      OID4VP_SUBJECT_RESOLUTION: '__not-a-subject-resolution-strategy__',
+    });
+
+    expect(result.success).toBe(false);
+    const issue = result.error?.issues.find(
+      (candidate) => candidate.path[0] === 'OID4VP_SUBJECT_RESOLUTION'
+    );
+    expect(issue?.code).toBe('invalid_value');
+
+    return issue !== undefined && issue.code === 'invalid_value'
+      ? issue.values.map((value) => String(value))
+      : [];
+  }
+
+  it('accepts exactly the strategies ADR-009 names — reserved ones included', () => {
+    expect([...acceptedStrategyValues()].sort()).toEqual(
+      [...SUBJECT_RESOLUTION_STRATEGY_IDS].sort()
+    );
+  });
+
+  it.each(SUBJECT_RESOLUTION_STRATEGY_IDS)('parses %s and hands it back unchanged', (strategy) => {
+    const parsed = federationEnvSchema.parse({ OID4VP_SUBJECT_RESOLUTION: strategy });
+
+    expect(parsed.OID4VP_SUBJECT_RESOLUTION).toBe(strategy);
+  });
+
+  it('treats a blank value as unset, not as a bad value', () => {
+    // `${OID4VP_SUBJECT_RESOLUTION:-}` is how an orchestrator materialises an
+    // absent variable. Unset means "use the profile default", which is a real
+    // answer — unlike OID4VP_VERIFIER_PROFILE, where unset is a refusal.
+    expect(
+      federationEnvSchema.parse({ OID4VP_SUBJECT_RESOLUTION: '   ' }).OID4VP_SUBJECT_RESOLUTION
+    ).toBeUndefined();
+  });
+
+  it('splits and trims the binding claim list, and refuses an entry with whitespace', () => {
+    expect(
+      federationEnvSchema.parse({ OID4VP_SUBJECT_BINDING_CLAIMS: ' family_name , given_name ' })
+        .OID4VP_SUBJECT_BINDING_CLAIMS
+    ).toEqual(['family_name', 'given_name']);
+
+    expect(
+      federationEnvSchema.safeParse({ OID4VP_SUBJECT_BINDING_CLAIMS: 'family name' }).success
+    ).toBe(false);
   });
 });

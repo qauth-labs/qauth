@@ -55,7 +55,13 @@ import type {
  * - **Which account is this?** ADR-009: there is no stable wallet subject
  *   identifier, and wallet key material (`cnf`, the `x5c` chain) MUST NOT become
  *   one — OID4VP §15.5–§15.6 treat it as a linkability defect wallets rotate
- *   away. Subject resolution is #300.
+ *   away. #300 landed the `SubjectResolutionStrategy` seam (`src/subject/`) that
+ *   decides instead, with `asserted-lookup` as the fail-closed default — but a
+ *   strategy is not an answer on its own. It needs the realm's configuration,
+ *   the identifier the user asserted, and an account store to look the asserted
+ *   identifier up in, so that the presented credential can be matched against
+ *   the binding stored for that account. This provider is handed none of the
+ *   three.
  *
  * Both gates are absent here, so this method fails closed. `safety-boundary.test.ts`
  * pins that a REAL, fully valid Presentation still authenticates nobody.
@@ -195,10 +201,11 @@ export function createWalletProvider(): CredentialProvider {
      *   which needs a per-realm registry this provider is not given.
      * - There is no protocol-guaranteed stable wallet subject identifier
      *   (ADR-009), so there is no `externalSub` to return. Resolving one is
-     *   `SubjectResolutionStrategy`'s job (#300), and under the
-     *   `asserted-lookup` default `verify()` must additionally check that the
-     *   presented credential matches the binding stored for the account the
-     *   user asserted — a check with no storage behind it yet.
+     *   `SubjectResolutionStrategy`'s job, and that seam now exists (#300,
+     *   `src/subject/`) — but under the `asserted-lookup` default it needs the
+     *   identifier the user asserted and an account store to match the presented
+     *   credential against the binding recorded for that account. This provider
+     *   is stateless and dependency-free by construction, so it has neither.
      *
      * So the honest state is: QAuth can now VALIDATE a wallet credential and
      * still cannot AUTHENTICATE a wallet user. Returning a placeholder identity
@@ -209,7 +216,7 @@ export function createWalletProvider(): CredentialProvider {
     async verify(): Promise<VerifiedIdentity> {
       throw walletSkeletonError(
         'verify',
-        'The OID4VP transport landed in #233 and presentation validation in #234 (see oid4vp/presentation-validation.ts, which produces a ValidatedCredential — a cryptographic finding, not an identity). Authentication additionally requires issuer trust (#236) and subject resolution (#300, ADR-009), neither of which this provider is wired to.'
+        'The OID4VP transport landed in #233 and presentation validation in #234 (see oid4vp/presentation-validation.ts, which produces a ValidatedCredential — a cryptographic finding, not an identity). Authentication additionally requires issuer trust (#236) and subject resolution (#300, ADR-009); the strategy seam for the latter exists in subject/, but this provider is wired to neither a trust registry nor an account store.'
       );
     },
 

@@ -162,3 +162,29 @@ Three things must land first:
 
 Only that file changes when they land: the screens already handle both outcomes,
 including session minting, auditing and the uniform refusal.
+
+### Subject resolution (#300) — the strategy exists, the wiring does not
+
+`@qauth-labs/server-federation`'s `subject/` module ships the
+`SubjectResolutionStrategy` seam ADR-009 specifies: `asserted-lookup` (the
+default), `issuer-scoped-claim` (opt-in per named issuer, with the mandatory
+fallback), and `session-binding` (the linking path, #238). `key-thumbprint` and
+`rp-pseudonym` are reserved ids that refuse with the gate that blocks them.
+
+A deployment selects one with `OID4VP_SUBJECT_RESOLUTION` and configures the
+entitlement check with `OID4VP_SUBJECT_BINDING_CLAIMS`; unset means "the active
+`VerifierProfile`'s default", which is `asserted-lookup` for both shipped
+profiles. `resolveSubjectResolution` folds the fail-closed assertions in, so a
+half-configured selection throws rather than quietly building a weaker strategy.
+
+What is still missing is not the decision but its inputs. `resolve()` consumes a
+`ValidatedCredential` (#234, not reached from this flow yet) and a
+`SubjectAccountLookup` — the account-store port that answers "which accounts in
+this realm does this asserted identifier resolve to, and what wallet binding does
+each carry". No adapter over `user_credentials` exists, so nothing can call the
+strategy yet, and `resolveWalletPresentation` keeps refusing.
+
+Note the boot posture, deliberately: selecting a strategy is **not** yet a
+startup gate. Wallet federation is enabled today only for the screens, and a
+gate that failed the boot for a capability nothing consumes would cost
+operability with no security benefit. The gate belongs with the first consumer.

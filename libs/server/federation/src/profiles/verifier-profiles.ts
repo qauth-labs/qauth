@@ -40,6 +40,11 @@ export const VERIFIER_PROFILES = Object.freeze({
     credentialFormats: Object.freeze(['dc+sd-jwt'] as const),
     issuerKeyResolution: Object.freeze(['x5c', 'issuer-metadata'] as const),
     requireCredentialStatus: false,
+    // ADR-009 §1: the only strategy viable in every ecosystem surveyed. A
+    // self-contained deployment whose own issuer guarantees a stable claim opts
+    // into `issuer-scoped-claim` per issuer; that is a deployment's contractual
+    // knowledge, not something the protocol floor can assert.
+    defaultSubjectResolution: 'asserted-lookup',
     verifierIdentity: Object.freeze({
       presentedPrefixes: Object.freeze([
         // Preferred: no certificate, runs today.
@@ -91,6 +96,15 @@ export const VERIFIER_PROFILES = Object.freeze({
     credentialFormats: Object.freeze(['dc+sd-jwt', 'mso_mdoc'] as const),
     issuerKeyResolution: Object.freeze(['x5c'] as const),
     requireCredentialStatus: true,
+    // Also `asserted-lookup`, and that is the finding rather than a copy-paste.
+    // ADR-009 Finding 1: the EUDI PID's mandatory attribute set carries NO
+    // identifier, `personal_administrative_number` is optional, provider-scoped
+    // and refusable, and the Rulebook does not require SD-JWT VC's `sub`. The
+    // EU's sanctioned returning-user mechanism is a relying-party pseudonym
+    // (`rp-pseudonym`), which is gated on three conditions none of which is
+    // cleared. So the flagship regulated profile has the same default as the
+    // protocol floor.
+    defaultSubjectResolution: 'asserted-lookup',
     verifierIdentity: Object.freeze({
       presentedPrefixes: Object.freeze([
         Object.freeze({ prefix: 'x509_hash', requires: 'non-self-signed-chain' } as const),

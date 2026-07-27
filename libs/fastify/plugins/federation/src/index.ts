@@ -84,3 +84,33 @@ export {
   resolveVerifierProfile,
   SD_JWT_VC_FORMAT,
 } from '@qauth-labs/server-federation';
+
+// Subject resolution (#300, ADR-009) — which ACCOUNT a validated presentation
+// belongs to. Re-exported for the same boundary reason as everything above: the
+// wallet-login seam (`app/helpers/wallet-presentation.ts`) and the account
+// linking flow (#238) both live in `apps/auth-server`, which may not import
+// `scope:server` libs directly.
+//
+// `SUBJECT_RESOLUTION_STRATEGY_IDS` comes with it for the cross-lib pin in
+// `apps/auth-server/src/config/env.test.ts`, exactly as `VERIFIER_PROFILE_IDS`
+// does — `server-config` spells the `OID4VP_SUBJECT_RESOLUTION` enum out as
+// literals and the app is the only place both lists are visible at once.
+export type {
+  AssertedLookupConfig,
+  IssuerScopedClaimConfig,
+  SubjectAccountCandidate,
+  SubjectAccountLookup,
+  SubjectResolutionConfig,
+  SubjectResolutionContext,
+  SubjectResolutionOutcome,
+  SubjectResolutionStrategy,
+  SubjectResolutionStrategyId,
+} from '@qauth-labs/server-federation';
+export {
+  assertSubjectResolved,
+  createSessionBindingStrategy,
+  createSubjectResolutionStrategy,
+  normalizeAssertedIdentifier,
+  resolveSubjectResolution,
+  SUBJECT_RESOLUTION_STRATEGY_IDS,
+} from '@qauth-labs/server-federation';

@@ -24,7 +24,11 @@ import type { FastifyInstance } from 'fastify';
  *   the presented credential matches the binding stored for the asserted
  *   account; without that check, anyone holding any valid credential can sign in
  *   as anyone. ADR-009 states this as the likeliest way the feature gets built
- *   wrong.
+ *   wrong. The strategy itself now EXISTS — `SubjectResolutionStrategy` and the
+ *   `asserted-lookup` default ship in `@qauth-labs/server-federation` — but it
+ *   is a pure function over an account-store PORT (`SubjectAccountLookup`) that
+ *   nothing implements yet, and it consumes a `ValidatedCredential` that the
+ *   first bullet above says does not reach this module.
  *
  * Refusing is therefore the only correct behaviour, and it must stay correct by
  * construction rather than by discipline: `WalletProvider.verify()` still throws
@@ -43,9 +47,14 @@ import type { FastifyInstance } from 'fastify';
  *
  * TODO(#234, #236, #300): implement resolution — validate the presentation,
  * apply the realm's issuer allowlist, then run the realm's
- * `SubjectResolutionStrategy` (`asserted-lookup` by default) against
- * {@link WalletPresentationInput.assertedIdentifier}. Until all three land this
- * function must keep returning `rejected`.
+ * `SubjectResolutionStrategy` (`resolveSubjectResolution` +
+ * `createSubjectResolutionStrategy`, `asserted-lookup` by default) against
+ * {@link WalletPresentationInput.assertedIdentifier}, backed by a
+ * `SubjectAccountLookup` over `user_credentials`. Every non-`matched` outcome
+ * must go through `assertSubjectResolved` — or be collapsed to `rejected` here
+ * — so a failed lookup stays indistinguishable from a failed proof. Until the
+ * validated presentation and the account-store adapter both exist this function
+ * must keep returning `rejected`.
  */
 
 /** What the UI knows when a presentation has arrived. */
