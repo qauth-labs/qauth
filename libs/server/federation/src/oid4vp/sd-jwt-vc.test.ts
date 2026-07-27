@@ -1129,6 +1129,107 @@ describe('validateSdJwtVcPresentation — claims that may not be selectively dis
   });
 });
 
+describe("validateSdJwtVcPresentation — the claim name '__proto__'", () => {
+  // Neither SD-JWT nor SD-JWT VC reserves `__proto__`, so a credential carrying
+  // one is spec-legal and must come back as an ORDINARY claim. It is also the
+  // single name plain assignment cannot create: `result['__proto__'] = value`
+  // runs the setter inherited from Object.prototype, which re-parents the
+  // accumulator and leaves no own property behind — while the digest is still
+  // consumed, so the leftover-Disclosure accounting balances and validation
+  // reports success over a claim set the claim has silently dropped out of.
+
+  /** Read the own `__proto__` claim, never through the inherited accessor. */
+  function ownProtoClaim(claims: Readonly<Record<string, unknown>>): unknown {
+    return Object.getOwnPropertyDescriptor(claims, '__proto__')?.value;
+  }
+
+  it("returns a Disclosure named '__proto__' as an own enumerable claim", async () => {
+    const disclosure = objectDisclosure('__proto__', { admin: true });
+    const issued = await issueSdJwtVc({
+      selectiveClaims: {},
+      extraDisclosures: [disclosure.encoded],
+      payloadOverrides: { _sd: [disclosure.digest] },
+    });
+    const presentation = await presentSdJwtVc(issued, { nonce: NONCE });
+
+    const validated = await validate(presentation, fixtureValidationContext(issued, NONCE));
+
+    expect(Object.hasOwn(validated.claims, '__proto__')).toBe(true);
+    expect(Object.keys(validated.claims)).toContain('__proto__');
+    expect(ownProtoClaim(validated.claims)).toEqual({ admin: true });
+    // The claim object was not re-parented: the disclosed value is a CLAIM, and
+    // its members are not readable as members of the claim set itself.
+    expect(Object.getPrototypeOf(validated.claims)).toBe(Object.prototype);
+    expect(validated.claims).not.toHaveProperty('admin');
+  });
+
+  it("does not re-parent a nested object a '__proto__' Disclosure lands in", async () => {
+    const nested = objectDisclosure('__proto__', { admin: true });
+    const issued = await issueSdJwtVc({
+      selectiveClaims: {},
+      extraDisclosures: [nested.encoded],
+      payloadOverrides: {
+        _sd: undefined,
+        address: { country: 'DE', _sd: [nested.digest] },
+      },
+    });
+    const presentation = await presentSdJwtVc(issued, { nonce: NONCE });
+
+    const validated = await validate(presentation, fixtureValidationContext(issued, NONCE));
+    const address = validated.claims['address'] as Record<string, unknown>;
+
+    // A re-parented sub-object is the worst of the three outcomes: its members
+    // read back by name while `Object.keys`, `Object.entries` and
+    // `JSON.stringify` cannot see them, so enumeration-based normalization
+    // (#235), redaction and audit logging all miss it.
+    expect(Object.getPrototypeOf(address)).toBe(Object.prototype);
+    expect(Object.hasOwn(address, '__proto__')).toBe(true);
+    expect(Object.keys(address)).toContain('__proto__');
+    expect(Object.getOwnPropertyDescriptor(address, '__proto__')?.value).toEqual({ admin: true });
+    expect(address).not.toHaveProperty('admin');
+    expect(address).toHaveProperty('country', 'DE');
+  });
+
+  it("returns a plain '__proto__' claim the issuer signed in the clear", async () => {
+    const issued = await issueSdJwtVc({
+      selectiveClaims: {},
+      // A COMPUTED key: `{ '__proto__': … }` in an object literal is a prototype
+      // assignment, which is the confusion under test rather than a claim. On
+      // the wire it is ordinary JSON either way, and `JSON.parse` hands the
+      // validator a real own key.
+      plainClaims: { ['__proto__']: { admin: true } },
+    });
+    const presentation = await presentSdJwtVc(issued, { nonce: NONCE });
+
+    const validated = await validate(presentation, fixtureValidationContext(issued, NONCE));
+
+    expect(Object.hasOwn(validated.claims, '__proto__')).toBe(true);
+    expect(Object.keys(validated.claims)).toContain('__proto__');
+    expect(ownProtoClaim(validated.claims)).toEqual({ admin: true });
+    expect(Object.getPrototypeOf(validated.claims)).toBe(Object.prototype);
+    expect(validated.claims).not.toHaveProperty('admin');
+  });
+
+  it("rejects a Disclosure that would overwrite an already-present '__proto__'", async () => {
+    // The overwrite guard reads `Object.hasOwn`, so it fires for this name only
+    // once the plain claim actually became an own property — exactly as it does
+    // for `given_name` above and for the reserved names below.
+    const disclosure = objectDisclosure('__proto__', { admin: true });
+    const issued = await issueSdJwtVc({
+      selectiveClaims: {},
+      plainClaims: { ['__proto__']: { admin: false } },
+      extraDisclosures: [disclosure.encoded],
+      payloadOverrides: { _sd: [disclosure.digest] },
+    });
+    const presentation = await presentSdJwtVc(issued, { nonce: NONCE });
+
+    await expectRejection(
+      validate(presentation, fixtureValidationContext(issued, NONCE)),
+      'disclosure-digest-mismatch'
+    );
+  });
+});
+
 describe('SD_JWT_VC_TYP', () => {
   it('equals the Credential Format identifier', () => {
     // The media type and the OID4VP format identifier are the same string;

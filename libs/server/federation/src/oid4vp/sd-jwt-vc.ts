@@ -207,6 +207,45 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 }
 
 /**
+ * Write one claim onto an accumulating claim object as a real OWN property.
+ *
+ * Plain `target[name] = value` is not safe here, because the names come from a
+ * credential and `__proto__` is a LEGITIMATE claim name — neither SD-JWT nor
+ * SD-JWT VC reserves it, so refusing it would refuse a spec-legal credential.
+ * Assignment to that one name invokes the setter inherited from
+ * `Object.prototype` instead of creating a property, and `JSON.parse` DOES
+ * produce an own `__proto__` key, so a payload carrying one really does arrive
+ * here with the name present.
+ *
+ * What that costs is not global prototype pollution — only the accumulator
+ * instance is re-parented — but three quieter things that are worse than they
+ * look:
+ *
+ *  - the overwrite guard in {@link discloseObject} reads `Object.hasOwn`, which
+ *    can never be true for a name that never became an own property, so the one
+ *    claim name where assignment is unsafe is the one name the guard could not
+ *    protect;
+ *  - the digest is consumed either way, so the leftover-Disclosure accounting in
+ *    {@link resolveDisclosures} still balances and nothing reports the loss — an
+ *    issuer-signed disclosed claim silently vanishes and validation SUCCEEDS;
+ *  - a nested claim object returned that way carries members readable by name
+ *    yet invisible to `Object.keys`/`Object.entries`/`JSON.stringify`, i.e.
+ *    invisible to enumeration-based normalization (#235), redaction and audit
+ *    logging.
+ *
+ * `defineProperty` creates the ordinary data property the name describes,
+ * leaving the target's prototype alone and the claim enumerable like any other.
+ */
+function defineClaim(target: Record<string, unknown>, name: string, value: unknown): void {
+  Object.defineProperty(target, name, {
+    value,
+    writable: true,
+    enumerable: true,
+    configurable: true,
+  });
+}
+
+/**
  * Compare two strings without an early-exit branch on content.
  *
  * Used for the `nonce` and `aud` comparisons. Neither is a high-value secret on
@@ -512,7 +551,7 @@ function discloseObject(
 
   for (const [key, value] of Object.entries(node)) {
     if (key === '_sd' || key === '_sd_alg') continue;
-    result[key] = discloseValue(value, state, depth + 1);
+    defineClaim(result, key, discloseValue(value, state, depth + 1));
   }
 
   const sd = node['_sd'];
@@ -556,7 +595,7 @@ function discloseObject(
       );
     }
 
-    result[disclosure.claimName] = discloseValue(disclosure.value, state, depth + 1);
+    defineClaim(result, disclosure.claimName, discloseValue(disclosure.value, state, depth + 1));
   }
 
   return result;
@@ -1071,7 +1110,7 @@ export async function validateSdJwtVcPresentation(
 
   for (const [key, value] of Object.entries(disclosedPayload)) {
     if (STRIPPED_CREDENTIAL_CLAIMS.includes(key)) continue;
-    claims[key] = value;
+    defineClaim(claims, key, value);
   }
 
   return {
