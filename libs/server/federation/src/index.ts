@@ -19,6 +19,7 @@ export * from './status/status-list-reference';
 export * from './status/status-list-spec';
 export * from './status/status-list-token';
 export * from './status/status-list-uri';
+export * from './subject';
 export * from './trust/assert-trusted-issuers';
 export * from './trust/issuer-identity';
 export * from './trust/issuer-trust-rejection';

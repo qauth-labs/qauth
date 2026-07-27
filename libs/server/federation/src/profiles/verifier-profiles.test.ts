@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
+import { assertSubjectResolutionStrategySelectable } from '../subject/subject-resolution-strategies';
 import type { ClientIdPrefix, VerifierProfile, VerifierProfileId } from './verifier-profile.types';
 import {
   parseVerifierProfileId,
@@ -102,6 +103,21 @@ describe('VERIFIER_PROFILES (issue #299)', () => {
         []
       );
     });
+
+    it.each(VERIFIER_PROFILE_IDS)(
+      "'%s' defaults to a subject-resolution strategy a deployment may actually select",
+      (id) => {
+        // #300/ADR-009: the profile supplies the fail-closed default. A profile
+        // defaulting to `key-thumbprint` or `rp-pseudonym` would make every
+        // deployment on it unbootable, and one defaulting to `session-binding`
+        // would give it a login flow that only authenticates users who are
+        // already authenticated. Asserted here rather than only in the resolver,
+        // because this is the table where such a value would be introduced.
+        expect(() =>
+          assertSubjectResolutionStrategySelectable(VERIFIER_PROFILES[id].defaultSubjectResolution)
+        ).not.toThrow();
+      }
+    );
 
     it('is itself frozen, so a profile cannot be added or replaced at runtime', () => {
       expect(Object.isFrozen(VERIFIER_PROFILES)).toBe(true);
