@@ -60,6 +60,13 @@ export const collections = {
   records: defineCollection({
     loader: glob({
       base: '../../docs',
+      // Non-recursive by design (`*.md`, not `**/*.md`): docs/adr/ and
+      // docs/security/ are both flat today. If either ever grows a nested
+      // subfolder, files inside it drop out of this collection SILENTLY —
+      // no warning, no build failure, just absent from `records.mdx`'s
+      // list and unreachable at /reference/records/. Widen to `**/*.md` if
+      // that happens, and check `lib/records.ts`'s `listRecords` (also a
+      // flat `readdirSync`) at the same time.
       pattern: '{adr,security}/*.md',
       // Astro's default id algorithm runs each path segment through
       // `github-slugger` (lowercasing `README.md` to `readme`, among other

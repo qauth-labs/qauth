@@ -21,9 +21,12 @@ export default defineConfig({
     // site routes at build time — see the plugin's own doc comment. Global
     // rather than scoped to the `records` collection: Astro applies
     // `markdown.remarkPlugins` to every collection's markdown/MDX (`docs`
-    // included), and no page in `docs` currently has a relative `.md` link
-    // for it to touch (verified — see the Task 10 report), so this is a
-    // true no-op there today and stays correct if that ever changes.
+    // included). `docs` pages DO link to un-rendered repo files today, but
+    // with a different, repo-root-ABSOLUTE convention (`/docs/agent-authorization.md`,
+    // not `./` or `../`) that this plugin explicitly leaves alone (see its
+    // bucket 0) — no page in `docs` has a RELATIVE `.md` link for it to
+    // touch instead (verified — see the Task 10 report), so this is a true
+    // no-op there today and stays correct if that ever changes.
     remarkPlugins: [
       [
         remarkRewriteRecordLinks,

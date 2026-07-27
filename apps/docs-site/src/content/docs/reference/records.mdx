@@ -12,6 +12,16 @@ export const adr009DriftRecheckHref = `${findRecord('adr/009-wallet-account-reso
 export const eudiDriftLogHref = `${GITHUB_REPO_BLOB_BASE}/docs/eudi-regulatory-drift-log.md`;
 export const oidfRunbookHref = `${GITHUB_REPO_BLOB_BASE}/docs/oidf-op-certification-runbook.md`;
 
+{/* NOTE TO THE NEXT EDITOR — read before changing how a record link below is written. Every link to a record is built from `RECORDS`/`findRecord` as a JSX-computed href (curly-brace expression), never as ordinary static Markdown-link or quoted-HTML-attribute syntax. That is deliberate; do not simplify it to the ordinary literal form. */}
+
+{/* Reason: the per-record pages are routes generated outside the `docs` collection (`src/pages/reference/records/[...slug].astro`), so `link-resolution.ts`'s `routedPages` — built only from a walk of `src/content/docs` — has no entry for them. A link written in the ordinary literal form would be reported broken by that guard even when the route is real, because the guard cannot find the route in its index. */}
+
+{/* This is NOT the same thing as `reference/status.mdx`'s `.map()` calls, which build plain-text table cells, never a link target — that precedent covers "render a list from data," not "build a link the guard can't see." This file introduces the second pattern; it does not reuse a solved one. */}
+
+{/* Two consequences follow, and both matter to whoever edits this file next. First: the guard cannot verify these links are correct — only that they are JSX it does not parse, so it stays silent either way. Correctness instead rests on a structural guarantee — `RECORDS.adr[i].route` and the remark link rewriter's `recordRouteForRepoPath` both go through `routeForRecordId` in `lib/records.ts`, so they cannot independently drift apart. That guarantee is real, but it is not guard coverage: nothing here would fail CI if it were ever wrong. */}
+
+{/* Second, and the trap is two-sided: add a new record link in the ordinary literal form and the link-resolution guard reports a false positive (broken link) even though the route is real; add it as a computed href instead — matching this file — and a genuinely wrong link (typo'd id, stale route) stays invisible to every guard forever, with no test short of a human clicking it. There is no move here that both satisfies the guard and gets guard coverage; pick the computed form deliberately, not because it's quieter. */}
+
 QAuth's architecture decision records (ADRs) and its post-quantum security review live at
 `docs/adr/` and `docs/security/` in the repository, not under this site's own content tree. They
 are cited by `file:line` from code comments and by path from dozens of closed issues and pull
@@ -51,7 +61,9 @@ Task 10 report for how this was verified.
 force 11 August 2026 — superseded part of ADR-009's findings. No Decision in ADR-009 has changed;
 one item is flagged as needing a human call. Read the dated re-check inside the ADR itself:
 
-<a href={adr009DriftRecheckHref}>ADR-009 § Drift re-check (2026-07-26)</a>.
+<a href={adr009DriftRecheckHref}>ADR-009 § Drift re-check (2026-07-26)</a>. ADR-009 actually carries
+two "Drift re-check" sections — this one, and an earlier 2026-07-20 pass it explicitly supersedes —
+cross-linked to each other inside the ADR; read the one linked here first, it points to the other.
 
 ## Security reviews
 

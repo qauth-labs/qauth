@@ -11,8 +11,27 @@ import { recordRouteForRepoPath } from '../lib/records';
  * correctly on GitHub (where the records are also read) but 404 as site
  * routes once rendered under `/reference/records/**`.
  *
- * A link falls into exactly one of four buckets:
+ * Registered globally (`astro.config.mjs`'s `markdown.remarkPlugins`), so
+ * this also runs over every page in the `docs` collection, not only
+ * records. Those pages link to un-rendered repo files with a DIFFERENT,
+ * pre-existing convention: repo-root-ABSOLUTE paths like
+ * `/docs/agent-authorization.md` (see `integrate/api-reference.md`,
+ * `operate/keys.md`, and others). This plugin deliberately leaves that
+ * form alone (see bucket 0 below) rather than resolving it — that
+ * convention is `link-resolution.ts`'s to interpret (it treats a leading
+ * `/` as repo-root-relative, `join(repoRoot, pathPart)`), and is out of
+ * scope for Task 10, which only asked for the records' OWN relative links.
  *
+ * A link falls into exactly one of five buckets, checked in this order:
+ *
+ *   0. Repo-root-ABSOLUTE (`pathPart` starts with `/`) — e.g.
+ *      `/docs/agent-authorization.md`. Left untouched, by an explicit rule,
+ *      not by an accident of path resolution: `path.resolve()` on an
+ *      absolute second argument discards the first and resolves against
+ *      the filesystem root, which happens to not exist on this machine
+ *      either — but relying on that instead of stating the rule would make
+ *      the outcome depend on `path.resolve`'s platform semantics rather
+ *      than on this plugin's own intent. See this bucket's regression test.
  *   1. Not an in-tree markdown link at all — an absolute URL with a scheme
  *      (`https://`, `mailto:`, ...) or a bare same-page `#anchor`. Left
  *      completely untouched; these already work wherever the page renders.
@@ -85,7 +104,7 @@ function visitLinks(node: MinimalTreeNode, visit: (link: MinimalTreeNode) => voi
   }
 }
 
-/** Rewrite a single link's URL in place; returns nothing (bucket 1 and 4 leave `link.url` as-is). */
+/** Rewrite a single link's URL in place; returns nothing (buckets 0, 1, and 4 leave `link.url` as-is). */
 export function rewriteRecordLink(
   link: MinimalTreeNode,
   sourcePath: string,
@@ -98,6 +117,13 @@ export function rewriteRecordLink(
 
   const { pathPart, fragment } = splitFragment(url);
   if (!pathPart.endsWith('.md')) return; // not an in-tree markdown link this plugin handles
+
+  // Bucket 0: repo-root-absolute (`/docs/...`) — a different, pre-existing
+  // convention this plugin does not touch. Checked explicitly, ahead of
+  // `resolve()`, so the outcome is this plugin's stated rule rather than
+  // `path.resolve`'s own (platform-dependent) handling of an absolute
+  // second argument. See the module doc comment.
+  if (pathPart.startsWith('/')) return;
 
   const absoluteTarget = resolve(dirname(sourcePath), pathPart);
   if (!existsSync(absoluteTarget)) return; // bucket 4: doesn't resolve to anything real

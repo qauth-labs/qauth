@@ -16,7 +16,7 @@ import {
  * records (`docs/adr/*.md`, `docs/security/*.md`) into working site
  * routes — or, for a real repo file the records collection does not
  * render, a GitHub blob URL — at build time. See the plugin's own doc
- * comment for the four-bucket rule this file tests.
+ * comment for the five-bucket rule this file tests.
  */
 
 const REPO_ROOT = resolveRepoRoot();
@@ -100,6 +100,31 @@ describe('rewriteRecordLink — the four buckets', () => {
     expect(node.url).toBe(
       `${GITHUB_BLOB_BASE_URL}/docs/eudi-regulatory-drift-log.md#3-cir-eu-20242979-article-14-and-annex-v--pseudonyms--superseded`
     );
+  });
+
+  it("leaves a repo-root-ABSOLUTE /docs/... link untouched — the docs collection's own, different convention (bucket 0)", () => {
+    // `/docs/agent-authorization.md` is the real, pre-existing form used
+    // throughout apps/docs-site/src/content/docs (e.g.
+    // integrate/api-reference.md, operate/keys.md) — a repo-root-relative
+    // reference, NOT resolved relative to the linking file the way `./`
+    // and `../` are. Without the plugin's explicit bucket-0 check, this
+    // would still happen to come out untouched today (`path.resolve` on an
+    // absolute second argument discards `dirname(sourcePath)` and lands on
+    // a filesystem-root path that doesn't exist) — but that would be
+    // correct by accident of `path.resolve` semantics, not by a rule this
+    // plugin states, and would diverge silently from `link-resolution.ts`,
+    // which DOES treat a leading `/` as repo-root-relative
+    // (`join(repoRoot, pathPart)`) and would find this exact file.
+    expect(existsSync(join(REPO_ROOT, 'docs', 'agent-authorization.md'))).toBe(true);
+    const node = link('/docs/agent-authorization.md');
+    rewriteRecordLink(node, sourcePath('adr', '007-mcp-first-positioning.md'), OPTIONS);
+    expect(node.url).toBe('/docs/agent-authorization.md');
+  });
+
+  it('leaves a repo-root-ABSOLUTE /docs/... link with an anchor untouched too (bucket 0)', () => {
+    const node = link('/docs/agent-authorization.md#1-agent-client-type-is_agent');
+    rewriteRecordLink(node, sourcePath('adr', '007-mcp-first-positioning.md'), OPTIONS);
+    expect(node.url).toBe('/docs/agent-authorization.md#1-agent-client-type-is_agent');
   });
 
   it('MUTATION: leaves a .md link untouched when it resolves to nothing on disk', () => {
