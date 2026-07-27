@@ -173,16 +173,21 @@ describe('findBrokenLinks — fixtures', () => {
  * Guard 1's blind spot (qauth-labs/qauth#[docs-astro-docs-site], the third
  * time this exact shape of defect has hit this project): a repo-root-absolute
  * link with a file extension (`/docs/adr/001-jwt-key-management.md`) used to
- * fall straight to `existsAsRepoOrPublicFile`, which answers "does this file
- * exist in the repository" — true, since the file is real — not "does the
- * BUILT SITE serve this literal path" — false, always, for anything under
- * `docs/`, since `astro.config.mjs` (`output: 'static'`, `outDir:
- * dist/apps/docs-site`) never copies the raw `docs/` directory into what
- * gets deployed. These fixtures use REAL files under the repo's `docs/adr`
- * and `docs/` root (not fixture-local stand-ins) so the "the file genuinely
- * exists" half of the defect is reproduced exactly, not merely simulated.
+ * fall straight to a plain "does this file exist in the repository" check —
+ * true, since the file is real — not "does the BUILT SITE serve this literal
+ * path" — false, always, for anything outside `apps/docs-site/public/`,
+ * since `astro.config.mjs` (`output: 'static'`, `outDir:
+ * dist/apps/docs-site`) never copies the repository itself into what gets
+ * deployed. The rule was first taught only about `/docs/*` (Task 14); it is
+ * now general — ANY repo-root-absolute path is only valid if it is a known
+ * site route or sits under `apps/docs-site/public/`, so `/libs/...`,
+ * `/package.json`, and any future unpublished prefix are caught the same
+ * way, with no per-prefix special case. These fixtures use REAL files under
+ * the repo's `docs/adr`, `docs/` root, and `libs/fastify/plugins/mcp-guard`
+ * (not fixture-local stand-ins) so the "the file genuinely exists" half of
+ * the defect is reproduced exactly, not merely simulated.
  */
-describe('findBrokenLinks — /docs/* paths the built site never publishes', () => {
+describe('findBrokenLinks — repo-root-absolute paths the deployed site never serves', () => {
   const home = loadFixturePage('content/index.md', '/');
   const guide = loadFixturePage('content/guide.md', '/guide/');
   const routedPages = [home, guide];
@@ -212,6 +217,39 @@ describe('findBrokenLinks — /docs/* paths the built site never publishes', () 
     expect(violations).toEqual([
       expect.objectContaining({
         link: '/docs/oidf-op-certification-runbook.md',
+        reason: expect.stringContaining('GitHub blob URL'),
+      }),
+    ]);
+  });
+
+  it('MUTATION: fails a link to a real repo file with NO docs/ or libs/ prefix at all, proving the rule is general', () => {
+    // package.json — no special-cased prefix — is exactly the "next
+    // unserved prefix someone invents" the generalized rule must catch
+    // without a third special case being added.
+    const page = loadFixturePage('repo-root-file-not-served.md');
+    const violations = findBrokenLinks([home, guide, page], {
+      repoRoot: REPO_ROOT,
+      routedPages,
+      siteOrigin: SITE_ORIGIN,
+    });
+    expect(violations).toEqual([
+      expect.objectContaining({
+        link: '/package.json',
+        reason: expect.stringContaining('GitHub blob URL'),
+      }),
+    ]);
+  });
+
+  it('MUTATION: fails a link to a real repo file under libs/, the family this rule was deliberately not generalized to cover until now', () => {
+    const page = loadFixturePage('repo-root-libs-not-served.md');
+    const violations = findBrokenLinks([home, guide, page], {
+      repoRoot: REPO_ROOT,
+      routedPages,
+      siteOrigin: SITE_ORIGIN,
+    });
+    expect(violations).toEqual([
+      expect.objectContaining({
+        link: '/libs/fastify/plugins/mcp-guard/README.md',
         reason: expect.stringContaining('GitHub blob URL'),
       }),
     ]);

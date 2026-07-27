@@ -1,2 +1,2 @@
-Read the [Guide](/guide/), the [repo manifest](/package.json), or the
+Read the [Guide](/guide/), the [OpenAPI spec](/openapi.json), or the
 [sibling stub](./stub-ok.md).

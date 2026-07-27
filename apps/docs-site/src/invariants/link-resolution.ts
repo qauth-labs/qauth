@@ -137,69 +137,54 @@ function hasFileExtension(pathPart: string): boolean {
 /**
  * Whether an absolute path resolves to a file under `apps/docs-site/public/`,
  * which Astro serves at the SITE ROOT (`public/openapi.json` →
- * `/openapi.json`). Checked on its own, ahead of
- * {@link isUnpublishedRepoDocsPath}, because a file placed under `public/`
- * really is served at its literal path even if it happens to start with
- * `/docs/` — nothing does today, but the rule should be true for the right
- * reason, not by accident of check ordering.
+ * `/openapi.json`). This is one of exactly two ways a repo-root-absolute
+ * link can be valid — the other is a known site route, checked in
+ * `findBrokenLinks` via `routeIndex` — so it is checked ahead of treating
+ * the path as unserved: a file placed under `public/` really is served at
+ * its literal path even if it happens to start with `/docs/` or `/libs/` —
+ * nothing does today, but the rule should be true for the right reason, not
+ * by accident of check ordering.
  */
 function existsUnderPublic(pathPart: string, repoRoot: string): boolean {
   return existsSync(join(repoRoot, 'apps', 'docs-site', 'public', pathPart));
 }
 
 /**
- * Whether an absolute, non-route path resolves to a real file in the
- * repository (`/package.json`, `/libs/...`) — a plain "does this path exist
- * in the working tree" check. Deliberately does NOT special-case `/docs/*`:
- * see {@link isUnpublishedRepoDocsPath} for why that prefix needs a
- * different question asked of it.
- */
-function existsAsRepoOrPublicFile(pathPart: string, repoRoot: string): boolean {
-  if (existsSync(join(repoRoot, pathPart))) return true;
-  return existsUnderPublic(pathPart, repoRoot);
-}
-
-/**
- * Whether an absolute path names something under the repository's `docs/`
- * directory — `/docs/agent-authorization.md`, `/docs/adr/001-....md`,
- * `/docs/security/005-....md`, `/docs/oidf-op-certification-runbook.md`,
- * all of it.
+ * The violation reason for a repo-root-absolute path the deployed site does
+ * not serve — tailored to what the author should do instead, and to whether
+ * the path even names a real file.
  *
- * This exists because `existsAsRepoOrPublicFile` answers "does this file
- * exist in the repository", and for anything under `docs/` that is the
- * WRONG question: the deployed site (`astro.config.mjs`: `output: 'static'`,
- * `outDir: dist/apps/docs-site`) never publishes the raw `docs/` directory
- * at all — only `docs/adr/**` and `docs/security/**` end up rendered
- * anywhere, and even those are served at a DIFFERENT route
- * (`recordRouteForRepoPath` → `/reference/records/**`), never at their
- * literal `/docs/...` path. So `/docs/adr/001-jwt-key-management.md` genuinely
- * existing on disk says nothing about whether that link resolves on
- * `docs.qauth.dev` — it never does. Three separate defects in this project
- * (qauth-labs/qauth#351, and the two `/docs/*.md` families this guard update
- * fixes) trace to exactly this confusion, so the rule is now explicit rather
- * than left to be rediscovered a fourth time.
+ * File existence is used ONLY to pick the wording, never to decide whether
+ * there is a violation (see `findBrokenLinks`'s absolute-path branch — a
+ * real file that the site doesn't serve is exactly as broken a link as one
+ * that names nothing at all; the reader gets a 404 either way):
+ *
+ *   - the path doesn't correspond to any real repository file: the old
+ *     generic "not a known site route" message — most likely a typo or a
+ *     route that was renamed/removed.
+ *   - the path IS a real repository file: computed from
+ *     `recordRouteForRepoPath` (the SAME function that decides which
+ *     `docs/` files actually render, reused here rather than re-deriving the
+ *     rule) so the message can never name a route that disagrees with what
+ *     the site actually builds — its rendered route if the `records`
+ *     collection loads it, otherwise a GitHub blob URL, matching this
+ *     project's one established convention for linking to un-rendered repo
+ *     files (see `remark-rewrite-record-links.ts`'s bucket 3).
  */
-function isUnpublishedRepoDocsPath(pathPart: string): boolean {
+function unservedAbsolutePathReason(pathPart: string, repoRoot: string): string {
   const repoRelative = pathPart.replace(/^\/+/, '');
-  return repoRelative === 'docs' || repoRelative.startsWith('docs/');
-}
-
-/**
- * The violation reason for a `/docs/...` link, tailored to what the author
- * should do instead — computed from `recordRouteForRepoPath` (the SAME
- * function that decides which `docs/` files actually render, reused here
- * rather than re-deriving the rule) so the message can never name a route
- * that disagrees with what the site actually builds.
- */
-function unpublishedDocsPathReason(pathPart: string): string {
-  const repoRelative = pathPart.replace(/^\/+/, '');
+  if (!existsSync(join(repoRoot, repoRelative))) {
+    return `"${pathPart}" is not a known site route and does not exist as a file in the repository`;
+  }
   const recordRoute = recordRouteForRepoPath(repoRelative);
   const instead = recordRoute
     ? `its rendered route ${recordRoute} instead`
     : 'a GitHub blob URL instead (the site does not render this file at all)';
   return (
-    `"${pathPart}" points into the repository's docs/ tree, which the built site never ` +
-    `publishes at that literal path — link to ${instead}`
+    `"${pathPart}" is a real repository file, but the deployed site (astro.config.mjs: ` +
+    `output: 'static', outDir dist/apps/docs-site) only serves its own routes and files under ` +
+    `apps/docs-site/public/ — it never publishes the rest of the repository at that literal ` +
+    `path, regardless of the file existing — link to ${instead}`
   );
 }
 
@@ -219,8 +204,16 @@ function checkFragment(
 /**
  * Resolve every link on every scanned page against:
  *   1. another page's site route (± a heading anchor that must actually exist there),
- *   2. a real file in the repository, or
- *   3. an anchor on the scanning page itself.
+ *   2. for a repo-root-absolute path, a file the deployed site actually
+ *      serves at that literal path — which is ONLY a file under
+ *      `apps/docs-site/public/`, since that route match already happened in
+ *      (1); a repo file existing on disk elsewhere (`docs/...`, `libs/...`,
+ *      `package.json`, ...) is never enough on its own — see
+ *      `unservedAbsolutePathReason`,
+ *   3. for a relative path, a real file on disk next to the scanning page
+ *      (relative links are read on GitHub, not resolved by the deployed
+ *      site, so a plain filesystem check is the right question there), or
+ *   4. an anchor on the scanning page itself.
  *
  * `scanPages` and `context.routedPages` are deliberately separate: running
  * this with `scanPages = [...sitePages, ...oldPathStubs]` while
@@ -258,23 +251,23 @@ export function findBrokenLinks(
             continue;
           }
         }
-        // A `/docs/...` path is never valid at that literal path — checked
-        // BEFORE the general repo-file fallback below, and ahead of even a
-        // file placed under `public/` winning first (see
-        // `isUnpublishedRepoDocsPath`'s doc comment): the file existing in
-        // the repository is exactly the fact that made this defect
-        // invisible to begin with.
-        if (isUnpublishedRepoDocsPath(pathPart) && !existsUnderPublic(pathPart, context.repoRoot)) {
-          violations.push({ page: page.id, link, reason: unpublishedDocsPathReason(pathPart) });
-          continue;
-        }
-        // Not a known route (or it looks like a file) — fall back to a real
-        // file, either repo-root-relative or under docs-site's `public/`.
-        if (existsAsRepoOrPublicFile(pathPart, context.repoRoot)) continue;
+        // Not a known route (or it looks like a file): the ONLY other way a
+        // repo-root-absolute path is genuinely served is a file under
+        // `apps/docs-site/public/` — checked here, ahead of treating the
+        // path as unserved, so a deliberately public-served file still
+        // passes for the right reason. A file merely existing SOMEWHERE ELSE
+        // in the repository (`docs/...`, `libs/...`, `package.json`, ...) is
+        // deliberately NOT enough on its own: the deployed site never
+        // publishes the rest of the repository at its literal path, and that
+        // gap between "exists in the repo" and "is served by the site" is
+        // exactly the fact that made this whole class of defect invisible to
+        // begin with (qauth-labs/qauth#351, and the `/docs/*` and
+        // `/libs/mcp-guard/*` families this rule generalizes over).
+        if (existsUnderPublic(pathPart, context.repoRoot)) continue;
         violations.push({
           page: page.id,
           link,
-          reason: `"${pathPart}" is not a known site route and does not exist as a file in the repository`,
+          reason: unservedAbsolutePathReason(pathPart, context.repoRoot),
         });
         continue;
       }
