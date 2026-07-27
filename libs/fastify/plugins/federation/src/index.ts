@@ -1,5 +1,11 @@
 export * from './lib/configured-providers';
 export * from './lib/federation-plugin';
+// #234 + #236 composed for the app layer: validate a presentation, then decide
+// whether its issuer is worth anything to this realm. The two halves are NOT
+// re-exported individually — `validatePresentations` alone produces a
+// plausible-looking `ValidatedCredential` from an untrusted issuer, which is
+// precisely the object a caller in a hurry would use. See the module JSDoc.
+export * from './lib/wallet-credential-verification';
 export type * from './types';
 
 // Re-exported provider surface: app code (scope:app) may only depend on
@@ -12,6 +18,40 @@ export type {
   TrustRankedAttribute,
   UserAttribute,
   VerifiedIdentity,
+} from '@qauth-labs/server-federation';
+
+// Assurance → `acr` surface (#237). The auth-server needs all three halves and
+// can reach none of them directly:
+//
+//  - `resolveAcrValue` / `AcrValueStyle` render a level into the deployment's
+//    `acr` vocabulary at ID-token mint time (`helpers/acr-claims.ts`);
+//  - `parseAssuranceLevel` narrows the level back out of an authorization-code
+//    column or a Redis session payload, where it is an untrusted string;
+//  - `resolveAssurancePolicy` / `resolveCredentialAssurance` derive the level
+//    from a validated credential and its issuer — the call `resolveWalletPresentation`
+//    makes once #234/#236/#300 give it a `ValidatedCredential` to work with.
+//
+// `createIssuerAssurancePolicy` is deliberately NOT re-exported: like the trust
+// allowlist, a policy must be obtained through the realm-scoped resolver so no
+// call site can assemble a deployment-wide one by hand.
+export type {
+  AcrValueStyle,
+  AssuranceEvidence,
+  AssurancePolicy,
+  AssurancePolicyEnvLike,
+  AssurancePolicyRealmLike,
+  AssuredKeyStorage,
+} from '@qauth-labs/server-federation';
+export {
+  ACR_VALUE_STYLES,
+  DEFAULT_ACR_VALUE_STYLE,
+  LOW_ONLY_ASSURANCE_POLICY,
+  parseAcrValueStyle,
+  parseAssuranceLevel,
+  resolveAcrValue,
+  resolveAssurancePolicy,
+  resolveCredentialAssurance,
+  supportedAcrValues,
 } from '@qauth-labs/server-federation';
 // Note the asymmetry with the password surface: `createWalletProvider` is
 // deliberately NOT re-exported. `createConfiguredProviders` is the only
@@ -33,6 +73,7 @@ export {
   PASSWORD_PROVIDER_TYPE,
   passwordCredentialDataSchema,
   rankAttributeSource,
+  readWalletBinding,
   selectTrustedAttribute,
   SELF_REPORTED_SOURCE,
   WALLET_PROVIDER_TYPE,
@@ -75,11 +116,13 @@ export type {
   DcqlClaimsQuery,
   DcqlCredentialQuery,
   DcqlQuery,
+  IssuerKeyResolver,
   Oid4vpAuthorizationRequest,
   Oid4vpDirectPostOutcome,
   Oid4vpRequestSecrets,
   PresentedCredential,
   RedeemedOid4vpRequestState,
+  ValidatedCredential,
   VerifierProfile,
   VerifierProfileId,
 } from '@qauth-labs/server-federation';
@@ -125,6 +168,8 @@ export type {
   SubjectResolutionOutcome,
   SubjectResolutionStrategy,
   SubjectResolutionStrategyId,
+  WalletLinkContext,
+  WalletLinkOutcome,
 } from '@qauth-labs/server-federation';
 export {
   assertSubjectResolved,
@@ -136,11 +181,19 @@ export {
   SUBJECT_RESOLUTION_STRATEGY_IDS,
 } from '@qauth-labs/server-federation';
 
+// Account linking (#238, ADR-009 §5). `prepareWalletLink` produces a WRITE PLAN
+// and touches no database — the app layer owns the transaction, because
+// `scope:server` may not import `infra-db`.
+export { prepareWalletLink } from '@qauth-labs/server-federation';
+
 // Presentation validation (#234) and issuer trust (#236), re-exported for the
-// wallet-login seam (#235). Both are PRECONDITIONS of subject resolution, in
+// wallet seam (#235, #238). Both are PRECONDITIONS of subject resolution, in
 // that order, and the seam that runs them lives in `apps/auth-server` — so the
 // app needs the `ValidatedCredential` type to accept one and the trust gate to
-// apply before it is acted on.
+// apply before it is acted on. `createStaticIssuerAllowlist` is deliberately NOT
+// re-exported: `resolveTrustRegistry` is the only supported way to obtain a live
+// registry, and it is fail-closed where the raw constructor throws on a bad
+// entry.
 //
 // `ValidatedIssuer` comes with them, and what it is NOT should be clear before
 // anyone reads the export as a widening: the brand is a TYPE-CONFUSION defence
@@ -150,7 +203,7 @@ export {
 // run over whatever is handed to them, so a hand-built instance grants nothing.
 // `credential-format.mdoc-registration.test.ts` already constructs one through
 // the same public factory.
-export type { TrustRegistry, ValidatedCredential } from '@qauth-labs/server-federation';
+export type { TrustRegistry } from '@qauth-labs/server-federation';
 export {
   assertIssuerTrusted,
   resolveTrustRegistry,

@@ -164,6 +164,58 @@ describe('signIdToken', () => {
     expect(payload['auth_time']).toBeUndefined();
   });
 
+  it('emits acr verbatim when an assurance level was established (#237)', async () => {
+    const { privateKey, publicKey } = await generateEdDSAKeyPair();
+
+    const token = await signIdToken(
+      {
+        sub: 'user-oidc-acr',
+        audience: 'client-oidc-acr',
+        acr: 'http://eidas.europa.eu/LoA/high',
+      },
+      privateKey,
+      'https://auth.example.com',
+      900
+    );
+
+    const { payload } = await jwtVerify(token, publicKey, { algorithms: ['EdDSA'] });
+    // Verbatim: the eIDAS LoA → acr vocabulary is decided in the federation
+    // layer, and the signer must not reshape a value an RP compares literally.
+    expect(payload['acr']).toBe('http://eidas.europa.eu/LoA/high');
+  });
+
+  it('omits acr entirely when no assurance level was established (#237, password logins)', async () => {
+    const { privateKey, publicKey } = await generateEdDSAKeyPair();
+
+    const token = await signIdToken(
+      { sub: 'user-oidc-noacr', audience: 'client-oidc-noacr' },
+      privateKey,
+      'https://auth.example.com',
+      900
+    );
+
+    const { payload } = await jwtVerify(token, publicKey, { algorithms: ['EdDSA'] });
+    // ADR-003/ADR-004: `'low'` carries no `acr`. The ABSENCE is the signal an
+    // RP gates on, so a placeholder value here would be a security regression,
+    // not a cosmetic one.
+    expect(payload['acr']).toBeUndefined();
+    expect(Object.hasOwn(payload, 'acr')).toBe(false);
+  });
+
+  it('treats an empty acr as absent rather than asserting an empty context', async () => {
+    const { privateKey, publicKey } = await generateEdDSAKeyPair();
+
+    const token = await signIdToken(
+      { sub: 'user-oidc-emptyacr', audience: 'client-oidc-emptyacr', acr: '' },
+      privateKey,
+      'https://auth.example.com',
+      900
+    );
+
+    const { payload } = await jwtVerify(token, publicKey, { algorithms: ['EdDSA'] });
+    expect(Object.hasOwn(payload, 'acr')).toBe(false);
+  });
+
   it('omits nonce and name when not supplied', async () => {
     const { privateKey, publicKey } = await generateEdDSAKeyPair();
 

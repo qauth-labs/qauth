@@ -77,7 +77,7 @@ describe('identity repositories integration (real Postgres)', () => {
     });
   });
 
-  it('findByRealmAndSub returns every provider type holding the identifier (#235, ADR-009 §1)', async () => {
+  it('findAllByRealmAndExternalSub returns every provider type holding the identifier (#235, ADR-009 §1)', async () => {
     // The wallet-login lookup MUST see the password row: an account that exists
     // without a wallet binding is ADR-009's second bootstrap case, a refusal —
     // and a query scoped to provider_type='wallet' would report it as "no
@@ -99,12 +99,12 @@ describe('identity repositories integration (real Postgres)', () => {
       credentialData: { wallet_binding: 'wb1:deadbeef' },
     });
 
-    const rows = await credentials.findByRealmAndSub(realmId, 'shared@example.com');
+    const rows = await credentials.findAllByRealmAndExternalSub(realmId, 'shared@example.com');
 
     expect(rows.map((row) => row.providerType).sort()).toEqual(['password', 'wallet']);
   });
 
-  it('findByRealmAndSub is realm-scoped and reports nothing found as an empty array', async () => {
+  it('findAllByRealmAndExternalSub is realm-scoped and reports nothing found as an empty array', async () => {
     const { realmId } = await seedUser('scoped@example.com');
     const other = await seedUser('other@example.com');
 
@@ -116,7 +116,9 @@ describe('identity repositories integration (real Postgres)', () => {
       credentialData: { password_hash: 'h', email_verified: false },
     });
 
-    expect(await credentials.findByRealmAndSub(realmId, 'scoped@example.com')).toEqual([]);
+    expect(await credentials.findAllByRealmAndExternalSub(realmId, 'scoped@example.com')).toEqual(
+      []
+    );
   });
 
   it('maps a (realm, provider, sub) duplicate onto UniqueConstraintError like the users repo', async () => {

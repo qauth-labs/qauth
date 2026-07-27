@@ -194,6 +194,8 @@ Table "authorization_codes" {
   "code_challenge" text [not null, note: "PKCE code challenge"]
   "code_challenge_method" "code_challenge_method" [not null, default: 'S256']
   "nonce" text [note: "OIDC nonce parameter — opaque, client-owned, no spec length limit (#316)"]
+  "auth_time" bigint [note: "OIDC Core §2 auth_time (epoch ms) — when the end-user actually authenticated"]
+  "assurance_level" text [note: "eIDAS LoA of that authentication: 'substantial' | 'high' | NULL (no acr claim) — #237"]
   "scopes" jsonb [not null, default: `'[]'::jsonb`]
   "state" text [note: "CSRF protection state parameter — opaque, client-owned, no spec length limit (#316)"]
   "expires_at" bigint [not null, note: "TTL: 5 minutes"]

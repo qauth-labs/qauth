@@ -36,6 +36,16 @@
  *    {@link NON_SELECTIVELY_DISCLOSABLE_CLAIMS}, without which such a credential
  *    would carry an expiry nobody enforced.
  *
+ * ## A fifth gate, when the profile asks for one
+ *
+ * Since #308 a `VerifierProfile` may additionally require that the holder's key
+ * be shown to live in a certified secure cryptographic device (HAIP §9.2 /
+ * §4.5.1). That gate is `attestation/key-storage-assurance.ts` and it runs LAST,
+ * after all four proofs above: it asks where a key lives, which is only a
+ * meaningful question about a key whose control has already been proved. It is
+ * inert under `oid4vp-1.0-base`, where the profile forbids the capability
+ * outright and a base-profile presentation is unaffected by any of it.
+ *
  * ## Bounded before it is walked
  *
  * Everything here runs on an unauthenticated path — a wallet has no client
@@ -53,6 +63,8 @@ import { createHash, timingSafeEqual } from 'node:crypto';
 import { importPublicSigningJwk, type JwsAlgorithm } from '@qauth-labs/core-crypto';
 import { compactVerify, type JWK } from 'jose';
 
+import type { KeyStorageAssuranceEvidence } from '../attestation/key-storage-assurance';
+import { NO_KEY_STORAGE_ASSURANCE } from '../attestation/key-storage-assurance';
 import {
   canonicalizeIssuerIdentifier,
   type IssuerKeyResolutionMethod,
@@ -916,6 +928,69 @@ function assertRequestedCredentialType(vct: string, query: DcqlCredentialQuery):
 }
 
 /**
+ * Run the key-storage-assurance gate (#308), fail-closed.
+ *
+ * The FIFTH gate, and deliberately the last one: it is layered on top of holder
+ * binding, never in place of it. Holder binding proves the presenter controls
+ * the credential's key *now*; this asks where that key LIVES. Running it earlier
+ * would mean asking the second question about a key nobody had proved control
+ * of, and running it instead of the first would be a straight downgrade.
+ *
+ * It sits before issuer trust (#236) only because that gate runs outside this
+ * function entirely, over the value returned. Neither can substitute for the
+ * other: an issuer nobody trusts does not become trustworthy by attesting good
+ * key storage, and certified hardware holding a credential from a forger is a
+ * well-protected forgery.
+ *
+ * The gate's own vocabulary is converted into this module's rejection type so
+ * callers keep exactly one error contract — the same containment
+ * `assertValidatedIssuer` applies — and the precise server-side reason travels
+ * on `cause` rather than in the reason code. A resolver that THROWS instead of
+ * answering is contained the same way: a gate that could not answer has
+ * established nothing, and letting the exception escape would turn a contained
+ * 401 into a 500 that an attacker can provoke selectively.
+ *
+ * When the context carries no gate the answer is the `oid4vp-1.0-base` posture:
+ * nothing evaluated, nothing established, and the credential is unaffected.
+ */
+async function resolveKeyStorageAssurance(
+  issuer: ValidatedIssuer,
+  confirmationJwk: JWK,
+  disclosedPayload: Record<string, unknown>,
+  context: PresentationValidationContext,
+  now: Date
+): Promise<KeyStorageAssuranceEvidence> {
+  const gate = context.keyStorageAssurance;
+
+  if (gate === undefined) return NO_KEY_STORAGE_ASSURANCE;
+
+  let decision;
+
+  try {
+    decision = await gate.resolver.resolveKeyStorageAssurance(
+      { issuer, confirmationJwk, claims: disclosedPayload, now },
+      gate.policy
+    );
+  } catch (error) {
+    throw rejectPresentation(
+      'key-storage-assurance-unestablished',
+      'the key-storage assurance resolver failed',
+      error
+    );
+  }
+
+  if (decision.outcome !== 'accepted') {
+    throw rejectPresentation(
+      'key-storage-assurance-unestablished',
+      'the active verifier profile requires key-storage assurance this presentation did not establish',
+      decision.reason
+    );
+  }
+
+  return decision.evidence;
+}
+
+/**
  * Validate one SD-JWT VC Presentation.
  *
  * @param presentation - the compact serialization, exactly as the wallet sent it.
@@ -1075,7 +1150,12 @@ export async function validateSdJwtVcPresentation(
   const hashAlgorithm = SD_HASH_ALGORITHMS[sdAlgClaim];
   const toleranceSeconds =
     context.clockToleranceSeconds ?? DEFAULT_PRESENTATION_CLOCK_TOLERANCE_SECONDS;
-  const nowSeconds = Math.floor((context.now ?? new Date()).getTime() / 1000);
+  // Read ONCE and shared by every temporal check below, including the
+  // key-storage gate. Two readings of the clock would let a credential's
+  // validity window and an attestation's expiry be judged against different
+  // instants, which is a difference nobody could reproduce from a log.
+  const now = context.now ?? new Date();
+  const nowSeconds = Math.floor(now.getTime() / 1000);
 
   const notBefore = readNumericClaim(verifiedPayload, 'nbf', 'the credential');
   const expiresAt = readNumericClaim(verifiedPayload, 'exp', 'the credential');
@@ -1106,6 +1186,17 @@ export async function validateSdJwtVcPresentation(
 
   const issuer = assertValidatedIssuer(resolved.identifier, resolved.keyResolution);
 
+  // Reads the DISCLOSED payload, which still carries `cnf` and `iss` — the
+  // stripped claim set below no longer does, and a conveyed assurance signal may
+  // legitimately live inside `cnf`.
+  const keyStorageAssurance = await resolveKeyStorageAssurance(
+    issuer,
+    confirmationJwk,
+    disclosedPayload,
+    context,
+    now
+  );
+
   const claims: Record<string, unknown> = {};
 
   for (const [key, value] of Object.entries(disclosedPayload)) {
@@ -1126,6 +1217,7 @@ export async function validateSdJwtVcPresentation(
       issuerSignatureAlgorithm: algorithm,
       keyBindingAlgorithm: keyBinding.algorithm,
       disclosedClaimCount: byDigest.size,
+      keyStorageAssurance,
       statusChecked: false,
     }),
   };

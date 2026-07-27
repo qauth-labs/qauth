@@ -1,3 +1,8 @@
+export * from './assurance/acr-value';
+export * from './assurance/assurance-level';
+export * from './assurance/credential-assurance';
+export * from './assurance/resolve-assurance-policy';
+export * from './attestation';
 export * from './claims/attribute-trust';
 export * from './claims/credential-claim-adapters';
 export type * from './claims/credential-claims.types';
@@ -11,6 +16,7 @@ export type * from './providers/credential-provider.interface';
 export * from './providers/password.provider';
 export * from './providers/provider-registry';
 export * from './providers/wallet.provider';
+export * from './providers/wallet-credential-data';
 export * from './status/credential-status-checker';
 export * from './status/credential-status-rejection';
 export * from './status/status-endpoint-breaker';

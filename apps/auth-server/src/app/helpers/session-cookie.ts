@@ -1,5 +1,6 @@
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 
+import type { AssuranceLevel } from '@qauth-labs/fastify-plugin-federation';
 import type { FastifyReply, FastifyRequest } from 'fastify';
 
 import { env } from '../../config/env';
@@ -35,6 +36,21 @@ export interface BrowserSessionData {
   email?: string;
   sessionId: string;
   createdAt: number;
+  /**
+   * eIDAS Level of Assurance established by the authentication that created
+   * this session (#237, ADR-004/ADR-010). `'substantial'` or `'high'`; ABSENT
+   * for every authentication that established nothing higher — which today is
+   * every password login (ADR-003: `assuranceLevel: 'low'`).
+   *
+   * Carried on the session for the same reason `createdAt` is: it describes the
+   * authentication EVENT, and `/oauth/authorize` copies it onto the
+   * authorization code so `/oauth/token` can assert `acr` in the ID token long
+   * after the session stopped being in scope.
+   *
+   * Absent — never `'low'` — so "no assurance was established" has one
+   * representation everywhere, and pre-#237 Redis sessions read correctly.
+   */
+  assuranceLevel?: AssuranceLevel;
   /** Monotonic nonce for CSRF double-submit cookie (rotated on consent POST). */
   csrfToken?: string;
   /**

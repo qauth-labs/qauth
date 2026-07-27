@@ -73,6 +73,17 @@ import { issuerTrustRejection } from '../trust/issuer-trust-rejection';
  *   Refusing matters because those claims are the ones the verifier ENFORCES:
  *   an `exp` the validity window never saw, or a `status` the revocation check
  *   never reads, would still surface in the claims and read as enforced.
+ * - `key-storage-assurance-unestablished` — the active `VerifierProfile`
+ *   requires the holder's key to be shown to live in a certified secure
+ *   cryptographic device (HAIP §9.2 / §4.5.1, #308) and that could not be
+ *   established, or a key attestation conveyed into the presentation did not
+ *   validate. ONE reason here for the nine the gate distinguishes internally:
+ *   the precise failure mode is
+ *   `attestation/key-storage-assurance-rejection.ts`'s vocabulary and travels on
+ *   this rejection's `cause`, because those nine describe the holder's DEVICE —
+ *   whether their key is in certified hardware, at what grade, and whether their
+ *   wallet vendor's chain is anchored here — and a caller able to tell them apart
+ *   learns facts about a stranger's hardware from a login attempt.
  * - `holder-binding-invalid` — the Key Binding JWT is absent, unverifiable
  *   against the credential's `cnf` key, or carries the wrong `aud`, `nonce`,
  *   `sd_hash` or `iat`. One reason rather than four on purpose: they are all the
@@ -89,6 +100,7 @@ export type PresentationRejectionReason =
   | 'credential-not-yet-valid'
   | 'disclosure-digest-mismatch'
   | 'forbidden-selective-disclosure'
+  | 'key-storage-assurance-unestablished'
   | 'holder-binding-invalid';
 
 /**

@@ -3,6 +3,7 @@ import path from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
+import { NO_KEY_STORAGE_ASSURANCE } from '../attestation/key-storage-assurance';
 import type { CredentialFormat } from '../profiles/verifier-profile.types';
 import { ValidatedIssuer } from '../trust/issuer-identity';
 import type {
@@ -86,6 +87,10 @@ const hypotheticalMdocAdapter: CredentialFormatAdapter = {
         issuerSignatureAlgorithm: 'ES256',
         keyBindingAlgorithm: 'ES256',
         disclosedClaimCount: 1,
+        // An mdoc's device-binding and key-attestation model is COSE/MSO-shaped
+        // and structurally different (#308), so this hypothetical adapter states
+        // the only honest thing: it established nothing.
+        keyStorageAssurance: NO_KEY_STORAGE_ASSURANCE,
         statusChecked: false,
       },
     };
