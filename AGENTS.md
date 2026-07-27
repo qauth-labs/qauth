@@ -37,6 +37,10 @@ standard OAuth 2.1 access tokens and OIDC ID tokens. The crypto layer is
 **crypto-agile** for a post-quantum transition. Wallet federation and post-quantum
 signing are the resequenced long-term platform (track T4).
 
+Guides, the OAuth 2.1 / OIDC reference, and the rendered design records live at
+[docs.qauth.dev](https://docs.qauth.dev); the ADRs and security review that
+site renders stay in `docs/adr/` and `docs/security/` in this repository.
+
 ## Architecture Principles
 
 - **Federation First**: Upstream sources plug in via `CredentialProvider`;

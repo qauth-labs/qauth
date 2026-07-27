@@ -716,17 +716,12 @@ function Dashboard() {
 
 ## 📚 Documentation
 
-**Guides** (start at the [docs index](./docs/README.md)):
-
-- [MCP Quickstart](./docs/mcp-quickstart.md) — run QAuth + a `mcp-guard`-protected MCP server and complete the full OAuth handshake end-to-end
-- [OAuth 2.1 Flow](./docs/oauth-flow.md) — every endpoint with copy-paste `curl` (PKCE, authorize, token, refresh, client_credentials, introspection)
-- [Agent Authorization](./docs/agent-authorization.md) — the agent client type, RFC 8693 on-behalf-of delegation, scope modes, and step-up
-- [API Reference](./docs/api-reference.md) — hand-written contract for `/auth/*`, `/oauth/*`, discovery, and `/api/clients`
-- [Environment-Aware Authorization](./docs/environment-authorization.md) — the `environment` policy profile (dev/staging/prod) and environment-gated API keys
-- [Browser Security](./docs/browser-security.md) — T3 hardening: security headers, CSRF, secure cookies, XSS-safe output
-- [Observability](./docs/observability.md) — structured logging, `/metrics`, request-id, failed-login lockout
-- [Code Examples](./docs/code-examples.md) — copy-paste Node/TS and browser (PKCE) clients
-- [Docker Development Guide](./docs/docker.md) — local development with Docker
+The full documentation site is **[docs.qauth.dev](https://docs.qauth.dev)** —
+start there for the guides (MCP quickstart, OAuth 2.1 flow, agent
+authorization, environment-aware authorization, browser security,
+observability, code examples, Docker), the hand-written API reference, and the
+rendered design records. The canonical, always-current API surface is the
+interactive OpenAPI / Swagger UI at `/docs` on any running instance.
 
 **Reference:**
 
