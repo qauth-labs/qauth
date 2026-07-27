@@ -142,3 +142,58 @@ export const PENDING_AUTHORIZATION_MAX_URL_BYTES = 16 * 1024;
  * default.
  */
 export const AUTHORIZE_BODY_LIMIT_BYTES = 128 * 1024;
+
+/**
+ * Lifetime of a wallet-login flow record — the server-side state tying one
+ * browser to one in-flight OID4VP presentation request (#239).
+ *
+ * Deliberately DERIVED from nothing: it is set to the same five minutes as
+ * `DEFAULT_OID4VP_REQUEST_TTL_MS` in `@qauth-labs/server-federation`, plus a
+ * grace window so the browser can still be told "this expired" instead of
+ * "this never existed" for a short while after the presentation request itself
+ * is dead. The authoritative expiry is the one stored on the flow record and
+ * enforced on every read; this TTL only bounds how long the record survives in
+ * Redis if nothing ever polls it again.
+ */
+export const WALLET_LOGIN_FLOW_TTL_MS = 6 * 60 * 1000;
+
+/**
+ * How often the wallet-login page asks the server whether the presentation has
+ * arrived (#239).
+ *
+ * A wallet round-trip is a human action — unlock the phone, open the wallet,
+ * approve the disclosure — so sub-second polling buys nothing and costs a
+ * request per client per second. Three seconds keeps the perceived latency
+ * under a wallet's own animation while capping a five-minute wait at ~100
+ * requests, which is what {@link WALLET_LOGIN_STATUS_RATE_LIMIT} is sized for.
+ */
+export const WALLET_LOGIN_POLL_INTERVAL_MS = 3000;
+
+/**
+ * Per-IP cap on wallet-login status polls, over
+ * {@link WALLET_LOGIN_STATUS_RATE_WINDOW_S}.
+ *
+ * The global default (`RATE_LIMIT_MAX`, 100/hour) is the wrong shape for a
+ * polling endpoint: one legitimate five-minute wait would exhaust it and the
+ * user would watch their own sign-in fail. This is the correction, not a
+ * relaxation — it is still a hard cap, sized at roughly two concurrent flows
+ * from one IP (each ~100 polls at {@link WALLET_LOGIN_POLL_INTERVAL_MS}), and
+ * the endpoint it protects performs no credential work and reveals nothing
+ * without an unguessable handle AND the matching browser-binder cookie.
+ */
+export const WALLET_LOGIN_STATUS_RATE_LIMIT = 200;
+
+/** Window for {@link WALLET_LOGIN_STATUS_RATE_LIMIT}, in seconds. */
+export const WALLET_LOGIN_STATUS_RATE_WINDOW_S = 300;
+
+/**
+ * Maximum length of the account identifier a user asserts on the wallet-login
+ * form (ADR-009 §1).
+ *
+ * The value is written into an `external_sub` lookup, so it is bounded for the
+ * same reason every other pre-authentication input in this codebase is: it
+ * arrives from an unauthenticated caller and reaches Redis and the database.
+ * 320 characters is the maximum length of an email address (RFC 3696 §3), which
+ * is the identifier shape `PasswordProvider` already stores in that column.
+ */
+export const ASSERTED_IDENTIFIER_MAX_LENGTH = 320;

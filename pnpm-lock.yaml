@@ -765,6 +765,9 @@ importers:
       '@qauth-labs/core-crypto':
         specifier: workspace:*
         version: link:../../core/crypto
+      '@qauth-labs/shared-validation':
+        specifier: workspace:*
+        version: link:../../shared/validation
       dotenv:
         specifier: 'catalog:'
         version: 17.4.2
@@ -817,6 +820,9 @@ importers:
       '@qauth-labs/shared-validation':
         specifier: workspace:*
         version: link:../../shared/validation
+      jose:
+        specifier: 'catalog:'
+        version: 6.2.4
       zod:
         specifier: 'catalog:'
         version: 4.4.3

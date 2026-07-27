@@ -10,6 +10,8 @@
  * fragments.
  */
 
+import { extractUrlScheme, isScriptCapableUrl } from '@qauth-labs/shared-validation';
+
 export function esc(value: unknown): string {
   if (value === null || value === undefined) return '';
   const s = String(value);
@@ -99,4 +101,33 @@ export function safeUrl(value: unknown): string | undefined {
     return undefined;
   }
   return SAFE_URL_SCHEMES.has(parsed.protocol) ? value : undefined;
+}
+
+/**
+ * The DENYLIST counterpart to {@link safeUrl}, for the one kind of href whose
+ * scheme cannot be allowlisted: an operator-configured deep link into a native
+ * app (the OID4VP 1.0 §5 wallet Authorization Endpoint — `openid4vp://`,
+ * `haip://`, a vendor's `eudi-wallet://` or its universal `https://` link;
+ * issue #239). There is no closed list of wallet schemes to allow.
+ *
+ * There does not need to be. Both functions ask the SAME question of the same
+ * `extractUrlScheme()` implementation — "which scheme would the browser
+ * navigate with, after it has undone case, embedded TAB/LF/NUL and HTML
+ * character references?" — and differ only in which answers they accept.
+ * Keeping one scheme parser is the point: two hand-rolled URL sanitisers that
+ * disagree in the corners is how these holes appear.
+ *
+ * PREFER {@link safeUrl} wherever the scheme CAN be constrained; "not
+ * script-capable" is a much weaker guarantee than "one of three schemes we
+ * chose", and it must never be pointed at client-supplied data.
+ *
+ * @param value - an absolute URI from trusted server-side configuration.
+ * @returns `value` unchanged when it carries a well-formed, non-script-capable
+ * scheme; `undefined` otherwise (including for relative references, which are
+ * never a valid app deep link).
+ */
+export function safeCustomSchemeUrl(value: unknown): string | undefined {
+  if (typeof value !== 'string' || value.length === 0) return undefined;
+  if (extractUrlScheme(value) === undefined) return undefined;
+  return isScriptCapableUrl(value) ? undefined : value;
 }

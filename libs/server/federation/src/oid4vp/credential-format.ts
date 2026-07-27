@@ -13,18 +13,37 @@
  * have and #298 does not add), it is the EUDI PID primary encoding, and its flat
  * claim model maps directly onto `user_attributes`.
  *
- * ## What an adapter may NOT do
+ * ## Two phases, one adapter (updated by #234)
  *
- * An adapter is a STRUCTURAL parser, never a validator. It answers "is this
- * shaped like the format it claims to be", and nothing else — no signature
- * check, no disclosure digest check, no `vct` check, no issuer resolution, no
- * key binding. Those are #234 (presentation validation) and #236 (issuer trust),
- * and until both exist, anything this layer returns must be treated as
- * ATTACKER-SUPPLIED. See {@link PresentedCredential}.
+ * An adapter now spans the whole lifetime of a format, in three methods that run
+ * at three different moments:
+ *
+ *  1. {@link CredentialFormatAdapter.buildCredentialQuery} — request time.
+ *  2. {@link CredentialFormatAdapter.parsePresentation} — intake time (#233).
+ *    STRUCTURAL ONLY: "is this shaped like the format it claims to be", and
+ *    nothing else. No signature check, no digest check, no key binding. Its
+ *    output is ATTACKER-SUPPLIED data. See {@link PresentedCredential}.
+ *  3. {@link CredentialFormatAdapter.validatePresentation} — validation time
+ *    (#234). Where the cryptography actually happens, producing a
+ *    {@link ValidatedCredential}.
+ *
+ * Keeping all three on ONE interface behind ONE registry is what makes epic
+ * #231's promise checkable: adding `mso_mdoc` is a registration, and neither the
+ * request builder, nor the `direct_post` intake, nor the validation dispatcher
+ * changes — none of them names a format. Do not add a fourth method that a
+ * caller could reach around the registry to invoke.
+ *
+ * Phase 2 and phase 3 must stay separate. Collapsing them would put signature
+ * verification on the intake path, which is exactly the confusion #233's safety
+ * boundary exists to prevent: a structurally-parsed response authenticates
+ * nobody, and neither does a validated one (#236 issuer trust and #300 subject
+ * resolution both still have to run).
  */
 
 import type { CredentialFormat } from '../profiles/verifier-profile.types';
 import type { DcqlClaimsQuery, DcqlCredentialQuery } from './dcql';
+import { validateSdJwtVcPresentation } from './sd-jwt-vc';
+import type { PresentationValidationContext, ValidatedCredential } from './validated-credential';
 
 /** SD-JWT VC format identifier (OID4VP 1.0 Annex B / SD-JWT VC). */
 export const SD_JWT_VC_FORMAT = 'dc+sd-jwt' satisfies CredentialFormat;
@@ -95,6 +114,26 @@ export interface CredentialFormatAdapter {
    * @throws Error when the value is not shaped like this format.
    */
   parsePresentation(queryId: string, value: unknown): PresentedCredential;
+  /**
+   * Cryptographically validate ONE structurally-parsed Presentation (#234).
+   *
+   * The format-specific half of validation: signature verification, whatever
+   * selective-disclosure or claim-encoding machinery the format defines, holder
+   * binding, and the credential's validity window. What it may NOT do is decide
+   * trust (#236) or resolve a subject (#300) — see {@link ValidatedCredential}.
+   *
+   * @param entry - the parsed entry, still UNVERIFIED.
+   * @param query - the Credential Query it answers; the adapter reads its own
+   * format-specific `meta` from it (`vct_values` here, `doctype_value` later),
+   * which is why the query is passed whole rather than pre-interpreted.
+   * @param context - bindings and policy — see {@link PresentationValidationContext}.
+   * @throws PresentationValidationRejection on every refusal.
+   */
+  validatePresentation(
+    entry: PresentedCredential,
+    query: DcqlCredentialQuery,
+    context: PresentationValidationContext
+  ): Promise<ValidatedCredential>;
 }
 
 /**
@@ -167,7 +206,25 @@ export const sdJwtVcAdapter: CredentialFormatAdapter = {
 
     return { queryId, format: SD_JWT_VC_FORMAT, presentation: value };
   },
+
+  validatePresentation(
+    entry: PresentedCredential,
+    query: DcqlCredentialQuery,
+    context: PresentationValidationContext
+  ): Promise<ValidatedCredential> {
+    return validateSdJwtVcPresentation(entry.presentation, entry.queryId, query, context);
+  },
 };
+
+/**
+ * A table of adapters, keyed by Credential Format.
+ *
+ * `Partial` because the table is deliberately incomplete: a format a profile
+ * PERMITS but QAuth has no adapter for must be refused, not stubbed.
+ */
+export type CredentialFormatAdapterRegistry = Readonly<
+  Partial<Record<CredentialFormat, CredentialFormatAdapter>>
+>;
 
 /**
  * Every format adapter QAuth ships.
@@ -177,10 +234,14 @@ export const sdJwtVcAdapter: CredentialFormatAdapter = {
  * {@link resolveCredentialFormatAdapter} rather than silently served a
  * credential shape QAuth cannot read. ISO/IEC 18013-5 is paywalled; the mdoc
  * adapter needs the standard first (epic #231).
+ *
+ * Exported so a test can build a hypothetical registry that ALSO contains
+ * `mso_mdoc` and run the whole request → intake → validation path over it. That
+ * is the only way "registering a second format requires no change to intake or
+ * dispatch" can be asserted rather than asserted-about — see
+ * `credential-format.mdoc-registration.test.ts`. Frozen, and never mutated.
  */
-const CREDENTIAL_FORMAT_ADAPTERS: Readonly<
-  Partial<Record<CredentialFormat, CredentialFormatAdapter>>
-> = Object.freeze({
+export const CREDENTIAL_FORMAT_ADAPTERS: CredentialFormatAdapterRegistry = Object.freeze({
   [SD_JWT_VC_FORMAT]: sdJwtVcAdapter,
 });
 
@@ -198,11 +259,18 @@ const CREDENTIAL_FORMAT_ADAPTERS: Readonly<
  *
  * @param format - the requested credential format.
  * @param permitted - formats the active profile permits.
+ * @param adapters - the adapter table; defaults to everything QAuth ships.
+ * Overridden ONLY by the tests that prove the registration seam is real
+ * ({@link CREDENTIAL_FORMAT_ADAPTERS}). Widening it does not widen what a
+ * deployment accepts: `permitted` is checked FIRST and comes from the active
+ * `VerifierProfile`, so an injected adapter for a profile-forbidden format is
+ * still refused.
  * @throws Error when the format is unshipped or profile-forbidden.
  */
 export function resolveCredentialFormatAdapter(
   format: CredentialFormat,
-  permitted: readonly CredentialFormat[]
+  permitted: readonly CredentialFormat[],
+  adapters: CredentialFormatAdapterRegistry = CREDENTIAL_FORMAT_ADAPTERS
 ): CredentialFormatAdapter {
   if (!permitted.includes(format)) {
     throw new Error(
@@ -210,7 +278,7 @@ export function resolveCredentialFormatAdapter(
     );
   }
 
-  const adapter = CREDENTIAL_FORMAT_ADAPTERS[format];
+  const adapter = adapters[format];
 
   if (adapter === undefined) {
     throw new Error(

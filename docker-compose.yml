@@ -147,6 +147,12 @@ services:
       # and not a boot failure. A value that is present but malformed IS a boot
       # failure, on purpose.
       OID4VP_TRUSTED_ISSUERS: ${OID4VP_TRUSTED_ISSUERS:-}
+      # Wallet sign-in screen (#239). Both blank-by-default: an empty
+      # OID4VP_REQUESTED_VCT means no credential type was chosen, and the UI
+      # then offers no wallet flow at all — the same fail-closed posture as the
+      # profile above, expressed as an absent button rather than a boot failure.
+      OID4VP_REQUESTED_VCT: ${OID4VP_REQUESTED_VCT:-}
+      OID4VP_WALLET_INVOCATION_ENDPOINT: ${OID4VP_WALLET_INVOCATION_ENDPOINT:-openid4vp://}
 
       # Rate Limiting (Global)
       RATE_LIMIT_ENABLED: ${RATE_LIMIT_ENABLED:-true}

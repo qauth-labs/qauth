@@ -38,6 +38,16 @@ interface TestContext {
 
 function createFastifyStub() {
   const ctx: TestContext = {};
+  /**
+   * In-memory stand-in for the Redis-backed session store — the one this
+   * endpoint touches, via the wallet-login transport signal (#239).
+   *
+   * It is decorated deliberately rather than left off: without it,
+   * `fastify.sessionUtils` is undefined, the property access throws a TypeError
+   * that `publishWalletPresentationSignal`'s try/catch swallows as a warning,
+   * and the suite passes while exercising none of the wiring.
+   */
+  const store = new Map<string, unknown>();
 
   const fastify: any = {
     withTypeProvider: () => ({
@@ -56,10 +66,19 @@ function createFastifyStub() {
         create: vi.fn().mockResolvedValue(undefined),
       },
     },
+    sessionUtils: {
+      setSession: vi.fn(async (key: string, value: unknown) => {
+        store.set(key, value);
+      }),
+      getSession: vi.fn(async (key: string) => store.get(key) ?? null),
+      deleteSession: vi.fn(async (key: string) => {
+        store.delete(key);
+      }),
+    },
     log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
   };
 
-  return { fastify: fastify as FastifyInstance, ctx };
+  return { fastify: fastify as FastifyInstance, ctx, store };
 }
 
 function makeReply() {
@@ -121,9 +140,9 @@ const ENABLED_ENV = {
 
 async function register(env: Record<string, unknown> = ENABLED_ENV) {
   const route = await loadRoute(env);
-  const { fastify, ctx } = createFastifyStub();
+  const { fastify, ctx, store } = createFastifyStub();
   await route(fastify);
-  return { fastify: fastify as any, ctx };
+  return { fastify: fastify as any, ctx, store };
 }
 
 afterEach(() => {
@@ -262,6 +281,65 @@ describe('POST /oid4vp/response — accepted submission', () => {
     await handler(makeRequest({ state: STATE, error: '<script>alert(1)</script>' }), reply);
 
     expect(JSON.stringify(sent[0])).not.toContain('script');
+  });
+});
+
+/**
+ * The join between this endpoint and the wallet-login screens (#239).
+ *
+ * `direct_post` is the ONLY production writer of the transport signal, and
+ * `helpers/wallet-login-flow.ts` reads it back under `wallet-login-signal:` +
+ * the SAME `sha256(state)` the request state is stored under. The two halves are
+ * tested in two files — `wallet-login.test.ts` writes the key into its fake
+ * store by hand and never comes through here — so this is what keeps them
+ * joined. Publishing the raw `state`, or moving the publish above the `redeem()`
+ * guard, has to fail here rather than in production, where it would hang every
+ * wallet sign-in with CI green.
+ */
+describe('POST /oid4vp/response — the wallet-login transport signal (#239)', () => {
+  const SIGNAL_KEY = `wallet-login-signal:${hashOid4vpState(STATE)}`;
+
+  it('publishes `received` for an accepted vp_token, keyed by the state HASH', async () => {
+    const { fastify, ctx, store } = await register();
+    fastify.repositories.oid4vpRequestStates.redeem.mockResolvedValue(pendingState());
+    const handler = ctx.handler as NonNullable<TestContext['handler']>;
+    const { reply } = makeReply();
+
+    await handler(makeRequest({ vp_token: VP_TOKEN, state: STATE }), reply);
+
+    expect(store.get(SIGNAL_KEY)).toMatchObject({ signal: 'received' });
+    // The raw `state` is a bearer value and must never become a key — nor may
+    // anything else be written by an endpoint nobody authenticated.
+    expect([...store.keys()]).toEqual([SIGNAL_KEY]);
+  });
+
+  it('publishes `wallet_error` for a wallet-reported error, carrying none of its text', async () => {
+    const { fastify, ctx, store } = await register();
+    fastify.repositories.oid4vpRequestStates.redeem.mockResolvedValue(pendingState());
+    const handler = ctx.handler as NonNullable<TestContext['handler']>;
+    const { reply } = makeReply();
+
+    await handler(makeRequest({ state: STATE, error: 'access_denied' }), reply);
+
+    expect(store.get(SIGNAL_KEY)).toMatchObject({ signal: 'wallet_error' });
+    expect(JSON.stringify(store.get(SIGNAL_KEY))).not.toContain('access_denied');
+  });
+
+  it('writes NOTHING at all when the state does not redeem', async () => {
+    // The signal write is the one store mutation an anonymous POST can cause.
+    // It is reachable only AFTER redemption, which is what stops it being an
+    // unbounded unauthenticated write primitive.
+    const { fastify, ctx, store } = await register();
+    fastify.repositories.oid4vpRequestStates.redeem.mockResolvedValue(undefined);
+    const handler = ctx.handler as NonNullable<TestContext['handler']>;
+    const { reply } = makeReply();
+
+    await expect(
+      handler(makeRequest({ vp_token: VP_TOKEN, state: STATE }), reply)
+    ).rejects.toThrow();
+
+    expect(store.size).toBe(0);
+    expect(fastify.sessionUtils.setSession).not.toHaveBeenCalled();
   });
 });
 
