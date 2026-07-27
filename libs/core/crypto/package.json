@@ -5,7 +5,8 @@
   "main": "src/index.ts",
   "dependencies": {
     "@noble/post-quantum": "catalog:",
-    "jose": "catalog:"
+    "jose": "catalog:",
+    "tslib": "catalog:"
   },
   "devDependencies": {
     "@vitest/coverage-v8": "catalog:",

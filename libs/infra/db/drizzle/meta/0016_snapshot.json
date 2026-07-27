@@ -260,12 +260,8 @@
           "name": "audit_logs_user_id_users_id_fk",
           "tableFrom": "audit_logs",
           "tableTo": "users",
-          "columnsFrom": [
-            "user_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["user_id"],
+          "columnsTo": ["id"],
           "onDelete": "set null",
           "onUpdate": "no action"
         },
@@ -273,12 +269,8 @@
           "name": "audit_logs_oauth_client_id_oauth_clients_id_fk",
           "tableFrom": "audit_logs",
           "tableTo": "oauth_clients",
-          "columnsFrom": [
-            "oauth_client_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["oauth_client_id"],
+          "columnsTo": ["id"],
           "onDelete": "set null",
           "onUpdate": "no action"
         }
@@ -418,12 +410,8 @@
           "name": "oauth_consents_user_id_users_id_fk",
           "tableFrom": "oauth_consents",
           "tableTo": "users",
-          "columnsFrom": [
-            "user_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["user_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -431,12 +419,8 @@
           "name": "oauth_consents_oauth_client_id_oauth_clients_id_fk",
           "tableFrom": "oauth_consents",
           "tableTo": "oauth_clients",
-          "columnsFrom": [
-            "oauth_client_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["oauth_client_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -444,12 +428,8 @@
           "name": "oauth_consents_realm_id_realms_id_fk",
           "tableFrom": "oauth_consents",
           "tableTo": "realms",
-          "columnsFrom": [
-            "realm_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["realm_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -616,12 +596,8 @@
           "name": "api_keys_realm_id_realms_id_fk",
           "tableFrom": "api_keys",
           "tableTo": "realms",
-          "columnsFrom": [
-            "realm_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["realm_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -629,12 +605,8 @@
           "name": "api_keys_client_id_oauth_clients_id_fk",
           "tableFrom": "api_keys",
           "tableTo": "oauth_clients",
-          "columnsFrom": [
-            "client_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["client_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -642,12 +614,8 @@
           "name": "api_keys_developer_id_users_id_fk",
           "tableFrom": "api_keys",
           "tableTo": "users",
-          "columnsFrom": [
-            "developer_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["developer_id"],
+          "columnsTo": ["id"],
           "onDelete": "set null",
           "onUpdate": "no action"
         }
@@ -931,12 +899,8 @@
           "name": "oauth_clients_realm_id_realms_id_fk",
           "tableFrom": "oauth_clients",
           "tableTo": "realms",
-          "columnsFrom": [
-            "realm_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["realm_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -944,12 +908,8 @@
           "name": "oauth_clients_developer_id_users_id_fk",
           "tableFrom": "oauth_clients",
           "tableTo": "users",
-          "columnsFrom": [
-            "developer_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["developer_id"],
+          "columnsTo": ["id"],
           "onDelete": "set null",
           "onUpdate": "no action"
         }
@@ -1144,9 +1104,7 @@
         "realms_name_unique": {
           "name": "realms_name_unique",
           "nullsNotDistinct": false,
-          "columns": [
-            "name"
-          ]
+          "columns": ["name"]
         }
       },
       "policies": {},
@@ -1254,12 +1212,8 @@
           "name": "users_realm_id_realms_id_fk",
           "tableFrom": "users",
           "tableTo": "realms",
-          "columnsFrom": [
-            "realm_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["realm_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -1382,12 +1336,8 @@
           "name": "user_attributes_user_id_users_id_fk",
           "tableFrom": "user_attributes",
           "tableTo": "users",
-          "columnsFrom": [
-            "user_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["user_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -1519,12 +1469,8 @@
           "name": "user_credentials_user_id_users_id_fk",
           "tableFrom": "user_credentials",
           "tableTo": "users",
-          "columnsFrom": [
-            "user_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["user_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -1532,12 +1478,8 @@
           "name": "user_credentials_realm_id_realms_id_fk",
           "tableFrom": "user_credentials",
           "tableTo": "realms",
-          "columnsFrom": [
-            "realm_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["realm_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -1679,12 +1621,8 @@
           "name": "oid4vp_request_states_realm_id_realms_id_fk",
           "tableFrom": "oid4vp_request_states",
           "tableTo": "realms",
-          "columnsFrom": [
-            "realm_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["realm_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -1694,9 +1632,7 @@
         "oid4vp_request_states_state_hash_unique": {
           "name": "oid4vp_request_states_state_hash_unique",
           "nullsNotDistinct": false,
-          "columns": [
-            "state_hash"
-          ]
+          "columns": ["state_hash"]
         }
       },
       "policies": {},
@@ -1850,12 +1786,8 @@
           "name": "roles_realm_id_realms_id_fk",
           "tableFrom": "roles",
           "tableTo": "realms",
-          "columnsFrom": [
-            "realm_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["realm_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -1863,12 +1795,8 @@
           "name": "roles_oauth_client_id_oauth_clients_id_fk",
           "tableFrom": "roles",
           "tableTo": "oauth_clients",
-          "columnsFrom": [
-            "oauth_client_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["oauth_client_id"],
+          "columnsTo": ["id"],
           "onDelete": "set null",
           "onUpdate": "no action"
         }
@@ -1946,12 +1874,8 @@
           "name": "user_roles_user_id_users_id_fk",
           "tableFrom": "user_roles",
           "tableTo": "users",
-          "columnsFrom": [
-            "user_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["user_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -1959,12 +1883,8 @@
           "name": "user_roles_role_id_roles_id_fk",
           "tableFrom": "user_roles",
           "tableTo": "roles",
-          "columnsFrom": [
-            "role_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["role_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -1972,12 +1892,8 @@
           "name": "user_roles_assigned_by_users_id_fk",
           "tableFrom": "user_roles",
           "tableTo": "users",
-          "columnsFrom": [
-            "assigned_by"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["assigned_by"],
+          "columnsTo": ["id"],
           "onDelete": "set null",
           "onUpdate": "no action"
         }
@@ -1985,10 +1901,7 @@
       "compositePrimaryKeys": {
         "user_roles_pk": {
           "name": "user_roles_pk",
-          "columns": [
-            "user_id",
-            "role_id"
-          ]
+          "columns": ["user_id", "role_id"]
         }
       },
       "uniqueConstraints": {},
@@ -2166,12 +2079,8 @@
           "name": "sessions_user_id_users_id_fk",
           "tableFrom": "sessions",
           "tableTo": "users",
-          "columnsFrom": [
-            "user_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["user_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -2179,12 +2088,8 @@
           "name": "sessions_oauth_client_id_oauth_clients_id_fk",
           "tableFrom": "sessions",
           "tableTo": "oauth_clients",
-          "columnsFrom": [
-            "oauth_client_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["oauth_client_id"],
+          "columnsTo": ["id"],
           "onDelete": "set null",
           "onUpdate": "no action"
         }
@@ -2383,12 +2288,8 @@
           "name": "authorization_codes_oauth_client_id_oauth_clients_id_fk",
           "tableFrom": "authorization_codes",
           "tableTo": "oauth_clients",
-          "columnsFrom": [
-            "oauth_client_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["oauth_client_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -2396,12 +2297,8 @@
           "name": "authorization_codes_user_id_users_id_fk",
           "tableFrom": "authorization_codes",
           "tableTo": "users",
-          "columnsFrom": [
-            "user_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["user_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -2411,9 +2308,7 @@
         "authorization_codes_code_unique": {
           "name": "authorization_codes_code_unique",
           "nullsNotDistinct": false,
-          "columns": [
-            "code"
-          ]
+          "columns": ["code"]
         }
       },
       "policies": {},
@@ -2534,12 +2429,8 @@
           "name": "email_verification_tokens_credential_id_user_credentials_id_fk",
           "tableFrom": "email_verification_tokens",
           "tableTo": "user_credentials",
-          "columnsFrom": [
-            "credential_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["credential_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -2549,9 +2440,7 @@
         "email_verification_tokens_token_hash_unique": {
           "name": "email_verification_tokens_token_hash_unique",
           "nullsNotDistinct": false,
-          "columns": [
-            "token_hash"
-          ]
+          "columns": ["token_hash"]
         }
       },
       "policies": {},
@@ -2764,12 +2653,8 @@
           "name": "refresh_tokens_user_id_users_id_fk",
           "tableFrom": "refresh_tokens",
           "tableTo": "users",
-          "columnsFrom": [
-            "user_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["user_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -2777,12 +2662,8 @@
           "name": "refresh_tokens_oauth_client_id_oauth_clients_id_fk",
           "tableFrom": "refresh_tokens",
           "tableTo": "oauth_clients",
-          "columnsFrom": [
-            "oauth_client_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["oauth_client_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -2792,9 +2673,7 @@
         "refresh_tokens_token_hash_unique": {
           "name": "refresh_tokens_token_hash_unique",
           "nullsNotDistinct": false,
-          "columns": [
-            "token_hash"
-          ]
+          "columns": ["token_hash"]
         }
       },
       "policies": {},
@@ -2806,75 +2685,42 @@
     "public.agent_mode": {
       "name": "agent_mode",
       "schema": "public",
-      "values": [
-        "readonly",
-        "admin",
-        "exec"
-      ]
+      "values": ["readonly", "admin", "exec"]
     },
     "public.audit_event_type": {
       "name": "audit_event_type",
       "schema": "public",
-      "values": [
-        "auth",
-        "token",
-        "client",
-        "security",
-        "user",
-        "realm",
-        "agent"
-      ]
+      "values": ["auth", "token", "client", "security", "user", "realm", "agent"]
     },
     "public.code_challenge_method": {
       "name": "code_challenge_method",
       "schema": "public",
-      "values": [
-        "S256"
-      ]
+      "values": ["S256"]
     },
     "public.environment": {
       "name": "environment",
       "schema": "public",
-      "values": [
-        "development",
-        "staging",
-        "production"
-      ]
+      "values": ["development", "staging", "production"]
     },
     "public.grant_type": {
       "name": "grant_type",
       "schema": "public",
-      "values": [
-        "authorization_code",
-        "refresh_token",
-        "client_credentials"
-      ]
+      "values": ["authorization_code", "refresh_token", "client_credentials"]
     },
     "public.response_type": {
       "name": "response_type",
       "schema": "public",
-      "values": [
-        "code"
-      ]
+      "values": ["code"]
     },
     "public.ssl_required": {
       "name": "ssl_required",
       "schema": "public",
-      "values": [
-        "none",
-        "external",
-        "all"
-      ]
+      "values": ["none", "external", "all"]
     },
     "public.token_endpoint_auth_method": {
       "name": "token_endpoint_auth_method",
       "schema": "public",
-      "values": [
-        "client_secret_post",
-        "client_secret_basic",
-        "private_key_jwt",
-        "none"
-      ]
+      "values": ["client_secret_post", "client_secret_basic", "private_key_jwt", "none"]
     }
   },
   "schemas": {},

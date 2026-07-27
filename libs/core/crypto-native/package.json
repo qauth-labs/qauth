@@ -10,7 +10,8 @@
     }
   },
   "dependencies": {
-    "@qauth-labs/core-crypto": "workspace:*"
+    "@qauth-labs/core-crypto": "workspace:*",
+    "tslib": "catalog:"
   },
   "devDependencies": {
     "@napi-rs/cli": "^3.7.4",

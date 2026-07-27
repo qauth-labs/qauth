@@ -93,3 +93,143 @@ jobs:
       # flow, `acr` propagation and the password-login invariant are asserted
       # end to end.
       - run: pnpm exec nx affected -t test-integration
+
+  # Container boot smoke test — the guard for #370.
+  #
+  # Nothing above this job ever builds or runs the auth-server image, so the
+  # whole class of "works in the workspace, dies in the container" defects was
+  # invisible to CI. #370 was exactly that: `@qauth-labs/core-crypto` sat in
+  # devDependencies while production source imported it. `nx build`, `nx test`
+  # and `nx lint` all passed, because the dev workspace root hoists every
+  # package. The image is assembled with `pnpm deploy --prod`, which strips
+  # devDependencies, and runs the TypeScript sources under tsx — so the import
+  # had nothing to resolve to and the container crash-looped on boot.
+  #
+  # This job builds the real image the same way docker-compose.yml does (repo
+  # root as context, apps/auth-server/Dockerfile) and requires it to actually
+  # come up and report healthy. Deliberately NOT affected-scoped: the image is
+  # assembled from the lockfile and every workspace package, so almost any
+  # change can break it, and "affected" cannot see a dependency-manifest edit
+  # as reaching the container.
+  docker-smoke:
+    runs-on: ubuntu-latest
+    env:
+      IMAGE: qauth/auth-server:smoke
+      CONTAINER: qauth-auth-server-smoke
+    services:
+      # Mirrors docker-compose.yml. GitHub publishes service ports on the
+      # runner's network namespace, which is why the container below joins it
+      # with `--network host` and talks to both over localhost.
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_DB: qauth
+          POSTGRES_USER: qauth
+          POSTGRES_PASSWORD: qauth_ci_password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U qauth -d qauth"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          filter: tree:0
+
+      # Same context and Dockerfile as the `auth-server` service in
+      # docker-compose.yml. BuildKit is required for the Dockerfile's
+      # `--mount=type=cache` pnpm-store mount.
+      - name: Build auth-server image
+        env:
+          DOCKER_BUILDKIT: '1'
+        run: docker build -f apps/auth-server/Dockerfile -t "$IMAGE" .
+
+      - name: Start auth-server container
+        run: |
+          set -euo pipefail
+          # Ephemeral EdDSA signing keypair — generated per run, never
+          # persisted. Both halves are passed: the plugin only derives the
+          # public key when JWT_PUBLIC_KEY is absent, and that derivation path
+          # cannot export SPKI from a private key, so a real deployment always
+          # supplies both (see .env.docker.example).
+          jwt_private_key="$(openssl genpkey -algorithm ed25519)"
+          jwt_public_key="$(printf '%s' "$jwt_private_key" | openssl pkey -pubout)"
+          docker run -d \
+            --name "$CONTAINER" \
+            --network host \
+            -e NODE_ENV=production \
+            -e HOST=0.0.0.0 \
+            -e PORT=3000 \
+            -e LOG_LEVEL=debug \
+            -e DATABASE_URL='postgresql://qauth:qauth_ci_password@localhost:5432/qauth' \
+            -e REDIS_URL='redis://localhost:6379/0' \
+            -e REDIS_HOST=localhost \
+            -e REDIS_PORT=6379 \
+            -e JWT_PRIVATE_KEY="$jwt_private_key" \
+            -e JWT_PUBLIC_KEY="$jwt_public_key" \
+            -e JWT_ISSUER='http://localhost:3000' \
+            -e SESSION_COOKIE_SECRET="$(openssl rand -base64 48)" \
+            -e SESSION_COOKIE_SECURE=false \
+            -e EMAIL_PROVIDER=mock \
+            -e EMAIL_FROM_ADDRESS='noreply@qauth.dev' \
+            -e EMAIL_BASE_URL='http://localhost:3000' \
+            "$IMAGE"
+
+      # The actual assertion. Fails fast if the container stops or restarts —
+      # a boot crash like #370 exits the process, so waiting out the full
+      # timeout would only slow the report down. /health reports `ok` only when
+      # both Postgres and Redis answer, so this also proves the wiring.
+      - name: Wait for /health to report healthy
+        timeout-minutes: 3
+        run: |
+          set -uo pipefail
+          for _ in $(seq 1 60); do
+            running="$(docker inspect -f '{{.State.Running}}' "$CONTAINER")"
+            restarts="$(docker inspect -f '{{.RestartCount}}' "$CONTAINER")"
+            if [ "$running" != "true" ]; then
+              exit_code="$(docker inspect -f '{{.State.ExitCode}}' "$CONTAINER")"
+              echo "::error::auth-server container stopped before becoming healthy (exit code ${exit_code})."
+              exit 1
+            fi
+            if [ "$restarts" -gt 0 ]; then
+              echo "::error::auth-server container restarted ${restarts} time(s) — it is crash-looping."
+              exit 1
+            fi
+            body="$(curl -fsS --max-time 5 http://localhost:3000/health || true)"
+            case "$body" in
+              *'"status":"ok"'*)
+                echo "auth-server is healthy: ${body}"
+                exit 0
+                ;;
+            esac
+            sleep 2
+          done
+          echo "::error::auth-server did not report healthy within the timeout. Last /health body: ${body:-<none>}"
+          exit 1
+
+      # Whatever went wrong, the next person needs the boot output. A missing
+      # module or a failed env parse is printed here and nowhere else.
+      - name: Dump container diagnostics on failure
+        if: failure()
+        run: |
+          echo "--- docker ps -a ---"
+          docker ps -a
+          echo "--- docker inspect state ---"
+          docker inspect -f '{{json .State}}' "$CONTAINER" || true
+          echo "--- container logs ---"
+          docker logs "$CONTAINER" 2>&1 || true
+
+      - name: Stop container
+        if: always()
+        run: docker rm -f "$CONTAINER" || true

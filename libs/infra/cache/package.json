@@ -5,6 +5,7 @@
   "main": "src/index.ts",
   "dependencies": {
     "ioredis": "catalog:",
+    "tslib": "catalog:",
     "zod": "catalog:"
   }
 }

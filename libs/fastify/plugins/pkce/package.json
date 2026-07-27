@@ -6,6 +6,7 @@
   "dependencies": {
     "@qauth-labs/server-pkce": "workspace:*",
     "fastify": "catalog:",
-    "fastify-plugin": "catalog:"
+    "fastify-plugin": "catalog:",
+    "tslib": "catalog:"
   }
 }

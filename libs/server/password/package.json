@@ -5,6 +5,7 @@
   "main": "src/index.ts",
   "dependencies": {
     "@node-rs/argon2": "catalog:",
+    "tslib": "catalog:",
     "zod": "catalog:"
   },
   "devDependencies": {

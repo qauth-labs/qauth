@@ -125,6 +125,12 @@ catalog:
   eslint-plugin-react-hooks: '^7.1.1'
   eslint-plugin-simple-import-sort: '^14.0.0'
   husky: '^9.1.7'
+  # JSON parser for ESLint, used by the `@nx/dependency-checks` config block in
+  # eslint.config.mjs. It already ships as a transitive dep of
+  # @nx/eslint-plugin, but pnpm's isolated layout does not hoist it to the root
+  # node_modules, so the root flat config cannot import it unless it is declared
+  # here — the same class of phantom dependency this rule exists to catch.
+  'jsonc-eslint-parser': '^2.4.2'
   lint-staged: '^17.2.0'
   nx: '23.1.0'
   prettier: '^3.9.6'

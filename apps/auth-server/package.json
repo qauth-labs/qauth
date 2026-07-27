@@ -12,6 +12,7 @@
     "@fastify/rate-limit": "catalog:",
     "@fastify/swagger": "catalog:",
     "@fastify/swagger-ui": "catalog:",
+    "@qauth-labs/core-crypto": "workspace:*",
     "@qauth-labs/fastify-plugin-cache": "workspace:*",
     "@qauth-labs/fastify-plugin-db": "workspace:*",
     "@qauth-labs/fastify-plugin-email": "workspace:*",
@@ -27,8 +28,6 @@
     "zod": "catalog:"
   },
   "devDependencies": {
-    "@qauth-labs/core-crypto": "workspace:*",
-    "@qauth-labs/server-jwt": "workspace:*",
     "@qauth-labs/shared-testing": "workspace:*",
     "@vitest/coverage-v8": "catalog:",
     "@vitest/ui": "catalog:",
