@@ -10,6 +10,7 @@ import { MIN_RESPONSE_TIME_MS } from '../../constants';
 import { verifyPasswordCredential } from '../../helpers/credential-auth';
 import { html, render } from '../../helpers/html';
 import { getOrCreateDefaultRealm } from '../../helpers/realm';
+import { isSafeReturnTo } from '../../helpers/return-to';
 import {
   clearLoginCsrfCookie,
   csrfTokensEqual,
@@ -21,6 +22,7 @@ import {
   verifyLoginCsrfCookie,
 } from '../../helpers/session-cookie';
 import { ensureMinimumResponseTime } from '../../helpers/timing';
+import { resolveWalletLoginCapability } from '../../helpers/wallet-login-request';
 
 /**
  * Server-rendered login page (issue #150).
@@ -35,24 +37,6 @@ import { ensureMinimumResponseTime } from '../../helpers/timing';
  * input falls back to `/`.
  */
 
-function isSafeReturnTo(value: unknown): value is string {
-  if (typeof value !== 'string') return false;
-  if (value.length === 0) return false;
-  // Disallow absolute URLs, protocol-relative, or anything that doesn't
-  // start with a single `/`. This keeps us off the open-redirector list.
-  if (!value.startsWith('/')) return false;
-  if (value.startsWith('//')) return false;
-  // `/\evil.example` is protocol-relative too. The WHATWG URL parser folds `\`
-  // into `/` for special schemes, so a browser resolving
-  // `Location: /\evil.example` against `https://auth.example.com` navigates to
-  // `https://evil.example` — the exact bypass the `//` check above exists to
-  // stop, spelled differently. Verified against Node's URL implementation,
-  // which is the same algorithm browsers use:
-  // `new URL('/\\evil.example/x', 'https://auth.example.com').host === 'evil.example'`.
-  if (value.startsWith('/\\')) return false;
-  return true;
-}
-
 function loginPage(opts: {
   returnTo: string;
   /** Per-request CSP nonce (issue #113) stamped onto the inline <style> tag. */
@@ -61,8 +45,17 @@ function loginPage(opts: {
   csrfToken: string;
   error?: string;
   email?: string;
+  /**
+   * Whether to offer the wallet-login entry point (#239). FAIL-CLOSED: the link
+   * is rendered only when the deployment can actually serve the flow — wallet
+   * federation on, a `VerifierProfile` selected and operable, a credential type
+   * configured. With none of that, the page presents no wallet flow at all
+   * rather than a link that refuses (#296, LOCKED).
+   */
+  walletLoginOffered: boolean;
 }): string {
-  const { returnTo, cspNonce, csrfToken, error, email } = opts;
+  const { returnTo, cspNonce, csrfToken, error, email, walletLoginOffered } = opts;
+  const walletLoginHref = `/ui/wallet-login?return_to=${encodeURIComponent(returnTo)}`;
   return render(
     html`<!doctype html>
       <html lang="en">
@@ -136,6 +129,33 @@ function loginPage(opts: {
               font-size: 13px;
               margin-bottom: 16px;
             }
+            .divider {
+              margin: 24px 0 16px;
+              border-top: 1px solid #e5e7eb;
+              text-align: center;
+              font-size: 12px;
+              color: #6b7280;
+            }
+            .divider span {
+              position: relative;
+              top: -9px;
+              background: #fff;
+              padding: 0 8px;
+            }
+            .alt-action {
+              display: block;
+              width: 100%;
+              padding: 10px;
+              border: 1px solid #2a5bd7;
+              border-radius: 6px;
+              background: #fff;
+              color: #2a5bd7;
+              font-weight: 600;
+              font-size: 14px;
+              text-align: center;
+              text-decoration: none;
+              box-sizing: border-box;
+            }
           </style>
         </head>
         <body>
@@ -159,6 +179,12 @@ function loginPage(opts: {
               <input type="password" name="password" autocomplete="current-password" required />
             </label>
             <button type="submit">Sign in</button>
+            ${
+              walletLoginOffered
+                ? html`<div class="divider"><span>or</span></div>
+                    <a class="alt-action" href="${walletLoginHref}">Sign in with your wallet</a>`
+                : ''
+            }
           </form>
         </body>
       </html>`
@@ -206,7 +232,13 @@ export default async function (fastify: FastifyInstance) {
       reply.header('Content-Type', 'text/html; charset=utf-8');
       reply.header('Cache-Control', 'no-store');
       return reply.send(
-        loginPage({ returnTo, cspNonce: reply.cspNonce.style, csrfToken, error: q.error })
+        loginPage({
+          returnTo,
+          cspNonce: reply.cspNonce.style,
+          csrfToken,
+          error: q.error,
+          walletLoginOffered: resolveWalletLoginCapability(fastify) !== undefined,
+        })
       );
     }
   );
@@ -262,6 +294,7 @@ export default async function (fastify: FastifyInstance) {
             csrfToken: freshCsrf,
             error: 'Your session expired. Please try again.',
             email: body.email,
+            walletLoginOffered: resolveWalletLoginCapability(fastify) !== undefined,
           })
         );
       }
@@ -315,6 +348,7 @@ export default async function (fastify: FastifyInstance) {
             csrfToken: cookieCsrf,
             error: 'Invalid email or password.',
             email: body.email,
+            walletLoginOffered: resolveWalletLoginCapability(fastify) !== undefined,
           })
         );
       }

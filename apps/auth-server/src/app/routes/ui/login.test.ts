@@ -293,6 +293,14 @@ describe('UI /ui/login — return_to open-redirect guard', () => {
     // `Location: /\evil.example` navigates to `https://evil.example` — the same
     // cross-origin bounce as `//evil.example`, spelled differently.
     '/\\evil.example/steal',
+    // The URL parser DISCARDS tab, LF and CR before it parses, so each of these
+    // reads as a single leading `/` here and is protocol-relative by the time a
+    // browser resolves it — the same bounce again, spelled a third way. See
+    // `helpers/return-to.test.ts`.
+    '/\t/evil.example/steal',
+    '/\n/evil.example/steal',
+    '/\r/evil.example/steal',
+    '/\t\\evil.example/steal',
     'javascript:alert(1)',
     'relative/path',
     '',

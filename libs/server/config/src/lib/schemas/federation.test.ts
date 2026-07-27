@@ -29,10 +29,12 @@ describe('federationEnvSchema (WALLET_FEDERATION_ENABLED — #232)', () => {
     // A `.superRefine()`/`.transform()`-wrapped schema has no `.shape`, which
     // would break `z.object({ ...federationEnvSchema.shape })` in env.ts. Both
     // fields wrap themselves (`.transform()`, `z.preprocess()`), which is fine;
-    // this asserts neither wrapper has been hoisted up to the object.
+    // this asserts no wrapper has been hoisted up to the object.
     expect(Object.keys(federationEnvSchema.shape)).toEqual([
       'WALLET_FEDERATION_ENABLED',
       'OID4VP_VERIFIER_PROFILE',
+      'OID4VP_REQUESTED_VCT',
+      'OID4VP_WALLET_INVOCATION_ENDPOINT',
     ]);
   });
 });
@@ -101,5 +103,108 @@ describe('federationEnvSchema (OID4VP_VERIFIER_PROFILE — #299)', () => {
     const parsed = federationEnvSchema.parse({ OID4VP_VERIFIER_PROFILE: 'oid4vp-1.0-base' });
     expect(parsed.WALLET_FEDERATION_ENABLED).toBe(false);
     expect(parsed.OID4VP_VERIFIER_PROFILE).toBe('oid4vp-1.0-base');
+  });
+});
+
+describe('federationEnvSchema (OID4VP_REQUESTED_VCT — #239)', () => {
+  it('is undefined when unset — the wallet-login entry point is then not offered', () => {
+    // No default is possible: a DCQL query with no type constraint asks a wallet
+    // for any credential it holds (OID4VP 1.0 §15.6), and an invented default
+    // would make a deployment request a credential nobody chose to accept.
+    expect(federationEnvSchema.parse({}).OID4VP_REQUESTED_VCT).toBeUndefined();
+  });
+
+  it.each(['', '   '])('reads %o as unset, like the other optional federation values', (raw) => {
+    expect(federationEnvSchema.parse({ OID4VP_REQUESTED_VCT: raw }).OID4VP_REQUESTED_VCT).toBe(
+      undefined
+    );
+  });
+
+  it('splits a comma-separated list and trims each entry', () => {
+    const parsed = federationEnvSchema.parse({
+      OID4VP_REQUESTED_VCT: 'urn:eudi:pid:1, https://example.org/vct/employee ,',
+    });
+    expect(parsed.OID4VP_REQUESTED_VCT).toEqual([
+      'urn:eudi:pid:1',
+      'https://example.org/vct/employee',
+    ]);
+  });
+
+  it('rejects a value that lists no usable entry', () => {
+    expect(() => federationEnvSchema.parse({ OID4VP_REQUESTED_VCT: ',,' })).toThrow();
+  });
+
+  it('rejects an entry containing whitespace', () => {
+    expect(() => federationEnvSchema.parse({ OID4VP_REQUESTED_VCT: 'urn:pid 1' })).toThrow();
+  });
+});
+
+describe('federationEnvSchema (OID4VP_WALLET_INVOCATION_ENDPOINT — #239)', () => {
+  it('defaults to the registered custom scheme', () => {
+    expect(federationEnvSchema.parse({}).OID4VP_WALLET_INVOCATION_ENDPOINT).toBe('openid4vp://');
+  });
+
+  it('accepts a wallet universal link', () => {
+    const parsed = federationEnvSchema.parse({
+      OID4VP_WALLET_INVOCATION_ENDPOINT: 'https://wallet.example/authorize',
+    });
+    expect(parsed.OID4VP_WALLET_INVOCATION_ENDPOINT).toBe('https://wallet.example/authorize');
+  });
+
+  it.each([
+    'openid4vp://',
+    'openid4vp://authorize',
+    'haip://',
+    'eudi-wallet://authorize',
+    'mdoc-openid4vp://',
+    'x-wallet.vendor+v2://go',
+    'https://wallet.example/authorize?x=1',
+  ])('accepts the genuine wallet scheme %j', (raw) => {
+    expect(
+      federationEnvSchema.parse({ OID4VP_WALLET_INVOCATION_ENDPOINT: raw })
+        .OID4VP_WALLET_INVOCATION_ENDPOINT
+    ).toBe(raw);
+  });
+
+  it.each([
+    ['no-scheme', 'a relative reference has no Authorization Endpoint to reach'],
+    ['openid4vp://#frag', 'a fragment never reaches the wallet'],
+    ['openid4vp:// spaced', 'whitespace cannot appear in a URI'],
+  ])('rejects %o (%s)', (raw) => {
+    expect(() => federationEnvSchema.parse({ OID4VP_WALLET_INVOCATION_ENDPOINT: raw })).toThrow();
+  });
+
+  /**
+   * The value is rendered into an `href` (`routes/ui/wallet-login.ts`), so a
+   * script-capable scheme here is an XSS primitive handed to whoever writes the
+   * deployment's environment. Operator-supplied is not the same as trusted: a
+   * leaked CI variable, a copy-pasted Helm value or a compromised secrets store
+   * all reach this string, and config parsing is where a boot must fail rather
+   * than a login page shipping `javascript:` to every user.
+   *
+   * The shape regex above cannot carry this on its own — `javascript:alert(1)`
+   * is a perfectly well-formed absolute URI.
+   */
+  it.each([
+    'javascript:alert(1)',
+    'JavaScript:alert(1)',
+    'jAvAsCrIpT:alert(document.domain)',
+    'vbscript:msgbox(1)',
+    'livescript:alert(1)',
+    'mocha:alert(1)',
+    'data:text/html;base64,PHNjcmlwdD5hbGVydCgxKTwvc2NyaXB0Pg==',
+    'DATA:text/html,<script>alert(1)</script>',
+    'blob:https://evil.example/1234',
+    'java\tscript:alert(1)',
+    'java\u0000script:alert(1)',
+    'java script:alert(1)',
+    ' javascript:alert(1)',
+    'java&#9;script:alert(1)',
+    'java&Tab;script:alert(1)',
+    '&#106;avascript:alert(1)',
+    '&#x6A;avascript:alert(1)',
+    'javascript&colon;alert(1)',
+  ])('refuses to boot on the script-capable endpoint %j', (raw) => {
+    expect(() => federationEnvSchema.parse({ OID4VP_WALLET_INVOCATION_ENDPOINT: raw })).toThrow();
   });
 });

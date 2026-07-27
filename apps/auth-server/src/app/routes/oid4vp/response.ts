@@ -13,6 +13,7 @@ import type { FastifyInstance } from 'fastify';
 import { ZodTypeProvider } from 'fastify-type-provider-zod';
 
 import { env } from '../../../config/env';
+import { publishWalletPresentationSignal } from '../../helpers/wallet-login-flow';
 import {
   type Oid4vpDirectPostRequest,
   oid4vpDirectPostRequestSchema,
@@ -106,14 +107,13 @@ export default async function (fastify: FastifyInstance) {
     },
     async (request, reply) => {
       const body = request.body as Oid4vpDirectPostRequest;
+      const stateHash = hashOid4vpState(body.state);
 
       try {
         // (1) Single-use redemption. One guarded UPDATE — see the repository.
         // Deliberately the FIRST thing that happens: a replayed or expired state
         // must be rejected before any work is done on attacker-supplied bytes.
-        const redeemed = await fastify.repositories.oid4vpRequestStates.redeem(
-          hashOid4vpState(body.state)
-        );
+        const redeemed = await fastify.repositories.oid4vpRequestStates.redeem(stateHash);
 
         if (redeemed === undefined) {
           throw new Oid4vpTransportRejection(
@@ -191,6 +191,11 @@ export default async function (fastify: FastifyInstance) {
             { requestStateId: correlated.id, walletError: body.error },
             'OID4VP wallet returned an error response'
           );
+          // Wake a browser waiting on this request (#239) so it shows a refusal
+          // instead of spinning until the request expires. The wallet's own
+          // error code is NOT carried across — it is attacker-controllable text
+          // and every failure renders the same refusal anyway.
+          await publishWalletPresentationSignal(fastify, stateHash, 'wallet_error');
           return reply.code(200).send({});
         }
 
@@ -236,6 +241,17 @@ export default async function (fastify: FastifyInstance) {
             authenticated: false,
           },
         });
+
+        // Wake the browser waiting on this request, if there is one (#239).
+        //
+        // This is a TRANSPORT signal and nothing else: it says a structurally
+        // valid `vp_token` came back for a `state` we issued. It carries no
+        // subject, no claims and no verdict, and the UI cannot turn it into a
+        // session on its own — `helpers/wallet-presentation.ts` is the seam that
+        // would, and it refuses until #234/#236/#300 land. Deliberately AFTER
+        // the audit entry and best-effort: a wallet's acknowledgement must not
+        // depend on a store the wallet has no relationship with.
+        await publishWalletPresentationSignal(fastify, stateHash, 'received');
 
         // OID4VP 1.0 §8.3 — a transport-level acknowledgement, nothing more.
         return reply.code(200).send({});

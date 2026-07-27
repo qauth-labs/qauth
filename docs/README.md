@@ -9,12 +9,13 @@ interactive **Swagger UI at `/docs`** on any running instance.
 
 ## Getting started
 
-| Guide                                         | What it covers                                                                                                                                                                      |
-| --------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| [**MCP Quickstart**](./mcp-quickstart.md)     | End-to-end: run QAuth, run a `mcp-guard`-protected MCP resource server, and complete the full discovery → register → `authorization_code` + PKCE → token handshake. **Start here.** |
-| [**Docker Guide**](./docker.md)               | Running the stack (auth-server + Postgres + Redis) in development and production; environment variables; CIMD configuration.                                                        |
-| [**Observability**](./observability.md)       | Structured logging + secret redaction, request-id tracking, auth-event logging, failed-login lockout, the Prometheus `GET /metrics` endpoint, and recommended Alertmanager rules.   |
-| [**Browser Security**](./browser-security.md) | The browser-facing hardening (T3): security headers (nonce-based CSP, HSTS, X-Frame-Options), CSRF double-submit protection, `__Host-` secure cookies, and XSS-safe HTML output.    |
+| Guide                                            | What it covers                                                                                                                                                                                          |
+| ------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [**MCP Quickstart**](./mcp-quickstart.md)        | End-to-end: run QAuth, run a `mcp-guard`-protected MCP resource server, and complete the full discovery → register → `authorization_code` + PKCE → token handshake. **Start here.**                     |
+| [**Docker Guide**](./docker.md)                  | Running the stack (auth-server + Postgres + Redis) in development and production; environment variables; CIMD configuration.                                                                            |
+| [**Observability**](./observability.md)          | Structured logging + secret redaction, request-id tracking, auth-event logging, failed-login lockout, the Prometheus `GET /metrics` endpoint, and recommended Alertmanager rules.                       |
+| [**Browser Security**](./browser-security.md)    | The browser-facing hardening (T3): security headers (nonce-based CSP, HSTS, X-Frame-Options), CSRF double-submit protection, `__Host-` secure cookies, and XSS-safe HTML output.                        |
+| [**Wallet sign-in (OID4VP)**](./wallet-login.md) | The browser wallet-login flow (T4): the required asserted-identifier step (ADR-009), the QR / deep-link targeting decision, fail-closed profile gating, and the authentication seam that still refuses. |
 
 ## OAuth 2.1 / OIDC
 
