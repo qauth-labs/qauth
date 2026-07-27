@@ -491,7 +491,7 @@ condition fails, and `isModeWithinCap` returns `false` for a `null` cap
 defaulting to a mode (`apps/auth-server/src/app/helpers/scope-modes.ts:76`). Cap ordering is
 `readonly < admin < exec`, and a cap is a maximum, not an exact match
 (`apps/auth-server/src/app/helpers/scope-modes.ts:59`). See
-[Agent authorization](/docs/agent-authorization.md) for the full layer.
+[Agent authorization](/integrate/agent-authorization/) for the full layer.
 
 ### The gap this surface actually has
 
@@ -1174,7 +1174,7 @@ Stated plainly, so nobody mistakes silence for a decision:
 - [Known gaps](/portal/known-gaps/) — the baseline this specification is written against.
 - [Environment-Aware Authorization](/operate/environment-authorization/) — the ADR-008 policy
   Surface B renders.
-- [Agent authorization](/docs/agent-authorization.md) — the ADR-007 layer Surface C makes visible.
+- [Agent authorization](/integrate/agent-authorization/) — the ADR-007 layer Surface C makes visible.
 - [Observability](/operate/observability/) — what the Prometheus registry is for, and why the
   metrics tiles do not use it.
 - [API reference](/integrate/api-reference/) — where `/api/audit` must be documented when it ships.

@@ -274,7 +274,7 @@ curl -s -X POST http://localhost:3000/oauth/token \
 > auth **extension** ([ext-auth](https://github.com/modelcontextprotocol/ext-auth)),
 > not core MCP — QAuth provides it as a value-add. This section is the wire-level
 > reference; for the end-to-end agent story (registering an agent, scope modes,
-> step-up, and audit) see the [Agent Authorization guide](/docs/agent-authorization.md).
+> step-up, and audit) see the [Agent Authorization guide](/integrate/agent-authorization/).
 
 An **agent** client exchanges a user's access token (`subject_token`) for a
 delegated access token whose `sub` is the user and whose `act` (actor) claim
@@ -433,7 +433,7 @@ QAuth returns standard OAuth error codes (RFC 6749 §5.2):
 
 - [MCP Quickstart](/integrate/mcp-quickstart/) — end-to-end QAuth → MCP handshake.
 - [Hosted UI](/integrate/hosted-ui/) — the login, consent, and resume screens.
-- [Agent Authorization](/docs/agent-authorization.md) — the agent-native layer
+- [Agent Authorization](/integrate/agent-authorization/) — the agent-native layer
   (`is_agent`, scope modes, step-up, per-agent audit) built on these grants.
 - [`@qauth-labs/mcp-guard`](/libs/fastify/plugins/mcp-guard/README.md) —
   resource-server SDK that validates these tokens.

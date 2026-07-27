@@ -203,11 +203,11 @@ Key contract facts:
   an `act` claim names the agent (nested for chained delegation). Agent-only and
   default-deny; scope/audience are preserved or narrowed, never widened. See the
   [Token Exchange](/integrate/oauth-flow/#token-exchange--agent-on-behalf-of-delegation-rfc-8693)
-  section and the [Agent Authorization guide](/docs/agent-authorization.md).
+  section and the [Agent Authorization guide](/integrate/agent-authorization/).
 - Dynamic Client Registration (`POST /oauth/register`) accepts the optional
   QAuth extension field `is_agent` (boolean, default `false`) marking the client
   as an AI agent; it is echoed back in the response. The flag is self-asserted
-  and untrusted — see [Agent Authorization](/docs/agent-authorization.md#1-agent-client-type-is_agent).
+  and untrusted — see [Agent Authorization](/integrate/agent-authorization/#1-agent-client-type-is_agent).
 
 ### Token response (`POST /oauth/token`, `200 OK`)
 
@@ -581,7 +581,7 @@ that any credential was verified or any user authenticated.
 
 - [OAuth 2.1 Flow](/integrate/oauth-flow/) — worked flows with `curl`.
 - [Hosted UI](/integrate/hosted-ui/) — the login, consent, and resume screens.
-- [Agent Authorization](/docs/agent-authorization.md) — the agent-native layer
+- [Agent Authorization](/integrate/agent-authorization/) — the agent-native layer
   (`is_agent`, Token Exchange, scope modes, step-up, audit).
 - [Code Examples](/integrate/code-examples/) — runnable Node/TS and browser clients.
 - [MCP Quickstart](/integrate/mcp-quickstart/) — protect an MCP server end-to-end.

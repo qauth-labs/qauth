@@ -132,5 +132,5 @@ one place:
 
 - [ADR-008: Environment-Aware Authorization Posture](/docs/adr/008-environment-aware-authorization.md) — rationale, fail-safe design, prior art.
 - [ADR-007: MCP-First Positioning](/docs/adr/007-mcp-first-positioning.md) — the operator-set `max_agent_mode` precedent this reuses.
-- [Agent Authorization](/docs/agent-authorization.md) — agent step-up, which this posture enforces in `staging`/`production`.
+- [Agent Authorization](/integrate/agent-authorization/) — agent step-up, which this posture enforces in `staging`/`production`.
 - [Browser Security](/operate/browser-security/) — the T3 hardening bundle that the production profile turns on.

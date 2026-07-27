@@ -329,7 +329,7 @@ even if both trust the same QAuth instance.
   detail, with copy-paste `curl` for every step (build your own client).
 - [Hosted UI](/integrate/hosted-ui/) — the login, consent, and resume screens an
   end user actually sees during that flow.
-- [Agent Authorization](/docs/agent-authorization.md) — when an **AI agent** acts on
+- [Agent Authorization](/integrate/agent-authorization/) — when an **AI agent** acts on
   behalf of a user: the `is_agent` client type, RFC 8693 token-exchange
   delegation, agent scope modes, and step-up before dangerous operations.
 - [`@qauth-labs/mcp-guard` README](/libs/fastify/plugins/mcp-guard/README.md) —
