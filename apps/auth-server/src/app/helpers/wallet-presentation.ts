@@ -19,7 +19,29 @@ import { env } from '../../config/env';
 import { resolveWalletAccount } from './wallet-account';
 import { createWalletAccountLookup } from './wallet-account-lookup';
 import { readWalletPresentationStash } from './wallet-login-flow';
-import { resolveRealmTrustRegistry, resolveWalletVerificationSetup } from './wallet-verification';
+import {
+  hasCredentialStatusAuditContext,
+  resolveRealmTrustRegistry,
+  resolveWalletVerificationSetup,
+  runWithCredentialStatusAuditContext,
+} from './wallet-verification';
+
+/**
+ * Establish a realm-scoped status audit correlation, unless a richer one exists.
+ *
+ * A route that wrapped this call already supplied the REQUEST logger, whose
+ * lines carry Fastify's `reqId`; overwriting it with the server logger would
+ * trade correlation for none. So this only fills a gap (#378).
+ *
+ * @param fastify - server instance, for its logger.
+ * @param realmId - the realm the presentation was made in.
+ * @param fn - the verification call to correlate.
+ * @returns whatever `fn` returns.
+ */
+function withStatusAuditCorrelation<T>(fastify: FastifyInstance, realmId: string, fn: () => T): T {
+  if (hasCredentialStatusAuditContext()) return fn();
+  return runWithCredentialStatusAuditContext({ log: fastify.log, realmId }, fn);
+}
 
 /**
  * The wallet AUTHENTICATION and ACCOUNT-LINKING seam (issues #239, #235, #238).
@@ -217,25 +239,43 @@ async function verifyPresentedCredential(
     return null;
   }
 
+  const trustRegistry = await resolveRealmTrustRegistry(fastify, request.realmId);
+
   let validated: readonly ValidatedCredential[];
   try {
-    validated = await verifyWalletPresentations(presentations, {
-      profile: setup.profile,
-      clientId: request.clientId,
-      nonce: request.nonce,
-      dcqlQuery,
-      resolveIssuerKey: setup.resolveIssuerKey,
-      trustRegistry: await resolveRealmTrustRegistry(fastify, request.realmId),
-      onRefusal: (refusal) => {
-        fastify.log.warn(
-          { gate: refusal.gate, detail: refusal.detail, realmId: request.realmId },
-          'wallet presentation refused'
-        );
-      },
-    });
+    // Correlate this deployment's status audit events (#378). A route that
+    // already established a request-scoped correlation keeps it — its logger
+    // carries `reqId`, which this one cannot. This fallback exists so a caller
+    // without a request context (`linkWalletPresentation`) still stamps the
+    // realm rather than emitting an uncorrelatable line.
+    validated = await withStatusAuditCorrelation(fastify, request.realmId, () =>
+      verifyWalletPresentations(presentations, {
+        profile: setup.profile,
+        clientId: request.clientId,
+        nonce: request.nonce,
+        dcqlQuery,
+        resolveIssuerKey: setup.resolveIssuerKey,
+        trustRegistry,
+        // Credential revocation (#297/#378). The per-deployment singleton, not a
+        // per-request object: it owns the verified-list cache, the in-flight
+        // coalescing map and the endpoint breaker. Its refusals are reported
+        // through its own `onAudit` sink rather than `onRefusal` below — see
+        // `wallet-verification.ts`.
+        credentialStatus: setup.credentialStatus,
+        onRefusal: (refusal) => {
+          fastify.log.warn(
+            { gate: refusal.gate, detail: refusal.detail, realmId: request.realmId },
+            'wallet presentation refused'
+          );
+        },
+      })
+    );
   } catch {
     // `verifyWalletPresentations` throws the single non-enumerating refusal and
-    // has already reported the reason through `onRefusal`.
+    // has already reported the reason — through `onRefusal` above for the
+    // validation and issuer-trust gates, and through the status checker's own
+    // `onAudit` sink for a credential-status refusal (#297/#378), which
+    // deliberately keeps its fine-grained reason off the error.
     return null;
   }
 

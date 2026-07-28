@@ -132,6 +132,18 @@ export interface IssueCredentialOptions {
   readonly notBefore?: number;
   /** Reuse an existing holder key — e.g. a re-issued credential for one device. */
   readonly holderKeys?: MockWalletKeys;
+  /**
+   * The `status` claim (Token Status List, HAIP §6.1, #297) — build it with
+   * `MockStatusList.statusClaimFor(idx)`.
+   *
+   * Signed in the CLEAR and never made selectively disclosable, because
+   * SD-JWT VC §3.2.2.2 forbids it: a status pointer a holder could withhold is
+   * one the verifier's status checker never sees, and QAuth refuses such a
+   * credential outright. Omitted entirely when absent, which is a credential
+   * naming no revocation mechanism — permitted by base OID4VP 1.0 and refused
+   * under a profile whose `requireCredentialStatus` is `true`.
+   */
+  readonly status?: Record<string, unknown>;
 }
 
 /** The `vct` the mock issuer signs unless told otherwise. */
@@ -214,6 +226,7 @@ export async function createMockIssuer(
           iat: Math.floor(Date.now() / 1000),
           ...(options.notBefore === undefined ? {} : { nbf: options.notBefore }),
           ...(options.expiresAt === undefined ? {} : { exp: options.expiresAt }),
+          ...(options.status === undefined ? {} : { status: options.status }),
           _sd_alg: 'sha-256',
           _sd: digests,
           cnf: { jwk: holderKeys.jwk },

@@ -91,7 +91,7 @@ const hypotheticalMdocAdapter: CredentialFormatAdapter = {
         // and structurally different (#308), so this hypothetical adapter states
         // the only honest thing: it established nothing.
         keyStorageAssurance: NO_KEY_STORAGE_ASSURANCE,
-        statusChecked: false,
+        statusChecked: 'not-required',
       },
     };
   },
@@ -169,6 +169,8 @@ describe('registering a second Credential Format', () => {
         signatureAlgorithms: ['ES256'],
         permittedFormats: [MSO_MDOC],
         resolveIssuerKey: async () => undefined,
+        credentialStatus: undefined,
+        requireCredentialStatus: false,
       },
       REGISTRY_WITH_MDOC
     );

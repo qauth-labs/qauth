@@ -25,6 +25,14 @@ const { envMock } = vi.hoisted(() => ({
     OID4VP_SUBJECT_CLAIM_ISSUERS: undefined as readonly string[] | undefined,
     OID4VP_TRUSTED_ISSUERS: {} as Record<string, readonly string[]>,
     OID4VP_ISSUER_JWKS: {} as Record<string, readonly Record<string, unknown>[]>,
+    // Credential revocation (#297/#378). Empty on both halves is the shipped
+    // default: no checker is built, nothing is fetched, and
+    // `assurance.statusChecked` reports `'not-required'`. Under
+    // `oid4vp-1.0-base` — the profile every test here selects — that is the
+    // documented posture; `haip-1.0` would not have booted.
+    OID4VP_STATUS_LIST_TRUST_ANCHORS: [] as readonly string[],
+    OID4VP_STATUS_LIST_TRUST_ANCHORS_PATH: [] as readonly string[],
+    OID4VP_STATUS_LIST_URI_ALLOWLIST: [] as readonly string[],
   },
 }));
 

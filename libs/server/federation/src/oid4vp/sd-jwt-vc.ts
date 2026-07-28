@@ -40,11 +40,36 @@
  *
  * Since #308 a `VerifierProfile` may additionally require that the holder's key
  * be shown to live in a certified secure cryptographic device (HAIP §9.2 /
- * §4.5.1). That gate is `attestation/key-storage-assurance.ts` and it runs LAST,
- * after all four proofs above: it asks where a key lives, which is only a
- * meaningful question about a key whose control has already been proved. It is
- * inert under `oid4vp-1.0-base`, where the profile forbids the capability
- * outright and a base-profile presentation is unaffected by any of it.
+ * §4.5.1). That gate is `attestation/key-storage-assurance.ts` and it runs after
+ * all four proofs above: it asks where a key lives, which is only a meaningful
+ * question about a key whose control has already been proved. It is inert under
+ * `oid4vp-1.0-base`, where the profile forbids the capability outright and a
+ * base-profile presentation is unaffected by any of it.
+ *
+ * ## A sixth gate, and the reason it is LAST of all
+ *
+ * Since #297 a deployment may thread a `CredentialStatusChecker` through the
+ * context, and revocation (Token Status List, HAIP §6.1) is then checked here
+ * rather than nowhere. It runs after every gate above, for two independent
+ * reasons and both are load-bearing:
+ *
+ *  - **The `status` claim is attacker-authored bytes until the Issuer signature
+ *    covers it.** It names a URI this process will dial. Reading it before the
+ *    JWS verifies would hand any wallet an outbound request to a host of its
+ *    choosing — an SSRF primitive — so the fetch happens strictly after
+ *    verification, and reads the VERIFIED payload rather than the disclosed one.
+ *    {@link NON_SELECTIVELY_DISCLOSABLE_CLAIMS} closes the other half of that
+ *    door: a `status` may not arrive through a Disclosure at all.
+ *  - **It is the only gate that can leave this machine.** Every check above is
+ *    local arithmetic on bytes already in hand. Running the network last means a
+ *    malformed, expired, unsigned or unbound Presentation is refused without
+ *    anyone dialling anything on its behalf.
+ *
+ * Fail-CLOSED, and that contract belongs to the checker, not to this call site:
+ * an unreachable endpoint, an unverifiable Status List Token, an open circuit
+ * and an out-of-range index are all refusals. There is no timeout fallback and
+ * no stale-on-error path here, because adding one anywhere would let an attacker
+ * who can degrade a third party's availability un-revoke credentials.
  *
  * ## Bounded before it is walked
  *
@@ -73,6 +98,7 @@ import {
 import type { DcqlCredentialQuery } from './dcql';
 import { rejectPresentation } from './presentation-rejection';
 import type {
+  CredentialStatusEvidence,
   CredentialValidityWindow,
   PresentationValidationContext,
   ValidatedCredential,
@@ -991,6 +1017,70 @@ async function resolveKeyStorageAssurance(
 }
 
 /**
+ * Run the credential-status gate (#297), fail-closed.
+ *
+ * The SIXTH gate and the last one — see the module JSDoc for why nothing may be
+ * fetched before every proof above has passed. Two things it deliberately does
+ * NOT do:
+ *
+ *  - **It does not re-implement the checker's policy.** Caching, in-flight
+ *    coalescing, the endpoint breaker and the "anything that is not a positively
+ *    read `VALID` bit is a refusal" rule are all properties of the checker
+ *    INSTANCE. A timeout fallback or a stale-cache-on-error path added here
+ *    would silently undo the whole of #297.
+ *  - **It does not catch the checker's error.** `assertCredentialNotRevoked`
+ *    throws an `InvalidCredentialsError` whose message already IS
+ *    `ISSUER_TRUST_REJECTION_MESSAGE`, so #236's single non-enumerating refusal
+ *    survives untouched, and the precise server-side reason reaches the operator
+ *    through the checker's own `onAudit` sink. Re-shaping it into a
+ *    {@link import('./presentation-rejection').PresentationValidationRejection}
+ *    would gain a `detail` string whose only honest content is the wallet's
+ *    chosen status list URI and index.
+ *
+ * The one refusal raised HERE is the misconfiguration: a profile that mandates a
+ * status mechanism with no checker wired. Answering `'not-required'` to that
+ * would be the exact defect this gate exists to close — a deployment whose
+ * configuration says revocation is mandatory and whose code never reads a bit.
+ *
+ * @param status - the `status` claim FROM THE VERIFIED Issuer-signed payload.
+ * @param context - the validation context; see
+ * {@link PresentationValidationContext.credentialStatus}.
+ * @returns which of the two accepting outcomes was reached.
+ */
+async function resolveCredentialStatusEvidence(
+  status: unknown,
+  context: PresentationValidationContext
+): Promise<CredentialStatusEvidence> {
+  // `=== true` rather than a truthiness test: the member is optional, and its
+  // absence is the base-profile posture, never a mandate this context invented.
+  const statusRequired = context.requireCredentialStatus === true;
+  const checker = context.credentialStatus;
+
+  if (checker === undefined) {
+    if (statusRequired) {
+      throw rejectPresentation(
+        'credential-status-unestablished',
+        'the active verifier profile requires a credential status mechanism (HAIP §6.1) and this deployment wired no status checker, so no status could be established for any credential'
+      );
+    }
+
+    return 'not-required';
+  }
+
+  // The posture is passed EXPLICITLY on every call, so the profile decides and
+  // the checker's own `statusRequired` default is never what answers.
+  await checker.assertCredentialNotRevoked(status, { statusRequired });
+
+  // Returning at all means one of exactly two things, and the credential says
+  // which. With no `status` claim the checker can only have accepted through its
+  // "not required, nothing to consult" branch — under `statusRequired` it would
+  // have refused. With one, the only non-throwing path through the checker is a
+  // bit it fetched, verified and read as VALID; a malformed claim, an
+  // unreachable list and every non-VALID value refuse under BOTH postures.
+  return status === undefined || status === null ? 'not-required' : 'checked';
+}
+
+/**
  * Validate one SD-JWT VC Presentation.
  *
  * @param presentation - the compact serialization, exactly as the wallet sent it.
@@ -998,8 +1088,15 @@ async function resolveKeyStorageAssurance(
  * @param query - that Credential Query, for the `vct` constraint it carries.
  * @param context - bindings and policy — see {@link PresentationValidationContext}.
  * @returns the {@link ValidatedCredential} — a cryptographic finding, NOT an identity.
- * @throws PresentationValidationRejection on every refusal, carrying a distinct
- * server-side reason and the single non-enumerating client error.
+ * @throws PresentationValidationRejection on every refusal this module reaches
+ * itself, carrying a distinct server-side reason and the single non-enumerating
+ * client error via `toClientError()`.
+ * @throws InvalidCredentialsError — and ONLY from the credential-status gate,
+ * propagated unwrapped from `CredentialStatusChecker.assertCredentialNotRevoked`
+ * (#297). It is already the byte-identical refusal `toClientError()` produces,
+ * so the wire is uniform either way; a caller that logs `reason`/`detail` should
+ * expect this one to carry neither, by design. See
+ * {@link resolveCredentialStatusEvidence}.
  */
 export async function validateSdJwtVcPresentation(
   presentation: string,
@@ -1197,6 +1294,15 @@ export async function validateSdJwtVcPresentation(
     now
   );
 
+  // LAST, and after `verifyKeyBinding` above by construction: this is the only
+  // gate that opens a socket, and the URI it dials comes out of the credential.
+  // `verifiedPayload` — not `disclosedPayload` — is deliberate: the claim must be
+  // one the Issuer signature covers, and `assertNoForbiddenSelectiveDisclosure`
+  // has already refused any presentation that tried to introduce or overwrite
+  // `status` through a Disclosure, so the two agree here and only one of them
+  // says so structurally.
+  const statusChecked = await resolveCredentialStatusEvidence(verifiedPayload['status'], context);
+
   const claims: Record<string, unknown> = {};
 
   for (const [key, value] of Object.entries(disclosedPayload)) {
@@ -1218,7 +1324,7 @@ export async function validateSdJwtVcPresentation(
       keyBindingAlgorithm: keyBinding.algorithm,
       disclosedClaimCount: byDigest.size,
       keyStorageAssurance,
-      statusChecked: false,
+      statusChecked,
     }),
   };
 }

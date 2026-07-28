@@ -211,7 +211,13 @@ describe('#234 safety boundary — a VALID credential authenticates nobody', () 
     expect(validated[0]).not.toHaveProperty('rawClaims');
     // The eIDAS LoA is derived downstream from the credential AND its trusted
     // issuer (#237); this layer reports evidence only.
-    expect(validated[0].assurance.statusChecked).toBe(false);
+    //
+    // `'not-required'` rather than the literal `false` since #378: this context
+    // wires no `CredentialStatusChecker` and the base profile mandates none, so
+    // nobody looked. The distinction is the point — `'checked'` would mean a
+    // status-list bit was fetched, verified and positively read `VALID`, and
+    // `statusChecked` must never let a consumer read "nobody looked" as that.
+    expect(validated[0].assurance.statusChecked).toBe('not-required');
   });
 
   it('surfaces the issuer WITHOUT treating it as trusted', async () => {

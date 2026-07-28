@@ -127,7 +127,15 @@ export interface CredentialFormatAdapter {
    * format-specific `meta` from it (`vct_values` here, `doctype_value` later),
    * which is why the query is passed whole rather than pre-interpreted.
    * @param context - bindings and policy — see {@link PresentationValidationContext}.
-   * @throws PresentationValidationRejection on every refusal.
+   * @throws PresentationValidationRejection on every refusal the adapter reaches
+   * itself.
+   * @throws InvalidCredentialsError when the context carries a
+   * `CredentialStatusChecker` and it refuses (#297). Propagated unwrapped and
+   * deliberately: that error is already the byte-identical refusal
+   * `PresentationValidationRejection.toClientError()` produces, and its precise
+   * reason is kept off the error and delivered to the checker's `onAudit` sink
+   * instead. A caller that branches on `reason`/`detail` must therefore treat a
+   * plain `InvalidCredentialsError` as a refusal too, not as a fault.
    */
   validatePresentation(
     entry: PresentedCredential,

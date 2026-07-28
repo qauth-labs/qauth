@@ -319,6 +319,12 @@ export function fixtureValidationContext(
     resolveIssuerKey: createStaticIssuerKeyResolver([
       { issuer: issued.issuer, jwks: [issued.issuerKeys.jwk] },
     ]),
+    // Both stated, because the context requires them stated (#378). The clean
+    // path is `oid4vp-1.0-base`: no checker wired, and a credential carrying no
+    // `status` claim is therefore accepted unchecked. A test exercising
+    // revocation overrides both.
+    credentialStatus: undefined,
+    requireCredentialStatus: false,
     ...overrides,
   };
 }

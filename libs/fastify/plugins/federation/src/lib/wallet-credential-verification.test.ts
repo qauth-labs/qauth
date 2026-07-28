@@ -71,6 +71,10 @@ function optionsOf(overrides: Partial<Parameters<typeof verifyWalletPresentation
     dcqlQuery: QUERY,
     resolveIssuerKey: async () => undefined,
     trustRegistry: TRUST_EVERYTHING,
+    // Stated, not omitted (#378) — the seam requires every caller to say
+    // whether it wired a checker. These cases exercise the earlier gates, which
+    // refuse before a status list is ever consulted.
+    credentialStatus: undefined,
     ...overrides,
   };
 }
@@ -232,13 +236,21 @@ describe('createConfiguredIssuerKeyResolver (#234)', () => {
 describe('verifyWalletPresentations — the seam authenticates nobody', () => {
   it('never consults the account store, the session, or anything user-shaped', async () => {
     // Structural: the options object carries a profile, two request bindings, a
-    // query, a key backend and a trust registry — and nothing that names a
-    // person. A trusted credential is a finding about a document; which USER it
-    // belongs to is #300's question.
+    // query, a key backend, a trust registry and a revocation checker — and
+    // nothing that names a person. A trusted credential is a finding about a
+    // document; which USER it belongs to is #300's question.
+    //
+    // `credentialStatus` (#378) belongs on this list for the same reason
+    // `trustRegistry` does: it is DEPLOYMENT configuration, resolved from env
+    // before any presentation arrives. It is asserted here rather than excused
+    // because this list is the guard that would catch a user-shaped input being
+    // added to the seam, and a guard nobody updates deliberately is a guard
+    // someone eventually updates carelessly.
     const options = optionsOf();
 
     expect(Object.keys(options).sort()).toEqual([
       'clientId',
+      'credentialStatus',
       'dcqlQuery',
       'nonce',
       'profile',

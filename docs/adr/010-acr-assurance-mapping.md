@@ -165,8 +165,12 @@ no change to this module or to any consumer.
 - Credential status (#297) is not yet an input to the assurance decision. Wiring
   revocation checking into the level — e.g. refusing `high` for a credential whose
   status was never checked — is a tightening this ADR anticipates but does not
-  make, because `CredentialAssuranceSignal.statusChecked` is still the literal
-  `false`.
+  make. As of #378 the input now exists:
+  `CredentialAssuranceSignal.statusChecked` is `'checked' | 'not-required'`
+  rather than the literal `false`, so an `IssuerAssuranceEntry.requiresStatusCheck`
+  knob mirroring `requiresKeyStorage` could gate `substantial`/`high` on
+  `statusChecked === 'checked'`. That remains a separate decision; nothing in the
+  assurance path reads the signal today.
 
 ## Related
 

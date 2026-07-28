@@ -45,6 +45,11 @@ vi.mock('@qauth-labs/fastify-plugin-federation', async (importOriginal) => {
 vi.mock('./wallet-verification', () => ({
   resolveWalletVerificationSetup: vi.fn(),
   resolveRealmTrustRegistry: vi.fn().mockResolvedValue({ isTrusted: () => true }),
+  // The status audit correlation (#378) is real behaviour under test elsewhere;
+  // here it must simply be transparent, so the runner invokes its callback and
+  // reports no ambient scope.
+  hasCredentialStatusAuditContext: vi.fn().mockReturnValue(false),
+  runWithCredentialStatusAuditContext: vi.fn((_scope: unknown, fn: () => unknown) => fn()),
 }));
 
 import {
@@ -92,7 +97,9 @@ const BRANDED_CREDENTIAL: ValidatedCredential = {
     issuerSignatureAlgorithm: 'ES256',
     keyBindingAlgorithm: 'ES256',
     disclosedClaimCount: 1,
-    statusChecked: false,
+    // #297's evidence, widened off the literal `false` by #378. Nothing in this
+    // fixture read a status list bit.
+    statusChecked: 'not-required',
     keyStorageAssurance: { assurance: 'none' },
   },
 };

@@ -2,8 +2,10 @@
 
 A checklist for validating QAuth's OID4VP verifier against a **real** wallet, and
 a record of what is and is not known about which wallets can do it today. Issue
-#240; complements the automated suite in
-`apps/auth-server/src/app/wallet-federation.integration.test.ts`.
+#240; complements the automated suites in
+`apps/auth-server/src/app/wallet-federation.integration.test.ts` and
+`apps/auth-server/src/app/wallet-federation-status.integration.test.ts` (the
+revocation path, #297/#378).
 
 > **This procedure has not been executed.** Nothing below is a report of a
 > successful interop run. It is the procedure to follow when someone does one,
@@ -66,12 +68,22 @@ OID4VP_SUBJECT_RESOLUTION=asserted-lookup
 OID4VP_SUBJECT_BINDING_CLAIMS=<claims the credential always discloses>
 # Optional, for the acr checks:
 OID4VP_ISSUER_ASSURANCE={"master":{"<issuer>":{"level":"substantial"}}}
+# Optional under this profile, for the revocation checks (#297). Both or
+# neither — setting exactly one fails the boot:
+OID4VP_STATUS_LIST_TRUST_ANCHORS_PATH=/etc/qauth/status-list-anchors.pem
+OID4VP_STATUS_LIST_URI_ALLOWLIST=https://<issuer host>/statuslists
 ```
 
-Three variables answer three different questions and configuring one does not
+Four variables answer four different questions and configuring one does not
 imply another: `OID4VP_VERIFIER_PROFILE` is _who are we, to a wallet?_,
-`OID4VP_ISSUER_JWKS` is _which key does an issuer sign with?_, and
-`OID4VP_TRUSTED_ISSUERS` is _which issuers does this realm accept?_.
+`OID4VP_ISSUER_JWKS` is _which key does an issuer sign with?_,
+`OID4VP_TRUSTED_ISSUERS` is _which issuers does this realm accept?_, and the
+`OID4VP_STATUS_LIST_*` pair is _which CA may vouch for a status issuer, and
+where may status lists be fetched from?_.
+
+Leaving the status pair unset means no revocation checking, which is what every
+release before #378 did. `haip-1.0` declares `requireCredentialStatus: true` and
+refuses to START without both.
 
 ## Checklist — base profile
 
@@ -123,6 +135,28 @@ Each item is pass/fail. Record the wallet's behaviour even when it matches.
       claims the credential disclosed, and `expires_at` matching the credential's
       `exp` (NULL when it has none).
 
+### Credential status, as the real issuer publishes it (#297/#378)
+
+Record what the issuer actually does, not only whether QAuth accepts it. This is
+an interoperability finding in its own right: a verifier that checks revocation
+against issuers who publish none has bought nothing.
+
+- [ ] Does the presented credential carry a `status` claim at all? If it does,
+      is it a `status_list` (HAIP §6.1 requires that when `status` is present),
+      and what is `status_list.uri`?
+- [ ] Is that URI reachable over HTTPS and does it serve
+      `application/statuslist+jwt`? A wallet ecosystem that publishes lists
+      behind an interactive login or an unauthenticated-but-HTML endpoint cannot
+      be revocation-checked at all.
+- [ ] Whose certificate signs the Status List Token, and does it chain to a CA
+      you can obtain and put in `OID4VP_STATUS_LIST_TRUST_ANCHORS`? Note the
+      status issuer need not be the credential issuer.
+- [ ] With both `OID4VP_STATUS_LIST_*` variables set, a live credential still
+      signs in and the server log shows exactly one `credential status check`
+      audit line per sign-in, with `cacheHit` `false` then `true`.
+- [ ] Setting exactly ONE of the two variables makes the server refuse to
+      **start**, and the message names the one that is missing.
+
 ### Returning user
 
 - [ ] Signing in a second time with the same wallet and the same asserted
@@ -136,6 +170,18 @@ Each item is pass/fail. Record the wallet's behaviour even when it matches.
 
 - [ ] An issuer not in `OID4VP_TRUSTED_ISSUERS` is refused.
 - [ ] An expired credential is refused.
+- [ ] With the `OID4VP_STATUS_LIST_*` pair configured: a credential whose Token
+      Status List bit is `INVALID` or `SUSPENDED` is refused (#297), and so is
+      one whose status endpoint is unreachable or serves a token that will not
+      verify. Fail-closed is the contract — none of these may pass. The precise
+      reason appears only in the server log, on the `credential status check`
+      audit line, and never on the wire.
+- [ ] A status refusal writes **nothing**: no `user_credentials` row, no
+      `user_attributes` rows, no session cookie. Check the database, not just the
+      rendered page — this is the criterion #378 exists to establish.
+- [ ] Every status check, **including the ones that pass**, produces one audit
+      line. A revocation-rejection count with no denominator cannot tell "we
+      started rejecting everything" from "traffic grew".
 - [ ] Re-posting the same `state` a second time is refused (single use).
 - [ ] Replaying a `vp_token` captured from an earlier flow against a **new**
       request is refused (the Key Binding JWT's `nonce` no longer matches).
@@ -180,8 +226,9 @@ When #298 lands, the additional items are:
 - [ ] The response arrives as `direct_post.jwt`, encrypted with ECDH-ES over
       P-256 and A128GCM or A256GCM, to the encryption key QAuth published in
       `client_metadata`.
-- [ ] Credential status (Token Status List, #297) is checked and a revoked
-      credential is refused.
+- [ ] A credential carrying **no** `status` claim is refused, because
+      `haip-1.0` declares `requireCredentialStatus: true`. Under the base profile
+      the same credential is accepted.
 - [ ] A key attestation (#308) is present and validated, and a credential
       without one is refused under `keyStorageAssurance: 'required'`.
 

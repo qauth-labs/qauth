@@ -57,6 +57,9 @@ import type { PresentationValidationContext, ValidatedCredential } from './valid
  * @returns one {@link ValidatedCredential} per Presentation, in input order.
  * @throws PresentationValidationRejection on the first refusal — carrying a
  * distinct server-side reason, and the single non-enumerating client error.
+ * @throws InvalidCredentialsError from the credential-status gate (#297), when
+ * `context.credentialStatus` is set and refuses. It carries no reason and no
+ * detail by design; see {@link import('./credential-format').CredentialFormatAdapter.validatePresentation}.
  */
 export async function validatePresentations(
   presentations: readonly PresentedCredential[],

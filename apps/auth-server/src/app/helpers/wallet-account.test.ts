@@ -55,7 +55,10 @@ function credentialFor(claims: Record<string, unknown>, expiresAt?: number): Val
       issuerSignatureAlgorithm: 'ES256',
       keyBindingAlgorithm: 'ES256',
       disclosedClaimCount: Object.keys(claims).length,
-      statusChecked: false,
+      // #297's evidence, widened off the literal `false` by #378.
+      // `'not-required'` is the honest value: nothing here read a status list
+      // bit, and enrolment must not read the signal either way.
+      statusChecked: 'not-required',
       // #308's evidence. `'none'` is the honest value: nothing here validated a
       // key attestation, and enrolment must not read it either way.
       keyStorageAssurance: { assurance: 'none' },

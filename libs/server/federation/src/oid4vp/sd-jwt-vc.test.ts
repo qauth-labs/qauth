@@ -126,9 +126,15 @@ describe('validateSdJwtVcPresentation — the credential validates', () => {
       // (#308). Asserted as part of the whole object rather than separately, so
       // a future change that starts inventing assurance here fails here.
       keyStorageAssurance: { assurance: 'none' },
-      statusChecked: false,
+      // Nothing was established about revocation either: this context carries
+      // no `CredentialStatusChecker` and does not set `requireCredentialStatus`,
+      // which is the `oid4vp-1.0-base` posture (#297/#378). `'not-required'`
+      // says "nobody looked" and is NOT interchangeable with `'checked'` — see
+      // `sd-jwt-vc.credential-status.test.ts` for the wired gate.
+      statusChecked: 'not-required',
     });
-    // #237 derives the eIDAS LoA; #297 flips `statusChecked`. Neither happens here.
+    // #237 derives the eIDAS LoA. That still does not happen here: this layer
+    // reports evidence and never a level.
     expect(assurance).not.toHaveProperty('assuranceLevel');
   });
 

@@ -28,7 +28,7 @@ function credential(identifier: string, credentialType: string = TEST_VCT): Vali
       issuerSignatureAlgorithm: 'ES256',
       keyBindingAlgorithm: 'ES256',
       disclosedClaimCount: 1,
-      statusChecked: false,
+      statusChecked: 'not-required',
       keyStorageAssurance: NO_KEY_STORAGE_ASSURANCE,
     },
   };

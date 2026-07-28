@@ -1,5 +1,224 @@
+import { readFileSync } from 'node:fs';
+
 import { isScriptCapableUrl } from '@qauth-labs/shared-validation';
 import { z } from 'zod';
+
+/**
+ * Longest raw inline PEM bundle accepted for status-list anchors, in characters.
+ *
+ * Generous, because a bundle is several certificates and each is ~2 KiB of
+ * base64. It is a DoS bound on a variable this process reads once, not a policy.
+ */
+const MAX_STATUS_LIST_ANCHOR_BUNDLE_LENGTH = 256 * 1024;
+
+/** Longest `_PATH` value accepted. A path longer than this cannot name a file. */
+const MAX_STATUS_LIST_ANCHOR_PATH_LENGTH = 4096;
+
+/** Most status-list trust anchors one deployment may configure. */
+const MAX_STATUS_LIST_ANCHORS = 32;
+
+/** Longest raw `OID4VP_STATUS_LIST_URI_ALLOWLIST` value accepted, in characters. */
+const MAX_STATUS_LIST_ALLOWLIST_LENGTH = 64 * 1024;
+
+/**
+ * Longest allowlist entry accepted, in characters.
+ *
+ * Mirrors the cap `server-federation`'s `createStatusListUriAllowlist` applies
+ * to both a prefix and the candidate URI matched against it, so an entry here
+ * can never be longer than a URI that could match it.
+ */
+const MAX_STATUS_LIST_URI_LENGTH = 2048;
+
+/** Most status list URI prefixes one deployment may permit. */
+const MAX_STATUS_LIST_URI_PREFIXES = 64;
+
+/** No PEM anchors — the value of an unset anchor variable. */
+const NO_ANCHOR_PEMS: readonly string[] = Object.freeze([]);
+
+/** No permitted prefixes — the value of an unset allowlist variable. */
+const NO_URI_PREFIXES: readonly string[] = Object.freeze([]);
+
+/**
+ * One PEM `CERTIFICATE` block.
+ *
+ * Anchors are split into individual blocks HERE rather than handed to the
+ * federation layer as one bundle string, and that is load-bearing rather than
+ * tidy: `new X509Certificate(bundle)` parses the FIRST certificate in a
+ * multi-certificate PEM and silently ignores the rest. A three-anchor bundle
+ * passed whole would anchor one issuer and quietly refuse the other two — a
+ * trust decision the operator wrote and the server did not apply.
+ */
+const PEM_CERTIFICATE_BLOCK = /-----BEGIN CERTIFICATE-----[\s\S]*?-----END CERTIFICATE-----/g;
+
+/** Split a PEM bundle into its individual `CERTIFICATE` blocks. */
+function splitCertificateBundle(bundle: string): readonly string[] {
+  return bundle.match(PEM_CERTIFICATE_BLOCK) ?? [];
+}
+
+/**
+ * Turn a PEM bundle into individual anchors, or report why it is not one.
+ *
+ * Shape only: that each block is a PARSEABLE X.509 certificate is
+ * `createStatusListTrustAnchors`' answer (`server-federation`), which throws on
+ * a malformed anchor rather than dropping it. Duplicating certificate parsing
+ * here would put the two rule sets on a drift course, and `server-config`
+ * carries no dependency on `server-federation` (config is the lowest layer).
+ */
+function parseCertificateBundle(
+  bundle: string,
+  variable: string,
+  ctx: z.RefinementCtx
+): readonly string[] {
+  const anchors = splitCertificateBundle(bundle);
+
+  if (anchors.length === 0) {
+    ctx.addIssue({
+      code: 'custom',
+      message: `${variable} contains no "-----BEGIN CERTIFICATE-----" block. It must hold one or more PEM-encoded X.509 certificates`,
+    });
+    return z.NEVER;
+  }
+
+  if (anchors.length > MAX_STATUS_LIST_ANCHORS) {
+    ctx.addIssue({
+      code: 'custom',
+      message: `${variable} carries ${anchors.length} certificates, more than the ${MAX_STATUS_LIST_ANCHORS} supported`,
+    });
+    return z.NEVER;
+  }
+
+  return Object.freeze(anchors.map((pem) => pem.trim()));
+}
+
+/** Parse the INLINE status-list anchor bundle. Unset and blank yield no anchors. */
+function parseInlineStatusListAnchors(
+  raw: string | undefined,
+  ctx: z.RefinementCtx
+): readonly string[] {
+  if (raw === undefined || raw.trim() === '') return NO_ANCHOR_PEMS;
+  return parseCertificateBundle(raw, 'OID4VP_STATUS_LIST_TRUST_ANCHORS', ctx);
+}
+
+/**
+ * Read and parse the status-list anchor bundle NAMED BY A PATH.
+ *
+ * An unreadable path is a hard parse failure, exactly as `jwt.ts` treats a
+ * missing `JWT_PRIVATE_KEY_PATH`: the operator stated where the anchors live, so
+ * "the file is not there" is a misconfiguration and never an empty anchor set. A
+ * silently empty set would make an unmounted secret look like a deployment that
+ * simply configured nothing.
+ */
+function parseStatusListAnchorFile(
+  raw: string | undefined,
+  ctx: z.RefinementCtx
+): readonly string[] {
+  if (raw === undefined || raw.trim() === '') return NO_ANCHOR_PEMS;
+
+  const path = raw.trim();
+  let contents: string;
+  try {
+    contents = readFileSync(path, 'utf-8');
+  } catch (error) {
+    ctx.addIssue({
+      code: 'custom',
+      message: `OID4VP_STATUS_LIST_TRUST_ANCHORS_PATH names a file that cannot be read (${path}): ${error instanceof Error ? error.message : String(error)}`,
+    });
+    return z.NEVER;
+  }
+
+  return parseCertificateBundle(contents, 'OID4VP_STATUS_LIST_TRUST_ANCHORS_PATH', ctx);
+}
+
+/** One permitted status list URI prefix: an absolute HTTPS URL. */
+const statusListUriPrefixSchema = z
+  .url({
+    protocol: /^https$/,
+    error: 'Each OID4VP_STATUS_LIST_URI_ALLOWLIST entry must be an absolute https:// URL',
+  })
+  .max(MAX_STATUS_LIST_URI_LENGTH);
+
+/**
+ * Parse the comma-separated status list URI allowlist.
+ *
+ * Shape only, and deliberately WEAKER than what the runtime accepts:
+ * `createStatusListUriAllowlist` additionally refuses userinfo, a query string,
+ * a fragment, an IP literal and `localhost`, and it throws on an entry it
+ * refuses rather than dropping it. Tightening those rules here as well would put
+ * two rule sets on a drift course; loosening the runtime's would be a hole. What
+ * this catches is the typo an operator can fix from the message alone.
+ */
+function parseStatusListUriAllowlist(
+  raw: string | undefined,
+  ctx: z.RefinementCtx
+): readonly string[] {
+  if (raw === undefined || raw.trim() === '') return NO_URI_PREFIXES;
+
+  const entries = raw
+    .split(',')
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0);
+
+  if (entries.length === 0) {
+    ctx.addIssue({
+      code: 'custom',
+      message: 'OID4VP_STATUS_LIST_URI_ALLOWLIST must list at least one non-empty https:// prefix',
+    });
+    return z.NEVER;
+  }
+
+  if (entries.length > MAX_STATUS_LIST_URI_PREFIXES) {
+    ctx.addIssue({
+      code: 'custom',
+      message: `OID4VP_STATUS_LIST_URI_ALLOWLIST names ${entries.length} prefixes, more than the ${MAX_STATUS_LIST_URI_PREFIXES} supported`,
+    });
+    return z.NEVER;
+  }
+
+  for (const [index, entry] of entries.entries()) {
+    const result = statusListUriPrefixSchema.safeParse(entry);
+    if (!result.success) {
+      ctx.addIssue({
+        code: 'custom',
+        message: `OID4VP_STATUS_LIST_URI_ALLOWLIST entry ${index}: ${result.error.issues[0]?.message ?? 'is not a usable https:// prefix'}`,
+      });
+      return z.NEVER;
+    }
+  }
+
+  return Object.freeze(entries);
+}
+
+/** The two places status-list anchors may be authored. */
+export interface StatusListTrustAnchorEnvLike {
+  /** Anchors written inline, as a PEM bundle. */
+  readonly OID4VP_STATUS_LIST_TRUST_ANCHORS: readonly string[];
+  /** Anchors read from the file `OID4VP_STATUS_LIST_TRUST_ANCHORS_PATH` names. */
+  readonly OID4VP_STATUS_LIST_TRUST_ANCHORS_PATH: readonly string[];
+}
+
+/**
+ * The full status-list anchor set this deployment configured (#297).
+ *
+ * The two sources are UNIONED, not one-overrides-the-other. That is a deliberate
+ * deviation from `jwt.ts`'s `resolveKey`, where the `_PATH` form WINS: a signing
+ * key has exactly one correct value, so two sources must be a precedence, while
+ * a trust anchor set is a SET and an operator who mounts a CA bundle and adds
+ * one more anchor inline means both. Neither reading can silently drop
+ * configuration — union is the one that cannot.
+ *
+ * @param env - the parsed federation env.
+ * @returns every configured anchor PEM, inline first. Empty when the deployment
+ * configured none, which is the fail-closed state
+ * (`NO_STATUS_LIST_TRUST_ANCHORS` refuses every Status List Token).
+ */
+export function resolveStatusListTrustAnchorPems(
+  env: StatusListTrustAnchorEnvLike
+): readonly string[] {
+  return Object.freeze([
+    ...env.OID4VP_STATUS_LIST_TRUST_ANCHORS,
+    ...env.OID4VP_STATUS_LIST_TRUST_ANCHORS_PATH,
+  ]);
+}
 
 /**
  * Federation environment configuration (ADR-004, epic #231).
@@ -31,10 +250,32 @@ import { z } from 'zod';
  * runs with. Both must be satisfied — an enabled deployment with no profile
  * refuses to start rather than serving wallet flows with an unstated posture.
  *
+ * `OID4VP_STATUS_LIST_TRUST_ANCHORS`, its `_PATH` sibling and
+ * `OID4VP_STATUS_LIST_URI_ALLOWLIST` (#297) are the two things a
+ * `CredentialStatusChecker` cannot be built without — the anchors a Status List
+ * Token must chain to, and the SSRF boundary on the URI a credential asks QAuth
+ * to fetch. Both default to the refusing value, so an unconfigured deployment
+ * wires no checker rather than a permissive one, and a profile whose
+ * `requireCredentialStatus` is `true` refuses to START when either is missing
+ * (`assertCredentialStatusProvisioned`).
+ *
+ * There is deliberately NO variable for the checker's request timeout or its
+ * cache TTL. Both defaults are policy rather than tuning: 3 s is already a
+ * generous outbound budget on a login path where the verified-list cache and the
+ * per-origin breaker make a fetch rare, and the 300 s cache ceiling is the
+ * revocation-FRESHNESS bound — it exists to stop an issuer publishing
+ * `ttl: 86400` from choosing QAuth's freshness for it, so exposing it as an
+ * operator knob would mostly be a way to widen the window in which an already
+ * revoked credential still authenticates. `CredentialStatusCheckerConfig`
+ * carries both knobs for the day a concrete deployment needs one; until then
+ * every deployment gets the same, reviewed values.
+ *
  * Kept a PLAIN `z.object` — no schema-level `.superRefine()`/`.transform()` —
  * so `apps/auth-server`'s env composition can spread `.shape` (a refined or
  * transformed schema has no `.shape`, which is why `cryptoEnvSchema` has to be
- * parsed separately).
+ * parsed separately). It is also why the two anchor sources are reconciled by
+ * an exported helper ({@link resolveStatusListTrustAnchorPems}) rather than by a
+ * cross-field transform: a cross-field rule would cost this schema its `.shape`.
  *
  * @see docs/adr/004-wallet-agnostic-federation.md
  */
@@ -334,6 +575,126 @@ export const federationEnvSchema = z.object({
         '(javascript:, data:, vbscript: and friends) — it is rendered as a link',
     })
     .default('openid4vp://'),
+
+  /**
+   * `OID4VP_STATUS_LIST_TRUST_ANCHORS` (#297) — the X.509 anchors a Status List
+   * Token's `x5c` chain must terminate at, as an inline PEM bundle.
+   *
+   * ## A FOURTH trust question, and it shares configuration with none of the
+   * other three
+   *
+   * | variable | question |
+   * | --- | --- |
+   * | `OID4VP_VERIFIER_PROFILE` | who are WE, to a wallet? |
+   * | `OID4VP_TRUSTED_ISSUERS` | which CREDENTIAL issuers does a realm accept? |
+   * | `OID4VP_ISSUER_JWKS` | which key does a credential issuer sign with? |
+   * | this | which CA may vouch for a STATUS issuer? |
+   *
+   * The Status List Token is signed by the status issuer, which need not be the
+   * credential issuer, and is fetched over a URI the CREDENTIAL supplied.
+   * Nothing about the presentation authenticates it. Without anchors the feature
+   * inverts into a vulnerability: a verifier that fetches a document from an
+   * attacker-named URI and believes what it says has not added revocation
+   * checking, it has added a way to assert that a revoked credential is valid
+   * (HAIP §6.1.1 — `x5c`, trust anchor excluded, leaf not self-signed).
+   *
+   * ## Fail-closed
+   *
+   * Unset and blank both mean "this deployment anchors no status issuer", which
+   * `createStatusListTrustAnchors` turns into `NO_STATUS_LIST_TRUST_ANCHORS` —
+   * an anchor set that refuses every token. Anything PRESENT but malformed is a
+   * hard parse failure, for the same reason `OID4VP_TRUSTED_ISSUERS` is: a typo
+   * must not degrade silently into the legitimate default, because the operator
+   * would have no way to tell the two apart.
+   *
+   * ## Shape
+   *
+   * One or more concatenated PEM `CERTIFICATE` blocks, exactly as `cat`ting
+   * several `.crt` files produces. Real newlines, quoted, as `JWT_PRIVATE_KEY`
+   * is authored in `.env.example`; there is no `\n`-escape handling, here or
+   * anywhere else in this workspace. Prefer
+   * {@link OID4VP_STATUS_LIST_TRUST_ANCHORS_PATH} for anything beyond one
+   * certificate — a CA bundle is what an orchestrator mounts as a file.
+   */
+  OID4VP_STATUS_LIST_TRUST_ANCHORS: z
+    .string()
+    .max(
+      MAX_STATUS_LIST_ANCHOR_BUNDLE_LENGTH,
+      `OID4VP_STATUS_LIST_TRUST_ANCHORS must be at most ${MAX_STATUS_LIST_ANCHOR_BUNDLE_LENGTH} characters — a bundle that large is a configuration mistake`
+    )
+    .optional()
+    .transform(parseInlineStatusListAnchors),
+
+  /**
+   * `OID4VP_STATUS_LIST_TRUST_ANCHORS_PATH` (#297) — a file holding the same PEM
+   * bundle.
+   *
+   * The `_PATH` sibling every PEM-carrying variable in this workspace has
+   * (`JWT_PRIVATE_KEY_PATH`, `JWT_RS256_PRIVATE_KEY_PATH`,
+   * `JWT_MLDSA_PRIVATE_KEY_PATH`), and the form to reach for here: a CA bundle
+   * is several kilobytes of multi-line base64, which is exactly what a mounted
+   * secret or ConfigMap is for and exactly what an environment variable is bad
+   * at.
+   *
+   * UNIONED with the inline variable rather than overriding it — see
+   * {@link resolveStatusListTrustAnchorPems} for why this one case departs from
+   * `jwt.ts`'s path-wins precedence.
+   *
+   * A path that is SET but unreadable fails the boot. Unset and blank are
+   * "no anchors from a file", which is not an error on its own.
+   */
+  OID4VP_STATUS_LIST_TRUST_ANCHORS_PATH: z
+    .string()
+    .max(MAX_STATUS_LIST_ANCHOR_PATH_LENGTH)
+    .optional()
+    .transform(parseStatusListAnchorFile),
+
+  /**
+   * `OID4VP_STATUS_LIST_URI_ALLOWLIST` (#297) — where status lists may be
+   * fetched from, as a comma-separated list of `https://` URI prefixes.
+   *
+   * ## This is an SSRF boundary, not a convenience
+   *
+   * Every other input on the wallet path is data QAuth parses. A status list URI
+   * is different in kind: it is a string the CREDENTIAL chose that QAuth is
+   * asked to make an outbound request to, and a credential is trivially minted
+   * with `status.status_list.uri = "https://169.254.169.254/…"`. There is no
+   * ordering that makes an unconstrained fetch safe — signature verification
+   * needs the fetched document — so the URI is constrained before it is dialled.
+   *
+   * An allowlist rather than a blocklist because the legitimate set is small and
+   * known: a deployment federates with a handful of issuers whose status
+   * endpoints its operator can name. A blocklist of "internal" addresses is a
+   * losing game (DNS names resolving into RFC 1918, IPv6-mapped IPv4, redirects,
+   * rebinding).
+   *
+   * ## Matching
+   *
+   * ORIGIN plus a SEGMENT-anchored path prefix, applied by
+   * `createStatusListUriAllowlist`, never a `startsWith`. A prefix with no path
+   * pins the whole origin, which is the common configuration. Entries must carry
+   * no query string, no fragment and no userinfo, and the runtime refuses IP
+   * literals and `localhost` whatever this variable says.
+   *
+   * ## Fail-closed
+   *
+   * Unset and blank both mean "status lists may be fetched from nowhere", which
+   * `DENY_ALL_STATUS_LIST_URI_ALLOWLIST` enforces by refusing every URI. That is
+   * the right default: a deployment that has not named its issuers' status
+   * endpoints has not decided where QAuth may make outbound requests.
+   *
+   * ```
+   * OID4VP_STATUS_LIST_URI_ALLOWLIST=https://issuer.example/statuslists,https://status.other.example
+   * ```
+   */
+  OID4VP_STATUS_LIST_URI_ALLOWLIST: z
+    .string()
+    .max(
+      MAX_STATUS_LIST_ALLOWLIST_LENGTH,
+      `OID4VP_STATUS_LIST_URI_ALLOWLIST must be at most ${MAX_STATUS_LIST_ALLOWLIST_LENGTH} characters — an allowlist that large is a configuration mistake`
+    )
+    .optional()
+    .transform(parseStatusListUriAllowlist),
 });
 
 /** Federation environment configuration type. */
