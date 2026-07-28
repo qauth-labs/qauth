@@ -189,6 +189,48 @@ describe('answering a DCQL query', () => {
     expect(disclosure[2]).toBe('Wanted');
   });
 
+  it('signs the `status` claim IN THE CLEAR and never as a Disclosure (#297)', async () => {
+    // SD-JWT VC §3.2.2.2 forbids `status` from being selectively disclosable,
+    // and QAuth refuses a credential that makes it so. A wallet harness that got
+    // this wrong would make the revocation E2E fail for the wrong reason —
+    // `forbidden-selective-disclosure` rather than a bit that says revoked.
+    const issuer = await createMockIssuer('https://issuer.example.com');
+    const status = { status_list: { idx: 7, uri: 'https://status.issuer.example/lists/1' } };
+    const wallet = createMockWallet([
+      await issuer.issue({ claims: { given_name: 'Alice' }, status }),
+    ]);
+
+    const presentation = presentationOf(
+      (await wallet.buildResponse(invocationUri(LOGIN_QUERY))).vpToken
+    );
+    const [issuerSignedJwt, disclosure] = presentation.split('~');
+    const payload = JSON.parse(
+      Buffer.from((issuerSignedJwt as string).split('.')[1] as string, 'base64url').toString()
+    ) as Record<string, unknown>;
+
+    expect(payload['status']).toEqual(status);
+    expect(
+      JSON.parse(Buffer.from(disclosure as string, 'base64url').toString()) as unknown[]
+    ).not.toContain('status');
+  });
+
+  it('omits `status` entirely when the issuer publishes no revocation mechanism', async () => {
+    const issuer = await createMockIssuer('https://issuer.example.com');
+    const wallet = createMockWallet([await issuer.issue()]);
+
+    const presentation = presentationOf(
+      (await wallet.buildResponse(invocationUri(LOGIN_QUERY))).vpToken
+    );
+    const payload = JSON.parse(
+      Buffer.from(
+        (presentation.split('~')[0] as string).split('.')[1] as string,
+        'base64url'
+      ).toString()
+    ) as Record<string, unknown>;
+
+    expect('status' in payload).toBe(false);
+  });
+
   it('can answer with a wallet error instead of a vp_token (§8.2)', async () => {
     const wallet = createMockWallet();
     const response = wallet.buildErrorResponse(invocationUri(LOGIN_QUERY));

@@ -173,6 +173,27 @@ services:
       # profile above, expressed as an absent button rather than a boot failure.
       OID4VP_REQUESTED_VCT: ${OID4VP_REQUESTED_VCT:-}
       OID4VP_WALLET_INVOCATION_ENDPOINT: ${OID4VP_WALLET_INVOCATION_ENDPOINT:-openid4vp://}
+      # Credential revocation — Token Status List (#297). A FOURTH trust
+      # question, and forwarded for the same reason as the three above: without
+      # these the container builds no status checker no matter what .env says,
+      # and a revoked credential would authenticate exactly like a live one.
+      #
+      # Both blank by default, which means no revocation checking — the posture
+      # every release before #378 had, and the only one `oid4vp-1.0-base`
+      # requires. Setting exactly ONE of the anchors and the allowlist is a boot
+      # failure, because a half-configured checker refuses every credential
+      # silently. Selecting OID4VP_VERIFIER_PROFILE=haip-1.0 with neither set is
+      # also a boot failure: that profile declares revocation checking mandatory.
+      #
+      # Prefer the _PATH form and mount the CA bundle as a file — a bundle is
+      # several kilobytes of multi-line base64, which an environment variable
+      # carries badly. The two anchor sources are UNIONED, not overriding.
+      OID4VP_STATUS_LIST_TRUST_ANCHORS: ${OID4VP_STATUS_LIST_TRUST_ANCHORS:-}
+      OID4VP_STATUS_LIST_TRUST_ANCHORS_PATH: ${OID4VP_STATUS_LIST_TRUST_ANCHORS_PATH:-}
+      # The SSRF boundary: comma-separated https:// prefixes status lists may be
+      # fetched from. The URI comes out of the CREDENTIAL, so blank means "fetch
+      # from nowhere" rather than "fetch from anywhere".
+      OID4VP_STATUS_LIST_URI_ALLOWLIST: ${OID4VP_STATUS_LIST_URI_ALLOWLIST:-}
 
       # Rate Limiting (Global)
       RATE_LIMIT_ENABLED: ${RATE_LIMIT_ENABLED:-true}

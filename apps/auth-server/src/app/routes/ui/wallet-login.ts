@@ -49,6 +49,7 @@ import {
 } from '../../helpers/wallet-login-request';
 import { resolveWalletPresentation } from '../../helpers/wallet-presentation';
 import { walletPageStyles, walletTerminalPage } from '../../helpers/wallet-ui';
+import { runWithCredentialStatusAuditContext } from '../../helpers/wallet-verification';
 
 /**
  * Server-rendered WALLET LOGIN screens (issue #239, ADR-004 / ADR-009).
@@ -400,14 +401,22 @@ async function advanceWalletLoginFlow(
   // (#300), enrol on a first presentation (#235). Note where each input comes
   // from — the presented bytes are the wallet's, everything they are checked
   // against is this flow record's.
-  const resolution = await resolveWalletPresentation(fastify, {
-    realmId: flow.realmId,
-    stateHash: flow.stateHash,
-    assertedIdentifier: flow.assertedIdentifier,
-    nonce: flow.nonce ?? '',
-    clientId: flow.clientId ?? '',
-    dcqlQuery: flow.dcqlQuery ?? {},
-  });
+  // Correlate credential-status audit events with THIS request (#378). Status
+  // refusals bypass `onRefusal` by design — the checker's fine-grained reason
+  // must not reach the wire — so `onAudit` is the only server-side channel that
+  // carries it, and `request.log` is what gives those lines a `reqId`.
+  const resolution = await runWithCredentialStatusAuditContext(
+    { log: request.log, realmId: flow.realmId },
+    () =>
+      resolveWalletPresentation(fastify, {
+        realmId: flow.realmId,
+        stateHash: flow.stateHash,
+        assertedIdentifier: flow.assertedIdentifier,
+        nonce: flow.nonce ?? '',
+        clientId: flow.clientId ?? '',
+        dcqlQuery: flow.dcqlQuery ?? {},
+      })
+  );
 
   await terminate(fastify, handle, flow);
 

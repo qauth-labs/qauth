@@ -36,7 +36,7 @@ function credential(
       issuerSignatureAlgorithm: 'ES256',
       keyBindingAlgorithm: 'ES256',
       disclosedClaimCount: 1,
-      statusChecked: false,
+      statusChecked: 'not-required',
       // #308's evidence, and `'none'` is the honest value for this fixture: no
       // key attestation was validated. Assurance policy must NOT read it — the
       // two are independent inputs (see `AssuredKeyStorage`).

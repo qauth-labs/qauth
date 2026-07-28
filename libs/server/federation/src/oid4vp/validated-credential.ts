@@ -12,7 +12,7 @@
  * issuer, these claims were selectively disclosed, and the holder proved
  * possession of the bound key against THIS request".
  *
- * Three things still stand between the two, and none of them is this issue's:
+ * Two things still stand between the two, and neither of them is this issue's:
  *
  *  - **Issuer trust (#236).** {@link ValidatedCredential.issuer} is a
  *    `ValidatedIssuer`, which means "key resolution confirmed this identifier",
@@ -20,8 +20,16 @@
  *    from an issuer nobody trusts is a forgery with extra steps.
  *  - **Subject resolution (#300 / ADR-009).** There is no protocol-guaranteed
  *    stable wallet subject identifier, so nothing here answers "which account?".
- *  - **Revocation (#297).** {@link CredentialAssuranceSignal.statusChecked} is
- *    the literal `false` — see below.
+ *
+ * **Revocation (#297) used to be a third**, and is not one any more: when the
+ * context carries a {@link PresentationValidationContext.credentialStatus}
+ * checker, the Token Status List gate runs INSIDE validation — after every
+ * cryptographic proof, as a refusal rather than a downgrade — and
+ * {@link CredentialAssuranceSignal.statusChecked} reports which posture applied.
+ * The gate lives here rather than at a seam above because only the producer of
+ * the assurance object can make that field truthful; a caller checking status
+ * afterwards would leave a field on this type permanently lying, which is
+ * exactly what the section below argues against.
  *
  * ## What is deliberately ABSENT from this type
  *
@@ -47,6 +55,7 @@ import type {
   KeyStorageAssuranceGate,
 } from '../attestation/key-storage-assurance';
 import type { CredentialFormat } from '../profiles/verifier-profile.types';
+import type { CredentialStatusChecker } from '../status/credential-status-checker';
 import type { ValidatedIssuer } from '../trust/issuer-identity';
 import type { IssuerKeyResolver } from './issuer-key-resolution';
 
@@ -138,6 +147,70 @@ export interface PresentationValidationContext {
    * additionally refused at BOOT by `assertKeyStorageAssuranceProvisioned`.
    */
   readonly keyStorageAssurance?: KeyStorageAssuranceGate;
+  /**
+   * This deployment's credential-revocation checker (Token Status List, HAIP
+   * §6.1, #297) — see
+   * {@link import('../status/credential-status-checker').CredentialStatusChecker}.
+   *
+   * The INTERFACE is injected, never the implementation. The checker keeps
+   * taking the `status` claim as `unknown` and keeps testing standalone, and
+   * this module gains no knowledge of how a status list is fetched, verified,
+   * cached or broken open.
+   *
+   * REQUIRED, and explicitly `undefined` when this deployment wired no status
+   * checker — never optional. The distinction is the whole subject of #378: an
+   * optional member lets a new caller omit it, compile, and silently get no
+   * revocation checking, which is precisely the defect this gate was added to
+   * close. Spelling `undefined` costs one word and makes "this deployment
+   * checks no revocation" a decision someone wrote down rather than a line
+   * nobody typed.
+   *
+   * `undefined` means no list is consulted and
+   * {@link CredentialAssuranceSignal.statusChecked} reports `'not-required'`.
+   * That reading is honest ONLY while {@link requireCredentialStatus} is not
+   * `true`: an absent checker under a profile that mandates status is a
+   * REFUSAL, never a pass, because the alternative is a deployment whose
+   * configuration says revocation is mandatory and whose code never reads a
+   * bit. A deployment that would rather make the refusal explicit can wire
+   * {@link import('../status/credential-status-checker').DENY_ALL_CREDENTIAL_STATUS_CHECKER}
+   * instead of passing `undefined`.
+   *
+   * Construct it ONCE per process and share it. The verified-list cache, the
+   * in-flight coalescing map and the endpoint breaker are properties of the
+   * INSTANCE; a per-request checker has a cold cache, a breaker that never
+   * trips, and turns every login into an outbound round-trip.
+   *
+   * Note what setting it costs, because it is the real price of putting the gate
+   * here: presentation validation acquires an outbound network dependency on the
+   * request path, where it previously had none.
+   */
+  readonly credentialStatus: CredentialStatusChecker | undefined;
+  /**
+   * The active profile's `VerifierProfile.requireCredentialStatus`, copied
+   * verbatim.
+   *
+   * Supplied by the caller from the resolved profile, exactly like
+   * {@link permittedFormats} and {@link signatureAlgorithms}: this context
+   * carries POLICY, never the profile object that produced it.
+   *
+   * `true` — HAIP §6.1: a credential carrying no `status` claim is refused.
+   * `false` — base OID4VP 1.0 mandates no revocation mechanism, so a credential
+   * without one is accepted unchecked.
+   *
+   * REQUIRED, for the same reason as {@link credentialStatus} above and not
+   * merely for symmetry. This member decides one question — what to do with a
+   * credential that names no status mechanism at all — and under `haip-1.0`
+   * the answer is "refuse". Were it optional, a new caller serving a mandating
+   * profile could omit it and accept exactly the credentials HAIP §6.1 requires
+   * it to reject, with nothing at the type level to say so. The profile always
+   * knows the answer, so the caller always can state it.
+   *
+   * It decides nothing else: supplying a {@link credentialStatus} checker means
+   * every credential that DOES carry a `status` claim is fully checked under
+   * either posture, and a claim that is present but unusable is refused under
+   * both. `true` with no checker refuses outright rather than sailing past.
+   */
+  readonly requireCredentialStatus: boolean;
   /** Clock skew tolerance; defaults to {@link DEFAULT_PRESENTATION_CLOCK_TOLERANCE_SECONDS}. */
   readonly clockToleranceSeconds?: number;
   /** KB-JWT age ceiling; defaults to {@link DEFAULT_KEY_BINDING_MAX_AGE_SECONDS}. */
@@ -163,6 +236,41 @@ export interface CredentialValidityWindow {
   /** `iat` — when the issuer says it issued the credential. */
   readonly issuedAt?: number;
 }
+
+/**
+ * What the credential-status gate established (#297).
+ *
+ * A UNION of the two accepting outcomes, never a `boolean`, because `boolean`
+ * collapses the distinction that matters:
+ *
+ *  - `'checked'` — a Token Status List entry was fetched, its Status List Token
+ *    verified against this deployment's anchors, and the bit at the
+ *    credential's index positively read `VALID`.
+ *  - `'not-required'` — nobody looked. Either the deployment wired no checker,
+ *    or the profile does not require a status mechanism
+ *    (`VerifierProfile.requireCredentialStatus: false`) and the credential
+ *    carried none, which base OID4VP 1.0 permits.
+ *
+ * `boolean` would render both of those `true`/`false` in a way that reads as
+ * "revoked or not", and a consumer gating an eIDAS level on `statusChecked`
+ * would then treat "no revocation mechanism exists for this credential" as
+ * equivalent to "a live bit says it is valid". That is the same argument
+ * {@link CredentialAssuranceSignal.keyStorageAssurance} makes for its own
+ * three-state evidence.
+ *
+ * **No refusing outcome can ever be a member** — not `'revoked'`, not
+ * `'suspended'`, not `'unavailable'`. Every one of those is a refusal, so no
+ * {@link ValidatedCredential} carrying one can exist to hold the value. The
+ * closed vocabulary for those lives on the server-side audit event
+ * (`CredentialStatusAuditEvent.reason`) and stays there.
+ *
+ * Extending this union is deliberately a compile-time event for every consumer:
+ * an `IssuerAssuranceEntry.requiresStatusCheck` knob (#237, mirroring
+ * `requiresKeyStorage`) would gate `substantial`/`high` on
+ * `statusChecked === 'checked'`, and that predicate must keep failing for every
+ * member added later unless the member genuinely means "a bit was read".
+ */
+export type CredentialStatusEvidence = 'checked' | 'not-required';
 
 /**
  * The EVIDENCE an assurance decision is made from — not the decision.
@@ -204,15 +312,20 @@ export interface CredentialAssuranceSignal {
    */
   readonly keyStorageAssurance: KeyStorageAssuranceEvidence;
   /**
-   * Whether credential status (Token Status List, HAIP §6.1) was checked.
+   * What was established about credential status (Token Status List, HAIP §6.1,
+   * #297).
    *
-   * Typed as the LITERAL `false`, not `boolean`. Revocation checking is #297, so
-   * today no code path in this library can truthfully say otherwise — and the
-   * literal type means none can even claim to. When #297 lands it widens this to
-   * a union, which is a compile-time event every consumer sees, rather than a
-   * silent flip from `false` to `true` that nobody reviews.
+   * Evidence, like everything else on this type, and the same three-state
+   * discipline {@link keyStorageAssurance} applies one field up: it records what
+   * the status gate DID, not whether the credential is fine. See
+   * {@link CredentialStatusEvidence} for why the two accepting outcomes are kept
+   * apart and why no refusing outcome can appear here.
+   *
+   * Required rather than optional so every producer must state it, and so a
+   * consumer cannot read a missing field as "not applicable" when it means
+   * "nobody looked".
    */
-  readonly statusChecked: false;
+  readonly statusChecked: CredentialStatusEvidence;
 }
 
 /**
@@ -227,9 +340,14 @@ export interface CredentialAssuranceSignal {
  *     twice, and none was left unmatched;
  *  3. the credential's validity window includes now;
  *  4. the holder proved possession of the credential's bound key against THIS
- *     request's `nonce` and QAuth's `client_id`.
+ *     request's `nonce` and QAuth's `client_id`;
+ *  5. credential status was ESTABLISHED to the extent
+ *     {@link CredentialAssuranceSignal.statusChecked} states — `'checked'` means
+ *     a status-list bit was positively read as `VALID`, `'not-required'` means
+ *     nobody looked. It can never mean "a bit was read and said revoked":
+ *     validation refuses first.
  *
- * It means nothing about trust, identity, account linkage or revocation.
+ * It means nothing about trust, identity or account linkage.
  */
 export interface ValidatedCredential {
   /** The DCQL Credential Query id this Presentation answered. */

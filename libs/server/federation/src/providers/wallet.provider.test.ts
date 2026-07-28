@@ -77,7 +77,10 @@ describe('WalletProvider (ADR-004 skeleton, #232)', () => {
           format: 'dc+sd-jwt',
           credentialType: 'https://credentials.example.com/pid',
           claims: { given_name: 'Alice' },
-          assurance: { statusChecked: false },
+          // `'checked'` since #378 — the strongest shape a caller could hold: a
+          // credential that validated AND whose status-list bit positively read
+          // `VALID`. It still authenticates nobody.
+          assurance: { statusChecked: 'checked' },
         },
       ],
     ];

@@ -18,6 +18,7 @@ export * from './providers/provider-registry';
 export * from './providers/wallet.provider';
 export * from './providers/wallet-credential-data';
 export * from './status/credential-status-checker';
+export * from './status/credential-status-provisioning';
 export * from './status/credential-status-rejection';
 export * from './status/status-endpoint-breaker';
 export * from './status/status-list-bits';

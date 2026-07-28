@@ -1,6 +1,7 @@
 import {
   assertIssuerTrusted,
   createStaticIssuerKeyResolver,
+  type CredentialStatusChecker,
   type DcqlQuery,
   isPresentationValidationRejection,
   type IssuerKeyResolver,
@@ -26,20 +27,33 @@ import {
  * then decide whether its issuer is worth anything to this realm — needs a home
  * in between, and this is it.
  *
- * Composition, not convenience. The two gates have a MANDATORY ORDER and a
+ * Composition, not convenience. The gates have a MANDATORY ORDER and a
  * mandatory conjunction:
  *
  * 1. **#234 validates.** Issuer signature, every Disclosure digest, the validity
  *    window, and the Key Binding JWT's `aud`/`nonce`/`sd_hash` — the proof that
  *    the bytes are a credential presented to THIS Verifier for THIS request.
- * 2. **#236 decides trust.** A validated credential from an issuer this realm
+ * 2. **#297 checks status.** Inside the same call, and deliberately LAST within
+ *    it: the Token Status List bit for this credential must positively read
+ *    `VALID`, or the presentation is refused. It runs after the Issuer signature
+ *    and after the Key Binding JWT because the status list URI is bytes the
+ *    WALLET chose until the issuer's signature covers them, and dialling a URI
+ *    out of an unverified payload is an SSRF primitive. Threaded in as a
+ *    {@link WalletCredentialVerificationOptions.credentialStatus} checker rather
+ *    than run as a third gate out here, so that
+ *    `ValidatedCredential.assurance.statusChecked` can state what actually
+ *    happened instead of being a field that permanently lies (#378).
+ * 3. **#236 decides trust.** A validated credential from an issuer this realm
  *    does not trust is, in `wallet.provider.ts`'s words, *"a forgery with extra
  *    steps"*.
  *
- * Neither is sufficient and neither can be skipped, so exposing them as one
- * function is how a caller is prevented from wiring up only the first. That is
- * not hypothetical: the first produces a plausible-looking `ValidatedCredential`
- * with claims in it, which is exactly the object someone in a hurry would use.
+ * None is sufficient and none can be skipped, so exposing them as one function
+ * is how a caller is prevented from wiring up only the first. That is not
+ * hypothetical: the first produces a plausible-looking `ValidatedCredential`
+ * with claims in it, which is exactly the object someone in a hurry would use —
+ * and #378 is the issue recording that a status gate which existed, was tested
+ * and was never threaded meant a revoked credential authenticated a user exactly
+ * like a live one.
  *
  * ## Every refusal is the same refusal
  *
@@ -93,6 +107,32 @@ export interface WalletCredentialVerificationOptions {
   readonly resolveIssuerKey: IssuerKeyResolver;
   /** The presenting realm's issuer allowlist (#236). */
   readonly trustRegistry: TrustRegistry;
+  /**
+   * This deployment's credential-revocation checker (#297), built ONCE per
+   * process by {@link createConfiguredCredentialStatusChecker}.
+   *
+   * REQUIRED, and explicitly `undefined` when this deployment configured no
+   * status checking — never optional, mirroring
+   * `PresentationValidationContext.credentialStatus` one layer down. An
+   * optional member would let a future caller of this seam omit the checker,
+   * compile, and silently serve logins with no revocation checking: #378's
+   * defect, reintroduced at the layer built to prevent it. The gate a caller
+   * cannot forget is the only kind that holds.
+   *
+   * `undefined` means nothing is fetched and `assurance.statusChecked` reports
+   * `'not-required'`. That is safe only because the two ways of getting it wrong
+   * are already closed elsewhere — a profile whose `requireCredentialStatus` is
+   * `true` never boots without a checker
+   * (`assertCredentialStatusProvisioned`), and validation refuses outright if it
+   * somehow did.
+   *
+   * The posture it is read against is NOT a second option here: it is
+   * {@link WalletCredentialVerificationOptions.profile}'s own
+   * `requireCredentialStatus`, passed through below. A separate knob would be a
+   * second answer to a question the profile already answers, and #299's rule is
+   * that profiles are data, not branches.
+   */
+  readonly credentialStatus: CredentialStatusChecker | undefined;
   /** Where the server-side reason goes. Wire it to the request logger. */
   readonly onRefusal?: (refusal: WalletCredentialRefusal) => void;
 }
@@ -170,14 +210,34 @@ export async function verifyWalletPresentations(
         .signingAlgs as PresentationValidationContext['signatureAlgorithms'],
       resolveIssuerKey: options.resolveIssuerKey,
       permittedFormats: options.profile.credentialFormats,
+      // Credential revocation (#297/#378). Both members come from this
+      // deployment's own configuration, never from the presentation: the checker
+      // is the process-wide singleton, and the posture is copied verbatim off
+      // the resolved profile the same way `permittedFormats` and
+      // `signatureAlgorithms` are just above. Passed unconditionally — a
+      // conditional spread here would reproduce the omission the required
+      // members below the seam exist to make impossible.
+      credentialStatus: options.credentialStatus,
+      requireCredentialStatus: options.profile.requireCredentialStatus,
     });
   } catch (error) {
     if (isPresentationValidationRejection(error)) {
       return refuse('validation', `${error.reason}: ${error.detail}`);
     }
-    // Not a refusal — a fault. Rethrown rather than laundered into an
-    // authentication failure, so a broken deployment does not look like a wallet
-    // that presented a bad credential.
+    // Everything else is rethrown rather than laundered into an authentication
+    // failure, so a broken deployment does not look like a wallet that presented
+    // a bad credential.
+    //
+    // ONE thing reaching here is a refusal rather than a fault, and is left
+    // unwrapped on purpose: the `InvalidCredentialsError` the status checker
+    // throws (#297). Its message already IS the single non-enumerating refusal
+    // `refuse()` would produce, so the wire is byte-identical either way, and
+    // catching it to re-shape it would gain nothing but a `detail` string whose
+    // only honest content is the status list URI and index the WALLET chose.
+    // The precise server-side reason is not lost — it reaches the operator
+    // through the checker's own `onAudit` sink, which reports every check
+    // including the accepted ones, so `onRefusal` is not the log seam for
+    // status and must not be made into one.
     throw error;
   }
 

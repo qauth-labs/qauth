@@ -110,7 +110,7 @@ describe('buildWalletCredentialData → readWalletBinding round trip', () => {
           issuerSignatureAlgorithm: 'ES256',
           keyBindingAlgorithm: 'ES256',
           disclosedClaimCount: 0,
-          statusChecked: false,
+          statusChecked: 'not-required',
           keyStorageAssurance: { assurance: 'none' },
         },
       },

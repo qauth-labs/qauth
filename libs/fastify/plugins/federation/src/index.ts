@@ -1,4 +1,9 @@
 export * from './lib/configured-providers';
+// Credential revocation (#297/#378): turning OID4VP_STATUS_LIST_* into a wired
+// `CredentialStatusChecker`, plus the boot-time refusal for a half-configured
+// one. Same boundary reason as the issuer key resolver below — `scope:app` can
+// reach neither the checker nor its anchor/allowlist factories directly.
+export * from './lib/credential-status';
 export * from './lib/federation-plugin';
 // #234 + #236 composed for the app layer: validate a presentation, then decide
 // whether its issuer is worth anything to this realm. The two halves are NOT
@@ -113,6 +118,16 @@ export type {
   CredentialFormat,
   CredentialFormatAdapter,
   CredentialRequestSpec,
+  // Credential revocation (#297/#378). The bootstrap holds the checker as a
+  // per-deployment singleton and writes its audit events to the server logger,
+  // so it needs both the interface and the event shape; `scope:app` can reach
+  // neither directly. The FACTORY is deliberately not re-exported — a checker
+  // must be obtained through `createConfiguredCredentialStatusChecker`, which is
+  // the only thing that passes a real breaker and refuses a half-configured
+  // deployment.
+  CredentialStatusAuditEvent,
+  CredentialStatusChecker,
+  CredentialStatusProvisioning,
   DcqlClaimsQuery,
   DcqlCredentialQuery,
   DcqlQuery,

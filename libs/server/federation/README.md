@@ -67,6 +67,10 @@ const credentials = await validatePresentations(presentations, state.dcqlQuery, 
   signatureAlgorithms: ['ES256'], // caller-pinned allowlist (HAIP §7)
   permittedFormats: profile.credentialFormats,
   resolveIssuerKey: createStaticIssuerKeyResolver(configuredIssuerKeys),
+  // #297: the revocation gate. The process-wide checker, plus the profile's
+  // posture copied verbatim — see "Credential revocation" below.
+  credentialStatus: statusChecker,
+  requireCredentialStatus: profile.requireCredentialStatus,
 });
 ```
 
@@ -80,13 +84,20 @@ produces a `ValidatedCredential` — a **cryptographic finding, not an identity*
   subject identifier ([ADR-009](../../../docs/adr/009-wallet-account-resolution.md)),
   and wallet key material must never become one — the holder's `cnf` key and the
   raw `iss` are stripped from the returned claims;
-- **it checks no revocation.** `assurance.statusChecked` is the literal `false`.
-  The Token Status List checker below (#297) ships alongside this, but nothing
-  calls it from the validation path yet.
+- **it checks revocation only when you wire it.** Pass `credentialStatus` and the
+  Token Status List gate below (#297) runs inside validation, as the last gate of
+  all, and `assurance.statusChecked` is `'checked'` when a bit was read and said
+  `VALID`. Omit it and the value is `'not-required'` — nobody looked. Omitting it
+  under a profile whose `requireCredentialStatus` is `true` is not a pass: it is
+  refused as `credential-status-unestablished`, because a mandate no code can
+  satisfy must not resolve to "accepted".
 
-`WalletProvider.verify()` therefore still fails closed. Every refusal is a
-`PresentationValidationRejection`: a distinct server-side `reason` for logs, and
-one non-enumerating `InvalidCredentialsError` on the wire via `toClientError()`.
+`WalletProvider.verify()` therefore still fails closed. Every refusal this layer
+reaches itself is a `PresentationValidationRejection`: a distinct server-side
+`reason` for logs, and one non-enumerating `InvalidCredentialsError` on the wire
+via `toClientError()`. The status checker's own refusals propagate unwrapped —
+they are already that same `InvalidCredentialsError`, and their precise reason is
+deliberately kept off the error and delivered to `onAudit` instead.
 
 A second credential format registers as ONE adapter in
 `CREDENTIAL_FORMAT_ADAPTERS` — the request builder, the intake and the
@@ -106,22 +117,48 @@ import {
   createStatusEndpointBreaker,
 } from '@qauth-labs/server-federation';
 
-const checker = createCredentialStatusChecker({
+// ONCE per process, never per request: the cache, the in-flight coalescing map
+// and the breaker are properties of THIS instance.
+const statusChecker = createCredentialStatusChecker({
   // x5c chains must terminate at one of these, and the anchor itself must NOT
   // appear in the chain (HAIP §6.1.1).
   trustAnchors: createStatusListTrustAnchors([operatorAnchorPem]),
   // SSRF boundary: the status list URI comes off an unverified credential.
   uriAllowlist: createStatusListUriAllowlist(['https://issuer.example/statuslists']),
   breaker: createStatusEndpointBreaker(),
-  onAudit: (event) => request.log.info(event, 'credential status check'),
-});
-
-// Takes ONLY the credential's `status` claim. Throws the same non-enumerating
-// InvalidCredentialsError as the issuer-trust path on anything but VALID.
-await checker.assertCredentialNotRevoked(credentialClaims.status, {
-  statusRequired: profile.requireCredentialStatus,
+  // The ONLY place the fine-grained reason surfaces. Server-side log only: the
+  // event carries the status list URI and index, which the wallet chose.
+  onAudit: (event) => logger.info(event, 'credential status check'),
 });
 ```
+
+Hand it to `validatePresentations` (above) rather than calling it yourself:
+
+```typescript
+await validatePresentations(presentations, state.dcqlQuery, {
+  /* ...bindings... */
+  credentialStatus: statusChecker,
+  requireCredentialStatus: profile.requireCredentialStatus,
+});
+```
+
+The gate then runs inside the format adapter, **after** the Issuer-signed JWS has
+verified and after Key Binding — a status list URI read from an unverified
+payload is an SSRF primitive — and it is the only thing that makes
+`assurance.statusChecked` truthful, since the adapter freezes that object. The
+checker itself still takes only the `status` claim, as `unknown`; the adapter
+receives the interface, not the implementation.
+
+In `apps/auth-server` none of this is assembled by hand. The two operator
+variables `OID4VP_STATUS_LIST_TRUST_ANCHORS` (or its `_PATH` sibling) and
+`OID4VP_STATUS_LIST_URI_ALLOWLIST` are turned into the checker above by
+`createConfiguredCredentialStatusChecker`
+(`@qauth-labs/fastify-plugin-federation`), which passes a real breaker and is
+called once from `resolveWalletVerificationSetup`. Configuring exactly one of the
+two fails the boot, and so does selecting a profile whose
+`requireCredentialStatus` is `true` with neither configured
+(`assertCredentialStatusProvisioned`) — a mandate nothing can satisfy must not
+become a deployment that boots and then refuses every login (#378).
 
 **Fail-closed, without exception.** An unreachable endpoint, an unverifiable
 Status List Token, an unanchored status issuer, an out-of-range index, an

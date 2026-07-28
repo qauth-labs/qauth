@@ -84,6 +84,25 @@ import { issuerTrustRejection } from '../trust/issuer-trust-rejection';
  *   whether their key is in certified hardware, at what grade, and whether their
  *   wallet vendor's chain is anchored here — and a caller able to tell them apart
  *   learns facts about a stranger's hardware from a login attempt.
+ * - `credential-status-unestablished` — the active `VerifierProfile` requires a
+ *   credential status mechanism (`requireCredentialStatus`, HAIP §6.1) and this
+ *   deployment wired no `CredentialStatusChecker`, so no bit can be read for any
+ *   credential. A misconfiguration rather than a bad credential, and refused for
+ *   the same fail-closed reason every other status outcome is: a mandate no code
+ *   can satisfy must not resolve to "accepted".
+ *
+ *   It is the ONLY status refusal raised here, and deliberately so. Every other
+ *   one — revoked, suspended, unknown bit, malformed `status` claim, URI outside
+ *   the SSRF allowlist, dead endpoint, unverifiable Status List Token, open
+ *   circuit — is raised by the checker itself as the `InvalidCredentialsError`
+ *   from `status/credential-status-rejection.ts`, and PROPAGATES UNWRAPPED. Not
+ *   wrapping it is the point: that error's message already IS
+ *   `ISSUER_TRUST_REJECTION_MESSAGE`, so the wire stays uniform with no help
+ *   from here, while its precise reason is deliberately discarded before it can
+ *   reach an error and travels only on the checker's `onAudit` event. Wrapping
+ *   would mean inventing a `detail` string, and the only honest content for one
+ *   is data the wallet chose — the status list URI and index. Those belong in
+ *   the audit sink, not in a field callers put in logs beside a request id.
  * - `holder-binding-invalid` — the Key Binding JWT is absent, unverifiable
  *   against the credential's `cnf` key, or carries the wrong `aud`, `nonce`,
  *   `sd_hash` or `iat`. One reason rather than four on purpose: they are all the
@@ -101,6 +120,7 @@ export type PresentationRejectionReason =
   | 'disclosure-digest-mismatch'
   | 'forbidden-selective-disclosure'
   | 'key-storage-assurance-unestablished'
+  | 'credential-status-unestablished'
   | 'holder-binding-invalid';
 
 /**
