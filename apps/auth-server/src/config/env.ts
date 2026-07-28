@@ -9,6 +9,7 @@ import {
   federationEnvSchema,
   issuerKeysEnvSchema,
   jwtEnvSchema,
+  keyAttestationEnvSchema,
   observabilityEnvSchema,
   parseEnv,
   passwordEnvSchema,
@@ -64,6 +65,18 @@ const envSchema = z
     // an unset variable means "no realm assures any issuer" (hence no `acr`
     // claim anywhere) rather than taking the boot down.
     ...assuranceEnvSchema.shape,
+    // Key ATTESTATION (HAIP §4.5.1, #308/#379): OID4VP_ATTESTING_ISSUERS — which
+    // issuance chains validate a wallet's key attestation before issuing, and at
+    // what OID4VCI Appendix D §D.2 grade.
+    //
+    // A FOURTH variable in the neighbourhood, and the only deployment-wide one:
+    // what an issuer's issuance process establishes is a property of that
+    // ecosystem, not of any realm's opinion of it. It produces EVIDENCE and never
+    // a level — a realm still grants nothing unless its own OID4VP_ISSUER_ASSURANCE
+    // names the issuer with `requiresKeyStorage` and its own OID4VP_TRUSTED_ISSUERS
+    // accepts it, so listing an issuer here cannot raise any realm's assurance
+    // on its own.
+    ...keyAttestationEnvSchema.shape,
     // Issuer VERIFICATION KEYS (ADR-004): OID4VP_ISSUER_JWKS (#234/#238) — the
     // public keys credential issuers sign with, pinned in configuration. A
     // third, separate question from the two above: the profile says who WE are,

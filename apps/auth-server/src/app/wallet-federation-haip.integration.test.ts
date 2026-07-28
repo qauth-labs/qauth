@@ -61,6 +61,14 @@ describe('wallet federation E2E — haip-1.0 profile (pending #298)', () => {
       JWT_PUBLIC_KEY: jwt.publicKey,
       WALLET_FEDERATION_ENABLED: 'true',
       OID4VP_REQUESTED_VCT: 'https://credentials.example.com/pid',
+      // Subject resolution, stated because #379 made it a BOOT gate: an enabled
+      // deployment that names no binding claims now refuses to start (ADR-010
+      // §6). It sits in the SHARED environment on purpose — the control below
+      // and the assertion after it must differ in the verifier profile and in
+      // nothing else, or the control stops isolating the variable it exists to
+      // isolate.
+      OID4VP_SUBJECT_RESOLUTION: 'asserted-lookup',
+      OID4VP_SUBJECT_BINDING_CLAIMS: 'family_name,given_name,birth_date',
     };
 
     // The control: the same deployment on the BASE profile boots. Without it the

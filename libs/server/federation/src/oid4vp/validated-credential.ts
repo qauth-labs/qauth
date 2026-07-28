@@ -89,6 +89,15 @@ export const DEFAULT_KEY_BINDING_MAX_AGE_SECONDS = 300;
  * `resolveIssuerKey` are all required, because a validator that "helpfully"
  * skipped the audience check when no audience was supplied would be the single
  * most dangerous line in this library.
+ *
+ * The three GATE members — {@link keyStorageAssurance} (#308/#379),
+ * {@link credentialStatus} and {@link requireCredentialStatus} (#297/#378) — are
+ * required-but-nullable for the same reason one step further on. Each of them
+ * has a legitimate `undefined`/`false` answer for some deployments, so none can
+ * be non-nullable; but an OPTIONAL member is one a new caller reaches by typing
+ * nothing, and both #378 and #379 are issues recording a shipped gate that no
+ * production call site ever passed. Spelling the answer costs one word and turns
+ * "this deployment checks nothing" into a decision rather than an omission.
  */
 export interface PresentationValidationContext {
   /**
@@ -133,20 +142,26 @@ export interface PresentationValidationContext {
    * resolver for it (#308) — see
    * {@link import('../attestation/key-storage-assurance').keyStorageAssuranceGateFor}.
    *
-   * Optional, and its absence means the `oid4vp-1.0-base` posture: key storage
-   * is not evaluated and no conveyed signal is read. That is the honest default
-   * for a field whose only other reading would be a profile this context does
-   * not carry — every other profile-derived member here (`permittedFormats`,
-   * `signatureAlgorithms`) is supplied by the caller from the resolved profile,
-   * and this one is no different.
+   * REQUIRED, and explicitly `undefined` when this deployment evaluates no key
+   * storage at all — never optional, for the same reason as
+   * {@link credentialStatus} below and with a sharper edge (#379). `undefined`
+   * here means the `oid4vp-1.0-base` posture: nothing is evaluated, no conveyed
+   * signal is read, and {@link CredentialAssuranceSignal.keyStorageAssurance}
+   * reports `'none'`. That reading is honest for a profile whose posture is
+   * `forbidden` and DISHONEST for one whose posture is `required` — an omitted
+   * gate under `haip-1.0` would accept exactly the presentations HAIP §4.5.1
+   * requires it to refuse, silently, because this member and not the profile is
+   * what the adapter reads. An optional member let a caller reach that state by
+   * typing nothing; a required one makes it a decision someone wrote down.
    *
    * Build it with `keyStorageAssuranceGateFor(profile, resolver)` rather than by
-   * hand: that helper keeps the profile's posture even when no resolver is
+   * hand, and prefer it to `undefined` in every case where a profile is in
+   * scope: that helper keeps the profile's posture even when no resolver is
    * provisioned, so a `required` profile with nothing wired refuses every
    * presentation instead of silently downgrading itself. A deployment is
    * additionally refused at BOOT by `assertKeyStorageAssuranceProvisioned`.
    */
-  readonly keyStorageAssurance?: KeyStorageAssuranceGate;
+  readonly keyStorageAssurance: KeyStorageAssuranceGate | undefined;
   /**
    * This deployment's credential-revocation checker (Token Status List, HAIP
    * §6.1, #297) — see

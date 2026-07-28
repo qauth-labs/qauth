@@ -1,9 +1,15 @@
 import {
   ACR_VALUE_STYLES,
+  ATTACK_POTENTIAL_RESISTANCE_ORDER,
+  DEFAULT_KEY_STORAGE_ATTACK_POTENTIAL,
   SUBJECT_RESOLUTION_STRATEGY_IDS,
   VERIFIER_PROFILE_IDS,
 } from '@qauth-labs/fastify-plugin-federation';
-import { assuranceEnvSchema, federationEnvSchema } from '@qauth-labs/server-config';
+import {
+  assuranceEnvSchema,
+  federationEnvSchema,
+  keyAttestationEnvSchema,
+} from '@qauth-labs/server-config';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 /**
@@ -432,5 +438,132 @@ describe('OID4VP_SUBJECT_RESOLUTION ↔ SUBJECT_RESOLUTION_STRATEGY_IDS cross-li
     expect(
       federationEnvSchema.safeParse({ OID4VP_SUBJECT_BINDING_CLAIMS: 'family name' }).success
     ).toBe(false);
+  });
+});
+
+/**
+ * The cross-lib pin three schemas' TSDoc promises (#308/#379).
+ *
+ * `server-config` DUPLICATES two `server-federation` vocabularies as Zod enums —
+ * `AttackPotentialResistance` (OID4VCI Appendix D §D.2) in both
+ * `schemas/assurance.ts` and `schemas/key-attestation.ts`, and
+ * `AssuredKeyStorage` in `schemas/assurance.ts` — rather than importing them,
+ * because config is the lowest server layer and carries no dependency on
+ * `server-federation`. Those three TSDoc blocks each say the duplication is
+ * "pinned by `apps/auth-server`'s `src/config/env.test.ts`".
+ *
+ * This is that pin. Without it the claim was decoration: a grade added to the
+ * §D.2 order would be accepted by `translateKeyStorageAssurance` and REJECTED by
+ * the env schema, so an operator could write the new grade, fail the boot, and
+ * find nothing in either library that said the two disagreed.
+ *
+ * Asserted behaviourally rather than by comparing arrays: what matters is not
+ * that two lists look alike but that a grade the runtime understands is a grade
+ * an operator can actually configure.
+ */
+describe('the §D.2 vocabulary agrees across server-config and server-federation (#308/#379)', () => {
+  it('accepts every grade the runtime orders, in OID4VP_ATTESTING_ISSUERS', () => {
+    for (const grade of ATTACK_POTENTIAL_RESISTANCE_ORDER) {
+      const parsed = keyAttestationEnvSchema.parse({
+        OID4VP_ATTESTING_ISSUERS: JSON.stringify({ 'https://pid.issuer.example': grade }),
+      });
+
+      expect(parsed.OID4VP_ATTESTING_ISSUERS).toEqual({ 'https://pid.issuer.example': grade });
+    }
+  });
+
+  it('accepts every grade the runtime orders, as an OID4VP_ISSUER_ASSURANCE floor', () => {
+    for (const grade of ATTACK_POTENTIAL_RESISTANCE_ORDER) {
+      const parsed = assuranceEnvSchema.parse({
+        OID4VP_ISSUER_ASSURANCE: JSON.stringify({
+          master: {
+            'https://issuer.example': {
+              level: 'high',
+              requiresKeyStorage: 'hardware',
+              requiresKeyStorageAttackPotential: grade,
+            },
+          },
+        }),
+      });
+
+      expect(
+        parsed.OID4VP_ISSUER_ASSURANCE?.['master']?.['https://issuer.example']
+          ?.requiresKeyStorageAttackPotential
+      ).toBe(grade);
+    }
+  });
+
+  it('the default floor is a grade the env schema accepts', () => {
+    // `DEFAULT_KEY_STORAGE_ATTACK_POTENTIAL` is what an entry gets when it
+    // states no floor. If config could not express it, an operator could never
+    // write the default down explicitly to see what they were already getting.
+    expect(ATTACK_POTENTIAL_RESISTANCE_ORDER).toContain(DEFAULT_KEY_STORAGE_ATTACK_POTENTIAL);
+
+    const parsed = keyAttestationEnvSchema.parse({
+      OID4VP_ATTESTING_ISSUERS: JSON.stringify({
+        'https://pid.issuer.example': DEFAULT_KEY_STORAGE_ATTACK_POTENTIAL,
+      }),
+    });
+
+    expect(parsed.OID4VP_ATTESTING_ISSUERS).toBeDefined();
+  });
+
+  it('rejects a grade the runtime does not order', () => {
+    // The other direction: config must not accept a value the runtime would
+    // then fail to recognise, which fails closed to "no assurance" silently.
+    expect(
+      keyAttestationEnvSchema.safeParse({
+        OID4VP_ATTESTING_ISSUERS: '{"https://pid.issuer.example":"iso_18045_beyond-high"}',
+      }).success
+    ).toBe(false);
+  });
+});
+
+/**
+ * `OID4VP_ATTESTING_ISSUERS` reaches the app env (#308/#379).
+ *
+ * The same wiring pin `OID4VP_TRUSTED_ISSUERS` and `OID4VP_ISSUER_ASSURANCE`
+ * already carry, and for the same failure: a variable that exists in
+ * `server-config`'s schema but is never spread into this app's env is
+ * configuration an operator can write, restart, and have the server ignore.
+ * Here the symptom is silent rather than loud — every credential resolves to
+ * `assurance: 'none'`, so an entry demanding hardware key storage grants `'low'`
+ * to a wallet that satisfies it.
+ */
+describe('OID4VP_ATTESTING_ISSUERS reaches the app env (#308/#379)', () => {
+  /**
+   * `setEnv` only deletes keys it is told about, so every wallet-federation
+   * variable this block does not set must be cleared EXPLICITLY — including
+   * `ACR_VALUE_STYLE`, which the assurance block above leaves behind and which
+   * fails this block's import for a reason that has nothing to do with
+   * attesting issuers. The same footgun that block documents.
+   */
+  function setAttestingEnv(overrides: Record<string, string | undefined>) {
+    setEnv({
+      NODE_ENV: 'development',
+      OID4VP_TRUSTED_ISSUERS: undefined,
+      OID4VP_ISSUER_ASSURANCE: undefined,
+      OID4VP_ATTESTING_ISSUERS: undefined,
+      ACR_VALUE_STYLE: undefined,
+      ...overrides,
+    });
+  }
+
+  it('unset → nothing recorded, and the boot still succeeds', async () => {
+    setAttestingEnv({});
+    const mod = await import('./env');
+
+    expect(mod.env.OID4VP_ATTESTING_ISSUERS).toEqual({});
+  });
+
+  it('a configured map arrives as issuer → grade', async () => {
+    setAttestingEnv({
+      OID4VP_ATTESTING_ISSUERS: '{"https://pid.issuer.example":"iso_18045_high"}',
+    });
+    const mod = await import('./env');
+
+    expect(mod.env.OID4VP_ATTESTING_ISSUERS).toEqual({
+      'https://pid.issuer.example': 'iso_18045_high',
+    });
   });
 });

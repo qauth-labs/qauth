@@ -99,6 +99,100 @@ describe('assuranceEnvSchema (OID4VP_ISSUER_ASSURANCE — #237)', () => {
     expect(() => parse(raw)).toThrow();
   });
 
+  /**
+   * The key-storage requirement (#379, Break 3).
+   *
+   * `issuerAssuranceSchema` is `.strict()`, so before #379 both of these keys
+   * were rejected outright: `IssuerAssuranceEntry.requiresKeyStorage` existed in
+   * `server-federation` and NO operator could author it. These assertions are
+   * what stop that regressing — a `.strict()` object is exactly the kind of
+   * thing a later edit tidies a key back out of.
+   */
+  describe('requiresKeyStorage (#379)', () => {
+    it('accepts a hardware requirement with no floor — the STRICT default', () => {
+      expect(
+        parse(
+          '{"master":{"https://issuer.example":{"level":"high","requiresKeyStorage":"hardware"}}}'
+        )
+      ).toEqual({
+        master: { 'https://issuer.example': { level: 'high', requiresKeyStorage: 'hardware' } },
+      });
+    });
+
+    it('accepts an operator-stated attack-potential floor beside it', () => {
+      expect(
+        parse(
+          '{"master":{"https://issuer.example":{"level":"high","requiresKeyStorage":"hardware","requiresKeyStorageAttackPotential":"iso_18045_moderate"}}}'
+        )
+      ).toEqual({
+        master: {
+          'https://issuer.example': {
+            level: 'high',
+            requiresKeyStorage: 'hardware',
+            requiresKeyStorageAttackPotential: 'iso_18045_moderate',
+          },
+        },
+      });
+    });
+
+    it('accepts a software requirement and every §D.2 grade', () => {
+      for (const grade of [
+        'iso_18045_basic',
+        'iso_18045_enhanced-basic',
+        'iso_18045_moderate',
+        'iso_18045_high',
+      ]) {
+        expect(() =>
+          parse(
+            `{"master":{"https://issuer.example":{"level":"substantial","requiresKeyStorage":"software","requiresKeyStorageAttackPotential":"${grade}"}}}`
+          )
+        ).not.toThrow();
+      }
+    });
+
+    it('carries the requirement through the freeze, alongside credentialTypes', () => {
+      const parsed = parse(
+        '{"master":{"https://issuer.example":{"level":"high","credentialTypes":["urn:pid"],"requiresKeyStorage":"hardware"}}}'
+      );
+
+      expect(parsed?.['master']?.['https://issuer.example']).toEqual({
+        level: 'high',
+        credentialTypes: ['urn:pid'],
+        requiresKeyStorage: 'hardware',
+      });
+      expect(Object.isFrozen(parsed?.['master']?.['https://issuer.example'])).toBe(true);
+    });
+
+    it.each([
+      [
+        'an unknown key-storage vocabulary',
+        '{"master":{"https://issuer.example":{"level":"high","requiresKeyStorage":"secure-element"}}}',
+      ],
+      [
+        'an eIDAS level where a key-storage value belongs',
+        '{"master":{"https://issuer.example":{"level":"high","requiresKeyStorage":"high"}}}',
+      ],
+      [
+        'a grade this build does not understand',
+        '{"master":{"https://issuer.example":{"level":"high","requiresKeyStorage":"hardware","requiresKeyStorageAttackPotential":"iso_18045_supreme"}}}',
+      ],
+      [
+        'the hyphen tidied out of enhanced-basic',
+        '{"master":{"https://issuer.example":{"level":"high","requiresKeyStorage":"hardware","requiresKeyStorageAttackPotential":"iso_18045_enhanced_basic"}}}',
+      ],
+      [
+        'a floor stated with no requirement to apply it to',
+        '{"master":{"https://issuer.example":{"level":"high","requiresKeyStorageAttackPotential":"iso_18045_high"}}}',
+      ],
+    ])('rejects %s', (_label, raw) => {
+      // The last row is the one worth spelling out: an entry carrying only a
+      // floor gates on NOTHING while reading like it gates on key storage — the
+      // shape that makes an operator believe they imposed a requirement they
+      // merely failed to impose.
+      expect(() => parse(raw)).toThrow();
+    });
+  });
+
   it('rejects a realm assuring more issuers than the cap allows', () => {
     const issuers = Object.fromEntries(
       Array.from({ length: 65 }, (_, i) => [`https://issuer-${i}.example`, { level: 'high' }])

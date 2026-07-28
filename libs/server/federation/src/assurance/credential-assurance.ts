@@ -1,7 +1,9 @@
+import type { AttackPotentialResistance } from '../attestation/attack-potential';
 import type { ValidatedCredential } from '../oid4vp/validated-credential';
 import type { AssuranceLevel } from '../providers/credential-provider.interface';
 import { canonicalizeIssuerIdentifier, ValidatedIssuer } from '../trust/issuer-identity';
 import type { AcrBearingAssuranceLevel } from './acr-value';
+import { keyStorageAtFloor } from './key-storage-evidence';
 
 /**
  * Deriving an eIDAS Level of Assurance from a validated credential (ADR-004,
@@ -66,10 +68,11 @@ import type { AcrBearingAssuranceLevel } from './acr-value';
  * decide a Level of Assurance.
  *
  * It reaches this module as OPTIONAL {@link AssuranceEvidence} rather than as a
- * field on `ValidatedCredential`, because #234 cannot observe it. A policy entry
- * that demands a key store is satisfiable only once a caller fills
- * {@link AssuranceEvidence.keyStorage} from #308's evidence — no wallet flow
- * does that yet, so such an entry is fail-closed by construction.
+ * field on `ValidatedCredential`, because #234 cannot observe it. The
+ * translation from #308's evidence into this vocabulary is `translateKeyStorageAssurance`
+ * (`assurance/key-storage-evidence.ts`) and lives THERE rather than here or at a
+ * call site — one function, separately tested, so no consumer decides for itself
+ * what an attestation is worth (ADR-010 §5, #379).
  *
  * - `software` — the key lives in ordinary application storage.
  * - `hardware` — the key is held in a secure cryptographic device (secure
@@ -92,8 +95,36 @@ export interface AssuranceEvidence {
   /**
    * Key storage as proven by a validated key attestation (#308). Absent means
    * unproven — see {@link IssuerAssuranceEntry.requiresKeyStorage}.
+   *
+   * Fill it from `translateKeyStorageAssurance(credential.assurance.keyStorageAssurance)`
+   * and from nothing else. Deriving it at a call site is how the same question
+   * gets two answers, and reading `assurance !== 'none'` as a level is the exact
+   * collapse {@link AssuredKeyStorage} above forbids.
+   *
+   * What this member deliberately does NOT carry is WHICH #308 source
+   * established it. The translation reports that on its own result, for the
+   * operator's log; a policy must not be able to branch on it, because D1
+   * settled the operator's knob as an attack-potential floor and a second axis
+   * here would be an undocumented one (ADR-010 §5).
    */
   readonly keyStorage?: AssuredKeyStorage;
+  /**
+   * The graded key-storage resistance a #308 source established — SOURCE-FREE,
+   * and present only when {@link keyStorage} was read from a recognised source
+   * and a recognised grade.
+   *
+   * Why both members exist: the caller translates ONCE, before the policy has
+   * selected an entry, so {@link keyStorage} is necessarily read at the DEFAULT
+   * floor. An entry carrying {@link IssuerAssuranceEntry.requiresKeyStorageAttackPotential}
+   * states a different floor, and re-reading it needs the grade rather than the
+   * already-collapsed `'software' | 'hardware'`.
+   *
+   * Fill it from `translateKeyStorageAssurance(...).establishedAttackPotential`
+   * and from nothing else — in particular never straight off
+   * `credential.assurance.keyStorageAssurance.keyStorage`, which has not passed
+   * the source gate and could carry a grade under `assurance: 'none'`.
+   */
+  readonly keyStorageAttackPotential?: AttackPotentialResistance;
 }
 
 /**
@@ -124,19 +155,46 @@ export interface IssuerAssuranceEntry {
    */
   readonly credentialTypes?: readonly string[];
   /**
-   * Minimum key storage this entry demands (#308 seam).
+   * Minimum key storage this entry demands (#308 → #237, ADR-010 §5).
    *
    * When set to `'hardware'`, the entry grants its level ONLY if
-   * {@link AssuranceEvidence.keyStorage} proves hardware storage. No wallet flow
-   * fills that field yet — #308 validates attestations and reports its own
-   * evidence on `CredentialAssuranceSignal.keyStorageAssurance`, and translating
-   * that into an eIDAS key-storage claim is an operator policy nobody has
-   * written — so such an entry can never grant. Fail-closed by construction, and
-   * deliberately so: an eIDAS `high` claim that assumed a secure cryptographic
-   * device nobody verified would be exactly the unearned assertion this module
-   * exists to prevent.
+   * {@link AssuranceEvidence.keyStorage} proves hardware storage. The wallet
+   * login path fills that field from #308's evidence through
+   * `translateKeyStorageAssurance`, so the entry is satisfiable — it was not
+   * before #379, which is the issue recording that the two halves shipped
+   * unconnected and this knob could therefore never grant.
+   *
+   * `'hardware'` alone means the STRICT reading: the strongest OID4VCI Appendix
+   * D §D.2 grade, as {@link import('./key-storage-evidence').DEFAULT_KEY_STORAGE_ATTACK_POTENTIAL}
+   * names it. An operator who wants a lower bar states
+   * {@link requiresKeyStorageAttackPotential}, because a default may only ever
+   * be the reading that refuses more. An eIDAS `high` claim that assumed a
+   * secure cryptographic device nobody verified is exactly the unearned
+   * assertion this module exists to prevent.
+   *
+   * Authorable through `OID4VP_ISSUER_ASSURANCE` since #379; before that it was
+   * reachable only from a direct {@link createIssuerAssurancePolicy} call, which
+   * nothing outside tests made.
    */
   readonly requiresKeyStorage?: AssuredKeyStorage;
+  /**
+   * The §D.2 attack-potential floor at which this entry reads evidence as
+   * `'hardware'` (D1, ADR-010 §5). Meaningless without
+   * {@link requiresKeyStorage} and refused by the configuration boundary when
+   * stated alone.
+   *
+   * Absent means {@link import('./key-storage-evidence').DEFAULT_KEY_STORAGE_ATTACK_POTENTIAL} —
+   * the STRICT reading. This exists so QAuth stays out of the
+   * eIDAS-interpretation business: where `high`'s "secure cryptographic device"
+   * begins is a property of the ecosystem a deployment participates in, and the
+   * operator is the only party that knows which ecosystems those are — the same
+   * reasoning that makes the assurance LEVEL itself configuration.
+   *
+   * A floor this build does not recognise never grants: `meetsAttackPotential`
+   * fails closed on an unrecognised floor, so a typo here refuses rather than
+   * disables the check it was written to impose.
+   */
+  readonly requiresKeyStorageAttackPotential?: AttackPotentialResistance;
 }
 
 /**
@@ -174,15 +232,33 @@ export const LOW_ONLY_ASSURANCE_POLICY: AssurancePolicy = Object.freeze({
   levelFor: (): AssuranceLevel => 'low',
 });
 
-/** Does the proven key storage satisfy what an entry demands? */
+/**
+ * Does the proven key storage satisfy what an entry demands?
+ *
+ * When the entry states its OWN floor the evidence is re-read at that floor,
+ * through the one translation rule, from the source-free grade
+ * {@link AssuranceEvidence.keyStorageAttackPotential}. The caller cannot have
+ * done that for us: it translates before any entry has been selected, so
+ * {@link AssuranceEvidence.keyStorage} is always the reading at the DEFAULT
+ * floor.
+ */
 function keyStorageSatisfied(
-  required: AssuredKeyStorage | undefined,
-  proven: AssuredKeyStorage | undefined
+  entry: IssuerAssuranceEntry,
+  evidence: AssuranceEvidence | undefined
 ): boolean {
+  const required = entry.requiresKeyStorage;
   if (required === undefined) return true;
+
+  const floor = entry.requiresKeyStorageAttackPotential;
+  const proven =
+    floor === undefined
+      ? evidence?.keyStorage
+      : keyStorageAtFloor(evidence?.keyStorageAttackPotential, floor);
+
   // Only an exact `hardware` proof satisfies a `hardware` requirement, and a
   // `software` requirement is satisfied by any PROVEN storage. Absent evidence
-  // never satisfies anything (#308 has not landed).
+  // never satisfies anything — which is what a caller that established nothing,
+  // or that never wired the #308 gate at all, passes.
   if (required === 'hardware') return proven === 'hardware';
   return proven === 'software' || proven === 'hardware';
 }
@@ -257,7 +333,7 @@ export function createIssuerAssurancePolicy(
           : undefined) ?? issuerWide.get(identifier);
 
       if (entry === undefined) return 'low';
-      if (!keyStorageSatisfied(entry.requiresKeyStorage, evidence?.keyStorage)) return 'low';
+      if (!keyStorageSatisfied(entry, evidence)) return 'low';
       return entry.assuranceLevel;
     },
   });

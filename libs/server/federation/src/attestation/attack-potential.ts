@@ -71,6 +71,22 @@ export const ATTACK_POTENTIAL_RESISTANCE_ORDER: readonly AttackPotentialResistan
   ]);
 
 /**
+ * The strongest level the table states.
+ *
+ * Exported so that a POLICY outside this adapter can state a floor of "the
+ * strongest resistance §D.2 grades" without naming the string — #308's placement
+ * rule is that no HAIP-specific key-attestation constant appears outside the
+ * `haip-1.0` profile entry and this adapter, and the #237 translation
+ * (`assurance/key-storage-evidence.ts`) needs exactly one such floor as its
+ * default. Pinned to the last member of
+ * {@link ATTACK_POTENTIAL_RESISTANCE_ORDER} by test rather than computed from
+ * it: a level added to the table must be a deliberate edit here too, because
+ * silently re-pointing every policy default at a brand-new grade would stop
+ * every already-granting deployment from granting.
+ */
+export const HIGHEST_ATTACK_POTENTIAL_RESISTANCE: AttackPotentialResistance = 'iso_18045_high';
+
+/**
  * Narrow an untrusted value to an {@link AttackPotentialResistance}.
  *
  * The input comes out of an attacker-influenced JWT payload, so this is a

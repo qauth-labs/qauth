@@ -19,6 +19,12 @@ export {
 } from './federation';
 export { type IssuerKeysEnv, issuerKeysEnvSchema, type PerIssuerKeySets } from './issuer-keys';
 export { type JwtEnv, jwtEnvSchema } from './jwt';
+export {
+  type AttestedKeyStorageGrade,
+  type AttestingIssuerMap,
+  type KeyAttestationEnv,
+  keyAttestationEnvSchema,
+} from './key-attestation';
 export { type ObservabilityEnv, observabilityEnvSchema } from './observability';
 export { type PasswordEnv, passwordEnvSchema } from './password';
 export { type RateLimitEnv, rateLimitEnvSchema } from './rate-limit';
