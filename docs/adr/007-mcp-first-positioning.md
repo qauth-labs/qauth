@@ -7,6 +7,13 @@
 > **Implementation status (2026-06-24):** The near-term MCP track has **shipped**. CIMD client registration is live (config-gated via `CIMD_*`, with SSRF guards and an optional domain trust policy); `@qauth-labs/mcp-guard` ships as the resource-server SDK (PRM discovery, `401`/`403` challenges, JWKS/introspection token validation); the agent-facing `GET /api/clients` developer surface exists; and the T0 trust floor is in place — testcontainers-backed repository tests plus a CI gate running `lint typecheck test build` and a repo-wide coverage threshold. The long-term federation/PQC items below remain accepted designs only (see [ADR-002](./002-identifier-abstraction.md) / [ADR-003](./003-credential-provider-interface.md) / [ADR-004](./004-wallet-agnostic-federation.md) / [ADR-005](./005-pqc-hybrid-signing.md)).
 >
 > **Activation (2026-07-21, #304): T4 (Federation & PQC) is now the active track, and the "accepted designs only" line above is superseded.** This ADR planned exactly this — federation/PQC "retained as the **long-term platform**, resequenced to follow the MCP work" (§Decision); §Consequences records that "only the order changes." Reaching the "follow" step is fulfillment, not a reversal. Current status: **ADR-002 is IMPLEMENTED** (identifier-abstraction migration complete — Epic #224, PRs #225–#230, migrations 0009–0012); **ADR-003 is implemented** (`CredentialProvider` interface + registry, PR #227); **ADR-004 has shipped code** (`WalletProvider` skeleton, #232 — `verify()` throws by design until the OID4VP flow lands; base-profile flow in progress under Epic #231); **ADR-005 has shipped code** (native + noble ML-DSA-65 backends, #243/#244 — no ML-DSA-signed token emitted yet). The gate this deferral hinged on is therefore **cleared**: the "gated on the ADR-002 schema migration, which has not started" statement (§Context) and "**Defer the ADR-002 identifier-abstraction migration**" (§Decision 3) describe the 2026-06-23 posture and no longer hold. T4 re-activation was the maintainer decision recorded on #296 (2026-07-20).
+>
+> **Progress update (2026-07-31): T4 is now 48 issues closed / 4 open, and the two "shipped code" clauses above understate where ADR-004 and ADR-005 stand.**
+>
+> - **ADR-004** — the OID4VP base profile is **complete**, not "in progress". All of #233–#240 merged, and a browser wallet sign-in runs end to end behind `WALLET_FEDERATION_ENABLED` (default off), covered by an E2E mock-wallet suite. `WalletProvider.verify()` still throws by design, but the wallet login path does **not** go through it — it runs on `apps/auth-server/src/app/routes/ui/wallet-login.ts` → `helpers/wallet-presentation.ts`. See the [ADR-004 status note](./004-wallet-agnostic-federation.md).
+> - **ADR-005** — "no ML-DSA-signed token emitted yet" no longer holds. #245–#247 landed the JWS carrier, mixed `AKP`+`OKP` JWKS and the introspection-first posture, and **#275 wired live hybrid issuance** into `/oauth/token`, `/auth/login` and `/oauth/introspect`. A deployment that enables `HYBRID_SIGNING_ENABLED` (default off) does emit ML-DSA-65 material.
+>
+> Both features remain **off by default**, so a default deployment's behaviour is unchanged. Open: #376, #377, #379 and the tracking epic #231.
 
 ## Context
 
@@ -154,8 +161,8 @@ catch this earlier than an ad-hoc audit does.
 
 - [ADR-002: Identifier Abstraction](./002-identifier-abstraction.md) — IMPLEMENTED (Epic #224); was the Phase 4 gate, now cleared
 - [ADR-003: CredentialProvider Abstraction](./003-credential-provider-interface.md) — implemented (PR #227)
-- [ADR-004: Wallet-Agnostic VC Federation](./004-wallet-agnostic-federation.md) — active (T4); `WalletProvider` skeleton shipped (#232), OID4VP flow in progress (Epic #231)
-- [ADR-005: Post-Quantum Hybrid Signing](./005-pqc-hybrid-signing.md) — active (T4); ML-DSA-65 backends shipped (#243/#244)
+- [ADR-004: Wallet-Agnostic VC Federation](./004-wallet-agnostic-federation.md) — active (T4); OID4VP base profile complete (#233–#240), browser wallet sign-in works end to end behind `WALLET_FEDERATION_ENABLED` (default off)
+- [ADR-005: Post-Quantum Hybrid Signing](./005-pqc-hybrid-signing.md) — active (T4); hybrid issuance merged and wired into the live routes (#275), default off via `HYBRID_SIGNING_ENABLED`
 - [ADR-006: OAuth Grants and Audience](./006-oauth-grants-and-audience.md) — the foundation this builds on
 - PR #156 — `integration/oauth-mcp-stack`; PR #159 — public-client `authorization_code`
 - [MCP Authorization specification (2025-11-25)](https://modelcontextprotocol.io/specification/2025-11-25/basic/authorization) · [changelog vs 2025-06-18](https://modelcontextprotocol.io/specification/2025-11-25/changelog) · [auth extensions (ext-auth)](https://github.com/modelcontextprotocol/ext-auth)

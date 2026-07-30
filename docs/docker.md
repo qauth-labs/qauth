@@ -343,6 +343,51 @@ CIMD is the recommended MCP client-registration mechanism (see [ADR-007](./adr/0
 
 > **Note:** `.env.docker.example` does not yet list the `CIMD_*` variables. They are optional and default-safe, so the stack runs without them; add them to `.env` only to override the defaults above.
 
+### Wallet federation (OID4VP, T4)
+
+Wallet sign-in is **off by default**. With `WALLET_FEDERATION_ENABLED` unset or
+`false` the wallet routes are never registered and the paths 404 — nothing below
+has any effect. See the [wallet sign-in guide](./wallet-login.md) for the full
+flow and [ADR-009](./adr/009-wallet-account-resolution.md) for the resolution model.
+
+| Variable                            | Required          | Default        | Description                                                                                                                                                               |
+| ----------------------------------- | ----------------- | -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `WALLET_FEDERATION_ENABLED`         | No                | `false`        | Master switch. When off, the wallet-login UI and the `direct_post` endpoint are not registered.                                                                           |
+| `OID4VP_VERIFIER_PROFILE`           | Yes, when enabled | _(unset)_      | `oid4vp-1.0-base` or `haip-1.0`. There is no fallback — an unset or unprovisioned profile refuses every flow. `haip-1.0` awaits #377.                                     |
+| `OID4VP_REQUESTED_VCT`              | Yes, when enabled | _(unset)_      | The credential type to request. Unset means a DCQL query with no type constraint, which is refused.                                                                       |
+| `OID4VP_TRUSTED_ISSUERS`            | Yes, when enabled | _(unset)_      | Per-realm issuer allowlist. An issuer absent here is refused before any claim is read.                                                                                    |
+| `OID4VP_ISSUER_JWKS`                | Yes, when enabled | _(unset)_      | The key each trusted issuer signs with.                                                                                                                                   |
+| `OID4VP_SUBJECT_RESOLUTION`         | No                | _(unset)_      | `asserted-lookup` (the ADR-009 default), `issuer-scoped-claim`, `session-binding`, `key-thumbprint`, or `rp-pseudonym`.                                                   |
+| `OID4VP_SUBJECT_BINDING_CLAIMS`     | Yes, when enabled | _(unset)_      | Comma-separated claims the wallet binding is derived from — the entitlement check of `asserted-lookup`. Missing means every refusal.                                      |
+| `OID4VP_SUBJECT_CLAIM`              | Conditional       | _(unset)_      | The claim carrying the subject, for `issuer-scoped-claim`.                                                                                                                |
+| `OID4VP_SUBJECT_CLAIM_ISSUERS`      | Conditional       | _(unset)_      | Which issuers may assert `OID4VP_SUBJECT_CLAIM`.                                                                                                                          |
+| `OID4VP_ISSUER_ASSURANCE`           | No                | _(unset)_      | Per-issuer eIDAS level of assurance, mapped to the OIDC `acr` claim ([ADR-010](./adr/010-acr-assurance-mapping.md)). Listing an issuer here does **not** make it trusted. |
+| `OID4VP_STATUS_LIST_TRUST_ANCHORS`  | No                | _(empty)_      | Trust anchors for Token Status List revocation checking (or `_PATH` to read them from a file).                                                                            |
+| `OID4VP_STATUS_LIST_URI_ALLOWLIST`  | No                | _(empty)_      | Permitted status-list URIs.                                                                                                                                               |
+| `OID4VP_WALLET_INVOCATION_ENDPOINT` | No                | `openid4vp://` | The wallet deep-link / QR target. Script-capable schemes (`javascript:`, `data:`) are refused at boot.                                                                    |
+
+### Post-quantum hybrid signing (ADR-005)
+
+Also **off by default** — tokens are Ed25519-only and the JWKS is EdDSA-only
+unless configured. See the [verifier guide](./hybrid-signing-verifier-guide.md).
+
+| Variable                 | Required               | Default     | Description                                                                                                                                                                     |
+| ------------------------ | ---------------------- | ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `SIGNING_ALGORITHM_MODE` | No                     | `ed25519`   | `ed25519` or `ed25519+ml-dsa-65`. Must be the latter for hybrid.                                                                                                                |
+| `HYBRID_SIGNING_ENABLED` | No                     | `false`     | Turns on live hybrid token issuance. Enabling it without an ML-DSA key **throws at startup** — a half-configured deployment fails fast rather than degrading to classical-only. |
+| `JWT_MLDSA_PRIVATE_KEY`  | Yes, when hybrid is on | _(unset)_   | ML-DSA-65 private key as a base64url 32-byte seed (or `JWT_MLDSA_PRIVATE_KEY_PATH`).                                                                                            |
+| `JWT_MLDSA_KID`          | No                     | _(unset)_   | Stable `kid` for the ML-DSA key published in the `AKP` JWK.                                                                                                                     |
+| `PQC_TOKEN_DELIVERY`     | No                     | `reference` | `reference` keeps the bearer a small Ed25519 JWS and serves the PQC signature via introspection. `self-contained` requires `PQC_SELF_CONTAINED_ACK`.                            |
+| `PQC_SELF_CONTAINED_ACK` | Conditional            | `false`     | Explicit acknowledgement that `self-contained` ships a ~4.4 KB detached signature exceeding cookie and URL budgets.                                                             |
+
+> Setting `JWT_MLDSA_PRIVATE_KEY` alone publishes the ML-DSA public key in the
+> JWKS without issuing any hybrid token — deliberate, so verifiers can fetch the
+> key before issuance is switched on.
+
+> **Note:** `.env.docker.example` does not list the wallet-federation or
+> post-quantum variables either. Both features are off by default, so the stack
+> runs without them.
+
 ## Troubleshooting
 
 ### Port Conflicts

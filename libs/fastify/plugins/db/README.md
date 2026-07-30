@@ -6,7 +6,7 @@ Fastify plugin for PostgreSQL database connection management in QAuth. This plug
 
 The `@qauth-labs/fastify-plugin-db` plugin integrates PostgreSQL into your Fastify application by:
 
-- Decorating the Fastify instance with `db` (Drizzle ORM) and `dbPool` (PostgreSQL connection pool) properties
+- Decorating the Fastify instance with `db` (Drizzle ORM), `dbPool` (PostgreSQL connection pool) and `repositories` (all repository factories, pre-bound)
 - Managing database connection lifecycle (connection, verification, graceful shutdown)
 - Providing automatic connection testing on server ready
 - Handling graceful shutdown on server close
@@ -118,7 +118,10 @@ fastify.get('/health', async (request, reply) => {
 For type-safe database operations with proper error handling, use the repository pattern:
 
 ```typescript
-import { usersRepository, realmsRepository } from '@qauth-labs/infra-db';
+// The plugin decorates `fastify.repositories` — there are no singleton
+// repository exports on @qauth-labs/infra-db. Available keys: users, realms,
+// userCredentials, userAttributes, emailVerificationTokens, oauthClients,
+// oauthConsents, refreshTokens, authorizationCodes, auditLogs, apiKeys.
 import { NotFoundError, UniqueConstraintError } from '@qauth-labs/shared-errors';
 
 // Get user by ID
@@ -126,7 +129,7 @@ fastify.get('/users/:id', async (request, reply) => {
   const { id } = request.params as { id: string };
 
   try {
-    const user = await usersRepository.findByIdOrThrow(id);
+    const user = await fastify.repositories.users.findByIdOrThrow(id);
     return { user };
   } catch (error) {
     if (error instanceof NotFoundError) {
@@ -143,7 +146,7 @@ fastify.post('/users', async (request, reply) => {
   const userData = request.body as NewUser;
 
   try {
-    const user = await usersRepository.create(userData);
+    const user = await fastify.repositories.users.create(userData);
     reply.code(201).send({ user });
   } catch (error) {
     if (error instanceof UniqueConstraintError) {
@@ -164,7 +167,7 @@ fastify.put('/users/:id', async (request, reply) => {
   const updateData = request.body as UpdateUser;
 
   try {
-    const user = await usersRepository.update(id, updateData);
+    const user = await fastify.repositories.users.update(id, updateData);
     return { user };
   } catch (error) {
     if (error instanceof NotFoundError) {
@@ -182,24 +185,27 @@ fastify.put('/users/:id', async (request, reply) => {
 Repositories support transactions for atomic operations:
 
 ```typescript
-import { db } from '@qauth-labs/infra-db';
-import { usersRepository, realmsRepository } from '@qauth-labs/infra-db';
+import { buildPasswordCredentialData } from '@qauth-labs/server-federation';
 
 fastify.post('/setup', async (request, reply) => {
   const { realmName, adminEmail } = request.body;
 
-  // All operations in a single transaction
-  const result = await db.transaction(async (tx) => {
+  // Drive the transaction through the decorated Drizzle client.
+  const result = await fastify.db.transaction(async (tx) => {
     // Create realm
-    const realm = await realmsRepository.create({ name: realmName }, tx);
+    const realm = await fastify.repositories.realms.create({ name: realmName }, tx);
 
-    // Create admin user in the same transaction
-    const admin = await usersRepository.create(
+    // Create the admin identity anchor. Since ADR-002 (#230) `users` carries
+    // no email or password — those live on the credential row below.
+    const admin = await fastify.repositories.users.create({ realmId: realm.id }, tx);
+
+    await fastify.repositories.userCredentials.create(
       {
+        userId: admin.id,
         realmId: realm.id,
-        email: adminEmail,
-        passwordHash: await hashPassword('admin123'),
-        emailVerified: true,
+        providerType: 'password',
+        externalSub: adminEmail,
+        credentialData: buildPasswordCredentialData(await hashPassword('admin123'), true),
       },
       tx
     );
@@ -234,13 +240,15 @@ The plugin requires a `config` object with database connection settings. Configu
 
 ### Fastify Instance Decorators
 
-The plugin decorates the Fastify instance with two properties:
+The plugin decorates the Fastify instance with three properties — `db`, `dbPool`
+and `repositories`:
 
 #### `fastify.db`
 
-Type: `typeof db` (Drizzle ORM instance)
+Type: `DbClient` (Drizzle ORM instance)
 
-The Drizzle ORM instance. This is the same instance exported from `@qauth-labs/infra-db`.
+The Drizzle ORM instance the plugin built via `createDatabase()`. `@qauth-labs/infra-db`
+exports a **factory, not a singleton**, so this decorator is the only handle on it.
 
 **Example**:
 
@@ -323,7 +331,7 @@ DB_POOL_IDLE_TIMEOUT=10000
 DB_POOL_CONNECTION_TIMEOUT=2000
 ```
 
-For detailed configuration options, see the [`@qauth-labs/infra-db` README](../../infra/db/README.md).
+For detailed configuration options, see the [`@qauth-labs/infra-db` README](../../../infra/db/README.md).
 
 ## Lifecycle Hooks
 
@@ -370,15 +378,18 @@ fastify.addHook('onClose', async () => {
 
 This plugin wraps the `@qauth-labs/infra-db` library. The underlying database connection is managed by `@qauth-labs/infra-db`, and this plugin provides Fastify-specific lifecycle management.
 
-You can still use utilities from `@qauth-labs/infra-db` directly:
+`@qauth-labs/infra-db` exports a **factory**, not `db` / `pool` / `testConnection`
+singletons — so inside a Fastify app, reach for the decorators the plugin
+installed rather than importing a connection:
 
 ```typescript
-import { db, pool, testConnection } from '@qauth-labs/infra-db';
-
-// These use the same database connection
-const isConnected = await testConnection();
-const result = await pool.query('SELECT NOW()');
+// The plugin already built and verified the connection on ready, and decorates
+// exactly three properties: `db`, `dbPool` and `repositories`.
+const result = await fastify.dbPool.query('SELECT NOW()');
 ```
+
+Only call `createDatabase()` yourself outside a Fastify process (scripts,
+migrations) — doing it inside one opens a second, unmanaged pool.
 
 ## Error Handling
 
@@ -468,7 +479,7 @@ await fastify.listen({ port: 3000 });
 
 ## Migrations
 
-Database migrations are managed through the `@qauth-labs/infra-db` library. See the [`@qauth-labs/infra-db` README](../../infra/db/README.md) for migration commands.
+Database migrations are managed through the `@qauth-labs/infra-db` library. See the [`@qauth-labs/infra-db` README](../../../infra/db/README.md) for migration commands.
 
 ## Development
 
@@ -493,8 +504,8 @@ nx lint fastify-plugin-db
 
 ## Related Libraries
 
-- [`@qauth-labs/infra-db`](../../infra/db/README.md): Core database utilities, Drizzle ORM, and repository pattern
-- [`@qauth-labs/shared-errors`](../../shared/errors/README.md): Error classes used by repositories
+- [`@qauth-labs/infra-db`](../../../infra/db/README.md): Core database utilities, Drizzle ORM, and repository pattern
+- [`@qauth-labs/shared-errors`](../../../shared/errors/README.md): Error classes used by repositories
 - [`@qauth-labs/fastify-plugin-cache`](../cache/README.md): Cache plugin for Fastify
 
 ## License

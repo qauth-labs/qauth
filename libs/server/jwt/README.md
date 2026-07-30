@@ -9,6 +9,7 @@ The `@qauth-labs/server-jwt` library provides:
 - **JWT Signing & Verification** - EdDSA (Ed25519) based JWT operations
 - **Key Management** - EdDSA key pair generation and import/export utilities
 - **Refresh Token Generation** - Secure refresh token generation with SHA-256 hashing
+- **Hybrid post-quantum signing** - detached-parallel ML-DSA-65 + Ed25519 ([ADR-005](../../../docs/adr/005-pqc-hybrid-signing.md)), off by default
 - **Type-Safe API** - Full TypeScript support with proper error handling
 - **Custom Error Types** - Domain-specific errors for JWT operations
 
@@ -350,6 +351,38 @@ Validates that a token is a valid 64-character hexadecimal string.
 isValidRefreshTokenFormat('a1b2c3d4e5f6...'); // true
 isValidRefreshTokenFormat('invalid'); // false
 ```
+
+### Hybrid post-quantum signing (ADR-005)
+
+Alongside the classical API above, this library exposes a hybrid surface used
+only when an operator sets `HYBRID_SIGNING_ENABLED=true`. A hybrid token **is**
+an ordinary Ed25519 compact JWS — the ML-DSA-65 signature is detached and carried
+alongside it, never inside the compact string — so classical verifiers are
+unaffected. See the
+[verifier guide](../../../docs/hybrid-signing-verifier-guide.md).
+
+#### `signHybridAccessToken(payload, keys, issuer, expiresIn, backend): Promise<HybridSignedToken>`
+
+Signs an access token with both algorithms. Returns the compact Ed25519 JWS plus
+the detached PQC signature; the caller decides how to deliver the latter
+(introspection by default, per `PQC_TOKEN_DELIVERY`).
+
+#### `signHybridIdToken(...): Promise<HybridSignedToken>`
+
+The ID-token equivalent.
+
+#### `verifyHybridAccessToken(hybrid, keys, options): Promise<Record<string, unknown>>`
+
+Verifies both signatures over the identical signing input. `options.requirePqc`
+decides whether a missing or invalid PQC component is fatal — set it `true` to
+refuse a token that only carries the classical signature.
+
+#### `exportMlDsaPublicJwk(...)` / `selectJwksKey(...)`
+
+Publish the ML-DSA public key as an `AKP` JWK alongside the Ed25519 `OKP` entry,
+and select the right key when verifying against a mixed JWKS. The `AKP` entry
+appears as soon as an ML-DSA key is configured, independently of whether hybrid
+issuance is on.
 
 ## Types
 

@@ -82,8 +82,9 @@ deep link, and the browser-native **Digital Credentials API**, whose `origin:`
 Client Identifier Prefix is reserved for it.
 
 **This ships QR/deep-link only.** The DC API path needs the `origin:` prefix,
-which QAuth's client-identifier module does not implement, and a signed request,
-which waits on #298 (ES256/JAR). Shipping half of it would mean an entry point
+which QAuth's client-identifier module does not implement, and a signed request.
+The ES256/JAR crypto landed with #298; wiring it into the request path is #377,
+so signed requests are still unavailable. Shipping half of it would mean an entry point
 that works in one browser build and fails everywhere else. Because the invocation
 URI is treated as opaque throughout, adding the DC API later changes what the
 backend produces, not the structure of these screens.
@@ -98,8 +99,9 @@ button that fails:
   all: the paths 404.
 - No `VerifierProfile` is selected, or the selected one is not provisioned. There
   is never a fallback to the more capable profile (#296, LOCKED).
-- The profile's posture needs a signed request or an encrypted response — both
-  wait on #298, so `haip-1.0` is refused today.
+- The profile's posture needs a signed request or an encrypted response. The
+  underlying crypto shipped with #298 (ES256 + JWE), but wiring it into the
+  request/response path is #377, so `haip-1.0` is still refused today.
 - The profile does not permit `dc+sd-jwt`, the one credential format QAuth ships
   an adapter for.
 - `OID4VP_REQUESTED_VCT` is unset. A DCQL query with no type constraint asks a
@@ -189,12 +191,15 @@ untrusted issuer.
 Listing an issuer in `OID4VP_ISSUER_ASSURANCE` does **not** make it trusted. The
 two variables answer different questions and an issuer must appear in both.
 
-### Not yet reachable
+### Reachable as of #240
 
-Because the authentication seam below still refuses every presentation, no wallet
-login can produce a level today, so no ID token carries `acr` yet. Everything from
-the seam onwards is wired and tested; the level appears the moment
-#234/#236/#300 let `resolveWalletPresentation` return an authenticated user.
+`resolveWalletPresentation` now returns an authenticated user, so a completed
+wallet login does produce a level and the resulting ID token carries `acr`. The
+E2E suite asserts both its presence and its absence, and that the password login
+still carries no `acr` with wallet federation on or off.
+
+This requires `WALLET_FEDERATION_ENABLED=true`; with the flag off the routes are
+never registered and no wallet login exists to produce a level.
 
 ## Security properties
 
@@ -446,7 +451,7 @@ query, and dispatches presentation building through a per-format table with
 `dc+sd-jwt` present and `mso_mdoc` deliberately absent — so an mdoc wallet is a
 new table entry, not a rewrite.
 
-A `haip-1.0` suite exists alongside it and is **pending #298**
+A `haip-1.0` suite exists alongside it and is **pending #377**
 (`wallet-federation-haip.integration.test.ts`): signed `x509_hash` requests and
 encrypted `direct_post.jwt` responses need ES256 and JWE. What it asserts today
 is that selecting that profile takes the deployment DOWN rather than serving

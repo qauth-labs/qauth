@@ -22,9 +22,26 @@ This library defines that abstraction (see
   `createProviderRegistry()` and populated from config/DI at auth-server
   bootstrap.
 
-> **Status:** interface + registry only. No concrete provider ships here —
-> `PasswordProvider` (#228) and `WalletProvider` (#232) implement
-> `CredentialProvider` in follow-up work.
+> **Status (2026-07-31):** this is no longer interface-and-registry only — an
+> earlier revision said so, and that is superseded. Shipping here now:
+>
+> - `providers/` — **`PasswordProvider`** (#228), live on the production login
+>   path, and **`WalletProvider`** (#232), whose `verify()` throws
+>   unconditionally **by design** and must keep doing so. Wallet login does not
+>   go through it; it runs on the auth-server's own OID4VP seam.
+> - `oid4vp/` — OID4VP 1.0 request generation, `direct_post` intake and SD-JWT VC
+>   presentation validation (#233, #234)
+> - `claims/` — VC claims normalization and the ADR-002 attribute trust order
+>   (#235)
+> - `trust/`, `x509/` — per-realm issuer trust registry and chain validation
+>   (#236)
+> - `status/` — Token Status List revocation checking (#297)
+> - `attestation/` — HAIP Interoperable Key Attestations (#308)
+> - `assurance/` — eIDAS level-of-assurance resolution feeding the `acr` claim
+>   ([ADR-010](../../../docs/adr/010-acr-assurance-mapping.md), #237)
+> - `subject/` — configurable `SubjectResolutionStrategy` and account linking
+>   (#300, #238)
+> - `profiles/` — the `VerifierProfile` abstraction (#299)
 
 ## Usage
 

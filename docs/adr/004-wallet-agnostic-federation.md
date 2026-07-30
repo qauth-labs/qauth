@@ -11,6 +11,12 @@
 > **Correction (2026-07-20): SIOPv2 is not the wallet authentication mechanism, and the 2026-07-19 refresh was wrong to say it was.** See [Spec status (2026-07-20)](#spec-status-2026-07-20), which supersedes that statement and records the OID4VP 1.0 / HAIP 1.0 corrections. Open questions arising from it are tracked in issue #296 and are **not** decided here.
 >
 > **Status (2026-07-21, #304): T4 is active and code has shipped — the "not implemented" note above is superseded for the skeleton.** The `WalletProvider` skeleton landed (#232, PR #294 — `provider_type: 'wallet'`; `verify()` throws by design until a validated presentation exists). The OID4VP 1.0 **base-profile** implementation is now in progress under Epic #231. The full presentation flow (#233–#240) is **not** yet complete. The [ADR-002](./002-identifier-abstraction.md) migration this ADR was gated on is cleared (ADR-002 IMPLEMENTED); track re-activation is the [ADR-007](./007-mcp-first-positioning.md) Activation note (decision #296).
+>
+> **Status (2026-07-31): the base profile is complete and a browser wallet sign-in works end to end — the "not yet complete" line above is superseded.** All of #233–#240 have merged: OID4VP 1.0 request generation + `direct_post` intake (#233), SD-JWT VC presentation validation (#234), VC claims normalization (#235), per-realm issuer trust registry (#236), `acr` propagation ([ADR-010](./010-acr-assurance-mapping.md), #237), account linking (#238), the wallet sign-in UI (#239) and an E2E mock-wallet suite (#240) — plus `VerifierProfile` (#299), ES256 + JWE (#298), Token Status List revocation (#297), HAIP key attestations (#308) and configurable subject resolution (#300).
+>
+> The flow runs on a dedicated seam in `apps/auth-server` (`routes/ui/wallet-login.ts` → `helpers/wallet-presentation.ts`), which resolves or enrols an account and mints a session. **`WalletProvider.verify()` still throws unconditionally and must keep doing so** — it is the generic `CredentialProvider`-registry entry point, and the wallet login path does not call it. Do not read that throw as "wallet login is unimplemented."
+>
+> It is **off by default** (`WALLET_FEDERATION_ENABLED=false`; the routes are not registered) and validated so far only on the `oid4vp-1.0-base` profile against a mock wallet. Remaining: HAIP profile wiring (#377), key-storage assurance in the assurance policy (#379), and the real-wallet interoperability pass (#376).
 
 ## Context
 

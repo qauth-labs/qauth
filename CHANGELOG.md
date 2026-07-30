@@ -7,6 +7,87 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Wallet federation (T4, [ADR-004](./docs/adr/004-wallet-agnostic-federation.md)) —
+  browser wallet sign-in.** QAuth can now generate an OID4VP 1.0 authorization
+  request, take back a `direct_post` response, validate an SD-JWT VC presentation,
+  resolve or enrol the account, and mint a session — a complete browser sign-in.
+  Covered end-to-end against a mock wallet: first-time enrolment, returning login,
+  the ADR-009 §1 takeover attempt, untrusted-issuer refusal, account linking, and
+  `acr` presence/absence.
+
+  **Off by default.** Nothing below changes how an existing email/password or
+  OAuth client behaves — the routes are not even registered unless
+  `WALLET_FEDERATION_ENABLED=true`. Validated so far only on the
+  `oid4vp-1.0-base` profile against a mock wallet; the HAIP profile (#377) and a
+  real-wallet interoperability pass (#376) remain open.
+
+  Note: `WalletProvider.verify()` still throws unconditionally and is required to
+  keep doing so (#232) — the wallet login path does not go through the generic
+  `CredentialProvider` registry.
+  - OID4VP 1.0 request generation + `direct_post` intake ([#233])
+  - `VerifierProfile` abstraction for configurable deployment profiles ([#299])
+  - SD-JWT VC presentation validation ([#234])
+  - Static per-realm issuer trust registry ([#236])
+  - ES256 + JWE (ECDH-ES / A\*GCM) crypto prerequisites for HAIP ([#298])
+  - Credential revocation via Token Status List, HAIP §6.1 ([#297])
+  - Interoperable Key Attestations validation, HAIP §9.2 ([#308])
+  - VC claims normalization into `user_attributes` ([#235])
+  - Configurable `SubjectResolutionStrategy` ([#300], [ADR-009](./docs/adr/009-wallet-account-resolution.md))
+  - Account linking — attach a wallet credential to an existing user ([#238])
+  - `acr` claim propagation from assurance level ([#237], [ADR-010](./docs/adr/010-acr-assurance-mapping.md))
+  - Wallet sign-in flow in the login screens ([#239])
+  - E2E integration suite against a reference mock wallet ([#240])
+
+  **New operator configuration** (all optional; the feature is off by default):
+  `WALLET_FEDERATION_ENABLED`, `OID4VP_VERIFIER_PROFILE`, `OID4VP_REQUESTED_VCT`,
+  `OID4VP_SUBJECT_RESOLUTION`, `OID4VP_SUBJECT_CLAIM`,
+  `OID4VP_SUBJECT_CLAIM_ISSUERS`, `OID4VP_SUBJECT_BINDING_CLAIMS`,
+  `OID4VP_STATUS_LIST_TRUST_ANCHORS` (or `_PATH`),
+  `OID4VP_STATUS_LIST_URI_ALLOWLIST`, `OID4VP_WALLET_INVOCATION_ENDPOINT`,
+  `OID4VP_ISSUER_JWKS`, `OID4VP_TRUSTED_ISSUERS`, `OID4VP_ISSUER_ASSURANCE`,
+  `ACR_VALUE_STYLE`.
+
+- **Post-quantum hybrid signing (T4, [ADR-005](./docs/adr/005-pqc-hybrid-signing.md))
+  — implemented and off by default.** Detached-parallel ML-DSA-65 + Ed25519
+  signing, a mixed `AKP` + `OKP` JWKS, a napi-rs native backend over `aws-lc-rs`
+  and a `@noble/post-quantum` fallback. **No behavior changes unless enabled**:
+  `SIGNING_ALGORITHM_MODE` defaults to `ed25519` and `HYBRID_SIGNING_ENABLED` to
+  `false`, so tokens remain Ed25519-only and classical verifiers need no action.
+  Enabling hybrid by default is gated on the pre-default-on checklist in the
+  [security gate review](./docs/security/005-pqc-hybrid-signing-review.md)
+  (CONDITIONAL PASS). See the
+  [verifier guide](./docs/hybrid-signing-verifier-guide.md).
+  ([#242], [#243], [#244], [#245], [#246], [#247], [#248], [#249])
+
+  **New operator configuration:** `SIGNING_ALGORITHM_MODE`,
+  `HYBRID_SIGNING_ENABLED`, `JWT_MLDSA_PRIVATE_KEY` (or `_PATH`),
+  `JWT_MLDSA_KID`, `PQC_TOKEN_DELIVERY`, `PQC_SELF_CONTAINED_ACK`.
+
+[#232]: https://github.com/qauth-labs/qauth/issues/232
+[#233]: https://github.com/qauth-labs/qauth/issues/233
+[#234]: https://github.com/qauth-labs/qauth/issues/234
+[#235]: https://github.com/qauth-labs/qauth/issues/235
+[#236]: https://github.com/qauth-labs/qauth/issues/236
+[#237]: https://github.com/qauth-labs/qauth/issues/237
+[#238]: https://github.com/qauth-labs/qauth/issues/238
+[#239]: https://github.com/qauth-labs/qauth/issues/239
+[#240]: https://github.com/qauth-labs/qauth/issues/240
+[#242]: https://github.com/qauth-labs/qauth/issues/242
+[#243]: https://github.com/qauth-labs/qauth/issues/243
+[#244]: https://github.com/qauth-labs/qauth/issues/244
+[#245]: https://github.com/qauth-labs/qauth/issues/245
+[#246]: https://github.com/qauth-labs/qauth/issues/246
+[#247]: https://github.com/qauth-labs/qauth/issues/247
+[#248]: https://github.com/qauth-labs/qauth/issues/248
+[#249]: https://github.com/qauth-labs/qauth/issues/249
+[#297]: https://github.com/qauth-labs/qauth/issues/297
+[#298]: https://github.com/qauth-labs/qauth/issues/298
+[#299]: https://github.com/qauth-labs/qauth/issues/299
+[#300]: https://github.com/qauth-labs/qauth/issues/300
+[#308]: https://github.com/qauth-labs/qauth/issues/308
+
 ### Changed
 
 - **BREAKING**: ID tokens now release `email`/`email_verified` only when the
@@ -112,3 +193,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and the register 201 response's `emailVerified: false` is now a literal
   (byte-identical wire value). No guard or special deploy ordering needed.
   ([#261])
+
+- **Schema**: migrations 0013–0016 support the OIDC and T4 work above. All four
+  are additive and require no special deploy ordering or backfill.
+  - `0013` — adds `authorization_codes.auth_time`, carrying the authentication
+    instant through to the ID token's `auth_time` claim.
+  - `0014` — widens `authorization_codes.nonce` and `.state` from `varchar` to
+    `text`. Clients that previously had long values rejected now succeed; no
+    existing row changes.
+  - `0015` — adds the `oid4vp_request_states` table (realm-scoped, with a unique
+    `state_hash`, the DCQL query, expiry and single-use `redeemed_at`), backing
+    OID4VP request/response correlation. Unused unless wallet federation is on.
+  - `0016` — adds `authorization_codes.assurance_level`, constrained to
+    `substantial` / `high` or NULL, feeding the `acr` mapping in ADR-010.

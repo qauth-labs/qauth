@@ -13,12 +13,21 @@ anything — you need to do.
 ## Current status (read this first)
 
 Hybrid signing is a **capability that is OFF by default**
-(`HYBRID_SIGNING_ENABLED=false`) and is **not yet wired into the live token
-routes**. As shipped today, QAuth issues classical Ed25519 access/ID tokens and
-serves an EdDSA-only JWKS. This guide describes the behavior you will observe
-**once an operator enables hybrid signing**, so you can prepare. Enabling it by
-default anywhere is gated on the [security review](./security/005-pqc-hybrid-signing-review.md)
+(`HYBRID_SIGNING_ENABLED=false`). It **is** wired into the live token routes as
+of #275 — `/oauth/token`, `/auth/login` and `/oauth/introspect` all go through
+the hybrid-aware issuance path — but with the flag off that path returns a
+classical Ed25519 token and the behavior is byte-identical to before.
+
+So on a **default deployment** QAuth issues classical Ed25519 access/ID tokens
+and serves an EdDSA-only JWKS, and this guide describes what you will observe
+**once an operator turns hybrid on**. Enabling it by default anywhere is gated on
+the [security review](./security/005-pqc-hybrid-signing-review.md)
 pre-default-on checklist ([ADR-005](./adr/005-pqc-hybrid-signing.md), #248).
+
+> Note: the JWKS gains its `AKP` entry as soon as an ML-DSA key is configured
+> (`JWT_MLDSA_PRIVATE_KEY`), which is independent of `HYBRID_SIGNING_ENABLED`
+> (#246). A deployment can therefore publish a PQC public key while still
+> issuing classical-only tokens.
 
 ## The design in one paragraph
 

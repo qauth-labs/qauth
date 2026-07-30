@@ -140,6 +140,64 @@ Global rate limiting configuration.
 | `RATE_LIMIT_MAX`    | number | `100`   | Max requests/window     |
 | `RATE_LIMIT_WINDOW` | number | `3600`  | Rate limit window (sec) |
 
+### jwtEnvSchema
+
+EdDSA signing keys and token lifetimes (`JWT_PRIVATE_KEY`, `JWT_PUBLIC_KEY`,
+`JWT_ISSUER`, access/refresh lifespans).
+
+### emailEnvSchema
+
+Email provider selection and credentials (`EMAIL_PROVIDER` — `mock`, `resend` or
+`smtp` — plus the provider-specific settings).
+
+### observabilityEnvSchema
+
+Log presentation, request-id propagation, the Prometheus `/metrics` surface, and
+failed-login throttling: `LOG_PRETTY`, `REQUEST_ID_HEADER`, `METRICS_ENABLED`,
+`FAILED_LOGIN_TRACKING_ENABLED`, `FAILED_LOGIN_MAX_ATTEMPTS`,
+`FAILED_LOGIN_WINDOW`, `FAILED_LOGIN_LOCKOUT_DURATION`. (`LOG_LEVEL` itself lives
+in `baseEnvSchema`.)
+
+### cryptoEnvSchema
+
+Post-quantum hybrid signing ([ADR-005](../../../docs/adr/005-pqc-hybrid-signing.md)).
+**Off by default** — `SIGNING_ALGORITHM_MODE` is `ed25519` and
+`HYBRID_SIGNING_ENABLED` is `false`.
+
+| Variable                 | Type    | Default     | Description                                                                     |
+| ------------------------ | ------- | ----------- | ------------------------------------------------------------------------------- |
+| `SIGNING_ALGORITHM_MODE` | enum    | `ed25519`   | `ed25519` or `ed25519+ml-dsa-65`                                                |
+| `HYBRID_SIGNING_ENABLED` | boolean | `false`     | Live hybrid issuance. Requires an ML-DSA key, or registration throws            |
+| `JWT_MLDSA_PRIVATE_KEY`  | string  | —           | base64url 32-byte ML-DSA-65 seed (or `JWT_MLDSA_PRIVATE_KEY_PATH`)              |
+| `JWT_MLDSA_KID`          | string  | —           | `kid` for the ML-DSA key published in JWKS                                      |
+| `PQC_TOKEN_DELIVERY`     | enum    | `reference` | `reference` (introspection-first) or `self-contained`                           |
+| `PQC_SELF_CONTAINED_ACK` | boolean | `false`     | Required to select `self-contained` — acknowledges the ~4.4 KB signature budget |
+
+### federationEnvSchema
+
+Wallet federation over OID4VP (T4, [ADR-004](../../../docs/adr/004-wallet-agnostic-federation.md)).
+**Off by default** — with `WALLET_FEDERATION_ENABLED` unset the wallet routes are
+never registered. Covers `OID4VP_VERIFIER_PROFILE`, `OID4VP_REQUESTED_VCT`,
+`OID4VP_SUBJECT_RESOLUTION` and the subject-binding, status-list and
+wallet-invocation settings. See the
+[Docker guide](../../../docs/docker.md#wallet-federation-oid4vp-t4) for the full table.
+
+### trustRegistryEnvSchema
+
+The per-realm issuer allowlist (`OID4VP_TRUSTED_ISSUERS`). An issuer absent here
+is refused before any claim is read.
+
+### issuerKeysEnvSchema
+
+The keys each trusted issuer signs with (`OID4VP_ISSUER_JWKS`).
+
+### assuranceEnvSchema
+
+Per-issuer eIDAS level of assurance (`OID4VP_ISSUER_ASSURANCE`), mapped to the
+OIDC `acr` claim ([ADR-010](../../../docs/adr/010-acr-assurance-mapping.md)).
+Listing an issuer here does **not** make it trusted — that is
+`trustRegistryEnvSchema`'s job, and an issuer must appear in both.
+
 ## API
 
 ### parseEnv(schema)
