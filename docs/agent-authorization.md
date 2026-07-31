@@ -45,12 +45,28 @@ curl -s -X POST http://localhost:3000/oauth/register \
   -H 'Content-Type: application/json' \
   -d '{
     "client_name": "My Agent",
-    "grant_types": ["urn:ietf:params:oauth:grant-type:token-exchange"],
+    "grant_types": ["client_credentials"],
     "token_endpoint_auth_method": "client_secret_basic",
     "is_agent": true
   }' | jq
 # → { "client_id": "…", "client_secret": "…", "is_agent": true, … }
 ```
+
+> ⚠️ **The token-exchange grant cannot be provisioned by any shipped path.**
+> Do **not** put `urn:ietf:params:oauth:grant-type:token-exchange` in
+> `grant_types` above — the DCR schema accepts only `authorization_code`,
+> `refresh_token` and `client_credentials`
+> (`apps/auth-server/src/app/schemas/oauth.ts`), and because `grant_types` is a
+> recognized key Zod **rejects** the request with `400` rather than stripping it.
+> The seed manifest (`libs/infra/db/src/scripts/seed-oauth-clients.ts`, validated
+> against the `grant_type` pg enum) and CIMD (`helpers/cimd.ts`) reject it too.
+>
+> Meanwhile `/.well-known/oauth-authorization-server` **does** advertise the grant
+> in `grant_types_supported`, and `POST /oauth/token` gates delegation on
+> `client.grantTypes.includes(...)`. So §2 below is unreachable for any client you
+> can register through a supported path — the grant currently has to be written
+> directly to the `oauth_clients.grant_types` JSONB column. This provisioning gap
+> is a bug in the server, not in this guide.
 
 ### `is_agent` is self-asserted and untrusted
 
@@ -250,7 +266,10 @@ Provision an agent with a cap via the `seed-oauth-clients` manifest:
     {
       "client_id": "my-agent",
       "name": "My Agent",
-      "grant_types": ["urn:ietf:params:oauth:grant-type:token-exchange"],
+      // Only authorization_code / refresh_token / client_credentials validate
+      // here — the manifest is checked against the `grant_type` pg enum. The
+      // token-exchange URN fails validation; see the note under §1.
+      "grant_types": ["client_credentials"],
       "scopes": ["agent:readonly", "agent:admin"],
       "token_endpoint_auth_method": "client_secret_basic",
       "is_agent": true, // self-asserted classification

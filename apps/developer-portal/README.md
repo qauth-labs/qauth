@@ -8,11 +8,20 @@ The portal owns its own session via an HttpOnly signed cookie `__Host-qauth_port
 
 ## Environment variables
 
-| Variable                | Required | Default | Description                                                |
-| ----------------------- | -------- | ------- | ---------------------------------------------------------- |
-| `AUTH_SERVER_URL`       | Yes      | —       | Base URL of the auth-server (e.g. `http://localhost:3001`) |
-| `PORTAL_SESSION_SECRET` | Yes      | —       | 32+ char random secret for signing the session cookie      |
-| `PORTAL_SESSION_TTL`    | No       | `900`   | Session cookie lifetime in seconds                         |
+| Variable                | Required | Default | Description                                                                      |
+| ----------------------- | -------- | ------- | -------------------------------------------------------------------------------- |
+| `AUTH_SERVER_URL`       | Yes      | —       | Base URL the **server** uses to reach auth-server (e.g. `http://localhost:3000`) |
+| `VITE_AUTH_SERVER_URL`  | Yes      | —       | Base URL the **browser** uses (e.g. `http://localhost:3000`); build-time inlined |
+| `PORTAL_SESSION_SECRET` | Yes      | —       | 32+ char random secret for signing the session cookie                            |
+| `PORTAL_SESSION_TTL`    | No       | `900`   | Session cookie lifetime in seconds                                               |
+
+The portal itself listens on **3001**; auth-server is on **3000**. Both URL
+variables point at auth-server, never at the portal.
+
+Under Docker Compose these are set indirectly — `PORTAL_AUTH_SERVER_URL` maps to
+`AUTH_SERVER_URL` (defaulting to `http://auth-server:3000` on the Compose
+network) and `PORTAL_PUBLIC_AUTH_SERVER_URL` maps to `VITE_AUTH_SERVER_URL`. See
+the [Docker guide](../../docs/docker.md#environment-variables).
 
 See `.env.example` at the repo root for sample values.
 

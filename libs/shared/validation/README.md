@@ -303,13 +303,13 @@ const email = validateEmail(email); // Still direct function (no config needed)
 ### Running Tests
 
 ```bash
-nx test validation
+nx test shared-validation
 ```
 
 ### Linting
 
 ```bash
-nx lint validation
+nx lint shared-validation
 ```
 
 ## Dependencies

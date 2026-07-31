@@ -181,8 +181,9 @@ async function loginUser(email: string, password: string) {
     throw new Error('User not found');
   }
 
-  // Verify password
-  const isValid = await hasher.verifyPassword(user.passwordHash, password);
+  // Verify password. Since ADR-002 (#230) the hash lives in the credential's
+  // JSONB blob (`credential_data.password_hash`), not on the user row.
+  const isValid = await hasher.verifyPassword(credential.credentialData.password_hash, password);
   if (!isValid) {
     throw new Error('Invalid password');
   }
@@ -251,13 +252,13 @@ const isValid = await hasher.verifyPassword(hashed, password);
 ### Running Tests
 
 ```bash
-nx test password
+nx test server-password
 ```
 
 ### Linting
 
 ```bash
-nx lint password
+nx lint server-password
 ```
 
 ## Dependencies

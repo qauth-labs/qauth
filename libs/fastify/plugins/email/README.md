@@ -70,16 +70,19 @@ Once registered, the email service is available on the Fastify instance:
 fastify.post('/auth/register', async (request, reply) => {
   const { email, password } = request.body as { email: string; password: string };
 
-  // Create user
-  const user = await createUser({ email, password });
+  // Your own persistence helper. Since ADR-002 (#230) a registration is two
+  // writes — the `users` identity anchor and its `user_credentials` row — so
+  // return both; see the full example at the end of this README.
+  const { user, credential } = await createUser({ email, password });
 
   // Generate verification token
   const { token, tokenHash } = generateVerificationToken();
 
-  // Store token hash in database
+  // Store token hash in database. Verification points at `credential_id`, not
+  // `user_id` — migration 0011 dropped the latter.
   await db.emailVerificationTokens.create({
     tokenHash,
-    userId: user.id,
+    credentialId: credential.id,
     expiresAt: Date.now() + 24 * 60 * 60 * 1000, // 24 hours
   });
 
@@ -87,7 +90,8 @@ fastify.post('/auth/register', async (request, reply) => {
   await fastify.emailService.sendVerificationEmail(email, token);
 
   return reply.code(201).send({
-    user: { id: user.id, email: user.email },
+    // The address lives on the credential's `external_sub`, not on the user row.
+    user: { id: user.id, email: credential.externalSub },
     message: 'Registration successful. Please check your email to verify your account.',
   });
 });
@@ -269,7 +273,7 @@ await fastify.register(emailPlugin, {
 });
 ```
 
-**Note**: Email environment variables are now available in `@qauth-labs/server-config` via `emailEnvSchema`. See the [server-config documentation](../../server/config/README.md) for details.
+**Note**: Email environment variables are now available in `@qauth-labs/server-config` via `emailEnvSchema`. See the [server-config documentation](../../../server/config/README.md) for details.
 
 ## Factory Pattern
 
@@ -306,6 +310,7 @@ import { cachePlugin } from '@qauth-labs/fastify-plugin-cache';
 import { passwordPlugin } from '@qauth-labs/fastify-plugin-password';
 import { emailPlugin } from '@qauth-labs/fastify-plugin-email';
 import { env } from '@qauth-labs/server-config';
+import { buildPasswordCredentialData } from '@qauth-labs/server-federation';
 
 await fastify.register(databasePlugin, {
   config: {
@@ -426,20 +431,27 @@ fastify.post('/auth/register', async (request, reply) => {
   // Hash password
   const passwordHash = await fastify.passwordHasher.hashPassword(password);
 
-  // Create user
-  const user = await fastify.repositories.users.create({
-    email,
-    passwordHash,
-    // ... other fields
+  // Create the identity anchor, then the credential. Since ADR-002 (#230)
+  // `users` carries no email or password_hash.
+  const user = await fastify.repositories.users.create({ realmId });
+
+  const credential = await fastify.repositories.userCredentials.create({
+    userId: user.id,
+    realmId,
+    providerType: 'password',
+    externalSub: email, // the normalized email
+    credentialData: buildPasswordCredentialData(passwordHash, false),
   });
 
   // Generate verification token
   const { token, tokenHash } = generateVerificationToken();
 
-  // Store token hash in database
+  // Store token hash in database. Migration 0011 dropped `user_id` and promoted
+  // `credential_id` to NOT NULL — verification points at the credential that
+  // owns the address, not at the user.
   await fastify.repositories.emailVerificationTokens.create({
     tokenHash,
-    userId: user.id,
+    credentialId: credential.id,
     expiresAt: Date.now() + 24 * 60 * 60 * 1000, // 24 hours
   });
 
@@ -453,8 +465,8 @@ fastify.post('/auth/register', async (request, reply) => {
     fastify.log.error(error, 'Error sending verification email');
   }
 
-  // Remove passwordHash from response
-  const { passwordHash: _, ...safeUser } = user;
+  // The user row never held a password hash, so it is already safe to return.
+  const safeUser = user;
   return reply.code(201).send({ user: safeUser });
 });
 
@@ -482,7 +494,7 @@ nx lint fastify-plugin-email
 
 ## Related Libraries
 
-- [`@qauth-labs/server-email`](../../server/email/README.md): Email service library with factory pattern
+- [`@qauth-labs/server-email`](../../../server/email/README.md): Email service library with factory pattern
 - [`@qauth-labs/fastify-plugin-db`](../db/README.md): Database plugin for Fastify
 - [`@qauth-labs/fastify-plugin-password`](../password/README.md): Password plugin for Fastify
 

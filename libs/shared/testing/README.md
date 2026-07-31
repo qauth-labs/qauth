@@ -21,7 +21,6 @@ import {
   buildTestApp,
   closeTestApp,
   createTestRequest,
-  createUserFixture,
   createRealmFixture,
   startPostgresContainer,
   isDockerAvailable,
@@ -152,89 +151,43 @@ const postResponse = await request.post('/users').send({
 
 ### Test Fixtures
 
-#### User Fixtures
-
-Create user test data with `createUserFixture` and `createUserFixtures`.
-
-```typescript
-import { createUserFixture, createUserFixtures } from '@qauth-labs/shared-testing';
-
-// Create a single user fixture
-const user = createUserFixture({
-  email: 'user@example.com',
-  emailVerified: true,
-});
-
-// Create multiple user fixtures
-const users = createUserFixtures(5);
-```
-
-**`createUserFixture(overrides?)`**
-
-Creates a single user fixture with optional overrides.
-
-**Parameters:**
-
-- `overrides?: Partial<UserFixture>` - Optional overrides for default values
-
-**Returns:** User fixture object
-
-**Example:**
-
-```typescript
-const user = createUserFixture({
-  email: 'custom@example.com',
-  emailVerified: true,
-});
-```
-
-**`createUserFixtures(count)`**
-
-Creates multiple user fixtures.
-
-**Parameters:**
-
-- `count: number` - Number of user fixtures to create
-
-**Returns:** Array of user fixture objects
-
-**Example:**
-
-```typescript
-const users = createUserFixtures(10);
-expect(users).toHaveLength(10);
-```
-
 #### Realm Fixtures
 
-Create realm test data with `createRealmFixture`.
+Realms are the only entity with fixture helpers in this library.
 
 ```typescript
-import { createRealmFixture } from '@qauth-labs/shared-testing';
+import { createRealmFixture, createRealmFixtures } from '@qauth-labs/shared-testing';
 
-// Create a realm fixture
-const realm = createRealmFixture({
-  name: 'my-realm',
-});
+// A single realm fixture — name defaults to `test-realm-<timestamp>`
+const realm = createRealmFixture({ name: 'my-realm' });
+
+// Multiple, each with a distinct generated name
+const realms = createRealmFixtures(5);
 ```
 
 **`createRealmFixture(overrides?)`**
 
-Creates a single realm fixture with optional overrides.
+**Parameters:**
+
+- `overrides?: Partial<RealmFixture>` — overrides for the defaults (`name`, `enabled`)
+
+**Returns:** `RealmFixture`
+
+**`createRealmFixtures(count)`**
 
 **Parameters:**
 
-- `overrides?: Partial<RealmFixture>` - Optional overrides for default values
+- `count: number` — how many to create
 
-**Returns:** Realm fixture object
+**Returns:** `RealmFixture[]`
 
-**Example:**
-
-```typescript
-const realm = createRealmFixture({
-  name: 'test-realm',
-});
-```
+> **There are no user fixtures.** Earlier revisions of this README documented
+> `createUserFixture` / `createUserFixtures`; no such exports have ever shipped.
+> Build users inline instead — and note that since ADR-002 (#230) a user is an
+> identity anchor with no `email` or `passwordHash`, so a fixture taking those
+> fields would not match the schema either. See
+> [`libs/infra/db/README.md`](../../infra/db/README.md) for the two-write
+> registration shape.
 
 ### Docker Integration Testing
 
@@ -301,7 +254,7 @@ describe.skipIf(!dockerAvailable)('OAuth clients repository (integration)', () =
 ```typescript
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { buildTestApp, closeTestApp, createTestRequest } from '@qauth-labs/shared-testing';
-import { createUserFixture, createRealmFixture } from '@qauth-labs/shared-testing';
+import { createRealmFixture } from '@qauth-labs/shared-testing';
 import { databasePlugin } from '@qauth-labs/fastify-plugin-db';
 
 describe('User API', () => {
@@ -318,10 +271,8 @@ describe('User API', () => {
   });
 
   it('should create a user', async () => {
-    const userData = createUserFixture({
-      email: 'test@example.com',
-      emailVerified: true,
-    });
+    // No user fixture helper ships — build the payload inline.
+    const userData = { realmId: createRealmFixture().name, email: 'test@example.com' };
 
     const response = await request.post('/users').send(userData);
 
@@ -330,7 +281,7 @@ describe('User API', () => {
   });
 
   it('should get a user by ID', async () => {
-    const userData = createUserFixture();
+    const userData = { email: 'lookup@example.com' };
     const createResponse = await request.post('/users').send(userData);
     const userId = createResponse.body.user.id;
 
@@ -345,8 +296,8 @@ describe('User API', () => {
     const realmResponse = await request.post('/realms').send(realm);
     const realmId = realmResponse.body.realm.id;
 
-    const users = createUserFixtures(5).map((user) => ({
-      ...user,
+    const users = Array.from({ length: 5 }, (_, i) => ({
+      email: `user-${i}@example.com`,
       realmId,
     }));
 
@@ -378,17 +329,16 @@ Creates a Supertest request instance from a Fastify app.
 
 ### Test Fixtures
 
-#### `createUserFixture(overrides?): UserFixture`
-
-Creates a single user fixture with optional overrides.
-
-#### `createUserFixtures(count): UserFixture[]`
-
-Creates multiple user fixtures.
-
 #### `createRealmFixture(overrides?): RealmFixture`
 
 Creates a single realm fixture with optional overrides.
+
+#### `createRealmFixtures(count): RealmFixture[]`
+
+Creates multiple realm fixtures, each with a distinct generated name.
+
+> There are no `createUserFixture` / `createUserFixtures` exports — see
+> [Realm Fixtures](#realm-fixtures) above.
 
 ### Docker Integration Testing
 

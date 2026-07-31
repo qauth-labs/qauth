@@ -33,9 +33,7 @@ REDIS_PORT=6379
 REDIS_PASSWORD=your_redis_password
 REDIS_DB=0
 
-# Connection Pool Settings
-REDIS_MAX_CONNECTIONS=10
-REDIS_MIN_CONNECTIONS=2
+# Timeouts
 REDIS_CONNECTION_TIMEOUT=10000
 REDIS_COMMAND_TIMEOUT=5000
 
@@ -47,23 +45,42 @@ REDIS_MAX_RETRIES=3
 
 ### Basic Connection
 
-```typescript
-import { getRedis, testConnection, isRedisConnected } from '@qauth-labs/infra-cache';
+This library exports **factories**, not singletons. Build a client with
+`createRedisConnection(config)` and pass it to the utility factories.
 
-// Test connection
-const isConnected = await testConnection();
+```typescript
+import {
+  createRedisConnection,
+  testRedisConnection,
+  isRedisConnected,
+  closeRedis,
+} from '@qauth-labs/infra-cache';
+
+const redis = createRedisConnection({ url: 'redis://localhost:6379' });
+
+// Test connection (takes the client)
+const isConnected = await testRedisConnection(redis);
 console.log('Redis connected:', isConnected);
 
-// Check connection status
-if (isRedisConnected()) {
+// Check connection status (takes the client)
+if (isRedisConnected(redis)) {
   console.log('Redis is ready');
 }
+
+await closeRedis(redis); // graceful shutdown
 ```
+
+> **Fastify app:** prefer `@qauth-labs/fastify-plugin-cache`, which builds the
+> client once and decorates the instance — route code should use that rather
+> than calling `createRedisConnection` directly.
 
 ### Session Management
 
 ```typescript
-import { SessionUtils } from '@qauth-labs/infra-cache';
+import { createRedisConnection, createSessionUtils } from '@qauth-labs/infra-cache';
+
+const redis = createRedisConnection({ url: 'redis://localhost:6379' });
+const SessionUtils = createSessionUtils(redis);
 
 // Set session data
 await SessionUtils.setSession(
@@ -93,7 +110,10 @@ await SessionUtils.deleteSession('user123');
 ### Rate Limiting
 
 ```typescript
-import { RateLimitUtils } from '@qauth-labs/infra-cache';
+import { createRedisConnection, createRateLimitUtils } from '@qauth-labs/infra-cache';
+
+const redis = createRedisConnection({ url: 'redis://localhost:6379' });
+const RateLimitUtils = createRateLimitUtils(redis);
 
 // Check rate limit
 const result = await RateLimitUtils.checkRateLimit('user123', 10, 60); // 10 requests per minute
@@ -112,7 +132,10 @@ await RateLimitUtils.resetRateLimit('user123');
 ### Caching
 
 ```typescript
-import { CacheUtils } from '@qauth-labs/infra-cache';
+import { createRedisConnection, createCacheUtils } from '@qauth-labs/infra-cache';
+
+const redis = createRedisConnection({ url: 'redis://localhost:6379' });
+const CacheUtils = createCacheUtils(redis);
 
 // Set cache
 await CacheUtils.setCache(
@@ -147,7 +170,10 @@ await CacheUtils.deleteCache('user:profile:123');
 ### User Data
 
 ```typescript
-import { UserUtils } from '@qauth-labs/infra-cache';
+import { createRedisConnection, createUserUtils } from '@qauth-labs/infra-cache';
+
+const redis = createRedisConnection({ url: 'redis://localhost:6379' });
+const UserUtils = createUserUtils(redis);
 
 // Set user data
 await UserUtils.setUserData(
@@ -169,7 +195,10 @@ await UserUtils.deleteUserData('user123');
 ### Token Management
 
 ```typescript
-import { TokenUtils } from '@qauth-labs/infra-cache';
+import { createRedisConnection, createTokenUtils } from '@qauth-labs/infra-cache';
+
+const redis = createRedisConnection({ url: 'redis://localhost:6379' });
+const TokenUtils = createTokenUtils(redis);
 
 // Blacklist token
 await TokenUtils.blacklistToken('jwt-token-here', 900); // 15 minutes TTL
@@ -213,10 +242,10 @@ The library includes comprehensive error handling:
 The library automatically handles graceful shutdown:
 
 ```typescript
-import { gracefulShutdown } from '@qauth-labs/infra-cache';
+import { closeRedis } from '@qauth-labs/infra-cache';
 
-// Manual graceful shutdown
-await gracefulShutdown();
+// Manual graceful shutdown — takes the client you created
+await closeRedis(redis);
 ```
 
 ## Fastify Integration
@@ -233,7 +262,6 @@ For Fastify applications, use the [`@qauth-labs/fastify-plugin-cache`](../../fas
 ```typescript
 import Fastify from 'fastify';
 import { cachePlugin } from '@qauth-labs/fastify-plugin-cache';
-import { SessionUtils } from '@qauth-labs/infra-cache';
 
 const fastify = Fastify();
 
@@ -246,15 +274,17 @@ fastify.get('/cache', async (request, reply) => {
   return { value };
 });
 
-// Or use utility functions (they use the same Redis connection)
+// Or use the session utils the plugin decorates (same Redis connection)
 fastify.post('/session', async (request, reply) => {
   const { userId, data } = request.body;
-  await SessionUtils.setSession(userId, data, 3600);
+  await fastify.sessionUtils.setSession(userId, data, 3600);
   return { success: true };
 });
 ```
 
-The Fastify plugin automatically manages the Redis connection lifecycle, so you don't need to manually call `gracefulShutdown()` when using the plugin.
+The plugin decorates `fastify.redis` and `fastify.sessionUtils`, and manages the
+Redis connection lifecycle — so you do not call `closeRedis()` yourself when
+using it.
 
 ## Best Practices
 
@@ -269,13 +299,13 @@ The Fastify plugin automatically manages the Redis connection lifecycle, so you 
 ### Running Tests
 
 ```bash
-nx test cache
+nx test infra-cache
 ```
 
 ### Linting
 
 ```bash
-nx lint cache
+nx lint infra-cache
 ```
 
 ## Architecture Notes

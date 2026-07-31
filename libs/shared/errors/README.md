@@ -52,12 +52,14 @@ try {
   }
 }
 
-// Login flow
-if (!user || !(await verifyPassword(user.passwordHash, password))) {
+// Login flow. Since ADR-002 (#230) the hash lives on the credential
+// (`credential_data.password_hash`), and verification state on the credential
+// too — the `users` row carries neither.
+if (!credential || !(await verifyPassword(credential.credentialData.password_hash, password))) {
   throw new InvalidCredentialsError(); // 401
 }
 
-if (!user.emailVerified) {
+if (!credential.credentialData.email_verified) {
   throw new EmailNotVerifiedError(); // 403
 }
 
@@ -332,8 +334,12 @@ import {
   isUniqueConstraintError,
   extractConstraintName,
 } from '@qauth-labs/shared-errors';
-import { db } from '@qauth-labs/infra-db';
-import { users } from '@qauth-labs/infra-db/schema';
+// `@qauth-labs/infra-db` exports a factory plus a `schema` namespace — there is
+// no `db` singleton and no `/schema` subpath export.
+import { createDatabase, schema } from '@qauth-labs/infra-db';
+
+const { db } = createDatabase({ connectionString: process.env.DATABASE_URL });
+const { users } = schema;
 
 export async function createUser(data: NewUser) {
   try {
@@ -371,7 +377,7 @@ import Fastify from 'fastify';
 
 fastify.get('/users/:id', async (request, reply) => {
   try {
-    const user = await usersRepository.findByIdOrThrow(request.params.id);
+    const user = await fastify.repositories.users.findByIdOrThrow(request.params.id);
     return { user };
   } catch (error) {
     if (error instanceof NotFoundError) {
@@ -388,7 +394,7 @@ fastify.get('/users/:id', async (request, reply) => {
 
 fastify.post('/users', async (request, reply) => {
   try {
-    const user = await usersRepository.create(request.body);
+    const user = await fastify.repositories.users.create(request.body);
     reply.code(201).send({ user });
   } catch (error) {
     if (error instanceof UniqueConstraintError) {
@@ -410,19 +416,19 @@ fastify.post('/users', async (request, reply) => {
 ### Running Tests
 
 ```bash
-nx test errors
+nx test shared-errors
 ```
 
 ### Linting
 
 ```bash
-nx lint errors
+nx lint shared-errors
 ```
 
 ### Type Checking
 
 ```bash
-nx typecheck errors
+nx typecheck shared-errors
 ```
 
 ## Related Libraries

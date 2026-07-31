@@ -282,7 +282,9 @@ advertised in discovery.
   `client_id` URL to be fetchable over HTTPS; the AS validates it (URL ==
   `client_id`, redirect-URI checks, SSRF guards, size/TTL limits). For purely
   local testing over `http://localhost`, CIMD is impractical — use DCR.
-- **DCR** open mode is rate-limited (3 registrations/hour/IP by default). Tighten
+- **DCR** open mode is rate-limited per IP — **30 registrations per 60-second
+  window** by default (`REGISTER_CLIENT_RATE_LIMIT` / `REGISTER_CLIENT_RATE_WINDOW`,
+  the latter in seconds). That is a burst cap, not a tight quota; tighten
   or gate it for any internet-facing deployment. See
   [ADR-007 §1](./adr/007-mcp-first-positioning.md) and the
   [Docker guide CIMD section](./docker.md#client-id-metadata-documents-cimd).

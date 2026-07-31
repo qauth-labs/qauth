@@ -174,6 +174,7 @@ Full request/response detail and a worked end-to-end walkthrough live in the
 | [`/oauth/introspect`](./oauth-flow.md#token-introspection-rfc-7662)         | POST   | form      | Token introspection (RFC 7662) — confidential clients only                                  |
 | [`/oauth/userinfo`](./oauth-flow.md#userinfo-oidc)                          | GET    | —         | OIDC UserInfo (Bearer)                                                                      |
 | [`/oauth/register`](./oauth-flow.md#dynamic-client-registration-rfc-7591)   | POST   | JSON      | Dynamic Client Registration (RFC 7591, open mode)                                           |
+| [`/oauth/revoke`](./oauth-flow.md#token-revocation-rfc-7009)                | POST   | form      | Token revocation (RFC 7009) — confidential clients only                                     |
 
 Key contract facts:
 
@@ -199,6 +200,7 @@ Key contract facts:
 {
   "access_token": "eyJ…",
   "refresh_token": "a1b2…", // omitted for client_credentials and token-exchange
+  "id_token": "eyJ…", // authorization_code only, and only when `openid` is granted
   "expires_in": 900,
   "token_type": "Bearer",
   "scope": "openid profile email", // present when scopes granted
