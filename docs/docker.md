@@ -328,7 +328,7 @@ For **development** with `docker-compose.dev.yml`, set `NODE_ENV=development` an
 
 ### Client ID Metadata Documents (CIMD)
 
-CIMD is the recommended MCP client-registration mechanism (see [ADR-007](./adr/007-mcp-first-positioning.md)). When a `client_id` is an HTTPS URL, the auth-server fetches and validates the client's metadata document on demand instead of persisting a registration record. All settings have safe defaults — none are required to run.
+CIMD is the recommended MCP client-registration mechanism (see [ADR-007](./adr/007-mcp-first-positioning.md)) — MCP Authorization 2026-07-28 says authorization servers and MCP clients **SHOULD** support it, and deprecates RFC 7591 dynamic registration in its favour. When a `client_id` is an HTTPS URL, the auth-server fetches and validates the client's metadata document on demand instead of persisting a registration record. All settings have safe defaults — none are required to run.
 
 | Variable                       | Required | Default            | Description                                                                                                                                                     |
 | ------------------------------ | -------- | ------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |

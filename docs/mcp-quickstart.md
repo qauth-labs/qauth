@@ -122,6 +122,7 @@ curl -s http://localhost:3000/.well-known/oauth-authorization-server | jq
   "jwks_uri": "http://localhost:3000/.well-known/jwks.json",
   "code_challenge_methods_supported": ["S256"],
   "resource_indicators_supported": true,
+  "authorization_response_iss_parameter_supported": true, // RFC 9207 `iss` always emitted
   "client_id_metadata_document_supported": true, // CIMD on by default
 }
 ```
@@ -159,11 +160,12 @@ curl -s http://localhost:8088/.well-known/oauth-protected-resource | jq
 # A protected call with no token → 401 + the Bearer challenge:
 curl -i http://localhost:8088/mcp/memory
 # → HTTP/1.1 401 Unauthorized
-#   WWW-Authenticate: Bearer resource_metadata="http://localhost:8088/.well-known/oauth-protected-resource"
+#   WWW-Authenticate: Bearer scope="mcp:read", resource_metadata="http://localhost:8088/.well-known/oauth-protected-resource"
 ```
 
 This is the trigger that starts the whole handshake: a 401 with a pointer to the
-metadata document.
+metadata document and the scopes the operation needs, so a client can authorize
+in one round instead of guessing.
 
 ---
 
@@ -184,8 +186,9 @@ On first use the client will:
 
 1. call the server, get the **401** + `WWW-Authenticate` challenge,
 2. fetch **Protected Resource Metadata** and discover QAuth,
-3. **register** itself — via Client ID Metadata Documents (CIMD) or Dynamic
-   Client Registration (see [below](#client-registration-cimd-vs-dcr)),
+3. **obtain a `client_id`** — via Client ID Metadata Documents (CIMD), or via
+   Dynamic Client Registration if it does not support CIMD
+   (see [below](#client-registration-cimd-vs-dcr)),
 4. run **`authorization_code` + PKCE**, opening a browser for **login + consent**
    at QAuth (you'll register/sign in and approve the `mcp:read` / `mcp:write`
    scopes),
@@ -271,17 +274,27 @@ satisfies both routes.)
 ## Client registration: CIMD vs DCR
 
 QAuth supports two ways for an MCP client to obtain a `client_id`. Both are
-advertised in discovery.
+advertised in discovery, but they are not co-equal: MCP Authorization
+2026-07-28 says authorization servers and clients **SHOULD** support CIMD, and
+**deprecates** RFC 7591 Dynamic Client Registration — retained only for
+backwards compatibility with parties that do not support CIMD. QAuth keeps DCR
+working (it is what makes the local walkthrough above practical), but prefer
+CIMD for anything you deploy.
 
-| Mechanism                                                | When QAuth uses it                                                | Best for                                                                                                                                                                                 |
-| -------------------------------------------------------- | ----------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **CIMD** — Client ID Metadata Documents (MCP 2025-11-25) | `client_id` is an **HTTPS URL** resolving to a metadata document  | Production clients with a stable, public metadata URL. No registration record is persisted (no open-DCR abuse surface).                                                                  |
-| **DCR** — Dynamic Client Registration (RFC 7591)         | `POST /oauth/register`, **open mode** (no `initial_access_token`) | Local development and clients without a public URL. Scopes are **capped to the realm allowlist** (`DEFAULT_DYNAMIC_REGISTRATION_SCOPES`) — this is why Step 1 adds `mcp:read mcp:write`. |
+| Mechanism                                                                          | When QAuth uses it                                                | Best for                                                                                                                                                                                 |
+| ---------------------------------------------------------------------------------- | ----------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **CIMD** — Client ID Metadata Documents (MCP 2026-07-28, **preferred**)            | `client_id` is an **HTTPS URL** resolving to a metadata document  | Production clients with a stable, public metadata URL. No registration record is persisted (no open-DCR abuse surface).                                                                  |
+| **DCR** — Dynamic Client Registration (RFC 7591, **deprecated** by MCP 2026-07-28) | `POST /oauth/register`, **open mode** (no `initial_access_token`) | Local development and clients without a public URL. Scopes are **capped to the realm allowlist** (`DEFAULT_DYNAMIC_REGISTRATION_SCOPES`) — this is why Step 1 adds `mcp:read mcp:write`. |
 
 - **CIMD** is on by default (`CIMD_ENABLED=true`). It requires the client's
   `client_id` URL to be fetchable over HTTPS; the AS validates it (URL ==
   `client_id`, redirect-URI checks, SSRF guards, size/TTL limits). For purely
   local testing over `http://localhost`, CIMD is impractical — use DCR.
+  MCP 2026-07-28 still cites `draft-ietf-oauth-client-id-metadata-document-00`;
+  the IETF draft has since reached **-02** (6 July 2026), and QAuth's
+  implementation already satisfies its added hardening (HTTPS-only fetches with
+  no redirect following, HTTP 200 required, and simple string comparison of the
+  document's `client_id` against the requested one).
 - **DCR** open mode is rate-limited per IP — **30 registrations per 60-second
   window** by default (`REGISTER_CLIENT_RATE_LIMIT` / `REGISTER_CLIENT_RATE_WINDOW`,
   the latter in seconds). That is a burst cap, not a tight quota; tighten

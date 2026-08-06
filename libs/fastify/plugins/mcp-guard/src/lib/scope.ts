@@ -28,6 +28,15 @@ export function parseScopes(scope: string | string[] | undefined | null): string
  * Return the required scopes the granted set does not satisfy. Empty result
  * means the granted set is sufficient. Matching is exact and case-sensitive
  * per RFC 6749 §3.3 (no hierarchical/prefix semantics).
+ *
+ * MCP Authorization 2026-07-28 ("Step-Up Authorization Flow") adds: servers
+ * MUST account for scope hierarchies, "where a broader scope implies narrower
+ * ones", when deciding whether a token is sufficient. QAuth's scope vocabulary
+ * declares no such implications — every scope is independent, so no broader
+ * scope stands in for a narrower one — which makes exact matching the complete
+ * and correct reading of that rule here, not a shortfall. A host that defines a
+ * genuinely hierarchical vocabulary of its own must expand the implied set
+ * itself when it configures `requiredScopes` / `requireScopes(...)`.
  */
 export function missingScopes(granted: string[], required: string[]): string[] {
   if (required.length === 0) {
@@ -47,10 +56,11 @@ export function hasRequiredScopes(granted: string[], required: string[]): boolea
  * server* rather than anything this resource will authorize, and which must
  * therefore never be advertised as a resource requirement (#284).
  *
- * MCP Authorization ("Scope Selection Strategy") names `offline_access`
- * explicitly: it only governs whether the AS issues a refresh token, so putting
- * it in a challenge or in PRM `scopes_supported` would tell a client to obtain
- * consent that has no bearing on the call it is trying to make.
+ * MCP Authorization 2026-07-28 ("Refresh Tokens") names `offline_access`
+ * explicitly — a protected resource SHOULD NOT include it in a
+ * `WWW-Authenticate` scope or in PRM `scopes_supported`, since it only governs
+ * whether the AS issues a refresh token. Advertising it would tell a client to
+ * obtain consent that has no bearing on the call it is trying to make.
  */
 const NON_RESOURCE_SCOPES: ReadonlySet<string> = new Set(['offline_access']);
 

@@ -13,13 +13,19 @@
  *
  * Mapping (reserved scope → mode):
  *   - `agent:readonly` → ReadOnly  (read-only access)
- *   - `agent:admin`    → Admin     (administrative; ⊇ ReadOnly)
+ *   - `agent:admin`    → Admin     (administrative)
  *   - `agent:exec`     → Exec      (action-taking; the most privileged)
  *
  * Ordering (cap semantics): readonly < admin < exec. A client capped at
- * mode N may request reserved-mode scopes of rank ≤ N. `Admin` therefore
- * also permits `agent:readonly` (ReadOnly ⊂ Admin), and `Exec` permits all
+ * mode N may REQUEST reserved-mode scopes of rank ≤ N. An `admin` cap
+ * therefore also permits requesting `agent:readonly`, and `exec` permits all
  * three. A cap is the MAXIMUM mode, not an exact match.
+ *
+ * The ordering is a REQUEST ceiling only, never a scope implication. The
+ * three reserved scopes are independent OAuth scopes: `agent:admin` does NOT
+ * satisfy a requirement for `agent:readonly` (`mcp-guard` matches scopes
+ * exactly and case-sensitively per RFC 6749 §3.3). A client that needs both
+ * must request both. See `docs/agent-authorization.md` §3.
  *
  * TRUST BOUNDARY / DEFAULT-DENY (epic #181 security requirement):
  * `oauth_clients.is_agent` is self-asserted, unverified client input. Agent

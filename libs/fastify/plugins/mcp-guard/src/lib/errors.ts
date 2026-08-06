@@ -2,7 +2,7 @@
  * Error model for `mcp-guard`.
  *
  * These map directly to the Bearer-token error responses defined by
- * RFC 6750 §3.1 and refined by the MCP Authorization profile (2025-11-25):
+ * RFC 6750 §3.1 and refined by the MCP Authorization profile (2026-07-28):
  *
  * - `MissingTokenError`      → 401, no `error` code (RFC 6750: a bare
  *   `WWW-Authenticate: Bearer` challenge when no credentials were sent).
@@ -44,9 +44,9 @@ export abstract class McpGuardError extends Error {
  * at the resource metadata so it can discover the AS and authenticate.
  *
  * The error carries the scopes the attempted route requires so the challenge
- * can advertise them (#284). MCP Authorization ("Scope Selection Strategy")
- * says the RS SHOULD do this, letting a client authorize correctly on its
- * first attempt instead of fetching the PRM document and guessing.
+ * can advertise them (#284). MCP Authorization 2026-07-28 ("Scope Selection
+ * Strategy") says the RS SHOULD do this, letting a client authorize correctly
+ * on its first attempt instead of fetching the PRM document and guessing.
  */
 export class MissingTokenError extends McpGuardError {
   readonly statusCode = 401 as const;
@@ -89,7 +89,7 @@ export class InvalidTokenError extends McpGuardError {
 /**
  * The token is valid but lacks one or more required scopes. RFC 6750 §3.1:
  * 403 `error="insufficient_scope"`, advertising the scopes that would satisfy
- * the request — the MCP 2025-11-25 incremental-consent step-up signal.
+ * the request — the MCP 2026-07-28 incremental-consent step-up signal.
  */
 export class InsufficientScopeError extends McpGuardError {
   readonly statusCode = 403 as const;

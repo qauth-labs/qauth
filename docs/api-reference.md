@@ -250,8 +250,11 @@ Unauthenticated, cacheable (`Cache-Control: public, max-age=3600`).
 | `GET /.well-known/jwks.json`                  | JWKS — active EdDSA public key(s) (RFC 7517) |
 
 Prefer discovering endpoint URLs from these documents over hard-coding paths.
-The AS metadata advertises `resource_indicators_supported: true` and, when
-enabled, `client_id_metadata_document_supported: true` (CIMD).
+The AS metadata advertises `resource_indicators_supported: true`,
+`authorization_response_iss_parameter_supported: true` (RFC 9207 — `/oauth/authorize`
+returns `iss` on both success and error redirects, so the flag is not
+configurable), and, when enabled, `client_id_metadata_document_supported: true`
+(CIMD).
 
 ---
 
@@ -391,8 +394,11 @@ Issue a new `clientSecret`. The previous secret is invalidated immediately;
 `clientSecret` string. Errors: `400` (public client — no secret to rotate),
 `401`, `404`, `429` (rate limited — argon2id, same per-IP budget as create).
 
-Clients may also be registered via [Dynamic Client Registration](./oauth-flow.md#dynamic-client-registration-rfc-7591)
-(`POST /oauth/register`), CIMD, or the `seed-oauth-clients` script.
+Clients may also be obtained outside this API: via **CIMD**, the mechanism
+MCP Authorization 2026-07-28 says to prefer; via
+[Dynamic Client Registration](./oauth-flow.md#dynamic-client-registration-rfc-7591)
+(`POST /oauth/register`), which that revision deprecates but QAuth still
+supports; or via the `seed-oauth-clients` script.
 
 ---
 

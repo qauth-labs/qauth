@@ -115,8 +115,9 @@ export function buildAuthorizationServerMetadata(
     // rather than configurable: /oauth/authorize emits `iss` unconditionally
     // — a deployment cannot turn it off, so the flag cannot go stale. Set on
     // the AS metadata so `buildOpenIdConfiguration` inherits it too. The
-    // upcoming MCP authorization revision requires this validation, and
-    // RFC 9207 signals a future SHOULD→MUST upgrade.
+    // published MCP Authorization 2026-07-28 revision requires an AS that
+    // emits `iss` to advertise this flag, and both it and RFC 9207 signal a
+    // future SHOULD→MUST upgrade of the emission itself.
     authorization_response_iss_parameter_supported: true,
     // RFC 8414 §2 / OIDC Discovery §3 (#286). Both are OPTIONAL, but their
     // OMITTED defaults disagree: `request_parameter_supported` defaults to

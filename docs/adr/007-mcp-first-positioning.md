@@ -84,10 +84,17 @@ The NLnet / NGI grant narrative is treated as **reframable**: an MCP framing ("s
 
 ## Spec tracking
 
-> **Refresh 2026-07-19:** MCP has published a **2026-07-28** revision (release
-> candidate; final 2026-07-28). See [Delta: 2025-11-25 to 2026-07-28](#delta-2025-11-25-to-2026-07-28)
-> below. The section immediately following remains the 2025-11-25 review, kept
-> for the audit trail.
+> **Current revision: MCP Authorization 2026-07-28 (final).** Read
+> [Delta: 2025-11-25 to 2026-07-28](#delta-2025-11-25-to-2026-07-28) first — it
+> is the live compliance picture. Everything between this note and that heading
+> is the **superseded 2025-11-25 review**, retained for the audit trail; do not
+> read it as current status.
+>
+> **[Refresh 2026-07-19 — superseded 2026-08-06: that pass reviewed the release
+> _candidate_ and the `draft` spec URL, not the published revision, and each of
+> its three "gap" bullets has since been closed in code. Re-reviewed against the
+> final 2026-07-28 specification; corrections are marked inline in the delta
+> section below.]**
 
 Reviewed against MCP Authorization **revision 2025-11-25** (the revision this ADR targets; the implementation in PR #156 was built to 2025-06-18). Auth-relevant deltas and QAuth's posture:
 
@@ -100,32 +107,127 @@ Unchanged core QAuth already meets: OAuth 2.1 (public + confidential), PKCE S256
 
 ## Delta: 2025-11-25 to 2026-07-28
 
-Reviewed 2026-07-19 against the [2026-07-28 release candidate](https://blog.modelcontextprotocol.io/posts/2026-07-28-release-candidate/)
-and the [draft authorization spec](https://modelcontextprotocol.io/specification/draft/basic/authorization).
+**Re-reviewed 2026-08-06 against the final, published
+[2026-07-28 revision](https://modelcontextprotocol.io/specification/2026-07-28/basic/authorization)**
+([release announcement](https://blog.modelcontextprotocol.io/posts/2026-07-28/),
+[changelog](https://modelcontextprotocol.io/specification/2026-07-28/changelog)).
+2026-07-28 is released and final.
+
+**[The original pass here was dated 2026-07-19 and read the release candidate
+announced ~2026-07-19 plus the `draft` spec URL. Superseded 2026-08-06: where
+the two disagree the statements below are authoritative, its three
+implementation-gap claims are corrected in place with the prior wording
+preserved, and the items it missed entirely are appended.]**
+
 Only auth-relevant deltas are listed; the release also adds a stateless protocol
 core, an Extensions framework, Tasks, and MCP Apps.
 
-- **RFC 9207 issuer identification — NEW, and QAuth does not implement it.** The
-  AS **SHOULD** include `iss` in authorization responses _including error
-  responses_, and an AS that does **MUST** advertise
+- **RFC 9207 issuer identification — NEW in 2026-07-28, and QAuth implements
+  it.** The AS **SHOULD** include `iss` in authorization responses _including
+  error responses_; clients **MUST** validate a present `iss` before redeeming
+  the code (SEP-2468); and an AS that emits it **MUST** advertise
   `authorization_response_iss_parameter_supported: true` in its metadata. The
-  spec states a future revision is expected to upgrade this to **MUST**.
-  QAuth emits neither. → Tracked as **#282**. This is the one hard gap in the
-  delta.
-- **Scope guidance on the 401.** Resources **SHOULD** include a `scope` parameter
-  in the `WWW-Authenticate` header of the 401, not only on `insufficient_scope`
-  (403). `mcp-guard` attaches `scope` to the 403 path only; clients currently
-  fall back to PRM `scopes_supported`. → Tracked as **#284**.
-- **`offline_access` is a resource anti-pattern.** MCP servers **SHOULD NOT**
-  advertise `offline_access` in `WWW-Authenticate` scope or PRM
-  `scopes_supported`, since refresh tokens are not a resource requirement. This
-  constrains `mcp-guard`; the AS advertising it in `scopes_supported` is
-  unaffected and remains correct.
-- **CIMD is now SHOULD; DCR is MAY and explicitly deprecated.** In 2025-11-25 CIMD
-  was "recommended" and DCR a "backwards-compatibility fallback". The normative
-  strength has firmed in the direction ADR-007 already chose. → **No change
-  required**; QAuth's client-resolution priority (pre-registered → CIMD → DCR)
-  already matches.
+  spec states a future revision is expected to upgrade the AS-side SHOULD to
+  **MUST**. → **Shipped (#282, closed).** `iss` is part of the
+  `AuthorizationResponseParams` union in
+  `apps/auth-server/src/app/helpers/oauth-redirect.ts`, so every
+  `buildRedirectUrl` call site — success _and_ error — must supply it or fail to
+  compile; `/oauth/authorize` sources it from
+  `resolveIssuerIdentifier(fastify.jwtUtils.getIssuer())` and appends it
+  verbatim, never through `new URL(...)`, because RFC 9207 §2.4 requires simple
+  string comparison with no normalisation.
+  `apps/auth-server/src/app/helpers/discovery.ts` hard-codes
+  `authorization_response_iss_parameter_supported: true` on the AS metadata —
+  deliberately not configurable, so the advertisement cannot drift from the
+  behaviour — and `buildOpenIdConfiguration` inherits it. Covered by
+  `oauth-redirect.test.ts` and `well-known.test.ts`.
+  **[Was: "NEW, and QAuth does not implement it … QAuth emits neither. →
+  Tracked as #282. This is the one hard gap in the delta." Superseded
+  2026-08-06 — #282 is closed and shipped, and this is no longer a gap.]**
+- **Scope guidance on the 401 — implemented.** Resources **SHOULD** include a
+  `scope` parameter in the `WWW-Authenticate` header of the 401, not only on
+  `insufficient_scope` (403). → **Shipped (#284, closed).**
+  `libs/fastify/plugins/mcp-guard/src/lib/challenge.ts` attaches the route's
+  required scopes to the credential-absent 401 as well as the 403, while keeping
+  the 401 free of an `error` parameter per RFC 6750 §3.1. `invalid_token` is
+  deliberately excluded: the client already holds a token, so the remedy is
+  re-authentication rather than a wider scope set, and repeating the requirement
+  there would invite pointless re-consent loops. Covered by `challenge.test.ts`.
+  **[Was: "`mcp-guard` attaches `scope` to the 403 path only; clients currently
+  fall back to PRM `scopes_supported`. → Tracked as #284." Superseded
+  2026-08-06.]**
+- **`offline_access` is a resource anti-pattern — filtering implemented.** MCP
+  servers **SHOULD NOT** advertise `offline_access` in `WWW-Authenticate` scope
+  or PRM `scopes_supported`, since refresh tokens are not a resource
+  requirement. → **Shipped.** `NON_RESOURCE_SCOPES` in
+  `libs/fastify/plugins/mcp-guard/src/lib/scope.ts` backs `advertisableScopes`,
+  applied at both advertisement surfaces (`challenge.ts` and `metadata.ts`) and
+  never to enforcement — a host that configures such a scope still has it
+  checked against the token, so the filter cannot widen access. The AS
+  advertising `offline_access` in its own `scopes_supported` is unaffected and
+  remains correct.
+  **[Was framed as a constraint `mcp-guard` must observe. Superseded
+  2026-08-06 — it observes it.]**
+- **DCR is now formally DEPRECATED in favour of CIMD** (spec PR #2858), retained
+  for backwards compatibility only, and the release adopts a formal
+  feature-lifecycle and deprecation policy with a **12-month minimum** window
+  (SEP-2596). Precisely what moved: **CIMD's level did not change** — both
+  revisions say "Authorization servers and MCP clients **SHOULD** support OAuth
+  Client ID Metadata Documents", and DCR is **MAY** in both. What is new is the
+  word _deprecated_: 2025-11-25 merely noted DCR was "included for backwards
+  compatibility with earlier versions of the MCP authorization spec", whereas
+  2026-07-28 states it "is deprecated and retained for backwards compatibility
+  with authorization servers that do not support Client ID Metadata Documents".
+  The direction ADR-007 already chose is now the specification's stated
+  lifecycle position. → **No change required.** QAuth's
+  client-resolution priority is pre-registered → CIMD → DCR
+  (`apps/auth-server/src/app/helpers/client-resolution.ts`), which already
+  matches; this is directional confirmation, not new work. **Forward risk:** the
+  12-month policy makes eventual _removal_ of DCR from the specification a real
+  possibility, so `POST /oauth/register` should be treated as a spec-deprecated
+  surface — keep it, keep it gated, and do not build new capability on it.
+  **[Was: "CIMD is now SHOULD; DCR is MAY and explicitly deprecated … In
+  2025-11-25 CIMD was 'recommended' … the normative strength has firmed."
+  Superseded 2026-08-06 — CIMD was already SHOULD and DCR already MAY in
+  2025-11-25; only the deprecation language is new.]**
+- **`application_type` on DCR (SEP-837) is a CLIENT-side MUST; nothing is
+  required of the AS.** Clients must send `application_type` when registering so
+  that an OIDC-aware server does not apply web-client redirect-URI rules to a
+  native client. → **QAuth requires no change, and this is not a gap.**
+  `apps/auth-server/src/app/routes/oauth/register.ts` strips `application_type`
+  as an unrecognised registration field, which is exactly what RFC 7591 §3.2
+  prescribes; `register.test.ts` asserts the strip. QAuth never derives
+  redirect-URI policy from a self-asserted client hint in the first place —
+  loopback handling is decided per RFC 8252 / [ADR-008](./008-environment-aware-authorization.md)
+  by `isHttpLocalhostRedirect` in `helpers/oauth-redirect.ts` and by
+  `helpers/environment-policy.ts`, keyed on the URI itself. Recorded explicitly
+  so a future reader does not re-open this as a compliance gap.
+- **Client-credential issuer binding (SEP-2352) is likewise a CLIENT-side
+  MUST.** Clients must key persisted client credentials by issuer, must not
+  reuse a registration across authorization servers, and must re-register when
+  the issuer changes. → **Nothing is required of QAuth as an AS.** It is worth
+  recording because it strengthens the CIMD case structurally: CIMD `client_id`s
+  are explicitly **exempt**, being portable self-hosted URLs that denote the
+  same client identity at every AS. That is a second, independent argument for
+  the CIMD-primary posture in Decision §1.
+- **Scope hierarchies — NEW MUST, and the one item needing a maintainer
+  ruling.** 2026-07-28 adds that servers **MUST** account for scope hierarchies,
+  where a broader scope implies narrower ones, when deciding whether a token is
+  sufficient for an operation. The sentence is absent from 2025-11-25 and binds
+  the resource server. → **Satisfied as-is; no code change.** The requirement is
+  conditional — it obliges a server to honour a hierarchy _where one exists_.
+  **Maintainer decision (2026-08-06): QAuth's agent scope modes are INDEPENDENT
+  OAuth scopes, not a hierarchy.** `agent:admin` does **not** imply
+  `agent:readonly`. The per-client `max_agent_mode` cap
+  (`isModeWithinCap` in `apps/auth-server/src/app/helpers/scope-modes.ts`) is a
+  **maximum requestable ceiling** — it governs which reserved scopes a client
+  may ask for, not which requirements an already-granted token satisfies.
+  `mcp-guard`'s exact, case-sensitive, non-hierarchical matching
+  (`missingScopes` in `libs/fastify/plugins/mcp-guard/src/lib/scope.ts`, per
+  RFC 6749 §3.3) is therefore correct and **must not be changed**: inferring an
+  implication would silently widen the reach of every `agent:admin` token. What
+  is wrong is the prose — [`docs/agent-authorization.md`](../agent-authorization.md)
+  described the modes in hierarchical terms and is being corrected to match.
 - **Both discovery mechanisms remain acceptable** (RFC 8414 _or_ OIDC Discovery),
   with clients required to support both. → **Already satisfied**, unchanged.
 - **RFC 8707 resource indicators remain MUST for clients**, with audience
@@ -135,19 +237,57 @@ core, an Extensions framework, Tasks, and MCP Apps.
   process. QAuth's RFC 8693 token-exchange delegation work remains an
   _extension_ (`ext-auth`), not core — the position ADR-007 already took. The
   formalisation makes that boundary firmer, not weaker.
+- **The `ext-auth` catalogue now carries lifecycle status, and QAuth implements
+  none of it.** Enterprise-Managed Authorization (EMA) is listed **STABLE** and
+  an OAuth **Client Credentials** extension is listed **DRAFT**. Verified in the
+  code on 2026-08-06, QAuth supports **neither**: `helpers/discovery.ts`
+  advertises `grant_types_supported` of `authorization_code`,
+  `client_credentials`, `refresh_token` and
+  `urn:ietf:params:oauth:grant-type:token-exchange` — there is no
+  `urn:ietf:params:oauth:grant-type:jwt-bearer`; there is no ID-JAG
+  (identity-assertion JWT authorization grant) handling anywhere; no
+  `authorization_grant_profiles_supported` member exists in either metadata
+  document; and `token_endpoint_auth_methods_supported` is
+  `['client_secret_basic', 'client_secret_post', 'none']` with **no**
+  `private_key_jwt` (`helpers/client-auth.ts` implements only the two
+  shared-secret methods plus public clients — the `private_key_jwt` value
+  present in the DB enum and the client schemas is not a working token-endpoint
+  authentication method). Token exchange is hard-gated to OAuth access tokens:
+  `routes/oauth/token.ts` rejects any `subject_token_type` /
+  `requested_token_type` / `actor_token_type` other than
+  `urn:ietf:params:oauth:token-type:access_token`, so an assertion grant could
+  not be smuggled through the existing surface even by accident. → This is **new
+  scope, not regression.** Tracked as **#383** (accept ID-JAG assertions at
+  `/oauth/token` for EMA) and **#384** (`private_key_jwt` token-endpoint
+  authentication), both filed 2026-08-06 and open.
+- **The stateless protocol core (SEP-2567, SEP-2575) is transport-level and does
+  not bind the AS.** The release removes sessions and `Mcp-Session-Id`, drops
+  the `initialize` / `notifications/initialized` handshake in favour of
+  per-request `_meta`, and removes SSE resumability. None of that is
+  authorization surface, so nothing in QAuth changes. It is worth recording as
+  _favourable_: authorization is now unambiguously per-request with no session
+  for a token to be bound to, which is precisely the model QAuth issues for —
+  self-contained, audience-bound tokens validated on every call by `mcp-guard`
+  with no server-side conversation state.
 
 ### Underlying spec drift
 
-- **OAuth 2.1 is at `draft-ietf-oauth-v2-1-15`** and is still not an RFC. The MCP
-  draft cites `-13` and `-14`. QAuth's "OAuth 2.1" positioning is accurate but
-  the base is still moving.
+- **OAuth 2.1 is at `draft-ietf-oauth-v2-1-15`** and is still not an RFC. The
+  published MCP 2026-07-28 specification cites `-13` (Standards Compliance,
+  Access Token Usage) and `-14` (Refresh Tokens). QAuth's "OAuth 2.1"
+  positioning is accurate but the base is still moving.
 - **CIMD is at `draft-ietf-oauth-client-id-metadata-document-02`** (6 July 2026);
-  QAuth and the MCP spec both still cite `-00`. No interop break — but note that
-  `-01` added SSRF hardening and required HTTP 200, and `-02` clarified that URL
-  comparison is simple string comparison without default-port normalisation.
+  QAuth and the MCP 2026-07-28 specification both still cite `-00`. QAuth's own
+  `-00` citations live in the header comment of
+  `apps/auth-server/src/app/helpers/cimd.ts` and beside the
+  `client_id_metadata_document_supported` advertisement in
+  `helpers/discovery.ts`. No interop break — but note that `-01` added SSRF
+  hardening and required HTTP 200, and `-02` clarified that URL comparison is
+  simple string comparison without default-port normalisation.
   **QAuth's implementation already satisfies all of these** (DNS-pinned IP
   validation, no redirect following, https-only, size bounds, non-200 rejection,
-  byte-for-byte `client_id` match). The citation lags the code, not the reverse.
+  byte-for-byte `client_id` match) — re-verified 2026-08-06. The citation lags
+  the code, not the reverse.
 
 ### Process note
 
@@ -157,6 +297,16 @@ spec citations. The decaying artefacts are the pin constants and ADR
 spec-tracking sections, not the code. A standing quarterly re-pin pass would
 catch this earlier than an ad-hoc audit does.
 
+**Addendum 2026-08-06.** The re-review found the same failure mode running in
+the other direction, which is worse: the 2026-07-19 pass asserted three
+implementation gaps (#282, #284, `offline_access` filtering) that were closed
+soon afterwards, and the ADR kept advertising them as open for two weeks. A
+stale "we don't do X" is more damaging than a stale citation — it invites
+duplicate issues and misstates compliance to anyone reading the ADR as status.
+Reviewing against a release _candidate_ compounded it. Two rules follow: pin
+spec reviews to published revisions only, and re-verify every status claim
+against the code at the moment of writing rather than carrying it forward.
+
 ## Related
 
 - [ADR-002: Identifier Abstraction](./002-identifier-abstraction.md) — IMPLEMENTED (Epic #224); was the Phase 4 gate, now cleared
@@ -165,7 +315,8 @@ catch this earlier than an ad-hoc audit does.
 - [ADR-005: Post-Quantum Hybrid Signing](./005-pqc-hybrid-signing.md) — active (T4); hybrid issuance merged and wired into the live routes (#275), default off via `HYBRID_SIGNING_ENABLED`
 - [ADR-006: OAuth Grants and Audience](./006-oauth-grants-and-audience.md) — the foundation this builds on
 - PR #156 — `integration/oauth-mcp-stack`; PR #159 — public-client `authorization_code`
-- [MCP Authorization specification (2025-11-25)](https://modelcontextprotocol.io/specification/2025-11-25/basic/authorization) · [changelog vs 2025-06-18](https://modelcontextprotocol.io/specification/2025-11-25/changelog) · [auth extensions (ext-auth)](https://github.com/modelcontextprotocol/ext-auth)
+- [MCP Authorization specification (2026-07-28 — current)](https://modelcontextprotocol.io/specification/2026-07-28/basic/authorization) · [client registration](https://modelcontextprotocol.io/specification/2026-07-28/basic/authorization/client-registration) · [changelog](https://modelcontextprotocol.io/specification/2026-07-28/changelog) · [release announcement](https://blog.modelcontextprotocol.io/posts/2026-07-28/) · [auth extensions (ext-auth)](https://github.com/modelcontextprotocol/ext-auth)
+- [MCP Authorization specification (2025-11-25 — superseded)](https://modelcontextprotocol.io/specification/2025-11-25/basic/authorization) — the revision the 2025-11-25 review above targets
 - [RFC 9728 — OAuth 2.0 Protected Resource Metadata](https://datatracker.ietf.org/doc/html/rfc9728)
-- [RFC 8707 — Resource Indicators](https://datatracker.ietf.org/doc/html/rfc8707) · [RFC 7591 — Dynamic Client Registration](https://datatracker.ietf.org/doc/html/rfc7591) · [RFC 8414 — Authorization Server Metadata](https://datatracker.ietf.org/doc/html/rfc8414) · [OAuth Client ID Metadata Documents (CIMD draft-00)](https://datatracker.ietf.org/doc/html/draft-ietf-oauth-client-id-metadata-document-00)
+- [RFC 8707 — Resource Indicators](https://datatracker.ietf.org/doc/html/rfc8707) · [RFC 7591 — Dynamic Client Registration](https://datatracker.ietf.org/doc/html/rfc7591) · [RFC 8414 — Authorization Server Metadata](https://datatracker.ietf.org/doc/html/rfc8414) · [OAuth Client ID Metadata Documents — CIMD `draft-00` (the revision QAuth and MCP cite)](https://datatracker.ietf.org/doc/html/draft-ietf-oauth-client-id-metadata-document-00) · [`draft-02` (current, 6 July 2026)](https://datatracker.ietf.org/doc/html/draft-ietf-oauth-client-id-metadata-document-02)
 - [RFC 8693 — OAuth 2.0 Token Exchange](https://datatracker.ietf.org/doc/html/rfc8693) · [RFC 7009 — Token Revocation](https://datatracker.ietf.org/doc/html/rfc7009)
