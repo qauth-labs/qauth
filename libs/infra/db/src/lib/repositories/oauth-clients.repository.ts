@@ -128,9 +128,9 @@ export function createOAuthClientsRepository(defaultDb: DbClient): OAuthClientsR
      * Uses a single INSERT ... ON CONFLICT so concurrent authorize requests
      * for the same metadata-document client_id collapse onto one row instead
      * of racing on a find-then-create. On conflict we refresh only the
-     * document-derived fields (name / redirect_uris / grant+response types)
-     * and bump `updatedAt`; identity columns and the secret sentinel are
-     * left as-is.
+     * document-derived fields (name / redirect_uris / grant+response types /
+     * auth method + key set) and bump `updatedAt`; identity columns and the
+     * secret sentinel are left as-is.
      */
     async upsertCimdClient(data: NewOAuthClient, tx?: DbClient): Promise<OAuthClient> {
       const invoker = tx ?? defaultDb;
@@ -146,6 +146,15 @@ export function createOAuthClientsRepository(defaultDb: DbClient): OAuthClientsR
             grantTypes: data.grantTypes,
             responseTypes: data.responseTypes,
             tokenEndpointAuthMethod: data.tokenEndpointAuthMethod,
+            // The key set MUST be refreshed alongside `tokenEndpointAuthMethod`
+            // (#384, CIMD §6.2). These two are one decision: a document that adds
+            // `private_key_jwt` on a LATER resolution would otherwise flip the
+            // method while the key columns stayed NULL, leaving the client
+            // permanently unauthenticable, and a client that ROTATES its keys
+            // would keep the stale set forever. Both are document-derived fields
+            // like everything else in this set-list.
+            jwks: data.jwks,
+            jwksUri: data.jwksUri,
             // Keep the agent classification in sync with the metadata document
             // (ADR-007 §2) so a CIMD doc that flips `is_agent` is reflected on
             // re-resolution, matching the other document-derived fields above.

@@ -1,11 +1,25 @@
 import Fastify from 'fastify';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+
+/**
+ * Mutable env stand-in so a test can flip a discovery feature flag
+ * (`CIMD_ENABLED`, `ID_JAG_ENABLED`) without re-importing the route module.
+ * Starts EMPTY on purpose: every flag reads as `undefined`, which must behave
+ * exactly like `false` — that is the fail-closed default the ADR-011 gating
+ * relies on.
+ */
+const { mockEnv } = vi.hoisted(() => ({ mockEnv: {} as Record<string, unknown> }));
 
 vi.mock('../../config/env', () => ({
-  env: {},
+  env: mockEnv,
 }));
 
+import { ID_JAG_GRANT_PROFILE, JWT_BEARER_GRANT_TYPE } from '../schemas/oauth';
 import wellKnownRoutes from './well-known';
+
+afterEach(() => {
+  for (const key of Object.keys(mockEnv)) delete mockEnv[key];
+});
 
 const ISSUER = 'https://auth.example.com';
 
@@ -76,6 +90,43 @@ describe('GET /.well-known/oauth-authorization-server', () => {
       // RFC 9207 §3 (#282): /oauth/authorize emits `iss` on every
       // authorization response, so the AS MUST advertise that it does.
       expect(body['authorization_response_iss_parameter_supported']).toBe(true);
+      // #384: private_key_jwt is unflagged and always advertised, together with
+      // the algorithms the assertion verifier will actually accept.
+      expect(body['token_endpoint_auth_methods_supported']).toContain('private_key_jwt');
+      expect(
+        (body['token_endpoint_auth_signing_alg_values_supported'] as string[]).length
+      ).toBeGreaterThan(0);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('does not advertise ID-JAG when the flag is unset (fail-closed default, ADR-011)', async () => {
+    // `mockEnv` is empty, so `env.ID_JAG_ENABLED` is undefined — the served
+    // document must look exactly as it does with an explicit `false`.
+    const app = await buildApp();
+    try {
+      const body = (
+        await app.inject({ method: 'GET', url: '/.well-known/oauth-authorization-server' })
+      ).json() as Record<string, unknown>;
+
+      expect(body['grant_types_supported']).not.toContain(JWT_BEARER_GRANT_TYPE);
+      expect('authorization_grant_profiles_supported' in body).toBe(false);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('advertises the jwt-bearer grant and ID-JAG profile once ID_JAG_ENABLED is set', async () => {
+    mockEnv['ID_JAG_ENABLED'] = true;
+    const app = await buildApp();
+    try {
+      const body = (
+        await app.inject({ method: 'GET', url: '/.well-known/oauth-authorization-server' })
+      ).json() as Record<string, unknown>;
+
+      expect(body['grant_types_supported']).toContain(JWT_BEARER_GRANT_TYPE);
+      expect(body['authorization_grant_profiles_supported']).toEqual([ID_JAG_GRANT_PROFILE]);
     } finally {
       await app.close();
     }

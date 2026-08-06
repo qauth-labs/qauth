@@ -2,6 +2,7 @@ import { InvalidClientError, InvalidScopeError } from '@qauth-labs/shared-errors
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 
+import { authenticateClientAssertion, type ClientAssertionCredentials } from './client-assertion';
 import { isAgentClient, resolveClient } from './client-resolution';
 import { type AgentMode, findExceedingAgentScopes, parseAgentMode } from './scope-modes';
 
@@ -31,8 +32,26 @@ export type OAuthClientLike = {
    * Token endpoint auth method (RFC 7591). `'none'` identifies public
    * clients (PKCE, native/SPA) that present only `client_id` at /token.
    * When absent we conservatively treat the client as confidential.
+   *
+   * `'private_key_jwt'` (RFC 7523 §2.2, #384) selects assertion-based
+   * authentication. The method is EXCLUSIVE: it is checked on both paths, so a
+   * `private_key_jwt` client cannot authenticate with its stored secret and a
+   * `client_secret_*` client cannot authenticate with an assertion.
    */
   tokenEndpointAuthMethod?: string;
+  /**
+   * RFC 7591 §2 inline JWK Set holding the client's PUBLIC assertion-signing
+   * keys (#384). Absent/null for every client that authenticates with a shared
+   * secret or is public — i.e. every pre-existing client. MUTUALLY EXCLUSIVE
+   * with {@link jwksUri}; a record carrying both authenticates nothing.
+   */
+  jwks?: { keys: Record<string, unknown>[] } | null;
+  /**
+   * RFC 7591 §2 https URL of the client's JWK Set — the by-reference
+   * alternative to {@link jwks}. Dereferenced only through the SSRF-guarded
+   * fetcher, and only for a client already resolved by `client_id`.
+   */
+  jwksUri?: string | null;
   /**
    * ADR-007 §2 (#182) self-asserted agent classification. Optional here so
    * the structural type stays a superset of older callers; absent ⇒ NOT an
@@ -137,9 +156,20 @@ export function extractClientCredentials(
 }
 
 /**
- * Look up and authenticate a confidential OAuth client.
+ * Look up and authenticate a confidential OAuth client by shared secret.
  * Throws `InvalidClientError` (RFC 6749 5.2 `invalid_client`) regardless of
  * which check failed — timing-safe padding handled upstream.
+ *
+ * The client's registered `token_endpoint_auth_method` is checked BEFORE the
+ * secret: a `private_key_jwt` client (#384) must not be able to fall back to
+ * secret-based authentication. That matters concretely — every client row
+ * carries a real `client_secret_hash` regardless of method (the seed script
+ * generates one unconditionally), so without this gate a client provisioned
+ * for assertions would remain authenticable with a secret it was never
+ * supposed to use, and the stronger method would be a suggestion rather than a
+ * requirement. Public clients (`'none'`) are likewise rejected here: their
+ * stored hash is a non-verifiable sentinel, so this is an explicit denial
+ * rather than a reliance on the sentinel never matching.
  */
 export async function authenticateClient(
   fastify: FastifyInstance,
@@ -150,6 +180,9 @@ export async function authenticateClient(
   if (!client || !client.enabled) {
     throw new InvalidClientError();
   }
+  if (!acceptsClientSecret(client.tokenEndpointAuthMethod)) {
+    throw new InvalidClientError();
+  }
   const valid = await fastify.passwordHasher.verifyPassword(
     client.clientSecretHash,
     creds.clientSecret
@@ -158,6 +191,25 @@ export async function authenticateClient(
     throw new InvalidClientError();
   }
   return client;
+}
+
+/**
+ * Whether a registered `token_endpoint_auth_method` is one that authenticates
+ * with a shared secret.
+ *
+ * An ABSENT method stays confidential-by-default, preserving the behaviour of
+ * every row provisioned before the column had a value. Only the two secret
+ * methods and "unset" qualify — anything else (today `'none'` and
+ * `'private_key_jwt'`) is denied, so a method QAuth does not implement can
+ * never fall through to the secret path.
+ */
+function acceptsClientSecret(method: string | undefined): boolean {
+  return (
+    method === undefined ||
+    method === null ||
+    method === 'client_secret_basic' ||
+    method === 'client_secret_post'
+  );
 }
 
 /**
@@ -193,8 +245,9 @@ export async function authenticateClientPublicOrConfidential(
   // pre-registered → CIMD chain. A CIMD client (https-URL client_id) is
   // materialised here too, so a direct token call whose authorize-time row
   // was never created (or whose document cache expired) still resolves.
-  // CIMD clients are public by construction (token_endpoint_auth_method:
-  // 'none'), so they satisfy the public-client requirement below.
+  // A CIMD client is public unless its metadata document registered a key set
+  // for `private_key_jwt` (#384, CIMD §6.2); such a client is confidential and
+  // is rejected below for arriving with no credential at all.
   if (!bodyClientId) {
     throw new InvalidClientError();
   }
@@ -209,6 +262,135 @@ export async function authenticateClientPublicOrConfidential(
   // `ResolvedClient` is a structural superset of `OAuthClientLike`, so the
   // resolved row is assignable directly — no cast required.
   return client;
+}
+
+/**
+ * The client-authentication parameters a token-endpoint request may carry,
+ * mirroring the shared `clientAuthenticationFields` in `schemas/oauth.ts`.
+ * Every grant body is assignable to this shape.
+ */
+export interface ClientAuthenticationParams {
+  client_id?: string;
+  client_secret?: string;
+  client_assertion_type?: string;
+  client_assertion?: string;
+}
+
+/**
+ * Which authentication mechanism a request is ATTEMPTING, decided before any
+ * credential is checked.
+ *
+ * `'none'` means no credential of any kind was presented — valid only for a
+ * registered public client on a grant that permits one.
+ */
+export type AttemptedClientAuthMethod = 'secret' | 'private_key_jwt' | 'none';
+
+/**
+ * Classify the authentication mechanism a request is attempting, rejecting any
+ * request that attempts more than one.
+ *
+ * RFC 6749 §2.3 is explicit: "The authorization server MUST NOT accept more
+ * than one mechanism of client authentication in any given request." That rule
+ * exists to stop credential-substitution games — a caller must not be able to
+ * present a secret AND an assertion and have the server keep trying until
+ * something passes. So this counts the mechanisms present and refuses as soon
+ * as there is more than one, BEFORE anything is verified.
+ *
+ * `client_assertion_type` and `client_assertion` must be presented TOGETHER
+ * (RFC 7521 §4.2); either one alone is a malformed attempt, not an absent one,
+ * and is rejected rather than silently downgraded to the public-client path.
+ */
+export function classifyClientAuthentication(
+  request: FastifyRequest,
+  params: ClientAuthenticationParams
+): AttemptedClientAuthMethod {
+  const hasBasic = /^Basic\s/i.test(request.headers.authorization ?? '');
+  const hasSecret = hasBasic || Boolean(params.client_secret);
+  const hasAssertionType = Boolean(params.client_assertion_type);
+  const hasAssertion = Boolean(params.client_assertion);
+
+  if ((hasAssertionType || hasAssertion) && hasSecret) {
+    throw new InvalidClientError();
+  }
+  if (hasAssertionType !== hasAssertion) {
+    // Exactly one half of the assertion pair — malformed, never "no credential".
+    throw new InvalidClientError();
+  }
+  if (hasAssertion) {
+    return 'private_key_jwt';
+  }
+  if (hasSecret) {
+    return 'secret';
+  }
+  return 'none';
+}
+
+/** Options for {@link authenticateClientRequest}. */
+export interface ClientAuthenticationOptions {
+  /**
+   * Whether the grant permits a registered PUBLIC client
+   * (`token_endpoint_auth_method: 'none'`) to authenticate with nothing but a
+   * `client_id`. True for `authorization_code` (PKCE-bound) and
+   * `refresh_token` (ownership-bound); false for every machine grant, where
+   * the absence of a credential must be `invalid_client`.
+   */
+  allowPublic: boolean;
+}
+
+/**
+ * Authenticate the client of a token-endpoint request by whichever mechanism
+ * it presented — the single entry point that covers all three.
+ *
+ * Dispatch is by what the REQUEST carries, and the mechanism is then checked
+ * against what the CLIENT is registered for. Those are two separate gates on
+ * purpose: the first refuses a request that mixes mechanisms, the second
+ * refuses a mechanism the client is not provisioned for. Together they mean
+ * adding `private_key_jwt` cannot make any existing client easier to
+ * authenticate — a `client_secret_*` client is rejected on the assertion path
+ * (it fails the registered-method check inside
+ * {@link authenticateClientAssertion}) and a `private_key_jwt` client is
+ * rejected on the secret path (it fails {@link acceptsClientSecret} inside
+ * {@link authenticateClient}).
+ *
+ * Every failure is {@link InvalidClientError} (RFC 6749 §5.2 `invalid_client`)
+ * so the caller keeps a single audit-log + error shape.
+ */
+export async function authenticateClientRequest(
+  fastify: FastifyInstance,
+  realmId: string,
+  request: FastifyRequest,
+  params: ClientAuthenticationParams,
+  options: ClientAuthenticationOptions
+): Promise<OAuthClientLike> {
+  const method = classifyClientAuthentication(request, params);
+
+  if (method === 'private_key_jwt') {
+    // `classifyClientAuthentication` guarantees both fields are present.
+    const creds: ClientAssertionCredentials = {
+      clientId: params.client_id,
+      assertionType: params.client_assertion_type as string,
+      assertion: params.client_assertion as string,
+      method: 'private_key_jwt',
+    };
+    return authenticateClientAssertion(fastify, realmId, creds);
+  }
+
+  if (method === 'secret') {
+    const creds = extractClientCredentials(request, params.client_id, params.client_secret);
+    return authenticateClient(fastify, realmId, creds);
+  }
+
+  // No credential presented.
+  if (!options.allowPublic) {
+    throw new InvalidClientError();
+  }
+  return authenticateClientPublicOrConfidential(
+    fastify,
+    realmId,
+    request,
+    params.client_id,
+    params.client_secret
+  );
 }
 
 /**

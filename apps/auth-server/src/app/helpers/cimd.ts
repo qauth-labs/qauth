@@ -5,6 +5,11 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 
 import { env } from '../../config/env';
+import {
+  assertJwksMutuallyExclusive,
+  CLIENT_JWKS_URI_MAX_LENGTH,
+  clientJwkSetSchema,
+} from './client-jwks';
 import { SsrfBlockedError, ssrfSafeGet } from './ssrf-safe-fetch';
 
 /**
@@ -81,6 +86,31 @@ export const cimdDocumentSchema = z.object({
    * client can also *omit* it to dodge agent-specific controls.
    */
   is_agent: z.boolean().optional(),
+  /**
+   * RFC 7591 §2 inline JWK Set (CIMD §6.2, #384). A CIMD client has no shared
+   * secret with the AS — there was never a registration in which to issue one —
+   * so publishing PUBLIC signature-verification keys in the metadata document
+   * is the only way it can be a CONFIDENTIAL client. Together with
+   * `token_endpoint_auth_method: 'private_key_jwt'` it upgrades the
+   * materialised row from public to assertion-authenticated.
+   *
+   * TRUST: like every other field here this is self-asserted. What makes it
+   * usable is the CIMD binding, not the field: the document was fetched from
+   * the client_id URL over the SSRF-guarded https path and its own `client_id`
+   * had to equal that URL byte-for-byte, so "the party controlling this URL
+   * holds these keys" is exactly what it establishes — and that is precisely
+   * the claim `private_key_jwt` needs. It confers no privilege beyond
+   * authenticating as that URL: scopes stay empty, `is_agent` stays untrusted,
+   * and `max_agent_mode` / `environment` remain operator-set.
+   */
+  jwks: clientJwkSetSchema.optional(),
+  /**
+   * RFC 7591 §2 `jwks_uri` — the by-reference alternative to {@link jwks},
+   * dereferenced only through the SSRF-guarded fetcher and only for an
+   * already-resolved client. Mutually exclusive with `jwks`; a document
+   * carrying both is rejected at materialisation.
+   */
+  jwks_uri: z.string().min(1).max(CLIENT_JWKS_URI_MAX_LENGTH).optional(),
 });
 
 export type CimdDocument = z.infer<typeof cimdDocumentSchema>;
@@ -116,7 +146,23 @@ export interface CimdClientInsert {
   redirectUris: string[];
   grantTypes: CimdGrantType[];
   responseTypes: 'code'[];
-  tokenEndpointAuthMethod: 'none';
+  /**
+   * `'none'` (public, PKCE-only) for every CIMD client that publishes no key
+   * set — which is the overwhelming majority and the historical behaviour.
+   * `'private_key_jwt'` only when the document BOTH declares that method and
+   * publishes exactly one of `jwks` / `jwks_uri` (#384).
+   */
+  tokenEndpointAuthMethod: 'none' | 'private_key_jwt';
+  /**
+   * The client's PUBLIC assertion-signing keys, carried over from the metadata
+   * document. NULL unless {@link tokenEndpointAuthMethod} resolved to
+   * `private_key_jwt` — a key set is persisted only when it is actually the
+   * client's authentication mechanism, so a stray `jwks` on a public client is
+   * dropped rather than lying dormant in the row.
+   */
+  jwks: { keys: Record<string, unknown>[] } | null;
+  /** By-reference form of the above; at most one of the two is ever non-null. */
+  jwksUri: string | null;
   requirePkce: true;
   enabled: true;
   developerId: null;
@@ -222,16 +268,24 @@ function cacheKey(clientId: string): string {
 }
 
 /**
- * Map a validated CIMD document to the persistence insert payload. CIMD
- * clients are always public (PKCE) — the AS has no shared secret with a
- * client it never registered, so `token_endpoint_auth_method=none` and
- * `requirePkce=true`. Scopes are intentionally left empty: the authorize
- * route's deny-by-default `filterRequestedScopes` then grants only what the
- * realm/consent layer permits, exactly as for an unknown-scope DCR client.
+ * Map a validated CIMD document to the persistence insert payload.
  *
- * `clientSecretHash` is a non-verifiable sentinel (the column is NOT NULL).
- * Because the client is public, no `client_secret_post`/`basic` attempt can
- * ever succeed against it.
+ * A CIMD client has no SHARED SECRET — the AS never registered it, so there was
+ * no exchange in which to issue one — and it therefore defaults to public
+ * (`token_endpoint_auth_method=none`, `requirePkce=true`). Since #384 it has a
+ * second option: a document that publishes PUBLIC keys and asks for
+ * `private_key_jwt` (CIMD §6.2 / RFC 7591 §2) materialises as a CONFIDENTIAL
+ * client that authenticates by assertion. PKCE stays required either way.
+ *
+ * Scopes are intentionally left empty: the authorize route's deny-by-default
+ * `filterRequestedScopes` then grants only what the realm/consent layer
+ * permits, exactly as for an unknown-scope DCR client.
+ *
+ * `clientSecretHash` is a non-verifiable sentinel (the column is NOT NULL) in
+ * BOTH cases. No `client_secret_post`/`basic` attempt can ever succeed against
+ * a CIMD client: the public row is rejected for its `'none'` method and the
+ * assertion row for its `'private_key_jwt'` method, before the sentinel is even
+ * reached.
  */
 export function toCimdClientInsert(
   realmId: string,
@@ -259,6 +313,24 @@ export function toCimdClientInsert(
   }
   const responseTypes: 'code'[] = supportedResponses.length > 0 ? supportedResponses : ['code'];
 
+  // CIMD §6.2 / RFC 7591 §2 (#384). A document may register PUBLIC keys so the
+  // client can authenticate with `private_key_jwt` instead of being restricted
+  // to the public, PKCE-only posture it has had until now.
+  //
+  // Both forms at once is an RFC 7591 §2 violation and leaves it ambiguous which
+  // key set is authoritative, so the document is rejected outright rather than
+  // materialised with a guess.
+  assertJwksMutuallyExclusive(doc.jwks, doc.jwks_uri, 'CIMD document');
+
+  const hasKeySet = doc.jwks !== undefined || doc.jwks_uri !== undefined;
+  // Fail SAFE, not merely closed: a document that asks for `private_key_jwt`
+  // without publishing keys, or publishes keys without asking for the method,
+  // falls back to the public posture it would have had before #384. Neither
+  // half-configuration can authenticate an assertion (the verifier requires the
+  // registered method AND a key set), so the fallback grants nothing — it just
+  // avoids breaking a client over metadata it never needed us to act on.
+  const usesPrivateKeyJwt = doc.token_endpoint_auth_method === 'private_key_jwt' && hasKeySet;
+
   return {
     realmId,
     clientId,
@@ -268,7 +340,9 @@ export function toCimdClientInsert(
     redirectUris: doc.redirect_uris,
     grantTypes,
     responseTypes,
-    tokenEndpointAuthMethod: 'none',
+    tokenEndpointAuthMethod: usesPrivateKeyJwt ? 'private_key_jwt' : 'none',
+    jwks: usesPrivateKeyJwt && doc.jwks !== undefined ? doc.jwks : null,
+    jwksUri: usesPrivateKeyJwt && doc.jwks_uri !== undefined ? doc.jwks_uri : null,
     requirePkce: true,
     enabled: true,
     developerId: null,

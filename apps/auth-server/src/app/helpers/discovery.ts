@@ -8,6 +8,13 @@
  * the route layer controls caching and the tests can exercise shape directly.
  */
 
+import {
+  ASSERTION_SIGNING_ALG_VALUES_SUPPORTED,
+  ID_JAG_GRANT_PROFILE,
+  JWT_BEARER_GRANT_TYPE,
+  TOKEN_EXCHANGE_GRANT_TYPE,
+} from '../schemas/oauth';
+
 /**
  * Default scopes advertised when a realm-specific list is not configured.
  *
@@ -50,6 +57,24 @@ export interface DiscoveryMetadataInput {
    * JWKS — advertising an algorithm with no matching key is a conformance failure.
    */
   idTokenSigningAlgValuesSupported?: readonly string[];
+  /**
+   * Whether the Identity Assertion Authorization Grant (ID-JAG) is enabled —
+   * the EMA cross-domain grant of ADR-011. The route layer passes
+   * `env.ID_JAG_ENABLED`; defaults to false here, matching the config default.
+   *
+   * Gates BOTH `urn:ietf:params:oauth:grant-type:jwt-bearer` in
+   * `grant_types_supported` and the whole
+   * `authorization_grant_profiles_supported` member. When the flag is off the
+   * token endpoint answers `unsupported_grant_type`, so advertising either
+   * would be a false capability claim — the same reason
+   * `client_id_metadata_document_supported` is emitted conditionally.
+   *
+   * NOTE this is only the FIRST of two gates: even with the flag on, an empty
+   * `ID_JAG_TRUSTED_ISSUERS` rejects every assertion. Discovery advertises the
+   * grant's availability, not the existence of any particular trusted issuer —
+   * which issuers an AS trusts is deployment policy and is not published.
+   */
+  idJagEnabled?: boolean;
 }
 
 /**
@@ -87,14 +112,38 @@ export function buildAuthorizationServerMetadata(
     // the grant handler. Token endpoint still rejects unsupported grants.
     // The token-exchange grant (RFC 8693, ADR-007 §2) powers agent
     // on-behalf-of delegation; only agent clients may use it (handler-gated).
+    // The RFC 7523 jwt-bearer grant is appended ONLY when ID-JAG is enabled
+    // (ADR-011): it is the sole consumer of that grant, and with the flag off
+    // /oauth/token answers `unsupported_grant_type`.
     grant_types_supported: [
       'authorization_code',
       'client_credentials',
       'refresh_token',
-      'urn:ietf:params:oauth:grant-type:token-exchange',
+      TOKEN_EXCHANGE_GRANT_TYPE,
+      ...(input.idJagEnabled ? [JWT_BEARER_GRANT_TYPE] : []),
     ],
     code_challenge_methods_supported: ['S256'],
-    token_endpoint_auth_methods_supported: ['client_secret_basic', 'client_secret_post', 'none'],
+    // `private_key_jwt` (RFC 7523 §2.2, #384) is advertised unconditionally:
+    // it needs no feature flag, it is opt-in per client via the registered
+    // `token_endpoint_auth_method`, and the token endpoint accepts a client
+    // assertion from any client provisioned for it. Deliberately NOT added to
+    // the introspection / revocation lists below — those endpoints keep
+    // secret-based authentication only, and under-advertising is safe where
+    // over-advertising would be a lie.
+    token_endpoint_auth_methods_supported: [
+      'client_secret_basic',
+      'client_secret_post',
+      'private_key_jwt',
+      'none',
+    ],
+    // RFC 8414 §2 / OIDC Discovery §3: REQUIRED whenever a JWT-based client
+    // authentication method is advertised, and required by the ext-auth
+    // client-credentials draft for the same reason. Sourced from the SAME
+    // constant the assertion verifiers pass to `jose`, so the advertised set
+    // and the accepted set cannot drift. Asymmetric algorithms only — `none`
+    // is impossible and `HS*` belongs to `client_secret_jwt`, which QAuth does
+    // not implement.
+    token_endpoint_auth_signing_alg_values_supported: [...ASSERTION_SIGNING_ALG_VALUES_SUPPORTED],
     introspection_endpoint_auth_methods_supported: ['client_secret_basic', 'client_secret_post'],
     revocation_endpoint_auth_methods_supported: ['client_secret_basic', 'client_secret_post'],
     scopes_supported: Array.from(input.scopesSupported ?? DEFAULT_SCOPES_SUPPORTED),
@@ -138,6 +187,18 @@ export function buildAuthorizationServerMetadata(
     // deployment that turns CIMD off does not over-advertise.
     ...(input.clientIdMetadataDocumentSupported
       ? { client_id_metadata_document_supported: true }
+      : {}),
+    // Identity Assertion Authorization Grant (ADR-011). Announces that this AS
+    // implements the ID-JAG profile of the jwt-bearer grant — both consuming an
+    // assertion from a trusted enterprise IdP and minting one via RFC 8693
+    // token exchange. Emitted only when `ID_JAG_ENABLED`, for the same reason
+    // the grant type above is: with the flag off nothing here is reachable, and
+    // an empty member would be worse than an absent one (RFC 8414 §2 has no
+    // "supported but disabled" state). Contrast
+    // `authorization_response_iss_parameter_supported`, which is hard-coded
+    // true precisely because no deployment switch can turn it off.
+    ...(input.idJagEnabled
+      ? { authorization_grant_profiles_supported: [ID_JAG_GRANT_PROFILE] }
       : {}),
   };
 }

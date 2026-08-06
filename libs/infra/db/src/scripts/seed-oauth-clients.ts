@@ -62,6 +62,22 @@ const responseTypeZ = z.enum(responseTypeEnum.enumValues);
 const tokenEndpointAuthMethodZ = z.enum(tokenEndpointAuthMethodEnum.enumValues);
 const agentModeZ = z.enum(agentModeEnum.enumValues);
 
+/**
+ * A single JWK inside a manifest-supplied key set. Deliberately loose about
+ * which members are present (the verifier decides that) but STRICT about one
+ * thing: no private-key material. `d` is the private exponent/scalar for RSA,
+ * EC and OKP alike; `k` is a symmetric key. The AS only ever needs a client's
+ * PUBLIC key to verify a `private_key_jwt` assertion, so a manifest carrying a
+ * private component is an operator mistake worth failing loudly on rather than
+ * silently persisting into the database.
+ */
+const clientJwkZ = z
+  .object({ kty: z.string().min(1) })
+  .catchall(z.unknown())
+  .refine((jwk) => !('d' in jwk) && !('k' in jwk), {
+    message: 'jwks must contain PUBLIC keys only (a "d" or "k" member was present)',
+  });
+
 const clientSpecSchema = z
   .object({
     client_id: z.string().min(1).max(255),
@@ -84,8 +100,35 @@ const clientSpecSchema = z
     // control must be server-set). Omitted ⇒ NULL ⇒ no agent mode permitted
     // (deny-by-default). Only meaningful together with `is_agent: true`.
     max_agent_mode: agentModeZ.optional(),
+    // RFC 7591 §2 client JWKS, consumed by `private_key_jwt` client
+    // authentication (#384). This is the ONLY provisioning path for it:
+    // `POST /oauth/register` (DCR) does not accept `jwks` / `jwks_uri` or the
+    // `private_key_jwt` auth method, so a client cannot self-register the keys
+    // that authenticate it — same operator-set posture as `max_agent_mode`.
+    jwks: z.object({ keys: z.array(clientJwkZ).min(1).max(20) }).optional(),
+    jwks_uri: z.url().max(2048).optional(),
   })
-  .strict();
+  .strict()
+  // RFC 7591 §2: "The `jwks_uri` and `jwks` parameters MUST NOT both be
+  // present in the same request or response." Enforced HERE, at the validation
+  // layer, rather than as a DB CHECK so the operator gets a message naming the
+  // conflict instead of a constraint violation.
+  .refine((spec) => !(spec.jwks && spec.jwks_uri), {
+    message: 'jwks and jwks_uri are mutually exclusive (RFC 7591 §2) — set at most one',
+    path: ['jwks'],
+  })
+  // Fail closed on a half-provisioned private_key_jwt client: without a key
+  // set there is nothing to verify an assertion against, so the client could
+  // never authenticate. Surfacing that at seed time beats a runtime
+  // `invalid_client` nobody can explain.
+  .refine(
+    (spec) =>
+      spec.token_endpoint_auth_method !== 'private_key_jwt' || Boolean(spec.jwks || spec.jwks_uri),
+    {
+      message: 'token_endpoint_auth_method=private_key_jwt requires either jwks or jwks_uri',
+      path: ['token_endpoint_auth_method'],
+    }
+  );
 
 const manifestSchema = z
   .object({
@@ -240,6 +283,10 @@ function buildInsert(realmId: string, spec: ClientSpec, clientSecretHash: string
     isAgent: spec.is_agent ?? false,
     // Operator-set agent scope-mode cap; null = deny-by-default (no agent mode).
     maxAgentMode: spec.max_agent_mode ?? null,
+    // RFC 7591 §2 client JWKS for `private_key_jwt` (#384). Mutually exclusive
+    // — the manifest validator rejects a spec that sets both.
+    jwks: spec.jwks ?? null,
+    jwksUri: spec.jwks_uri ?? null,
     enabled: true,
   } as const;
 }
@@ -264,6 +311,10 @@ function buildUpdate(spec: ClientSpec, clientSecretHash: string) {
     isAgent: spec.is_agent ?? false,
     // Operator-set agent scope-mode cap; null = deny-by-default (no agent mode).
     maxAgentMode: spec.max_agent_mode ?? null,
+    // Kept in lock-step with the manifest so a key rotation is a manifest edit
+    // + re-run, exactly like the other document-derived fields above.
+    jwks: spec.jwks ?? null,
+    jwksUri: spec.jwks_uri ?? null,
     updatedAt: sql`(EXTRACT(EPOCH FROM now()) * 1000)::bigint`,
   } as const;
 }

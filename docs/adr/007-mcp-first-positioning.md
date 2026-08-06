@@ -238,28 +238,47 @@ core, an Extensions framework, Tasks, and MCP Apps.
   _extension_ (`ext-auth`), not core — the position ADR-007 already took. The
   formalisation makes that boundary firmer, not weaker.
 - **The `ext-auth` catalogue now carries lifecycle status, and QAuth implements
-  none of it.** Enterprise-Managed Authorization (EMA) is listed **STABLE** and
-  an OAuth **Client Credentials** extension is listed **DRAFT**. Verified in the
-  code on 2026-08-06, QAuth supports **neither**: `helpers/discovery.ts`
-  advertises `grant_types_supported` of `authorization_code`,
-  `client_credentials`, `refresh_token` and
-  `urn:ietf:params:oauth:grant-type:token-exchange` — there is no
-  `urn:ietf:params:oauth:grant-type:jwt-bearer`; there is no ID-JAG
-  (identity-assertion JWT authorization grant) handling anywhere; no
-  `authorization_grant_profiles_supported` member exists in either metadata
-  document; and `token_endpoint_auth_methods_supported` is
-  `['client_secret_basic', 'client_secret_post', 'none']` with **no**
-  `private_key_jwt` (`helpers/client-auth.ts` implements only the two
-  shared-secret methods plus public clients — the `private_key_jwt` value
-  present in the DB enum and the client schemas is not a working token-endpoint
-  authentication method). Token exchange is hard-gated to OAuth access tokens:
-  `routes/oauth/token.ts` rejects any `subject_token_type` /
-  `requested_token_type` / `actor_token_type` other than
-  `urn:ietf:params:oauth:token-type:access_token`, so an assertion grant could
-  not be smuggled through the existing surface even by accident. → This is **new
-  scope, not regression.** Tracked as **#383** (accept ID-JAG assertions at
-  `/oauth/token` for EMA) and **#384** (`private_key_jwt` token-endpoint
-  authentication), both filed 2026-08-06 and open.
+  the stable one.** Enterprise-Managed Authorization (EMA) is listed **STABLE**
+  and an OAuth **Client Credentials** extension is listed **DRAFT**.
+
+  **[Was, on the 2026-08-06 audit: QAuth supported _neither_ — `discovery.ts`
+  advertised no `urn:ietf:params:oauth:grant-type:jwt-bearer`, no ID-JAG
+  handling existed anywhere, no `authorization_grant_profiles_supported` member
+  was emitted, and `token_endpoint_auth_methods_supported` was
+  `['client_secret_basic', 'client_secret_post', 'none']` with no
+  `private_key_jwt`, the DB-enum value being inert. Tracked as #383 / #384.
+  Superseded 2026-08-06 by their implementation — kept as the audit trail for
+  why the work was scoped.]**
+
+  **Current state — EMA is implemented (#383), and so is `private_key_jwt`
+  (#384). See [ADR-011](./011-enterprise-managed-authorization.md) for the
+  design and trust model.** QAuth now serves **both** EMA roles: it consumes
+  ID-JAG assertions via `urn:ietf:params:oauth:grant-type:jwt-bearer` at
+  `/oauth/token`, issuing an access token audience-restricted to the
+  assertion's `resource` claim, and it mints them via RFC 8693 token exchange
+  on `requested_token_type=urn:ietf:params:oauth:token-type:id-jag`, acting as
+  the enterprise IdP. Both halves are **default-off and fail closed on two
+  independent gates** — `ID_JAG_ENABLED` (default `false`) and an empty
+  `ID_JAG_TRUSTED_ISSUERS` allowlist — and discovery advertises the grant and
+  the `authorization_grant_profiles_supported` profile only when enabled, so
+  metadata cannot claim a capability the endpoint refuses. `private_key_jwt`
+  (RFC 7523 §2.2) is now a working token-endpoint authentication method,
+  advertised alongside `token_endpoint_auth_signing_alg_values_supported`;
+  it needs no flag because it is opt-in per client, and it is what finally lets
+  a CIMD-identified client — which has no client secret — be confidential
+  (CIMD §6.2).
+
+  The **DRAFT Client Credentials** extension remains unimplemented in one
+  respect worth naming: it calls `private_key_jwt` RECOMMENDED, which #384
+  delivers, but QAuth still authenticates introspection and revocation by
+  shared secret only. Discovery states that honestly rather than mirroring the
+  token endpoint.
+
+  Token exchange remains hard-gated otherwise: `routes/oauth/token.ts` still
+  rejects every `subject_token_type` / `actor_token_type` other than
+  `urn:ietf:params:oauth:token-type:access_token`, and the ID-JAG URN is the
+  only `requested_token_type` added to that gate.
+
 - **The stateless protocol core (SEP-2567, SEP-2575) is transport-level and does
   not bind the AS.** The release removes sessions and `Mcp-Session-Id`, drops
   the `initialize` / `notifications/initialized` handshake in favour of
@@ -314,6 +333,7 @@ against the code at the moment of writing rather than carrying it forward.
 - [ADR-004: Wallet-Agnostic VC Federation](./004-wallet-agnostic-federation.md) — active (T4); OID4VP base profile complete (#233–#240), browser wallet sign-in works end to end behind `WALLET_FEDERATION_ENABLED` (default off)
 - [ADR-005: Post-Quantum Hybrid Signing](./005-pqc-hybrid-signing.md) — active (T4); hybrid issuance merged and wired into the live routes (#275), default off via `HYBRID_SIGNING_ENABLED`
 - [ADR-006: OAuth Grants and Audience](./006-oauth-grants-and-audience.md) — the foundation this builds on
+- [ADR-011: Enterprise-Managed Authorization](./011-enterprise-managed-authorization.md) — Proposed; implements the stable `ext-auth` EMA extension (#383) plus `private_key_jwt` (#384), closing the gap recorded in the delta above
 - PR #156 — `integration/oauth-mcp-stack`; PR #159 — public-client `authorization_code`
 - [MCP Authorization specification (2026-07-28 — current)](https://modelcontextprotocol.io/specification/2026-07-28/basic/authorization) · [client registration](https://modelcontextprotocol.io/specification/2026-07-28/basic/authorization/client-registration) · [changelog](https://modelcontextprotocol.io/specification/2026-07-28/changelog) · [release announcement](https://blog.modelcontextprotocol.io/posts/2026-07-28/) · [auth extensions (ext-auth)](https://github.com/modelcontextprotocol/ext-auth)
 - [MCP Authorization specification (2025-11-25 — superseded)](https://modelcontextprotocol.io/specification/2025-11-25/basic/authorization) — the revision the 2025-11-25 review above targets
