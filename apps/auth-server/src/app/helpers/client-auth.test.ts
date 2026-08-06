@@ -17,8 +17,11 @@ vi.mock('../../config/env', () => ({
   },
 }));
 
+import { CLIENT_ASSERTION_TYPE_JWT_BEARER } from '../schemas/oauth';
 import {
   authenticateClient,
+  authenticateClientRequest,
+  classifyClientAuthentication,
   enforceAgentScopeCap,
   extractClientCredentials,
   type OAuthClientLike,
@@ -196,6 +199,214 @@ describe('authenticateClient', () => {
       })
     ).rejects.toThrow(InvalidClientError);
     expect(fastify.passwordHasher.verifyPassword).toHaveBeenCalledWith('hash', 'wrong');
+  });
+
+  it('accepts a client whose auth method is unset (confidential by default)', async () => {
+    const fastify = makeFastifyStub({ ...baseClient, tokenEndpointAuthMethod: undefined }, true);
+    await expect(
+      authenticateClient(fastify, 'realm', {
+        clientId: 'cid',
+        clientSecret: 'secret',
+        method: 'client_secret_post',
+      })
+    ).resolves.toBeDefined();
+  });
+
+  it.each(['client_secret_basic', 'client_secret_post'])(
+    'accepts a %s client presenting a secret',
+    async (method) => {
+      const fastify = makeFastifyStub({ ...baseClient, tokenEndpointAuthMethod: method }, true);
+      await expect(
+        authenticateClient(fastify, 'realm', {
+          clientId: 'cid',
+          clientSecret: 'secret',
+          method: 'client_secret_post',
+        })
+      ).resolves.toBeDefined();
+    }
+  );
+
+  it('rejects a private_key_jwt client presenting a secret, without checking the hash', async () => {
+    // Every row carries a real client_secret_hash regardless of method (the
+    // seed script generates one unconditionally), so this pairing check — not
+    // the hash — is what makes the stronger method a requirement rather than a
+    // suggestion.
+    const fastify = makeFastifyStub(
+      { ...baseClient, tokenEndpointAuthMethod: 'private_key_jwt' },
+      true
+    );
+    await expect(
+      authenticateClient(fastify, 'realm', {
+        clientId: 'cid',
+        clientSecret: 'secret',
+        method: 'client_secret_post',
+      })
+    ).rejects.toThrow(InvalidClientError);
+    expect(fastify.passwordHasher.verifyPassword).not.toHaveBeenCalled();
+  });
+
+  it('rejects a public client presenting a secret', async () => {
+    const fastify = makeFastifyStub({ ...baseClient, tokenEndpointAuthMethod: 'none' }, true);
+    await expect(
+      authenticateClient(fastify, 'realm', {
+        clientId: 'cid',
+        clientSecret: 'secret',
+        method: 'client_secret_post',
+      })
+    ).rejects.toThrow(InvalidClientError);
+    expect(fastify.passwordHasher.verifyPassword).not.toHaveBeenCalled();
+  });
+});
+
+describe('classifyClientAuthentication (RFC 6749 §2.3 — one mechanism only)', () => {
+  const basic = `Basic ${Buffer.from('cid:secret', 'utf8').toString('base64')}`;
+
+  it('classifies a body secret as the secret mechanism', () => {
+    expect(
+      classifyClientAuthentication(requestWith(undefined), {
+        client_id: 'cid',
+        client_secret: 's',
+      })
+    ).toBe('secret');
+  });
+
+  it('classifies a Basic header as the secret mechanism', () => {
+    expect(classifyClientAuthentication(requestWith(basic), {})).toBe('secret');
+  });
+
+  it('classifies a complete assertion pair as private_key_jwt', () => {
+    expect(
+      classifyClientAuthentication(requestWith(undefined), {
+        client_assertion_type: CLIENT_ASSERTION_TYPE_JWT_BEARER,
+        client_assertion: 'a.b.c',
+      })
+    ).toBe('private_key_jwt');
+  });
+
+  it('classifies a bare client_id as no credential', () => {
+    expect(classifyClientAuthentication(requestWith(undefined), { client_id: 'cid' })).toBe('none');
+  });
+
+  it('rejects an assertion presented together with a body client_secret', () => {
+    expect(() =>
+      classifyClientAuthentication(requestWith(undefined), {
+        client_id: 'cid',
+        client_secret: 's',
+        client_assertion_type: CLIENT_ASSERTION_TYPE_JWT_BEARER,
+        client_assertion: 'a.b.c',
+      })
+    ).toThrow(InvalidClientError);
+  });
+
+  it('rejects an assertion presented together with a Basic header', () => {
+    expect(() =>
+      classifyClientAuthentication(requestWith(basic), {
+        client_assertion_type: CLIENT_ASSERTION_TYPE_JWT_BEARER,
+        client_assertion: 'a.b.c',
+      })
+    ).toThrow(InvalidClientError);
+  });
+
+  it('rejects a client_assertion with no client_assertion_type', () => {
+    expect(() =>
+      classifyClientAuthentication(requestWith(undefined), { client_assertion: 'a.b.c' })
+    ).toThrow(InvalidClientError);
+  });
+
+  it('rejects a client_assertion_type with no client_assertion', () => {
+    expect(() =>
+      classifyClientAuthentication(requestWith(undefined), {
+        client_assertion_type: CLIENT_ASSERTION_TYPE_JWT_BEARER,
+      })
+    ).toThrow(InvalidClientError);
+  });
+});
+
+describe('authenticateClientRequest', () => {
+  function stub(client: OAuthClientLike | null, passwordValid = true) {
+    return {
+      repositories: {
+        oauthClients: { findByClientId: vi.fn().mockResolvedValue(client) },
+      },
+      passwordHasher: { verifyPassword: vi.fn().mockResolvedValue(passwordValid) },
+      redis: { get: vi.fn(), set: vi.fn() },
+      jwtUtils: { getIssuer: () => 'https://auth.example.com' },
+    } as unknown as FastifyInstance;
+  }
+
+  const confidential: OAuthClientLike = {
+    id: 'cuid',
+    clientId: 'cid',
+    clientSecretHash: 'hash',
+    enabled: true,
+    grantTypes: ['client_credentials'],
+    scopes: [],
+    audience: null,
+    tokenEndpointAuthMethod: 'client_secret_post',
+  };
+
+  it('authenticates a confidential client by secret', async () => {
+    const fastify = stub(confidential);
+    await expect(
+      authenticateClientRequest(
+        fastify,
+        'realm',
+        requestWith(undefined),
+        { client_id: 'cid', client_secret: 'secret' },
+        { allowPublic: false }
+      )
+    ).resolves.toMatchObject({ clientId: 'cid' });
+  });
+
+  it('rejects a credential-free request on a grant that forbids public clients', async () => {
+    const fastify = stub(confidential);
+    await expect(
+      authenticateClientRequest(
+        fastify,
+        'realm',
+        requestWith(undefined),
+        { client_id: 'cid' },
+        { allowPublic: false }
+      )
+    ).rejects.toThrow(InvalidClientError);
+    expect(fastify.repositories.oauthClients.findByClientId).not.toHaveBeenCalled();
+  });
+
+  it('routes an assertion to the private_key_jwt path and rejects a secret-registered client', async () => {
+    const fastify = stub(confidential);
+    await expect(
+      authenticateClientRequest(
+        fastify,
+        'realm',
+        requestWith(undefined),
+        {
+          client_assertion_type: CLIENT_ASSERTION_TYPE_JWT_BEARER,
+          client_assertion: 'not-a-jwt',
+        },
+        { allowPublic: false }
+      )
+    ).rejects.toThrow(InvalidClientError);
+    // Never falls back to the secret path.
+    expect(fastify.passwordHasher.verifyPassword).not.toHaveBeenCalled();
+  });
+
+  it('rejects a request mixing a secret and an assertion before any lookup', async () => {
+    const fastify = stub(confidential);
+    await expect(
+      authenticateClientRequest(
+        fastify,
+        'realm',
+        requestWith(undefined),
+        {
+          client_id: 'cid',
+          client_secret: 'secret',
+          client_assertion_type: CLIENT_ASSERTION_TYPE_JWT_BEARER,
+          client_assertion: 'a.b.c',
+        },
+        { allowPublic: false }
+      )
+    ).rejects.toThrow(InvalidClientError);
+    expect(fastify.repositories.oauthClients.findByClientId).not.toHaveBeenCalled();
   });
 });
 

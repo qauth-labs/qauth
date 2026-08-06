@@ -289,11 +289,110 @@ describe('toCimdClientInsert — grant/response type tolerance (RFC 7591 §2)', 
     expect(insert.responseTypes).toEqual(['code']);
   });
 
-  it('accepts an unrecognised token_endpoint_auth_method (CIMD clients are forced to none)', () => {
+  it('falls back to a public client when private_key_jwt is declared without a key set', () => {
+    // Half-configured: the document asks for assertion authentication but
+    // publishes nothing to verify an assertion against. It keeps the public,
+    // PKCE-only posture it had before #384 rather than being rejected — the
+    // fallback grants nothing, because the verifier requires BOTH the
+    // registered method and a key set.
     const doc = cimdDocumentSchema.parse(
       validDoc({ token_endpoint_auth_method: 'private_key_jwt' })
     );
     const insert = toCimdClientInsert(REALM, CLIENT_ID, doc, SENTINEL);
     expect(insert.tokenEndpointAuthMethod).toBe('none');
+    expect(insert.jwks).toBeNull();
+    expect(insert.jwksUri).toBeNull();
+  });
+
+  it('accepts an unrecognised token_endpoint_auth_method and materialises a public client', () => {
+    const doc = cimdDocumentSchema.parse(
+      validDoc({ token_endpoint_auth_method: 'client_secret_basic' })
+    );
+    const insert = toCimdClientInsert(REALM, CLIENT_ID, doc, SENTINEL);
+    expect(insert.tokenEndpointAuthMethod).toBe('none');
+  });
+});
+
+describe('toCimdClientInsert — client JWKS (CIMD §6.2 / RFC 7591 §2, #384)', () => {
+  const REALM = 'realm-1';
+  const SENTINEL = '$argon2id$v=19$m=65536,t=3,p=4$c2FsdA$ZGlnZXN0';
+  const PUBLIC_JWK = { kty: 'EC', crv: 'P-256', x: 'abc', y: 'def', kid: 'k1' };
+
+  it('materialises a confidential client when the document registers an inline jwks', () => {
+    const doc = cimdDocumentSchema.parse(
+      validDoc({
+        token_endpoint_auth_method: 'private_key_jwt',
+        jwks: { keys: [PUBLIC_JWK] },
+      })
+    );
+    const insert = toCimdClientInsert(REALM, CLIENT_ID, doc, SENTINEL);
+    expect(insert.tokenEndpointAuthMethod).toBe('private_key_jwt');
+    expect(insert.jwks).toEqual({ keys: [PUBLIC_JWK] });
+    expect(insert.jwksUri).toBeNull();
+    // PKCE stays mandatory regardless of the authentication method.
+    expect(insert.requirePkce).toBe(true);
+  });
+
+  it('materialises a confidential client from a jwks_uri', () => {
+    const doc = cimdDocumentSchema.parse(
+      validDoc({
+        token_endpoint_auth_method: 'private_key_jwt',
+        jwks_uri: 'https://app.example.com/jwks.json',
+      })
+    );
+    const insert = toCimdClientInsert(REALM, CLIENT_ID, doc, SENTINEL);
+    expect(insert.tokenEndpointAuthMethod).toBe('private_key_jwt');
+    expect(insert.jwksUri).toBe('https://app.example.com/jwks.json');
+    expect(insert.jwks).toBeNull();
+  });
+
+  it('rejects a document that sets both jwks and jwks_uri (RFC 7591 §2)', () => {
+    const doc = cimdDocumentSchema.parse(
+      validDoc({
+        token_endpoint_auth_method: 'private_key_jwt',
+        jwks: { keys: [PUBLIC_JWK] },
+        jwks_uri: 'https://app.example.com/jwks.json',
+      })
+    );
+    expect(() => toCimdClientInsert(REALM, CLIENT_ID, doc, SENTINEL)).toThrow(/mutually exclusive/);
+  });
+
+  it('ignores a key set the document did not ask to authenticate with', () => {
+    // `jwks` without `token_endpoint_auth_method: private_key_jwt` leaves the
+    // client public; persisting the keys anyway would leave them lying dormant
+    // in the row for a later method flip to pick up.
+    const doc = cimdDocumentSchema.parse(validDoc({ jwks: { keys: [PUBLIC_JWK] } }));
+    const insert = toCimdClientInsert(REALM, CLIENT_ID, doc, SENTINEL);
+    expect(insert.tokenEndpointAuthMethod).toBe('none');
+    expect(insert.jwks).toBeNull();
+  });
+
+  it('rejects a document whose jwks carries a private key component', () => {
+    expect(
+      cimdDocumentSchema.safeParse(
+        validDoc({ jwks: { keys: [{ ...PUBLIC_JWK, d: 'private-scalar' }] } })
+      ).success
+    ).toBe(false);
+  });
+
+  it('rejects a document whose jwks carries a symmetric key', () => {
+    expect(
+      cimdDocumentSchema.safeParse(validDoc({ jwks: { keys: [{ kty: 'oct', k: 'secret' }] } }))
+        .success
+    ).toBe(false);
+  });
+
+  it('rejects a document whose jwks is empty or oversized', () => {
+    expect(cimdDocumentSchema.safeParse(validDoc({ jwks: { keys: [] } })).success).toBe(false);
+    const tooMany = Array.from({ length: 21 }, (_, i) => ({ ...PUBLIC_JWK, kid: `k${i}` }));
+    expect(cimdDocumentSchema.safeParse(validDoc({ jwks: { keys: tooMany } })).success).toBe(false);
+  });
+
+  it('leaves a document without any key set exactly as it behaved before #384', () => {
+    const doc = cimdDocumentSchema.parse(validDoc());
+    const insert = toCimdClientInsert(REALM, CLIENT_ID, doc, SENTINEL);
+    expect(insert.tokenEndpointAuthMethod).toBe('none');
+    expect(insert.jwks).toBeNull();
+    expect(insert.jwksUri).toBeNull();
   });
 });

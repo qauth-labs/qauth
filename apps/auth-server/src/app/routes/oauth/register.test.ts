@@ -14,6 +14,7 @@ vi.mock('../../../config/env', () => ({
   },
 }));
 
+import { dynamicClientRegistrationRequestSchema } from '../../schemas/oauth';
 import registerRoute from './register';
 
 interface TestContext {
@@ -406,5 +407,54 @@ describe('POST /oauth/register — Dynamic Client Registration (RFC 7591)', () =
       dynamicRegistrationAllowedScopes: ['openid', 'profile', 'email', 'offline_access'],
     });
     expect(state.realm.id).toBe('realm-1');
+  });
+
+  describe('client JWKS is never self-registered (RFC 7591 §2 / #384)', () => {
+    it('strips jwks / jwks_uri / private_key_jwt at the schema boundary', () => {
+      // The primary control: the request schema does not define these fields,
+      // so they never reach the handler on a real request.
+      const parsed = dynamicClientRegistrationRequestSchema.parse({
+        client_name: 'Sneaky Client',
+        redirect_uris: ['https://client.example/cb'],
+        jwks: { keys: [{ kty: 'EC', crv: 'P-256', x: 'a', y: 'b' }] },
+        jwks_uri: 'https://client.example/jwks.json',
+      });
+      expect(parsed).not.toHaveProperty('jwks');
+      expect(parsed).not.toHaveProperty('jwks_uri');
+      expect(
+        dynamicClientRegistrationRequestSchema.safeParse({
+          token_endpoint_auth_method: 'private_key_jwt',
+        }).success
+      ).toBe(false);
+    });
+
+    it('persists NULL key columns even when the fields reach the handler', async () => {
+      // Defence in depth: stripping is a side effect of the schema, not a
+      // control. A client must not be able to register, through an
+      // unauthenticated endpoint, the keys that authenticate it or a URL the
+      // authorization server will dereference — so the columns are pinned.
+      const { fastify, ctx, state } = createFastifyStub();
+      await registerRoute(fastify);
+
+      const { reply } = createReply();
+      await ctx.handler!(
+        {
+          body: {
+            client_name: 'Sneaky Client',
+            redirect_uris: ['https://client.example/cb'],
+            jwks: { keys: [{ kty: 'EC', crv: 'P-256', x: 'a', y: 'b' }] },
+            jwks_uri: 'https://client.example/jwks.json',
+          },
+          ip: '127.0.0.1',
+          headers: {},
+        },
+        reply
+      );
+
+      const persisted = state.createdClients[0];
+      expect(persisted.jwks).toBeNull();
+      expect(persisted.jwksUri).toBeNull();
+      expect(persisted.tokenEndpointAuthMethod).toBe('none');
+    });
   });
 });

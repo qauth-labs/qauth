@@ -140,6 +140,18 @@ export default async function (fastify: FastifyInstance) {
         // is the defence-in-depth that keeps that guarantee true even if the
         // schema changes.
         environment: 'production',
+        // RFC 7591 §2 `jwks` / `jwks_uri` (#384): explicitly NULL, never taken
+        // from the request. `dynamicClientRegistrationRequestSchema` does not
+        // define either field (nor `private_key_jwt` as an auth method), so Zod
+        // already strips them — but stripping is a side effect, not a control.
+        // Pinning the columns here is the control, for the same reason
+        // `environment` is pinned above: a client MUST NOT be able to register,
+        // through an unauthenticated endpoint, the keys that authenticate it or
+        // a URL the authorization server will dereference. `private_key_jwt` is
+        // provisioned by an operator (the `db:seed-oauth-clients` manifest) or
+        // established by the CIMD url==client_id binding, never self-asserted.
+        jwks: null,
+        jwksUri: null,
         // Stamp the dyn-reg timestamp so the consent screen (issue #150)
         // can surface the "Newly registered" phishing-defense badge
         // within DYNAMIC_CLIENT_BADGE_DAYS of registration.

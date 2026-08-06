@@ -20,10 +20,8 @@ import { MIN_RESPONSE_TIME_MS } from '../../constants';
 import { resolveAcrClaims } from '../../helpers/acr-claims';
 import { flattenActChain, MAX_DELEGATION_DEPTH } from '../../helpers/agent-audit';
 import {
-  authenticateClient,
-  authenticateClientPublicOrConfidential,
+  authenticateClientRequest,
   enforceAgentScopeCap,
-  extractClientCredentials,
   type OAuthClientLike,
   resolveAudience,
   toAgentScopeContext,
@@ -37,19 +35,31 @@ import {
   resolveEnvironmentPolicy,
 } from '../../helpers/environment-policy';
 import { issueAccessToken } from '../../helpers/hybrid-token';
+import {
+  idJagCredentialProviderType,
+  IdJagValidationError,
+  mintIdJag,
+  type ValidatedIdJag,
+  validateIdJagAssertion,
+} from '../../helpers/id-jag';
 import { getOrCreateDefaultRealm } from '../../helpers/realm';
 import { resolveRealmRateLimitMax } from '../../helpers/realm-rate-limit';
 import { highestAgentModeInScopes } from '../../helpers/scope-modes';
 import { ensureMinimumResponseTime } from '../../helpers/timing';
 import {
+  type IdJagTokenResponse,
+  JWT_BEARER_GRANT_TYPE,
   TOKEN_EXCHANGE_GRANT_TYPE,
   TOKEN_TYPE_ACCESS_TOKEN,
+  TOKEN_TYPE_ID_JAG,
+  type TokenEndpointResponse,
+  tokenEndpointResponseSchema,
   type TokenExchangeAuthCodeBody,
   tokenExchangeBodySchema,
   type TokenExchangeClientCredsBody,
+  type TokenExchangeJwtBearerBody,
   type TokenExchangeRefreshBody,
   type TokenExchangeResponse,
-  tokenExchangeResponseSchema,
   type TokenExchangeTokenExchangeBody,
 } from '../../schemas/oauth';
 
@@ -63,6 +73,15 @@ import {
  *    OAuth 2.1 §4.3.1, RFC 9700 §2.2.2). Confidential and public clients
  *    both dispatch here; public clients authenticate by refresh-token
  *    ownership instead of a client secret.
+ *
+ *  - `urn:ietf:params:oauth:grant-type:token-exchange` (RFC 8693) for agent
+ *    on-behalf-of delegation, and — when `ID_JAG_ENABLED` — for MINTING an
+ *    Identity Assertion Authorization Grant (ID-JAG) targeted at a third-party
+ *    resource authorization server (ADR-011).
+ *  - `urn:ietf:params:oauth:grant-type:jwt-bearer` (RFC 7523 §2.1) for
+ *    CONSUMING an ID-JAG minted by a trusted enterprise IdP, issuing an access
+ *    token audience-restricted to the MCP server the assertion names. Available
+ *    only when `ID_JAG_ENABLED`; rejected as `unsupported_grant_type` otherwise.
  *
  * Client auth supports both `client_secret_post` (form body) and
  * `client_secret_basic` (Authorization header, RFC 6749 2.3.1).
@@ -81,7 +100,12 @@ export default async function (fastify: FastifyInstance) {
         tags: ['OAuth', 'Token'],
         body: tokenExchangeBodySchema,
         response: {
-          200: tokenExchangeResponseSchema,
+          // A UNION, not the Bearer-only schema: an ID-JAG mint (ADR-011) must
+          // report `token_type: "N_A"` (RFC 8693 §2.2.1), which the Bearer
+          // literal would reject at serialization time. The ID-JAG variant is
+          // listed first inside the union so an `N_A` response matches it
+          // instead of failing the Bearer branch.
+          200: tokenEndpointResponseSchema,
         },
       },
       config: {
@@ -106,9 +130,35 @@ export default async function (fastify: FastifyInstance) {
         | TokenExchangeAuthCodeBody
         | TokenExchangeClientCredsBody
         | TokenExchangeRefreshBody
-        | TokenExchangeTokenExchangeBody;
+        | TokenExchangeTokenExchangeBody
+        | TokenExchangeJwtBearerBody;
 
       try {
+        // ADR-011 MASTER GATE. With `ID_JAG_ENABLED` off the jwt-bearer grant
+        // does not exist on this deployment, so it is refused HERE — before
+        // client authentication, before any DB work — exactly as an unknown
+        // grant type is. This keeps the flag-off behaviour equivalent to the
+        // pre-ADR-011 build (which fell through to `unsupported_grant_type`)
+        // and means a disabled feature costs an attacker one string compare.
+        // Discovery does not advertise the grant when the flag is off, so this
+        // answer leaks nothing a client could not already read there.
+        if (body.grant_type === JWT_BEARER_GRANT_TYPE && !env.ID_JAG_ENABLED) {
+          await fastify.repositories.auditLogs.create({
+            userId: null,
+            oauthClientId: null,
+            event: 'oauth.token.exchange.failure',
+            eventType: 'token',
+            success: false,
+            ipAddress: request.ip,
+            userAgent: request.headers['user-agent'] || null,
+            metadata: {
+              error: 'unsupported_grant_type: ID-JAG is not enabled',
+              grantType: body.grant_type,
+            },
+          });
+          throw new BadRequestError('unsupported_grant_type');
+        }
+
         const realm = await getOrCreateDefaultRealm(fastify);
 
         // Authenticate the client. authorization_code (PKCE) and
@@ -117,30 +167,43 @@ export default async function (fastify: FastifyInstance) {
         // refresh-token ownership binds the grant to the client; no
         // `client_secret` is required when `token_endpoint_auth_method:
         // 'none'`. client_credentials is confidential-only by definition.
+        // `authenticateClientRequest` dispatches on the mechanism the request
+        // PRESENTS (secret / `private_key_jwt` assertion / none), rejecting any
+        // request that presents more than one (RFC 6749 §2.3), and then checks
+        // that mechanism against what the client is REGISTERED for. Both
+        // pre-existing branches are preserved exactly: with `allowPublic` it is
+        // `authenticateClientPublicOrConfidential`, without it it is
+        // `extractClientCredentials` + `authenticateClient`.
+        //
+        // client_credentials, token-exchange AND jwt-bearer are
+        // CONFIDENTIAL-ONLY (`allowPublic: false`). For token-exchange this is a
+        // deliberate security floor (RFC 9700, epic #181): on-behalf-of
+        // delegation must not be mintable by a public client that proves nothing
+        // but knowledge of a `client_id`. A public agent
+        // (token_endpoint_auth_method=none) presents no credential at all, so it
+        // is refused before any lookup.
+        //
+        // jwt-bearer is confidential-only DELIBERATELY (ADR-011). RFC 7523 §2.1
+        // permits an assertion grant from an unauthenticated client, and this is
+        // NOT widened to allow that: MCP EMA §5 has the client authenticate
+        // "with its credentials as registered with the Resource Authorization
+        // Server", and an ID-JAG's `client_id` claim can only be BOUND to a real
+        // caller if that caller proved who it is. Without client authentication,
+        // anyone who observed an assertion in transit could redeem it.
+        // `private_key_jwt` (#384) satisfies this requirement too — that is the
+        // CIMD-client route the EMA spec points at, and it needs no widening.
         let client: OAuthClientLike;
         try {
-          if (body.grant_type === 'authorization_code' || body.grant_type === 'refresh_token') {
-            client = await authenticateClientPublicOrConfidential(
-              fastify,
-              realm.id,
-              request as FastifyRequest,
-              body.client_id,
-              body.client_secret
-            );
-          } else {
-            // client_credentials AND token-exchange are CONFIDENTIAL-ONLY. For
-            // token-exchange this is a deliberate security floor (RFC 9700,
-            // epic #181): on-behalf-of delegation must not be mintable by a
-            // public client that proves nothing but knowledge of a `client_id`.
-            // A public agent (token_endpoint_auth_method=none) presents no
-            // secret, so `extractClientCredentials` → `invalid_client`.
-            const creds = extractClientCredentials(
-              request as FastifyRequest,
-              body.client_id,
-              body.client_secret
-            );
-            client = await authenticateClient(fastify, realm.id, creds);
-          }
+          client = await authenticateClientRequest(
+            fastify,
+            realm.id,
+            request as FastifyRequest,
+            body,
+            {
+              allowPublic:
+                body.grant_type === 'authorization_code' || body.grant_type === 'refresh_token',
+            }
+          );
         } catch (err) {
           await fastify.repositories.auditLogs.create({
             userId: null,
@@ -174,6 +237,7 @@ export default async function (fastify: FastifyInstance) {
             client,
             body,
             policy,
+            realmId: realm.id,
           });
           return reply.send(responseBody);
         }
@@ -185,6 +249,7 @@ export default async function (fastify: FastifyInstance) {
             client,
             body,
             policy,
+            realmId: realm.id,
           });
           return reply.send(responseBody);
         }
@@ -196,6 +261,7 @@ export default async function (fastify: FastifyInstance) {
             client,
             body,
             policy,
+            realmId: realm.id,
           });
           return reply.send(responseBody);
         }
@@ -207,6 +273,19 @@ export default async function (fastify: FastifyInstance) {
             client,
             body,
             policy,
+            realmId: realm.id,
+          });
+          return reply.send(responseBody);
+        }
+
+        if (body.grant_type === JWT_BEARER_GRANT_TYPE) {
+          const responseBody = await handleJwtBearer({
+            fastify,
+            request: request as FastifyRequest,
+            client,
+            body,
+            policy,
+            realmId: realm.id,
           });
           return reply.send(responseBody);
         }
@@ -260,6 +339,14 @@ type HandlerContext<TBody> = {
    * dispatch resolves it fail-safe to `production` before calling any handler.
    */
   policy: EnvironmentPolicy;
+  /**
+   * The realm the client authenticated in. Resolved once at dispatch alongside
+   * the client itself, so a handler that needs a realm-scoped lookup (the
+   * ID-JAG consume path resolves the assertion's subject through
+   * `user_credentials`, which is keyed by realm) never re-resolves it and can
+   * never disagree with the realm the client was authenticated against.
+   */
+  realmId: string;
 };
 
 /**
@@ -1119,7 +1206,7 @@ function actDepth(act: ActClaim | undefined): number {
  */
 async function handleTokenExchange(
   ctx: HandlerContext<TokenExchangeTokenExchangeBody>
-): Promise<TokenExchangeResponse> {
+): Promise<TokenEndpointResponse> {
   const { fastify, request, client, body, policy } = ctx;
 
   const auditFailure = async (error: string, extra?: Record<string, unknown>): Promise<void> => {
@@ -1147,9 +1234,30 @@ async function handleTokenExchange(
     throw new UnauthorizedClientError();
   }
 
-  // GATE 2 — token-type support. We only mint/consume OAuth access tokens.
+  // GATE 2 — token-type support.
+  //
+  // ADR-011 relaxes this by EXACTLY ONE URN and no more: a
+  // `requested_token_type` of `...:token-type:id-jag` asks QAuth to MINT an
+  // Identity Assertion Authorization Grant instead of a delegated access token,
+  // and is honoured only while `ID_JAG_ENABLED`. Every other value stays
+  // rejected, and with the flag off `mintingIdJag` is always false, so this
+  // gate's behaviour is byte-identical to the pre-ADR-011 build.
+  //
+  // `subject_token_type` is NOT relaxed. MCP EMA §4 describes an OIDC ID token
+  // (or a refresh token) as the subject token, but QAuth's JWT plugin exposes no
+  // ID-token verifier — `verifyAccessToken` pins `typ: at+jwt` and
+  // `token_use: 'access'` on purpose — and inventing an ad-hoc one in the route
+  // layer is exactly the kind of parallel verification path that produces
+  // token-confusion bugs. QAuth's OWN access token is a strictly stronger
+  // subject proof here: it is cryptographically verified, carries the same
+  // authenticated end-user, and GATE 3c already asserts it was minted FOR this
+  // client, which is the binding draft §4.3.3 step 1 requires. Accepting
+  // `...:token-type:id_token` is a follow-up that belongs in the JWT plugin.
+  //
   // OAuth error codes are the BARE token (RFC 6749 §5.2 / RFC 8693 §2.2.2);
   // human detail goes in `error_description` via InvalidRequestError.
+  const mintingIdJag = env.ID_JAG_ENABLED && body.requested_token_type === TOKEN_TYPE_ID_JAG;
+
   if (body.subject_token_type !== TOKEN_TYPE_ACCESS_TOKEN) {
     await auditFailure('invalid_request: unsupported subject_token_type', {
       subjectTokenType: body.subject_token_type,
@@ -1158,7 +1266,8 @@ async function handleTokenExchange(
   }
   if (
     body.requested_token_type !== undefined &&
-    body.requested_token_type !== TOKEN_TYPE_ACCESS_TOKEN
+    body.requested_token_type !== TOKEN_TYPE_ACCESS_TOKEN &&
+    !mintingIdJag
   ) {
     await auditFailure('invalid_request: unsupported requested_token_type', {
       requestedTokenType: body.requested_token_type,
@@ -1302,6 +1411,33 @@ async function handleTokenExchange(
     throw err;
   }
 
+  // ADR-011 MINT BRANCH. Everything above this line — agent classification,
+  // grant authorisation, subject-token verification and provenance, the
+  // client-binding check, the enabled-user check, scope narrowing and the agent
+  // scope-mode cap — applies IDENTICALLY to both outcomes and has already run.
+  //
+  // What diverges below is only the TARGET model, and it diverges because it
+  // must: GATE 4b narrows the issued token's `aud` against the SUBJECT TOKEN's
+  // audience, which is correct for a delegated access token minted inside
+  // QAuth's own trust domain and meaningless for an assertion whose `aud` is a
+  // FOREIGN authorization server that could never appear in a QAuth-issued
+  // token. Substituting the operator's per-client audience allowlist there (see
+  // `mintIdJagForExchange`) is a narrowing, not a widening: it is the same
+  // allowlist `client_credentials` already treats as the client's reachable
+  // resource set, and an empty one denies.
+  if (mintingIdJag) {
+    return mintIdJagForExchange({
+      fastify,
+      request,
+      client,
+      body,
+      user,
+      grantedScopes,
+      subjectAct: subjectPayload.act,
+      auditFailure,
+    });
+  }
+
   // GATE 4b — audience narrowing (RFC 8707 §2.2 + RFC 8693 `audience`). The
   // delegated token's `aud` is the subject token's `aud`, optionally narrowed
   // by `resource` and/or `audience`. Any value outside the subject token's
@@ -1417,6 +1553,429 @@ async function handleTokenExchange(
   return {
     access_token: accessToken,
     issued_token_type: TOKEN_TYPE_ACCESS_TOKEN,
+    expires_in: accessTokenExpiresIn,
+    token_type: 'Bearer' as const,
+    ...(scopeString ? { scope: scopeString } : {}),
+  };
+}
+
+/**
+ * The operator-configured set of targets a client may name in an ID-JAG request.
+ *
+ * This is `oauth_clients.audience` — the SAME server-side allowlist
+ * `handleClientCredentials` already treats as "the resource servers this client
+ * may obtain tokens for". Reused rather than re-invented so an operator has one
+ * knob, not two, and so the ID-JAG paths inherit its deny-by-default shape.
+ *
+ * `client_credentials` falls back to `[client.clientId]` when the column is
+ * empty, because a token audience-restricted to the client itself is a
+ * meaningful (if narrow) default. THAT FALLBACK IS DELIBERATELY ABSENT HERE:
+ * both ID-JAG paths name a FOREIGN party — a third-party authorization server,
+ * or an MCP server this deployment protects — and "the client's own id" is never
+ * a correct answer for either. An unconfigured client therefore reaches no
+ * target at all, which is the ADR-011 default-off posture expressed per client.
+ */
+function idJagTargetAllowlist(client: OAuthClientLike): string[] {
+  return client.audience && client.audience.length > 0 ? client.audience : [];
+}
+
+/**
+ * MINT an Identity Assertion Authorization Grant through RFC 8693 token
+ * exchange (ADR-011, MCP EMA §4). QAuth acts as the enterprise IdP; the
+ * assertion is redeemed at a THIRD-PARTY resource authorization server.
+ *
+ * Reached only from {@link handleTokenExchange}, after every control that
+ * governs a delegated access token has already passed. What remains is the
+ * target model:
+ *
+ *  - `audience` (EMA §4, MUST) — the issuer identifier of the resource
+ *    authorization server, and becomes the assertion's `aud`. Exactly one value:
+ *    an assertion naming two authorization servers is redeemable at either of
+ *    them, so a multi-valued `audience` is refused rather than silently
+ *    truncated to the first entry.
+ *  - `resource` (EMA §4, OPTIONAL in the draft) — the MCP server's resource
+ *    identifier, and becomes the assertion's `resource`. REQUIRED here: EMA §5.1
+ *    obliges the redeeming AS to audience-restrict its access token to this
+ *    value, so an assertion without one authorizes an unbounded token. Being
+ *    stricter than the draft can only refuse requests, never widen a grant.
+ *  - both MUST appear in {@link idJagTargetAllowlist}. This is the
+ *    "administrator-defined policy" EMA §4.1 requires the IdP to evaluate, in
+ *    the form QAuth already has: operator-set server state, never client input.
+ */
+async function mintIdJagForExchange(args: {
+  fastify: FastifyInstance;
+  request: FastifyRequest;
+  client: OAuthClientLike;
+  body: TokenExchangeTokenExchangeBody;
+  user: { id: string };
+  grantedScopes: string[];
+  subjectAct: ActClaim | undefined;
+  auditFailure: (error: string, extra?: Record<string, unknown>) => Promise<void>;
+}): Promise<IdJagTokenResponse> {
+  const { fastify, request, client, body, user, grantedScopes, subjectAct, auditFailure } = args;
+
+  const allowedTargets = idJagTargetAllowlist(client);
+
+  const requestedAudience = body.audience ?? [];
+  if (requestedAudience.length !== 1) {
+    await auditFailure('invalid_request: ID-JAG requires exactly one audience', {
+      audienceCount: requestedAudience.length,
+    });
+    throw new InvalidRequestError(
+      'audience is required and must name exactly one authorization server when requesting an ID-JAG'
+    );
+  }
+  const targetAuthorizationServer = requestedAudience[0];
+
+  const requestedResource = body.resource ?? [];
+  if (requestedResource.length !== 1) {
+    await auditFailure('invalid_request: ID-JAG requires exactly one resource', {
+      resourceCount: requestedResource.length,
+    });
+    throw new InvalidRequestError(
+      'resource is required and must name exactly one MCP server when requesting an ID-JAG'
+    );
+  }
+  const targetResource = requestedResource[0];
+
+  const outsidePolicy = [targetAuthorizationServer, targetResource].filter(
+    (target) => !allowedTargets.includes(target)
+  );
+  if (outsidePolicy.length > 0) {
+    await auditFailure('invalid_target: ID-JAG target outside the client audience allowlist', {
+      outsidePolicy,
+      allowedTargets,
+    });
+    throw new InvalidTargetError('requested audience/resource is outside the client policy');
+  }
+
+  // Delegation depth stays bounded on this path too. The assertion carries no
+  // `act` claim (it is not part of the ID-JAG claim set, and a foreign AS would
+  // either ignore or reject it), but the CHAIN still exists — the subject token
+  // may already be a delegated token — and an unbounded re-exchange loop must
+  // not become reachable just because the issued artefact happens to be smaller.
+  const act: ActClaim = { sub: client.clientId, ...(subjectAct ? { act: subjectAct } : {}) };
+  const depth = actDepth(act);
+  if (depth > MAX_DELEGATION_DEPTH) {
+    await auditFailure('invalid_request: delegation chain too deep', {
+      depth,
+      max: MAX_DELEGATION_DEPTH,
+    });
+    throw new InvalidRequestError('delegation chain exceeds the maximum depth');
+  }
+
+  const scopeString = grantedScopes.length > 0 ? grantedScopes.join(' ') : undefined;
+
+  const minted = await mintIdJag(fastify, {
+    subject: user.id,
+    audience: targetAuthorizationServer,
+    resource: targetResource,
+    clientId: client.clientId,
+    ...(scopeString !== undefined ? { scope: scopeString } : {}),
+  });
+
+  await fastify.repositories.auditLogs.create({
+    userId: user.id,
+    oauthClientId: client.id,
+    actorClientId: client.clientId,
+    delegationChain: flattenActChain(act),
+    scopeMode: highestAgentModeInScopes(grantedScopes),
+    event: 'oauth.token.exchange.success',
+    eventType: 'token',
+    success: true,
+    ipAddress: request.ip,
+    userAgent: request.headers['user-agent'] || null,
+    metadata: {
+      grantType: 'token-exchange',
+      issuedTokenType: TOKEN_TYPE_ID_JAG,
+      actor: client.clientId,
+      delegationDepth: depth,
+      // Public identifiers only — the assertion itself is never persisted, only
+      // the `jti` that identifies it.
+      idJagId: minted.jti,
+      audience: targetAuthorizationServer,
+      resource: targetResource,
+      scope: scopeString,
+      expiresIn: minted.expiresIn,
+    },
+  });
+
+  fastify.metrics.tokensIssued.inc({ type: 'id_jag', grant_type: 'token-exchange' });
+
+  // RFC 8693 §2.2.1 / EMA §4.2: `token_type` MUST be `N_A` because the issued
+  // artefact is not usable as a bearer access token, and `issued_token_type`
+  // names what it actually is. No refresh token — an ID-JAG is a single-use
+  // hand-off credential, and a refreshable one would let a client keep
+  // redeeming access at the target long after the enterprise policy that
+  // authorised this exchange stopped applying.
+  return {
+    access_token: minted.assertion,
+    issued_token_type: TOKEN_TYPE_ID_JAG,
+    token_type: 'N_A' as const,
+    expires_in: minted.expiresIn,
+    ...(scopeString ? { scope: scopeString } : {}),
+  };
+}
+
+/**
+ * Handle the RFC 7523 §2.1 JWT authorization grant — QAuth's CONSUME side of
+ * ID-JAG (ADR-011, MCP EMA §5). Here QAuth is the MCP server's Resource
+ * Authorization Server: a client presents an assertion minted by a trusted
+ * ENTERPRISE IdP and receives an access token for the MCP server that assertion
+ * names.
+ *
+ * Security invariants, all default-deny:
+ *
+ *  - GATE 0 — `ID_JAG_ENABLED`. Already enforced at dispatch (before client
+ *    authentication); re-asserted here so the handler is safe in isolation.
+ *  - GATE 1 — the client must be REGISTERED for the jwt-bearer grant
+ *    (`unauthorized_client`, RFC 6749 §5.2). The client is already
+ *    authenticated as a confidential client by the dispatch layer.
+ *  - GATE 2 — the assertion must verify end to end: `typ`, an allowlisted
+ *    issuer, a key resolved only from that issuer's own OIDC metadata, an
+ *    asymmetric algorithm, `aud` equal to THIS server's issuer identifier, a
+ *    bounded lifetime, and a single-use `jti`. See `helpers/id-jag.ts`; every
+ *    refusal there lands on one uniform `invalid_grant` here.
+ *  - GATE 3 — the assertion's `client_id` claim MUST equal the AUTHENTICATED
+ *    client (draft §4.4.1). This is what stops a valid assertion intended for
+ *    client A being redeemed by client B.
+ *  - GATE 4 — the assertion's `resource` MUST be inside the operator's
+ *    per-client allowlist. A trusted IdP is trusted to say WHICH USER authorized
+ *    WHICH CLIENT; it is not thereby trusted to enrol this deployment's clients
+ *    into resources an operator never granted them.
+ *  - GATE 5 — the granted scope is the assertion's scope, optionally narrowed by
+ *    the request, and then still subject to the client's own allowlist and the
+ *    agent scope-mode cap. Both ceilings apply; neither can raise the other.
+ *  - GATE 6 — the subject must already be LINKED to a QAuth user. There is no
+ *    just-in-time provisioning (see below).
+ *
+ * The issued token is audience-restricted to the assertion's `resource` — the
+ * central MUST of EMA §5.1 — and NO refresh token is issued: the enterprise
+ * re-evaluates policy every time it mints an assertion, and a refresh token
+ * would let the client keep renewing access without that evaluation ever
+ * happening again.
+ */
+async function handleJwtBearer(
+  ctx: HandlerContext<TokenExchangeJwtBearerBody>
+): Promise<TokenExchangeResponse> {
+  const { fastify, request, client, body, policy, realmId } = ctx;
+
+  const auditFailure = async (error: string, extra?: Record<string, unknown>): Promise<void> => {
+    await fastify.repositories.auditLogs.create({
+      userId: null,
+      oauthClientId: client.id,
+      event: 'oauth.token.exchange.failure',
+      eventType: 'token',
+      success: false,
+      ipAddress: request.ip,
+      userAgent: request.headers['user-agent'] || null,
+      metadata: { error, grantType: 'jwt-bearer', ...extra },
+    });
+  };
+
+  // GATE 0 — defence in depth. The dispatch rejected this before client
+  // authentication; a future caller reaching the handler directly must not be
+  // able to skip the flag.
+  if (!env.ID_JAG_ENABLED) {
+    await auditFailure('unsupported_grant_type: ID-JAG is not enabled');
+    throw new BadRequestError('unsupported_grant_type');
+  }
+
+  // GATE 1 — grant authorisation (RFC 6749 §5.2). The grant is not registrable
+  // through DCR, so this reflects an operator's provisioning decision.
+  if (!client.grantTypes.includes(JWT_BEARER_GRANT_TYPE)) {
+    await auditFailure('unauthorized_client: client not allowed the jwt-bearer grant');
+    throw new UnauthorizedClientError();
+  }
+
+  // GATE 2 — the assertion itself, INCLUDING the `client_id` binding to this
+  // authenticated client. The binding is passed in rather than checked after the
+  // fact so it is evaluated BEFORE the single-use `jti` is burned: otherwise any
+  // client holding another client's assertion could destroy it by presenting it
+  // once and being refused a step later.
+  let assertion: ValidatedIdJag;
+  try {
+    assertion = await validateIdJagAssertion(fastify, {
+      assertion: body.assertion,
+      expectedClientId: client.clientId,
+    });
+  } catch (err) {
+    // Every distinct refusal reason is recorded for the operator and collapsed
+    // to ONE opaque `invalid_grant` on the wire. Telling a caller whether an
+    // issuer is allowlisted, whether a `kid` exists, or whether a `jti` was
+    // already burned turns this endpoint into an oracle for each of those.
+    const reason = err instanceof IdJagValidationError ? err.reason : 'unexpected';
+    const detail = err instanceof Error ? err.message : 'unknown error';
+    await auditFailure(`invalid_grant: assertion rejected (${reason})`, { reason, detail });
+    throw new InvalidGrantError('the presented assertion is not acceptable');
+  }
+
+  // GATE 3 — belt-and-braces re-assertion of the `client_id` binding GATE 2
+  // already enforced. Kept because it is the invariant that stops an assertion
+  // captured in transit (or one legitimately issued to a different client) being
+  // redeemed by any client that happens to hold credentials at this AS, and a
+  // future refactor of the helper must not be able to drop it silently.
+  if (assertion.clientId !== client.clientId) {
+    await auditFailure(
+      'invalid_grant: assertion client_id does not match the authenticated client',
+      {
+        assertionClientId: assertion.clientId,
+        issuer: assertion.issuer,
+      }
+    );
+    throw new InvalidGrantError('the presented assertion is not acceptable');
+  }
+
+  // GATE 4 — the resource must be one an operator granted this client.
+  const allowedTargets = idJagTargetAllowlist(client);
+  if (!allowedTargets.includes(assertion.resource)) {
+    await auditFailure('invalid_target: assertion resource outside the client audience allowlist', {
+      resource: assertion.resource,
+      allowedTargets,
+      issuer: assertion.issuer,
+    });
+    throw new InvalidTargetError('the assertion resource is outside the client policy');
+  }
+
+  // RFC 8707 §2.2: an explicit `resource` parameter may only AGREE with the
+  // claim. The claim is authoritative — it is what the enterprise signed — so a
+  // parameter naming anything else is a mismatch to reject, never a set to merge
+  // with or a value that can broaden the audience.
+  const requestedResource = body.resource ?? [];
+  const mismatched = requestedResource.filter((value) => value !== assertion.resource);
+  if (mismatched.length > 0) {
+    await auditFailure('invalid_target: resource parameter disagrees with the assertion', {
+      mismatched,
+      assertionResource: assertion.resource,
+    });
+    throw new InvalidTargetError('requested resource is outside the assertion');
+  }
+
+  // GATE 5 — scope. TWO independent ceilings, both of which must hold:
+  //   1. the assertion's own `scope` claim — what the enterprise authorized;
+  //   2. the client's registered `scopes` (plus the agent scope-mode cap) —
+  //      what THIS deployment permits this client to hold at all.
+  // The result is the intersection. A trusted IdP cannot grant a client a scope
+  // the operator never configured, and the operator's allowlist cannot grant a
+  // scope the enterprise did not authorize.
+  const assertionScopes = [...assertion.scopes];
+  let requestedScopes: string[];
+  if (body.scope !== undefined && body.scope.trim().length > 0) {
+    const requested = [...new Set(body.scope.split(/\s+/).filter((s) => s.length > 0))];
+    const extraneous = requested.filter((s) => !assertionScopes.includes(s));
+    if (extraneous.length > 0) {
+      await auditFailure('invalid_scope: requested scope exceeds the assertion', {
+        extraneous,
+        assertionScopes,
+      });
+      throw new InvalidScopeError(`${extraneous.join(' ')} not in assertion scope`);
+    }
+    requestedScopes = requested;
+  } else {
+    requestedScopes = assertionScopes;
+  }
+
+  let grantedScopes: string[];
+  try {
+    grantedScopes = validateScopes(
+      requestedScopes.join(' '),
+      client.scopes,
+      toAgentScopeContext(client)
+    );
+  } catch (err) {
+    await auditFailure('invalid_scope: assertion scope exceeds what the client may hold', {
+      requestedScopes,
+      maxAgentMode: client.maxAgentMode ?? null,
+    });
+    throw err;
+  }
+
+  // GATE 6 — subject resolution. The assertion's `sub` is unique only WITHIN its
+  // issuer (draft §6), so the lookup is keyed by BOTH: a `user_credentials` row
+  // under provider type `oidc_<issuer>` with that `external_sub`.
+  //
+  // AN UNKNOWN SUBJECT IS REJECTED. Just-in-time provisioning is deliberately
+  // NOT implemented: it would let any allowlisted IdP create QAuth identities by
+  // asserting subjects that do not exist, turning a trust decision about
+  // AUTHENTICATION into an account-creation primitive, and email-based linking
+  // would additionally let a compromised IdP bind itself to an existing local
+  // account. Linking an enterprise subject to a QAuth user stays an explicit,
+  // out-of-band operator action.
+  const credential = await fastify.repositories.userCredentials.findByRealmProviderSub(
+    realmId,
+    idJagCredentialProviderType(assertion.issuer),
+    assertion.subject
+  );
+  if (!credential) {
+    await auditFailure('invalid_grant: assertion subject is not linked to a user', {
+      issuer: assertion.issuer,
+    });
+    throw new InvalidGrantError('the presented assertion is not acceptable');
+  }
+
+  const user = await fastify.repositories.users.findById(credential.userId);
+  if (!user || !user.enabled) {
+    await auditFailure('invalid_grant: assertion subject is unknown or disabled', {
+      issuer: assertion.issuer,
+      userId: credential.userId,
+    });
+    throw new InvalidGrantError('the presented assertion is not acceptable');
+  }
+
+  const scopeString = grantedScopes.length > 0 ? grantedScopes.join(' ') : undefined;
+
+  // Access-token lifespan under the environment policy (ADR-008 §5, #197). The
+  // token is NOT clamped to the assertion's remaining lifetime: an assertion is
+  // a GRANT, like an authorization code, and a grant's short single-use window
+  // exists to bound REDEMPTION, not to bound what redemption produces. EMA §5.2
+  // shows exactly this (a 300s assertion yielding an 86400s access token).
+  const accessTokenExpiresIn = accessTokenLifespanForPolicy(fastify, policy);
+
+  const emailClaims = await resolveEmailClaims(fastify, user.id);
+
+  // EMA §5.1, the profile's central MUST: the issued access token is
+  // audience-restricted to the MCP server the assertion's `resource` claim
+  // identifies — never the client's configured default audience, and never the
+  // whole allowlist. `resolveAudience` collapses the single value to a string
+  // `aud`, so the token names exactly one resource server.
+  const accessToken = await issueAccessToken(fastify, {
+    sub: user.id,
+    ...emailClaims,
+    clientId: client.clientId,
+    scope: scopeString,
+    aud: resolveAudience(client, [assertion.resource]),
+    expiresInOverride: accessTokenExpiresIn,
+  });
+
+  const isAgent = isAgentClient(client);
+  await fastify.repositories.auditLogs.create({
+    userId: user.id,
+    oauthClientId: client.id,
+    actorClientId: isAgent ? client.clientId : null,
+    scopeMode: isAgent ? highestAgentModeInScopes(grantedScopes) : null,
+    event: 'oauth.token.exchange.success',
+    eventType: 'token',
+    success: true,
+    ipAddress: request.ip,
+    userAgent: request.headers['user-agent'] || null,
+    metadata: {
+      grantType: 'jwt-bearer',
+      // Public identifiers only. The assertion is never persisted; its `jti` is
+      // what ties this issuance to the single-use record that consumed it.
+      idJagIssuer: assertion.issuer,
+      idJagId: assertion.jti,
+      resource: assertion.resource,
+      scope: scopeString,
+      expiresIn: accessTokenExpiresIn,
+    },
+  });
+
+  fastify.metrics.tokensIssued.inc({ type: 'access', grant_type: 'jwt-bearer' });
+
+  // No refresh token, and no `issued_token_type`: EMA §5.2 is an ordinary
+  // RFC 6749 §5.1 access-token response, not an RFC 8693 exchange response.
+  return {
+    access_token: accessToken,
     expires_in: accessTokenExpiresIn,
     token_type: 'Bearer' as const,
     ...(scopeString ? { scope: scopeString } : {}),

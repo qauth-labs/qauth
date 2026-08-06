@@ -27,6 +27,9 @@ export default async function (fastify: FastifyInstance) {
     issuer: fastify.jwtUtils.getIssuer(),
     // CIMD (MCP 2025-11-25): advertise on BOTH AS metadata and OIDC config.
     clientIdMetadataDocumentSupported: env.CIMD_ENABLED,
+    // ADR-011: gates the jwt-bearer grant type and the ID-JAG grant profile.
+    // Off by default, so neither is advertised until an operator opts in.
+    idJagEnabled: env.ID_JAG_ENABLED,
     // #309: advertise exactly the ID-token signing algorithms the plugin can
     // produce keys for — `['RS256','EdDSA']` when an RS256 key is configured,
     // else `['EdDSA']`. Sourced from the plugin so discovery never drifts from

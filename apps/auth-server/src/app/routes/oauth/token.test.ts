@@ -1,3 +1,5 @@
+import { generateKeyPairSync } from 'node:crypto';
+
 import {
   InvalidClientError,
   InvalidGrantError,
@@ -8,23 +10,85 @@ import {
   UnauthorizedClientError,
 } from '@qauth-labs/shared-errors';
 import type { FastifyInstance } from 'fastify';
-import { describe, expect, it, type Mock, vi } from 'vitest';
+import {
+  type CryptoKey,
+  decodeJwt,
+  decodeProtectedHeader,
+  exportJWK,
+  generateKeyPair,
+  importPKCS8,
+  type JWK,
+  SignJWT,
+} from 'jose';
+import { afterEach, beforeAll, describe, expect, it, type Mock, vi } from 'vitest';
 
 vi.mock('../../helpers/timing', () => ({
   ensureMinimumResponseTime: vi.fn().mockResolvedValue(undefined),
 }));
 
-vi.mock('../../../config/env', () => ({
-  env: {
+/** A fresh Ed25519 pair in the PKCS#8 / SPKI PEM form the config carries. */
+function generateEd25519Pem(): { privateKeyPem: string; publicKeyPem: string } {
+  const { privateKey, publicKey } = generateKeyPairSync('ed25519', {
+    privateKeyEncoding: { type: 'pkcs8', format: 'pem' },
+    publicKeyEncoding: { type: 'spki', format: 'pem' },
+  });
+  return { privateKeyPem: privateKey, publicKeyPem: publicKey };
+}
+
+/** This server's own signing key — used by the ADR-011 ID-JAG MINT path. */
+const SERVER_KEYS = generateEd25519Pem();
+/** The enterprise IdP's signing key — used to mint ID-JAG fixtures to CONSUME. */
+const IDP_KEYS = generateEd25519Pem();
+
+/**
+ * Mutable env stand-in. The pre-ADR-011 values are the DEFAULTS and are restored
+ * after every test, so the ID-JAG flag is off unless a test turns it on — which
+ * is exactly the production posture the deny-path tests below assert.
+ */
+const { mockEnv } = vi.hoisted(() => ({
+  mockEnv: {} as Record<string, unknown>,
+}));
+
+function resetMockEnv(): void {
+  for (const key of Object.keys(mockEnv)) delete mockEnv[key];
+  Object.assign(mockEnv, {
     DATABASE_URL: 'postgresql://test:test@localhost:5432/test',
     EMAIL_FROM_ADDRESS: 'noreply@example.com',
     EMAIL_BASE_URL: 'http://localhost:3000',
     TOKEN_RATE_LIMIT: 60,
     TOKEN_RATE_WINDOW: 60,
-  },
-}));
+    JWT_PRIVATE_KEY: SERVER_KEYS.privateKeyPem,
+    // ADR-011 defaults: OFF, and an EMPTY allowlist.
+    ID_JAG_ENABLED: false,
+    ID_JAG_TRUSTED_ISSUERS: [] as string[],
+    ID_JAG_FETCH_TIMEOUT_MS: 5000,
+    ID_JAG_JWKS_CACHE_TTL: 300,
+    ID_JAG_MAX_DOCUMENT_BYTES: 65536,
+    ID_JAG_ALLOW_PRIVATE_ADDRESSES: false,
+    ID_JAG_CLOCK_SKEW_LEEWAY: 60,
+    ID_JAG_MAX_ASSERTION_LIFETIME: 300,
+    ID_JAG_ISSUED_LIFETIME: 300,
+  });
+}
+resetMockEnv();
+
+vi.mock('../../../config/env', () => ({ env: mockEnv }));
+
+const { ssrfSafeGet } = vi.hoisted(() => ({ ssrfSafeGet: vi.fn() }));
+
+vi.mock('../../helpers/ssrf-safe-fetch', async () => {
+  const actual = await vi.importActual<typeof import('../../helpers/ssrf-safe-fetch')>(
+    '../../helpers/ssrf-safe-fetch'
+  );
+  return { ...actual, ssrfSafeGet };
+});
 
 import tokenRoute from './token';
+
+afterEach(() => {
+  resetMockEnv();
+  ssrfSafeGet.mockReset();
+});
 
 interface TestContext {
   handler?: (request: any, reply: any) => Promise<unknown>;
@@ -49,6 +113,7 @@ function createReply(onSend?: (body: unknown) => void): {
 
 function createFastifyStub() {
   const ctx: TestContext = {};
+  const redisStore = new Map<string, string>();
 
   const fastify: any = {
     withTypeProvider: () => ({
@@ -91,6 +156,11 @@ function createFastifyStub() {
           externalSub: 'user@example.com',
           credentialData: { password_hash: 'hash', email_verified: true },
         }),
+        // ADR-011 subject resolution: an ID-JAG `sub` is linked to a QAuth user
+        // through `(realm, oidc_<issuer>, external_sub)`. Deny-by-default here —
+        // an unlinked subject is rejected, never provisioned — so the ID-JAG
+        // tests opt IN by overriding this mock.
+        findByRealmProviderSub: vi.fn().mockResolvedValue(undefined),
       },
       userAttributes: {
         // #229 claim resolution: default fixture is ONE verified self_reported
@@ -142,6 +212,17 @@ function createFastifyStub() {
     sessionUtils: {
       setSession: vi.fn().mockResolvedValue(undefined),
     },
+    // In-memory `fastify.redis` with real SET NX semantics — the ID-JAG replay
+    // store depends on NX returning null for an already-present key, so a stub
+    // that always says 'OK' would make every replay test pass vacuously.
+    redis: {
+      get: vi.fn(async (key: string) => redisStore.get(key) ?? null),
+      set: vi.fn(async (key: string, value: string, _ex?: string, _ttl?: number, nx?: string) => {
+        if (nx === 'NX' && redisStore.has(key)) return null;
+        redisStore.set(key, value);
+        return 'OK';
+      }),
+    },
     db: {
       transaction: vi.fn(async (cb: (tx: unknown) => Promise<unknown>) => cb({})),
     },
@@ -157,7 +238,7 @@ function createFastifyStub() {
     },
   };
 
-  return { fastify: fastify as FastifyInstance, ctx };
+  return { fastify: fastify as FastifyInstance, ctx, redisStore };
 }
 
 describe('POST /oauth/token route — client_credentials grant', () => {
@@ -2578,5 +2659,1319 @@ describe('POST /oauth/token route — token-exchange grant (RFC 8693, ADR-007 §
       );
       expect(fastify.jwtUtils.signAccessToken).not.toHaveBeenCalled();
     });
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/*      ADR-011 — MCP Enterprise-Managed Authorization (ID-JAG), both sides     */
+/* -------------------------------------------------------------------------- */
+
+const ID_JAG_TYP = 'oauth-id-jag+jwt';
+const JWT_BEARER_GRANT = 'urn:ietf:params:oauth:grant-type:jwt-bearer';
+const TOKEN_EXCHANGE_GRANT = 'urn:ietf:params:oauth:grant-type:token-exchange';
+const ID_JAG_TOKEN_TYPE = 'urn:ietf:params:oauth:token-type:id-jag';
+const ACCESS_TOKEN_URN = 'urn:ietf:params:oauth:token-type:access_token';
+
+const AS_ISSUER = 'https://auth.example.com';
+const IDP_ISSUER = 'https://idp.example.com';
+const MCP_SERVER = 'https://mcp.example.com/';
+const TARGET_AS = 'https://auth.chat.example';
+const EMA_CLIENT_ID = 'mcp-client-1';
+
+/**
+ * Serve the trusted IdP's OIDC discovery document and JWK Set through the
+ * SSRF-guarded fetcher, so the ID-JAG consume tests exercise the REAL key
+ * resolution chain (allowlist → discovery → jwks_uri → JWK import) rather than
+ * a mocked-out resolver.
+ */
+async function wireTrustedIdp(): Promise<CryptoKey> {
+  const { exportJWK, importSPKI } = await import('jose');
+  const publicKey = await importSPKI(IDP_KEYS.publicKeyPem, 'EdDSA');
+  const jwk = await exportJWK(publicKey);
+
+  ssrfSafeGet.mockImplementation(async (url: string) => {
+    if (url === `${IDP_ISSUER}/.well-known/openid-configuration`) {
+      return {
+        status: 200,
+        body: JSON.stringify({ issuer: IDP_ISSUER, jwks_uri: `${IDP_ISSUER}/jwks.json` }),
+        headers: {},
+      };
+    }
+    if (url === `${IDP_ISSUER}/jwks.json`) {
+      return {
+        status: 200,
+        body: JSON.stringify({ keys: [{ ...jwk, kid: 'idp-1' }] }),
+        headers: {},
+      };
+    }
+    throw new Error(`unexpected fetch: ${url}`);
+  });
+
+  return (await importPKCS8(IDP_KEYS.privateKeyPem, 'EdDSA')) as CryptoKey;
+}
+
+let idJagJtiCounter = 0;
+
+async function signIdJag(
+  privateKey: CryptoKey,
+  overrides: Record<string, unknown> = {},
+  header: Record<string, unknown> = {}
+): Promise<string> {
+  const now = Math.floor(Date.now() / 1000);
+  const payload: Record<string, unknown> = {
+    jti: `route-jti-${++idJagJtiCounter}`,
+    iss: IDP_ISSUER,
+    sub: 'U019488227',
+    aud: AS_ISSUER,
+    resource: MCP_SERVER,
+    client_id: EMA_CLIENT_ID,
+    iat: now,
+    exp: now + 120,
+    ...overrides,
+  };
+  for (const [key, value] of Object.entries(overrides)) {
+    if (value === undefined) delete payload[key];
+  }
+  return new SignJWT(payload)
+    .setProtectedHeader({ alg: 'EdDSA', typ: ID_JAG_TYP, kid: 'idp-1', ...header })
+    .sign(privateKey);
+}
+
+describe('POST /oauth/token — ID-JAG CONSUME (jwt-bearer grant, ADR-011)', () => {
+  /**
+   * A confidential client provisioned for the jwt-bearer grant, with the MCP
+   * server on its operator-set audience allowlist and a linked enterprise
+   * subject. Every ID-JAG deny-path test starts from this and removes one thing.
+   */
+  function setupConsumeStub(
+    opts: {
+      grantTypes?: string[];
+      audience?: string[] | null;
+      scopes?: string[];
+      confidential?: boolean;
+      linked?: boolean;
+      userEnabled?: boolean;
+      maxAgentMode?: string | null;
+      isAgent?: boolean;
+    } = {}
+  ) {
+    const { fastify, ctx, redisStore } = createFastifyStub();
+
+    const client = {
+      id: 'client-uuid-ema-1',
+      clientId: EMA_CLIENT_ID,
+      clientSecretHash: 'hash',
+      enabled: true,
+      grantTypes: opts.grantTypes ?? [JWT_BEARER_GRANT],
+      scopes: opts.scopes ?? ['chat.read', 'chat.history'],
+      audience: opts.audience === undefined ? [MCP_SERVER] : opts.audience,
+      isAgent: opts.isAgent ?? true,
+      maxAgentMode: opts.maxAgentMode ?? null,
+      tokenEndpointAuthMethod: opts.confidential === false ? 'none' : 'client_secret_post',
+    };
+
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(client);
+    (fastify.passwordHasher.verifyPassword as unknown as Mock).mockResolvedValue(true);
+    (
+      fastify.repositories.userCredentials.findByRealmProviderSub as unknown as Mock
+    ).mockResolvedValue(
+      opts.linked === false
+        ? undefined
+        : {
+            id: 'cred-ema-1',
+            userId: 'user-uuid-enterprise',
+            realmId: 'realm-1',
+            providerType: `oidc_${IDP_ISSUER}`,
+            externalSub: 'U019488227',
+            credentialData: {},
+          }
+    );
+    (fastify.repositories.users.findById as unknown as Mock).mockResolvedValue({
+      id: 'user-uuid-enterprise',
+      enabled: opts.userEnabled ?? true,
+    });
+    (
+      fastify.repositories.userAttributes.findVerifiedByUserIdAndKey as unknown as Mock
+    ).mockResolvedValue([]);
+    (fastify.jwtUtils.signAccessToken as unknown as Mock).mockResolvedValue('ema.access.jwt');
+
+    return { fastify, ctx, client, redisStore };
+  }
+
+  function bearerRequest(assertion: string, overrides: Record<string, unknown> = {}) {
+    return {
+      body: {
+        grant_type: JWT_BEARER_GRANT,
+        assertion,
+        client_id: EMA_CLIENT_ID,
+        client_secret: 'secret',
+        ...overrides,
+      },
+      ip: '127.0.0.1',
+      headers: { 'user-agent': 'vitest' },
+    };
+  }
+
+  async function invoke(fastify: FastifyInstance, ctx: TestContext, req: unknown) {
+    await tokenRoute(fastify);
+    const handler = ctx.handler;
+    if (!handler) throw new Error('Handler missing');
+    return handler(req, createReply());
+  }
+
+  function enableIdJag() {
+    mockEnv['ID_JAG_ENABLED'] = true;
+    mockEnv['ID_JAG_TRUSTED_ISSUERS'] = [IDP_ISSUER];
+  }
+
+  it('issues an access token audience-restricted to the assertion `resource` (EMA §5.1)', async () => {
+    enableIdJag();
+    const idpKey = await wireTrustedIdp();
+    const { fastify, ctx } = setupConsumeStub();
+
+    const result = (await invoke(
+      fastify,
+      ctx,
+      bearerRequest(await signIdJag(idpKey, { scope: 'chat.read chat.history' }))
+    )) as Record<string, unknown>;
+
+    expect(result['token_type']).toBe('Bearer');
+    expect(result['access_token']).toBe('ema.access.jwt');
+    expect(result['scope']).toBe('chat.read chat.history');
+    // THE central MUST: `aud` is the MCP server the assertion names — a single
+    // value, not the client's default audience and not an array.
+    expect(fastify.jwtUtils.signAccessToken).toHaveBeenCalledWith(
+      expect.objectContaining({ sub: 'user-uuid-enterprise', aud: MCP_SERVER })
+    );
+    // EMA §5.2 is a plain access-token response: no refresh token, no
+    // `issued_token_type`.
+    expect(result).not.toHaveProperty('refresh_token');
+    expect(result).not.toHaveProperty('issued_token_type');
+  });
+
+  it('resolves the subject through (realm, oidc_<issuer>, sub)', async () => {
+    enableIdJag();
+    const idpKey = await wireTrustedIdp();
+    const { fastify, ctx } = setupConsumeStub();
+
+    await invoke(fastify, ctx, bearerRequest(await signIdJag(idpKey)));
+
+    expect(fastify.repositories.userCredentials.findByRealmProviderSub).toHaveBeenCalledWith(
+      'realm-1',
+      `oidc_${IDP_ISSUER}`,
+      'U019488227'
+    );
+  });
+
+  it('rejects the grant entirely when ID_JAG_ENABLED is false', async () => {
+    // Flag left at its default (false) — no allowlist, no IdP wired.
+    const { fastify, ctx } = setupConsumeStub();
+    const idpKey = (await importPKCS8(IDP_KEYS.privateKeyPem, 'EdDSA')) as CryptoKey;
+
+    await expect(
+      invoke(fastify, ctx, bearerRequest(await signIdJag(idpKey)))
+    ).rejects.toBeInstanceOf(Error);
+    // Refused BEFORE client authentication, so nothing was looked up.
+    expect(fastify.repositories.oauthClients.findByClientId).not.toHaveBeenCalled();
+    expect(fastify.jwtUtils.signAccessToken).not.toHaveBeenCalled();
+  });
+
+  it('rejects every assertion when the trusted-issuer allowlist is EMPTY', async () => {
+    mockEnv['ID_JAG_ENABLED'] = true;
+    mockEnv['ID_JAG_TRUSTED_ISSUERS'] = [];
+    const idpKey = await wireTrustedIdp();
+    const { fastify, ctx } = setupConsumeStub();
+
+    await expect(
+      invoke(fastify, ctx, bearerRequest(await signIdJag(idpKey)))
+    ).rejects.toBeInstanceOf(InvalidGrantError);
+    // Fail-closed BEFORE any network call.
+    expect(ssrfSafeGet).not.toHaveBeenCalled();
+  });
+
+  it('rejects an issuer that is not on the allowlist, without fetching anything', async () => {
+    enableIdJag();
+    const idpKey = await wireTrustedIdp();
+    const { fastify, ctx } = setupConsumeStub();
+
+    await expect(
+      invoke(fastify, ctx, bearerRequest(await signIdJag(idpKey, { iss: 'https://evil.example' })))
+    ).rejects.toBeInstanceOf(InvalidGrantError);
+    expect(ssrfSafeGet).not.toHaveBeenCalled();
+  });
+
+  it('rejects an `aud` that is not this authorization server', async () => {
+    enableIdJag();
+    const idpKey = await wireTrustedIdp();
+    const { fastify, ctx } = setupConsumeStub();
+
+    await expect(
+      invoke(fastify, ctx, bearerRequest(await signIdJag(idpKey, { aud: 'https://other.example' })))
+    ).rejects.toBeInstanceOf(InvalidGrantError);
+  });
+
+  it('rejects an expired assertion', async () => {
+    enableIdJag();
+    const idpKey = await wireTrustedIdp();
+    const { fastify, ctx } = setupConsumeStub();
+    const now = Math.floor(Date.now() / 1000);
+
+    await expect(
+      invoke(
+        fastify,
+        ctx,
+        bearerRequest(await signIdJag(idpKey, { iat: now - 900, exp: now - 800 }))
+      )
+    ).rejects.toBeInstanceOf(InvalidGrantError);
+  });
+
+  it('rejects `alg: none`', async () => {
+    enableIdJag();
+    await wireTrustedIdp();
+    const { fastify, ctx } = setupConsumeStub();
+    const now = Math.floor(Date.now() / 1000);
+    const header = Buffer.from(JSON.stringify({ alg: 'none', typ: ID_JAG_TYP })).toString(
+      'base64url'
+    );
+    const payload = Buffer.from(
+      JSON.stringify({
+        jti: 'none-1',
+        iss: IDP_ISSUER,
+        sub: 'U019488227',
+        aud: AS_ISSUER,
+        resource: MCP_SERVER,
+        client_id: EMA_CLIENT_ID,
+        iat: now,
+        exp: now + 120,
+      })
+    ).toString('base64url');
+
+    await expect(
+      invoke(fastify, ctx, bearerRequest(`${header}.${payload}.`))
+    ).rejects.toBeInstanceOf(InvalidGrantError);
+    expect(ssrfSafeGet).not.toHaveBeenCalled();
+  });
+
+  it('rejects a MAC-algorithm assertion', async () => {
+    enableIdJag();
+    await wireTrustedIdp();
+    const { fastify, ctx } = setupConsumeStub();
+    const now = Math.floor(Date.now() / 1000);
+    const macAssertion = await new SignJWT({
+      jti: 'hs-1',
+      iss: IDP_ISSUER,
+      sub: 'U019488227',
+      aud: AS_ISSUER,
+      resource: MCP_SERVER,
+      client_id: EMA_CLIENT_ID,
+      iat: now,
+      exp: now + 120,
+    })
+      .setProtectedHeader({ alg: 'HS256', typ: ID_JAG_TYP })
+      .sign(new Uint8Array(32).fill(9));
+
+    await expect(invoke(fastify, ctx, bearerRequest(macAssertion))).rejects.toBeInstanceOf(
+      InvalidGrantError
+    );
+    expect(ssrfSafeGet).not.toHaveBeenCalled();
+  });
+
+  it('rejects a REPLAYED assertion (same jti twice)', async () => {
+    enableIdJag();
+    const idpKey = await wireTrustedIdp();
+    const { fastify, ctx } = setupConsumeStub();
+    const assertion = await signIdJag(idpKey, { jti: 'replay-me' });
+
+    await expect(invoke(fastify, ctx, bearerRequest(assertion))).resolves.toBeDefined();
+    await expect(invoke(fastify, ctx, bearerRequest(assertion))).rejects.toBeInstanceOf(
+      InvalidGrantError
+    );
+    // The token was issued exactly once.
+    expect((fastify.jwtUtils.signAccessToken as unknown as Mock).mock.calls).toHaveLength(1);
+  });
+
+  it('rejects an assertion with NO `resource` claim', async () => {
+    enableIdJag();
+    const idpKey = await wireTrustedIdp();
+    const { fastify, ctx } = setupConsumeStub();
+
+    await expect(
+      invoke(fastify, ctx, bearerRequest(await signIdJag(idpKey, { resource: undefined })))
+    ).rejects.toBeInstanceOf(InvalidGrantError);
+  });
+
+  it('rejects a `resource` the client is not configured to reach', async () => {
+    enableIdJag();
+    const idpKey = await wireTrustedIdp();
+    const { fastify, ctx } = setupConsumeStub({ audience: ['https://other-mcp.example/'] });
+
+    await expect(
+      invoke(fastify, ctx, bearerRequest(await signIdJag(idpKey)))
+    ).rejects.toBeInstanceOf(InvalidTargetError);
+  });
+
+  it('rejects every resource when the client has NO configured audience (deny by default)', async () => {
+    enableIdJag();
+    const idpKey = await wireTrustedIdp();
+    const { fastify, ctx } = setupConsumeStub({ audience: null });
+
+    await expect(
+      invoke(fastify, ctx, bearerRequest(await signIdJag(idpKey)))
+    ).rejects.toBeInstanceOf(InvalidTargetError);
+  });
+
+  it('rejects a `resource` PARAMETER that disagrees with the assertion claim', async () => {
+    enableIdJag();
+    const idpKey = await wireTrustedIdp();
+    const { fastify, ctx } = setupConsumeStub();
+
+    await expect(
+      invoke(
+        fastify,
+        ctx,
+        bearerRequest(await signIdJag(idpKey), { resource: ['https://elsewhere.example/'] })
+      )
+    ).rejects.toBeInstanceOf(InvalidTargetError);
+  });
+
+  it('rejects an assertion whose `client_id` names a different client', async () => {
+    enableIdJag();
+    const idpKey = await wireTrustedIdp();
+    const { fastify, ctx } = setupConsumeStub();
+
+    await expect(
+      invoke(fastify, ctx, bearerRequest(await signIdJag(idpKey, { client_id: 'someone-else' })))
+    ).rejects.toBeInstanceOf(InvalidGrantError);
+  });
+
+  it('rejects a client not registered for the jwt-bearer grant', async () => {
+    enableIdJag();
+    const idpKey = await wireTrustedIdp();
+    const { fastify, ctx } = setupConsumeStub({ grantTypes: ['authorization_code'] });
+
+    await expect(
+      invoke(fastify, ctx, bearerRequest(await signIdJag(idpKey)))
+    ).rejects.toBeInstanceOf(UnauthorizedClientError);
+  });
+
+  it('rejects a PUBLIC client (no secret presented)', async () => {
+    enableIdJag();
+    const idpKey = await wireTrustedIdp();
+    const { fastify, ctx } = setupConsumeStub({ confidential: false });
+
+    await expect(
+      invoke(fastify, ctx, {
+        body: {
+          grant_type: JWT_BEARER_GRANT,
+          assertion: await signIdJag(idpKey),
+          client_id: EMA_CLIENT_ID,
+        },
+        ip: '127.0.0.1',
+        headers: {},
+      })
+    ).rejects.toBeInstanceOf(InvalidClientError);
+  });
+
+  it('rejects an UNLINKED subject rather than provisioning one', async () => {
+    enableIdJag();
+    const idpKey = await wireTrustedIdp();
+    const { fastify, ctx } = setupConsumeStub({ linked: false });
+
+    await expect(
+      invoke(fastify, ctx, bearerRequest(await signIdJag(idpKey)))
+    ).rejects.toBeInstanceOf(InvalidGrantError);
+    expect(fastify.jwtUtils.signAccessToken).not.toHaveBeenCalled();
+  });
+
+  it('rejects a linked-but-DISABLED user', async () => {
+    enableIdJag();
+    const idpKey = await wireTrustedIdp();
+    const { fastify, ctx } = setupConsumeStub({ userEnabled: false });
+
+    await expect(
+      invoke(fastify, ctx, bearerRequest(await signIdJag(idpKey)))
+    ).rejects.toBeInstanceOf(InvalidGrantError);
+  });
+
+  it('rejects a requested scope wider than the assertion authorized', async () => {
+    enableIdJag();
+    const idpKey = await wireTrustedIdp();
+    const { fastify, ctx } = setupConsumeStub();
+
+    await expect(
+      invoke(
+        fastify,
+        ctx,
+        bearerRequest(await signIdJag(idpKey, { scope: 'chat.read' }), {
+          scope: 'chat.read chat.history',
+        })
+      )
+    ).rejects.toBeInstanceOf(InvalidScopeError);
+  });
+
+  it('rejects an assertion scope the CLIENT may not hold, even when the IdP authorized it', async () => {
+    enableIdJag();
+    const idpKey = await wireTrustedIdp();
+    const { fastify, ctx } = setupConsumeStub({ scopes: ['chat.read'] });
+
+    await expect(
+      invoke(fastify, ctx, bearerRequest(await signIdJag(idpKey, { scope: 'chat.read admin.all' })))
+    ).rejects.toBeInstanceOf(InvalidScopeError);
+  });
+
+  it('applies the agent scope-mode cap to an assertion-granted agent scope', async () => {
+    enableIdJag();
+    const idpKey = await wireTrustedIdp();
+    // The client is allowed `agent:exec` in its raw allowlist but is capped at
+    // `readonly` — the cap wins (fail-closed), exactly as on every other grant.
+    const { fastify, ctx } = setupConsumeStub({
+      scopes: ['agent:exec'],
+      maxAgentMode: 'readonly',
+    });
+
+    await expect(
+      invoke(fastify, ctx, bearerRequest(await signIdJag(idpKey, { scope: 'agent:exec' })))
+    ).rejects.toBeInstanceOf(InvalidScopeError);
+  });
+
+  it('narrows the granted scope when the request asks for a subset', async () => {
+    enableIdJag();
+    const idpKey = await wireTrustedIdp();
+    const { fastify, ctx } = setupConsumeStub();
+
+    const result = (await invoke(
+      fastify,
+      ctx,
+      bearerRequest(await signIdJag(idpKey, { scope: 'chat.read chat.history' }), {
+        scope: 'chat.read',
+      })
+    )) as Record<string, unknown>;
+
+    expect(result['scope']).toBe('chat.read');
+  });
+
+  it('audit-logs both the accept and the reject', async () => {
+    enableIdJag();
+    const idpKey = await wireTrustedIdp();
+
+    const accepted = setupConsumeStub();
+    await invoke(accepted.fastify, accepted.ctx, bearerRequest(await signIdJag(idpKey)));
+    expect(accepted.fastify.repositories.auditLogs.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: 'oauth.token.exchange.success',
+        success: true,
+        metadata: expect.objectContaining({ grantType: 'jwt-bearer', resource: MCP_SERVER }),
+      })
+    );
+
+    const rejected = setupConsumeStub({ linked: false });
+    await expect(
+      invoke(rejected.fastify, rejected.ctx, bearerRequest(await signIdJag(idpKey)))
+    ).rejects.toBeInstanceOf(InvalidGrantError);
+    expect(rejected.fastify.repositories.auditLogs.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: 'oauth.token.exchange.failure',
+        success: false,
+        metadata: expect.objectContaining({ grantType: 'jwt-bearer' }),
+      })
+    );
+  });
+});
+
+describe('POST /oauth/token — ID-JAG MINT (token exchange, ADR-011)', () => {
+  const AGENT_CLIENT_ID = 'agent-client';
+
+  function setupMintStub(
+    opts: {
+      audience?: string[] | null;
+      isAgent?: boolean;
+      grantTypes?: string[];
+      subjectScope?: string;
+      subjectAct?: unknown;
+    } = {}
+  ) {
+    const { fastify, ctx } = createFastifyStub();
+
+    const client = {
+      id: 'client-uuid-agent-1',
+      clientId: AGENT_CLIENT_ID,
+      clientSecretHash: 'hash',
+      enabled: true,
+      grantTypes: opts.grantTypes ?? [TOKEN_EXCHANGE_GRANT],
+      scopes: [] as string[],
+      audience: opts.audience === undefined ? [TARGET_AS, MCP_SERVER] : opts.audience,
+      isAgent: opts.isAgent ?? true,
+      maxAgentMode: null,
+      tokenEndpointAuthMethod: 'client_secret_post',
+    };
+
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(client);
+    (fastify.passwordHasher.verifyPassword as unknown as Mock).mockResolvedValue(true);
+    (fastify.jwtUtils.verifyAccessToken as unknown as Mock).mockResolvedValue({
+      sub: 'user-uuid-subject',
+      clientId: 'original-app-client',
+      scope: opts.subjectScope ?? 'chat.read chat.history',
+      aud: [AGENT_CLIENT_ID],
+      iss: AS_ISSUER,
+      token_use: 'access',
+      exp: Math.floor(Date.now() / 1000) + 600,
+      ...(opts.subjectAct ? { act: opts.subjectAct } : {}),
+    });
+    (fastify.repositories.users.findById as unknown as Mock).mockResolvedValue({
+      id: 'user-uuid-subject',
+      enabled: true,
+    });
+
+    return { fastify, ctx, client };
+  }
+
+  function mintRequest(overrides: Record<string, unknown> = {}) {
+    return {
+      body: {
+        grant_type: TOKEN_EXCHANGE_GRANT,
+        client_id: AGENT_CLIENT_ID,
+        client_secret: 'secret',
+        subject_token: 'subject.jwt.token',
+        subject_token_type: ACCESS_TOKEN_URN,
+        requested_token_type: ID_JAG_TOKEN_TYPE,
+        // Arrays, because the Zod body schema coerces both parameters to arrays
+        // before the handler ever sees them; these tests call the handler
+        // directly, so they supply the post-parse shape.
+        audience: [TARGET_AS],
+        resource: [MCP_SERVER],
+        ...overrides,
+      },
+      ip: '127.0.0.1',
+      headers: { 'user-agent': 'vitest' },
+    };
+  }
+
+  async function invoke(fastify: FastifyInstance, ctx: TestContext, req: unknown) {
+    await tokenRoute(fastify);
+    const handler = ctx.handler;
+    if (!handler) throw new Error('Handler missing');
+    return handler(req, createReply());
+  }
+
+  it('mints an ID-JAG with the exact spec claim set and `token_type: "N_A"`', async () => {
+    mockEnv['ID_JAG_ENABLED'] = true;
+    const { fastify, ctx } = setupMintStub();
+
+    const result = (await invoke(fastify, ctx, mintRequest())) as Record<string, unknown>;
+
+    expect(result['token_type']).toBe('N_A');
+    expect(result['issued_token_type']).toBe(ID_JAG_TOKEN_TYPE);
+    expect(result['expires_in']).toBe(300);
+    expect(result['scope']).toBe('chat.read chat.history');
+    expect(result).not.toHaveProperty('refresh_token');
+
+    const assertion = result['access_token'] as string;
+    expect(decodeProtectedHeader(assertion)).toEqual({ alg: 'EdDSA', typ: ID_JAG_TYP });
+
+    const claims = decodeJwt(assertion) as Record<string, unknown>;
+    expect(Object.keys(claims).sort()).toEqual(
+      ['aud', 'client_id', 'exp', 'iat', 'iss', 'jti', 'resource', 'scope', 'sub'].sort()
+    );
+    expect(claims['iss']).toBe(AS_ISSUER);
+    expect(claims['sub']).toBe('user-uuid-subject');
+    expect(claims['aud']).toBe(TARGET_AS);
+    expect(claims['resource']).toBe(MCP_SERVER);
+    expect(claims['client_id']).toBe(AGENT_CLIENT_ID);
+    // No `act`, and no identity claims crossing the trust boundary.
+    expect(claims).not.toHaveProperty('act');
+    expect(claims).not.toHaveProperty('email');
+    // An ID-JAG is NOT an access token: no access token was signed on this path.
+    expect(fastify.jwtUtils.signAccessToken).not.toHaveBeenCalled();
+  });
+
+  it('rejects the ID-JAG token type when ID_JAG_ENABLED is false', async () => {
+    // Flag at its default — the pre-ADR-011 access_token-only gate must stand.
+    const { fastify, ctx } = setupMintStub();
+
+    await expect(invoke(fastify, ctx, mintRequest())).rejects.toBeInstanceOf(InvalidRequestError);
+  });
+
+  it('rejects a MISSING audience', async () => {
+    mockEnv['ID_JAG_ENABLED'] = true;
+    const { fastify, ctx } = setupMintStub();
+
+    await expect(invoke(fastify, ctx, mintRequest({ audience: undefined }))).rejects.toBeInstanceOf(
+      InvalidRequestError
+    );
+  });
+
+  it('rejects a MULTI-VALUED audience rather than picking the first', async () => {
+    mockEnv['ID_JAG_ENABLED'] = true;
+    const { fastify, ctx } = setupMintStub();
+
+    await expect(
+      invoke(fastify, ctx, mintRequest({ audience: [TARGET_AS, 'https://other-as.example'] }))
+    ).rejects.toBeInstanceOf(InvalidRequestError);
+  });
+
+  it('rejects a missing or multi-valued resource', async () => {
+    mockEnv['ID_JAG_ENABLED'] = true;
+
+    const missing = setupMintStub();
+    await expect(
+      invoke(missing.fastify, missing.ctx, mintRequest({ resource: undefined }))
+    ).rejects.toBeInstanceOf(InvalidRequestError);
+
+    const multiple = setupMintStub({ audience: [TARGET_AS, MCP_SERVER, 'https://mcp2.example/'] });
+    await expect(
+      invoke(
+        multiple.fastify,
+        multiple.ctx,
+        mintRequest({ resource: [MCP_SERVER, 'https://mcp2.example/'] })
+      )
+    ).rejects.toBeInstanceOf(InvalidRequestError);
+  });
+
+  it('rejects an audience outside the client policy allowlist', async () => {
+    mockEnv['ID_JAG_ENABLED'] = true;
+    const { fastify, ctx } = setupMintStub({ audience: [MCP_SERVER] });
+
+    await expect(invoke(fastify, ctx, mintRequest())).rejects.toBeInstanceOf(InvalidTargetError);
+  });
+
+  it('rejects everything when the client has NO configured audience (deny by default)', async () => {
+    mockEnv['ID_JAG_ENABLED'] = true;
+    const { fastify, ctx } = setupMintStub({ audience: null });
+
+    await expect(invoke(fastify, ctx, mintRequest())).rejects.toBeInstanceOf(InvalidTargetError);
+  });
+
+  it('keeps the agent gate in force on the mint path', async () => {
+    mockEnv['ID_JAG_ENABLED'] = true;
+    const nonAgent = setupMintStub({ isAgent: false });
+    await expect(invoke(nonAgent.fastify, nonAgent.ctx, mintRequest())).rejects.toBeInstanceOf(
+      UnauthorizedClientError
+    );
+
+    const notGranted = setupMintStub({ grantTypes: ['authorization_code'] });
+    await expect(invoke(notGranted.fastify, notGranted.ctx, mintRequest())).rejects.toBeInstanceOf(
+      UnauthorizedClientError
+    );
+  });
+
+  it('rejects a PUBLIC client attempting to mint', async () => {
+    mockEnv['ID_JAG_ENABLED'] = true;
+    const { fastify, ctx } = setupMintStub();
+
+    await expect(
+      invoke(fastify, ctx, {
+        body: {
+          grant_type: TOKEN_EXCHANGE_GRANT,
+          client_id: AGENT_CLIENT_ID,
+          subject_token: 'subject.jwt.token',
+          subject_token_type: ACCESS_TOKEN_URN,
+          requested_token_type: ID_JAG_TOKEN_TYPE,
+          audience: [TARGET_AS],
+          resource: [MCP_SERVER],
+        },
+        ip: '127.0.0.1',
+        headers: {},
+      })
+    ).rejects.toBeInstanceOf(InvalidClientError);
+  });
+
+  it('rejects an up-scoped mint (scope wider than the subject token)', async () => {
+    mockEnv['ID_JAG_ENABLED'] = true;
+    const { fastify, ctx } = setupMintStub({ subjectScope: 'chat.read' });
+
+    await expect(
+      invoke(fastify, ctx, mintRequest({ scope: 'chat.read chat.history' }))
+    ).rejects.toBeInstanceOf(InvalidScopeError);
+  });
+
+  it('keeps the delegation-depth bound in force', async () => {
+    mockEnv['ID_JAG_ENABLED'] = true;
+    // A chain already at the maximum depth; adding this agent exceeds it.
+    const deepChain = { sub: 'a1', act: { sub: 'a2', act: { sub: 'a3', act: { sub: 'a4' } } } };
+    const { fastify, ctx } = setupMintStub({ subjectAct: deepChain });
+
+    await expect(invoke(fastify, ctx, mintRequest())).rejects.toBeInstanceOf(InvalidRequestError);
+  });
+
+  it('does NOT regress the ordinary access_token exchange when ID-JAG is enabled', async () => {
+    mockEnv['ID_JAG_ENABLED'] = true;
+    const { fastify, ctx } = setupMintStub();
+    (fastify.jwtUtils.signAccessToken as unknown as Mock).mockResolvedValue('delegated.jwt');
+
+    const result = (await invoke(
+      fastify,
+      ctx,
+      mintRequest({
+        requested_token_type: ACCESS_TOKEN_URN,
+        audience: undefined,
+        resource: undefined,
+      })
+    )) as Record<string, unknown>;
+
+    expect(result['token_type']).toBe('Bearer');
+    expect(result['issued_token_type']).toBe(ACCESS_TOKEN_URN);
+    expect(result['access_token']).toBe('delegated.jwt');
+  });
+
+  it('audit-logs the mint with the assertion id, never the assertion itself', async () => {
+    mockEnv['ID_JAG_ENABLED'] = true;
+    const { fastify, ctx } = setupMintStub();
+
+    const result = (await invoke(fastify, ctx, mintRequest())) as Record<string, unknown>;
+    const claims = decodeJwt(result['access_token'] as string);
+
+    expect(fastify.repositories.auditLogs.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: 'oauth.token.exchange.success',
+        metadata: expect.objectContaining({
+          issuedTokenType: ID_JAG_TOKEN_TYPE,
+          idJagId: claims.jti,
+          audience: TARGET_AS,
+          resource: MCP_SERVER,
+        }),
+      })
+    );
+    const logged = (fastify.repositories.auditLogs.create as unknown as Mock).mock.calls
+      .map((call) => JSON.stringify(call[0]))
+      .join('');
+    expect(logged).not.toContain(result['access_token']);
+  });
+});
+
+describe('POST /oauth/token — response serialization (union schema, ADR-011)', () => {
+  const AGENT_CLIENT_ID = 'agent-client';
+
+  /**
+   * Boot the REAL route on a REAL Fastify instance with the Zod type provider,
+   * so the `response: { 200: ... }` schema is actually applied.
+   *
+   * This is the one thing the handler-level tests above cannot check: they call
+   * the route handler directly and never touch the serializer. Before ADR-011
+   * the response schema pinned `token_type: z.literal('Bearer')`, which would
+   * reject an ID-JAG's mandatory `N_A` at serialization time — a failure that
+   * only appears once a response is actually written.
+   */
+  async function buildApp(overrides: (fastify: FastifyInstance) => void) {
+    const { serializerCompiler, validatorCompiler } = await import('fastify-type-provider-zod');
+    const Fastify = (await import('fastify')).default;
+
+    const app = Fastify({ logger: false });
+    app.setValidatorCompiler(validatorCompiler);
+    app.setSerializerCompiler(serializerCompiler);
+    await app.register(async (instance) => {
+      const { fastify: stub } = createFastifyStub();
+      for (const [key, value] of Object.entries(stub)) {
+        if (key === 'withTypeProvider') continue;
+        instance.decorate(key as never, value as never);
+      }
+      overrides(instance as unknown as FastifyInstance);
+      await instance.register(tokenRoute);
+    });
+    await app.ready();
+    return app;
+  }
+
+  function mintingApp() {
+    return buildApp((instance) => {
+      const client = {
+        id: 'client-uuid-agent-1',
+        clientId: AGENT_CLIENT_ID,
+        clientSecretHash: 'hash',
+        enabled: true,
+        grantTypes: [TOKEN_EXCHANGE_GRANT],
+        scopes: [] as string[],
+        audience: [TARGET_AS, MCP_SERVER],
+        isAgent: true,
+        maxAgentMode: null,
+        tokenEndpointAuthMethod: 'client_secret_post',
+      };
+      (instance.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(
+        client
+      );
+      (instance.passwordHasher.verifyPassword as unknown as Mock).mockResolvedValue(true);
+      (instance.jwtUtils.verifyAccessToken as unknown as Mock).mockResolvedValue({
+        sub: 'user-uuid-subject',
+        clientId: 'original-app-client',
+        scope: 'chat.read',
+        aud: [AGENT_CLIENT_ID],
+        iss: AS_ISSUER,
+        token_use: 'access',
+        exp: Math.floor(Date.now() / 1000) + 600,
+      });
+      (instance.repositories.users.findById as unknown as Mock).mockResolvedValue({
+        id: 'user-uuid-subject',
+        enabled: true,
+      });
+      (instance.jwtUtils.signAccessToken as unknown as Mock).mockResolvedValue('delegated.jwt');
+      (
+        instance.repositories.userAttributes.findVerifiedByUserIdAndKey as unknown as Mock
+      ).mockResolvedValue([]);
+    });
+  }
+
+  it('serializes an ID-JAG response with token_type "N_A" intact', async () => {
+    mockEnv['ID_JAG_ENABLED'] = true;
+    const app = await mintingApp();
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/token',
+      payload: {
+        grant_type: TOKEN_EXCHANGE_GRANT,
+        client_id: AGENT_CLIENT_ID,
+        client_secret: 'secret',
+        subject_token: 'subject.jwt.token',
+        subject_token_type: ACCESS_TOKEN_URN,
+        requested_token_type: ID_JAG_TOKEN_TYPE,
+        audience: TARGET_AS,
+        resource: MCP_SERVER,
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json() as Record<string, unknown>;
+    expect(body['token_type']).toBe('N_A');
+    expect(body['issued_token_type']).toBe(ID_JAG_TOKEN_TYPE);
+    expect(decodeProtectedHeader(body['access_token'] as string).typ).toBe(ID_JAG_TYP);
+
+    await app.close();
+  });
+
+  it('still serializes an authorization_code response with refresh_token + id_token', async () => {
+    // The 200 schema changed shape in ADR-011; the richest existing response
+    // must survive it unchanged, including the members the ID-JAG variant does
+    // not declare (`refresh_token`, `id_token`).
+    const app = await buildApp((instance) => {
+      const client = {
+        id: 'client-uuid-1',
+        clientId: 'web-app',
+        clientSecretHash: 'hash',
+        enabled: true,
+        grantTypes: ['authorization_code'],
+        scopes: [] as string[],
+        audience: null,
+        tokenEndpointAuthMethod: 'client_secret_post',
+      };
+      (instance.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(
+        client
+      );
+      (instance.passwordHasher.verifyPassword as unknown as Mock).mockResolvedValue(true);
+      (instance.repositories.authorizationCodes.findByCode as unknown as Mock).mockResolvedValue({
+        id: 'code-1',
+        oauthClientId: 'client-uuid-1',
+        userId: 'user-1',
+        redirectUri: 'https://app.example.com/cb',
+        codeChallenge: 'challenge',
+        scopes: ['openid', 'email'],
+        resource: [],
+        nonce: null,
+        authTime: null,
+        assuranceLevel: null,
+      });
+      (instance.pkceUtils.verifyCodeChallenge as unknown as Mock).mockReturnValue(true);
+      (instance.repositories.users.findById as unknown as Mock).mockResolvedValue({
+        id: 'user-1',
+        enabled: true,
+        firstName: 'Ada',
+        lastName: 'Lovelace',
+      });
+      (instance.jwtUtils.signAccessToken as unknown as Mock).mockResolvedValue('access.jwt');
+      (instance.jwtUtils.signIdToken as unknown as Mock).mockResolvedValue('id.jwt');
+      (instance.jwtUtils.generateRefreshToken as unknown as Mock).mockReturnValue({
+        token: 'a'.repeat(64),
+        tokenHash: 'hash',
+      });
+    });
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/token',
+      payload: {
+        grant_type: 'authorization_code',
+        client_id: 'web-app',
+        client_secret: 'secret',
+        code: 'the-code',
+        redirect_uri: 'https://app.example.com/cb',
+        code_verifier: 'v'.repeat(43),
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json() as Record<string, unknown>;
+    expect(body['token_type']).toBe('Bearer');
+    expect(body['access_token']).toBe('access.jwt');
+    expect(body['refresh_token']).toBe('a'.repeat(64));
+    expect(body['id_token']).toBe('id.jwt');
+    expect(body['scope']).toBe('openid email');
+
+    await app.close();
+  });
+
+  it('still serializes an ordinary Bearer exchange response unchanged', async () => {
+    mockEnv['ID_JAG_ENABLED'] = true;
+    const app = await mintingApp();
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/token',
+      payload: {
+        grant_type: TOKEN_EXCHANGE_GRANT,
+        client_id: AGENT_CLIENT_ID,
+        client_secret: 'secret',
+        subject_token: 'subject.jwt.token',
+        subject_token_type: ACCESS_TOKEN_URN,
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json() as Record<string, unknown>;
+    expect(body['token_type']).toBe('Bearer');
+    expect(body['access_token']).toBe('delegated.jwt');
+    expect(body['issued_token_type']).toBe(ACCESS_TOKEN_URN);
+
+    await app.close();
+  });
+});
+
+/**
+ * ROUTE-LEVEL wiring for `private_key_jwt` (#384, RFC 7523 §2.2).
+ *
+ * The helper-level suite in `client-assertion.test.ts` proves the VERIFIER is
+ * correct. These tests prove the token endpoint actually CALLS it — a distinction
+ * that matters, because the feature originally shipped with a complete, correct,
+ * fully-tested verifier that no route ever invoked, leaving every assertion
+ * rejected as `invalid_client` while discovery advertised the method as supported.
+ * Nothing below reaches into a helper: each case drives the real route handler.
+ */
+describe('POST /oauth/token — private_key_jwt client authentication (#384 wiring)', () => {
+  const PKJWT_CLIENT_ID = 'pkjwt-route-client';
+  const AS_ISSUER_URL = 'https://auth.example.com';
+  const CLIENT_ASSERTION_TYPE = 'urn:ietf:params:oauth:client-assertion-type:jwt-bearer';
+
+  let clientKeys: { publicKey: CryptoKey; privateKey: CryptoKey };
+  let clientPublicJwk: JWK;
+
+  beforeAll(async () => {
+    clientKeys = await generateKeyPair('ES256', { extractable: true });
+    clientPublicJwk = { ...(await exportJWK(clientKeys.publicKey)), kid: 'client-key-1' };
+  });
+
+  /** A client row provisioned for `private_key_jwt` with an inline key set. */
+  function pkjwtClient(overrides: Record<string, unknown> = {}) {
+    return {
+      id: 'client-uuid-pkjwt',
+      clientId: PKJWT_CLIENT_ID,
+      // A REAL-looking secret hash, exactly as the seed script writes for every
+      // client regardless of method. The `private_key_jwt` client must not be
+      // authenticable with it.
+      clientSecretHash: 'hash',
+      enabled: true,
+      grantTypes: ['client_credentials'],
+      scopes: ['read:foo'],
+      audience: null,
+      tokenEndpointAuthMethod: 'private_key_jwt',
+      jwks: { keys: [clientPublicJwk as unknown as Record<string, unknown>] },
+      jwksUri: null,
+      ...overrides,
+    };
+  }
+
+  async function signAssertion(
+    overrides: { aud?: string; jti?: string; iss?: string; sub?: string } = {}
+  ): Promise<string> {
+    const now = Math.floor(Date.now() / 1000);
+    return new SignJWT({})
+      .setProtectedHeader({ alg: 'ES256', kid: 'client-key-1' })
+      .setIssuer(overrides.iss ?? PKJWT_CLIENT_ID)
+      .setSubject(overrides.sub ?? PKJWT_CLIENT_ID)
+      .setAudience(overrides.aud ?? `${AS_ISSUER_URL}/oauth/token`)
+      .setJti(overrides.jti ?? `jti-${Math.random().toString(36).slice(2)}`)
+      .setIssuedAt(now)
+      .setExpirationTime(now + 120)
+      .sign(clientKeys.privateKey);
+  }
+
+  async function runToken(
+    handler: (request: unknown, reply: unknown) => Promise<unknown>,
+    body: Record<string, unknown>,
+    headers: Record<string, string> = {}
+  ) {
+    const request = {
+      body,
+      ip: '127.0.0.1',
+      headers: { 'user-agent': 'vitest', ...headers },
+    };
+    return handler(request, createReply());
+  }
+
+  it('authenticates a private_key_jwt client and issues a token (the wiring itself)', async () => {
+    const { fastify, ctx } = createFastifyStub();
+    await tokenRoute(fastify);
+    const handler = ctx.handler;
+    if (!handler) throw new Error('Handler missing');
+
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(
+      pkjwtClient()
+    );
+    (fastify.jwtUtils.signAccessToken as unknown as Mock).mockResolvedValue('signed.jwt.token');
+
+    const result = await runToken(handler, {
+      grant_type: 'client_credentials',
+      client_assertion_type: CLIENT_ASSERTION_TYPE,
+      client_assertion: await signAssertion(),
+      scope: 'read:foo',
+    });
+
+    expect(result).toMatchObject({
+      access_token: 'signed.jwt.token',
+      token_type: 'Bearer',
+      scope: 'read:foo',
+    });
+    // The shared secret was never consulted — the assertion is what authenticated.
+    expect(fastify.passwordHasher.verifyPassword).not.toHaveBeenCalled();
+  });
+
+  it('accepts the issuer identifier as `aud` as well as the token endpoint URL', async () => {
+    const { fastify, ctx } = createFastifyStub();
+    await tokenRoute(fastify);
+    const handler = ctx.handler;
+    if (!handler) throw new Error('Handler missing');
+
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(
+      pkjwtClient()
+    );
+    (fastify.jwtUtils.signAccessToken as unknown as Mock).mockResolvedValue('signed.jwt.token');
+
+    const result = await runToken(handler, {
+      grant_type: 'client_credentials',
+      client_assertion_type: CLIENT_ASSERTION_TYPE,
+      client_assertion: await signAssertion({ aud: AS_ISSUER_URL }),
+      scope: 'read:foo',
+    });
+
+    expect(result).toMatchObject({ access_token: 'signed.jwt.token' });
+  });
+
+  it('rejects an assertion whose `aud` names a different authorization server', async () => {
+    const { fastify, ctx } = createFastifyStub();
+    await tokenRoute(fastify);
+    const handler = ctx.handler;
+    if (!handler) throw new Error('Handler missing');
+
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(
+      pkjwtClient()
+    );
+
+    await expect(
+      runToken(handler, {
+        grant_type: 'client_credentials',
+        client_assertion_type: CLIENT_ASSERTION_TYPE,
+        client_assertion: await signAssertion({ aud: 'https://evil.example.com/oauth/token' }),
+      })
+    ).rejects.toThrow(InvalidClientError);
+    expect(fastify.jwtUtils.signAccessToken).not.toHaveBeenCalled();
+  });
+
+  it('rejects a replayed assertion — the `jti` is burned at the route', async () => {
+    const { fastify, ctx } = createFastifyStub();
+    await tokenRoute(fastify);
+    const handler = ctx.handler;
+    if (!handler) throw new Error('Handler missing');
+
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(
+      pkjwtClient()
+    );
+    (fastify.jwtUtils.signAccessToken as unknown as Mock).mockResolvedValue('signed.jwt.token');
+
+    const assertion = await signAssertion({ jti: 'replay-me-once' });
+    const body = {
+      grant_type: 'client_credentials',
+      client_assertion_type: CLIENT_ASSERTION_TYPE,
+      client_assertion: assertion,
+      scope: 'read:foo',
+    };
+
+    await expect(runToken(handler, body)).resolves.toMatchObject({
+      access_token: 'signed.jwt.token',
+    });
+    // Byte-identical second presentation.
+    await expect(runToken(handler, body)).rejects.toThrow(InvalidClientError);
+  });
+
+  it('rejects a private_key_jwt client that falls back to its shared secret', async () => {
+    const { fastify, ctx } = createFastifyStub();
+    await tokenRoute(fastify);
+    const handler = ctx.handler;
+    if (!handler) throw new Error('Handler missing');
+
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(
+      pkjwtClient()
+    );
+    // The hasher would say YES — the registered-method gate is what must refuse.
+    (fastify.passwordHasher.verifyPassword as unknown as Mock).mockResolvedValue(true);
+
+    await expect(
+      runToken(handler, {
+        grant_type: 'client_credentials',
+        client_id: PKJWT_CLIENT_ID,
+        client_secret: 'secret',
+      })
+    ).rejects.toThrow(InvalidClientError);
+    expect(fastify.jwtUtils.signAccessToken).not.toHaveBeenCalled();
+  });
+
+  it('rejects a client_secret_post client that presents an assertion', async () => {
+    const { fastify, ctx } = createFastifyStub();
+    await tokenRoute(fastify);
+    const handler = ctx.handler;
+    if (!handler) throw new Error('Handler missing');
+
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(
+      pkjwtClient({ tokenEndpointAuthMethod: 'client_secret_post' })
+    );
+
+    await expect(
+      runToken(handler, {
+        grant_type: 'client_credentials',
+        client_assertion_type: CLIENT_ASSERTION_TYPE,
+        client_assertion: await signAssertion(),
+      })
+    ).rejects.toThrow(InvalidClientError);
+    expect(fastify.jwtUtils.signAccessToken).not.toHaveBeenCalled();
+  });
+
+  it('rejects a request presenting BOTH a secret and an assertion (RFC 6749 §2.3)', async () => {
+    const { fastify, ctx } = createFastifyStub();
+    await tokenRoute(fastify);
+    const handler = ctx.handler;
+    if (!handler) throw new Error('Handler missing');
+
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(
+      pkjwtClient()
+    );
+    (fastify.passwordHasher.verifyPassword as unknown as Mock).mockResolvedValue(true);
+
+    await expect(
+      runToken(handler, {
+        grant_type: 'client_credentials',
+        client_id: PKJWT_CLIENT_ID,
+        client_secret: 'secret',
+        client_assertion_type: CLIENT_ASSERTION_TYPE,
+        client_assertion: await signAssertion(),
+      })
+    ).rejects.toThrow(InvalidClientError);
+    // Refused BEFORE any lookup — never "try each until one passes".
+    expect(fastify.repositories.oauthClients.findByClientId).not.toHaveBeenCalled();
+  });
+
+  it('rejects an assertion presented with a Basic authorization header', async () => {
+    const { fastify, ctx } = createFastifyStub();
+    await tokenRoute(fastify);
+    const handler = ctx.handler;
+    if (!handler) throw new Error('Handler missing');
+
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(
+      pkjwtClient()
+    );
+    (fastify.passwordHasher.verifyPassword as unknown as Mock).mockResolvedValue(true);
+
+    const basic = Buffer.from(`${PKJWT_CLIENT_ID}:secret`).toString('base64');
+    await expect(
+      runToken(
+        handler,
+        {
+          grant_type: 'client_credentials',
+          client_assertion_type: CLIENT_ASSERTION_TYPE,
+          client_assertion: await signAssertion(),
+        },
+        { authorization: `Basic ${basic}` }
+      )
+    ).rejects.toThrow(InvalidClientError);
+    expect(fastify.repositories.oauthClients.findByClientId).not.toHaveBeenCalled();
+  });
+
+  it('rejects half an assertion pair rather than downgrading to the public path', async () => {
+    const { fastify, ctx } = createFastifyStub();
+    await tokenRoute(fastify);
+    const handler = ctx.handler;
+    if (!handler) throw new Error('Handler missing');
+
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(
+      pkjwtClient({ tokenEndpointAuthMethod: 'none', grantTypes: ['authorization_code'] })
+    );
+
+    await expect(
+      runToken(handler, {
+        grant_type: 'authorization_code',
+        client_id: PKJWT_CLIENT_ID,
+        code: 'some-code',
+        redirect_uri: 'https://app.example.com/cb',
+        code_verifier: 'a'.repeat(64),
+        client_assertion_type: CLIENT_ASSERTION_TYPE,
+      })
+    ).rejects.toThrow(InvalidClientError);
+    expect(fastify.repositories.oauthClients.findByClientId).not.toHaveBeenCalled();
+  });
+
+  it('rejects an assertion signed by a key outside the registered JWK Set', async () => {
+    const { fastify, ctx } = createFastifyStub();
+    await tokenRoute(fastify);
+    const handler = ctx.handler;
+    if (!handler) throw new Error('Handler missing');
+
+    const attacker = await generateKeyPair('ES256', { extractable: true });
+    const now = Math.floor(Date.now() / 1000);
+    const forged = await new SignJWT({})
+      .setProtectedHeader({ alg: 'ES256', kid: 'client-key-1' })
+      .setIssuer(PKJWT_CLIENT_ID)
+      .setSubject(PKJWT_CLIENT_ID)
+      .setAudience(`${AS_ISSUER_URL}/oauth/token`)
+      .setJti('forged-1')
+      .setIssuedAt(now)
+      .setExpirationTime(now + 120)
+      .sign(attacker.privateKey);
+
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(
+      pkjwtClient()
+    );
+
+    await expect(
+      runToken(handler, {
+        grant_type: 'client_credentials',
+        client_assertion_type: CLIENT_ASSERTION_TYPE,
+        client_assertion: forged,
+      })
+    ).rejects.toThrow(InvalidClientError);
+    expect(fastify.jwtUtils.signAccessToken).not.toHaveBeenCalled();
+  });
+
+  it('keeps the pre-#384 client_secret_post path byte-identical', async () => {
+    const { fastify, ctx } = createFastifyStub();
+    await tokenRoute(fastify);
+    const handler = ctx.handler;
+    if (!handler) throw new Error('Handler missing');
+
+    // A row with NO `token_endpoint_auth_method` at all — the pre-#384 shape.
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue({
+      id: 'client-uuid-legacy',
+      clientId: 'legacy-client',
+      clientSecretHash: 'hash',
+      enabled: true,
+      grantTypes: ['client_credentials'],
+      scopes: ['read:foo'],
+      audience: null,
+    });
+    (fastify.passwordHasher.verifyPassword as unknown as Mock).mockResolvedValue(true);
+    (fastify.jwtUtils.signAccessToken as unknown as Mock).mockResolvedValue('signed.jwt.token');
+
+    const result = await runToken(handler, {
+      grant_type: 'client_credentials',
+      client_id: 'legacy-client',
+      client_secret: 'secret',
+      scope: 'read:foo',
+    });
+
+    expect(result).toMatchObject({ access_token: 'signed.jwt.token', scope: 'read:foo' });
+    expect(fastify.passwordHasher.verifyPassword).toHaveBeenCalled();
   });
 });

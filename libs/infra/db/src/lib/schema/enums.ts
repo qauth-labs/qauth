@@ -45,13 +45,23 @@ export const codeChallengeMethodEnum = pgEnum('code_challenge_method', [
  * - authorization_code: Authorization Code Flow (with PKCE)
  * - refresh_token: Refresh Token Flow
  * - client_credentials: Client Credentials Flow (for service-to-service)
+ * - urn:ietf:params:oauth:grant-type:jwt-bearer: RFC 7523 JWT assertion grant,
+ *   used by QAuth to CONSUME an Identity Assertion Authorization Grant
+ *   (ID-JAG) minted by a trusted enterprise IdP (ADR-011). Registering it on a
+ *   client only records that the client MAY present an assertion — the grant
+ *   itself is inert unless `ID_JAG_ENABLED=true` AND the assertion's issuer is
+ *   on `ID_JAG_TRUSTED_ISSUERS`. Both gates are fail-closed.
  *
- * Note: OAuth 2.1 removed deprecated grant types (password, implicit)
+ * Note: OAuth 2.1 removed deprecated grant types (password, implicit). The
+ * RFC 8693 token-exchange grant is deliberately NOT listed here: eligibility
+ * for it is decided by the agent classification + `max_agent_mode` gates in
+ * the handler, not by a per-client registered grant type.
  */
 const GRANT_TYPES = [
   'authorization_code', // Authorization Code Flow (with PKCE)
   'refresh_token', // Refresh Token Flow
   'client_credentials', // Client Credentials Flow
+  'urn:ietf:params:oauth:grant-type:jwt-bearer', // RFC 7523 assertion grant (ID-JAG, ADR-011)
 ] as const;
 
 export const grantTypeEnum = pgEnum('grant_type', GRANT_TYPES);

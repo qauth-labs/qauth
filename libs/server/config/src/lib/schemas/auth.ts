@@ -399,6 +399,136 @@ export const authEnvSchema = z.object({
     .enum(['true', 'false'])
     .default('false')
     .transform((v) => v === 'true'),
+
+  // ------------------------------------------------------------------
+  // Identity Assertion Authorization Grant (ID-JAG) — the Enterprise-Managed
+  // Agents (EMA) cross-domain grant, ADR-011. QAuth implements BOTH sides:
+  //   - CONSUME: `urn:ietf:params:oauth:grant-type:jwt-bearer` at /oauth/token,
+  //     validating an ID-JAG minted by a trusted enterprise IdP and issuing an
+  //     access token audience-restricted to the assertion's `resource`.
+  //   - MINT: RFC 8693 token exchange with
+  //     `requested_token_type=urn:ietf:params:oauth:token-type:id-jag`, with
+  //     QAuth acting as the enterprise IdP for a third-party MCP server's AS.
+  //
+  // TRUST MODEL — operator config allowlist, and nothing else. Signing keys are
+  // resolved by running OIDC discovery against an issuer that is ALREADY on
+  // `ID_JAG_TRUSTED_ISSUERS`, then fetching that document's `jwks_uri`. Never
+  // against an unlisted issuer, and never from any URL carried in the assertion
+  // itself. Trust is never self-asserted by a client nor derived from assertion
+  // content. Default-off + empty allowlist ⇒ the feature is inert until an
+  // operator explicitly opts in, matching WALLET_FEDERATION_ENABLED and
+  // `max_agent_mode`.
+  // ------------------------------------------------------------------
+
+  /**
+   * Master switch for ID-JAG (both the consume and the mint side).
+   * Defaults to FALSE — this is a cross-domain trust feature and must be an
+   * explicit operator decision. When false the jwt-bearer grant is rejected
+   * with `unsupported_grant_type` and a token-exchange request asking for an
+   * ID-JAG is rejected with `invalid_request`; neither is advertised in
+   * discovery metadata.
+   */
+  ID_JAG_ENABLED: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((v) => v === 'true'),
+
+  /**
+   * Comma/space-separated allowlist of trusted enterprise IdP **issuer
+   * identifiers** (the exact `iss` string, e.g.
+   * `https://idp.example.com`). An assertion whose `iss` is not byte-equal to
+   * a listed value — after the same trailing-slash-only canonicalisation the
+   * AS applies to its own issuer — is rejected without any network call.
+   *
+   * EMPTY BY DEFAULT, which means EVERY ID-JAG assertion is rejected. This is
+   * the fail-closed posture, not an oversight: `ID_JAG_ENABLED=true` with an
+   * empty allowlist still accepts nothing. Wildcards are deliberately NOT
+   * supported — an issuer identifier is an exact-match trust anchor.
+   */
+  ID_JAG_TRUSTED_ISSUERS: z
+    .string()
+    .default('')
+    .transform((s) =>
+      s
+        .split(/[\s,]+/)
+        .map((x) => x.trim())
+        .filter((x) => x.length > 0)
+    ),
+
+  /**
+   * Per-fetch timeout (milliseconds) applied to BOTH outbound requests in the
+   * key-resolution chain: the trusted issuer's OIDC discovery document and the
+   * `jwks_uri` it names.
+   */
+  ID_JAG_FETCH_TIMEOUT_MS: z.coerce.number().int().min(100).default(5000),
+
+  /**
+   * TTL (seconds) for a cached trusted-issuer OIDC discovery document and its
+   * JWK Set. Bounds how long a rotated-away key stays usable; a verification
+   * failure on an unknown `kid` SHOULD force one bounded refresh rather than
+   * waiting out the TTL. Default 5 minutes.
+   */
+  ID_JAG_JWKS_CACHE_TTL: z.coerce
+    .number()
+    .int()
+    .min(0)
+    .default(5 * 60),
+
+  /**
+   * Maximum size in bytes accepted for a fetched OIDC discovery document or
+   * JWK Set. Bounds memory + abuse surface; both are small JSON blobs.
+   */
+  ID_JAG_MAX_DOCUMENT_BYTES: z.coerce
+    .number()
+    .int()
+    .min(256)
+    .default(64 * 1024),
+
+  /**
+   * Allow ID-JAG discovery / JWKS fetches to non-public IP ranges (loopback,
+   * private, link-local). MUST stay false in production — it disables the core
+   * SSRF guard. Exists only so an integration/dev harness can point a trusted
+   * issuer at a localhost fixture server.
+   */
+  ID_JAG_ALLOW_PRIVATE_ADDRESSES: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((v) => v === 'true'),
+
+  /**
+   * Clock-skew leeway (seconds) applied when validating an inbound assertion's
+   * `exp` / `nbf` / `iat`. Bounded hard at 300s: a larger window is a replay
+   * window, and the assertion is a bearer credential for a cross-domain grant.
+   * Default 60s.
+   */
+  ID_JAG_CLOCK_SKEW_LEEWAY: z.coerce.number().int().min(0).max(300).default(60),
+
+  /**
+   * Maximum accepted lifetime (seconds) of an INBOUND assertion, measured
+   * `exp - iat`. An assertion whose window is longer is rejected outright.
+   * This is what makes `jti` replay prevention bounded and affordable: the
+   * replay cache only needs to retain a `jti` for this long (plus the skew
+   * leeway), so it cannot grow without limit. Default 5 minutes, hard cap 1
+   * hour.
+   */
+  ID_JAG_MAX_ASSERTION_LIFETIME: z.coerce
+    .number()
+    .int()
+    .min(1)
+    .max(60 * 60)
+    .default(5 * 60),
+
+  /**
+   * Lifetime (seconds) of an ID-JAG that QAuth MINTS via token exchange. Kept
+   * short — an ID-JAG is a single-use hand-off credential presented once to
+   * the target resource's AS, not a session token. Default 5 minutes.
+   */
+  ID_JAG_ISSUED_LIFETIME: z.coerce
+    .number()
+    .int()
+    .min(1)
+    .max(60 * 60)
+    .default(5 * 60),
 });
 
 /**
