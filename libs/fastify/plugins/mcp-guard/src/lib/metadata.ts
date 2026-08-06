@@ -60,8 +60,9 @@ export function buildProtectedResourceMetadata(
   };
   // Advertise only scopes that are genuinely a requirement of THIS resource:
   // `offline_access` and friends concern refresh-token issuance at the AS, not
-  // resource authorization, and the MCP spec says they must not appear here
-  // (#284). Filtering can empty the list, in which case the key is omitted —
+  // resource authorization, and MCP Authorization 2026-07-28 ("Refresh
+  // Tokens") says a protected resource SHOULD NOT list them here (#284).
+  // Filtering can empty the list, in which case the key is omitted —
   // RFC 9728 §3.2 makes `scopes_supported` OPTIONAL, and an empty array would
   // wrongly assert the resource understands no scopes at all.
   const scopesSupported = advertisableScopes(input.scopesSupported ?? []);

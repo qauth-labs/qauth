@@ -41,7 +41,7 @@ declare module 'fastify' {
     requireBearer: preHandlerHookHandler;
     /**
      * Build a preHandler that additionally requires the given scopes — the
-     * step-up surface for privileged operations (MCP 2025-11-25 incremental
+     * step-up surface for privileged operations (MCP 2026-07-28 incremental
      * consent). Failures emit a 403 `insufficient_scope` challenge.
      */
     requireScopes: (...scopes: string[]) => preHandlerHookHandler;

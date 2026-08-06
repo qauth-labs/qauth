@@ -167,7 +167,7 @@ Phase 1 core OAuth 2.1 / OIDC, the MCP and agent-native authorization layers, th
 - **Agent-native authorization (ADR-007 §2)** — agent client type, RFC 8693 on-behalf-of token exchange (`act` claim), scope modes (ReadOnly / Admin / Exec), step-up before dangerous operations, and per-agent audit
 - **Documentation** — [MCP quickstart](./docs/mcp-quickstart.md), [OAuth 2.1 flow](./docs/oauth-flow.md), [API reference](./docs/api-reference.md), and the [agent-authorization guide](./docs/agent-authorization.md)
 - `@qauth-labs/mcp-guard` — resource-server SDK: RFC 9728 protected-resource metadata + 401 challenge + token validation
-- Client ID Metadata Documents (CIMD) as the primary client-registration path (MCP 2025-11-25); RFC 7591 dynamic registration kept as the documented fallback
+- Client ID Metadata Documents (CIMD) as the primary client-registration path (MCP 2026-07-28, which deprecates RFC 7591 dynamic registration); DCR stays supported as the documented backwards-compatibility fallback
 - Trust floor: real-DB (testcontainers) repository tests + logout endpoint test + CI typecheck/coverage gate
 - **Security hardening (T3)** — `@fastify/helmet` security headers (nonce-based CSP, HSTS, X-Frame-Options, X-Content-Type-Options), CSRF double-submit protection, `__Host-` secure cookies, and XSS-safe HTML output
 - **OIDC conformance (T3)** — ID token issuance (EdDSA) with `nonce`, and aligned `sub` / `email` / `email_verified` / `name` claims across ID token, userinfo, and discovery

@@ -3,7 +3,7 @@
  *
  * RFC 6750 §3 defines the challenge sent with a 401/403 to a Bearer-protected
  * resource. RFC 9728 §5.1 adds the `resource_metadata` parameter so the client
- * can discover the AS. Under MCP 2025-11-25 this header is OPTIONAL when the
+ * can discover the AS. Under MCP 2026-07-28 this header is OPTIONAL when the
  * resource exposes the `.well-known` PRM document, but emitting it is the
  * fastest path for a client and is recommended — `mcp-guard` always emits it.
  */
@@ -69,11 +69,12 @@ export function challengeForError(error: McpGuardError, resourceMetadataUrl: str
     params.errorDescription = (error as { reason: string }).reason;
   }
   // `scope` is advertised on the 403 step-up challenge and — since #284 — on
-  // the credential-absent 401 as well: MCP Authorization ("Scope Selection
-  // Strategy") says the RS SHOULD tell an unauthenticated client what the
-  // operation needs, so it can authorize in one round instead of fetching PRM
-  // and guessing. The 401 still carries NO `error` parameter: RFC 6750 §3.1
-  // omits it when no credentials were presented, and only `scope` is added.
+  // the credential-absent 401 as well: MCP Authorization 2026-07-28 ("Scope
+  // Selection Strategy") says the RS SHOULD tell an unauthenticated client
+  // what the operation needs, so it can authorize in one round instead of
+  // fetching PRM and guessing. The 401 still carries NO `error` parameter:
+  // RFC 6750 §3.1 omits it when no credentials were presented, and only
+  // `scope` is added.
   //
   // `invalid_token` is deliberately excluded — the client already holds a
   // token, so the remedy is re-authentication, not a wider scope set, and

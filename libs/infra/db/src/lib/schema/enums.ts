@@ -83,7 +83,7 @@ export type ResponseType = (typeof RESPONSE_TYPES)[number];
  */
 const AGENT_MODES = [
   'readonly', // read-only access
-  'admin', // administrative (⊇ ReadOnly)
+  'admin', // administrative (ranks above readonly for the cap only)
   'exec', // action-taking (most privileged)
 ] as const;
 

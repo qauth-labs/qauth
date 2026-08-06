@@ -4,7 +4,7 @@
  * `mcp-guard` is the resource-server (RS) side of the QAuth OAuth 2.1 stack.
  * An MCP-server author drops it in to obtain spec-correct OAuth from a
  * self-hosted QAuth authorization server (AS), per the MCP Authorization
- * profile revision 2025-11-25 and the RFCs it references:
+ * profile revision 2026-07-28 and the RFCs it references:
  *
  * - RFC 9728 — OAuth 2.0 Protected Resource Metadata (PRM)
  * - RFC 8707 — Resource Indicators (audience binding; no token passthrough)
