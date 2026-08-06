@@ -9,6 +9,23 @@ packages:
 # auto-installing or failing in non-interactive runs. (This setting is read from
 # pnpm-workspace.yaml in pnpm 11, not .npmrc.)
 verifyDepsBeforeRun: warn
+# Workspace deps are linked into consumers as injected (hard-linked) COPIES
+# rather than symlinks. Required for `pnpm deploy`: from pnpm 10 a deploy is
+# only self-contained when the workspace injects, and `--legacy` instead emits
+# symlinks pointing back at the workspace root (`/app/libs/...`). Those resolve
+# in the Docker builder but dangle in the runner stage, which copies only the
+# deploy bundle — so every `@qauth-labs/*` import died with MODULE_NOT_FOUND at
+# container boot. This setting is recorded in `pnpm-lock.yaml`, so changing it
+# requires regenerating the lockfile (ERR_PNPM_LOCKFILE_CONFIG_MISMATCH).
+#
+# Local layout barely changes: pnpm still links most workspace deps as direct
+# symlinks to `libs/*` and only materialises a package under `.pnpm/` when it
+# needs a distinct variant (e.g. peer-dependency resolution). Verified after a
+# clean `pnpm install --frozen-lockfile`: typecheck passes across 24 projects
+# and the full suite (3591 tests, 18 projects) is green. What does change is
+# `pnpm deploy`, which now emits a self-contained bundle whose links stay
+# inside it.
+injectWorkspacePackages: true
 onlyBuiltDependencies:
   - '@swc/core'
   - 'esbuild'

@@ -36,8 +36,14 @@ RUN --mount=type=cache,id=pnpm,target=/pnpm/store \
 #   - all workspace deps (real copies, not symlinks) under node_modules/@qauth-labs/
 #   - all external prod deps under node_modules/
 # We keep devDeps out via --prod.
+#
+# NOT `--legacy`: that mode links workspace deps as symlinks back into
+# /app/libs, which does not exist in the runner stage, so the image booted
+# straight into `Cannot find module '@qauth-labs/fastify-plugin-cache'`. The
+# real copies this produces depend on `injectWorkspacePackages: true` in
+# pnpm-workspace.yaml — the two must change together.
 RUN --mount=type=cache,id=pnpm,target=/pnpm/store \
-    pnpm --filter @qauth-labs/auth-server deploy --prod --legacy \
+    pnpm --filter @qauth-labs/auth-server deploy --prod \
     --store-dir /pnpm/store /deploy
 
 # Stage 2: Runner.
