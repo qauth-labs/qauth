@@ -11,6 +11,7 @@ import { GITHUB_REPO_BLOB_BASE, RECORDS, findRecord } from '../../../lib/records
 export const adr009DriftRecheckHref = `${findRecord('adr/009-wallet-account-resolution').route}#drift-re-check-2026-07-26`;
 export const eudiDriftLogHref = `${GITHUB_REPO_BLOB_BASE}/docs/eudi-regulatory-drift-log.md`;
 export const oidfRunbookHref = `${GITHUB_REPO_BLOB_BASE}/docs/oidf-op-certification-runbook.md`;
+export const walletInteropHref = `${GITHUB_REPO_BLOB_BASE}/docs/wallet-interop-manual-validation.md`;
 
 {/* NOTE TO THE NEXT EDITOR — read before changing how a record link below is written. Every link to a record is built from `RECORDS`/`findRecord` as a JSX-computed href (curly-brace expression), never as ordinary static Markdown-link or quoted-HTML-attribute syntax. That is deliberate; do not simplify it to the ordinary literal form. */}
 
@@ -87,7 +88,7 @@ itself, not just here — it says exactly what changed and why the rest still ho
 
 ## What this page does not render
 
-Two more design records live at `docs/` root, outside both `docs/adr/` and `docs/security/`, and
+Three more design records live at `docs/` root, outside both `docs/adr/` and `docs/security/`, and
 are linked out to rather than rendered on this site:
 
 <ul>
@@ -101,6 +102,11 @@ are linked out to rather than rendered on this site:
   <li>
     <a href={oidfRunbookHref}>OIDF OP Certification Runbook</a> — an operational checklist, not a
     decision record.
+  </li>
+  <li>
+    <a href={walletInteropHref}>Wallet Interop Manual Validation</a> — the manual procedure for the
+    real-wallet interoperability pass (#376), and the place findings get recorded. Same genre as the
+    runbook above: a procedure to run and append to, not a closed-form decision.
   </li>
 </ul>
 
