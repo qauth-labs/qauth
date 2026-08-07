@@ -51,12 +51,28 @@ curl -s -X POST http://localhost:3000/oauth/register \
   -H 'Content-Type: application/json' \
   -d '{
     "client_name": "My Agent",
-    "grant_types": ["urn:ietf:params:oauth:grant-type:token-exchange"],
+    "grant_types": ["client_credentials"],
     "token_endpoint_auth_method": "client_secret_basic",
     "is_agent": true
   }' | jq
 # → { "client_id": "…", "client_secret": "…", "is_agent": true, … }
 ```
+
+> ⚠️ **The token-exchange grant cannot be provisioned by any shipped path.**
+> Do **not** put `urn:ietf:params:oauth:grant-type:token-exchange` in
+> `grant_types` above — the DCR schema accepts only `authorization_code`,
+> `refresh_token` and `client_credentials`
+> (`apps/auth-server/src/app/schemas/oauth.ts`), and because `grant_types` is a
+> recognized key Zod **rejects** the request with `400` rather than stripping it.
+> The seed manifest (`libs/infra/db/src/scripts/seed-oauth-clients.ts`, validated
+> against the `grant_type` pg enum) and CIMD (`helpers/cimd.ts`) reject it too.
+>
+> Meanwhile `/.well-known/oauth-authorization-server` **does** advertise the grant
+> in `grant_types_supported`, and `POST /oauth/token` gates delegation on
+> `client.grantTypes.includes(...)`. So §2 below is unreachable for any client you
+> can register through a supported path — the grant currently has to be written
+> directly to the `oauth_clients.grant_types` JSONB column. This provisioning gap
+> is a bug in the server, not in this guide.
 
 ### `is_agent` is self-asserted and untrusted
 
@@ -168,9 +184,11 @@ and knows a public agent `client_id`:
   be a subset of the subject token's scope (else `invalid_scope`); `resource` /
   `audience` must fall within the subject token's `aud` (else `invalid_target`).
 - **Scope-mode cap still applies.** Any reserved `agent:*` scope that survives
-  narrowing is additionally clamped to the agent's server-side `max_agent_mode`
-  (see §3), so a capped agent cannot launder a higher mode through delegation
-  even when the subject token carried it.
+  narrowing is additionally checked against the agent's server-side
+  `max_agent_mode` (see §3), so a capped agent cannot launder a higher mode
+  through delegation even when the subject token carried it. An over-cap scope
+  **rejects the whole exchange** with `invalid_scope`; it is never silently
+  reduced to the cap.
 - **Lifetime never exceeds the subject token.** `expires_in` is clamped to
   `min(configured_lifespan, subject_token_remaining)`, so a delegated token can
   never outlast — or be re-exchanged to extend — the authority it derives from.
@@ -194,15 +212,18 @@ instead of hand-curating scope strings.
 
 ### The taxonomy
 
-| Mode     | Reserved scope   | Meaning                            |
-| -------- | ---------------- | ---------------------------------- |
-| ReadOnly | `agent:readonly` | Read-only access                   |
-| Admin    | `agent:admin`    | Administrative; **⊇ ReadOnly**     |
-| Exec     | `agent:exec`     | Action-taking; the most privileged |
+| Mode     | Reserved scope   | Meaning                                          |
+| -------- | ---------------- | ------------------------------------------------ |
+| ReadOnly | `agent:readonly` | Read-only access                                 |
+| Admin    | `agent:admin`    | Administrative; ranks above ReadOnly for the cap |
+| Exec     | `agent:exec`     | Action-taking; the most privileged               |
 
-Cap ordering: **ReadOnly ⊂ Admin ⊂ Exec**. A client whose maximum mode is
-`admin` may request `agent:readonly` and `agent:admin`, but not `agent:exec`.
-The cap is a **maximum**, not an exact match.
+Cap ordering — **which modes a client is allowed to request** — is **ReadOnly <
+Admin < Exec**. A client whose maximum mode is `admin` may request
+`agent:readonly` and/or `agent:admin`, but not `agent:exec`. The cap is a
+**maximum**, not an exact match. This ordering is a provisioning ceiling only:
+it says what a client may ask for, never that one granted scope stands in for
+another.
 
 The modes are plain OAuth scopes (`agent:*`), so the **existing** scope
 machinery enforces them with no new claim system — the per-client allowlist and
@@ -210,6 +231,29 @@ machinery enforces them with no new claim system — the per-client allowlist an
 consent screens, and `@qauth-labs/mcp-guard`'s resource-server scope checks. The
 granted mode is therefore already visible to resource servers in the token's
 `scope` set.
+
+### The three modes are independent scopes, not a hierarchy
+
+> **Corrected 2026-08-06.** This guide previously described `agent:admin` as
+> "⊇ ReadOnly" and the ordering as "ReadOnly ⊂ Admin ⊂ Exec". **That reading is
+> wrong at enforcement time**, and a client built on it will break.
+
+The three reserved scopes are three ordinary, **independent** OAuth scopes. A
+broader mode does **not** imply a narrower one:
+
+- `@qauth-labs/mcp-guard` matches scopes **exactly and case-sensitively** per
+  RFC 6749 §3.3, with no hierarchical or prefix semantics (`missingScopes` in
+  `libs/fastify/plugins/mcp-guard/src/lib/scope.ts`). This is deliberate and is
+  not changing.
+- A token carrying only `agent:admin` therefore **does not** satisfy a route
+  that requires `agent:readonly` — it gets a `403 insufficient_scope`, exactly
+  as it would for any other unrelated missing scope.
+- **A client that needs both must request both**, e.g.
+  `scope=agent:readonly agent:admin`. Being capped at `admin` permits that
+  request; it does not perform it for you.
+
+`max_agent_mode` is a **maximum requestable ceiling**, not an implication
+relation between the scopes.
 
 ### Enforcement: deny-by-default, untrusted `is_agent`
 
@@ -256,7 +300,10 @@ Provision an agent with a cap via the `seed-oauth-clients` manifest:
     {
       "client_id": "my-agent",
       "name": "My Agent",
-      "grant_types": ["urn:ietf:params:oauth:grant-type:token-exchange"],
+      // Only authorization_code / refresh_token / client_credentials validate
+      // here — the manifest is checked against the `grant_type` pg enum. The
+      // token-exchange URN fails validation; see the note under §1.
+      "grant_types": ["client_credentials"],
       "scopes": ["agent:readonly", "agent:admin"],
       "token_endpoint_auth_method": "client_secret_basic",
       "is_agent": true, // self-asserted classification
@@ -281,7 +328,8 @@ T1). The authorization-server half of that loop lives in `/oauth/authorize`:
 when a client returns asking for an **increased** scope set, QAuth must not
 silently widen an existing grant. Crossing into a more-privileged scope set is a
 **step-up** — it requires a **fresh authentication** and/or **explicit
-re-consent** (MCP 2025-11-25 incremental consent).
+re-consent** (MCP 2026-07-28 incremental consent — the "Step-Up Authorization
+Flow").
 
 ### What counts as "dangerous"
 
@@ -346,12 +394,12 @@ Every agent-attributable action is written to `audit_logs` with structured,
 queryable columns **on top of** the existing event metadata. The agent-specific
 columns are:
 
-| Column             | What it records                                                                                                                                                                          |
-| ------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `user_id`          | The end user the agent acted **on behalf of** (the subject). Null for `client_credentials` (no subject user).                                                                            |
-| `actor_client_id`  | The denormalized `client_id` **string** of the agent that performed the action — stored as a string (not the FK) so the attribution survives deletion of the client row.                 |
-| `delegation_chain` | The RFC 8693 `act` chain flattened to an ordered list of actor `client_id`s — index 0 is the outermost (most recent) actor, each following entry a prior actor. Null when not delegated. |
-| `scope_mode`       | The effective agent scope mode (`readonly` \| `admin` \| `exec`) the action ran under — the highest mode in the granted scope set. Null when the action carries no agent-mode scope.     |
+| Column             | What it records                                                                                                                                                                                                                                                               |
+| ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `user_id`          | The end user the agent acted **on behalf of** (the subject). Null for `client_credentials` (no subject user).                                                                                                                                                                 |
+| `actor_client_id`  | The denormalized `client_id` **string** of the agent that performed the action — stored as a string (not the FK) so the attribution survives deletion of the client row.                                                                                                      |
+| `delegation_chain` | The RFC 8693 `act` chain flattened to an ordered list of actor `client_id`s — index 0 is the outermost (most recent) actor, each following entry a prior actor. Null when not delegated.                                                                                      |
+| `scope_mode`       | The effective agent scope mode (`readonly` \| `admin` \| `exec`) the action ran under — the highest-ranked mode present in the granted scope set. An audit rollup only: it does **not** imply the lower modes were granted. Null when the action carries no agent-mode scope. |
 
 What each grant attributes:
 

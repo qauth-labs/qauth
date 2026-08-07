@@ -89,6 +89,12 @@ and skips the `AKP` entry. The `AKP` entry never affects Ed25519 verification.
 The `AKP` entry carries **only** the public key (`pub`); it never contains
 private material (no `priv`, no `d`).
 
+> The JWKS gains its `AKP` entry as soon as an ML-DSA key is configured
+> (`JWT_MLDSA_PRIVATE_KEY`), which is **independent of `HYBRID_SIGNING_ENABLED`**
+> (#246). A deployment can therefore publish a PQC public key while still issuing
+> classical-only tokens — so seeing an `AKP` entry does not mean hybrid tokens are
+> being issued.
+
 ## 2. Token delivery: reference-token / introspection is the default
 
 The post-quantum signature is large. Measured on a representative token

@@ -220,12 +220,16 @@ describe('rewriteRecordLink — the real docs/adr and docs/security corpus, enum
     return links;
   }
 
-  it('extracts exactly 144 links across the 9 ADRs, the ADR README, and the security review — the corpus the counts below are checked against', () => {
+  it('extracts exactly 196 links across the 11 ADRs, the ADR README, and the security review — the corpus the counts below are checked against', () => {
     // A fixed count, not a lower bound: this test's whole point is that the
     // categorisation below is checked against the FULL corpus, not a
     // sample. If a future ADR amendment changes the link count, this
     // assertion is meant to force a look at the new numbers below too.
-    expect(extractAllLinks()).toHaveLength(144);
+    //
+    // Rose 144 → 196 when main merged in: ADR-010 (acr assurance mapping) and
+    // ADR-011 (enterprise managed authorization) joined the corpus, and ADR-007
+    // was substantially expanded. Recounted mechanically, not adjusted by hand.
+    expect(extractAllLinks()).toHaveLength(196);
   });
 
   it('every link falls into exactly one of the four buckets, with none left unresolved', () => {
@@ -260,16 +264,24 @@ describe('rewriteRecordLink — the real docs/adr and docs/security corpus, enum
     }
 
     // Counts verified by direct enumeration of the corpus (see the Task 10
-    // report): 66 external links, 17 bare #anchors, 56 links into another
-    // rendered record, 5 links to the EUDI regulatory drift log (the only
-    // un-rendered docs/ file the current corpus links to — 4 from ADR-009,
-    // 1 from docs/adr/README.md). An earlier draft of this test asserted 57
-    // and 4 here, from a by-hand tally of the corpus printout that miscounted
-    // the EUDI drift log links by one; this run caught it, which is the
-    // point of enumerating mechanically instead of eyeballing a sample.
-    expect(untouchedExternalOrAnchor).toBe(66 + 17);
-    expect(rewrittenToRoute).toBe(56);
-    expect(rewrittenToBlob).toBe(5);
+    // report): 93 external links, 17 bare #anchors, 78 links into another
+    // rendered record, and 8 links to un-rendered docs/ files that fall back
+    // to a GitHub blob URL. An earlier draft of this test asserted 57 and 4
+    // here, from a by-hand tally of the corpus printout that miscounted the
+    // EUDI drift log links by one; that run caught it, which is the point of
+    // enumerating mechanically instead of eyeballing a sample.
+    //
+    // The blob bucket is 5 EUDI-regulatory-drift-log links plus 3 links to
+    // `docs/agent-authorization.md`. That second group is worth understanding
+    // rather than just counting: the guide itself moved to the site, so those
+    // ADR links now land on its 3-line pointer stub and the reader takes one
+    // extra hop to /integrate/agent-authorization/. That is the migration's
+    // accepted trade-off (the epic's "moved guides leave a pointer stub"
+    // decision), not a broken link — but if this count grows, check whether a
+    // new ADR is pointing at a stub where it meant to point at the guide.
+    expect(untouchedExternalOrAnchor).toBe(93 + 17);
+    expect(rewrittenToRoute).toBe(78);
+    expect(rewrittenToBlob).toBe(8);
     expect(leftUnresolved).toBe(0);
   });
 });

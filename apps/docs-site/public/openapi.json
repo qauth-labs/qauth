@@ -95,6 +95,168 @@
         }
       }
     },
+    "/auth/link/wallet": {
+      "post": {
+        "tags": [
+          "Auth"
+        ],
+        "description": "Start linking a wallet credential to the signed-in account. Requires a valid session cookie and an `X-CSRF-Token` header matching the per-session token returned by `GET /consents`. Issues an OID4VP 1.0 presentation request in LINKING mode: the validated response is bound to the caller's authenticated users.id and is never used to resolve or create an account (ADR-009 §5). Issue #238.",
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "handle": {
+                      "type": "string"
+                    },
+                    "invocation_uri": {
+                      "type": "string"
+                    },
+                    "expires_at": {
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "handle",
+                    "invocation_uri",
+                    "expires_at"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "message"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "message"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "message"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auth/link/wallet/{handle}": {
+      "get": {
+        "tags": [
+          "Auth"
+        ],
+        "description": "Poll a wallet-linking flow. Reports whether the direct_post presentation response has arrived, and COMPLETES the link when it has — writing a second user_credentials row (provider_type=wallet) under the same users.id. Issue #238.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "path",
+            "name": "handle",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "pending",
+                        "linked",
+                        "conflict",
+                        "expired",
+                        "rejected"
+                      ]
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "status"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "message"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/auth/login": {
       "post": {
         "tags": [
@@ -2374,19 +2536,11 @@
                         "type": "string",
                         "minLength": 1
                       },
-                      "client_id": {
-                        "type": "string",
-                        "minLength": 1
-                      },
                       "code_verifier": {
                         "type": "string",
                         "minLength": 43,
                         "maxLength": 128,
                         "pattern": "^[A-Za-z0-9._~-]+$"
-                      },
-                      "client_secret": {
-                        "type": "string",
-                        "minLength": 1
                       },
                       "resource": {
                         "anyOf": [
@@ -2405,6 +2559,24 @@
                             }
                           }
                         ]
+                      },
+                      "client_id": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "client_secret": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "client_assertion_type": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 256
+                      },
+                      "client_assertion": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 8192
                       }
                     },
                     "required": [
@@ -2422,14 +2594,6 @@
                         "enum": [
                           "client_credentials"
                         ]
-                      },
-                      "client_id": {
-                        "type": "string",
-                        "minLength": 1
-                      },
-                      "client_secret": {
-                        "type": "string",
-                        "minLength": 1
                       },
                       "scope": {
                         "type": "string"
@@ -2451,6 +2615,24 @@
                             }
                           }
                         ]
+                      },
+                      "client_id": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "client_secret": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "client_assertion_type": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 256
+                      },
+                      "client_assertion": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 8192
                       }
                     },
                     "required": [
@@ -2472,14 +2654,6 @@
                         "maxLength": 64,
                         "pattern": "^[0-9a-fA-F]{64}$"
                       },
-                      "client_id": {
-                        "type": "string",
-                        "minLength": 1
-                      },
-                      "client_secret": {
-                        "type": "string",
-                        "minLength": 1
-                      },
                       "scope": {
                         "type": "string"
                       },
@@ -2500,6 +2674,24 @@
                             }
                           }
                         ]
+                      },
+                      "client_id": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "client_secret": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "client_assertion_type": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 256
+                      },
+                      "client_assertion": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 8192
                       }
                     },
                     "required": [
@@ -2541,14 +2733,6 @@
                         "minLength": 1,
                         "maxLength": 256
                       },
-                      "client_id": {
-                        "type": "string",
-                        "minLength": 1
-                      },
-                      "client_secret": {
-                        "type": "string",
-                        "minLength": 1
-                      },
                       "scope": {
                         "type": "string",
                         "maxLength": 2048
@@ -2588,12 +2772,90 @@
                             }
                           }
                         ]
+                      },
+                      "client_id": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "client_secret": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "client_assertion_type": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 256
+                      },
+                      "client_assertion": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 8192
                       }
                     },
                     "required": [
                       "grant_type",
                       "subject_token",
                       "subject_token_type"
+                    ]
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "grant_type": {
+                        "type": "string",
+                        "enum": [
+                          "urn:ietf:params:oauth:grant-type:jwt-bearer"
+                        ]
+                      },
+                      "assertion": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 8192
+                      },
+                      "scope": {
+                        "type": "string",
+                        "maxLength": 2048
+                      },
+                      "resource": {
+                        "anyOf": [
+                          {
+                            "type": "string",
+                            "maxLength": 2048,
+                            "format": "uri"
+                          },
+                          {
+                            "maxItems": 10,
+                            "type": "array",
+                            "items": {
+                              "type": "string",
+                              "maxLength": 2048,
+                              "format": "uri"
+                            }
+                          }
+                        ]
+                      },
+                      "client_id": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "client_secret": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "client_assertion_type": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 256
+                      },
+                      "client_assertion": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 8192
+                      }
+                    },
+                    "required": [
+                      "grant_type",
+                      "assertion"
                     ]
                   }
                 ]
@@ -2607,39 +2869,76 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "properties": {
-                    "access_token": {
-                      "type": "string"
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "access_token": {
+                          "type": "string"
+                        },
+                        "issued_token_type": {
+                          "type": "string",
+                          "enum": [
+                            "urn:ietf:params:oauth:token-type:id-jag"
+                          ]
+                        },
+                        "token_type": {
+                          "type": "string",
+                          "enum": [
+                            "N_A"
+                          ]
+                        },
+                        "expires_in": {
+                          "type": "number"
+                        },
+                        "scope": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "access_token",
+                        "issued_token_type",
+                        "token_type",
+                        "expires_in"
+                      ],
+                      "additionalProperties": false
                     },
-                    "refresh_token": {
-                      "type": "string"
-                    },
-                    "expires_in": {
-                      "type": "number"
-                    },
-                    "token_type": {
-                      "type": "string",
-                      "enum": [
-                        "Bearer"
-                      ]
-                    },
-                    "scope": {
-                      "type": "string"
-                    },
-                    "issued_token_type": {
-                      "type": "string"
-                    },
-                    "id_token": {
-                      "type": "string"
+                    {
+                      "type": "object",
+                      "properties": {
+                        "access_token": {
+                          "type": "string"
+                        },
+                        "refresh_token": {
+                          "type": "string"
+                        },
+                        "expires_in": {
+                          "type": "number"
+                        },
+                        "token_type": {
+                          "type": "string",
+                          "enum": [
+                            "Bearer"
+                          ]
+                        },
+                        "scope": {
+                          "type": "string"
+                        },
+                        "issued_token_type": {
+                          "type": "string"
+                        },
+                        "id_token": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "access_token",
+                        "expires_in",
+                        "token_type"
+                      ],
+                      "additionalProperties": false
                     }
-                  },
-                  "required": [
-                    "access_token",
-                    "expires_in",
-                    "token_type"
-                  ],
-                  "additionalProperties": false
+                  ]
                 }
               }
             }
@@ -3142,6 +3441,216 @@
         "responses": {
           "200": {
             "description": "Default Response"
+          }
+        }
+      }
+    },
+    "/ui/wallet-link": {
+      "get": {
+        "tags": [
+          "UI"
+        ],
+        "description": "Renders the wallet-linking confirmation screen for the signed-in user. Issue #238.",
+        "responses": {
+          "200": {
+            "description": "Default Response"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "UI"
+        ],
+        "description": "Starts a wallet-linking flow for the signed-in user and issues an OID4VP presentation request. Issue #238.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "csrf_token": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "required": [
+                  "csrf_token"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Default Response"
+          }
+        }
+      }
+    },
+    "/ui/wallet-link/{handle}": {
+      "get": {
+        "tags": [
+          "UI"
+        ],
+        "description": "Re-renders a wallet-linking flow in progress, completing it if the wallet has responded. Also the no-JavaScript refresh path. Issue #238.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "path",
+            "name": "handle",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response"
+          }
+        }
+      }
+    },
+    "/ui/wallet-login": {
+      "get": {
+        "tags": [
+          "UI"
+        ],
+        "description": "Renders the wallet sign-in screen, which collects the account identifier the user asserts (ADR-009). Issue #239.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "query",
+            "name": "return_to",
+            "required": false
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "query",
+            "name": "error",
+            "required": false
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "UI"
+        ],
+        "description": "Starts a wallet sign-in: records the asserted account identifier and issues an OID4VP presentation request. Issue #239.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "identifier": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 320
+                  },
+                  "return_to": {
+                    "type": "string"
+                  },
+                  "csrf_token": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "required": [
+                  "identifier",
+                  "csrf_token"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Default Response"
+          }
+        }
+      }
+    },
+    "/ui/wallet-login/{handle}": {
+      "get": {
+        "tags": [
+          "UI"
+        ],
+        "description": "Re-renders a wallet sign-in in progress, advancing it if the wallet has responded. Also the no-JavaScript refresh path. Issue #239.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "path",
+            "name": "handle",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response"
+          }
+        }
+      }
+    },
+    "/ui/wallet-login/{handle}/status": {
+      "get": {
+        "tags": [
+          "UI"
+        ],
+        "description": "Polled by the wallet sign-in screen. Reports whether the direct_post presentation response has arrived, and completes the sign-in when it has. Issue #239.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "path",
+            "name": "handle",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "pending",
+                        "complete",
+                        "expired",
+                        "rejected"
+                      ]
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "redirect_to": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "status"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
           }
         }
       }

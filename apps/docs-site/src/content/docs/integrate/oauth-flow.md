@@ -38,6 +38,7 @@ OIDC Core / Discovery 1.0 · RFC 9700 (OAuth 2.0 Security BCP).
 | `/oauth/introspect`                       | POST   | Token introspection (RFC 7662)               |
 | `/oauth/userinfo`                         | GET    | OIDC UserInfo (Bearer)                       |
 | `/oauth/register`                         | POST   | Dynamic Client Registration (RFC 7591, open) |
+| `/oauth/revoke`                           | POST   | Token revocation (RFC 7009)                  |
 
 Discover these programmatically instead of hard-coding paths:
 
@@ -169,6 +170,10 @@ curl -s -X POST http://localhost:3000/oauth/token \
   "scope": "openid profile email"
 }
 ```
+
+`id_token` is present **only** when the granted scope includes `openid` on the
+`authorization_code` path (OIDC Core §3.1.3.3) — as in this example. Drop `openid`
+from `scope` and the member is absent entirely.
 
 Notes:
 
@@ -336,6 +341,39 @@ Rules and guarantees:
   re-exchanges as needed.
 - Every exchange (success and failure) is written to `audit_logs`, including the
   actor and delegation depth.
+
+---
+
+## Token Revocation (RFC 7009)
+
+`POST /oauth/revoke` invalidates an access or refresh token. Requires
+**confidential** client authentication — `client_secret_basic` (header) or
+`client_secret_post` (body); the route rejects a request using neither.
+
+```bash
+curl -s -X POST http://localhost:3000/oauth/revoke \
+  -u "CLIENT_ID:CLIENT_SECRET" \
+  -H 'Content-Type: application/x-www-form-urlencoded' \
+  -d token=REFRESH_TOKEN \
+  -d token_type_hint=refresh_token -i
+# → HTTP/1.1 200 OK  (empty body)
+```
+
+| Field             | Required | Notes                                                                                                         |
+| ----------------- | -------- | ------------------------------------------------------------------------------------------------------------- |
+| `token`           | Yes      | The access or refresh token to revoke.                                                                        |
+| `token_type_hint` | No       | `access_token` or `refresh_token`. **Advisory only** (§2.1) — the server determines the real type regardless. |
+| `client_id`       | No       | Only when authenticating via `client_secret_post`.                                                            |
+| `client_secret`   | No       | Only when authenticating via `client_secret_post`.                                                            |
+
+**It always returns `200` with an empty body on success** — including when the
+token was already expired, already revoked, or simply never existed (RFC 7009
+§2.2). That is deliberate: a distinguishable response would let a caller probe
+which tokens are valid. The **only** non-200 outcome is `invalid_client` (§2.2.1)
+when client authentication fails.
+
+Revoking a refresh token also revokes its whole rotation family, so a stolen
+descendant cannot be replayed.
 
 ---
 

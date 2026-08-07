@@ -175,6 +175,38 @@ per-window caps).
 **`200 OK`**: `{ "message": "..." }` — returned even for unknown addresses
 (no account enumeration). Errors: `429` (too soon / over limit).
 
+### `POST /auth/link/wallet`
+
+Start linking a wallet credential to the **signed-in** account (issue #238,
+[ADR-004](/reference/records/adr/004-wallet-agnostic-federation/) /
+[ADR-009](/reference/records/adr/009-wallet-account-resolution/) §5). Registered
+only when `WALLET_FEDERATION_ENABLED` is on; otherwise the path does not exist
+(`404`).
+
+Requires a valid `__Host-qauth_session` cookie **and** an `X-CSRF-Token` header
+matching the per-session token returned by `GET /consents/`.
+
+**`200 OK`**: `{ "handle": "...", "invocation_uri": "openid4vp://...", "expires_at": 1730000000000 }`
+— render `invocation_uri` as a QR code or deep link; it is opaque.
+Errors: `401` (no session), `400` (`invalid_csrf_token`), `404` (no usable
+`VerifierProfile`), `500`.
+
+### `GET /auth/link/wallet/{handle}`
+
+Poll a linking flow, and complete it once the wallet has responded. Requires the
+session cookie and the browser-binder cookie minted by the `POST` above; the
+session must be the **same user** that started the flow.
+
+**`200 OK`**: `{ "status": "pending" | "linked" | "conflict" | "expired" | "rejected", "message"?: "..." }`
+
+On `linked`, a second `user_credentials` row (`provider_type='wallet'`) now
+exists under the same `users.id`, keyed on the identifier the account already
+owned — so a later wallet sign-in returns tokens with the identical `sub`.
+`conflict` is the one specific outcome (the credential belongs to another
+account) and is only reachable under the `issuer-scoped-claim` strategy; every
+other failure renders one uniform refusal. See
+[Wallet sign-in](/integrate/wallet-login/#account-linking-238).
+
 ---
 
 ## OAuth 2.1
@@ -293,14 +325,17 @@ Unauthenticated, cacheable (`Cache-Control: public, max-age=3600`).
 | `GET /.well-known/jwks.json`                  | JWKS — active EdDSA public key(s) (RFC 7517) |
 
 Prefer discovering endpoint URLs from these documents over hard-coding paths.
-The AS metadata advertises `resource_indicators_supported: true` and, when
-enabled, `client_id_metadata_document_supported: true` (CIMD).
+The AS metadata advertises `resource_indicators_supported: true`,
+`authorization_response_iss_parameter_supported: true` (RFC 9207 — `/oauth/authorize`
+returns `iss` on both success and error redirects, so the flag is not
+configurable), and, when enabled, `client_id_metadata_document_supported: true`
+(CIMD).
 
 ---
 
 ## Hosted UI
 
-Three server-rendered, cookie-authenticated pages back the browser leg of
+Server-rendered, cookie-authenticated pages back the browser leg of
 `authorization_code` — see [Hosted UI](/integrate/hosted-ui/) for the full
 behaviour, including the pending-authorization mechanics behind the login
 bounce.
@@ -310,6 +345,18 @@ bounce.
 | `/ui/login`           | GET, POST | Session-cookie login page and form submission                          |
 | `/ui/consent`         | GET, POST | OAuth consent screen and decision submission                           |
 | `/ui/resume/{handle}` | GET       | Resume a pending authorization after login (single-use, 10-minute TTL) |
+
+The wallet-login screens below are registered **only** when
+`WALLET_FEDERATION_ENABLED` is on; with the flag off (the default) every path
+404s. See [Wallet sign-in](/integrate/wallet-login/) for the flow they implement.
+
+| Endpoint                           | Method | Purpose                                                                  |
+| ---------------------------------- | ------ | ------------------------------------------------------------------------ |
+| `/ui/wallet-login`                 | GET    | Start a wallet sign-in — renders the QR / deep-link invocation.          |
+| `/ui/wallet-login/{handle}`        | GET    | The waiting screen for a pending presentation.                           |
+| `/ui/wallet-login/{handle}/status` | GET    | Poll the presentation's outcome, and complete the sign-in once it lands. |
+| `/ui/wallet-link`                  | GET    | Start linking a wallet credential to the signed-in account (issue #238). |
+| `/ui/wallet-link/{handle}`         | GET    | The waiting/outcome screen for a pending link.                           |
 
 ---
 
@@ -494,8 +541,11 @@ Issue a new `clientSecret`. The previous secret is invalidated immediately;
 `clientSecret` string. Errors: `400` (public client — no secret to rotate),
 `401`, `404`, `429` (rate limited — argon2id, same per-IP budget as create).
 
-Clients may also be registered via [Dynamic Client Registration](/integrate/oauth-flow/#dynamic-client-registration-rfc-7591)
-(`POST /oauth/register`), CIMD, or the `seed-oauth-clients` script.
+Clients may also be obtained outside this API: via **CIMD**, the mechanism
+MCP Authorization 2026-07-28 says to prefer; via
+[Dynamic Client Registration](/integrate/oauth-flow/#dynamic-client-registration-rfc-7591)
+(`POST /oauth/register`), which that revision deprecates but QAuth still
+supports; or via the `seed-oauth-clients` script.
 
 ---
 
