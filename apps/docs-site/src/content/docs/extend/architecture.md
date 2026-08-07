@@ -26,7 +26,7 @@ Fastify instance rather than of a plugin.
 
 ### 1. The instance options (`apps/auth-server/src/main.ts:29`)
 
-`logger` (pino with secret redaction), `requestIdHeader` / `requestIdLogLabel` / `genReqId`
+`logger` (pino with secret redaction), `requestIdHeader` / `logController` / `genReqId`
 (an inbound request id is honoured when present and generated otherwise, then attached to the
 request-scoped logger as `reqId`), and `routerOptions.ignoreTrailingSlash`.
 
@@ -270,8 +270,14 @@ moment each route decides who will handle them.
 
 ### What silently regresses when it is wrong
 
-`app.ts` registered the error handler after both `AutoLoad` sweeps for a long time, under a comment
-saying that was what made it catch everything. It did the opposite — the plugin reached no route in
+> **This is a live defect in this tree, not history.** At HEAD `app.ts` still registers the error
+> handler **after** both `AutoLoad` sweeps, under a comment saying that is what makes it catch
+> everything. #365 is filed and analysed but not fixed here — there is no `error-handler.wiring.test.ts`
+> yet. Read the past tense below as "what the investigation found", and the rule above as the
+> constraint the code currently violates.
+
+`app.ts` registers the error handler after both `AutoLoad` sweeps, under a comment
+saying that is what makes it catch everything. It does the opposite — the plugin reaches no route in
 the application. Three consequences, all confirmed against the real assembled app in [#365]:
 
 - **Validation failures returned `FST_ERR_VALIDATION`**, Fastify's raw internal error code, instead
@@ -320,7 +326,7 @@ of `apps/auth-server`'s suite is in that position.
 
 ## The fail-closed boot checks
 
-Three things in the bootstrap answer configuration questions at startup rather than at request
+Four things in the bootstrap answer configuration questions at startup rather than at request
 time. They are not symmetrical, and the difference is worth getting right.
 
 ### `assertTrustedIssuersUsable` — refuses the boot, ungated
@@ -348,6 +354,20 @@ implementation that could drift. It is **not** gated on `WALLET_FEDERATION_ENABL
 typo whether or not those flows are on today. An absent or empty map is not a fault; it means no
 realm trusts any issuer, which is the intended fail-closed default, and it starts.
 
+### `assertCredentialStatusConfigUsable` — refuses the boot, ungated
+
+`resolveStatusListTrustAnchorPems(env)` followed by `assertCredentialStatusConfigUsable(...)` in
+`app.ts`, immediately after the issuer check. It validates the Token Status List revocation
+configuration (#297/#378) — the trust anchors and the URI allowlist — and, like the issuer check,
+is **ungated**: a malformed anchor bundle is malformed whether or not wallet flows are on today.
+
+It exists for the same reason as its sibling. Revocation checking that cannot resolve its anchors
+does not fail loudly at the point of use; it refuses credentials, and a refusal is
+indistinguishable from a legitimately revoked credential. Catching it at boot converts a silent,
+permanent deny-all into a startup error an operator can act on. The resolved anchors are then
+passed into `federationPlugin` as `credentialStatusProvisioned`, which is what the wallet-provider
+gate #5 below consults.
+
 ### `createConfiguredProviders` — refuses the boot, but only when the flag is on
 
 `createConfiguredProviders`, `apps/auth-server/src/app/app.ts:125`, implemented at
@@ -360,7 +380,7 @@ With `WALLET_FEDERATION_ENABLED` at its default of `false`, this function **cann
 entire gate sits inside `if (options.walletFederationEnabled === true)` at
 `libs/fastify/plugins/federation/src/lib/configured-providers.ts:317`. (Strict `=== true`, not
 truthiness, because the string `'false'` — what an unparsed `process.env` value would hand it — is
-truthy in JavaScript.) When the flag _is_ on, three questions must all be answered before a wallet
+truthy in JavaScript.) When the flag _is_ on, five questions must all be answered before a wallet
 provider may exist:
 
 1. **Is a `VerifierProfile` selected?** `resolveVerifierProfile` returns `undefined` when none
@@ -371,11 +391,19 @@ provider may exist:
    call throws for this case; the assertion is folded into the resolver, so there is no path that
    obtains a profile without it having been checked.
 3. **Can this deployment's crypto layer honour the profile's mandates?** —
-   `libs/fastify/plugins/federation/src/lib/configured-providers.ts:169`, the only one the
-   resolver cannot make, because it is a property of this build rather than of the profile.
+   `configured-providers.ts` (`assertCryptoCapabilities`), the first of three the resolver cannot
+   make, because it is a property of this build rather than of the profile.
+4. **Can we establish the key-storage assurance it requires (#308)?** —
+   `assertKeyStorageAssuranceProvisioned`. Also a property of the deployment: it asks what the
+   **operator** configured, not what the profile declares.
+5. **Can we establish the credential status it requires (#297/#378)?** —
+   `assertCredentialStatusProvisioned`, the same shape as the fourth. A profile whose
+   `requireCredentialStatus` is true, with no status anchors and no URI allowlist, would boot
+   cleanly and then refuse every single login — the worst possible place to discover a
+   configuration mistake.
 
-No profile is named in that third check by design: adding one must mean editing the profile table
-and nothing else.
+No profile is named in checks 3–5 by design: adding one must mean editing the profile table and
+nothing else.
 
 ### `deriveCryptoCapabilities` — a descriptor, not an assertion
 

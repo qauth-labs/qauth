@@ -444,6 +444,13 @@ properties enforce that:
 The grant is confidential-client only, and the client must additionally be
 registered for it — which, like `private_key_jwt`, only an operator can do.
 
+**An assertion carrying `authorization_details` (RFC 9396) is refused, not
+ignored.** QAuth does not implement rich authorization requests on this path, and
+silently dropping a constraint the enterprise IdP applied would hand the client
+more authority than was authorized — a downgrade. Unrecognised members that are
+_not_ authorization constraints are still tolerated, so a later spec revision
+does not break existing deployments.
+
 Every rejection returns a bare `invalid_grant` (RFC 6749 §5.2). The specific
 reason is written to the audit log and never to the wire: a caller learning which
 check failed would learn whether an issuer is allowlisted, whether a `jti` was

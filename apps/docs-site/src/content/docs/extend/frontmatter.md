@@ -12,13 +12,18 @@ Starlight's built-in `docsSchema()` via its `extend` option.
 
 ## Fields
 
-| Field           | Required | Meaning                                                                       |
-| --------------- | -------- | ----------------------------------------------------------------------------- |
-| `title`         | yes      | Page title; also the sidebar label.                                           |
-| `description`   | yes      | One sentence; used for the meta description and search.                       |
-| `sidebar.order` | yes      | Position within its lane. Pages sort by this value, ascending.                |
-| `lastVerified`  | yes      | ISO date (`YYYY-MM-DD`) the page's claims were last checked against the tree. |
-| `unbuiltClaims` | no       | Declares that this page intentionally describes something not yet built.      |
+| Field           | Required         | Meaning                                                                       |
+| --------------- | ---------------- | ----------------------------------------------------------------------------- |
+| `title`         | yes — schema     | Page title; also the sidebar label.                                           |
+| `lastVerified`  | yes — schema     | ISO date (`YYYY-MM-DD`) the page's claims were last checked against the tree. |
+| `description`   | yes — convention | One sentence; used for the meta description and search.                       |
+| `sidebar.order` | yes — convention | Position within its lane. Pages sort by this value, ascending.                |
+| `unbuiltClaims` | no               | Declares that this page intentionally describes something not yet built.      |
+
+Only two fields are enforced by a schema: Starlight requires `title`, and this project's
+`extend:` requires `lastVerified` — omit either and the build fails. `description` and
+`sidebar.order` are **optional** in Starlight's schema (`index.mdx` sets no `sidebar` block at all
+and builds fine); they are required here by convention, and nothing mechanical enforces them.
 
 `title`, `description`, and `sidebar.order` come from Starlight's own schema. `lastVerified`
 and `unbuiltClaims` are added by this project's `extend:` — without that extension, Zod would

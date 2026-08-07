@@ -12,6 +12,6 @@ their own OAuth clients.
 
 - [Portal guide](/portal/guide/) — the session model, the required environment variables, and
   every flow the portal implements, each traced to its route and server action.
-- [Known gaps](/portal/known-gaps/) — an honest account of the two places the portal is thinner
+- [Known gaps](/portal/known-gaps/) — an honest account of the places the portal is thinner
   than a first look suggests: a dashboard card that misreports a shipped feature as unbuilt, and
   a page that exists but isn't linked from anywhere.

@@ -82,9 +82,12 @@ pnpm test:integration
 
 Defined at `libs/infra/db/project.json:8`, running `vitest.integration.config.ts`, which includes
 only `**/*.integration.test.ts`, runs files serially (one Postgres container per file), and allows
-60s per test for a cold image pull. There are five such suites today, all under
+60s per test for a cold image pull. There are eight such suites today, across **two** projects. Five sit under
 `libs/infra/db/src/lib/` — repositories, identity repositories, OID4VP request state, and two
-migration suites.
+migration suites. Three more live in `apps/auth-server/src/app/` (wallet-federation, HAIP and
+credential-status E2E), which is why `apps/auth-server` carries its own `test-integration`
+target: since #240 its wallet-federation E2E boots the real server against testcontainers
+Postgres **and** Redis.
 
 **This is the only tier that exercises real DDL, and that is not a nice-to-have.** The `ci.yml`
 comment at `.github/workflows/ci.yml:56` states the reasoning better than a paraphrase would:
@@ -238,7 +241,8 @@ in this site's history, and a guard nobody trusts gets deleted.
 ```bash
 pnpm exec nx affected -t lint typecheck test build
 pnpm exec vitest run --coverage
-pnpm exec nx run infra-db:test-integration   # if you touched schema, migrations, or repositories
+pnpm exec nx run infra-db:test-integration      # if you touched schema, migrations, or repositories
+pnpm exec nx run auth-server:test-integration   # if you touched wallet federation or credential status
 ```
 
 If you changed anything under `apps/docs-site`, add:

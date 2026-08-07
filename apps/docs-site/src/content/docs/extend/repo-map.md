@@ -138,7 +138,7 @@ consequence of this arrangement: because `server-config` carries no dependency o
 the federation lib's `VerifierProfileId` union, and `apps/auth-server` is the only place in the
 workspace that can see both — which is why the cross-lib pin between the two lists lives in the
 app's env test. Verified: nothing under `libs/server/config/src` imports `server-federation`. All
-seven references to it there are prose — six in comments, one in a test's description string.
+15 references to it there are prose — 13 in comments, two in test description strings.
 
 ### A directory is not a tag
 
@@ -194,7 +194,7 @@ Two rules of thumb that follow from the layering:
 
 `.gitattributes` forces `eol=lf` **by enumerated extension** — `.sh`, `.bash`, `.js`, `.ts`,
 `.json`, `.yml`, `.yaml`, `.md`, `.mdx`. Several extensions in the tree are not on that list:
-`.tsx` (51 tracked files), `.mjs` (4), `.astro` (1) and `.css` (1).
+`.tsx` (51 tracked files), `.mjs` (4), `.astro` (2) and `.css` (1).
 
 On a Windows checkout with `core.autocrlf=true`, those files land on disk with CRLF line endings.
 Prettier's config sets `endOfLine: "lf"` (`.prettierrc`) and `eslint.config.mjs:149` promotes

@@ -802,7 +802,7 @@ An allowlist that names some events and leaves the rest to fail closed is not a 
 decision deferred to whoever next reads the code and cannot tell whether an omission was reasoned or
 overlooked. So: **every `event` string written anywhere in `apps/auth-server/src` or `libs` appears
 exactly once below, with a verdict and a reason.** The enumeration is mechanical (all `event: '…'`
-audit writes, test files excluded) and gives **32 distinct names** at the `lastVerified` date.
+audit writes, test files excluded) and gives **38 distinct names** at the `lastVerified` date.
 
 Three verdicts, not two — because a third category turned out to exist and matters:
 
@@ -1008,7 +1008,7 @@ the one composite index above:
 
 **Decision — the "Token failures" predicate carries `AND success = false` explicitly**, even though
 it is redundant against today's data. Every `.failure` event in the tree is written with
-`success: false` — verified by extracting all 45 `.failure` audit writes across
+`success: false` — verified by extracting all 53 `.failure` audit writes across
 `apps/auth-server/src` and checking each one's `success` field — so this changes no result. It is
 there because the redundancy is the _contract_: it documents at the query site that the naming
 convention and the boolean must agree, and it is the form a partial index on `success = false`
@@ -1022,13 +1022,13 @@ enough to split without changing anything else in this specification.
 
 **Decision — the fourth tile is called "Agent-attributed events", not "Agent actions".** It counts
 audit rows that carry an `actor_client_id`, which is a narrower and more literal thing than "actions
-an agent took": today exactly three call sites write that column — `client_credentials` token
-issuance (`apps/auth-server/src/app/routes/oauth/token.ts:728`), delegated token exchange
-(`apps/auth-server/src/app/routes/oauth/token.ts:1385`), and consent step-up elevation
-(`apps/auth-server/src/app/routes/ui/consent.ts:830`). Whatever an agent then does against a
+an agent took": today five call sites write that column, four in
+`apps/auth-server/src/app/routes/oauth/token.ts` — `client_credentials` token issuance, delegated
+token exchange, ID-JAG token exchange and the `jwt-bearer` (ID-JAG) grant — plus consent step-up
+elevation in `apps/auth-server/src/app/routes/ui/consent.ts`. Whatever an agent then does against a
 resource server is invisible to this authorization server. "Agent actions" would promise the latter.
 
-**A note on what this tile counts, because it is easy to get backwards.** All three write sites set
+**A note on what this tile counts, because it is easy to get backwards.** All five write sites set
 `oauthClientId` and `actorClientId` from the **same** client — the agent is both the row's owning
 client and its actor. So under an ownership predicate on `oauth_client_id`, this counts rows where
 **the developer's own agent client acted**, which is the intended question. It does not count rows
