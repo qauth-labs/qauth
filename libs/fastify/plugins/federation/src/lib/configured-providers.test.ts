@@ -362,8 +362,60 @@ describe('createConfiguredProviders (crypto-capability gate, #299 F12)', () => {
     ).toThrow(/requires encrypted Authorization Responses/);
   });
 
-  it('accepts haip-1.0 once ES256, the JWE stack and the WRPAC all exist', () => {
-    // Proves the gate is exactly these three requirements and not a hardcoded
+  it('still refuses haip-1.0 when key-storage assurance is provisioned by nothing', () => {
+    // The fourth requirement (#308). HAIP §4.5.1 makes key attestations a
+    // mandate, and QAuth's reliance on it is transitive — it needs an
+    // operator-recorded attesting-issuer registry or key-attestation anchors.
+    // With neither, the profile would accept wallet requests and then reject
+    // every single presentation.
+    expect(() =>
+      createConfiguredProviders({
+        walletFederationEnabled: true,
+        verifierProfileId: 'haip-1.0',
+        cryptoCapabilities: CRYPTO_AFTER_298,
+        provisionedVerifierMaterial: WRPAC_PROVISIONED,
+      })
+    ).toThrow(/requires key-storage assurance/);
+  });
+
+  it.each([
+    [
+      'no status configuration at all',
+      { trustAnchors: false, uriAllowlist: false },
+      /has not provisioned status list trust anchors .* and a status list URI allowlist/s,
+    ],
+    [
+      'anchors but no URI allowlist',
+      { trustAnchors: true, uriAllowlist: false },
+      /has not provisioned a status list URI allowlist/,
+    ],
+    [
+      'a URI allowlist but no anchors',
+      { trustAnchors: false, uriAllowlist: true },
+      /has not provisioned status list trust anchors/,
+    ],
+  ])(
+    'still refuses haip-1.0 with %s, naming what is missing (#297/#378)',
+    (_label, credentialStatusProvisioned, expected) => {
+      // The fifth requirement. `haip-1.0` declares
+      // `requireCredentialStatus: true` (HAIP §6.1), and a mandate no code can
+      // satisfy is a deployment that boots and then rejects every login for a
+      // status nothing here can establish — the exact defect #378 reports.
+      expect(() =>
+        createConfiguredProviders({
+          walletFederationEnabled: true,
+          verifierProfileId: 'haip-1.0',
+          cryptoCapabilities: CRYPTO_AFTER_298,
+          provisionedVerifierMaterial: WRPAC_PROVISIONED,
+          keyStorageAssuranceProvisioned: true,
+          credentialStatusProvisioned,
+        })
+      ).toThrow(expected);
+    }
+  );
+
+  it('accepts haip-1.0 once ES256, the JWE stack, the WRPAC, key-storage assurance and credential status all exist', () => {
+    // Proves the gate is exactly these five requirements and not a hardcoded
     // ban on `haip-1.0` — profiles are data (#299 AC), so the profile that is
     // unusable today must become usable with no edit to the gate.
     expect(() =>
@@ -372,6 +424,21 @@ describe('createConfiguredProviders (crypto-capability gate, #299 F12)', () => {
         verifierProfileId: 'haip-1.0',
         cryptoCapabilities: CRYPTO_AFTER_298,
         provisionedVerifierMaterial: WRPAC_PROVISIONED,
+        keyStorageAssuranceProvisioned: true,
+        credentialStatusProvisioned: { trustAnchors: true, uriAllowlist: true },
+      })
+    ).not.toThrow();
+  });
+
+  it('leaves oid4vp-1.0-base untouched by the key-storage gate', () => {
+    // #308 acceptance criterion: the base profile is unaffected. It forbids the
+    // capability, so the gate has nothing to require and the omitted flag — the
+    // fail-closed default — must not refuse it.
+    expect(() =>
+      createConfiguredProviders({
+        walletFederationEnabled: true,
+        verifierProfileId: 'oid4vp-1.0-base',
+        cryptoCapabilities: CRYPTO_TODAY,
       })
     ).not.toThrow();
   });

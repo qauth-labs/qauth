@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  ASSERTION_SIGNING_ALG_VALUES_SUPPORTED,
+  ID_JAG_GRANT_PROFILE,
+  JWT_BEARER_GRANT_TYPE,
+} from '../schemas/oauth';
+import {
   buildAuthorizationServerMetadata,
   buildOpenIdConfiguration,
   DEFAULT_SCOPES_SUPPORTED,
@@ -36,10 +41,85 @@ describe('buildAuthorizationServerMetadata', () => {
     expect(meta['token_endpoint_auth_methods_supported']).toEqual([
       'client_secret_basic',
       'client_secret_post',
+      'private_key_jwt',
       'none',
     ]);
     expect(meta['id_token_signing_alg_values_supported']).toEqual(['EdDSA']);
     expect(meta['subject_types_supported']).toEqual(['public']);
+  });
+
+  describe('private_key_jwt client authentication (#384)', () => {
+    it('advertises private_key_jwt unconditionally — it is opt-in per client, not feature-flagged', () => {
+      for (const idJagEnabled of [true, false]) {
+        const meta = buildAuthorizationServerMetadata({ issuer: ISSUER, idJagEnabled });
+        expect(meta['token_endpoint_auth_methods_supported']).toContain('private_key_jwt');
+      }
+    });
+
+    it('publishes exactly the signing algorithms the assertion verifier accepts', () => {
+      const meta = buildAuthorizationServerMetadata({ issuer: ISSUER });
+
+      // RFC 8414 §2 requires this member whenever a JWT-based client auth
+      // method is advertised. It MUST be the verifier's own allowlist —
+      // a hand-maintained copy would drift and publish a false capability.
+      expect(meta['token_endpoint_auth_signing_alg_values_supported']).toEqual([
+        ...ASSERTION_SIGNING_ALG_VALUES_SUPPORTED,
+      ]);
+    });
+
+    it('never advertises a symmetric or "none" client-assertion algorithm', () => {
+      const meta = buildAuthorizationServerMetadata({ issuer: ISSUER });
+      const algs = meta['token_endpoint_auth_signing_alg_values_supported'] as string[];
+
+      // `HS*` would be client_secret_jwt (not implemented); `none` would be an
+      // unsigned assertion. Either would let a caller authenticate without
+      // proving possession of the registered private key.
+      expect(algs.some((a) => a.startsWith('HS'))).toBe(false);
+      expect(algs).not.toContain('none');
+      expect(algs.length).toBeGreaterThan(0);
+    });
+
+    it('does NOT extend introspection/revocation auth methods (no over-advertising)', () => {
+      const meta = buildAuthorizationServerMetadata({ issuer: ISSUER });
+
+      expect(meta['introspection_endpoint_auth_methods_supported']).not.toContain(
+        'private_key_jwt'
+      );
+      expect(meta['revocation_endpoint_auth_methods_supported']).not.toContain('private_key_jwt');
+    });
+  });
+
+  describe('ID-JAG gating (ADR-011) — discovery must never advertise a disabled capability', () => {
+    it('omits the jwt-bearer grant and the grant-profile member when ID-JAG is disabled', () => {
+      const off = buildAuthorizationServerMetadata({ issuer: ISSUER, idJagEnabled: false });
+      const defaulted = buildAuthorizationServerMetadata({ issuer: ISSUER });
+
+      for (const meta of [off, defaulted]) {
+        // Default-off must behave identically to explicitly-off: the config
+        // default is false, so an unwired caller cannot accidentally advertise.
+        expect(meta['grant_types_supported']).not.toContain(JWT_BEARER_GRANT_TYPE);
+        expect('authorization_grant_profiles_supported' in meta).toBe(false);
+      }
+    });
+
+    it('advertises both once ID-JAG is enabled', () => {
+      const meta = buildAuthorizationServerMetadata({ issuer: ISSUER, idJagEnabled: true });
+
+      expect(meta['grant_types_supported']).toContain(JWT_BEARER_GRANT_TYPE);
+      expect(meta['authorization_grant_profiles_supported']).toEqual([ID_JAG_GRANT_PROFILE]);
+    });
+
+    it('keeps the pre-existing grants untouched in both states', () => {
+      // Enabling a new grant must never remove or reorder an advertised one.
+      const base = ['authorization_code', 'client_credentials', 'refresh_token'];
+      for (const idJagEnabled of [true, false]) {
+        const grants = buildAuthorizationServerMetadata({ issuer: ISSUER, idJagEnabled })[
+          'grant_types_supported'
+        ] as string[];
+        expect(grants.slice(0, 3)).toEqual(base);
+        expect(grants).toContain('urn:ietf:params:oauth:grant-type:token-exchange');
+      }
+    });
   });
 
   it('advertises the ID-token signing algorithms passed in (#309 RS256 + EdDSA)', () => {
@@ -162,6 +242,27 @@ describe('buildOpenIdConfiguration', () => {
     expect('request_uri_parameter_supported' in oidc).toBe(true);
     expect(oidc['request_parameter_supported']).toBe(false);
     expect(oidc['request_uri_parameter_supported']).toBe(false);
+  });
+
+  it('carries the ID-JAG gating into the OIDC config in BOTH directions (ADR-011)', () => {
+    // `buildOpenIdConfiguration` spreads the AS metadata, so a client that only
+    // reads /.well-known/openid-configuration must see the same truth.
+    const on = buildOpenIdConfiguration({ issuer: ISSUER, idJagEnabled: true });
+    expect(on['grant_types_supported']).toContain(JWT_BEARER_GRANT_TYPE);
+    expect(on['authorization_grant_profiles_supported']).toEqual([ID_JAG_GRANT_PROFILE]);
+
+    const off = buildOpenIdConfiguration({ issuer: ISSUER, idJagEnabled: false });
+    expect(off['grant_types_supported']).not.toContain(JWT_BEARER_GRANT_TYPE);
+    expect('authorization_grant_profiles_supported' in off).toBe(false);
+  });
+
+  it('carries the private_key_jwt auth method and its algorithms into the OIDC config (#384)', () => {
+    const oidc = buildOpenIdConfiguration({ issuer: ISSUER });
+
+    expect(oidc['token_endpoint_auth_methods_supported']).toContain('private_key_jwt');
+    expect(oidc['token_endpoint_auth_signing_alg_values_supported']).toEqual([
+      ...ASSERTION_SIGNING_ALG_VALUES_SUPPORTED,
+    ]);
   });
 
   it('carries authorization_response_iss_parameter_supported into the OIDC config (RFC 9207 §3, #282)', () => {

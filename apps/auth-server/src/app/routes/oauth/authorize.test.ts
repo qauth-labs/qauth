@@ -410,6 +410,59 @@ describe('POST /oauth/authorize (OIDC Core §3.1.2.1)', () => {
     expect(createArg.authTime).toBe(createdAt);
   });
 
+  it.each([
+    ['a wallet session at high assurance', 'high', 'high'],
+    ['a wallet session at substantial assurance', 'substantial', 'substantial'],
+    // The password path: `ui/login.ts` writes no `assuranceLevel` at all
+    // (ADR-003 makes a password credential `'low'`), so the code records NULL
+    // and /oauth/token emits no `acr`. This is the #237/#240 invariant, asserted
+    // at the hop where it could first be broken.
+    ['a password session', undefined, null],
+    ['a session that somehow carries low', 'low', null],
+    ['a session carrying an unreadable level', 'medium', null],
+  ])(
+    'binds the assurance level of %s onto the authorization code (#237)',
+    async (_label, sessionLevel, expected) => {
+      const { fastify, ctx } = makeFastify();
+      await authorizeRoute(fastify);
+      (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(
+        CLIENT
+      );
+      (fastify.jwtUtils.extractFromHeader as unknown as Mock).mockReturnValue(null);
+      (fastify.repositories.oauthConsents.findActive as unknown as Mock).mockResolvedValue({
+        scopes: ['email', 'read:foo'],
+        revokedAt: null,
+      });
+
+      const { signSessionId } = await import('../../helpers/session-cookie');
+      const signed = signSessionId('sid-acr-1');
+      (fastify.sessionUtils.getSession as unknown as Mock).mockResolvedValue({
+        userId: 'user-1',
+        email: 'a@b.com',
+        sessionId: 'sid-acr-1',
+        createdAt: Date.now(),
+        ...(sessionLevel === undefined ? {} : { assuranceLevel: sessionLevel }),
+      });
+
+      const { reply } = createReply();
+      await ctx.postHandler!(
+        {
+          method: 'POST',
+          body: { ...BASE_QUERY, scope: 'email' },
+          query: {},
+          url: '/oauth/authorize',
+          headers: { cookie: `__Host-qauth_session=${signed}` },
+          ip: '127.0.0.1',
+        },
+        reply
+      );
+
+      const createArg = (fastify.repositories.authorizationCodes.create as unknown as Mock).mock
+        .calls[0][0];
+      expect(createArg.assuranceLevel).toBe(expected);
+    }
+  );
+
   it('reconstructs a lossless return_to from the POST body on the login round-trip', async () => {
     const { fastify, ctx } = makeFastify();
     await authorizeRoute(fastify);

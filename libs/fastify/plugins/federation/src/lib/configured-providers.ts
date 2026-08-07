@@ -1,7 +1,11 @@
 import {
+  assertCredentialStatusProvisioned,
+  assertKeyStorageAssuranceProvisioned,
   createPasswordProvider,
   createWalletProvider,
   type CredentialProvider,
+  type CredentialStatusProvisioning,
+  NO_CREDENTIAL_STATUS_PROVISIONING,
   NO_VERIFIER_MATERIAL,
   type ProvisionedVerifierMaterial,
   resolveVerifierProfile,
@@ -131,6 +135,38 @@ export interface ConfiguredProvidersOptions {
    * signature.
    */
   provisionedVerifierMaterial?: ProvisionedVerifierMaterial;
+
+  /**
+   * Whether the operator has provisioned what a profile requiring key-storage
+   * assurance needs (#308) — an attesting-issuer registry, key-attestation trust
+   * anchors, or both.
+   *
+   * Optional for the same reason as the field above, and only because omitting
+   * it is the fail-closed answer: nothing is provisionable until an operator
+   * configuration surface for wallet-provider anchors exists, so the default is
+   * `false` — the value that makes `haip-1.0` refuse. A deployment that declared
+   * the mandate and can satisfy none of it would otherwise accept wallet
+   * requests and then reject every presentation, which is the worst place to
+   * discover a boot-time misconfiguration.
+   */
+  keyStorageAssuranceProvisioned?: boolean;
+
+  /**
+   * What the operator has provisioned for credential revocation checking (#297)
+   * — status list trust anchors, a status list URI allowlist, or neither.
+   *
+   * Optional for the same reason as the two fields above, and only because
+   * omitting it is the fail-closed answer: the default is
+   * `NO_CREDENTIAL_STATUS_PROVISIONING`, which makes any profile declaring
+   * `requireCredentialStatus: true` refuse. Build it with
+   * `credentialStatusProvisioningOf(...)` from the parsed
+   * `OID4VP_STATUS_LIST_*` configuration rather than by hand.
+   *
+   * A record rather than a boolean, unlike {@link keyStorageAssuranceProvisioned}
+   * above, because the refusal must name WHICH half is missing: no anchors and
+   * no allowlist are different mistakes with different fixes.
+   */
+  credentialStatusProvisioned?: CredentialStatusProvisioning;
 }
 
 /** Render identifiers as a quoted list, or `none` for the empty set. */
@@ -212,7 +248,9 @@ interface ProfileAvailability {
  */
 function probeProfiles(
   provisioned: ProvisionedVerifierMaterial,
-  capabilities: VerifierCryptoCapabilities
+  capabilities: VerifierCryptoCapabilities,
+  keyStorageAssuranceProvisioned: boolean,
+  credentialStatusProvisioned: CredentialStatusProvisioning
 ): readonly ProfileAvailability[] {
   return VERIFIER_PROFILE_IDS.map((id) => {
     try {
@@ -226,6 +264,8 @@ function probeProfiles(
       }
 
       assertProfileWithinCryptoCapabilities(candidate, capabilities);
+      assertKeyStorageAssuranceProvisioned(candidate, keyStorageAssuranceProvisioned);
+      assertCredentialStatusProvisioned(candidate, credentialStatusProvisioned);
       return { id, blockedBecause: undefined };
     } catch (error) {
       return { id, blockedBecause: error instanceof Error ? error.message : String(error) };
@@ -251,9 +291,16 @@ function probeProfiles(
  */
 function buildNoProfileSelectedMessage(
   provisioned: ProvisionedVerifierMaterial,
-  capabilities: VerifierCryptoCapabilities
+  capabilities: VerifierCryptoCapabilities,
+  keyStorageAssuranceProvisioned: boolean,
+  credentialStatusProvisioned: CredentialStatusProvisioning
 ): string {
-  const availability = probeProfiles(provisioned, capabilities);
+  const availability = probeProfiles(
+    provisioned,
+    capabilities,
+    keyStorageAssuranceProvisioned,
+    credentialStatusProvisioned
+  );
   const selectable = availability.filter((entry) => entry.blockedBecause === undefined);
   const blocked = availability.filter((entry) => entry.blockedBecause !== undefined);
 
@@ -328,6 +375,14 @@ export function createConfiguredProviders(
     //   3. Can our crypto layer honour its mandates? → the check below, which is
     //      the only one the resolver cannot make: it is a property of this
     //      deployment's build, not of the profile.
+    //   4. Can we establish the key-storage assurance it requires (#308)? → the
+    //      second check below. Also a property of the deployment: it asks what
+    //      the OPERATOR configured, not what the profile declares.
+    //   5. Can we establish the credential STATUS it requires (#297/#378)? → the
+    //      third check below, and the same shape as the fourth: a profile whose
+    //      `requireCredentialStatus` is true with no status anchors and no URI
+    //      allowlist would boot and then refuse every single login, which is the
+    //      worst place to discover a configuration mistake.
     //
     // The realm argument is `null`: this is the deployment-wide bootstrap
     // decision. Per-realm selection is resolved at request time by the same
@@ -338,11 +393,24 @@ export function createConfiguredProviders(
       provisioned
     );
 
+    const keyStorageAssuranceProvisioned = options.keyStorageAssuranceProvisioned === true;
+    const credentialStatusProvisioned =
+      options.credentialStatusProvisioned ?? NO_CREDENTIAL_STATUS_PROVISIONING;
+
     if (profile === undefined) {
-      throw new Error(buildNoProfileSelectedMessage(provisioned, options.cryptoCapabilities));
+      throw new Error(
+        buildNoProfileSelectedMessage(
+          provisioned,
+          options.cryptoCapabilities,
+          keyStorageAssuranceProvisioned,
+          credentialStatusProvisioned
+        )
+      );
     }
 
     assertProfileWithinCryptoCapabilities(profile, options.cryptoCapabilities);
+    assertKeyStorageAssuranceProvisioned(profile, keyStorageAssuranceProvisioned);
+    assertCredentialStatusProvisioned(profile, credentialStatusProvisioned);
 
     providers.push(createWalletProvider());
   }

@@ -31,11 +31,30 @@ authorization layer (agent client type, RFC 8693 on-behalf-of delegation, scope
 modes, step-up), the T3 production-hardening bundle, and the T5 environment-aware
 posture ([ADR-008](./docs/adr/008-environment-aware-authorization.md)) all ship
 today. By design it is also a **federation hub**: upstream identity sources
-(email/password, OIDC providers, and — long-term — Verifiable Credential wallets)
-plug in through the `CredentialProvider` interface, and downstream apps receive
-standard OAuth 2.1 access tokens and OIDC ID tokens. The crypto layer is
-**crypto-agile** for a post-quantum transition. Wallet federation and post-quantum
-signing are the resequenced long-term platform (track T4).
+(email/password and — behind a default-off flag — Verifiable Credential wallets;
+external OIDC providers still to come) plug in through the `CredentialProvider`
+interface, and downstream apps receive standard OAuth 2.1 access tokens and OIDC
+ID tokens.
+
+**Track T4 status (48 closed / 4 open)** — do not describe it as "deferred":
+
+- The ADR-002 identifier-abstraction migration is **complete** (epic #224;
+  migrations 0010–0012). `users` is a pure identity anchor; credential data lives
+  in `user_credentials`.
+- Post-quantum hybrid signing is **implemented and default-off** (epic #241).
+  `SIGNING_ALGORITHM_MODE=ed25519` and `HYBRID_SIGNING_ENABLED=false` are the
+  defaults; the crypto layer stays crypto-agile via `@qauth-labs/core-crypto`.
+- Wallet federation **works end-to-end behind `WALLET_FEDERATION_ENABLED`**
+  (default off): the OID4VP verifier, SD-JWT VC validation, key attestations,
+  status-list revocation, the claims pipeline and the browser sign-in flow are
+  merged, with an E2E suite covering first-time enrolment, returning login,
+  account linking and `acr`. Validated only on the `oid4vp-1.0-base` profile
+  against a mock wallet so far.
+- **`WalletProvider.verify()` throws unconditionally and must keep throwing** —
+  a deliberate fail-closed property, not a stub. Never "fix" it. Wallet login
+  does **not** use it; it runs on the dedicated `/ui/wallet-login` +
+  `/oid4vp/response` seam in `apps/auth-server`. The provider is the generic
+  `CredentialProvider`-registry entry point, which no wallet path calls.
 
 Guides, the OAuth 2.1 / OIDC reference, and the rendered design records live at
 [docs.qauth.dev](https://docs.qauth.dev); the ADRs and security review that

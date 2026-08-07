@@ -147,6 +147,53 @@ services:
       # and not a boot failure. A value that is present but malformed IS a boot
       # failure, on purpose.
       OID4VP_TRUSTED_ISSUERS: ${OID4VP_TRUSTED_ISSUERS:-}
+      # Per-realm issuer ASSURANCE (#237) — a third variable in the same
+      # neighbourhood, and deliberately not merged with the allowlist above:
+      # that one decides whether an issuer may be accepted at all, this one what
+      # its credentials are WORTH (the eIDAS LoA that becomes the ID token's
+      # `acr` claim). Forwarded for the same reason: without it the container
+      # assures nothing and no ID token ever carries `acr`, whatever .env says.
+      # Blank reads as "no realm assures any issuer" — fail-closed, not a boot
+      # failure; a present-but-malformed value IS a boot failure.
+      OID4VP_ISSUER_ASSURANCE: ${OID4VP_ISSUER_ASSURANCE:-}
+      # Which vocabulary the emitted `acr` value is written in (#237). Defaults
+      # to the eIDAS LoA URI form, which is what OIDC Core §2 asks an `acr`
+      # value to be. Only reached once a level has been established, so unlike
+      # the profile above it has a safe default.
+      ACR_VALUE_STYLE: ${ACR_VALUE_STYLE:-eidas-uri}
+      # Issuer VERIFICATION KEYS (#234/#238) — which key each issuer signs with.
+      # A separate question from the allowlist above: that one decides whether an
+      # issuer's credentials count, this one is what makes a signature checkable
+      # at all. Blank means no issuer key is configured, so every presentation is
+      # refused — the fail-closed state, not a permissive one.
+      OID4VP_ISSUER_JWKS: ${OID4VP_ISSUER_JWKS:-}
+      # Wallet sign-in screen (#239). Both blank-by-default: an empty
+      # OID4VP_REQUESTED_VCT means no credential type was chosen, and the UI
+      # then offers no wallet flow at all — the same fail-closed posture as the
+      # profile above, expressed as an absent button rather than a boot failure.
+      OID4VP_REQUESTED_VCT: ${OID4VP_REQUESTED_VCT:-}
+      OID4VP_WALLET_INVOCATION_ENDPOINT: ${OID4VP_WALLET_INVOCATION_ENDPOINT:-openid4vp://}
+      # Credential revocation — Token Status List (#297). A FOURTH trust
+      # question, and forwarded for the same reason as the three above: without
+      # these the container builds no status checker no matter what .env says,
+      # and a revoked credential would authenticate exactly like a live one.
+      #
+      # Both blank by default, which means no revocation checking — the posture
+      # every release before #378 had, and the only one `oid4vp-1.0-base`
+      # requires. Setting exactly ONE of the anchors and the allowlist is a boot
+      # failure, because a half-configured checker refuses every credential
+      # silently. Selecting OID4VP_VERIFIER_PROFILE=haip-1.0 with neither set is
+      # also a boot failure: that profile declares revocation checking mandatory.
+      #
+      # Prefer the _PATH form and mount the CA bundle as a file — a bundle is
+      # several kilobytes of multi-line base64, which an environment variable
+      # carries badly. The two anchor sources are UNIONED, not overriding.
+      OID4VP_STATUS_LIST_TRUST_ANCHORS: ${OID4VP_STATUS_LIST_TRUST_ANCHORS:-}
+      OID4VP_STATUS_LIST_TRUST_ANCHORS_PATH: ${OID4VP_STATUS_LIST_TRUST_ANCHORS_PATH:-}
+      # The SSRF boundary: comma-separated https:// prefixes status lists may be
+      # fetched from. The URI comes out of the CREDENTIAL, so blank means "fetch
+      # from nowhere" rather than "fetch from anywhere".
+      OID4VP_STATUS_LIST_URI_ALLOWLIST: ${OID4VP_STATUS_LIST_URI_ALLOWLIST:-}
 
       # Rate Limiting (Global)
       RATE_LIMIT_ENABLED: ${RATE_LIMIT_ENABLED:-true}

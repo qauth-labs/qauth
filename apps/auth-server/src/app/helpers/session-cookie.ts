@@ -1,5 +1,6 @@
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 
+import type { AssuranceLevel } from '@qauth-labs/fastify-plugin-federation';
 import type { FastifyReply, FastifyRequest } from 'fastify';
 
 import { env } from '../../config/env';
@@ -35,6 +36,21 @@ export interface BrowserSessionData {
   email?: string;
   sessionId: string;
   createdAt: number;
+  /**
+   * eIDAS Level of Assurance established by the authentication that created
+   * this session (#237, ADR-004/ADR-010). `'substantial'` or `'high'`; ABSENT
+   * for every authentication that established nothing higher — which today is
+   * every password login (ADR-003: `assuranceLevel: 'low'`).
+   *
+   * Carried on the session for the same reason `createdAt` is: it describes the
+   * authentication EVENT, and `/oauth/authorize` copies it onto the
+   * authorization code so `/oauth/token` can assert `acr` in the ID token long
+   * after the session stopped being in scope.
+   *
+   * Absent — never `'low'` — so "no assurance was established" has one
+   * representation everywhere, and pre-#237 Redis sessions read correctly.
+   */
+  assuranceLevel?: AssuranceLevel;
   /** Monotonic nonce for CSRF double-submit cookie (rotated on consent POST). */
   csrfToken?: string;
   /**
@@ -232,11 +248,201 @@ export function clearLoginCsrfCookie(reply: FastifyReply): void {
 }
 
 /**
+ * Cookie binding a wallet-login flow to the browser that started it (#239).
+ *
+ * The wallet-login handle in the URL is unguessable, but unguessable is not the
+ * same as bound: a handle can be MAILED. Without this cookie an attacker could
+ * start a wallet-login flow, present their own credential, and hand the victim
+ * the resulting URL — the victim's browser would then finish the flow and be
+ * signed in as the ATTACKER. That is login CSRF, the same attack the login-CSRF
+ * cookie above defends the password form against, and the same defence applies:
+ * the binder is minted into a `__Host-` cookie on the POST that CREATES the flow
+ * and compared against the copy stored with the flow record on every read.
+ *
+ * This is the deliberate opposite of the pending-authorization stash's "NOT
+ * bound to the browser" choice (see `helpers/pending-authorization.ts`). That
+ * record confers no privilege — resuming it still requires authenticating. This
+ * one ENDS in a session cookie, so it must be bound.
+ *
+ * ## One cookie, several flows
+ *
+ * The binder is per FLOW, not per browser: the cookie carries a bounded set of
+ * `handle → binder` bindings rather than one value. A single value would be
+ * overwritten by the next `POST /ui/wallet-login` from the same browser — a
+ * second tab, or a re-submit while the first QR was still on screen — and
+ * because a MISSING binder and a WRONG one are deliberately indistinguishable
+ * from an expiry, the first flow would then report "expired" while its
+ * presentation request was still live and its QR still scannable. Scanning it
+ * at that point burns the single-use `state` for a flow no surface can read.
+ *
+ * The bindings share ONE cookie rather than getting a cookie name each, because
+ * a per-flow name lets a browser accumulate cookies until it reaches its
+ * per-domain cap and starts evicting — possibly the session cookie. The set is
+ * capped at {@link WALLET_FLOW_COOKIE_MAX_BINDINGS}, soonest-to-expire dropped
+ * first.
+ */
+export const WALLET_FLOW_COOKIE_NAME = '__Host-qauth_wallet_flow';
+
+/**
+ * How many concurrent wallet-login flows one browser may keep bound at once.
+ *
+ * Three covers what a person actually does (a second tab, an impatient
+ * re-submit) and keeps the cookie a few hundred bytes. The cap is what makes
+ * this cookie bounded rather than something a scripted caller can grow.
+ */
+export const WALLET_FLOW_COOKIE_MAX_BINDINGS = 3;
+
+/** One flow's binder, as carried in the wallet-flow cookie. */
+export interface WalletFlowBinding {
+  /** Handle of the flow this binder belongs to. */
+  handle: string;
+  /** The CSPRNG binder value, also stored on the flow record. */
+  binder: string;
+  /** Absolute expiry (epoch ms) of the flow it binds. */
+  expiresAt: number;
+}
+
+/**
+ * Payload separators. Neither can occur in a base64url handle or binder, and
+ * both are legal cookie-octets (RFC 6265 §4.1.1).
+ */
+const WALLET_FLOW_BINDING_SEPARATOR = '|';
+const WALLET_FLOW_FIELD_SEPARATOR = ':';
+
+/**
+ * Drop expired bindings, then keep the {@link WALLET_FLOW_COOKIE_MAX_BINDINGS}
+ * longest-lived. Every flow is minted with the same lifetime, so "longest-lived"
+ * is "most recently started" — the eviction order a user expects.
+ */
+function pruneWalletFlowBindings(bindings: readonly WalletFlowBinding[]): WalletFlowBinding[] {
+  const now = Date.now();
+  return bindings
+    .filter((binding) => binding.expiresAt > now)
+    .sort((a, b) => a.expiresAt - b.expiresAt)
+    .slice(-WALLET_FLOW_COOKIE_MAX_BINDINGS);
+}
+
+/**
+ * Emit the signed wallet-flow binder cookie carrying `bindings`, or clear it
+ * when none of them are still live. Attributes mirror the login-CSRF cookie;
+ * `Max-Age` is the longest remaining flow lifetime rather than the session TTL,
+ * so the cookie cannot outlive every flow it binds.
+ */
+export function setWalletFlowCookie(
+  reply: FastifyReply,
+  bindings: readonly WalletFlowBinding[]
+): void {
+  const live = pruneWalletFlowBindings(bindings);
+  if (live.length === 0) {
+    clearWalletFlowCookie(reply);
+    return;
+  }
+  const payload = live
+    .map((binding) =>
+      [binding.handle, binding.binder, binding.expiresAt].join(WALLET_FLOW_FIELD_SEPARATOR)
+    )
+    .join(WALLET_FLOW_BINDING_SEPARATOR);
+  // `live` is sorted soonest-first, so the last entry is the latest deadline.
+  const maxAgeSeconds = Math.max(
+    1,
+    Math.ceil((live[live.length - 1].expiresAt - Date.now()) / 1000)
+  );
+  const attrs = [
+    `${WALLET_FLOW_COOKIE_NAME}=${payload}${SEPARATOR}${hmac(payload)}`,
+    'Path=/',
+    'HttpOnly',
+    'SameSite=Lax',
+    `Max-Age=${maxAgeSeconds}`,
+  ];
+  if (env.SESSION_COOKIE_SECURE) attrs.push('Secure');
+  reply.header('Set-Cookie', attrs.join('; '));
+}
+
+/** Clear the wallet-flow binder cookie (burned when the last flow terminates). */
+export function clearWalletFlowCookie(reply: FastifyReply): void {
+  const attrs = [`${WALLET_FLOW_COOKIE_NAME}=`, 'Path=/', 'HttpOnly', 'SameSite=Lax', 'Max-Age=0'];
+  if (env.SESSION_COOKIE_SECURE) attrs.push('Secure');
+  reply.header('Set-Cookie', attrs.join('; '));
+}
+
+/**
+ * Verify the signed wallet-flow cookie and return the bindings it carries. Same
+ * `<value>.<hmac>` scheme + timing-safe verification as
+ * {@link verifyLoginCsrfCookie}, applied to the whole payload — so a binding
+ * cannot be added, edited or reordered without the signing secret.
+ *
+ * An absent, unsigned or tampered cookie yields an EMPTY list rather than a
+ * throw: the caller reports "expired" for a handle it holds no binding for,
+ * which is the answer every other unbindable state gets.
+ */
+export function readWalletFlowBindings(
+  cookieValue: string | undefined | null
+): WalletFlowBinding[] {
+  const payload = verifySignedValue(cookieValue);
+  if (payload === null) return [];
+  const bindings: WalletFlowBinding[] = [];
+  for (const entry of payload.split(WALLET_FLOW_BINDING_SEPARATOR)) {
+    const [handle, binder, expiresAt] = entry.split(WALLET_FLOW_FIELD_SEPARATOR);
+    if (!handle || !binder || !expiresAt) continue;
+    const deadline = Number(expiresAt);
+    if (!Number.isFinite(deadline)) continue;
+    bindings.push({ handle, binder, expiresAt: deadline });
+  }
+  return pruneWalletFlowBindings(bindings);
+}
+
+/**
+ * The binder this browser holds for `handle`, or null.
+ *
+ * The handle lookup is an ordinary comparison on purpose: the handle travels in
+ * the URL and is not the secret. The BINDER this returns is the secret, and the
+ * caller still compares it with {@link csrfTokensEqual}.
+ */
+export function findWalletFlowBinder(
+  cookieValue: string | undefined | null,
+  handle: string
+): string | null {
+  const match = readWalletFlowBindings(cookieValue).find((binding) => binding.handle === handle);
+  return match ? match.binder : null;
+}
+
+/**
+ * Burn ONE flow's binding, leaving any other flow this browser has in progress
+ * bound. Clears the cookie outright when nothing else was in it.
+ */
+export function dropWalletFlowBinding(
+  request: FastifyRequest,
+  reply: FastifyReply,
+  handle: string
+): void {
+  setWalletFlowCookie(
+    reply,
+    readWalletFlowBindings(readCookie(request, WALLET_FLOW_COOKIE_NAME)).filter(
+      (binding) => binding.handle !== handle
+    )
+  );
+}
+
+/**
  * Verify the signed login-CSRF cookie value and return the embedded token if
  * the signature is valid, otherwise null. Same `<token>.<hmac>` scheme +
  * timing-safe verification as {@link verifySignedSessionId}.
  */
 export function verifyLoginCsrfCookie(cookieValue: string | undefined | null): string | null {
+  return verifySignedValue(cookieValue);
+}
+
+/**
+ * Verify a `<value>.<hmac>` cookie and return the value, or null.
+ *
+ * The shared implementation behind {@link verifyLoginCsrfCookie} and
+ * {@link readWalletFlowBindings}: both are pre-authentication, browser-bound
+ * markers signed with the session secret, and neither may ever short-circuit its
+ * comparison. Kept private so the two cookies stay separately NAMED — they have
+ * different lifetimes and different clearing rules — while sharing one
+ * timing-safe verification.
+ */
+function verifySignedValue(cookieValue: string | undefined | null): string | null {
   if (!cookieValue) return null;
   const idx = cookieValue.lastIndexOf(SEPARATOR);
   if (idx <= 0 || idx === cookieValue.length - 1) return null;

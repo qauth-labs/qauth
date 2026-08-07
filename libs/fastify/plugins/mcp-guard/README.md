@@ -1,6 +1,6 @@
 # @qauth-labs/mcp-guard
 
-> Targets the **MCP Authorization** specification, **revision 2025-11-25**, and
+> Targets the **MCP Authorization** specification, **revision 2026-07-28**, and
 > **RFC 9728** (OAuth 2.0 Protected Resource Metadata).
 
 The resource-server (RS) side SDK for protecting an **MCP server** with a
@@ -12,7 +12,12 @@ Drop it into an MCP server and you get spec-correct OAuth in minutes:
   `/.well-known/oauth-protected-resource[/<path>]`
 - **RFC 6750 §3** `401` / `403` `WWW-Authenticate: Bearer` challenges, with the
   `resource_metadata` pointer (and the well-known doc as the fallback per MCP
-  2025-11-25)
+  2026-07-28)
+- **Scope guidance on the first 401**: the scopes the operation needs are
+  advertised on the credential-absent `401` as well as the `403`, so a client
+  authorizes in one round instead of fetching PRM and guessing. `offline_access`
+  is filtered out of both advertisement surfaces — it concerns refresh-token
+  issuance at the AS, not access to this resource
 - Bearer-token validation in two modes — local **JWT** verification against the
   QAuth JWKS, or **RFC 7662** introspection
 - **No token passthrough**: tokens not audience-bound to this resource
@@ -22,7 +27,7 @@ Drop it into an MCP server and you get spec-correct OAuth in minutes:
 It ships both a **Fastify 5 plugin** and a **framework-agnostic core**
 (`McpGuard`) for non-Fastify hosts.
 
-> Targets the MCP Authorization profile **revision 2025-11-25** and QAuth's AS
+> Targets the MCP Authorization profile **revision 2026-07-28** and QAuth's AS
 > contract (JWKS at `/.well-known/jwks.json`, discovery at
 > `/.well-known/oauth-authorization-server`, introspection at
 > `/oauth/introspect`). See [ADR-007](../../../../docs/adr/007-mcp-first-positioning.md).
@@ -79,7 +84,7 @@ The validated claims are available on `request.tokenClaims`
 
 ```
 client → GET /mcp/memory                         (no token)
-server → 401  WWW-Authenticate: Bearer
+server → 401  WWW-Authenticate: Bearer scope="mcp:read",
               resource_metadata="https://…/.well-known/oauth-protected-resource"
 client → GET /.well-known/oauth-protected-resource
 server → 200  { resource, authorization_servers: ["https://auth.example.com"], … }
@@ -173,6 +178,12 @@ try {
   never returns the raw token to a call site or forwards it to upstream APIs.
 - **Algorithm pinning.** JWT mode accepts `EdDSA` only by default, closing
   algorithm-confusion attacks.
+- **Exact scope matching.** Scopes are compared exactly and case-sensitively
+  (RFC 6749 §3.3) — no prefix or wildcard semantics. QAuth's scope vocabulary
+  declares no scope hierarchy (no scope implies another), so the MCP 2026-07-28
+  requirement that servers account for hierarchies is satisfied by construction.
+  A host whose own vocabulary _is_ hierarchical must list the implied scopes
+  itself in `requiredScopes` / `requireScopes(...)`.
 - **Fail closed.** Transport errors, non-2xx introspection responses, malformed
   tokens, and unknown signing keys all fail validation. Error reasons are short
   and non-sensitive; **the token is never echoed** in a challenge or a log.
@@ -192,7 +203,7 @@ npx tsx examples/memory-mcp/server.ts
 
 RFC 9728 (Protected Resource Metadata) · RFC 8707 (Resource Indicators) ·
 RFC 7662 (Token Introspection) · RFC 6750 §3 (Bearer challenges) ·
-RFC 8414 (AS Metadata) · MCP Authorization 2025-11-25.
+RFC 8414 (AS Metadata) · MCP Authorization 2026-07-28.
 
 ## Testing
 

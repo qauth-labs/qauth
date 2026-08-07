@@ -1,14 +1,18 @@
 /**
- * OID4VP 1.0 transport layer (issue #233).
+ * OID4VP 1.0 transport and presentation validation (issues #233, #234).
  *
- * Two halves, both profile-gated by #299's `VerifierProfile`:
+ * Three stages, all profile-gated by #299's `VerifierProfile`:
  *
- * - **Request generation** (Phase B) — `authorization-request`, `dcql`,
+ * - **Request generation** (#233 Phase B) — `authorization-request`, `dcql`,
  *   `client-identifier`, `credential-format`.
- * - **Response intake** (Phase A) — `request-state`, `direct-post`.
+ * - **Response intake** (#233 Phase A) — `request-state`, `direct-post`.
+ * - **Presentation validation** (#234) — `presentation-validation`, `sd-jwt-vc`,
+ *   `issuer-key-resolution`, `validated-credential`, `presentation-rejection`.
  *
- * Nothing exported from here authenticates anyone. See `direct-post.ts`'s
- * module JSDoc for the safety boundary this whole subdirectory sits behind.
+ * Nothing exported from here authenticates anyone — not even the validated
+ * credential. Issuer trust (#236) and subject resolution (#300) both still have
+ * to run. See `direct-post.ts` and `validated-credential.ts` for the two module
+ * JSDocs that state the boundary this whole subdirectory sits behind.
  */
 
 export * from './authorization-request';
@@ -16,4 +20,9 @@ export * from './client-identifier';
 export * from './credential-format';
 export * from './dcql';
 export * from './direct-post';
+export * from './issuer-key-resolution';
+export * from './presentation-rejection';
+export * from './presentation-validation';
 export * from './request-state';
+export * from './sd-jwt-vc';
+export * from './validated-credential';

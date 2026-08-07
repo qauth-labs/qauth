@@ -7,14 +7,17 @@ import { cachePlugin } from '@qauth-labs/fastify-plugin-cache';
 import { databasePlugin } from '@qauth-labs/fastify-plugin-db';
 import { emailPlugin, type EmailProviderConfig } from '@qauth-labs/fastify-plugin-email';
 import {
+  assertCredentialStatusConfigUsable,
   assertTrustedIssuersUsable,
   createConfiguredProviders,
+  credentialStatusProvisioningOf,
   federationPlugin,
   type VerifierCryptoCapabilities,
 } from '@qauth-labs/fastify-plugin-federation';
 import { jwtPlugin } from '@qauth-labs/fastify-plugin-jwt';
 import { passwordPlugin } from '@qauth-labs/fastify-plugin-password';
 import { pkcePlugin } from '@qauth-labs/fastify-plugin-pkce';
+import { resolveStatusListTrustAnchorPems } from '@qauth-labs/server-config';
 import type { FastifyInstance } from 'fastify';
 
 import { env } from '../config/env';
@@ -121,11 +124,37 @@ export async function app(fastify: FastifyInstance, opts: object) {
   // when the first presentation arrives.
   assertTrustedIssuersUsable(env.OID4VP_TRUSTED_ISSUERS);
 
+  // Credential revocation (#297/#378), the same posture as the line above and
+  // for the same reason. The two OID4VP_STATUS_LIST_* variables are validated by
+  // the env schema for SHAPE, but the runtime additionally PARSES every anchor
+  // certificate and COMPILES every URI prefix — and a deployment that configured
+  // one half and not the other would build a checker that silently refuses every
+  // credential carrying a `status` claim. Running the runtime's own compilation
+  // at startup is what turns both into a boot failure instead of a 100%
+  // login-failure rate nobody can explain.
+  //
+  // NOT gated on WALLET_FEDERATION_ENABLED or on the selected profile: a typo is
+  // a typo whether or not wallet flows are switched on today.
+  const statusListTrustAnchorPems = resolveStatusListTrustAnchorPems(env);
+  assertCredentialStatusConfigUsable({
+    trustAnchorPems: statusListTrustAnchorPems,
+    uriAllowlist: env.OID4VP_STATUS_LIST_URI_ALLOWLIST,
+  });
+
   await fastify.register(federationPlugin, {
     providers: createConfiguredProviders({
       walletFederationEnabled: env.WALLET_FEDERATION_ENABLED,
       verifierProfileId: env.OID4VP_VERIFIER_PROFILE,
       cryptoCapabilities: CRYPTO_CAPABILITIES,
+      // What the operator provisioned for revocation checking (#297). A profile
+      // declaring `requireCredentialStatus: true` — `haip-1.0` does — refuses to
+      // start when either half is missing, naming which one. Threaded rather
+      // than defaulted: the default is the refusing value, and a bootstrap that
+      // HAS the answer must state it.
+      credentialStatusProvisioned: credentialStatusProvisioningOf({
+        trustAnchorPems: statusListTrustAnchorPems,
+        uriAllowlist: env.OID4VP_STATUS_LIST_URI_ALLOWLIST,
+      }),
       // `provisionedVerifierMaterial` is deliberately not passed: no certificate
       // configuration surface exists until #233, and the option's default is the
       // refusing one. Threading real material through here is that issue's job.

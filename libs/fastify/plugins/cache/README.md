@@ -135,7 +135,7 @@ The plugin decorates the Fastify instance with:
 
 Type: `Redis` (from `ioredis`)
 
-The Redis client instance. This is the same instance returned by `getRedis()` from `@qauth-labs/infra-cache`.
+The Redis client instance the plugin built via `createRedisConnection()` from `@qauth-labs/infra-cache` (that library exports a factory, not a `getRedis()` singleton).
 
 **Example**:
 
@@ -195,7 +195,7 @@ REDIS_COMMAND_TIMEOUT=5000
 REDIS_MAX_RETRIES=3
 ```
 
-For detailed configuration options, see the [`@qauth-labs/infra-cache` README](../../infra/cache/README.md).
+For detailed configuration options, see the [`@qauth-labs/infra-cache` README](../../../infra/cache/README.md).
 
 ## Lifecycle Hooks
 
@@ -242,14 +242,18 @@ fastify.addHook('onClose', async () => {
 
 This plugin wraps the `@qauth-labs/infra-cache` library. The underlying Redis connection is managed by `@qauth-labs/infra-cache`, and this plugin provides Fastify-specific lifecycle management.
 
-You can still use utilities from `@qauth-labs/infra-cache` directly:
+The plugin decorates `fastify.sessionUtils`. For the other utility families,
+build them from the decorated client — they are factories, not singletons:
 
 ```typescript
-import { SessionUtils, CacheUtils } from '@qauth-labs/infra-cache';
+import { createCacheUtils } from '@qauth-labs/infra-cache';
 
-// These utilities use the same Redis connection
-await SessionUtils.setSession('user123', data, 3600);
-await CacheUtils.setCache('key', value, 300);
+// Session utils are already decorated by the plugin
+await fastify.sessionUtils.setSession('user123', data, 3600);
+
+// Others take the same connection the plugin manages
+const cacheUtils = createCacheUtils(fastify.redis);
+await cacheUtils.setCache('key', value, 300);
 ```
 
 ## Error Handling
@@ -289,7 +293,6 @@ fastify.get('/safe-cache', async (request, reply) => {
 ```typescript
 import Fastify from 'fastify';
 import { cachePlugin } from '@qauth-labs/fastify-plugin-cache';
-import { SessionUtils } from '@qauth-labs/infra-cache';
 
 const fastify = Fastify();
 
@@ -300,8 +303,8 @@ await fastify.register(cachePlugin);
 fastify.post('/login', async (request, reply) => {
   const { userId, sessionData } = request.body;
 
-  // Use utility functions
-  await SessionUtils.setSession(userId, sessionData, 3600);
+  // Use the session utils the plugin decorates
+  await fastify.sessionUtils.setSession(userId, sessionData, 3600);
 
   // Or use direct Redis access
   await fastify.redis.set(`user:${userId}:last-login`, new Date().toISOString());
@@ -311,7 +314,7 @@ fastify.post('/login', async (request, reply) => {
 
 fastify.get('/session/:userId', async (request, reply) => {
   const { userId } = request.params as { userId: string };
-  const session = await SessionUtils.getSession(userId);
+  const session = await fastify.sessionUtils.getSession(userId);
 
   if (!session) {
     reply.code(404).send({ error: 'Session not found' });
@@ -346,7 +349,7 @@ nx lint fastify-plugin-cache
 
 ## Related Libraries
 
-- [`@qauth-labs/infra-cache`](../../infra/cache/README.md): Core Redis utilities and connection management
+- [`@qauth-labs/infra-cache`](../../../infra/cache/README.md): Core Redis utilities and connection management
 - [`@qauth-labs/fastify-plugin-db`](../db/README.md): Database plugin for Fastify
 
 ## License

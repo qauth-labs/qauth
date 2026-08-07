@@ -77,6 +77,50 @@ describe('identity repositories integration (real Postgres)', () => {
     });
   });
 
+  it('findAllByRealmAndExternalSub returns every provider type holding the identifier (#235, ADR-009 §1)', async () => {
+    // The wallet-login lookup MUST see the password row: an account that exists
+    // without a wallet binding is ADR-009's second bootstrap case, a refusal —
+    // and a query scoped to provider_type='wallet' would report it as "no
+    // account", which the caller is allowed to turn into an enrolment.
+    const { realmId, user } = await seedUser('shared@example.com');
+
+    await credentials.create({
+      userId: user.id,
+      realmId,
+      providerType: 'password',
+      externalSub: 'shared@example.com',
+      credentialData: { password_hash: '$argon2id$fake', email_verified: true },
+    });
+    await credentials.create({
+      userId: user.id,
+      realmId,
+      providerType: 'wallet',
+      externalSub: 'shared@example.com',
+      credentialData: { wallet_binding: 'wb1:deadbeef' },
+    });
+
+    const rows = await credentials.findAllByRealmAndExternalSub(realmId, 'shared@example.com');
+
+    expect(rows.map((row) => row.providerType).sort()).toEqual(['password', 'wallet']);
+  });
+
+  it('findAllByRealmAndExternalSub is realm-scoped and reports nothing found as an empty array', async () => {
+    const { realmId } = await seedUser('scoped@example.com');
+    const other = await seedUser('other@example.com');
+
+    await credentials.create({
+      userId: other.user.id,
+      realmId: other.realmId,
+      providerType: 'password',
+      externalSub: 'scoped@example.com',
+      credentialData: { password_hash: 'h', email_verified: false },
+    });
+
+    expect(await credentials.findAllByRealmAndExternalSub(realmId, 'scoped@example.com')).toEqual(
+      []
+    );
+  });
+
   it('maps a (realm, provider, sub) duplicate onto UniqueConstraintError like the users repo', async () => {
     const { realmId, user } = await seedUser();
     const base = {

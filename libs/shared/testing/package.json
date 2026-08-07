@@ -4,11 +4,15 @@
   "private": true,
   "main": "src/index.ts",
   "dependencies": {
+    "drizzle-orm": "catalog:",
     "fastify": "catalog:",
-    "supertest": "catalog:"
+    "pg": "catalog:",
+    "supertest": "catalog:",
+    "testcontainers": "^12.0.4",
+    "tslib": "catalog:"
   },
   "devDependencies": {
-    "@types/supertest": "catalog:",
-    "testcontainers": "^12.0.4"
+    "@types/pg": "catalog:",
+    "@types/supertest": "catalog:"
   }
 }

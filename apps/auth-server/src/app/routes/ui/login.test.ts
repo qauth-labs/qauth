@@ -210,6 +210,15 @@ describe('UI /ui/login — CSRF defence', () => {
       (c) => c.startsWith('__Host-qauth_login_csrf=') && c.includes('Max-Age=0')
     );
     expect(cleared).toBeDefined();
+
+    // #237/#240: a password credential is `assuranceLevel: 'low'` (ADR-003), so
+    // the session records NO assurance at all. This is the ORIGIN of the
+    // invariant that password-authenticated ID tokens carry no `acr` claim:
+    // /oauth/authorize copies this field onto the authorization code, and
+    // /oauth/token renders `acr` only from a level that is present.
+    const sessionPayload = (fastify.sessionUtils.setSession as unknown as Mock).mock
+      .calls[0][1] as Record<string, unknown>;
+    expect('assuranceLevel' in sessionPayload).toBe(false);
   });
 
   it('POST rejects a disabled user (401 re-render) even with valid credentials', async () => {
@@ -293,6 +302,14 @@ describe('UI /ui/login — return_to open-redirect guard', () => {
     // `Location: /\evil.example` navigates to `https://evil.example` — the same
     // cross-origin bounce as `//evil.example`, spelled differently.
     '/\\evil.example/steal',
+    // The URL parser DISCARDS tab, LF and CR before it parses, so each of these
+    // reads as a single leading `/` here and is protocol-relative by the time a
+    // browser resolves it — the same bounce again, spelled a third way. See
+    // `helpers/return-to.test.ts`.
+    '/\t/evil.example/steal',
+    '/\n/evil.example/steal',
+    '/\r/evil.example/steal',
+    '/\t\\evil.example/steal',
     'javascript:alert(1)',
     'relative/path',
     '',

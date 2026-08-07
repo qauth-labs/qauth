@@ -39,7 +39,7 @@
 import { InvalidRequestError } from '@qauth-labs/shared-errors';
 
 import type { CredentialFormat } from '../profiles/verifier-profile.types';
-import type { PresentedCredential } from './credential-format';
+import type { CredentialFormatAdapterRegistry, PresentedCredential } from './credential-format';
 import { resolveCredentialFormatAdapter } from './credential-format';
 import type { DcqlQuery } from './dcql';
 
@@ -158,13 +158,18 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
  * @param rawVpToken - the `vp_token` form field, JSON-encoded.
  * @param query - the DCQL query from the redeemed request state.
  * @param permittedFormats - credential formats the active profile permits.
+ * @param adapters - the adapter table; defaults to everything QAuth ships. See
+ * {@link resolveCredentialFormatAdapter} — it exists so a test can prove that a
+ * second format needs no change to THIS function, and it cannot widen what a
+ * deployment accepts.
  * @returns the parsed Presentations — UNVERIFIED, carrying no identity.
  * @throws Oid4vpTransportRejection on any structural mismatch.
  */
 export function parseVpToken(
   rawVpToken: string,
   query: DcqlQuery,
-  permittedFormats: readonly CredentialFormat[]
+  permittedFormats: readonly CredentialFormat[],
+  adapters?: CredentialFormatAdapterRegistry
 ): readonly PresentedCredential[] {
   if (rawVpToken.length > MAX_VP_TOKEN_LENGTH) {
     throw new Oid4vpTransportRejection(
@@ -232,7 +237,7 @@ export function parseVpToken(
     let adapter;
 
     try {
-      adapter = resolveCredentialFormatAdapter(credential.format, permittedFormats);
+      adapter = resolveCredentialFormatAdapter(credential.format, permittedFormats, adapters);
     } catch (error) {
       // A format the profile no longer permits, or one QAuth cannot read. Either
       // way the response is unusable and the reason stays server-side.

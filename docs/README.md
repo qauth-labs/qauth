@@ -27,3 +27,6 @@ in closed issues and PRs keep resolving.
   specifications that ADR-004 and ADR-009 rest on.
 - [OIDF OP Certification Runbook](./oidf-op-certification-runbook.md) — the
   operator runbook for driving the OpenID Foundation conformance suite.
+- [Wallet Interop Manual Validation](./wallet-interop-manual-validation.md) —
+  the manual procedure for the real-wallet interoperability pass (#376): what
+  to run against a live EUDI-profile wallet and what counts as a pass.

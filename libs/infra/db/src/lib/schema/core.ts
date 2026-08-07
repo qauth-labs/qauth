@@ -37,6 +37,24 @@ export interface PasswordPolicy {
   preventReuse?: number; // Number of previous passwords to prevent reuse
 }
 
+/**
+ * A JSON Web Key Set as persisted on an OAuth client (RFC 7517 §5) — the
+ * `oauth_clients.jwks` column's shape.
+ *
+ * Deliberately structural (`Record<string, unknown>` members) rather than a
+ * pinned JWK union: the DB layer stores whatever the operator registered and
+ * MUST NOT be the component that decides which key types / algorithms are
+ * acceptable. That decision belongs to the verifier at the auth layer, which
+ * validates each key before use and rejects anything outside its allowlist.
+ *
+ * The column below repeats this shape inline rather than referencing the alias.
+ * That is not an oversight: naming it inside `$type<>` puts the alias into the
+ * inferred type of every downstream helper that returns a client row, and
+ * `tsc --emitDeclarationOnly` then cannot write a portable import for it across
+ * the workspace's nested-symlink package layout (TS2883). Keep the two in sync.
+ */
+export type ClientJwkSet = { keys: Record<string, unknown>[] };
+
 export const realms = pgTable(
   'realms',
   {
@@ -148,6 +166,40 @@ export const oauthClients = pgTable(
     tokenEndpointAuthMethod: tokenEndpointAuthMethodEnum('token_endpoint_auth_method')
       .notNull()
       .default('client_secret_post'),
+    /**
+     * Inline JWK Set holding the client's PUBLIC signature-verification keys,
+     * used to verify an RFC 7523 §2.2 `private_key_jwt` client assertion
+     * (issue #384). NULL for every client that authenticates with a shared
+     * secret or is public — which is every pre-existing row, so this column is
+     * backward-compatible by construction.
+     *
+     * MUTUALLY EXCLUSIVE with {@link oauthClients.jwksUri}. RFC 7591 §2 permits
+     * either form but forbids both ("The `jwks_uri` and `jwks` parameters MUST
+     * NOT both be present in the same request or response"). That rule is
+     * enforced at the VALIDATION layer, not by a DB CHECK, so the server can
+     * return a structured OAuth error naming the offending parameter instead
+     * of surfacing a constraint violation.
+     *
+     * PUBLIC KEYS ONLY. A key set containing a private component (`d`, or any
+     * other private JWK member) MUST be rejected before it ever reaches this
+     * column — the AS never needs a client's private key, so accepting one is
+     * pure liability. The verifier must also re-check on read (defence in
+     * depth) rather than trusting what was persisted.
+     */
+    jwks: jsonb('jwks').$type<{ keys: Record<string, unknown>[] } | null>(),
+    /**
+     * HTTPS URL of the client's JWK Set (RFC 7591 §2), the by-reference
+     * alternative to {@link oauthClients.jwks}. Mutually exclusive with it
+     * (see above). NULL for every existing client.
+     *
+     * SECURITY: this is an operator/registration-supplied URL that the AS will
+     * dereference, so every fetch MUST go through `ssrfSafeGet` with the same
+     * guards the CIMD path uses — https-only, no redirect following, DNS-pinned
+     * IP validation, byte cap, timeout, non-200 rejection — and the result MUST
+     * be cached with a bounded TTL. It is NEVER read from a token request; only
+     * from the persisted client record resolved by an authenticated client_id.
+     */
+    jwksUri: text('jwks_uri'),
     grantTypes: jsonb('grant_types')
       .notNull()
       .default(sql`'["authorization_code","refresh_token"]'::jsonb`)

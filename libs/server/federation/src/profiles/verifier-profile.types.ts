@@ -28,6 +28,9 @@
  * @see docs/adr/004-wallet-agnostic-federation.md
  */
 
+import type { AttackPotentialResistance } from '../attestation/attack-potential';
+import type { SubjectResolutionStrategyId } from '../subject/subject-resolution.types';
+
 /**
  * Deployment profiles QAuth ships.
  *
@@ -166,5 +169,53 @@ export interface VerifierProfile {
   readonly issuerKeyResolution: readonly IssuerKeyResolution[];
   /** Whether credential revocation via Token Status List (#297) is mandatory. */
   readonly requireCredentialStatus: boolean;
+  /**
+   * The subject-resolution strategy a deployment gets when it selects none
+   * (#300, ADR-009).
+   *
+   * A DEFAULT, not a mandate: `OID4VP_SUBJECT_RESOLUTION` — and, later, a realm
+   * column — override it, and `resolveSubjectResolution` applies the same
+   * fail-closed gate to this value as to an operator-supplied one, so a profile
+   * cannot default a deployment into a strategy ADR-009 gates.
+   *
+   * It belongs on the profile for the reason ADR-009's Consequences give: *"The
+   * `VerifierProfile` abstraction (#299) gains a per-profile default strategy;
+   * the two abstractions compose without either changing shape."* A controlled
+   * ecosystem whose issuer guarantees a persistent identifier could default to
+   * `issuer-scoped-claim`; neither shipped profile does, because ADR-009 §1
+   * found no ecosystem where that guarantee holds.
+   */
+  readonly defaultSubjectResolution: SubjectResolutionStrategyId;
+  /**
+   * Whether the holder's key must be shown to live in a certified secure
+   * cryptographic device (WSCD) — HAIP §9.2 / §4.5.1, issue #308.
+   *
+   * A capability like every other on this interface, and read the same way:
+   *
+   * - `required` — a presentation whose key-storage assurance cannot be
+   *   established is REFUSED. Never leniently accepted because it parses.
+   * - `permitted` — assurance is evaluated and reported, and its absence is not
+   *   an error.
+   * - `forbidden` — the capability is not part of the profile. No signal is read
+   *   and none can raise assurance; the resolved value is always "none". What is
+   *   made unreachable is the SIGNAL, not the credential — refusing an otherwise
+   *   valid base-profile presentation because it happened to carry extra
+   *   assurance would be a regression dressed as strictness. See
+   *   `attestation/key-storage-assurance.ts`.
+   *
+   * Distinct from {@link requireCredentialStatus} and from issuer trust: this
+   * asks where the holder's KEY lives, not whether the credential is still valid
+   * or whether its issuer is trusted.
+   */
+  readonly keyStorageAssurance: CapabilityPosture;
+  /**
+   * The floor a `required` {@link keyStorageAssurance} enforces, in OID4VCI
+   * Appendix D §D.2 terms (#308).
+   *
+   * Optional because "a WSCD is mandatory but its grade is not" is a coherent
+   * ecosystem posture. Meaningless — and ignored — unless the posture is
+   * `required`.
+   */
+  readonly minimumKeyStorageAttackPotential?: AttackPotentialResistance;
   readonly verifierIdentity: VerifierIdentityConfig;
 }

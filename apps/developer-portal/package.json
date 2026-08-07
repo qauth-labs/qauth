@@ -5,19 +5,19 @@
   "type": "module",
   "dependencies": {
     "@qauth-labs/ui": "workspace:*",
-    "@tailwindcss/vite": "catalog:",
-    "@tanstack/nitro-v2-vite-plugin": "catalog:",
     "@tanstack/react-start": "catalog:",
     "@tanstack/react-router": "catalog:",
     "react": "catalog:",
-    "react-dom": "catalog:",
-    "tailwindcss": "catalog:"
+    "react-dom": "catalog:"
   },
   "devDependencies": {
+    "@tailwindcss/vite": "catalog:",
+    "@tanstack/nitro-v2-vite-plugin": "catalog:",
     "@types/node": "catalog:",
     "@types/react": "catalog:",
     "@types/react-dom": "catalog:",
     "@vitejs/plugin-react": "catalog:",
+    "tailwindcss": "catalog:",
     "typescript": "catalog:",
     "vite": "catalog:"
   }

@@ -114,25 +114,39 @@ repository exports**.
 import { createDatabase } from '@qauth-labs/infra-db';
 import {
   createUsersRepository,
-  createEmailVerificationTokensRepository,
+  createUserCredentialsRepository,
+  createUserAttributesRepository,
 } from '@qauth-labs/infra-db';
+import { buildPasswordCredentialData, selectTrustedAttribute } from '@qauth-labs/server-federation';
 import { NotFoundError, UniqueConstraintError } from '@qauth-labs/shared-errors';
 
 const { db } = createDatabase({ connectionString: 'postgresql://…' });
 const usersRepo = createUsersRepository(db);
+const credentialsRepo = createUserCredentialsRepository(db);
+const attributesRepo = createUserAttributesRepository(db);
 
-// Create a new user
+// Registration is two writes, in one transaction: the identity anchor, then
+// the credential. `users` carries no email or password (ADR-002 / #230).
 try {
-  const user = await usersRepo.create({
+  const user = await usersRepo.create({ realmId: 'realm-123' });
+
+  await credentialsRepo.create({
+    userId: user.id,
     realmId: 'realm-123',
-    email: 'user@example.com',
-    passwordHash: 'argon2id_hash',
-    emailVerified: false,
+    providerType: 'password',
+    // The normalized email — the duplicate-registration guard is the
+    // (realm_id, provider_type, external_sub) unique index on this row.
+    externalSub: 'user@example.com',
+    // Keys are snake_case and load-bearing: the login path reads
+    // `credential_data.password_hash`. Build it with the canonical helper
+    // rather than by hand — `buildPasswordCredentialData(hash, emailVerified)`
+    // from @qauth-labs/server-federation returns
+    // `{ password_hash, email_verified }`.
+    credentialData: buildPasswordCredentialData('argon2id_hash', false),
   });
-  console.log('User created:', user);
 } catch (error) {
   if (error instanceof UniqueConstraintError) {
-    console.error('Email already exists:', error.constraint);
+    console.error('Credential already registered:', error.constraint);
   }
   throw error;
 }
@@ -146,11 +160,22 @@ try {
   }
 }
 
-// Find user by email (returns undefined if not found)
-const user = await usersRepo.findByEmail('realm-123', 'user@example.com');
+// Look an account up by its credential — this replaces the old findByEmail()
+const credential = await credentialsRepo.findByRealmProviderSub(
+  'realm-123',
+  'password',
+  'user@example.com'
+);
+
+// Fetch every VERIFIED row for a claim. This returns an ARRAY and applies no
+// ordering — the ADR-002 trust order lives in application code, not in SQL.
+const rows = await attributesRepo.findVerifiedByUserIdAndKey('user-123', 'email');
+
+// Rank them with @qauth-labs/server-federation (wallet > oidc_* > self_reported)
+const email = selectTrustedAttribute(rows);
 
 // Update / delete
-const updatedUser = await usersRepo.update('user-123', { emailVerified: true });
+const updatedUser = await usersRepo.update('user-123', { enabled: false });
 const deleted = await usersRepo.delete('user-123');
 ```
 
@@ -180,8 +205,16 @@ const realmsRepo = createRealmsRepository(db);
 
 await db.transaction(async (tx) => {
   const realm = await realmsRepo.create({ name: 'my-realm' }, tx);
-  const user = await usersRepo.create(
-    { realmId: realm.id, email: 'user@example.com', passwordHash: 'hash' },
+  // `users` takes no email/password — see the registration example above.
+  const user = await usersRepo.create({ realmId: realm.id }, tx);
+  await credentialsRepo.create(
+    {
+      userId: user.id,
+      realmId: realm.id,
+      providerType: 'password',
+      externalSub: 'user@example.com',
+      credentialData: buildPasswordCredentialData('hash', false),
+    },
     tx
   );
   return { realm, user }; // both commit, or both roll back
@@ -193,8 +226,18 @@ await db.transaction(async (tx) => {
 Each factory takes a `defaultDb: DbClient`. Methods below take an optional
 `tx?: DbClient`.
 
-- **`createUsersRepository(db)`**: User CRUD
-  - `create()`, `findById()`, `findByIdOrThrow()`, `findByEmail()`, `findByEmailNormalized()`, `update()`, `updateLastLogin()`, `verifyEmail()`, `delete()`
+- **`createUsersRepository(db)`**: Identity-anchor CRUD
+  - `create()`, `findById()`, `findByIdOrThrow()`, `update()`, `updateLastLogin()`, `delete()`
+  - Since ADR-002 / #230 the `users` table carries **no email or password columns**, so there is no `findByEmail()`, `findByEmailNormalized()` or `verifyEmail()`. Look an account up through `createUserCredentialsRepository(db).findByRealmProviderSub()` instead; duplicate registration is guarded by the credentials unique index, not by this insert.
+- **`createUserCredentialsRepository(db)`**: Credential rows per authentication method (ADR-002 / ADR-003)
+  - `create()`, `findById()`, `findByRealmProviderSub()`, `findByUserIdAndType()`, `findAllByUserIdAndType()`, `findAllByRealmAndExternalSub()`, `updateCredentialData()`, `setEmailVerified()`
+  - `findByRealmProviderSub(realmId, providerType, externalSub)` is the credential lookup that replaces the removed `findByEmail()`. It is not itself the duplicate guard — duplicates are caught by the `(realm_id, provider_type, external_sub)` **unique index**, which raises on insert even if this lookup is skipped or races.
+- **`createUserAttributesRepository(db)`**: Normalized claims per user (ADR-002)
+  - `upsertMany()`, `findVerifiedByUserIdAndKey()`, `setVerified()`
+  - `findVerifiedByUserIdAndKey()` returns **every verified row** for that key as an array, in no particular order. It does **not** rank them — the ADR-002 trust order (`wallet > oidc_* > self_reported`) is enforced in application code by `rankAttributeSource()` / `selectTrustedAttribute()` in `libs/server/federation/src/claims/attribute-trust.ts`. Pair the two to resolve the `email` / `email_verified` claims.
+- **`createOAuthConsentsRepository(db)`**: Consent grants and revocation
+- **`createOid4vpRequestStatesRepository(db)`**: OID4VP request/response correlation (T4)
+  - Realm-scoped, unique `state_hash`, single-use via `redeemed_at`. Unused unless `WALLET_FEDERATION_ENABLED` is on.
 - **`createRealmsRepository(db)`**: Realm CRUD
   - `create()`, `findById()`, `findByIdOrThrow()`, `findByName()`, `update()`, `delete()`
 - **`createOAuthClientsRepository(db)`**: OAuth client CRUD
@@ -234,10 +277,14 @@ try {
 }
 
 try {
-  await usersRepo.create({
+  // The unique index lives on `user_credentials`, so this is the write that
+  // raises on a duplicate registration — not the `users` insert.
+  await credentialsRepo.create({
+    userId: 'user-123',
     realmId: 'realm-1',
-    email: 'existing@example.com',
-    passwordHash: '…',
+    providerType: 'password',
+    externalSub: 'existing@example.com',
+    credentialData: buildPasswordCredentialData('…', false),
   });
 } catch (error) {
   if (error instanceof UniqueConstraintError) {
@@ -426,19 +473,26 @@ libs/infra/db/
 ### Core Tables
 
 - **realms**: Multi-tenancy support, each realm is an isolated tenant
-- **users**: User accounts with email normalization and password hashing
+- **users**: Pure identity anchor. Since migration 0011 (ADR-002, #230) it carries **no** `email`, `email_normalized` or `password_hash` — all credential data lives in `user_credentials`
+- **user_credentials**: One row per authentication method per user (`password`, `wallet`, …), keyed by `(realm_id, provider_type, external_sub)` — the sole duplicate-registration guard
+- **user_attributes**: Normalized claims (email, name, …) with a source and verification state; resolved in the ADR-002 trust order `wallet > oidc_* > self_reported`
 - **oauth_clients**: OAuth 2.1 client registrations with PKCE support
 
 ### Token Tables
 
-- **email_verification_tokens**: Email verification tokens with expiration
-- **authorization_codes**: OAuth authorization codes with PKCE challenges
+- **email_verification_tokens**: Email verification tokens with expiration, pointed at a `credential_id`
+- **authorization_codes**: OAuth authorization codes with PKCE challenges, plus `auth_time` (0013) and `assurance_level` (0016, ADR-010)
 - **refresh_tokens**: Refresh tokens with rotation support
+
+### Federation Tables (T4)
+
+- **oid4vp_request_states**: OID4VP request/response correlation — realm-scoped, unique `state_hash`, a DCQL query, expiry and single-use `redeemed_at`. Unused unless `WALLET_FEDERATION_ENABLED` is on
 
 ### Additional Tables
 
 - **sessions**: User sessions (optional, can use Redis instead)
 - **audit_logs**: Comprehensive audit logging for security events
+- **api_keys**: Environment-gated static developer API keys (ADR-008 §6)
 - **roles**: Role-based access control (Phase 5+)
 - **user_roles**: User-role assignments
 

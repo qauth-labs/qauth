@@ -1,5 +1,9 @@
-import { VERIFIER_PROFILE_IDS } from '@qauth-labs/fastify-plugin-federation';
-import { federationEnvSchema } from '@qauth-labs/server-config';
+import {
+  ACR_VALUE_STYLES,
+  SUBJECT_RESOLUTION_STRATEGY_IDS,
+  VERIFIER_PROFILE_IDS,
+} from '@qauth-labs/fastify-plugin-federation';
+import { assuranceEnvSchema, federationEnvSchema } from '@qauth-labs/server-config';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 /**
@@ -185,6 +189,126 @@ describe('OID4VP_TRUSTED_ISSUERS reaches the app env (#236)', () => {
 });
 
 /**
+ * `OID4VP_ISSUER_ASSURANCE` and `ACR_VALUE_STYLE` reach the running server
+ * (#237).
+ *
+ * Same wiring pin as `OID4VP_TRUSTED_ISSUERS` above, and for the same failure:
+ * a variable that exists in `server-config`'s schema but is never spread into
+ * this app's env is configuration an operator can write, restart, and have the
+ * server ignore — here the symptom would be an ID token that silently never
+ * carries an `acr` claim.
+ */
+describe('OID4VP_ISSUER_ASSURANCE / ACR_VALUE_STYLE reach the app env (#237)', () => {
+  /**
+   * `setEnv` only deletes keys it is told about, so every wallet-federation
+   * variable this block does not set has to be cleared EXPLICITLY — otherwise a
+   * deliberately-invalid `OID4VP_TRUSTED_ISSUERS` left behind by the previous
+   * describe fails this block's imports for a reason that has nothing to do
+   * with assurance.
+   */
+  function setAssuranceEnv(overrides: Record<string, string | undefined>) {
+    setEnv({
+      NODE_ENV: 'development',
+      OID4VP_TRUSTED_ISSUERS: undefined,
+      OID4VP_ISSUER_ASSURANCE: undefined,
+      ACR_VALUE_STYLE: undefined,
+      ...overrides,
+    });
+  }
+
+  it('unset → an empty map, not undefined (fail-closed: no realm assures anyone)', async () => {
+    setAssuranceEnv({});
+    const mod = await import('./env');
+
+    expect(mod.env.OID4VP_ISSUER_ASSURANCE).toEqual({});
+  });
+
+  it.each([
+    ['an empty string', ''],
+    ['whitespace', '   '],
+  ])('%s is read as unset and does NOT fail the boot', async (_label, raw) => {
+    setAssuranceEnv({ OID4VP_ISSUER_ASSURANCE: raw });
+    const mod = await import('./env');
+
+    expect(mod.env.OID4VP_ISSUER_ASSURANCE).toEqual({});
+  });
+
+  it('a configured policy arrives as a per-realm, per-issuer map', async () => {
+    setAssuranceEnv({
+      OID4VP_ISSUER_ASSURANCE: '{"master":{"https://issuer.example":{"level":"high"}}}',
+    });
+    const mod = await import('./env');
+
+    expect(mod.env.OID4VP_ISSUER_ASSURANCE).toEqual({
+      master: { 'https://issuer.example': { level: 'high' } },
+    });
+  });
+
+  it.each([
+    ['malformed JSON', '{not json'],
+    ['a bare array with no realm to attach a policy to', '["https://issuer.example"]'],
+    ['a plain-http issuer', '{"master":{"http://issuer.example":{"level":"high"}}}'],
+    ['a level of low', '{"master":{"https://issuer.example":{"level":"low"}}}'],
+  ])('fails the boot on %s rather than degrading to "assures nothing"', async (_label, raw) => {
+    setAssuranceEnv({ OID4VP_ISSUER_ASSURANCE: raw });
+
+    await expect(import('./env')).rejects.toThrow(/OID4VP_ISSUER_ASSURANCE/);
+  });
+
+  it('ACR_VALUE_STYLE defaults to the eIDAS URI form', async () => {
+    setAssuranceEnv({});
+    const mod = await import('./env');
+
+    expect(mod.env.ACR_VALUE_STYLE).toBe('eidas-uri');
+  });
+
+  it('ACR_VALUE_STYLE accepts an explicit vocabulary', async () => {
+    setAssuranceEnv({ ACR_VALUE_STYLE: 'loa-name' });
+    const mod = await import('./env');
+
+    expect(mod.env.ACR_VALUE_STYLE).toBe('loa-name');
+  });
+
+  it('ACR_VALUE_STYLE fails the boot on an unknown vocabulary', async () => {
+    setAssuranceEnv({ ACR_VALUE_STYLE: 'eidas-saml' });
+
+    await expect(import('./env')).rejects.toThrow(/ACR_VALUE_STYLE/);
+  });
+});
+
+/**
+ * Cross-lib pin: `ACR_VALUE_STYLE` ↔ the shipped `acr` vocabularies (#237).
+ *
+ * Identical layering problem to the profile pin below: `server-config` spells
+ * the enum out as a literal because it may not depend on `server-federation`,
+ * and a duplicated list drifts. A vocabulary added to the federation table but
+ * not to the enum is one no operator can select; an enum value with no table
+ * behind it silently renders as the default. This app is the only place both
+ * lists are visible at once.
+ */
+describe('ACR_VALUE_STYLE ↔ ACR_VALUE_STYLES cross-lib pin (#237)', () => {
+  function acceptedStyles(): readonly string[] {
+    const result = assuranceEnvSchema.safeParse({ ACR_VALUE_STYLE: '__not-an-acr-style__' });
+
+    expect(result.success).toBe(false);
+    const issue = result.error?.issues.find((candidate) => candidate.path[0] === 'ACR_VALUE_STYLE');
+    expect(issue?.code).toBe('invalid_value');
+
+    return issue !== undefined && issue.code === 'invalid_value'
+      ? issue.values.map((value) => String(value))
+      : [];
+  }
+
+  it('accepts exactly the shipped vocabularies — no more, no fewer', () => {
+    expect([...acceptedStyles()].sort()).toEqual([...ACR_VALUE_STYLES].sort());
+  });
+
+  it.each(ACR_VALUE_STYLES)('parses %s and hands it back unchanged', (style) => {
+    expect(assuranceEnvSchema.parse({ ACR_VALUE_STYLE: style }).ACR_VALUE_STYLE).toBe(style);
+  });
+});
+
+/**
  * Cross-lib pin: `OID4VP_VERIFIER_PROFILE` ↔ the shipped VerifierProfile table
  * (#299).
  *
@@ -245,5 +369,68 @@ describe('OID4VP_VERIFIER_PROFILE ↔ VERIFIER_PROFILE_IDS cross-lib pin (#299)'
     const parsed = federationEnvSchema.parse({ OID4VP_VERIFIER_PROFILE: profileId });
 
     expect(parsed.OID4VP_VERIFIER_PROFILE).toBe(profileId);
+  });
+});
+
+/**
+ * Cross-lib pin: `OID4VP_SUBJECT_RESOLUTION` ↔ the shipped strategy table
+ * (#300).
+ *
+ * The same drift hazard as the profile pin above, with one extra edge that makes
+ * it worth its own block. The enum deliberately accepts strategies a deployment
+ * may NOT select — `session-binding`, `key-thumbprint` and `rp-pseudonym` — so
+ * that the refusal an operator sees is
+ * `assertSubjectResolutionStrategySelectable`'s explanation of the actual gate
+ * (ADR-009 §§3–5) rather than a `ZodError` listing strings. A future edit that
+ * "tidies" the enum down to the selectable ids would silently replace a useful
+ * message with a useless one, and this pin fails when it does.
+ */
+describe('OID4VP_SUBJECT_RESOLUTION ↔ SUBJECT_RESOLUTION_STRATEGY_IDS cross-lib pin (#300)', () => {
+  function acceptedStrategyValues(): readonly string[] {
+    const result = federationEnvSchema.safeParse({
+      OID4VP_SUBJECT_RESOLUTION: '__not-a-subject-resolution-strategy__',
+    });
+
+    expect(result.success).toBe(false);
+    const issue = result.error?.issues.find(
+      (candidate) => candidate.path[0] === 'OID4VP_SUBJECT_RESOLUTION'
+    );
+    expect(issue?.code).toBe('invalid_value');
+
+    return issue !== undefined && issue.code === 'invalid_value'
+      ? issue.values.map((value) => String(value))
+      : [];
+  }
+
+  it('accepts exactly the strategies ADR-009 names — reserved ones included', () => {
+    expect([...acceptedStrategyValues()].sort()).toEqual(
+      [...SUBJECT_RESOLUTION_STRATEGY_IDS].sort()
+    );
+  });
+
+  it.each(SUBJECT_RESOLUTION_STRATEGY_IDS)('parses %s and hands it back unchanged', (strategy) => {
+    const parsed = federationEnvSchema.parse({ OID4VP_SUBJECT_RESOLUTION: strategy });
+
+    expect(parsed.OID4VP_SUBJECT_RESOLUTION).toBe(strategy);
+  });
+
+  it('treats a blank value as unset, not as a bad value', () => {
+    // `${OID4VP_SUBJECT_RESOLUTION:-}` is how an orchestrator materialises an
+    // absent variable. Unset means "use the profile default", which is a real
+    // answer — unlike OID4VP_VERIFIER_PROFILE, where unset is a refusal.
+    expect(
+      federationEnvSchema.parse({ OID4VP_SUBJECT_RESOLUTION: '   ' }).OID4VP_SUBJECT_RESOLUTION
+    ).toBeUndefined();
+  });
+
+  it('splits and trims the binding claim list, and refuses an entry with whitespace', () => {
+    expect(
+      federationEnvSchema.parse({ OID4VP_SUBJECT_BINDING_CLAIMS: ' family_name , given_name ' })
+        .OID4VP_SUBJECT_BINDING_CLAIMS
+    ).toEqual(['family_name', 'given_name']);
+
+    expect(
+      federationEnvSchema.safeParse({ OID4VP_SUBJECT_BINDING_CLAIMS: 'family name' }).success
+    ).toBe(false);
   });
 });

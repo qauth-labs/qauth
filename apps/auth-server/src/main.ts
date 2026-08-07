@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 
 import swagger from '@fastify/swagger';
 import swaggerUi from '@fastify/swagger-ui';
-import Fastify from 'fastify';
+import Fastify, { LogController } from 'fastify';
 import { serializerCompiler, validatorCompiler, ZodTypeProvider } from 'fastify-type-provider-zod';
 
 import { app } from './app/app';
@@ -18,7 +18,9 @@ import { buildLoggerOptions } from './config/logger';
 //   `REQUEST_ID_HEADER` when present and otherwise generated, then attached to
 //   the request-scoped logger as `reqId` so every log line for a request is
 //   correlated. The id is echoed back on the response by the request-id plugin
-//   (#128).
+//   (#128). The label is set through `logController` rather than the top-level
+//   `requestIdLogLabel`, which Fastify 5 deprecated (FSTDEP024) and removes in
+//   Fastify 6.
 //
 // SECURITY INVARIANT — HTTP/1.1 only. Do NOT add `http2: true` (or `http2SessionTimeout`,
 // or an HTTP/2 `serverFactory`) here without first clearing the `find-my-way` advisory.
@@ -29,7 +31,7 @@ import { buildLoggerOptions } from './config/logger';
 const server = Fastify({
   logger: buildLoggerOptions(env),
   requestIdHeader: env.REQUEST_ID_HEADER,
-  requestIdLogLabel: 'reqId',
+  logController: new LogController({ requestIdLogLabel: 'reqId' }),
   genReqId: () => randomUUID(),
   routerOptions: {
     ignoreTrailingSlash: true,

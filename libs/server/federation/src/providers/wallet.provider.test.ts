@@ -66,6 +66,23 @@ describe('WalletProvider (ADR-004 skeleton, #232)', () => {
           rawClaims: { given_name: 'Alice' },
         },
       ],
+      [
+        // #234 landed presentation validation, so this is now a shape a caller
+        // could genuinely hold: a credential that verified in every respect.
+        // It still authenticates nobody — issuer trust (#236) and subject
+        // resolution (#300) have not run, and neither has anything here.
+        'a ValidatedCredential (#234) — validated is not authenticated',
+        {
+          queryId: 'pid',
+          format: 'dc+sd-jwt',
+          credentialType: 'https://credentials.example.com/pid',
+          claims: { given_name: 'Alice' },
+          // `'checked'` since #378 — the strongest shape a caller could hold: a
+          // credential that validated AND whose status-list bit positively read
+          // `VALID`. It still authenticates nobody.
+          assurance: { statusChecked: 'checked' },
+        },
+      ],
     ];
 
     it.each(plausibleInputs)('rejects for %s', async (_label, input) => {
@@ -96,42 +113,97 @@ describe('WalletProvider (ADR-004 skeleton, #232)', () => {
       expect(error?.message).toContain('#234');
       expect(error?.message).toContain('WalletProvider.verify()');
     });
+
+    it('names the gates that remain OPEN now that validation (#234) has landed', async () => {
+      const error = await provider.verify({}).then(
+        () => null,
+        (reason: unknown) => reason as Error
+      );
+
+      // Issuer trust and subject resolution. Until both are wired, a validated
+      // credential is a cryptographic finding and nothing more.
+      expect(error?.message).toContain('#236');
+      expect(error?.message).toContain('#300');
+    });
   });
 
-  describe('extractAttributes (must fail closed)', () => {
+  /**
+   * IMPLEMENTED as of #235 — and #232's reason for making it throw survives.
+   *
+   * The original skeleton test read *"never returns an empty attribute list
+   * (silent claim loss)"*, because a stub returning `[]` would be
+   * indistinguishable from a working provider handed a credential carrying no
+   * claims. That property is still asserted below, in the only form it can now
+   * take: a malformed input THROWS, and `[]` is reachable only from a
+   * well-formed envelope whose credential genuinely disclosed nothing mappable.
+   *
+   * The mapping itself is exercised against real, validated credentials in
+   * `wallet.provider.claims.test.ts`.
+   */
+  describe('extractAttributes (#235)', () => {
+    /** What `buildWalletVerifiedIdentity` produces — the only accepted shape. */
     const identity: VerifiedIdentity = {
-      externalSub: 'did:example:123',
-      assuranceLevel: 'high',
-      rawClaims: { given_name: 'Alice', family_name: 'Doe' },
+      externalSub: 'alice@example.com',
+      assuranceLevel: 'low',
+      rawClaims: {
+        credential_format: 'dc+sd-jwt',
+        credential_type: 'https://credentials.example.com/pid',
+        issuer: 'https://issuer.example.com',
+        claims: { given_name: 'Alice', family_name: 'Doe' },
+      },
     };
 
-    it('throws instead of returning attributes', () => {
-      expect(() => provider.extractAttributes(identity)).toThrow(/not implemented/);
+    it('normalizes the envelope’s claims into verified wallet attributes', () => {
+      expect(provider.extractAttributes(identity)).toEqual([
+        { source: WALLET_SOURCE, attrKey: 'given_name', attrValue: 'Alice', verified: true },
+        { source: WALLET_SOURCE, attrKey: 'family_name', attrValue: 'Doe', verified: true },
+      ]);
     });
 
-    it('never returns an empty attribute list (silent claim loss)', () => {
-      let returned: unknown = 'sentinel';
-      try {
-        returned = provider.extractAttributes(identity);
-      } catch {
-        // expected — the assertion below proves nothing was produced.
+    it('still fails LOUDLY on an envelope verify() would never have produced', () => {
+      // #232's silent-claim-loss guard, in its post-#235 form. A bare claim set
+      // (the shape a caller who skipped `buildWalletVerifiedIdentity` would
+      // pass) carries no format, so there is no vocabulary to read it with —
+      // and returning `[]` would look exactly like an empty credential.
+      expect(() =>
+        provider.extractAttributes({
+          externalSub: 'alice@example.com',
+          assuranceLevel: 'low',
+          rawClaims: { given_name: 'Alice', family_name: 'Doe' },
+        })
+      ).toThrow(/buildWalletVerifiedIdentity did not produce/);
+    });
+
+    it.each([
+      ['a password-shaped rawClaims', { email: 'a@example.com', email_verified: true }],
+      ['an unknown credential format', { ...identity.rawClaims, credential_format: 'mso_mdoc' }],
+      ['a missing issuer', { ...identity.rawClaims, issuer: '' }],
+      ['an unexpected sibling key', { ...identity.rawClaims, sub: 'did:example:123' }],
+      ['claims that are not an object', { ...identity.rawClaims, claims: 'given_name=Alice' }],
+    ] as ReadonlyArray<readonly [string, Record<string, unknown>]>)(
+      'throws for %s',
+      (_label, rawClaims) => {
+        expect(() =>
+          provider.extractAttributes({ externalSub: 'x', assuranceLevel: 'low', rawClaims })
+        ).toThrow();
       }
-      expect(returned).toBe('sentinel');
+    );
+
+    it('returns [] only for a credential that genuinely disclosed nothing mappable', () => {
+      expect(
+        provider.extractAttributes({
+          ...identity,
+          rawClaims: { ...identity.rawClaims, claims: { age_over_18: true } },
+        })
+      ).toEqual([]);
     });
 
-    it('names this issue and the follow-up that implements claim normalization', () => {
-      const error = (() => {
-        try {
-          provider.extractAttributes(identity);
-          return null;
-        } catch (e: unknown) {
-          return e as Error;
-        }
-      })();
+    it('authenticates nobody: the rows carry no subject and no user id', () => {
+      const surface = JSON.stringify(provider.extractAttributes(identity));
 
-      expect(error?.message).toContain('#232');
-      expect(error?.message).toContain('#235');
-      expect(error?.message).toContain('WalletProvider.extractAttributes()');
+      expect(surface).not.toContain('externalSub');
+      expect(surface).not.toContain('external_sub');
+      expect(surface).not.toContain('userId');
     });
   });
 

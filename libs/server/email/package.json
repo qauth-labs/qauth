@@ -7,7 +7,8 @@
     "@react-email/render": "catalog:",
     "nodemailer": "catalog:",
     "react": "catalog:",
-    "resend": "catalog:"
+    "resend": "catalog:",
+    "tslib": "catalog:"
   },
   "devDependencies": {
     "@types/nodemailer": "catalog:",

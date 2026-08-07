@@ -74,6 +74,11 @@ await fastify.listen({ port: 3000 });
 
 Once registered, both password hasher and validator are available on the Fastify instance:
 
+> `createUser` / `findUserByEmail` below stand in for your own persistence layer.
+> If you are storing through QAuth's repositories, note that since ADR-002 (#230)
+> the hash lives in `user_credentials.credential_data.password_hash`, not on the
+> user row — see the [full integration example](#example-complete-integration) at the end.
+
 ```typescript
 fastify.post('/register', async (request, reply) => {
   const { email, password } = request.body as { email: string; password: string };
@@ -360,6 +365,7 @@ import { databasePlugin } from '@qauth-labs/fastify-plugin-db';
 import { cachePlugin } from '@qauth-labs/fastify-plugin-cache';
 import { passwordPlugin } from '@qauth-labs/fastify-plugin-password';
 import { env } from '@qauth-labs/server-config';
+import { buildPasswordCredentialData } from '@qauth-labs/server-federation';
 
 const fastify = Fastify();
 
@@ -399,10 +405,12 @@ await fastify.register(passwordPlugin, {
   },
 });
 
-// Helper function to sanitize user data (remove sensitive fields)
-function sanitizeUser(user: { passwordHash: string; [key: string]: unknown }) {
-  const { passwordHash, ...safeUser } = user;
-  return safeUser;
+// Since ADR-002 (#230) the `users` row holds no password hash — the secret
+// lives in `user_credentials.credential_data.password_hash` and is never
+// fetched here — so the user row is already safe to return. Kept as an
+// explicit seam in case you attach derived fields later.
+function sanitizeUser<T extends Record<string, unknown>>(user: T): T {
+  return user;
 }
 
 // Registration route
@@ -421,11 +429,17 @@ fastify.post('/auth/register', async (request, reply) => {
   // Hash password
   const passwordHash = await fastify.passwordHasher.hashPassword(password);
 
-  // Create user
-  const user = await fastify.repositories.users.create({
-    email,
-    passwordHash,
-    // ... other fields
+  // Create the identity anchor, then the credential. Since ADR-002 (#230)
+  // `users` carries no email or password_hash; the unique index on
+  // (realm_id, provider_type, external_sub) is the duplicate-registration guard.
+  const user = await fastify.repositories.users.create({ realmId });
+
+  await fastify.repositories.userCredentials.create({
+    userId: user.id,
+    realmId,
+    providerType: 'password',
+    externalSub: email, // the normalized email
+    credentialData: buildPasswordCredentialData(passwordHash, false),
   });
 
   // Remove passwordHash from response
@@ -436,18 +450,28 @@ fastify.post('/auth/register', async (request, reply) => {
 fastify.post('/auth/login', async (request, reply) => {
   const { email, password } = request.body as { email: string; password: string };
 
-  const user = await fastify.repositories.users.findByEmail(email);
-  if (!user) {
+  // `users.findByEmail()` no longer exists (ADR-002 / #230) — look the account
+  // up through its credential instead.
+  const credential = await fastify.repositories.userCredentials.findByRealmProviderSub(
+    realmId,
+    'password',
+    email
+  );
+  if (!credential) {
     return reply.code(401).send({ error: 'Invalid credentials' });
   }
 
-  const isValid = await fastify.passwordHasher.verifyPassword(user.passwordHash, password);
+  // The hash lives in the credential's snake_case JSONB blob, not on the user.
+  const isValid = await fastify.passwordHasher.verifyPassword(
+    credential.credentialData.password_hash,
+    password
+  );
 
   if (!isValid) {
     return reply.code(401).send({ error: 'Invalid credentials' });
   }
 
-  // Remove passwordHash from response
+  const user = await fastify.repositories.users.findByIdOrThrow(credential.userId);
   return { user: sanitizeUser(user) };
 });
 
@@ -476,8 +500,8 @@ nx lint fastify-plugin-password
 
 ## Related Libraries
 
-- [`@qauth-labs/server-password`](../../server/password/README.md): Password hashing library with factory pattern
-- [`@qauth-labs/shared-validation`](../../shared/validation/README.md): Password and email validation library
+- [`@qauth-labs/server-password`](../../../server/password/README.md): Password hashing library with factory pattern
+- [`@qauth-labs/shared-validation`](../../../shared/validation/README.md): Password and email validation library
 - [`@qauth-labs/fastify-plugin-db`](../db/README.md): Database plugin for Fastify
 - [`@qauth-labs/fastify-plugin-cache`](../cache/README.md): Cache plugin for Fastify
 

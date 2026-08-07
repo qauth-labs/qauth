@@ -1,5 +1,15 @@
 import { relations, sql } from 'drizzle-orm';
-import { bigint, boolean, index, jsonb, pgTable, text, uuid, varchar } from 'drizzle-orm/pg-core';
+import {
+  bigint,
+  boolean,
+  check,
+  index,
+  jsonb,
+  pgTable,
+  text,
+  uuid,
+  varchar,
+} from 'drizzle-orm/pg-core';
 
 import { oauthClients, users } from './core';
 import { codeChallengeMethodEnum } from './enums';
@@ -77,6 +87,28 @@ export const authorizationCodes = pgTable(
      * before this column existed (those simply omit the claim).
      */
     authTime: bigint('auth_time', { mode: 'number' }),
+    /**
+     * eIDAS Level of Assurance of the authentication that backs this code
+     * (ADR-004, ADR-010, issue #237). `'substantial'` or `'high'`; NULL means no
+     * assurance above `low` was established — which is every password login, and
+     * every wallet login whose issuer the realm assures nothing about.
+     *
+     * Captured at code-mint time from the browser session, exactly as
+     * {@link authTime} is, because /oauth/token has no other view of HOW the
+     * user authenticated: the ID token is minted from this row long after the
+     * session that produced it stopped being in scope.
+     *
+     * The internal LEVEL is stored, never the rendered `acr` string. The eIDAS
+     * LoA → `acr` vocabulary is deployment configuration (`ACR_VALUE_STYLE`), so
+     * storing the rendered value would freeze in-flight codes into whichever
+     * vocabulary was configured when they were minted and make a config change
+     * observable as two different `acr` values for the same level.
+     *
+     * NULL — not `'low'` — for the unassured case, so "no assurance was
+     * established" is one value everywhere and no code path has to remember that
+     * `'low'` means "omit the claim".
+     */
+    assuranceLevel: text('assurance_level'),
     scopes: jsonb('scopes').notNull().default(JSONB_EMPTY_ARRAY).$type<string[]>(),
     /**
      * RFC 8707 `resource` parameter(s) from /oauth/authorize. Absolute URIs
@@ -107,6 +139,17 @@ export const authorizationCodes = pgTable(
     index('idx_authorization_codes_expires_at').on(t.expiresAt),
     index('idx_authorization_codes_user_id').on(t.userId),
     index('idx_authorization_codes_oauth_client_id').on(t.oauthClientId),
+    /**
+     * Only the two levels that BEAR an `acr` claim may be stored. `'low'` is
+     * excluded deliberately: NULL is the single representation of "no assurance
+     * established", so a row can never carry a level the claim builder would
+     * have to remember to drop. A corrupt or hand-edited value is refused by the
+     * database rather than reaching the ID token.
+     */
+    check(
+      'authorization_codes_assurance_level_valid',
+      sql`${t.assuranceLevel} IS NULL OR ${t.assuranceLevel} IN ('substantial', 'high')`
+    ),
   ]
 );
 

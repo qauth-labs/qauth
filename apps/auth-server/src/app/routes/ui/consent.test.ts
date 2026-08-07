@@ -382,6 +382,61 @@ describe('UI /ui/consent POST — allow/deny', () => {
     expect(createArg.resource).toEqual(['https://api.example.com/v1']);
   });
 
+  it.each([
+    ['a wallet session at high assurance', 'high', 'high'],
+    // The password path writes no `assuranceLevel` (ADR-003: `'low'`), so the
+    // code records NULL and the ID token carries no `acr` — the #237/#240
+    // invariant, asserted on the consent-screen code-mint path too.
+    ['a password session', undefined, null],
+    ['a session that somehow carries low', 'low', null],
+  ])(
+    'binds the assurance level of %s onto the authorization code (#237)',
+    async (_label, sessionLevel, expected) => {
+      const { fastify, ctx } = makeFastify();
+      await consentRoute(fastify);
+      const { signSessionId } = await import('../../helpers/session-cookie');
+      const signed = signSessionId('sid-acr');
+      const csrf = 'csrf-acr';
+      (fastify.sessionUtils.getSession as unknown as Mock).mockResolvedValue({
+        userId: 'user-1',
+        email: 'a@b.com',
+        sessionId: 'sid-acr',
+        csrfToken: csrf,
+        createdAt: Date.now(),
+        consentScopes: { 'app-123': ['email'] },
+        ...(sessionLevel === undefined ? {} : { assuranceLevel: sessionLevel }),
+      });
+      (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(
+        CLIENT
+      );
+
+      const { reply } = createReply();
+      await ctx.post!(
+        {
+          body: {
+            decision: 'allow',
+            allow_forever: '1',
+            csrf_token: csrf,
+            client_id: 'app-123',
+            redirect_uri: 'https://example.com/cb',
+            state: 'xyz',
+            scope: 'email',
+            code_challenge: 'A'.repeat(43),
+            code_challenge_method: 'S256',
+            response_type: 'code',
+          },
+          headers: { cookie: `__Host-qauth_session=${signed}` },
+          ip: '127.0.0.1',
+        },
+        reply
+      );
+
+      const createArg = (fastify.repositories.authorizationCodes.create as unknown as Mock).mock
+        .calls[0][0];
+      expect(createArg.assuranceLevel).toBe(expected);
+    }
+  );
+
   it('allow without allow_forever issues code but does NOT persist consent', async () => {
     const { fastify, ctx } = makeFastify();
     await consentRoute(fastify);

@@ -14,6 +14,10 @@ import { ZodTypeProvider } from 'fastify-type-provider-zod';
 
 import { env } from '../../../config/env';
 import {
+  publishWalletPresentationSignal,
+  stashWalletPresentation,
+} from '../../helpers/wallet-login-flow';
+import {
   type Oid4vpDirectPostRequest,
   oid4vpDirectPostRequestSchema,
   oid4vpDirectPostResponseSchema,
@@ -106,14 +110,13 @@ export default async function (fastify: FastifyInstance) {
     },
     async (request, reply) => {
       const body = request.body as Oid4vpDirectPostRequest;
+      const stateHash = hashOid4vpState(body.state);
 
       try {
         // (1) Single-use redemption. One guarded UPDATE — see the repository.
         // Deliberately the FIRST thing that happens: a replayed or expired state
         // must be rejected before any work is done on attacker-supplied bytes.
-        const redeemed = await fastify.repositories.oid4vpRequestStates.redeem(
-          hashOid4vpState(body.state)
-        );
+        const redeemed = await fastify.repositories.oid4vpRequestStates.redeem(stateHash);
 
         if (redeemed === undefined) {
           throw new Oid4vpTransportRejection(
@@ -191,6 +194,11 @@ export default async function (fastify: FastifyInstance) {
             { requestStateId: correlated.id, walletError: body.error },
             'OID4VP wallet returned an error response'
           );
+          // Wake a browser waiting on this request (#239) so it shows a refusal
+          // instead of spinning until the request expires. The wallet's own
+          // error code is NOT carried across — it is attacker-controllable text
+          // and every failure renders the same refusal anyway.
+          await publishWalletPresentationSignal(fastify, stateHash, 'wallet_error');
           return reply.code(200).send({});
         }
 
@@ -200,11 +208,13 @@ export default async function (fastify: FastifyInstance) {
 
         // (4) Structural parse against the DCQL query we actually sent.
         //
-        // The outcome is built and then deliberately goes NOWHERE: nothing in
-        // this issue may consume a presentation. #234 picks it up from exactly
-        // here, binding each Presentation's Key Binding JWT to
-        // `outcome.state.nonce`. Assembling it now rather than leaving a bare
-        // array keeps that handoff a one-line change instead of a rewrite.
+        // STILL only a structural parse. #238 picks the outcome up from exactly
+        // here and PARKS it for the cookie-bound browser that is waiting on this
+        // request; validation (#234), issuer trust (#236), subject resolution
+        // (#300) and enrolment (#235) all happen on that side, where the session
+        // and the asserted identifier exist. Nothing about this endpoint's
+        // posture changed: it still authenticates nobody, still creates nothing,
+        // and still cannot name a browser, a user or an account.
         const outcome: Oid4vpDirectPostOutcome = {
           state: correlated,
           presentations: parseVpToken(
@@ -236,6 +246,26 @@ export default async function (fastify: FastifyInstance) {
             authenticated: false,
           },
         });
+
+        // Park the presented bytes for the browser waiting on this request
+        // (#238). Attacker-controlled text, addressed by the digest of a `state`
+        // the caller had to redeem to get here at all, and read by nothing
+        // except the verification seam — which checks it against a `nonce`, a
+        // `client_id` and a DCQL query that come from the BROWSER's flow record,
+        // never from this stash. Written BEFORE the signal so a browser that
+        // sees `received` always finds the bytes it names.
+        await stashWalletPresentation(fastify, stateHash, outcome.presentations);
+
+        // Wake the browser waiting on this request, if there is one (#239).
+        //
+        // This is a TRANSPORT signal and nothing else: it says a structurally
+        // valid `vp_token` came back for a `state` we issued. It carries no
+        // subject, no claims and no verdict, and the UI cannot turn it into a
+        // session on its own — `helpers/wallet-presentation.ts` is the seam that
+        // does that, under a cookie-bound request. Deliberately AFTER the audit
+        // entry and best-effort: a wallet's acknowledgement must not depend on a
+        // store the wallet has no relationship with.
+        await publishWalletPresentationSignal(fastify, stateHash, 'received');
 
         // OID4VP 1.0 §8.3 — a transport-level acknowledgement, nothing more.
         return reply.code(200).send({});

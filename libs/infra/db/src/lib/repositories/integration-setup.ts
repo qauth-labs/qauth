@@ -1,20 +1,11 @@
-import path from 'node:path';
-
-import { type StartedPostgres, startPostgresContainer } from '@qauth-labs/shared-testing';
-import { migrate } from 'drizzle-orm/node-postgres/migrator';
+import {
+  applyQauthMigrations,
+  type StartedPostgres,
+  startPostgresContainer,
+  truncateDomainTablesStatement,
+} from '@qauth-labs/shared-testing';
 
 import { createDatabase, type DatabaseInstance } from '../db';
-
-/**
- * Absolute path to the generated Drizzle migrations folder
- * (`libs/infra/db/drizzle`).
- *
- * The integration target / `test:integration` script run vitest from the
- * workspace root (`cwd: {workspaceRoot}`), so this resolves correctly under
- * both the CommonJS typecheck and the ESM vitest runtime — without needing
- * `import.meta.url` (unavailable under the lib's `module: commonjs` tsconfig).
- */
-const MIGRATIONS_FOLDER = path.resolve(process.cwd(), 'libs/infra/db/drizzle');
 
 /**
  * A fully migrated, container-backed database ready for repository tests.
@@ -33,24 +24,17 @@ export interface IntegrationDb {
   teardown(): Promise<void>;
 }
 
-/** Tables truncated by {@link IntegrationDb.reset}; child-first is irrelevant with CASCADE. */
-const DOMAIN_TABLES = [
-  'api_keys',
-  'audit_logs',
-  'oid4vp_request_states',
-  'oauth_consents',
-  'refresh_tokens',
-  'authorization_codes',
-  'email_verification_tokens',
-  'oauth_clients',
-  'users',
-  'realms',
-];
-
 /**
  * Spin up a Postgres 18 container, apply all Drizzle migrations, and return a
  * connected {@link DatabaseInstance}. Intended for a `beforeAll`; pair with
  * `reset()` in `beforeEach` and `teardown()` in `afterAll`.
+ *
+ * The migration step and the truncate list live in `@qauth-labs/shared-testing`
+ * (#240) rather than here: `apps/auth-server`'s wallet E2E needs the same
+ * migrated schema and, being `scope:app`, may not import this library. One
+ * implementation is the point — a second copy would let the two suites drift
+ * onto different DDL, which is the one thing container-backed tests exist to
+ * rule out.
  *
  * Requires Docker. Suites should guard with `requireDockerOrSkip()` from
  * `@qauth-labs/shared-testing`, which skips locally but fails on CI so a
@@ -58,21 +42,20 @@ const DOMAIN_TABLES = [
  */
 export async function setupIntegrationDb(): Promise<IntegrationDb> {
   const container: StartedPostgres = await startPostgresContainer();
-  const database = createDatabase({ connectionString: container.connectionString });
 
   // Apply the real generated migrations — this is the whole point: we exercise
   // the actual DDL (constraints, partial unique indexes, uuidv7 defaults), not
   // a hand-rolled schema.
-  await migrate(database.db, { migrationsFolder: MIGRATIONS_FOLDER });
+  await applyQauthMigrations(container.connectionString);
+
+  const database = createDatabase({ connectionString: container.connectionString });
 
   return {
     database,
     connectionString: container.connectionString,
 
     async reset(): Promise<void> {
-      await database.pool.query(
-        `TRUNCATE TABLE ${DOMAIN_TABLES.map((t) => `"${t}"`).join(', ')} RESTART IDENTITY CASCADE`
-      );
+      await database.pool.query(truncateDomainTablesStatement());
     },
 
     async teardown(): Promise<void> {
