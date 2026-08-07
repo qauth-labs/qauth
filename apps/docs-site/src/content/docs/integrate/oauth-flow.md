@@ -50,15 +50,21 @@ curl -s http://localhost:3000/.well-known/oauth-authorization-server | jq
 
 ## Grant types
 
-| Grant                                             | Subject (`sub`) | Refresh token?       | Use case                                            |
-| ------------------------------------------------- | --------------- | -------------------- | --------------------------------------------------- |
-| `authorization_code` (+ PKCE)                     | the end user    | yes                  | Apps acting **on behalf of a user**                 |
-| `refresh_token`                                   | the end user    | yes (rotated)        | Renew an access token without re-prompting          |
-| `client_credentials`                              | the `client_id` | no (RFC 6749 §4.4.3) | **Machine-to-machine**, no user                     |
-| `urn:ietf:params:oauth:grant-type:token-exchange` | the end user    | no                   | **Agent delegation** on behalf of a user (RFC 8693) |
+| Grant                                             | Subject (`sub`) | Refresh token?       | Use case                                                |
+| ------------------------------------------------- | --------------- | -------------------- | ------------------------------------------------------- |
+| `authorization_code` (+ PKCE)                     | the end user    | yes                  | Apps acting **on behalf of a user**                     |
+| `refresh_token`                                   | the end user    | yes (rotated)        | Renew an access token without re-prompting              |
+| `client_credentials`                              | the `client_id` | no (RFC 6749 §4.4.3) | **Machine-to-machine**, no user                         |
+| `urn:ietf:params:oauth:grant-type:token-exchange` | the end user    | no                   | **Agent delegation** on behalf of a user (RFC 8693)     |
+| `urn:ietf:params:oauth:grant-type:jwt-bearer`     | the end user    | no                   | **ID-JAG** — enterprise-managed authorization (ADR-011) |
 
 `response_type` is `code` only. There is no implicit or password grant
 (removed in OAuth 2.1).
+
+The `jwt-bearer` grant is **off by default** (`ID_JAG_ENABLED=false`) and is
+advertised in `grant_types_supported` only while it is on — with the flag off
+the token endpoint answers `unsupported_grant_type`, so advertising it would be
+a false capability claim. See [ID-JAG](#id-jag--enterprise-managed-authorization-adr-011).
 
 ---
 
@@ -344,6 +350,120 @@ Rules and guarantees:
 
 ---
 
+## Client authentication with `private_key_jwt` (RFC 7523 §2.2)
+
+A confidential client can authenticate at the token endpoint by presenting a
+short-lived JWT it signed, instead of a shared secret. QAuth advertises
+`private_key_jwt` in `token_endpoint_auth_methods_supported` unconditionally.
+
+The practical motivation is CIMD: a client identified by an HTTPS URL was never
+issued a secret, so assertion-based authentication is the only confidential
+method available to it.
+
+```bash
+curl -s -X POST http://localhost:3000/oauth/token \
+  -H 'Content-Type: application/x-www-form-urlencoded' \
+  -d grant_type=client_credentials \
+  -d client_assertion_type=urn:ietf:params:oauth:client-assertion-type:jwt-bearer \
+  -d client_assertion=eyJ… | jq
+```
+
+| Parameter               | Required | Notes                                                                                         |
+| ----------------------- | -------- | --------------------------------------------------------------------------------------------- |
+| `client_assertion_type` | yes      | Exactly `urn:ietf:params:oauth:client-assertion-type:jwt-bearer`.                             |
+| `client_assertion`      | yes      | The signed JWT. Its `sub` names the client.                                                   |
+| `client_id`             | no       | MAY be omitted when an assertion is present (RFC 7521 §4.2) — the assertion's `sub` names it. |
+
+Rules that are load-bearing rather than incidental:
+
+- **The public key comes from registration, never from the assertion.** Keys are
+  read from the client's registered `jwks` (inline) or `jwks_uri` (by reference).
+  Key material carried _by_ the assertion — `jwk`, `jku`, `x5u` headers — is
+  rejected outright; honouring it would let anyone sign their own credential and
+  supply the key to check it against.
+- **Asymmetric algorithms only.** `alg` is intersected with the same list
+  discovery advertises, which contains no `none` and no `HS*`. An HS256
+  assertion verified against a public JWK is the classic algorithm-confusion
+  attack, where the "signature" is an HMAC over a key the attacker can also read.
+- **The registered method must match exactly.** A client provisioned for
+  `client_secret_*` cannot authenticate by assertion, and a `private_key_jwt`
+  client cannot fall back to its secret.
+- **One method per request.** Presenting more than one authentication method is
+  rejected with `invalid_client` (RFC 6749 §2.3) — never "try each until one
+  passes".
+
+> ⚠️ **`private_key_jwt` cannot be self-registered.** `POST /oauth/register`
+> accepts only `none`, `client_secret_basic` and `client_secret_post`, and the
+> `jwks` / `jwks_uri` fields are stripped from a registration request. This is
+> deliberate: a client must not be able to self-register the keys that
+> authenticate it, nor hand the server a URL to dereference, through an
+> unauthenticated endpoint. It is provisioned by an operator — the
+> `seed-oauth-clients` manifest or admin — exactly like `max_agent_mode`.
+
+---
+
+## ID-JAG — enterprise-managed authorization (ADR-011)
+
+An **Identity Assertion JWT Authorization Grant** is the credential at the centre
+of MCP Enterprise-Managed Authorization. QAuth implements both sides.
+
+**Off by default.** `ID_JAG_ENABLED=false`, and `ID_JAG_TRUSTED_ISSUERS` defaults
+to empty — an empty allowlist rejects every assertion. Nothing in an assertion
+ever nominates its own trust: verification keys come only from an OIDC discovery
+run against an already-allowlisted issuer.
+
+### Consuming an ID-JAG (QAuth as the resource authorization server)
+
+A client presents an ID-JAG minted by a trusted enterprise IdP under the
+`jwt-bearer` grant and receives an access token audience-restricted to the MCP
+server named by the assertion's `resource` claim.
+
+```bash
+curl -s -X POST http://localhost:3000/oauth/token \
+  -u "CLIENT_ID:CLIENT_SECRET" \
+  -H 'Content-Type: application/x-www-form-urlencoded' \
+  -d grant_type=urn:ietf:params:oauth:grant-type:jwt-bearer \
+  -d assertion=eyJ… | jq
+```
+
+### An ID-JAG is not an access token
+
+It is a single-use, short-lived, audience-restricted authorization **grant**,
+presented to one authorization server exactly once and exchanged. Three
+properties enforce that:
+
+- the protected header `typ` is `oauth-id-jag+jwt`, distinct from `at+jwt`
+  (access token) and `JWT` (ID token), so no token signed for another purpose can
+  be substituted — and vice versa;
+- `aud` is a **single** authorization-server issuer identifier. A multi-valued
+  `aud` is rejected: an assertion authorizing two servers is one that either of
+  them can redeem;
+- `jti` is consumed exactly once, inside a window bounded by
+  `ID_JAG_MAX_ASSERTION_LIFETIME`.
+
+The grant is confidential-client only, and the client must additionally be
+registered for it — which, like `private_key_jwt`, only an operator can do.
+
+Every rejection returns a bare `invalid_grant` (RFC 6749 §5.2). The specific
+reason is written to the audit log and never to the wire: a caller learning which
+check failed would learn whether an issuer is allowlisted, whether a `jti` was
+already burned, and whether a `kid` exists — all oracles.
+
+### Minting an ID-JAG (QAuth as the enterprise IdP)
+
+An RFC 8693 token exchange requesting
+`requested_token_type=urn:ietf:params:oauth:token-type:id-jag` returns an
+assertion targeted at a **third-party** resource authorization server.
+
+Minted assertions are signed with EdDSA — the same key that signs access tokens —
+so a foreign authorization server verifies them from the JWKS it already fetches
+from `GET /.well-known/jwks.json`. This is deliberately **not** the hybrid
+(ADR-005) signer: the detached ML-DSA component is delivered through
+introspection, and a foreign server has no introspection relationship with QAuth,
+so a hybrid ID-JAG would be unverifiable at exactly the party that must verify it.
+
+---
+
 ## Token Revocation (RFC 7009)
 
 `POST /oauth/revoke` invalidates an access or refresh token. Requires
@@ -445,6 +565,14 @@ See the example in [step 0](#0-prerequisites--a-client). Key fields:
 | `grant_types`                | Subset of `authorization_code`, `refresh_token`, `client_credentials`. |
 | `token_endpoint_auth_method` | `none` (public/PKCE), `client_secret_basic`, or `client_secret_post`.  |
 | `scope`                      | Space-separated; **capped to the realm allowlist**.                    |
+
+Those two lists are exhaustive for self-registration, and the omissions are
+deliberate rather than incomplete. `private_key_jwt`, the `jwks` / `jwks_uri`
+fields, and the `jwt-bearer` (ID-JAG) grant are all **operator-provisioned
+only** — a client must not be able to grant itself a capability whose trust
+boundary an operator owns. Zod strips these keys, so a registration request
+carrying them is silently ignored rather than honoured; do not rely on that
+silence as the enforcement mechanism.
 
 For MCP clients, **CIMD** (an HTTPS-URL `client_id`) is the recommended
 alternative to DCR — see the [MCP Quickstart](/integrate/mcp-quickstart/#client-registration-cimd-vs-dcr).

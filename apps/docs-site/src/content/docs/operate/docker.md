@@ -376,6 +376,25 @@ CIMD is the recommended MCP client-registration mechanism (see [ADR-007](/refere
 
 > **Note:** `.env.docker.example` does not yet list the `CIMD_*` variables. They are optional and default-safe, so the stack runs without them; add them to `.env` only to override the defaults above.
 
+### ID-JAG / enterprise-managed authorization (ADR-011)
+
+**Off by default**, and doubly fail-closed: with `ID_JAG_ENABLED` off the
+`jwt-bearer` grant is neither advertised nor accepted, and even with it on an
+empty `ID_JAG_TRUSTED_ISSUERS` rejects every assertion. See
+[ID-JAG](/integrate/oauth-flow/#id-jag--enterprise-managed-authorization-adr-011).
+
+| Variable                         | Required          | Default   | Description                                                                                                                                  |
+| -------------------------------- | ----------------- | --------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ID_JAG_ENABLED`                 | No                | `false`   | Master switch. Gates both the `jwt-bearer` grant and the discovery members that advertise it.                                                |
+| `ID_JAG_TRUSTED_ISSUERS`         | Yes, when enabled | _(empty)_ | Allowlist of enterprise IdP issuers whose assertions may be redeemed. Empty rejects everything — an assertion never nominates its own trust. |
+| `ID_JAG_MAX_ASSERTION_LIFETIME`  | No                | `300`     | Seconds. Bounds the replay window a `jti` is tracked for.                                                                                    |
+| `ID_JAG_ISSUED_LIFETIME`         | No                | `300`     | Seconds. Lifetime stamped on assertions QAuth **mints**.                                                                                     |
+| `ID_JAG_CLOCK_SKEW_LEEWAY`       | No                | `60`      | Seconds of tolerance on `exp` / `nbf` / `iat`.                                                                                               |
+| `ID_JAG_JWKS_CACHE_TTL`          | No                | `300`     | Seconds to cache a trusted issuer's JWKS.                                                                                                    |
+| `ID_JAG_FETCH_TIMEOUT_MS`        | No                | `5000`    | Timeout for issuer discovery / JWKS fetches.                                                                                                 |
+| `ID_JAG_MAX_DOCUMENT_BYTES`      | No                | `65536`   | Size cap on a fetched discovery or JWKS document.                                                                                            |
+| `ID_JAG_ALLOW_PRIVATE_ADDRESSES` | No                | `false`   | SSRF guard. Leave off outside local development.                                                                                             |
+
 ### Wallet federation (OID4VP, T4)
 
 Wallet sign-in is **off by default**. With `WALLET_FEDERATION_ENABLED` unset or
