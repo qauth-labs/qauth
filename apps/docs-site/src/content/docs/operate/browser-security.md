@@ -34,10 +34,24 @@ cookie/CSRF mechanics below.
   local plain-HTTP development. In production it must stay on (the `__Host-`
   prefix requires it).
 
-## CSRF protection (consent form)
+## CSRF protection
 
-`POST /ui/consent` is the only cookie-authenticated, state-changing browser
-endpoint, so it is CSRF-protected with a session-bound double-submit token:
+Four cookie-authenticated, state-changing browser endpoints ship today, and
+**every one of them is CSRF-protected**. They do not all use the same mechanism,
+so check the column before integrating:
+
+| Endpoint                | Token travels as                  | Mechanism                                                                   |
+| ----------------------- | --------------------------------- | --------------------------------------------------------------------------- |
+| `POST /ui/consent`      | `csrf_token` form field           | Session-bound double-submit; token stored in the server-side session.       |
+| `POST /ui/login`        | `csrf_token` form field           | Signed `__Host-qauth_login_csrf` double-submit cookie (pre-authentication). |
+| `POST /ui/wallet-link`  | `csrf_token` form field           | Session cookie + the same signed login-CSRF cookie.                         |
+| `DELETE /consents/{id}` | `X-CSRF-Token` **request header** | Per-session `apiCsrfToken`, echoed from `GET /consents/`.                   |
+
+`POST /auth/link/wallet` is a JSON API on the same session cookie and also
+requires the `X-CSRF-Token` header; it is registered only when
+`WALLET_FEDERATION_ENABLED` is on.
+
+### `POST /ui/consent` — session-bound double-submit
 
 1. `GET /ui/consent` renders a hidden `<input name="csrf_token">`. The same
    value is stored in the server-side session.
@@ -53,16 +67,27 @@ endpoint, so it is CSRF-protected with a session-bound double-submit token:
 Clients embedding the consent flow must round-trip the `csrf_token` field
 verbatim from the rendered form; do not generate it client-side.
 
-### Why other endpoints do not carry a CSRF token
+### `POST /ui/login` — pre-authentication double-submit cookie
 
-- `POST /ui/login` submits credentials and runs **before** any authenticated
-  session exists. Classic CSRF rides an existing ambient session, which is
-  absent here; `SameSite=Lax` plus the fresh-session-on-success behaviour
-  (session-fixation defence) cover the relevant cases.
-- `/auth/login`, `/auth/logout`, `/auth/register`, `/auth/refresh`,
-  `/auth/resend-verification`, and all `/oauth/*` endpoints authenticate with a
-  **bearer token or client credentials**, not the browser session cookie. They
-  carry no ambient-authority cookie, so CSRF does not apply.
+Login runs **before** any authenticated session exists, so it cannot use the
+session-bound token above. It uses a signed double-submit cookie instead:
+
+1. `GET /ui/login` mints a token, sets it as `__Host-qauth_login_csrf`
+   (`HttpOnly`, `SameSite=Lax`, `Path=/`, signed with an HMAC), and renders the
+   same value as a hidden `<input name="csrf_token">`.
+2. `POST /ui/login` **requires** `csrf_token` in the body — it is a required
+   field of the route schema, not an optional hardening extra. A missing or
+   mismatched value is rejected and audited as `ui.login.csrf_failure`.
+
+A client that posts credentials without `csrf_token` will be refused. Round-trip
+the hidden field verbatim from the rendered form.
+
+### Why the remaining endpoints do not carry a CSRF token
+
+`/auth/login`, `/auth/logout`, `/auth/register`, `/auth/resend-verification`,
+and all `/oauth/*` endpoints authenticate with a **bearer token or client
+credentials**, not the browser session cookie. They carry no ambient-authority
+cookie, so CSRF does not apply.
 
 ## Response security headers (issue #113)
 
@@ -86,8 +111,14 @@ verbatim from the rendered form; do not generate it client-side.
 
 The strict CSP would break Swagger UI (it bundles inline scripts/styles), so the
 `/docs` prefix is served a relaxed CSP that permits `'unsafe-inline'` for its
-own scripts and styles. The relaxation is scoped to `/docs` only; every other
-route keeps the strict policy.
+own scripts and styles.
+
+There is a **second** relaxation, and operators should know about it: the
+consent screen serves a development CSP (`style-src 'self' 'unsafe-inline'`)
+whenever the resolved environment policy has `t3SecurityEnforced` false — i.e.
+for a client on the `development` profile. Scripts stay `'self'` in that policy;
+only inline styles are permitted. Every other route, and every client on
+`staging` or `production`, keeps the strict policy.
 
 ## Related configuration
 
@@ -100,5 +131,5 @@ route keeps the strict policy.
 
 ## See also
 
-- [Environment-Aware Authorization](/operate/environment-authorization/) — the `t3SecurityEnforced` knob that governs whether this hardening bundle is on (always on in `staging`/`production`, off in `development`).
+- [Environment-Aware Authorization](/operate/environment-authorization/) — the `t3SecurityEnforced` knob. **It does not gate this hardening bundle.** Helmet is registered globally and unconditionally, the CSRF checks are unconditional, and the session cookie's `Secure` flag comes from `SESSION_COOKIE_SECURE` — none of them consult the environment profile. Today `t3SecurityEnforced` relaxes exactly one thing: the consent-screen style CSP described above.
 - [Keys](/operate/keys/) — the signing-key side of QAuth's security posture.

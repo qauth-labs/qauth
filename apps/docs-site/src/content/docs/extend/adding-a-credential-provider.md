@@ -193,11 +193,18 @@ constructor, both exported from the provider module.
 
 ## The fail-closed pattern
 
-`WalletProvider` (`libs/server/federation/src/providers/wallet.provider.ts:158`) is registered and
-**both of its methods throw unconditionally** —
-`libs/server/federation/src/providers/wallet.provider.ts:172` and
-`libs/server/federation/src/providers/wallet.provider.ts:189`. That is the point of it, and it is
-the most useful thing on this page: **you can land a provider in that state on purpose.**
+`WalletProvider` (`libs/server/federation/src/providers/wallet.provider.ts`, `createWalletProvider`)
+is registered with its two halves in **different** states, and the split is the most useful thing on
+this page: **you can land a provider in that state on purpose.**
+
+- **`verify()` still throws unconditionally** (`walletSkeletonError`). It is the non-functional
+  skeleton issue #232 shipped, and it must keep throwing — see below.
+- **`extractAttributes()` is implemented** as of issue #235. It parses the envelope with
+  `walletRawClaimsSchema` and returns real attribute rows via `extractWalletAttributes`; it throws
+  only on a **malformed** envelope, not unconditionally.
+
+The module's own header says exactly this — read "Why `verify()` still throws while
+`extractAttributes()` works" in the source before assuming either half is a mistake.
 
 ### Why a provider like this exists
 
@@ -217,6 +224,10 @@ the two method bodies against a stable shell. The module deliberately contains n
 > - A stub that returned `[]` from `extractAttributes()` would look identical to a working provider
 >   handed a credential carrying no claims, silently dropping identity data instead of failing
 >   loudly.
+
+The second bullet is now recorded in the source as **#232's original reasoning**, not as a live
+description: `extractAttributes()` shipped in #235. It survives as the explanation for why the
+implemented method still throws on a malformed envelope rather than degrading to `[]`.
 
 Both failure modes exist **because** the engine is provider-agnostic. The abstraction that makes
 new providers cheap also means the engine will not second-guess a provider that lies to it. So the

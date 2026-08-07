@@ -57,12 +57,21 @@ Every request gets a request id, surfaced as `reqId` on all of its log lines:
 
 ## Auth-Event Logging
 
-Login, registration, logout, and token exchange emit structured log lines via
-`logAuthEvent` (`apps/auth-server/src/app/helpers/auth-events.ts`), on both
-success and failure. Each line carries:
+Login, logout and registration emit structured log lines via `logAuthEvent`
+(`apps/auth-server/src/app/helpers/auth-events.ts`) — login and logout on both
+success and failure, registration on success.
 
-- `authEvent` — e.g. `user.login.success`, `user.login.failure`,
-  `oauth.token.exchange.success`.
+> ⚠️ **Token-exchange events are not log lines.** `logAuthEvent` is called only
+> from `routes/auth/login.ts`, `routes/auth/logout.ts` and
+> `routes/auth/register.ts`. The `oauth.token.exchange.*` names exist as members
+> of the event type union, but the token endpoint records them **only as rows in
+> the `audit_logs` table**, never through the logger. An alert built on an
+> `oauth.token.exchange.success` log line will never fire — query the audit table
+> for those instead.
+
+Each emitted line carries:
+
+- `authEvent` — e.g. `user.login.success`, `user.login.failure`.
 - `success`, `userId`/`clientId` (when known), `ip`, ISO `timestamp`, and
   `reqId`.
 - On **failure** paths, the email is logged as a SHA-256 `emailHash` rather than
