@@ -7,7 +7,14 @@ services:
       POSTGRES_USER: qauth
       POSTGRES_PASSWORD: ${DB_PASSWORD:-qauth_dev_password}
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      # Mount the parent directory, NOT `/var/lib/postgresql/data`. Postgres 18
+      # images default PGDATA to a version-scoped subdirectory
+      # (`/var/lib/postgresql/18/docker`) so that `pg_upgrade --link` can run
+      # without crossing a mount boundary, and the entrypoint aborts on startup
+      # if it finds a volume mounted at the pre-18 path. The testcontainers
+      # helper in libs/shared/testing pins the same image but mounts no volume,
+      # so integration tests do not exercise this.
+      - postgres_data:/var/lib/postgresql
     ports:
       - '5432:5432'
     healthcheck:
