@@ -252,17 +252,74 @@ export async function app(fastify: FastifyInstance, opts: object) {
       : {}),
   });
 
+  // Rate limiting (T3). This position IS load-bearing: it MUST stay ahead of
+  // the routes AutoLoad below. @fastify/rate-limit applies both the global
+  // ceiling and every per-route `config.rateLimit` override through an
+  // `onRoute` hook, and `onRoute` is NOT retroactive — Fastify fires it as each
+  // route is added, so routes already registered by the time this plugin loads
+  // are simply never seen. Moving it after the AutoLoad would not throw, warn
+  // or fail a boot check; it would silently drop every per-route limit,
+  // including the brute-force ceiling on /auth/login and the
+  // `config: { rateLimit: false }` scrape exemption on /metrics.
   await fastify.register(rateLimitPlugin);
 
-  // Security headers (issue #113): register before routes so every response —
-  // including the server-rendered login/consent pages and error responses —
-  // carries the CSP, HSTS, frame-options and related hardening headers.
+  // Security headers (issue #113): every response — including the
+  // server-rendered login/consent pages and error responses — carries the CSP,
+  // HSTS, frame-options and related hardening headers.
+  //
+  // Unlike the rate limiter above, this position is NOT load-bearing (#365) —
+  // but for a different reason than the symmetry suggests, and the distinction
+  // is the whole point. The plugin installs an `onSend` hook, and `addHook`
+  // for that class of hook recurses into already-created child scopes
+  // (`this[kChildren].forEach(child => _addHook.call(child, name, fn))` in
+  // Fastify's `_addHook`), so it does reach routes that loaded earlier.
+  // `onRoute` is explicitly routed past that recursion — which is exactly why
+  // the rate limiter above IS position-sensitive and this is not. Do not
+  // generalise "hooks are retroactive" from this comment; it holds per hook
+  // type, not per plugin.
   await fastify.register(securityHeadersPlugin);
 
   // Observability (T3): request-id propagation (#128) and the metrics registry
-  // (#123/#126) must be available before routes are loaded.
+  // (#123/#126). Neither position is load-bearing either (#365): request-id is
+  // another hook (`onRequest`), propagated into existing child scopes by the
+  // same recursion described above, and metrics only `decorate()`s the
+  // instance — its sole consumer, GET /metrics, dereferences `fastify.metrics`
+  // inside the handler at request time, not while the route plugin is loading.
   await fastify.register(requestIdPlugin);
   await fastify.register(metricsPlugin);
+
+  // Global error handler (#365). This MUST precede every route registration
+  // below — it used to sit after both AutoLoads, under a comment claiming the
+  // last position "catches all unhandled errors", and that is exactly
+  // backwards. A route does not look its error handler up at request time:
+  // Fastify snapshots it while closing the route's enclosing plugin
+  // (`context.errorHandler = this[kErrorHandler]` in the `after()` callback of
+  // `lib/route.js`). Since avvio runs queued plugins in registration order, a
+  // `setErrorHandler` that runs later reaches NO route that already loaded —
+  // the handler existed but was unreachable, and every error was answered by
+  // Fastify's built-in `{statusCode, code, error, message}` envelope instead.
+  //
+  // What that silently reverted: the F-01 register-enumeration fix (PR #212),
+  // which genericises `UniqueConstraintError` so the DB constraint name never
+  // reaches the wire (the built-in envelope echoes `error.message`, which
+  // embeds it); the RFC 6750 §3 `WWW-Authenticate: Bearer` challenge a
+  // bearer-protected resource such as /oauth/userinfo MUST return on 401; the
+  // RFC 6749 §5.2 OAuth error shapes; and the `error_description` sanitisation
+  // that keeps that challenge header well-formed.
+  //
+  // It sits ahead of `cors` deliberately, not merely ahead of the AutoLoads:
+  // @fastify/cors registers a route of its own — `fastify.options('*')` — so a
+  // handler installed after it would leave that one route on the built-in
+  // envelope. Cors answers most preflights from its `onRequest` hook before the
+  // route body runs, but @fastify/rate-limit THROWS its 429 from an `onRequest`
+  // hook registered earlier still, so a rate-limited OPTIONS request would
+  // render the wrong shape. Registering here covers every route in this scope.
+  //
+  // Not covered, and never was: routes registered on the ROOT instance in
+  // `main.ts` (Swagger's /docs, and the default 404 context) resolve the root's
+  // error handler, not this one. Do not read this registration as "every
+  // response now goes through error-handler.ts".
+  await fastify.register(errorHandler);
 
   // CORS (F-06): fail-closed in production when CORS_ORIGIN is unset — the
   // auth-server's own browser flows (login/consent) are same-origin and do
@@ -303,7 +360,4 @@ export async function app(fastify: FastifyInstance, opts: object) {
     options: { ...opts },
     ignorePattern: /\.(test|spec)\.(ts|js)$/,
   });
-
-  // Register error handler last to catch all unhandled errors
-  await fastify.register(errorHandler);
 }

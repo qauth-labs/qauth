@@ -22,6 +22,29 @@ export default defineConfig({
       // `test-integration` target instead.
       '**/*.integration.test.ts',
     ],
+    server: {
+      deps: {
+        // #365: `apps/auth-server/src/app/error-handler-wiring.test.ts` boots
+        // the REAL `app` plugin — the only way to assert that the global error
+        // handler is actually REACHABLE from a route, which is the property
+        // that regressed. `@fastify/autoload` discovers route modules at
+        // RUNTIME and imports them by absolute path; left externalized, those
+        // `import()` calls go to Node's own loader, which cannot resolve the
+        // extensionless relative imports TypeScript sources use, so the boot
+        // dies on the first route file. Inlining puts autoload inside Vite's
+        // module graph, so its dynamic imports resolve through the same
+        // transform pipeline as everything else.
+        //
+        // Declared HERE rather than in `apps/auth-server/vitest.config.ts`
+        // because that file `mergeConfig`s this one (so it inherits the
+        // setting) while the workspace-root `qauth:test` target runs a bare
+        // `vitest run` against THIS config and globs every project's specs,
+        // auth-server's included — a project-local declaration would leave that
+        // run failing. Same reason, same setting, as
+        // `vitest.integration.config.ts`.
+        inline: ['@fastify/autoload'],
+      },
+    },
     coverage: {
       provider: 'v8',
       reporter: ['text', 'lcov', 'html'],
