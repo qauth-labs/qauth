@@ -3,7 +3,7 @@ title: Observability Guide
 description: QAuth's observability surface — structured logging, request-id tracking, auth-event logging, failed-login lockout, Prometheus metrics, and alerting.
 sidebar:
   order: 3
-lastVerified: '2026-07-27'
+lastVerified: '2026-08-10'
 ---
 
 This guide covers QAuth's observability surface: structured logging, request-id
@@ -35,11 +35,26 @@ CloudWatch, ...).
 ### Secret redaction
 
 The logger is configured with a pino `redact` allowlist that replaces sensitive
-values with `[Redacted]`. Covered fields include passwords, access/refresh/ID
-tokens, client secrets, OAuth codes, PKCE verifiers, `Authorization` headers,
-and cookies — at both top-level and nested (`*.field`) positions. See
-`apps/auth-server/src/config/logger.ts` (`LOG_REDACT_PATHS`). A regression test
-(`logger.test.ts`) asserts that none of these values reach the log output.
+values with `[Redacted]`. The paths are `LOG_REDACT_PATHS` in
+`apps/auth-server/src/config/logger.ts`, and they fall into three groups:
+
+- **Credential-bearing headers** — `req.headers.authorization`,
+  `req.headers.cookie`, `res.headers["set-cookie"]`.
+- **Top-level plus one level of nesting** (each field also has a `*.field`
+  twin) — `password`, `token`, `access_token`, `refresh_token`, `id_token`,
+  `client_secret`, `secret`.
+- **Top-level only** (no `*.` twin) — `newPassword`, `currentPassword`,
+  `subject_token`, `actor_token`, `code`, `code_verifier`, `authorization`.
+
+Two limits follow from that shape. A field in the last group is redacted only at
+the root of a logged object: `log.info({ code_verifier })` is redacted,
+`log.info({ body: { code_verifier } })` is not. And pino's `*` matches exactly
+**one** level, so even a field with a `*.` twin is missed deeper down
+(`{ a: { b: { password } } }`). No route logs a request body, so nothing reaches
+a log sink today — read the list as the shape of the backstop, not as
+full-depth coverage. A regression test (`logger.test.ts`) drives the real pino
+config end to end and asserts that a payload carrying these fields (including
+one nested level) is serialised with `[Redacted]` in their place.
 
 > Callers must still avoid passing secrets into log payloads; redaction is a
 > defence-in-depth backstop, not a license to log credentials.
@@ -92,7 +107,12 @@ verification.
 - The attempt counter has a TTL equal to the window, so it **decays** naturally.
 - A **successful** login clears both the counter and any lockout.
 - All cache operations are **best-effort / fail-open**: if Redis is unavailable,
-  logins are never blocked by the tracker.
+  logins are never blocked by the tracker — though an instance-wide Redis outage
+  still fails the request earlier, at the app-wide rate-limiter's `onRequest`
+  hook (see
+  [Hosted UI](/integrate/hosted-ui/#what-the-stash-adds-to-the-pre-authentication-path)),
+  so "the tracker never blocks" is not the same as "a Redis outage is invisible
+  on `POST /auth/login`".
 
 ### Configuration
 
@@ -102,6 +122,9 @@ verification.
 | `FAILED_LOGIN_MAX_ATTEMPTS`     | `5`     | Failures in the window before lockout. |
 | `FAILED_LOGIN_WINDOW`           | `900`   | Sliding window in seconds (15 min).    |
 | `FAILED_LOGIN_LOCKOUT_DURATION` | `900`   | Lockout duration in seconds (15 min).  |
+
+None of these reach the container under Docker Compose — see the Compose caveat
+below.
 
 ## Metrics (`GET /metrics`)
 
@@ -114,15 +137,37 @@ process/runtime metrics plus QAuth auth counters:
 | `qauth_login_attempts_total` | counter | `result`, `reason`   | Login outcomes (success/failure). |
 | `qauth_tokens_issued_total`  | counter | `type`, `grant_type` | Tokens issued by type and grant.  |
 
-- `result` is `success` or `failure`; `reason` annotates failures
-  (`invalid_credentials`, `locked_out`, `error`).
-- `type` is `access` or `refresh`; `grant_type` is `password`,
-  `authorization_code`, `refresh_token`, `client_credentials`, or
-  `token-exchange`.
+Label values, as emitted today. The plugin
+(`apps/auth-server/src/app/plugins/metrics.ts`) does not constrain them, so treat
+each list as **open** — a new call site can add a value without a schema change.
+
+- `result` is `success` or `failure`. `reason` is set on failures only, e.g.
+  `invalid_credentials`, `locked_out`, `email_not_verified` (emitted only when
+  `REQUIRE_EMAIL_VERIFIED=true`), `error`.
+- `type` is e.g. `access`, `refresh`, or `id_jag` (the ID-JAG assertion minted by
+  the token-exchange grant). `grant_type` is e.g. `password`,
+  `authorization_code`, `refresh_token`, `client_credentials`, `token-exchange`,
+  or `jwt-bearer`.
 
 The endpoint is **unauthenticated and rate-limit-exempt** (so a scraper can poll
 it frequently). Restrict access at the reverse proxy / network layer (e.g. to a
 metrics subnet), or disable it entirely with `METRICS_ENABLED=false`.
+
+> ⚠️ **Under Docker Compose, putting these in `.env` does nothing.** The
+> `auth-server` service in `docker-compose.yml` declares an explicit
+> `environment:` map and no `env_file:`, so that map is an **allowlist**: only
+> the variables named in it are forwarded into the container. Almost none of the
+> observability variables are on it — `METRICS_ENABLED`, `LOG_PRETTY`,
+> `REQUEST_ID_HEADER` and the four `FAILED_LOGIN_*` settings all resolve to their
+> schema defaults inside the container regardless of `.env`. So
+> `METRICS_ENABLED=false` is silently discarded and `GET /metrics` stays
+> registered on the host-published port `3000`. The exception is `LOG_LEVEL`,
+> which **is** forwarded (as is `NODE_ENV`), so log verbosity does respond to
+> `.env`; `LOG_PRETTY` is not, so container output is always JSON whatever you
+> set it to. To change any of the rest, add the variable to that `environment:`
+> map — the wallet-federation flags in the same file show the pattern, e.g.
+> `METRICS_ENABLED: ${METRICS_ENABLED:-true}` — or run the server outside
+> Compose. See [Docker](/operate/docker/#environment-variables).
 
 ### Example Prometheus scrape config
 

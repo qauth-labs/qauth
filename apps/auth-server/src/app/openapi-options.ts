@@ -3,27 +3,23 @@ import { createJsonSchemaTransform } from 'fastify-type-provider-zod';
 
 /**
  * `@fastify/swagger` registration options — the `openapi` object plus the
- * `transform` — shared verbatim by `main.ts` (the running server, `/docs`)
- * and `openapi-export.ts` (the offline exporter that writes
- * `apps/docs-site/public/openapi.json`, #347). Before this extraction (#347
- * fix round 3) both files carried an independent copy of this object, and
- * Task 3's endpoint-coverage guard compares PATHS only, so it would never
- * have caught the two copies' `info`/`components` metadata drifting apart —
- * one file feeding the published docs site, the other feeding the live
- * Swagger UI. A single shared constant removes that whole class of drift
- * instead of relying on a guard to notice it.
+ * `transform` — shared verbatim by `main.ts` (the running server, `/docs`),
+ * `openapi-export.ts` (the offline exporter that writes
+ * `apps/docs-site/public/openapi.json`, #347) and `openapi.test.ts` (which
+ * registers it on a minimal Fastify instance rather than the real app).
+ * Before this extraction (#347 fix round 3) the first two each carried an
+ * independent copy of this object, and Task 3's endpoint-coverage guard
+ * compares PATHS only, so it would never have caught the two copies'
+ * `info`/`components` metadata drifting apart — one file feeding the
+ * published docs site, the other feeding the live Swagger UI. A single shared
+ * constant removes that whole class of drift instead of relying on a guard to
+ * notice it.
  *
  * PURE EXTRACTION at the time this file was created: identical bytes to what
- * both files carried before. `info.description`'s original "Phase 1.7:
+ * those two carried before. `info.description`'s original "Phase 1.7:
  * userinfo and token introspection" wording was known-stale and was
  * deliberately left as-is by that extraction, pending a later content task
  * (#351) to own the correction — that task has since updated it below.
- *
- * (`apps/auth-server/src/app/openapi.test.ts` carries its own separate copy
- * of this same object, for a minimal Fastify instance rather than the real
- * app — left alone; whether that test should import this constant too is a
- * judgement call for the reviewer, not something folded into this
- * extraction.)
  *
  * Explicitly typed as `SwaggerPlugin.FastifyDynamicSwaggerOptions` — without
  * this, TS infers `type: 'http'` (a required literal on `HttpSecurityScheme`)

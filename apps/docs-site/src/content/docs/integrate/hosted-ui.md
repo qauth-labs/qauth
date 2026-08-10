@@ -3,7 +3,7 @@ title: Hosted UI
 description: The server-rendered login, consent, and resume screens an integrator's users see during authorization_code + PKCE.
 sidebar:
   order: 3
-lastVerified: '2026-07-27'
+lastVerified: '2026-08-10'
 ---
 
 `authorization_code` + PKCE ([OAuth 2.1 Flow, step 2](/integrate/oauth-flow/#2-redirect-the-user-to-oauthauthorize))
@@ -15,7 +15,7 @@ every integrator meets all three, even one that never renders its own login UI.
 
 `GET /ui/login?return_to=<path>&error=<message>` renders an email/password
 form. `return_to` must be a relative, same-origin path — `isSafeReturnTo`
-(`apps/auth-server/src/app/routes/ui/login.ts:38`) rejects absolute URLs,
+(`apps/auth-server/src/app/helpers/return-to.ts:50`) rejects absolute URLs,
 `//host` protocol-relative values, and the `/\host` backslash variant a
 browser also resolves as protocol-relative, falling back to `/` on anything
 that fails. The page carries a signed, double-submit login-CSRF token in both
@@ -26,9 +26,9 @@ mints a **fresh** session id (session-fixation defence — a pre-login session
 id is never reused), sets it as `__Host-qauth_session`, and redirects to
 `return_to`. On failure it re-renders the form, and the two failure modes
 handle the CSRF token differently: a `403` (CSRF pair missing or mismatched,
-`apps/auth-server/src/app/routes/ui/login.ts:241`) mints and sets a **fresh**
+`apps/auth-server/src/app/routes/ui/login.ts:289`) mints and sets a **fresh**
 token so a legitimate retry can succeed; a `401` (bad credentials,
-`apps/auth-server/src/app/routes/ui/login.ts:294`) **reuses** the existing
+`apps/auth-server/src/app/routes/ui/login.ts:341`) **reuses** the existing
 cookie's token unchanged, since that cookie is still valid — only the
 credentials were wrong.
 
@@ -118,26 +118,45 @@ authorization request is too large`
   (`apps/auth-server/src/app/helpers/pending-authorization.ts:215`)
   rather than either a `500` or a `Location` header no proxy would forward.
 
-### Redis is now on the pre-authentication path
+### What the stash adds to the pre-authentication path
 
-Before #319, an unauthenticated visit to `/oauth/authorize` touched no Redis
-at all (`resolveBrowserSession` only reads Redis when a session cookie is
-present). The pending-authorization stash changes that: **writing** the
-handle is now the first Redis dependency an unauthenticated caller can
-trigger. QAuth degrades rather than fails when that write cannot complete —
-if Redis is unreachable, `redirectToLoginWithPendingAuthorization` catches
-the failure and falls back to the pre-#319 inline `return_to`
+Redis was already on that path before #319, and not marginally: the
+Redis-backed `@fastify/rate-limit` plugin is registered app-wide
+(`apps/auth-server/src/app/app.ts:255`) ahead of both route sweeps (lines 294
+and 301), against the same `fastify.redis` client
+(`apps/auth-server/src/app/plugins/rate-limit.ts:27`); `RATE_LIMIT_ENABLED`
+defaults to `true` (`libs/server/config/src/lib/schemas/rate-limit.ts:12-15`);
+and the `onRequest` hook it attaches to each of those routes `INCR`s a per-IP
+counter on **every** request, authenticated or not (`PEXPIRE` on the first
+request of a window, `PTTL` on the rest) — which is why the size cap above talks
+about "the same Redis that holds live browser sessions and rate-limit
+counters". What the pending-authorization stash adds is narrower and worth
+naming precisely: it is
+the first **caller-influenced write** an unauthenticated visitor can trigger,
+which is the reason `PENDING_AUTHORIZATION_MAX_URL_BYTES` exists at all.
+
+The stash itself degrades rather than fails. If the write cannot complete,
+`redirectToLoginWithPendingAuthorization` catches the failure and falls back
+to the pre-#319 inline `return_to`
 (`apps/auth-server/src/app/helpers/pending-authorization.ts:299`). That
 inline fallback is correct for every request small enough to survive a
 proxy's header buffer — only the pathological multi-kilobyte `state` that
-motivated the stash would still be too large during a Redis outage, and for
-that one case an oversized redirect is judged better than an opaque `500` at
-the authorization endpoint. Symmetrically, a **read** failure in
+motivated the stash would still be too large, and for that one case an
+oversized redirect is judged better than an opaque `500` at the
+authorization endpoint. Symmetrically, a **read** failure in
 `consumePendingAuthorization` is treated as a miss and renders the same
 "expired" page a genuinely-expired handle would
 (`apps/auth-server/src/app/helpers/pending-authorization.ts:245`) — an
 unreachable Redis is, from the user's side of `/ui/resume/{handle}`,
 indistinguishable from a handle that timed out.
+
+Do not read those fallbacks as "a Redis outage is invisible here", though.
+`@fastify/rate-limit`'s `skipOnError` is left at its default of `false`, so
+when the store is unreachable the rate-limiter rethrows from its `onRequest`
+hook — before the route handler, and therefore before either fallback can
+run. The fallbacks cover a stash operation that fails on its own; they do not
+cover an instance-wide Redis outage, which fails the request at the
+rate-limit hook instead.
 
 ### Not an open redirector
 

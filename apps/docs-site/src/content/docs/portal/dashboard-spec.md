@@ -3,7 +3,7 @@ title: Dashboard specification
 description: The specification the developer dashboard is to be built from — four surfaces, two proposed endpoints, and the ordering constraints an implementer must respect.
 sidebar:
   order: 3
-lastVerified: '2026-07-27'
+lastVerified: '2026-08-10'
 unbuiltClaims: true
 ---
 
@@ -42,12 +42,15 @@ Four surfaces, in the order an implementer should build them:
 | C   | Agent visibility                        | Response widening (see [Surface C](#surface-c--agent-visibility))             |
 | D   | Activity feed and metrics tiles         | Two new endpoints and one index migration                                     |
 
-### Non-goals, dated 2026-07-27
+### Non-goals, dated 2026-08-10
 
-- **Wallet-federation provider configuration UI.** Deferred with the T4 platform track; wallet
-  login cannot complete end to end today (`apps/docs-site/src/lib/status.ts:147`, the
-  `WALLET_FEDERATION_ENABLED` row), so a configuration surface would configure something a
-  developer cannot then use.
+- **Wallet-federation provider configuration UI.** Wallet trust is operator-set environment
+  configuration, not developer self-service: `WALLET_FEDERATION_ENABLED`
+  (`libs/server/config/src/lib/schemas/federation.ts:283`), the `VerifierProfile` the deployment
+  operates under, and the per-realm issuer allowlist all come from the server environment. The
+  sign-in flow itself completes end to end once an operator turns them on
+  (`apps/docs-site/src/lib/status.ts:147`, the `WALLET_FEDERATION_ENABLED` row), so a portal
+  surface would be editing deployment configuration a developer does not own.
 - **Realm administration.** No admin-panel application exists in the workspace. Realm-level
   controls (`max_environment_laxity`, `dynamic_registration_allowed_scopes`) are operator-set by
   design (`apps/auth-server/src/app/helpers/environment-policy.ts:22`), and putting them in a
@@ -273,11 +276,11 @@ This specification records both as dependencies and pre-empts neither.
 ## Surface B — effective environment policy
 
 **Shipped.** `apps/auth-server/src/app/helpers/environment-policy.ts` is the single authority.
-`resolveEnvironmentPolicy` (`apps/auth-server/src/app/helpers/environment-policy.ts:236`) takes the
+`resolveEnvironmentPolicy` (`apps/auth-server/src/app/helpers/environment-policy.ts:248`) takes the
 stricter of the client's declared environment and the realm ceiling — strictness ordering lives in
 one map (`apps/auth-server/src/app/helpers/environment-policy.ts:46`) — and returns the frozen
 profile from `ENVIRONMENT_PROFILES`
-(`apps/auth-server/src/app/helpers/environment-policy.ts:158`). Both inputs fail safe to
+(`apps/auth-server/src/app/helpers/environment-policy.ts:170`). Both inputs fail safe to
 `production`. See [Environment-Aware Authorization](/operate/environment-authorization/#the-profiles)
 for the profile table itself.
 
@@ -296,8 +299,8 @@ exactly two of its fields — `environment` and `staticApiKeysAllowed`
 (`apps/auth-server/src/app/routes/clients/index.ts:108`) — and `clientSchema` carries only those two
 (`apps/auth-server/src/app/schemas/clients.ts:40` and
 `apps/auth-server/src/app/schemas/clients.ts:48`). Token TTL tier, PKCE enforcement,
-loopback-redirect tolerance, rate-limit tier, agent step-up and the T3 hardening bundle are all
-resolved server-side and then dropped on the floor.
+loopback-redirect tolerance, rate-limit tier, agent step-up and the consent-screen CSP relaxation
+(`t3SecurityEnforced`) are all resolved server-side and then dropped on the floor.
 
 So the UI has two options, and only one of them is acceptable:
 
@@ -322,7 +325,7 @@ Concretely: `environment`, `staticApiKeysAllowed`, `localhostRedirectAllowed`, `
 `agentStepUpEnforced`, `t3SecurityEnforced`.
 
 **Plus two fields that are not on `EnvironmentPolicy`,** for reasons given below:
-`declaredEnvironment` (the raw column, see [the effective-environment note](#the-policy-cards-two-traps))
+`declaredEnvironment` (the raw column, see [the effective-environment note](#the-policy-cards-three-traps))
 and `loopbackRedirectPermitted` (a server-computed answer, see the same section).
 
 **Decision — the widening cascades to two response schemas, deliberately.**
@@ -355,23 +358,23 @@ On the client-detail page, a **Policy** card. On the client list card, a compact
 only. The detail card shows the six consequences an operator actually cares about, each as a
 labelled row with the value and a one-line explanation of what it means for this client:
 
-| Row                    | Source                                            | Rendered as                                                                       |
-| ---------------------- | ------------------------------------------------- | --------------------------------------------------------------------------------- |
-| Access token lifetime  | `policy.accessTokenLifespanTier`                  | "Short" / "Long", with the tier name in the tooltip                               |
-| PKCE                   | **Not a policy field — always "Required (S256)"** | See [the two traps](#the-policy-cards-two-traps) below                            |
-| Loopback redirect URIs | `policy.loopbackRedirectPermitted` (new)          | "Permitted" / "Rejected"                                                          |
-| Rate limit             | `policy.rateLimitTier`                            | "Strict" / "Lenient"                                                              |
-| Agent step-up          | `policy.agentStepUpEnforced`                      | "Enforced" / "Not enforced"                                                       |
-| T3 hardening bundle    | `policy.t3SecurityEnforced`                       | "Enforced" / "Relaxed", linking to [Browser security](/operate/browser-security/) |
+| Row                      | Source                                            | Rendered as                                                                        |
+| ------------------------ | ------------------------------------------------- | ---------------------------------------------------------------------------------- |
+| Access token lifetime    | `policy.accessTokenLifespanTier`                  | "Short" / "Long", with the tier name in the tooltip                                |
+| PKCE                     | **Not a policy field — always "Required (S256)"** | See [the three traps](#the-policy-cards-three-traps) below                         |
+| Loopback redirect URIs   | `policy.loopbackRedirectPermitted` (new)          | "Permitted" / "Rejected"                                                           |
+| Rate limit               | `policy.rateLimitTier`                            | "Strict" / "Lenient"                                                               |
+| Agent step-up            | `policy.agentStepUpEnforced`                      | "Enforced" / "Not enforced"                                                        |
+| Consent-screen style CSP | `policy.t3SecurityEnforced`                       | "Strict" / "Relaxed (inline styles)" — see [trap 3](#the-policy-cards-three-traps) |
 
-### The Policy card's two traps
+### The Policy card's three traps
 
-Two rows in that table do **not** come from the obviously-named policy field, and both would be
-false security statements if they did. This section exists because the first draft of this
-specification got both of them wrong — which is the best evidence available that "render the
+Three rows in that table do **not** say what the obviously-named policy field appears to say, and
+each would be a false security statement if they did. This section exists because the first draft of
+this specification got all three wrong — which is the best evidence available that "render the
 response, never re-derive" is necessary but **not sufficient**. Faithfully rendering a field whose
-name reads like the answer, when it is only one input to the answer, produces exactly the drift the
-rule was written to prevent.
+name reads like the answer, when it is only one input to the answer — or an answer about something
+much narrower — produces exactly the drift the rule was written to prevent.
 
 **Trap 1 — PKCE is mandatory for every client in every environment, and `pkceRequired` does not say
 so.** `authorizeQuerySchema` declares `code_challenge` and
@@ -424,7 +427,7 @@ that is true.
 permits an `http://localhost` redirect when **either** the environment opts in **or** PKCE is
 enforced: `policy.localhostRedirectAllowed || policy.pkceRequired`
 (`apps/auth-server/src/app/helpers/oauth-redirect.ts:73`). Across the three shipped profiles
-(`apps/auth-server/src/app/helpers/environment-policy.ts:158`) that disjunction is `true` every
+(`apps/auth-server/src/app/helpers/environment-policy.ts:170`) that disjunction is `true` every
 time — `development` via the first term, `staging` and `production` via the second. The reasoning is
 in the function's own doc comment: loopback plus S256 is safe on any host, and gating it on PKCE
 rather than https-only is what lets native and MCP clients complete the auth-code flow against a
@@ -444,10 +447,31 @@ policy fields, the server sends the decision, not the arguments.** A field named
 not an answer, and a UI that combines inputs is re-deriving policy no matter how simple the
 combination looks.
 
+**Trap 3 — `t3SecurityEnforced` does not gate the T3 hardening bundle; it gates one directive on one
+page.** The T3 controls proper — security headers, CSRF, secure cookies — are global, have no client
+in scope, and never read the flag: helmet is registered globally, the `/ui/login` and `/ui/consent`
+CSRF checks always run, and the session cookie's `Secure` attribute comes solely from
+`SESSION_COOKIE_SECURE`. The field's own contract says exactly that, and closes with "do not
+document this flag as gating the whole bundle"
+(`apps/auth-server/src/app/helpers/environment-policy.ts:157`). Its one consumer is the consent
+screen — the rare browser surface that unambiguously carries a `client_id` — which marks the reply
+for a relaxed style CSP when the flag is false
+(`apps/auth-server/src/app/routes/ui/consent.ts:464`), so a developer iterating on that page is not
+forced to nonce every style.
+
+A row reading "T3 hardening bundle: Relaxed" would therefore tell a `development` client's owner
+that clickjacking, MIME-sniffing and CSRF protection are off for them. They are not, in any
+environment. [Browser security](/operate/browser-security/) states the same thing from the other
+side, in bold — which is what makes linking that page from such a row worse than not linking it.
+
+**Decision — the row is labelled "Consent-screen style CSP", renders "Strict" / "Relaxed (inline
+styles)", and does not link to the browser-security page.** Unlike traps 1 and 2, the source field
+is the right one; the trap is entirely in its name. What the row must not do is inherit that name.
+
 **Decision — four `policy` fields are carried in the response and rendered nowhere.**
-`pkceRequired` and `localhostRedirectAllowed` for the reasons in the two traps above — they are
-inputs, not answers. `refreshRotationRequired` and `openDynamicRegistration` because neither is a
-consequence a developer can act on from the portal: refresh rotation is transparent to a correctly
+`pkceRequired` and `localhostRedirectAllowed` for the reasons in the first two traps above — they
+are inputs, not answers. `refreshRotationRequired` and `openDynamicRegistration` because neither is
+a consequence a developer can act on from the portal: refresh rotation is transparent to a correctly
 implemented client, and dynamic registration is a realm-level posture this client's page cannot
 influence. Carrying all four and rendering none is deliberate — it keeps the response the complete
 record of what the server decided while keeping the card to what a reader can use.
@@ -455,13 +479,13 @@ record of what the server decided while keeping the card to what a reader can us
 **Decision — render tier names, not seconds.** `accessTokenLifespanTier` is a coarse label by
 design; the concrete seconds come from realm and environment configuration through
 `resolveAccessTokenLifespanSeconds`
-(`apps/auth-server/src/app/helpers/environment-policy.ts:281`), which the client response does not
+(`apps/auth-server/src/app/helpers/environment-policy.ts:293`), which the client response does not
 carry. Displaying a number the portal cannot actually resolve would be an invented capability.
 "Short" with the tier name in the tooltip is honest; "3600 s" would not be.
 
 **Decision — the card states that the environment is the _effective_ one, and why it may differ
 from what the developer set.** A realm pinned to `production` overrides a client asking for
-`development` (`apps/auth-server/src/app/helpers/environment-policy.ts:242`). A developer who set
+`development` (`apps/auth-server/src/app/helpers/environment-policy.ts:254`). A developer who set
 `development` and sees `production` with no explanation will file a bug. One sentence — "Capped by
 your realm's ceiling" — prevents it, shown only when the effective value is stricter than the
 client's declared value. That comparison needs the declared value, which the response does not
@@ -844,7 +868,7 @@ Three verdicts, not two — because a third category turned out to exist and mat
 | `oauth.userinfo.success`          | Unreachable       | `oauthClientId: null` (`apps/auth-server/src/app/routes/oauth/userinfo.ts:78`). Policy answer if that ever changes: allow                                     |
 | `oauth.userinfo.failure`          | Unreachable       | `oauthClientId: null` (`apps/auth-server/src/app/routes/oauth/userinfo.ts:96`). Policy answer if that ever changes: allow                                     |
 | `oauth.client.registered`         | Unreachable       | Attributed, but dynamic registration creates clients with `developerId: null` — see below                                                                     |
-| `oid4vp.response.received`        | Unreachable       | `oauthClientId: null` (`apps/auth-server/src/app/routes/oid4vp/response.ts:224`); also wallet federation behind a default-off flag                            |
+| `oid4vp.response.received`        | Unreachable       | `oauthClientId: null` (`apps/auth-server/src/app/routes/oid4vp/response.ts:234`); also wallet federation behind a default-off flag                            |
 | `oauth.consent.csrf_failure`      | Unreachable       | `oauthClientId: null` (`apps/auth-server/src/app/routes/ui/consent.ts:565`)                                                                                   |
 | `consents.revoke.csrf_failure`    | Unreachable       | `oauthClientId: null` (`apps/auth-server/src/app/routes/consents/index.ts:145`)                                                                               |
 

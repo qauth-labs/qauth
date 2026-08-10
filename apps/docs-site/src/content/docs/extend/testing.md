@@ -3,7 +3,7 @@ title: Testing
 description: The four tiers — unit, testcontainers integration, the repo-wide coverage gate, and the documentation invariants — what each can and cannot catch, how to run them, and the two caching lessons this repo learned the hard way.
 sidebar:
   order: 4
-lastVerified: '2026-07-27'
+lastVerified: '2026-08-10'
 ---
 
 QAuth has three test tiers plus a fourth that guards this documentation site. Knowing what each
@@ -179,7 +179,7 @@ assertions that this site has not drifted from the tree.
 | ------------------- | -------------------------------------------------------- | ------------------------------------------------------------------------------- |
 | Link resolution     | `apps/docs-site/src/invariants/link-resolution.ts:177`   | A link points at a route, heading anchor, or repository file that is not there  |
 | `path:line` anchors | `apps/docs-site/src/invariants/anchor-validity.ts:81`    | A quoted `path:line` names a missing file, or a symbol quoted beside it is gone |
-| Endpoint coverage   | `apps/docs-site/src/invariants/endpoint-coverage.ts:111` | The route tree, `openapi.json`, and the API reference page disagree on paths    |
+| Endpoint coverage   | `apps/docs-site/src/invariants/endpoint-coverage.ts:127` | The route tree, `openapi.json`, and the API reference page disagree on paths    |
 | Status claims       | `apps/docs-site/src/invariants/status-claims.ts:21`      | Prose calls a feature unbuilt while its evidence path exists on disk            |
 
 ### What they protect
@@ -215,11 +215,11 @@ These are the limits **by construction**, not gaps waiting to be filled:
   write one, open the file and count. This has already produced a round of corrections on another
   lane.
 - **Endpoint coverage proves path-set equality only.** The guard's own comment at
-  `apps/docs-site/src/invariants/endpoint-coverage.ts:128` states that the HTTP method is matched
+  `apps/docs-site/src/invariants/endpoint-coverage.ts:144` states that the HTTP method is matched
   only to be skipped and never captured, so `` `GET /oauth/revoke` `` would satisfy the check for a
   POST-only endpoint exactly as well as the correct method. It also "cannot tell a real explanation
   from a passing mention": a path named once in a see-also list counts as documented. What legs 2
-  and 3 prove, per `apps/docs-site/src/invariants/endpoint-coverage.ts:136`, is that the **set** of
+  and 3 prove, per `apps/docs-site/src/invariants/endpoint-coverage.ts:152`, is that the **set** of
   path strings on the reference page equals the **set** of path keys in `openapi.json` — real
   anti-rot value, but not a correctness check on what the page says about any one of them.
 - **`lastVerified` is recorded, not enforced.** Nothing fails when it goes stale; the Reference

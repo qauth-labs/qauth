@@ -3,7 +3,7 @@ title: Docker Guide
 description: Running QAuth with Docker Compose — production and development, service details, and troubleshooting.
 sidebar:
   order: 1
-lastVerified: '2026-07-27'
+lastVerified: '2026-08-10'
 ---
 
 This guide covers the Docker setup for QAuth: **production** (prod build, no watch) and **development** (dev image, Compose Watch + `nx serve --watch`).
@@ -330,7 +330,21 @@ docker exec -it qauth-redis sh
 
 ## Environment Variables
 
-See `.env.docker.example` for all available variables. Key variables:
+> **The Compose `environment:` map is an allowlist — `.env` alone is not enough.**
+> The `auth-server` service in `docker-compose.yml` configures itself through an
+> explicit `environment:` map. There is no `env_file:`, no bind mount of the repo
+> into the container, and the root `.dockerignore` excludes `.env` from the build
+> context — so the container never reads `.env` itself. Compose does read `.env`,
+> but only to expand the `${VAR:-default}` references **that the map already
+> contains**. A variable the map does not name resolves to its schema default
+> inside the container no matter what `.env` says, silently. Turning on a setting
+> from the sections below therefore means adding a line to that map, e.g.
+> `CIMD_TRUST_POLICY: ${CIMD_TRUST_POLICY:-accept-any-https}`; the
+> wallet-federation block in the same file is the worked example, and says in a
+> comment why each flag had to be forwarded.
+
+See `.env.docker.example` for all available variables. Key variables — these
+ones do take effect from `.env` under Compose:
 
 | Variable          | Required | Description                                        |
 | ----------------- | -------- | -------------------------------------------------- |
@@ -374,7 +388,7 @@ CIMD is the recommended MCP client-registration mechanism (see [ADR-007](/refere
 | `CIMD_FETCH_TIMEOUT_MS`        | No       | `5000`             | Per-fetch timeout in milliseconds.                                                                                                                              |
 | `CIMD_ALLOW_PRIVATE_ADDRESSES` | No       | `false`            | Allow fetches to non-public IPs (loopback/private/link-local). **Keep `false` in production** — it disables the SSRF guard; for dev/integration harnesses only. |
 
-> **Note:** `.env.docker.example` does not yet list the `CIMD_*` variables. They are optional and default-safe, so the stack runs without them; add them to `.env` only to override the defaults above.
+> **Note:** neither `.env.docker.example` nor the `auth-server` `environment:` map in `docker-compose.yml` lists the `CIMD_*` variables. They are optional and default-safe, so the stack runs without them — but under Compose you cannot override them from `.env`. `CIMD_TRUST_POLICY=allowlist` set that way never reaches the container: the policy stays `accept-any-https`, which returns before the `CIMD_TRUSTED_DOMAINS` check is consulted, so the allowlist you configured is not applied. Forward the variables in the `environment:` map first (see the allowlist note at the top of this section).
 
 ### ID-JAG / enterprise-managed authorization (ADR-011)
 
@@ -394,6 +408,11 @@ empty `ID_JAG_TRUSTED_ISSUERS` rejects every assertion. See
 | `ID_JAG_FETCH_TIMEOUT_MS`        | No                | `5000`    | Timeout for issuer discovery / JWKS fetches.                                                                                                 |
 | `ID_JAG_MAX_DOCUMENT_BYTES`      | No                | `65536`   | Size cap on a fetched discovery or JWKS document.                                                                                            |
 | `ID_JAG_ALLOW_PRIVATE_ADDRESSES` | No                | `false`   | SSRF guard. Leave off outside local development.                                                                                             |
+
+> **Note:** none of the `ID_JAG_*` variables are forwarded by the `auth-server`
+> `environment:` map, so under Compose they stay at the defaults above whatever
+> `.env` says — including `ID_JAG_ENABLED`, which means the `jwt-bearer` grant
+> cannot be switched on from `.env`. Add the ones you need to that map first.
 
 ### Wallet federation (OID4VP, T4)
 
@@ -439,7 +458,14 @@ unless configured. See the [verifier guide](/operate/pqc-verifier-guide/).
 
 > **Note:** `.env.docker.example` does not list the wallet-federation or
 > post-quantum variables either. Both features are off by default, so the stack
-> runs without them.
+> runs without them. Compose forwarding differs between the two: every wallet
+> variable above **is** in the `auth-server` `environment:` map except the four
+> `OID4VP_SUBJECT_*` ones, so the forwarded ones can be set from `.env`. Those
+> four cannot — and one of them, `OID4VP_SUBJECT_BINDING_CLAIMS`, is required
+> once the flag is on, so a stock Compose stack cannot complete a wallet sign-in
+> until you add it to the map. **None** of the post-quantum variables are, so
+> `SIGNING_ALGORITHM_MODE`, `HYBRID_SIGNING_ENABLED`, `JWT_MLDSA_*` and `PQC_*`
+> stay at their defaults inside the container until you add them to that map.
 
 ## Troubleshooting
 

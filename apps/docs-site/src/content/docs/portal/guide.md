@@ -3,7 +3,7 @@ title: Portal guide
 description: The developer portal's session model, required environment variables, and every flow it implements, each traced to its route and server action.
 sidebar:
   order: 1
-lastVerified: '2026-07-27'
+lastVerified: '2026-08-10'
 ---
 
 `apps/developer-portal` (Nx project `developer-portal`) is a TanStack Start + React 19
@@ -252,7 +252,7 @@ The component's own comment says why it expects that to work: `credentials: 'inc
 browser sends the `__Host-qauth_session` cookie to the auth-server even on cross-origin
 deployments" (`apps/developer-portal/src/routes/consents.tsx:14`). `__Host-qauth_session` is
 real — it is the auth-server's own session cookie, set by `POST /ui/login`
-(`apps/auth-server/src/app/routes/ui/login.ts:218`, and see
+(`apps/auth-server/src/app/routes/ui/login.ts:383`, and see
 [Hosted UI](/integrate/hosted-ui/#uilogin)). But the developer portal's own login flow never
 visits `/ui/login`. It calls the JSON API `POST /auth/login` from a server function (see
 [the session model](#the-session-model) above) and stores the result in
@@ -274,8 +274,8 @@ already carries `__Host-qauth_session`:
   exactly the request shape `Lax` withholds the cookie from.
 - **CORS is fail-closed in production.** `cors` is registered with
   `origin: corsOrigins.length > 0 ? corsOrigins : env.NODE_ENV === 'production' ? false : '*'`
-  (`apps/auth-server/src/app/app.ts:255`) — `false` unless an operator sets `CORS_ORIGIN`. The
-  comment immediately above it (`apps/auth-server/src/app/app.ts:238`) says the assumption
+  (`apps/auth-server/src/app/app.ts:283-284`) — `false` unless an operator sets `CORS_ORIGIN`. The
+  comment above that block (`apps/auth-server/src/app/app.ts:267-277`) says the assumption
   behind the default is that "the JSON API is called by the same-origin developer portal." This
   page's direct browser `fetch()` is the one call site that isn't.
 

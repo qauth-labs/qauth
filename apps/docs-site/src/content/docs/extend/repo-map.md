@@ -3,7 +3,7 @@ title: Repository map
 description: The apps/ and libs/ layout, the Nx scope tags and the eslint boundary constraints derived from them, where new code belongs, and the Windows CRLF gotcha that breaks nx lint on files you never touched.
 sidebar:
   order: 3
-lastVerified: '2026-07-27'
+lastVerified: '2026-08-10'
 ---
 
 QAuth is an Nx monorepo with two trees: `apps/` for deployable entry points and `libs/` for
@@ -60,24 +60,24 @@ Directory nesting under `libs/` is a readability convention. **The `scope:` tag 
 
 ## The layering
 
-Every rule below is a `depConstraints` entry in `eslint.config.mjs:36`, and the comments there are
+Every rule below is a `depConstraints` entry in `eslint.config.mjs:117`, and the comments there are
 the source of record. `onlyDependOnLibsWithTags` lists what a project carrying that source tag may
 import **from inside the workspace**; external npm packages are never restricted.
 
 | Source tag      | May import (workspace)                                                           | In `eslint.config.mjs`  |
 | --------------- | -------------------------------------------------------------------------------- | ----------------------- |
-| `scope:core`    | nothing — strict leaf                                                            | `eslint.config.mjs:51`  |
-| `scope:shared`  | nothing — strict leaf                                                            | `eslint.config.mjs:41`  |
-| `scope:ui`      | nothing — strict leaf                                                            | `eslint.config.mjs:58`  |
-| `scope:infra`   | `scope:core`, `scope:infra`, `scope:shared`                                      | `eslint.config.mjs:77`  |
-| `scope:server`  | `scope:core`, `scope:server`, `scope:shared`                                     | `eslint.config.mjs:85`  |
-| `scope:fastify` | `scope:core`, `scope:fastify`, `scope:server`, `scope:infra`, `scope:shared`     | `eslint.config.mjs:93`  |
-| `scope:app`     | `scope:core`, `scope:fastify`, `scope:shared`, `scope:server-config`, `scope:ui` | `eslint.config.mjs:106` |
-| `type:testing`  | see [the dead rule](#the-typetesting-rule-cannot-grant-anything)                 | `eslint.config.mjs:62`  |
+| `scope:core`    | nothing — strict leaf                                                            | `eslint.config.mjs:132` |
+| `scope:shared`  | nothing — strict leaf                                                            | `eslint.config.mjs:122` |
+| `scope:ui`      | nothing — strict leaf                                                            | `eslint.config.mjs:139` |
+| `scope:infra`   | `scope:core`, `scope:infra`, `scope:shared`                                      | `eslint.config.mjs:158` |
+| `scope:server`  | `scope:core`, `scope:server`, `scope:shared`                                     | `eslint.config.mjs:166` |
+| `scope:fastify` | `scope:core`, `scope:fastify`, `scope:server`, `scope:infra`, `scope:shared`     | `eslint.config.mjs:174` |
+| `scope:app`     | `scope:core`, `scope:fastify`, `scope:shared`, `scope:server-config`, `scope:ui` | `eslint.config.mjs:187` |
+| `type:testing`  | see [the dead rule](#the-typetesting-rule-cannot-grant-anything)                 | `eslint.config.mjs:143` |
 
 ### Why `scope:core` and `scope:shared` are strict leaves
 
-Both are declared `onlyDependOnLibsWithTags: []`, and the comment at `eslint.config.mjs:45`
+Both are declared `onlyDependOnLibsWithTags: []`, and the comment at `eslint.config.mjs:126`
 explains `scope:core`:
 
 > Core libraries provide low-level, framework-agnostic primitives (crypto, encoding). Like the
@@ -102,7 +102,7 @@ would therefore slip past every leaf constraint. Tag every new lib as the first 
 
 ### The consequence you will actually hit: `scope:app` cannot import `scope:server`
 
-`scope:app`'s allowlist (`eslint.config.mjs:106`) contains `scope:fastify` but **not**
+`scope:app`'s allowlist (`eslint.config.mjs:187`) contains `scope:fastify` but **not**
 `scope:server`. So `apps/auth-server` cannot import `@qauth-labs/server-federation`,
 `@qauth-labs/server-jwt`, or any other `libs/server/*` package directly, even though it is
 obviously the consumer of all of them. The only sanctioned route is through the matching
@@ -154,7 +154,7 @@ So do not infer a project's layer from its path. Read its `project.json`.
 
 ### The `type:testing` rule cannot grant anything
 
-`eslint.config.mjs:62` declares that a `type:testing` project may depend on `scope:core`,
+`eslint.config.mjs:143` declares that a `type:testing` project may depend on `scope:core`,
 `scope:shared`, `scope:ui`, `scope:infra`, `scope:server` and `scope:fastify` — a deliberately
 broad allowance, so test helpers can reach whatever they need to build fixtures.
 
@@ -197,7 +197,7 @@ Two rules of thumb that follow from the layering:
 `.tsx` (51 tracked files), `.mjs` (4), `.astro` (2) and `.css` (1).
 
 On a Windows checkout with `core.autocrlf=true`, those files land on disk with CRLF line endings.
-Prettier's config sets `endOfLine: "lf"` (`.prettierrc`) and `eslint.config.mjs:149` promotes
+Prettier's config sets `endOfLine: "lf"` (`.prettierrc`) and `eslint.config.mjs:242` promotes
 `prettier/prettier` to `error`, so:
 
 ```console

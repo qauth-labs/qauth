@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -140,8 +140,8 @@ describe('findBrokenLinks — fixtures', () => {
   it('MUTATION: fails a site-origin-absolute link aiming at a route that does not exist', () => {
     // Before this fix, `isOutOfScope` matched ANY `https?:` link — including
     // one on the site's own origin — and skipped it unconditionally. This
-    // is the exact bug qauth-labs/qauth#351 fix round 2 found: all four
-    // `docs/*.md` pointer stubs use this absolute form, so this guard was
+    // is the exact bug qauth-labs/qauth#351 fix round 2 found: every
+    // `docs/*.md` pointer stub uses this absolute form, so this guard was
     // silently checking none of their forward links.
     const siteOriginBroken = loadFixturePage('site-origin-broken.md');
     const violations = findBrokenLinks([home, guide, siteOriginBroken], {
@@ -287,10 +287,40 @@ describe('findBrokenLinks — repo-root-absolute paths the deployed site never s
 });
 
 describe('findBrokenLinks — real content tree', () => {
-  /** The repo-root pointer stubs Task 5 left behind — scan-only, own no route. */
-  function loadStub(fileName: string): LinkablePage {
+  /** A repo-root `docs/*.md` file — scan-only, owns no route. */
+  function loadRepoDocsPage(fileName: string): LinkablePage {
     const filePath = join(REPO_ROOT, 'docs', fileName);
     return { id: `docs/${fileName}`, filePath, content: readFileSync(filePath, 'utf8') };
+  }
+
+  /**
+   * The pointer-stub shape a moved guide leaves behind at its old
+   * `docs/*.md` path: one sentence naming the guide's new home on the site,
+   * written as an absolute `SITE_ORIGIN` URL rather than a site-relative
+   * path (a stub is read on GitHub, where `/integrate/...` would resolve
+   * against github.com). Built from the SAME `site:` value the resolver
+   * reads out of `astro.config.mjs`, so a domain change cannot leave a
+   * second hardcoded copy of the origin behind here.
+   */
+  const ESCAPED_SITE_ORIGIN = SITE_ORIGIN.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const POINTER_STUB_RE = new RegExp(
+    `has moved to the documentation site: \\[[^\\]]*\\]\\(${ESCAPED_SITE_ORIGIN}/`
+  );
+
+  /**
+   * Every pointer stub under `docs/`, DERIVED by globbing the directory and
+   * matching the shape above rather than enumerated by hand. The hand-kept
+   * list this replaced named four files; the migration has since left eleven,
+   * and the seven it did not name were scanned by nothing at all — no other
+   * invariant reads `docs/*.md`, and CI runs no link checker. A derived set
+   * cannot fall behind the next guide that moves.
+   */
+  function loadPointerStubs(): LinkablePage[] {
+    return readdirSync(join(REPO_ROOT, 'docs'))
+      .filter((fileName) => fileName.endsWith('.md'))
+      .sort()
+      .map(loadRepoDocsPage)
+      .filter((page) => POINTER_STUB_RE.test(page.content));
   }
 
   /**
@@ -337,7 +367,7 @@ describe('findBrokenLinks — real content tree', () => {
     // directory, or a workspace-root resolution that lands somewhere
     // unexpected would still leave the assertion below green. Lower bounds,
     // not an exact count, so this survives the content tree growing (the
-    // whole point of every later docs task). Today there are 7 pages and
+    // whole point of every later docs task). Today there are 30 pages and
     // `index.mdx` alone carries 4 `LinkCard` links.
     expect(pages.length).toBeGreaterThanOrEqual(5);
     const totalLinks = pages.reduce(
@@ -346,27 +376,42 @@ describe('findBrokenLinks — real content tree', () => {
     );
     expect(totalLinks).toBeGreaterThan(0);
 
-    // The four Task 5 pointer stubs — scanned here too (previously they
-    // were not: they link with the site's absolute production URL, which
-    // `isOutOfScope` treated as unconditionally external and skipped
-    // before qauth-labs/qauth#351 fix round 2). `routedPages` stays
-    // `pages` + `recordPages` only: a stub owns no route of its own, so
-    // nothing should be able to link INTO one.
-    const stubs = [
-      loadStub('mcp-quickstart.md'),
-      loadStub('oauth-flow.md'),
-      loadStub('api-reference.md'),
-      loadStub('code-examples.md'),
-    ];
-    // Non-vacuity for the stub scan specifically: each stub must carry at
-    // least one link, or a broken stub loader would silently contribute
-    // nothing to the scan below.
-    for (const stub of stubs) {
-      expect(extractLinkTargets(stub.content).length).toBeGreaterThan(0);
+    // Every `docs/*.md` pointer stub, plus `docs/README.md` — scanned here
+    // too (previously they were not: they link with the site's absolute
+    // production URL, which `isOutOfScope` treated as unconditionally
+    // external and skipped before qauth-labs/qauth#351 fix round 2).
+    // `README.md` is listed explicitly because it is not a stub — it is the
+    // directory's own index page, and it links out to the site with the same
+    // absolute form. `routedPages` stays `pages` + `recordPages` only:
+    // neither a stub nor `README.md` owns a route of its own, so nothing
+    // should be able to link INTO one.
+    const stubs = loadPointerStubs();
+    const repoDocsPages = [...stubs, loadRepoDocsPage('README.md')];
+
+    // Non-vacuity for the derived stub set: a glob or a shape regex that
+    // stops matching would leave this describe scanning fewer files while
+    // still reporting zero violations — the exact way a derived set fails
+    // silently where the old hand-kept list failed loudly. A lower bound,
+    // not an exact count, so a twelfth guide moving does not break this;
+    // the named four are the set the hand-kept list carried, asserted so a
+    // regex that matched eleven of the WRONG files still fails.
+    expect(stubs.length).toBeGreaterThanOrEqual(11);
+    expect(stubs.map((stub) => stub.id)).toEqual(
+      expect.arrayContaining([
+        'docs/mcp-quickstart.md',
+        'docs/oauth-flow.md',
+        'docs/api-reference.md',
+        'docs/code-examples.md',
+      ])
+    );
+    // Each scanned file must carry at least one link, or a broken loader
+    // would silently contribute nothing to the scan below.
+    for (const page of repoDocsPages) {
+      expect(extractLinkTargets(page.content).length).toBeGreaterThan(0);
     }
 
     const routedPages = [...pages, ...recordPages];
-    const violations = findBrokenLinks([...pages, ...stubs], {
+    const violations = findBrokenLinks([...pages, ...repoDocsPages], {
       repoRoot: REPO_ROOT,
       routedPages,
       siteOrigin: SITE_ORIGIN,

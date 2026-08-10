@@ -18,13 +18,22 @@ on:
   push:
     branches:
       - main
-    paths: &docs-site-inputs
+    # Spelled out longhand in both places on purpose. A YAML anchor/alias pair
+    # (`&docs-site-inputs` / `*docs-site-inputs`) is valid YAML but GitHub's
+    # workflow parser rejects it outright ("Anchors are not currently
+    # supported"), which makes the whole file unparseable and the workflow
+    # never runs. Keep the two lists identical by hand.
+    paths:
       - 'apps/docs-site/**'
       - 'docs/adr/**'
       - 'docs/security/**'
       - '.github/workflows/docs.yml'
   pull_request:
-    paths: *docs-site-inputs
+    paths:
+      - 'apps/docs-site/**'
+      - 'docs/adr/**'
+      - 'docs/security/**'
+      - '.github/workflows/docs.yml'
   # Manual escape hatch: the path filters above are the build's true content
   # inputs, not every possible influence on the built output (a root
   # dependency bump in package.json/pnpm-lock.yaml, for instance, changes
@@ -83,8 +92,12 @@ jobs:
         # Scoped to exactly the two conditions below that actually attempt a
         # deploy. A `workflow_dispatch` run on a non-main branch deploys
         # nothing (see the last step), so it must not fail here over secrets
-        # it will never need.
-        if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main'
+        # it will never need. Fork pull requests are excluded for the same
+        # reason: GitHub withholds secrets from them, so they can never have
+        # these two and never reach the preview step below — failing them here
+        # would throw away an external contributor's passing test and build
+        # results over a condition they cannot fix.
+        if: (github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork != true) || github.ref == 'refs/heads/main'
         env:
           NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
           NETLIFY_SITE_ID: ${{ secrets.NETLIFY_SITE_ID }}
@@ -98,7 +111,12 @@ jobs:
           fi
 
       - name: Deploy preview (pull request)
-        if: github.event_name == 'pull_request'
+        # Non-fork pull requests only: a fork-originated `pull_request` run gets
+        # no repository secrets, so NETLIFY_AUTH_TOKEN/NETLIFY_SITE_ID below
+        # would both be empty and the deploy would hard-fail (or hang on an
+        # interactive prompt). Fork PRs still get the test and build gates
+        # above; they just publish no preview.
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork != true
         env:
           NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
           NETLIFY_SITE_ID: ${{ secrets.NETLIFY_SITE_ID }}

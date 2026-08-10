@@ -16,7 +16,7 @@ import {
  * records (`docs/adr/*.md`, `docs/security/*.md`) into working site
  * routes — or, for a real repo file the records collection does not
  * render, a GitHub blob URL — at build time. See the plugin's own doc
- * comment for the five-bucket rule this file tests.
+ * comment for the six-bucket rule this file tests.
  */
 
 const REPO_ROOT = resolveRepoRoot();
@@ -31,7 +31,12 @@ function sourcePath(...segments: string[]): string {
   return join(REPO_ROOT, 'docs', ...segments);
 }
 
-describe('rewriteRecordLink — the four buckets', () => {
+/** A page of the site's own `docs` content collection — the bucket 2b family. */
+function contentDocsPath(...segments: string[]): string {
+  return join(REPO_ROOT, 'apps', 'docs-site', 'src', 'content', 'docs', ...segments);
+}
+
+describe('rewriteRecordLink — the six buckets', () => {
   it('leaves an external https:// link untouched', () => {
     const node = link('https://openid.net/specs/openid-connect-core-1_0.html');
     rewriteRecordLink(node, sourcePath('adr', '002-identifier-abstraction.md'), OPTIONS);
@@ -100,6 +105,35 @@ describe('rewriteRecordLink — the four buckets', () => {
     expect(node.url).toBe(
       `${GITHUB_BLOB_BASE_URL}/docs/eudi-regulatory-drift-log.md#3-cir-eu-20242979-article-14-and-annex-v--pseudonyms--superseded`
     );
+  });
+
+  it('rewrites a relative .md link between two SITE CONTENT pages to the route Starlight serves, NOT a GitHub blob URL (bucket 2b)', () => {
+    // The plugin is registered globally, so it also runs over every page of
+    // the `docs` collection. Before bucket 2b, this link resolved to a real
+    // file, was not a record, and therefore fell to bucket 3 — coming out as
+    // `${GITHUB_BLOB_BASE_URL}/apps/docs-site/src/content/docs/extend/frontmatter.md`,
+    // silently ejecting a reader of the rendered page into raw markdown
+    // source. `link-resolution.ts` cannot catch that: it only asks whether
+    // the relative target exists next to the page, which it does.
+    expect(existsSync(contentDocsPath('extend', 'frontmatter.md'))).toBe(true);
+    const node = link('./frontmatter.md');
+    rewriteRecordLink(node, contentDocsPath('extend', 'architecture.md'), OPTIONS);
+    expect(node.url).toBe('/extend/frontmatter/');
+  });
+
+  it('keeps the anchor when rewriting a site-content link to its route (bucket 2b)', () => {
+    // `## Fields` in extend/frontmatter.md — a real heading, so the rewritten
+    // link is one a reader can actually follow, not just a string match.
+    const node = link('./frontmatter.md#fields');
+    rewriteRecordLink(node, contentDocsPath('extend', 'architecture.md'), OPTIONS);
+    expect(node.url).toBe('/extend/frontmatter/#fields');
+  });
+
+  it('collapses an index page to its lane route, the way Starlight serves it (bucket 2b)', () => {
+    expect(existsSync(contentDocsPath('integrate', 'index.md'))).toBe(true);
+    const node = link('../integrate/index.md');
+    rewriteRecordLink(node, contentDocsPath('extend', 'architecture.md'), OPTIONS);
+    expect(node.url).toBe('/integrate/');
   });
 
   it("leaves a repo-root-ABSOLUTE /docs/... link untouched — the docs collection's own, different convention (bucket 0)", () => {
@@ -232,7 +266,7 @@ describe('rewriteRecordLink — the real docs/adr and docs/security corpus, enum
     expect(extractAllLinks()).toHaveLength(196);
   });
 
-  it('every link falls into exactly one of the four buckets, with none left unresolved', () => {
+  it('every link falls into exactly one of the four outcomes, with none left unresolved', () => {
     const links = extractAllLinks();
     let untouchedExternalOrAnchor = 0;
     let rewrittenToRoute = 0;

@@ -3,7 +3,7 @@ title: API Reference
 description: Hand-written reference for every path in QAuth's committed OpenAPI spec.
 sidebar:
   order: 4
-lastVerified: '2026-07-27'
+lastVerified: '2026-08-10'
 ---
 
 Hand-written reference for QAuth's HTTP endpoints. The **authoritative, always-current**
@@ -39,6 +39,30 @@ Schema-validation failures use:
 ```json
 { "error": "Validation error", "code": "VALIDATION_ERROR", "statusCode": 400 }
 ```
+
+> **⚠️ A live defect in this tree, not history.** The two shapes above describe
+> `apps/auth-server/src/app/plugins/error-handler.ts`, and at this commit that
+> handler answers **no** route: `app.ts` registers it after both `AutoLoad`
+> sweeps, and Fastify 5 captures each route's error handler when that route's
+> plugin finishes loading, so Fastify's built-in handler serves every error
+> instead. What a client sees today is
+> `{ "error": "<HTTP status name>", "code": "…", "message": "…", "statusCode": 400 }` —
+> the human-readable text sits in `message`, and `error` holds the status name
+> (`"Bad Request"`, `"Conflict"`). Schema-validation failures carry
+> `code: "FST_ERR_VALIDATION"`, so a client branching on
+> `code === "VALIDATION_ERROR"` never matches; and a duplicate
+> `POST /auth/register` returns the raw database constraint name in `message` —
+> the account-enumeration oracle the handler above exists to suppress. The OAuth
+> error codes in the next paragraph reach a JSON body the same way:
+> `error-handler.ts:82-97` is what puts `invalid_grant`, `invalid_scope`,
+> `invalid_request`, and `invalid_target` in the `error` field alongside a
+> separate `error_description`. Unreached, the bare code arrives in `message`,
+> `error_description` is dropped entirely, and `error` holds the status name — a
+> client keying off `error` as RFC 6749 §5.2 prescribes matches nothing, and all
+> four share `statusCode: 400`. Branch on `statusCode` — and, on the OAuth
+> endpoints, on `message` — until [#365](https://github.com/qauth-labs/qauth/issues/365)
+> lands, and delete this callout with it. Mechanism and the full consequence list:
+> [Request lifecycle](/extend/architecture/#what-silently-regresses-when-it-is-wrong).
 
 OAuth endpoints additionally return the standard OAuth error codes documented in
 [OAuth 2.1 Flow → Errors](/integrate/oauth-flow/#errors) (e.g. `invalid_grant`,
@@ -122,7 +146,9 @@ Create a user account. A verification email is sent (the `mock` provider logs it
 ```
 
 Errors: `400` (validation / weak password), `409` (email already registered),
-`429` (rate limited).
+`429` (rate limited). Until [#365](https://github.com/qauth-labs/qauth/issues/365)
+lands, that `409` also carries the raw unique-constraint name in `message` — see the
+[error-model caveat](#error-model) above.
 
 ### `POST /auth/login`
 
@@ -350,13 +376,13 @@ The wallet-login screens below are registered **only** when
 `WALLET_FEDERATION_ENABLED` is on; with the flag off (the default) every path
 404s. See [Wallet sign-in](/integrate/wallet-login/) for the flow they implement.
 
-| Endpoint                           | Method | Purpose                                                                  |
-| ---------------------------------- | ------ | ------------------------------------------------------------------------ |
-| `/ui/wallet-login`                 | GET    | Start a wallet sign-in — renders the QR / deep-link invocation.          |
-| `/ui/wallet-login/{handle}`        | GET    | The waiting screen for a pending presentation.                           |
-| `/ui/wallet-login/{handle}/status` | GET    | Poll the presentation's outcome, and complete the sign-in once it lands. |
-| `/ui/wallet-link`                  | GET    | Start linking a wallet credential to the signed-in account (issue #238). |
-| `/ui/wallet-link/{handle}`         | GET    | The waiting/outcome screen for a pending link.                           |
+| Endpoint                           | Method    | Purpose                                                                                                |
+| ---------------------------------- | --------- | ------------------------------------------------------------------------------------------------------ |
+| `/ui/wallet-login`                 | GET, POST | GET renders the ADR-009 identifier form; POST starts the sign-in and renders the QR / deep link.       |
+| `/ui/wallet-login/{handle}`        | GET       | The waiting screen for a pending presentation.                                                         |
+| `/ui/wallet-login/{handle}/status` | GET       | Poll the presentation's outcome, and complete the sign-in once it lands.                               |
+| `/ui/wallet-link`                  | GET, POST | GET renders the confirmation screen; POST starts the link and renders the QR / deep link (issue #238). |
+| `/ui/wallet-link/{handle}`         | GET       | The waiting/outcome screen for a pending link.                                                         |
 
 ---
 

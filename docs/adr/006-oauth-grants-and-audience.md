@@ -7,7 +7,7 @@
 > **Corrections (2026-08-08): two statements below were overtaken by changes landed within days of this ADR and never annotated.**
 >
 > 1. **`/auth/refresh` no longer exists.** The claims-flow list below names it as a user-context token route; it was removed on 2026-04-24 (commit `b0164cd`) in favour of a single token surface. Refreshing is now `grant_type=refresh_token` on `POST /oauth/token`. No route file or reference to `/auth/refresh` remains in `apps/` or `libs/`.
-> 2. **`unauthorized_client` returns HTTP 400, not 401.** The error-mapping table below records 401 for "grant not in `client.grant_types`". `UnauthorizedClientError.statusCode` is `400` (`libs/shared/errors/src/lib/auth/unauthorized-client.error.ts`), and the global error handler passes that status through verbatim, so the wire response is 400. Changed on 2026-04-22 (commit `64abb7f`). The table's other rows remain correct — `invalid_client` is 401; `invalid_scope`, `invalid_grant` and `unsupported_grant_type` are 400.
+> 2. **`unauthorized_client` returns HTTP 400, not 401.** The error-mapping table below records 401 for "grant not in `client.grant_types`". `UnauthorizedClientError.statusCode` is `400` (`libs/shared/errors/src/lib/auth/unauthorized-client.error.ts`), and that is the status Fastify puts on the wire, so the response is 400. Changed on 2026-04-22 (commit `64abb7f`). The table's other rows remain correct — `invalid_client` is 401; `invalid_scope`, `invalid_grant` and `unsupported_grant_type` are 400.
 
 ## Context
 

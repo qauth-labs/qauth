@@ -3,7 +3,7 @@ title: Adding a credential provider
 description: The ADR-003 extension point — the CredentialProvider interface, the registry, and createConfiguredProviders as the single registration point, with PasswordProvider as the complete example and WalletProvider as the fail-closed one.
 sidebar:
   order: 5
-lastVerified: '2026-07-27'
+lastVerified: '2026-08-10'
 ---
 
 A **credential provider** is how QAuth learns that a user is who they say they are. Password
@@ -215,7 +215,7 @@ the two method bodies against a stable shell. The module deliberately contains n
 
 ### Why throwing is a security property, not laziness
 
-`libs/server/federation/src/providers/wallet.provider.ts:30` states both halves:
+`libs/server/federation/src/providers/wallet.provider.ts:43-78` states both halves:
 
 > - A stub that resolved a placeholder `VerifiedIdentity` would be an authentication-bypass
 >   primitive the moment `WALLET_FEDERATION_ENABLED` is flipped or a route wires up
@@ -238,18 +238,21 @@ placeholder returns to make a caller compile or a test go green.
 
 ### The error type is chosen, too
 
-`walletSkeletonError` (`libs/server/federation/src/providers/wallet.provider.ts:145`) builds a
+`walletSkeletonError` (`libs/server/federation/src/providers/wallet.provider.ts:494`) builds a
 plain `Error`, not a `@qauth-labs/shared-errors` domain error. Domain errors carry
-`statusCode`/`code` and are mapped onto the wire by the global error handler, which would frame
-this as a reachable, client-facing outcome with a stable error contract. It is not one. Reaching it
-means QAuth is mis-wired, and a generic 500 plus a server-side stack trace is the right signal —
-minting a dedicated error class in the shared library would create permanent public wire surface
-for a condition that must never occur, and would invite treating the condition as a normal
-authentication outcome.
+`statusCode`/`code` for the global error handler to map onto the wire — what that handler is written
+to do, though at this commit it is registered after the route sweeps and so answers no route
+([#365](https://github.com/qauth-labs/qauth/issues/365);
+[Request lifecycle](/extend/architecture/#what-silently-regresses-when-it-is-wrong)) — and reaching
+for one here would frame this as a reachable, client-facing outcome with a stable error contract. It
+is not one. Reaching it means QAuth is mis-wired, and a generic 500 plus a server-side stack trace
+is the right signal — minting a dedicated error class in the shared library would create permanent
+public wire surface for a condition that must never occur, and would invite treating the condition
+as a normal authentication outcome.
 
 ### Constants can be load-bearing
 
-`WALLET_SOURCE` (`libs/server/federation/src/providers/wallet.provider.ts:125`) is `'wallet'`, and
+`WALLET_SOURCE` (`libs/server/federation/src/providers/wallet.provider.ts:188`) is `'wallet'`, and
 its comment flags that `claims/attribute-trust.ts` ranks that literal above every other attribute
 source. Changing the constant without changing `rankAttributeSource` would silently demote every
 wallet-issued attribute to the bottom rank. `wallet.provider.test.ts` pins the pair — if you add a

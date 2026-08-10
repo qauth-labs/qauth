@@ -3,7 +3,7 @@ title: Environment-Aware Authorization
 description: The environment (development/staging/production) policy-profile dimension — the two knobs, fail-safe defaults, and the operator setup for each deployment shape.
 sidebar:
   order: 5
-lastVerified: '2026-07-27'
+lastVerified: '2026-08-10'
 ---
 
 QAuth treats **environment** — `development`, `staging`, or `production` — as a
@@ -67,10 +67,21 @@ before production.
 | `rateLimitTier`                             | lenient     | lenient | strict     |
 | `openDynamicRegistration`                   | open        | gated   | gated      |
 | `agentStepUpEnforced`                       | ❌          | ✅      | ✅         |
-| `t3SecurityEnforced` (headers/CSRF/cookies) | ❌          | ✅      | ✅         |
+| `t3SecurityEnforced` (style CSP on consent) | ❌          | ✅      | ✅         |
 
 Notes:
 
+- `t3SecurityEnforced` is **narrower than its name suggests**, and the row above
+  is the whole of it. The flag has exactly one consumer: when it is false, the
+  consent screen serves a relaxed style CSP (`style-src 'self' 'unsafe-inline'`).
+  The rest of the T3 browser hardening is **unconditional** and never reads the
+  environment profile — `@fastify/helmet` is registered globally
+  (`apps/auth-server/src/app/plugins/security-headers.ts`), the `/ui/login` and
+  `/ui/consent` CSRF checks always run, and the session cookie's `Secure`
+  attribute is driven solely by `SESSION_COOKIE_SECURE`
+  (`apps/auth-server/src/app/helpers/session-cookie.ts`). Marking a client
+  `production` does **not** turn any of those on, and marking it `development`
+  does not turn them off. See [Browser Security](/operate/browser-security/).
 - `pkceRequired` here governs whether the **environment profile** hard-requires
   PKCE. QAuth's project-wide floor still defaults `oauth_clients.require_pkce=true`
   regardless, so PKCE is on unless a client is explicitly a `development` client
@@ -120,7 +131,10 @@ one place:
 
 - **Production deployment**: leave both columns at their `production` default, or
   explicitly pin `realms.max_environment_laxity = production` to lock the entire
-  realm. Nothing else to configure — the T3 hardening bundle is on.
+  realm. Nothing else to configure on this dimension — but note the T3 browser
+  hardening (security headers, CSRF, the cookie `Secure` flag) is **not** part of
+  it: those are unconditional and configured separately, chiefly via
+  `SESSION_COOKIE_SECURE` and the `SECURITY_HSTS_*` variables.
 - **Local development**: set the developer's realm `max_environment_laxity` to
   `development` (or `staging`) and mark specific clients `environment = development`
   to opt into static API keys, localhost redirects, and long-lived tokens — without
@@ -133,4 +147,4 @@ one place:
 - [ADR-008: Environment-Aware Authorization Posture](/reference/records/adr/008-environment-aware-authorization/) — rationale, fail-safe design, prior art.
 - [ADR-007: MCP-First Positioning](/reference/records/adr/007-mcp-first-positioning/) — the operator-set `max_agent_mode` precedent this reuses.
 - [Agent Authorization](/integrate/agent-authorization/) — agent step-up, which this posture enforces in `staging`/`production`.
-- [Browser Security](/operate/browser-security/) — the T3 hardening bundle that the production profile turns on.
+- [Browser Security](/operate/browser-security/) — the T3 hardening bundle. **This profile does not gate it**: Helmet, the CSRF checks, and the session cookie's `Secure` flag are all unconditional. `t3SecurityEnforced` relaxes exactly one thing — the consent-screen style CSP.

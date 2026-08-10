@@ -115,7 +115,7 @@ export const DELIVERY_TRACKS: DeliveryTrack[] = [
     name: 'Federation + PQC (long-term platform)',
     state: 'partial',
     summary:
-      'Identifier abstraction, the gate this track waited on, shipped and closed. Wallet federation is merged core but cannot complete a login end-to-end yet; PQC hybrid signing shipped behind a default-off flag. See the feature rows below.',
+      'Identifier abstraction, the gate this track waited on, shipped and closed. Wallet federation completes a browser sign-in end to end behind a default-off flag, with HAIP profile wiring, key-storage assurance and the real-wallet interoperability pass still open; PQC hybrid signing shipped behind a default-off flag. See the feature rows below.',
   },
 ];
 
@@ -143,7 +143,7 @@ export const FEATURE_STATUS: FeatureStatus[] = [
     feature: 'Wallet federation / OID4VP',
     state: 'partial',
     summary:
-      'Merged: `VerifierProfile` (#299), OID4VP 1.0 request generation and `direct_post` intake (#233), the per-realm issuer trust allowlist (#236), and ES256 + JWE crypto (#298). Open pull requests: SD-JWT VC presentation validation (#342), Token Status List revocation (#343), the wallet login UI (#344). `WalletProvider.verify()` still throws unconditionally by design, so wallet login cannot complete end to end. Also requires a configured `VerifierProfile`.',
+      'Merged: `VerifierProfile` (#299), OID4VP 1.0 request generation and `direct_post` intake (#233), the per-realm issuer trust allowlist (#236), ES256 + JWE crypto (#298), SD-JWT VC presentation validation (#234), Token Status List revocation (#297), the wallet sign-in UI (#239) and the end-to-end mock-wallet suite (#240, `apps/auth-server/src/app/wallet-federation.integration.test.ts`). A browser completes a wallet sign-in — first-time enrolment, returning login, account linking and `acr` — once the flag is on and a `VerifierProfile` is named; with the flag on and no profile named the deployment refuses to start rather than falling back to a default posture. Validated so far only on the `oid4vp-1.0-base` profile against a mock wallet. Open: HAIP profile wiring (#377), key-storage assurance in the assurance policy (#379), and the real-wallet interoperability pass (#376).',
     flag: { name: 'WALLET_FEDERATION_ENABLED', default: 'off' },
   },
   {

@@ -3,7 +3,7 @@ title: OAuth 2.1 Flow
 description: QAuth's OAuth 2.1 / OIDC endpoints with copy-paste curl for every step, to implement a client by hand.
 sidebar:
   order: 2
-lastVerified: '2026-07-27'
+lastVerified: '2026-08-10'
 ---
 
 This page documents QAuth's OAuth 2.1 / OIDC endpoints with copy-paste `curl`
@@ -589,6 +589,24 @@ alternative to DCR — see the [MCP Quickstart](/integrate/mcp-quickstart/#clien
 ## Errors
 
 QAuth returns standard OAuth error codes (RFC 6749 §5.2):
+
+> **⚠️ Not where you expect them at this commit.** In a JSON error body these
+> codes come only from `apps/auth-server/src/app/plugins/error-handler.ts`, which
+> is registered after the route sweeps and so answers no route. Until
+> [#365](https://github.com/qauth-labs/qauth/issues/365) lands the bare code
+> arrives in `message`, `error` holds the HTTP status name, and the
+> `error_description` the handler attaches to `invalid_grant`, `invalid_scope`,
+> `invalid_request`, and `invalid_target` (`error-handler.ts:82-97`) is dropped.
+> `/oauth/authorize` is only partly unaffected. Once `client_id` and
+> `redirect_uri` validate it returns `unauthorized_client`, `invalid_scope`,
+> `access_denied` and `login_required` as redirect query parameters built in the
+> route itself (`apps/auth-server/src/app/routes/oauth/authorize.ts:230`,
+> `:393`). The errors RFC 6749 §4.1.2.1 forbids redirecting — an unknown client
+> (`apps/auth-server/src/app/routes/oauth/authorize.ts:167`) and a
+> `redirect_uri` that is not registered or not permitted for the environment
+> (`:185`, `:214`) — are thrown as `BadRequestError` and reach the caller
+> through the same JSON path described above. See the
+> [error-model caveat](/integrate/api-reference/#error-model).
 
 | Code                     | Meaning                                                                    |
 | ------------------------ | -------------------------------------------------------------------------- |

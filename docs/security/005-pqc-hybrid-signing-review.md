@@ -12,7 +12,7 @@
 | Findings                 | 4 MEDIUM, 4 LOW, 5 INFO (none gate-blocking)                                                                                                  |
 
 > **Note — 2026-07-27.** This review's premise that hybrid issuance "is not wired
-> into live routes yet" (§2) no longer holds: `apps/auth-server/src/app/app.ts:216-218`
+> into live routes yet" (§2) no longer holds: `apps/auth-server/src/app/app.ts:243-252`
 > wires `mlDsaSeed` and `hybridSigningEnabled: true` into the JWT plugin whenever
 > `HYBRID_SIGNING_ENABLED` is set (#275, merged after this review's 2026-07-18 date).
 > Runtime security posture now **does** depend on this code once an operator sets
