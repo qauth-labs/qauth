@@ -34,6 +34,7 @@
     "@vitest/ui": "catalog:",
     "pino-pretty": "catalog:",
     "testcontainers": "^12.0.4",
+    "tsx": "catalog:",
     "typescript": "catalog:",
     "vitest": "catalog:"
   }

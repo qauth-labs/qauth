@@ -1170,7 +1170,7 @@ Ordered. Each step assumes every step above it has landed.
 ### One more dependency, in the opposite direction
 
 The guard that catches documentation claiming a shipped feature is unbuilt scans the site content
-tree and the two READMEs (`apps/docs-site/src/invariants/status-claims.ts:248`, the
+tree and the two READMEs (`apps/docs-site/src/invariants/status-claims.ts:282`, the
 `findStaleStatusClaims` function). It does **not** scan `apps/developer-portal`. That is precisely
 why "Coming soon in Phase 2.3" survived in a React component for two shipped issues while the
 documentation stayed correct. Extending the guard's scan set to portal source is a reasonable

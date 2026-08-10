@@ -153,21 +153,20 @@ The endpoint is **unauthenticated and rate-limit-exempt** (so a scraper can poll
 it frequently). Restrict access at the reverse proxy / network layer (e.g. to a
 metrics subnet), or disable it entirely with `METRICS_ENABLED=false`.
 
-> ⚠️ **Under Docker Compose, putting these in `.env` does nothing.** The
-> `auth-server` service in `docker-compose.yml` declares an explicit
-> `environment:` map and no `env_file:`, so that map is an **allowlist**: only
-> the variables named in it are forwarded into the container. Almost none of the
-> observability variables are on it — `METRICS_ENABLED`, `LOG_PRETTY`,
-> `REQUEST_ID_HEADER` and the four `FAILED_LOGIN_*` settings all resolve to their
-> schema defaults inside the container regardless of `.env`. So
-> `METRICS_ENABLED=false` is silently discarded and `GET /metrics` stays
-> registered on the host-published port `3000`. The exception is `LOG_LEVEL`,
-> which **is** forwarded (as is `NODE_ENV`), so log verbosity does respond to
-> `.env`; `LOG_PRETTY` is not, so container output is always JSON whatever you
-> set it to. To change any of the rest, add the variable to that `environment:`
-> map — the wallet-federation flags in the same file show the pattern, e.g.
-> `METRICS_ENABLED: ${METRICS_ENABLED:-true}` — or run the server outside
-> Compose. See [Docker](/operate/docker/#environment-variables).
+> ℹ️ **Under Docker Compose these reach the container, but only because they are
+> listed.** The `auth-server` service in `docker-compose.yml` declares an
+> explicit `environment:` map and no `env_file:`, so that map is an
+> **allowlist**: only the variables named in it are forwarded. Every variable on
+> this page is on it — `METRICS_ENABLED`, `LOG_PRETTY`, `LOG_REDACT_PATHS`,
+> `REQUEST_ID_HEADER` and the four `FAILED_LOGIN_*` settings are forwarded as
+> bare `VAR:` entries, a null value that Compose resolves from `.env` (or the
+> shell) and omits entirely when unset, so an unset variable still falls through
+> to its schema default. `METRICS_ENABLED=false` in `.env` therefore does
+> unregister `GET /metrics`.
+>
+> The allowlist itself is the thing to remember: a variable you add to `.env`
+> later is **not** reachable from Compose until you also add it to that map.
+> See [Docker](/operate/docker/#environment-variables).
 
 ### Example Prometheus scrape config
 

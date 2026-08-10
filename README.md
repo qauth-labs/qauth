@@ -205,7 +205,8 @@ Phase 1 core OAuth 2.1 / OIDC, the MCP and agent-native authorization layers, th
 │  ┌────────────────────────────────────────────────┐  │
 │  │  API Layer (REST)                              │  │
 │  │  OAuth 2.1 · OIDC 1.0 (✅)                     │  │
-│  │  OID4VC · OID4VP (📋 Phase 4)                  │  │
+│  │  OID4VP (✅ — verification)                    │  │
+│  │  OID4VC (📋 Phase 4 — issuance)                │  │
 │  └────────────────────────────────────────────────┘  │
 │                          ↓                           │
 │  ┌────────────────────────────────────────────────┐  │

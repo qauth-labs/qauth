@@ -108,6 +108,45 @@ describe('findStaleStatusClaims — fixtures', () => {
   });
 
   /**
+   * The `📋` symbol form. README.md's legend defines it as "planned", and the
+   * architecture diagram used it to mark OID4VP planned 25 lines after the same
+   * file said wallet login works end to end — drift the word-phrase alternation
+   * could never see, because the sentence contains no word for it.
+   */
+  it('flags a shipped feature marked planned with the 📋 symbol inside a fenced diagram', () => {
+    const violations = findStaleStatusClaims(
+      [loadFixturePage('symbol-diagram-stale.md')],
+      FEATURE_EVIDENCE,
+      REPO_ROOT
+    );
+    expect(violations).toEqual([
+      expect.objectContaining({
+        file: 'symbol-diagram-stale.md',
+        feature: 'Wallet federation / OID4VP',
+        matchedPhrase: '📋',
+      }),
+    ]);
+  });
+
+  /**
+   * NON-VACUITY for the segmentation that makes the case above safe. A fenced
+   * repo tree has no blank lines, so it is ONE paragraph: scoped by paragraph, a
+   * `📋` marking `auth-ui/` as planned lands in the same segment as the shipped
+   * `server/federation/` and `core/crypto/` rows and reports both as drift.
+   * Every such block marks one subject per line, so `📋` lines are segmented per
+   * line and absorb no continuation. Delete that branch in `splitSegments` and
+   * this case reports two violations instead of none.
+   */
+  it('MUTATION regression: a 📋 row does not taint shipped rows elsewhere in the same fenced block', () => {
+    const violations = findStaleStatusClaims(
+      [loadFixturePage('symbol-diagram-scoped.md')],
+      FEATURE_EVIDENCE,
+      REPO_ROOT
+    );
+    expect(violations).toEqual([]);
+  });
+
+  /**
    * Same regression, harder shape: README.md's own blockquoted T0–T5 roadmap
    * recap, where "environment-gated developer API keys" sits inside the
    * SHIPPED `T5` bullet immediately above the genuinely deferred `T4` bullet

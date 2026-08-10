@@ -28,7 +28,12 @@ export const FEATURE_EVIDENCE: EvidenceEntry[] = [
   },
   {
     feature: 'Wallet federation / OID4VP',
-    aliases: ['wallet federation', 'oid4vp', 'oid4vc'],
+    // `oid4vc` is deliberately NOT an alias here. The evidence path proves OID4VP
+    // *verification* shipped; OID4VC *issuance* did not (there is no
+    // libs/server/federation/src/oid4vci). Aliasing the two made this row treat an
+    // accurate "OID4VC is planned" statement as drift — a false positive on a true
+    // sentence, which is worse than the miss it was meant to catch.
+    aliases: ['wallet federation', 'oid4vp'],
     evidencePaths: ['libs/server/federation/src/oid4vp'],
   },
   {
@@ -78,9 +83,19 @@ export interface StatusClaimViolation {
  * sentence correcting the record — e.g. README.md's own "is implemented and
  * shipping today, not deferred" aside about ADR-006 — is never itself
  * flagged as the violation.
+ *
+ * `📋` is included because it is not decoration: README.md's own legend defines
+ * it as "planned", and the architecture diagram used it to mark OID4VP planned
+ * 25 lines after the same file said wallet login works end to end. Matching the
+ * symbol rather than the word "planned" is deliberate — the drift this missed
+ * was written as `(📋 Phase 4)`, with the word nowhere in the sentence.
+ *
+ * Note this regex is applied to raw markdown, fenced blocks included. That is
+ * why the diagram above is reachable at all, and it is intentional: a status
+ * claim drawn inside an ASCII box misleads exactly as much as one in prose.
  */
 const STATUS_PHRASE_RE =
-  /(?:(?<!\bnot\s)\bdeferred\b)|(?:\bnot yet implemented\b)|(?:\bnot implemented\b)|(?:\bcoming soon\b)|(?:\bnot yet built\b)|(?:\bnot built yet\b)|(?:\bto be implemented\b)|(?:\bunimplemented\b)/gi;
+  /(?:(?<!\bnot\s)\bdeferred\b)|(?:\bnot yet implemented\b)|(?:\bnot implemented\b)|(?:\bcoming soon\b)|(?:\bnot yet built\b)|(?:\bnot built yet\b)|(?:\bto be implemented\b)|(?:\bunimplemented\b)|📋/gi;
 
 interface Paragraph {
   text: string;
@@ -104,6 +119,19 @@ function splitParagraphs(content: string): Paragraph[] {
 // A bullet/checkbox/numbered line, optionally itself inside a `>` blockquote
 // (README.md's roadmap recap quotes each T0–T5 status as `> - ✅ **T0 …**`).
 const LIST_LINE_RE = /^\s*(?:>\s*)?(?:[-*+]\s|\d+[.)]\s)/;
+
+/**
+ * A line carrying the `📋` status symbol. Such a line is its own claim about its
+ * own subject, so it becomes its own segment and absorbs no continuation lines.
+ *
+ * This matters only because `📋` occurs where the word-phrases do not: inside the
+ * big ASCII diagram and repo-tree fences in README.md, which contain no blank
+ * lines and are therefore ONE paragraph each. Scoped by paragraph, a `📋` marking
+ * `auth-ui/` as planned sat in the same segment as an unrelated "API keys"
+ * mention 40 lines away and reported it as drift. Every one of those blocks marks
+ * one subject per line, so the line is the honest unit.
+ */
+const SYMBOL_LINE_RE = /📋/;
 
 function isListParagraph(text: string): boolean {
   const firstLine = text.split(/\r?\n/).find((line) => line.trim().length > 0);
@@ -144,7 +172,13 @@ function splitSegments(paragraphText: string): Segment[] {
   for (let i = 0; i < parts.length; i += 2) {
     const line = parts[i];
     const precedingTerminator = i > 0 ? parts[i - 1] : '';
-    if (LIST_LINE_RE.test(line)) {
+    if (SYMBOL_LINE_RE.test(line)) {
+      // Own segment, and `current` is cleared so the NEXT line starts fresh
+      // rather than being absorbed as this claim's continuation.
+      if (current) segments.push(current);
+      segments.push({ text: line, start: offset, isList: false });
+      current = undefined;
+    } else if (LIST_LINE_RE.test(line)) {
       if (current) segments.push(current);
       current = { text: line, start: offset, isList: true };
     } else if (current) {

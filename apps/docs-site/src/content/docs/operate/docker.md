@@ -330,21 +330,24 @@ docker exec -it qauth-redis sh
 
 ## Environment Variables
 
-> **The Compose `environment:` map is an allowlist — `.env` alone is not enough.**
-> The `auth-server` service in `docker-compose.yml` configures itself through an
-> explicit `environment:` map. There is no `env_file:`, no bind mount of the repo
-> into the container, and the root `.dockerignore` excludes `.env` from the build
-> context — so the container never reads `.env` itself. Compose does read `.env`,
-> but only to expand the `${VAR:-default}` references **that the map already
-> contains**. A variable the map does not name resolves to its schema default
-> inside the container no matter what `.env` says, silently. Turning on a setting
-> from the sections below therefore means adding a line to that map, e.g.
-> `CIMD_TRUST_POLICY: ${CIMD_TRUST_POLICY:-accept-any-https}`; the
-> wallet-federation block in the same file is the worked example, and says in a
-> comment why each flag had to be forwarded.
+> **The Compose `environment:` map is an allowlist.** The `auth-server` service
+> in `docker-compose.yml` configures itself through an explicit `environment:`
+> map. There is no `env_file:`, no bind mount of the repo into the container, and
+> the root `.dockerignore` excludes `.env` from the build context — so the
+> container never reads `.env` itself. Compose reads `.env` only to resolve the
+> entries **the map already contains**. A variable the map does not name resolves
+> to its schema default inside the container no matter what `.env` says,
+> silently.
+>
+> Every variable documented on this page is on that map, so `.env` works for all
+> of them. Entries take one of two forms: `VAR: ${VAR:-default}` restates a
+> default in the file, while a bare `VAR:` is a null value that Compose resolves
+> from `.env` (or the shell) and omits entirely when unset, letting the schema
+> default apply without this file having to track it. Prefer the bare form when
+> adding a variable — restating defaults in two places is what let them drift
+> apart before.
 
-See `.env.docker.example` for all available variables. Key variables — these
-ones do take effect from `.env` under Compose:
+See `.env.docker.example` for all available variables. Key variables:
 
 | Variable          | Required | Description                                        |
 | ----------------- | -------- | -------------------------------------------------- |
@@ -388,7 +391,7 @@ CIMD is the recommended MCP client-registration mechanism (see [ADR-007](/refere
 | `CIMD_FETCH_TIMEOUT_MS`        | No       | `5000`             | Per-fetch timeout in milliseconds.                                                                                                                              |
 | `CIMD_ALLOW_PRIVATE_ADDRESSES` | No       | `false`            | Allow fetches to non-public IPs (loopback/private/link-local). **Keep `false` in production** — it disables the SSRF guard; for dev/integration harnesses only. |
 
-> **Note:** neither `.env.docker.example` nor the `auth-server` `environment:` map in `docker-compose.yml` lists the `CIMD_*` variables. They are optional and default-safe, so the stack runs without them — but under Compose you cannot override them from `.env`. `CIMD_TRUST_POLICY=allowlist` set that way never reaches the container: the policy stays `accept-any-https`, which returns before the `CIMD_TRUSTED_DOMAINS` check is consulted, so the allowlist you configured is not applied. Forward the variables in the `environment:` map first (see the allowlist note at the top of this section).
+> **Note:** the `CIMD_*` variables are optional and default-safe, so the stack runs without them, and `.env.docker.example` does not list them. The `auth-server` `environment:` map does, so setting them in `.env` takes effect. Be deliberate about `CIMD_TRUST_POLICY`: it defaults to `accept-any-https`, which returns before `CIMD_TRUSTED_DOMAINS` is consulted — so populating the domain list alone changes nothing until you also set `CIMD_TRUST_POLICY=allowlist`.
 
 ### ID-JAG / enterprise-managed authorization (ADR-011)
 
@@ -457,15 +460,13 @@ unless configured. See the [verifier guide](/operate/pqc-verifier-guide/).
 > key before issuance is switched on.
 
 > **Note:** `.env.docker.example` does not list the wallet-federation or
-> post-quantum variables either. Both features are off by default, so the stack
-> runs without them. Compose forwarding differs between the two: every wallet
-> variable above **is** in the `auth-server` `environment:` map except the four
-> `OID4VP_SUBJECT_*` ones, so the forwarded ones can be set from `.env`. Those
-> four cannot — and one of them, `OID4VP_SUBJECT_BINDING_CLAIMS`, is required
-> once the flag is on, so a stock Compose stack cannot complete a wallet sign-in
-> until you add it to the map. **None** of the post-quantum variables are, so
-> `SIGNING_ALGORITHM_MODE`, `HYBRID_SIGNING_ENABLED`, `JWT_MLDSA_*` and `PQC_*`
-> stay at their defaults inside the container until you add them to that map.
+> post-quantum variables. Both features are off by default, so the stack runs
+> without them. The `auth-server` `environment:` map does list them — every
+> wallet variable above including the four `OID4VP_SUBJECT_*`, and every
+> post-quantum one (`SIGNING_ALGORITHM_MODE`, `HYBRID_SIGNING_ENABLED`,
+> `JWT_MLDSA_*`, `PQC_*`) — so all of them can be set from `.env`. Note that
+> `OID4VP_SUBJECT_BINDING_CLAIMS` is required once the wallet flag is on: leaving
+> it unset refuses every sign-in rather than falling back to a default.
 
 ## Troubleshooting
 
