@@ -1,9 +1,39 @@
-# Force unix line endings for shell scripts (fixes Windows execution issues)
-*.sh text eol=lf
-*.bash text eol=lf
-*.js text eol=lf
-*.ts text eol=lf
-*.json text eol=lf
-*.yml text eol=lf
-*.yaml text eol=lf
-*.md text eol=lf
+# Line-ending policy.
+#
+# The catch-all is deliberate. This file previously enumerated eight extensions
+# (*.sh, *.bash, *.js, *.ts, *.json, *.yml, *.yaml, *.md) and every text type
+# added since — *.tsx, *.mjs, *.mts, *.astro, *.mdx, *.css, *.sql, *.toml, *.rs —
+# fell through it. On a checkout with core.autocrlf=true (the Windows default)
+# those files land CRLF against LF blobs, and both `prettier --check` and the
+# `prettier/prettier` ESLint rule then reject them with `Delete ␍` on lines the
+# developer never touched, while `git status` stays clean. CI runs ubuntu-latest,
+# so it never reproduces there. See #363.
+#
+# `text=auto` lets Git detect which files are text; `eol=lf` fixes the working-tree
+# ending for those it does. Binary files are unaffected by the detection, and the
+# explicit `binary` entries below make that independent of heuristics.
+* text=auto eol=lf
+
+# Explicitly binary — never diffed, never line-ending normalised.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.webp binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.eot binary
+*.otf binary
+*.pdf binary
+*.zip binary
+*.gz binary
+*.wasm binary
+*.node binary
+*.so binary
+*.dylib binary
+*.dll binary
+
+# Generated lockfile — keep it out of diffs and reviews.
+pnpm-lock.yaml -diff linguist-generated
