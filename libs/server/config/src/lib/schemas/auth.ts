@@ -289,6 +289,28 @@ export const authEnvSchema = z.object({
   OID4VP_RESPONSE_RATE_WINDOW: z.coerce.number().int().min(1).default(60),
 
   /**
+   * Maximum OID4VP request-object fetches per window per-IP
+   * (`GET /oid4vp/request/:handle`, RFC 9101 / HAIP §5.1, issue #377).
+   *
+   * A SEPARATE budget from the response endpoint above, not a shared one. The
+   * two are unauthenticated for the same reason and capped for the same reason,
+   * but they are opposite halves of the exchange — a wallet fetches once before
+   * it shows the user anything, and posts once after the user consents — so an
+   * operator tuning one has no reason to be tuning the other, and a shared
+   * variable would make a slow-wallet retry budget also a state-guessing budget.
+   *
+   * Same default (30) and same reasoning: a legitimate wallet fetches exactly
+   * once per presentation request, occasionally twice on a retry, so the default
+   * sits well above real usage while bounding how fast an anonymous caller can
+   * throw candidate handles at a store of signed bytes.
+   */
+  OID4VP_REQUEST_OBJECT_RATE_LIMIT: z.coerce.number().int().min(1).default(30),
+  /**
+   * OID4VP request-object endpoint rate limit window in seconds.
+   */
+  OID4VP_REQUEST_OBJECT_RATE_WINDOW: z.coerce.number().int().min(1).default(60),
+
+  /**
    * Comma-separated scopes allowed by default for dynamically registered
    * clients when a realm's `dynamic_registration_allowed_scopes` column is
    * empty. Used at /oauth/register time to seed the realm on first use.

@@ -72,6 +72,18 @@ const WALLET_PRESENTATION_KEY_PREFIX = 'wallet-presentation:';
  */
 const WALLET_SIGNAL_KEY_PREFIX = 'wallet-login-signal:';
 
+/**
+ * Redis namespace for the SIGNED REQUEST OBJECT a wallet fetches (#377).
+ *
+ * A fourth namespace rather than a field on the flow record, and the separation
+ * carries the same weight as the three above: this is the one value an
+ * UNAUTHENTICATED party reads by handle, and it must not be addressable by
+ * anything that also names a browser. A shape mistake in the flow record must
+ * not become a way to read one, and a handle leaked from a wallet must not
+ * become a way to read the flow.
+ */
+const WALLET_REQUEST_OBJECT_KEY_PREFIX = 'wallet-request-object:';
+
 /** CSPRNG bytes per handle and per binder; 32 bytes → 43 base64url characters. */
 const HANDLE_BYTES = 32;
 
@@ -163,6 +175,16 @@ export interface WalletLoginFlow {
    * Credential Query ids, so validation cannot proceed without it.
    */
   dcqlQuery?: Record<string, unknown>;
+  /**
+   * Handle of the parked signed request object, when the request was signed
+   * (#377). Absent under a profile whose requests are unsigned, and absent on
+   * records written by a binary that predates #377.
+   *
+   * Held here so {@link deleteWalletLoginFlow} can clean the request object up
+   * on the SAME terminal outcome that ends the flow — the two have the same
+   * lifetime and there is no path that ends one and not the other.
+   */
+  requestObjectHandle?: string;
   /** Relative path to redirect to after a completed sign-in. */
   returnTo: string;
   /** Binder mirrored in the signed `__Host-` wallet-flow cookie. */
@@ -233,11 +255,24 @@ export async function readWalletLoginFlow(
 /**
  * Delete a flow record. Called on EVERY terminal outcome — success, refusal and
  * expiry alike — so a completed or refused flow cannot be polled again.
+ *
+ * Also deletes the signed request object the flow parked, when it parked one
+ * (#377). Read first rather than passed in: every caller already has the handle
+ * and none of them has the record, and one extra store read on a path that runs
+ * once per flow is cheaper than a parameter every call site could forget. The
+ * request object would expire on its own TTL regardless — this is hygiene, not a
+ * control, which is why a failure to read it is not a failure to end the flow.
  */
 export async function deleteWalletLoginFlow(
   fastify: FastifyInstance,
   handle: string
 ): Promise<void> {
+  const flow = await readWalletLoginFlow(fastify, handle);
+
+  if (typeof flow?.requestObjectHandle === 'string') {
+    await deleteWalletRequestObject(fastify, flow.requestObjectHandle);
+  }
+
   try {
     await fastify.sessionUtils.deleteSession(`${WALLET_FLOW_KEY_PREFIX}${handle}`);
   } catch (error) {
@@ -391,5 +426,108 @@ export async function deleteWalletPresentationStash(
     await fastify.sessionUtils.deleteSession(`${WALLET_PRESENTATION_KEY_PREFIX}${stateHash}`);
   } catch (error) {
     fastify.log.warn({ err: error }, 'failed to delete a stashed wallet presentation');
+  }
+}
+
+/**
+ * A signed JAR request object, parked for the wallet that will fetch it (#377).
+ *
+ * An object rather than a bare string because `sessionUtils` stores
+ * `SessionData` — an index-signature type — and a bare JWT would not typecheck.
+ * The wrapper is not decoration: it is also where a future member (a per-request
+ * encryption key id, Phase C) lands without changing the key shape.
+ */
+export interface StoredWalletRequestObject {
+  /** The compact JWS, exactly as it goes on the wire. */
+  requestObject: string;
+  [key: string]: unknown;
+}
+
+/**
+ * Park a signed request object and return the handle addressing it (#377).
+ *
+ * ## What the handle is, and what holding one gets you
+ *
+ * 32 CSPRNG bytes, the same shape as a flow handle, minted per Authorization
+ * Request. It goes on the wire inside `request_uri`, which is exactly where a
+ * wallet needs it, so it is a BEARER value by construction — and the value it
+ * bears is a request object QAuth signed, which carries `state`, `nonce`,
+ * `client_id` and the DCQL query.
+ *
+ * That is the same exposure the invocation URI already carries under the base
+ * profile: it embeds `state` and `nonce` as query parameters. Whoever holds
+ * either can consume the pending presentation request exactly once. The handle
+ * therefore adds no reachability that the unsigned form did not already have,
+ * and it is accepted for the same reason — see the module JSDoc on why the
+ * invocation URI lives in Redis at all.
+ *
+ * @throws whatever the session store throws. A failed write CANNOT degrade to a
+ * fallback: under a profile that mandates `request_uri` there is no other way to
+ * deliver the request, so the caller must surface it as a failed sign-in attempt
+ * rather than render a QR code pointing at nothing.
+ */
+export async function storeWalletRequestObject(
+  fastify: FastifyInstance,
+  requestObject: string
+): Promise<string> {
+  const handle = generateWalletFlowSecret();
+
+  await fastify.sessionUtils.setSession<StoredWalletRequestObject>(
+    `${WALLET_REQUEST_OBJECT_KEY_PREFIX}${handle}`,
+    { requestObject },
+    Math.floor(WALLET_LOGIN_FLOW_TTL_MS / 1000)
+  );
+
+  return handle;
+}
+
+/**
+ * Read a parked request object, or null (#377).
+ *
+ * A malformed handle, an unknown one, an expired one and an unreachable store
+ * are ALL null, and they must stay indistinguishable: this is read by an
+ * unauthenticated endpoint, so any difference between them is an oracle telling
+ * a caller sweeping handles which ones exist. That is the same reasoning
+ * {@link readWalletLoginFlow} gives, applied to a surface with no cookie at all.
+ */
+export async function readWalletRequestObject(
+  fastify: FastifyInstance,
+  handle: unknown
+): Promise<string | null> {
+  if (!isWalletLoginHandle(handle)) return null;
+
+  try {
+    const record = await fastify.sessionUtils.getSession<StoredWalletRequestObject>(
+      `${WALLET_REQUEST_OBJECT_KEY_PREFIX}${handle}`
+    );
+
+    return typeof record?.requestObject === 'string' && record.requestObject.length > 0
+      ? record.requestObject
+      : null;
+  } catch (error) {
+    fastify.log.warn(
+      { err: error },
+      'wallet request-object store unavailable; treating as expired'
+    );
+    return null;
+  }
+}
+
+/**
+ * Delete a parked request object.
+ *
+ * Called on every TERMINAL outcome of the flow that owns it, never on the fetch:
+ * a wallet may legitimately retry the `request_uri` GET — a dropped connection,
+ * a backgrounded app — and deleting on first read would turn a retry into a
+ * failed login. The TTL and the single-use `state` are what bound it.
+ */
+export async function deleteWalletRequestObject(
+  fastify: FastifyInstance,
+  handle: string
+): Promise<void> {
+  try {
+    await fastify.sessionUtils.deleteSession(`${WALLET_REQUEST_OBJECT_KEY_PREFIX}${handle}`);
+  } catch (error) {
+    fastify.log.warn({ err: error }, 'failed to delete a wallet request object');
   }
 }

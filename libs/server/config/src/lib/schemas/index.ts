@@ -15,7 +15,11 @@ export {
   type FederationEnv,
   federationEnvSchema,
   resolveStatusListTrustAnchorPems,
+  resolveVerifierCertificateChainPems,
+  resolveVerifierSigningKeyPem,
+  resolveVerifierTrustAnchorPems,
   type StatusListTrustAnchorEnvLike,
+  type VerifierSigningEnvLike,
 } from './federation';
 export { type IssuerKeysEnv, issuerKeysEnvSchema, type PerIssuerKeySets } from './issuer-keys';
 export { type JwtEnv, jwtEnvSchema } from './jwt';

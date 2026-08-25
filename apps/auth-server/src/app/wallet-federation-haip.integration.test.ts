@@ -1,46 +1,49 @@
 import { describe, expect, it } from 'vitest';
 
 import { bootAuthServer, generateJwtPem, REQUIRED_TEST_ENVIRONMENT } from '../testing/e2e-harness';
+import { createMockVerifierPki, verifierIdentityEnvironment } from '../testing/mock-verifier-pki';
 
 /**
  * WALLET FEDERATION under `haip-1.0` — the second E2E suite issue #240 asks for,
- * PENDING on #298.
+ * still PENDING on Phase C of #377 and on #379.
  *
- * The flows it will exercise: a SIGNED request JWT identified by an `x509_hash`
- * Client Identifier Prefix (with the trust anchor EXCLUDED from the `x5c`
- * header, HAIP §4.5.1), and an ENCRYPTED `direct_post.jwt` response (JWE:
- * ECDH-ES over P-256 with A128GCM/A256GCM) to the verifier's encryption key from
- * `client_metadata`.
+ * ## Why it is still pending, and what is asserted meanwhile
  *
- * ## Why it is pending, and what is asserted meanwhile
+ * `createConfiguredProviders` refused `haip-1.0` on four independent counts.
+ * #377 Phase A + B cleared the first two:
  *
- * The profile cannot start. `createConfiguredProviders` refuses `haip-1.0` on
- * four independent counts today:
- *
- *  1. no WRPAC / X.509 verifier material is provisioned, so
- *     `assertVerifierIdentityProvisioned` refuses the `x509_hash` prefix;
- *  2. the crypto-capability gate finds `signingAlgs: ['ES256']` unmet — QAuth
- *     signs EdDSA — so a signed JAR cannot be produced (#298);
- *  3. `responseEncryption: 'required'` is unmet for the same reason: there is no
- *     JWE stack behind `direct_post.jwt` (#298);
+ *  1. ~~no WRPAC / X.509 verifier material is provisioned~~ — **CLEARED**.
+ *     `OID4VP_VERIFIER_SIGNING_KEY` and its chain/anchor siblings provision it,
+ *     and this suite configures them below.
+ *  2. ~~`signingAlgs: ['ES256']` unmet~~ — **CLEARED**. `deriveCryptoCapabilities`
+ *     claims ES256 for a deployment that provisioned both halves.
+ *  3. `responseEncryption: 'required'` is unmet: there is still no JWE path
+ *     behind `direct_post.jwt` — Phase C of #377, which lands the response mode,
+ *     the published `client_metadata` encryption key and the decrypting intake
+ *     together.
  *  4. `keyStorageAssurance: 'required'` (#308) has neither an attesting-issuer
- *     registry nor key-attestation anchors provisioned.
+ *     registry nor key-attestation anchors provisioned — #379.
  *
- * A suite written speculatively against an API #298 has not shipped would encode
- * guesses; one written and skipped would assert nothing at all. So the flows are
- * `it.todo`, and what DOES run is the property that must hold until they can be
- * written: selecting `haip-1.0` takes the deployment DOWN rather than quietly
- * serving wallet flows under a weaker posture. That refusal is the only thing
- * standing between a deployment that believes it runs HAIP and one that runs
- * unsigned requests over cleartext responses.
+ * So the profile still refuses, and the refusal below names count 3
+ * SPECIFICALLY. That is the difference between this assertion and the one it
+ * replaces: a test matching any `/haip-1\.0/` message would keep passing for
+ * counts 1 and 2, which are exactly the ones #377 was supposed to clear — a
+ * false green that would hide a regression in the work this suite is about.
  *
- * ## What to write when #298 lands
+ * Count 4 is pinned separately, in `crypto-capabilities.test.ts`, by handing the
+ * gate a descriptor whose `responseEncryption` is hypothetically true: that is
+ * the one member Phase C changes, and asserting the NEXT refusal now means the
+ * ordering is proven rather than assumed.
  *
- * Reuse `src/testing/mock-wallet.ts`: it already parses a request off the wire
- * and dispatches presentation building through a per-format table, so the
- * additions are (a) verifying the signed request JWT and its `x5c` chain against
- * an anchor the header does not carry, and (b) encrypting the response to the
- * verifier's `client_metadata` encryption key. Neither changes the E2E's shape.
+ * ## What is covered elsewhere
+ *
+ * The signed-request half of #377 does not need this suite and is not duplicated
+ * into it: `helpers/wallet-login-request.test.ts` drives the app's own builder
+ * end to end and hands the resulting JAR to `testing/mock-wallet.ts`, which
+ * validates the signature and the `x5c` chain against an anchor the header does
+ * not carry — the independence that makes it an interoperability check.
+ * `verifier-key-isolation.integration.test.ts` holds the other Phase A property:
+ * that the verifier key reaches neither the JWKS nor any issued token.
  *
  * No containers: the boot is refused during plugin registration, before anything
  * opens a connection.
@@ -48,9 +51,10 @@ import { bootAuthServer, generateJwtPem, REQUIRED_TEST_ENVIRONMENT } from '../te
  * @see https://openid.net/specs/openid4vc-high-assurance-interoperability-profile-1_0.html
  */
 
-describe('wallet federation E2E — haip-1.0 profile (pending #298)', () => {
-  it('refuses to boot rather than serving wallet flows under a weaker posture', async () => {
+describe('wallet federation E2E — haip-1.0 profile (pending Phase C of #377, and #379)', () => {
+  it('refuses to boot on the response-encryption count, not the ones #377 cleared', async () => {
     const jwt = await generateJwtPem();
+    const pki = createMockVerifierPki();
 
     const environment = {
       ...REQUIRED_TEST_ENVIRONMENT,
@@ -61,27 +65,47 @@ describe('wallet federation E2E — haip-1.0 profile (pending #298)', () => {
       JWT_PUBLIC_KEY: jwt.publicKey,
       WALLET_FEDERATION_ENABLED: 'true',
       OID4VP_REQUESTED_VCT: 'https://credentials.example.com/pid',
+      // The verifier identity #377 made provisionable. Configured here on
+      // purpose: without it the refusal below would fire on the CERTIFICATE
+      // count, and the assertion would pass for the state that existed before
+      // this work — the exact false green this test is written to avoid.
+      ...verifierIdentityEnvironment(pki),
     };
 
     // The control: the same deployment on the BASE profile boots. Without it the
     // assertion below would pass for any configuration mistake at all — which is
-    // exactly how a "fails to boot" test stops testing what it claims to.
+    // exactly how a "fails to boot" test stops testing what it claims to. It is
+    // also what proves the provisioned chain VALIDATED: an unusable one would
+    // take this boot down too, since the material is checked whatever profile is
+    // selected.
     const base = await bootAuthServer({
       ...environment,
       OID4VP_VERIFIER_PROFILE: 'oid4vp-1.0-base',
     });
     await base.close();
 
-    await expect(
-      bootAuthServer({ ...environment, OID4VP_VERIFIER_PROFILE: 'haip-1.0' })
-    ).rejects.toThrow(/haip-1\.0/);
+    const refusal = await bootAuthServer({
+      ...environment,
+      OID4VP_VERIFIER_PROFILE: 'haip-1.0',
+    }).then(
+      async (server) => {
+        await server.close();
+        return undefined;
+      },
+      (error: unknown) => (error instanceof Error ? error.message : String(error))
+    );
+
+    expect(refusal).toBeDefined();
+    expect(refusal).toContain('haip-1.0');
+    // Count 3, named.
+    expect(refusal).toMatch(/requires encrypted Authorization Responses/);
+    // NOT count 1: the certificate material is provisioned now.
+    expect(refusal).not.toMatch(/X\.509 material that is not configured/);
+    // NOT count 2: ES256 is producible now.
+    expect(refusal).not.toMatch(/for request signing, but this deployment's crypto layer/);
   }, 60_000);
 
-  it.todo(
-    'verifies a signed request JWT identified by x509_hash, with the anchor excluded from x5c (#298)'
-  );
+  it.todo('decrypts a direct_post.jwt response (ECDH-ES P-256 + A*GCM) (Phase C of #377)');
 
-  it.todo('decrypts a direct_post.jwt response (ECDH-ES P-256 + A*GCM) (#298)');
-
-  it.todo('completes a wallet login end to end under haip-1.0 (#298)');
+  it.todo('completes a wallet login end to end under haip-1.0 (Phase C of #377, #379)');
 });

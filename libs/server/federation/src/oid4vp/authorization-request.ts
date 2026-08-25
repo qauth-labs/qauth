@@ -1,6 +1,5 @@
 /**
- * OID4VP 1.0 Authorization Request generation — the `oid4vp-1.0-base` profile
- * (issue #233, Phase B).
+ * OID4VP 1.0 Authorization Request generation (issues #233 Phase B, #377).
  *
  * Builds the request QAuth-as-Verifier sends to a wallet:
  * `response_type=vp_token`, `response_mode=direct_post`, a `response_uri`, a
@@ -20,21 +19,39 @@
  * request signing, credential format). Passing a profile in is not the same as
  * honouring it, and `CapabilityPosture` is only real if something reads it.
  *
+ * ## Signed requests (#377)
+ *
+ * A request is signed exactly when its Client Identifier Prefix says so, and the
+ * prefix comes from the profile. `redirect_uri` can never be signed (OID4VP 1.0
+ * §5.9.3 — such a request is unverifiable, so a signature asserts nothing);
+ * `x509_hash` is always signed, because the wallet establishes the Verifier's
+ * identity from the `x5c` header of the request object and checks it against the
+ * `client_id` digest. There is no third state and no downgrade path: a caller
+ * that asks for the signed prefix without provisioning material gets a refusal,
+ * never the unsigned prefix it did not ask for.
+ *
+ * The JWT itself is `request-object.ts`; DELIVERY is
+ * {@link encodeOid4vpRequestUri}, which refuses to put a signed request on the
+ * wire as query parameters at all — HAIP §5.1 mandates `request_uri`, so the
+ * unsigned form has to be unreachable rather than merely unpreferred.
+ *
  * ## What is NOT here
  *
- * - **Signed requests.** `x509_san_dns` (base) and `x509_hash` (HAIP) both need
- *   a JAR signed with ES256, which `@qauth-labs/core-crypto` cannot produce
- *   until #298. Refused explicitly rather than silently downgraded to the
- *   unsigned path — a downgrade is exactly the "half-configured verifier" #299
- *   forbids.
- * - **`request_uri` / JAR delivery and encrypted responses**
- *   (`direct_post.jwt`). Phase C, deferred with #298 and the `haip-1.0` profile.
+ * - **`x509_san_dns`.** The other signed prefix base OID4VP permits. HAIP
+ *   mandates `x509_hash` and only that, so #377 builds one signed identity
+ *   rather than two, and this refuses the other explicitly rather than
+ *   silently downgrading it.
+ * - **Encrypted responses** (`direct_post.jwt`). Phase C of #377: the response
+ *   mode, the `client_metadata` encryption key and the decrypting intake all
+ *   land together, because publishing any one of them alone asks a wallet for a
+ *   response QAuth has nowhere to hand to.
  *
  * @see https://openid.net/specs/openid-4-verifiable-presentations-1_0.html §5, §8
  */
 
 import {
   assertPrefixProvisioned,
+  assertRequestSigningAllowed,
   assertRequestSigningPosture,
   NO_VERIFIER_MATERIAL,
   type ProvisionedVerifierMaterial,
@@ -45,7 +62,14 @@ import type {
   ResponseMode,
   VerifierProfile,
 } from '../profiles/verifier-profile.types';
-import { buildRedirectUriClientId, UNSIGNED_CLIENT_ID_PREFIX } from './client-identifier';
+import type { VerifierSigningMaterial } from '../x509/verifier-signing-material';
+import {
+  buildRedirectUriClientId,
+  buildX509HashClientId,
+  CLIENT_ID_PREFIX_SEPARATOR,
+  UNSIGNED_CLIENT_ID_PREFIX,
+  X509_HASH_CLIENT_ID_PREFIX,
+} from './client-identifier';
 import { type CredentialRequestSpec, resolveCredentialFormatAdapter } from './credential-format';
 import { assertValidDcqlQuery, type DcqlQuery } from './dcql';
 
@@ -54,6 +78,18 @@ export const OID4VP_RESPONSE_TYPE = 'vp_token';
 
 /** The base OID4VP 1.0 Response Mode this issue implements (§8.2). */
 export const DIRECT_POST_RESPONSE_MODE = 'direct_post' satisfies ResponseMode;
+
+/**
+ * The Client Identifier Prefixes this builder can actually render.
+ *
+ * Narrower than `ClientIdPrefix`, which also names `x509_san_dns`. The narrowing
+ * is what makes the `client_id` branch below EXHAUSTIVE: adding a third prefix
+ * to this union stops that branch compiling until it is given an answer, which
+ * is the same "no capability by silence" property `satisfies Record<...>` gives
+ * `deriveCryptoCapabilities`.
+ */
+export type RenderableClientIdPrefix =
+  typeof UNSIGNED_CLIENT_ID_PREFIX | typeof X509_HASH_CLIENT_ID_PREFIX;
 
 /**
  * Verifier metadata sent as `client_metadata` (OID4VP 1.0 §5.1).
@@ -114,6 +150,18 @@ export interface BuildOid4vpAuthorizationRequestOptions {
   readonly clientIdPrefix?: ClientIdPrefix;
   /** X.509 material the operator provisioned; defaults to none (fail-closed). */
   readonly provisioned?: ProvisionedVerifierMaterial;
+  /**
+   * The VALIDATED verifier key and chain (#377), required by any signed prefix.
+   *
+   * Distinct from {@link provisioned}, which is a set of marker strings saying
+   * WHAT KIND of material exists. This is the material itself, and only
+   * `createVerifierSigningMaterial` can produce one — so a request whose
+   * `client_id` is an `x509_hash` digest is, by construction, a request whose
+   * chain validated at boot. Build the marker set from this value with
+   * `verifierMaterialProvisionedBy` (`x509/verifier-signing-material`) so the
+   * two cannot disagree.
+   */
+  readonly signingMaterial?: VerifierSigningMaterial;
   /** Optional human-readable Verifier name for `client_metadata`. */
   readonly clientName?: string;
 }
@@ -206,18 +254,21 @@ function buildVpFormatsSupported(
 
 /**
  * Choose the Client Identifier Prefix to present, and refuse the ones QAuth
- * cannot honour yet.
+ * cannot honour (#233, #377).
  *
  * Order matters. The profile questions are asked FIRST — permitted set, then
  * provisioned material — so a caller that asks for a prefix the profile does not
- * present gets that answer rather than "#298 is missing", which would invite
- * widening the profile's prefix list to work around a crypto gap.
+ * present gets that answer rather than "this build cannot do it", which would
+ * invite widening the profile's prefix list to work around an implementation
+ * gap. Only once the profile has said yes does the question become what this
+ * build can render.
  */
 function selectClientIdPrefix(
   profile: VerifierProfile,
   requested: ClientIdPrefix | undefined,
-  provisioned: ProvisionedVerifierMaterial
-): typeof UNSIGNED_CLIENT_ID_PREFIX {
+  provisioned: ProvisionedVerifierMaterial,
+  signingMaterial: VerifierSigningMaterial | undefined
+): RenderableClientIdPrefix {
   const preferred = profile.verifierIdentity.presentedPrefixes[0];
 
   if (preferred === undefined) {
@@ -236,17 +287,32 @@ function selectClientIdPrefix(
 
   assertPrefixProvisioned(profile, prefix, provisioned);
 
-  if (prefix !== UNSIGNED_CLIENT_ID_PREFIX) {
-    throw new Error(
-      `The '${prefix}' Client Identifier Prefix requires a SIGNED Authorization Request, and this deployment cannot sign one: '@qauth-labs/core-crypto' is EdDSA-only and OID4VP signed requests need ES256 (#298). Refusing rather than falling back to the unsigned '${UNSIGNED_CLIENT_ID_PREFIX}' prefix, which would present a weaker verifier identity than the caller asked for.`
-    );
+  if (prefix === UNSIGNED_CLIENT_ID_PREFIX) return prefix;
+
+  if (prefix === X509_HASH_CLIENT_ID_PREFIX) {
+    // The per-prefix signing rule, in the module that owns it. It re-asks the
+    // permitted-set and provisioning questions above and adds the two this
+    // function cannot answer on its own: that `redirect_uri` may never be
+    // signed, and that the profile does not FORBID signing. Written down once,
+    // there, rather than restated here.
+    assertRequestSigningAllowed(profile, prefix, provisioned);
+
+    if (signingMaterial === undefined) {
+      throw new Error(
+        `The '${prefix}' Client Identifier Prefix identifies QAuth by a digest of its own leaf certificate, so the request must be SIGNED with the key that certificate belongs to — and no verifier signing material was passed to the builder. This is a caller-wiring bug rather than an operator misconfiguration: '${prefix}' passed the provisioning check, so the material exists and was simply not threaded through (#377).`
+      );
+    }
+
+    return prefix;
   }
 
-  return prefix;
+  throw new Error(
+    `The '${prefix}' Client Identifier Prefix requires a signed Authorization Request identified by a certificate SAN, which QAuth does not implement. HAIP 1.0 §5 mandates '${X509_HASH_CLIENT_ID_PREFIX}' and only that, so #377 builds one signed verifier identity rather than two. Refusing rather than falling back to the unsigned '${UNSIGNED_CLIENT_ID_PREFIX}' prefix, which would present a weaker verifier identity than the caller asked for.`
+  );
 }
 
 /**
- * Build an `oid4vp-1.0-base` Authorization Request (issue #233, Phase B).
+ * Build an OID4VP 1.0 Authorization Request (issues #233 Phase B, #377).
  *
  * Pure: no I/O, no clock, no randomness — `state` and `nonce` are minted by
  * `generateOid4vpRequestSecrets` and passed in, and persisting the request state
@@ -254,8 +320,14 @@ function selectClientIdPrefix(
  * a database, and keeps the single-use redemption story in one place
  * (the request-state store) rather than split across two modules.
  *
+ * Purity is also why SIGNING is not done here: producing a JWS is asynchronous
+ * and needs a key import, so `request-object.ts` owns it and this function stays
+ * a synchronous function of its inputs. What this decides is WHETHER the request
+ * is signed — the prefix in `client_id` is that decision, and it is binding on
+ * every layer downstream.
+ *
  * @param options - see {@link BuildOid4vpAuthorizationRequestOptions}.
- * @returns the request parameters, ready to be delivered to a wallet.
+ * @returns the request parameters, ready to be signed and/or delivered.
  * @throws Error when the active profile forbids anything the request needs, when
  * the deployment cannot honour a capability (signing, encryption), or when the
  * inputs are malformed.
@@ -269,30 +341,41 @@ export function buildOid4vpAuthorizationRequest(
   assertValidResponseUri(responseUri);
 
   // Response mode. `haip-1.0` permits only 'direct_post.jwt' (HAIP §5.1), so it
-  // lands here — correctly: the encrypted mode is Phase C and needs #298's JWE
-  // stack. The profile's own list decides, so no profile is named.
+  // lands here — correctly: the encrypted mode is Phase C of #377 and arrives
+  // with the decrypting intake. The profile's own list decides, so no profile is
+  // named.
   if (!profile.responseModes.includes(DIRECT_POST_RESPONSE_MODE)) {
     throw new Error(
-      `Verifier profile '${profile.id}' does not permit the '${DIRECT_POST_RESPONSE_MODE}' Response Mode (permitted: ${profile.responseModes.join(', ')}). The encrypted 'direct_post.jwt' mode is deferred with #298 (JWE) and is not implemented by #233.`
+      `Verifier profile '${profile.id}' does not permit the '${DIRECT_POST_RESPONSE_MODE}' Response Mode (permitted: ${profile.responseModes.join(', ')}). The encrypted 'direct_post.jwt' mode is Phase C of #377 and is not implemented yet.`
     );
   }
 
   // Response encryption is a separate posture from the mode, and 'required'
-  // means the JWE stack must exist outright — it does not yet (#298).
+  // means the JWE stack must be WIRED outright — the primitives exist in
+  // `@qauth-labs/core-crypto` (#298), but nothing publishes an encryption key or
+  // decrypts a response until Phase C of #377.
   if (profile.responseEncryption === 'required') {
     throw new Error(
-      `Verifier profile '${profile.id}' requires encrypted Authorization Responses, and this deployment has no JWE stack (#298). Refusing rather than asking a wallet for a response it cannot encrypt to us.`
+      `Verifier profile '${profile.id}' requires encrypted Authorization Responses, and this deployment has no wired JWE path (Phase C of #377). Refusing rather than asking a wallet for a response it cannot encrypt to us.`
     );
   }
 
-  // Verifier identity. Called for its refusals: it narrows to the one prefix
-  // this deployment can present, and every other outcome is a throw.
-  selectClientIdPrefix(profile, options.clientIdPrefix, provisioned);
+  // Verifier identity. Called for its refusals AND its answer: it narrows to the
+  // prefixes this build can render, and every other outcome is a throw.
+  const prefix = selectClientIdPrefix(
+    profile,
+    options.clientIdPrefix,
+    provisioned,
+    options.signingMaterial
+  );
 
-  // The request we are about to build is unsigned. Stated explicitly so a
-  // profile declaring `requestSigning: 'required'` refuses here rather than
-  // having its posture quietly ignored.
-  assertRequestSigningPosture(profile, { signed: false });
+  // Whether this request is signed follows from the prefix and nothing else —
+  // OID4VP 1.0 §5.9.3 makes `redirect_uri` unsignable and `x509_hash`
+  // unverifiable unsigned. Stated explicitly so a profile declaring
+  // `requestSigning: 'required'` refuses an unsigned request here rather than
+  // having its posture quietly ignored, and so a profile that FORBIDS signing
+  // refuses a signed one.
+  assertRequestSigningPosture(profile, { signed: prefix !== UNSIGNED_CLIENT_ID_PREFIX });
 
   if (credentials.length === 0) {
     throw new Error(
@@ -311,11 +394,22 @@ export function buildOid4vpAuthorizationRequest(
   assertValidDcqlQuery(dcqlQuery);
 
   const request: Oid4vpAuthorizationRequest = {
-    // §5.9.3 under `direct_post`: the identifier IS the Response URI.
-    // `selectClientIdPrefix` narrows to the single unsigned prefix, so there is
-    // no branch here to get wrong — when #298 makes a signed prefix reachable,
-    // its return type widens and this line stops compiling, which is the point.
-    client_id: buildRedirectUriClientId(responseUri),
+    // The break the #233 comment predicted, taken rather than routed around:
+    // `selectClientIdPrefix` no longer narrows to a single value, so this line
+    // has to branch, and the union's exhaustiveness is what makes a future third
+    // prefix a compile error instead of a silent fall-through to the unsigned
+    // identity.
+    //
+    // §5.9.3 under `direct_post`: the unsigned identifier IS the Response URI.
+    // Under `x509_hash` it is the digest of the leaf certificate the request
+    // object's `x5c` header carries — the same certificate, stated twice, so a
+    // wallet can check the two agree.
+    client_id:
+      prefix === UNSIGNED_CLIENT_ID_PREFIX
+        ? buildRedirectUriClientId(responseUri)
+        : // `selectClientIdPrefix` throws when the signed prefix has no material,
+          // so this is a narrowing rather than an assumption.
+          buildX509HashClientId((options.signingMaterial as VerifierSigningMaterial).leafDer),
     response_type: OID4VP_RESPONSE_TYPE,
     response_mode: DIRECT_POST_RESPONSE_MODE,
     response_uri: responseUri,
@@ -337,24 +431,117 @@ export function buildOid4vpAuthorizationRequest(
 }
 
 /**
+ * How the request reaches the wallet (#377).
+ *
+ * A discriminated union rather than an optional `requestUri?: string`, because
+ * "by reference, to nowhere" is not a valid state and the type should say so.
+ */
+export type Oid4vpRequestDelivery =
+  | {
+      /** OID4VP 1.0 §5: the parameters travel as query parameters, unsigned. */
+      readonly mode: 'query-parameters';
+    }
+  | {
+      /** RFC 9101 / HAIP §5.1: the wallet fetches a signed request object. */
+      readonly mode: 'request-uri';
+      /** Absolute URI the wallet GETs the signed request object from. */
+      readonly requestUri: string;
+    };
+
+/** Delivery for an unsigned request — the base-profile default. */
+export const QUERY_PARAMETER_DELIVERY: Oid4vpRequestDelivery = Object.freeze({
+  mode: 'query-parameters',
+});
+
+/**
+ * Whether a built request is SIGNED (#377).
+ *
+ * Read off the Client Identifier Prefix inside `client_id`, because that IS the
+ * statement about signedness — OID4VP 1.0 §5.9.3 makes `redirect_uri` unsignable
+ * and `x509_hash` unverifiable unsigned — and because it is what the request
+ * actually carries. Exported so every layer that has to branch on signedness
+ * asks the SAME question of the SAME value.
+ *
+ * That matters more than it looks. A caller that instead branched on "did the
+ * deployment provision signing material" would disagree with the builder the
+ * moment a deployment provisions material while running a profile whose
+ * preferred prefix is unsigned — a supported configuration, and one where the
+ * two answers differ.
+ *
+ * @param request - the built request.
+ */
+export function isSignedOid4vpRequest(request: Oid4vpAuthorizationRequest): boolean {
+  return !isUnsignedClientId(request.client_id);
+}
+
+/** Whether a `client_id` names the one prefix that is never signed (§5.9.3). */
+function isUnsignedClientId(clientId: string): boolean {
+  return clientId.startsWith(`${UNSIGNED_CLIENT_ID_PREFIX}${CLIENT_ID_PREFIX_SEPARATOR}`);
+}
+
+/**
  * Render the request as a wallet invocation URI.
  *
- * OID4VP 1.0 §5 delivers request parameters as query parameters of the wallet's
- * Authorization Endpoint (custom scheme or universal link). `dcql_query` and
- * `client_metadata` are JSON-valued parameters and are serialized as JSON
- * strings, per §5.
+ * Two forms, and WHICH ONE is not the caller's choice — it follows from the
+ * Client Identifier Prefix inside `client_id`:
  *
- * This is the UNSIGNED delivery form. Signed delivery — a JAR passed by
- * `request_uri` — is Phase C (HAIP) and needs #298.
+ * - **Unsigned (`redirect_uri`)** — OID4VP 1.0 §5 delivers the parameters as
+ *   query parameters of the wallet's Authorization Endpoint. `dcql_query` and
+ *   `client_metadata` are JSON-valued and are serialized as JSON strings, per §5.
+ * - **Signed (`x509_hash`)** — HAIP 1.0 §5.1 requires JAR *"with the
+ *   `request_uri` parameter"*, so only `client_id` and `request_uri` go on the
+ *   wire and everything else lives inside the signed object. Emitting the query
+ *   form for a signed request is REFUSED, not merely avoided: a signed request
+ *   flattened into query parameters is an unsigned request that happens to carry
+ *   a certificate digest as its identifier, which is precisely the downgrade the
+ *   mandate exists to prevent.
+ *
+ * The prefix is read from `client_id` rather than taken as an argument so the
+ * two cannot be passed inconsistently — the identifier a wallet will act on IS
+ * the statement about signedness.
  *
  * @param walletAuthorizationEndpoint - e.g. `openid4vp://` or a universal link.
  * @param request - the built request.
+ * @param delivery - how the request reaches the wallet; defaults to the unsigned
+ * query-parameter form, which is refused for a signed request.
+ * @throws Error when the delivery form contradicts the request's prefix.
  */
 export function encodeOid4vpRequestUri(
   walletAuthorizationEndpoint: string,
-  request: Oid4vpAuthorizationRequest
+  request: Oid4vpAuthorizationRequest,
+  delivery: Oid4vpRequestDelivery = QUERY_PARAMETER_DELIVERY
 ): string {
   assertNoRedirectUriParameter(request);
+
+  const unsigned = isUnsignedClientId(request.client_id);
+
+  if (!unsigned && delivery.mode !== 'request-uri') {
+    throw new Error(
+      "A signed OID4VP Authorization Request MUST be delivered by 'request_uri' (HAIP 1.0 §5.1 — JAR with the request_uri parameter). Refusing to flatten it into query parameters, which would put the request on the wire unsigned while still naming a certificate-derived Client Identifier (#377)."
+    );
+  }
+
+  if (unsigned && delivery.mode === 'request-uri') {
+    throw new Error(
+      `A request using the '${UNSIGNED_CLIENT_ID_PREFIX}' Client Identifier Prefix cannot be delivered by 'request_uri': there is no request object to fetch, because OID4VP 1.0 §5.9.3 makes such a request unverifiable and QAuth therefore never signs one (#377).`
+    );
+  }
+
+  const separator = walletAuthorizationEndpoint.includes('?') ? '&' : '?';
+
+  if (delivery.mode === 'request-uri') {
+    // RFC 9101 §5.2.2: `client_id` stays OUTSIDE the request object so the
+    // wallet knows whose identity to establish before it fetches anything.
+    // Nothing else does: every other parameter is inside the signature, and
+    // duplicating one out here would create a second, unsigned copy a wallet
+    // could be steered by.
+    const reference = new URLSearchParams({
+      client_id: request.client_id,
+      request_uri: delivery.requestUri,
+    });
+
+    return `${walletAuthorizationEndpoint}${separator}${reference.toString()}`;
+  }
 
   const params = new URLSearchParams({
     client_id: request.client_id,
@@ -366,8 +553,6 @@ export function encodeOid4vpRequestUri(
     dcql_query: JSON.stringify(request.dcql_query),
     client_metadata: JSON.stringify(request.client_metadata),
   });
-
-  const separator = walletAuthorizationEndpoint.includes('?') ? '&' : '?';
 
   return `${walletAuthorizationEndpoint}${separator}${params.toString()}`;
 }
