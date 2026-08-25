@@ -140,6 +140,7 @@ export type {
   ValidatedCredential,
   VerifierProfile,
   VerifierProfileId,
+  VerifierSigningMaterial,
 } from '@qauth-labs/server-federation';
 export {
   assertNoRedirectUriParameter,
@@ -147,6 +148,7 @@ export {
   assertValidResponseUri,
   buildOid4vpAuthorizationRequest,
   buildRedirectUriClientId,
+  createVerifierSigningMaterial,
   DEFAULT_OID4VP_REQUEST_TTL_MS,
   DIRECT_POST_RESPONSE_MODE,
   encodeOid4vpRequestUri,
@@ -161,6 +163,7 @@ export {
   resolveOid4vpExpiry,
   resolveVerifierProfile,
   SD_JWT_VC_FORMAT,
+  verifierMaterialProvisionedBy,
 } from '@qauth-labs/server-federation';
 
 // Subject resolution (#300, ADR-009) — which ACCOUNT a validated presentation
