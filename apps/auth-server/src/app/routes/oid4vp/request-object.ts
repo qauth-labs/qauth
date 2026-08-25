@@ -49,7 +49,17 @@ import { readWalletRequestObject } from '../../helpers/wallet-login-flow';
  * for the same reason, and set their media type on the reply instead.
  */
 
-/** How many characters of a fetch handle may reach the store (43 + slack). */
+/**
+ * How many characters of a fetch handle may reach the store.
+ *
+ * A handle is 43 characters (32 CSPRNG bytes, base64url); the slack is for a
+ * future encoding, not for a caller. Fastify's router rejects a path parameter
+ * over `maxParamLength` (100 by default, and this app does not raise it) with a
+ * 414 before the handler runs, so this bound covers the band between the two —
+ * and, more usefully, keeps the handler correct if that default ever changes.
+ * Neither answer tells a caller anything about server state: 414 is a function
+ * of the URL they sent, and everything else is the same 404.
+ */
 const MAX_REQUEST_OBJECT_HANDLE_LENGTH = 64;
 
 export default async function (fastify: FastifyInstance) {

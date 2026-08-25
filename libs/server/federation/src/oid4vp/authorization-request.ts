@@ -158,7 +158,8 @@ export interface BuildOid4vpAuthorizationRequestOptions {
    * `createVerifierSigningMaterial` can produce one — so a request whose
    * `client_id` is an `x509_hash` digest is, by construction, a request whose
    * chain validated at boot. Build the marker set from this value with
-   * {@link verifierMaterialProvisionedBy} so the two cannot disagree.
+   * `verifierMaterialProvisionedBy` (`x509/verifier-signing-material`) so the
+   * two cannot disagree.
    */
   readonly signingMaterial?: VerifierSigningMaterial;
   /** Optional human-readable Verifier name for `client_metadata`. */

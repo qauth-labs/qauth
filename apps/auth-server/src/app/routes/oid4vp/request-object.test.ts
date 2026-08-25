@@ -1,5 +1,6 @@
 import { OID4VP_REQUEST_OBJECT_MEDIA_TYPE } from '@qauth-labs/fastify-plugin-federation';
-import type { FastifyInstance } from 'fastify';
+import Fastify, { type FastifyInstance } from 'fastify';
+import { serializerCompiler, validatorCompiler } from 'fastify-type-provider-zod';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const { envMock } = vi.hoisted(() => ({
@@ -216,7 +217,9 @@ describe('every miss is the same miss', () => {
     ['a malformed handle', 'not-a-handle'],
     ['an empty handle', ''],
     ['a non-string handle', 42],
-    ['an over-long handle', 'x'.repeat(4096)],
+    // Longer than the handler's own bound but inside the router's, so this is
+    // the band the in-handler guard actually covers.
+    ['an over-long handle', 'x'.repeat(96)],
   ];
 
   it.each(CASES)('answers %s with a bare 404', async (_label, handle) => {
@@ -250,5 +253,129 @@ describe('every miss is the same miss', () => {
     await invoke(ctx, 'not-a-handle');
 
     expect(fastify.log.warn).toHaveBeenCalled();
+  });
+});
+
+/**
+ * The same route, through REAL Fastify.
+ *
+ * The stub above proves what the handler decides; this proves what actually goes
+ * on the wire, and it exists because of one specific hazard: the Zod serializer
+ * compiler is installed globally in `main.ts`, and a route that declared a
+ * `response` schema would emit `"eyJ..."` — a JSON-quoted string — instead of the
+ * compact JWS a wallet parses. That failure is invisible to a stub, because the
+ * stub never serializes anything.
+ */
+describe('through real Fastify serialization', () => {
+  /** The production compilers, registered exactly as `main.ts` registers them. */
+  async function buildApp(): Promise<{ app: FastifyInstance; handle: string }> {
+    const store = new Map<string, unknown>();
+    const app = Fastify({ logger: false });
+
+    app.setValidatorCompiler(validatorCompiler);
+    app.setSerializerCompiler(serializerCompiler);
+    app.decorate('sessionUtils', {
+      setSession: async (key: string, value: unknown) => {
+        store.set(key, value);
+      },
+      getSession: async (key: string) => store.get(key) ?? null,
+      deleteSession: async (key: string) => {
+        store.delete(key);
+      },
+    } as never);
+
+    await app.register(requestObjectRoute, { prefix: '/oid4vp' });
+    await app.ready();
+
+    const handle = await storeWalletRequestObject(app, REQUEST_OBJECT);
+    return { app, handle };
+  }
+
+  it('serves the compact JWS as raw bytes, not as a JSON string', async () => {
+    const { app, handle } = await buildApp();
+
+    try {
+      const response = await app.inject({ method: 'GET', url: `/oid4vp/request/${handle}` });
+
+      expect(response.statusCode).toBe(200);
+      // The assertion the stub cannot make: the body IS the token, with no
+      // surrounding quotes and no JSON escaping.
+      expect(response.body).toBe(REQUEST_OBJECT);
+      expect(response.body.startsWith('"')).toBe(false);
+      expect(response.headers['content-type']).toBe(OID4VP_REQUEST_OBJECT_MEDIA_TYPE);
+      expect(response.headers['cache-control']).toBe('no-store');
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('answers an unknown handle with a bare 404 over the wire', async () => {
+    const { app } = await buildApp();
+
+    try {
+      const response = await app.inject({
+        method: 'GET',
+        url: '/oid4vp/request/wRDlPCVLwlfHrCsMgTNMHfxYbUpKfANMlQaBcDeFgHi',
+      });
+
+      expect(response.statusCode).toBe(404);
+      expect(response.body).toBe('');
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("is routed under the directory's prefix, not a doubled one", async () => {
+    const { app, handle } = await buildApp();
+
+    try {
+      // Declaring `/oid4vp/request/:handle` inside the file would produce
+      // `/oid4vp/oid4vp/request/:handle` once autoload applies the directory
+      // prefix, which is the mistake `routes/consents/index.ts` warns about.
+      expect(
+        (await app.inject({ method: 'GET', url: `/oid4vp/request/${handle}` })).statusCode
+      ).toBe(200);
+      expect((await app.inject({ method: 'GET', url: `/request/${handle}` })).statusCode).toBe(404);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('lets the ROUTER reject a param past maxParamLength, before the handler runs', async () => {
+    // Fastify's default `maxParamLength` is 100 and this app does not raise it,
+    // so a very long candidate is answered 414 by the router and the store is
+    // never touched. Recorded rather than normalised to 404: 414 is a function
+    // of the URL the caller sent and tells them nothing they did not already
+    // know, so it is not the state oracle the 404 path exists to deny.
+    const { app } = await buildApp();
+
+    try {
+      const response = await app.inject({
+        method: 'GET',
+        url: `/oid4vp/request/${'x'.repeat(512)}`,
+      });
+
+      expect(response.statusCode).toBe(414);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('answers a handle inside the router bound but past the handler bound with the same 404', async () => {
+    // The band the in-handler guard covers: long enough that the handler
+    // refuses it, short enough that the router does not.
+    const { app } = await buildApp();
+
+    try {
+      const response = await app.inject({
+        method: 'GET',
+        url: `/oid4vp/request/${'x'.repeat(96)}`,
+      });
+
+      expect(response.statusCode).toBe(404);
+      expect(response.body).toBe('');
+    } finally {
+      await app.close();
+    }
   });
 });
