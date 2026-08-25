@@ -1,6 +1,17 @@
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
+
 import { describe, expect, it } from 'vitest';
 
-import { type FederationEnv, federationEnvSchema } from './federation';
+import {
+  type FederationEnv,
+  federationEnvSchema,
+  resolveStatusListTrustAnchorPems,
+  resolveVerifierCertificateChainPems,
+  resolveVerifierSigningKeyPem,
+  resolveVerifierTrustAnchorPems,
+} from './federation';
 
 describe('federationEnvSchema (WALLET_FEDERATION_ENABLED — #232)', () => {
   it('is off by default when unset (epic #231 is incomplete)', () => {
@@ -42,6 +53,12 @@ describe('federationEnvSchema (WALLET_FEDERATION_ENABLED — #232)', () => {
       'OID4VP_STATUS_LIST_TRUST_ANCHORS',
       'OID4VP_STATUS_LIST_TRUST_ANCHORS_PATH',
       'OID4VP_STATUS_LIST_URI_ALLOWLIST',
+      'OID4VP_VERIFIER_SIGNING_KEY',
+      'OID4VP_VERIFIER_SIGNING_KEY_PATH',
+      'OID4VP_VERIFIER_CERTIFICATE_CHAIN',
+      'OID4VP_VERIFIER_CERTIFICATE_CHAIN_PATH',
+      'OID4VP_VERIFIER_TRUST_ANCHORS',
+      'OID4VP_VERIFIER_TRUST_ANCHORS_PATH',
     ]);
   });
 });
@@ -213,5 +230,251 @@ describe('federationEnvSchema (OID4VP_WALLET_INVOCATION_ENDPOINT — #239)', () 
     'javascript&colon;alert(1)',
   ])('refuses to boot on the script-capable endpoint %j', (raw) => {
     expect(() => federationEnvSchema.parse({ OID4VP_WALLET_INVOCATION_ENDPOINT: raw })).toThrow();
+  });
+});
+
+/**
+ * The VERIFIER identity variables (#377) — QAuth's own ES256 key and X.509
+ * chain.
+ *
+ * This layer validates SHAPE ONLY, exactly as it does for the status-list
+ * anchors: that the chain VALIDATES, that the key is P-256 and that the key
+ * belongs to the leaf are all `createVerifierSigningMaterial`'s answers at boot.
+ * Duplicating certificate parsing here would put two rule sets on a drift
+ * course, and `server-config` carries no dependency on `server-federation`.
+ */
+
+/** A PEM block of the shape the splitter looks for; never parsed here. */
+function certificateBlock(body: string): string {
+  return `-----BEGIN CERTIFICATE-----\n${body}\n-----END CERTIFICATE-----`;
+}
+
+const LEAF = certificateBlock('bGVhZg==');
+const INTERMEDIATE = certificateBlock('aW50ZXJtZWRpYXRl');
+const ANCHOR = certificateBlock('YW5jaG9y');
+const KEY = '-----BEGIN PRIVATE KEY-----\nc2lnbmluZw==\n-----END PRIVATE KEY-----';
+
+describe('federationEnvSchema (OID4VP_VERIFIER_SIGNING_KEY — #377)', () => {
+  it('is undefined when unset — the default posture provisions no verifier identity', () => {
+    const parsed = federationEnvSchema.parse({});
+
+    expect(parsed.OID4VP_VERIFIER_SIGNING_KEY).toBeUndefined();
+    expect(parsed.OID4VP_VERIFIER_SIGNING_KEY_PATH).toBeUndefined();
+  });
+
+  it('treats a blank value as unset, the way `${VAR:-}` materialises an absent one', () => {
+    expect(
+      federationEnvSchema.parse({ OID4VP_VERIFIER_SIGNING_KEY: '   ' }).OID4VP_VERIFIER_SIGNING_KEY
+    ).toBeUndefined();
+  });
+
+  it('trims the inline key', () => {
+    expect(
+      federationEnvSchema.parse({ OID4VP_VERIFIER_SIGNING_KEY: `\n${KEY}\n` })
+        .OID4VP_VERIFIER_SIGNING_KEY
+    ).toBe(KEY);
+  });
+
+  it('fails the boot when the _PATH form names a file that cannot be read', () => {
+    // The operator stated where the key lives, so "not there" is a
+    // misconfiguration and never an empty key.
+    expect(() =>
+      federationEnvSchema.parse({ OID4VP_VERIFIER_SIGNING_KEY_PATH: '/nonexistent/verifier.key' })
+    ).toThrow(/cannot be read/);
+  });
+});
+
+describe('federationEnvSchema (OID4VP_VERIFIER_CERTIFICATE_CHAIN — #377)', () => {
+  it('is empty when unset', () => {
+    expect(federationEnvSchema.parse({}).OID4VP_VERIFIER_CERTIFICATE_CHAIN).toEqual([]);
+  });
+
+  it('splits a concatenated bundle into individual certificates, in order', () => {
+    // Load-bearing: `new X509Certificate(bundle)` parses the FIRST certificate
+    // and silently ignores the rest, so a two-tier chain passed whole would sign
+    // with a leaf whose intermediate never reached the wallet.
+    expect(
+      federationEnvSchema.parse({
+        OID4VP_VERIFIER_CERTIFICATE_CHAIN: `${LEAF}\n${INTERMEDIATE}`,
+      }).OID4VP_VERIFIER_CERTIFICATE_CHAIN
+    ).toEqual([LEAF, INTERMEDIATE]);
+  });
+
+  it('rejects a value that carries no CERTIFICATE block', () => {
+    expect(() =>
+      federationEnvSchema.parse({ OID4VP_VERIFIER_CERTIFICATE_CHAIN: 'not a certificate' })
+    ).toThrow(/OID4VP_VERIFIER_CERTIFICATE_CHAIN/);
+  });
+
+  it('rejects a chain longer than the x5c bound the runtime enforces', () => {
+    expect(() =>
+      federationEnvSchema.parse({
+        OID4VP_VERIFIER_CERTIFICATE_CHAIN: Array.from({ length: 9 }, () => LEAF).join('\n'),
+      })
+    ).toThrow(/more than the 8 supported/);
+  });
+});
+
+describe('federationEnvSchema — the _PATH forms read a real file (#377)', () => {
+  /** Write a fixture file into the OS temp directory and clean it up after. */
+  function withFile<T>(contents: string, run: (path: string) => T): T {
+    const path = join(mkdtempSync(join(tmpdir(), 'qauth-verifier-')), 'material.pem');
+    writeFileSync(path, contents, 'utf-8');
+    try {
+      return run(path);
+    } finally {
+      rmSync(dirname(path), { recursive: true, force: true });
+    }
+  }
+
+  it('reads the signing key from the file the _PATH names', () => {
+    withFile(`${KEY}\n`, (path) => {
+      expect(
+        federationEnvSchema.parse({ OID4VP_VERIFIER_SIGNING_KEY_PATH: path })
+          .OID4VP_VERIFIER_SIGNING_KEY_PATH
+      ).toBe(KEY);
+    });
+  });
+
+  it('treats an EMPTY key file as no key rather than as an empty key', () => {
+    withFile('   \n', (path) => {
+      expect(
+        federationEnvSchema.parse({ OID4VP_VERIFIER_SIGNING_KEY_PATH: path })
+          .OID4VP_VERIFIER_SIGNING_KEY_PATH
+      ).toBeUndefined();
+    });
+  });
+
+  it('reads and splits the chain from the file the _PATH names', () => {
+    withFile(`${LEAF}\n${INTERMEDIATE}\n`, (path) => {
+      expect(
+        federationEnvSchema.parse({ OID4VP_VERIFIER_CERTIFICATE_CHAIN_PATH: path })
+          .OID4VP_VERIFIER_CERTIFICATE_CHAIN_PATH
+      ).toEqual([LEAF, INTERMEDIATE]);
+    });
+  });
+
+  it('reads and splits the anchors from the file the _PATH names', () => {
+    withFile(`${ANCHOR}\n`, (path) => {
+      expect(
+        federationEnvSchema.parse({ OID4VP_VERIFIER_TRUST_ANCHORS_PATH: path })
+          .OID4VP_VERIFIER_TRUST_ANCHORS_PATH
+      ).toEqual([ANCHOR]);
+    });
+  });
+
+  it('fails the boot when a chain file holds no CERTIFICATE block', () => {
+    withFile('nothing here\n', (path) => {
+      expect(() =>
+        federationEnvSchema.parse({ OID4VP_VERIFIER_CERTIFICATE_CHAIN_PATH: path })
+      ).toThrow(/OID4VP_VERIFIER_CERTIFICATE_CHAIN_PATH/);
+    });
+  });
+
+  it.each([['OID4VP_VERIFIER_CERTIFICATE_CHAIN_PATH'], ['OID4VP_VERIFIER_TRUST_ANCHORS_PATH']])(
+    'fails the boot when %s names a file that cannot be read',
+    (variable) => {
+      expect(() => federationEnvSchema.parse({ [variable]: '/nonexistent/verifier.pem' })).toThrow(
+        /cannot be read/
+      );
+    }
+  );
+
+  it.each([
+    ['OID4VP_VERIFIER_SIGNING_KEY_PATH'],
+    ['OID4VP_VERIFIER_CERTIFICATE_CHAIN_PATH'],
+    ['OID4VP_VERIFIER_TRUST_ANCHORS_PATH'],
+  ])('treats a blank %s as unset rather than as an unreadable file', (variable) => {
+    expect(() => federationEnvSchema.parse({ [variable]: '   ' })).not.toThrow();
+  });
+});
+
+describe('federationEnvSchema (OID4VP_VERIFIER_TRUST_ANCHORS — #377)', () => {
+  it('is empty when unset, which makes any configured chain refuse at boot', () => {
+    expect(federationEnvSchema.parse({}).OID4VP_VERIFIER_TRUST_ANCHORS).toEqual([]);
+  });
+
+  it('splits a bundle into individual anchors', () => {
+    expect(
+      federationEnvSchema.parse({ OID4VP_VERIFIER_TRUST_ANCHORS: `${ANCHOR}\n${LEAF}` })
+        .OID4VP_VERIFIER_TRUST_ANCHORS
+    ).toEqual([ANCHOR, LEAF]);
+  });
+});
+
+describe('the verifier-identity resolvers (#377)', () => {
+  /** The parsed env a resolver reads, with everything unset by default. */
+  function parse(raw: Record<string, string> = {}): FederationEnv {
+    return federationEnvSchema.parse(raw);
+  }
+
+  it('lets the key _PATH form WIN over the inline one — a key has one value', () => {
+    // Not a union, unlike the anchors below. Two sources for a signing key must
+    // be a precedence; a set would be meaningless.
+    const env = {
+      ...parse(),
+      OID4VP_VERIFIER_SIGNING_KEY: KEY,
+      OID4VP_VERIFIER_SIGNING_KEY_PATH: 'from-file',
+    };
+
+    expect(resolveVerifierSigningKeyPem(env)).toBe('from-file');
+  });
+
+  it('falls back to the inline key when no path is configured', () => {
+    expect(resolveVerifierSigningKeyPem({ ...parse(), OID4VP_VERIFIER_SIGNING_KEY: KEY })).toBe(
+      KEY
+    );
+  });
+
+  it('lets the chain _PATH form WIN rather than concatenating the two', () => {
+    // ORDER, not singularity: `x5c` is leaf-first and every link is checked
+    // against the next, so interleaving two independently authored chains would
+    // produce a sequence whose middle link does not issue the one after it.
+    const env = {
+      ...parse(),
+      OID4VP_VERIFIER_CERTIFICATE_CHAIN: [LEAF],
+      OID4VP_VERIFIER_CERTIFICATE_CHAIN_PATH: [INTERMEDIATE, ANCHOR],
+    };
+
+    expect(resolveVerifierCertificateChainPems(env)).toEqual([INTERMEDIATE, ANCHOR]);
+  });
+
+  it('falls back to the inline chain when the path form is empty', () => {
+    expect(
+      resolveVerifierCertificateChainPems({
+        ...parse(),
+        OID4VP_VERIFIER_CERTIFICATE_CHAIN: [LEAF, INTERMEDIATE],
+      })
+    ).toEqual([LEAF, INTERMEDIATE]);
+  });
+
+  it('UNIONS the two anchor sources — an anchor set is a set', () => {
+    expect(
+      resolveVerifierTrustAnchorPems({
+        ...parse(),
+        OID4VP_VERIFIER_TRUST_ANCHORS: [ANCHOR],
+        OID4VP_VERIFIER_TRUST_ANCHORS_PATH: [LEAF],
+      })
+    ).toEqual([ANCHOR, LEAF]);
+  });
+
+  it('resolves an unconfigured deployment to nothing at all', () => {
+    const env = parse();
+
+    expect(resolveVerifierSigningKeyPem(env)).toBeUndefined();
+    expect(resolveVerifierCertificateChainPems(env)).toEqual([]);
+    expect(resolveVerifierTrustAnchorPems(env)).toEqual([]);
+  });
+
+  it('keeps the verifier anchors SEPARATE from the status-list anchors', () => {
+    // Sharing them would let a status-issuer CA mint a certificate that
+    // identifies this deployment to a wallet.
+    const env = {
+      ...parse({ OID4VP_STATUS_LIST_TRUST_ANCHORS: LEAF }),
+      OID4VP_VERIFIER_TRUST_ANCHORS: [ANCHOR],
+    };
+
+    expect(resolveVerifierTrustAnchorPems(env)).toEqual([ANCHOR]);
+    expect(resolveStatusListTrustAnchorPems(env)).toEqual([LEAF]);
   });
 });

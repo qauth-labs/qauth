@@ -658,7 +658,7 @@ export default async function (fastify: FastifyInstance) {
       let invocationUri: string;
       try {
         const realm = await getOrCreateDefaultRealm(fastify);
-        const invocation = buildWalletLoginInvocation(capability);
+        const invocation = await buildWalletLoginInvocation(fastify, capability);
 
         await fastify.repositories.oid4vpRequestStates.create({
           realmId: realm.id,
@@ -679,6 +679,11 @@ export default async function (fastify: FastifyInstance) {
           assertedIdentifier,
           mode: 'login',
           invocationUri: invocation.invocationUri,
+          // Carried so the terminal outcome that ends this flow also removes
+          // the parked request object (#377). Absent when unsigned.
+          ...(invocation.requestObjectHandle === undefined
+            ? {}
+            : { requestObjectHandle: invocation.requestObjectHandle }),
           // Recorded on the BROWSER's record so the presentation is checked
           // against values the wallet cannot choose (#234). See `WalletLoginFlow`.
           nonce: invocation.nonce,

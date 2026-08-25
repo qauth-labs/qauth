@@ -47,6 +47,7 @@ password login they extend:
 | `POST /auth/link/wallet`              | JSON API: starts a linking flow (session cookie + `X-CSRF-Token`)                 |
 | `GET /auth/link/wallet/:handle`       | JSON API: polls, and completes the link when the wallet has responded             |
 | `POST /oid4vp/response`               | The `response_uri` the **wallet** posts to (issue #233) — not a browser surface   |
+| `GET /oid4vp/request/:handle`         | The `request_uri` a **wallet** fetches a signed request object from (#377)        |
 
 `libs/ui` is the React primitive set used by the developer portal; it is not
 involved here.
@@ -69,8 +70,11 @@ involved here.
    the active `VerifierProfile`, its `state` digest is persisted, and the wallet
    invocation URI is rendered as a QR code and an **Open my wallet** deep link.
    The URI is **opaque to the UI**: under `oid4vp-1.0-base` it carries the request
-   inline, and under `haip-1.0` it would be a `request_uri` reference to a signed
-   JAR. The page renders what the backend produced.
+   inline; under a profile that mandates signed requests it is a `request_uri`
+   reference to a signed JAR the wallet fetches from
+   `GET /oid4vp/request/:handle` (#377). The page renders what the backend
+   produced, and which form it is follows from the Client Identifier Prefix
+   rather than from a setting.
 
 3. **The wallet responds.** It posts the Authorization Response to
    `POST /oid4vp/response`, which redeems the single-use `state` and publishes a
@@ -88,9 +92,9 @@ deep link, and the browser-native **Digital Credentials API**, whose `origin:`
 Client Identifier Prefix is reserved for it.
 
 **This ships QR/deep-link only.** The DC API path needs the `origin:` prefix,
-which QAuth's client-identifier module does not implement, and a signed request.
-The ES256/JAR crypto landed with #298; wiring it into the request path is #377,
-so signed requests are still unavailable. Shipping half of it would mean an entry point
+which QAuth's client-identifier module does not implement. Signed requests are no
+longer the blocker — #377 wired the ES256/JAR crypto from #298 into the request
+path — but the missing prefix still is. Shipping half of it would mean an entry point
 that works in one browser build and fails everywhere else. Because the invocation
 URI is treated as opaque throughout, adding the DC API later changes what the
 backend produces, not the structure of these screens.
@@ -105,9 +109,14 @@ button that fails:
   all: the paths 404.
 - No `VerifierProfile` is selected, or the selected one is not provisioned. There
   is never a fallback to the more capable profile (#296, LOCKED).
-- The profile's posture needs a signed request or an encrypted response. The
-  underlying crypto shipped with #298 (ES256 + JWE), but wiring it into the
-  request/response path is #377, so `haip-1.0` is still refused today.
+- The profile mandates SIGNED requests and the deployment provisioned no verifier
+  signing material. Signing itself is built (#377): a deployment that configures
+  `OID4VP_VERIFIER_SIGNING_KEY` and its chain signs an `x509_hash`-identified
+  request and delivers it by `request_uri`. What is refused is the profile
+  mandating it with nothing to sign with.
+- The profile's posture needs an ENCRYPTED response. The JWE primitives shipped
+  with #298, but the `direct_post.jwt` path is Phase C of #377 — so `haip-1.0` is
+  still refused today, now on that count and on key-storage assurance (#379).
 - The profile does not permit `dc+sd-jwt`, the one credential format QAuth ships
   an adapter for.
 - `OID4VP_REQUESTED_VCT` is unset. A DCQL query with no type constraint asks a
@@ -122,6 +131,9 @@ button that fails:
 | `OID4VP_VERIFIER_PROFILE`           | _(none)_       | `oid4vp-1.0-base` is the only value that works today              |
 | `OID4VP_REQUESTED_VCT`              | _(none)_       | Comma-separated `vct` values; **no wallet flow without it**       |
 | `OID4VP_WALLET_INVOCATION_ENDPOINT` | `openid4vp://` | The wallet Authorization Endpoint the QR and deep link target     |
+| `OID4VP_VERIFIER_SIGNING_KEY`       | _(none)_       | ES256 key the Verifier signs a request object with (#377)         |
+| `OID4VP_VERIFIER_CERTIFICATE_CHAIN` | _(none)_       | `x5c` chain, leaf first, **anchor excluded** (#377)               |
+| `OID4VP_VERIFIER_TRUST_ANCHORS`     | _(none)_       | Anchors QAuth's OWN chain must terminate at (#377)                |
 | `OID4VP_TRUSTED_ISSUERS`            | _(empty)_      | Per-realm issuer allowlist (#236) — the opposite trust direction  |
 | `OID4VP_ISSUER_JWKS`                | _(empty)_      | Issuer public JWKs (#234) — **nothing verifies without it**       |
 | `OID4VP_SUBJECT_RESOLUTION`         | _(profile)_    | Account-resolution strategy (#300); defaults to `asserted-lookup` |
@@ -137,7 +149,17 @@ an issuer with no configured key can never verify anything — both directions f
 closed.
 
 The `response_uri` is derived from `JWT_ISSUER`, so it is always the same origin
-the server publishes as its issuer identifier.
+the server publishes as its issuer identifier. So is the `request_uri` base, for
+the same reason.
+
+The three `OID4VP_VERIFIER_*` variables are a FOURTH question, and the only one
+pointing outward: _how does QAuth prove who IT is to a wallet?_ Each has a
+`_PATH` sibling. They are not token-issuance keys — the key configured here is
+published nowhere, never reaches the JWT plugin, and cannot sign an access or ID
+token, which `verifier-key-isolation.integration.test.ts` asserts. Unset all
+three and the deployment runs the unsigned `redirect_uri` path, which is the
+default; set SOME of them and the boot refuses, because a half-provisioned
+verifier identity would otherwise fall back silently to a weaker one.
 
 `OID4VP_WALLET_INVOCATION_ENDPOINT` accepts any wallet scheme — `openid4vp://`,
 `haip://`, a vendor's `eudi-wallet://` or its `https://` universal link — but
@@ -457,11 +479,19 @@ query, and dispatches presentation building through a per-format table with
 `dc+sd-jwt` present and `mso_mdoc` deliberately absent — so an mdoc wallet is a
 new table entry, not a rewrite.
 
-A `haip-1.0` suite exists alongside it and is **pending #377**
-(`wallet-federation-haip.integration.test.ts`): signed `x509_hash` requests and
-encrypted `direct_post.jwt` responses need ES256 and JWE. What it asserts today
-is that selecting that profile takes the deployment DOWN rather than serving
-wallet flows under a weaker posture.
+The mock wallet also verifies a SIGNED request the way a real one would (#377):
+it parses the `request_uri` reference, fetches the JAR, checks the `x5c` chain
+against a trust anchor it holds **out of band** — never one the request carried —
+and checks `client_id` against the digest of the leaf before verifying the
+signature. That path is exercised by `helpers/wallet-login-request.test.ts`.
+
+A `haip-1.0` suite exists alongside it and is **pending Phase C of #377 and
+#379** (`wallet-federation-haip.integration.test.ts`): encrypted
+`direct_post.jwt` responses need the JWE path, and key-storage assurance needs an
+attesting-issuer registry. What it asserts today is that selecting that profile
+takes the deployment DOWN rather than serving wallet flows under a weaker
+posture — and, since #377, that the refusal names the response-encryption count
+specifically rather than the certificate and ES256 counts that are now cleared.
 
 Interoperability with a REAL wallet is unverified, and which wallets implement
 HAIP 1.0 is an open research question. The procedure for a manual pass — and the

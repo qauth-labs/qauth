@@ -3,8 +3,8 @@
  *
  * Three stages, all profile-gated by #299's `VerifierProfile`:
  *
- * - **Request generation** (#233 Phase B) — `authorization-request`, `dcql`,
- *   `client-identifier`, `credential-format`.
+ * - **Request generation** (#233 Phase B, #377) — `authorization-request`,
+ *   `request-object`, `dcql`, `client-identifier`, `credential-format`.
  * - **Response intake** (#233 Phase A) — `request-state`, `direct-post`.
  * - **Presentation validation** (#234) — `presentation-validation`, `sd-jwt-vc`,
  *   `issuer-key-resolution`, `validated-credential`, `presentation-rejection`.
@@ -23,6 +23,7 @@ export * from './direct-post';
 export * from './issuer-key-resolution';
 export * from './presentation-rejection';
 export * from './presentation-validation';
+export * from './request-object';
 export * from './request-state';
 export * from './sd-jwt-vc';
 export * from './validated-credential';

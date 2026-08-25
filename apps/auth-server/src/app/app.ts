@@ -13,16 +13,22 @@ import {
   credentialStatusProvisioningOf,
   federationPlugin,
   type VerifierCryptoCapabilities,
+  verifierMaterialProvisionedBy,
 } from '@qauth-labs/fastify-plugin-federation';
 import { jwtPlugin } from '@qauth-labs/fastify-plugin-jwt';
 import { passwordPlugin } from '@qauth-labs/fastify-plugin-password';
 import { pkcePlugin } from '@qauth-labs/fastify-plugin-pkce';
-import { resolveStatusListTrustAnchorPems } from '@qauth-labs/server-config';
+import {
+  resolveStatusListTrustAnchorPems,
+  resolveVerifierCertificateChainPems,
+  resolveVerifierSigningKeyPem,
+} from '@qauth-labs/server-config';
 import type { FastifyInstance } from 'fastify';
 
 import { env } from '../config/env';
 import { deriveCryptoCapabilities } from './crypto-capabilities';
 import { isJtiRevoked } from './helpers/token-revocation';
+import { verifierSigningMaterial } from './helpers/verifier-identity';
 import errorHandler from './plugins/error-handler';
 import { metricsPlugin } from './plugins/metrics';
 import { rateLimitPlugin } from './plugins/rate-limit';
@@ -50,6 +56,12 @@ import { securityHeadersPlugin } from './plugins/security-headers';
  */
 const CRYPTO_CAPABILITIES: VerifierCryptoCapabilities = deriveCryptoCapabilities({
   rs256PrivateKey: env.JWT_RS256_PRIVATE_KEY,
+  // The OID4VP verifier's own key and chain (#377). Read here as CONFIGURED
+  // rather than as validated: validation happens inside `app()` below and is a
+  // boot refusal, so a deployment that reaches a request with this descriptor
+  // has already had its chain accepted.
+  verifierEs256PrivateKey: resolveVerifierSigningKeyPem(env),
+  verifierCertificateChainPems: resolveVerifierCertificateChainPems(env),
 });
 
 export async function app(fastify: FastifyInstance, opts: object) {
@@ -141,6 +153,21 @@ export async function app(fastify: FastifyInstance, opts: object) {
     uriAllowlist: env.OID4VP_STATUS_LIST_URI_ALLOWLIST,
   });
 
+  // The VERIFIER identity (#377), and the same posture again for the third
+  // trust direction: the two calls above validate material QAuth will BELIEVE,
+  // this one validates the material QAuth will PRESENT. It parses the chain,
+  // checks it terminates at a configured anchor with the anchor itself excluded,
+  // and confirms the signing key belongs to the leaf — every one of which is an
+  // operator mistake whose only runtime symptom is a wallet rejecting 100% of
+  // requests with nothing in QAuth's logs naming the cause.
+  //
+  // NOT gated on WALLET_FEDERATION_ENABLED, for the reason the two gates above
+  // give: a mis-pasted certificate is mis-pasted whether or not wallet flows are
+  // switched on today, and finding it at boot beats finding it on the first
+  // presentation. A deployment that configured nothing gets `undefined` and is
+  // unaffected.
+  const verifierMaterial = verifierSigningMaterial();
+
   await fastify.register(federationPlugin, {
     providers: createConfiguredProviders({
       walletFederationEnabled: env.WALLET_FEDERATION_ENABLED,
@@ -155,9 +182,15 @@ export async function app(fastify: FastifyInstance, opts: object) {
         trustAnchorPems: statusListTrustAnchorPems,
         uriAllowlist: env.OID4VP_STATUS_LIST_URI_ALLOWLIST,
       }),
-      // `provisionedVerifierMaterial` is deliberately not passed: no certificate
-      // configuration surface exists until #233, and the option's default is the
-      // refusing one. Threading real material through here is that issue's job.
+      // What the operator provisioned for the VERIFIER identity (#377) — the
+      // ES256 key and the X.509 chain a wallet establishes QAuth's identity
+      // from. Derived from the material that VALIDATED above rather than from
+      // the raw variables, so the marker set the gate reads can never claim a
+      // capability the chain did not earn: a chain that failed to anchor took
+      // the boot down before this line, and a deployment that configured
+      // nothing yields `NO_VERIFIER_MATERIAL`, which is what makes a profile
+      // requiring a WRPAC refuse.
+      provisionedVerifierMaterial: verifierMaterialProvisionedBy(verifierMaterial),
     }),
   });
 

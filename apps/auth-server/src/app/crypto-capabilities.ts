@@ -42,6 +42,29 @@ export interface ProvisionedSigningKeys {
    * the operator configured no RS256 key, which is the default posture.
    */
   readonly rs256PrivateKey: string | undefined;
+  /**
+   * `OID4VP_VERIFIER_SIGNING_KEY` / `_PATH` after resolution (#377) — the ES256
+   * key QAuth signs an OID4VP Authorization Request with.
+   *
+   * A DIFFERENT key set from the two above, and deliberately named as such. The
+   * `rs256PrivateKey` field is a TOKEN-ISSUANCE key whose public half is
+   * published in `GET /.well-known/jwks.json`; this one proves QAuth's identity
+   * to a WALLET and is published nowhere. #298's risk note: *"the two key sets
+   * must not be interchangeable."*
+   */
+  readonly verifierEs256PrivateKey: string | undefined;
+  /**
+   * `OID4VP_VERIFIER_CERTIFICATE_CHAIN` / `_PATH` after resolution (#377), as
+   * individual PEM certificates.
+   *
+   * Read alongside the key because a key with no chain cannot sign anything a
+   * wallet can act on: the Verifier identity is established from the `x5c`
+   * header, so a signature under a certificate nobody received identifies
+   * nobody. Whether the chain VALIDATES is `createVerifierSigningMaterial`'s
+   * answer at boot — a deployment whose chain does not validate never reaches a
+   * request, because it does not finish starting.
+   */
+  readonly verifierCertificateChainPems: readonly string[];
 }
 
 /**
@@ -54,6 +77,12 @@ export interface ProvisionedSigningKeys {
  * shape of that answer — `true` used to mean "the union names it", which
  * conflated the library with the deployment; now each entry states whether a key
  * for that algorithm exists HERE.
+ *
+ * Note that "a key exists here" is answered per ALGORITHM, not per PURPOSE. The
+ * `ES256` entry reads the OID4VP verifier's key and the `EdDSA`/`RS256` entries
+ * read the token-issuance keys, and those two key sets are not interchangeable
+ * (#298): a deployment claiming `ES256` can sign an Authorization Request to a
+ * wallet, and that is the only thing it claims.
  *
  * @param keys - provisioned signing key material.
  * @returns the capability descriptor handed to `createConfiguredProviders`.
@@ -68,30 +97,41 @@ export function deriveCryptoCapabilities(keys: ProvisionedSigningKeys): Verifier
     // absent nothing in this build can produce an RS256 signature — claiming it
     // unconditionally was the same category of error as claiming ES256.
     RS256: keys.rs256PrivateKey !== undefined && keys.rs256PrivateKey.trim().length > 0,
-    // FALSE, and not because the crypto layer cannot compute an ES256 signature
-    // — #298 landed `sign(..., 'ES256', ...)` and it works. There is no way for
-    // an operator to provision a P-256 signing key: no env var, no schema field,
-    // no JWKS entry, and no federation code path that would sign an OID4VP
-    // Authorization Request with one. Certificate/key provisioning for the
-    // signed Client Identifier Prefixes is #233's job; this flips to a real
-    // predicate over that config in the same commit that adds it, and `haip-1.0`
-    // becomes selectable then — not before.
-    ES256: false,
+    // OPTIONAL and env-provisioned (#377), and the ONLY entry whose predicate
+    // reads two variables rather than one. #298 landed `sign(..., 'ES256', ...)`
+    // years before anything could use it; what was missing was never the
+    // algorithm but the MATERIAL, and the material is a pair. A P-256 key with
+    // no certificate chain can produce a signature no wallet can attribute to
+    // anyone — OID4VP 1.0 §5.9.3 establishes the Verifier identity from the
+    // `x5c` header — so claiming ES256 on the key alone would lift the gate for
+    // a deployment that still cannot present a verifiable request.
+    //
+    // Both halves are read as CONFIGURED, not as VALID. Validity is
+    // `createVerifierSigningMaterial`'s answer, and it is a boot REFUSAL rather
+    // than a capability downgrade: a deployment whose chain does not anchor
+    // never finishes starting, so it never reaches this descriptor with a false
+    // claim. Re-deriving validity here would need this pure function to parse
+    // certificates, which is exactly the layering the module JSDoc rejects.
+    ES256:
+      keys.verifierEs256PrivateKey !== undefined &&
+      keys.verifierEs256PrivateKey.trim().length > 0 &&
+      keys.verifierCertificateChainPems.length > 0,
   } satisfies Record<JwsAlgorithm, boolean>;
 
   return {
     signingAlgs: Object.entries(signingKeyProvisioned)
       .filter(([, provisioned]) => provisioned)
       .map(([alg]) => alg),
-    // FALSE for the same reason. `@qauth-labs/core-crypto` exports `encryptJwe`
-    // / `decryptJwe` and the per-request ephemeral key helpers, but nothing in
-    // the workspace calls them: the federation layer has no `direct_post.jwt`
-    // response mode, no published `client_metadata` encryption JWK, and no
-    // intake route to decrypt at. A deployment that advertised
-    // `direct_post.jwt` to wallets on the strength of an uncalled library
-    // function would ask for a response it has nowhere to hand to — exactly the
-    // "asking a wallet for a response it cannot decrypt" the gate's refusal
-    // text names. Flips with the #233/#234 response-intake path.
+    // FALSE, and for the reason ES256 no longer is. `@qauth-labs/core-crypto`
+    // exports `encryptJwe` / `decryptJwe` and the per-request ephemeral key
+    // helpers, but nothing in the workspace calls them: the federation layer has
+    // no `direct_post.jwt` response mode, no published `client_metadata`
+    // encryption JWK, and no intake route to decrypt at. A deployment that
+    // advertised `direct_post.jwt` to wallets on the strength of an uncalled
+    // library function would ask for a response it has nowhere to hand to —
+    // exactly the "asking a wallet for a response it cannot decrypt" the gate's
+    // refusal text names. Flips with Phase C of #377, which lands the response
+    // mode, the published encryption key and the decrypting intake together.
     responseEncryption: false,
   };
 }
