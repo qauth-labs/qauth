@@ -1,4 +1,4 @@
-import { createPrivateKey, createPublicKey, X509Certificate } from 'node:crypto';
+import { createPrivateKey, createPublicKey, type KeyObject, X509Certificate } from 'node:crypto';
 
 import { InvalidConfigurationError } from '@qauth-labs/shared-errors';
 
@@ -73,7 +73,13 @@ const REQUIRED_LEAF_CURVE = 'prime256v1';
  */
 export interface VerifierSigningMaterial {
   /**
-   * The ES256 private key in PKCS#8 PEM, as the operator supplied it.
+   * The ES256 private key as PKCS#8 PEM — NORMALISED, not verbatim.
+   *
+   * An operator may configure SEC1 (`BEGIN EC PRIVATE KEY`, what
+   * `openssl ecparam -genkey` emits) or PKCS#8; this is always the latter,
+   * because that is the only form `importPrivateSigningKey` accepts. See
+   * {@link normalizeAndMatchPrivateKey} for why the conversion happens at boot
+   * rather than the input being refused.
    *
    * Kept as PEM rather than an imported key object because importing is the
    * signing layer's concern and this library must not choose a JOSE backend for
@@ -106,7 +112,10 @@ export interface VerifierSigningMaterial {
 
 /** Inputs to {@link createVerifierSigningMaterial}. */
 export interface CreateVerifierSigningMaterialOptions {
-  /** ES256 private key, PKCS#8 PEM. */
+  /**
+   * ES256 private key as the OPERATOR supplied it — PKCS#8 or SEC1 PEM. It is
+   * normalised to PKCS#8 on the way out; see {@link normalizeAndMatchPrivateKey}.
+   */
   readonly privateKeyPem: string;
   /**
    * The chain as individual PEM certificates, LEAF FIRST, anchor excluded.
@@ -137,54 +146,88 @@ function parseChainCertificate(pem: string, index: number): X509Certificate {
 }
 
 /**
- * Refuse a private key that is not the leaf's own EC P-256 key.
+ * The EC public-key members that identify a P-256 key uniquely.
  *
- * The check that no amount of chain validation can substitute for, and the one
- * whose absence is invisible until a wallet rejects a request: an operator who
- * mounts last year's key beside this year's certificate produces a signature
- * that verifies under a key nobody in the chain holds. Every wallet refuses it,
- * and nothing in QAuth's own logs says why.
- *
- * Compared as exported SPKI DER rather than by any key identifier: SPKI is the
- * exact byte string the certificate carries, so equality here means the leaf
- * would verify this key's signatures, which is the property that matters.
+ * Compared instead of exported SPKI DER, which is sensitive to the point
+ * CONVERSION FORM: a certificate whose issuer encoded the public point in
+ * compressed form (RFC 5480 §2.2 permits it) re-exports compressed, while the
+ * key derived from a PKCS#8 private key exports uncompressed — two different
+ * byte strings for the same key. `x` and `y` are the coordinates themselves, so
+ * they are equal exactly when the keys are.
  */
-function assertPrivateKeyMatchesLeaf(privateKeyPem: string, leaf: X509Certificate): void {
-  let publicFromPrivate: Buffer;
+function publicKeyIdentity(key: KeyObject): string {
+  const jwk = key.export({ format: 'jwk' });
+  return `${String(jwk.crv)}.${String(jwk.x)}.${String(jwk.y)}`;
+}
+
+/** A private key accepted at boot, in the form the signing path requires. */
+interface AcceptedPrivateKey {
+  /** PKCS#8 PEM — see {@link normalizeAndMatchPrivateKey} for why normalised. */
+  readonly pkcs8Pem: string;
+}
+
+/**
+ * Refuse a private key that is not the leaf's own EC P-256 key, and hand back
+ * the form the signing path will actually use.
+ *
+ * Two failures, both invisible until a wallet rejects a request:
+ *
+ *  - **The wrong key.** An operator who mounts last year's key beside this
+ *    year's certificate produces a signature that verifies under a key nobody
+ *    in the chain holds. Every wallet refuses it, and nothing in QAuth's own
+ *    logs says why. Chain validation cannot substitute for this check.
+ *  - **The right key in the wrong ENCODING.** `openssl ecparam -genkey` — the
+ *    way most operators will produce a P-256 key — emits SEC1
+ *    (`BEGIN EC PRIVATE KEY`). `createPrivateKey` accepts it, so a check written
+ *    around `node:crypto` alone passes; `jose`'s `importPKCS8`, which the
+ *    signing path uses, refuses it outright. The boot would then validate one
+ *    thing and the request path use another.
+ *
+ * The second is fixed by NORMALISING rather than refusing, and that is a
+ * deliberate departure from this codebase's usual refuse-don't-repair posture.
+ * The two encodings are the same key with no security difference and no
+ * ambiguity about intent — unlike a peer-supplied JWK, where a repair would hide
+ * a broken or hostile counterparty. What the normalisation buys is stronger than
+ * ergonomics: the bytes this function VALIDATED are the bytes the signing path
+ * IMPORTS, so the class of "boot checked one form, signing used another" is
+ * closed rather than narrowed.
+ */
+function normalizeAndMatchPrivateKey(
+  privateKeyPem: string,
+  leaf: X509Certificate
+): AcceptedPrivateKey {
+  let privateKey: KeyObject;
 
   try {
-    const privateKey = createPrivateKey(privateKeyPem);
-
-    if (
-      privateKey.asymmetricKeyType !== 'ec' ||
-      privateKey.asymmetricKeyDetails?.namedCurve !== REQUIRED_LEAF_CURVE
-    ) {
-      throw new InvalidConfigurationError(
-        `The OID4VP verifier signing key must be an EC P-256 (prime256v1) private key — ${VERIFIER_REQUEST_SIGNING_ALGORITHM} is the algorithm HAIP §7 requires and the only one an OID4VP request object may be signed with here (#377).`
-      );
-    }
-
-    // Derived from the PEM rather than from `privateKey`: `createPublicKey`
-    // accepts either, and the PEM overload is the one @types/node types for a
-    // string input. Node returns the corresponding PUBLIC key for a private
-    // input, which is what makes the SPKI comparison below meaningful.
-    publicFromPrivate = createPublicKey(privateKeyPem).export({ type: 'spki', format: 'der' });
+    privateKey = createPrivateKey(privateKeyPem);
   } catch (error) {
-    if (error instanceof InvalidConfigurationError) throw error;
-
     throw new InvalidConfigurationError(
-      'The OID4VP verifier signing key is not a readable PKCS#8 PEM private key (#377). See this error\'s "details" for the underlying reason; the key itself is never logged.',
+      'The OID4VP verifier signing key is not a readable PEM private key (#377). See this error\'s "details" for the underlying reason; the key itself is never logged.',
       { cause: error instanceof Error ? error.message : String(error) }
     );
   }
 
-  const leafPublic = leaf.publicKey.export({ type: 'spki', format: 'der' });
+  if (
+    privateKey.asymmetricKeyType !== 'ec' ||
+    privateKey.asymmetricKeyDetails?.namedCurve !== REQUIRED_LEAF_CURVE
+  ) {
+    throw new InvalidConfigurationError(
+      `The OID4VP verifier signing key must be an EC P-256 (prime256v1) private key — ${VERIFIER_REQUEST_SIGNING_ALGORITHM} is the algorithm HAIP §7 requires and the only one an OID4VP request object may be signed with here (#377).`
+    );
+  }
 
-  if (!publicFromPrivate.equals(leafPublic)) {
+  // Normalised FIRST, and the identity check then runs on those exact bytes —
+  // so what boot proved about the key is a property of the value the signing
+  // path will import, not of the value the operator happened to write.
+  const pkcs8Pem = privateKey.export({ type: 'pkcs8', format: 'pem' }).toString();
+
+  if (publicKeyIdentity(createPublicKey(pkcs8Pem)) !== publicKeyIdentity(leaf.publicKey)) {
     throw new InvalidConfigurationError(
       'The OID4VP verifier signing key does not belong to the leaf certificate of the configured chain (#377). Refusing to start rather than signing every Authorization Request with a key no wallet can find in the x5c header.'
     );
   }
+
+  return { pkcs8Pem };
 }
 
 /**
@@ -202,7 +245,8 @@ function assertPrivateKeyMatchesLeaf(privateKeyPem: string, leaf: X509Certificat
  *     expired certificates, broken links, an anchor smuggled into the chain, a
  *     non-P-256 leaf key and a leaf its own issuer marked unfit for signing are
  *     each refused with a distinct reason.
- *  5. **The key belongs to the leaf** — see {@link assertPrivateKeyMatchesLeaf}.
+ *  5. **The key belongs to the leaf, and is usable by the signing path** — see
+ *     {@link normalizeAndMatchPrivateKey}.
  *
  * @param options - see {@link CreateVerifierSigningMaterialOptions}.
  * @returns the validated material, ready to sign request objects with.
@@ -241,10 +285,10 @@ export function createVerifierSigningMaterial(
     );
   }
 
-  assertPrivateKeyMatchesLeaf(options.privateKeyPem, resolution.leaf);
+  const accepted = normalizeAndMatchPrivateKey(options.privateKeyPem, resolution.leaf);
 
   return Object.freeze({
-    privateKeyPem: options.privateKeyPem,
+    privateKeyPem: accepted.pkcs8Pem,
     x5c,
     leafDer: resolution.leaf.raw,
     leafNotAfter: resolution.leaf.validToDate,

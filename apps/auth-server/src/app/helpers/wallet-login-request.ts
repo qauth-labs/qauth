@@ -5,6 +5,7 @@ import {
   encodeOid4vpRequestUri,
   generateOid4vpRequestSecrets,
   hashOid4vpState,
+  isSignedOid4vpRequest,
   type Oid4vpAuthorizationRequest,
   resolveOid4vpExpiry,
   resolveVerifierProfile,
@@ -290,11 +291,19 @@ interface RequestDelivery {
 /**
  * Put the built request where the wallet can reach it (#377).
  *
- * Which form is used is NOT decided here: `encodeOid4vpRequestUri` reads the
- * Client Identifier Prefix out of `client_id` and refuses the form that
- * contradicts it. This function only does the WORK each form needs — signing and
- * parking for the reference form, nothing for the inline one — and the presence
- * of signing material is what tells it which one it is about to be asked for.
+ * Which form is used is decided by the REQUEST, via `isSignedOid4vpRequest` —
+ * the same question `encodeOid4vpRequestUri` asks of the same value, so the two
+ * cannot disagree. This function only does the WORK the chosen form needs:
+ * signing and parking for the reference form, nothing for the inline one.
+ *
+ * Branching on "did the deployment provision signing material" instead would be
+ * wrong, and wrong in a shipped configuration rather than a hypothetical one: a
+ * deployment running `oid4vp-1.0-base` may perfectly well provision a verifier
+ * identity — the boot validates it whatever profile is selected — and that
+ * profile's preferred prefix is the unsigned one. The builder would emit an
+ * unsigned request, this function would try to deliver it by reference, and
+ * `encodeOid4vpRequestUri` would refuse. Every wallet login on the base profile
+ * would break the moment an operator configured a chain.
  *
  * The request object is signed and parked BEFORE the URI is rendered, so a
  * failure to store is a failed sign-in attempt rather than a QR code pointing at
@@ -305,11 +314,21 @@ async function deliverRequest(
   capability: WalletLoginCapability,
   request: Oid4vpAuthorizationRequest
 ): Promise<RequestDelivery> {
-  if (capability.signingMaterial === undefined) {
+  if (!isSignedOid4vpRequest(request)) {
     return {
       invocationUri: encodeOid4vpRequestUri(capability.walletInvocationEndpoint, request),
       requestObjectHandle: undefined,
     };
+  }
+
+  if (capability.signingMaterial === undefined) {
+    // Unreachable through the builder, which refuses a signed prefix with no
+    // material. Stated anyway rather than asserted away: it is the one place
+    // where "the request says signed" and "we hold a key" could come apart, and
+    // a narrowing cast here would be the thing that hid it.
+    throw new Error(
+      'A signed OID4VP Authorization Request was built without verifier signing material to sign it with (#377). This is a caller-wiring bug: the capability and the request disagree about whether this deployment can sign.'
+    );
   }
 
   const requestObject = await signOid4vpRequestObject({

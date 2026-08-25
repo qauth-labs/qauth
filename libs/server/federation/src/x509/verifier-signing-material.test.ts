@@ -1,4 +1,5 @@
-import { generateKeyPairSync } from 'node:crypto';
+import { execSync } from 'node:child_process';
+import { createPrivateKey, generateKeyPairSync } from 'node:crypto';
 
 import { InvalidConfigurationError } from '@qauth-labs/shared-errors';
 import { describe, expect, it } from 'vitest';
@@ -70,8 +71,76 @@ describe('createVerifierSigningMaterial — the happy path', () => {
     expect(material.leafNotAfter.getTime()).toBe(leaf.certificate.validToDate.getTime());
   });
 
-  it('keeps the operator key verbatim rather than re-encoding it', () => {
+  it('hands back the key as PKCS#8, the one form the signing path can import', () => {
+    expect(material.privateKeyPem.startsWith('-----BEGIN PRIVATE KEY-----')).toBe(true);
     expect(material.privateKeyPem).toBe(pkcs8(leaf));
+  });
+});
+
+describe('createVerifierSigningMaterial — key ENCODING (#377)', () => {
+  const { anchor, intermediate, leaf } = buildPki();
+
+  it('accepts a SEC1 key and normalises it, because that is what openssl emits', () => {
+    // The failure this closes: `openssl ecparam -name prime256v1 -genkey` — the
+    // way most operators produce a P-256 key — emits SEC1 (`BEGIN EC PRIVATE
+    // KEY`). `node:crypto` parses it happily, so a boot check written around
+    // `createPrivateKey` alone passes, while `jose`'s `importPKCS8` (what the
+    // signing path uses) refuses it with `"pkcs8" must be PKCS#8 formatted
+    // string`. Boot would validate one form and the request path import another,
+    // and the symptom would be every wallet login failing with nothing in the
+    // logs naming the cause.
+    const sec1 = leaf.keys.privateKey.export({ type: 'sec1', format: 'pem' }).toString();
+
+    expect(sec1.startsWith('-----BEGIN EC PRIVATE KEY-----')).toBe(true);
+
+    const material = createVerifierSigningMaterial({
+      privateKeyPem: sec1,
+      certificateChainPems: [leaf.pem, intermediate.pem],
+      trustAnchorPems: [anchor.pem],
+    });
+
+    expect(material.privateKeyPem.startsWith('-----BEGIN PRIVATE KEY-----')).toBe(true);
+    // The normalised bytes are the SAME KEY, not merely a well-formed one.
+    expect(material.privateKeyPem).toBe(pkcs8(leaf));
+  });
+
+  it('accepts what `openssl ecparam -genkey` actually writes', () => {
+    // Belt and braces on the assertion above: the SEC1 export used there is
+    // Node's, and the claim is about openssl's. This runs the real command, and
+    // asserts only that the encoding is accepted — the key is a stranger's, so
+    // the leaf match is what refuses it.
+    const openssl = execSync('openssl ecparam -name prime256v1 -genkey -noout', {
+      encoding: 'utf8',
+    });
+
+    expect(openssl.startsWith('-----BEGIN EC PRIVATE KEY-----')).toBe(true);
+    expect(createPrivateKey(openssl).asymmetricKeyDetails?.namedCurve).toBe('prime256v1');
+    expect(
+      () =>
+        createVerifierSigningMaterial({
+          privateKeyPem: openssl,
+          certificateChainPems: [leaf.pem, intermediate.pem],
+          trustAnchorPems: [anchor.pem],
+        })
+      // Refused for belonging to the wrong leaf, NOT for its encoding.
+    ).toThrow(/does not belong to the leaf certificate/);
+  });
+
+  it('matches the key to the leaf by EC coordinates, not by SPKI byte equality', () => {
+    // SPKI DER is sensitive to the point CONVERSION FORM — a certificate whose
+    // issuer encoded the public point compressed (RFC 5480 §2.2 permits it)
+    // re-exports compressed, while a key derived from PKCS#8 exports
+    // uncompressed. Comparing `crv`/`x`/`y` is form-independent, so a legitimate
+    // operator PKI cannot be refused for an encoding choice its CA made.
+    const jwk = leaf.keys.publicKey.export({ format: 'jwk' });
+    const material = createVerifierSigningMaterial({
+      privateKeyPem: pkcs8(leaf),
+      certificateChainPems: [leaf.pem, intermediate.pem],
+      trustAnchorPems: [anchor.pem],
+    });
+
+    expect(jwk.crv).toBe('P-256');
+    expect(material.x5c[0]).toBe(leaf.x5c);
   });
 });
 
@@ -226,14 +295,14 @@ describe('createVerifierSigningMaterial — operator mistakes', () => {
     ).toThrow(/EC P-256/);
   });
 
-  it('refuses a key that is not a readable PKCS#8 PEM', () => {
+  it('refuses a key that is not a readable PEM at all', () => {
     expect(() =>
       createVerifierSigningMaterial({
         privateKeyPem: '-----BEGIN PRIVATE KEY-----\nnot base64\n-----END PRIVATE KEY-----',
         certificateChainPems: [leaf.pem, intermediate.pem],
         trustAnchorPems: [anchor.pem],
       })
-    ).toThrow(/not a readable PKCS#8 PEM/);
+    ).toThrow(/not a readable PEM private key/);
   });
 
   it('never puts the operator key into an error message', () => {

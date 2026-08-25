@@ -157,6 +157,7 @@ export {
   encodeOid4vpRequestUri,
   generateOid4vpRequestSecrets,
   hashOid4vpState,
+  isSignedOid4vpRequest,
   MAX_VP_TOKEN_LENGTH,
   OID4VP_REJECTION_DESCRIPTION,
   OID4VP_REQUEST_OBJECT_MEDIA_TYPE,

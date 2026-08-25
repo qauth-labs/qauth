@@ -453,6 +453,27 @@ export const QUERY_PARAMETER_DELIVERY: Oid4vpRequestDelivery = Object.freeze({
   mode: 'query-parameters',
 });
 
+/**
+ * Whether a built request is SIGNED (#377).
+ *
+ * Read off the Client Identifier Prefix inside `client_id`, because that IS the
+ * statement about signedness — OID4VP 1.0 §5.9.3 makes `redirect_uri` unsignable
+ * and `x509_hash` unverifiable unsigned — and because it is what the request
+ * actually carries. Exported so every layer that has to branch on signedness
+ * asks the SAME question of the SAME value.
+ *
+ * That matters more than it looks. A caller that instead branched on "did the
+ * deployment provision signing material" would disagree with the builder the
+ * moment a deployment provisions material while running a profile whose
+ * preferred prefix is unsigned — a supported configuration, and one where the
+ * two answers differ.
+ *
+ * @param request - the built request.
+ */
+export function isSignedOid4vpRequest(request: Oid4vpAuthorizationRequest): boolean {
+  return !isUnsignedClientId(request.client_id);
+}
+
 /** Whether a `client_id` names the one prefix that is never signed (§5.9.3). */
 function isUnsignedClientId(clientId: string): boolean {
   return clientId.startsWith(`${UNSIGNED_CLIENT_ID_PREFIX}${CLIENT_ID_PREFIX_SEPARATOR}`);

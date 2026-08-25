@@ -70,6 +70,13 @@ function fakeFastify() {
   } as unknown as FastifyInstance;
 }
 
+/** Split a concatenated PEM bundle the way the env schema does. */
+function blocks(bundle: string): readonly string[] {
+  return (bundle.match(/-----BEGIN CERTIFICATE-----[\s\S]*?-----END CERTIFICATE-----/g) ?? []).map(
+    (pem) => pem.trim()
+  );
+}
+
 beforeEach(() => {
   envMock.WALLET_FEDERATION_ENABLED = true;
   envMock.OID4VP_VERIFIER_PROFILE = 'oid4vp-1.0-base';
@@ -177,6 +184,36 @@ describe('buildWalletLoginInvocation — the unsigned base path', () => {
     expect(invocation.expiresAt).toBeLessThanOrEqual(Date.now() + 15 * 60 * 1000);
   });
 
+  // The regression this suite exists for. A deployment may run
+  // `oid4vp-1.0-base` AND provision a verifier identity — the boot validates the
+  // material whatever profile is selected — and that profile's preferred prefix
+  // is the unsigned one. A delivery decision made from "do we hold a key" rather
+  // than from "is this request signed" breaks every wallet login on the base
+  // profile the moment an operator configures a chain.
+  it('still delivers INLINE when material is provisioned but the profile is unsigned', async () => {
+    const pki = createMockVerifierPki();
+    const fastify = fakeFastify();
+    const capability: WalletLoginCapability = {
+      ...resolveWalletLoginCapability(fastify)!,
+      signingMaterial: createVerifierSigningMaterial({
+        privateKeyPem: pki.signingKeyPem,
+        certificateChainPems: blocks(pki.certificateChainPem),
+        trustAnchorPems: blocks(pki.trustAnchorPem),
+      }),
+    };
+
+    expect(capability.profile.id).toBe('oid4vp-1.0-base');
+
+    const invocation = await buildWalletLoginInvocation(fastify, capability);
+
+    expect(invocation.request.client_id.startsWith('redirect_uri:')).toBe(true);
+    expect(invocation.invocationUri.startsWith('openid4vp://?')).toBe(true);
+    expect(invocation.invocationUri).toContain('dcql_query');
+    expect(invocation.invocationUri).not.toContain('request_uri');
+    expect(invocation.requestObjectHandle).toBeUndefined();
+    expect(fastify.sessionUtils.setSession).not.toHaveBeenCalled();
+  });
+
   it('honours a custom wallet invocation endpoint', async () => {
     envMock.OID4VP_WALLET_INVOCATION_ENDPOINT = 'https://wallet.example/authorize?v=1';
     const fastify = fakeFastify();
@@ -201,13 +238,6 @@ const HAIP_SIGNING_POSTURE: VerifierProfile = {
   responseModes: ['direct_post'],
   responseEncryption: 'permitted',
 };
-
-/** Split a concatenated PEM bundle the way the env schema does. */
-function blocks(bundle: string): readonly string[] {
-  return (bundle.match(/-----BEGIN CERTIFICATE-----[\s\S]*?-----END CERTIFICATE-----/g) ?? []).map(
-    (pem) => pem.trim()
-  );
-}
 
 describe('buildWalletLoginInvocation — the signed request_uri path (#377)', () => {
   const pki = createMockVerifierPki();
