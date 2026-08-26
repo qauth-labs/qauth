@@ -41,7 +41,7 @@ Therefore:
 - **Public keys (optional) MUST be SPKI PEM** — first line `-----BEGIN PUBLIC KEY-----`. QAuth derives the public key from the private key if you omit it.
 - **RSA MUST be ≥2048-bit.** The conformance test fixture uses exactly `rsa` `modulusLength: 2048` exported pkcs8/pem, ed25519 as pkcs8/spki, example kid `'rsa-2026'` (`apps/auth-server/src/app/routes/oauth/oidc-conformance.test.ts:53-56, 61-63, 68`).
 
-> **Pitfall:** `openssl genrsa` emits **PKCS#1** (`-----BEGIN RSA PRIVATE KEY-----`), which `importPKCS8` rejects. Use `openssl genpkey` (PKCS#8) below, or convert: `openssl pkcs8 -topk8 -nocrypt -in old.pem -out jwt-rs256-private.pem`.
+> **Pitfall:** a **PKCS#1** private key (`-----BEGIN RSA PRIVATE KEY-----`) is rejected — `importPKCS8` reads PKCS#8 only. Which command produces which depends on your OpenSSL: since **3.0**, `openssl genrsa` defaults to PKCS#8, and `-traditional` is needed to get PKCS#1; on **1.1.x and earlier** it emits PKCS#1 unconditionally. Check with `openssl version`, or just look at the first line of the file. `openssl genpkey` (below) emits PKCS#8 on every version, which is why it is the recommendation here. To convert an existing PKCS#1 key: `openssl pkcs8 -topk8 -nocrypt -in old.pem -out jwt-rs256-private.pem`.
 
 ### (a) EdDSA (Ed25519) — required; signs access tokens (and ID tokens when RS256 absent)
 
