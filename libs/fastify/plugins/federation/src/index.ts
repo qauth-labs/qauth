@@ -58,6 +58,60 @@ export {
   resolveCredentialAssurance,
   supportedAcrValues,
 } from '@qauth-labs/server-federation';
+
+// Key-storage assurance (#308) joined to the assurance policy (#237) — the #379
+// seam, and the reason this block exists at all. The app layer needs three
+// things and can reach none of them directly:
+//
+//  - `keyStorageAssuranceGateFor` builds the GATE from the resolved profile, so
+//    `wallet-verification.ts` can state a posture that survives a deployment
+//    having provisioned no resolver. Never assemble the gate by object literal;
+//    see `WalletCredentialVerificationOptions.keyStorageAssurance`.
+//  - `translateKeyStorageAssurance` is the ONE D1 rule (ADR-010 §5) turning
+//    #308's evidence into `AssuranceEvidence.keyStorage`. It is exported as a
+//    function rather than inlined at the call site precisely so no consumer
+//    re-derives "does this attestation mean eIDAS hardware".
+//  - `DEFAULT_KEY_STORAGE_ATTACK_POTENTIAL` is the floor an entry gets when it
+//    states none, exported so a test or an operator-facing message can name it
+//    rather than repeating the literal.
+//
+// The RESOLVER factories (`createKeyStorageAssuranceResolver`,
+// `createStaticAttestingIssuers`) remain deliberately absent: like the trust
+// allowlist and the status checker, a resolver must be obtained through a
+// configuration-driven factory in this layer, not assembled at a call site.
+// That factory now exists — `createConfiguredKeyStorageAssuranceResolver` in
+// `lib/attesting-issuers.ts`, exported below with the provisioning predicate the
+// bootstrap threads into `createConfiguredProviders`.
+export {
+  assertAttestingIssuersUsable,
+  type ConfiguredAttestingIssuers,
+  createConfiguredKeyStorageAssuranceResolver,
+  keyStorageAssuranceProvisioningOf,
+} from './lib/attesting-issuers';
+export type {
+  AttackPotentialResistance,
+  KeyStorageAssuranceEvidence,
+  KeyStorageAssuranceGate,
+  KeyStorageAssuranceResolver,
+  // Needed by `apps/auth-server`'s `app.ts`, which owns the single
+  // `PROVISIONED_VERIFIER_MATERIAL` constant both the provider path and the
+  // subject-resolution boot gate read (#233/#379).
+  ProvisionedVerifierMaterial,
+  TranslatedKeyStorage,
+} from '@qauth-labs/server-federation';
+export {
+  // Re-exported for the cross-lib pin in `apps/auth-server`'s
+  // `src/config/env.test.ts`: `server-config` DUPLICATES this §D.2 vocabulary
+  // as a Zod enum rather than importing it (it is the lowest layer and carries
+  // no dependency on `server-federation`), so something has to assert the two
+  // still agree. The app is the lowest layer permitted to see both, and it can
+  // only see this half through this barrel — without the export, the pin those
+  // schemas' TSDoc promises cannot be written at all.
+  ATTACK_POTENTIAL_RESISTANCE_ORDER,
+  DEFAULT_KEY_STORAGE_ATTACK_POTENTIAL,
+  keyStorageAssuranceGateFor,
+  translateKeyStorageAssurance,
+} from '@qauth-labs/server-federation';
 // Note the asymmetry with the password surface: `createWalletProvider` is
 // deliberately NOT re-exported. `createConfiguredProviders` is the only
 // sanctioned way for app code to put a wallet provider in the registry, so no
@@ -134,12 +188,14 @@ export type {
   IssuerKeyResolver,
   Oid4vpAuthorizationRequest,
   Oid4vpDirectPostOutcome,
+  Oid4vpRequestDelivery,
   Oid4vpRequestSecrets,
   PresentedCredential,
   RedeemedOid4vpRequestState,
   ValidatedCredential,
   VerifierProfile,
   VerifierProfileId,
+  VerifierSigningMaterial,
 } from '@qauth-labs/server-federation';
 export {
   assertNoRedirectUriParameter,
@@ -147,13 +203,19 @@ export {
   assertValidResponseUri,
   buildOid4vpAuthorizationRequest,
   buildRedirectUriClientId,
+  buildX509HashClientId,
+  createVerifierSigningMaterial,
   DEFAULT_OID4VP_REQUEST_TTL_MS,
+  DEFAULT_REQUEST_OBJECT_LIFETIME_SECONDS,
   DIRECT_POST_RESPONSE_MODE,
   encodeOid4vpRequestUri,
   generateOid4vpRequestSecrets,
   hashOid4vpState,
+  isSignedOid4vpRequest,
   MAX_VP_TOKEN_LENGTH,
   OID4VP_REJECTION_DESCRIPTION,
+  OID4VP_REQUEST_OBJECT_MEDIA_TYPE,
+  OID4VP_REQUEST_OBJECT_TYP,
   OID4VP_RESPONSE_TYPE,
   Oid4vpTransportRejection,
   parseStoredDcqlQuery,
@@ -161,6 +223,9 @@ export {
   resolveOid4vpExpiry,
   resolveVerifierProfile,
   SD_JWT_VC_FORMAT,
+  signOid4vpRequestObject,
+  verifierMaterialProvisionedBy,
+  X509_HASH_CLIENT_ID_PREFIX,
 } from '@qauth-labs/server-federation';
 
 // Subject resolution (#300, ADR-009) — which ACCOUNT a validated presentation

@@ -11,6 +11,16 @@
 | Confirmed blockers       | **0**                                                                                                                                         |
 | Findings                 | 4 MEDIUM, 4 LOW, 5 INFO (none gate-blocking)                                                                                                  |
 
+> **Note — 2026-07-27.** This review's premise that hybrid issuance "is not wired
+> into live routes yet" (§2) no longer holds: `apps/auth-server/src/app/app.ts:243-252`
+> wires `mlDsaSeed` and `hybridSigningEnabled: true` into the JWT plugin whenever
+> `HYBRID_SIGNING_ENABLED` is set (#275, merged after this review's 2026-07-18 date).
+> Runtime security posture now **does** depend on this code once an operator sets
+> that flag — the pre-default-on checklist (§8) is the thing to work through, not a
+> hypothetical. The rest of this review's findings and verdict are unaffected and
+> were accurate as of its review date; this note marks a superseded premise, not a
+> re-assessment.
+
 ## 1. Scope and gate question
 
 This is the AC#1/AC#2 security gate for the merged PQC hybrid-signing crypto surface. The gate question is narrow and explicit:
@@ -37,6 +47,10 @@ Surface reviewed (all merged on `main`):
 Per the ADR-005 amendments (#245), the hybrid construction is a **detached-parallel** signature and _deliberately_ not the strict LAMPS/prabel composite: the token is an ordinary Ed25519 compact JWS, the ML-DSA-65 signature is detached in a separate `pqcSignature` field, and `pqc_alg`/`pqc_kid` are **non-critical** protected-header members to preserve stock-JOSE-verifier compatibility (AC#2). Downgrade resistance within a single bearer token is, by documented design, a **verifier-policy** control (`requirePqc`), not a cryptographic one. This review assessed whether that documented mitigation actually holds in code; it did not re-propose the architecture. `HYBRID_SIGNING_ENABLED` defaults **OFF** and ~~hybrid issuance is **not wired into live routes yet**, so no runtime security posture depends on this code today~~.
 
 > **Update (2026-07-31):** only the default-OFF half still holds. **#275 wired live hybrid issuance and PQC-aware verification into `/oauth/token`, `/auth/login` and `/oauth/introspect`** (`apps/auth-server/src/app/helpers/hybrid-token.ts`) — as §8 item 4 of this document already records as **DONE**. Any deployment that flips the flag therefore _does_ rest a real runtime security posture on this surface, so the residual §8 items are now pre-conditions for enabling it, not merely for defaulting it on.
+
+> **Superseded 2026-07-27** — see the note at the top of this document. #275
+> wired hybrid issuance into live routes after this review's date; with
+> `HYBRID_SIGNING_ENABLED` set, runtime posture does depend on this code.
 
 ## 3. Methodology
 

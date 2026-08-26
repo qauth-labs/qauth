@@ -105,7 +105,7 @@ export async function startWalletLinkFlow(
   if (capability === undefined) return undefined;
 
   const realm = await getOrCreateDefaultRealm(fastify);
-  const invocation = buildWalletLoginInvocation(capability);
+  const invocation = await buildWalletLoginInvocation(fastify, capability);
 
   await fastify.repositories.oid4vpRequestStates.create({
     realmId: realm.id,
@@ -127,6 +127,11 @@ export async function startWalletLinkFlow(
     mode: 'link',
     linkUserId: userId,
     invocationUri: invocation.invocationUri,
+    // Carried so the terminal outcome that ends this flow also removes the
+    // parked request object (#377). Absent for an unsigned request.
+    ...(invocation.requestObjectHandle === undefined
+      ? {}
+      : { requestObjectHandle: invocation.requestObjectHandle }),
     nonce: invocation.nonce,
     clientId: invocation.request.client_id,
     dcqlQuery: { ...invocation.request.dcql_query },

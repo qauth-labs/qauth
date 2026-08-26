@@ -1,4 +1,4 @@
-import { createHash, randomBytes } from 'node:crypto';
+import { createHash, randomBytes, X509Certificate } from 'node:crypto';
 
 import {
   exportPublicSigningJwk,
@@ -6,7 +6,7 @@ import {
   type JwsAlgorithm,
   type SigningKeyPair,
 } from '@qauth-labs/core-crypto';
-import { CompactSign, type JWK } from 'jose';
+import { CompactSign, compactVerify, importSPKI, type JWK } from 'jose';
 
 /**
  * A REFERENCE / MOCK WALLET (issue #240, OID4VP 1.0, ADR-004).
@@ -45,6 +45,16 @@ import { CompactSign, type JWK } from 'jose';
  * ships; `mso_mdoc` is deliberately ABSENT and a request for it is REFUSED
  * rather than answered by the SD-JWT path. Adding an mdoc wallet later is a new
  * table entry plus a credential the wallet holds — not a rewrite of the suite.
+ *
+ * ## The signed-request seam (#377)
+ *
+ * Under a profile that mandates signed requests the wallet receives a
+ * `request_uri` reference, fetches a JAR, and has to decide whether to believe
+ * it. {@link verifyOid4vpRequestObject} is that decision, and it is written HERE
+ * rather than delegated for the same reason as everything else in this file: it
+ * must not be the verifier's own chain reader. The anchor it validates against
+ * is passed in from a trust list the wallet holds OUT OF BAND — never read from
+ * the request — which is the property the whole exercise is about.
  *
  * ## What it is not
  *
@@ -382,6 +392,12 @@ export interface MockWallet {
    * return the form body a `direct_post` response carries.
    */
   buildResponse(invocationUri: string): Promise<WalletAuthorizationResponse>;
+  /**
+   * Answer a request the wallet already read — the signed path, where the
+   * parameters came out of a verified request object rather than off the URI
+   * (#377). {@link MockWallet.buildResponse} is this, plus the parse.
+   */
+  buildResponseForRequest(request: Oid4vpRequestView): Promise<WalletAuthorizationResponse>;
   /** Answer with an OAuth-style error instead of a `vp_token` (§8.2). */
   buildErrorResponse(invocationUri: string, error?: string): WalletAuthorizationErrorResponse;
 }
@@ -430,7 +446,12 @@ export function createMockWallet(credentials: readonly HeldCredential[] = []): M
     },
 
     async buildResponse(invocationUri: string): Promise<WalletAuthorizationResponse> {
-      const request = parseOid4vpRequest(invocationUri);
+      return this.buildResponseForRequest(parseOid4vpRequest(invocationUri));
+    },
+
+    async buildResponseForRequest(
+      request: Oid4vpRequestView
+    ): Promise<WalletAuthorizationResponse> {
       const vpToken: Record<string, string[]> = {};
 
       for (const query of request.dcqlQuery.credentials) {
@@ -482,4 +503,211 @@ export function issuerJwksConfig(issuers: readonly MockCredentialIssuer[]): stri
   const map: Record<string, JWK[]> = {};
   for (const issuer of issuers) map[issuer.identifier] = [issuer.jwk];
   return JSON.stringify(map);
+}
+
+/** The `typ` a wallet requires on a JAR request object (RFC 9101 §10.8). */
+const REQUEST_OBJECT_TYP = 'oauth-authz-req+jwt';
+
+/** OID4VP 1.0 §5.9.3 — the prefix HAIP mandates for a signed request. */
+const X509_HASH_PREFIX = 'x509_hash:';
+
+/** A `request_uri` invocation, as a wallet reads it off the wire (#377). */
+export interface Oid4vpRequestReference {
+  /** `client_id`, which RFC 9101 §5.2.2 keeps OUTSIDE the request object. */
+  readonly clientId: string;
+  /** Absolute URI the request object is fetched from. */
+  readonly requestUri: string;
+}
+
+/**
+ * Parse a `request_uri`-form wallet invocation URI (#377).
+ *
+ * A wallet that received this form must NOT find the request parameters here:
+ * they live inside the signed object, and a second unsigned copy on the wire
+ * would be a value an attacker could steer. So this refuses an invocation that
+ * carries `dcql_query` — the shape a downgrade to the query form would take.
+ *
+ * @throws Error when a required parameter is missing or the unsigned parameters
+ * are present alongside the reference.
+ */
+export function parseOid4vpRequestReference(invocationUri: string): Oid4vpRequestReference {
+  const params = new URLSearchParams(invocationUri.slice(invocationUri.indexOf('?') + 1));
+
+  const clientId = params.get('client_id');
+  const requestUri = params.get('request_uri');
+
+  if (clientId === null || clientId === '') {
+    throw new Error("a request_uri invocation is missing required parameter 'client_id'");
+  }
+  if (requestUri === null || requestUri === '') {
+    throw new Error("a request_uri invocation is missing required parameter 'request_uri'");
+  }
+  if (params.has('dcql_query') || params.has('client_metadata')) {
+    throw new Error(
+      'a request_uri invocation must not also carry the unsigned request parameters — ' +
+        'the signed object is the only copy a wallet may act on'
+    );
+  }
+
+  return { clientId, requestUri };
+}
+
+/** What the wallet holds out of band about who it will accept requests from. */
+export interface WalletTrustList {
+  /**
+   * PEM trust anchor from the wallet's own trust list.
+   *
+   * The request never carries this and must never be able to: an `x5c` that
+   * shipped its own anchor would validate against itself.
+   */
+  readonly trustAnchorPem: string;
+  /** Reference time for every validity window. Defaults to now. */
+  readonly now?: Date;
+}
+
+/** A signed request the wallet decided to believe (#377). */
+export interface VerifiedOid4vpRequest {
+  /** The request parameters, read from the SIGNED payload. */
+  readonly request: Oid4vpRequestView;
+  /** The `x5c` chain the request object carried, leaf first. */
+  readonly x5c: readonly string[];
+  /** The certificates that chain, parsed — for a suite to assert about. */
+  readonly chain: readonly X509Certificate[];
+}
+
+/** Decode one base64url JOSE segment into an object. */
+function decodeJoseSegment(segment: string): Record<string, unknown> {
+  return JSON.parse(Buffer.from(segment, 'base64url').toString('utf8')) as Record<string, unknown>;
+}
+
+/** Whether `certificate` is inside its validity window at `now`. */
+function isTemporallyValid(certificate: X509Certificate, now: Date): boolean {
+  return (
+    certificate.validFromDate.getTime() <= now.getTime() &&
+    now.getTime() <= certificate.validToDate.getTime()
+  );
+}
+
+/**
+ * Verify a JAR request object the way a wallet would (#377, RFC 9101, HAIP §5).
+ *
+ * Written against `node:crypto` and `jose` alone, with no import of QAuth's own
+ * chain reader — the independence that makes this an interoperability check
+ * rather than a round trip through the encoder under test.
+ *
+ * The order matters and mirrors what a wallet can actually know at each step.
+ * Everything before the signature check treats the header as attacker-supplied,
+ * because it is: the key that would authenticate it is what the chain produces.
+ *
+ *  1. `alg` is `ES256` and `typ` is the JAR type — a pin, so a token minted for
+ *     something else cannot be replayed here.
+ *  2. `x5c` parses, leaf first.
+ *  3. The wallet's own anchor is NOT in the chain.
+ *  4. Every certificate is inside its validity window.
+ *  5. Every link is genuinely issued by the next, by name AND by signature.
+ *  6. The top of the chain is issued by the wallet's anchor.
+ *  7. `client_id` equals `x509_hash:` + base64url(SHA-256(DER(leaf))).
+ *  8. Only now: the signature verifies under the leaf's key.
+ *
+ * @throws Error naming the first check that refused.
+ */
+export async function verifyOid4vpRequestObject(
+  requestObject: string,
+  trust: WalletTrustList
+): Promise<VerifiedOid4vpRequest> {
+  const now = trust.now ?? new Date();
+  const segments = requestObject.split('.');
+
+  if (segments.length !== 3) throw new Error('request object is not a compact JWS');
+
+  const header = decodeJoseSegment(segments[0] as string);
+
+  if (header['alg'] !== 'ES256') {
+    throw new Error(`request object must be signed with ES256; got '${String(header['alg'])}'`);
+  }
+  if (header['typ'] !== REQUEST_OBJECT_TYP) {
+    throw new Error(`request object must carry typ '${REQUEST_OBJECT_TYP}'`);
+  }
+
+  const x5c = header['x5c'];
+  if (!Array.isArray(x5c) || x5c.length === 0) {
+    throw new Error('request object carries no x5c chain');
+  }
+
+  const chain = x5c.map((entry) => {
+    if (typeof entry !== 'string') throw new Error('x5c entry is not a string');
+    return new X509Certificate(Buffer.from(entry, 'base64'));
+  });
+
+  const anchor = new X509Certificate(trust.trustAnchorPem);
+
+  if (chain.some((certificate) => certificate.raw.equals(anchor.raw))) {
+    throw new Error(
+      'x5c carries the trust anchor; a chain that ships its own anchor validates against itself'
+    );
+  }
+
+  for (const certificate of chain) {
+    if (!isTemporallyValid(certificate, now)) {
+      throw new Error(`certificate '${certificate.subject}' is outside its validity window`);
+    }
+  }
+
+  for (let index = 0; index < chain.length - 1; index += 1) {
+    const child = chain[index] as X509Certificate;
+    const parent = chain[index + 1] as X509Certificate;
+    if (parent.ca !== true) throw new Error('an x5c intermediate is not a CA');
+    if (!child.checkIssued(parent) || !child.verify(parent.publicKey)) {
+      throw new Error('x5c chain is broken');
+    }
+  }
+
+  const top = chain[chain.length - 1] as X509Certificate;
+  if (
+    !isTemporallyValid(anchor, now) ||
+    !top.checkIssued(anchor) ||
+    !top.verify(anchor.publicKey)
+  ) {
+    throw new Error('x5c chain does not terminate at the trust anchor this wallet holds');
+  }
+
+  const leaf = chain[0] as X509Certificate;
+  const expectedClientId = `${X509_HASH_PREFIX}${createHash('sha256').update(leaf.raw).digest('base64url')}`;
+
+  const { payload } = await compactVerify(
+    requestObject,
+    await importSPKI(leaf.publicKey.export({ type: 'spki', format: 'pem' }).toString(), 'ES256'),
+    { algorithms: ['ES256'] }
+  );
+
+  const claims = JSON.parse(Buffer.from(payload).toString('utf8')) as Record<string, unknown>;
+
+  if (claims['client_id'] !== expectedClientId) {
+    throw new Error(
+      "the request object's client_id is not the base64url SHA-256 of its own leaf certificate"
+    );
+  }
+
+  const required = (name: string): string => {
+    const value = claims[name];
+    if (typeof value !== 'string' || value === '') {
+      throw new Error(`signed OID4VP request is missing required claim '${name}'`);
+    }
+    return value;
+  };
+
+  return {
+    request: {
+      clientId: expectedClientId,
+      responseType: required('response_type'),
+      responseMode: required('response_mode'),
+      responseUri: required('response_uri'),
+      nonce: required('nonce'),
+      state: required('state'),
+      dcqlQuery: claims['dcql_query'] as DcqlQueryView,
+      clientMetadata: (claims['client_metadata'] ?? {}) as Record<string, unknown>,
+    },
+    x5c: x5c as readonly string[],
+    chain,
+  };
 }

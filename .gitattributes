@@ -9,6 +9,12 @@
 # developer never touched, while `git status` stays clean. CI runs ubuntu-latest,
 # so it never reproduces there. See #363.
 #
+# Enumerating them one at a time is what fails: #389 hit exactly this on the
+# docs site and answered it by appending `*.mdx` to the list, leaving *.astro,
+# *.mjs and *.css — the other extensions that PR introduced — still falling
+# through. That entry is superseded here rather than lost; the rule below covers
+# it and every extension nobody has thought of yet.
+#
 # `text=auto` lets Git detect which files are text; `eol=lf` fixes the working-tree
 # ending for those it does. Binary files are unaffected by the detection, and the
 # explicit `binary` entries below make that independent of heuristics.

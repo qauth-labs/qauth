@@ -17,6 +17,30 @@ const MAX_STATUS_LIST_ANCHOR_PATH_LENGTH = 4096;
 /** Most status-list trust anchors one deployment may configure. */
 const MAX_STATUS_LIST_ANCHORS = 32;
 
+/**
+ * Longest raw inline PEM value accepted for the verifier's own key or chain.
+ *
+ * Smaller than the status-list bound above because this is one key or one short
+ * chain rather than a CA bundle. It is a DoS bound on a variable this process
+ * reads once, not a policy.
+ */
+const MAX_VERIFIER_PEM_LENGTH = 16 * 1024;
+
+/**
+ * Most certificates accepted in the verifier's own `x5c` chain.
+ *
+ * Pinned to `server-federation`'s own `MAX_CHAIN_LENGTH`, which is what
+ * `resolveAnchoredSigningCertificate` enforces at boot. Duplicated as a number
+ * rather than imported for the layering reason the module JSDoc gives: config is
+ * the lowest layer and carries no dependency on `server-federation`. A chain
+ * longer than this is refused here with a message naming the variable, instead
+ * of later as an opaque `malformed-x5c`.
+ */
+const MAX_VERIFIER_CHAIN_CERTIFICATES = 8;
+
+/** Most trust anchors one deployment may configure for its OWN chain. */
+const MAX_VERIFIER_TRUST_ANCHORS = 8;
+
 /** Longest raw `OID4VP_STATUS_LIST_URI_ALLOWLIST` value accepted, in characters. */
 const MAX_STATUS_LIST_ALLOWLIST_LENGTH = 64 * 1024;
 
@@ -67,11 +91,12 @@ function splitCertificateBundle(bundle: string): readonly string[] {
 function parseCertificateBundle(
   bundle: string,
   variable: string,
-  ctx: z.RefinementCtx
+  ctx: z.RefinementCtx,
+  max: number = MAX_STATUS_LIST_ANCHORS
 ): readonly string[] {
-  const anchors = splitCertificateBundle(bundle);
+  const certificates = splitCertificateBundle(bundle);
 
-  if (anchors.length === 0) {
+  if (certificates.length === 0) {
     ctx.addIssue({
       code: 'custom',
       message: `${variable} contains no "-----BEGIN CERTIFICATE-----" block. It must hold one or more PEM-encoded X.509 certificates`,
@@ -79,15 +104,47 @@ function parseCertificateBundle(
     return z.NEVER;
   }
 
-  if (anchors.length > MAX_STATUS_LIST_ANCHORS) {
+  if (certificates.length > max) {
     ctx.addIssue({
       code: 'custom',
-      message: `${variable} carries ${anchors.length} certificates, more than the ${MAX_STATUS_LIST_ANCHORS} supported`,
+      message: `${variable} carries ${certificates.length} certificates, more than the ${max} supported`,
     });
     return z.NEVER;
   }
 
-  return Object.freeze(anchors.map((pem) => pem.trim()));
+  return Object.freeze(certificates.map((pem) => pem.trim()));
+}
+
+/**
+ * Read a file named by a `_PATH` variable, or report that it cannot be read.
+ *
+ * An unreadable path is a hard parse failure, exactly as `jwt.ts` treats a
+ * missing `JWT_PRIVATE_KEY_PATH`: the operator stated where the material lives,
+ * so "the file is not there" is a misconfiguration and never an empty value. A
+ * silently empty result would make an unmounted secret look like a deployment
+ * that simply configured nothing.
+ *
+ * @returns the file contents, or `undefined` when the variable is unset or blank
+ * (which is not an error), or `z.NEVER` when the named file cannot be read.
+ */
+function readConfiguredFile(
+  raw: string | undefined,
+  variable: string,
+  ctx: z.RefinementCtx
+): string | undefined {
+  if (raw === undefined || raw.trim() === '') return undefined;
+
+  const path = raw.trim();
+
+  try {
+    return readFileSync(path, 'utf-8');
+  } catch (error) {
+    ctx.addIssue({
+      code: 'custom',
+      message: `${variable} names a file that cannot be read (${path}): ${error instanceof Error ? error.message : String(error)}`,
+    });
+    return z.NEVER;
+  }
 }
 
 /** Parse the INLINE status-list anchor bundle. Unset and blank yield no anchors. */
@@ -112,21 +169,58 @@ function parseStatusListAnchorFile(
   raw: string | undefined,
   ctx: z.RefinementCtx
 ): readonly string[] {
-  if (raw === undefined || raw.trim() === '') return NO_ANCHOR_PEMS;
+  const contents = readConfiguredFile(raw, 'OID4VP_STATUS_LIST_TRUST_ANCHORS_PATH', ctx);
 
-  const path = raw.trim();
-  let contents: string;
-  try {
-    contents = readFileSync(path, 'utf-8');
-  } catch (error) {
-    ctx.addIssue({
-      code: 'custom',
-      message: `OID4VP_STATUS_LIST_TRUST_ANCHORS_PATH names a file that cannot be read (${path}): ${error instanceof Error ? error.message : String(error)}`,
-    });
-    return z.NEVER;
-  }
+  if (contents === undefined) return NO_ANCHOR_PEMS;
+  if (contents === z.NEVER) return z.NEVER;
 
   return parseCertificateBundle(contents, 'OID4VP_STATUS_LIST_TRUST_ANCHORS_PATH', ctx);
+}
+
+/** No certificates — the value of an unset verifier chain or anchor variable. */
+const NO_VERIFIER_PEMS: readonly string[] = Object.freeze([]);
+
+/** Parse an INLINE verifier PEM bundle under a documented certificate cap. */
+function parseInlineVerifierCertificates(
+  variable: string,
+  max: number
+): (raw: string | undefined, ctx: z.RefinementCtx) => readonly string[] {
+  return (raw, ctx) => {
+    if (raw === undefined || raw.trim() === '') return NO_VERIFIER_PEMS;
+    return parseCertificateBundle(raw, variable, ctx, max);
+  };
+}
+
+/** Read and parse a verifier PEM bundle NAMED BY A PATH. */
+function parseVerifierCertificateFile(
+  variable: string,
+  max: number
+): (raw: string | undefined, ctx: z.RefinementCtx) => readonly string[] {
+  return (raw, ctx) => {
+    const contents = readConfiguredFile(raw, variable, ctx);
+
+    if (contents === undefined) return NO_VERIFIER_PEMS;
+    if (contents === z.NEVER) return z.NEVER;
+
+    return parseCertificateBundle(contents, variable, ctx, max);
+  };
+}
+
+/** Trim an optional inline PEM, treating blank as unset. */
+function parseInlineVerifierKey(raw: string | undefined): string | undefined {
+  if (raw === undefined || raw.trim() === '') return undefined;
+  return raw.trim();
+}
+
+/** Read the verifier signing key NAMED BY A PATH; blank and unset yield none. */
+function parseVerifierKeyFile(raw: string | undefined, ctx: z.RefinementCtx): string | undefined {
+  const contents = readConfiguredFile(raw, 'OID4VP_VERIFIER_SIGNING_KEY_PATH', ctx);
+
+  if (contents === undefined) return undefined;
+  if (contents === z.NEVER) return z.NEVER;
+
+  const key = contents.trim();
+  return key.length === 0 ? undefined : key;
 }
 
 /** One permitted status list URI prefix: an absolute HTTPS URL. */
@@ -217,6 +311,80 @@ export function resolveStatusListTrustAnchorPems(
   return Object.freeze([
     ...env.OID4VP_STATUS_LIST_TRUST_ANCHORS,
     ...env.OID4VP_STATUS_LIST_TRUST_ANCHORS_PATH,
+  ]);
+}
+
+/** The parsed verifier-identity variables, as `federationEnvSchema` yields them. */
+export interface VerifierSigningEnvLike {
+  /** Key written inline. */
+  readonly OID4VP_VERIFIER_SIGNING_KEY: string | undefined;
+  /** Key read from the file `OID4VP_VERIFIER_SIGNING_KEY_PATH` names. */
+  readonly OID4VP_VERIFIER_SIGNING_KEY_PATH: string | undefined;
+  /** Chain written inline, leaf first. */
+  readonly OID4VP_VERIFIER_CERTIFICATE_CHAIN: readonly string[];
+  /** Chain read from the file `OID4VP_VERIFIER_CERTIFICATE_CHAIN_PATH` names. */
+  readonly OID4VP_VERIFIER_CERTIFICATE_CHAIN_PATH: readonly string[];
+  /** Anchors written inline. */
+  readonly OID4VP_VERIFIER_TRUST_ANCHORS: readonly string[];
+  /** Anchors read from the file `OID4VP_VERIFIER_TRUST_ANCHORS_PATH` names. */
+  readonly OID4VP_VERIFIER_TRUST_ANCHORS_PATH: readonly string[];
+}
+
+/**
+ * The verifier's ES256 signing key, from whichever source supplied one (#377).
+ *
+ * The `_PATH` form WINS, exactly as `jwt.ts`'s `resolveKey` makes it win for
+ * `JWT_PRIVATE_KEY`: a signing key has exactly one correct value, so two sources
+ * must be a precedence rather than a set. This is the opposite of how the anchor
+ * variables above reconcile, and the difference is the point — see
+ * {@link resolveVerifierTrustAnchorPems}.
+ *
+ * @param env - the parsed federation env.
+ * @returns the PKCS#8 PEM, or `undefined` when the deployment configured none —
+ * which is the default posture and the one that leaves `ES256` unclaimed.
+ */
+export function resolveVerifierSigningKeyPem(env: VerifierSigningEnvLike): string | undefined {
+  return env.OID4VP_VERIFIER_SIGNING_KEY_PATH ?? env.OID4VP_VERIFIER_SIGNING_KEY;
+}
+
+/**
+ * The verifier's own certificate chain, LEAF FIRST (#377).
+ *
+ * The `_PATH` form WINS rather than being unioned, and here the reason is
+ * ORDER rather than singularity: `x5c` is defined leaf-first (RFC 7515 §4.1.6)
+ * and every link is checked against the next, so concatenating two independently
+ * authored chains would produce a sequence whose middle link does not issue the
+ * one after it. Refusing to interleave them is what keeps a chain a chain.
+ *
+ * @param env - the parsed federation env.
+ * @returns the chain as individual PEM certificates, leaf first. Empty when the
+ * deployment configured none.
+ */
+export function resolveVerifierCertificateChainPems(
+  env: VerifierSigningEnvLike
+): readonly string[] {
+  return env.OID4VP_VERIFIER_CERTIFICATE_CHAIN_PATH.length > 0
+    ? env.OID4VP_VERIFIER_CERTIFICATE_CHAIN_PATH
+    : env.OID4VP_VERIFIER_CERTIFICATE_CHAIN;
+}
+
+/**
+ * The anchors the verifier's own chain must terminate at (#377).
+ *
+ * UNIONED, like the status-list anchors and for the same reason: an anchor set
+ * is a SET, and an operator who mounts a CA bundle and adds one more anchor
+ * inline means both. The two chain variables above are a precedence and this one
+ * is a union — that asymmetry is deliberate, and it is the same asymmetry
+ * {@link resolveStatusListTrustAnchorPems} documents.
+ *
+ * @param env - the parsed federation env.
+ * @returns every configured anchor PEM, inline first. Empty when none is
+ * configured, which makes any configured chain fail to validate at boot.
+ */
+export function resolveVerifierTrustAnchorPems(env: VerifierSigningEnvLike): readonly string[] {
+  return Object.freeze([
+    ...env.OID4VP_VERIFIER_TRUST_ANCHORS,
+    ...env.OID4VP_VERIFIER_TRUST_ANCHORS_PATH,
   ]);
 }
 
@@ -695,6 +863,168 @@ export const federationEnvSchema = z.object({
     )
     .optional()
     .transform(parseStatusListUriAllowlist),
+
+  /**
+   * `OID4VP_VERIFIER_SIGNING_KEY` (#377) — the ES256 private key QAuth signs an
+   * OID4VP Authorization Request with, as PKCS#8 PEM.
+   *
+   * ## A FIFTH trust question, and it is the only one pointing outward
+   *
+   * Every other X.509 variable in this file asks whether QAuth may believe
+   * somebody else. This one, its chain and its anchors are how QAuth proves who
+   * IT is to a wallet — the VERIFIER identity of OID4VP 1.0 §5.9, which HAIP §5
+   * requires be carried by the `x509_hash` Client Identifier Prefix over a
+   * SIGNED request object.
+   *
+   * ## NOT a token-issuance key, and never interchangeable with one
+   *
+   * `JWT_PRIVATE_KEY` and `JWT_RS256_PRIVATE_KEY` (`jwt.ts`) sign the access and
+   * ID tokens QAuth issues to its own relying parties, and their public halves
+   * are published at `GET /.well-known/jwks.json`. This key is not published
+   * anywhere, never reaches the JWT plugin, and signs nothing a relying party
+   * ever sees. #298's risk note states the requirement plainly — *"the two key
+   * sets must not be interchangeable"* — and `apps/auth-server` carries a test
+   * asserting this key appears in neither the JWKS nor any issued token.
+   *
+   * ## Shape and sources
+   *
+   * PKCS#8 PEM (`-----BEGIN PRIVATE KEY-----`) over an EC P-256 key, because
+   * `ES256` is HAIP §7's floor and the only algorithm a P-256 key satisfies.
+   * That the key parses, is P-256, and BELONGS TO the configured leaf are all
+   * checked by `server-federation`'s `createVerifierSigningMaterial` at boot —
+   * this layer validates length only, exactly as it does for the anchors above,
+   * so the two rule sets cannot drift.
+   *
+   * Prefer {@link OID4VP_VERIFIER_SIGNING_KEY_PATH} in any real deployment: a
+   * private key is what an orchestrator mounts as a secret file.
+   *
+   * OPTIONAL WITH NO DEFAULT. Unset means the deployment provisions no verifier
+   * signing identity, cannot claim `ES256`, and therefore cannot operate a
+   * profile that mandates signed requests — which is the fail-closed state.
+   */
+  OID4VP_VERIFIER_SIGNING_KEY: z
+    .string()
+    .max(
+      MAX_VERIFIER_PEM_LENGTH,
+      `OID4VP_VERIFIER_SIGNING_KEY must be at most ${MAX_VERIFIER_PEM_LENGTH} characters — a private key that large is a configuration mistake`
+    )
+    .optional()
+    .transform(parseInlineVerifierKey),
+
+  /**
+   * `OID4VP_VERIFIER_SIGNING_KEY_PATH` (#377) — a file holding the same PKCS#8
+   * PEM key.
+   *
+   * The `_PATH` sibling every key-carrying variable in this workspace has
+   * (`JWT_PRIVATE_KEY_PATH`, `JWT_RS256_PRIVATE_KEY_PATH`), and it takes
+   * PRECEDENCE over the inline form — see {@link resolveVerifierSigningKeyPem}.
+   *
+   * A path that is SET but unreadable fails the boot. Unset and blank are "no
+   * key from a file", which is not an error on its own.
+   */
+  OID4VP_VERIFIER_SIGNING_KEY_PATH: z
+    .string()
+    .max(MAX_STATUS_LIST_ANCHOR_PATH_LENGTH)
+    .optional()
+    .transform(parseVerifierKeyFile),
+
+  /**
+   * `OID4VP_VERIFIER_CERTIFICATE_CHAIN` (#377) — the certificate chain that
+   * accompanies the key above, as an inline PEM bundle, **leaf first**.
+   *
+   * This becomes the `x5c` header of the signed request object, so two
+   * properties are load-bearing and each is a way to make every wallet reject
+   * every request:
+   *
+   *  - **Leaf first** (RFC 7515 §4.1.6). Each entry must be issued by the next.
+   *    A reversed bundle is refused at boot as a broken link rather than
+   *    reordered, because guessing an order is guessing which certificate the
+   *    operator meant to identify this deployment.
+   *  - **Trust anchor EXCLUDED.** The anchor belongs in
+   *    {@link OID4VP_VERIFIER_TRUST_ANCHORS}, not here. A chain that ships a
+   *    copy of its own anchor would satisfy a path check against itself, which
+   *    turns "chains to an anchor" into "carries one" — and
+   *    `resolveAnchoredSigningCertificate` refuses such a chain outright.
+   *
+   * In the EU this is the QTSP-issued WRPAC and its issuing CA. A public CA such
+   * as Let's Encrypt does NOT satisfy it: the wallet has to recognise the anchor.
+   *
+   * Shape only here — one or more concatenated PEM `CERTIFICATE` blocks, under
+   * the chain-length cap `resolveAnchoredSigningCertificate` also enforces.
+   * Whether the chain VALIDATES is
+   * `createVerifierSigningMaterial`'s answer at boot.
+   */
+  OID4VP_VERIFIER_CERTIFICATE_CHAIN: z
+    .string()
+    .max(
+      MAX_VERIFIER_PEM_LENGTH,
+      `OID4VP_VERIFIER_CERTIFICATE_CHAIN must be at most ${MAX_VERIFIER_PEM_LENGTH} characters — a verifier chain that large is a configuration mistake`
+    )
+    .optional()
+    .transform(
+      parseInlineVerifierCertificates(
+        'OID4VP_VERIFIER_CERTIFICATE_CHAIN',
+        MAX_VERIFIER_CHAIN_CERTIFICATES
+      )
+    ),
+
+  /**
+   * `OID4VP_VERIFIER_CERTIFICATE_CHAIN_PATH` (#377) — a file holding the same
+   * leaf-first PEM bundle.
+   *
+   * Takes PRECEDENCE over the inline form rather than being unioned with it —
+   * see {@link resolveVerifierCertificateChainPems} for why a chain is the one
+   * certificate variable here that must not be a set.
+   */
+  OID4VP_VERIFIER_CERTIFICATE_CHAIN_PATH: z
+    .string()
+    .max(MAX_STATUS_LIST_ANCHOR_PATH_LENGTH)
+    .optional()
+    .transform(
+      parseVerifierCertificateFile(
+        'OID4VP_VERIFIER_CERTIFICATE_CHAIN_PATH',
+        MAX_VERIFIER_CHAIN_CERTIFICATES
+      )
+    ),
+
+  /**
+   * `OID4VP_VERIFIER_TRUST_ANCHORS` (#377) — the anchors QAuth's OWN chain must
+   * terminate at, as an inline PEM bundle.
+   *
+   * Distinct from `OID4VP_STATUS_LIST_TRUST_ANCHORS` and never a substitute for
+   * it: that set decides which CA may vouch for a STATUS issuer, this one is the
+   * CA that vouches for QAuth. Sharing them would let a status-issuer CA mint a
+   * certificate that identifies this deployment to a wallet — which is why
+   * `anchored-chain.ts` takes anchors as a parameter and owns no configuration.
+   *
+   * REQUIRED whenever a chain is configured, and the boot refuses a chain with
+   * no anchor rather than accepting one validated against nothing.
+   */
+  OID4VP_VERIFIER_TRUST_ANCHORS: z
+    .string()
+    .max(
+      MAX_STATUS_LIST_ANCHOR_BUNDLE_LENGTH,
+      `OID4VP_VERIFIER_TRUST_ANCHORS must be at most ${MAX_STATUS_LIST_ANCHOR_BUNDLE_LENGTH} characters — a bundle that large is a configuration mistake`
+    )
+    .optional()
+    .transform(
+      parseInlineVerifierCertificates('OID4VP_VERIFIER_TRUST_ANCHORS', MAX_VERIFIER_TRUST_ANCHORS)
+    ),
+
+  /**
+   * `OID4VP_VERIFIER_TRUST_ANCHORS_PATH` (#377) — a file holding the same anchor
+   * bundle.
+   *
+   * UNIONED with the inline variable, like the status-list anchors and unlike
+   * the chain — see {@link resolveVerifierTrustAnchorPems}.
+   */
+  OID4VP_VERIFIER_TRUST_ANCHORS_PATH: z
+    .string()
+    .max(MAX_STATUS_LIST_ANCHOR_PATH_LENGTH)
+    .optional()
+    .transform(
+      parseVerifierCertificateFile('OID4VP_VERIFIER_TRUST_ANCHORS_PATH', MAX_VERIFIER_TRUST_ANCHORS)
+    ),
 });
 
 /** Federation environment configuration type. */

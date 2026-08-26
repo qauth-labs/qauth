@@ -1,0 +1,257 @@
+import { existsSync, readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+import { describe, expect, it } from 'vitest';
+
+import { loadContentTree } from './content-tree';
+import {
+  type EvidenceEntry,
+  FEATURE_EVIDENCE,
+  findStaleStatusClaims,
+  type ScannablePage,
+} from './status-claims';
+import { resolveWorkspaceRoot } from './workspace-root';
+
+/**
+ * Guard 4: content may not call a shipped feature "deferred", "not yet
+ * implemented", "coming soon" or equivalent. This is what actually failed
+ * in the repo already — README.md still lists the ADR-002 migration, PQC
+ * hybrid signing and wallet federation as undelivered, unnoticed across
+ * three merge waves because nothing mechanical checked it. If this test is
+ * deleted, that regression is silent again.
+ */
+
+const FIXTURES = join(dirname(fileURLToPath(import.meta.url)), '__fixtures__', 'status-claims');
+const REPO_ROOT = resolveWorkspaceRoot();
+
+function loadFixturePage(name: string, unbuiltClaims?: boolean): ScannablePage {
+  return { id: name, content: readFileSync(join(FIXTURES, name), 'utf8'), unbuiltClaims };
+}
+
+describe('FEATURE_EVIDENCE table', () => {
+  it('every evidence path exists in the repository — an invented path would silently disable its row', () => {
+    for (const entry of FEATURE_EVIDENCE) {
+      for (const evidencePath of entry.evidencePaths) {
+        expect(
+          existsSync(join(REPO_ROOT, evidencePath)),
+          `${entry.feature}: expected "${evidencePath}" to exist`
+        ).toBe(true);
+      }
+    }
+  });
+});
+
+describe('findStaleStatusClaims — fixtures', () => {
+  it('passes prose that describes a shipped feature as shipped', () => {
+    const violations = findStaleStatusClaims(
+      [loadFixturePage('ok-shipped.md')],
+      FEATURE_EVIDENCE,
+      REPO_ROOT
+    );
+    expect(violations).toEqual([]);
+  });
+
+  it('MUTATION: fails prose that calls a shipped feature deferred / not yet implemented', () => {
+    const violations = findStaleStatusClaims(
+      [loadFixturePage('broken-deferred.md')],
+      FEATURE_EVIDENCE,
+      REPO_ROOT
+    );
+    expect(violations).toEqual([
+      expect.objectContaining({ file: 'broken-deferred.md', feature: 'PQC / hybrid signing' }),
+    ]);
+  });
+
+  it('the escape hatch is page-scoped: unbuiltClaims: true silences the exact same prose', () => {
+    const violations = findStaleStatusClaims(
+      [loadFixturePage('broken-deferred.md', true)],
+      FEATURE_EVIDENCE,
+      REPO_ROOT
+    );
+    expect(violations).toEqual([]);
+  });
+
+  it('does not flag "not deferred" as a violation (negative-lookbehind on the status phrase)', () => {
+    const violations = findStaleStatusClaims(
+      [loadFixturePage('not-deferred.md')],
+      FEATURE_EVIDENCE,
+      REPO_ROOT
+    );
+    expect(violations).toEqual([]);
+  });
+
+  /**
+   * Regression test for the actual failure mode that motivated `computeScope`
+   * (see the design-decisions section of the task report): a first
+   * implementation used a fixed character window around each status-phrase
+   * match, which reached sideways into an UNRELATED, already-shipped
+   * feature's bullet just because it shared a list with a genuinely deferred
+   * one. This fixture is modeled directly on the real README.md shape that
+   * produced that false positive — a plain bullet list where "API key
+   * management" (shipped) sits immediately above "Federation provider
+   * configuration UI ... deferred" (genuinely unbuilt). Only the deferred
+   * bullet's own feature may be flagged.
+   */
+  it('MUTATION regression: a shipped bullet next to a deferred one in the same list is not conflated', () => {
+    const violations = findStaleStatusClaims(
+      [loadFixturePage('roadmap-mixed-bullets.md')],
+      FEATURE_EVIDENCE,
+      REPO_ROOT
+    );
+    expect(violations).toEqual([
+      expect.objectContaining({
+        file: 'roadmap-mixed-bullets.md',
+        feature: 'Wallet federation / OID4VP',
+      }),
+    ]);
+  });
+
+  /**
+   * The `📋` symbol form. README.md's legend defines it as "planned", and the
+   * architecture diagram used it to mark OID4VP planned 25 lines after the same
+   * file said wallet login works end to end — drift the word-phrase alternation
+   * could never see, because the sentence contains no word for it.
+   */
+  it('flags a shipped feature marked planned with the 📋 symbol inside a fenced diagram', () => {
+    const violations = findStaleStatusClaims(
+      [loadFixturePage('symbol-diagram-stale.md')],
+      FEATURE_EVIDENCE,
+      REPO_ROOT
+    );
+    expect(violations).toEqual([
+      expect.objectContaining({
+        file: 'symbol-diagram-stale.md',
+        feature: 'Wallet federation / OID4VP',
+        matchedPhrase: '📋',
+      }),
+    ]);
+  });
+
+  /**
+   * NON-VACUITY for the segmentation that makes the case above safe. A fenced
+   * repo tree has no blank lines, so it is ONE paragraph: scoped by paragraph, a
+   * `📋` marking `auth-ui/` as planned lands in the same segment as the shipped
+   * `server/federation/` and `core/crypto/` rows and reports both as drift.
+   * Every such block marks one subject per line, so `📋` lines are segmented per
+   * line and absorb no continuation. Delete that branch in `splitSegments` and
+   * this case reports two violations instead of none.
+   */
+  it('MUTATION regression: a 📋 row does not taint shipped rows elsewhere in the same fenced block', () => {
+    const violations = findStaleStatusClaims(
+      [loadFixturePage('symbol-diagram-scoped.md')],
+      FEATURE_EVIDENCE,
+      REPO_ROOT
+    );
+    expect(violations).toEqual([]);
+  });
+
+  /**
+   * Same regression, harder shape: README.md's own blockquoted T0–T5 roadmap
+   * recap, where "environment-gated developer API keys" sits inside the
+   * SHIPPED `T5` bullet immediately above the genuinely deferred `T4` bullet
+   * — both inside one markdown paragraph (a `>` blockquote has no blank
+   * lines between its lines). `Environment-aware authorization` must not be
+   * flagged; `PQC / hybrid signing` and `Identifier abstraction (ADR-002)`
+   * (both named in the T4 bullet itself) must be, and nothing else.
+   */
+  it('MUTATION regression: a shipped T-item next to a deferred one in a blockquoted list is not conflated', () => {
+    const violations = findStaleStatusClaims(
+      [loadFixturePage('roadmap-mixed-blockquote.md')],
+      FEATURE_EVIDENCE,
+      REPO_ROOT
+    );
+    expect(violations).toEqual([
+      expect.objectContaining({
+        file: 'roadmap-mixed-blockquote.md',
+        feature: 'PQC / hybrid signing',
+      }),
+      expect.objectContaining({
+        file: 'roadmap-mixed-blockquote.md',
+        feature: 'Identifier abstraction (ADR-002)',
+      }),
+    ]);
+  });
+
+  it('does not trust evidence that does not exist on disk', () => {
+    const fakeEvidence: EvidenceEntry[] = [
+      { feature: 'Ghost Feature', aliases: ['ghost feature'], evidencePaths: ['does/not/exist'] },
+    ];
+    const violations = findStaleStatusClaims(
+      [loadFixturePage('fake-evidence.md')],
+      fakeEvidence,
+      REPO_ROOT
+    );
+    expect(violations).toEqual([]);
+  });
+
+  it('README.md and docs/README.md have no frontmatter and must not crash the guard', () => {
+    const page: ScannablePage = {
+      id: 'no-frontmatter.md',
+      content: 'plain text, no unbuiltClaims field',
+    };
+    expect(() => findStaleStatusClaims([page], FEATURE_EVIDENCE, REPO_ROOT)).not.toThrow();
+  });
+});
+
+/**
+ * Real-tree scan set: the site content tree plus README.md and
+ * docs/README.md (per the brief). `MVP-PRD.md` is deliberately excluded —
+ * owner decision, not an oversight: it is a planning record that calls
+ * already-shipped work "in progress" by design (that's what a PRD's status
+ * column is for), so scanning it would make this guard permanently red for
+ * a reason unrelated to documentation drift. See vitest.config.ts / nx.json
+ * for this repo's existing convention of commenting exclusions like this
+ * one rather than leaving them unexplained.
+ */
+function buildRealScanSet(): ScannablePage[] {
+  const contentDir = join(REPO_ROOT, 'apps', 'docs-site', 'src', 'content', 'docs');
+  const sitePages: ScannablePage[] = loadContentTree(contentDir).map((page) => ({
+    id: page.slug,
+    content: page.body,
+    unbuiltClaims: page.frontmatter.unbuiltClaims === true,
+  }));
+
+  // No frontmatter on either file, so `unbuiltClaims` is left `undefined` —
+  // never exempt. That absence must not throw (asserted above).
+  const readme: ScannablePage = {
+    id: 'README.md',
+    content: readFileSync(join(REPO_ROOT, 'README.md'), 'utf8'),
+  };
+  const docsReadme: ScannablePage = {
+    id: 'docs/README.md',
+    content: readFileSync(join(REPO_ROOT, 'docs', 'README.md'), 'utf8'),
+  };
+
+  return [...sitePages, readme, docsReadme];
+}
+
+describe('findStaleStatusClaims — real tree', () => {
+  /**
+   * EXPECTED TO FAIL until Task 4 (#350) lands. README.md and docs/README.md
+   * currently call the ADR-002 migration, PQC hybrid signing and wallet
+   * federation "deferred" / "not yet implemented" while all three have
+   * shipped — the exact rot this guard exists to catch. Per the task brief:
+   * do not skip this, do not narrow the scan set, do not soften the
+   * assertion. Its failure output IS Task 4's work order.
+   */
+  it('the site content tree, README.md, and docs/README.md make no stale status claims', () => {
+    const scanSet = buildRealScanSet();
+
+    // Non-vacuity, asserted BEFORE the violations check below (deliberately
+    // — that check currently fails by design, so anything placed after it
+    // would never execute today, and the whole point is that these must be
+    // verified now, not merely planned for after Task 4 lands). Once
+    // README.md/docs/README.md are fixed, "zero violations" alone would
+    // look identical whether this scanned everything or nothing — assert
+    // instead that the scan actually covered both READMEs plus a
+    // non-trivial, growth-tolerant number of content pages.
+    const scannedIds = scanSet.map((page) => page.id);
+    expect(scannedIds).toContain('README.md');
+    expect(scannedIds).toContain('docs/README.md');
+    expect(scanSet.length).toBeGreaterThanOrEqual(7); // 5+ content pages today, plus the two READMEs
+
+    const violations = findStaleStatusClaims(scanSet, FEATURE_EVIDENCE, REPO_ROOT);
+    expect(violations).toEqual([]);
+  });
+});

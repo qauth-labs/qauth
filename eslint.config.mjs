@@ -27,6 +27,12 @@ const NON_SHIPPED_FILES = [
   // up, but imported only by `*.integration.test.ts` and never reachable from
   // main.ts, so its imports (jose) are test-scope.
   '{projectRoot}/src/testing/**',
+  // docs-site's drift guards. Same shape as src/testing/** above: under src/
+  // (so the typecheck input set picks it up) but imported only from the
+  // sibling `*.test.ts` files — astro.config.mjs, content.config.ts and the
+  // .astro pages reach src/lib/ and src/plugins/ only, never src/invariants/.
+  // Its imports (github-slugger) are test-scope.
+  '{projectRoot}/src/invariants/**',
 ];
 
 /**
@@ -83,6 +89,7 @@ export default [
   ...nx.configs['flat/javascript'],
   {
     ignores: [
+      '**/.astro/**',
       '**/.expo/**',
       '**/.nitro/**',
       '**/.nx/**',

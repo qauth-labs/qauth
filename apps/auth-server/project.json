@@ -70,6 +70,14 @@
       "dependsOn": ["prune-lockfile", "copy-workspace-modules"],
       "executor": "nx:noop"
     },
+    "openapi-export": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "tsx src/openapi-export.ts",
+        "cwd": "apps/auth-server"
+      },
+      "description": "Boot the real app (no Postgres/Redis required, no listening port) under the maximal flag surface and write apps/docs-site/public/openapi.json"
+    },
     "serve": {
       "continuous": true,
       "executor": "@nx/js:node",

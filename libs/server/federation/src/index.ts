@@ -1,6 +1,7 @@
 export * from './assurance/acr-value';
 export * from './assurance/assurance-level';
 export * from './assurance/credential-assurance';
+export * from './assurance/key-storage-evidence';
 export * from './assurance/resolve-assurance-policy';
 export * from './attestation';
 export * from './claims/attribute-trust';
@@ -35,3 +36,4 @@ export * from './trust/issuer-identity';
 export * from './trust/issuer-trust-rejection';
 export * from './trust/resolve-trust-registry';
 export * from './trust/trust-registry';
+export * from './x509/verifier-signing-material';

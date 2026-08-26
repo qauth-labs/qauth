@@ -94,6 +94,7 @@ export type IdJagRejectionReason =
   | 'signature_invalid'
   | 'issuer_invalid'
   | 'claims_invalid'
+  | 'unsupported_constraint'
   | 'audience_invalid'
   | 'lifetime_invalid'
   | 'client_mismatch'
@@ -391,6 +392,39 @@ export async function validateIdJagAssertion(
   // rewritten header cannot get past it.
   if (verified.protectedHeader['typ'] !== ID_JAG_TYP) {
     throw new IdJagValidationError('unsupported_typ', `assertion typ is not ${ID_JAG_TYP}`);
+  }
+
+  // ADR-011 gate 15 — REFUSE an authorization constraint we do not implement;
+  // never ignore it. `idJagClaimsSchema` below is deliberately non-strict (a
+  // future spec revision may add members we should tolerate), so it would
+  // SILENTLY STRIP `authorization_details` — which is precisely the downgrade
+  // this gate exists to prevent. The enterprise IdP used RFC 9396 to narrow
+  // what the grant authorizes; issuing a token without honouring that narrowing
+  // hands the client more authority than the IdP granted.
+  //
+  // Read from `verified.claims` — the bytes the signature covers — because by
+  // the time the schema has parsed, the member is already gone.
+  // ADR-011 gate 15 — REFUSE an authorization constraint we do not implement;
+  // never ignore it. `idJagClaimsSchema` below is deliberately non-strict (a
+  // future spec revision may add members we should tolerate), so it would
+  // SILENTLY STRIP `authorization_details` — which is precisely the downgrade
+  // this gate exists to prevent. The enterprise IdP used RFC 9396 to narrow
+  // what the grant authorizes; issuing a token without honouring that narrowing
+  // hands the client more authority than the IdP granted.
+  //
+  // Read from `verified.claims` — the bytes the signature covers — because by
+  // the time the schema has parsed, the member is already gone. Deliberately a
+  // TARGETED check rather than `.strict()`: strictness would also reject
+  // unrecognised-but-harmless members a later spec revision may add.
+  if (
+    typeof verified.claims === 'object' &&
+    verified.claims !== null &&
+    'authorization_details' in verified.claims
+  ) {
+    throw new IdJagValidationError(
+      'unsupported_constraint',
+      'assertion carries authorization_details (RFC 9396), which this server does not implement'
+    );
   }
 
   const parsed = idJagClaimsSchema.safeParse(verified.claims);

@@ -1,10 +1,7 @@
-import {
-  generateKeyPairSync,
-  type KeyObject,
-  sign as signBytes,
-  X509Certificate,
-} from 'node:crypto';
+import { type KeyObject, sign as signBytes } from 'node:crypto';
 import { deflateSync } from 'node:zlib';
+
+import { createTestCertificate, type TestCertificate } from './x509-der';
 
 /**
  * A REFERENCE / MOCK STATUS LIST ISSUER (issues #297, #378).
@@ -25,214 +22,31 @@ import { deflateSync } from 'node:zlib';
  * keys the verifier never sees, decides what its list says, and speaks to QAuth
  * only over HTTP.
  *
- * That separation is what makes the E2E an INTEROPERABILITY test. The DER below
+ * That separation is what makes the E2E an INTEROPERABILITY test. `x509-der.ts`
  * and `status/test/x509-fixtures.ts` are independent implementations of the same
- * standard; if QAuth's chain reader and this encoder ever disagree, the E2E
- * fails rather than a shared helper absorbing the divergence.
+ * standard; if QAuth's chain reader and this app's encoder ever disagree, the
+ * E2E fails rather than a shared helper absorbing the divergence. The encoder
+ * itself moved to `x509-der.ts` with #377 so the app has ONE of them rather than
+ * one per fixture — the boundary that buys independence is the app/lib one, and
+ * a second copy inside `src/testing/` would buy nothing.
  *
  * ## What is implemented
  *
- * Only what the E2E exercises: ECDSA P-256 keys, `ecdsa-with-SHA256`, a
- * single-CN name, a validity window, `basicConstraints` and `dNSName` SANs; a
- * 2-bit status list; and a compact ES256 JWS. It is a TEST helper and must not
- * become a certificate-issuing or status-publishing utility.
+ * Only what the E2E exercises: the certificates `x509-der.ts` builds; a 2-bit
+ * status list; and a compact ES256 JWS. It is a TEST helper and must not become
+ * a certificate-issuing or status-publishing utility.
  *
  * @see https://datatracker.ietf.org/doc/draft-ietf-oauth-status-list/
  */
 
-// ------------------------------------------------------------------- DER
-
-/** ASN.1 tag numbers used below. */
-const TAG = {
-  BOOLEAN: 0x01,
-  INTEGER: 0x02,
-  BIT_STRING: 0x03,
-  OCTET_STRING: 0x04,
-  OID: 0x06,
-  UTF8_STRING: 0x0c,
-  SEQUENCE: 0x30,
-  SET: 0x31,
-  UTC_TIME: 0x17,
-} as const;
-
-/** Encode a DER length header. */
-function derLength(length: number): Buffer {
-  if (length < 0x80) return Buffer.from([length]);
-  const bytes: number[] = [];
-  let remaining = length;
-  while (remaining > 0) {
-    bytes.unshift(remaining & 0xff);
-    remaining >>= 8;
-  }
-  return Buffer.from([0x80 | bytes.length, ...bytes]);
-}
-
-/** Wrap `content` in a DER TLV with the given tag. */
-function der(tag: number, content: Buffer): Buffer {
-  return Buffer.concat([Buffer.from([tag]), derLength(content.length), content]);
-}
-
-/** A context-specific constructed `[n]` wrapper. */
-function contextConstructed(n: number, content: Buffer): Buffer {
-  return der(0xa0 | n, content);
-}
-
-/** DER INTEGER from a non-negative JS integer. */
-function derInteger(value: number): Buffer {
-  const bytes: number[] = [];
-  let remaining = value;
-  do {
-    bytes.unshift(remaining & 0xff);
-    remaining = Math.floor(remaining / 256);
-  } while (remaining > 0);
-  // A leading bit of 1 would make the INTEGER negative.
-  if (((bytes[0] as number) & 0x80) !== 0) bytes.unshift(0x00);
-  return der(TAG.INTEGER, Buffer.from(bytes));
-}
-
-/** Encode a dotted OID string as DER. */
-function derOid(dotted: string): Buffer {
-  const parts = dotted.split('.').map((part) => Number.parseInt(part, 10));
-  const bytes: number[] = [(parts[0] as number) * 40 + (parts[1] as number)];
-  for (const part of parts.slice(2)) {
-    const chunk: number[] = [part & 0x7f];
-    let remaining = part >> 7;
-    while (remaining > 0) {
-      chunk.unshift((remaining & 0x7f) | 0x80);
-      remaining >>= 7;
-    }
-    bytes.push(...chunk);
-  }
-  return der(TAG.OID, Buffer.from(bytes));
-}
-
-/** `AlgorithmIdentifier` for `ecdsa-with-SHA256` (no parameters). */
-function ecdsaWithSha256(): Buffer {
-  return der(TAG.SEQUENCE, derOid('1.2.840.10045.4.3.2'));
-}
-
-/** A `Name` holding a single CN. */
-function commonName(value: string): Buffer {
-  const attribute = der(
-    TAG.SEQUENCE,
-    Buffer.concat([derOid('2.5.4.3'), der(TAG.UTF8_STRING, Buffer.from(value, 'utf8'))])
-  );
-  return der(TAG.SEQUENCE, der(TAG.SET, attribute));
-}
-
-/** `UTCTime` as `YYMMDDHHMMSSZ`. */
-function utcTime(date: Date): Buffer {
-  const pad = (n: number): string => n.toString().padStart(2, '0');
-  const text =
-    pad(date.getUTCFullYear() % 100) +
-    pad(date.getUTCMonth() + 1) +
-    pad(date.getUTCDate()) +
-    pad(date.getUTCHours()) +
-    pad(date.getUTCMinutes()) +
-    pad(date.getUTCSeconds()) +
-    'Z';
-  return der(TAG.UTC_TIME, Buffer.from(text, 'ascii'));
-}
-
-/** A single X.509 v3 extension. */
-function extension(oid: string, critical: boolean, value: Buffer): Buffer {
-  return der(
-    TAG.SEQUENCE,
-    Buffer.concat([
-      derOid(oid),
-      ...(critical ? [der(TAG.BOOLEAN, Buffer.from([0xff]))] : []),
-      der(TAG.OCTET_STRING, value),
-    ])
-  );
-}
-
-/** `basicConstraints`; `cA` is omitted when false, per DER DEFAULT rules. */
-function basicConstraints(isCa: boolean): Buffer {
-  return extension(
-    '2.5.29.19',
-    true,
-    der(TAG.SEQUENCE, isCa ? der(TAG.BOOLEAN, Buffer.from([0xff])) : Buffer.alloc(0))
-  );
-}
-
-/** `subjectAltName` holding `dNSName` entries (`[2] IMPLICIT IA5String`). */
-function subjectAltName(dnsNames: readonly string[]): Buffer {
-  return extension(
-    '2.5.29.17',
-    false,
-    der(
-      TAG.SEQUENCE,
-      Buffer.concat(dnsNames.map((name) => der(0x80 | 2, Buffer.from(name, 'ascii'))))
-    )
-  );
-}
-
-// ----------------------------------------------------------- certificates
-
-/** A built certificate and everything a test needs to use it. */
-export interface MockCertificate {
-  /** PEM form — what an operator puts in `OID4VP_STATUS_LIST_TRUST_ANCHORS`. */
-  readonly pem: string;
-  /** Standard-alphabet base64 DER, i.e. an `x5c` entry. */
-  readonly x5c: string;
-  readonly privateKey: KeyObject;
-  readonly subject: string;
-}
-
-/** What {@link createMockCertificate} may vary. */
-interface CreateMockCertificateOptions {
-  readonly subject: string;
-  /** Issuer; omit for a self-signed certificate. */
-  readonly issuer?: MockCertificate;
-  readonly ca?: boolean;
-  readonly dnsNames?: readonly string[];
-}
-
-let nextSerial = 1;
-
-/** Build a signed X.509 v3 certificate. */
-function createMockCertificate(options: CreateMockCertificateOptions): MockCertificate {
-  const { privateKey, publicKey } = generateKeyPairSync('ec', { namedCurve: 'prime256v1' });
-  const notBefore = new Date(Date.now() - 3_600_000);
-  const notAfter = new Date(Date.now() + 30 * 24 * 3_600_000);
-
-  const extensions: Buffer[] = [basicConstraints(options.ca === true)];
-  if (options.dnsNames !== undefined && options.dnsNames.length > 0) {
-    extensions.push(subjectAltName(options.dnsNames));
-  }
-
-  const tbs = der(
-    TAG.SEQUENCE,
-    Buffer.concat([
-      contextConstructed(0, derInteger(2)),
-      derInteger(nextSerial++),
-      ecdsaWithSha256(),
-      commonName(options.issuer?.subject ?? options.subject),
-      der(TAG.SEQUENCE, Buffer.concat([utcTime(notBefore), utcTime(notAfter)])),
-      commonName(options.subject),
-      Buffer.from(publicKey.export({ type: 'spki', format: 'der' })),
-      contextConstructed(3, der(TAG.SEQUENCE, Buffer.concat(extensions))),
-    ])
-  );
-
-  const signature = signBytes('sha256', tbs, options.issuer?.privateKey ?? privateKey);
-
-  const certificateDer = der(
-    TAG.SEQUENCE,
-    Buffer.concat([
-      tbs,
-      ecdsaWithSha256(),
-      der(TAG.BIT_STRING, Buffer.concat([Buffer.from([0x00]), signature])),
-    ])
-  );
-
-  return {
-    pem: new X509Certificate(certificateDer).toString(),
-    x5c: certificateDer.toString('base64'),
-    privateKey,
-    subject: options.subject,
-  };
-}
+/**
+ * A built certificate, as this module passes it around.
+ *
+ * An alias rather than a distinct shape: the members it needs — `pem` for the
+ * anchor variable, `x5c` for the token header, `privateKey` to sign with — are
+ * exactly what {@link createTestCertificate} returns.
+ */
+export type MockCertificate = TestCertificate;
 
 // ---------------------------------------------------------- status lists
 
@@ -355,8 +169,8 @@ export function createMockStatusList(options: CreateMockStatusListOptions = {}):
   const issuer = `https://${host}`;
   const uri = `${issuer}/lists/1`;
 
-  const root = createMockCertificate({ subject: `${host} Root CA`, ca: true });
-  const signer = createMockCertificate({ subject: host, issuer: root, dnsNames: [host] });
+  const root = createTestCertificate({ subject: `${host} Root CA`, ca: true });
+  const signer = createTestCertificate({ subject: host, issuer: root, dnsNames: [host] });
 
   const entries = new Array<number>(options.size ?? 64).fill(MOCK_STATUS.VALID);
   let behaviour: MockStatusEndpointBehaviour = { kind: 'ok' };

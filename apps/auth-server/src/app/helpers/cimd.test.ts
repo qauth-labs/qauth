@@ -354,7 +354,9 @@ describe('toCimdClientInsert — client JWKS (CIMD §6.2 / RFC 7591 §2, #384)',
         jwks_uri: 'https://app.example.com/jwks.json',
       })
     );
-    expect(() => toCimdClientInsert(REALM, CLIENT_ID, doc, SENTINEL)).toThrow(/mutually exclusive/);
+    expect(() => toCimdClientInsert(REALM, CLIENT_ID, doc, SENTINEL)).toThrow(
+      expect.objectContaining({ errorDescription: expect.stringMatching(/mutually exclusive/) })
+    );
   });
 
   it('ignores a key set the document did not ask to authenticate with', () => {

@@ -75,6 +75,8 @@ interface AssertionOverrides {
   readonly iat?: number;
   readonly exp?: number;
   readonly key?: CryptoKey;
+  /** Extra top-level claims, for asserting on members the schema would strip. */
+  readonly extraClaims?: Record<string, unknown>;
 }
 
 let jtiCounter = 0;
@@ -96,6 +98,7 @@ async function makeAssertion(overrides: AssertionOverrides = {}): Promise<string
     payload['resource'] = overrides.resource ?? MCP_SERVER;
   }
   if (overrides.scope !== undefined) payload['scope'] = overrides.scope;
+  if (overrides.extraClaims) Object.assign(payload, overrides.extraClaims);
 
   return new SignJWT(payload)
     .setProtectedHeader({ alg: overrides.alg ?? 'EdDSA', typ: overrides.typ ?? ID_JAG_TYP })
@@ -339,6 +342,46 @@ describe('validateIdJagAssertion — deny paths', () => {
       }),
       'audience_invalid'
     );
+  });
+
+  // ADR-011 gate 15. The regression this guards is specific: `idJagClaimsSchema`
+  // is non-strict, so before the explicit check existed Zod stripped
+  // `authorization_details` and the assertion was ACCEPTED with the IdP's
+  // narrowing silently discarded — a privilege upgrade relative to what the
+  // enterprise authorized. A passing "rejects" assertion here is only
+  // meaningful alongside the sibling test below proving other unknown members
+  // still pass, otherwise `.strict()` would satisfy this one and break callers.
+  it('rejects an assertion carrying authorization_details (RFC 9396), never ignores it', async () => {
+    const { fastify } = fastifyStub();
+    const assertion = await makeAssertion({
+      extraClaims: {
+        authorization_details: [{ type: 'payment_initiation', actions: ['initiate'] }],
+      },
+    });
+
+    await expectRejection(
+      validateIdJagAssertion(fastify, {
+        assertion,
+        expectedClientId: CLIENT_ID,
+        resolver: trustedResolver(),
+      }),
+      'unsupported_constraint'
+    );
+  });
+
+  it('still accepts an assertion carrying an unrecognised member that is NOT a constraint', async () => {
+    const { fastify } = fastifyStub();
+    const assertion = await makeAssertion({
+      extraClaims: { some_future_spec_member: 'tolerated' },
+    });
+
+    const result = await validateIdJagAssertion(fastify, {
+      assertion,
+      expectedClientId: CLIENT_ID,
+      resolver: trustedResolver(),
+    });
+
+    expect(result.clientId).toBe(CLIENT_ID);
   });
 
   it('rejects an expired assertion', async () => {

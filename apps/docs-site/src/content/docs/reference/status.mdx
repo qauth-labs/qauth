@@ -1,0 +1,66 @@
+---
+title: Status
+description: What has shipped, what is flag-gated, and what is still open — rendered from the single status source.
+sidebar:
+  order: 1
+lastVerified: '2026-07-26'
+---
+
+import { CURRENT_RELEASE, DELIVERY_TRACKS, FEATURE_STATUS } from '../../../lib/status';
+import OldestVerified from '../../../components/OldestVerified.astro';
+
+This page is rendered from `apps/docs-site/src/lib/status.ts`, the single source for QAuth's
+delivery status. To change what this page says, edit that file — not this one.
+
+**Current release:** {CURRENT_RELEASE.version} ({CURRENT_RELEASE.stage}, {CURRENT_RELEASE.date}).
+
+<OldestVerified />
+
+## Delivery tracks
+
+<table>
+  <thead>
+    <tr>
+      <th>Track</th>
+      <th>State</th>
+      <th>Summary</th>
+    </tr>
+  </thead>
+  <tbody>
+    {DELIVERY_TRACKS.map((track) => (
+      <tr key={track.id}>
+        <td>
+          {track.id} — {track.name}
+        </td>
+        <td>{track.state}</td>
+        <td>{track.summary}</td>
+      </tr>
+    ))}
+  </tbody>
+</table>
+
+## Feature status
+
+Flag-gated features are off by default; enabling one is an operator decision, not a statement
+that the feature is incomplete everywhere it applies.
+
+<table>
+  <thead>
+    <tr>
+      <th>Feature</th>
+      <th>State</th>
+      <th>Flag</th>
+      <th>Summary</th>
+    </tr>
+  </thead>
+  <tbody>
+    {FEATURE_STATUS.map((feature) => (
+      <tr key={feature.feature}>
+        <td>{feature.feature}</td>
+        <td>{feature.state}</td>
+        <td>{feature.flag ? `${feature.flag.name} (default ${feature.flag.default})` : '—'}</td>
+        <td>{feature.summary}</td>
+      </tr>
+    ))}
+  </tbody>
+</table>

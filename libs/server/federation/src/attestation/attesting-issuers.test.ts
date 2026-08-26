@@ -6,6 +6,7 @@ import {
   type AttestingIssuerEntry,
   createStaticAttestingIssuers,
   NO_ATTESTING_ISSUERS,
+  strongestAttestedKeyStorage,
 } from './attesting-issuers';
 
 /** A validated issuer identity, built the only way #234 can build one. */
@@ -144,5 +145,100 @@ describe('KeyStorageAttestingIssuers — the transitive WSCD path (#308, HAIP §
     it('is frozen, so a request handler cannot widen it process-wide', () => {
       expect(Object.isFrozen(createStaticAttestingIssuers(ENTRIES))).toBe(true);
     });
+  });
+});
+
+/**
+ * The aggregate the BOOT gate reads (#379 review, finding 3).
+ *
+ * `assertKeyStorageAssuranceProvisioned` used to be handed a boolean, so a
+ * registry recording only `iso_18045_basic` issuers answered "provisioned" for a
+ * `haip-1.0` deployment whose declared floor is `iso_18045_high` — it booted and
+ * then refused every presentation with `attack-potential-below-minimum`, the
+ * same 100%-failure outcome as provisioning nothing. This is what replaced the
+ * boolean.
+ */
+describe('strongestAttestedKeyStorage (#308/#379)', () => {
+  it('is undefined for an empty, absent or non-array set', () => {
+    for (const entries of [[], undefined, null, 'x', 3]) {
+      expect(
+        strongestAttestedKeyStorage(entries as readonly AttestingIssuerEntry[])
+      ).toBeUndefined();
+    }
+  });
+
+  it('reports the single recorded grade', () => {
+    expect(
+      strongestAttestedKeyStorage([
+        { issuer: 'https://pid.issuer.example', keyStorage: 'iso_18045_moderate' },
+      ])
+    ).toBe('iso_18045_moderate');
+  });
+
+  it('reports the STRONGEST, not the first, the last or the weakest', () => {
+    // The gate asks whether the deployment can clear the floor for ANY recorded
+    // ecosystem. A registry mixing a strong issuer with a weak one is a working
+    // deployment with one weak ecosystem, and refusing to start on it would be
+    // wrong — so the aggregate must not be the minimum.
+    expect(
+      strongestAttestedKeyStorage([
+        { issuer: 'https://a.example', keyStorage: 'iso_18045_moderate' },
+        { issuer: 'https://b.example', keyStorage: 'iso_18045_high' },
+        { issuer: 'https://c.example', keyStorage: 'iso_18045_basic' },
+      ])
+    ).toBe('iso_18045_high');
+  });
+
+  it('is order-independent', () => {
+    const forwards = strongestAttestedKeyStorage([
+      { issuer: 'https://a.example', keyStorage: 'iso_18045_basic' },
+      { issuer: 'https://b.example', keyStorage: 'iso_18045_high' },
+    ]);
+    const backwards = strongestAttestedKeyStorage([
+      { issuer: 'https://b.example', keyStorage: 'iso_18045_high' },
+      { issuer: 'https://a.example', keyStorage: 'iso_18045_basic' },
+    ]);
+
+    expect(forwards).toBe('iso_18045_high');
+    expect(backwards).toBe(forwards);
+  });
+
+  it('SKIPS a grade this build cannot read rather than throwing', () => {
+    // `createStaticAttestingIssuers`, run at boot through
+    // `assertAttestingIssuersUsable`, is the one place a grade this build cannot
+    // read takes the deployment down — naming the position and the value. A
+    // second, differently-worded refusal for the same typo would be worse than
+    // useless.
+    expect(
+      strongestAttestedKeyStorage([
+        { issuer: 'https://a.example', keyStorage: 'ISO_18045_HIGH' as never },
+        { issuer: 'https://b.example', keyStorage: 'iso_18045_moderate' },
+      ])
+    ).toBe('iso_18045_moderate');
+  });
+
+  it('is undefined when every recorded grade is unreadable', () => {
+    expect(
+      strongestAttestedKeyStorage([
+        { issuer: 'https://a.example', keyStorage: 'high' as never },
+        { issuer: 'https://b.example', keyStorage: undefined as never },
+      ])
+    ).toBeUndefined();
+  });
+
+  it('tolerates a hole in the array without throwing', () => {
+    expect(
+      strongestAttestedKeyStorage([
+        undefined as unknown as AttestingIssuerEntry,
+        { issuer: 'https://b.example', keyStorage: 'iso_18045_high' },
+      ])
+    ).toBe('iso_18045_high');
+  });
+
+  it('does not enumerate the registry to answer — it reads the ENTRIES', () => {
+    // The opacity of `KeyStorageAttestingIssuers` is a deliberate property: no
+    // error message can be built from its contents. This function must not have
+    // been the thing that broke it.
+    expect(Object.keys(createStaticAttestingIssuers(ENTRIES))).toEqual(['attestedKeyStorage']);
   });
 });

@@ -8,6 +8,7 @@ import {
   type KeyAttestationPki,
 } from '../../testing/key-attestation.fixture';
 import { generateFixtureKeys } from '../../testing/sd-jwt-vc.fixture';
+import type { VerifierProfile } from '../profiles/verifier-profile.types';
 import { VERIFIER_PROFILES } from '../profiles/verifier-profiles';
 import { ValidatedIssuer } from '../trust/issuer-identity';
 import { createStaticAttestingIssuers } from './attesting-issuers';
@@ -20,6 +21,7 @@ import {
   keyStorageAssuranceMeets,
   type KeyStorageAssurancePolicy,
   keyStorageAssurancePolicyOf,
+  type KeyStorageAssuranceProvisioning,
   NO_KEY_STORAGE_ASSURANCE,
 } from './key-storage-assurance';
 
@@ -373,6 +375,140 @@ describe('haip-1.0 — a conveyed key attestation', () => {
   });
 });
 
+/**
+ * The DIRECT path with no anchors provisioned (#379 review, finding 4).
+ *
+ * `keyAttestationAnchors` has no operator configuration surface yet, so this is
+ * EVERY deployment today. Before the fix, `validateKeyAttestation` refused every
+ * conveyed attestation with `attestation-chain-unanchored` — a verdict about the
+ * DEPLOYMENT's configuration wearing the vocabulary of a verdict about the
+ * attestation — and the resolver read it as a rejection.
+ *
+ * The result inverted the gate: a wallet that conveys a HAIP §9.2 attestation
+ * (the more conformant wallet, doing the more helpful thing) failed 100% of its
+ * logins, while the same wallet omitting it sailed through the transitive path.
+ * An operator who recorded an attesting issuer and then met an attesting wallet
+ * got a total outage from configuration that looked complete.
+ */
+describe('a conveyed key attestation with NO anchors provisioned', () => {
+  /** The only state provisionable today: a transitive registry, no anchors. */
+  function transitiveOnlyResolver() {
+    return createKeyStorageAssuranceResolver({
+      attestingIssuers: createStaticAttestingIssuers([
+        { issuer: ATTESTING_ISSUER, keyStorage: 'iso_18045_high' },
+      ]),
+    });
+  }
+
+  it('falls through to the transitive path instead of refusing', async () => {
+    const attestation = await issueKeyAttestation(pki, {
+      attestedKeys: [holderJwk],
+      keyStorage: ['iso_18045_high'],
+    });
+
+    expect(
+      await transitiveOnlyResolver().resolveKeyStorageAssurance(
+        input(ATTESTING_ISSUER, { cnf: { jwk: holderJwk, key_attestation: attestation } }),
+        HAIP_POLICY
+      )
+    ).toEqual({
+      outcome: 'accepted',
+      evidence: { assurance: 'issuer-attested', keyStorage: 'iso_18045_high' },
+    });
+  });
+
+  it('leaves a conveying wallet exactly as well off as a silent one, never worse', async () => {
+    // The property the fix is FOR, stated as an equality: conveying evidence
+    // this deployment cannot evaluate must change nothing.
+    const attestation = await issueKeyAttestation(pki, {
+      attestedKeys: [holderJwk],
+      keyStorage: ['iso_18045_high'],
+    });
+
+    const resolver = transitiveOnlyResolver();
+    const conveying = await resolver.resolveKeyStorageAssurance(
+      input(ATTESTING_ISSUER, { cnf: { jwk: holderJwk, key_attestation: attestation } }),
+      HAIP_POLICY
+    );
+    const silent = await resolver.resolveKeyStorageAssurance(input(ATTESTING_ISSUER), HAIP_POLICY);
+
+    expect(conveying).toEqual(silent);
+  });
+
+  it('grants no more than the transitive record — a skipped attestation adds nothing', async () => {
+    // Skipping is not a weakening. The attestation claims `high`; the operator
+    // recorded `moderate`; the answer is `moderate`, and under haip-1.0's
+    // `iso_18045_high` floor that is a REFUSAL. An unevaluated attestation must
+    // not buy its bearer a level the operator never recorded.
+    const resolver = createKeyStorageAssuranceResolver({
+      attestingIssuers: createStaticAttestingIssuers([
+        { issuer: ATTESTING_ISSUER, keyStorage: 'iso_18045_moderate' },
+      ]),
+    });
+    const attestation = await issueKeyAttestation(pki, {
+      attestedKeys: [holderJwk],
+      keyStorage: ['iso_18045_high'],
+    });
+
+    expect(
+      await resolver.resolveKeyStorageAssurance(
+        input(ATTESTING_ISSUER, { cnf: { jwk: holderJwk, key_attestation: attestation } }),
+        HAIP_POLICY
+      )
+    ).toEqual({ outcome: 'rejected', reason: 'attack-potential-below-minimum' });
+  });
+
+  it('still refuses an issuer nobody recorded — skipping is not a fallback grant', async () => {
+    const attestation = await issueKeyAttestation(pki, {
+      attestedKeys: [holderJwk],
+      keyStorage: ['iso_18045_high'],
+    });
+
+    expect(
+      await transitiveOnlyResolver().resolveKeyStorageAssurance(
+        input(SILENT_ISSUER, { cnf: { jwk: holderJwk, key_attestation: attestation } }),
+        HAIP_POLICY
+      )
+    ).toEqual({ outcome: 'rejected', reason: 'assurance-required-but-absent' });
+  });
+
+  it('reports the source as issuer-attested, never as key-attested', async () => {
+    // The honesty property `TranslatedKeyStorage.source` exists for: QAuth
+    // verified nothing of the sort, and an operator investigating an assured
+    // session must not be told it did.
+    const attestation = await issueKeyAttestation(pki, {
+      attestedKeys: [holderJwk],
+      keyStorage: ['iso_18045_high'],
+    });
+
+    expect(
+      await transitiveOnlyResolver().resolveKeyStorageAssurance(
+        input(ATTESTING_ISSUER, { cnf: { jwk: holderJwk, key_attestation: attestation } }),
+        HAIP_POLICY
+      )
+    ).toMatchObject({ evidence: { assurance: 'issuer-attested' } });
+  });
+
+  it('resumes REFUSING an unanchored attestation the moment anchors exist', async () => {
+    // The skip is scoped to "this deployment cannot evaluate the direct path at
+    // all". With anchors configured, a chain that does not reach one is a
+    // forgery signal again — so the branch must be taken, not permanently
+    // disabled.
+    const otherPki = createKeyAttestationPki();
+    const foreign = await issueKeyAttestation(otherPki, {
+      attestedKeys: [holderJwk],
+      keyStorage: ['iso_18045_high'],
+    });
+
+    expect(
+      await provisionedResolver().resolveKeyStorageAssurance(
+        input(ATTESTING_ISSUER, { cnf: { jwk: holderJwk, key_attestation: foreign } }),
+        HAIP_POLICY
+      )
+    ).toEqual({ outcome: 'rejected', reason: 'attestation-chain-unanchored' });
+  });
+});
+
 describe("the 'permitted' posture", () => {
   it('accepts a credential that establishes nothing', async () => {
     expect(
@@ -570,9 +706,11 @@ describe('assertKeyStorageAssuranceProvisioned — the boot gate', () => {
     );
   });
 
-  it('accepts haip-1.0 once something is', () => {
+  it("accepts haip-1.0 once a registry records the profile's own floor", () => {
     expect(() =>
-      assertKeyStorageAssuranceProvisioned(VERIFIER_PROFILES['haip-1.0'], true)
+      assertKeyStorageAssuranceProvisioned(VERIFIER_PROFILES['haip-1.0'], {
+        strongestAttestedKeyStorage: 'iso_18045_high',
+      })
     ).not.toThrow();
   });
 
@@ -593,5 +731,103 @@ describe('assertKeyStorageAssuranceProvisioned — the boot gate', () => {
     expect(() => assertKeyStorageAssuranceProvisioned(hypothetical)).toThrow(
       /requires key-storage assurance/
     );
+  });
+
+  /**
+   * The failure the boolean parameter could not express (#379 review).
+   *
+   * A registry recording only weak issuers passes "is anything provisioned" and
+   * fails the profile's floor on every single presentation — the same 100%
+   * failure rate as provisioning nothing, which is what this gate exists to make
+   * impossible. The two assertions below are the same deployment before and
+   * after the operator records an issuer that actually attests at the floor.
+   */
+  describe('the profile FLOOR, not merely the presence of a registry', () => {
+    it('refuses a registry whose strongest recorded grade is below the floor', () => {
+      expect(() =>
+        assertKeyStorageAssuranceProvisioned(VERIFIER_PROFILES['haip-1.0'], {
+          strongestAttestedKeyStorage: 'iso_18045_basic',
+        })
+      ).toThrow(/strongest level any issuer in OID4VP_ATTESTING_ISSUERS is recorded as attesting/);
+    });
+
+    it("names both the profile's floor and what was recorded, so the fix is stated", () => {
+      const refusal = (): void =>
+        assertKeyStorageAssuranceProvisioned(VERIFIER_PROFILES['haip-1.0'], {
+          strongestAttestedKeyStorage: 'iso_18045_moderate',
+        });
+
+      expect(refusal).toThrow(/iso_18045_high/);
+      expect(refusal).toThrow(/iso_18045_moderate/);
+    });
+
+    it('does not confuse a below-floor registry with an empty one', () => {
+      // Different mistakes, different fixes: one operator must record an issuer,
+      // the other must record a STRONGER one. A shared message would send the
+      // second to look for configuration they already wrote.
+      expect(() =>
+        assertKeyStorageAssuranceProvisioned(VERIFIER_PROFILES['haip-1.0'], {
+          strongestAttestedKeyStorage: 'iso_18045_basic',
+        })
+      ).not.toThrow(/provisioned neither an attesting-issuer registry/);
+    });
+
+    it('accepts a grade STRONGER than the floor', () => {
+      const belowHigh = {
+        ...VERIFIER_PROFILES['haip-1.0'],
+        id: 'haip-1.0' as const,
+        minimumKeyStorageAttackPotential: 'iso_18045_basic' as const,
+      };
+
+      expect(() =>
+        assertKeyStorageAssuranceProvisioned(belowHigh, {
+          strongestAttestedKeyStorage: 'iso_18045_high',
+        })
+      ).not.toThrow();
+    });
+
+    it('accepts any recorded grade for a mandating profile that declares no floor', () => {
+      const noFloor: VerifierProfile = {
+        ...VERIFIER_PROFILES['oid4vp-1.0-base'],
+        id: 'oid4vp-1.0-base' as const,
+        keyStorageAssurance: 'required' as const,
+      };
+
+      expect(noFloor.minimumKeyStorageAttackPotential).toBeUndefined();
+      expect(() =>
+        assertKeyStorageAssuranceProvisioned(noFloor, {
+          strongestAttestedKeyStorage: 'iso_18045_basic',
+        })
+      ).not.toThrow();
+    });
+
+    it('exempts the DIRECT path from the comparison — an attestation states its own grade', () => {
+      expect(() =>
+        assertKeyStorageAssuranceProvisioned(VERIFIER_PROFILES['haip-1.0'], {
+          hasKeyAttestationAnchors: true,
+        })
+      ).not.toThrow();
+    });
+  });
+
+  describe('fails closed on a provisioning value it cannot read', () => {
+    it('treats a non-object as nothing provisioned rather than throwing a TypeError', () => {
+      expect(() =>
+        assertKeyStorageAssuranceProvisioned(
+          VERIFIER_PROFILES['haip-1.0'],
+          'yes' as unknown as KeyStorageAssuranceProvisioning
+        )
+      ).toThrow(/provisioned neither an attesting-issuer registry/);
+    });
+
+    it('does not read a truthy non-boolean as configured anchors', () => {
+      // The `=== true` comparison, pinned: `hasKeyAttestationAnchors: 'yes'`
+      // must not clear a floor no registry can meet.
+      expect(() =>
+        assertKeyStorageAssuranceProvisioned(VERIFIER_PROFILES['haip-1.0'], {
+          hasKeyAttestationAnchors: 'yes' as unknown as boolean,
+        })
+      ).toThrow(/requires key-storage assurance/);
+    });
   });
 });

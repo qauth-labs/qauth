@@ -3,14 +3,10 @@ import { randomUUID } from 'node:crypto';
 import swagger from '@fastify/swagger';
 import swaggerUi from '@fastify/swagger-ui';
 import Fastify, { LogController } from 'fastify';
-import {
-  createJsonSchemaTransform,
-  serializerCompiler,
-  validatorCompiler,
-  ZodTypeProvider,
-} from 'fastify-type-provider-zod';
+import { serializerCompiler, validatorCompiler, ZodTypeProvider } from 'fastify-type-provider-zod';
 
 import { app } from './app/app';
+import { openapiOptions } from './app/openapi-options';
 import { env } from './config/env';
 import { buildLoggerOptions } from './config/logger';
 
@@ -56,6 +52,14 @@ const server = Fastify({
 // The second leg of the same invariant lives in the redirect_uri checks: matching is an
 // exact string comparison (`client.redirectUris.includes(...)`, RFC 9700) with no URI
 // parser in the security decision — see `app/helpers/oauth-redirect.ts`.
+//
+// POSITION IS PART OF THE INVARIANT (#365). These two calls MUST run before
+// `server.register(app)` below. A child scope snapshots the parent's validator and
+// serializer compilers when it is created and Fastify does not propagate a later change
+// into existing children, so moving these into `start()` — or anywhere after the app is
+// registered — would silently return every autoloaded route to ajv validation, with no
+// error and no warning. That is the same failure mode as #365 (a handler registered too
+// late reaching nothing), here with a CVE behind it rather than an error shape.
 server.setValidatorCompiler(validatorCompiler);
 server.setSerializerCompiler(serializerCompiler);
 
@@ -83,31 +87,7 @@ async function start() {
     // hardened deployment. The spec is still registered (so routes are
     // discoverable for the Zod type provider) even when the UI is off — the
     // gate only suppresses the `/docs` route.
-    await server.register(swagger, {
-      openapi: {
-        openapi: '3.1.0',
-        info: {
-          title: 'QAuth Auth Server API',
-          description:
-            'OAuth 2.1 / OIDC authentication server API. Phase 1.7: userinfo and token introspection.',
-          version: '1.0.0',
-        },
-        servers: [{ url: '/', description: 'Default' }],
-        components: {
-          securitySchemes: {
-            bearerAuth: {
-              type: 'http',
-              scheme: 'bearer',
-              bearerFormat: 'JWT',
-              description: 'Access token obtained from login, refresh, or OAuth token endpoint.',
-            },
-          },
-        },
-      },
-      transform: createJsonSchemaTransform({
-        zodToJsonConfig: { target: 'draft-2020-12' },
-      }),
-    });
+    await server.register(swagger, openapiOptions);
     if (env.ENABLE_SWAGGER) {
       await server.register(swaggerUi, {
         routePrefix: '/docs',

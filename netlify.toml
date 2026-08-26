@@ -1,0 +1,52 @@
+# Netlify build configuration for docs.qauth.dev (#347).
+#
+# Deployment is Netlify's OWN git-based continuous deployment. There is
+# deliberately no GitHub Actions deploy workflow: `.github/workflows/docs.yml`
+# built the site and pushed a prebuilt artifact through the Netlify CLI, and it
+# was deleted when this file landed. The site's lint/typecheck/test/build
+# coverage did not go with it — `ci.yml` runs `nx affected -t lint typecheck
+# test build`, which picks up `docs-site` whenever the diff touches it or
+# anything it reads.
+#
+# Settings here OVERRIDE the equivalents in the Netlify UI, which is the point:
+# the build is reproducible from the repository rather than from a dashboard
+# nobody can review.
+
+[build]
+  # The repository root. This is a pnpm WORKSPACE — the lockfile and the
+  # packages `docs-site` depends on live here, so the install has to happen at
+  # the root. Pointing `base` at `apps/docs-site` would leave Netlify installing
+  # from a package with no lockfile of its own.
+  base = "."
+
+  command = "pnpm exec nx build docs-site"
+
+  # `dist/apps/docs-site`, NOT `apps/docs-site/dist`.
+  #
+  # `astro.config.mjs` redirects `outDir` to the workspace-level output so it
+  # matches the Nx `build` target's declared `outputs` — a declared output that
+  # does not match reality breaks Nx caching silently. Astro's default location
+  # is therefore empty, and a publish path pointing at it deploys nothing while
+  # reporting success.
+  publish = "dist/apps/docs-site"
+
+[build.environment]
+  # Pinned to what the root `package.json` demands (`engines.pnpm: ">=11.0.0"`)
+  # and to what every workflow in `.github/workflows/` installs.
+  #
+  # Without this the build image activates its own bundled pnpm — 10.30.3 at the
+  # time of writing — and the install dies with ERR_PNPM_UNSUPPORTED_ENGINE
+  # before a single file is built. The repo pins the version in each workflow's
+  # `pnpm/action-setup` input rather than in a `packageManager` field, so an
+  # external builder has nothing to read it from; this is that pin for Netlify.
+  # Keep it in step with `.github/workflows/*.yml`.
+  PNPM_VERSION = "11.4.0"
+
+  # `engines.node` is `>=24.7.0`. Naming the major lets Netlify take the current
+  # 24.x rather than freezing a patch release nobody will remember to bump.
+  NODE_VERSION = "24"
+
+  # No Nx daemon in an ephemeral builder: it exists to keep a project graph warm
+  # across repeated invocations, and there is exactly one here. Left on, it also
+  # spawns a background process that can outlive the build.
+  NX_DAEMON = "false"

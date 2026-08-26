@@ -56,6 +56,10 @@ ID tokens.
   `/oid4vp/response` seam in `apps/auth-server`. The provider is the generic
   `CredentialProvider`-registry entry point, which no wallet path calls.
 
+Guides, the OAuth 2.1 / OIDC reference, and the rendered design records live at
+[docs.qauth.dev](https://docs.qauth.dev); the ADRs and security review that
+site renders stay in `docs/adr/` and `docs/security/` in this repository.
+
 ## Architecture Principles
 
 - **Federation First**: Upstream sources plug in via `CredentialProvider`;

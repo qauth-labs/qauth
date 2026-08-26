@@ -1,4 +1,5 @@
 import {
+  type KeyStorageAssuranceProvisioning,
   PASSWORD_PROVIDER_TYPE,
   type ProvisionedVerifierMaterial,
   type VerifierProfileId,
@@ -55,6 +56,18 @@ const CRYPTO_ES256_WITHOUT_JWE: VerifierCryptoCapabilities = {
  */
 const WRPAC_PROVISIONED: ProvisionedVerifierMaterial = {
   available: ['non-self-signed-chain'],
+};
+
+/**
+ * A key-storage provisioning that actually clears `haip-1.0`'s declared floor.
+ *
+ * Not merely "something is recorded" (#379 review): the profile declares
+ * `minimumKeyStorageAttackPotential: 'iso_18045_high'`, and a registry recording
+ * anything weaker boots into refusing every presentation. The gate compares, so
+ * the fixture has to state a grade rather than a flag.
+ */
+const KEY_STORAGE_AT_HAIP_FLOOR: KeyStorageAssuranceProvisioning = {
+  strongestAttestedKeyStorage: 'iso_18045_high',
 };
 
 /**
@@ -407,7 +420,7 @@ describe('createConfiguredProviders (crypto-capability gate, #299 F12)', () => {
           verifierProfileId: 'haip-1.0',
           cryptoCapabilities: CRYPTO_AFTER_298,
           provisionedVerifierMaterial: WRPAC_PROVISIONED,
-          keyStorageAssuranceProvisioned: true,
+          keyStorageAssuranceProvisioned: KEY_STORAGE_AT_HAIP_FLOOR,
           credentialStatusProvisioned,
         })
       ).toThrow(expected);
@@ -424,7 +437,7 @@ describe('createConfiguredProviders (crypto-capability gate, #299 F12)', () => {
         verifierProfileId: 'haip-1.0',
         cryptoCapabilities: CRYPTO_AFTER_298,
         provisionedVerifierMaterial: WRPAC_PROVISIONED,
-        keyStorageAssuranceProvisioned: true,
+        keyStorageAssuranceProvisioned: KEY_STORAGE_AT_HAIP_FLOOR,
         credentialStatusProvisioned: { trustAnchors: true, uriAllowlist: true },
       })
     ).not.toThrow();

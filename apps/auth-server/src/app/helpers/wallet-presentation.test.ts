@@ -59,7 +59,7 @@ import {
   ValidatedIssuer,
   verifyWalletPresentations,
 } from '@qauth-labs/fastify-plugin-federation';
-import { UniqueConstraintError } from '@qauth-labs/shared-errors';
+import { InvalidConfigurationError, UniqueConstraintError } from '@qauth-labs/shared-errors';
 
 import { createWalletAccountLookup } from './wallet-account-lookup';
 import { linkWalletPresentation, resolveWalletPresentation } from './wallet-presentation';
@@ -71,6 +71,11 @@ const CREDENTIAL = {
   credentialType: 'https://credentials.example.com/pid',
   issuer: { identifier: 'https://issuer.example.com', keyResolution: 'issuer-metadata' },
   claims: { given_name: 'Alice' },
+  // Carried even by the minimal stand-in, because the assurance step reads it
+  // for real now (#379): `translateKeyStorageAssurance` turns #308's evidence
+  // into `AssuranceEvidence.keyStorage`, so a fixture without an `assurance`
+  // block would be testing a shape no adapter can produce.
+  assurance: { keyStorageAssurance: { assurance: 'none' }, statusChecked: 'not-required' },
 } as never;
 
 /**
@@ -242,6 +247,10 @@ function assertedLookupStub(binding: string) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // Reset explicitly: the assurance policy is the one env member a test here
+  // sets to observe an `acr`, and a leaked policy would silently grant a level
+  // to every case that follows.
+  envMock.OID4VP_ISSUER_ASSURANCE = {};
   (resolveWalletVerificationSetup as unknown as Mock).mockReturnValue({
     profile: { id: 'oid4vp-1.0-base', credentialFormats: ['dc+sd-jwt'], signingAlgs: ['ES256'] },
     subjectResolution: { strategy: 'asserted-lookup', bindingClaims: ['given_name'] },
@@ -274,6 +283,206 @@ describe('resolveWalletPresentation — the gates run, in order (#234/#236/#300)
     });
   });
 
+  it('passes the deployment gate objects through to verification, never omitting one', async () => {
+    // #378 and #379 are the same defect twice: a gate that shipped complete,
+    // exported and tested, with no production call site. Asserting the KEYS
+    // rather than their values is the point — this catches a future edit that
+    // drops one, which is exactly how both gates went missing.
+    const store = createCredentialStore([]);
+    const { fastify } = makeFastify(store);
+
+    await resolveWalletPresentation(fastify, {
+      ...REQUEST,
+      assertedIdentifier: 'alice@example.com',
+    });
+
+    const options = (verifyWalletPresentations as unknown as Mock).mock.calls[0]?.[1] as Record<
+      string,
+      unknown
+    >;
+
+    expect(Object.keys(options)).toEqual(
+      expect.arrayContaining(['credentialStatus', 'keyStorageAssurance'])
+    );
+  });
+
+  it('records WHICH source established key-storage assurance, server-side (D1a)', async () => {
+    // Inherited assurance (`issuer-attested` — an issuance chain the operator
+    // recorded) and verified assurance (`key-attested` — an Appendix D
+    // attestation QAuth checked against this credential's own key) can both read
+    // as eIDAS `hardware`. The assurance policy deliberately cannot see the
+    // difference, so the operator log is the only place it survives.
+    (verifyWalletPresentations as unknown as Mock).mockResolvedValue([
+      {
+        ...(CREDENTIAL as unknown as Record<string, unknown>),
+        assurance: {
+          keyStorageAssurance: { assurance: 'issuer-attested', keyStorage: 'iso_18045_high' },
+          statusChecked: 'not-required',
+        },
+      },
+    ]);
+
+    const store = createCredentialStore([
+      {
+        id: 'cred-w',
+        userId: 'user-1',
+        realmId: 'realm-1',
+        providerType: 'wallet',
+        externalSub: 'alice@example.com',
+        credentialData: { wallet_binding: BINDING, issuer: 'https://issuer.example.com', vct: 'v' },
+      },
+    ]);
+    const { fastify } = makeFastify(store);
+
+    await resolveWalletPresentation(fastify, {
+      ...REQUEST,
+      assertedIdentifier: 'alice@example.com',
+    });
+
+    expect(fastify.log.info).toHaveBeenCalledWith(
+      expect.objectContaining({ keyStorageSource: 'issuer-attested', keyStorage: 'hardware' }),
+      'wallet presentation carried key-storage assurance'
+    );
+  });
+
+  it('logs nothing about key storage when no source established anything', async () => {
+    const store = createCredentialStore([]);
+    const { fastify } = makeFastify(store);
+
+    await resolveWalletPresentation(fastify, {
+      ...REQUEST,
+      assertedIdentifier: 'alice@example.com',
+    });
+
+    expect(fastify.log.info).not.toHaveBeenCalledWith(
+      expect.anything(),
+      'wallet presentation carried key-storage assurance'
+    );
+  });
+
+  /**
+   * BREAK 2 of #379, at the exact line the issue names.
+   *
+   * `resolveAssurance` used to pass a literal `undefined` for its
+   * `AssuranceEvidence`, which made `IssuerAssuranceEntry.requiresKeyStorage`
+   * unsatisfiable by construction: an operator could demand hardware key storage
+   * and receive `'low'` for every credential, forever. Nothing observed that
+   * `undefined` — restoring it type-checks, and every other case in this file
+   * passes with it back — so it is asserted here, through the OUTCOME rather
+   * than through the call, because the level is what an operator experiences.
+   *
+   * The translation rule itself is tested once, in `key-storage-evidence.test.ts`,
+   * and end to end over real signatures in `key-storage-policy.e2e.test.ts`.
+   * What only exists HERE is that this call site fills the evidence at all, and
+   * fills BOTH of its members.
+   */
+  describe('the key-storage evidence reaches the assurance policy (#379)', () => {
+    /** A realm whose policy demands hardware key storage from this issuer. */
+    function demandHardware(extra: Record<string, unknown> = {}): void {
+      envMock.OID4VP_ISSUER_ASSURANCE = {
+        master: {
+          'https://issuer.example.com': {
+            level: 'high',
+            requiresKeyStorage: 'hardware',
+            ...extra,
+          },
+        },
+      };
+    }
+
+    /**
+     * What a #308 gate established for the presented credential.
+     *
+     * Built on {@link BRANDED_CREDENTIAL} rather than the minimal stand-in: a
+     * policy re-checks `ValidatedIssuer.isValidated` itself and answers `'low'`
+     * for a hand-built issuer no matter what identifier it carries, so an
+     * unbranded fixture would make every case below pass for the wrong reason.
+     */
+    function withEvidence(keyStorageAssurance: Record<string, unknown>): void {
+      (verifyWalletPresentations as unknown as Mock).mockResolvedValue([
+        {
+          ...BRANDED_CREDENTIAL,
+          assurance: { ...BRANDED_CREDENTIAL.assurance, keyStorageAssurance },
+        },
+      ]);
+    }
+
+    /** The linked account the asserted-lookup stub resolves to. */
+    function authenticate() {
+      const { fastify } = makeFastify(
+        createCredentialStore([
+          {
+            id: 'cred-w',
+            userId: 'user-1',
+            realmId: 'realm-1',
+            providerType: 'wallet',
+            externalSub: 'alice@example.com',
+            credentialData: {
+              wallet_binding: BINDING,
+              issuer: 'https://issuer.example.com',
+              vct: 'v',
+            },
+          },
+        ])
+      );
+
+      return resolveWalletPresentation(fastify, {
+        ...REQUEST,
+        assertedIdentifier: 'alice@example.com',
+      });
+    }
+
+    it('GRANTS the demanded level when a source established storage at the strict floor', async () => {
+      demandHardware();
+      withEvidence({ assurance: 'issuer-attested', keyStorage: 'iso_18045_high' });
+
+      await expect(authenticate()).resolves.toEqual({
+        status: 'authenticated',
+        userId: 'user-1',
+        externalSub: 'alice@example.com',
+        assuranceLevel: 'high',
+      });
+    });
+
+    it('grants NOTHING for the same entry when no source established anything', async () => {
+      // The state every deployment was in before #379, and the one that must not
+      // change for a deployment that provisions nothing: a successful login
+      // carrying no `acr` at all. Asserted with `toEqual` rather than by probing
+      // one key, so an `assuranceLevel: 'low'` leaking onto the wire would fail
+      // — `'low'` is represented as ABSENCE all the way down to the NULL in
+      // `authorization_codes.assurance_level`.
+      demandHardware();
+      withEvidence({ assurance: 'none' });
+
+      await expect(authenticate()).resolves.toEqual({
+        status: 'authenticated',
+        userId: 'user-1',
+        externalSub: 'alice@example.com',
+      });
+    });
+
+    it('carries the SOURCE-FREE grade too, so an entry may state its own floor', async () => {
+      // The second member of the evidence, which the first two cases cannot
+      // observe: `keyStorage` alone is the reading at the DEFAULT floor, and an
+      // entry stating a lower floor re-reads the grade. Dropping
+      // `keyStorageAttackPotential` here would silently make every
+      // operator-stated floor inert.
+      withEvidence({ assurance: 'issuer-attested', keyStorage: 'iso_18045_moderate' });
+
+      demandHardware({ requiresKeyStorageAttackPotential: 'iso_18045_moderate' });
+      await expect(authenticate()).resolves.toMatchObject({ assuranceLevel: 'high' });
+
+      // The control: the SAME evidence read by an entry that states no floor.
+      // A stated floor lowers the bar; it does not remove it.
+      demandHardware();
+      await expect(authenticate()).resolves.toEqual({
+        status: 'authenticated',
+        userId: 'user-1',
+        externalSub: 'alice@example.com',
+      });
+    });
+  });
+
   it('refuses when no presentation was parked — the transport signal is not a credential', async () => {
     const { fastify } = makeFastify();
     (fastify.sessionUtils.getSession as unknown as Mock).mockResolvedValue(null);
@@ -296,7 +505,9 @@ describe('resolveWalletPresentation — the gates run, in order (#234/#236/#300)
   it('refuses — rather than 500s — when the deployment is HALF-configured', async () => {
     // A distinct status here would be a signal an anonymous caller can drive.
     (resolveWalletVerificationSetup as unknown as Mock).mockImplementation(() => {
-      throw new Error('OID4VP_SUBJECT_BINDING_CLAIMS must list at least one credential claim');
+      throw new InvalidConfigurationError(
+        'OID4VP_SUBJECT_BINDING_CLAIMS must list at least one credential claim'
+      );
     });
     const { fastify } = makeFastify();
 
@@ -304,6 +515,41 @@ describe('resolveWalletPresentation — the gates run, in order (#234/#236/#300)
       resolveWalletPresentation(fastify, { ...REQUEST, assertedIdentifier: 'alice@example.com' })
     ).resolves.toEqual({ status: 'rejected' });
     expect(fastify.log.error).toHaveBeenCalled();
+  });
+
+  it('keeps the half-configured refusal INDISTINGUISHABLE from a forged credential', async () => {
+    // REGRESSION-CRITICAL (#379). The boot gate added in `app.ts` replaces the
+    // operator's discovery channel and must not change one byte of what an
+    // anonymous caller can observe. A deployment that somehow reaches the
+    // request path half-configured — configuration edited under a running
+    // process, or a per-realm strategy once `realms.subject_resolution` exists —
+    // must still be unable to tell a misconfiguration from a rejection.
+    const { fastify: forgedServer } = makeFastify();
+    (verifyWalletPresentations as unknown as Mock).mockRejectedValueOnce(new Error('refused'));
+    const forged = await resolveWalletPresentation(forgedServer, {
+      ...REQUEST,
+      assertedIdentifier: 'alice@example.com',
+    });
+
+    (resolveWalletVerificationSetup as unknown as Mock).mockImplementation(() => {
+      throw new InvalidConfigurationError(
+        'OID4VP_SUBJECT_BINDING_CLAIMS must list at least one credential claim'
+      );
+    });
+    const { fastify: brokenServer } = makeFastify();
+    const misconfigured = await resolveWalletPresentation(brokenServer, {
+      ...REQUEST,
+      assertedIdentifier: 'alice@example.com',
+    });
+
+    // The same object, not merely the same shape: one uniform refusal, and no
+    // member an attacker could probe for the difference.
+    expect(misconfigured).toEqual(forged);
+    expect(misconfigured).toEqual({ status: 'rejected' });
+    expect(Object.keys(misconfigured)).toEqual(Object.keys(forged));
+
+    // Loud server-side, silent on the wire — the split the design depends on.
+    expect(brokenServer.log.error).toHaveBeenCalled();
   });
 
   it('refuses when validation or issuer trust refuses', async () => {

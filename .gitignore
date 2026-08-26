@@ -15,6 +15,8 @@ coverage/
 # Nitro build cache / generated types (TanStack Start + Nitro)
 .nitro/
 .output/
+# Astro content-layer type-generation cache (docs-site)
+.astro/
 
 # Test outputs
 .vitest/

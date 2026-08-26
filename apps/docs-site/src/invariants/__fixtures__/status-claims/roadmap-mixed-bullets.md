@@ -1,0 +1,3 @@
+- Self-service OAuth client registration and management ✅ (`/api/clients` + portal UI)
+- API key management ✅ (environment-gated developer API keys, ADR-008)
+- Federation provider configuration UI 📋 (deferred with wallet federation, T4)

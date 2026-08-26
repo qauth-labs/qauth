@@ -139,8 +139,20 @@ export interface EnvironmentPolicy {
   /** Agent step-up before dangerous ops is enforced. True for `staging`/`production`. */
   readonly agentStepUpEnforced: boolean;
   /**
-   * T3 hardening (security headers / CSRF / secure cookies, #108/#109/#113) is
-   * enforced. True for `staging`/`production`; relaxed in `development`.
+   * The client-scoped slice of the T3 hardening (#108/#109/#113) is enforced.
+   * True for `staging`/`production`; relaxed in `development`.
+   *
+   * NARROWER THAN THE NAME SUGGESTS, deliberately. The T3 controls proper —
+   * security headers, CSRF, secure cookies — are GLOBAL, with no client in
+   * scope, so they are unconditional and never read this flag: helmet is
+   * registered globally (`plugins/security-headers.ts`), the `/ui/login` and
+   * `/ui/consent` CSRF checks always run, and the session cookie's `Secure`
+   * attribute comes solely from `env.SESSION_COOKIE_SECURE`
+   * (`helpers/session-cookie.ts`). The one consumer of this flag is the consent
+   * screen (`routes/ui/consent.ts`), the rare browser surface that unambiguously
+   * carries a `client_id`: when false it serves a relaxed style CSP
+   * (`style-src 'self' 'unsafe-inline'`). Do not document this flag as gating
+   * the whole bundle.
    */
   readonly t3SecurityEnforced: boolean;
 }

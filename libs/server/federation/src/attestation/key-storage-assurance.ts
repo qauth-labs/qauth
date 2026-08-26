@@ -365,7 +365,10 @@ export interface KeyStorageAssuranceResolverConfig {
    * Anchors a conveyed Appendix D attestation's `x5c` chain must terminate at.
    *
    * A DIFFERENT anchor set from the status-list anchors (#297): these are wallet
-   * provider CAs. Defaults to none, which refuses every conveyed attestation.
+   * provider CAs. Defaults to none, which leaves the DIRECT path unprovisioned —
+   * a conveyed attestation is then SKIPPED rather than refused, and the
+   * credential falls through to the transitive path. See `establish` for why
+   * skipping is the fail-closed reading and refusing was not.
    */
   readonly keyAttestationAnchors?: KeyAttestationTrustAnchors;
   /** How to find a conveyed signal; defaults to {@link defaultConveyedSignalExtractor}. */
@@ -410,6 +413,51 @@ export function keyStorageAssuranceGateFor(
 }
 
 /**
+ * What a deployment has provisioned for key-storage assurance, in the terms the
+ * BOOT gate reads it in (#308/#379).
+ *
+ * A record rather than a boolean, for the reason `CredentialStatusProvisioning`
+ * is one next door: the refusal has to name WHAT is wrong, and "nothing is
+ * recorded" and "what is recorded cannot reach this profile's floor" are
+ * different mistakes with different fixes. A boolean could express only the
+ * first, which is how the second one used to boot.
+ */
+export interface KeyStorageAssuranceProvisioning {
+  /**
+   * The strongest §D.2 grade the attesting-issuer registry records — the
+   * TRANSITIVE path — or `undefined` when it records nothing readable.
+   *
+   * Build it with `strongestAttestedKeyStorage` from the configured entries.
+   * The strongest rather than the weakest, because the gate asks whether the
+   * deployment can clear the floor for ANY ecosystem it recorded; see that
+   * function for why.
+   */
+  readonly strongestAttestedKeyStorage?: AttackPotentialResistance;
+  /**
+   * Whether the deployment holds key-attestation trust anchors — the DIRECT
+   * path.
+   *
+   * Unqualified by a grade on purpose: a conveyed Appendix D attestation states
+   * its own grade, so anchors can establish any floor a profile declares and
+   * the gate cannot rule them out in advance. `false` until an operator
+   * configuration surface for wallet-provider anchors exists (#379).
+   */
+  readonly hasKeyAttestationAnchors?: boolean;
+}
+
+/**
+ * The provisioning meaning "nothing at all", and the gate's fail-closed default.
+ *
+ * A frozen singleton for the same reason `NO_ATTESTING_ISSUERS` is one:
+ * "we could not work out what this deployment provisioned" and "this deployment
+ * provisioned nothing" must be the same value, not two branches one of which
+ * might be forgotten.
+ */
+export const NO_KEY_STORAGE_ASSURANCE_PROVISIONING: KeyStorageAssuranceProvisioning = Object.freeze(
+  {}
+);
+
+/**
  * Refuse, at BOOT, a profile that requires key-storage assurance this deployment
  * cannot establish (#308).
  *
@@ -419,26 +467,63 @@ export function keyStorageAssuranceGateFor(
  * reject every single presentation. An operator must learn that at startup, not
  * from a 100% login-failure rate.
  *
+ * ## The floor is part of the mandate
+ *
+ * A profile requiring assurance almost always requires it AT A LEVEL —
+ * `haip-1.0` declares `minimumKeyStorageAttackPotential: 'iso_18045_high'` — and
+ * `resolveKeyStorageAssurance` enforces that floor on every presentation. So a
+ * deployment whose registry records only `iso_18045_basic` issuers has
+ * provisioned something and still cannot satisfy the mandate: it boots, accepts
+ * wallet requests, and refuses every presentation with
+ * `attack-potential-below-minimum`. That is the same 100%-failure outcome as
+ * provisioning nothing, reached by a different route, and this gate has to catch
+ * both or it catches neither.
+ *
+ * The DIRECT path is exempt from the comparison, not from the gate: a conveyed
+ * attestation states its own grade, so anchors can clear any floor and no
+ * boot-time prediction is possible or needed.
+ *
  * No profile is named: this reads the declared capability, so a future profile
  * requiring key-storage assurance is gated with no edit here.
  *
  * @param profile - the profile the deployment selected.
- * @param provisioned - whether the operator has provisioned what the transitive
- * path (an attesting-issuer registry) or the direct path (key-attestation trust
- * anchors) needs. Defaults to `false`: a caller that forgets to thread it
- * through fails closed rather than sails past, exactly as
- * `assertPrefixProvisioned` does for verifier material.
- * @throws Error when the profile requires assurance nothing can establish.
+ * @param provisioned - what the operator provisioned for the transitive path (an
+ * attesting-issuer registry) and the direct path (key-attestation trust
+ * anchors). Defaults to {@link NO_KEY_STORAGE_ASSURANCE_PROVISIONING}: a caller
+ * that forgets to thread it through fails closed rather than sails past, exactly
+ * as `assertPrefixProvisioned` does for verifier material.
+ * @throws Error when the profile requires assurance this deployment cannot
+ * establish, naming which of the two ways it cannot.
  */
 export function assertKeyStorageAssuranceProvisioned(
   profile: VerifierProfile,
-  provisioned = false
+  provisioned: KeyStorageAssuranceProvisioning = NO_KEY_STORAGE_ASSURANCE_PROVISIONING
 ): void {
   if (profile.keyStorageAssurance !== 'required') return;
-  if (provisioned === true) return;
+
+  // Defensive rather than decorative: the value crosses a package boundary from
+  // configuration parsing, and an unreadable one must land on "provisioned
+  // nothing" rather than throw a TypeError out of a boot gate.
+  const supplied =
+    provisioned !== null && typeof provisioned === 'object'
+      ? provisioned
+      : NO_KEY_STORAGE_ASSURANCE_PROVISIONING;
+
+  if (supplied.hasKeyAttestationAnchors === true) return;
+
+  const recorded = supplied.strongestAttestedKeyStorage;
+
+  if (recorded === undefined) {
+    throw new Error(
+      `Verifier profile '${profile.id}' requires key-storage assurance for every presentation (HAIP §4.5.1, #308), and this deployment has provisioned neither an attesting-issuer registry nor key-attestation trust anchors. Refusing to start rather than accepting wallet requests and then rejecting every presentation for assurance nothing here can establish.`
+    );
+  }
+
+  const floor = profile.minimumKeyStorageAttackPotential;
+  if (floor === undefined || meetsAttackPotential(recorded, floor)) return;
 
   throw new Error(
-    `Verifier profile '${profile.id}' requires key-storage assurance for every presentation (HAIP §4.5.1, #308), and this deployment has provisioned neither an attesting-issuer registry nor key-attestation trust anchors. Refusing to start rather than accepting wallet requests and then rejecting every presentation for assurance nothing here can establish.`
+    `Verifier profile '${profile.id}' requires key-storage assurance at '${floor}' or stronger (OID4VCI Appendix D §D.2, #308), and the strongest level any issuer in OID4VP_ATTESTING_ISSUERS is recorded as attesting is '${recorded}'. Every presentation would be refused for attack potential below the profile's minimum, so this is refused at startup instead. Record an issuer that attests at '${floor}', or select a profile whose floor this deployment can meet.`
   );
 }
 
@@ -490,7 +575,26 @@ export function createKeyStorageAssuranceResolver(
     const signal = conveyedSignal(input.claims);
     const recorded = recordedFor(input.issuer);
 
-    if (signal?.kind === 'key-attestation') {
+    // The DIRECT path is only ATTEMPTED where it can reach a verdict. With no
+    // wallet-provider anchors configured there is nothing to anchor an `x5c`
+    // chain against, so `validateKeyAttestation` refuses every attestation with
+    // `attestation-chain-unanchored` — a verdict about THIS DEPLOYMENT's
+    // configuration wearing the vocabulary of a verdict about the attestation.
+    //
+    // Read as a rejection it inverted the gate. A wallet that conveys a §9.2
+    // attestation — the more conformant wallet, doing the more helpful thing —
+    // was refused outright, while the same wallet omitting it sailed through the
+    // transitive path below. Since the direct path has no configuration surface
+    // yet (#379), that is EVERY deployment: recording an attesting issuer and
+    // then meeting a wallet that attests would have failed 100% of its logins.
+    //
+    // Skipping is not a weakening. It grants exactly what the credential would
+    // have been worth with no attestation conveyed at all — the operator's
+    // recorded transitive claim, capped at what they recorded — and a forged
+    // attestation buys its bearer nothing it did not already have. The moment
+    // anchors ARE configured the branch is taken again and a failure to anchor
+    // becomes what the vocabulary says it is: a forgery signal, refused.
+    if (signal?.kind === 'key-attestation' && anchors.size > 0) {
       const validation = await validateKeyAttestation({
         attestation: signal.attestation,
         confirmationJwk: input.confirmationJwk,
@@ -519,9 +623,10 @@ export function createKeyStorageAssuranceResolver(
       };
     }
 
-    // Both remaining sources depend on the operator having recorded this issuer.
+    // Everything from here depends on the operator having recorded this issuer.
     // Without that record there is no basis for believing anything about the
-    // holder's key, so an issuer-asserted claim is worth exactly nothing.
+    // holder's key, so an issuer-asserted claim is worth exactly nothing — and
+    // so is an attestation this deployment provisioned no way to evaluate.
     if (recorded === undefined) {
       return { outcome: 'rejected', reason: 'issuer-does-not-attest-key-storage' };
     }
@@ -547,6 +652,11 @@ export function createKeyStorageAssuranceResolver(
       };
     }
 
+    // Reached by a credential conveying no signal at all, and by one whose
+    // key attestation was skipped above. Both get the recorded transitive claim
+    // and nothing more: an attestation nobody could evaluate adds no grade, so
+    // it cannot raise the level, and `assurance: 'issuer-attested'` says
+    // truthfully which source the answer came from.
     return {
       outcome: 'accepted',
       evidence: Object.freeze({ assurance: 'issuer-attested', keyStorage: recorded }),

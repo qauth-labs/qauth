@@ -3,9 +3,13 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import {
   createConfiguredCredentialStatusChecker,
   createConfiguredIssuerKeyResolver,
+  createConfiguredKeyStorageAssuranceResolver,
   type CredentialStatusAuditEvent,
   type CredentialStatusChecker,
   type IssuerKeyResolver,
+  type KeyStorageAssuranceGate,
+  keyStorageAssuranceGateFor,
+  type KeyStorageAssuranceResolver,
   resolveSubjectResolution,
   resolveTrustRegistry,
   type SubjectResolutionConfig,
@@ -31,6 +35,7 @@ import { resolveWalletLoginCapability } from './wallet-login-request';
  * | which key does an issuer sign with? | `OID4VP_ISSUER_JWKS` (#234) |
  * | which issuers does this realm accept? | `OID4VP_TRUSTED_ISSUERS` (#236) |
  * | is the credential still live? | `OID4VP_STATUS_LIST_*` (#297) |
+ * | where does the holder's key live? | the profile's posture (#308/#379) |
  * | which account does a credential belong to? | `OID4VP_SUBJECT_RESOLUTION` (#300) |
  *
  * Resolving them in ONE place is what keeps the login flow and the linking flow
@@ -74,6 +79,22 @@ export interface WalletVerificationSetup {
    * at boot by `assertCredentialStatusProvisioned`.
    */
   readonly credentialStatus: CredentialStatusChecker | undefined;
+  /**
+   * The deployment's key-storage-assurance gate (#308/#379).
+   *
+   * NON-nullable, unlike {@link credentialStatus} one field up, and the
+   * asymmetry is deliberate. A status checker either exists or does not; a
+   * key-storage gate is always constructible, because half of it is the
+   * PROFILE's posture and the profile is right there. `keyStorageAssuranceGateFor`
+   * pairs that posture with whatever resolver this deployment provisioned — none
+   * today — so an unprovisioned deployment gets a gate that keeps the posture
+   * and refuses, rather than one that quietly reports "not evaluated".
+   *
+   * That distinction is the whole of #379's Break 1: the seam below accepts
+   * `undefined` for a caller with no profile resolved, and passing it from here
+   * would make a `required` profile behave exactly like a `forbidden` one.
+   */
+  readonly keyStorageAssurance: KeyStorageAssuranceGate;
 }
 
 /**
@@ -90,6 +111,31 @@ let cachedIssuerKeyResolver: IssuerKeyResolver | undefined;
 function issuerKeyResolver(): IssuerKeyResolver {
   cachedIssuerKeyResolver ??= createConfiguredIssuerKeyResolver(env.OID4VP_ISSUER_JWKS);
   return cachedIssuerKeyResolver;
+}
+
+/**
+ * The key-storage assurance resolver, built ONCE (#308/#379).
+ *
+ * Memoized for the same reason as the issuer key resolver above:
+ * `createStaticAttestingIssuers` validates every entry eagerly and throws on a
+ * malformed one, which is right at bootstrap and wrong per request.
+ *
+ * `undefined` is a legitimate memoized value ("this deployment recorded no
+ * attesting issuer"), so the built flag is separate from the value — `??=` would
+ * re-run the factory on every call for exactly the deployments that configured
+ * nothing, which is most of them.
+ */
+let cachedKeyStorageAssuranceResolver: KeyStorageAssuranceResolver | undefined;
+let keyStorageAssuranceResolverBuilt = false;
+
+function keyStorageAssuranceResolver(): KeyStorageAssuranceResolver | undefined {
+  if (!keyStorageAssuranceResolverBuilt) {
+    cachedKeyStorageAssuranceResolver = createConfiguredKeyStorageAssuranceResolver(
+      env.OID4VP_ATTESTING_ISSUERS
+    );
+    keyStorageAssuranceResolverBuilt = true;
+  }
+  return cachedKeyStorageAssuranceResolver;
 }
 
 /**
@@ -283,6 +329,18 @@ export function resolveWalletVerificationSetup(
     subjectResolution,
     resolveIssuerKey: issuerKeyResolver(),
     credentialStatus: credentialStatusChecker(),
+    // Built from the RESOLVED profile, never by object literal (#308/#379).
+    // `keyStorageAssuranceResolver()` is `undefined` for a deployment that
+    // recorded no attesting issuer, and `keyStorageAssuranceGateFor` then pairs
+    // the profile's posture with `DENY_ALL_KEY_STORAGE_ASSURANCE_RESOLVER` —
+    // the posture travels and the evidence is refused, which is the correct
+    // reading of "this deployment provisioned nothing" and is additionally
+    // refused at boot by `assertKeyStorageAssuranceProvisioned` for any profile
+    // whose posture is `required`.
+    keyStorageAssurance: keyStorageAssuranceGateFor(
+      capability.profile,
+      keyStorageAssuranceResolver()
+    ),
   };
 }
 
