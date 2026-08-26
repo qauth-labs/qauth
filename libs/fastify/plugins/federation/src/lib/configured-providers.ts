@@ -28,7 +28,7 @@ import {
  * `VerifierProfileId` and nothing else in the workspace can compare the two
  * lists. Without this export the pin has nowhere to live.
  */
-export { VERIFIER_PROFILE_IDS } from '@qauth-labs/server-federation';
+export { VERIFIER_PROFILE_IDS, VERIFIER_PROFILES } from '@qauth-labs/server-federation';
 
 /**
  * What the deployment's crypto layer can ACTUALLY produce — as opposed to what a
@@ -125,14 +125,17 @@ export interface ConfiguredProvidersOptions {
    * X.509 material the operator has provisioned for the verifier identity (#299).
    *
    * The single exception to the required-fields rule above, and only because
-   * omitting it is the fail-closed answer rather than an unstated one: nothing
-   * is provisionable until #233 ships a certificate configuration surface, so
-   * the default is `NO_VERIFIER_MATERIAL` — the value that makes `haip-1.0`
-   * refuse. This mirrors `assertPrefixProvisioned`'s own defaulted parameter: a
-   * caller that forgets to thread it through fails closed rather than sails past.
-   * When #233 lands, the bootstrap starts passing real material here and
-   * `haip-1.0` clears the certificate half of the gate without an edit to this
-   * signature.
+   * omitting it is the fail-closed answer rather than an unstated one: a
+   * deployment that provisions no certificate configures nothing here, so the
+   * default is `NO_VERIFIER_MATERIAL` — the value that makes `haip-1.0` refuse.
+   * This mirrors `assertPrefixProvisioned`'s own defaulted parameter: a caller
+   * that forgets to thread it through fails closed rather than sails past.
+   *
+   * #377 gave that configuration a surface (`OID4VP_VERIFIER_SIGNING_KEY` and
+   * its chain/anchor siblings), so `apps/auth-server` now passes real material
+   * here — built with `verifierMaterialProvisionedBy` from the material that
+   * VALIDATED at boot, never assembled by hand, so the marker set cannot claim
+   * a capability the chain did not earn.
    */
   provisionedVerifierMaterial?: ProvisionedVerifierMaterial;
 
@@ -182,7 +185,7 @@ function quoteList(values: readonly string[]): string {
  * precisely how that gap becomes visible and fail-closed". This is the code that
  * makes the claim true; until it existed nothing read `signingAlgs` or
  * `responseEncryption` at startup and the ONLY thing keeping `haip-1.0` out was
- * its missing certificate chain. So the moment #298/#233 provisioned a chain, a
+ * its missing certificate chain. So the moment #377 provisioned a chain, a
  * `haip-1.0` deployment would have booted happily on an EdDSA-only crypto layer
  * and every EUDI wallet would have rejected every request — a boot-time
  * misconfiguration surfacing as a 100% production presentation failure, which is
@@ -210,13 +213,13 @@ function assertProfileWithinCryptoCapabilities(
 
   if (usable.length === 0) {
     throw new Error(
-      `Verifier profile '${profile.id}' accepts ${quoteList(profile.signingAlgs)} for request signing, but this deployment's crypto layer produces ${quoteList(capabilities.signingAlgs)}. Refusing to start rather than advertising the profile to wallets and then failing every presentation with a signature they will not accept (#299). ES256 signing exists in the crypto layer (#298) but no key for it is provisionable until #233.`
+      `Verifier profile '${profile.id}' accepts ${quoteList(profile.signingAlgs)} for request signing, but this deployment's crypto layer produces ${quoteList(capabilities.signingAlgs)}. Refusing to start rather than advertising the profile to wallets and then failing every presentation with a signature they will not accept (#299). ES256 signing exists in the crypto layer (#298) and a key for it is provisionable with OID4VP_VERIFIER_SIGNING_KEY plus OID4VP_VERIFIER_CERTIFICATE_CHAIN and OID4VP_VERIFIER_TRUST_ANCHORS (#377).`
     );
   }
 
   if (profile.responseEncryption === 'required' && !capabilities.responseEncryption) {
     throw new Error(
-      `Verifier profile '${profile.id}' requires encrypted Authorization Responses — the 'direct_post.jwt' response mode of HAIP §5.1 — and this deployment has no JWE stack. Refusing to start rather than asking a wallet for a response it cannot decrypt (#299). The JWE primitives exist in the crypto layer (#298) but the encrypted-response path lands with #233/#234.`
+      `Verifier profile '${profile.id}' requires encrypted Authorization Responses — the 'direct_post.jwt' response mode of HAIP §5.1 — and this deployment has no JWE stack. Refusing to start rather than asking a wallet for a response it cannot decrypt (#299). The JWE primitives exist in the crypto layer (#298) but the encrypted-response path lands with Phase C of #377.`
     );
   }
 }
@@ -234,15 +237,14 @@ interface ProfileAvailability {
  *
  * The "no profile selected" refusal used to advise, in prose, *"set it to
  * 'oid4vp-1.0-base' or 'haip-1.0'"*. Half of that was a trap: `haip-1.0` needs a
- * WRPAC no deployment can provision until #298/#233, so an operator who took the
+ * WRPAC no deployment could provision at all, so an operator who took the
  * second option restarted straight into a SECOND, different refusal. Two failed
  * restarts to learn that one of the two advertised values cannot start anything.
  *
  * Executing the guards rather than describing them is what keeps the advice
  * honest: the advertised set cannot drift from the set that actually boots,
- * because it IS that set, computed the same way at the same moment. When
- * #298/#233 land, `haip-1.0` moves from the blocked list to the selectable one
- * with no edit here — which is also why the blocked entry carries the refusal
+ * because it IS that set, computed the same way at the same moment. As each
+ * blocker clears, `haip-1.0` moves toward the selectable list with no edit here — which is also why the blocked entry carries the refusal
  * VERBATIM rather than a summary. The operator learns the second refusal without
  * spending a restart on it.
  */
