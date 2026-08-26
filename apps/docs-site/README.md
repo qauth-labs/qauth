@@ -2,7 +2,8 @@
 
 The QAuth documentation site (Astro + Starlight), published at
 [docs.qauth.dev](https://docs.qauth.dev). Source lives here; deployment is
-handled by `.github/workflows/docs.yml` at the repo root.
+handled by Netlify's own git-based continuous deployment, configured in
+`netlify.toml` at the repo root.
 
 ## Local development
 
@@ -60,38 +61,37 @@ so a guard failure blocks the deploy — it does not publish a broken site.
 
 ## Deployment
 
-`.github/workflows/docs.yml`:
+Netlify's own git-connected build, configured by `netlify.toml` at the repo
+root. Netlify clones the repository, installs the pnpm workspace, runs
+`pnpm exec nx build docs-site`, and publishes `dist/apps/docs-site`. Pushes to
+`main` produce a production deploy and pull requests produce a deploy preview,
+both on Netlify's side — no repository secrets and no GitHub Actions step are
+involved.
 
-- **Pull requests** get a Netlify **preview deploy** (draft, with its own
-  URL, printed in the job log).
-- **Pushes to `main`** get a **production deploy**.
-- A `workflow_dispatch` run is available as a manual escape hatch — useful
-  after a change the path filter doesn't watch (e.g. a root dependency bump
-  in `package.json`/`pnpm-lock.yaml`), since it isn't a change under
-  `apps/docs-site/**`, `docs/adr/**`, or `docs/security/**`.
+There used to be one: `.github/workflows/docs.yml` built the site in Actions and
+uploaded the prebuilt output through the Netlify CLI, which needed a
+`NETLIFY_AUTH_TOKEN` and a `NETLIFY_SITE_ID`. It was removed in favour of
+Netlify's own CD. The site's checks did not go with it — `ci.yml` runs
+`nx affected -t lint typecheck test build`, which covers `docs-site` (its drift
+invariants included) whenever the diff touches it or anything it reads.
 
-Both triggers run the same steps: install, `nx test docs-site`,
-`nx build docs-site`, then upload `dist/apps/docs-site` with the Netlify CLI
-(`netlify deploy` / `netlify deploy --prod`). The workflow builds the site
-itself in GitHub Actions (using this repo's normal pnpm/Nx setup and cache)
-and uploads the prebuilt output — it does not rely on Netlify's own
-git-connected build servers.
+Two settings in `netlify.toml` are load-bearing, and both are documented at the
+lines that set them:
 
-This requires two repository secrets, **currently unset**:
+- **`PNPM_VERSION`.** The root `package.json` declares
+  `engines.pnpm: ">=11.0.0"` but pins the exact version only inside each
+  workflow's `pnpm/action-setup` input, so an external builder has nothing to
+  read it from. Unset, Netlify activates its bundled pnpm and the install fails
+  with `ERR_PNPM_UNSUPPORTED_ENGINE` before anything is built. Keep it in step
+  with `.github/workflows/*.yml`.
+- **`publish`.** `dist/apps/docs-site`, not `apps/docs-site/dist` — see
+  [Build](#build) for why `outDir` points at the workspace root. A publish path
+  aimed at Astro's default location deploys an empty directory and reports
+  success.
 
-- `NETLIFY_AUTH_TOKEN` — a personal or CI access token
-  (Netlify dashboard → User settings → Applications → Personal access
-  tokens).
-- `NETLIFY_SITE_ID` — the target site's Project ID (Netlify dashboard →
-  Site configuration → General → Project ID).
-
-If a Netlify site doesn't exist yet for this project, create one (a manual
-`netlify init --manual` or `netlify deploy` from a one-off local build is
-enough — Git-based continuous deployment is not needed here, since this
-workflow uploads a prebuilt artifact instead) and copy its Project ID
-into `NETLIFY_SITE_ID`. Without both secrets set, the workflow fails
-immediately with a named "missing secret" error rather than silently
-skipping the deploy.
+Because `netlify.toml` overrides the equivalent fields in the Netlify UI, the
+build is reproducible from the repository rather than from dashboard settings
+nobody can review.
 
 ## DNS and TLS for docs.qauth.dev
 
