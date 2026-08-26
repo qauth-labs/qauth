@@ -292,7 +292,7 @@ describe('authenticateClientAssertion — rejected', () => {
 
     await expect(
       authenticateClientAssertion(asFastify(stub), 'realm-1', creds(assertion))
-    ).rejects.toThrow(/lifetime exceeds/);
+    ).rejects.toMatchObject({ errorDescription: expect.stringMatching(/lifetime exceeds/) });
   });
 
   it('rejects an assertion whose iss and sub disagree', async () => {
@@ -301,7 +301,7 @@ describe('authenticateClientAssertion — rejected', () => {
 
     await expect(
       authenticateClientAssertion(asFastify(stub), 'realm-1', creds(assertion))
-    ).rejects.toThrow(/iss and sub/);
+    ).rejects.toMatchObject({ errorDescription: expect.stringMatching(/iss and sub/) });
   });
 
   it('rejects an assertion with no sub at all', async () => {
@@ -317,7 +317,7 @@ describe('authenticateClientAssertion — rejected', () => {
 
     await expect(
       authenticateClientAssertion(asFastify(stub), 'realm-1', creds(assertion))
-    ).rejects.toThrow(/iss and sub/);
+    ).rejects.toMatchObject({ errorDescription: expect.stringMatching(/iss and sub/) });
   });
 
   it('rejects a body client_id that disagrees with the assertion subject', async () => {
@@ -330,7 +330,7 @@ describe('authenticateClientAssertion — rejected', () => {
         'realm-1',
         creds(assertion, { clientId: 'a-different-client' })
       )
-    ).rejects.toThrow(/does not match/);
+    ).rejects.toMatchObject({ errorDescription: expect.stringMatching(/does not match/) });
   });
 
   it('rejects an unknown client', async () => {
@@ -357,7 +357,7 @@ describe('authenticateClientAssertion — rejected', () => {
 
     await expect(
       authenticateClientAssertion(asFastify(stub), 'realm-1', creds(assertion))
-    ).rejects.toThrow(/signature or claims/);
+    ).rejects.toMatchObject({ errorDescription: expect.stringMatching(/signature or claims/) });
   });
 
   it('rejects `alg: none`', async () => {
@@ -375,7 +375,7 @@ describe('authenticateClientAssertion — rejected', () => {
 
     await expect(
       authenticateClientAssertion(asFastify(stub), 'realm-1', creds(unsigned))
-    ).rejects.toThrow(/alg is not permitted/);
+    ).rejects.toMatchObject({ errorDescription: expect.stringMatching(/alg is not permitted/) });
   });
 
   it('rejects an HS256 assertion (MAC algorithms are never accepted)', async () => {
@@ -389,7 +389,7 @@ describe('authenticateClientAssertion — rejected', () => {
 
     await expect(
       authenticateClientAssertion(asFastify(stub), 'realm-1', creds(assertion))
-    ).rejects.toThrow(/alg is not permitted/);
+    ).rejects.toMatchObject({ errorDescription: expect.stringMatching(/alg is not permitted/) });
   });
 
   it('rejects an assertion that carries its own key material (jwk header)', async () => {
@@ -402,7 +402,9 @@ describe('authenticateClientAssertion — rejected', () => {
 
     await expect(
       authenticateClientAssertion(asFastify(stub), 'realm-1', creds(assertion))
-    ).rejects.toThrow(/must not carry its own key material/);
+    ).rejects.toMatchObject({
+      errorDescription: expect.stringMatching(/must not carry its own key material/),
+    });
   });
 
   it('rejects an assertion that points at a remote key set (jku header)', async () => {
@@ -413,7 +415,9 @@ describe('authenticateClientAssertion — rejected', () => {
 
     await expect(
       authenticateClientAssertion(asFastify(stub), 'realm-1', creds(assertion))
-    ).rejects.toThrow(/must not carry its own key material/);
+    ).rejects.toMatchObject({
+      errorDescription: expect.stringMatching(/must not carry its own key material/),
+    });
   });
 
   it('rejects a replayed jti', async () => {
@@ -425,7 +429,7 @@ describe('authenticateClientAssertion — rejected', () => {
     ).resolves.toBeDefined();
     await expect(
       authenticateClientAssertion(asFastify(stub), 'realm-1', creds(assertion))
-    ).rejects.toThrow(/already been used/);
+    ).rejects.toMatchObject({ errorDescription: expect.stringMatching(/already been used/) });
   });
 
   it('rejects an assertion with no jti (replay protection needs one)', async () => {
@@ -444,7 +448,9 @@ describe('authenticateClientAssertion — rejected', () => {
 
     await expect(
       authenticateClientAssertion(asFastify(stub), 'realm-1', creds(assertion))
-    ).rejects.toThrow(/replay protection is unavailable/);
+    ).rejects.toMatchObject({
+      errorDescription: expect.stringMatching(/replay protection is unavailable/),
+    });
   });
 
   it('rejects a client_secret_post client presenting an assertion', async () => {
@@ -455,7 +461,9 @@ describe('authenticateClientAssertion — rejected', () => {
 
     await expect(
       authenticateClientAssertion(asFastify(stub), 'realm-1', creds(assertion))
-    ).rejects.toThrow(/not registered for private_key_jwt/);
+    ).rejects.toMatchObject({
+      errorDescription: expect.stringMatching(/not registered for private_key_jwt/),
+    });
   });
 
   it('rejects a public client presenting an assertion', async () => {
@@ -466,7 +474,9 @@ describe('authenticateClientAssertion — rejected', () => {
 
     await expect(
       authenticateClientAssertion(asFastify(stub), 'realm-1', creds(assertion))
-    ).rejects.toThrow(/not registered for private_key_jwt/);
+    ).rejects.toMatchObject({
+      errorDescription: expect.stringMatching(/not registered for private_key_jwt/),
+    });
   });
 
   it('rejects a client that registered both jwks and jwks_uri', async () => {
@@ -477,7 +487,7 @@ describe('authenticateClientAssertion — rejected', () => {
 
     await expect(
       authenticateClientAssertion(asFastify(stub), 'realm-1', creds(assertion))
-    ).rejects.toThrow(/mutually exclusive/);
+    ).rejects.toMatchObject({ errorDescription: expect.stringMatching(/mutually exclusive/) });
   });
 
   it('rejects a client that registered neither jwks nor jwks_uri', async () => {
@@ -486,7 +496,7 @@ describe('authenticateClientAssertion — rejected', () => {
 
     await expect(
       authenticateClientAssertion(asFastify(stub), 'realm-1', creds(assertion))
-    ).rejects.toThrow(/no registered jwks/);
+    ).rejects.toMatchObject({ errorDescription: expect.stringMatching(/no registered jwks/) });
   });
 
   it('rejects a jwks_uri that resolves to a private address', async () => {
@@ -500,7 +510,7 @@ describe('authenticateClientAssertion — rejected', () => {
 
     await expect(
       authenticateClientAssertion(asFastify(stub), 'realm-1', creds(assertion))
-    ).rejects.toThrow(/jwks_uri fetch blocked/);
+    ).rejects.toMatchObject({ errorDescription: expect.stringMatching(/jwks_uri fetch blocked/) });
   });
 
   it('rejects a jwks_uri document that is not a 200', async () => {
@@ -512,7 +522,7 @@ describe('authenticateClientAssertion — rejected', () => {
 
     await expect(
       authenticateClientAssertion(asFastify(stub), 'realm-1', creds(assertion))
-    ).rejects.toThrow(/returned 404/);
+    ).rejects.toMatchObject({ errorDescription: expect.stringMatching(/returned 404/) });
   });
 
   it('rejects a registered key set that leaks a private component', async () => {
@@ -522,7 +532,9 @@ describe('authenticateClientAssertion — rejected', () => {
 
     await expect(
       authenticateClientAssertion(asFastify(stub), 'realm-1', creds(assertion))
-    ).rejects.toThrow(/not a valid public JWK Set/);
+    ).rejects.toMatchObject({
+      errorDescription: expect.stringMatching(/not a valid public JWK Set/),
+    });
   });
 
   it('rejects a registered key set containing a symmetric key', async () => {
@@ -531,7 +543,9 @@ describe('authenticateClientAssertion — rejected', () => {
 
     await expect(
       authenticateClientAssertion(asFastify(stub), 'realm-1', creds(assertion))
-    ).rejects.toThrow(/not a valid public JWK Set/);
+    ).rejects.toMatchObject({
+      errorDescription: expect.stringMatching(/not a valid public JWK Set/),
+    });
   });
 
   it('rejects the grant-type URN presented as a client_assertion_type', async () => {
@@ -546,7 +560,9 @@ describe('authenticateClientAssertion — rejected', () => {
         'realm-1',
         creds(assertion, { assertionType: 'urn:ietf:params:oauth:grant-type:jwt-bearer' })
       )
-    ).rejects.toThrow(/unsupported client_assertion_type/);
+    ).rejects.toMatchObject({
+      errorDescription: expect.stringMatching(/unsupported client_assertion_type/),
+    });
   });
 
   it('rejects an assertion that is not a decodable JWT', async () => {

@@ -27,12 +27,36 @@ Errors share a single envelope:
 Schema-validation failures use:
 
 ```json
-{ "error": "Validation error", "code": "VALIDATION_ERROR", "statusCode": 400 }
+{
+  "error": "Validation error",
+  "code": "VALIDATION_ERROR",
+  "statusCode": 400,
+  "details": [{ "path": "/grant_type", "message": "…" }]
+}
 ```
+
+`details` carries one entry per rejected field: `path` names it, `message` says
+what is wrong with it. Nothing else — the validator's own issue objects also
+carry the schema path, the rule keyword and a parameter bag, and those describe
+how QAuth is built rather than what it accepts, so they are not returned.
 
 OAuth endpoints additionally return the standard OAuth error codes documented in
 [OAuth 2.1 Flow → Errors](./oauth-flow.md#errors) (e.g. `invalid_grant`,
-`invalid_client`, `invalid_scope`, `invalid_target`).
+`invalid_client`, `invalid_scope`, `invalid_target`). On those endpoints `error`
+is the registered RFC 6749 §5.2 token and any human-readable detail is a
+separate `error_description`:
+
+```json
+{
+  "error": "invalid_client",
+  "error_description": "CIMD document is not valid JSON",
+  "code": "INVALID_CLIENT",
+  "statusCode": 401
+}
+```
+
+`error_description` is omitted where describing the failure would be an
+enumeration oracle — client authentication failures answer with the bare token.
 
 | Status | Meaning                                                   |
 | ------ | --------------------------------------------------------- |

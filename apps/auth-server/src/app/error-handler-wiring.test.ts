@@ -356,3 +356,113 @@ describe('assembled app — global error handler reachability (#365)', () => {
     }
   });
 });
+
+/**
+ * The registration ORDER in `app.ts`, asserted on the source (#365).
+ *
+ * ## Why a source assertion, here and nowhere else
+ *
+ * Three of `app.ts`'s registrations are position-sensitive, and the thing that
+ * makes them dangerous is precisely that breaking them produces NO runtime
+ * signal — no throw, no warning, no failed boot. The tests above cover the one
+ * invariant that does have a runtime signal (an autoloaded route's error shape)
+ * and they are the stronger guard. These two have none:
+ *
+ *  - **`rateLimitPlugin` before the routes AutoLoad.** @fastify/rate-limit
+ *    applies the global ceiling and every per-route `config.rateLimit` through
+ *    an `onRoute` hook, and `onRoute` is NOT retroactive — Fastify fires it as
+ *    each route is added, so routes already registered when the plugin loads
+ *    are never seen. Moving it down would silently drop the brute-force ceiling
+ *    on /auth/login and the `rateLimit: false` scrape exemption on /metrics.
+ *    Unobservable in this suite by construction: the limiter is backed by
+ *    `fastify.redis` and this suite runs with an unreachable Redis, so it is
+ *    disabled here.
+ *
+ *  - **`errorHandler` before `cors`.** @fastify/cors registers a route of its
+ *    own (`options('*')`), so a handler installed after it leaves that one
+ *    route on Fastify's built-in envelope. Cors answers most preflights from an
+ *    `onRequest` hook before the route body runs, which is exactly what makes
+ *    the gap hard to reach from a test — but @fastify/rate-limit throws its 429
+ *    from an `onRequest` hook registered earlier still, so a rate-limited
+ *    OPTIONS request lands in the route context and renders the wrong shape.
+ *
+ * A source-order assertion is a blunt instrument and is used deliberately: for
+ * an invariant whose violation is silent, a guard that reads the declaration is
+ * better than no guard. It fails loudly the moment someone moves a line, which
+ * is the whole of what is needed — the comments at each registration site say
+ * WHY, and this says THAT.
+ */
+describe('app.ts registration order — the invariants with no runtime signal (#365)', () => {
+  /** The registration sites, in the order `app.ts` must perform them. */
+  const REQUIRED_ORDER = [
+    'fastify.register(rateLimitPlugin)',
+    'fastify.register(errorHandler)',
+    'fastify.register(cors,',
+    'fastify.register(AutoLoad,',
+  ] as const;
+
+  /**
+   * Where `app.ts` sits relative to the working directory.
+   *
+   * Two, because this spec runs under two roots: `nx test auth-server` starts in
+   * the project directory, and the workspace-root `qauth:test` target globs every
+   * project's specs from the repository root. Resolved by trying both and
+   * THROWING when neither exists — a guard that silently found no source would
+   * assert nothing while staying green, which is the failure mode the whole file
+   * is about.
+   */
+  const APP_SOURCE_CANDIDATES = ['src/app/app.ts', 'apps/auth-server/src/app/app.ts'] as const;
+
+  let source: string;
+
+  beforeAll(async () => {
+    const { readFile } = await import('node:fs/promises');
+    const { resolve } = await import('node:path');
+
+    for (const candidate of APP_SOURCE_CANDIDATES) {
+      try {
+        source = await readFile(resolve(process.cwd(), candidate), 'utf8');
+        break;
+      } catch {
+        // Try the next root.
+      }
+    }
+
+    if (!source) {
+      throw new Error(
+        `could not read app.ts from ${process.cwd()} — tried ${APP_SOURCE_CANDIDATES.join(', ')}`
+      );
+    }
+  });
+
+  it('registers each position-sensitive plugin exactly once', () => {
+    // A second registration site would make the ordering assertion below read
+    // the wrong one, and `indexOf` would not notice.
+    for (const marker of REQUIRED_ORDER) {
+      const occurrences = source.split(marker).length - 1;
+      const expected = marker === 'fastify.register(AutoLoad,' ? 2 : 1;
+      expect(occurrences, `${marker} appears ${occurrences} times`).toBe(expected);
+    }
+  });
+
+  it('keeps them in the order every comment in app.ts depends on', () => {
+    const positions = REQUIRED_ORDER.map((marker) => source.indexOf(marker));
+
+    expect(positions.every((position) => position > 0)).toBe(true);
+    expect([...positions].sort((a, b) => a - b)).toEqual(positions);
+  });
+
+  it('puts the error handler ahead of BOTH AutoLoad calls, not merely the first', () => {
+    // The plugins AutoLoad and the routes AutoLoad are separate registrations
+    // and both mount route-bearing scopes.
+    const handler = source.indexOf('fastify.register(errorHandler)');
+    const autoloads = [...source.matchAll(/fastify\.register\(AutoLoad,/g)].map(
+      (match) => match.index ?? -1
+    );
+
+    expect(autoloads).toHaveLength(2);
+    for (const autoload of autoloads) {
+      expect(handler).toBeLessThan(autoload);
+    }
+  });
+});
