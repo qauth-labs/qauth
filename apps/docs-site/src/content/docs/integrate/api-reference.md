@@ -630,7 +630,7 @@ Errors: `401`, `404` (client or key not found / not owned).
 
 ---
 
-## Wallet federation transport (`/oid4vp/response`)
+## Wallet federation transport (`/oid4vp/request/{handle}`, `/oid4vp/response`)
 
 **Flag-gated, off by default.** `POST /oid4vp/response` is registered only when
 `WALLET_FEDERATION_ENABLED=true` **and** a `VerifierProfile` is configured for
@@ -650,6 +650,26 @@ credential, or issuer validation, and authenticates no user.**
 **`200 OK`** — an empty transport-level acknowledgement (OID4VP 1.0 §8.3)
 confirming the response was well-formed and correlated. It does **not** assert
 that any credential was verified or any user authenticated.
+
+### `GET /oid4vp/request/{handle}`
+
+**Flag-gated on the same variable, and registered only alongside the endpoint
+above.** This is the JAR Request Object Endpoint (RFC 9101 §5.2.2, HAIP 1.0
+§5.1): under a `VerifierProfile` that mandates signed Authorization Requests,
+the wallet invocation URI carries a `request_uri` pointing here instead of the
+request parameters inline, and the wallet fetches the signed request object from
+it (#377).
+
+**`200 OK`** — the compact JWS, served as `application/oauth-authz-req+jwt` with
+`Cache-Control: no-store`. Its `x5c` header carries the Verifier's leaf
+certificate and any intermediates, with the trust anchor excluded; `client_id`
+is the base64url SHA-256 of that leaf.
+
+**It consumes nothing and writes nothing.** The request `state` is not redeemed
+here — a wallet may legitimately retry the fetch — so single use stays enforced
+where it belongs, at `POST /oid4vp/response`. An unknown, expired or malformed
+handle all produce the **same** bare `404`, so the endpoint is not an oracle for
+which requests exist.
 
 ---
 

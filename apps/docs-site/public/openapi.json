@@ -3038,6 +3038,29 @@
         }
       }
     },
+    "/oid4vp/request/{handle}": {
+      "get": {
+        "tags": [
+          "OID4VP"
+        ],
+        "description": "OID4VP 1.0 / RFC 9101 Request Object Endpoint. Serves the signed Authorization Request a `request_uri` refers to, as application/oauth-authz-req+jwt. TRANSPORT ONLY: the request state is neither read nor consumed here, nothing is written, and an unknown or expired reference is indistinguishable from a malformed one.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "path",
+            "name": "handle",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response"
+          }
+        }
+      }
+    },
     "/oid4vp/response": {
       "post": {
         "tags": [
