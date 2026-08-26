@@ -85,8 +85,16 @@ import {
  *
  * `iss` is nonetheless REQUIRED here even though §5.1 does not require it: the
  * SAN binding needs a name to bind against, and a token with no `iss` would
- * silently skip that check. Refusing it is the fail-closed reading, and every
- * real status issuer emits it — the draft's own example does.
+ * silently skip that check, so refusing it is the fail-closed reading. Be
+ * honest about the cost — §5.1 lists only `typ`, `sub`, `iat` and `status_list`
+ * as REQUIRED and its own non-normative example carries NO `iss` at all (nor
+ * does the §5.2 CWT one), so this rejects a token the draft would call
+ * conforming. It is a deliberate deployment-profile restriction, which §5.1
+ * rule 4 permits — *"Application of additional restrictions and policies are at
+ * the discretion of the Relying Party"* — and it is only safe to impose because
+ * status issuers here must already be anchored by the operator, who can require
+ * `iss` of them. An ecosystem that cannot must drop the SAN binding rather than
+ * relax this to "absent means unchecked".
  */
 
 /** Longest protected header accepted, in base64url characters. */
