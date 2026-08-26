@@ -163,6 +163,17 @@ services:
       # Blank reads as "no realm assures any issuer" — fail-closed, not a boot
       # failure; a present-but-malformed value IS a boot failure.
       OID4VP_ISSUER_ASSURANCE: ${OID4VP_ISSUER_ASSURANCE:-}
+      # Which issuance chains VALIDATE a wallet's key attestation (#308/#379,
+      # HAIP §4.5.1) — a fourth variable in the same neighbourhood, and the only
+      # deployment-wide one, because what an issuer's issuance process
+      # establishes is a property of that ECOSYSTEM rather than of any realm's
+      # opinion of it. Recording an issuer here produces EVIDENCE and never a
+      # level: a realm still grants nothing unless its own
+      # OID4VP_ISSUER_ASSURANCE names the issuer with `requiresKeyStorage`.
+      # Blank reads as "no issuer attests anything" — fail-closed, and what keeps
+      # a profile that MANDATES key-storage assurance (haip-1.0) refusing to
+      # boot. A present-but-malformed value IS a boot failure.
+      OID4VP_ATTESTING_ISSUERS: ${OID4VP_ATTESTING_ISSUERS:-}
       # Which vocabulary the emitted `acr` value is written in (#237). Defaults
       # to the eIDAS LoA URI form, which is what OIDC Core §2 asks an `acr`
       # value to be. Only reached once a level has been established, so unlike

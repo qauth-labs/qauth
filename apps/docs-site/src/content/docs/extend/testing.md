@@ -59,16 +59,16 @@ There are two stronger patterns in the tree, and the difference between them is 
   `apps/auth-server/src/app/routes/oauth/signature-verification.test.ts`, which registers `formbody`
   and the JWT plugin so it can exercise the same parsers production wires up. Better than a stub,
   but it still only proves the wiring the test itself built.
-- **The real assembled app** — the pattern [#365] introduces as
-  `apps/auth-server/src/app/error-handler.wiring.test.ts`. It boots the actual application
+- **The real assembled app** — the pattern [#365] introduced as
+  `apps/auth-server/src/app/error-handler-wiring.test.ts`. It boots the actual application
   composition, asserts a property of it, and is mutation-checked so it fails if the registration
-  order regresses. Check whether it is in your checkout: it lands with that fix, and until it does
-  there is no test in this repository of this kind.
+  order regresses. It also pins the two orderings with no runtime signal — `rateLimitPlugin` before
+  the route sweep, and `errorHandler` before `cors` — by reading the registration order out of
+  `app.ts` itself.
 
 When you add a test whose subject is _wiring_ rather than _logic_, the second pattern is the one
-that would have caught #365; the first would not have. It is also the pattern that is still missing
-for `formbody` and `rateLimitPlugin`, both of which have real ordering requirements and no wiring
-test either way.
+that caught #365; the first would not have. `formbody` still has a real ordering requirement and no
+guard of either kind.
 
 [#365]: https://github.com/qauth-labs/qauth/issues/365
 

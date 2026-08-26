@@ -22,6 +22,18 @@ const { envMock } = vi.hoisted(() => ({
     JWT_ISSUER: 'https://auth.example.com',
     WALLET_FEDERATION_ENABLED: true,
     OID4VP_VERIFIER_PROFILE: 'oid4vp-1.0-base' as string | undefined,
+    // The verifier-identity variables at their parsed DEFAULTS (#377). Stated
+    // rather than omitted because the request path now resolves the profile with
+    // the deployment's provisioned material, and
+    // `resolveVerifierCertificateChainPems` reads `.length` off the array forms —
+    // which the real parsed env always supplies (Zod defaults them to `[]`) and
+    // an env stub silently would not.
+    OID4VP_VERIFIER_SIGNING_KEY: undefined as string | undefined,
+    OID4VP_VERIFIER_SIGNING_KEY_PATH: undefined as string | undefined,
+    OID4VP_VERIFIER_CERTIFICATE_CHAIN: [] as readonly string[],
+    OID4VP_VERIFIER_CERTIFICATE_CHAIN_PATH: [] as readonly string[],
+    OID4VP_VERIFIER_TRUST_ANCHORS: [] as readonly string[],
+    OID4VP_VERIFIER_TRUST_ANCHORS_PATH: [] as readonly string[],
     OID4VP_REQUESTED_VCT: ['urn:example:pid'] as readonly string[] | undefined,
     OID4VP_WALLET_INVOCATION_ENDPOINT: 'openid4vp://',
   },

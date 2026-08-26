@@ -8,6 +8,7 @@ import {
   resolveAssurancePolicy,
   resolveCredentialAssurance,
   type SubjectResolutionStrategyId,
+  translateKeyStorageAssurance,
   type ValidatedCredential,
   verifyWalletPresentations,
   WALLET_PROVIDER_TYPE,
@@ -262,6 +263,12 @@ async function verifyPresentedCredential(
         // through its own `onAudit` sink rather than `onRefusal` below — see
         // `wallet-verification.ts`.
         credentialStatus: setup.credentialStatus,
+        // Key-storage assurance (#308/#379). Built from the resolved profile in
+        // `wallet-verification.ts`, so the posture travels even though this
+        // deployment provisions no resolver yet — passing `undefined` here would
+        // make a profile that REQUIRES assurance behave like one that forbids
+        // it, which is exactly the inert state #379 exists to end.
+        keyStorageAssurance: setup.keyStorageAssurance,
         onRefusal: (refusal) => {
           fastify.log.warn(
             { gate: refusal.gate, detail: refusal.detail, realmId: request.realmId },
@@ -302,6 +309,23 @@ async function verifyPresentedCredential(
  * emits no `acr`. `'low'` is returned as `undefined` so the single
  * representation of "no assurance" is absence, all the way down to the NULL in
  * `authorization_codes.assurance_level`.
+ *
+ * ## Where the key-storage evidence enters (#308 → #237, issue #379)
+ *
+ * `AssuranceEvidence` used to be the literal `undefined` here, which made
+ * `IssuerAssuranceEntry.requiresKeyStorage` unsatisfiable by construction — an
+ * operator could demand hardware key storage and get `'low'` for every
+ * credential, forever. It is now derived from what #308's gate actually
+ * established, through `translateKeyStorageAssurance` and through nothing else:
+ * the D1 rule (ADR-010 §5) is stated once, in one function, so no call site gets
+ * to decide for itself what an attestation is worth.
+ *
+ * The floor is left unstated HERE, so the translation reads at the strict
+ * default. That is the only floor this call site can apply: the policy has not
+ * yet chosen an entry, and the floor is a property of the entry. An entry
+ * carrying `requiresKeyStorageAttackPotential` re-reads the source-free grade
+ * where the entry IS known — inside `createIssuerAssurancePolicy` — through the
+ * same one translation rule.
  */
 async function resolveAssurance(
   fastify: FastifyInstance,
@@ -310,19 +334,50 @@ async function resolveAssurance(
 ): Promise<AssuranceLevel | undefined> {
   const realm = await fastify.repositories.realms.findById(realmId);
 
+  const keyStorage = translateKeyStorageAssurance(credential.assurance.keyStorageAssurance);
+
   const level = resolveCredentialAssurance(
     resolveAssurancePolicy(
       { name: realm?.name ?? null },
       { OID4VP_ISSUER_ASSURANCE: env.OID4VP_ISSUER_ASSURANCE }
     ),
     credential,
-    undefined,
+    // Both members, and they are not redundant. `keyStorage` is the reading at
+    // the DEFAULT floor, which is all this call site can compute — no entry has
+    // been selected yet. `keyStorageAttackPotential` is the source-free grade an
+    // entry carrying its own `requiresKeyStorageAttackPotential` re-reads once
+    // the policy knows which entry applies.
+    {
+      keyStorage: keyStorage.keyStorage,
+      keyStorageAttackPotential: keyStorage.establishedAttackPotential,
+    },
     {
       onPolicyError: (error: unknown) => {
         fastify.log.error({ err: error, realmId }, 'assurance policy threw');
       },
     }
   );
+
+  // The D1a corollary, and the only place it can be honoured: an operator must
+  // be able to tell assurance QAuth VERIFIED (`key-attested` — an Appendix D
+  // attestation bound to this credential's own key) from assurance it INHERITED
+  // (`issuer-attested` — an issuance chain the operator recorded as doing that
+  // work). Both can read as `'hardware'`; they are not the same claim, and the
+  // policy deliberately cannot see the difference, so the log is where the
+  // difference has to survive. Server-side only — nothing here is a distinct
+  // wire outcome, and `acr`'s absence stays indistinguishable from a password
+  // login either way.
+  if (keyStorage.source !== 'none') {
+    fastify.log.info(
+      {
+        realmId,
+        keyStorageSource: keyStorage.source,
+        keyStorage: keyStorage.keyStorage ?? 'unestablished',
+        assuranceLevel: level,
+      },
+      'wallet presentation carried key-storage assurance'
+    );
+  }
 
   return level === 'low' ? undefined : level;
 }

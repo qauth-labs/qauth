@@ -3,6 +3,7 @@ import {
   DENY_ALL_TRUST_REGISTRY,
   ISSUER_TRUST_REJECTION_MESSAGE,
   issuerTrustRejection,
+  keyStorageAssuranceGateFor,
   type PresentedCredential,
   type TrustRegistry,
   VERIFIER_PROFILES,
@@ -75,6 +76,11 @@ function optionsOf(overrides: Partial<Parameters<typeof verifyWalletPresentation
     // whether it wired a checker. These cases exercise the earlier gates, which
     // refuse before a status list is ever consulted.
     credentialStatus: undefined,
+    // Stated for the same reason (#379). Built from the profile rather than
+    // spelled `undefined`, because that is what a real caller does and because
+    // `oid4vp-1.0-base`'s `forbidden` posture is what makes these cases behave
+    // as they did before the gate was threaded.
+    keyStorageAssurance: keyStorageAssuranceGateFor(PROFILE),
     ...overrides,
   };
 }
@@ -240,18 +246,20 @@ describe('verifyWalletPresentations — the seam authenticates nobody', () => {
     // nothing that names a person. A trusted credential is a finding about a
     // document; which USER it belongs to is #300's question.
     //
-    // `credentialStatus` (#378) belongs on this list for the same reason
-    // `trustRegistry` does: it is DEPLOYMENT configuration, resolved from env
-    // before any presentation arrives. It is asserted here rather than excused
-    // because this list is the guard that would catch a user-shaped input being
-    // added to the seam, and a guard nobody updates deliberately is a guard
-    // someone eventually updates carelessly.
+    // `credentialStatus` (#378) and `keyStorageAssurance` (#308/#379) belong on
+    // this list for the same reason `trustRegistry` does: both are DEPLOYMENT
+    // configuration, resolved from env and from the active profile before any
+    // presentation arrives, and neither names a person. They are asserted here
+    // rather than excused because this list is the guard that would catch a
+    // user-shaped input being added to the seam, and a guard nobody updates
+    // deliberately is a guard someone eventually updates carelessly.
     const options = optionsOf();
 
     expect(Object.keys(options).sort()).toEqual([
       'clientId',
       'credentialStatus',
       'dcqlQuery',
+      'keyStorageAssurance',
       'nonce',
       'profile',
       'resolveIssuerKey',

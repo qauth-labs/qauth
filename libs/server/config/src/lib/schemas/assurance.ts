@@ -91,6 +91,36 @@ const PROTOTYPE_KEYS: ReadonlySet<string> = new Set(['__proto__', 'constructor',
  */
 const configuredAssuranceLevelSchema = z.enum(['substantial', 'high']);
 
+/**
+ * The key-storage vocabulary an operator may demand (#379, ADR-010 §5).
+ *
+ * eIDAS-shaped, matching `AssuredKeyStorage` in `server-federation`. Duplicated
+ * for the same reason {@link configuredAssuranceLevelSchema} is — config is the
+ * lowest layer and carries no dependency on `server-federation` — and pinned by
+ * `apps/auth-server`'s `src/config/env.test.ts`.
+ */
+const configuredKeyStorageSchema = z.enum(['software', 'hardware']);
+
+/**
+ * The OID4VCI Appendix D §D.2 attack-potential grades (#379, ADR-010 §5).
+ *
+ * The second vocabulary this variable speaks, and the reason it is here rather
+ * than only in code: where eIDAS `high`'s "secure cryptographic device" begins
+ * is a property of the ecosystem a deployment participates in, so the floor is
+ * the operator's to state. Omitting it selects the STRICT reading — the
+ * strongest grade — never the permissive one.
+ *
+ * Spelled exactly as the specification does, hyphen included in
+ * `enhanced-basic`. Duplicated from `AttackPotentialResistance` on the same
+ * terms as the two enums above, and pinned by the same test.
+ */
+const configuredAttackPotentialSchema = z.enum([
+  'iso_18045_basic',
+  'iso_18045_enhanced-basic',
+  'iso_18045_moderate',
+  'iso_18045_high',
+]);
+
 /** One issuer statement: the level, and optionally the credential types it covers. */
 const issuerAssuranceSchema = z
   .object({
@@ -111,8 +141,55 @@ const issuerAssuranceSchema = z
       .min(1, 'credentialTypes must name at least one vct, or be omitted entirely')
       .max(MAX_CREDENTIAL_TYPES)
       .optional(),
+    /**
+     * Minimum holder key storage this statement demands (#379, ADR-010 §5).
+     *
+     * `'hardware'` grants the level ONLY when a validated key attestation — or
+     * an issuance chain recorded in `OID4VP_ATTESTING_ISSUERS` — established
+     * storage meeting the floor. Absent demands nothing, which is what every
+     * deployment authored before #379 means.
+     *
+     * Accepted here since #379. It was rejected outright before, because this
+     * object is `.strict()` and had no such key — so the field existed in
+     * `IssuerAssuranceEntry` and no operator could author it.
+     */
+    requiresKeyStorage: configuredKeyStorageSchema.optional(),
+    /**
+     * The §D.2 grade at which {@link requiresKeyStorage} reads evidence as
+     * hardware. Omit for the STRICT default (`iso_18045_high`).
+     *
+     * Meaningful ONLY alongside `requiresKeyStorage: 'hardware'`; see the
+     * refinement below for why the `'software'` pairing is refused rather than
+     * accepted and ignored.
+     */
+    requiresKeyStorageAttackPotential: configuredAttackPotentialSchema.optional(),
   })
-  .strict();
+  .strict()
+  .refine(
+    (statement) =>
+      statement.requiresKeyStorageAttackPotential === undefined ||
+      statement.requiresKeyStorage === 'hardware',
+    {
+      // Refused rather than ignored, in BOTH the shapes that make it inert.
+      //
+      // Stated alone, it gates on nothing while reading like it gates on key
+      // storage. Stated alongside `requiresKeyStorage: 'software'` it is inert
+      // for a subtler reason: the floor decides only where a graded claim reads
+      // as `'hardware'` rather than `'software'`, and a `'software'` requirement
+      // is satisfied by EITHER reading, so every floor from `iso_18045_basic` to
+      // `iso_18045_high` accepts exactly the same evidence. An operator who
+      // wrote `{"requiresKeyStorage":"software","requiresKeyStorageAttackPotential":"iso_18045_high"}`
+      // means to demand something and demands nothing.
+      //
+      // Both are the shape that makes an operator believe they imposed a
+      // requirement they merely failed to impose — the same reasoning as the
+      // empty `credentialTypes` list above, and as `assuranceLevel: 'low'` being
+      // unstatable at all.
+      message:
+        "requiresKeyStorageAttackPotential sets the grade at which key-storage evidence reads as hardware, so it only means something with requiresKeyStorage: 'hardware' — a 'software' requirement is satisfied by any graded evidence at every floor. State requiresKeyStorage: 'hardware', or omit the floor",
+      path: ['requiresKeyStorageAttackPotential'],
+    }
+  );
 
 /** One issuer identifier: an absolute HTTPS URL, exactly as the trust allowlist requires. */
 const issuerIdentifierSchema = z
@@ -140,6 +217,10 @@ export interface ConfiguredIssuerAssuranceStatement {
   readonly level: 'substantial' | 'high';
   /** `vct` values covered; absent covers every type the issuer signs. */
   readonly credentialTypes?: readonly string[];
+  /** Minimum holder key storage demanded; absent demands none (#379). */
+  readonly requiresKeyStorage?: 'software' | 'hardware';
+  /** The §D.2 floor that requirement is read at; absent means the strict default (#379). */
+  readonly requiresKeyStorageAttackPotential?: z.infer<typeof configuredAttackPotentialSchema>;
 }
 
 /** Issuer identifier → what credentials from it are worth. */
@@ -171,6 +252,14 @@ function harden(
         level: statement.level,
         ...(statement.credentialTypes !== undefined
           ? { credentialTypes: Object.freeze([...statement.credentialTypes]) }
+          : {}),
+        ...(statement.requiresKeyStorage !== undefined
+          ? { requiresKeyStorage: statement.requiresKeyStorage }
+          : {}),
+        ...(statement.requiresKeyStorageAttackPotential !== undefined
+          ? {
+              requiresKeyStorageAttackPotential: statement.requiresKeyStorageAttackPotential,
+            }
           : {}),
       });
     }

@@ -240,10 +240,7 @@ placeholder returns to make a caller compile or a test go green.
 
 `walletSkeletonError` (`libs/server/federation/src/providers/wallet.provider.ts:494`) builds a
 plain `Error`, not a `@qauth-labs/shared-errors` domain error. Domain errors carry
-`statusCode`/`code` for the global error handler to map onto the wire — what that handler is written
-to do, though at this commit it is registered after the route sweeps and so answers no route
-([#365](https://github.com/qauth-labs/qauth/issues/365);
-[Request lifecycle](/extend/architecture/#what-silently-regresses-when-it-is-wrong)) — and reaching
+`statusCode`/`code` for the global error handler to map onto the wire — and reaching
 for one here would frame this as a reachable, client-facing outcome with a stable error contract. It
 is not one. Reaching it means QAuth is mis-wired, and a generic 500 plus a server-side stack trace
 is the right signal — minting a dedicated error class in the shared library would create permanent

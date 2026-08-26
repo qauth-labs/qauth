@@ -37,36 +37,36 @@ Errors share a single envelope:
 Schema-validation failures use:
 
 ```json
-{ "error": "Validation error", "code": "VALIDATION_ERROR", "statusCode": 400 }
+{
+  "error": "Validation error",
+  "code": "VALIDATION_ERROR",
+  "statusCode": 400,
+  "details": [{ "path": "/grant_type", "message": "…" }]
+}
 ```
 
-> **⚠️ A live defect in this tree, not history.** The two shapes above describe
-> `apps/auth-server/src/app/plugins/error-handler.ts`, and at this commit that
-> handler answers **no** route: `app.ts` registers it after both `AutoLoad`
-> sweeps, and Fastify 5 captures each route's error handler when that route's
-> plugin finishes loading, so Fastify's built-in handler serves every error
-> instead. What a client sees today is
-> `{ "error": "<HTTP status name>", "code": "…", "message": "…", "statusCode": 400 }` —
-> the human-readable text sits in `message`, and `error` holds the status name
-> (`"Bad Request"`, `"Conflict"`). Schema-validation failures carry
-> `code: "FST_ERR_VALIDATION"`, so a client branching on
-> `code === "VALIDATION_ERROR"` never matches; and a duplicate
-> `POST /auth/register` returns the raw database constraint name in `message` —
-> the account-enumeration oracle the handler above exists to suppress. The OAuth
-> error codes in the next paragraph reach a JSON body the same way:
-> `error-handler.ts:82-97` is what puts `invalid_grant`, `invalid_scope`,
-> `invalid_request`, and `invalid_target` in the `error` field alongside a
-> separate `error_description`. Unreached, the bare code arrives in `message`,
-> `error_description` is dropped entirely, and `error` holds the status name — a
-> client keying off `error` as RFC 6749 §5.2 prescribes matches nothing, and all
-> four share `statusCode: 400`. Branch on `statusCode` — and, on the OAuth
-> endpoints, on `message` — until [#365](https://github.com/qauth-labs/qauth/issues/365)
-> lands, and delete this callout with it. Mechanism and the full consequence list:
-> [Request lifecycle](/extend/architecture/#what-silently-regresses-when-it-is-wrong).
+`details` carries one entry per rejected field: `path` names it, `message` says
+what is wrong with it. Nothing else — the validator's own issue objects also
+carry the schema path, the rule keyword and a parameter bag, and those describe
+how QAuth is built rather than what it accepts, so they are not returned.
 
 OAuth endpoints additionally return the standard OAuth error codes documented in
 [OAuth 2.1 Flow → Errors](/integrate/oauth-flow/#errors) (e.g. `invalid_grant`,
-`invalid_client`, `invalid_scope`, `invalid_target`).
+`invalid_client`, `invalid_scope`, `invalid_target`). On those endpoints `error`
+is the registered RFC 6749 §5.2 token and any human-readable detail is a
+separate `error_description`:
+
+```json
+{
+  "error": "invalid_client",
+  "error_description": "CIMD document is not valid JSON",
+  "code": "INVALID_CLIENT",
+  "statusCode": 401
+}
+```
+
+`error_description` is omitted where describing the failure would be an
+enumeration oracle — client authentication failures answer with the bare token.
 
 | Status | Meaning                                                   |
 | ------ | --------------------------------------------------------- |
@@ -146,9 +146,9 @@ Create a user account. A verification email is sent (the `mock` provider logs it
 ```
 
 Errors: `400` (validation / weak password), `409` (email already registered),
-`429` (rate limited). Until [#365](https://github.com/qauth-labs/qauth/issues/365)
-lands, that `409` also carries the raw unique-constraint name in `message` — see the
-[error-model caveat](#error-model) above.
+`429` (rate limited). The `409` is deliberately generic — it carries neither the
+database constraint name nor anything else that would confirm the address is
+already registered.
 
 ### `POST /auth/login`
 

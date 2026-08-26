@@ -254,7 +254,7 @@ describe('rewriteRecordLink — the real docs/adr and docs/security corpus, enum
     return links;
   }
 
-  it('extracts exactly 196 links across the 11 ADRs, the ADR README, and the security review — the corpus the counts below are checked against', () => {
+  it('extracts exactly 197 links across the 11 ADRs, the ADR README, and the security review — the corpus the counts below are checked against', () => {
     // A fixed count, not a lower bound: this test's whole point is that the
     // categorisation below is checked against the FULL corpus, not a
     // sample. If a future ADR amendment changes the link count, this
@@ -263,7 +263,12 @@ describe('rewriteRecordLink — the real docs/adr and docs/security corpus, enum
     // Rose 144 → 196 when main merged in: ADR-010 (acr assurance mapping) and
     // ADR-011 (enterprise managed authorization) joined the corpus, and ADR-007
     // was substantially expanded. Recounted mechanically, not adjusted by hand.
-    expect(extractAllLinks()).toHaveLength(196);
+    //
+    // 196 → 197 when #379 rewrote ADR-010 §5 and added §6: one new EXTERNAL
+    // link, the OID4VCI 1.0 specification. Identified by diffing the extracted
+    // link lists across the two revisions rather than by re-reading the ADR, so
+    // the bucket it lands in below is a finding and not an assumption.
+    expect(extractAllLinks()).toHaveLength(197);
   });
 
   it('every link falls into exactly one of the four outcomes, with none left unresolved', () => {
@@ -313,7 +318,10 @@ describe('rewriteRecordLink — the real docs/adr and docs/security corpus, enum
     // accepted trade-off (the epic's "moved guides leave a pointer stub"
     // decision), not a broken link — but if this count grows, check whether a
     // new ADR is pointing at a stub where it meant to point at the guide.
-    expect(untouchedExternalOrAnchor).toBe(93 + 17);
+    // 93 → 94 external with #379's ADR-010 amendment (the OID4VCI 1.0 spec
+    // URL). The three buckets below are unchanged by it, which is the check
+    // that it really was an external link and not an in-tree one.
+    expect(untouchedExternalOrAnchor).toBe(94 + 17);
     expect(rewrittenToRoute).toBe(78);
     expect(rewrittenToBlob).toBe(8);
     expect(leftUnresolved).toBe(0);

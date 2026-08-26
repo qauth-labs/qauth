@@ -7,13 +7,14 @@ import { cachePlugin } from '@qauth-labs/fastify-plugin-cache';
 import { databasePlugin } from '@qauth-labs/fastify-plugin-db';
 import { emailPlugin, type EmailProviderConfig } from '@qauth-labs/fastify-plugin-email';
 import {
+  assertAttestingIssuersUsable,
   assertCredentialStatusConfigUsable,
   assertTrustedIssuersUsable,
   createConfiguredProviders,
   credentialStatusProvisioningOf,
   federationPlugin,
+  keyStorageAssuranceProvisioningOf,
   type VerifierCryptoCapabilities,
-  verifierMaterialProvisionedBy,
 } from '@qauth-labs/fastify-plugin-federation';
 import { jwtPlugin } from '@qauth-labs/fastify-plugin-jwt';
 import { passwordPlugin } from '@qauth-labs/fastify-plugin-password';
@@ -27,8 +28,9 @@ import type { FastifyInstance } from 'fastify';
 
 import { env } from '../config/env';
 import { deriveCryptoCapabilities } from './crypto-capabilities';
+import { assertSubjectResolutionProvisioned } from './helpers/assert-subject-resolution';
 import { isJtiRevoked } from './helpers/token-revocation';
-import { verifierSigningMaterial } from './helpers/verifier-identity';
+import { provisionedVerifierMaterial } from './helpers/verifier-identity';
 import errorHandler from './plugins/error-handler';
 import { metricsPlugin } from './plugins/metrics';
 import { rateLimitPlugin } from './plugins/rate-limit';
@@ -166,7 +168,43 @@ export async function app(fastify: FastifyInstance, opts: object) {
   // switched on today, and finding it at boot beats finding it on the first
   // presentation. A deployment that configured nothing gets `undefined` and is
   // unaffected.
-  const verifierMaterial = verifierSigningMaterial();
+  //
+  // The call also produces the marker set both boot gates below read. #379
+  // introduced that as a module-level `PROVISIONED_VERIFIER_MATERIAL = undefined`
+  // with the note "replace `undefined` here, not at either call site" —
+  // precisely so the subject-resolution gate and the provider gate could never
+  // disagree about which profiles resolve. This is that replacement, widened:
+  // the two request-path callers of `resolveVerifierProfile` read the SAME
+  // helper, so the boot gates and the request path cannot disagree either.
+  //
+  // A call rather than a module-level constant because the material is now
+  // VALIDATED, and validation can throw: computing it at module scope would turn
+  // an operator's mis-pasted certificate into an import-time crash with no
+  // plugin context around it. The helper memoises, so this parses the chain once
+  // per process however many times it is asked.
+  const provisioned = provisionedVerifierMaterial();
+
+  // Attesting issuers (#308/#379), the same posture again. `server-config`
+  // validates each key as a syntactically valid https:// URL; the runtime
+  // additionally reduces it with `canonicalizeIssuerIdentifier`, which refuses
+  // userinfo, a query string and a fragment. The resolver that would catch the
+  // disagreement is built lazily at the first presentation, so without this the
+  // symptom is silent: every credential from that ecosystem resolves to
+  // `assurance: 'none'`, and a policy entry demanding hardware key storage
+  // grants `'low'` to a wallet that satisfies it.
+  //
+  // NOT gated on WALLET_FEDERATION_ENABLED, for the reason given twice above.
+  assertAttestingIssuersUsable(env.OID4VP_ATTESTING_ISSUERS);
+
+  // Subject resolution (#300/#238/#379, ADR-010 §6), the fourth gate in this
+  // group and the one that IS flag-gated. #300 and #238 each deferred it "to
+  // the first consumer"; the wallet login path is now that consumer, so a
+  // deployment whose `OID4VP_SUBJECT_*` configuration cannot build a strategy
+  // fails here instead of refusing every presentation with an error nobody
+  // reads. It runs BEFORE `createConfiguredProviders` below but yields to it on
+  // a profile that cannot resolve at all, so a profile refusal keeps its own
+  // message. Nothing about the request path changes — see the helper.
+  assertSubjectResolutionProvisioned(env, provisioned);
 
   await fastify.register(federationPlugin, {
     providers: createConfiguredProviders({
@@ -182,6 +220,18 @@ export async function app(fastify: FastifyInstance, opts: object) {
         trustAnchorPems: statusListTrustAnchorPems,
         uriAllowlist: env.OID4VP_STATUS_LIST_URI_ALLOWLIST,
       }),
+      // What the operator provisioned for key-storage assurance (#308/#379). A
+      // profile declaring `keyStorageAssurance: 'required'` — `haip-1.0` does —
+      // refuses to start unless something can establish it. Before #379 this
+      // option was never passed, so `assertKeyStorageAssuranceProvisioned` sat
+      // permanently in its refusing state: a constant, not a predicate.
+      //
+      // Only the TRANSITIVE path is provisionable today. The direct path
+      // (verifying an Appendix D attestation conveyed into the presentation)
+      // needs the same certificate surface #233 owes the line below.
+      keyStorageAssuranceProvisioned: keyStorageAssuranceProvisioningOf(
+        env.OID4VP_ATTESTING_ISSUERS
+      ),
       // What the operator provisioned for the VERIFIER identity (#377) — the
       // ES256 key and the X.509 chain a wallet establishes QAuth's identity
       // from. Derived from the material that VALIDATED above rather than from
@@ -190,7 +240,7 @@ export async function app(fastify: FastifyInstance, opts: object) {
       // the boot down before this line, and a deployment that configured
       // nothing yields `NO_VERIFIER_MATERIAL`, which is what makes a profile
       // requiring a WRPAC refuse.
-      provisionedVerifierMaterial: verifierMaterialProvisionedBy(verifierMaterial),
+      provisionedVerifierMaterial: provisioned,
     }),
   });
 
@@ -285,17 +335,74 @@ export async function app(fastify: FastifyInstance, opts: object) {
       : {}),
   });
 
+  // Rate limiting (T3). This position IS load-bearing: it MUST stay ahead of
+  // the routes AutoLoad below. @fastify/rate-limit applies both the global
+  // ceiling and every per-route `config.rateLimit` override through an
+  // `onRoute` hook, and `onRoute` is NOT retroactive — Fastify fires it as each
+  // route is added, so routes already registered by the time this plugin loads
+  // are simply never seen. Moving it after the AutoLoad would not throw, warn
+  // or fail a boot check; it would silently drop every per-route limit,
+  // including the brute-force ceiling on /auth/login and the
+  // `config: { rateLimit: false }` scrape exemption on /metrics.
   await fastify.register(rateLimitPlugin);
 
-  // Security headers (issue #113): register before routes so every response —
-  // including the server-rendered login/consent pages and error responses —
-  // carries the CSP, HSTS, frame-options and related hardening headers.
+  // Security headers (issue #113): every response — including the
+  // server-rendered login/consent pages and error responses — carries the CSP,
+  // HSTS, frame-options and related hardening headers.
+  //
+  // Unlike the rate limiter above, this position is NOT load-bearing (#365) —
+  // but for a different reason than the symmetry suggests, and the distinction
+  // is the whole point. The plugin installs an `onSend` hook, and `addHook`
+  // for that class of hook recurses into already-created child scopes
+  // (`this[kChildren].forEach(child => _addHook.call(child, name, fn))` in
+  // Fastify's `_addHook`), so it does reach routes that loaded earlier.
+  // `onRoute` is explicitly routed past that recursion — which is exactly why
+  // the rate limiter above IS position-sensitive and this is not. Do not
+  // generalise "hooks are retroactive" from this comment; it holds per hook
+  // type, not per plugin.
   await fastify.register(securityHeadersPlugin);
 
   // Observability (T3): request-id propagation (#128) and the metrics registry
-  // (#123/#126) must be available before routes are loaded.
+  // (#123/#126). Neither position is load-bearing either (#365): request-id is
+  // another hook (`onRequest`), propagated into existing child scopes by the
+  // same recursion described above, and metrics only `decorate()`s the
+  // instance — its sole consumer, GET /metrics, dereferences `fastify.metrics`
+  // inside the handler at request time, not while the route plugin is loading.
   await fastify.register(requestIdPlugin);
   await fastify.register(metricsPlugin);
+
+  // Global error handler (#365). This MUST precede every route registration
+  // below — it used to sit after both AutoLoads, under a comment claiming the
+  // last position "catches all unhandled errors", and that is exactly
+  // backwards. A route does not look its error handler up at request time:
+  // Fastify snapshots it while closing the route's enclosing plugin
+  // (`context.errorHandler = this[kErrorHandler]` in the `after()` callback of
+  // `lib/route.js`). Since avvio runs queued plugins in registration order, a
+  // `setErrorHandler` that runs later reaches NO route that already loaded —
+  // the handler existed but was unreachable, and every error was answered by
+  // Fastify's built-in `{statusCode, code, error, message}` envelope instead.
+  //
+  // What that silently reverted: the F-01 register-enumeration fix (PR #212),
+  // which genericises `UniqueConstraintError` so the DB constraint name never
+  // reaches the wire (the built-in envelope echoes `error.message`, which
+  // embeds it); the RFC 6750 §3 `WWW-Authenticate: Bearer` challenge a
+  // bearer-protected resource such as /oauth/userinfo MUST return on 401; the
+  // RFC 6749 §5.2 OAuth error shapes; and the `error_description` sanitisation
+  // that keeps that challenge header well-formed.
+  //
+  // It sits ahead of `cors` deliberately, not merely ahead of the AutoLoads:
+  // @fastify/cors registers a route of its own — `fastify.options('*')` — so a
+  // handler installed after it would leave that one route on the built-in
+  // envelope. Cors answers most preflights from its `onRequest` hook before the
+  // route body runs, but @fastify/rate-limit THROWS its 429 from an `onRequest`
+  // hook registered earlier still, so a rate-limited OPTIONS request would
+  // render the wrong shape. Registering here covers every route in this scope.
+  //
+  // Not covered, and never was: routes registered on the ROOT instance in
+  // `main.ts` (Swagger's /docs, and the default 404 context) resolve the root's
+  // error handler, not this one. Do not read this registration as "every
+  // response now goes through error-handler.ts".
+  await fastify.register(errorHandler);
 
   // CORS (F-06): fail-closed in production when CORS_ORIGIN is unset — the
   // auth-server's own browser flows (login/consent) are same-origin and do
@@ -336,7 +443,4 @@ export async function app(fastify: FastifyInstance, opts: object) {
     options: { ...opts },
     ignorePattern: /\.(test|spec)\.(ts|js)$/,
   });
-
-  // Register error handler last to catch all unhandled errors
-  await fastify.register(errorHandler);
 }

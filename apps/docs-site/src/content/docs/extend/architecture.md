@@ -246,7 +246,8 @@ stack for unknown errors when `env.NODE_ENV === 'production'`. Routes throw
 > **⚠️ This registration must come before the route sweep, and it is load-bearing.** It is the
 > third entry in the binding-time table above and the least obvious of the three, because a
 > misordering here produces error responses rather than no response — so it looks like it works.
-> Tracked, with the confirmation and the fix, in [#365].
+> [#365] found it misordered, fixed it, and left a guard behind; the section below records what
+> it cost while it was wrong.
 
 ### The mechanism
 
@@ -270,14 +271,12 @@ moment each route decides who will handle them.
 
 ### What silently regresses when it is wrong
 
-> **This is a live defect in this tree, not history.** At HEAD `app.ts` still registers the error
-> handler **after** both `AutoLoad` sweeps, under a comment saying that is what makes it catch
-> everything. #365 is filed and analysed but not fixed here — there is no `error-handler.wiring.test.ts`
-> yet. Read the past tense below as "what the investigation found", and the rule above as the
-> constraint the code currently violates.
+> **Fixed in [#365]; kept because the failure mode is the point.** `app.ts` now registers the
+> error handler ahead of both sweeps, and `error-handler-wiring.test.ts` fails if it moves back.
+> What follows is what the misordering actually cost, which is the argument for the guard.
 
-`app.ts` registers the error handler after both `AutoLoad` sweeps, under a comment
-saying that is what makes it catch everything. It does the opposite — the plugin reaches no route in
+`app.ts` used to register the error handler after both `AutoLoad` sweeps, under a comment
+saying that is what makes it catch everything. It did the opposite — the plugin reached no route in
 the application. Three consequences, all confirmed against the real assembled app in [#365]:
 
 - **Validation failures returned `FST_ERR_VALIDATION`**, Fastify's raw internal error code, instead
@@ -293,18 +292,17 @@ That third one is why this belongs in the same category as `formbody` rather tha
 An ordering mistake here does not break a feature; it disables a security control while leaving
 every visible behaviour intact.
 
-### The guard, which arrives with the fix
+### The guard that landed with the fix
 
-[#365] adds `apps/auth-server/src/app/error-handler.wiring.test.ts` alongside the reordering. It
-builds the **real assembled app** — not a hand-rolled Fastify instance — asserts that the
-application's handler is the one answering, and is mutation-checked, so it fails if the
-registration moves back below the route sweep.
+`apps/auth-server/src/app/error-handler-wiring.test.ts` builds the **real assembled app** — not a
+hand-rolled Fastify instance — and asserts that the application's handler is the one answering. Its
+`[#365 ORDERING GUARD]` cases are mutation-checked: moving the registration back below either sweep
+flips every one of them to Fastify's built-in envelope.
 
-**Check that it is present in your checkout before relying on it.** The fix and its test land
-together, and this page describes the ordering rule rather than any one branch's state; if
-`error-handler.wiring.test.ts` is not in your tree, nothing is protecting this constraint for you
-and a regression will be silent. Once it is there, this becomes the only ordering constraint in
-`app.ts` that a test catches — `formbody` and `rateLimitPlugin` have nothing equivalent either way.
+The same file also pins the two orderings that have **no** runtime signal at all — `rateLimitPlugin`
+before the route sweep, and `errorHandler` before `cors` — by reading the registration order out of
+`app.ts` itself. That is a blunt instrument used deliberately: breaking either produces no throw, no
+warning and no failed boot, so a guard that reads the declaration beats no guard.
 
 Regardless: if you are adding a route whose contract includes a specific error body, assert that
 body end-to-end. A passing unit test proves the handler _can_ produce the shape, not that your
@@ -318,7 +316,7 @@ Every test that exercises the handler's mapping —
 `apps/auth-server/src/app/routes/oauth/signature-verification.test.ts` — builds its own Fastify
 instance and registers `errorHandler` **before** the routes under test. Each is a correct test of
 the mapping logic against a correctly composed app, so none of them could ever observe how the
-production app was composed. The wiring test [#365] adds is the answer to that specific gap.
+production app was composed. The wiring test [#365] added is the answer to that specific gap.
 
 Generalise the lesson rather than the fix: a test that constructs its own wiring can only ever
 verify the wiring it constructs. See [Testing](/extend/testing/#the-honest-limitation) for how much

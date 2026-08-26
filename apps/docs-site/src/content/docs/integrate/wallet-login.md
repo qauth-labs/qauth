@@ -17,8 +17,11 @@ step, and what is deliberately not built yet. Implements
 > [The authentication seam](#the-authentication-seam) and
 > [Account linking](#account-linking-238). A deployment additionally has to
 > configure `OID4VP_ISSUER_JWKS` (whose key each issuer signs with) and
-> `OID4VP_SUBJECT_BINDING_CLAIMS` (the entitlement check); with either missing,
-> every presentation is refused rather than accepted.
+> `OID4VP_SUBJECT_BINDING_CLAIMS` (the entitlement check). Since #379 the second
+> of those is a **boot requirement**, not a runtime one: a deployment with
+> `WALLET_FEDERATION_ENABLED=true` and no usable subject-resolution
+> configuration now **refuses to start**, naming the variable to set. It
+> previously started and then refused every presentation.
 >
 > Claims normalization into `user_attributes` (#235) landed too: a validated
 > credential's claims become `source='wallet'` attribute rows, and a first
@@ -137,9 +140,76 @@ button that fails:
 | `OID4VP_TRUSTED_ISSUERS`            | _(empty)_      | Per-realm issuer allowlist (#236) — the opposite trust direction  |
 | `OID4VP_ISSUER_JWKS`                | _(empty)_      | Issuer public JWKs (#234) — **nothing verifies without it**       |
 | `OID4VP_SUBJECT_RESOLUTION`         | _(profile)_    | Account-resolution strategy (#300); defaults to `asserted-lookup` |
-| `OID4VP_SUBJECT_BINDING_CLAIMS`     | _(none)_       | The entitlement check (#300) — **required by `asserted-lookup`**  |
+| `OID4VP_SUBJECT_BINDING_CLAIMS`     | _(none)_       | The entitlement check (#300) — **required to BOOT when enabled**  |
 | `OID4VP_ISSUER_ASSURANCE`           | _(empty)_      | Per-realm issuer → eIDAS LoA (#237); drives the `acr` claim       |
+| `OID4VP_ATTESTING_ISSUERS`          | _(empty)_      | Issuance chains that attest key storage (#308/#379)               |
 | `ACR_VALUE_STYLE`                   | `eidas-uri`    | Vocabulary the `acr` value is written in (#237)                   |
+
+### Subject resolution is required to BOOT when wallet federation is on (#379)
+
+`WALLET_FEDERATION_ENABLED=true` with **no** `OID4VP_SUBJECT_*` variables used to
+start. It is now refused at startup, beside the issuer-allowlist and
+credential-status gates, with the resolver's own message naming the variable.
+
+This is a deliberate breaking change and it takes nothing away. The profile
+default is `asserted-lookup`, and `asserted-lookup` with no binding claims has
+nothing to match a presentation against — [ADR-009](/reference/records/adr/009-wallet-account-resolution/)
+§1 calls that a total authentication bypass, so the server already rejected every
+presentation. What changes is only where the operator finds out: a failed start
+instead of a 100% login-failure rate. Set `OID4VP_SUBJECT_BINDING_CLAIMS` (and,
+for `issuer-scoped-claim`, `OID4VP_SUBJECT_CLAIM` and
+`OID4VP_SUBJECT_CLAIM_ISSUERS`), or turn `WALLET_FEDERATION_ENABLED` off —
+which remains a clean boot with no wallet configuration present at all.
+
+The **request path is unchanged**. A half-configured deployment that still
+reaches it logs at `error` and returns the same uniform refusal a forged
+credential gets; the boot gate replaces the operator's discovery channel and
+changes nothing an anonymous caller can observe.
+
+### Key-storage assurance (#308/#379)
+
+An `OID4VP_ISSUER_ASSURANCE` entry may demand a minimum holder key storage with
+`requiresKeyStorage: "hardware"`, optionally with a
+`requiresKeyStorageAttackPotential` floor. Omitting the floor selects the strict
+reading (`iso_18045_high`), because an unqualified `"hardware"` is asking for
+eIDAS `high`'s secure cryptographic device.
+
+The floor is refused unless `requiresKeyStorage` is `"hardware"`. It decides only
+whether graded evidence reads as `hardware` or as `software`, and a `"software"`
+requirement accepts either reading — so under `"software"` every floor in the
+§D.2 vocabulary admits exactly the same evidence, and an operator who stated one
+demanded nothing by it. A configuration that reads like a requirement and imposes
+none is refused rather than ignored, the same way a floor stated with no
+`requiresKeyStorage` at all is.
+
+The evidence comes from `OID4VP_ATTESTING_ISSUERS` — the operator's record of
+which issuance chains validate a wallet's key attestation per HAIP §4.5.1, and at
+what grade. Recording an issuer there produces evidence, never a level: the realm
+still has to name the issuer in its own `OID4VP_ISSUER_ASSURANCE` and accept it in
+its own `OID4VP_TRUSTED_ISSUERS`.
+
+**The recorded grade must clear the selected profile's own floor.** A profile
+declaring `keyStorageAssurance: required` usually declares a minimum too —
+`haip-1.0` requires `iso_18045_high` — and a deployment whose
+`OID4VP_ATTESTING_ISSUERS` records nothing stronger than `iso_18045_basic` would
+start and then refuse every presentation for attack potential below the minimum.
+That is refused at startup instead, naming both the profile's floor and the
+strongest grade recorded. The comparison takes the strongest, not the weakest: a
+registry pairing a strong ecosystem with a weak one is a working deployment with
+one ecosystem that will not reach the floor.
+
+Key attestations conveyed **into a presentation** need wallet-provider trust
+anchors, which have no configuration surface yet. Until they do, a conveyed
+attestation is skipped rather than refused and the credential falls through to
+the transitive path above — a wallet doing the more conformant thing must not be
+worse off than one conveying nothing. It grants no more than the operator's
+recorded claim, and the evidence still reports its source as `issuer-attested`.
+
+Note that `oid4vp-1.0-base` declares `keyStorageAssurance: forbidden`, so on the
+only profile that boots today this machinery establishes nothing and changes no
+behaviour. It becomes reachable when a profile whose posture is `permitted` or
+`required` can start — `haip-1.0` waits on Phase C of #377. See
+[ADR-010](/reference/records/adr/010-acr-assurance-mapping/) §5.
 
 Three variables answer three different questions and must not be conflated:
 `OID4VP_VERIFIER_PROFILE` is _who are we, to a wallet?_, `OID4VP_TRUSTED_ISSUERS`

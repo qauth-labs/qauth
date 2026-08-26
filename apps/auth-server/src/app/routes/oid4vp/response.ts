@@ -13,6 +13,7 @@ import type { FastifyInstance } from 'fastify';
 import { ZodTypeProvider } from 'fastify-type-provider-zod';
 
 import { env } from '../../../config/env';
+import { provisionedVerifierMaterial } from '../../helpers/verifier-identity';
 import {
   publishWalletPresentationSignal,
   stashWalletPresentation,
@@ -129,9 +130,20 @@ export default async function (fastify: FastifyInstance) {
         // carries the `realm_id` this resolves for, with no change to the call
         // shape. `undefined` means no profile is selected → wallet flows are
         // refused outright, never served under a fallback posture.
-        const profile = resolveVerifierProfile(null, {
-          OID4VP_VERIFIER_PROFILE: env.OID4VP_VERIFIER_PROFILE,
-        });
+        //
+        // The provisioned material is threaded for the reason
+        // `helpers/wallet-login-request.ts` gives at its own call site (#377):
+        // `resolveVerifierProfile` folds in `assertVerifierIdentityProvisioned`,
+        // and the default `NO_VERIFIER_MATERIAL` would make a profile requiring
+        // an X.509 verifier identity throw on a deployment that provisioned one
+        // and booted on it — every presentation refused, on the endpoint whose
+        // refusals are deliberately indistinguishable from a forgery. Read from
+        // the one helper `app.ts`'s boot gate reads.
+        const profile = resolveVerifierProfile(
+          null,
+          { OID4VP_VERIFIER_PROFILE: env.OID4VP_VERIFIER_PROFILE },
+          provisionedVerifierMaterial()
+        );
 
         if (profile === undefined) {
           throw new Oid4vpTransportRejection('no VerifierProfile is selected for this deployment');

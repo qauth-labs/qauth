@@ -6,6 +6,7 @@ import {
   isPresentationValidationRejection,
   type IssuerKeyResolver,
   issuerTrustRejection,
+  type KeyStorageAssuranceGate,
   type PresentationValidationContext,
   type PresentedCredential,
   type StaticIssuerKeyEntry,
@@ -33,7 +34,18 @@ import {
  * 1. **#234 validates.** Issuer signature, every Disclosure digest, the validity
  *    window, and the Key Binding JWT's `aud`/`nonce`/`sd_hash` — the proof that
  *    the bytes are a credential presented to THIS Verifier for THIS request.
- * 2. **#297 checks status.** Inside the same call, and deliberately LAST within
+ * 2. **#308 resolves key-storage assurance.** Inside the same call, layered on
+ *    top of holder binding and never in place of it: holder binding proves the
+ *    presenter controls the credential's key now, this asks where that key
+ *    LIVES. Threaded in as a
+ *    {@link WalletCredentialVerificationOptions.keyStorageAssurance} gate for
+ *    the same reason the status checker is — only the producer of
+ *    `ValidatedCredential.assurance` can make
+ *    `assurance.keyStorageAssurance` state what actually happened, and #379 is
+ *    the issue recording that a gate which existed, was tested and was never
+ *    threaded left that field reading `'none'` for every credential the
+ *    auth-server has ever produced.
+ * 3. **#297 checks status.** Inside the same call, and deliberately LAST within
  *    it: the Token Status List bit for this credential must positively read
  *    `VALID`, or the presentation is refused. It runs after the Issuer signature
  *    and after the Key Binding JWT because the status list URI is bytes the
@@ -43,7 +55,7 @@ import {
  *    than run as a third gate out here, so that
  *    `ValidatedCredential.assurance.statusChecked` can state what actually
  *    happened instead of being a field that permanently lies (#378).
- * 3. **#236 decides trust.** A validated credential from an issuer this realm
+ * 4. **#236 decides trust.** A validated credential from an issuer this realm
  *    does not trust is, in `wallet.provider.ts`'s words, *"a forgery with extra
  *    steps"*.
  *
@@ -133,6 +145,33 @@ export interface WalletCredentialVerificationOptions {
    * that profiles are data, not branches.
    */
   readonly credentialStatus: CredentialStatusChecker | undefined;
+  /**
+   * This deployment's key-storage-assurance gate (HAIP §9.2/§4.5.1, #308/#379).
+   *
+   * REQUIRED, and explicitly `undefined` only when this deployment evaluates no
+   * key storage at all — never optional, for exactly the reason
+   * {@link credentialStatus} above is not. #379 is the issue recording that
+   * `keyStorageAssuranceGateFor`, `createKeyStorageAssuranceResolver` and
+   * `createStaticAttestingIssuers` shipped complete, exported and tested with
+   * ZERO non-test callers, so every credential the auth-server produced carried
+   * `assurance.keyStorageAssurance === { assurance: 'none' }` unconditionally.
+   * An omittable gate is how that happens.
+   *
+   * Build it with `keyStorageAssuranceGateFor(profile, resolver)` and NEVER by
+   * object literal. The helper pairs the profile's POSTURE with the deployment's
+   * RESOLVER, which is why the two travel as one object: a literal lets a caller
+   * supply a resolver without the policy it must be read against, or a policy
+   * with no resolver, either of which silently disables the gate. With the
+   * helper, a `required` profile whose resolver was never provisioned refuses
+   * every presentation instead of downgrading itself to `forbidden`.
+   *
+   * `undefined` is materially weaker than a gate built from the profile — the
+   * adapter reads it as "not evaluated" without consulting the profile at all —
+   * so a caller that has {@link profile} in hand always has something better to
+   * pass. It is nullable rather than absent only so a caller with no profile
+   * resolved can still state the answer.
+   */
+  readonly keyStorageAssurance: KeyStorageAssuranceGate | undefined;
   /** Where the server-side reason goes. Wire it to the request logger. */
   readonly onRefusal?: (refusal: WalletCredentialRefusal) => void;
 }
@@ -219,6 +258,14 @@ export async function verifyWalletPresentations(
       // members below the seam exist to make impossible.
       credentialStatus: options.credentialStatus,
       requireCredentialStatus: options.profile.requireCredentialStatus,
+      // Key-storage assurance (#308/#379). Passed through verbatim rather than
+      // rebuilt here: the gate carries the profile's posture AND this
+      // deployment's resolver, and reconstructing either half at this seam would
+      // be the second answer to a question the caller already answered. Passed
+      // unconditionally for the same reason the two members above are — a
+      // conditional spread would reproduce the omission that made #308's gate
+      // unreachable in the first place.
+      keyStorageAssurance: options.keyStorageAssurance,
     });
   } catch (error) {
     if (isPresentationValidationRejection(error)) {

@@ -19,7 +19,7 @@ import type { FastifyInstance } from 'fastify';
 
 import { env } from '../../config/env';
 import { resolveIssuerIdentifier } from './discovery';
-import { verifierSigningMaterial } from './verifier-identity';
+import { provisionedVerifierMaterial, verifierSigningMaterial } from './verifier-identity';
 import { storeWalletRequestObject } from './wallet-login-flow';
 
 /**
@@ -145,9 +145,20 @@ export function resolveWalletLoginCapability(
     // The realm argument is null because `realms.verifier_profile` does not
     // exist yet (#299) — the same call shape `routes/oid4vp/response.ts` uses,
     // so per-realm selection lands in both places at once.
-    profile = resolveVerifierProfile(null, {
-      OID4VP_VERIFIER_PROFILE: env.OID4VP_VERIFIER_PROFILE,
-    });
+    //
+    // The third argument is NOT optional in practice (#377). `resolveVerifierProfile`
+    // folds in `assertVerifierIdentityProvisioned`, and omitting the material
+    // defaults it to `NO_VERIFIER_MATERIAL` — so a profile whose Client
+    // Identifier Prefixes need an X.509 identity throws here even on a
+    // deployment that provisioned a validated chain and booted on it. That would
+    // silently un-render the wallet link on the login page for exactly the
+    // deployments that configured wallet login most carefully. Threaded from the
+    // one helper `app.ts`'s boot gate reads, so the two cannot disagree.
+    profile = resolveVerifierProfile(
+      null,
+      { OID4VP_VERIFIER_PROFILE: env.OID4VP_VERIFIER_PROFILE },
+      provisionedVerifierMaterial()
+    );
   } catch (error) {
     fastify.log.error(
       { err: error },

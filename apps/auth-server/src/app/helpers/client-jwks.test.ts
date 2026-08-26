@@ -87,7 +87,7 @@ describe('assertJwksMutuallyExclusive (RFC 7591 §2)', () => {
 
   it('rejects both forms at once', () => {
     expect(() => assertJwksMutuallyExclusive({ keys: [] }, JWKS_URI, 'x')).toThrow(
-      /mutually exclusive/
+      expect.objectContaining({ errorDescription: expect.stringMatching(/mutually exclusive/) })
     );
   });
 });
@@ -126,17 +126,23 @@ describe('fetchClientJwkSet', () => {
 
   it('rejects a target that resolves to a private address', async () => {
     ssrfSafeGet.mockRejectedValue(new SsrfBlockedError('resolves to a non-public address'));
-    await expect(fetchClientJwkSet(fastifyStub(), JWKS_URI)).rejects.toThrow(/fetch blocked/);
+    await expect(fetchClientJwkSet(fastifyStub(), JWKS_URI)).rejects.toMatchObject({
+      errorDescription: expect.stringMatching(/fetch blocked/),
+    });
   });
 
   it('rejects a non-200 response', async () => {
     ssrfSafeGet.mockResolvedValue({ status: 500, body: '', headers: {} });
-    await expect(fetchClientJwkSet(fastifyStub(), JWKS_URI)).rejects.toThrow(/returned 500/);
+    await expect(fetchClientJwkSet(fastifyStub(), JWKS_URI)).rejects.toMatchObject({
+      errorDescription: expect.stringMatching(/returned 500/),
+    });
   });
 
   it('rejects a document that is not JSON', async () => {
     ssrfSafeGet.mockResolvedValue({ status: 200, body: '<html>', headers: {} });
-    await expect(fetchClientJwkSet(fastifyStub(), JWKS_URI)).rejects.toThrow(/not valid JSON/);
+    await expect(fetchClientJwkSet(fastifyStub(), JWKS_URI)).rejects.toMatchObject({
+      errorDescription: expect.stringMatching(/not valid JSON/),
+    });
   });
 
   it('rejects a fetched document carrying private key material', async () => {
@@ -145,9 +151,9 @@ describe('fetchClientJwkSet', () => {
       body: JSON.stringify({ keys: [{ ...PUBLIC_JWK, d: 'secret' }] }),
       headers: {},
     });
-    await expect(fetchClientJwkSet(fastifyStub(), JWKS_URI)).rejects.toThrow(
-      /not a valid public JWK Set/
-    );
+    await expect(fetchClientJwkSet(fastifyStub(), JWKS_URI)).rejects.toMatchObject({
+      errorDescription: expect.stringMatching(/not a valid public JWK Set/),
+    });
   });
 
   it('does not cache a rejected document', async () => {
@@ -183,18 +189,18 @@ describe('resolveClientKeySet', () => {
         jwks: { keys: [PUBLIC_JWK] },
         jwksUri: JWKS_URI,
       })
-    ).rejects.toThrow(/mutually exclusive/);
+    ).rejects.toMatchObject({ errorDescription: expect.stringMatching(/mutually exclusive/) });
   });
 
   it('rejects a client registered with neither form', async () => {
     await expect(
       resolveClientKeySet(fastifyStub(), { ...base, jwks: null, jwksUri: null })
-    ).rejects.toThrow(/no registered jwks/);
+    ).rejects.toMatchObject({ errorDescription: expect.stringMatching(/no registered jwks/) });
   });
 
   it('rejects a client whose jwksUri is an empty string', async () => {
     await expect(
       resolveClientKeySet(fastifyStub(), { ...base, jwks: null, jwksUri: '' })
-    ).rejects.toThrow(/no registered jwks/);
+    ).rejects.toMatchObject({ errorDescription: expect.stringMatching(/no registered jwks/) });
   });
 });

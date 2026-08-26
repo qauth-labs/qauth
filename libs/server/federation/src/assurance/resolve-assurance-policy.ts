@@ -1,7 +1,12 @@
+import {
+  type AttackPotentialResistance,
+  isAttackPotentialResistance,
+} from '../attestation/attack-potential';
 import { canonicalizeIssuerIdentifier } from '../trust/issuer-identity';
 import type { AcrBearingAssuranceLevel } from './acr-value';
 import {
   type AssurancePolicy,
+  type AssuredKeyStorage,
   createIssuerAssurancePolicy,
   type IssuerAssuranceEntry,
   LOW_ONLY_ASSURANCE_POLICY,
@@ -47,6 +52,20 @@ export interface ConfiguredIssuerAssurance {
    * issuer signs — see {@link IssuerAssuranceEntry.credentialTypes}.
    */
   credentialTypes?: readonly string[] | null;
+  /**
+   * Minimum key storage this statement demands (#379, ADR-010 §5). Absent
+   * demands none, which is every deployment that predates #379.
+   *
+   * @see IssuerAssuranceEntry.requiresKeyStorage
+   */
+  requiresKeyStorage?: string | null;
+  /**
+   * The §D.2 attack-potential floor at which {@link requiresKeyStorage} reads
+   * evidence as `'hardware'`. Absent means the STRICT default.
+   *
+   * @see IssuerAssuranceEntry.requiresKeyStorageAttackPotential
+   */
+  requiresKeyStorageAttackPotential?: string | null;
 }
 
 /** Issuer identifier → what credentials from it are worth. */
@@ -92,6 +111,71 @@ function parseConfiguredLevel(value: unknown): AcrBearingAssuranceLevel | undefi
   return value;
 }
 
+/** The key-storage half of one entry, as configured. */
+type KeyStorageRequirement = Pick<
+  IssuerAssuranceEntry,
+  'requiresKeyStorage' | 'requiresKeyStorageAttackPotential'
+>;
+
+/** The requirement meaning "this statement demands no particular key storage". */
+const NO_KEY_STORAGE_REQUIREMENT: KeyStorageRequirement = Object.freeze({});
+
+/** Is a configured value absent, in either of the two ways JSON can express it? */
+function isUnset(value: unknown): boolean {
+  return value === null || value === undefined;
+}
+
+/**
+ * Parse the key-storage half of a configured statement (#379, ADR-010 §5).
+ *
+ * `undefined` means MALFORMED, and the caller turns that into
+ * {@link LOW_ONLY_ASSURANCE_POLICY} for the whole map — the same all-or-nothing
+ * rule the level and the credential-type list already follow. Both fields absent
+ * is not malformed; it is every deployment that predates #379.
+ *
+ * A floor is refused rather than ignored in BOTH the shapes that make it inert.
+ * Stated WITHOUT `requiresKeyStorage`, the entry grants its level to every
+ * credential regardless of key storage while reading like one that gates on it.
+ * Stated alongside `requiresKeyStorage: 'software'` it is inert for a subtler
+ * reason: the floor decides only whether graded evidence reads as `'hardware'`
+ * or as `'software'`, and a `'software'` requirement accepts EITHER reading — so
+ * every floor in the §D.2 union accepts exactly the same evidence, and an
+ * operator who stated one demanded nothing by it.
+ *
+ * Both are the shape that makes an operator believe they imposed a requirement
+ * they merely failed to impose, and the same hazard the empty `credentialTypes`
+ * list is refused for.
+ */
+function parseKeyStorageRequirement(
+  statement: ConfiguredIssuerAssurance
+): KeyStorageRequirement | undefined {
+  const rawStorage: unknown = statement.requiresKeyStorage;
+  const rawFloor: unknown = statement.requiresKeyStorageAttackPotential;
+
+  if (isUnset(rawStorage)) {
+    return isUnset(rawFloor) ? NO_KEY_STORAGE_REQUIREMENT : undefined;
+  }
+
+  if (rawStorage !== 'software' && rawStorage !== 'hardware') return undefined;
+  const requiresKeyStorage: AssuredKeyStorage = rawStorage;
+
+  if (isUnset(rawFloor)) return Object.freeze({ requiresKeyStorage });
+
+  // The inert pairing, refused for the reason the JSDoc gives. `server-config`
+  // refuses it too; this is the boundary that holds for a realm policy handed in
+  // from anywhere else, and the two must agree — a value one layer rejects and
+  // the other silently accepts is how the same configuration gets two meanings.
+  if (requiresKeyStorage !== 'hardware') return undefined;
+
+  // Delegated rather than compared against a local list: the §D.2 vocabulary
+  // lives in the attestation adapter, and restating it here would let a grade be
+  // added to the union and missed by this boundary.
+  if (!isAttackPotentialResistance(rawFloor)) return undefined;
+  const requiresKeyStorageAttackPotential: AttackPotentialResistance = rawFloor;
+
+  return Object.freeze({ requiresKeyStorage, requiresKeyStorageAttackPotential });
+}
+
 /**
  * Turn an untrusted candidate map into a policy, or into an assures-nothing.
  *
@@ -124,9 +208,12 @@ function toPolicy(candidate: unknown): AssurancePolicy {
     const assuranceLevel = parseConfiguredLevel(statement.level);
     if (assuranceLevel === undefined) return LOW_ONLY_ASSURANCE_POLICY;
 
+    const keyStorage = parseKeyStorageRequirement(statement);
+    if (keyStorage === undefined) return LOW_ONLY_ASSURANCE_POLICY;
+
     const rawTypes = statement.credentialTypes;
     if (rawTypes === null || rawTypes === undefined) {
-      entries.push({ issuer, assuranceLevel });
+      entries.push({ issuer, assuranceLevel, ...keyStorage });
       continue;
     }
     if (!Array.isArray(rawTypes)) return LOW_ONLY_ASSURANCE_POLICY;
@@ -141,7 +228,7 @@ function toPolicy(candidate: unknown): AssurancePolicy {
     // no-op entry. Refuse the whole map instead: the operator wrote something
     // they believed had an effect.
     if (credentialTypes.length === 0) return LOW_ONLY_ASSURANCE_POLICY;
-    entries.push({ issuer, assuranceLevel, credentialTypes });
+    entries.push({ issuer, assuranceLevel, credentialTypes, ...keyStorage });
   }
 
   return createIssuerAssurancePolicy(entries);
