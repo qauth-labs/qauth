@@ -319,12 +319,14 @@ export function fixtureValidationContext(
     resolveIssuerKey: createStaticIssuerKeyResolver([
       { issuer: issued.issuer, jwks: [issued.issuerKeys.jwk] },
     ]),
-    // Both stated, because the context requires them stated (#378). The clean
-    // path is `oid4vp-1.0-base`: no checker wired, and a credential carrying no
-    // `status` claim is therefore accepted unchecked. A test exercising
-    // revocation overrides both.
+    // All three gate members stated, because the context requires them stated
+    // (#378, #379). The clean path is `oid4vp-1.0-base`: no status checker
+    // wired, so a credential carrying no `status` claim is accepted unchecked,
+    // and no key-storage gate, which is that profile's `forbidden` posture. A
+    // test exercising revocation or key storage overrides what it is about.
     credentialStatus: undefined,
     requireCredentialStatus: false,
+    keyStorageAssurance: undefined,
     ...overrides,
   };
 }

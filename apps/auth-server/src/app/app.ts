@@ -7,13 +7,14 @@ import { cachePlugin } from '@qauth-labs/fastify-plugin-cache';
 import { databasePlugin } from '@qauth-labs/fastify-plugin-db';
 import { emailPlugin, type EmailProviderConfig } from '@qauth-labs/fastify-plugin-email';
 import {
+  assertAttestingIssuersUsable,
   assertCredentialStatusConfigUsable,
   assertTrustedIssuersUsable,
   createConfiguredProviders,
   credentialStatusProvisioningOf,
   federationPlugin,
+  keyStorageAssuranceProvisioningOf,
   type VerifierCryptoCapabilities,
-  verifierMaterialProvisionedBy,
 } from '@qauth-labs/fastify-plugin-federation';
 import { jwtPlugin } from '@qauth-labs/fastify-plugin-jwt';
 import { passwordPlugin } from '@qauth-labs/fastify-plugin-password';
@@ -27,8 +28,9 @@ import type { FastifyInstance } from 'fastify';
 
 import { env } from '../config/env';
 import { deriveCryptoCapabilities } from './crypto-capabilities';
+import { assertSubjectResolutionProvisioned } from './helpers/assert-subject-resolution';
 import { isJtiRevoked } from './helpers/token-revocation';
-import { verifierSigningMaterial } from './helpers/verifier-identity';
+import { provisionedVerifierMaterial } from './helpers/verifier-identity';
 import errorHandler from './plugins/error-handler';
 import { metricsPlugin } from './plugins/metrics';
 import { rateLimitPlugin } from './plugins/rate-limit';
@@ -166,7 +168,43 @@ export async function app(fastify: FastifyInstance, opts: object) {
   // switched on today, and finding it at boot beats finding it on the first
   // presentation. A deployment that configured nothing gets `undefined` and is
   // unaffected.
-  const verifierMaterial = verifierSigningMaterial();
+  //
+  // The call also produces the marker set both boot gates below read. #379
+  // introduced that as a module-level `PROVISIONED_VERIFIER_MATERIAL = undefined`
+  // with the note "replace `undefined` here, not at either call site" —
+  // precisely so the subject-resolution gate and the provider gate could never
+  // disagree about which profiles resolve. This is that replacement, widened:
+  // the two request-path callers of `resolveVerifierProfile` read the SAME
+  // helper, so the boot gates and the request path cannot disagree either.
+  //
+  // A call rather than a module-level constant because the material is now
+  // VALIDATED, and validation can throw: computing it at module scope would turn
+  // an operator's mis-pasted certificate into an import-time crash with no
+  // plugin context around it. The helper memoises, so this parses the chain once
+  // per process however many times it is asked.
+  const provisioned = provisionedVerifierMaterial();
+
+  // Attesting issuers (#308/#379), the same posture again. `server-config`
+  // validates each key as a syntactically valid https:// URL; the runtime
+  // additionally reduces it with `canonicalizeIssuerIdentifier`, which refuses
+  // userinfo, a query string and a fragment. The resolver that would catch the
+  // disagreement is built lazily at the first presentation, so without this the
+  // symptom is silent: every credential from that ecosystem resolves to
+  // `assurance: 'none'`, and a policy entry demanding hardware key storage
+  // grants `'low'` to a wallet that satisfies it.
+  //
+  // NOT gated on WALLET_FEDERATION_ENABLED, for the reason given twice above.
+  assertAttestingIssuersUsable(env.OID4VP_ATTESTING_ISSUERS);
+
+  // Subject resolution (#300/#238/#379, ADR-010 §6), the fourth gate in this
+  // group and the one that IS flag-gated. #300 and #238 each deferred it "to
+  // the first consumer"; the wallet login path is now that consumer, so a
+  // deployment whose `OID4VP_SUBJECT_*` configuration cannot build a strategy
+  // fails here instead of refusing every presentation with an error nobody
+  // reads. It runs BEFORE `createConfiguredProviders` below but yields to it on
+  // a profile that cannot resolve at all, so a profile refusal keeps its own
+  // message. Nothing about the request path changes — see the helper.
+  assertSubjectResolutionProvisioned(env, provisioned);
 
   await fastify.register(federationPlugin, {
     providers: createConfiguredProviders({
@@ -182,6 +220,18 @@ export async function app(fastify: FastifyInstance, opts: object) {
         trustAnchorPems: statusListTrustAnchorPems,
         uriAllowlist: env.OID4VP_STATUS_LIST_URI_ALLOWLIST,
       }),
+      // What the operator provisioned for key-storage assurance (#308/#379). A
+      // profile declaring `keyStorageAssurance: 'required'` — `haip-1.0` does —
+      // refuses to start unless something can establish it. Before #379 this
+      // option was never passed, so `assertKeyStorageAssuranceProvisioned` sat
+      // permanently in its refusing state: a constant, not a predicate.
+      //
+      // Only the TRANSITIVE path is provisionable today. The direct path
+      // (verifying an Appendix D attestation conveyed into the presentation)
+      // needs the same certificate surface #233 owes the line below.
+      keyStorageAssuranceProvisioned: keyStorageAssuranceProvisioningOf(
+        env.OID4VP_ATTESTING_ISSUERS
+      ),
       // What the operator provisioned for the VERIFIER identity (#377) — the
       // ES256 key and the X.509 chain a wallet establishes QAuth's identity
       // from. Derived from the material that VALIDATED above rather than from
@@ -190,7 +240,7 @@ export async function app(fastify: FastifyInstance, opts: object) {
       // the boot down before this line, and a deployment that configured
       // nothing yields `NO_VERIFIER_MATERIAL`, which is what makes a profile
       // requiring a WRPAC refuse.
-      provisionedVerifierMaterial: verifierMaterialProvisionedBy(verifierMaterial),
+      provisionedVerifierMaterial: provisioned,
     }),
   });
 

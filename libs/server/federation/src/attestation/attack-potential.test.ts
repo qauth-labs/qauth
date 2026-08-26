@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   ATTACK_POTENTIAL_RESISTANCE_ORDER,
+  HIGHEST_ATTACK_POTENTIAL_RESISTANCE,
   isAttackPotentialResistance,
   meetsAttackPotential,
   rankAttackPotentialResistance,
@@ -23,6 +24,18 @@ describe('Attack Potential Resistance (OID4VCI Appendix D §D.2, #308)', () => {
 
   it('is frozen, so the order a policy compares against cannot be reordered', () => {
     expect(Object.isFrozen(ATTACK_POTENTIAL_RESISTANCE_ORDER)).toBe(true);
+  });
+
+  it('pins the strongest level a policy default can name', () => {
+    // `HIGHEST_ATTACK_POTENTIAL_RESISTANCE` is what
+    // `assurance/key-storage-evidence.ts` defaults an unstated floor to (#379,
+    // ADR-010 §5), and it is spelled out rather than computed so that adding a
+    // level to the table is a deliberate edit HERE too. This is the test that
+    // makes the omission loud: a new strongest grade with no edit here leaves
+    // every `requiresKeyStorage: 'hardware'` entry reading against the old one.
+    expect(HIGHEST_ATTACK_POTENTIAL_RESISTANCE).toBe(
+      ATTACK_POTENTIAL_RESISTANCE_ORDER[ATTACK_POTENTIAL_RESISTANCE_ORDER.length - 1]
+    );
   });
 
   describe('rankAttackPotentialResistance', () => {

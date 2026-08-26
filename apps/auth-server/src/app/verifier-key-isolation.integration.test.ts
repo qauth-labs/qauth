@@ -61,6 +61,13 @@ async function bootWithVerifierIdentity() {
     WALLET_FEDERATION_ENABLED: 'true',
     OID4VP_VERIFIER_PROFILE: 'oid4vp-1.0-base',
     OID4VP_REQUESTED_VCT: 'https://credentials.example.com/pid',
+    // Subject resolution, stated because #379 made it a BOOT gate: an enabled
+    // deployment that names no binding claims refuses to start (ADR-010 §6).
+    // Irrelevant to what this suite asserts — no request here reaches a
+    // presentation — but the boot has to succeed before anything can be
+    // asserted about the key sets it produced.
+    OID4VP_SUBJECT_RESOLUTION: 'asserted-lookup',
+    OID4VP_SUBJECT_BINDING_CLAIMS: 'family_name,given_name,birth_date',
     ...verifierIdentityEnvironment(pki),
   });
 }

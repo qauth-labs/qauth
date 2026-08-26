@@ -171,6 +171,7 @@ describe('registering a second Credential Format', () => {
         resolveIssuerKey: async () => undefined,
         credentialStatus: undefined,
         requireCredentialStatus: false,
+        keyStorageAssurance: undefined,
       },
       REGISTRY_WITH_MDOC
     );

@@ -2,7 +2,11 @@ import { InvalidConfigurationError } from '@qauth-labs/shared-errors';
 
 import { summarizeConfiguredValue } from '../trust/configured-value';
 import { canonicalizeIssuerIdentifier, ValidatedIssuer } from '../trust/issuer-identity';
-import { type AttackPotentialResistance, isAttackPotentialResistance } from './attack-potential';
+import {
+  type AttackPotentialResistance,
+  isAttackPotentialResistance,
+  meetsAttackPotential,
+} from './attack-potential';
 
 /**
  * The TRANSITIVE WSCD assurance path (issue #308, HAIP §4.5.1).
@@ -166,4 +170,61 @@ export function createStaticAttestingIssuers(
       return attested.get(issuer.identifier);
     },
   });
+}
+
+/**
+ * The strongest §D.2 grade a set of entries records, or nothing (#308/#379).
+ *
+ * ## Why it takes ENTRIES rather than a registry
+ *
+ * {@link KeyStorageAttestingIssuers} is deliberately opaque — a caller can ask
+ * about one issuer and cannot enumerate it, so no message can ever be built from
+ * its contents. That property is worth keeping, and this question does not need
+ * it broken: the answer is an AGGREGATE over configuration the operator wrote,
+ * not a fact about any issuer, and the boot gate that asks it already holds the
+ * configured entries.
+ *
+ * ## What it is for
+ *
+ * `assertKeyStorageAssuranceProvisioned` compares it against the active
+ * profile's `minimumKeyStorageAttackPotential`. A deployment that records only
+ * `iso_18045_basic` issuers has provisioned a registry, but not one that can
+ * ever clear an `iso_18045_high` floor — so under `haip-1.0` every presentation
+ * would be refused with `attack-potential-below-minimum`, which is exactly the
+ * 100%-failure shape the boot gate exists to catch. Counting entries answered
+ * "is anything recorded"; this answers the question the profile actually asks.
+ *
+ * The STRONGEST rather than the weakest: the gate is asking whether the
+ * deployment can establish the floor for ANY ecosystem it recorded, not for
+ * every one. A registry mixing a `high` issuer with a `basic` one is a working
+ * deployment with one ecosystem that will not reach the floor, and refusing to
+ * start on it would be wrong.
+ *
+ * Unrecognised grades are SKIPPED rather than throwing: this is an aggregate
+ * over already-validated configuration, and `createStaticAttestingIssuers` — run
+ * at boot through `assertAttestingIssuersUsable` — is the one place a grade this
+ * build cannot read is allowed to take the deployment down. Skipping keeps the
+ * two from disagreeing about which error an operator sees.
+ *
+ * @param entries - the configured entries; may be empty or malformed.
+ * @returns the strongest recorded grade, or `undefined` when none is readable.
+ */
+export function strongestAttestedKeyStorage(
+  entries: readonly AttestingIssuerEntry[]
+): AttackPotentialResistance | undefined {
+  if (!Array.isArray(entries)) return undefined;
+
+  let strongest: AttackPotentialResistance | undefined;
+
+  for (const entry of entries) {
+    const keyStorage: unknown = entry?.keyStorage;
+    if (!isAttackPotentialResistance(keyStorage)) continue;
+    // Delegated, never compared by index: the ordering lives in one table, and
+    // re-deriving it here is how a grade added to the union gets ranked twice.
+    if (strongest === undefined || meetsAttackPotential(keyStorage, strongest)) {
+      strongest = keyStorage;
+    }
+  }
+
+  return strongest;
 }

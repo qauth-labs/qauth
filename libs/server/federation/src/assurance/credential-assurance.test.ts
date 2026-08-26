@@ -191,6 +191,77 @@ describe('createIssuerAssurancePolicy (ADR-004 — assurance is a property of th
         policy.levelFor(credential('https://issuer.example'), { keyStorage: 'software' })
       ).toBe('substantial');
     });
+
+    /**
+     * A requirement outside the union fails CLOSED (#379 review, finding 2).
+     *
+     * `IssuerAssuranceEntry` is a nominal promise, not an enforcement, and this
+     * module's own JSDoc calls the policy a trust boundary in its own right:
+     * `createIssuerAssurancePolicy` is exported and callable with entries no
+     * configuration boundary ever read.
+     *
+     * The old fall-through carried the failure the WRONG WAY. A value that was
+     * neither `undefined` nor `'hardware'` missed the hardware branch and landed
+     * on the software one, so `'HARDWARE'` — a plain typo for the strictest
+     * requirement an operator can state — was satisfied by a SOFTWARE key. The
+     * typo did not disable the check; it rewrote it into its opposite.
+     */
+    describe('a requirement this build cannot read', () => {
+      function policyRequiring(requirement: unknown): AssurancePolicy {
+        return createIssuerAssurancePolicy([
+          {
+            issuer: 'https://issuer.example',
+            assuranceLevel: 'high',
+            requiresKeyStorage: requirement as 'hardware',
+          },
+        ]);
+      }
+
+      it.each([
+        ['a case-mangled hardware', 'HARDWARE'],
+        ['a plural', 'hardwares'],
+        ['an eIDAS level mistaken for a storage kind', 'high'],
+        ['a boolean', true],
+        ['a number', 1],
+        ['null, which JSON round-trips produce', null],
+        ['an object', {}],
+      ])('grants nothing for %s, whatever the evidence', (_label, requirement) => {
+        const policy = policyRequiring(requirement);
+
+        for (const evidence of [
+          undefined,
+          {},
+          { keyStorage: 'software' as const },
+          { keyStorage: 'hardware' as const },
+        ]) {
+          expect(policy.levelFor(credential('https://issuer.example'), evidence)).toBe('low');
+        }
+      });
+
+      it('specifically does not read a mistyped hardware as software', () => {
+        // The regression this closes, stated on its own: `'HARDWARE'` accepting
+        // a software key is strictly worse than `'HARDWARE'` accepting nothing.
+        expect(
+          policyRequiring('HARDWARE').levelFor(credential('https://issuer.example'), {
+            keyStorage: 'software',
+          })
+        ).toBe('low');
+      });
+
+      it('still grants for the two requirements that ARE in the union', () => {
+        // The allowlist must not have narrowed the legitimate cases away.
+        expect(
+          policyRequiring('software').levelFor(credential('https://issuer.example'), {
+            keyStorage: 'software',
+          })
+        ).toBe('high');
+        expect(
+          policyRequiring('hardware').levelFor(credential('https://issuer.example'), {
+            keyStorage: 'hardware',
+          })
+        ).toBe('high');
+      });
+    });
   });
 });
 

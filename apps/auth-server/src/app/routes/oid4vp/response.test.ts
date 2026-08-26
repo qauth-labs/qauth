@@ -6,6 +6,8 @@ import { InvalidRequestError } from '@qauth-labs/shared-errors';
 import type { FastifyInstance } from 'fastify';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { createMockVerifierPki } from '../../../testing/mock-verifier-pki';
+
 /**
  * Route tests for the OID4VP `direct_post` response endpoint (#233).
  *
@@ -131,11 +133,56 @@ async function loadRoute(env: Record<string, unknown>) {
   return mod.default;
 }
 
+/**
+ * The verifier-identity variables at their parsed DEFAULTS (#377).
+ *
+ * Stated rather than omitted because the handler resolves the profile with the
+ * deployment's provisioned material, and `resolveVerifierCertificateChainPems`
+ * reads `.length` off the array forms — which the real parsed env always
+ * supplies (Zod defaults them to `[]`) and an env stub silently would not. An
+ * omission here is a TypeError on every test in this file, not a narrower one.
+ */
+const VERIFIER_IDENTITY_UNSET = {
+  OID4VP_VERIFIER_SIGNING_KEY: undefined,
+  OID4VP_VERIFIER_SIGNING_KEY_PATH: undefined,
+  OID4VP_VERIFIER_CERTIFICATE_CHAIN: [] as readonly string[],
+  OID4VP_VERIFIER_CERTIFICATE_CHAIN_PATH: [] as readonly string[],
+  OID4VP_VERIFIER_TRUST_ANCHORS: [] as readonly string[],
+  OID4VP_VERIFIER_TRUST_ANCHORS_PATH: [] as readonly string[],
+};
+
 const ENABLED_ENV = {
   WALLET_FEDERATION_ENABLED: true,
   OID4VP_VERIFIER_PROFILE: 'oid4vp-1.0-base',
   OID4VP_RESPONSE_RATE_LIMIT: 30,
   OID4VP_RESPONSE_RATE_WINDOW: 60,
+  ...VERIFIER_IDENTITY_UNSET,
+};
+
+/** Split a concatenated PEM bundle the way the env schema does. */
+function pemBlocks(bundle: string): readonly string[] {
+  return (bundle.match(/-----BEGIN CERTIFICATE-----[\s\S]*?-----END CERTIFICATE-----/g) ?? []).map(
+    (pem) => pem.trim()
+  );
+}
+
+const VERIFIER_PKI = createMockVerifierPki();
+
+/**
+ * A deployment that provisioned a verifier identity and selected `haip-1.0`.
+ *
+ * The only configuration under which this endpoint's `resolveVerifierProfile`
+ * call can differ from the boot gate's — see the describe block that uses it.
+ */
+const HAIP_ENV = {
+  ...ENABLED_ENV,
+  OID4VP_VERIFIER_PROFILE: 'haip-1.0',
+  OID4VP_VERIFIER_SIGNING_KEY: VERIFIER_PKI.signingKeyPem,
+  OID4VP_VERIFIER_SIGNING_KEY_PATH: undefined,
+  OID4VP_VERIFIER_CERTIFICATE_CHAIN: pemBlocks(VERIFIER_PKI.certificateChainPem),
+  OID4VP_VERIFIER_CERTIFICATE_CHAIN_PATH: [],
+  OID4VP_VERIFIER_TRUST_ANCHORS: pemBlocks(VERIFIER_PKI.trustAnchorPem),
+  OID4VP_VERIFIER_TRUST_ANCHORS_PATH: [],
 };
 
 async function register(env: Record<string, unknown> = ENABLED_ENV) {
@@ -281,6 +328,59 @@ describe('POST /oid4vp/response — accepted submission', () => {
     await handler(makeRequest({ state: STATE, error: '<script>alert(1)</script>' }), reply);
 
     expect(JSON.stringify(sent[0])).not.toContain('script');
+  });
+});
+
+/**
+ * The profile is resolved WITH the provisioned material (#377, #379 review).
+ *
+ * `resolveVerifierProfile` folds in `assertVerifierIdentityProvisioned`, and its
+ * third argument defaults to `NO_VERIFIER_MATERIAL` — which THROWS for a profile
+ * whose Client Identifier Prefixes need an X.509 identity. `haip-1.0` declares
+ * exactly one prefix, `x509_hash`, so this endpoint omitting the argument meant
+ * that the moment such a profile could START, every presentation reaching it
+ * died on an error the deployment had already proved wrong at boot: the chain
+ * validated, `app.ts` threaded it into the provider gate, and this handler asked
+ * the same question with the answer missing.
+ *
+ * It could not bite under `oid4vp-1.0-base` — `redirect_uri` needs no material —
+ * which is why nothing caught it. This block is the deployment where it does.
+ */
+describe('POST /oid4vp/response — the profile gate on a provisioned deployment', () => {
+  it('accepts a presentation under haip-1.0 rather than throwing an unprovisioned-profile error', async () => {
+    const { fastify, ctx } = await register(HAIP_ENV);
+    const handler = ctx.handler as NonNullable<TestContext['handler']>;
+    (fastify as any).repositories.oid4vpRequestStates.redeem.mockResolvedValue(
+      pendingState({ verifierProfile: 'haip-1.0' })
+    );
+    const { reply, sent } = makeReply();
+
+    // Without the material threaded this REJECTS with a plain Error — not an
+    // `Oid4vpTransportRejection`, so it escapes the uniform-refusal catch and
+    // surfaces as a 500 on every single wallet submission.
+    await handler(makeRequest({ vp_token: VP_TOKEN, state: STATE }), reply);
+
+    expect(reply.statusCode).toBe(200);
+    expect(sent).toEqual([{}]);
+  });
+
+  it('still refuses when the deployment provisioned nothing, so the gate is not disabled', async () => {
+    // The control. The same profile with no material is a half-configured
+    // verifier, and `resolveVerifierProfile` must still refuse it — the fix
+    // threads the real answer through, it does not stop asking the question.
+    const { fastify, ctx } = await register({
+      ...ENABLED_ENV,
+      OID4VP_VERIFIER_PROFILE: 'haip-1.0',
+    });
+    const handler = ctx.handler as NonNullable<TestContext['handler']>;
+    (fastify as any).repositories.oid4vpRequestStates.redeem.mockResolvedValue(
+      pendingState({ verifierProfile: 'haip-1.0' })
+    );
+    const { reply } = makeReply();
+
+    await expect(
+      handler(makeRequest({ vp_token: VP_TOKEN, state: STATE }), reply)
+    ).rejects.toThrow();
   });
 });
 

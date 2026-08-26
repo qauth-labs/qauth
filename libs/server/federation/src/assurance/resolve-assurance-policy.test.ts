@@ -143,6 +143,39 @@ describe('resolveAssurancePolicy (#237, mirrors resolveTrustRegistry)', () => {
     ],
     ['a top-level array', ['https://issuer.example']],
     ['a top-level null', null],
+    [
+      'a floor with no key-storage requirement at all',
+      {
+        'https://issuer.example': {
+          level: 'high',
+          requiresKeyStorageAttackPotential: 'iso_18045_moderate',
+        },
+      },
+    ],
+    [
+      'a floor beside a SOFTWARE requirement, in which it decides nothing',
+      {
+        'https://issuer.example': {
+          level: 'high',
+          requiresKeyStorage: 'software',
+          requiresKeyStorageAttackPotential: 'iso_18045_moderate',
+        },
+      },
+    ],
+    [
+      'an unreadable key-storage requirement',
+      { 'https://issuer.example': { level: 'high', requiresKeyStorage: 'HARDWARE' } },
+    ],
+    [
+      'a floor this build does not rank',
+      {
+        'https://issuer.example': {
+          level: 'high',
+          requiresKeyStorage: 'hardware',
+          requiresKeyStorageAttackPotential: 'iso_18045_ultra',
+        },
+      },
+    ],
   ] as const)('discards the WHOLE realm policy when it contains %s', (_label, configured) => {
     // All-or-nothing, matching `resolveTrustRegistry`. Honouring the entries
     // that happened to parse would apply an assurance policy the operator never
@@ -167,5 +200,64 @@ describe('resolveAssurancePolicy (#237, mirrors resolveTrustRegistry)', () => {
     } as unknown as AssurancePolicyEnvLike);
     expect(whole.levelFor(credential('https://issuer.example'))).toBe('low');
     expect(whole.levelFor(credential('https://good.example'))).toBe('low');
+  });
+
+  /**
+   * The key-storage half, admitted rather than discarded (#379).
+   *
+   * The table above is a fail-closed list, so on its own it cannot tell "this
+   * shape is refused" from "no shape is ever accepted". These are the two
+   * legitimate authorings, pinned so the tightening for the review's finding 1
+   * cannot quietly become a ban on the knob it was narrowing.
+   */
+  describe('the key-storage requirement it DOES admit', () => {
+    function policyWith(statement: Record<string, unknown>) {
+      return resolveAssurancePolicy({ name: 'master' }, {
+        OID4VP_ISSUER_ASSURANCE: {
+          master: { 'https://issuer.example': { level: 'high', ...statement } },
+        },
+      } as unknown as AssurancePolicyEnvLike);
+    }
+
+    it('accepts a bare hardware requirement and enforces it', () => {
+      const policy = policyWith({ requiresKeyStorage: 'hardware' });
+
+      expect(
+        policy.levelFor(credential('https://issuer.example'), { keyStorage: 'hardware' })
+      ).toBe('high');
+      expect(
+        policy.levelFor(credential('https://issuer.example'), { keyStorage: 'software' })
+      ).toBe('low');
+    });
+
+    it('accepts a bare software requirement', () => {
+      expect(
+        policyWith({ requiresKeyStorage: 'software' }).levelFor(
+          credential('https://issuer.example'),
+          { keyStorage: 'software' }
+        )
+      ).toBe('high');
+    });
+
+    it('accepts a floor beside a HARDWARE requirement and reads evidence at it', () => {
+      const policy = policyWith({
+        requiresKeyStorage: 'hardware',
+        requiresKeyStorageAttackPotential: 'iso_18045_moderate',
+      });
+
+      // The whole of the knob: the same graded evidence, refused at the strict
+      // default and granted at the floor the entry states.
+      expect(
+        policy.levelFor(credential('https://issuer.example'), {
+          keyStorageAttackPotential: 'iso_18045_moderate',
+        })
+      ).toBe('high');
+      expect(
+        policyWith({ requiresKeyStorage: 'hardware' }).levelFor(
+          credential('https://issuer.example'),
+          { keyStorageAttackPotential: 'iso_18045_moderate' }
+        )
+      ).toBe('low');
+    });
   });
 });
