@@ -156,7 +156,17 @@ export async function resolveClient(
       const row = await fastify.repositories.oauthClients.upsertCimdClient(insert);
       return { client: row };
     } catch (err) {
-      const reason = err instanceof InvalidClientError ? err.message : 'cimd_resolution_failed';
+      // `errorDescription` before `message` (#365): since `InvalidClientError`
+      // carries the registered RFC 6749 §5.2 token as its message, reading
+      // `message` here would collapse every distinct CIMD failure into the
+      // string `invalid_client`. This `reason` is server-side diagnostic text —
+      // it reaches the audit log and the operator's log, never a client — so it
+      // wants the detail, and falls back to the token when the throw carried
+      // none (which is what `helpers/client-auth.ts` throws deliberately).
+      const reason =
+        err instanceof InvalidClientError
+          ? (err.errorDescription ?? err.message)
+          : 'cimd_resolution_failed';
       return { client: null, reason };
     }
   }
