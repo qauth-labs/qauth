@@ -1,8 +1,12 @@
 import {
   type AttackPotentialResistance,
+  type AttestingIssuerEntry,
   createKeyStorageAssuranceResolver,
   createStaticAttestingIssuers,
+  type KeyStorageAssuranceProvisioning,
   type KeyStorageAssuranceResolver,
+  NO_KEY_STORAGE_ASSURANCE_PROVISIONING,
+  strongestAttestedKeyStorage,
 } from '@qauth-labs/server-federation';
 
 /**
@@ -37,12 +41,18 @@ import {
  * `OID4VP_ATTESTING_ISSUERS` provisions #308's TRANSITIVE path — the operator's
  * record that an issuer validates key attestations at issuance per HAIP §4.5.1.
  * The DIRECT path (verifying an Appendix D attestation conveyed into the
- * presentation against anchored trust) needs a certificate configuration surface
- * that does not exist yet, the same one #233 owes `provisionedVerifierMaterial`.
- * A deployment that records no attesting issuer therefore provisions nothing,
- * and {@link keyStorageAssuranceProvisioningOf} says so — which is what keeps
- * `assertKeyStorageAssuranceProvisioned` refusing a `haip-1.0` boot rather than
- * letting it accept wallet requests and reject every presentation.
+ * presentation against anchored trust) needs an anchor configuration surface
+ * that does not exist yet — a WALLET-PROVIDER anchor set, distinct from the
+ * verifier's own chain that #377 provisioned and from the status-list anchors of
+ * #297. A deployment that records no attesting issuer therefore provisions
+ * nothing, and {@link keyStorageAssuranceProvisioningOf} says so — which is what
+ * keeps `assertKeyStorageAssuranceProvisioned` refusing a `haip-1.0` boot rather
+ * than letting it accept wallet requests and reject every presentation.
+ *
+ * Until that surface exists the resolver holds no anchors, and a conveyed
+ * attestation is SKIPPED rather than refused (see `key-storage-assurance.ts`):
+ * a wallet doing the more conformant thing must not be worse off than one that
+ * conveys nothing.
  */
 
 /** Issuer identifier → the §D.2 grade its issuance process attests. */
@@ -63,8 +73,25 @@ function recordsAnything(configured: ConfiguredAttestingIssuers | null | undefin
 }
 
 /**
- * Whether this deployment has provisioned what key-storage assurance needs
- * (#308/#379).
+ * The configured map as the entry array `server-federation` reads (#308/#379).
+ *
+ * One conversion, used by every function below, so the boot gate and the request
+ * path can never disagree about what the operator's map says. The grade is CAST
+ * rather than re-validated for the reason
+ * {@link createConfiguredKeyStorageAssuranceResolver} gives: the §D.2 vocabulary
+ * lives one layer down and each consumer applies it itself —
+ * `createStaticAttestingIssuers` by throwing, `strongestAttestedKeyStorage` by
+ * skipping.
+ */
+function toEntries(configured: ConfiguredAttestingIssuers): readonly AttestingIssuerEntry[] {
+  return Object.entries(configured).map(([issuer, keyStorage]) => ({
+    issuer,
+    keyStorage: keyStorage as AttackPotentialResistance,
+  }));
+}
+
+/**
+ * What this deployment has provisioned for key-storage assurance (#308/#379).
  *
  * Threaded into `createConfiguredProviders` as `keyStorageAssuranceProvisioned`,
  * where `assertKeyStorageAssuranceProvisioned` turns it into a boot refusal for
@@ -72,17 +99,46 @@ function recordsAnything(configured: ConfiguredAttestingIssuers | null | undefin
  * option was never passed, so the assertion sat permanently in its refusing
  * state and was a constant rather than a predicate.
  *
- * `false` for an empty or absent map, which is the honest answer AND the
- * fail-closed one: a deployment recording no attesting issuer and holding no
- * key-attestation anchors can establish key storage by no path at all.
+ * ## Why it reports the recorded GRADE, not a boolean
+ *
+ * Because the mandate has a floor. `haip-1.0` declares
+ * `minimumKeyStorageAttackPotential: 'iso_18045_high'`, and a deployment whose
+ * map records only `iso_18045_basic` issuers satisfies "something is recorded"
+ * while satisfying nothing the profile asks for: it boots, accepts wallet
+ * requests, and refuses every presentation with `attack-potential-below-minimum`
+ * — the same 100%-failure outcome as provisioning nothing, which is precisely
+ * what the gate exists to prevent. A boolean could not express the difference,
+ * so it reported the wrong answer for that map.
+ *
+ * `NO_KEY_STORAGE_ASSURANCE_PROVISIONING` for an empty or absent map, which is
+ * the honest answer AND the fail-closed one: a deployment recording no attesting
+ * issuer and holding no key-attestation anchors can establish key storage by no
+ * path at all.
+ *
+ * `hasKeyAttestationAnchors` stays unset: the DIRECT path has no operator
+ * configuration surface yet (see the module JSDoc), so there is nothing here
+ * that could set it, and stating `false` explicitly would read as a fact
+ * established rather than a path not built.
  *
  * @param configured - the parsed `OID4VP_ATTESTING_ISSUERS` map.
- * @returns whether a mandating profile may start here.
+ * @returns what a mandating profile is checked against at boot.
  */
 export function keyStorageAssuranceProvisioningOf(
   configured: ConfiguredAttestingIssuers | null | undefined
-): boolean {
-  return recordsAnything(configured);
+): KeyStorageAssuranceProvisioning {
+  if (!recordsAnything(configured)) return NO_KEY_STORAGE_ASSURANCE_PROVISIONING;
+
+  const strongest = strongestAttestedKeyStorage(
+    toEntries(configured as ConfiguredAttestingIssuers)
+  );
+
+  // A map recording only grades this build cannot read provisions nothing, and
+  // says so with the same value an empty map produces. The grades themselves are
+  // refused loudly by `assertAttestingIssuersUsable`, which runs at boot; this
+  // must not reach a SECOND, differently-worded refusal for the same typo.
+  if (strongest === undefined) return NO_KEY_STORAGE_ASSURANCE_PROVISIONING;
+
+  return Object.freeze({ strongestAttestedKeyStorage: strongest });
 }
 
 /**
@@ -108,19 +164,15 @@ export function createConfiguredKeyStorageAssuranceResolver(
 ): KeyStorageAssuranceResolver | undefined {
   if (!recordsAnything(configured)) return undefined;
 
-  const entries = Object.entries(configured as ConfiguredAttestingIssuers).map(
-    ([issuer, keyStorage]) => ({
-      issuer,
-      // Cast rather than re-validated: `createStaticAttestingIssuers` runs the
-      // membership test itself and THROWS on a grade it does not understand, so
-      // narrowing here would only move the same refusal earlier while adding a
-      // second copy of the §D.2 vocabulary to this layer.
-      keyStorage: keyStorage as AttackPotentialResistance,
-    })
-  );
-
+  // Cast rather than re-validated inside `toEntries`:
+  // `createStaticAttestingIssuers` runs the membership test itself and THROWS on
+  // a grade it does not understand, so narrowing here would only move the same
+  // refusal earlier while adding a second copy of the §D.2 vocabulary to this
+  // layer.
   return createKeyStorageAssuranceResolver({
-    attestingIssuers: createStaticAttestingIssuers(entries),
+    attestingIssuers: createStaticAttestingIssuers(
+      toEntries(configured as ConfiguredAttestingIssuers)
+    ),
   });
 }
 

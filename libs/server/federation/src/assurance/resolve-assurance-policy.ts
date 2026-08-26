@@ -133,11 +133,18 @@ function isUnset(value: unknown): boolean {
  * rule the level and the credential-type list already follow. Both fields absent
  * is not malformed; it is every deployment that predates #379.
  *
- * A floor stated WITHOUT `requiresKeyStorage` is refused rather than ignored.
- * The entry would grant its level to every credential regardless of key storage
- * while reading like one that gates on it — the shape that makes an operator
- * believe they imposed a requirement they merely failed to impose, and the same
- * hazard the empty `credentialTypes` list is refused for.
+ * A floor is refused rather than ignored in BOTH the shapes that make it inert.
+ * Stated WITHOUT `requiresKeyStorage`, the entry grants its level to every
+ * credential regardless of key storage while reading like one that gates on it.
+ * Stated alongside `requiresKeyStorage: 'software'` it is inert for a subtler
+ * reason: the floor decides only whether graded evidence reads as `'hardware'`
+ * or as `'software'`, and a `'software'` requirement accepts EITHER reading — so
+ * every floor in the §D.2 union accepts exactly the same evidence, and an
+ * operator who stated one demanded nothing by it.
+ *
+ * Both are the shape that makes an operator believe they imposed a requirement
+ * they merely failed to impose, and the same hazard the empty `credentialTypes`
+ * list is refused for.
  */
 function parseKeyStorageRequirement(
   statement: ConfiguredIssuerAssurance
@@ -153,6 +160,12 @@ function parseKeyStorageRequirement(
   const requiresKeyStorage: AssuredKeyStorage = rawStorage;
 
   if (isUnset(rawFloor)) return Object.freeze({ requiresKeyStorage });
+
+  // The inert pairing, refused for the reason the JSDoc gives. `server-config`
+  // refuses it too; this is the boundary that holds for a realm policy handed in
+  // from anywhere else, and the two must agree — a value one layer rejects and
+  // the other silently accepts is how the same configuration gets two meanings.
+  if (requiresKeyStorage !== 'hardware') return undefined;
 
   // Delegated rather than compared against a local list: the §D.2 vocabulary
   // lives in the attestation adapter, and restating it here would let a grade be

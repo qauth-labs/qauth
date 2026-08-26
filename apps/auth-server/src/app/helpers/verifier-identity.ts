@@ -1,5 +1,7 @@
 import {
   createVerifierSigningMaterial,
+  type ProvisionedVerifierMaterial,
+  verifierMaterialProvisionedBy,
   type VerifierSigningMaterial,
 } from '@qauth-labs/fastify-plugin-federation';
 import {
@@ -103,4 +105,43 @@ export function resolveConfiguredVerifierSigningMaterial(
 export function verifierSigningMaterial(): VerifierSigningMaterial | undefined {
   resolved ??= { material: resolveConfiguredVerifierSigningMaterial(env) };
   return resolved.material;
+}
+
+/**
+ * The marker set every `resolveVerifierProfile` call in this app must be given.
+ *
+ * ## Why this exists rather than each call site deciding
+ *
+ * `resolveVerifierProfile` folds in `assertVerifierIdentityProvisioned`, so it
+ * answers a DIFFERENT question depending on the third argument: omit it and the
+ * default is `NO_VERIFIER_MATERIAL`, which throws for any profile whose Client
+ * Identifier Prefixes need an X.509 identity. `haip-1.0` is such a profile.
+ *
+ * Before #377 that could not bite — nothing could provision the material, so
+ * every answer was the same one. #377 provisioned it at boot and threaded it
+ * into `createConfiguredProviders`, and two request-path call sites kept the
+ * default: `helpers/wallet-login-request.ts` and `routes/oid4vp/response.ts`.
+ * They agreed with the boot gate only for as long as the boot gate refused
+ * everything they would have refused. The moment a profile requiring a WRPAC can
+ * actually START — Phase C of #377 — those two disagree with it: the deployment
+ * boots on a validated chain, and then the login page renders no wallet link and
+ * every presentation is rejected, both because the request path asked the
+ * question with the material missing.
+ *
+ * So the material is threaded from ONE place, exactly as `app.ts` derives its
+ * gate marker from ONE call. A call site that computed its own answer is the
+ * drift this function removes.
+ *
+ * ## No second validation
+ *
+ * It reads {@link verifierSigningMaterial}, which is memoised and was already
+ * resolved at boot, so this neither re-parses a certificate nor can it throw on
+ * the request path: a deployment whose material does not validate never reached
+ * a request at all.
+ *
+ * @returns the marker set built from the validated material, or
+ * `NO_VERIFIER_MATERIAL` when the deployment provisioned no verifier identity.
+ */
+export function provisionedVerifierMaterial(): ProvisionedVerifierMaterial {
+  return verifierMaterialProvisionedBy(verifierSigningMaterial());
 }

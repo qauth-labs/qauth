@@ -150,7 +150,11 @@ tests; no call site re-derives it and no consumer reads `assurance !== 'none'` a
 level. A policy entry may state its own attack-potential floor
 (`requiresKeyStorageAttackPotential`), which also makes `requiresKeyStorage`
 authorable through `OID4VP_ISSUER_ASSURANCE` rather than reachable only from a
-programmatic `createIssuerAssurancePolicy` call.
+programmatic `createIssuerAssurancePolicy` call. The floor is meaningful only
+alongside `requiresKeyStorage: 'hardware'` and is refused otherwise: it decides
+where graded evidence stops reading as `software` and starts reading as
+`hardware`, and a `software` requirement accepts both readings, so under it every
+floor admits identical evidence.
 
 The rule:
 

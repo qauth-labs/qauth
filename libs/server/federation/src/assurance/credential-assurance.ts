@@ -179,9 +179,16 @@ export interface IssuerAssuranceEntry {
   readonly requiresKeyStorage?: AssuredKeyStorage;
   /**
    * The §D.2 attack-potential floor at which this entry reads evidence as
-   * `'hardware'` (D1, ADR-010 §5). Meaningless without
-   * {@link requiresKeyStorage} and refused by the configuration boundary when
-   * stated alone.
+   * `'hardware'` (D1, ADR-010 §5). Meaningful ONLY alongside
+   * `requiresKeyStorage: 'hardware'`, and refused by both configuration
+   * boundaries in either shape that makes it inert — stated alone, and stated
+   * alongside `requiresKeyStorage: 'software'`.
+   *
+   * The second pairing is inert because the floor decides only whether graded
+   * evidence reads as `'hardware'` or as `'software'`, and a `'software'`
+   * requirement accepts either reading: every floor in the union then admits
+   * exactly the same evidence. Refused rather than ignored, so an operator
+   * cannot state a floor and believe it narrowed anything.
    *
    * Absent means {@link import('./key-storage-evidence').DEFAULT_KEY_STORAGE_ATTACK_POTENTIAL} —
    * the STRICT reading. This exists so QAuth stays out of the
@@ -260,7 +267,26 @@ function keyStorageSatisfied(
   // never satisfies anything — which is what a caller that established nothing,
   // or that never wired the #308 gate at all, passes.
   if (required === 'hardware') return proven === 'hardware';
-  return proven === 'software' || proven === 'hardware';
+  if (required === 'software') return proven === 'software' || proven === 'hardware';
+
+  // An ALLOWLIST, for the same reason `resolveCredentialAssurance` uses one on
+  // the way out: `IssuerAssuranceEntry` is a nominal promise, not an
+  // enforcement, and this policy is a trust boundary in its own right — the
+  // module JSDoc says so, and `createIssuerAssurancePolicy` is exported and
+  // callable with entries no configuration boundary ever read.
+  //
+  // Without this line the fall-through carried the failure the wrong way. A
+  // requirement outside the union — a mistyped `'HARDWARE'`, a `null` a JSON
+  // round trip left behind — missed the `hardware` branch and landed on the
+  // `software` one, so the STRICTEST requirement an operator can state was
+  // satisfied by a SOFTWARE key. The typo did not disable the check, which would
+  // have been bad enough; it silently rewrote it into its opposite.
+  //
+  // Fail closed instead: an unreadable requirement grants nothing, exactly as an
+  // unrecognised FLOOR already grants nothing through `meetsAttackPotential`.
+  // The cost is a lost `acr` claim on an entry nobody could author through
+  // configuration; the alternative cost was an unearned eIDAS level.
+  return false;
 }
 
 /**

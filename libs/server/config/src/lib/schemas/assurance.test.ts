@@ -135,7 +135,43 @@ describe('assuranceEnvSchema (OID4VP_ISSUER_ASSURANCE — #237)', () => {
       });
     });
 
-    it('accepts a software requirement and every §D.2 grade', () => {
+    it('accepts a bare software requirement', () => {
+      expect(
+        parse(
+          '{"master":{"https://issuer.example":{"level":"substantial","requiresKeyStorage":"software"}}}'
+        )
+      ).toEqual({
+        master: {
+          'https://issuer.example': { level: 'substantial', requiresKeyStorage: 'software' },
+        },
+      });
+    });
+
+    it('accepts every §D.2 grade beside a HARDWARE requirement', () => {
+      for (const grade of [
+        'iso_18045_basic',
+        'iso_18045_enhanced-basic',
+        'iso_18045_moderate',
+        'iso_18045_high',
+      ]) {
+        expect(() =>
+          parse(
+            `{"master":{"https://issuer.example":{"level":"substantial","requiresKeyStorage":"hardware","requiresKeyStorageAttackPotential":"${grade}"}}}`
+          )
+        ).not.toThrow();
+      }
+    });
+
+    /**
+     * The INERT pairing, refused rather than accepted and ignored (#379 review).
+     *
+     * The floor decides only whether graded evidence reads as `'hardware'` or as
+     * `'software'`, and a `'software'` requirement accepts either reading — so
+     * every grade in the union admits exactly the same evidence and the operator
+     * demanded nothing by stating one. Same hazard as the empty
+     * `credentialTypes` list, and refused for the same reason.
+     */
+    it('refuses a floor beside a SOFTWARE requirement, in which it decides nothing', () => {
       for (const grade of [
         'iso_18045_basic',
         'iso_18045_enhanced-basic',
@@ -146,7 +182,7 @@ describe('assuranceEnvSchema (OID4VP_ISSUER_ASSURANCE — #237)', () => {
           parse(
             `{"master":{"https://issuer.example":{"level":"substantial","requiresKeyStorage":"software","requiresKeyStorageAttackPotential":"${grade}"}}}`
           )
-        ).not.toThrow();
+        ).toThrow(/only means something with requiresKeyStorage: 'hardware'/);
       }
     });
 

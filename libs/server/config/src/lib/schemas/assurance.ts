@@ -157,6 +157,10 @@ const issuerAssuranceSchema = z
     /**
      * The §D.2 grade at which {@link requiresKeyStorage} reads evidence as
      * hardware. Omit for the STRICT default (`iso_18045_high`).
+     *
+     * Meaningful ONLY alongside `requiresKeyStorage: 'hardware'`; see the
+     * refinement below for why the `'software'` pairing is refused rather than
+     * accepted and ignored.
      */
     requiresKeyStorageAttackPotential: configuredAttackPotentialSchema.optional(),
   })
@@ -164,14 +168,25 @@ const issuerAssuranceSchema = z
   .refine(
     (statement) =>
       statement.requiresKeyStorageAttackPotential === undefined ||
-      statement.requiresKeyStorage !== undefined,
+      statement.requiresKeyStorage === 'hardware',
     {
-      // Refused rather than ignored: an entry carrying only a floor gates on
-      // nothing while reading like it gates on key storage — the shape that makes
-      // an operator believe they imposed a requirement they merely failed to
-      // impose. Same reasoning as the empty `credentialTypes` list above.
+      // Refused rather than ignored, in BOTH the shapes that make it inert.
+      //
+      // Stated alone, it gates on nothing while reading like it gates on key
+      // storage. Stated alongside `requiresKeyStorage: 'software'` it is inert
+      // for a subtler reason: the floor decides only where a graded claim reads
+      // as `'hardware'` rather than `'software'`, and a `'software'` requirement
+      // is satisfied by EITHER reading, so every floor from `iso_18045_basic` to
+      // `iso_18045_high` accepts exactly the same evidence. An operator who
+      // wrote `{"requiresKeyStorage":"software","requiresKeyStorageAttackPotential":"iso_18045_high"}`
+      // means to demand something and demands nothing.
+      //
+      // Both are the shape that makes an operator believe they imposed a
+      // requirement they merely failed to impose — the same reasoning as the
+      // empty `credentialTypes` list above, and as `assuranceLevel: 'low'` being
+      // unstatable at all.
       message:
-        'requiresKeyStorageAttackPotential sets the grade at which requiresKeyStorage is satisfied and does nothing on its own — state requiresKeyStorage as well, or omit both',
+        "requiresKeyStorageAttackPotential sets the grade at which key-storage evidence reads as hardware, so it only means something with requiresKeyStorage: 'hardware' — a 'software' requirement is satisfied by any graded evidence at every floor. State requiresKeyStorage: 'hardware', or omit the floor",
       path: ['requiresKeyStorageAttackPotential'],
     }
   );

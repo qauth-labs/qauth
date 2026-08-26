@@ -5,7 +5,9 @@ import {
   createWalletProvider,
   type CredentialProvider,
   type CredentialStatusProvisioning,
+  type KeyStorageAssuranceProvisioning,
   NO_CREDENTIAL_STATUS_PROVISIONING,
+  NO_KEY_STORAGE_ASSURANCE_PROVISIONING,
   NO_VERIFIER_MATERIAL,
   type ProvisionedVerifierMaterial,
   resolveVerifierProfile,
@@ -140,19 +142,25 @@ export interface ConfiguredProvidersOptions {
   provisionedVerifierMaterial?: ProvisionedVerifierMaterial;
 
   /**
-   * Whether the operator has provisioned what a profile requiring key-storage
-   * assurance needs (#308) — an attesting-issuer registry, key-attestation trust
-   * anchors, or both.
+   * What the operator has provisioned for key-storage assurance (#308/#379) — an
+   * attesting-issuer registry, key-attestation trust anchors, or neither.
    *
    * Optional for the same reason as the field above, and only because omitting
-   * it is the fail-closed answer: nothing is provisionable until an operator
-   * configuration surface for wallet-provider anchors exists, so the default is
-   * `false` — the value that makes `haip-1.0` refuse. A deployment that declared
-   * the mandate and can satisfy none of it would otherwise accept wallet
-   * requests and then reject every presentation, which is the worst place to
-   * discover a boot-time misconfiguration.
+   * it is the fail-closed answer: the default is
+   * `NO_KEY_STORAGE_ASSURANCE_PROVISIONING`, the value that makes `haip-1.0`
+   * refuse. A deployment that declared the mandate and can satisfy none of it
+   * would otherwise accept wallet requests and then reject every presentation,
+   * which is the worst place to discover a boot-time misconfiguration.
+   *
+   * A record rather than a boolean — like {@link credentialStatusProvisioned}
+   * below and for the same reason — because the mandate has a FLOOR. A registry
+   * recording only `iso_18045_basic` issuers is provisioned and still cannot
+   * satisfy `haip-1.0`'s `iso_18045_high`; a boolean said "yes" to that and the
+   * deployment booted straight into a 100% presentation-failure rate. Build it
+   * with `keyStorageAssuranceProvisioningOf(...)` from the parsed
+   * `OID4VP_ATTESTING_ISSUERS` rather than by hand.
    */
-  keyStorageAssuranceProvisioned?: boolean;
+  keyStorageAssuranceProvisioned?: KeyStorageAssuranceProvisioning;
 
   /**
    * What the operator has provisioned for credential revocation checking (#297)
@@ -165,9 +173,10 @@ export interface ConfiguredProvidersOptions {
    * `credentialStatusProvisioningOf(...)` from the parsed
    * `OID4VP_STATUS_LIST_*` configuration rather than by hand.
    *
-   * A record rather than a boolean, unlike {@link keyStorageAssuranceProvisioned}
-   * above, because the refusal must name WHICH half is missing: no anchors and
-   * no allowlist are different mistakes with different fixes.
+   * A record rather than a boolean, as {@link keyStorageAssuranceProvisioned}
+   * above now is and for the same reason: the refusal must name WHICH half is
+   * missing, and no anchors and no allowlist are different mistakes with
+   * different fixes.
    */
   credentialStatusProvisioned?: CredentialStatusProvisioning;
 }
@@ -251,7 +260,7 @@ interface ProfileAvailability {
 function probeProfiles(
   provisioned: ProvisionedVerifierMaterial,
   capabilities: VerifierCryptoCapabilities,
-  keyStorageAssuranceProvisioned: boolean,
+  keyStorageAssuranceProvisioned: KeyStorageAssuranceProvisioning,
   credentialStatusProvisioned: CredentialStatusProvisioning
 ): readonly ProfileAvailability[] {
   return VERIFIER_PROFILE_IDS.map((id) => {
@@ -294,7 +303,7 @@ function probeProfiles(
 function buildNoProfileSelectedMessage(
   provisioned: ProvisionedVerifierMaterial,
   capabilities: VerifierCryptoCapabilities,
-  keyStorageAssuranceProvisioned: boolean,
+  keyStorageAssuranceProvisioned: KeyStorageAssuranceProvisioning,
   credentialStatusProvisioned: CredentialStatusProvisioning
 ): string {
   const availability = probeProfiles(
@@ -395,7 +404,8 @@ export function createConfiguredProviders(
       provisioned
     );
 
-    const keyStorageAssuranceProvisioned = options.keyStorageAssuranceProvisioned === true;
+    const keyStorageAssuranceProvisioned =
+      options.keyStorageAssuranceProvisioned ?? NO_KEY_STORAGE_ASSURANCE_PROVISIONING;
     const credentialStatusProvisioned =
       options.credentialStatusProvisioned ?? NO_CREDENTIAL_STATUS_PROVISIONING;
 

@@ -15,7 +15,6 @@ import {
   federationPlugin,
   keyStorageAssuranceProvisioningOf,
   type VerifierCryptoCapabilities,
-  verifierMaterialProvisionedBy,
 } from '@qauth-labs/fastify-plugin-federation';
 import { jwtPlugin } from '@qauth-labs/fastify-plugin-jwt';
 import { passwordPlugin } from '@qauth-labs/fastify-plugin-password';
@@ -31,7 +30,7 @@ import { env } from '../config/env';
 import { deriveCryptoCapabilities } from './crypto-capabilities';
 import { assertSubjectResolutionProvisioned } from './helpers/assert-subject-resolution';
 import { isJtiRevoked } from './helpers/token-revocation';
-import { verifierSigningMaterial } from './helpers/verifier-identity';
+import { provisionedVerifierMaterial } from './helpers/verifier-identity';
 import errorHandler from './plugins/error-handler';
 import { metricsPlugin } from './plugins/metrics';
 import { rateLimitPlugin } from './plugins/rate-limit';
@@ -169,19 +168,21 @@ export async function app(fastify: FastifyInstance, opts: object) {
   // switched on today, and finding it at boot beats finding it on the first
   // presentation. A deployment that configured nothing gets `undefined` and is
   // unaffected.
-  const verifierMaterial = verifierSigningMaterial();
-
-  // The marker set both boot gates read, derived ONCE from the material above.
   //
-  // #379 introduced this as a module-level `PROVISIONED_VERIFIER_MATERIAL =
-  // undefined` with the note "#233: replace `undefined` here, not at either call
-  // site" — precisely so the subject-resolution gate and the provider gate could
-  // never disagree about which profiles resolve. #377 is that replacement, and
-  // the value is a local rather than a constant because the material is now
-  // VALIDATED at boot and validation can throw: computing it at module scope
-  // would turn an operator's mis-pasted certificate into an import-time crash
-  // with no plugin context around it.
-  const provisionedVerifierMaterial = verifierMaterialProvisionedBy(verifierMaterial);
+  // The call also produces the marker set both boot gates below read. #379
+  // introduced that as a module-level `PROVISIONED_VERIFIER_MATERIAL = undefined`
+  // with the note "replace `undefined` here, not at either call site" —
+  // precisely so the subject-resolution gate and the provider gate could never
+  // disagree about which profiles resolve. This is that replacement, widened:
+  // the two request-path callers of `resolveVerifierProfile` read the SAME
+  // helper, so the boot gates and the request path cannot disagree either.
+  //
+  // A call rather than a module-level constant because the material is now
+  // VALIDATED, and validation can throw: computing it at module scope would turn
+  // an operator's mis-pasted certificate into an import-time crash with no
+  // plugin context around it. The helper memoises, so this parses the chain once
+  // per process however many times it is asked.
+  const provisioned = provisionedVerifierMaterial();
 
   // Attesting issuers (#308/#379), the same posture again. `server-config`
   // validates each key as a syntactically valid https:// URL; the runtime
@@ -203,7 +204,7 @@ export async function app(fastify: FastifyInstance, opts: object) {
   // reads. It runs BEFORE `createConfiguredProviders` below but yields to it on
   // a profile that cannot resolve at all, so a profile refusal keeps its own
   // message. Nothing about the request path changes — see the helper.
-  assertSubjectResolutionProvisioned(env, provisionedVerifierMaterial);
+  assertSubjectResolutionProvisioned(env, provisioned);
 
   await fastify.register(federationPlugin, {
     providers: createConfiguredProviders({
@@ -239,7 +240,7 @@ export async function app(fastify: FastifyInstance, opts: object) {
       // the boot down before this line, and a deployment that configured
       // nothing yields `NO_VERIFIER_MATERIAL`, which is what makes a profile
       // requiring a WRPAC refuse.
-      provisionedVerifierMaterial,
+      provisionedVerifierMaterial: provisioned,
     }),
   });
 

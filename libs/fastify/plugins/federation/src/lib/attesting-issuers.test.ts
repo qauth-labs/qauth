@@ -59,14 +59,55 @@ describe('keyStorageAssuranceProvisioningOf (#308/#379)', () => {
     // issuer and holding no key-attestation anchors can establish key storage by
     // no path at all, so a mandating profile must not start here.
     for (const configured of [undefined, null, {}, Object.create(null), 'x', 3]) {
-      expect(keyStorageAssuranceProvisioningOf(configured as ConfiguredAttestingIssuers)).toBe(
-        false
+      expect(keyStorageAssuranceProvisioningOf(configured as ConfiguredAttestingIssuers)).toEqual(
+        {}
       );
     }
   });
 
-  it('reports provisioned once the operator records an issuer', () => {
-    expect(keyStorageAssuranceProvisioningOf({ [ISSUER]: HIGH })).toBe(true);
+  it('reports the GRADE recorded, not merely that something was', () => {
+    // The boot gate compares against the profile's floor, so a boolean was the
+    // wrong answer shape: it said "provisioned" for a registry that could not
+    // clear `haip-1.0`'s `iso_18045_high` and let the deployment boot straight
+    // into refusing every presentation (#379 review).
+    expect(keyStorageAssuranceProvisioningOf({ [ISSUER]: HIGH })).toEqual({
+      strongestAttestedKeyStorage: HIGH,
+    });
+  });
+
+  it('reports the STRONGEST grade across a mixed registry', () => {
+    // The gate asks whether the deployment can clear the floor for ANY recorded
+    // ecosystem, not for every one. A registry pairing a `high` issuer with a
+    // `basic` one is a working deployment with one weak ecosystem, and refusing
+    // to start on it would be wrong.
+    expect(
+      keyStorageAssuranceProvisioningOf({
+        [ISSUER]: 'iso_18045_basic',
+        'https://strong.example': HIGH,
+        'https://middling.example': 'iso_18045_moderate',
+      })
+    ).toEqual({ strongestAttestedKeyStorage: HIGH });
+  });
+
+  it('reports the weak grade as-is, so the gate can refuse it against a higher floor', () => {
+    expect(keyStorageAssuranceProvisioningOf({ [ISSUER]: 'iso_18045_basic' })).toEqual({
+      strongestAttestedKeyStorage: 'iso_18045_basic',
+    });
+  });
+
+  it('reports nothing provisioned for a registry of grades this build cannot read', () => {
+    // `assertAttestingIssuersUsable` refuses those loudly at boot, naming the
+    // position and the value. This must not reach a SECOND, differently-worded
+    // refusal for the same typo — so it returns the same value an empty map does.
+    expect(keyStorageAssuranceProvisioningOf({ [ISSUER]: 'ISO_18045_HIGH' })).toEqual({});
+  });
+
+  it('never claims the DIRECT path, which has no configuration surface yet', () => {
+    // Stating `false` explicitly would read as a fact established rather than a
+    // path not built, and the boot gate's `=== true` treats both alike.
+    expect(
+      keyStorageAssuranceProvisioningOf({ [ISSUER]: HIGH }).hasKeyAttestationAnchors
+    ).toBeUndefined();
   });
 
   it('reads a prototype-less record, which is what server-config hardens to', () => {
@@ -75,7 +116,9 @@ describe('keyStorageAssuranceProvisioningOf (#308/#379)', () => {
     const configured = Object.create(null) as Record<string, string>;
     configured[ISSUER] = HIGH;
 
-    expect(keyStorageAssuranceProvisioningOf(configured)).toBe(true);
+    expect(keyStorageAssuranceProvisioningOf(configured)).toEqual({
+      strongestAttestedKeyStorage: HIGH,
+    });
   });
 });
 

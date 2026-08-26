@@ -168,16 +168,41 @@ An `OID4VP_ISSUER_ASSURANCE` entry may demand a minimum holder key storage with
 reading (`iso_18045_high`), because an unqualified `"hardware"` is asking for
 eIDAS `high`'s secure cryptographic device.
 
+The floor is refused unless `requiresKeyStorage` is `"hardware"`. It decides only
+whether graded evidence reads as `hardware` or as `software`, and a `"software"`
+requirement accepts either reading — so under `"software"` every floor in the
+§D.2 vocabulary admits exactly the same evidence, and an operator who stated one
+demanded nothing by it. A configuration that reads like a requirement and imposes
+none is refused rather than ignored, the same way a floor stated with no
+`requiresKeyStorage` at all is.
+
 The evidence comes from `OID4VP_ATTESTING_ISSUERS` — the operator's record of
 which issuance chains validate a wallet's key attestation per HAIP §4.5.1, and at
 what grade. Recording an issuer there produces evidence, never a level: the realm
 still has to name the issuer in its own `OID4VP_ISSUER_ASSURANCE` and accept it in
 its own `OID4VP_TRUSTED_ISSUERS`.
 
+**The recorded grade must clear the selected profile's own floor.** A profile
+declaring `keyStorageAssurance: required` usually declares a minimum too —
+`haip-1.0` requires `iso_18045_high` — and a deployment whose
+`OID4VP_ATTESTING_ISSUERS` records nothing stronger than `iso_18045_basic` would
+start and then refuse every presentation for attack potential below the minimum.
+That is refused at startup instead, naming both the profile's floor and the
+strongest grade recorded. The comparison takes the strongest, not the weakest: a
+registry pairing a strong ecosystem with a weak one is a working deployment with
+one ecosystem that will not reach the floor.
+
+Key attestations conveyed **into a presentation** need wallet-provider trust
+anchors, which have no configuration surface yet. Until they do, a conveyed
+attestation is skipped rather than refused and the credential falls through to
+the transitive path above — a wallet doing the more conformant thing must not be
+worse off than one conveying nothing. It grants no more than the operator's
+recorded claim, and the evidence still reports its source as `issuer-attested`.
+
 Note that `oid4vp-1.0-base` declares `keyStorageAssurance: forbidden`, so on the
 only profile that boots today this machinery establishes nothing and changes no
 behaviour. It becomes reachable when a profile whose posture is `permitted` or
-`required` can start — `haip-1.0` is blocked on #298. See
+`required` can start — `haip-1.0` waits on Phase C of #377. See
 [ADR-010](./adr/010-acr-assurance-mapping.md) §5.
 
 Three variables answer three different questions and must not be conflated:
