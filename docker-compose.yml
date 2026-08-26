@@ -7,7 +7,14 @@ services:
       POSTGRES_USER: qauth
       POSTGRES_PASSWORD: ${DB_PASSWORD:-qauth_dev_password}
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      # Mount the parent directory, NOT `/var/lib/postgresql/data`. Postgres 18
+      # images default PGDATA to a version-scoped subdirectory
+      # (`/var/lib/postgresql/18/docker`) so that `pg_upgrade --link` can run
+      # without crossing a mount boundary, and the entrypoint aborts on startup
+      # if it finds a volume mounted at the pre-18 path. The testcontainers
+      # helper in libs/shared/testing pins the same image but mounts no volume,
+      # so integration tests do not exercise this.
+      - postgres_data:/var/lib/postgresql
     ports:
       - '5432:5432'
     healthcheck:
@@ -205,6 +212,69 @@ services:
       # fetched from. The URI comes out of the CREDENTIAL, so blank means "fetch
       # from nowhere" rather than "fetch from anywhere".
       OID4VP_STATUS_LIST_URI_ALLOWLIST: ${OID4VP_STATUS_LIST_URI_ALLOWLIST:-}
+
+      # ── Operator-settable, forwarded by pass-through ──────────────────────
+      # Every variable below is documented on /operate/docker/ or
+      # /operate/observability/ as settable from `.env`, and none of them
+      # reached the container before: this `environment:` map is an explicit
+      # allowlist, there is no `env_file:`, and `.dockerignore` keeps `.env` out
+      # of the image. So `CIMD_TRUST_POLICY=allowlist` was silently discarded
+      # and the helper kept its accept-any-https default; likewise
+      # `METRICS_ENABLED=false` left /metrics served on the published port.
+      #
+      # The bare `VAR:` form is deliberate and differs from the
+      # `${VAR:-default}` style above. A null value means "resolve from `.env`
+      # or the shell, and omit the variable entirely when unset" — so an unset
+      # variable reaches the schema as absent and keeps its own default, rather
+      # than arriving as an empty string this file would have to keep in sync by
+      # hand. Restating each default here is what let the two lists drift apart
+      # in the first place.
+
+      # Client ID Metadata Documents (CIMD)
+      CIMD_ENABLED:
+      CIMD_TRUST_POLICY:
+      CIMD_TRUSTED_DOMAINS:
+      CIMD_ALLOW_PRIVATE_ADDRESSES:
+      CIMD_FETCH_TIMEOUT_MS:
+      CIMD_MAX_DOCUMENT_BYTES:
+      CIMD_CACHE_DEFAULT_TTL:
+      CIMD_CACHE_MAX_TTL:
+
+      # ID-JAG cross-domain assertions (ADR-011)
+      ID_JAG_ENABLED:
+      ID_JAG_TRUSTED_ISSUERS:
+      ID_JAG_ALLOW_PRIVATE_ADDRESSES:
+      ID_JAG_CLOCK_SKEW_LEEWAY:
+      ID_JAG_FETCH_TIMEOUT_MS:
+      ID_JAG_ISSUED_LIFETIME:
+      ID_JAG_JWKS_CACHE_TTL:
+      ID_JAG_MAX_ASSERTION_LIFETIME:
+      ID_JAG_MAX_DOCUMENT_BYTES:
+
+      # Signing algorithm / post-quantum hybrid (ADR-005)
+      SIGNING_ALGORITHM_MODE:
+      HYBRID_SIGNING_ENABLED:
+      PQC_TOKEN_DELIVERY:
+      PQC_SELF_CONTAINED_ACK:
+      JWT_MLDSA_KID:
+      JWT_MLDSA_PRIVATE_KEY:
+      JWT_MLDSA_PRIVATE_KEY_PATH:
+
+      # Observability
+      METRICS_ENABLED:
+      LOG_PRETTY:
+      LOG_REDACT_PATHS:
+      REQUEST_ID_HEADER:
+      FAILED_LOGIN_TRACKING_ENABLED:
+      FAILED_LOGIN_MAX_ATTEMPTS:
+      FAILED_LOGIN_WINDOW:
+      FAILED_LOGIN_LOCKOUT_DURATION:
+
+      # OID4VP subject binding (#308) — required once the wallet flag is on
+      OID4VP_SUBJECT_RESOLUTION:
+      OID4VP_SUBJECT_CLAIM:
+      OID4VP_SUBJECT_CLAIM_ISSUERS:
+      OID4VP_SUBJECT_BINDING_CLAIMS:
 
       # The VERIFIER's OWN identity (#377): the ES256 key and X.509 chain a
       # wallet establishes QAuth's identity from, under the `x509_hash` Client

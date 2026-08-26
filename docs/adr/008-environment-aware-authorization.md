@@ -15,6 +15,14 @@
 > The rate-limit tier was wired to the live `/oauth/token` and `/oauth/authorize`
 > limits as a realm-level seam in the #209 follow-up.
 
+> **Correction (2026-08-10): the "T3 hardening bundle" framing is narrower as
+> implemented.** Two statements below — the note above ("the production profile
+> wired as the T3 hardening bundle (#197)") and §5's opening line — read as if
+> the profile drives the T3 controls. #197 wired exactly one client-scoped knob,
+> the consent screen's style CSP; the T3 controls proper are global and
+> unconditional. Both statements are left as recorded; the **As implemented
+> (#197)** callout after the §5 table has what actually shipped.
+
 ## Context
 
 Two needs collided while finishing the MVP and planning T3:
@@ -112,8 +120,9 @@ simplest safe rule is operator-set, period, which this ADR adopts.)
 
 ### 5. The profiles
 
-`production` is the strict baseline — and **is the T3 hardening bundle**. The
-laxer profiles relax specific knobs. Security-relevant relaxations apply to
+`production` is the strict baseline — and **is the T3 hardening bundle** (as
+implemented this is narrower than it reads — see the callout after the table).
+The laxer profiles relax specific knobs. Security-relevant relaxations apply to
 **`development` only**; **`staging` keeps production-grade security** and relaxes
 only operational conveniences (so promoting dev→staging surfaces security
 posture before production).
@@ -133,6 +142,18 @@ posture before production).
 Each row is a default; an operator may override a single knob, but **only within
 the realm ceiling** and never below the hard security floors (e.g. a client
 secret is always hashed; audience binding always holds).
+
+> **As implemented (#197) — the last row is narrower than it reads.** The T3
+> controls proper are **global**, with no client in scope, so they were wired
+> unconditionally and do not consult the environment profile at all:
+> `@fastify/helmet` is registered globally, the `/ui/login` and `/ui/consent`
+> CSRF checks always run, and the session cookie's `Secure` attribute is driven
+> solely by `SESSION_COOKIE_SECURE`. The resolved `t3SecurityEnforced` flag has
+> exactly one consumer — the consent screen, the rare browser surface that
+> unambiguously carries a `client_id`, which serves a relaxed style CSP
+> (`style-src 'self' 'unsafe-inline'`) for a `development` client. Marking a
+> client `production` therefore enables none of the global controls, and marking
+> it `development` disables none of them.
 
 ### 6. Static developer API keys (#97/#98), reframed
 

@@ -1,0 +1,8 @@
+{
+  "paths": {
+    "/": { "get": {} },
+    "/widgets/": { "get": {} },
+    "/widgets/{id}": { "get": {} },
+    "/api/gadgets/": { "post": {} }
+  }
+}

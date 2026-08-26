@@ -37,12 +37,12 @@ import { PENDING_AUTHORIZATION_MAX_URL_BYTES, PENDING_AUTHORIZATION_TTL_MS } fro
  *     /ui/login?return_to=%2Fui%2Fresume%2F<handle>
  *
  * `/ui/resume/<handle>` starts with a single `/` and never `//`, so
- * `isSafeReturnTo` in `routes/ui/login.ts` accepts it as-is — the
- * open-redirector defence is not relaxed anywhere for this change, it is simply
- * given a much shorter value. (It was TIGHTENED while this landed: it now also
- * rejects `/\host`, the backslash spelling of a protocol-relative URL.) After a
- * successful sign-in, `/ui/resume/:handle` swaps the handle back for the
- * authorize URL and redirects there.
+ * `isSafeReturnTo` (`helpers/return-to.ts`, applied by `routes/ui/login.ts`)
+ * accepts it as-is — the open-redirector defence is not relaxed anywhere for
+ * this change, it is simply given a much shorter value. (It was TIGHTENED while
+ * this landed: it now also rejects `/\host`, the backslash spelling of a
+ * protocol-relative URL.) After a successful sign-in, `/ui/resume/:handle` swaps
+ * the handle back for the authorize URL and redirects there.
  *
  * ## Security properties
  *
@@ -52,14 +52,14 @@ import { PENDING_AUTHORIZATION_MAX_URL_BYTES, PENDING_AUTHORIZATION_TTL_MS } fro
  *   so the only reachable destination is this server's own
  *   `/oauth/authorize?…`, which then re-validates `client_id` and
  *   `redirect_uri` exactly as it does on a first visit.
- * - **Never a 500.** The stash is the FIRST Redis dependency on the
- *   pre-authentication path (`resolveBrowserSession` does no Redis I/O when the
- *   cookie is absent), so a failed write must not turn a 302-to-login into an
- *   opaque 500 at the authorization endpoint. A write failure degrades to the
- *   pre-#316 inline `return_to`, which is correct for every request small
- *   enough to fit a proxy's header buffer — i.e. all of them but the
- *   pathological `state` this helper exists for. Symmetrically, a failed read
- *   in {@link consumePendingAuthorization} degrades to the "expired" page.
+ * - **A stash failure never becomes a 500.** Redis is NOT new to the
+ *   pre-authentication path: `@fastify/rate-limit` (Redis-backed, on by
+ *   default) already INCRs against the same `fastify.redis` client on EVERY
+ *   request. What the stash adds is the first CALLER-INFLUENCED pre-auth
+ *   write, and a failed write degrades to the pre-#316 inline `return_to`
+ *   rather than a 500; a failed read in {@link consumePendingAuthorization}
+ *   degrades to the "expired" page. Neither covers a FULL Redis outage:
+ *   `skipOnError` is false, so the rate-limit hook fails the request first.
  * - **Bounded.** {@link PENDING_AUTHORIZATION_MAX_URL_BYTES} caps what an
  *   unauthenticated caller can write, so the stash can never become an
  *   unbounded pre-auth write primitive against the Redis that also holds live
@@ -155,7 +155,7 @@ export function normalizeInternalAuthorizeUrl(value: unknown): string | null {
   if (!value.startsWith('/')) return null;
   // Protocol-relative (`//host`) and its backslash twin (`/\host`), which a
   // browser resolves to the same thing. Mirrors — and slightly exceeds —
-  // `isSafeReturnTo`'s guard in routes/ui/login.ts.
+  // `isSafeReturnTo`'s guard in helpers/return-to.ts.
   if (value.startsWith('//') || value.startsWith('/\\')) return null;
   const queryStart = value.indexOf('?');
   const path = queryStart < 0 ? value : value.slice(0, queryStart);

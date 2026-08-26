@@ -4,6 +4,10 @@
 **Date:** 2026-01-15  
 **Authors:** QAuth Team
 
+> **Status (2026-08-08): the "Future — JWKS Support" framing below is superseded; the JWKS endpoint and multi-key publication have shipped.** `GET /.well-known/jwks.json` is registered (`apps/auth-server/src/app/routes/well-known.ts`) and serves `fastify.jwtUtils.getJwks()`. The key set is genuinely multi-entry (`libs/fastify/plugins/jwt/src/lib/fastify-plugin-jwt.ts`): the active Ed25519 key, an optional RS256 key (#309), ML-DSA `AKP` entries (#246), and retired Ed25519 keys published under their own `kid` so in-flight tokens keep verifying across a rotation (#248 F9).
+>
+> **What is still accurate:** `apps/auth-server/src/app/app.ts` does not currently pass retired keys when it constructs the JWT plugin, so a deployed server publishes a single EdDSA key and the "users must re-login on rotation" consequence below still holds in practice. The distinction matters — the JWKS _machinery_ is built, its retired-key _configuration_ is not yet wired at the app layer. Read the "Future" headings below as "not yet wired", not "not yet built".
+
 ## Context
 
 QAuth uses EdDSA (Ed25519) asymmetric keys for JWT signing and verification. We need a strategy for:

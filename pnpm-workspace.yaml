@@ -196,6 +196,29 @@ catalog:
   tailwind-merge: '^3.6.0'
   clsx: '^2.1.1'
   class-variance-authority: '^0.7.1'
+  # docs.qauth.dev (Astro + Starlight, #347). Pinned exact — this pairing is
+  # deliberate (Starlight 0.41 requires Astro ^7.0.2 and dropped Astro 6
+  # support), so a routine catalog bump must move both together, not drift
+  # independently. Astro 7's own `vite` dependency is `^8.0.13`, matching the
+  # workspace's existing `vite: 8.1.5` — no second Vite line introduced.
+  astro: '7.1.3'
+  '@astrojs/starlight': '0.41.4'
+  # `astro check` (Task 1 fix round 1, #347) — the real type-checking story
+  # for an Astro project: it type-checks `.astro` and MDX content through
+  # Astro's own language server, which `tsc --emitDeclarationOnly` (the
+  # @nx/js/typescript-inferred default) never does and which trips on
+  # Starlight's `docsSchema()` / Zod v4 combination under declaration-emit
+  # strictness for an unrelated reason. Peer `typescript: ^5.0.0 || ^6.0.0`
+  # matches the workspace's pinned `typescript: ~6.0.3`.
+  '@astrojs/check': '0.9.9'
+  # Task 5 fix round 1 (#351): the docs-site invariants need to compute the
+  # SAME heading-anchor slug Astro's own markdown pipeline produces, not an
+  # approximation of it. `astro` (via `@astrojs/markdown-remark` /
+  # `@astrojs/markdown-satteri`) already depends on `github-slugger` at
+  # exactly this version — pinned to match rather than left to range
+  # resolution, so the guard can never silently drift onto a second,
+  # differently-behaved copy of the same algorithm.
+  github-slugger: '2.0.0'
 # pnpm 11 requires an explicit build decision per dependency with a postinstall
 # script (it no longer infers them from onlyBuiltDependencies). Mirror the
 # approved set; cpu-features is an optional ssh2 native accel we don't build.

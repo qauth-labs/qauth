@@ -1,0 +1,13 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "include": [".astro/types.d.ts", "**/*"],
+  "exclude": ["dist"],
+  "compilerOptions": {
+    "moduleResolution": "Bundler",
+    "jsx": "preserve",
+    "jsxImportSource": "astro",
+    "allowJs": true,
+    "verbatimModuleSyntax": true,
+    "allowSyntheticDefaultImports": true
+  }
+}

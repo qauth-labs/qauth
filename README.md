@@ -173,7 +173,8 @@ Phase 1 core OAuth 2.1 / OIDC, the MCP and agent-native authorization layers, th
 - **OIDC conformance (T3)** — ID token issuance (EdDSA) with `nonce`, and aligned `sub` / `email` / `email_verified` / `name` claims across ID token, userinfo, and discovery
 - **Observability (T3)** — structured pino logging with secret redaction, `X-Request-Id` propagation, Prometheus `/metrics` (login + token counters), and Redis-backed failed-login tracking with lockout
 - **developer-portal production Docker image** + Docker Compose service
-- **Environment-aware authorization (T5, [ADR-008](./docs/adr/008-environment-aware-authorization.md))** — `environment` (development / staging / production) as a fail-safe, operator-set policy dimension on clients/realms; a single `resolveEnvironmentPolicy` resolver drives token TTLs, PKCE, localhost redirects, rate-limit tier, agent step-up, and the T3 security bundle; plus environment-gated static developer API keys (backend + portal UI)
+- **Environment-aware authorization (T5, [ADR-008](./docs/adr/008-environment-aware-authorization.md))** — `environment` (development / staging / production) as a fail-safe, operator-set policy dimension on clients/realms; a single `resolveEnvironmentPolicy` resolver drives token TTLs, PKCE, localhost redirects, rate-limit tier, agent step-up, and the consent screen's style CSP; plus environment-gated static developer API keys (backend + portal UI)
+- **Identifier abstraction ([ADR-002](./docs/adr/002-identifier-abstraction.md))** — epic #224 closed; migrations 0010–0012 shipped, including the destructive 0011 that dropped `users.email`, `users.email_normalized`, and `users.password_hash`. `users` is now a pure identity anchor; credentials live in `user_credentials`. Done — not a gate for anything else.
 
 **🚧 In progress — T4 platform track (48 closed / 4 open)**
 
@@ -204,7 +205,8 @@ Phase 1 core OAuth 2.1 / OIDC, the MCP and agent-native authorization layers, th
 │  ┌────────────────────────────────────────────────┐  │
 │  │  API Layer (REST)                              │  │
 │  │  OAuth 2.1 · OIDC 1.0 (✅)                     │  │
-│  │  OID4VC · OID4VP (📋 Phase 4)                  │  │
+│  │  OID4VP (✅ — verification)                    │  │
+│  │  OID4VC (📋 Phase 4 — issuance)                │  │
 │  └────────────────────────────────────────────────┘  │
 │                          ↓                           │
 │  ┌────────────────────────────────────────────────┐  │
@@ -549,7 +551,7 @@ docker compose up -d
 > - ✅ **T1 — MCP productization:** `@qauth-labs/mcp-guard` (RFC 9728 metadata + token validation + step-up scope challenges), Client ID Metadata Documents (CIMD) support, MCP quickstart + example, RFC 7009 revocation
 > - ✅ **T2 — Agent-native authZ (the Phase 9 substance, pulled forward):** agent client type, RFC 8693 token-exchange delegation, scope modes (ReadOnly/Admin/Exec), step-up, per-agent audit
 > - ✅ **T3 — OIDC conformance + hardening (done):** security (CSRF/Helmet/secure cookies/XSS), observability (pino/`/metrics`/request-id/failed-login lockout), ID token/nonce/claims, developer-portal Docker image
-> - ✅ **T5 — Environment-aware authZ ([ADR-008](./docs/adr/008-environment-aware-authorization.md)) (done):** `environment` as a fail-safe, operator-set policy dimension; `resolveEnvironmentPolicy` driving token TTLs / PKCE / localhost redirects / rate-limit tier / agent step-up / T3 bundle; environment-gated developer API keys (backend + portal UI)
+> - ✅ **T5 — Environment-aware authZ ([ADR-008](./docs/adr/008-environment-aware-authorization.md)) (done):** `environment` as a fail-safe, operator-set policy dimension; `resolveEnvironmentPolicy` driving token TTLs / PKCE / localhost redirects / rate-limit tier / agent step-up / consent-screen style CSP; environment-gated developer API keys (backend + portal UI)
 > - 🚧 **T4 — Federation + PQC (48 closed / 4 open):** the [ADR-002](./docs/adr/002-identifier-abstraction.md) migration gate is **passed** (epic #224); post-quantum hybrid signing is **merged and default-off** (epic #241); wallet federation **works end-to-end behind `WALLET_FEDERATION_ENABLED`**, validated against a mock wallet on the base profile. Phases 4–5 below.
 
 ### Phase 1: Core Auth Server (complete)
@@ -733,19 +735,12 @@ function Dashboard() {
 
 ## 📚 Documentation
 
-**Guides** (start at the [docs index](./docs/README.md)):
-
-- [MCP Quickstart](./docs/mcp-quickstart.md) — run QAuth + a `mcp-guard`-protected MCP server and complete the full OAuth handshake end-to-end
-- [OAuth 2.1 Flow](./docs/oauth-flow.md) — every endpoint with copy-paste `curl` (PKCE, authorize, token, refresh, client_credentials, introspection)
-- [Agent Authorization](./docs/agent-authorization.md) — the agent client type, RFC 8693 on-behalf-of delegation, scope modes, and step-up
-- [API Reference](./docs/api-reference.md) — hand-written contract for `/auth/*`, `/oauth/*`, discovery, and `/api/clients`
-- [Environment-Aware Authorization](./docs/environment-authorization.md) — the `environment` policy profile (dev/staging/prod) and environment-gated API keys
-- [Browser Security](./docs/browser-security.md) — T3 hardening: security headers, CSRF, secure cookies, XSS-safe output
-- [Observability](./docs/observability.md) — structured logging, `/metrics`, request-id, failed-login lockout
-- [Code Examples](./docs/code-examples.md) — copy-paste Node/TS and browser (PKCE) clients
-- [Docker Development Guide](./docs/docker.md) — local development with Docker
-- [Wallet Sign-in (OID4VP)](./docs/wallet-login.md) — the T4 browser wallet-login flow, the asserted-identifier step, and how to enable it
-- [Hybrid Signing — Verifier Guide](./docs/hybrid-signing-verifier-guide.md) — what token verifiers must do during the ADR-005 rollout (nothing, for classical Ed25519-only verifiers)
+The full documentation site is **[docs.qauth.dev](https://docs.qauth.dev)** —
+start there for the guides (MCP quickstart, OAuth 2.1 flow, agent
+authorization, wallet sign-in, environment-aware authorization, browser
+security, observability, code examples, Docker), the hand-written API
+reference, and the rendered design records. The canonical, always-current API surface is the
+interactive OpenAPI / Swagger UI at `/docs` on any running instance.
 
 **Reference:**
 

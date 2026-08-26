@@ -1,0 +1,58 @@
+---
+// Task 10 (#356): renders each `records` collection entry (docs/adr/*.md,
+// docs/security/*.md — loaded in place, see content.config.ts) as its own
+// page with Starlight's chrome, via the officially documented
+// `<StarlightPage>` component — the supported way to render content from
+// outside the `docs` collection with the same look as the rest of the site.
+//
+// Deliberately a route under `src/pages/`, NOT a physical file inside
+// `src/content/docs/`: the four drift guards (`src/invariants/*.ts`) find
+// their scan set by walking `src/content/docs` on disk, and these records
+// are historical documents whose claims were true when written — bringing
+// them under a guard that asserts present-tense truth would flag every
+// honest "not implemented" from March as drift. See the Task 10 report for
+// how this was verified empirically, not assumed.
+import { getCollection, render } from 'astro:content';
+import StarlightPage from '@astrojs/starlight/components/StarlightPage.astro';
+
+import { GITHUB_REPO_BLOB_BASE, extractRecordTitle } from '../../../lib/records';
+
+export async function getStaticPaths() {
+  const entries = await getCollection('records');
+  return entries.map((entry) => ({
+    params: { slug: entry.id },
+    props: { entry },
+  }));
+}
+
+const { entry } = Astro.props;
+const { Content, headings } = await render(entry);
+const title = extractRecordTitle(entry.body ?? '', entry.id);
+const sourcePath = `docs/${entry.id}.md`;
+
+const frontmatter = {
+  title,
+  description: `Rendered in place from ${sourcePath} — the source file is the record of truth; this page is a read-only copy.`,
+  // `lastVerified` satisfies this site's extended docs schema (see
+  // content.config.ts's `docs` collection — `<StarlightPage>` validates its
+  // `frontmatter` prop against that SAME schema, whatever collection the
+  // data actually came from). It carries no meaning for a historical
+  // record: the whole point of the Task 10 guard question is that these
+  // pages sit outside the drift guards' scan, `lastVerified` included, so
+  // there is nothing here for a reader to trust this date about. It exists
+  // only because the schema requires a value that type-checks, and is
+  // never written back into docs/adr or docs/security.
+  lastVerified: '2026-07-27',
+};
+---
+
+<StarlightPage frontmatter={frontmatter} headings={headings}>
+  <p>
+    This is a rendered copy of <a href={`${GITHUB_REPO_BLOB_BASE}/${sourcePath}`}>
+      <code>{sourcePath}</code></a
+    >, read in place from the repository — see the
+    <a href="/reference/records/">records index</a> for how to read it. If this page and the source
+    file ever disagree, the source file is correct.
+  </p>
+  <Content />
+</StarlightPage>
