@@ -206,6 +206,26 @@ services:
       # from nowhere" rather than "fetch from anywhere".
       OID4VP_STATUS_LIST_URI_ALLOWLIST: ${OID4VP_STATUS_LIST_URI_ALLOWLIST:-}
 
+      # The VERIFIER's OWN identity (#377): the ES256 key and X.509 chain a
+      # wallet establishes QAuth's identity from, under the `x509_hash` Client
+      # Identifier Prefix HAIP §5 mandates. Needed only by a profile that
+      # mandates signed requests; `oid4vp-1.0-base` needs none of it.
+      #
+      # NOT a token-issuance key: this one is published nowhere and never
+      # reaches the JWT plugin. Unset everything is the default and boots;
+      # setting SOME of it is a boot failure, because a half-provisioned
+      # verifier identity would otherwise fall back to a weaker one silently.
+      #
+      # Prefer the _PATH forms and mount the key and chain as files. The key and
+      # chain _PATH forms WIN over their inline siblings (one correct value, and
+      # an ordered sequence); the two ANCHOR sources are UNIONED.
+      OID4VP_VERIFIER_SIGNING_KEY: ${OID4VP_VERIFIER_SIGNING_KEY:-}
+      OID4VP_VERIFIER_SIGNING_KEY_PATH: ${OID4VP_VERIFIER_SIGNING_KEY_PATH:-}
+      OID4VP_VERIFIER_CERTIFICATE_CHAIN: ${OID4VP_VERIFIER_CERTIFICATE_CHAIN:-}
+      OID4VP_VERIFIER_CERTIFICATE_CHAIN_PATH: ${OID4VP_VERIFIER_CERTIFICATE_CHAIN_PATH:-}
+      OID4VP_VERIFIER_TRUST_ANCHORS: ${OID4VP_VERIFIER_TRUST_ANCHORS:-}
+      OID4VP_VERIFIER_TRUST_ANCHORS_PATH: ${OID4VP_VERIFIER_TRUST_ANCHORS_PATH:-}
+
       # Rate Limiting (Global)
       RATE_LIMIT_ENABLED: ${RATE_LIMIT_ENABLED:-true}
       RATE_LIMIT_MAX: ${RATE_LIMIT_MAX:-100}

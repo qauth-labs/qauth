@@ -36,3 +36,4 @@ export * from './trust/issuer-identity';
 export * from './trust/issuer-trust-rejection';
 export * from './trust/resolve-trust-registry';
 export * from './trust/trust-registry';
+export * from './x509/verifier-signing-material';

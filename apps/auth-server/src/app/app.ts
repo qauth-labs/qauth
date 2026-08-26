@@ -15,17 +15,23 @@ import {
   federationPlugin,
   keyStorageAssuranceProvisioningOf,
   type VerifierCryptoCapabilities,
+  verifierMaterialProvisionedBy,
 } from '@qauth-labs/fastify-plugin-federation';
 import { jwtPlugin } from '@qauth-labs/fastify-plugin-jwt';
 import { passwordPlugin } from '@qauth-labs/fastify-plugin-password';
 import { pkcePlugin } from '@qauth-labs/fastify-plugin-pkce';
-import { resolveStatusListTrustAnchorPems } from '@qauth-labs/server-config';
+import {
+  resolveStatusListTrustAnchorPems,
+  resolveVerifierCertificateChainPems,
+  resolveVerifierSigningKeyPem,
+} from '@qauth-labs/server-config';
 import type { FastifyInstance } from 'fastify';
 
 import { env } from '../config/env';
 import { deriveCryptoCapabilities } from './crypto-capabilities';
 import { assertSubjectResolutionProvisioned } from './helpers/assert-subject-resolution';
 import { isJtiRevoked } from './helpers/token-revocation';
+import { verifierSigningMaterial } from './helpers/verifier-identity';
 import errorHandler from './plugins/error-handler';
 import { metricsPlugin } from './plugins/metrics';
 import { rateLimitPlugin } from './plugins/rate-limit';
@@ -53,25 +59,13 @@ import { securityHeadersPlugin } from './plugins/security-headers';
  */
 const CRYPTO_CAPABILITIES: VerifierCryptoCapabilities = deriveCryptoCapabilities({
   rs256PrivateKey: env.JWT_RS256_PRIVATE_KEY,
+  // The OID4VP verifier's own key and chain (#377). Read here as CONFIGURED
+  // rather than as validated: validation happens inside `app()` below and is a
+  // boot refusal, so a deployment that reaches a request with this descriptor
+  // has already had its chain accepted.
+  verifierEs256PrivateKey: resolveVerifierSigningKeyPem(env),
+  verifierCertificateChainPems: resolveVerifierCertificateChainPems(env),
 });
-
-/**
- * The X.509 material this deployment provisioned for its verifier identity
- * (#299), which is none until #233 builds the configuration surface.
- *
- * ONE constant with TWO consumers, and that is the point rather than tidiness.
- * `resolveVerifierProfile` takes this as its third argument and defaults it to
- * `NO_VERIFIER_MATERIAL`; both `createConfiguredProviders` below and
- * `assertSubjectResolutionProvisioned` above call that resolver. If only one of
- * them were given real material, they would disagree about which profiles
- * resolve — and the disagreement is not symmetric: the boot gate would find no
- * usable profile, return early, and stop checking subject resolution at all,
- * while the provider path booted happily. A gate that silently switches itself
- * off is the exact failure #379 exists to fix, one level up.
- *
- * #233: replace `undefined` here, not at either call site.
- */
-const PROVISIONED_VERIFIER_MATERIAL = undefined;
 
 export async function app(fastify: FastifyInstance, opts: object) {
   await fastify.register(databasePlugin, {
@@ -162,6 +156,33 @@ export async function app(fastify: FastifyInstance, opts: object) {
     uriAllowlist: env.OID4VP_STATUS_LIST_URI_ALLOWLIST,
   });
 
+  // The VERIFIER identity (#377), and the same posture again for the third
+  // trust direction: the two calls above validate material QAuth will BELIEVE,
+  // this one validates the material QAuth will PRESENT. It parses the chain,
+  // checks it terminates at a configured anchor with the anchor itself excluded,
+  // and confirms the signing key belongs to the leaf — every one of which is an
+  // operator mistake whose only runtime symptom is a wallet rejecting 100% of
+  // requests with nothing in QAuth's logs naming the cause.
+  //
+  // NOT gated on WALLET_FEDERATION_ENABLED, for the reason the two gates above
+  // give: a mis-pasted certificate is mis-pasted whether or not wallet flows are
+  // switched on today, and finding it at boot beats finding it on the first
+  // presentation. A deployment that configured nothing gets `undefined` and is
+  // unaffected.
+  const verifierMaterial = verifierSigningMaterial();
+
+  // The marker set both boot gates read, derived ONCE from the material above.
+  //
+  // #379 introduced this as a module-level `PROVISIONED_VERIFIER_MATERIAL =
+  // undefined` with the note "#233: replace `undefined` here, not at either call
+  // site" — precisely so the subject-resolution gate and the provider gate could
+  // never disagree about which profiles resolve. #377 is that replacement, and
+  // the value is a local rather than a constant because the material is now
+  // VALIDATED at boot and validation can throw: computing it at module scope
+  // would turn an operator's mis-pasted certificate into an import-time crash
+  // with no plugin context around it.
+  const provisionedVerifierMaterial = verifierMaterialProvisionedBy(verifierMaterial);
+
   // Attesting issuers (#308/#379), the same posture again. `server-config`
   // validates each key as a syntactically valid https:// URL; the runtime
   // additionally reduces it with `canonicalizeIssuerIdentifier`, which refuses
@@ -182,7 +203,7 @@ export async function app(fastify: FastifyInstance, opts: object) {
   // reads. It runs BEFORE `createConfiguredProviders` below but yields to it on
   // a profile that cannot resolve at all, so a profile refusal keeps its own
   // message. Nothing about the request path changes — see the helper.
-  assertSubjectResolutionProvisioned(env, PROVISIONED_VERIFIER_MATERIAL);
+  assertSubjectResolutionProvisioned(env, provisionedVerifierMaterial);
 
   await fastify.register(federationPlugin, {
     providers: createConfiguredProviders({
@@ -210,17 +231,15 @@ export async function app(fastify: FastifyInstance, opts: object) {
       keyStorageAssuranceProvisioned: keyStorageAssuranceProvisioningOf(
         env.OID4VP_ATTESTING_ISSUERS
       ),
-      // No certificate configuration surface exists until #233, and the
-      // option's default is the refusing one, so this is `undefined` today.
-      //
-      // It is passed EXPLICITLY, from the same constant the subject-resolution
-      // gate above reads, because the two must never disagree. If this call
-      // resolved a profile that `assertSubjectResolutionProvisioned` could not,
-      // that gate would return early and SILENTLY disable itself — a boot check
-      // that stops checking is worse than one that was never added. #233 owes
-      // real material to `PROVISIONED_VERIFIER_MATERIAL`, once, and both
-      // consumers pick it up together.
-      provisionedVerifierMaterial: PROVISIONED_VERIFIER_MATERIAL,
+      // What the operator provisioned for the VERIFIER identity (#377) — the
+      // ES256 key and the X.509 chain a wallet establishes QAuth's identity
+      // from. Derived from the material that VALIDATED above rather than from
+      // the raw variables, so the marker set the gate reads can never claim a
+      // capability the chain did not earn: a chain that failed to anchor took
+      // the boot down before this line, and a deployment that configured
+      // nothing yields `NO_VERIFIER_MATERIAL`, which is what makes a profile
+      // requiring a WRPAC refuse.
+      provisionedVerifierMaterial,
     }),
   });
 
