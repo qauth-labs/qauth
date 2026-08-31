@@ -32,18 +32,18 @@ The dashboard card was never updated after #97/#98 landed. A developer who trust
 own words has no way to discover that API keys already work — the card actively tells them the
 opposite of what the rest of the app does.
 
-## `/consents` exists but nothing links to it
+## ~~`/consents` exists but nothing links to it~~ — fixed
 
-`/consents` (`apps/developer-portal/src/routes/consents.tsx`) is a working page — see the
-[portal guide](/portal/guide/#the-consents-page) for what it does and a separate authentication
-issue on that page. Structurally, it also sits outside the authenticated layout: every other page
-a signed-in developer uses lives under `_authed` (`apps/developer-portal/src/routes/_authed.tsx`),
-which redirects to `/login` when there is no session. That layout's header renders **no navigation
-links at all** — it carries only the product label, the signed-in address and a log-out button. The
-one "Manage clients" link in the product is a card on `/dashboard`, not a nav item. `/consents` defines its own top-level route
-(`apps/developer-portal/src/routes/consents.tsx:20`) with none of that — no auth redirect, no nav
-link. Nothing in the dashboard, the authed header, or any other route links to `/consents`. A
-developer reaches it only by typing the URL.
+**Resolved in #366.** The consent screen now lives under the authenticated layout
+(`apps/developer-portal/src/routes/_authed/consents.tsx`), so it redirects to `/login` without a
+session, and the `_authed` header carries a nav link to it
+(`apps/developer-portal/src/routes/_authed.tsx`). It also no longer calls the auth-server from the
+browser — the separate authentication defect recorded here previously — and it has a test, which
+it did not when this gap was written. See the
+[portal guide](/portal/guide/#the-consents-page).
+
+Both halves of this gap had the same root cause: no link and no test meant nothing exercised the
+page, so its `401` for every portal-authenticated developer went unnoticed.
 
 ## Two smaller, verified leftovers
 

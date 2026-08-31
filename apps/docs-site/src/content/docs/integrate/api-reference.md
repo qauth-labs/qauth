@@ -388,10 +388,14 @@ The wallet-login screens below are registered **only** when
 
 ## Consents (`/consents/`)
 
-Lets a signed-in user manage their own OAuth consent grants. **Cookie-authed**
-(`__Host-qauth_session`), not Bearer — there is no first-party access-token path
-here, because consent management is inherently a same-origin, user-present
-operation.
+Lets a signed-in user manage their own OAuth consent grants from the auth-server's
+**hosted UI**. **Cookie-authed** (`__Host-qauth_session`), so it carries a CSRF
+token.
+
+If you are calling from a separate origin — the developer portal, or your own
+front end — use [`/api/consents/`](#consents-api-apiconsents) below instead. That
+cookie is set only by `POST /ui/login` and is `SameSite=Lax`, so it will not be
+attached to a cross-site `fetch()` whatever `credentials: 'include'` says.
 
 ### `GET /consents/`
 
@@ -428,6 +432,54 @@ Revoke one consent owned by the signed-in user.
 mismatched `X-CSRF-Token`; the first outcome you'll hit if the header isn't
 wired up yet), `401` (no/invalid session), `404` (consent does not exist or
 is not owned by the caller).
+
+---
+
+## Consents API (`/api/consents/`)
+
+The same consent management, **Bearer-authed** — the credential the developer
+portal and any other API client actually holds. Same auth model as
+[`/api/clients/`](#client-management-apiclients): `Authorization: Bearer
+<access_token>`, scoped strictly to the token subject.
+
+**No CSRF token.** A Bearer token is not ambient authority a cross-site page can
+make the browser attach, so there is nothing for one to add. The cookie-authed
+`/consents/` above needs one precisely because its credential is ambient.
+
+Ownership and auditing are shared with `/consents/`, so the two surfaces cannot
+diverge on who may revoke what.
+
+### `GET /api/consents/`
+
+List the authenticated user's active consents.
+
+**Headers**: `Authorization: Bearer <access_token>` (required).
+
+**`200 OK`**
+
+```json
+{
+  "consents": [
+    {
+      "id": "...",
+      "clientId": "...",
+      "clientName": "My App",
+      "scopes": ["openid"],
+      "grantedAt": 1750000000000
+    }
+  ]
+}
+```
+
+No `csrfToken` field — see above. Errors: `401` (missing/invalid bearer).
+
+### `DELETE /api/consents/{id}`
+
+Revoke one consent owned by the authenticated user.
+
+**`204 No Content`**. Errors: `401` (missing/invalid bearer), `404` (consent
+does not exist **or** is not owned by the caller — deliberately the same
+outcome, so the API never reveals that another user's consent id exists).
 
 ---
 

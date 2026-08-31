@@ -155,12 +155,25 @@ function setEphemeralEnv(): void {
 
     RATE_LIMIT_ENABLED: 'false',
 
-    // Wallet federation (ADR-004): both are required together, or the app
-    // refuses to boot (#299 fail-closed). `POST /oid4vp/response` is
-    // registered only when the flag is on — this is the whole reason the
+    // Wallet federation (ADR-004): all three are required together, or the app
+    // refuses to boot (#299 and #379, both fail-closed). `POST /oid4vp/response`
+    // is registered only when the flag is on — this is the whole reason the
     // export needs a non-default environment (see module doc comment).
+    //
+    // `OID4VP_SUBJECT_BINDING_CLAIMS` became load-bearing with #379's
+    // subject-resolution boot gate: `oid4vp-1.0-base` defaults to
+    // `asserted-lookup`, and `assertSubjectResolutionProvisioned` refuses to
+    // start when that strategy has no binding claims, because an unchecked
+    // asserted-lookup would let any valid credential authenticate any account
+    // (ADR-009 §1). That gate landed without this script being updated, so the
+    // export — and therefore any regeneration of `openapi.json` — has been
+    // failing at boot ever since. The value is the EUDI PID mandatory attribute
+    // set from `.env.example`; it affects no path in the emitted document, it
+    // only has to be a configuration the app will start on.
     WALLET_FEDERATION_ENABLED: 'true',
     OID4VP_VERIFIER_PROFILE: 'oid4vp-1.0-base',
+    OID4VP_SUBJECT_RESOLUTION: 'asserted-lookup',
+    OID4VP_SUBJECT_BINDING_CLAIMS: 'family_name,given_name,birth_date',
   });
 }
 

@@ -1,10 +1,11 @@
-import { BadRequestError, NotFoundError } from '@qauth-labs/shared-errors';
+import { BadRequestError } from '@qauth-labs/shared-errors';
 import type { FastifyInstance } from 'fastify';
 import { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 
 import { env } from '../../../config/env';
 import { resolveBrowserSession } from '../../helpers/browser-session';
+import { listConsentsForUser, revokeConsentForUser } from '../../helpers/consent-management';
 import {
   type BrowserSessionData,
   csrfTokensEqual,
@@ -99,19 +100,7 @@ export default async function (fastify: FastifyInstance) {
       }
 
       const csrfToken = await ensureApiCsrfToken(fastify, session);
-
-      const rows = await fastify.repositories.oauthConsents.listActiveForUserWithClient(
-        session.userId
-      );
-
-      const consents = rows.map((row) => ({
-        id: row.id,
-        clientId: row.clientClientId,
-        clientName: row.clientName,
-        scopes: row.scopes,
-        grantedAt: row.grantedAt,
-      }));
-
+      const consents = await listConsentsForUser(fastify, session.userId);
       return reply.send({ consents, csrfToken });
     }
   );
@@ -155,36 +144,10 @@ export default async function (fastify: FastifyInstance) {
 
       const { id } = request.params as { id: string };
 
-      // Ownership check — we must not allow a user to revoke another
-      // user's consent, and `revoke()` by id alone cannot enforce that.
-      const rows = await fastify.repositories.oauthConsents.listActiveForUser(session.userId);
-      const owned = rows.find((r) => r.id === id);
-      if (!owned) {
-        throw new NotFoundError('OAuthConsent', id);
-      }
-
-      try {
-        await fastify.repositories.oauthConsents.revoke(id);
-      } catch (err) {
-        if (err instanceof NotFoundError) {
-          // Raced with another tab — treat as idempotent success.
-        } else if (err instanceof BadRequestError) {
-          throw err;
-        } else {
-          throw err;
-        }
-      }
-
-      await fastify.repositories.auditLogs.create({
-        userId: session.userId,
-        oauthClientId: owned.oauthClientId,
-        event: 'oauth.consent.revoked',
-        eventType: 'auth',
-        success: true,
-        ipAddress: request.ip,
-        userAgent: request.headers['user-agent'] || null,
-        metadata: { consentId: id },
-      });
+      // Ownership check + audit live in `helpers/consent-management` so this
+      // surface and the Bearer-authenticated `/api/consents` cannot drift on
+      // the security boundary (#366).
+      await revokeConsentForUser(fastify, request, session.userId, id);
 
       reply.code(204);
       return reply.send(null);

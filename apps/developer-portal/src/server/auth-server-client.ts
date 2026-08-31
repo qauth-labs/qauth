@@ -149,6 +149,23 @@ export interface ClientWithSecret extends OAuthClient {
   clientSecret?: string;
 }
 
+/**
+ * One row of `GET /api/consents` (issue #366). The auth-server owns the shape;
+ * this mirrors `consentRowSchema` in `routes/consents-api`.
+ */
+export interface Consent {
+  id: string;
+  clientId: string;
+  clientName: string;
+  scopes: string[];
+  /** Epoch milliseconds. */
+  grantedAt: number;
+}
+
+export interface ConsentListData {
+  consents: Consent[];
+}
+
 export interface ClientListData {
   clients: OAuthClient[];
 }
@@ -372,6 +389,27 @@ export const authServerClient = {
   listClients(accessToken: string): Promise<Result<ClientListData>> {
     return apiRequest<ClientListData>('/api/clients', {
       method: 'GET',
+      headers: { Authorization: `Bearer ${accessToken}` },
+      skipContentType: true,
+    });
+  },
+
+  listConsents(accessToken: string): Promise<Result<ConsentListData>> {
+    return apiRequest<ConsentListData>('/api/consents', {
+      method: 'GET',
+      headers: { Authorization: `Bearer ${accessToken}` },
+      skipContentType: true,
+    });
+  },
+
+  /**
+   * Revoke one consent. `/api/consents` is Bearer-authenticated, so unlike the
+   * cookie-authed `/consents` it needs no `X-CSRF-Token` header — see that
+   * route's module comment for why.
+   */
+  revokeConsent(accessToken: string, id: string): Promise<Result<null>> {
+    return apiRequestNoContent(`/api/consents/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
       headers: { Authorization: `Bearer ${accessToken}` },
       skipContentType: true,
     });

@@ -775,7 +775,8 @@
                       "enum": [
                         "authorization_code",
                         "refresh_token",
-                        "client_credentials"
+                        "client_credentials",
+                        "urn:ietf:params:oauth:grant-type:token-exchange"
                       ]
                     }
                   },
@@ -1116,7 +1117,8 @@
                       "enum": [
                         "authorization_code",
                         "refresh_token",
-                        "client_credentials"
+                        "client_credentials",
+                        "urn:ietf:params:oauth:grant-type:token-exchange"
                       ]
                     }
                   },
@@ -1912,6 +1914,91 @@
         }
       }
     },
+    "/api/consents/": {
+      "get": {
+        "tags": [
+          "Consents"
+        ],
+        "description": "List the active OAuth consents belonging to the authenticated user. Requires a developer Bearer access token. Drives the developer portal revocation screen (issue #366).",
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "consents": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "clientId": {
+                            "type": "string"
+                          },
+                          "clientName": {
+                            "type": "string"
+                          },
+                          "scopes": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          },
+                          "grantedAt": {
+                            "type": "number"
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "clientId",
+                          "clientName",
+                          "scopes",
+                          "grantedAt"
+                        ],
+                        "additionalProperties": false
+                      }
+                    }
+                  },
+                  "required": [
+                    "consents"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/consents/{id}": {
+      "delete": {
+        "tags": [
+          "Consents"
+        ],
+        "description": "Revoke one of the authenticated user's OAuth consents. Returns 404 if the consent does not exist or belongs to another user, so the API never reveals that another user's consent id exists. Requires a developer Bearer access token.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            },
+            "in": "path",
+            "name": "id",
+            "required": true
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Default Response"
+          }
+        }
+      }
+    },
     "/oauth/authorize": {
       "get": {
         "tags": [
@@ -2292,7 +2379,8 @@
                       "enum": [
                         "authorization_code",
                         "refresh_token",
-                        "client_credentials"
+                        "client_credentials",
+                        "urn:ietf:params:oauth:grant-type:token-exchange"
                       ]
                     }
                   },
