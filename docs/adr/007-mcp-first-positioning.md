@@ -316,6 +316,15 @@ spec citations. The decaying artefacts are the pin constants and ADR
 spec-tracking sections, not the code. A standing quarterly re-pin pass would
 catch this earlier than an ad-hoc audit does.
 
+**That pass now has a home: [`docs/spec-pin-log.md`](../spec-pin-log.md)** (#401).
+It records what is pinned, to which revision, **on what basis**, when it was
+last verified and when it is next due — and a check fails the build on an
+overdue row or a vanished consumer path, so the obligation is enforced rather
+than merely stated. The pin-basis column is the part that matters here: SD-JWT
+VC is pinned at `draft-13` because HAIP 1.0 §9.4 requires it, not because
+nobody has looked, and a re-pin pass that could not tell those apart would
+break conformance while appearing to modernise the docs.
+
 **Addendum 2026-08-06.** The re-review found the same failure mode running in
 the other direction, which is worse: the 2026-07-19 pass asserted three
 implementation gaps (#282, #284, `offline_access` filtering) that were closed

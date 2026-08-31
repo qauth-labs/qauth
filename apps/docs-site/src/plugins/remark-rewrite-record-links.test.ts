@@ -268,7 +268,13 @@ describe('rewriteRecordLink — the real docs/adr and docs/security corpus, enum
     // link, the OID4VCI 1.0 specification. Identified by diffing the extracted
     // link lists across the two revisions rather than by re-reading the ADR, so
     // the bucket it lands in below is a finding and not an assumption.
-    expect(extractAllLinks()).toHaveLength(197);
+    //
+    // 197 → 200 with #401's spec pin log: ADR-007's process note and two places
+    // in ADR-011 now link `../spec-pin-log.md`. All three are in-tree `.md`
+    // links to a document that is deliberately NOT a rendered record, so they
+    // land in the BLOB bucket below — the same outcome, for the same reason, as
+    // the EUDI drift log links already there.
+    expect(extractAllLinks()).toHaveLength(200);
   });
 
   it('every link falls into exactly one of the four outcomes, with none left unresolved', () => {
@@ -310,20 +316,29 @@ describe('rewriteRecordLink — the real docs/adr and docs/security corpus, enum
     // EUDI drift log links by one; that run caught it, which is the point of
     // enumerating mechanically instead of eyeballing a sample.
     //
-    // The blob bucket is 5 EUDI-regulatory-drift-log links plus 3 links to
-    // `docs/agent-authorization.md`. That second group is worth understanding
-    // rather than just counting: the guide itself moved to the site, so those
-    // ADR links now land on its 3-line pointer stub and the reader takes one
-    // extra hop to /integrate/agent-authorization/. That is the migration's
-    // accepted trade-off (the epic's "moved guides leave a pointer stub"
-    // decision), not a broken link — but if this count grows, check whether a
-    // new ADR is pointing at a stub where it meant to point at the guide.
+    // The blob bucket is 5 EUDI-regulatory-drift-log links, 3 links to
+    // `docs/agent-authorization.md`, and (since #401) 3 to `docs/spec-pin-log.md`.
+    // The middle group is worth understanding rather than just counting: that
+    // guide moved to the site, so those ADR links land on its 3-line pointer
+    // stub and the reader takes one extra hop to /integrate/agent-authorization/.
+    // That is the migration's accepted trade-off (the epic's "moved guides
+    // leave a pointer stub" decision), not a broken link — but if THAT group
+    // grows, check whether a new ADR is pointing at a stub where it meant to
+    // point at the guide.
+    //
+    // The pin-log group is the other kind: like the EUDI drift log beside it,
+    // `docs/spec-pin-log.md` is an operational ledger that is deliberately not
+    // rendered as a record, so a blob URL is the correct destination and not a
+    // stub hop. 8 → 11 accordingly, with the external and route buckets
+    // unchanged — which is the check that these really were in-tree links to an
+    // unrendered doc.
+    //
     // 93 → 94 external with #379's ADR-010 amendment (the OID4VCI 1.0 spec
     // URL). The three buckets below are unchanged by it, which is the check
     // that it really was an external link and not an in-tree one.
     expect(untouchedExternalOrAnchor).toBe(94 + 17);
     expect(rewrittenToRoute).toBe(78);
-    expect(rewrittenToBlob).toBe(8);
+    expect(rewrittenToBlob).toBe(11);
     expect(leftUnresolved).toBe(0);
   });
 });
