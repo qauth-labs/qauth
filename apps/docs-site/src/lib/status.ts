@@ -6,9 +6,21 @@
  * `src/invariants/status-claims.ts` (which does NOT import this module —
  * see that file's `FEATURE_EVIDENCE` table for why: it detects "shipped" by
  * checking whether evidence paths exist on disk, not by trusting a declared
- * status. Unifying the two — evidence-based detection driving this file's
- * data, or this file's data feeding the guard's feature list — is a real
- * design question raised but deliberately not settled here).
+ * status.
+ *
+ * UNIFICATION: settled 2026-08-31, and the answer is NO (#399). The two are
+ * kept separate on purpose, because they answer different questions and a
+ * merged one would answer neither well. This file is a CURATED narrative — what
+ * a reader should be told about delivery status, in what order, with the
+ * caveats that matter. The guard is a FALSIFIER — a small set of claims that
+ * can be mechanically disproved against the tree and against GitHub. Feeding
+ * this file into the guard would make the guard trust exactly the thing it
+ * exists to check; deriving this file from the guard would reduce a status page
+ * to a list of paths that happen to exist. What #399 added instead is a second
+ * falsifier — issue-state claims resolved against the GitHub API — so more of
+ * this file's claims are checkable without either side absorbing the other.
+ * `#379` is why: it went stale in this file within 24 hours of closing, and no
+ * amount of unification would have caught that. An API lookup does.)
  *
  * Plain data with types only: no rendering, no filesystem access. Every
  * claim below must stay true of the tree at HEAD — update this file, not a
