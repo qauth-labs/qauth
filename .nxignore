@@ -1,0 +1,11 @@
+# Git worktrees are created under `.claude/worktrees/<id>/`, i.e. INSIDE the
+# repo, so each one is a second full copy of the tree. Without this exclusion
+# Nx's project discovery walks into them and finds every project twice
+# ("shared-errors: libs/shared/errors, .claude/worktrees/<id>/libs/shared/errors"),
+# which fails every `nx` command run from the main checkout while a worktree
+# exists. A worktree runs Nx from its own root, where this path does not apply,
+# so it stays fully functional.
+#
+# `vitest.config.ts` excludes `**/.claude/**` for the same underlying reason —
+# keep the two in step.
+.claude/
