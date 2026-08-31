@@ -13,7 +13,7 @@
 > - **ADR-004** — the OID4VP base profile is **complete**, not "in progress". All of #233–#240 merged, and a browser wallet sign-in runs end to end behind `WALLET_FEDERATION_ENABLED` (default off), covered by an E2E mock-wallet suite. `WalletProvider.verify()` still throws by design, but the wallet login path does **not** go through it — it runs on `apps/auth-server/src/app/routes/ui/wallet-login.ts` → `helpers/wallet-presentation.ts`. See the [ADR-004 status note](./004-wallet-agnostic-federation.md).
 > - **ADR-005** — "no ML-DSA-signed token emitted yet" no longer holds. #245–#247 landed the JWS carrier, mixed `AKP`+`OKP` JWKS and the introspection-first posture, and **#275 wired live hybrid issuance** into `/oauth/token`, `/auth/login` and `/oauth/introspect`. A deployment that enables `HYBRID_SIGNING_ENABLED` (default off) does emit ML-DSA-65 material.
 >
-> Both features remain **off by default**, so a default deployment's behaviour is unchanged. Open: #376, #377, #379 and the tracking epic #231.
+> Both features remain **off by default**, so a default deployment's behaviour is unchanged. Open: #376, #377 and the tracking epic #231.
 
 ## Context
 

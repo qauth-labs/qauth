@@ -36,7 +36,7 @@ external OIDC providers still to come) plug in through the `CredentialProvider`
 interface, and downstream apps receive standard OAuth 2.1 access tokens and OIDC
 ID tokens.
 
-**Track T4 status (48 closed / 4 open)** — do not describe it as "deferred":
+**Track T4 status — 37 issues closed / 3 open** (`gh issue list --repo qauth-labs/qauth --milestone "T4 - Federation & PQC" --state all`; issues only — the milestone's own counter includes merged PRs; checked 2026-08-31) — do not describe it as "deferred":
 
 - The ADR-002 identifier-abstraction migration is **complete** (epic #224;
   migrations 0010–0012). `users` is a pure identity anchor; credential data lives

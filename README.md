@@ -25,9 +25,9 @@ MCP / AI-agent authorization ships today. Wallet federation works end-to-end aga
   <h3>🇪🇺 Made in Europe · 🇪🇪 Made in Estonia · 🇹🇷 Made in Türkiye</h3>
 </div>
 
-> 🎉 **July 2026 — the T4 platform track is nearly through.** The MVP, the agent-native authorization layer (T2), production hardening (T3) and the environment-aware posture (T5) all shipped previously. Since then the **identifier-abstraction migration ([ADR-002](./docs/adr/002-identifier-abstraction.md), epic #224) and post-quantum hybrid signing ([ADR-005](./docs/adr/005-pqc-hybrid-signing.md), epic #241) have both landed**, and wallet federation now completes a browser sign-in end-to-end behind a default-off flag. T4 stands at 48 issues closed, 4 open.
+> 🎉 **July 2026 — the T4 platform track is nearly through.** The MVP, the agent-native authorization layer (T2), production hardening (T3) and the environment-aware posture (T5) all shipped previously. Since then the **identifier-abstraction migration ([ADR-002](./docs/adr/002-identifier-abstraction.md), epic #224) and post-quantum hybrid signing ([ADR-005](./docs/adr/005-pqc-hybrid-signing.md), epic #241) have both landed**, and wallet federation now completes a browser sign-in end-to-end behind a default-off flag. T4 stands at 37 issues closed, 3 open (`gh issue list --repo qauth-labs/qauth --milestone "T4 - Federation & PQC" --state all`; issues only — the milestone's own counter includes merged PRs; checked 2026-08-31).
 
-> **Status:** Core OAuth 2.1 / OIDC **and** the MCP / agent-native authorization layer work end-to-end — discovery, dynamic client registration, resource-indicator audience binding, consent, and on-behalf-of agent delegation (the self-hostable OAuth 2.1 authorization server for MCP servers and AI agents; see [ADR-007](./docs/adr/007-mcp-first-positioning.md)). **Production hardening (T3)** and the **environment-aware authorization posture (T5, [ADR-008](./docs/adr/008-environment-aware-authorization.md))** are complete; deploy with the documented production configuration. **Wallet federation (T4) works end-to-end behind a flag** — the OID4VP verifier, SD-JWT VC validation, key attestations and the claims pipeline are merged, and first-time login, returning login, account linking and `acr` emission are covered by an E2E suite driving a mock wallet over the wire. It is **off by default** (`WALLET_FEDERATION_ENABLED=false`) and validated only against the `oid4vp-1.0-base` profile; the HAIP profile and a real-wallet pass are still open. **Post-quantum hybrid signing is implemented and default-off** (`HYBRID_SIGNING_ENABLED=false`). See [Current Status](#-current-status-july-2026).
+> **Status:** Core OAuth 2.1 / OIDC **and** the MCP / agent-native authorization layer work end-to-end — discovery, dynamic client registration, resource-indicator audience binding, consent, and on-behalf-of agent delegation (the self-hostable OAuth 2.1 authorization server for MCP servers and AI agents; see [ADR-007](./docs/adr/007-mcp-first-positioning.md)). **Production hardening (T3)** and the **environment-aware authorization posture (T5, [ADR-008](./docs/adr/008-environment-aware-authorization.md))** are complete; deploy with the documented production configuration. **Wallet federation (T4) works end-to-end behind a flag** — the OID4VP verifier, SD-JWT VC validation, key attestations and the claims pipeline are merged, and first-time login, returning login, account linking and `acr` emission are covered by an E2E suite driving a mock wallet over the wire. It is **off by default** (`WALLET_FEDERATION_ENABLED=false`) and validated only against the `oid4vp-1.0-base` profile; the HAIP profile and a real-wallet pass are still open. **Post-quantum hybrid signing is implemented and default-off** (`HYBRID_SIGNING_ENABLED=false`). See [Current Status](#-current-status-august-2026).
 
 ## ⚠️ AI-Assisted Development & Security Notice
 
@@ -143,9 +143,9 @@ An identity hub for the next generation of the internet — humans, agents, and 
 - **Standards compliant** — OAuth 2.1 (RFC 9700), OIDC 1.0, OID4VC, OID4VP, W3C DID, NIST FIPS 204
 - **Open and self-hostable** — Apache 2.0, no telemetry, runs anywhere
 
-## 📍 Current Status (July 2026)
+## 📍 Current Status (August 2026)
 
-> 🎉 **Milestone reached.** The **MVP**, the **agent-native authorization track (ADR-007 §2)**, the **T3 production-hardening track** and the **T5 environment-aware posture** are all complete. The **T4 platform track** — identifier abstraction, wallet federation and post-quantum signing — is 48 issues closed with 4 open.
+> 🎉 **Milestone reached.** The **MVP**, the **agent-native authorization track (ADR-007 §2)**, the **T3 production-hardening track** and the **T5 environment-aware posture** are all complete. The **T4 platform track** — identifier abstraction, wallet federation and post-quantum signing — is 37 issues closed with 3 open (`gh issue list --repo qauth-labs/qauth --milestone "T4 - Federation & PQC" --state all`; issues only — the milestone's own counter includes merged PRs; checked 2026-08-31).
 
 QAuth is **feature-complete for MCP / agent authentication and production-hardened**. An honest snapshot.
 
@@ -176,14 +176,14 @@ Phase 1 core OAuth 2.1 / OIDC, the MCP and agent-native authorization layers, th
 - **Environment-aware authorization (T5, [ADR-008](./docs/adr/008-environment-aware-authorization.md))** — `environment` (development / staging / production) as a fail-safe, operator-set policy dimension on clients/realms; a single `resolveEnvironmentPolicy` resolver drives token TTLs, PKCE, localhost redirects, rate-limit tier, agent step-up, and the consent screen's style CSP; plus environment-gated static developer API keys (backend + portal UI)
 - **Identifier abstraction ([ADR-002](./docs/adr/002-identifier-abstraction.md))** — epic #224 closed; migrations 0010–0012 shipped, including the destructive 0011 that dropped `users.email`, `users.email_normalized`, and `users.password_hash`. `users` is now a pure identity anchor; credentials live in `user_credentials`. Done — not a gate for anything else.
 
-**🚧 In progress — T4 platform track (48 closed / 4 open)**
+**🚧 In progress — T4 platform track (37 issues closed / 3 open)** (`gh issue list --repo qauth-labs/qauth --milestone "T4 - Federation & PQC" --state all`; issues only — the milestone's own counter includes merged PRs; checked 2026-08-31)
 
 - **Identifier abstraction ([ADR-002](./docs/adr/002-identifier-abstraction.md)) — complete.** Epic #224 closed; migrations 0010–0012 shipped, including the destructive 0011 that dropped `users.email` / `password_hash`. `users` is now a pure identity anchor and all credential data lives in `user_credentials`. This was the Phase 4 gate; it is passed.
 - **Post-quantum hybrid signing ([ADR-005](./docs/adr/005-pqc-hybrid-signing.md)) — implemented, default-off.** Epic #241 closed: detached-parallel ML-DSA-65 + Ed25519, mixed AKP+OKP JWKS, native `aws-lc-rs` backend with a `@noble/post-quantum` fallback. Gated behind `HYBRID_SIGNING_ENABLED=false` pending the [security review](./docs/security/005-pqc-hybrid-signing-review.md) checklist.
 - **Wallet federation ([ADR-004](./docs/adr/004-wallet-agnostic-federation.md)) — works end-to-end, off by default.** Merged: OID4VP 1.0 request generation + `direct_post` intake (#233), `VerifierProfile` (#299), per-realm issuer trust registry (#236), ES256 + JWE (#298), SD-JWT VC presentation validation (#234), Token Status List revocation (#297), HAIP key attestations (#308), `acr` propagation from assurance level (#237, [ADR-010](./docs/adr/010-acr-assurance-mapping.md)), VC claims normalization (#235), account linking (#238), subject resolution strategy (#300), the wallet sign-in UI (#239) and an E2E mock-wallet suite (#240).
   A browser can complete a wallet sign-in — first-time enrolment, returning login, account linking and `acr` emission are all covered end-to-end against a mock wallet speaking OID4VP 1.0 over the wire. Set `WALLET_FEDERATION_ENABLED=true` to register the routes; **the whole surface is inert while it is off**, which is the default. Validated so far only against the `oid4vp-1.0-base` profile and a mock wallet. See the [wallet sign-in guide](./docs/wallet-login.md).
   Note: `WalletProvider.verify()` — the generic `CredentialProvider`-registry entry point — still throws by design (#232). Wallet login does **not** go through it; it runs on the dedicated `/ui/wallet-login` + `/oid4vp/response` seam.
-- **Open:** HAIP profile wiring (#377), key-storage assurance into the assurance policy (#379), the real-wallet interoperability pass (#376), and the tracking epic (#231).
+- **Open:** HAIP profile wiring (#377), the real-wallet interoperability pass (#376), and the tracking epic (#231).
 
 **📋 Not started — deferred beyond T4**
 
@@ -304,7 +304,7 @@ qauth/
 
 ### Phase 1 — Core Auth Server (complete)
 
-> **Status:** Core OAuth 2.1 / OIDC flows work end-to-end with Ed25519 JWTs, Argon2id, PKCE, multi-tenancy via Realms, dynamic client registration, resource-indicator audience binding, and consent. The T3 hardening items — OIDC conformance detail (ID token, nonce, claims), structured logging + metrics, security headers, and the developer-portal Dockerfile — **shipped under the [T3 milestone](https://github.com/qauth-labs/qauth/milestones)** (see [ADR-007](./docs/adr/007-mcp-first-positioning.md)). For the full snapshot, see [Current Status](#-current-status-july-2026).
+> **Status:** Core OAuth 2.1 / OIDC flows work end-to-end with Ed25519 JWTs, Argon2id, PKCE, multi-tenancy via Realms, dynamic client registration, resource-indicator audience binding, and consent. The T3 hardening items — OIDC conformance detail (ID token, nonce, claims), structured logging + metrics, security headers, and the developer-portal Dockerfile — **shipped under the [T3 milestone](https://github.com/qauth-labs/qauth/milestones)** (see [ADR-007](./docs/adr/007-mcp-first-positioning.md)). For the full snapshot, see [Current Status](#-current-status-august-2026).
 
 **Core authentication (working today):**
 
@@ -360,7 +360,7 @@ qauth/
 - `acr` propagation from assurance level ✅ (#237, ADR-010); account linking ✅ (#238)
 - Wallet sign-in UI ✅ (#239) + E2E mock-wallet suite ✅ (#240)
 - Browser wallet sign-in completes end-to-end behind `WALLET_FEDERATION_ENABLED` ✅
-- HAIP profile wiring 📋 (#377) · real-wallet interop pass 📋 (#376) · key-storage assurance 📋 (#379)
+- HAIP profile wiring 📋 (#377) · real-wallet interop pass 📋 (#376)
 - Wallet login UI flow in `auth-ui`
 - Inverse: QAuth as a Verifiable Credential issuer
 
@@ -552,7 +552,7 @@ docker compose up -d
 > - ✅ **T2 — Agent-native authZ (the Phase 9 substance, pulled forward):** agent client type, RFC 8693 token-exchange delegation, scope modes (ReadOnly/Admin/Exec), step-up, per-agent audit
 > - ✅ **T3 — OIDC conformance + hardening (done):** security (CSRF/Helmet/secure cookies/XSS), observability (pino/`/metrics`/request-id/failed-login lockout), ID token/nonce/claims, developer-portal Docker image
 > - ✅ **T5 — Environment-aware authZ ([ADR-008](./docs/adr/008-environment-aware-authorization.md)) (done):** `environment` as a fail-safe, operator-set policy dimension; `resolveEnvironmentPolicy` driving token TTLs / PKCE / localhost redirects / rate-limit tier / agent step-up / consent-screen style CSP; environment-gated developer API keys (backend + portal UI)
-> - 🚧 **T4 — Federation + PQC (48 closed / 4 open):** the [ADR-002](./docs/adr/002-identifier-abstraction.md) migration gate is **passed** (epic #224); post-quantum hybrid signing is **merged and default-off** (epic #241); wallet federation **works end-to-end behind `WALLET_FEDERATION_ENABLED`**, validated against a mock wallet on the base profile. Phases 4–5 below.
+> - 🚧 **T4 — Federation + PQC (37 issues closed / 3 open (`gh issue list --repo qauth-labs/qauth --milestone "T4 - Federation & PQC" --state all`; issues only — the milestone's own counter includes merged PRs; checked 2026-08-31)):** the [ADR-002](./docs/adr/002-identifier-abstraction.md) migration gate is **passed** (epic #224); post-quantum hybrid signing is **merged and default-off** (epic #241); wallet federation **works end-to-end behind `WALLET_FEDERATION_ENABLED`**, validated against a mock wallet on the base profile. Phases 4–5 below.
 
 ### Phase 1: Core Auth Server (complete)
 
@@ -602,7 +602,7 @@ docker compose up -d
 - [x] Integration tests against a reference mock wallet (#240)
 - [x] Browser wallet sign-in completes end-to-end behind `WALLET_FEDERATION_ENABLED`
 - [ ] HAIP profile wiring — signed `x509_hash` requests, encrypted `direct_post.jwt` (#377)
-- [ ] Key-storage assurance into the assurance policy (#379)
+- [x] Key-storage assurance into the assurance policy (#379)
 - [ ] Real-wallet interoperability validation pass (#376)
 - [ ] Trust anchor validation against the EU Trusted List
 - [ ] Inverse direction: QAuth as a Verifiable Credential issuer
