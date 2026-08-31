@@ -1,0 +1,68 @@
+{
+  "$comment": "Alias registry for the spec-conformance matrix (#400). Maps every spelling a test title uses onto one spec id, so a citation grammar can vary without touching a single requirement row. `sealed` is the ratchet: once true, a citation naming this spec with no matching row is a build FAILURE rather than a note.",
+  "specs": [
+    {
+      "id": "rfc-9207",
+      "title": "RFC 9207 \u2014 OAuth 2.0 Authorization Server Issuer Identification",
+      "url": "https://datatracker.ietf.org/doc/html/rfc9207",
+      "aliases": ["RFC 9207"],
+      "sealed": true
+    },
+    {
+      "id": "rfc-8414",
+      "title": "RFC 8414 \u2014 OAuth 2.0 Authorization Server Metadata",
+      "url": "https://datatracker.ietf.org/doc/html/rfc8414",
+      "aliases": ["RFC 8414"],
+      "sealed": true
+    },
+    {
+      "id": "oidc-discovery-1_0",
+      "title": "OpenID Connect Discovery 1.0",
+      "url": "https://openid.net/specs/openid-connect-discovery-1_0.html",
+      "aliases": ["OIDC Discovery", "OpenID Connect Discovery", "OpenID Connect Discovery 1.0"],
+      "sealed": true
+    },
+    {
+      "id": "oidc-core-1_0",
+      "title": "OpenID Connect Core 1.0",
+      "url": "https://openid.net/specs/openid-connect-core-1_0.html",
+      "aliases": ["OIDC Core", "OIDC Core 1.0", "OpenID Connect Core", "OpenID Connect Core 1.0"],
+      "sealed": false
+    },
+    {
+      "id": "rfc-6749",
+      "title": "RFC 6749 \u2014 The OAuth 2.0 Authorization Framework",
+      "url": "https://datatracker.ietf.org/doc/html/rfc6749",
+      "aliases": ["RFC 6749"],
+      "sealed": false
+    },
+    {
+      "id": "rfc-7636",
+      "title": "RFC 7636 \u2014 Proof Key for Code Exchange (PKCE)",
+      "url": "https://datatracker.ietf.org/doc/html/rfc7636",
+      "aliases": ["RFC 7636"],
+      "sealed": false
+    },
+    {
+      "id": "rfc-6750",
+      "title": "RFC 6750 \u2014 The OAuth 2.0 Bearer Token Usage",
+      "url": "https://datatracker.ietf.org/doc/html/rfc6750",
+      "aliases": ["RFC 6750"],
+      "sealed": false
+    },
+    {
+      "id": "rfc-7591",
+      "title": "RFC 7591 \u2014 OAuth 2.0 Dynamic Client Registration Protocol",
+      "url": "https://datatracker.ietf.org/doc/html/rfc7591",
+      "aliases": ["RFC 7591"],
+      "sealed": false
+    },
+    {
+      "id": "rfc-9700",
+      "title": "RFC 9700 \u2014 Best Current Practice for OAuth 2.0 Security",
+      "url": "https://datatracker.ietf.org/doc/html/rfc9700",
+      "aliases": ["RFC 9700"],
+      "sealed": false
+    }
+  ]
+}

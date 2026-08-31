@@ -1,0 +1,74 @@
+{
+  "spec": "oidc-core-1_0",
+  "$comment": "Basic-OP subset only. The spec is NOT sealed in specs.json, so a citation with no row here is a note rather than a failure while the rest is filled in.",
+  "requirements": [
+    {
+      "section": "3.1.2.1",
+      "level": "MUST",
+      "quote": "Authorization Servers MUST support the use of the HTTP GET and POST methods defined in RFC 7231 at the Authorization Endpoint.",
+      "applies": "GET and POST /oauth/authorize",
+      "status": "covered"
+    },
+    {
+      "section": "3.1.2.1",
+      "level": "MUST",
+      "quote": "prompt — none: The Authorization Server MUST NOT display any authentication or consent user interface pages. An error is returned if an End-User is not already authenticated.",
+      "applies": "GET /oauth/authorize with prompt=none",
+      "status": "covered",
+      "$comment": "#318. Before it, a silent-renewal request rendered a login form inside the client's hidden iframe and hung until timeout."
+    },
+    {
+      "section": "3.1.3.6",
+      "level": "MUST",
+      "quote": "The Client MUST validate the ID Token in the Token Response... The Issuer Identifier for the OpenID Provider MUST exactly match the value of the iss (issuer) Claim.",
+      "applies": "ID token minted at POST /oauth/token",
+      "status": "covered"
+    },
+    {
+      "section": "3.1.3.7",
+      "level": "MUST",
+      "quote": "If a nonce value was sent in the Authentication Request, a nonce Claim MUST be present and its value checked to verify that it is the same value as the one that was sent in the Authentication Request.",
+      "applies": "ID token nonce echo",
+      "status": "covered"
+    },
+    {
+      "section": "2",
+      "level": "OPTIONAL",
+      "quote": "acr — OPTIONAL. Authentication Context Class Reference. String specifying an Authentication Context Class Reference value that identifies the Authentication Context Class that the authentication performed satisfied.",
+      "applies": "resolveAcrValue (ADR-010)",
+      "status": "covered"
+    },
+    {
+      "section": "5.1",
+      "level": "MUST",
+      "quote": "email_verified — True if the End-User's e-mail address has been verified; otherwise false.",
+      "applies": "ID token, userinfo and access-token convenience claims",
+      "status": "covered",
+      "$comment": "ADR-002: QAuth omits BOTH claims when there is no verified attribute, rather than emitting email_verified:false. Presence is the verification signal."
+    },
+    {
+      "section": "3.3.2.11",
+      "level": "MUST",
+      "quote": "at_hash — Access Token hash value... This is REQUIRED when the ID Token is issued from the Authorization Endpoint with an access_token value.",
+      "applies": "hybrid and implicit flows",
+      "status": "n/a",
+      "reason": "QAuth supports only the authorization code flow (response_types_supported is ['code']). An ID token is never issued from the authorization endpoint, so at_hash and c_hash never apply."
+    },
+    {
+      "section": "5.3.2",
+      "level": "MAY",
+      "quote": "The UserInfo Claims MUST be returned as the members of a JSON object unless a signed or encrypted response was requested during Client Registration.",
+      "applies": "GET /oauth/userinfo",
+      "status": "n/a",
+      "reason": "Signed UserInfo responses are not offered: userinfo_signing_alg_values_supported is intentionally absent from discovery, so no client can request one and the plain JSON branch is the only reachable one."
+    },
+    {
+      "section": "16.18",
+      "level": "SHOULD",
+      "quote": "The OpenID Provider SHOULD support the certification process defined by the OpenID Foundation.",
+      "applies": "deployment-level",
+      "status": "manual",
+      "evidenceRef": "docs/oidf-op-certification-runbook.md"
+    }
+  ]
+}

@@ -61,7 +61,7 @@ async function buildApp(overrides?: {
 }
 
 describe('GET /.well-known/oauth-authorization-server', () => {
-  it('returns RFC 8414 metadata with the expected shape and caching headers', async () => {
+  it('returns RFC 8414 §3 metadata with the RFC 8414 §2 required members, and the RFC 8414 §3.2 response contract (200, application/json) plus caching headers', async () => {
     const app = await buildApp();
     try {
       const res = await app.inject({
@@ -149,7 +149,7 @@ describe('GET /.well-known/oauth-authorization-server', () => {
 });
 
 describe('GET /.well-known/openid-configuration', () => {
-  it('returns an OIDC Discovery document superset of the AS metadata', async () => {
+  it('returns an OIDC Discovery §4 document carrying the OIDC Discovery §3 required members, a superset of the AS metadata', async () => {
     const app = await buildApp();
     try {
       const res = await app.inject({

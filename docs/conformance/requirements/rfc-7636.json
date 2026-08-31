@@ -1,0 +1,5 @@
+{
+  "spec": "rfc-7636",
+  "$comment": "STUB — present in the registry so a citation resolves to a known spec, with rows to follow. NOT sealed in specs.json, so an orphan citation here is a note, not a build failure. Increment 1 (#400) populated RFC 9207, RFC 8414, OIDC Discovery 1.0 and the Basic-OP subset of OIDC Core 1.0 only.",
+  "requirements": []
+}

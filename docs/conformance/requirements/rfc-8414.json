@@ -1,0 +1,34 @@
+{
+  "spec": "rfc-8414",
+  "requirements": [
+    {
+      "section": "2",
+      "level": "MUST",
+      "quote": "issuer — REQUIRED. The authorization server's issuer identifier, which is a URL that uses the \"https\" scheme and has no query or fragment components.",
+      "applies": "buildAuthorizationServerMetadata",
+      "status": "covered"
+    },
+    {
+      "section": "3",
+      "level": "MUST",
+      "quote": "Authorization servers supporting metadata MUST make a JSON document containing metadata as specified in Section 2 available at a path formed by inserting a well-known URI string into the authorization server's issuer identifier between the host component and the path component, if any.",
+      "applies": "GET /.well-known/oauth-authorization-server",
+      "status": "covered"
+    },
+    {
+      "section": "3.2",
+      "level": "MUST",
+      "quote": "The response is a set of claims about the authorization server's configuration, including all necessary endpoints and public key location information. A successful response MUST use the 200 OK HTTP status code and return a JSON object using the application/json content type.",
+      "applies": "GET /.well-known/oauth-authorization-server",
+      "status": "covered"
+    },
+    {
+      "section": "2",
+      "level": "OPTIONAL",
+      "quote": "request_uri_parameter_supported — OPTIONAL. Boolean value specifying whether the authorization server supports use of the request_uri parameter, with true indicating support. If omitted, the default value is true.",
+      "applies": "buildAuthorizationServerMetadata",
+      "status": "covered",
+      "$comment": "The default is TRUE, so omitting it advertised a capability QAuth does not have. #286 made it explicitly false. This row exists because the omission was a real defect, not a stylistic gap."
+    }
+  ]
+}

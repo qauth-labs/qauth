@@ -1,0 +1,40 @@
+{
+  "spec": "oidc-discovery-1_0",
+  "requirements": [
+    {
+      "section": "4",
+      "level": "MUST",
+      "quote": "OpenID Providers supporting Discovery MUST make a JSON document available at the path formed by concatenating the string /.well-known/openid-configuration to the Issuer.",
+      "applies": "GET /.well-known/openid-configuration",
+      "status": "covered"
+    },
+    {
+      "section": "3",
+      "level": "MUST",
+      "quote": "issuer — REQUIRED. URL using the https scheme with no query or fragment component that the OP asserts as its Issuer Identifier.",
+      "applies": "buildOpenIdConfiguration",
+      "status": "covered"
+    },
+    {
+      "section": "3",
+      "level": "MUST",
+      "quote": "jwks_uri — REQUIRED. URL of the OP's JSON Web Key Set [JWK] document.",
+      "applies": "buildOpenIdConfiguration + GET /.well-known/jwks.json",
+      "status": "covered"
+    },
+    {
+      "section": "3",
+      "level": "MUST",
+      "quote": "id_token_signing_alg_values_supported — REQUIRED. JSON array containing a list of the JWS signing algorithms (alg values) supported by the OP for the ID Token to encode the Claims in a JWT.",
+      "applies": "buildOpenIdConfiguration",
+      "status": "covered"
+    },
+    {
+      "section": "3",
+      "level": "RECOMMENDED",
+      "quote": "claims_supported — RECOMMENDED. JSON array containing a list of the Claim Names of the Claims that the OpenID Provider MAY be able to supply values for.",
+      "applies": "buildOpenIdConfiguration",
+      "status": "covered"
+    }
+  ]
+}
