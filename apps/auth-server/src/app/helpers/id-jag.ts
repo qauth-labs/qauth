@@ -58,9 +58,23 @@ import {
  */
 
 /**
- * RFC 8725 / draft-ietf-oauth-identity-assertion-authz-grant §3.1 media type for
- * an ID-JAG's protected header. Asserted on the VERIFIED header when consuming,
- * and stamped when minting.
+ * The Internet-Draft revision this implementation targets.
+ *
+ * ADR-011:420-422 requires the implementation to "pin the revision it targets
+ * **in code**" rather than only in prose, so the pin lives here beside the wire
+ * constants it governs and moves in the same diff they do.
+ *
+ * `-04` expires **2026-11-22**, which is this row's `Re-check by` date in
+ * `docs/spec-pin-log.md`; that log's freshness check fails the build once the
+ * date passes, so the pass cannot be forgotten. Changing this constant without
+ * updating the log — or the reverse — is the drift both are there to prevent.
+ */
+export const ID_JAG_DRAFT = 'draft-ietf-oauth-identity-assertion-authz-grant-04' as const;
+
+/**
+ * RFC 8725 / `draft-ietf-oauth-identity-assertion-authz-grant` §3.1 media type
+ * for an ID-JAG's protected header, at the revision {@link ID_JAG_DRAFT} pins.
+ * Asserted on the VERIFIED header when consuming, and stamped when minting.
  */
 export const ID_JAG_TYP = 'oauth-id-jag+jwt';
 

@@ -22,9 +22,14 @@ in closed issues and PRs keep resolving.
 
 ## Standing records
 
+- [Specification Pin Log](./spec-pin-log.md) — what every moving specification
+  is pinned to, **on what basis**, when it was last verified and when it is next
+  due. Home of the quarterly re-pin pass ADR-007 mandates; a check fails the
+  build on an overdue row.
 - [EUDI Regulatory Drift Log](./eudi-regulatory-drift-log.md) — the standing
   re-verification record for the EU implementing regulations and
-  specifications that ADR-004 and ADR-009 rest on.
+  specifications that ADR-004 and ADR-009 rest on. Sibling of the pin log
+  above, and sole owner of the EU legal instruments.
 - [OIDF OP Certification Runbook](./oidf-op-certification-runbook.md) — the
   operator runbook for driving the OpenID Foundation conformance suite.
 - [Wallet Interop Manual Validation](./wallet-interop-manual-validation.md) —

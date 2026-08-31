@@ -32,6 +32,23 @@ text — that a repository method returns the right shape, that a helper is
 fail-closed, that a regression stays fixed. Annotating them with spec references
 would be noise, and would invert the direction this document depends on.
 
+## A caveat on the `quote` field
+
+Every increment-1 specification source — `rfc-editor.org`, `datatracker.ietf.org`,
+`openid.net` — is unreachable from the environment these rows were authored in
+(the egress proxy returns 403). The `quote` field is therefore **transcribed, not
+copy-pasted from the source**, and is faithful to the normative requirement
+rather than guaranteed byte-exact.
+
+That is fine for the gate — which joins on `(specId, section)` and never reads
+the quote — and NOT fine for a certification submission, where a reviewer will
+read the quotes. **Re-verify every `quote` against the published specification
+before the matrix is used as certification evidence**, and drop this section when
+that pass has run.
+
+Recording it here rather than leaving it implicit: a document whose whole purpose
+is to be checkable should not have an unmarked soft spot.
+
 ## Statuses
 
 Four, and the distinctions carry the whole value:

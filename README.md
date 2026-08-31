@@ -747,6 +747,7 @@ interactive OpenAPI / Swagger UI at `/docs` on any running instance.
 - [Product Requirements Document](./MVP-PRD.md) — full phase breakdown, API specs, database schema
 - [Architecture Decision Records](./docs/adr/README.md) — key architectural decisions
 - [PQC Security Gate Review](./docs/security/005-pqc-hybrid-signing-review.md) — the three-dimension review of the merged PQC surface and the pre-default-on checklist
+- [Specification Pin Log](./docs/spec-pin-log.md) — what every moving spec is pinned to and on what basis; home of ADR-007's quarterly re-pin pass
 - [EUDI Regulatory Drift Log](./docs/eudi-regulatory-drift-log.md) — standing re-verification of the EU regulations ADR-004 and ADR-009 rest on
 - [OIDF OP Certification Runbook](./docs/oidf-op-certification-runbook.md) — the procedure for the OpenID Foundation conformance run
 - [Wallet Interop Manual Validation](./docs/wallet-interop-manual-validation.md) — the real-wallet validation procedure (#376)
