@@ -61,10 +61,32 @@ must:
 
 1. Deploy a build from the commit range that has the backfill target: at or
    after `62886c9` (#226, "add idempotent ADR-002 identity backfill") and
-   before `29abe4a` (#230, "drop legacy users identity columns"). At the time
-   of writing no tagged release pins this window — identify the commit your
-   deploy pipeline can build from, or ask in the tracking issue if you land
-   here and none exists yet.
+   before `29abe4a` (#230, "drop legacy users identity columns").
+
+   **Build `00c23f04`** unless you have a reason not to. It is the immediate
+   parent of `29abe4a` — the newest state of `main` that still carries the
+   backfill tool and migration 0010's dual-write behaviour, and does not yet
+   carry migration 0011. Verify what you checked out before deploying it:
+
+   ```bash
+   git show 00c23f04:libs/infra/db/project.json | grep backfill-identity   # must match
+   git ls-tree 00c23f04 libs/infra/db/drizzle | grep 0011                  # must be EMPTY
+   ```
+
+   **No release tag names this commit** — giving the hop a pinnable tag is
+   tracked in [#362](https://github.com/qauth-labs/qauth/issues/362). Until
+   then a SHA is the only precise instrument available, which is why this page
+   gives you one rather than a tag that would be wrong.
+
+   :::danger[`v0.1.0-rc.0` is not a safe starting point]
+   The repository's only tag, `v0.1.0-rc.0` (2026-07-25), **postdates**
+   migration 0011 and already contains the destructive drop. Deploying it as
+   the "previous release" of a two-hop upgrade applies 0011 to a database that
+   was never backfilled — which is the failure this whole page exists to
+   prevent. Confirm for yourself with
+   `git ls-tree v0.1.0-rc.0 libs/infra/db/drizzle | grep 0011`.
+   :::
+
 2. Run the [Step 3](#step-3-run-the-backfill-verification) backfill against
    that deployment.
 3. Only then continue upgrading, release by release, until you reach the
