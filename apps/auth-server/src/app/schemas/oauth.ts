@@ -556,12 +556,39 @@ export type IntrospectResponse = z.infer<typeof introspectResponseSchema>;
  * Since Zod strips unknown keys here, a registration request carrying any of
  * them is silently ignored rather than honoured — which is the fail-closed
  * outcome, but callers should not rely on it as the enforcement mechanism.
+ *
+ * ADMITTED, and why it differs from `jwt-bearer` above (#381):
+ * `urn:ietf:params:oauth:grant-type:token-exchange` IS accepted here. Note the
+ * asymmetry is deliberate. `jwt-bearer` is excluded because a self-registered
+ * client could not reach the capability at all — the issuer allowlist is
+ * operator-set, so advertising it to the client would be a lie. Token exchange
+ * is the opposite: the capability IS reachable, and reaching it confers nothing
+ * the client did not already hold. `handleTokenExchange` requires a
+ * cryptographically valid subject token the client must already possess, and
+ * preserves-or-narrows its scope and audience (GATE 4) — the delegated token is
+ * never wider than the one presented. The one axis where a grant could add
+ * authority, the reserved `agent:*` scope modes, is clamped to the OPERATOR-set
+ * `max_agent_mode` (GATE 4c), which self-registration deliberately never sets,
+ * so it stays NULL and yields no agent mode at all. What the exchange does add
+ * is an `act` claim naming the agent — strictly more auditable, not less.
+ *
+ * Refusing it here instead would have meant withdrawing the grant from
+ * `grant_types_supported` (`helpers/discovery.ts`) and from ADR-007 §2's
+ * agent-native surface, i.e. deleting a shipped feature rather than finishing
+ * its provisioning.
  */
 export const dynamicClientRegistrationRequestSchema = z.object({
   client_name: z.string().min(1).max(255).optional(),
   redirect_uris: z.array(z.string().min(1).max(2048)).max(20).optional(),
   grant_types: z
-    .array(z.enum(['authorization_code', 'refresh_token', 'client_credentials']))
+    .array(
+      z.enum([
+        'authorization_code',
+        'refresh_token',
+        'client_credentials',
+        TOKEN_EXCHANGE_GRANT_TYPE,
+      ])
+    )
     .max(8)
     .optional(),
   response_types: z

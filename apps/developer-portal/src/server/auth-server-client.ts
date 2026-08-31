@@ -54,7 +54,14 @@ export interface UserInfoData {
 export type TokenEndpointAuthMethod =
   'none' | 'client_secret_post' | 'client_secret_basic' | 'private_key_jwt';
 
-export type GrantType = 'authorization_code' | 'refresh_token' | 'client_credentials';
+export type GrantType =
+  | 'authorization_code'
+  | 'refresh_token'
+  | 'client_credentials'
+  // RFC 8693 on-behalf-of delegation (ADR-007 §2). Settable by a developer on
+  // their own client since #381; see `grantTypeSchema` in the auth-server's
+  // `schemas/clients.ts` for why this subset excludes `jwt-bearer`.
+  | 'urn:ietf:params:oauth:grant-type:token-exchange';
 
 /**
  * Safe representation of an OAuth client as returned by every `/api/clients`

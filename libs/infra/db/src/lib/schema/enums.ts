@@ -51,17 +51,32 @@ export const codeChallengeMethodEnum = pgEnum('code_challenge_method', [
  *   client only records that the client MAY present an assertion — the grant
  *   itself is inert unless `ID_JAG_ENABLED=true` AND the assertion's issuer is
  *   on `ID_JAG_TRUSTED_ISSUERS`. Both gates are fail-closed.
+ * - urn:ietf:params:oauth:grant-type:token-exchange: RFC 8693 on-behalf-of
+ *   delegation (ADR-007 §2, #183). Registering it records only that the client
+ *   MAY attempt an exchange; it confers no authority. Every consequence is
+ *   still decided by the handler's gates — `isAgentClient(client)`, a
+ *   cryptographically valid subject token, preserve-or-narrow on scope and
+ *   audience, a bounded `act` chain, and the OPERATOR-set `max_agent_mode`
+ *   ceiling that self-registration deliberately never sets.
  *
- * Note: OAuth 2.1 removed deprecated grant types (password, implicit). The
- * RFC 8693 token-exchange grant is deliberately NOT listed here: eligibility
- * for it is decided by the agent classification + `max_agent_mode` gates in
- * the handler, not by a per-client registered grant type.
+ *   This value was previously absent, with a note here claiming eligibility was
+ *   "decided by the agent classification + `max_agent_mode` gates in the
+ *   handler, not by a per-client registered grant type". That was not what
+ *   shipped: `handleTokenExchange` gates on
+ *   `client.grantTypes.includes(TOKEN_EXCHANGE_GRANT_TYPE)` as GATE 1's second
+ *   half, so the registered grant type is load-bearing. With the value missing
+ *   from every provisioning path, the grant was advertised in
+ *   `grant_types_supported` and enforced at the token endpoint while being
+ *   reachable only by writing the JSONB column out of band (#381).
+ *
+ * Note: OAuth 2.1 removed deprecated grant types (password, implicit).
  */
 const GRANT_TYPES = [
   'authorization_code', // Authorization Code Flow (with PKCE)
   'refresh_token', // Refresh Token Flow
   'client_credentials', // Client Credentials Flow
   'urn:ietf:params:oauth:grant-type:jwt-bearer', // RFC 7523 assertion grant (ID-JAG, ADR-011)
+  'urn:ietf:params:oauth:grant-type:token-exchange', // RFC 8693 delegation (ADR-007 §2, #381)
 ] as const;
 
 export const grantTypeEnum = pgEnum('grant_type', GRANT_TYPES);

@@ -5,6 +5,7 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 
 import { env } from '../../config/env';
+import { TOKEN_EXCHANGE_GRANT_TYPE } from '../schemas/oauth';
 import {
   assertJwksMutuallyExclusive,
   CLIENT_JWKS_URI_MAX_LENGTH,
@@ -125,12 +126,30 @@ export type CimdDocument = z.infer<typeof cimdDocumentSchema>;
  * re-resolving the same client_id updates one row instead of creating new
  * ones; there is no record to spam.
  */
-export type CimdGrantType = 'authorization_code' | 'refresh_token' | 'client_credentials';
+export type CimdGrantType =
+  'authorization_code' | 'refresh_token' | 'client_credentials' | typeof TOKEN_EXCHANGE_GRANT_TYPE;
 
+/**
+ * RFC 8693 token exchange (#381) is admitted here for the same reason it is
+ * admitted on DCR: the grant records only that the client MAY attempt an
+ * exchange, and the exchange itself requires a valid subject token the client
+ * already holds, preserves-or-narrows its scope and audience, and clamps any
+ * reserved `agent:*` scope to the OPERATOR-set `max_agent_mode` — which CIMD
+ * materialisation deliberately never sets. CIMD is the primary
+ * client-registration path for MCP clients, so leaving the grant off it left
+ * ADR-007 §2's whole delegation surface unreachable through the path the
+ * project positions first.
+ *
+ * `urn:ietf:params:oauth:grant-type:jwt-bearer` stays OUT, matching DCR: its
+ * capability depends on an operator-set issuer allowlist a CIMD document
+ * cannot reach, so accepting it would advertise something the client can never
+ * use.
+ */
 const SUPPORTED_CIMD_GRANT_TYPES: readonly CimdGrantType[] = [
   'authorization_code',
   'refresh_token',
   'client_credentials',
+  TOKEN_EXCHANGE_GRANT_TYPE,
 ];
 
 function isSupportedCimdGrantType(value: string): value is CimdGrantType {
@@ -303,7 +322,7 @@ export function toCimdClientInsert(
   if (declaredGrants.length > 0 && supportedGrants.length === 0) {
     throw new InvalidClientError('CIMD document declares no supported grant types');
   }
-  const grantTypes: CimdGrantType[] =
+  const defaultedGrants: CimdGrantType[] =
     supportedGrants.length > 0 ? supportedGrants : ['authorization_code', 'refresh_token'];
 
   const declaredResponses = doc.response_types ?? [];
@@ -330,6 +349,28 @@ export function toCimdClientInsert(
   // registered method AND a key set), so the fallback grants nothing — it just
   // avoids breaking a client over metadata it never needed us to act on.
   const usesPrivateKeyJwt = doc.token_endpoint_auth_method === 'private_key_jwt' && hasKeySet;
+
+  // RFC 8693 token exchange requires a CONFIDENTIAL client: `POST /oauth/token`
+  // authenticates the agent through the confidential client-auth path and
+  // rejects a public client with `invalid_client` before any exchange logic
+  // runs. A CIMD client is public unless it registered a key set for
+  // `private_key_jwt` above, so materialising the grant on a public one would
+  // record a capability it can never use (#381).
+  //
+  // DROPPED rather than rejected, matching how this function already treats a
+  // grant QAuth does not implement — a CIMD document describes the client
+  // across every AS it talks to, so an unusable-here grant is not an error.
+  // The one exception is a document that has NOTHING left afterwards, which is
+  // unusable for the same reason a document declaring no supported grant is,
+  // and gets the same error.
+  const grantTypes: CimdGrantType[] = usesPrivateKeyJwt
+    ? defaultedGrants
+    : defaultedGrants.filter((grant) => grant !== TOKEN_EXCHANGE_GRANT_TYPE);
+  if (grantTypes.length === 0) {
+    throw new InvalidClientError(
+      'CIMD document declares only the token-exchange grant, which requires a confidential client'
+    );
+  }
 
   return {
     realmId,
