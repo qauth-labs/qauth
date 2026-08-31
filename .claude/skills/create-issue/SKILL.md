@@ -39,8 +39,18 @@ gh issue create \
 BODY
 )" \
   --label "enhancement" \
-  --milestone "MVP"
+  --milestone "$MILESTONE"
 ```
+
+Set `MILESTONE` from the live list, never from memory — `MVP` is closed (checked
+2026-08-31) and filing against it buries the issue:
+
+```bash
+gh api repos/qauth-labs/qauth/milestones --jq '.[] | select(.state=="open") | .title'
+```
+
+Omit `--milestone` entirely if no open milestone fits; an unmilestoned issue is better
+than a misfiled one.
 
 ## Instructions
 

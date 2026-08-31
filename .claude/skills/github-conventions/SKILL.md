@@ -75,8 +75,17 @@ Use `Fixes #N` for bug fixes, `Closes #N` for features.
 
 - **Labels**: `enhancement` (features), `bug` (fixes); add others as needed
   (e.g. `priority:high`, `auth`).
-- **Milestone**: MVP issues use `MVP`. Phases: Phase 0 Foundation, Phase 1 Core
-  Auth, Phase 2 Developer Portal, Phase 3 Production Readiness.
+- **Milestone**: the scheme is `MVP` plus a numbered track series (`T0`, `T1`, …),
+  whose titles carry a descriptive suffix — e.g. `T4 - Federation & PQC`. There has
+  never been a `Phase N` milestone; the "Phase" numbering in `MVP-PRD.md` is planning
+  vocabulary, not a milestone name. Read the live list before setting one, because
+  this file cannot stay ahead of it:
+
+  ```bash
+  gh api repos/qauth-labs/qauth/milestones --jq '.[] | "\(.title) (\(.state))"'
+  ```
+
+  As of 2026-08-31, `MVP` is closed — do not file new work against it.
 
 ## Focused Skills
 
