@@ -885,14 +885,17 @@ behind a flag that is off by default.
 **A fourth structural gap, found while enumerating: dynamically registered clients are invisible to
 this feed entirely.** Both `POST /oauth/register`
 (`apps/auth-server/src/app/routes/oauth/register.ts:129`) and CIMD registration
-(`apps/auth-server/src/app/helpers/cimd.ts:274`) create clients with `developerId: null`. The
+(`apps/auth-server/src/app/helpers/cimd.ts:389`) create clients with `developerId: null`. The
 ownership predicate is `oauth_clients.developer_id = :sub`, so **no** row belonging to a DCR or CIMD
 client can ever match it — not just `oauth.client.registered`, but every token exchange and
 authorize event those clients generate. A developer whose clients were all registered dynamically
 sees an empty feed and no explanation. This is a property of the ownership model, not of the
 allowlist, and it cannot be fixed here: `developer_id` is the only ownership signal the schema has.
 The feed's empty state must therefore say so rather than reading as "nothing happened" — see the
-footnote below.
+footnote below. The ownership position itself is now settled in
+[ADR-012](/reference/records/adr/012-dynamic-client-ownership/): a DCR registration carrying a
+developer access token IS attributed (#374), an anonymous one is not, and a CIMD client is not
+ownable at all — so this gap narrows but does not close, and the empty state is still required.
 
 ##### The allowlist's cost, stated in one place
 

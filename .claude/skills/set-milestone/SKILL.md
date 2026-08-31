@@ -79,9 +79,11 @@ authority, and this file cannot stay ahead of it:
 gh api repos/qauth-labs/qauth/milestones --jq '.[] | "\(.title) (\(.state))"'
 ```
 
-As of 2026-08-31, `MVP` is **closed** and must not be used for new work; `T4 - Federation
-& PQC` is the track still carrying open issues. Re-derive both facts with the command
-above rather than trusting this paragraph.
+As of 2026-08-31 the full list is `MVP` plus `T0`-`T6`. `MVP` is **closed** and must not
+be used for new work, and `T4 - Federation & PQC` is the only _open_ milestone that still
+carries open issues — note that a closed milestone can still have open issues attached
+(`MVP` has two), so "closed" and "empty" are not the same thing. Re-derive all of it with
+the command above rather than trusting this paragraph.
 
 ## Instructions
 

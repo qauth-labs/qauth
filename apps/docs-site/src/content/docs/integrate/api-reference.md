@@ -490,6 +490,30 @@ Developer-portal API for managing a developer's own OAuth clients. **JSON**,
 access token (from [`POST /auth/login`](#post-authlogin)). Results are scoped to
 the token subject's `developer_id`; the client secret is **never** returned.
 
+:::note[Dynamically registered clients and ownership]
+A client registered **anonymously** through [`POST /oauth/register`](/integrate/oauth-flow/#dynamic-client-registration-rfc-7591)
+or materialised from a CIMD document has no developer to attribute to, so its
+`developer_id` is `NULL` and it will **not** appear here for anyone. That is
+deliberate: inventing an owner would hand an anonymous caller's client to
+whoever the server guessed. Manage such a client out of band, or register it
+with attribution instead.
+
+**To get a manageable client from dynamic registration, send your developer
+access token with the registration request** (#374):
+
+```bash
+curl -s -X POST https://auth.example.com/oauth/register \
+  -H 'Content-Type: application/json' \
+  -H "Authorization: Bearer $ACCESS_TOKEN" \
+  -d '{ "client_name": "My App", "redirect_uris": ["https://app.example.com/cb"] }'
+```
+
+The client is then owned by that token's subject and behaves like any client
+created through `POST /api/clients/`. A token that does not verify is rejected
+rather than silently ignored — otherwise you would get an unowned client while
+believing you owned it, which is the failure this note exists to prevent.
+:::
+
 ### `GET /api/clients/`
 
 List the authenticated developer's OAuth clients.

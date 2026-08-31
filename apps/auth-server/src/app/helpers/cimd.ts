@@ -386,6 +386,11 @@ export function toCimdClientInsert(
     jwksUri: usesPrivateKeyJwt && doc.jwks_uri !== undefined ? doc.jwks_uri : null,
     requirePkce: true,
     enabled: true,
+    // NOT OWNABLE, not merely unowned — ADR-012 §3. The `ON CONFLICT` set in
+    // `upsertCimdClient` refreshes every field `PATCH /api/clients/{id}` can
+    // edit except `scopes`, so an adopted CIMD client would accept a
+    // developer's edits and silently revert them on the next resolution of the
+    // `client_id` URL. The metadata document IS the management surface.
     developerId: null,
     scopes: [],
     // ADR-007 §2: carry the agent classification from the metadata document.

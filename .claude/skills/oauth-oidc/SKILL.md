@@ -97,7 +97,10 @@ For the flow, verifier/challenge mechanics, and grant-type rules, see the
 QAuth's token implementation (generic OAuth token-handling rules are in the
 `auth-oauth` skill):
 
-- Access tokens: JWT, signed with Ed25519 (Phase 1), hybrid ML-DSA-65+Ed25519 (Phase 5 — post-quantum)
+- Access tokens: JWT, signed with Ed25519 by default. Post-quantum hybrid
+  signing (ML-DSA-65 + Ed25519) is **implemented and merged**, gated behind
+  `HYBRID_SIGNING_ENABLED` which is off by default — it is not future work
+  (`libs/core/crypto/src/lib/hybrid-signing.ts`, ADR-005; checked 2026-08-31).
 - Refresh tokens: opaque random tokens, SHA-256 hashed before storage
 - Verification tokens: opaque random tokens, SHA-256 hashed before storage
 - All token hashes stored as 64-character hex strings (SHA-256 output)

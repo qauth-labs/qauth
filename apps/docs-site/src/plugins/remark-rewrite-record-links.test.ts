@@ -274,7 +274,12 @@ describe('rewriteRecordLink — the real docs/adr and docs/security corpus, enum
     // links to a document that is deliberately NOT a rendered record, so they
     // land in the BLOB bucket below — the same outcome, for the same reason, as
     // the EUDI drift log links already there.
-    expect(extractAllLinks()).toHaveLength(200);
+    //
+    // 200 → 203 with #374's ADR-012 (dynamic client ownership): one in-tree
+    // link to ADR-007 (a rendered record → ROUTE bucket) and two external RFC
+    // links (7591, 7592). Predicted from the ADR's own link list before
+    // running, so the buckets below are a check and not a readjustment.
+    expect(extractAllLinks()).toHaveLength(203);
   });
 
   it('every link falls into exactly one of the four outcomes, with none left unresolved', () => {
@@ -336,8 +341,13 @@ describe('rewriteRecordLink — the real docs/adr and docs/security corpus, enum
     // 93 → 94 external with #379's ADR-010 amendment (the OID4VCI 1.0 spec
     // URL). The three buckets below are unchanged by it, which is the check
     // that it really was an external link and not an in-tree one.
-    expect(untouchedExternalOrAnchor).toBe(94 + 17);
-    expect(rewrittenToRoute).toBe(78);
+    //
+    // ADR-012 (#374): 94 → 96 external (RFC 7591, RFC 7592) and 78 → 79 route
+    // (its ADR-007 link). The blob bucket is unchanged, which is the check that
+    // the ADR-007 link really did resolve to a rendered record rather than
+    // falling back to a GitHub blob URL.
+    expect(untouchedExternalOrAnchor).toBe(96 + 17);
+    expect(rewrittenToRoute).toBe(79);
     expect(rewrittenToBlob).toBe(11);
     expect(leftUnresolved).toBe(0);
   });
