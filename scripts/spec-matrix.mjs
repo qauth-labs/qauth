@@ -665,8 +665,22 @@ function tally(matrix) {
   return counts;
 }
 
+/**
+ * Escape a value for a GitHub-flavoured Markdown table cell.
+ *
+ * Backslashes go FIRST. Escaping `|` without escaping `\` is the classic
+ * incomplete-sanitization bug: an input already containing `\|` would become
+ * `\\|`, which GFM renders as a literal backslash followed by a live cell
+ * separator — so a requirement `quote` could silently split its own row and
+ * shift every later column. Requirement quotes are verbatim spec text and
+ * `applies`/`reason` are free prose, so neither is under this script's control.
+ */
 function escapeCell(text) {
-  return String(text).replace(/\|/g, '\\|').replace(/\n+/g, ' ').trim();
+  return String(text)
+    .replace(/\\/g, '\\\\')
+    .replace(/\|/g, '\\|')
+    .replace(/\n+/g, ' ')
+    .trim();
 }
 
 function renderMarkdown(matrix, meta) {

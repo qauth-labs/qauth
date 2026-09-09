@@ -413,6 +413,35 @@ describe('spec-matrix — waived and n/a rows must carry their justification', (
     const markdown = readFileSync(join(result.outDir, 'matrix.md'), 'utf8');
     expect(markdown.indexOf('### Waived')).toBeLessThan(markdown.indexOf('### Not applicable'));
   });
+
+  it('escapes a backslash before a pipe, so a quote cannot split its own row', () => {
+    // Incomplete sanitization: escaping `|` alone turns an input that already
+    // reads `\|` into `\\|`, which GFM renders as a literal backslash followed
+    // by a LIVE cell separator — the row silently gains a column and every
+    // later cell shifts. Requirement quotes are verbatim spec text, so this
+    // input is not under the joiner's control.
+    const result = run({
+      rows: [row({ quote: 'The server MUST treat a\\|b as one token.' })],
+      reportBody: report([{ fullName: CITING }]),
+    });
+
+    expect(result.status).toBe(EXIT_OK);
+    const markdown = readFileSync(join(result.outDir, 'matrix.md'), 'utf8');
+
+    // The backslash is escaped first, so the pipe stays escaped after it.
+    expect(markdown).toContain('a\\\\\\|b');
+    // MUTATION: with `\` unescaped the cell would carry `a\|b`, whose pipe is
+    // live once the preceding backslash is consumed as an escape.
+    expect(markdown).not.toContain('a\\|b as one token');
+
+    // The row still has exactly the columns the header declares.
+    const dataRow = markdown
+      .split('\n')
+      .find((line) => line.includes('as one token'))!
+      .trim();
+    const cells = dataRow.split(/(?<!\\)\|/).slice(1, -1);
+    expect(cells).toHaveLength(5);
+  });
 });
 
 describe('spec-matrix — the sealed ratchet', () => {
