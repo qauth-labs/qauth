@@ -54,7 +54,7 @@ jobs:
       # `--reporter=default --reporter=json` keeps the human output AND emits the
       # machine report the conformance matrix joins against, so the suite is not
       # run twice (#400).
-      - run: pnpm exec vitest run --coverage --reporter=default --reporter=json --outputFile=dist/vitest-report.json
+      - run: pnpm exec vitest run --coverage --reporter=default --reporter=json --outputFile.json=dist/vitest-report.json
 
       # Spec-conformance matrix (#400). Deliberately NOT `if: always()`, unlike
       # the issue-state guard below: when the suite fails the report is partial,
@@ -62,7 +62,7 @@ jobs:
       # exits 2 rather than rendering a partial report as proven, so skipping it
       # here loses nothing.
       - name: Spec conformance matrix
-        run: node scripts/spec-matrix.mjs --vitest-report dist/vitest-report.json --out dist/conformance
+        run: pnpm spec-matrix
 
       # `always()` so a partial artifact survives a gate failure — the matrix is
       # most useful precisely when it is red.

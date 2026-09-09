@@ -1,451 +1,899 @@
 #!/usr/bin/env node
 /**
- * Spec-conformance matrix (#400): join hand-authored normative requirements to
- * the tests that prove them.
+ * spec-matrix — join QAuth's hand-authored normative requirement rows to the
+ * tests that prove them, and gate CI on the result.
  *
- * "Which normative requirements do we satisfy, and which do we knowingly not"
- * is currently unanswerable without reading the whole suite — and it is a
- * deliverable for OpenID Foundation OP certification, not overhead
- * (`docs/oidf-op-certification-runbook.md` already anticipates it).
+ * QAuth's requirements are written by the IETF and the OIDF, not by us, and the
+ * test suite already cites them in `describe`/`it` titles. What was missing was
+ * the join. This script reads:
  *
- * Node ESM, zero runtime dependencies, deliberately NOT an Nx project: it reads
- * a repo-wide artifact no single project owns and would cache on the wrong
- * inputs.
+ *   - `docs/conformance/specs.json`               — the spec alias registry
+ *   - `docs/conformance/requirements/<id>.json`   — the requirement rows
+ *   - a Vitest JSON report                        — the run that proves them
+ *
+ * and writes `matrix.md` (for a human or an OIDF certification reviewer),
+ * `matrix.json` (for machines) and a GitHub job summary.
+ *
+ * Deliberately NOT an Nx project: it consumes a repo-wide test report that no
+ * single project owns, so it would cache on the wrong inputs.
+ *
+ * Zero runtime dependencies — Node's standard library only.
  *
  * Exit codes:
  *   0  clean
- *   1  gate failure — an unproven `covered` row, evidence that is only skipped,
+ *   1  gate failure (an unproven `covered` row, evidence that only ever skips,
  *      a malformed waiver, an unresolvable `decision`/`evidenceRef`, or an
- *      orphan citation in a SEALED spec. Emitted as `::error` annotations so
- *      they land on the PR diff.
- *   2  input error — a missing, empty or shape-changed report; unreadable
- *      registry or requirement files.
+ *      orphan citation in a sealed spec)
+ *   2  input error (missing, empty or shape-changed report; unreadable or
+ *      unparseable conformance data; bad arguments)
  *
- * The exit-2 class is the important one. Certification evidence that fails OPEN
- * is worse than none: a report that silently arrived empty would render every
- * row as "no citing tests" or, worse, let a `covered` row pass unnoticed. So the
- * report is asserted to have assertions, and the first one is asserted to carry
- * `fullName` and `status`, before anything is joined.
+ * A missing, empty or shape-changed report MUST exit non-zero and must never
+ * render as "everything proven". Certification evidence that fails open is
+ * worse than no evidence at all. `scripts/spec-matrix.test.ts` holds that
+ * property down.
+ *
+ * The join key is `(specId, section)`, and a spec section is frequently coarser
+ * than a requirement — OIDC Core §2 declares the whole ID Token claim set. A
+ * row may therefore carry `evidenceMatch`, a pattern the citing test's
+ * `fullName` must ALSO match before it counts as proof of that row, so the
+ * Evidence column names a test that really proves the sentence beside it.
  *
  * Usage:
- *   node scripts/spec-matrix.mjs --vitest-report <path> [--out dist/conformance]
+ *   node scripts/spec-matrix.mjs --vitest-report dist/vitest/unit-report.json
  */
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+
+import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
-const CONFORMANCE_DIR = join(REPO_ROOT, 'docs', 'conformance');
+const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
-const VALID_STATUSES = ['covered', 'manual', 'waived', 'n/a'];
-
-function inputError(message) {
-  process.stderr.write(`spec-matrix: ${message}\n`);
-  process.exit(2);
+/** Repo-relative when the path is inside the repo, absolute when it is not. */
+function repoPath(absolute) {
+  const rel = relative(REPO_ROOT, absolute);
+  return rel === '' || rel.startsWith('..') ? absolute : rel;
 }
+
+const EXIT_OK = 0;
+const EXIT_GATE = 1;
+const EXIT_INPUT = 2;
+
+/** RFC 2119 / RFC 8174 keywords a requirement row may carry as its `level`. */
+const LEVELS = new Set([
+  'MUST',
+  'MUST NOT',
+  'SHALL',
+  'SHALL NOT',
+  'REQUIRED',
+  'SHOULD',
+  'SHOULD NOT',
+  'RECOMMENDED',
+  'NOT RECOMMENDED',
+  'MAY',
+  'OPTIONAL',
+]);
+
+const STATUSES = new Set(['covered', 'manual', 'waived', 'n/a']);
+
+/** A section number as cited and as declared: dotted decimals, no `§`. */
+const SECTION_SHAPE = /^\d+(?:\.\d+)*$/;
+
+/**
+ * Spec-name tokens that are NOT in the registry but must still anchor a
+ * section reference, so that a bare `§X.Y` is never mis-attributed to a
+ * registered spec named earlier in the same test name. `describe('key
+ * attestation (HAIP §4.5.1)') > it('applies the §5.9.3 prohibition')` must
+ * attribute both sections to HAIP — i.e. to nothing — rather than to whatever
+ * registered spec an outer `describe` happened to mention.
+ */
+const FOREIGN_ANCHOR =
+  'RFC\\s?\\d{4}[a-z]*|draft-[A-Za-z0-9.-]+|ADR-\\d+|OID4VCI|OID4VP|HAIP|CIMD|SD-JWT|eIDAS|ISO\\/IEC|OpenID|OIDC|OAuth';
+
+/** `§4.2.1.3`, `§2`, or the spelled-out `Section 4.2`. */
+const SECTION_TOKEN = /(?:§|Section\s+)(\d+(?:\.\d+)*)/g;
+
+// ---------------------------------------------------------------------------
+// Errors
+// ---------------------------------------------------------------------------
+
+class InputError extends Error {}
+
+/** A gate failure: rendered as a `::error` annotation and exits 1. */
+class Finding {
+  constructor({ file, line, title, message }) {
+    this.file = file;
+    this.line = line;
+    this.title = title;
+    this.message = message;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Arguments
+// ---------------------------------------------------------------------------
+
+const USAGE = `Usage: node scripts/spec-matrix.mjs --vitest-report <path> [options]
+
+Options:
+  --vitest-report <path>   Vitest JSON report to join against (required)
+  --conformance-dir <dir>  default: docs/conformance
+  --out-dir <dir>          default: dist/spec-matrix
+  --summary <path>         Markdown job summary sink
+                           (default: $GITHUB_STEP_SUMMARY, when set)
+  --no-summary             Never write a job summary
+  --help                   Print this and exit 0
+`;
 
 function parseArgs(argv) {
-  const args = { report: null, out: join(REPO_ROOT, 'dist', 'conformance') };
-  for (let i = 0; i < argv.length; i += 1) {
-    if (argv[i] === '--vitest-report') args.report = argv[++i];
-    else if (argv[i] === '--out') args.out = argv[++i];
+  const opts = {
+    vitestReport: null,
+    conformanceDir: join(REPO_ROOT, 'docs', 'conformance'),
+    outDir: join(REPO_ROOT, 'dist', 'spec-matrix'),
+    summary: process.env.GITHUB_STEP_SUMMARY || null,
+    help: false,
+  };
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i];
+    const next = () => {
+      const value = argv[++i];
+      if (value === undefined) throw new InputError(`${arg} requires a value`);
+      return value;
+    };
+    switch (arg) {
+      case '--vitest-report':
+        opts.vitestReport = next();
+        break;
+      case '--conformance-dir':
+        opts.conformanceDir = resolve(next());
+        break;
+      case '--out-dir':
+        opts.outDir = resolve(next());
+        break;
+      case '--summary':
+        opts.summary = resolve(next());
+        break;
+      case '--no-summary':
+        opts.summary = null;
+        break;
+      case '--help':
+      case '-h':
+        opts.help = true;
+        break;
+      default:
+        throw new InputError(`unknown argument: ${arg}`);
+    }
   }
-  if (!args.report) inputError('--vitest-report <path> is required');
-  return args;
+  if (!opts.help && !opts.vitestReport) {
+    throw new InputError('--vitest-report is required');
+  }
+  if (opts.vitestReport) opts.vitestReport = resolve(opts.vitestReport);
+  return opts;
 }
+
+// ---------------------------------------------------------------------------
+// Loading
+// ---------------------------------------------------------------------------
 
 function readJson(path, what) {
-  if (!existsSync(path)) inputError(`${what} not found at ${path}`);
+  let raw;
   try {
-    return JSON.parse(readFileSync(path, 'utf8'));
+    raw = readFileSync(path, 'utf8');
   } catch (err) {
-    inputError(`${what} at ${path} is not valid JSON: ${err.message}`);
+    throw new InputError(`cannot read ${what} at ${path}: ${err.message}`);
+  }
+  if (raw.trim() === '') throw new InputError(`${what} at ${path} is empty`);
+  try {
+    return { raw, data: JSON.parse(raw) };
+  } catch (err) {
+    throw new InputError(`${what} at ${path} is not valid JSON: ${err.message}`);
   }
 }
 
-/* -------------------------------------------------------------------------- */
-/*                                  Inputs                                     */
-/* -------------------------------------------------------------------------- */
-
-function loadRegistry() {
-  const registry = readJson(join(CONFORMANCE_DIR, 'specs.json'), 'spec registry');
-  if (!Array.isArray(registry.specs) || registry.specs.length === 0) {
-    inputError('spec registry has no `specs` array');
+function loadRegistry(conformanceDir) {
+  const path = join(conformanceDir, 'specs.json');
+  const { data } = readJson(path, 'the spec registry');
+  if (!data || typeof data !== 'object' || !Array.isArray(data.specs)) {
+    throw new InputError(`${path} must be an object with a "specs" array`);
   }
-  return registry.specs;
+  const specs = [];
+  const seen = new Set();
+  for (const spec of data.specs) {
+    if (!spec || typeof spec.id !== 'string' || spec.id === '') {
+      throw new InputError(`${path}: every spec needs a non-empty string "id"`);
+    }
+    if (seen.has(spec.id)) throw new InputError(`${path}: duplicate spec id "${spec.id}"`);
+    seen.add(spec.id);
+    if (!Array.isArray(spec.aliases) || spec.aliases.length === 0) {
+      throw new InputError(`${path}: spec "${spec.id}" needs a non-empty "aliases" array`);
+    }
+    if (typeof spec.sealed !== 'boolean') {
+      throw new InputError(`${path}: spec "${spec.id}" needs a boolean "sealed"`);
+    }
+    specs.push({
+      id: spec.id,
+      name: typeof spec.name === 'string' ? spec.name : spec.id,
+      url: typeof spec.url === 'string' ? spec.url : null,
+      aliases: spec.aliases,
+      sealed: spec.sealed,
+      scopeNote: typeof spec.scopeNote === 'string' ? spec.scopeNote : null,
+    });
+  }
+  if (specs.length === 0) throw new InputError(`${path} registers no specs`);
+  return specs;
 }
 
-function loadRequirements(specs) {
-  const dir = join(CONFORMANCE_DIR, 'requirements');
-  if (!existsSync(dir)) inputError(`requirements directory not found at ${dir}`);
-
-  const known = new Set(specs.map((spec) => spec.id));
-  const rows = [];
-
-  for (const file of readdirSync(dir)
-    .filter((name) => name.endsWith('.json'))
-    .sort()) {
-    const doc = readJson(join(dir, file), `requirements file ${file}`);
-    if (!known.has(doc.spec)) {
-      inputError(`${file} declares spec "${doc.spec}", which is not in specs.json`);
+function loadRequirements(conformanceDir, specs) {
+  for (const spec of specs) {
+    const path = join(conformanceDir, 'requirements', `${spec.id}.json`);
+    const { raw, data } = readJson(path, `the requirement rows for "${spec.id}"`);
+    if (!data || typeof data !== 'object' || !Array.isArray(data.requirements)) {
+      throw new InputError(`${path} must be an object with a "requirements" array`);
     }
-    for (const requirement of doc.requirements ?? []) {
-      rows.push({
-        ...requirement,
-        specId: doc.spec,
-        sourceFile: `docs/conformance/requirements/${file}`,
-      });
+    if (data.specId !== spec.id) {
+      throw new InputError(`${path}: "specId" is "${data.specId}", expected "${spec.id}"`);
     }
+    spec.file = repoPath(path);
+    spec.rawLines = raw.split('\n');
+    spec.requirements = data.requirements;
   }
-  return rows;
 }
 
 /**
- * Read the Vitest JSON report, asserting enough of its shape that a silently
- * changed or truncated one cannot render as "everything proven".
+ * Load and hard-validate the Vitest JSON report.
+ *
+ * This is the fail-closed seam. A report that is missing, empty, or no longer
+ * the shape we read is an input error, never "no citations found".
  */
-function loadAssertions(reportPath) {
-  const report = readJson(reportPath, 'vitest report');
-  const files = report.testResults;
-  if (!Array.isArray(files) || files.length === 0) {
-    inputError(
-      'vitest report has no testResults — a partial or empty run must never render as proven'
+function loadReport(path) {
+  if (!existsSync(path)) {
+    throw new InputError(
+      `no Vitest report at ${path}. The gate needs a complete report; run the suite with ` +
+        `\`--reporter=json --outputFile.json=${repoPath(path)}\` first.`
     );
   }
-
-  const assertions = files.flatMap((file) => file.assertionResults ?? []);
-  if (assertions.length === 0) {
-    inputError('vitest report contains no assertions');
+  const { data } = readJson(path, 'the Vitest report');
+  if (!data || typeof data !== 'object' || Array.isArray(data)) {
+    throw new InputError(`${path}: expected a JSON object at the top level`);
   }
-
+  if (!Array.isArray(data.testResults)) {
+    throw new InputError(`${path}: expected a "testResults" array — the reporter shape changed`);
+  }
+  const assertions = [];
+  for (const suite of data.testResults) {
+    if (!suite || !Array.isArray(suite.assertionResults)) continue;
+    for (const assertion of suite.assertionResults) {
+      assertions.push({
+        ...assertion,
+        suiteName: typeof suite.name === 'string' ? suite.name : '',
+      });
+    }
+  }
+  if (assertions.length === 0) {
+    throw new InputError(
+      `${path} contains no test assertions. An empty report cannot prove anything, ` +
+        `so it is treated as a failure rather than as a clean matrix.`
+    );
+  }
   const first = assertions[0];
   if (typeof first.fullName !== 'string' || typeof first.status !== 'string') {
-    inputError(
-      'vitest report assertions lack `fullName`/`status` — the reporter shape changed; ' +
-        'refusing to join against a format this script does not understand'
+    throw new InputError(
+      `${path}: the first assertion is missing a string "fullName" or "status" — ` +
+        `the reporter shape changed and the join key is no longer readable.`
     );
   }
   return assertions;
 }
 
-/* -------------------------------------------------------------------------- */
-/*                                  The join                                   */
-/* -------------------------------------------------------------------------- */
+// ---------------------------------------------------------------------------
+// Citation extraction
+// ---------------------------------------------------------------------------
+
+function escapeRegExp(text) {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
 
 /**
- * Every `(specId, section)` a test title cites.
- *
- * Matched against `fullName`, so a `describe`-level citation propagates to every
- * leaf beneath it — which is what lifts the joinable base far above the naive
- * `it`-level count.
- *
- * MEASURED ON HEAD 2026-08-31, because #400's own figures were not reliable:
- * 550 of 4288 leaf assertions (12.8%) across 77 files carry any spec reference,
- * and only 82 (1.9%, 20 files) use the `RFC NNNN §X.Y` grammar the issue calls
- * dominant. The extractor therefore accepts a section that follows the alias
- * with or without the `§`, and tolerates intervening punctuation, rather than
- * assuming one shape.
+ * Build one anchor matcher over every registered alias (longest first, so
+ * `OIDC Core 1.0` wins over `OIDC Core`) followed by the foreign anchors.
  */
-function extractCitations(assertions, specs) {
-  const citations = [];
-
-  for (const assertion of assertions) {
-    const name = assertion.fullName ?? '';
-    for (const spec of specs) {
-      for (const alias of spec.aliases) {
-        const escaped = alias.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-        // The alias, then an OPTIONAL run of sections. Real titles in this
-        // corpus write all of:
-        //   `RFC 9207 §3`            — one section
-        //   `RFC 8414 §2`            — one section
-        //   `OIDC Core §3.1.3.6, §3.1.3.7` — a LIST after one alias
-        //   `emits RFC 8414 required fields`  — the alias with no section
-        // The list form is why the run is captured whole and split afterwards:
-        // an earlier draft took only the first section and silently dropped
-        // every one after the comma, which the gate then reported as an
-        // unproven row for a requirement that WAS proven.
-        const pattern = new RegExp(
-          `${escaped}\\s*((?:(?:§\\s*)?\\d+(?:\\.\\d+)*(?:\\s*(?:,|and)\\s*)?)*)`,
-          'gi'
-        );
-        let match;
-        while ((match = pattern.exec(name))) {
-          const sections = (match[1] ?? '')
-            .split(/\s*(?:,|and)\s*/)
-            .map((part) => part.replace(/§/g, '').trim())
-            .filter((part) => /^\d+(?:\.\d+)*$/.test(part));
-
-          if (sections.length === 0) {
-            citations.push({
-              specId: spec.id,
-              section: null,
-              fullName: name,
-              status: assertion.status,
-            });
-            continue;
-          }
-          for (const section of sections) {
-            citations.push({ specId: spec.id, section, fullName: name, status: assertion.status });
-          }
-        }
-      }
+function buildAnchorMatcher(specs) {
+  const aliasToSpec = new Map();
+  const aliases = [];
+  for (const spec of specs) {
+    for (const alias of spec.aliases) {
+      aliasToSpec.set(alias.toLowerCase(), spec.id);
+      aliases.push(alias);
     }
+  }
+  aliases.sort((a, b) => b.length - a.length);
+  // Registered aliases first, so `OIDC Core 1.0` wins over `OIDC Core` and both
+  // win over the bare `OIDC` foreign anchor at the same position.
+  const source = `(?<![A-Za-z0-9])(?:${aliases.map(escapeRegExp).join('|')}|${FOREIGN_ANCHOR})(?![A-Za-z0-9])`;
+  return { regex: new RegExp(source, 'gi'), aliasToSpec };
+}
+
+/**
+ * Extract `(specId, section)` citations from one test's full name.
+ *
+ * Each section token is attributed to the nearest anchor to its left, so a
+ * `describe`-level spec name carries down to bare `§X.Y` references in its
+ * leaves, and `draft-14 §5/§6` yields two citations. A section whose nearest
+ * anchor is unregistered (or which has no anchor at all) is dropped.
+ */
+function extractCitations(fullName, matcher) {
+  const anchors = [];
+  matcher.regex.lastIndex = 0;
+  for (const match of fullName.matchAll(matcher.regex)) {
+    anchors.push({
+      index: match.index,
+      specId: matcher.aliasToSpec.get(match[0].toLowerCase()) ?? null,
+    });
+  }
+  const citations = [];
+  SECTION_TOKEN.lastIndex = 0;
+  for (const match of fullName.matchAll(SECTION_TOKEN)) {
+    let anchor = null;
+    for (const candidate of anchors) {
+      if (candidate.index < match.index) anchor = candidate;
+      else break;
+    }
+    if (!anchor || !anchor.specId) continue;
+    citations.push({ specId: anchor.specId, section: match[1] });
   }
   return citations;
 }
 
+/** A test citing §2.4 proves a row declared at §2.4 or at §2 — never at §2.4.1. */
+function citationProves(citedSection, rowSection) {
+  return citedSection === rowSection || citedSection.startsWith(`${rowSection}.`);
+}
+
 /**
- * Hierarchical section match: a test citing §2.4 proves a row declared at §2.4
- * OR at §2.
+ * Compile a row's optional `evidenceMatch` narrowing pattern.
  *
- * Cited depth in this corpus runs from §2 to §3.1.2.1, so nothing flatter works.
- * A citation with NO section proves nothing — it names a spec, not a
- * requirement, and treating it as proof of every row would make the gate
- * meaningless.
+ * The join key is `(specId, section)`, and a section is often far coarser than
+ * a requirement: OIDC Core §2 declares the whole ID Token claim set and RFC
+ * 8414 §2 the whole metadata document, so EVERY test citing §2 would otherwise
+ * count as proof of EVERY §2 row. That is how a certification artifact ends up
+ * citing an `acr`-value test as its evidence that the ID Token carries `iss` —
+ * and how deleting the test that really proves `iss` leaves the gate green.
+ *
+ * `evidenceMatch` closes that: a citing test counts as evidence for the row
+ * only if its `fullName` also matches this pattern (case-insensitive). It can
+ * only ever REMOVE evidence, never add it, so a row that carries one is
+ * strictly harder to prove than one that does not.
+ *
+ * Returns `null` when the row declares no narrowing.
  */
-function proves(citedSection, rowSection) {
-  if (!citedSection) return false;
-  if (citedSection === rowSection) return true;
-  return citedSection.startsWith(`${rowSection}.`);
+function compileEvidenceMatch(row) {
+  if (row?.evidenceMatch === undefined) return null;
+  return new RegExp(row.evidenceMatch, 'i');
 }
 
-function joinRows(rows, citations) {
-  return rows.map((row) => {
-    const matching = citations.filter(
-      (citation) => citation.specId === row.specId && proves(citation.section, row.section)
+// ---------------------------------------------------------------------------
+// Validation and join
+// ---------------------------------------------------------------------------
+
+/** Line of the row's `"id"` member in its source file, for the annotation. */
+function findRowLine(spec, rowId) {
+  const needle = `"id": ${JSON.stringify(rowId)}`;
+  const index = spec.rawLines.findIndex((line) => line.includes(needle));
+  return index === -1 ? 1 : index + 1;
+}
+
+/** GitHub's heading slug: lowercase, drop punctuation, spaces become hyphens. */
+function slugify(heading) {
+  return heading
+    .trim()
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}\s-]/gu, '')
+    .replace(/\s/g, '-');
+}
+
+/** `path`, or `path#anchor` where the anchor must exist as a markdown heading. */
+function resolveReference(reference) {
+  const [path, anchor] = reference.split('#');
+  if (path === '') return `"${reference}" has no path`;
+  const absolute = isAbsolute(path) ? path : join(REPO_ROOT, path);
+  if (!existsSync(absolute)) return `"${path}" does not exist`;
+  if (!anchor) return null;
+  let contents;
+  try {
+    contents = readFileSync(absolute, 'utf8');
+  } catch (err) {
+    return `"${path}" could not be read: ${err.message}`;
+  }
+  const slugs = new Set(
+    contents
+      .split('\n')
+      .filter((line) => /^#{1,6}\s+/.test(line))
+      .map((line) => slugify(line.replace(/^#{1,6}\s+/, '')))
+  );
+  return slugs.has(anchor) ? null : `"${path}" has no heading anchored at "#${anchor}"`;
+}
+
+const ISSUE_REF = /^#\d+$/;
+const ISSUE_URL = /^https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/issues\/\d+$/;
+const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
+
+/**
+ * Validate one row's shape and its status-specific obligations. Returns the
+ * findings; an empty array means the row is well formed.
+ */
+function validateRow(spec, row, index) {
+  const findings = [];
+  const where = typeof row?.id === 'string' ? row.id : `row #${index + 1}`;
+  const line = typeof row?.id === 'string' ? findRowLine(spec, row.id) : 1;
+  const fail = (message) =>
+    findings.push(
+      new Finding({ file: spec.file, line, title: `${spec.id} ${where}`, message: message })
     );
-    const passing = matching.filter((citation) => citation.status === 'passed');
-    return {
-      ...row,
-      citingTests: matching.length,
-      passingTests: passing.length,
-      proofs: [...new Set(passing.map((citation) => citation.fullName))],
-    };
-  });
-}
 
-/* -------------------------------------------------------------------------- */
-/*                                  The gate                                   */
-/* -------------------------------------------------------------------------- */
-
-function gate(joined, citations, specs) {
-  const failures = [];
-  const rowsBySpec = new Map();
-  for (const row of joined) {
-    if (!rowsBySpec.has(row.specId)) rowsBySpec.set(row.specId, []);
-    rowsBySpec.get(row.specId).push(row);
+  if (!row || typeof row !== 'object' || Array.isArray(row)) {
+    fail('a requirement must be a JSON object');
+    return findings;
+  }
+  if (typeof row.id !== 'string' || row.id === '') fail('missing a non-empty string "id"');
+  if (typeof row.section !== 'string' || !SECTION_SHAPE.test(row.section)) {
+    fail('"section" must be dotted decimals with no "§", e.g. "3.1.2.1"');
+  }
+  if (typeof row.level !== 'string' || !LEVELS.has(row.level)) {
+    fail(`"level" must be one of: ${[...LEVELS].join(', ')}`);
+  }
+  if (typeof row.quote !== 'string' || row.quote.trim() === '') {
+    fail('"quote" must be the verbatim normative sentence');
+  }
+  if (typeof row.status !== 'string' || !STATUSES.has(row.status)) {
+    fail(`"status" must be one of: ${[...STATUSES].join(', ')}`);
+    return findings;
   }
 
-  for (const row of joined) {
-    const where = `${row.sourceFile} §${row.section}`;
-
-    if (!VALID_STATUSES.includes(row.status)) {
-      failures.push({
-        file: row.sourceFile,
-        message: `${where}: status "${row.status}" is not one of ${VALID_STATUSES.join(', ')}`,
-      });
-      continue;
+  if (row.evidenceMatch !== undefined) {
+    if (row.status !== 'covered') {
+      fail(
+        '"evidenceMatch" narrows which citing tests count as proof, so it only means anything on a "covered" row'
+      );
     }
-
-    if (row.status === 'covered') {
-      if (row.passingTests === 0) {
-        // A row whose only citing tests are SKIPPED counts as unproven, and
-        // says so distinctly — "no test" and "a test nobody runs" are different
-        // problems with different fixes.
-        const reason =
-          row.citingTests > 0
-            ? `has ${row.citingTests} citing test(s) but none PASSING (skipped tests are not evidence)`
-            : 'is marked covered but no passing test cites it';
-        failures.push({ file: row.sourceFile, message: `${where}: ${reason}` });
+    if (typeof row.evidenceMatch !== 'string' || row.evidenceMatch === '') {
+      fail('"evidenceMatch" must be a non-empty regular-expression source string');
+    } else {
+      try {
+        compileEvidenceMatch(row);
+      } catch (err) {
+        fail(`"evidenceMatch" is not a valid regular expression: ${err.message}`);
       }
-      continue;
     }
+  }
 
-    if (row.status === 'manual') {
-      if (!row.evidenceRef) {
-        failures.push({
-          file: row.sourceFile,
-          message: `${where}: status "manual" requires an evidenceRef`,
-        });
-      } else {
-        const [path] = row.evidenceRef.split('#');
-        if (!existsSync(join(REPO_ROOT, path))) {
-          failures.push({
-            file: row.sourceFile,
-            message: `${where}: evidenceRef "${row.evidenceRef}" does not resolve`,
-          });
+  if (row.status === 'manual') {
+    if (typeof row.evidenceRef !== 'string' || row.evidenceRef === '') {
+      fail('a "manual" row must carry an "evidenceRef" path to the evidence');
+    } else {
+      const problem = resolveReference(row.evidenceRef);
+      if (problem) fail(`"evidenceRef" does not resolve: ${problem}`);
+    }
+  }
+
+  if (row.status === 'waived') {
+    if (typeof row.reason !== 'string' || row.reason.trim() === '') {
+      fail('a "waived" row must carry a "reason" — what applies and why we do not satisfy it');
+    }
+    if (typeof row.decision !== 'string' || row.decision === '') {
+      fail('a "waived" row must carry a "decision" — an issue reference or a path in the repo');
+    } else if (!ISSUE_REF.test(row.decision) && !ISSUE_URL.test(row.decision)) {
+      const problem = resolveReference(row.decision);
+      if (problem)
+        fail(`"decision" is neither an issue reference nor a resolvable path: ${problem}`);
+    }
+    if (
+      typeof row.revisit !== 'string' ||
+      (row.revisit !== 'never' && !ISO_DATE.test(row.revisit))
+    ) {
+      fail('a "waived" row must carry a "revisit" — an ISO date (YYYY-MM-DD) or "never"');
+    } else if (row.revisit !== 'never' && Number.isNaN(Date.parse(row.revisit))) {
+      fail(`"revisit" is not a real date: ${row.revisit}`);
+    }
+  }
+
+  if (row.status === 'n/a' && (typeof row.reason !== 'string' || row.reason.trim() === '')) {
+    fail('an "n/a" row must carry a "reason" — why the requirement never applied');
+  }
+
+  return findings;
+}
+
+/**
+ * Join rows to citing tests and decide the gate.
+ */
+function buildMatrix(specs, assertions, matcher) {
+  const findings = [];
+
+  // Index every citation in the run by spec.
+  const citationsBySpec = new Map(specs.map((spec) => [spec.id, []]));
+  // How much of the suite the joiner can actually see. Derived here on every
+  // run so no document has to hand-copy the figure and watch it go stale.
+  const citing = { assertions: 0, files: new Set() };
+  for (const assertion of assertions) {
+    const fullName = typeof assertion.fullName === 'string' ? assertion.fullName : '';
+    if (fullName === '') continue;
+    const extracted = extractCitations(fullName, matcher);
+    if (extracted.length > 0) {
+      citing.assertions++;
+      if (assertion.suiteName) citing.files.add(assertion.suiteName);
+    }
+    for (const citation of extracted) {
+      citationsBySpec.get(citation.specId)?.push({
+        section: citation.section,
+        fullName,
+        status: typeof assertion.status === 'string' ? assertion.status : 'unknown',
+        file: assertion.suiteName ? repoPath(assertion.suiteName) : '',
+        matched: false,
+      });
+    }
+  }
+
+  const rendered = [];
+  for (const spec of specs) {
+    const citations = citationsBySpec.get(spec.id) ?? [];
+    const rows = [];
+    spec.requirements.forEach((row, index) => {
+      const rowFindings = validateRow(spec, row, index);
+      findings.push(...rowFindings);
+      if (rowFindings.length > 0 && !STATUSES.has(row?.status)) return;
+
+      // A broken `evidenceMatch` must never widen the evidence back out, so a
+      // pattern that will not compile matches nothing at all. `validateRow`
+      // has already raised the finding that explains why.
+      let narrow;
+      try {
+        narrow = compileEvidenceMatch(row);
+      } catch {
+        narrow = /(?!)/;
+      }
+
+      const proving = [];
+      const skipped = [];
+      if (typeof row?.section === 'string') {
+        for (const citation of citations) {
+          if (!citationProves(citation.section, row.section)) continue;
+          // The section match alone answers the citation. Narrowing decides
+          // whether this ROW may lean on it, and must not turn a sibling row's
+          // legitimate test into an orphan.
+          citation.matched = true;
+          if (narrow && !narrow.test(citation.fullName)) continue;
+          if (citation.status === 'passed') proving.push(citation);
+          else skipped.push(citation);
         }
       }
-      continue;
-    }
 
-    if (row.status === 'waived') {
-      for (const field of ['reason', 'decision', 'revisit']) {
-        if (!row[field]) {
-          failures.push({
-            file: row.sourceFile,
-            message: `${where}: status "waived" requires "${field}"`,
-          });
-        }
+      if (row?.status === 'covered' && proving.length === 0) {
+        const line = typeof row.id === 'string' ? findRowLine(spec, row.id) : 1;
+        const pinned = narrow ? ` and matches its evidenceMatch \`${row.evidenceMatch}\`` : '';
+        const detail =
+          skipped.length > 0
+            ? `its only citing tests did not pass (${skipped
+                .map((c) => `${c.status}: ${c.fullName}`)
+                .slice(0, 3)
+                .join('; ')})`
+            : `no passing test in the report cites it${pinned}`;
+        findings.push(
+          new Finding({
+            file: spec.file,
+            line,
+            title: `unproven: ${spec.id} §${row.section}`,
+            message:
+              `${spec.name} §${row.section} (${row.id}) is declared "covered" but ${detail}. ` +
+              `Cite it from the test that proves it, e.g. "(${spec.aliases[0]} §${row.section})" ` +
+              `in the describe or it title, or change the row's status.`,
+          })
+        );
       }
-      if (row.revisit && row.revisit !== 'never' && !/^\d{4}-\d{2}-\d{2}$/.test(row.revisit)) {
-        failures.push({
-          file: row.sourceFile,
-          message: `${where}: "revisit" must be an ISO date or "never" (got "${row.revisit}")`,
-        });
-      }
-      if (
-        row.decision &&
-        !row.decision.startsWith('#') &&
-        !existsSync(join(REPO_ROOT, row.decision.split('#')[0]))
-      ) {
-        failures.push({
-          file: row.sourceFile,
-          message: `${where}: "decision" is neither an issue ref nor a resolvable path`,
-        });
-      }
-      continue;
-    }
 
-    if (row.status === 'n/a' && !row.reason) {
-      failures.push({
-        file: row.sourceFile,
-        message: `${where}: status "n/a" requires a "reason"`,
+      rows.push({
+        ...row,
+        provingTests: proving.map((c) => ({ fullName: c.fullName, file: c.file })),
+        nonPassingTests: skipped.map((c) => ({
+          fullName: c.fullName,
+          file: c.file,
+          status: c.status,
+        })),
       });
+    });
+
+    // Orphan citations: a test points at this spec but no row answers it.
+    const orphans = new Map();
+    for (const citation of citations) {
+      if (citation.matched) continue;
+      const key = citation.section;
+      if (!orphans.has(key)) orphans.set(key, []);
+      orphans.get(key).push(citation.fullName);
     }
+    for (const [section, tests] of orphans) {
+      if (!spec.sealed) continue;
+      findings.push(
+        new Finding({
+          file: spec.file,
+          line: 1,
+          title: `orphan citation: ${spec.id} §${section}`,
+          message:
+            `${tests.length} test(s) cite ${spec.name} §${section} but no requirement row ` +
+            `covers that section, and this spec is sealed. Add the row, or unseal the spec ` +
+            `in docs/conformance/specs.json. First: ${tests[0]}`,
+        })
+      );
+    }
+
+    rendered.push({
+      id: spec.id,
+      name: spec.name,
+      url: spec.url,
+      sealed: spec.sealed,
+      scopeNote: spec.scopeNote,
+      file: spec.file,
+      rows,
+      orphans: [...orphans].map(([section, tests]) => ({ section, tests })),
+      citationCount: citations.length,
+    });
   }
 
-  // Orphan citations: a SEALED spec must have a row for every section its tests
-  // cite. This is the ratchet — it is what stops a spec's coverage silently
-  // regressing once someone has done the work of enumerating it.
-  for (const spec of specs.filter((candidate) => candidate.sealed)) {
-    const sections = new Set((rowsBySpec.get(spec.id) ?? []).map((row) => row.section));
-    const orphans = new Set(
-      citations
-        .filter((citation) => citation.specId === spec.id && citation.section)
-        .filter((citation) => ![...sections].some((section) => proves(citation.section, section)))
-        .map((citation) => citation.section)
-    );
-    for (const section of orphans) {
-      failures.push({
-        file: `docs/conformance/requirements/${spec.id}.json`,
-        message: `tests cite ${spec.id} §${section}, which has no requirement row — ${spec.id} is SEALED`,
-      });
-    }
-  }
-
-  return failures;
+  return {
+    specs: rendered,
+    findings,
+    citing: { assertions: citing.assertions, files: citing.files.size },
+  };
 }
 
-/* -------------------------------------------------------------------------- */
-/*                                  Render                                     */
-/* -------------------------------------------------------------------------- */
+// ---------------------------------------------------------------------------
+// Rendering
+// ---------------------------------------------------------------------------
 
-function renderMarkdown(joined, specs, stats) {
-  const byId = new Map(specs.map((spec) => [spec.id, spec]));
-  const lines = [
-    '# Spec conformance matrix',
-    '',
-    '_Generated by `scripts/spec-matrix.mjs`. Do not edit — edit the JSON under `docs/conformance/requirements/` instead._',
-    '',
-    `Joined ${stats.rows} requirement rows against ${stats.assertions} test assertions ` +
-      `(${stats.citations} citations across ${specs.length} registered specs).`,
-    '',
-  ];
+const STATUS_LABEL = {
+  covered: 'covered',
+  manual: 'manual',
+  waived: 'waived',
+  'n/a': 'n/a',
+};
 
-  const satisfied = joined.filter((row) => row.status === 'covered' || row.status === 'manual');
-  const knowinglyNot = joined.filter((row) => row.status === 'waived');
-  const outOfProfile = joined.filter((row) => row.status === 'n/a');
+function tally(matrix) {
+  const counts = { covered: 0, manual: 0, waived: 0, 'n/a': 0, total: 0 };
+  for (const spec of matrix.specs) {
+    for (const row of spec.rows) {
+      counts.total++;
+      if (row.status in counts) counts[row.status]++;
+    }
+  }
+  return counts;
+}
 
-  lines.push('## Satisfied', '');
-  lines.push('| Spec | § | Level | Status | Proven by | Requirement |');
-  lines.push('| --- | --- | --- | --- | --- | --- |');
-  for (const row of satisfied) {
-    const proof =
-      row.status === 'manual' ? `\`${row.evidenceRef}\`` : `${row.passingTests} test(s)`;
-    lines.push(
-      `| ${byId.get(row.specId)?.title ?? row.specId} | ${row.section} | ${row.level} | ${row.status} | ${proof} | ${row.quote.slice(0, 120)}… |`
-    );
+function escapeCell(text) {
+  return String(text).replace(/\|/g, '\\|').replace(/\n+/g, ' ').trim();
+}
+
+function renderMarkdown(matrix, meta) {
+  const counts = tally(matrix);
+  const out = [];
+  out.push('# QAuth spec-conformance matrix');
+  out.push('');
+  out.push(
+    'Which normative requirements QAuth satisfies, and which it knowingly does not. ' +
+      'Generated by `scripts/spec-matrix.mjs` — do not edit; edit the rows under ' +
+      '`docs/conformance/requirements/` instead.'
+  );
+  out.push('');
+  out.push(`- Generated: ${meta.generatedAt}`);
+  out.push(`- Vitest report: \`${meta.report}\` (${meta.assertionCount} assertions)`);
+  out.push(
+    `- Joinable corpus: **${meta.citingAssertionCount}** of those assertions ` +
+      `(${((meta.citingAssertionCount / meta.assertionCount) * 100).toFixed(1)}%) cite a ` +
+      `registered spec section in a \`describe\` or \`it\` title, across ` +
+      `${meta.citingFileCount} test file(s). Everything else is out of scope by design ` +
+      `— see \`docs/conformance/README.md\`.`
+  );
+  out.push(
+    `- Rows: **${counts.total}** — ${counts.covered} covered, ${counts.manual} manual, ` +
+      `${counts.waived} waived, ${counts['n/a']} n/a`
+  );
+  out.push(
+    `- Gate: ${meta.findingCount === 0 ? '**pass**' : `**${meta.findingCount} failure(s)**`}`
+  );
+  out.push('');
+
+  out.push('## Proven by the suite');
+  out.push('');
+  for (const spec of matrix.specs) {
+    const rows = spec.rows.filter((row) => row.status === 'covered' || row.status === 'manual');
+    out.push(`### ${spec.name}${spec.sealed ? '' : ' (unsealed)'}`);
+    out.push('');
+    if (spec.url) out.push(`<${spec.url}>`);
+    if (spec.scopeNote) out.push(`\n${spec.scopeNote}`);
+    out.push('');
+    if (rows.length === 0) {
+      out.push('_No rows yet._');
+      out.push('');
+      continue;
+    }
+    out.push('| Section | Level | Status | Requirement | Evidence |');
+    out.push('| --- | --- | --- | --- | --- |');
+    for (const row of rows) {
+      const evidence =
+        row.status === 'manual'
+          ? `\`${row.evidenceRef}\``
+          : row.provingTests.length === 0
+            ? '**none**'
+            : `${row.provingTests.length} test(s), e.g. ${escapeCell(row.provingTests[0].fullName)}`;
+      out.push(
+        `| §${row.section} | ${row.level} | ${STATUS_LABEL[row.status]} | ` +
+          `${escapeCell(row.quote)} | ${escapeCell(evidence)} |`
+      );
+    }
+    out.push('');
   }
 
-  // `waived` gets its own prominent section. Collapsing it into `n/a` destroys
-  // the document for a certification reviewer: `n/a` means the requirement never
-  // applied; `waived` means it applied and we chose not to satisfy it.
-  lines.push('', '## Knowingly NOT satisfied (waived)', '');
-  if (knowinglyNot.length === 0) {
-    lines.push('_None._', '');
+  out.push('## Knowingly not satisfied, and out of profile');
+  out.push('');
+  out.push(
+    'A **waived** row applied to QAuth and we chose not to satisfy it. An **n/a** row never ' +
+      'applied — a client-side obligation, or a flow QAuth does not implement. Collapsing the ' +
+      'two would destroy the document for a certification reviewer.'
+  );
+  out.push('');
+
+  const waived = matrix.specs.flatMap((spec) =>
+    spec.rows.filter((row) => row.status === 'waived').map((row) => ({ spec, row }))
+  );
+  out.push('### Waived');
+  out.push('');
+  if (waived.length === 0) {
+    out.push('_Nothing waived._');
   } else {
-    lines.push('| Spec | § | Level | Reason | Decision | Revisit |');
-    lines.push('| --- | --- | --- | --- | --- | --- |');
-    for (const row of knowinglyNot) {
-      lines.push(
-        `| ${byId.get(row.specId)?.title ?? row.specId} | ${row.section} | ${row.level} | ${row.reason} | ${row.decision} | ${row.revisit} |`
+    out.push('| Spec | Section | Level | Requirement | Why not | Decision | Revisit |');
+    out.push('| --- | --- | --- | --- | --- | --- | --- |');
+    for (const { spec, row } of waived) {
+      out.push(
+        `| ${spec.name} | §${row.section} | ${row.level} | ${escapeCell(row.quote)} | ` +
+          `${escapeCell(row.reason)} | ${escapeCell(row.decision)} | ${row.revisit} |`
       );
     }
   }
+  out.push('');
 
-  lines.push('', "## Outside QAuth's profile (n/a)", '');
-  lines.push('| Spec | § | Requirement | Why it does not apply |');
-  lines.push('| --- | --- | --- | --- |');
-  for (const row of outOfProfile) {
-    lines.push(
-      `| ${byId.get(row.specId)?.title ?? row.specId} | ${row.section} | ${row.quote.slice(0, 80)}… | ${row.reason} |`
+  const notApplicable = matrix.specs.flatMap((spec) =>
+    spec.rows.filter((row) => row.status === 'n/a').map((row) => ({ spec, row }))
+  );
+  out.push('### Not applicable');
+  out.push('');
+  if (notApplicable.length === 0) {
+    out.push('_Nothing marked n/a._');
+  } else {
+    out.push('| Spec | Section | Level | Requirement | Why it never applied |');
+    out.push('| --- | --- | --- | --- | --- |');
+    for (const { spec, row } of notApplicable) {
+      out.push(
+        `| ${spec.name} | §${row.section} | ${row.level} | ${escapeCell(row.quote)} | ` +
+          `${escapeCell(row.reason)} |`
+      );
+    }
+  }
+  out.push('');
+
+  const orphans = matrix.specs.filter((spec) => spec.orphans.length > 0);
+  if (orphans.length > 0) {
+    out.push('## Citations with no row');
+    out.push('');
+    out.push(
+      'Tests citing a registered spec at a section no requirement row covers. In a sealed ' +
+        'spec this is a build failure; in an unsealed one it is the backlog.'
     );
+    out.push('');
+    out.push('| Spec | Section | Sealed | Tests |');
+    out.push('| --- | --- | --- | --- |');
+    for (const spec of orphans) {
+      for (const orphan of spec.orphans) {
+        out.push(
+          `| ${spec.name} | §${orphan.section} | ${spec.sealed ? 'yes' : 'no'} | ` +
+            `${orphan.tests.length} |`
+        );
+      }
+    }
+    out.push('');
   }
 
-  lines.push('', '## Specs not yet enumerated', '');
-  for (const spec of specs) {
-    const count = joined.filter((row) => row.specId === spec.id).length;
-    if (count === 0)
-      lines.push(`- **${spec.title}** — registered, no rows yet (sealed: ${spec.sealed}).`);
-  }
-
-  return `${lines.join('\n')}\n`;
+  return `${out.join('\n')}\n`;
 }
 
-/* -------------------------------------------------------------------------- */
+// ---------------------------------------------------------------------------
+// Main
+// ---------------------------------------------------------------------------
+
+function emitAnnotations(findings) {
+  for (const finding of findings) {
+    const props = [`file=${finding.file}`, `line=${finding.line}`, `title=${finding.title}`].join(
+      ','
+    );
+    const message = finding.message.replace(/\r?\n/g, '%0A');
+    process.stderr.write(`::error ${props}::${message}\n`);
+  }
+}
 
 function main() {
-  const args = parseArgs(process.argv.slice(2));
-  const specs = loadRegistry();
-  const rows = loadRequirements(specs);
-  const assertions = loadAssertions(args.report);
-  const citations = extractCitations(assertions, specs);
-  const joined = joinRows(rows, citations);
-  const failures = gate(joined, citations, specs);
+  let opts;
+  try {
+    opts = parseArgs(process.argv.slice(2));
+  } catch (err) {
+    process.stderr.write(`spec-matrix: ${err.message}\n\n${USAGE}`);
+    return EXIT_INPUT;
+  }
+  if (opts.help) {
+    process.stdout.write(USAGE);
+    return EXIT_OK;
+  }
 
-  const stats = { rows: rows.length, assertions: assertions.length, citations: citations.length };
+  let specs;
+  let assertions;
+  try {
+    specs = loadRegistry(opts.conformanceDir);
+    loadRequirements(opts.conformanceDir, specs);
+    assertions = loadReport(opts.vitestReport);
+  } catch (err) {
+    if (!(err instanceof InputError)) throw err;
+    process.stderr.write(`spec-matrix: ${err.message}\n`);
+    return EXIT_INPUT;
+  }
 
-  mkdirSync(args.out, { recursive: true });
-  writeFileSync(join(args.out, 'matrix.md'), renderMarkdown(joined, specs, stats));
+  const matcher = buildAnchorMatcher(specs);
+  const { specs: rendered, findings, citing } = buildMatrix(specs, assertions, matcher);
+  const matrix = { specs: rendered };
+
+  const meta = {
+    generatedAt: new Date().toISOString(),
+    report: repoPath(opts.vitestReport),
+    assertionCount: assertions.length,
+    citingAssertionCount: citing.assertions,
+    citingFileCount: citing.files,
+    findingCount: findings.length,
+  };
+
+  const markdown = renderMarkdown(matrix, meta);
+  mkdirSync(opts.outDir, { recursive: true });
+  writeFileSync(join(opts.outDir, 'matrix.md'), markdown);
   writeFileSync(
-    join(args.out, 'matrix.json'),
-    `${JSON.stringify({ stats, rows: joined, failures }, null, 2)}\n`
+    join(opts.outDir, 'matrix.json'),
+    `${JSON.stringify(
+      {
+        meta,
+        counts: tally(matrix),
+        findings: findings.map((f) => ({ ...f })),
+        specs: rendered,
+      },
+      null,
+      2
+    )}\n`
   );
 
-  process.stdout.write(
-    `spec-matrix: ${stats.rows} rows, ${stats.assertions} assertions, ${stats.citations} citations → ${args.out}\n`
-  );
-
-  // Job summary, so every PR shows the delta without downloading an artifact.
-  if (process.env.GITHUB_STEP_SUMMARY) {
-    const counts = VALID_STATUSES.map(
-      (status) => `${status}: ${joined.filter((row) => row.status === status).length}`
-    ).join(', ');
-    writeFileSync(
-      process.env.GITHUB_STEP_SUMMARY,
-      `### Spec conformance matrix\n\n${counts}\n\nFailures: ${failures.length}\n`,
-      { flag: 'a' }
-    );
-  }
-
-  if (failures.length > 0) {
-    for (const failure of failures) {
-      process.stdout.write(`::error file=${failure.file}::${failure.message}\n`);
+  if (opts.summary) {
+    try {
+      appendFileSync(opts.summary, markdown);
+    } catch (err) {
+      process.stderr.write(`spec-matrix: could not write the job summary: ${err.message}\n`);
     }
-    process.stderr.write(`\nspec-matrix: ${failures.length} gate failure(s).\n`);
-    process.exit(1);
   }
+
+  const counts = tally(matrix);
+  process.stdout.write(
+    `spec-matrix: ${counts.total} rows across ${rendered.length} specs — ` +
+      `${counts.covered} covered, ${counts.manual} manual, ${counts.waived} waived, ` +
+      `${counts['n/a']} n/a; ${assertions.length} assertions read from ${meta.report}, ` +
+      `${meta.citingAssertionCount} of them citing a registered spec across ` +
+      `${meta.citingFileCount} file(s)\n`
+  );
+  process.stdout.write(`spec-matrix: wrote ${repoPath(opts.outDir)}/matrix.{md,json}\n`);
+
+  if (findings.length > 0) {
+    emitAnnotations(findings);
+    process.stderr.write(`spec-matrix: ${findings.length} gate failure(s)\n`);
+    return EXIT_GATE;
+  }
+  return EXIT_OK;
 }
 
-main();
+process.exitCode = main();

@@ -1102,7 +1102,7 @@ describe('GET /oauth/authorize — environment localhost redirect gate (ADR-008 
   });
 });
 
-describe('GET /oauth/authorize — RFC 9207 `iss` on every authorization response (#282)', () => {
+describe('GET /oauth/authorize — RFC 9207 §2 `iss` on every authorization response (#282)', () => {
   // The issuer this suite's makeFastify() advertises via jwtUtils.getIssuer().
   const RAW_ISSUER = 'https://auth.example.com';
 

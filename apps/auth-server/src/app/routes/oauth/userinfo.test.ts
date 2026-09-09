@@ -146,7 +146,7 @@ describe('GET /userinfo route', () => {
     expect(ctx.options?.preHandler).toBe(fastify.requireJwt);
   });
 
-  it('returns userinfo for existing user and jwt payload', async () => {
+  it('returns userinfo for existing user and jwt payload — `sub` is unconditional (OIDC Core §5.3.2)', async () => {
     const { fastify, ctx } = createFastifyStub();
     await userinfoRoute(fastify);
 
@@ -407,7 +407,7 @@ describe('GET /userinfo route', () => {
     });
   });
 
-  it('omits BOTH email claims when no verified email attribute exists (email scope granted) — BREAKING #229', async () => {
+  it('omits BOTH email claims when no verified email attribute exists (email scope granted) — BREAKING #229 (OIDC Core §5.3.2)', async () => {
     const { fastify, ctx } = createFastifyStub();
     await userinfoRoute(fastify);
 

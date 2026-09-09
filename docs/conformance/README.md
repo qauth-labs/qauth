@@ -1,123 +1,178 @@
-# Spec conformance matrix
+# Spec-conformance matrix
 
-QAuth's requirements are written by the IETF and the OpenID Foundation, not by
-us. This directory answers one question: **which normative requirements do we
-satisfy, and which do we knowingly not?**
+QAuth's requirements are written by the IETF and the OIDF, not by us. This
+directory holds the join between those normative requirements and the tests
+that prove them, so that **"which normative requirements do we satisfy, and
+which do we knowingly not"** is answerable without reading the whole suite.
 
-Before it existed, that was unanswerable without reading the whole test suite —
-and it is a deliverable for OpenID Foundation OP certification, not overhead
-(`docs/oidf-op-certification-runbook.md` anticipates it).
+It doubles as the evidence package for OpenID Foundation OP certification,
+which [the certification runbook](../oidf-op-certification-runbook.md) already
+anticipates.
 
 ## What is here
 
-| File                       | What it is                                                                                                                                            |
-| -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `specs.json`               | Alias registry. Maps every spelling a test title uses (`OIDC Core`, `OpenID Connect Core 1.0`, …) onto one spec id, and carries the `sealed` ratchet. |
-| `requirements/<spec>.json` | Hand-authored requirement rows, reviewed like code.                                                                                                   |
-| `scripts/spec-matrix.mjs`  | The joiner and the gate. Zero runtime dependencies.                                                                                                   |
+| Path                          | What it is                                                                                                  |
+| ----------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| `specs.json`                  | The alias registry — which strings in a test title mean which spec, and the ratchet                         |
+| `requirements/<id>.json`      | The requirement rows, hand-authored and reviewed like code                                                  |
+| `scripts/spec-matrix.mjs`     | The joiner and the CI gate (repo root, not an Nx project)                                                   |
+| `scripts/spec-matrix.test.ts` | The joiner's own guard — chiefly that a missing, empty or shape-changed report can never render as "proven" |
 
-Output goes to a gitignored `dist/conformance/` — `matrix.md` for a human or a
-certification reviewer, `matrix.json` for machines. **Nothing rendered is checked
-in.** The reviewable content is the hand-authored JSON, which is diffed in every
-pull request; a committed render would churn on every added test.
-
-## Rows pull tests. Tests never push rows.
-
-The matrix is requirement-driven. You add a row because a specification says
-something normative, and the join then finds the tests that prove it.
-
-**The ~3,700 uncited tests are deliberately out of scope, and there is no
-backfill to do.** Most of them prove internal behaviour rather than normative
-text — that a repository method returns the right shape, that a helper is
-fail-closed, that a regression stays fixed. Annotating them with spec references
-would be noise, and would invert the direction this document depends on.
-
-## A caveat on the `quote` field
-
-Every increment-1 specification source — `rfc-editor.org`, `datatracker.ietf.org`,
-`openid.net` — is unreachable from the environment these rows were authored in
-(the egress proxy returns 403). The `quote` field is therefore **transcribed, not
-copy-pasted from the source**, and is faithful to the normative requirement
-rather than guaranteed byte-exact.
-
-That is fine for the gate — which joins on `(specId, section)` and never reads
-the quote — and NOT fine for a certification submission, where a reviewer will
-read the quotes. **Re-verify every `quote` against the published specification
-before the matrix is used as certification evidence**, and drop this section when
-that pass has run.
-
-Recording it here rather than leaving it implicit: a document whose whole purpose
-is to be checkable should not have an unmarked soft spot.
-
-## Statuses
-
-Four, and the distinctions carry the whole value:
-
-| Status    | Meaning                                                                  | Gate                                                                                                                                                 |
-| --------- | ------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `covered` | Proven by at least one **passing** citing test.                          | Unproven fails the build. A row whose only citing tests are **skipped** counts as unproven, and says so distinctly.                                  |
-| `manual`  | Settled outside the unit suite.                                          | Requires an `evidenceRef` path (optionally with an anchor) that must resolve.                                                                        |
-| `waived`  | **In profile, knowingly not satisfied.**                                 | Requires `reason`, `decision` (issue ref or resolvable path) and `revisit` (ISO date or `never`). Never fails; renders in its own prominent section. |
-| `n/a`     | Outside QAuth's profile — implicit/hybrid flow, client-side obligations. | Requires `reason`. Never fails.                                                                                                                      |
-
-**Do not collapse `waived` into `n/a`.** It destroys the document for a
-certification reviewer: `n/a` means the requirement never applied; `waived`
-means it applied and we chose not to satisfy it. Today's one waiver — RFC 9700
-§4.5, token revocation on authorization-code replay — is precisely the kind of
-thing a reviewer must be able to find.
-
-## The join
-
-The key is `(specId, section)`, matched **hierarchically**: a test citing §2.4
-proves a row declared at §2.4 **or** at §2, never the reverse. Matching is
-against Vitest's `fullName`, so a `describe`-level citation propagates to every
-leaf beneath it — which is what lifts the joinable base far above the naive
-`it`-level count.
-
-A citation with **no** section proves nothing. It names a spec, not a
-requirement, and treating it as proof of every row would make the gate
-meaningless.
-
-### The corpus, measured on HEAD (2026-08-31)
-
-| Measure                            | Count | Share |
-| ---------------------------------- | ----- | ----- |
-| Leaf assertions                    | 4,288 | —     |
-| Carrying any spec reference        | 550   | 12.8% |
-| Using the `RFC NNNN §X.Y` grammar  | 82    | 1.9%  |
-| Files with a `RFC NNNN §` citation | 20    | —     |
-
-#400 quoted 26.5% (1,111 of 4,187 across 103 files) and called `RFC NNNN §X.Y`
-the overwhelmingly dominant grammar. **Neither holds on HEAD** — re-measured
-before the extractor was written, exactly as the issue asked. The practical
-consequence is that the extractor could not assume one shape: it accepts a
-section with or without `§`, and accepts a **list** of sections after a single
-alias (`OIDC Core §3.1.3.6, §3.1.3.7`), which a first draft silently truncated.
-
-## The `sealed` ratchet
-
-Once a spec is `sealed`, a citation naming it with a section that has no
-matching row is a **failure**, not a note. That is what stops a spec's coverage
-silently regressing after someone has done the work of enumerating it.
-
-Increment 1 seals RFC 9207, RFC 8414 and OIDC Discovery 1.0 — the three that are
-enumerated to the depth their tests cite. OIDC Core 1.0 carries the Basic-OP
-subset and is deliberately **not** sealed yet; RFC 6749, 7636, 6750, 7591 and
-9700 are registered with stubs or a single row.
+The joiner writes `dist/conformance/matrix.md` and `dist/conformance/matrix.json`.
+Both are gitignored on purpose: the reviewable content is the hand-authored JSON,
+which is diffed in every PR, whereas a checked-in render would churn on every
+added test. CI uploads the rendered matrix as a build artifact and posts it as a
+job summary, so every PR shows the delta without downloading anything.
 
 ## Running it
 
 ```bash
-pnpm exec vitest run --coverage --reporter=json --outputFile=dist/vitest-report.json
-node scripts/spec-matrix.mjs --vitest-report dist/vitest-report.json
+# One suite run, two reporters — the JSON report is what the gate reads.
+pnpm exec vitest run --coverage --reporter=default \
+  --reporter=json --outputFile.json=dist/vitest-report.json
+
+pnpm spec-matrix    # node scripts/spec-matrix.mjs --vitest-report dist/vitest-report.json --out-dir dist/conformance
 ```
 
-It reads the report the existing coverage step already emits, so the suite is
-never run twice.
+Exit codes: `0` clean, `1` gate failure, `2` input error. A missing, empty or
+shape-changed report is an **input error**, never a clean matrix — certification
+evidence that fails open is worse than no evidence at all.
 
-**Exit codes.** `0` clean · `1` gate failure, emitted as `::error file=…::`
-annotations so they land on the pull-request diff · `2` input error.
+## The alias registry
 
-The `2` class matters most. A missing, empty or shape-changed report exits `2`
-rather than rendering as "everything proven": certification evidence that fails
-**open** is worse than none.
+`specs.json` maps every spelling a test title uses onto one spec id, so the
+citation grammar can drift without touching a single requirement row: `OIDC Core`,
+`OIDC Core 1.0` and `OpenID Connect Core 1.0` all resolve to `oidc-core-1_0`.
+
+Each spec carries a `sealed` flag, and that is the ratchet:
+
+- **`sealed: false`** — rows are still being written. A citation that matches no
+  row is reported in the matrix's "Citations with no row" section and is the
+  backlog.
+- **`sealed: true`** — the row list is complete for every section the suite
+  cites. A citation that matches no row is a **build failure**, so new citations
+  cannot quietly outrun the requirement list.
+
+## The requirement rows
+
+Each row in `requirements/<specId>.json` carries:
+
+- **`section`** — dotted, no `§`. This is the join key.
+- **`level`** — the RFC 2119 keyword: `MUST`, `SHOULD`, `REQUIRED`, `OPTIONAL`, …
+- **`quote`** — a short **verbatim** quote of the normative sentence, so a
+  reviewer never has to trust our paraphrase.
+- **`applies`** — optional; which QAuth surface the requirement lands on.
+- **`status`** — one of four, below.
+- **`evidenceMatch`** — optional, `covered` rows only; see below.
+
+### `evidenceMatch`, and why a section is not a requirement
+
+The join key is `(specId, section)`, and a spec section is routinely far coarser
+than a single requirement. OIDC Core §2 declares the **whole** ID Token claim
+set; RFC 8414 §2 declares the **whole** metadata document. Section matching
+alone would therefore let every test citing §2 stand as proof of every §2 row —
+which is how a certification artifact ends up naming an `acr`-value test as its
+evidence that the ID Token carries a correct `iss`, and how deleting the test
+that actually proves `iss` leaves the gate green.
+
+`evidenceMatch` is the narrowing. It is a regular-expression source string; a
+citing test counts as evidence for that row only if its `fullName` **also**
+matches it, case-insensitively. It can only ever remove evidence, never add it,
+so a row carrying one is strictly harder to prove than a row without one, and a
+pattern that fails to compile matches nothing at all.
+
+Write one on every row that shares a section with a row about something else.
+When the gate reports such a row as unproven it names the pattern, so the fix —
+cite the test that really proves the sentence, or correct the pattern — is
+obvious from the annotation alone.
+
+### The four statuses
+
+The distinctions carry the whole value of the document.
+
+- **`covered`** — must be proven by at least one **passing** citing test.
+  Unproven fails the build. A row whose only citing tests are skipped counts as
+  unproven, because a skipped test proves nothing.
+- **`manual`** — settled outside the unit suite: deployment configuration, or
+  the external OIDF conformance run. Requires an `evidenceRef` path, optionally
+  with a `#anchor`, which the joiner asserts resolves. This is where "there has
+  been no external certification run yet" lives — the runbook is the evidence,
+  and the row says so.
+- **`waived`** — in profile, knowingly not satisfied. Requires `reason`,
+  `decision` (an issue reference or a resolvable path) and `revisit` (an ISO
+  date or `never`). Never fails the build; renders in its own prominent section.
+- **`n/a`** — outside QAuth's profile: the implicit and hybrid flows,
+  client-side obligations. Requires `reason`. Never fails the build.
+
+**Do not collapse `waived` into `n/a`.** `n/a` means the requirement never
+applied to QAuth. `waived` means it applied and we chose not to satisfy it. For
+a certification reviewer, conflating the two destroys the document.
+
+## How the join works
+
+The joiner reads the Vitest JSON report the coverage step already emits — the
+suite is never run twice — and extracts `(specId, section)` citations from each
+test's `fullName`. Matching `fullName` rather than the leaf title is what makes a
+`describe`-level citation carry down to every test inside it.
+
+Sections match **hierarchically**: a test citing `§2.4` proves a row declared at
+`§2.4` or at `§2`, but not one at `§2.4.1`. Cited depth in this repo ranges from
+`§2` to `§4.2.1.3`, so nothing flatter works.
+
+A bare `§X.Y` is attributed to the nearest spec name to its left in the same
+`fullName`, which is how `describe('… (HAIP §4.5.1)') > it('the §5.9.3 prohibition')`
+keeps both sections on HAIP. Unregistered spec names still act as anchors
+precisely so they can block that mis-attribution; their citations are then
+dropped, because only registered specs participate.
+
+The section match is what **answers** a citation — it is why a citation counts
+as belonging to this spec rather than showing up under "Citations with no row".
+A row's `evidenceMatch` then decides whether that row may lean on it. The two
+are kept separate on purpose: narrowing one row must never turn a sibling row's
+perfectly good test into an orphan.
+
+## Explicitly out of scope
+
+**The uncited tests are not touched, and nobody should start a backfill.** Only
+a small minority of the suite cites a registered spec section in a `describe` or
+`it` title, and that ratio is fine.
+
+The exact counts are deliberately **not** written down here. A figure copied
+into prose is stale the day after it is copied, and this document exists to be
+trusted. Every run of the gate derives them instead and prints them twice: on
+stdout (`… N assertions read from …, M of them citing a registered spec across
+K file(s)`) and in the header of `dist/conformance/matrix.md`, which CI uploads
+and posts as the job summary. If you want the number, run the joiner.
+
+Most uncited tests prove internal behaviour — a helper's edge cases, an error
+shape, a repository call — rather than normative text, and annotating them would
+be noise that buries the citations that do mean something.
+
+The matrix is **requirement-driven**: rows pull tests, tests never push rows. A
+citation is added to a test title when a requirement row needs that test as its
+evidence, and for no other reason.
+
+Specs cited in test titles but absent from `specs.json` — ADR references, HAIP,
+OID4VP, OID4VCI and the rest — are ignored entirely. Registering one is a
+deliberate act that comes with writing its rows.
+
+## Scope of increment 1
+
+Populated: **RFC 9207**, **RFC 8414**, **OpenID Connect Discovery 1.0**, and the
+**Basic-OP subset** of **OpenID Connect Core 1.0** (the ID Token, the
+authorization endpoint, the token response, UserInfo, and the request-object
+obligations the runbook flags). The first three are sealed; OIDC Core is not,
+because its row list is deliberately partial.
+
+Stubbed — registered so citations resolve to a stable id, rows to follow:
+**RFC 6749**, **RFC 7636**, **RFC 6750**, **RFC 7591**.
+
+Seed rows came from the runbook's Step 7 residual-item checklist and its
+Basic-plan Appendix, and from the prose "Known gaps" register that used to sit in
+the header comment of `apps/auth-server/src/app/routes/oauth/oidc-conformance.test.ts`.
+That comment is now a pointer here, so the gap register has one home.
+
+Two of the runbook's nine Step 7 checkboxes have **no** row yet, and both for the
+same reason: **both client-auth methods demonstrated** and **authorization-code
+reuse** are RFC 6749 requirements, and RFC 6749 is one of the four stubs above.
+They arrive with its rows. Every other Step 7 checkbox is a row here.

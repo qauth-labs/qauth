@@ -22,12 +22,13 @@
  * does NOT import `jose` or `@qauth-labs/server-jwt` directly, keeping within
  * the auth-server dependency graph.
  *
- * Known gaps: the register that used to live here has ONE home now —
- * `docs/conformance/requirements/oidc-core-1_0.json` (#400). The three gaps it
- * recorded are rows there: the external certification run as `manual` against
- * the OIDF runbook, and `at_hash`/`c_hash` (§3.3.2.11) and signed UserInfo
- * responses (§5.3.2) as `n/a` with their reasons. Add a row rather than prose
- * here, so a gap is answerable without reading this file.
+ * Known gaps have ONE home, and it is not this comment: the requirement rows
+ * under `docs/conformance/requirements/` carry them as `manual`, `waived` and
+ * `n/a` statuses, and `scripts/spec-matrix.mjs` renders them. The three that
+ * used to be listed here — no external OpenID certification run, no
+ * `at_hash`/`c_hash`, no signed UserInfo JWT — are rows in
+ * `oidc-discovery-1_0.json` and `oidc-core-1_0.json`. See
+ * `docs/conformance/README.md`.
  *
  * ID token signature verification is asserted INDIRECTLY via `jwtUtils.verifyAccessToken`
  * (the same EdDSA public key the JWKS publishes) plus a cross-key rejection
@@ -377,8 +378,8 @@ describe('OIDC conformance — RS256 ID token signing (#309, cert #286)', () => 
   });
 });
 
-describe('OIDC conformance — ID token validation against the published key', () => {
-  it('mints an ID token that verifies against the server key with all required claims (OIDC Core §3.1.3.6, §3.1.3.7)', async () => {
+describe('OIDC conformance — ID token validation against the published key (OIDC Core §2)', () => {
+  it('mints an ID token that verifies against the server key with all required claims', async () => {
     const app = await buildApp();
     try {
       const nonce = 'n-0S6_WzA2Mj';
