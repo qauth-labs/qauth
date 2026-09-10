@@ -62,6 +62,25 @@ overrides:
   # 5.0.8 -> 5.0.9 for the unbounded-intermediate-array DoS; see the js-yaml
   # note below on why a floor at the resolved version achieves nothing.
   brace-expansion: '>=5.0.9'
+  # Build-tooling floors, all dev-scope, all reached only through the Astro/Vite
+  # docs-site toolchain — none is imported by shipped code. Floored rather than
+  # bumped because each still resolves to a second, vulnerable copy through a
+  # transitive dependent that pins the old line; a direct update alone left
+  # 4.28.4 / 1.6.1 / 2.10.38 in the tree beside the new ones.
+  #   browserslist            GHSA: uncaught crash / prototype write via an
+  #                           untrusted browserslist-stats.json custom stats file.
+  #                           We ship no such file, so this is a floor, not a fix.
+  #   smol-toml               DoS on malformed TOML. Only the toolchain parses TOML.
+  #   baseline-browser-mapping process termination on invalid input.
+  browserslist: '>=4.28.7'
+  smol-toml: '>=1.7.1'
+  baseline-browser-mapping: '>=2.11.0'
+  # `qs` is pulled only by express / body-parser / superagent, i.e. the test
+  # tooling. QAuth serves on Fastify and imports `qs` nowhere, so neither the
+  # array-limit bypass nor the isBuffer DoS is reachable from shipped code.
+  # Floored anyway so `pnpm audit` stays clean and a future real dependent
+  # cannot land on a vulnerable line unnoticed.
+  qs: '>=6.16.0'
   esbuild: '>=0.28.1'
   # Host-confusion advisories (CVE-2026-13676, CVE-2026-16221, and the backslash
   # authority bypass patched in 3.1.5). Inert today — main.ts sets a global Zod
@@ -157,8 +176,8 @@ catalog:
   '@types/react-dom': '^19.2.3'
   '@types/supertest': '^7.2.1'
   '@types/zxcvbn': '^4.4.5'
-  '@vitest/coverage-v8': '^4.1.10'
-  '@vitest/ui': '^4.1.10'
+  '@vitest/coverage-v8': '^4.1.11'
+  '@vitest/ui': '^4.1.11'
   drizzle-kit: '^0.31.10'
   esbuild: '^0.28.1'
   eslint: '^10.8.0'
@@ -185,7 +204,7 @@ catalog:
   tsx: '^4.23.1'
   typescript: '~6.0.3'
   typescript-eslint: '^8.65.0'
-  vitest: '^4.1.10'
+  vitest: '^4.1.11'
   '@fastify/autoload': '^6.4.0'
   '@fastify/cors': '^11.3.0'
   '@fastify/formbody': '^8.0.2'
