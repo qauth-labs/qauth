@@ -22,8 +22,12 @@ the enterprise identity provider the resource authorization server already trust
 for single sign-on, using OAuth 2.0 Token Exchange ([RFC 8693](https://datatracker.ietf.org/doc/html/rfc8693))
 and the JWT authorization grant ([RFC 7523](https://datatracker.ietf.org/doc/html/rfc7523)).
 The wire format is the **Identity Assertion JWT Authorization Grant (ID-JAG)**,
-specified in [`draft-ietf-oauth-identity-assertion-authz-grant`](https://datatracker.ietf.org/doc/html/draft-ietf-oauth-identity-assertion-authz-grant)
-(currently `-04`).
+specified in [`draft-ietf-oauth-identity-assertion-authz-grant`](https://datatracker.ietf.org/doc/html/draft-ietf-oauth-identity-assertion-authz-grant),
+pinned at `-04` (verified 2026-08-06; that revision expires **2026-11-22**).
+"Currently" was the original wording and could not be falsified — see
+[`docs/spec-pin-log.md`](../spec-pin-log.md), which now carries the row and the
+expiry date, and whose freshness check fails the build once the re-check is
+overdue.
 
 It is a **three-party** flow. The parties are distinct roles, not distinct
 products:
@@ -417,11 +421,14 @@ path is audited at least as carefully as the accept path.
 - **Nothing here is QAuth-proprietary.** Every wire artefact is an IETF
   construct; a client written against the draft and the MCP extension interoperates.
 - **The base specification is still moving.** The MCP extension is STABLE but
-  `draft-ietf-oauth-identity-assertion-authz-grant` is an Internet-Draft at `-04`.
-  Per the ADR-007 process note, the implementation must pin the revision it
-  targets in code and be re-reviewed on a schedule rather than ad hoc — and the
-  citation must be re-verified against the code at the moment of writing, not
-  carried forward.
+  `draft-ietf-oauth-identity-assertion-authz-grant` is an Internet-Draft at
+  `-04`, which expires **2026-11-22**. Per the ADR-007 process note, the
+  implementation must pin the revision it targets in code and be re-reviewed on
+  a schedule rather than ad hoc — and the citation must be re-verified against
+  the code at the moment of writing, not carried forward. That schedule is now
+  kept in [`docs/spec-pin-log.md`](../spec-pin-log.md), whose freshness check
+  fails the build once this row's re-check date passes. This ADR is **Proposed**
+  with merged code, so it re-verifies its own rows before moving to Accepted.
 
 ## Explicitly out of scope
 

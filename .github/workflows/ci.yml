@@ -51,7 +51,46 @@ jobs:
       # the whole fast unit suite. The Docker-backed integration suite (#167,
       # `*.integration.test.ts`) is excluded here, so no Postgres/Redis is
       # needed — the `integration` job below runs it instead.
-      - run: pnpm exec vitest run --coverage
+      # `--reporter=default --reporter=json` keeps the human output AND emits the
+      # machine report the conformance matrix joins against, so the suite is not
+      # run twice (#400).
+      - run: pnpm exec vitest run --coverage --reporter=default --reporter=json --outputFile.json=dist/vitest-report.json
+
+      # Spec-conformance matrix (#400). Deliberately NOT `if: always()`, unlike
+      # the issue-state guard below: when the suite fails the report is partial,
+      # and matrix noise on top of a real test failure helps nobody. The script
+      # exits 2 rather than rendering a partial report as proven, so skipping it
+      # here loses nothing.
+      - name: Spec conformance matrix
+        run: pnpm spec-matrix
+
+      # `always()` so a partial artifact survives a gate failure — the matrix is
+      # most useful precisely when it is red.
+      - name: Upload conformance matrix
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: spec-conformance-matrix
+          path: dist/conformance/
+          if-no-files-found: ignore
+
+      # Issue-state drift guard (#399). The evidence-path half of
+      # `status-claims.ts` runs inside the unit suite above; this half needs the
+      # GitHub API, so it runs here.
+      #
+      # `if: always()` is deliberate. The check is about prose, not code, so a
+      # failing test suite tells you nothing about whether the docs list a
+      # closed issue as open work — and skipping it whenever something else is
+      # red is how a claim stays stale for weeks. It cannot mask a real failure:
+      # a red suite above already fails the job.
+      #
+      # Cadence note: per-PR, NOT on the spec pin log's quarterly cadence.
+      # `#379` closed and `MVP-PRD.md` was wrong within 24 hours.
+      - name: Issue-state claims are not stale
+        if: always()
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: node --experimental-strip-types scripts/check-issue-state-claims.mts
 
   # The `main` job above can never exercise real DDL: every unit suite mocks the
   # repositories, and both vitest.config.ts and the coverage gate exclude

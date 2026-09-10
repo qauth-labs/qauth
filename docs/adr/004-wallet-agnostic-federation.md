@@ -16,7 +16,7 @@
 >
 > The flow runs on a dedicated seam in `apps/auth-server` (`routes/ui/wallet-login.ts` → `helpers/wallet-presentation.ts`), which resolves or enrols an account and mints a session. **`WalletProvider.verify()` still throws unconditionally and must keep doing so** — it is the generic `CredentialProvider`-registry entry point, and the wallet login path does not call it. Do not read that throw as "wallet login is unimplemented."
 >
-> It is **off by default** (`WALLET_FEDERATION_ENABLED=false`; the routes are not registered) and validated so far only on the `oid4vp-1.0-base` profile against a mock wallet. Remaining: HAIP profile wiring (#377), key-storage assurance in the assurance policy (#379), and the real-wallet interoperability pass (#376).
+> It is **off by default** (`WALLET_FEDERATION_ENABLED=false`; the routes are not registered) and validated so far only on the `oid4vp-1.0-base` profile against a mock wallet. Remaining: HAIP profile wiring (#377) and the real-wallet interoperability pass (#376).
 
 ## Context
 

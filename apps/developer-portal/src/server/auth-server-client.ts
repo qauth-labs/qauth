@@ -54,7 +54,14 @@ export interface UserInfoData {
 export type TokenEndpointAuthMethod =
   'none' | 'client_secret_post' | 'client_secret_basic' | 'private_key_jwt';
 
-export type GrantType = 'authorization_code' | 'refresh_token' | 'client_credentials';
+export type GrantType =
+  | 'authorization_code'
+  | 'refresh_token'
+  | 'client_credentials'
+  // RFC 8693 on-behalf-of delegation (ADR-007 §2). Settable by a developer on
+  // their own client since #381; see `grantTypeSchema` in the auth-server's
+  // `schemas/clients.ts` for why this subset excludes `jwt-bearer`.
+  | 'urn:ietf:params:oauth:grant-type:token-exchange';
 
 /**
  * Safe representation of an OAuth client as returned by every `/api/clients`
@@ -140,6 +147,23 @@ export interface CreateApiKeyInput {
  */
 export interface ClientWithSecret extends OAuthClient {
   clientSecret?: string;
+}
+
+/**
+ * One row of `GET /api/consents` (issue #366). The auth-server owns the shape;
+ * this mirrors `consentRowSchema` in `routes/consents-api`.
+ */
+export interface Consent {
+  id: string;
+  clientId: string;
+  clientName: string;
+  scopes: string[];
+  /** Epoch milliseconds. */
+  grantedAt: number;
+}
+
+export interface ConsentListData {
+  consents: Consent[];
 }
 
 export interface ClientListData {
@@ -365,6 +389,27 @@ export const authServerClient = {
   listClients(accessToken: string): Promise<Result<ClientListData>> {
     return apiRequest<ClientListData>('/api/clients', {
       method: 'GET',
+      headers: { Authorization: `Bearer ${accessToken}` },
+      skipContentType: true,
+    });
+  },
+
+  listConsents(accessToken: string): Promise<Result<ConsentListData>> {
+    return apiRequest<ConsentListData>('/api/consents', {
+      method: 'GET',
+      headers: { Authorization: `Bearer ${accessToken}` },
+      skipContentType: true,
+    });
+  },
+
+  /**
+   * Revoke one consent. `/api/consents` is Bearer-authenticated, so unlike the
+   * cookie-authed `/consents` it needs no `X-CSRF-Token` header — see that
+   * route's module comment for why.
+   */
+  revokeConsent(accessToken: string, id: string): Promise<Result<null>> {
+    return apiRequestNoContent(`/api/consents/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
       headers: { Authorization: `Bearer ${accessToken}` },
       skipContentType: true,
     });

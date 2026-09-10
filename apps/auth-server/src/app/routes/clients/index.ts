@@ -330,6 +330,32 @@ export default async function (fastify: FastifyInstance) {
         return reply.send({ clients: [] });
       }
 
+      // `developer_id IS NULL` — the deliberate answer (#374).
+      //
+      // A client registered anonymously through RFC 7591 DCR, or materialised
+      // from a CIMD document, has no developer to attribute to, so its
+      // `developer_id` is NULL and it matches no caller here. That is correct
+      // and intentional: inventing an owner would hand an anonymous caller's
+      // client to whoever the server guessed.
+      //
+      // What changed with #374 is that a developer who registers WITH their
+      // access token is now attributed and does appear below — the case that
+      // was simply unserved before. An anonymous registration is still
+      // unmanageable from the portal, by design, and `docs/conformance` aside,
+      // the developer-facing statement of that lives in the portal guide and
+      // the API reference so a developer meets it before wondering where their
+      // client went.
+      //
+      // Any future developer-scoped query MUST make the same choice explicitly
+      // rather than inheriting it: a `WHERE developer_id = $1` that silently
+      // drops NULL rows reads as "you have none" when it means "these cannot be
+      // attributed to anyone". And it must NOT be widened to
+      // `OR developer_id IS NULL` — that equality is the only tenant boundary
+      // on this table, so widening it would hand every party's dynamically
+      // registered clients to every developer.
+      //
+      // Full reasoning, including why a CIMD client is not merely unowned but
+      // NOT OWNABLE: `docs/adr/012-dynamic-client-ownership.md`.
       const rows = await fastify.repositories.oauthClients.listByDeveloper(developerId);
 
       // Resolve each client's effective policy against its realm ceiling. Realms

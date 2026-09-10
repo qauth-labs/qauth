@@ -52,27 +52,51 @@ curl -s -X POST http://localhost:3000/oauth/register \
   -d '{
     "client_name": "My Agent",
     "grant_types": ["client_credentials"],
+    "response_types": [],
     "token_endpoint_auth_method": "client_secret_basic",
     "is_agent": true
   }' | jq
 # → { "client_id": "…", "client_secret": "…", "is_agent": true, … }
 ```
 
-> ⚠️ **The token-exchange grant cannot be provisioned by any shipped path.**
-> Do **not** put `urn:ietf:params:oauth:grant-type:token-exchange` in
-> `grant_types` above — the DCR schema accepts only `authorization_code`,
-> `refresh_token` and `client_credentials`
-> (`apps/auth-server/src/app/schemas/oauth.ts`), and because `grant_types` is a
-> recognized key Zod **rejects** the request with `400` rather than stripping it.
-> The seed manifest (`libs/infra/db/src/scripts/seed-oauth-clients.ts`, validated
-> against the `grant_type` pg enum) and CIMD (`helpers/cimd.ts`) reject it too.
+> ℹ️ **Ask for the delegation grant explicitly.** The registration above gets you
+> a client, but §2's on-behalf-of delegation additionally requires
+> `urn:ietf:params:oauth:grant-type:token-exchange` in `grant_types` — `POST
+/oauth/token` gates delegation on `client.grantTypes.includes(...)`, so a
+> client without it is refused with `unauthorized_client`:
 >
-> Meanwhile `/.well-known/oauth-authorization-server` **does** advertise the grant
-> in `grant_types_supported`, and `POST /oauth/token` gates delegation on
-> `client.grantTypes.includes(...)`. So §2 below is unreachable for any client you
-> can register through a supported path — the grant currently has to be written
-> directly to the `oauth_clients.grant_types` JSONB column. This provisioning gap
-> is a bug in the server, not in this guide.
+> ```jsonc
+> {
+>   "client_name": "My Agent",
+>   "grant_types": ["client_credentials", "urn:ietf:params:oauth:grant-type:token-exchange"],
+>   "response_types": [],
+>   "token_endpoint_auth_method": "client_secret_basic",
+>   "is_agent": true,
+> }
+> ```
+>
+> Two constraints to know:
+>
+> - **The client must be confidential.** Token exchange authenticates the agent
+>   through the confidential client-auth path, so
+>   `token_endpoint_auth_method: "none"` is refused at registration rather than
+>   at every exchange. On CIMD, where a client is public unless it publishes a
+>   key set for `private_key_jwt`, the grant is dropped from the materialised row
+>   instead — CIMD documents describe a client across every AS it talks to, so an
+>   unusable-here grant is not an error.
+> - **`response_types` must be `[]`** for a token-endpoint-only registration.
+>   That is not specific to this grant — `client_credentials` alone needs it too,
+>   because the normalizer refuses a `code` response type without the
+>   `authorization_code` grant.
+>
+> Holding the grant confers no authority by itself. The exchange still requires a
+> valid subject token you already hold, preserves-or-narrows its scope and
+> audience, and clamps any reserved `agent:*` scope to the operator-set
+> `max_agent_mode` — which self-registration never sets. See §2.
+>
+> _(Before #381 this was impossible: the grant was advertised and enforced but
+> rejected by every provisioning path, so it had to be written straight into the
+> `oauth_clients.grant_types` JSONB column.)_
 
 ### `is_agent` is self-asserted and untrusted
 

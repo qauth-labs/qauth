@@ -58,16 +58,19 @@ overrides:
   # lines too — and is patched ONLY in 5.0.8. So there is no in-major fix for
   # the 1.x/2.x consumers (minimatch@3, minimatch@5) and everything has to move
   # to 5.x. Safe here: the module's surface is the single expand() function,
-  # unchanged across these majors, and the full suite passes on it.
-  brace-expansion: '>=5.0.8'
+  # unchanged across these majors, and the full suite passes on it. Raised
+  # 5.0.8 -> 5.0.9 for the unbounded-intermediate-array DoS; see the js-yaml
+  # note below on why a floor at the resolved version achieves nothing.
+  brace-expansion: '>=5.0.9'
   esbuild: '>=0.28.1'
-  # Both host-confusion advisories (CVE-2026-13676, CVE-2026-16221). Inert today
-  # — main.ts sets a global Zod validator compiler so ajv never parses a request,
-  # and redirect_uri matching is an exact string comparison with no URI parser in
-  # the decision — but floored so that stops being load-bearing. Upper-bounded
-  # because a bare '>=3.1.4' resolves to 4.x, turning a security floor into an
-  # unreviewed major; same reasoning as h3 below.
-  fast-uri: '>=3.1.4 <4'
+  # Host-confusion advisories (CVE-2026-13676, CVE-2026-16221, and the backslash
+  # authority bypass patched in 3.1.5). Inert today — main.ts sets a global Zod
+  # validator compiler so ajv never parses a request, and redirect_uri matching
+  # is an exact string comparison with no URI parser in the decision — but
+  # floored so that stops being load-bearing. Upper-bounded because a bare
+  # '>=3.1.5' resolves to 4.x, turning a security floor into an unreviewed
+  # major; same reasoning as h3 below.
+  fast-uri: '>=3.1.5 <4'
   # Fastify's router. CVE-2026-47219 is HTTP/2-only and we serve HTTP/1.1, so
   # this is a floor against a future http2 switch, not a live fix.
   find-my-way: '>=9.7.0'
@@ -78,10 +81,20 @@ overrides:
   # The earlier `>=2.0.1` floor was inert (nothing pulled h3) and would force
   # the wrong major onto Nitro. Revisit if anything ever needs h3 2.x.
   h3: '^1.15.11'
-  # Raised from the earlier '>=4.1.2' floor, which sat BELOW the fix for
-  # CVE-2026-59869 (patched 4.3.0) and so left resolution free to pick a still
-  # vulnerable 4.1.x/4.2.x.
-  js-yaml: '>=4.3.0 <5'
+  # GHSA: a custom alphabet can make the generator loop indefinitely. Build-time
+  # only (postcss/vite), and QAuth passes no custom alphabet, so this is board
+  # hygiene rather than a shipped fix. Bounded to the 3.x line the sole consumer
+  # requests — a bare '>=3.3.18' resolves to 5.x, which is ESM-only and would
+  # turn a security floor into an unreviewed major, the same reasoning as
+  # fast-uri and h3 above.
+  nanoid: '>=3.3.18 <4'
+  # Raised TWICE now for the same reason, which is the pattern to watch on every
+  # floor in this block: '>=4.1.2' sat below CVE-2026-59869's fix (4.3.0), and
+  # '>=4.3.0' then sat below the quadratic-!!omap fix (4.3.1). A `>=` floor at
+  # the CURRENTLY RESOLVED version is inert — the lockfile already satisfies it,
+  # so nothing re-resolves and the advisory stays open. Floor to the PATCHED
+  # version, never to the version you happen to have.
+  js-yaml: '>=4.3.1 <5'
   postcss: '>=8.5.18'
   # Reaches the tree only through dockerode -> testcontainers (devDependency of
   # @qauth-labs/shared-testing), so this is a floor for board hygiene rather
@@ -94,6 +107,21 @@ overrides:
   # and QAuth parses none, so the floor clears the board without shipping a fix.
   tar: '>=7.5.21'
   tmp: '>=0.2.7'
+  # Five advisories, all request/response correctness bugs — cross-user
+  # information disclosure, CRLF injection via a blob-like body, cookie
+  # attribute injection, response desynchronisation. Reaches the tree only via
+  # vitest -> jsdom (dev tooling; the auth server uses Node's own fetch), so
+  # nothing shipped is affected, but the floor is cheap and stops that being
+  # load-bearing.
+  #
+  # SELECTOR, and upper bound, both load-bearing. An unbounded `undici` floor
+  # pulls jsdom onto the 8.x already in the tree for other consumers, and jsdom
+  # 29.1.1 requires `undici/lib/handler/wrap-handler.js`, which 8.x removed —
+  # every jsdom-environment test file then fails to start its worker with
+  # MODULE_NOT_FOUND. Caught by running the suite, not by reading the advisory.
+  # `undici@7` scopes the floor to the line that is actually vulnerable and
+  # leaves the 8.x resolution alone.
+  'undici@7': '>=7.29.0 <8'
   # Dedupe commitlint's loose TS resolution onto the workspace TS; cap <6.1 to
   # stay within typescript-eslint@8's `typescript <6.1.0` peer range.
   typescript: '~6.0.3'

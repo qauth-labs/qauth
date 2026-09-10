@@ -9,6 +9,13 @@ which version/date of which source, at which URL, and the verdict.
 It exists so that a re-check is a diff against a previous pass rather than a
 fresh investigation, and so that a negative result carries its controls with it.
 
+**Scope.** This log owns the **EU legal instruments** and the standards bound to
+them: the eIDAS 2 implementing regulations, the ARF, ISO/IEC and ETSI. Every
+other moving citation — Internet-Drafts, OpenID Foundation specifications, the
+MCP authorization specification — lives in its sibling
+[`spec-pin-log.md`](./spec-pin-log.md). Two logs tracking one source is how they
+come to disagree, so a source belongs to exactly one of them.
+
 | Pass         | Trigger                    | Headline outcome                                                                                 |
 | ------------ | -------------------------- | ------------------------------------------------------------------------------------------------ |
 | `2026-07-20` | ADR-009 acceptance (#305)  | All three drift risks **pending** — nothing published in the OJ.                                 |

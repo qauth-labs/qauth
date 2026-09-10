@@ -388,10 +388,14 @@ The wallet-login screens below are registered **only** when
 
 ## Consents (`/consents/`)
 
-Lets a signed-in user manage their own OAuth consent grants. **Cookie-authed**
-(`__Host-qauth_session`), not Bearer — there is no first-party access-token path
-here, because consent management is inherently a same-origin, user-present
-operation.
+Lets a signed-in user manage their own OAuth consent grants from the auth-server's
+**hosted UI**. **Cookie-authed** (`__Host-qauth_session`), so it carries a CSRF
+token.
+
+If you are calling from a separate origin — the developer portal, or your own
+front end — use [`/api/consents/`](#consents-api-apiconsents) below instead. That
+cookie is set only by `POST /ui/login` and is `SameSite=Lax`, so it will not be
+attached to a cross-site `fetch()` whatever `credentials: 'include'` says.
 
 ### `GET /consents/`
 
@@ -431,12 +435,84 @@ is not owned by the caller).
 
 ---
 
+## Consents API (`/api/consents/`)
+
+The same consent management, **Bearer-authed** — the credential the developer
+portal and any other API client actually holds. Same auth model as
+[`/api/clients/`](#client-management-apiclients): `Authorization: Bearer
+<access_token>`, scoped strictly to the token subject.
+
+**No CSRF token.** A Bearer token is not ambient authority a cross-site page can
+make the browser attach, so there is nothing for one to add. The cookie-authed
+`/consents/` above needs one precisely because its credential is ambient.
+
+Ownership and auditing are shared with `/consents/`, so the two surfaces cannot
+diverge on who may revoke what.
+
+### `GET /api/consents/`
+
+List the authenticated user's active consents.
+
+**Headers**: `Authorization: Bearer <access_token>` (required).
+
+**`200 OK`**
+
+```json
+{
+  "consents": [
+    {
+      "id": "...",
+      "clientId": "...",
+      "clientName": "My App",
+      "scopes": ["openid"],
+      "grantedAt": 1750000000000
+    }
+  ]
+}
+```
+
+No `csrfToken` field — see above. Errors: `401` (missing/invalid bearer).
+
+### `DELETE /api/consents/{id}`
+
+Revoke one consent owned by the authenticated user.
+
+**`204 No Content`**. Errors: `401` (missing/invalid bearer), `404` (consent
+does not exist **or** is not owned by the caller — deliberately the same
+outcome, so the API never reveals that another user's consent id exists).
+
+---
+
 ## Client management (`/api/clients/`)
 
 Developer-portal API for managing a developer's own OAuth clients. **JSON**,
 **camelCase**, and authenticated with a developer **`Authorization: Bearer`**
 access token (from [`POST /auth/login`](#post-authlogin)). Results are scoped to
 the token subject's `developer_id`; the client secret is **never** returned.
+
+:::note[Dynamically registered clients and ownership]
+A client registered **anonymously** through [`POST /oauth/register`](/integrate/oauth-flow/#dynamic-client-registration-rfc-7591)
+or materialised from a CIMD document has no developer to attribute to, so its
+`developer_id` is `NULL` and it will **not** appear here for anyone. That is
+deliberate: inventing an owner would hand an anonymous caller's client to
+whoever the server guessed. Manage such a client out of band, or register it
+with attribution instead.
+
+**To get a manageable client from dynamic registration, send your developer
+access token with the registration request** (#374):
+
+```bash
+curl -s -X POST https://auth.example.com/oauth/register \
+  -H 'Content-Type: application/json' \
+  -H "Authorization: Bearer $ACCESS_TOKEN" \
+  -d '{ "client_name": "My App", "redirect_uris": ["https://app.example.com/cb"] }'
+```
+
+The client is then owned by that token's subject and behaves like any client
+created through `POST /api/clients/`. A token that does not verify is rejected
+rather than silently ignored — otherwise you would get an unowned client while
+believing you owned it, which is the failure this note exists to prevent.
+:::
 
 ### `GET /api/clients/`
 

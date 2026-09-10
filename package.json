@@ -31,6 +31,7 @@
     "lint": "nx lint",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
+    "spec-matrix": "node scripts/spec-matrix.mjs --vitest-report dist/vitest-report.json --out-dir dist/conformance",
     "test": "nx run-many -t test --all",
     "test:watch": "nx run-many -t test --all --watch",
     "test:ui": "vitest --ui",

@@ -316,3 +316,163 @@ export function findStaleStatusClaims(
 
   return violations;
 }
+
+/* -------------------------------------------------------------------------- */
+/*        Second class of check: issue-state claims (#399)                     */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * A `#NNN` reference found inside an open-work construction.
+ *
+ * WHY THIS EXISTS. The evidence-path check above resolves "shipped" by asking
+ * whether a path exists on disk. It has no notion of a GitHub issue's state, so
+ * a sentence reading "Open: … key-storage assurance (#379) …" stays green
+ * forever after `#379` closes — nothing about it is falsifiable from the
+ * filesystem. That is exactly what happened: `#379` closed 2026-08-26 and
+ * `MVP-PRD.md` was wrong within 24 hours, while `status.ts` — the file whose own
+ * header says "Every claim below must stay true of the tree at HEAD" — still
+ * named it. This makes that class of claim falsifiable.
+ */
+export interface OpenWorkIssueRef {
+  /** Page id, as supplied by the caller — a repo-relative path is ideal. */
+  file: string;
+  /** 1-indexed line the reference sits on. */
+  line: number;
+  /** The referenced issue number. */
+  issue: number;
+  /** The open-work phrase that put this reference in scope. */
+  trigger: string;
+  /** One line of surrounding text, for the failure message. */
+  excerpt: string;
+}
+
+export interface IssueStateViolation extends OpenWorkIssueRef {
+  reason: string;
+}
+
+/**
+ * The constructions that turn a following `#NNN` into a claim about an issue's
+ * state. Deliberately a short, explicit list rather than "any `#NNN` anywhere":
+ * this repository cites issue numbers constantly as ATTRIBUTION — "added in
+ * #226", "the #308 gate", "(#379 review, finding 3)" — and those are correct
+ * precisely because the issue is closed. Flagging every reference would make the
+ * check unusable and would be wrong on the merits.
+ *
+ * `Remaining:` and `Open:` are matched with their colon because the bare words
+ * are far too common in prose ("the remaining scopes", "an open redirect").
+ */
+const OPEN_WORK_TRIGGER_RE =
+  /(?:\bOpen:)|(?:\bRemaining:)|(?:\bstill open\b)|(?:\bstill to (?:come|do|land|ship)\b)|(?:\byet to (?:come|be|land|ship)\b)|(?:\bremaining (?:T\d+ )?work\b)|(?:\bstill (?:being|under) )/gi;
+
+/** `#123`, not `#12345678` (a colour) and not part of a longer token. */
+const ISSUE_REF_RE = /(?<![\w#])#(\d{1,5})\b/g;
+
+/**
+ * How far past a trigger a `#NNN` still counts as governed by it.
+ *
+ * Bounded by structure, not a character window. The lists this has to read run
+ * to several clauses — "Open: HAIP profile wiring (#377), key-storage assurance
+ * (#379), the real-wallet pass (#376), and the tracking epic (#231)." — and a
+ * window wide enough for the last of those would run into whatever came after.
+ *
+ * The scope ends at the earliest of:
+ *
+ *   - the end of the sentence (`.` followed by whitespace, or by end of input);
+ *   - a blank line, i.e. the end of the paragraph;
+ *   - the start of the next list item.
+ *
+ * A SOFT line break does not end it. That distinction is the whole difficulty:
+ * this repository hard-wraps markdown at about 80 columns, so the four-issue
+ * list above spans three physical lines. An earlier draft stopped at any `\n`
+ * and saw only `#377` — correctly scoping bullets while silently truncating
+ * every wrapped prose list, which is where the drift this check exists for
+ * actually lives.
+ */
+function scopeAfterTrigger(content: string, triggerEnd: number): string {
+  const rest = content.slice(triggerEnd);
+  const boundaries = [
+    rest.search(/\.(?:\s|$)/), // sentence end
+    rest.search(/\n[ \t]*\n/), // blank line — paragraph end
+    rest.search(/\n\s*(?:[-*+]\s|\d+[.)]\s)/), // next list item
+  ].filter((index) => index !== -1);
+
+  return boundaries.length === 0 ? rest : rest.slice(0, Math.min(...boundaries));
+}
+
+function lineOf(content: string, index: number): number {
+  let line = 1;
+  for (let i = 0; i < index; i += 1) {
+    if (content[i] === '\n') line += 1;
+  }
+  return line;
+}
+
+/**
+ * Every `#NNN` this content presents as OPEN work.
+ *
+ * Pure and offline by design: resolving the numbers is the caller's job (see
+ * `scripts/check-issue-state-claims.mjs`), so the extraction can be tested
+ * exhaustively against fixtures without a network or a token.
+ */
+export function findOpenWorkIssueRefs(pages: ScannablePage[]): OpenWorkIssueRef[] {
+  const refs: OpenWorkIssueRef[] = [];
+
+  for (const page of pages) {
+    if (page.unbuiltClaims) continue; // same page-scoped escape hatch
+
+    const seen = new Set<string>();
+    const triggers = new RegExp(OPEN_WORK_TRIGGER_RE.source, OPEN_WORK_TRIGGER_RE.flags);
+    let trigger: RegExpExecArray | null;
+
+    while ((trigger = triggers.exec(page.content))) {
+      const triggerEnd = trigger.index + trigger[0].length;
+      const scope = scopeAfterTrigger(page.content, triggerEnd);
+
+      const issues = new RegExp(ISSUE_REF_RE.source, ISSUE_REF_RE.flags);
+      let ref: RegExpExecArray | null;
+      while ((ref = issues.exec(scope))) {
+        const issue = Number(ref[1]);
+        const absolute = triggerEnd + ref.index;
+        const key = `${issue}@${absolute}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        refs.push({
+          file: page.id,
+          line: lineOf(page.content, absolute),
+          issue,
+          trigger: trigger[0],
+          excerpt: `${trigger[0]}${scope}`.replace(/\s+/g, ' ').trim().slice(0, 200),
+        });
+      }
+    }
+  }
+
+  return refs;
+}
+
+/**
+ * The refs whose issues are CLOSED — prose that presents finished work as
+ * outstanding.
+ *
+ * `states` must carry an entry for every ref. A number the caller could not
+ * resolve is a violation in its own right rather than a pass: a guard that
+ * silently skips what it could not check reports green while checking nothing,
+ * which is worse than no guard at all.
+ */
+export function findClosedIssuesNamedAsOpen(
+  refs: OpenWorkIssueRef[],
+  states: Map<number, 'open' | 'closed'>
+): IssueStateViolation[] {
+  const violations: IssueStateViolation[] = [];
+
+  for (const ref of refs) {
+    const state = states.get(ref.issue);
+    if (state === undefined) {
+      violations.push({ ...ref, reason: `issue #${ref.issue} could not be resolved` });
+    } else if (state === 'closed') {
+      violations.push({ ...ref, reason: `issue #${ref.issue} is closed but listed as open work` });
+    }
+  }
+
+  return violations;
+}

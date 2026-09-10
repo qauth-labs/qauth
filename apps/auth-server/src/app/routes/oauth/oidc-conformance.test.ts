@@ -22,11 +22,15 @@
  * does NOT import `jose` or `@qauth-labs/server-jwt` directly, keeping within
  * the auth-server dependency graph.
  *
- * Known gaps (documented per #121): no external OpenID certification run; no
- * `at_hash`/`c_hash` (OIDC Core §3.3.2.11, only required for hybrid/implicit
- * which QAuth does not support); userinfo signed-response JWTs are not offered
- * (`userinfo_signing_alg_values_supported` intentionally absent). ID token
- * signature verification is asserted INDIRECTLY via `jwtUtils.verifyAccessToken`
+ * Known gaps have ONE home, and it is not this comment: the requirement rows
+ * under `docs/conformance/requirements/` carry them as `manual`, `waived` and
+ * `n/a` statuses, and `scripts/spec-matrix.mjs` renders them. The three that
+ * used to be listed here — no external OpenID certification run, no
+ * `at_hash`/`c_hash`, no signed UserInfo JWT — are rows in
+ * `oidc-discovery-1_0.json` and `oidc-core-1_0.json`. See
+ * `docs/conformance/README.md`.
+ *
+ * ID token signature verification is asserted INDIRECTLY via `jwtUtils.verifyAccessToken`
  * (the same EdDSA public key the JWKS publishes) plus a cross-key rejection
  * test, rather than re-importing the JWK in the test process — since #283 that
  * call rejects an ID token on its RFC 9068 `typ`, but only AFTER the signature
@@ -374,7 +378,7 @@ describe('OIDC conformance — RS256 ID token signing (#309, cert #286)', () => 
   });
 });
 
-describe('OIDC conformance — ID token validation against the published key', () => {
+describe('OIDC conformance — ID token validation against the published key (OIDC Core §2)', () => {
   it('mints an ID token that verifies against the server key with all required claims', async () => {
     const app = await buildApp();
     try {
@@ -450,7 +454,7 @@ describe('OIDC conformance — ID token validation against the published key', (
     }
   });
 
-  it('BREAKING #229: a user with no verified email gets an ID token with the claim keys ABSENT, never null (OIDC Core §5.3.2)', async () => {
+  it('BREAKING #229: a user with no verified email gets an ID token with the claim keys ABSENT, never null (OIDC Core §5.1, §5.3.2)', async () => {
     const app = await buildApp();
     try {
       // Post-#229 the token endpoint passes NO email pair to the signer when

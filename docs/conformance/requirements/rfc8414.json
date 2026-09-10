@@ -1,0 +1,93 @@
+{
+  "specId": "rfc8414",
+  "note": "Hand-authored. `quote` is verbatim from https://www.rfc-editor.org/rfc/rfc8414 with line wrapping removed and nothing else changed.",
+  "requirements": [
+    {
+      "id": "rfc8414-2-issuer",
+      "section": "2",
+      "level": "REQUIRED",
+      "quote": "issuer: REQUIRED. The authorization server's issuer identifier, which is a URL that uses the \"https\" scheme and has no query or fragment components.",
+      "applies": "apps/auth-server/src/app/helpers/discovery.ts — resolveIssuerIdentifier strips exactly one trailing slash and normalises nothing else.",
+      "status": "covered",
+      "evidenceMatch": "required fields anchored on the issuer|strips exactly one trailing slash"
+    },
+    {
+      "id": "rfc8414-2-authorization-endpoint",
+      "section": "2",
+      "level": "REQUIRED",
+      "quote": "authorization_endpoint: URL of the authorization server's authorization endpoint [RFC6749]. This is REQUIRED unless no grant types are supported that use the authorization endpoint.",
+      "applies": "apps/auth-server/src/app/helpers/discovery.ts — buildAuthorizationServerMetadata, derived from the resolved issuer.",
+      "status": "covered",
+      "evidenceMatch": "required fields anchored on the issuer"
+    },
+    {
+      "id": "rfc8414-2-token-endpoint",
+      "section": "2",
+      "level": "REQUIRED",
+      "quote": "token_endpoint: URL of the authorization server's token endpoint [RFC6749]. This is REQUIRED unless only the implicit grant type is supported.",
+      "applies": "apps/auth-server/src/app/helpers/discovery.ts — buildAuthorizationServerMetadata, derived from the resolved issuer.",
+      "status": "covered",
+      "evidenceMatch": "required fields anchored on the issuer"
+    },
+    {
+      "id": "rfc8414-2-response-types-supported",
+      "section": "2",
+      "level": "REQUIRED",
+      "quote": "response_types_supported: REQUIRED. JSON array containing a list of the OAuth 2.0 \"response_type\" values that this authorization server supports.",
+      "applies": "apps/auth-server/src/app/helpers/discovery.ts — ['code'] only; QAuth supports neither the implicit nor the hybrid flow.",
+      "status": "covered",
+      "evidenceMatch": "response types, grants, and PKCE methods"
+    },
+    {
+      "id": "rfc8414-2-jwks-uri",
+      "section": "2",
+      "level": "OPTIONAL",
+      "quote": "jwks_uri: OPTIONAL. URL of the authorization server's JWK Set [JWK] document. The referenced document contains the signing key(s) the client uses to validate signatures from the authorization server.",
+      "applies": "apps/auth-server/src/app/helpers/discovery.ts plus apps/auth-server/src/app/routes/well-known.ts — /.well-known/jwks.json serves fastify.jwtUtils.getJwks().",
+      "status": "covered",
+      "evidenceMatch": "required fields anchored on the issuer"
+    },
+    {
+      "id": "rfc8414-3-well-known-document",
+      "section": "3",
+      "level": "MUST",
+      "quote": "Authorization servers supporting metadata MUST make a JSON document containing metadata as specified in Section 2 available at a path formed by inserting a well-known URI string into the authorization server's issuer identifier between the host component and the path component, if any. By default, the well-known URI string used is \"/.well-known/oauth-authorization-server\".",
+      "applies": "apps/auth-server/src/app/routes/well-known.ts — GET /.well-known/oauth-authorization-server.",
+      "status": "covered"
+    },
+    {
+      "id": "rfc8414-3-https-path",
+      "section": "3",
+      "level": "MUST",
+      "quote": "This path MUST use the \"https\" scheme.",
+      "applies": "Deployment configuration: the path is derived from JWT_ISSUER, so the scheme is whatever the operator configures.",
+      "status": "manual",
+      "evidenceRef": "docs/oidf-op-certification-runbook.md#step-2--configure-the-environment",
+      "reason": "Not decidable in the unit suite, which injects requests into an in-process Fastify instance under an http test issuer. The runbook pins the deployed issuer to https and Step 3 smoke-verifies the published document over TLS."
+    },
+    {
+      "id": "rfc8414-3_1-get-request",
+      "section": "3.1",
+      "level": "MUST",
+      "quote": "An authorization server metadata document MUST be queried using an HTTP \"GET\" request at the previously specified path.",
+      "applies": "apps/auth-server/src/app/routes/well-known.ts — the metadata routes are registered as GET only.",
+      "status": "covered"
+    },
+    {
+      "id": "rfc8414-3_2-response-shape",
+      "section": "3.2",
+      "level": "MUST",
+      "quote": "A successful response MUST use the 200 OK HTTP status code and return a JSON object using the \"application/json\" content type that contains a set of claims as its members that are a subset of the metadata values defined in Section 2.",
+      "applies": "apps/auth-server/src/app/routes/well-known.ts — 200 with the default JSON serializer and a Cache-Control header.",
+      "status": "covered"
+    },
+    {
+      "id": "rfc8414-3_3-metadata-validation",
+      "section": "3.3",
+      "level": "MUST",
+      "quote": "The \"issuer\" value returned MUST be identical to the authorization server's issuer identifier value into which the well-known URI string was inserted to create the URL used to retrieve the metadata. If these values are not identical, the data contained in the response MUST NOT be used.",
+      "status": "n/a",
+      "reason": "A client-side validation obligation. QAuth publishes the metadata; the comparison is performed by whoever fetched it."
+    }
+  ]
+}

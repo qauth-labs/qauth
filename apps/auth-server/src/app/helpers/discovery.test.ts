@@ -15,7 +15,7 @@ import {
 const ISSUER = 'https://auth.example.com';
 
 describe('buildAuthorizationServerMetadata', () => {
-  it('emits RFC 8414 required fields anchored on the issuer', () => {
+  it('emits RFC 8414 §2 required fields anchored on the issuer', () => {
     const meta = buildAuthorizationServerMetadata({ issuer: ISSUER });
 
     expect(meta['issuer']).toBe(ISSUER);
@@ -27,7 +27,7 @@ describe('buildAuthorizationServerMetadata', () => {
     expect(meta['registration_endpoint']).toBe(`${ISSUER}/oauth/register`);
   });
 
-  it('advertises only OAuth 2.1-compliant response types, grants, and PKCE methods', () => {
+  it('advertises only OAuth 2.1-compliant response types, grants, and PKCE methods (RFC 8414 §2)', () => {
     const meta = buildAuthorizationServerMetadata({ issuer: ISSUER });
 
     expect(meta['response_types_supported']).toEqual(['code']);
@@ -137,7 +137,7 @@ describe('buildAuthorizationServerMetadata', () => {
     expect(meta['id_token_signing_alg_values_supported']).toEqual(['EdDSA']);
   });
 
-  it('falls back to the default scope list when none is provided', () => {
+  it('falls back to the default scope list when none is provided (OIDC Discovery 1.0 §3)', () => {
     const meta = buildAuthorizationServerMetadata({ issuer: ISSUER });
 
     expect(meta['scopes_supported']).toEqual([...DEFAULT_SCOPES_SUPPORTED]);
@@ -233,7 +233,7 @@ describe('buildOpenIdConfiguration', () => {
     expect(oidc['client_id_metadata_document_supported']).toBe(true);
   });
 
-  it('carries the explicit request/request_uri flags into the OIDC config (#286)', () => {
+  it('carries the explicit request/request_uri flags into the OIDC config (#286, OIDC Discovery 1.0 §3)', () => {
     // OIDC Discovery §3 repeats RFC 8414's asymmetric defaults, so the same
     // false-capability claim would appear on this document if the base builder
     // stopped emitting them.
@@ -298,7 +298,7 @@ describe('resolveIssuerIdentifier (RFC 9207 §2 verbatim contract, #282)', () =>
     );
   });
 
-  it('is the exact function that produces the advertised `issuer` member', () => {
+  it('is the exact function that produces the advertised `issuer` member (RFC 9207 §2.3)', () => {
     // The invariant #282 rests on: whatever /oauth/authorize puts in `iss` is
     // byte-identical to discovery's `issuer` because both go through here.
     for (const raw of [ISSUER, `${ISSUER}/`, 'https://Auth.EXAMPLE.com:8443/idp']) {

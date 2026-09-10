@@ -28,6 +28,14 @@ vi.mock('@tanstack/react-router', async (importOriginal) => {
     // — that is provided by RouterContextProvider below.
     useRouter: vi.fn(() => ({ navigate: vi.fn() })),
     Outlet: () => null,
+    // The header gained navigation links in #366. A real `Link` calls
+    // `router.buildLocation()`, which `fakeRouter` below deliberately does not
+    // implement — it is the minimum needed for `useRouteContext`. Render an
+    // anchor that KEEPS `to`, so the nav assertions below are still checking
+    // where each link points rather than only that some text appeared.
+    Link: ({ to, children }: { to: string; children: React.ReactNode }) => (
+      <a href={to}>{children}</a>
+    ),
   };
 });
 
@@ -90,5 +98,19 @@ describe('AuthedLayout component', () => {
     expect(html).toContain('QAuth Developer Portal');
     expect(html).toContain('dev@example.com');
     expect(html).toContain('Log out');
+  });
+
+  it('renders navigation to clients and the consent screen (#366)', () => {
+    // The consent screen was unreachable by navigation for its whole life —
+    // a developer could only find it by typing the URL. Between that and having
+    // no test, nothing exercised the page and its 401 went unnoticed.
+    const html = renderToString(
+      <RouterContextProvider router={fakeRouter}>
+        <PageComponent />
+      </RouterContextProvider>
+    );
+    expect(html).toContain('href="/clients"');
+    expect(html).toContain('href="/consents"');
+    expect(html).toContain('Authorized apps');
   });
 });

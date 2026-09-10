@@ -44,16 +44,32 @@ for any unauthenticated request rather than an error, per RFC 7662.
 `/.well-known/openid-configuration` must always reflect the current set of supported
 grant types, response types, and signing algorithms.
 
-When the wallet-federation flow (T4, Epic #231 — now active) is implemented, update to advertise:
+Wallet federation (T4, Epic #231) is **merged and flag-gated** behind
+`WALLET_FEDERATION_ENABLED`, which is off by default. Sign-in runs on the dedicated
+`/ui/wallet-login` + `/oid4vp/response` seam in `apps/auth-server`, not through
+`WalletProvider.verify()` — that method throws unconditionally by design and must keep
+throwing (see `AGENTS.md`). Two discovery fields are still **not** advertised, and each is
+gated on a distinct condition rather than on wallet federation shipping (checked
+2026-08-31):
 
-- `subject_types_supported: ["public", "pairwise"]`
-- `request_object_signing_alg_values_supported` — still required, but for **JAR**
+- `subject_types_supported` reads `["public"]`
+  (`apps/auth-server/src/app/helpers/discovery.ts:151`). Add `"pairwise"` only when QAuth
+  actually derives pairwise subject identifiers; there are no pairwise salts today, so
+  advertising it would be a false capability claim.
+- `request_object_signing_alg_values_supported` — required for **JAR**
   ([RFC 9101] signed requests), not SIOPv2. HAIP 1.0 §5.1 mandates signed
   authorization requests via JAR with `request_uri`; SIOPv2 is not the mechanism
   (see [ADR-004 § Spec status (2026-07-20)](../../../docs/adr/004-wallet-agnostic-federation.md)).
-  Note HAIP 1.0 §7 requires `ES256` at minimum, which QAuth does not support today (#298).
+  HAIP 1.0 §7 requires `ES256` at minimum, and **QAuth supports ES256** — `JwsAlgorithm`
+  carries it (`libs/core/crypto/src/lib/algorithms.ts:61`, #298, closed 2026-07-26) and the
+  Status List Token verifier requires it (`libs/server/federation/src/status/status-list-token.ts:104`).
+  Note ES256 is deliberately absent from `SignatureAlgorithm`: it exists for the
+  wallet-federation seam only, and QAuth's own token signing stays EdDSA/hybrid per ADR-005.
+  Advertise this field when QAuth accepts signed request objects on its own authorization
+  endpoint — which is a separate capability from verifying a wallet's presentation.
 
-Do not add these fields until the `WalletProvider` presentation flow is implemented and tested (T4, Epic #231) — the skeleton (#232) does not authenticate anyone yet.
+Before advertising either field, confirm the capability against the tree rather than
+against this list.
 
 ## Email Claim Behaviour
 
@@ -81,7 +97,10 @@ For the flow, verifier/challenge mechanics, and grant-type rules, see the
 QAuth's token implementation (generic OAuth token-handling rules are in the
 `auth-oauth` skill):
 
-- Access tokens: JWT, signed with Ed25519 (Phase 1), hybrid ML-DSA-65+Ed25519 (Phase 5 — post-quantum)
+- Access tokens: JWT, signed with Ed25519 by default. Post-quantum hybrid
+  signing (ML-DSA-65 + Ed25519) is **implemented and merged**, gated behind
+  `HYBRID_SIGNING_ENABLED` which is off by default — it is not future work
+  (`libs/core/crypto/src/lib/hybrid-signing.ts`, ADR-005; checked 2026-08-31).
 - Refresh tokens: opaque random tokens, SHA-256 hashed before storage
 - Verification tokens: opaque random tokens, SHA-256 hashed before storage
 - All token hashes stored as 64-character hex strings (SHA-256 output)

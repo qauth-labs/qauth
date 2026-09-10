@@ -6,6 +6,7 @@ import { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { env } from '../../../config/env';
 import { validateAndNormalize } from '../../helpers/dynamic-client-registration';
 import { getOrCreateDefaultRealm } from '../../helpers/realm';
+import { resolveRegistrationDeveloperId } from '../../helpers/registration-attribution';
 import {
   type DynamicClientRegistrationRequest,
   dynamicClientRegistrationRequestSchema,
@@ -54,6 +55,12 @@ export default async function (fastify: FastifyInstance) {
     },
     async (request, reply) => {
       const body = request.body as DynamicClientRegistrationRequest;
+
+      // #374: attribute the client when the caller presented a developer access
+      // token, so a signed-in developer's dynamic registration is manageable
+      // from the portal instead of invisible. Resolved BEFORE any write, so a
+      // bad token fails the request rather than leaving an unowned row behind.
+      const developerId = await resolveRegistrationDeveloperId(fastify, request);
 
       const realm = await getOrCreateDefaultRealm(fastify);
 
@@ -126,7 +133,14 @@ export default async function (fastify: FastifyInstance) {
         // we keep the project-wide default of requirePkce=true.
         requirePkce: true,
         enabled: true,
-        developerId: null,
+        // #374: the developer's `users.id` when the request carried their
+        // access token, otherwise NULL. An anonymous registration genuinely
+        // has no developer to attribute to, and inventing one would hand the
+        // client to whoever the server guessed — see
+        // `helpers/registration-attribution.ts` for why that case is left
+        // unowned rather than papered over, and what the portal tells such a
+        // developer instead.
+        developerId,
         // ADR-007 §2: first-class agent classification. Defaults to false
         // (standard client); nothing is gated on it yet.
         isAgent: normalized.isAgent,

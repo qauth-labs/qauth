@@ -1,0 +1,111 @@
+{
+  "specId": "oidc-discovery-1_0",
+  "note": "Hand-authored. `quote` is verbatim from https://openid.net/specs/openid-connect-discovery-1_0.html with line wrapping removed and nothing else changed.",
+  "requirements": [
+    {
+      "id": "oidc-discovery-2-issuer-discovery",
+      "section": "2",
+      "level": "OPTIONAL",
+      "quote": "Issuer discovery is OPTIONAL; if a Relying Party knows the OP's Issuer location through an out-of-band mechanism, it can skip this step and proceed to Section 4 (Obtaining OpenID Provider Configuration Information).",
+      "status": "n/a",
+      "reason": "QAuth implements no WebFinger endpoint. Issuer discovery is explicitly OPTIONAL and is outside both the Basic OP and the Config OP profiles: a relying party is given the issuer out of band, which is what every QAuth client does."
+    },
+    {
+      "id": "oidc-discovery-3-issuer",
+      "section": "3",
+      "level": "REQUIRED",
+      "quote": "issuer: REQUIRED. URL using the https scheme with no query or fragment components that the OP asserts as its Issuer Identifier. This also MUST be identical to the iss Claim value in ID Tokens issued from this Issuer.",
+      "applies": "apps/auth-server/src/app/helpers/discovery.ts — buildOpenIdConfiguration extends the RFC 8414 document, so both carry the same resolved issuer.",
+      "status": "covered",
+      "evidenceMatch": "document superset of the AS metadata"
+    },
+    {
+      "id": "oidc-discovery-3-subject-types-supported",
+      "section": "3",
+      "level": "REQUIRED",
+      "quote": "subject_types_supported: REQUIRED. JSON array containing a list of the Subject Identifier types that this OP supports. Valid types include pairwise and public.",
+      "applies": "apps/auth-server/src/app/helpers/discovery.ts — ['public'].",
+      "status": "covered",
+      "evidenceMatch": "document superset of the AS metadata"
+    },
+    {
+      "id": "oidc-discovery-3-request-uri-parameter-supported",
+      "section": "3",
+      "level": "OPTIONAL",
+      "quote": "request_uri_parameter_supported: OPTIONAL. Boolean value specifying whether the OP supports use of the request_uri parameter, with true indicating support. If omitted, the default value is true.",
+      "applies": "apps/auth-server/src/app/helpers/discovery.ts — stated explicitly as false on both documents (#286). Omitting it would have defaulted to true and advertised a capability QAuth does not have.",
+      "status": "covered",
+      "evidenceMatch": "request/request_uri flags into the OIDC config"
+    },
+    {
+      "id": "oidc-discovery-3-id-token-signing-alg-rs256",
+      "section": "3",
+      "level": "MUST",
+      "quote": "id_token_signing_alg_values_supported: REQUIRED. JSON array containing a list of the JWS signing algorithms (alg values) supported by the OP for the ID Token to encode the Claims in a JWT [JWT]. The algorithm RS256 MUST be included.",
+      "applies": "apps/auth-server/src/app/helpers/discovery.ts plus libs/fastify/plugins/jwt — the advertised list is whatever signing keys the deployment configures. QAuth defaults to EdDSA-only and includes RS256 only when an RS256 key is present (#309).",
+      "status": "manual",
+      "evidenceRef": "docs/oidf-op-certification-runbook.md#step-3--deploy-and-smoke-verify",
+      "reason": "Satisfied by deployment configuration, not by code. The unit suite proves the plumbing in both directions — EdDSA-only by default, RS256+EdDSA once an RS256 key is configured — but whether the certified deployment actually advertises RS256 is settled by the runbook's Step 1(b)/Step 2 key material and the Step 3(a) smoke check, and confirmed by the external OIDF Basic OP run. That external run is the one piece of QAuth's OIDC evidence no unit test can stand in for."
+    },
+    {
+      "id": "oidc-discovery-3-scopes-supported",
+      "section": "3",
+      "level": "RECOMMENDED",
+      "quote": "scopes_supported: RECOMMENDED. JSON array containing a list of the OAuth 2.0 [RFC6749] scope values that this server supports. The server MUST support the openid scope value. Servers MAY choose not to advertise some supported scope values even when this parameter is used.",
+      "applies": "apps/auth-server/src/app/helpers/discovery.ts — DEFAULT_SCOPES_SUPPORTED is ['openid', 'profile', 'email', 'offline_access'], and buildOpenIdConfiguration spreads the same member onto the OIDC document. `address` and `phone` are deliberately absent and unsupported scopes are dropped rather than rejected, which is why the certification runbook's Step 7 expects those two optional-scope modules to SKIP or WARN rather than fail.",
+      "status": "covered",
+      "evidenceMatch": "default scope list"
+    },
+    {
+      "id": "oidc-discovery-3-claims-parameter-supported",
+      "section": "3",
+      "level": "OPTIONAL",
+      "quote": "claims_parameter_supported: OPTIONAL. Boolean value specifying whether the OP supports use of the claims parameter, with true indicating support. If omitted, the default value is false.",
+      "status": "n/a",
+      "reason": "QAuth has no `claims` request parameter — authorizeQuerySchema declares no such field — and this member's documented default when omitted is false, which is exactly QAuth's behaviour. There is nothing to advertise and nothing to satisfy. It is the exact opposite of request_uri_parameter_supported, whose omitted default is TRUE and which therefore had to be stated explicitly (#286). The certification runbook's Step 7 expects the OIDCCClaimsEssential module to SKIP for this reason."
+    },
+    {
+      "id": "oidc-discovery-4-well-known-document",
+      "section": "4",
+      "level": "MUST",
+      "quote": "OpenID Providers supporting Discovery MUST make a JSON document available at the path formed by concatenating the string /.well-known/openid-configuration to the Issuer. openid-configuration MUST point to a JSON document compliant with this specification and MUST be returned using the application/json content type.",
+      "applies": "apps/auth-server/src/app/routes/well-known.ts — GET /.well-known/openid-configuration.",
+      "status": "covered"
+    },
+    {
+      "id": "oidc-discovery-4-cors",
+      "section": "4",
+      "level": "SHOULD",
+      "quote": "The openid-configuration endpoint SHOULD support the use of Cross-Origin Resource Sharing (CORS) [CORS] and/or other methods as appropriate to enable JavaScript Clients and other Browser-Based Clients to access it.",
+      "applies": "apps/auth-server/src/app/app.ts — @fastify/cors is registered with origin: false in production unless CORS_ORIGIN is set, so the discovery document is not readable cross-origin by default.",
+      "status": "waived",
+      "reason": "QAuth's production CORS posture is deny-by-default (F-06): the server's own login and consent flows are same-origin, and a wildcard on every route to satisfy a SHOULD on one document would widen the whole JSON API to cross-origin reads. An operator who needs browser-based clients sets CORS_ORIGIN, which restores the SHOULD for that origin. A per-route CORS allowance scoped to the three /.well-known documents would satisfy the SHOULD without the wide posture, and is the shape any revisit should take.",
+      "decision": "apps/auth-server/src/app/app.ts",
+      "revisit": "2027-02-28"
+    },
+    {
+      "id": "oidc-discovery-4_1-get-request",
+      "section": "4.1",
+      "level": "MUST",
+      "quote": "An OpenID Provider's configuration information MUST be retrieved using an HTTP GET request at the previously specified path.",
+      "applies": "apps/auth-server/src/app/routes/well-known.ts — registered as GET only.",
+      "status": "covered"
+    },
+    {
+      "id": "oidc-discovery-4_2-response-shape",
+      "section": "4.2",
+      "level": "MUST",
+      "quote": "A successful response MUST use the 200 OK HTTP status code and return a JSON object using the application/json content type that contains a set of Claims as its members that are a subset of the Metadata values defined in Section 3 (OpenID Provider Metadata).",
+      "applies": "apps/auth-server/src/app/routes/well-known.ts — 200 with the default JSON serializer.",
+      "status": "covered"
+    },
+    {
+      "id": "oidc-discovery-4_3-configuration-validation",
+      "section": "4.3",
+      "level": "MUST",
+      "quote": "The issuer value returned MUST be identical to the Issuer URL that was used as the prefix to /.well-known/openid-configuration to retrieve the configuration information. This MUST also be identical to the iss Claim value in ID Tokens issued from this Issuer.",
+      "status": "n/a",
+      "reason": "The comparison is a relying-party obligation. QAuth's side of it — one resolved issuer feeding the metadata, the authorization-response iss and the ID Token iss — is carried by the RFC 9207 §2.3 rows."
+    }
+  ]
+}

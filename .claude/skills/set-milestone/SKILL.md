@@ -22,7 +22,7 @@ gh api repos/{owner}/{repo}/milestones --jq '.[] | "\(.number): \(.title) (\(.st
 
 ```bash
 # Using gh issue edit (recommended)
-gh issue edit {issue_number} --milestone "MVP"
+gh issue edit {issue_number} --milestone "T4 - Federation & PQC"
 ```
 
 ## Remove Milestone
@@ -45,7 +45,7 @@ gh api repos/{owner}/{repo}/milestones \
 
 ```bash
 # Get milestone number first
-gh api repos/{owner}/{repo}/milestones --jq '.[] | select(.title=="MVP") | .number'
+gh api repos/{owner}/{repo}/milestones --jq '.[] | select(.title=="{milestone_title}") | .number'
 
 # Update milestone
 gh api repos/{owner}/{repo}/milestones/{milestone_number} \
@@ -66,12 +66,24 @@ gh api repos/{owner}/{repo}/milestones/{milestone_number} \
 
 ```bash
 # Set milestone on multiple issues
-gh issue edit 1 2 3 4 5 --milestone "MVP"
+gh issue edit 1 2 3 4 5 --milestone "T4 - Federation & PQC"
 ```
 
 ## Project Milestones
 
-Current milestone is **MVP**; see `github-conventions` for the phase list.
+The milestone scheme is `MVP` plus a numbered track series (`T0`, `T1`, …); see
+`github-conventions`. **Never assume which one is current** — the live list is the only
+authority, and this file cannot stay ahead of it:
+
+```bash
+gh api repos/qauth-labs/qauth/milestones --jq '.[] | "\(.title) (\(.state))"'
+```
+
+As of 2026-08-31 the full list is `MVP` plus `T0`-`T6`. `MVP` is **closed** and must not
+be used for new work, and `T4 - Federation & PQC` is the only _open_ milestone that still
+carries open issues — note that a closed milestone can still have open issues attached
+(`MVP` has two), so "closed" and "empty" are not the same thing. Re-derive all of it with
+the command above rather than trusting this paragraph.
 
 ## Instructions
 

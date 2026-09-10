@@ -13,7 +13,7 @@
 > - **ADR-004** — the OID4VP base profile is **complete**, not "in progress". All of #233–#240 merged, and a browser wallet sign-in runs end to end behind `WALLET_FEDERATION_ENABLED` (default off), covered by an E2E mock-wallet suite. `WalletProvider.verify()` still throws by design, but the wallet login path does **not** go through it — it runs on `apps/auth-server/src/app/routes/ui/wallet-login.ts` → `helpers/wallet-presentation.ts`. See the [ADR-004 status note](./004-wallet-agnostic-federation.md).
 > - **ADR-005** — "no ML-DSA-signed token emitted yet" no longer holds. #245–#247 landed the JWS carrier, mixed `AKP`+`OKP` JWKS and the introspection-first posture, and **#275 wired live hybrid issuance** into `/oauth/token`, `/auth/login` and `/oauth/introspect`. A deployment that enables `HYBRID_SIGNING_ENABLED` (default off) does emit ML-DSA-65 material.
 >
-> Both features remain **off by default**, so a default deployment's behaviour is unchanged. Open: #376, #377, #379 and the tracking epic #231.
+> Both features remain **off by default**, so a default deployment's behaviour is unchanged. Open: #376, #377 and the tracking epic #231.
 
 ## Context
 
@@ -315,6 +315,15 @@ failure mode: QAuth's implementation is repeatedly _more_ current than its own
 spec citations. The decaying artefacts are the pin constants and ADR
 spec-tracking sections, not the code. A standing quarterly re-pin pass would
 catch this earlier than an ad-hoc audit does.
+
+**That pass now has a home: [`docs/spec-pin-log.md`](../spec-pin-log.md)** (#401).
+It records what is pinned, to which revision, **on what basis**, when it was
+last verified and when it is next due — and a check fails the build on an
+overdue row or a vanished consumer path, so the obligation is enforced rather
+than merely stated. The pin-basis column is the part that matters here: SD-JWT
+VC is pinned at `draft-13` because HAIP 1.0 §9.4 requires it, not because
+nobody has looked, and a re-pin pass that could not tell those apart would
+break conformance while appearing to modernise the docs.
 
 **Addendum 2026-08-06.** The re-review found the same failure mode running in
 the other direction, which is worse: the 2026-07-19 pass asserted three

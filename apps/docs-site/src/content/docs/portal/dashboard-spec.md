@@ -81,11 +81,10 @@ The authed header gains a navigation row linking Dashboard, Clients, API keys, A
 Consents. It is one row of links, not a collapsible sidebar: five destinations do not justify a
 navigation chrome the app does not otherwise have.
 
-**Decision — `/consents` keeps its URL.** `_authed` is a pathless layout route
-(`apps/developer-portal/src/routes/_authed.tsx:8`), so moving
-`apps/developer-portal/src/routes/consents.tsx` to `routes/_authed/consents.tsx` puts it behind the
-session gate without changing the URL a developer may have bookmarked. Do not rename it to
-`/settings/consents` on the way past.
+**Decision — `/consents` keeps its URL. DONE (#366).** `_authed` is a pathless layout route
+(`apps/developer-portal/src/routes/_authed.tsx`), so moving the page to
+`routes/_authed/consents.tsx` put it behind the session gate without changing the URL a developer
+may have bookmarked. Do not rename it to `/settings/consents` in a later pass.
 
 **Decision — the feed page is called "Activity", not "Audit".** The API resource genuinely is
 `audit_logs` and the endpoint is named for it. The page is not, because "audit" promises a
@@ -226,16 +225,17 @@ three independent blockers, each fatal on its own:
 3. Production CORS is fail-closed: `origin` resolves to `false` unless an operator sets
    `CORS_ORIGIN` (`apps/auth-server/src/app/app.ts:255`).
 
-The page is the only one in the portal that calls the auth-server directly from the browser
-(`apps/developer-portal/src/routes/consents.tsx:45` for the list,
-`apps/developer-portal/src/routes/consents.tsx:70` for revoke). See
+It was the only page in the portal that called the auth-server directly from the browser. See
 [the portal guide](/portal/guide/#the-consents-page) for the full account.
 
-**Hard prerequisite.** Moving the consent calls behind TanStack Start server functions — #366's
-first task — is a **prerequisite for the dashboard's consents link, not a follow-up**. A dashboard
+**Hard prerequisite — SATISFIED (#366).** Moving the consent calls behind TanStack Start server
+functions was a **prerequisite for the dashboard's consents link, not a follow-up**: a dashboard
 that links to a page which answers "Please sign in to manage authorized applications" to a
-signed-in developer is worse than a dashboard that does not link it: it converts a page nobody
-finds into a page everybody finds broken.
+signed-in developer is worse than a dashboard that does not link it. That migration has landed —
+the page is `apps/developer-portal/src/routes/_authed/consents.tsx`, backed by
+`apps/developer-portal/src/server/actions/consents.server.ts` against `GET`/`DELETE
+/api/consents` — and the `_authed` header already carries the link. The dashboard card described
+below is now unblocked.
 
 **Decision — no feature flag for the link.** The consents entry appears in the dashboard and the
 authed header in the same pull request that lands #366's server-function migration, and not before.
@@ -885,14 +885,17 @@ behind a flag that is off by default.
 **A fourth structural gap, found while enumerating: dynamically registered clients are invisible to
 this feed entirely.** Both `POST /oauth/register`
 (`apps/auth-server/src/app/routes/oauth/register.ts:129`) and CIMD registration
-(`apps/auth-server/src/app/helpers/cimd.ts:274`) create clients with `developerId: null`. The
+(`apps/auth-server/src/app/helpers/cimd.ts:389`) create clients with `developerId: null`. The
 ownership predicate is `oauth_clients.developer_id = :sub`, so **no** row belonging to a DCR or CIMD
 client can ever match it — not just `oauth.client.registered`, but every token exchange and
 authorize event those clients generate. A developer whose clients were all registered dynamically
 sees an empty feed and no explanation. This is a property of the ownership model, not of the
 allowlist, and it cannot be fixed here: `developer_id` is the only ownership signal the schema has.
 The feed's empty state must therefore say so rather than reading as "nothing happened" — see the
-footnote below.
+footnote below. The ownership position itself is now settled in
+[ADR-012](/reference/records/adr/012-dynamic-client-ownership/): a DCR registration carrying a
+developer access token IS attributed (#374), an anonymous one is not, and a CIMD client is not
+ownable at all — so this gap narrows but does not close, and the empty state is still required.
 
 ##### The allowlist's cost, stated in one place
 
@@ -1119,9 +1122,9 @@ Auto-refresh would put the visible list and the held cursor into permanent disag
 twenty-five at a time.** The preview exists to make a problem visible, not to be read in full.
 
 **Decision — the portal reaches both endpoints only through TanStack Start server functions.** The
-browser must never call the auth-server directly. This is the exact mistake #366 documents
-(`apps/developer-portal/src/routes/consents.tsx:45`), and the whole portal holds the opposite
-property everywhere else. Do not add a second exception.
+browser must never call the auth-server directly. This is the exact mistake #366 fixed on the
+consent screen — where a regression test now asserts the page contains no browser-side `fetch()`
+at all — and the whole portal holds the property everywhere else. Do not add a new exception.
 
 ## Implementation order and dependencies
 

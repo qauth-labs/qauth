@@ -1,0 +1,1 @@
+ALTER TYPE "public"."grant_type" ADD VALUE 'urn:ietf:params:oauth:grant-type:token-exchange';

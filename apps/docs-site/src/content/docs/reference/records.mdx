@@ -10,6 +10,7 @@ import { GITHUB_REPO_BLOB_BASE, RECORDS, findRecord } from '../../../lib/records
 
 export const adr009DriftRecheckHref = `${findRecord('adr/009-wallet-account-resolution').route}#drift-re-check-2026-07-26`;
 export const eudiDriftLogHref = `${GITHUB_REPO_BLOB_BASE}/docs/eudi-regulatory-drift-log.md`;
+export const specPinLogHref = `${GITHUB_REPO_BLOB_BASE}/docs/spec-pin-log.md`;
 export const oidfRunbookHref = `${GITHUB_REPO_BLOB_BASE}/docs/oidf-op-certification-runbook.md`;
 export const walletInteropHref = `${GITHUB_REPO_BLOB_BASE}/docs/wallet-interop-manual-validation.md`;
 
@@ -88,7 +89,7 @@ itself, not just here — it says exactly what changed and why the rest still ho
 
 ## What this page does not render
 
-Three more design records live at `docs/` root, outside both `docs/adr/` and `docs/security/`, and
+Four more design records live at `docs/` root, outside both `docs/adr/` and `docs/security/`, and
 are linked out to rather than rendered on this site:
 
 <ul>
@@ -98,6 +99,12 @@ are linked out to rather than rendered on this site:
     regulations publish. Its whole purpose is to be read as a continuously-appended tracker rather
     than a point-in-time decision, which is a different genre from the ADRs and security review this
     page indexes.
+  </li>
+  <li>
+    <a href={specPinLogHref}>Specification Pin Log</a> — what every moving specification is pinned
+    to, on what basis, and when it is next due for re-verification. Sibling of the EUDI log above,
+    and the home of the quarterly re-pin pass ADR-007 mandates. Same genre as that log: a ledger
+    appended to over time, not a closed-form decision.
   </li>
   <li>
     <a href={oidfRunbookHref}>OIDF OP Certification Runbook</a> — an operational checklist, not a
@@ -111,7 +118,7 @@ are linked out to rather than rendered on this site:
 </ul>
 
 Rendering them here would need widening the `records` collection's `glob()` pattern in
-`content.config.ts` beyond `docs/adr/` and `docs/security/`, which Task 10 did not do — these two
+`content.config.ts` beyond `docs/adr/` and `docs/security/`, which Task 10 did not do — these
 files are actively-changing logs, not the kind of dated, closed-form record the guard question
 this page exists to answer is about. A GitHub link is also simply correct for them today: unlike
 the ADRs' and security review's own internal cross-links (rewritten to site routes by this

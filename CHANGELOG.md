@@ -116,10 +116,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   before starting any instance of this release — the new binary writes only
   the ADR-002 tables; this direction has no in-SQL guard.
   Upgrading from a pre-#229 deployment is a two-hop path: first deploy the
-  previous release (the last one containing the `db:backfill-identity`
-  target — pin to the concrete release tag once releases are cut), run its
-  backfill runbook (`--refresh`, then `--verify-only`; both exit 0), then
-  upgrade to this release. Note: that script's help says `--refresh` is
+  previous release — the last one containing the `db:backfill-identity`
+  target, which is commit **`00c23f04`** ("Merge pull request #260 …",
+  2026-07-18), the immediate parent of `29abe4a` and therefore the newest
+  state of `main` that still has the tool and does _not_ yet have migration
+  0011 — run its backfill runbook (`--refresh`, then `--verify-only`; both
+  exit 0), then upgrade to this release. **No tag names that commit yet**;
+  giving the hop a pinnable tag is tracked in [#362]. `v0.1.0-rc.0`
+  (2026-07-25) is **not** it — that tag postdates 0011 and already contains
+  the destructive migration, so starting the two-hop path from it is exactly
+  the mistake this note exists to prevent. Note: that script's help says `--refresh` is
   "PRE-CUTOVER ONLY" — the warning does not apply on that release, because
   its binary dual-writes the legacy columns in the same transactions,
   keeping them equal to the authoritative tables; `--refresh` is safe there.
@@ -140,6 +146,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   [#261].
 
 [#230]: https://github.com/qauth-labs/qauth/issues/230
+[#362]: https://github.com/qauth-labs/qauth/issues/362
 [#261]: https://github.com/qauth-labs/qauth/issues/261
 
 - **BREAKING**: `email` and `email_verified` claims — in ID tokens, userinfo

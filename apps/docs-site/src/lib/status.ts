@@ -6,9 +6,21 @@
  * `src/invariants/status-claims.ts` (which does NOT import this module —
  * see that file's `FEATURE_EVIDENCE` table for why: it detects "shipped" by
  * checking whether evidence paths exist on disk, not by trusting a declared
- * status. Unifying the two — evidence-based detection driving this file's
- * data, or this file's data feeding the guard's feature list — is a real
- * design question raised but deliberately not settled here).
+ * status.
+ *
+ * UNIFICATION: settled 2026-08-31, and the answer is NO (#399). The two are
+ * kept separate on purpose, because they answer different questions and a
+ * merged one would answer neither well. This file is a CURATED narrative — what
+ * a reader should be told about delivery status, in what order, with the
+ * caveats that matter. The guard is a FALSIFIER — a small set of claims that
+ * can be mechanically disproved against the tree and against GitHub. Feeding
+ * this file into the guard would make the guard trust exactly the thing it
+ * exists to check; deriving this file from the guard would reduce a status page
+ * to a list of paths that happen to exist. What #399 added instead is a second
+ * falsifier — issue-state claims resolved against the GitHub API — so more of
+ * this file's claims are checkable without either side absorbing the other.
+ * `#379` is why: it went stale in this file within 24 hours of closing, and no
+ * amount of unification would have caught that. An API lookup does.)
  *
  * Plain data with types only: no rendering, no filesystem access. Every
  * claim below must stay true of the tree at HEAD — update this file, not a
@@ -115,7 +127,7 @@ export const DELIVERY_TRACKS: DeliveryTrack[] = [
     name: 'Federation + PQC (long-term platform)',
     state: 'partial',
     summary:
-      'Identifier abstraction, the gate this track waited on, shipped and closed. Wallet federation completes a browser sign-in end to end behind a default-off flag, with HAIP profile wiring, key-storage assurance and the real-wallet interoperability pass still open; PQC hybrid signing shipped behind a default-off flag. See the feature rows below.',
+      'Identifier abstraction, the gate this track waited on, shipped and closed. Wallet federation completes a browser sign-in end to end behind a default-off flag, with HAIP profile wiring and the real-wallet interoperability pass still open; PQC hybrid signing shipped behind a default-off flag. See the feature rows below.',
   },
 ];
 
@@ -143,7 +155,7 @@ export const FEATURE_STATUS: FeatureStatus[] = [
     feature: 'Wallet federation / OID4VP',
     state: 'partial',
     summary:
-      'Merged: `VerifierProfile` (#299), OID4VP 1.0 request generation and `direct_post` intake (#233), the per-realm issuer trust allowlist (#236), ES256 + JWE crypto (#298), SD-JWT VC presentation validation (#234), Token Status List revocation (#297), the wallet sign-in UI (#239) and the end-to-end mock-wallet suite (#240, `apps/auth-server/src/app/wallet-federation.integration.test.ts`). A browser completes a wallet sign-in — first-time enrolment, returning login, account linking and `acr` — once the flag is on and a `VerifierProfile` is named; with the flag on and no profile named the deployment refuses to start rather than falling back to a default posture. Validated so far only on the `oid4vp-1.0-base` profile against a mock wallet. Open: HAIP profile wiring (#377), key-storage assurance in the assurance policy (#379), and the real-wallet interoperability pass (#376).',
+      'Merged: `VerifierProfile` (#299), OID4VP 1.0 request generation and `direct_post` intake (#233), the per-realm issuer trust allowlist (#236), ES256 + JWE crypto (#298), SD-JWT VC presentation validation (#234), Token Status List revocation (#297), the wallet sign-in UI (#239) and the end-to-end mock-wallet suite (#240, `apps/auth-server/src/app/wallet-federation.integration.test.ts`). A browser completes a wallet sign-in — first-time enrolment, returning login, account linking and `acr` — once the flag is on and a `VerifierProfile` is named; with the flag on and no profile named the deployment refuses to start rather than falling back to a default posture. Validated so far only on the `oid4vp-1.0-base` profile against a mock wallet. Open: HAIP profile wiring (#377) and the real-wallet interoperability pass (#376). Key-storage assurance into the assurance policy (#379) closed 2026-08-26.',
     flag: { name: 'WALLET_FEDERATION_ENABLED', default: 'off' },
   },
   {

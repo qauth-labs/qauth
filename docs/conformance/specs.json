@@ -1,0 +1,88 @@
+{
+  "version": 1,
+  "note": "Alias registry for the spec-conformance matrix. `aliases` are the strings a test title may use for this spec; the joiner resolves them to `id`, so a citation grammar can drift without touching a single requirement row. `sealed: true` means the row list is complete for every section the suite cites, so a citation that resolves to no row is a build failure; `sealed: false` means rows are still being written and an unmatched citation is only reported. See ./README.md.",
+  "specs": [
+    {
+      "id": "rfc9207",
+      "name": "RFC 9207 — OAuth 2.0 Authorization Server Issuer Identification",
+      "url": "https://www.rfc-editor.org/rfc/rfc9207",
+      "aliases": ["RFC 9207"],
+      "increment": 1,
+      "sealed": true
+    },
+    {
+      "id": "rfc8414",
+      "name": "RFC 8414 — OAuth 2.0 Authorization Server Metadata",
+      "url": "https://www.rfc-editor.org/rfc/rfc8414",
+      "aliases": ["RFC 8414"],
+      "increment": 1,
+      "sealed": true
+    },
+    {
+      "id": "oidc-discovery-1_0",
+      "name": "OpenID Connect Discovery 1.0",
+      "url": "https://openid.net/specs/openid-connect-discovery-1_0.html",
+      "aliases": [
+        "OpenID Connect Discovery 1.0",
+        "OpenID Connect Discovery",
+        "OIDC Discovery 1.0",
+        "OIDC Discovery"
+      ],
+      "increment": 1,
+      "sealed": true
+    },
+    {
+      "id": "oidc-core-1_0",
+      "name": "OpenID Connect Core 1.0",
+      "url": "https://openid.net/specs/openid-connect-core-1_0.html",
+      "aliases": ["OpenID Connect Core 1.0", "OpenID Connect Core", "OIDC Core 1.0", "OIDC Core"],
+      "increment": 1,
+      "sealed": false,
+      "scopeNote": "Increment 1 populates the Basic-OP subset only — the ID Token, the authorization endpoint, the token response, UserInfo, and the request-object obligations the certification runbook flags. Sections outside that subset are deliberately unwritten, so this spec stays unsealed."
+    },
+    {
+      "id": "rfc6749",
+      "name": "RFC 6749 — The OAuth 2.0 Authorization Framework",
+      "url": "https://www.rfc-editor.org/rfc/rfc6749",
+      "aliases": ["RFC 6749"],
+      "increment": 2,
+      "sealed": false,
+      "scopeNote": "Stub — registered so citations resolve to a stable id; rows to follow."
+    },
+    {
+      "id": "rfc7636",
+      "name": "RFC 7636 — Proof Key for Code Exchange by OAuth Public Clients",
+      "url": "https://www.rfc-editor.org/rfc/rfc7636",
+      "aliases": ["RFC 7636"],
+      "increment": 2,
+      "sealed": false,
+      "scopeNote": "Stub — registered so citations resolve to a stable id; rows to follow."
+    },
+    {
+      "id": "rfc6750",
+      "name": "RFC 6750 — The OAuth 2.0 Authorization Framework: Bearer Token Usage",
+      "url": "https://www.rfc-editor.org/rfc/rfc6750",
+      "aliases": ["RFC 6750"],
+      "increment": 2,
+      "sealed": false,
+      "scopeNote": "Stub — registered so citations resolve to a stable id; rows to follow."
+    },
+    {
+      "id": "rfc7591",
+      "name": "RFC 7591 — OAuth 2.0 Dynamic Client Registration Protocol",
+      "url": "https://www.rfc-editor.org/rfc/rfc7591",
+      "aliases": ["RFC 7591"],
+      "increment": 2,
+      "sealed": false,
+      "scopeNote": "Stub — registered so citations resolve to a stable id; rows to follow."
+    },
+    {
+      "id": "rfc9700",
+      "name": "RFC 9700 — Best Current Practice for OAuth 2.0 Security",
+      "url": "https://www.rfc-editor.org/rfc/rfc9700",
+      "aliases": ["RFC 9700"],
+      "increment": 1,
+      "sealed": false
+    }
+  ]
+}

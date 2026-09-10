@@ -1,0 +1,56 @@
+{
+  "specId": "rfc9207",
+  "note": "Hand-authored. `quote` is verbatim from https://www.rfc-editor.org/rfc/rfc9207 with line wrapping removed and nothing else changed.",
+  "requirements": [
+    {
+      "id": "rfc9207-2-iss-on-every-authorization-response",
+      "section": "2",
+      "level": "MUST",
+      "quote": "In authorization responses to the client, including error responses, an authorization server supporting this specification MUST indicate its identity by including the iss parameter in the response.",
+      "applies": "apps/auth-server/src/app/helpers/oauth-redirect.ts (buildRedirectUrl) — every /oauth/authorize redirect, success and error alike.",
+      "status": "covered",
+      "evidenceMatch": "on every authorization response|on the success response"
+    },
+    {
+      "id": "rfc9207-2-iss-is-the-issuer-identifier",
+      "section": "2",
+      "level": "MUST",
+      "quote": "The iss parameter value is the issuer identifier of the authorization server that created the authorization response, as defined in [RFC8414]. Its value MUST be a URL that uses the \"https\" scheme without any query or fragment components.",
+      "applies": "apps/auth-server/src/app/helpers/discovery.ts (resolveIssuerIdentifier) — the single function that produces both the emitted iss and the advertised issuer.",
+      "status": "covered",
+      "evidenceMatch": "resolveIssuerIdentifier"
+    },
+    {
+      "id": "rfc9207-2_3-metadata-issuer-identical-to-iss",
+      "section": "2.3",
+      "level": "MUST",
+      "quote": "The issuer identifier included in the server's metadata value issuer MUST be identical to the iss parameter's value.",
+      "applies": "apps/auth-server/src/app/helpers/discovery.ts — resolveIssuerIdentifier feeds both the metadata `issuer` member and the authorization-response `iss`, so the two cannot drift.",
+      "status": "covered"
+    },
+    {
+      "id": "rfc9207-2_3-advertise-support",
+      "section": "2.3",
+      "level": "MUST",
+      "quote": "The server MUST indicate its support for the iss parameter by setting the metadata parameter authorization_response_iss_parameter_supported, defined in Section 3, to true.",
+      "applies": "apps/auth-server/src/app/helpers/discovery.ts — hard-coded true on both the RFC 8414 and the OIDC documents, matching the unconditional emission.",
+      "status": "covered"
+    },
+    {
+      "id": "rfc9207-2_4-client-validates-iss",
+      "section": "2.4",
+      "level": "MUST",
+      "quote": "Clients that support this specification MUST extract the value of the iss parameter from authorization responses they receive if the parameter is present.",
+      "status": "n/a",
+      "reason": "A relying-party obligation. QAuth is the authorization server; nothing in this repository consumes an authorization response, so the requirement never applies to it."
+    },
+    {
+      "id": "rfc9207-3-metadata-parameter",
+      "section": "3",
+      "level": "OPTIONAL",
+      "quote": "authorization_response_iss_parameter_supported: Boolean parameter indicating whether the authorization server provides the iss parameter in the authorization response as defined in Section 2. If omitted, the default value is false.",
+      "applies": "apps/auth-server/src/app/helpers/discovery.ts — buildAuthorizationServerMetadata and buildOpenIdConfiguration.",
+      "status": "covered"
+    }
+  ]
+}

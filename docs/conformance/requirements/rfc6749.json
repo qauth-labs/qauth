@@ -1,0 +1,5 @@
+{
+  "specId": "rfc6749",
+  "note": "Stub. RFC 6749 is registered in ../specs.json so its citations resolve to a stable id, but no requirement rows are written yet — increment 1 covers RFC 9207, RFC 8414, OpenID Connect Discovery 1.0 and the Basic-OP subset of OpenID Connect Core 1.0. The spec is unsealed, so citations that match no row are reported as orphans rather than failing the build.",
+  "requirements": []
+}

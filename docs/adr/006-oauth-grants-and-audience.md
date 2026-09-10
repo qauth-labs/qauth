@@ -4,10 +4,11 @@
 **Date:** 2026-04-16
 **Authors:** QAuth Team
 
-> **Corrections (2026-08-08): two statements below were overtaken by changes landed within days of this ADR and never annotated.**
+> **Corrections — three statements below were overtaken by later changes and never annotated (items 1-2 recorded 2026-08-08; item 3 recorded 2026-08-31).**
 >
 > 1. **`/auth/refresh` no longer exists.** The claims-flow list below names it as a user-context token route; it was removed on 2026-04-24 (commit `b0164cd`) in favour of a single token surface. Refreshing is now `grant_type=refresh_token` on `POST /oauth/token`. No route file or reference to `/auth/refresh` remains in `apps/` or `libs/`.
 > 2. **`unauthorized_client` returns HTTP 400, not 401.** The error-mapping table below records 401 for "grant not in `client.grant_types`". `UnauthorizedClientError.statusCode` is `400` (`libs/shared/errors/src/lib/auth/unauthorized-client.error.ts`), and that is the status Fastify puts on the wire, so the response is 400. Changed on 2026-04-22 (commit `64abb7f`). The table's other rows remain correct — `invalid_client` is 401; `invalid_scope`, `invalid_grant` and `unsupported_grant_type` are 400.
+> 3. **RFC 8707 full-mode is shipped, not deferred.** The Neutral bullet below records "RFC 8707 full-mode (`resource` parameter per request, dynamic audience) is intentionally deferred". Both halves now ship. `resource` is accepted at `/oauth/authorize` and on the `/oauth/token` grants — `resourceParamSchema` (`apps/auth-server/src/app/schemas/oauth.ts:19-22`) takes one absolute URI or up to ten, rejects a fragment, and normalises to an array. The requested set is bound to the code and carried onto the refresh token (`authorization_codes.resource`, `refresh_tokens.resource` — `libs/infra/db/src/lib/schema/tokens.ts:120,188`), and narrowing is enforced: a widening attempt is rejected with `invalid_target` at HTTP 400 (`libs/shared/errors/src/lib/auth/invalid-target.error.ts`, surfaced at `apps/auth-server/src/app/plugins/error-handler.ts`). The dynamic audience the bullet calls deferred is `resolveAudience()` (`apps/auth-server/src/app/helpers/client-auth.ts:521`), where a non-empty resource set **overrides** `oauth_clients.audience`; the column is the light-mode default, not a ceiling. Advertised as `resource_indicators_supported: true` (`apps/auth-server/src/app/helpers/discovery.ts:160`). Scope note: `/oauth/introspect` takes no `resource` of its own — it reflects the resulting `aud` and authorises the caller against it.
 
 ## Context
 

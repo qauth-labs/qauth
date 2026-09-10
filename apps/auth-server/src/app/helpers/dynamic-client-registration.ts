@@ -1,6 +1,17 @@
 import { BadRequestError } from '@qauth-labs/shared-errors';
 
 import type { DynamicClientRegistrationRequest } from '../schemas/oauth';
+import { TOKEN_EXCHANGE_GRANT_TYPE } from '../schemas/oauth';
+
+/**
+ * The grant types a dynamic registration may carry — the DCR subset of the
+ * `grant_type` pg enum, kept in step with
+ * `dynamicClientRegistrationRequestSchema`'s own `grant_types` enum. Named
+ * rather than repeated inline so the two cannot drift silently: this used to be
+ * an inline cast that quietly LIED once the schema widened.
+ */
+export type DynRegGrantType =
+  'authorization_code' | 'refresh_token' | 'client_credentials' | typeof TOKEN_EXCHANGE_GRANT_TYPE;
 
 /**
  * RFC 7591 error codes we return for client-metadata validation failures.
@@ -89,7 +100,7 @@ export const DYN_REG_DEFAULTS = {
 export interface NormalizedRegistrationRequest {
   clientName: string | null;
   redirectUris: string[];
-  grantTypes: ('authorization_code' | 'refresh_token' | 'client_credentials')[];
+  grantTypes: DynRegGrantType[];
   responseTypes: 'code'[];
   tokenEndpointAuthMethod: 'none' | 'client_secret_basic' | 'client_secret_post';
   /** Parsed + capped-against-realm scope list. Empty array means no scopes. */
@@ -132,9 +143,7 @@ export function validateAndNormalize(
   body: DynamicClientRegistrationRequest,
   realmAllowedScopes: string[]
 ): NormalizedRegistrationRequest {
-  const grantTypes = (body.grant_types ?? [...DYN_REG_DEFAULTS.grantTypes]) as (
-    'authorization_code' | 'refresh_token' | 'client_credentials'
-  )[];
+  const grantTypes = (body.grant_types ?? [...DYN_REG_DEFAULTS.grantTypes]) as DynRegGrantType[];
   const responseTypes = (body.response_types ?? [...DYN_REG_DEFAULTS.responseTypes]) as 'code'[];
 
   // RFC 7591 §2 / OIDC Reg §2: authorization_code grant pairs with `code`
@@ -201,6 +210,21 @@ export function validateAndNormalize(
     rejectRegistration(
       'invalid_client_metadata',
       'client_credentials grant requires a confidential client (token_endpoint_auth_method must not be "none")'
+    );
+  }
+
+  // Same rule, same reason, for RFC 8693 token exchange (#381). The token
+  // endpoint authenticates the agent through the CONFIDENTIAL client-auth path
+  // and rejects a public client with `invalid_client` before any exchange logic
+  // runs. Registering the grant on a public client would therefore hand back a
+  // capability the client can never reach — the precise failure the
+  // `jwt-bearer` exclusion in `dynamicClientRegistrationRequestSchema` exists to
+  // avoid. Fail at registration, where the operator can see it, rather than at
+  // every exchange attempt.
+  if (tokenEndpointAuthMethod === 'none' && grantTypes.includes(TOKEN_EXCHANGE_GRANT_TYPE)) {
+    rejectRegistration(
+      'invalid_client_metadata',
+      'token-exchange grant requires a confidential client (token_endpoint_auth_method must not be "none")'
     );
   }
 

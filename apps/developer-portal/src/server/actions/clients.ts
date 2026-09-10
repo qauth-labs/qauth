@@ -30,10 +30,15 @@ export const UNAUTHENTICATED: Result<never> = {
   },
 };
 
+// Mirrors `grantTypeSchema` in the auth-server's `schemas/clients.ts` — the
+// subset a developer may set on their own client. `token-exchange` (RFC 8693,
+// ADR-007 §2) is included since #381; `jwt-bearer` is deliberately excluded
+// because ID-JAG depends on an operator-set issuer allowlist.
 const VALID_GRANT_TYPES: GrantType[] = [
   'authorization_code',
   'refresh_token',
   'client_credentials',
+  'urn:ietf:params:oauth:grant-type:token-exchange',
 ];
 const VALID_AUTH_METHODS: TokenEndpointAuthMethod[] = [
   'none',

@@ -69,14 +69,33 @@ export const listClientsResponseSchema = z.object({
 export type ListClientsResponse = z.infer<typeof listClientsResponseSchema>;
 
 /**
- * The OAuth grant types this server supports (mirrors the `grant_type`
- * pg enum in `@qauth-labs/infra-db`). `password`/`implicit` were removed in
+ * The OAuth grant types an authenticated developer may put on their own client
+ * through `POST`/`PATCH /api/clients`. `password`/`implicit` were removed in
  * OAuth 2.1, so they are intentionally absent.
+ *
+ * This is NOT a mirror of the `grant_type` pg enum, despite what this comment
+ * used to claim — it is a deliberate subset of it, and the two diverge on
+ * purpose:
+ *
+ *   - `urn:ietf:params:oauth:grant-type:token-exchange` (RFC 8693, ADR-007 §2)
+ *     is admitted (#381). This path is strictly more trusted than DCR, where
+ *     the same grant is now accepted, so refusing it here would leave an
+ *     authenticated developer less capable than an anonymous registrant. The
+ *     grant confers no authority on its own: `handleTokenExchange` still
+ *     requires a valid subject token, preserves-or-narrows scope and audience,
+ *     and clamps reserved `agent:*` scopes to the operator-set
+ *     `max_agent_mode`.
+ *   - `urn:ietf:params:oauth:grant-type:jwt-bearer` (ID-JAG, ADR-011) is in the
+ *     pg enum but NOT here, for the same reason it is absent from DCR: it
+ *     depends on the operator-set `ID_JAG_TRUSTED_ISSUERS` allowlist, so a
+ *     developer adding it to their own client would be recording a capability
+ *     they cannot reach. Provision it through the seed manifest.
  */
 export const grantTypeSchema = z.enum([
   'authorization_code',
   'refresh_token',
   'client_credentials',
+  'urn:ietf:params:oauth:grant-type:token-exchange',
 ]);
 
 /**
