@@ -30,10 +30,25 @@ Two things follow, and both are load-bearing:
 1. A **base-profile** (`oid4vp-1.0-base`) manual pass is possible today: unsigned
    request, `redirect_uri` Client Identifier Prefix, unencrypted `direct_post`.
    That is the pass described below.
-2. A **HAIP-profile** pass is blocked on #298 (ES256 + JWE) regardless of which
-   wallet is used, because QAuth cannot sign a request JAR or decrypt a
-   `direct_post.jwt` response yet. See
-   `apps/auth-server/src/app/wallet-federation-haip.integration.test.ts`.
+2. A **HAIP-profile** pass is blocked on **Phase C of #377** (encrypted
+   `direct_post.jwt` responses), regardless of which wallet is used.
+
+   This was previously attributed to #298. That attribution is **stale**: #298
+   closed 2026-07-26 and its crypto shipped — ES256 signing, `ECDH-ES`/`A*GCM`
+   JWE and per-request ephemeral keys all live in `@qauth-labs/core-crypto`.
+   The request half is built too: #377 Phases A and B landed request-object
+   signing, the `x509_hash` Client Identifier Prefix and `request_uri` (JAR)
+   delivery. QAuth **can** sign a request JAR today —
+   `crypto-capabilities.ts:115-118` derives `ES256` from the operator's
+   provisioned P-256 key rather than hardcoding `false`.
+
+   What remains is the response half: `crypto-capabilities.ts:125-135` still
+   reports `responseEncryption: false`, because there is no `direct_post.jwt`
+   intake to decrypt at. That single count is what `haip-1.0` refuses to boot
+   on. See
+   `apps/auth-server/src/app/wallet-federation-haip.integration.test.ts`, whose
+   assertion names exactly that count and explicitly excludes the ones #377
+   already cleared.
 
 When someone evaluates a wallet, record the finding here: wallet, version, date,
 which profile it negotiated, and what failed. A "we tried X and it did not work"
@@ -209,20 +224,25 @@ against issuers who publish none has bought nothing.
 - [ ] A later wallet sign-in resolves to that same account, and its ID token's
       `sub` equals the password session's.
 
-## Checklist — HAIP profile (blocked on #298)
+## Checklist — HAIP profile (blocked on Phase C of #377)
 
-Do not attempt until #298 lands; `haip-1.0` refuses to boot before then, which is
-itself worth confirming:
+Do not attempt until Phase C of #377 lands; `haip-1.0` refuses to boot before then,
+which is itself worth confirming:
 
 - [ ] Setting `OID4VP_VERIFIER_PROFILE=haip-1.0` makes the server refuse to
       start, and the message names the missing capabilities rather than falling
       back to the base profile.
 
-When #298 lands, the additional items are:
+When Phase C of #377 lands, the additional items are:
 
 - [ ] The request is delivered as a **signed** JAR referenced by `request_uri`.
+      **Built** (#377 Phase B) and exercised against the mock wallet in
+      `apps/auth-server/src/app/helpers/wallet-login-request.test.ts`. What is
+      untested is a REAL wallet accepting it — not the code.
 - [ ] `client_id` carries the `x509_hash` prefix, and the wallet validates the
       `x5c` chain against a trust anchor **not** present in the header.
+      **Built** (#377 Phase A/B), likewise mock-exercised only. Note the anchor
+      exclusion is RFC 7515 practice, not a quoted HAIP MUST.
 - [ ] The response arrives as `direct_post.jwt`, encrypted with ECDH-ES over
       P-256 and A128GCM or A256GCM, to the encryption key QAuth published in
       `client_metadata`.
