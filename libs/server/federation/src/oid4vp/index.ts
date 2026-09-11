@@ -5,7 +5,8 @@
  *
  * - **Request generation** (#233 Phase B, #377) — `authorization-request`,
  *   `request-object`, `dcql`, `client-identifier`, `credential-format`.
- * - **Response intake** (#233 Phase A) — `request-state`, `direct-post`.
+ * - **Response intake** (#233 Phase A, #405) — `request-state`, `direct-post`,
+ *   `response-code`.
  * - **Presentation validation** (#234) — `presentation-validation`, `sd-jwt-vc`,
  *   `issuer-key-resolution`, `validated-credential`, `presentation-rejection`.
  *
@@ -25,6 +26,7 @@ export * from './presentation-rejection';
 export * from './presentation-validation';
 export * from './request-object';
 export * from './request-state';
+export * from './response-code';
 export * from './response-encryption';
 export * from './sd-jwt-vc';
 export * from './validated-credential';

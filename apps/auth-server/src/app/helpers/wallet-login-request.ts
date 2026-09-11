@@ -76,6 +76,16 @@ import { storeWalletRequestObject } from './wallet-login-flow';
  * on a different HTTP request than the one that minted it. Nothing about it is
  * operator material, which is why the gate above has no clause for it: a
  * deployment can always encrypt, so encryption never makes the button vanish.
+ *
+ * ## The same-device return leg (#405, ADR-013)
+ *
+ * The third wallet-facing URL lives here too: the absolute `redirect_uri` the
+ * Response Endpoint hands a wallet on a same-device flow (OID4VP 1.0 §8.2,
+ * HAIP 1.0 §5.1), built by {@link buildWalletLoginReturnUri} from the SAME
+ * issuer base as `responseUri` and `requestObjectBaseUri`. It is the one URL
+ * of the three that a browser, not a wallet, ends up fetching — so its shape
+ * (a query parameter, never a fragment) is decided here once, where the
+ * noscript twins of the wallet pages can rely on it.
  */
 
 /** Path of the `direct_post` Response Endpoint (`routes/oid4vp/response.ts`). */
@@ -90,6 +100,22 @@ export const OID4VP_RESPONSE_PATH = '/oid4vp/response';
  * from one place and neither can drift from the route that serves it.
  */
 export const OID4VP_REQUEST_OBJECT_PATH_PREFIX = '/oid4vp/request/';
+
+/**
+ * Path of the same-device return leg (`routes/ui/wallet-login.ts`, #405).
+ *
+ * Where the `redirect_uri` a wallet is handed after a `direct_post` points
+ * (OID4VP 1.0 §8.2), carrying the Response Code as its `response_code` query
+ * parameter. Written here beside the two paths above for the same reason they
+ * are together: every wallet-facing URL is built from one place, on one origin,
+ * and none can drift from the route that serves it. The route registers the
+ * path as a literal (`'/wallet-login/return'` under the `/ui` autoload prefix)
+ * because the docs-site endpoint-coverage invariant reads route literals, not
+ * constants; this constant is the EMITTING side's one spelling, and the
+ * same-device E2E suite, which follows a real `redirect_uri` back into the
+ * app, is what proves the two meet.
+ */
+export const WALLET_LOGIN_RETURN_PATH = '/ui/wallet-login/return';
 
 /**
  * DCQL Credential Query id used by the login flow.
@@ -285,6 +311,43 @@ export function resolveWalletLoginCapability(
     ],
     signingMaterial,
   };
+}
+
+/**
+ * Build the absolute `redirect_uri` the Response Endpoint returns to a wallet
+ * on a same-device flow (OID4VP 1.0 §8.2, HAIP 1.0 §5.1, #405).
+ *
+ * The origin is `resolveIssuerIdentifier(env.JWT_ISSUER)` — the base
+ * `responseUri` and `requestObjectBaseUri` are built on a few lines up, and the
+ * ONLY sanctioned source of this deployment's public origin. Never the `Host`
+ * header or `X-Forwarded-*`: Fastify runs without `trustProxy`, nothing in the
+ * app reads them, and a redirect target shaped by a request header would hand
+ * an attacker the host in the URL a wallet is told to open.
+ *
+ * The code rides as a query parameter, not a fragment, though §8.2 permits
+ * either (its fragment example is non-normative): a fragment never reaches the
+ * server, which would make the landing JS-only, and every wallet page here has
+ * a noscript twin. The exposure a query parameter adds — request logs, browser
+ * history, `Referer` — is closed elsewhere: the code is single-use, lives for
+ * `WALLET_RETURN_CODE_TTL_MS`, pino redacts it from the logged `url`
+ * (`config/logger.ts`), and the landing answers `no-store` / `no-referrer`.
+ *
+ * `encodeURIComponent` is the identity for the base64url alphabet a Response
+ * Code is minted from, so the result is byte-for-byte
+ * `<issuer>/ui/wallet-login/return?response_code=<code>`; it is applied anyway
+ * because a function that builds a URL must not lean on its caller's alphabet.
+ *
+ * Standalone rather than a field of {@link WalletLoginCapability}: the caller
+ * is `routes/oid4vp/response.ts`, which serves the wallet, resolves no
+ * capability (that object is the browser-side gate for rendering a login
+ * button) and reads `env` directly, exactly as this does.
+ *
+ * @param code - a Response Code minted by `generateOid4vpResponseCode`.
+ */
+export function buildWalletLoginReturnUri(code: string): string {
+  const issuer = resolveIssuerIdentifier(env.JWT_ISSUER);
+
+  return `${issuer}${WALLET_LOGIN_RETURN_PATH}?response_code=${encodeURIComponent(code)}`;
 }
 
 /**

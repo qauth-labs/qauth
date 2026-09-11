@@ -30,7 +30,14 @@ import {
 } from '../../helpers/wallet-link-flow';
 import { isWalletLoginHandle } from '../../helpers/wallet-login-flow';
 import { resolveWalletLoginCapability } from '../../helpers/wallet-login-request';
-import { walletPageStyles, walletTerminalPage } from '../../helpers/wallet-ui';
+import {
+  WALLET_LINK_CONFLICT_TITLE,
+  WALLET_LINK_EXPIRED_TITLE,
+  WALLET_LINK_REJECTED_TITLE,
+  walletLinkedPage,
+  walletLinkTerminalPage,
+  walletPageStyles,
+} from '../../helpers/wallet-ui';
 
 /**
  * Server-rendered WALLET LINKING screens (issue #238, ADR-004 / ADR-009 §5).
@@ -59,9 +66,34 @@ import { walletPageStyles, walletTerminalPage } from '../../helpers/wallet-ui';
  * `routes/auth/link-wallet.ts`, rather than a second status endpoint of its own.
  * One completion path, one set of gates; two would be two places for the session
  * re-check to be forgotten.
+ *
+ * ## Same device or another device — the user says which (#405, ADR-013)
+ *
+ * The confirmation form ends in TWO submit buttons, `device=other` ("Scan with
+ * a wallet on another device") and `device=this` ("Use a wallet on this
+ * device"), exactly as the wallet sign-in form does and for the same reason:
+ * the two flows END differently. A same-device link completes on the return
+ * leg — the wallet is handed a `redirect_uri` with a Response Code and brings
+ * the browser to `/ui/wallet-login/return`, which dispatches on the flow's
+ * mode — and never by polling (OID4VP 1.0 §14.2; HAIP 1.0 §5.1). A
+ * cross-device link completes by polling exactly as before. So the pending
+ * page renders exactly ONE affordance per flow, and the choice is recorded at
+ * start in both records (`helpers/wallet-link-flow.ts`). An absent field is
+ * cross-device, so every existing client and harness keeps the QR path it had.
+ * The terminal pages moved to `helpers/wallet-ui.ts` so the return route
+ * renders the same outcome bytes this page does.
  */
 
-/** Confirmation screen — a CSRF-protected POST starts the flow. */
+/**
+ * Confirmation screen — a CSRF-protected POST starts the flow.
+ *
+ * Two submit buttons on the one form, named `device` (#405): the button the
+ * user taps IS the same-device choice. Both are plain submits, so a browser
+ * with scripts off makes the same choice the same way. The first button in
+ * source order is the cross-device one on purpose — it is the path every
+ * deployment served before #405, and the one that cannot strand a user on a
+ * device with no wallet.
+ */
 function confirmPage(opts: { cspNonce: string; csrfToken: string; error?: string }): string {
   const { cspNonce, csrfToken, error } = opts;
   return render(
@@ -86,7 +118,16 @@ function confirmPage(opts: { cspNonce: string; csrfToken: string; error?: string
             <p class="hint">
               Your wallet does not tell us who you are, so this only works while you are signed in.
             </p>
-            <button type="submit">Continue</button>
+            <button type="submit" name="device" value="other">
+              Scan with a wallet on another device
+            </button>
+            <button type="submit" name="device" value="this" class="secondary">
+              Use a wallet on this device
+            </button>
+            <p class="hint" id="device-hint">
+              Choose where your wallet is: scanning shows a code for a wallet on your phone; using
+              this device opens a wallet installed here and brings you back when you're done.
+            </p>
             <a class="footer-link" href="/">Cancel</a>
           </form>
         </body>
@@ -94,16 +135,27 @@ function confirmPage(opts: { cspNonce: string; csrfToken: string; error?: string
   );
 }
 
-/** The wallet invocation, plus the wait. */
+/**
+ * The wallet invocation, plus the wait.
+ *
+ * Exactly one affordance (#405): a same-device flow renders the "Open my
+ * wallet" anchor and NO QR; a cross-device flow renders the QR and NO anchor.
+ * The two are not interchangeable once the flow has started — see the
+ * `pendingPage` JSDoc in `wallet-login.ts`, which this mirrors — so each
+ * variant gets a "Start again" footer link to `/ui/wallet-link`, which begins
+ * a FRESH flow with the other choice available. The anchor is a plain
+ * user-gesture `href` through `safeCustomSchemeUrl()`, exactly as before; the
+ * QR degrades to an explanation past `QR_MAX_BYTES` rather than to a deep
+ * link a scanning device could not use.
+ */
 function pendingPage(opts: {
   handle: string;
   invocationUri: string;
+  sameDevice: boolean;
   cspNonce: string;
   scriptNonce: string;
 }): string {
-  const { handle, invocationUri, cspNonce, scriptNonce } = opts;
-  const qr = encodeQrCode(invocationUri);
-  const deepLink = safeCustomSchemeUrl(invocationUri);
+  const { handle, invocationUri, sameDevice, cspNonce, scriptNonce } = opts;
   const statusPath = `/auth/link/wallet/${handle}`;
 
   return render(
@@ -119,26 +171,13 @@ function pendingPage(opts: {
         <body>
           <div class="card">
             <h1>Present a credential</h1>
-            <p>Scan this code with your wallet, or open your wallet on this device.</p>
-            ${
-              qr === undefined
-                ? html`<p class="hint">
-                    This request is too large to show as a code. Use the button below on the device
-                    your wallet is installed on.
-                  </p>`
-                : html`<div class="qr">
-                    ${safe(renderQrCodeSvg(qr, 'QR code containing the wallet linking request'))}
-                  </div>`
-            }
-            ${
-              deepLink === undefined
-                ? html`<p class="hint">
-                    This deployment cannot offer an open-my-wallet link. Contact your administrator.
-                  </p>`
-                : html`<a class="alt-action" href="${deepLink}">Open my wallet</a>`
-            }
+            ${sameDevice ? sameDeviceInvocation(invocationUri) : crossDeviceInvocation(invocationUri)}
             <div class="status" id="wallet-status" role="status" aria-live="polite">
-              Waiting for your wallet…
+              ${
+                sameDevice
+                  ? "Opening your wallet on this device… When you're done, your wallet will bring you back here."
+                  : 'Waiting for your wallet…'
+              }
             </div>
             <noscript>
               <p class="hint">
@@ -146,6 +185,7 @@ function pendingPage(opts: {
                 <a href="/ui/wallet-link/${handle}">Check whether your wallet has responded</a>.
               </p>
             </noscript>
+            <a class="footer-link" href="/ui/wallet-link">Start again</a>
             <a class="footer-link" href="/">Cancel</a>
           </div>
           <script nonce="${scriptNonce}">
@@ -180,7 +220,55 @@ function pendingPage(opts: {
   );
 }
 
-const linkFormSchema = z.object({ csrf_token: z.string().min(1) });
+/**
+ * The same-device half of the pending page: the "Open my wallet" anchor.
+ * `safeCustomSchemeUrl()` rather than `safeUrl()` because the href is
+ * `openid4vp://…` by design; when it refuses, the page renders an explanation
+ * and no href at all.
+ */
+function sameDeviceInvocation(invocationUri: string) {
+  const deepLink = safeCustomSchemeUrl(invocationUri);
+  return html`<p>Open your wallet on this device to present a credential.</p>
+    ${
+      deepLink === undefined
+        ? html`<p class="hint">
+            This deployment cannot offer an open-my-wallet link. Contact your administrator.
+          </p>`
+        : html`<a class="alt-action" href="${deepLink}">Open my wallet</a>`
+    }`;
+}
+
+/** The cross-device half of the pending page: the QR code. */
+function crossDeviceInvocation(invocationUri: string) {
+  const qr = encodeQrCode(invocationUri);
+  return html`<p>Scan this code with the wallet on your other device.</p>
+    ${
+      qr === undefined
+        ? html`<p class="hint">
+            This request is too large to show as a code, so it cannot be scanned. Contact your
+            administrator, or <a href="/ui/wallet-link">start again</a> and use a wallet on this
+            device instead.
+          </p>`
+        : html`<div class="qr">
+            ${safe(renderQrCodeSvg(qr, 'QR code containing the wallet linking request'))}
+          </div>`
+    }`;
+}
+
+const linkFormSchema = z.object({
+  csrf_token: z.string().min(1),
+  /**
+   * Which submit button was pressed (#405): `this` opens a wallet on this
+   * device and completes on the return leg; `other` renders a QR and completes
+   * by polling. Defaults to `other` so a body without the field — the E2E
+   * harness, a client built before #405 — keeps the cross-device path it had.
+   * `startWalletLinkFlow` ALSO treats anything but `'this'` as `other`, so the
+   * default holds even for a caller that bypasses schema validation.
+   */
+  device: z.enum(['this', 'other']).default('other'),
+});
+
+type LinkForm = z.infer<typeof linkFormSchema>;
 
 function sendHtml(reply: FastifyReply, body: string, statusCode?: number): FastifyReply {
   reply.header('Content-Type', 'text/html; charset=utf-8');
@@ -189,23 +277,12 @@ function sendHtml(reply: FastifyReply, body: string, statusCode?: number): Fasti
   return reply.send(body);
 }
 
-/** The terminal screen every linking outcome renders, with linking-specific copy. */
-function linkTerminalPage(opts: {
-  cspNonce: string;
-  title: string;
-  message: string;
-  retry: boolean;
-}): string {
-  return walletTerminalPage({
-    cspNonce: opts.cspNonce,
-    title: opts.title,
-    message: opts.message,
-    returnTo: '/',
-    retry: opts.retry,
-    retryHref: '/ui/wallet-link',
-    footer: { href: '/', label: 'Back' },
-  });
-}
+/**
+ * The terminal screen every linking outcome renders, with linking-specific
+ * copy. Lives in `helpers/wallet-ui.ts` since #405 so the return route renders
+ * the same bytes; aliased here so the handlers below read as they did.
+ */
+const linkTerminalPage = walletLinkTerminalPage;
 
 export default async function (fastify: FastifyInstance) {
   // Registration gate (#232 / #299), identical to the login screens': a
@@ -277,7 +354,7 @@ export default async function (fastify: FastifyInstance) {
         return reply.redirect(`/ui/login?return_to=${encodeURIComponent('/ui/wallet-link')}`, 302);
       }
 
-      const body = request.body as z.infer<typeof linkFormSchema>;
+      const body = request.body as LinkForm;
 
       // Login CSRF, checked BEFORE anything else so a forged cross-site POST
       // cannot mint presentation requests (each of which is a DB row) against a
@@ -309,7 +386,12 @@ export default async function (fastify: FastifyInstance) {
 
       let started;
       try {
-        started = await startWalletLinkFlow(fastify, request, reply, session.userId);
+        // The device choice is the user's own form submission (#405); the
+        // helper records it on both the row and the flow record, and reports
+        // back what it recorded so the page renders the matching affordance.
+        started = await startWalletLinkFlow(fastify, request, reply, session.userId, {
+          device: body.device,
+        });
       } catch (error) {
         fastify.log.error({ err: error }, 'failed to start a wallet-link flow');
         return sendHtml(
@@ -344,6 +426,7 @@ export default async function (fastify: FastifyInstance) {
         pendingPage({
           handle: started.handle,
           invocationUri: started.invocationUri,
+          sameDevice: started.sameDevice,
           cspNonce: reply.cspNonce.style,
           scriptNonce: reply.cspNonce.script,
         })
@@ -381,7 +464,7 @@ export default async function (fastify: FastifyInstance) {
           reply,
           linkTerminalPage({
             cspNonce: reply.cspNonce.style,
-            title: 'Linking request expired',
+            title: WALLET_LINK_EXPIRED_TITLE,
             message: WALLET_LINK_EXPIRED,
             retry: true,
           }),
@@ -389,7 +472,9 @@ export default async function (fastify: FastifyInstance) {
         );
       }
 
-      const outcome = await advanceWalletLinkFlow(fastify, request, reply, handle, session.userId);
+      const outcome = await advanceWalletLinkFlow(fastify, request, reply, handle, session.userId, {
+        via: 'poll',
+      });
 
       switch (outcome.status) {
         case 'pending': {
@@ -398,6 +483,7 @@ export default async function (fastify: FastifyInstance) {
             pendingPage({
               handle,
               invocationUri: outcome.flow.invocationUri,
+              sameDevice: outcome.flow.sameDevice === true,
               cspNonce: reply.cspNonce.style,
               scriptNonce: reply.cspNonce.script,
             })
@@ -406,21 +492,14 @@ export default async function (fastify: FastifyInstance) {
         case 'linked':
           return sendHtml(
             reply,
-            linkTerminalPage({
-              cspNonce: reply.cspNonce.style,
-              title: 'Wallet credential linked',
-              message: outcome.rebound
-                ? 'Your wallet credential was updated. You can sign in with it or with your password.'
-                : 'Your wallet credential is now linked to this account. You can sign in with either.',
-              retry: false,
-            })
+            walletLinkedPage({ cspNonce: reply.cspNonce.style, rebound: outcome.rebound })
           );
         case 'conflict':
           return sendHtml(
             reply,
             linkTerminalPage({
               cspNonce: reply.cspNonce.style,
-              title: 'Already linked elsewhere',
+              title: WALLET_LINK_CONFLICT_TITLE,
               message: WALLET_LINK_CONFLICT,
               retry: false,
             }),
@@ -431,7 +510,7 @@ export default async function (fastify: FastifyInstance) {
             reply,
             linkTerminalPage({
               cspNonce: reply.cspNonce.style,
-              title: 'Linking was not completed',
+              title: WALLET_LINK_REJECTED_TITLE,
               message: WALLET_LINK_REFUSAL,
               retry: true,
             }),
@@ -442,7 +521,7 @@ export default async function (fastify: FastifyInstance) {
             reply,
             linkTerminalPage({
               cspNonce: reply.cspNonce.style,
-              title: 'Linking request expired',
+              title: WALLET_LINK_EXPIRED_TITLE,
               message: WALLET_LINK_EXPIRED,
               retry: true,
             }),

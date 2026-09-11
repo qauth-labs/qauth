@@ -431,6 +431,24 @@ export type Oid4vpRequestState = InferSelectModel<typeof oid4vpRequestStates>;
 export type NewOid4vpRequestState = InferInsertModel<typeof oid4vpRequestStates>;
 
 /**
+ * The Response Code (#405, OID4VP 1.0 §8.2 / §14.2) as the repository is
+ * allowed to see it: its SHA-256 digest and its own deadline, handed to the
+ * redemption so both are written by the statement that consumes the row.
+ *
+ * The code itself never reaches the repository, for the reason the raw
+ * `state` never does — `codeHash` MUST be `hashOid4vpResponseCode(code)` from
+ * `@qauth-labs/server-federation`, and the repository stores nothing else.
+ * `codeExpiresAt` is epoch ms, deliberately not derived from the row's
+ * `expiresAt` (see `responseCodeExpiresAt` in the schema for why).
+ */
+export interface NewOid4vpResponseCode {
+  /** SHA-256 hex digest of the Response Code that goes into the `redirect_uri`. */
+  codeHash: string;
+  /** The code's own expiry, epoch ms — the return leg's deadline. */
+  codeExpiresAt: number;
+}
+
+/**
  * Repository for `oid4vp_request_states` — the single-use, expiring correlator
  * behind the OID4VP `direct_post` response endpoint (ADR-004, issue #233).
  *
@@ -439,6 +457,9 @@ export type NewOid4vpRequestState = InferInsertModel<typeof oid4vpRequestStates>
  * used") is precisely the race this repository exists to make impossible, and an
  * innocent-looking finder is how that pattern gets reintroduced. The only way to
  * observe a row is to CONSUME it — see {@link Oid4vpRequestStatesRepository.redeem}.
+ * The same holds of the Response Code (#405): there is no `findByResponseCode`;
+ * {@link Oid4vpRequestStatesRepository.redeemResponseCode} consumes the code,
+ * and that is the only way to learn which row it named.
  */
 export interface Oid4vpRequestStatesRepository {
   /**
@@ -459,12 +480,25 @@ export interface Oid4vpRequestStatesRepository {
    * and exactly one of them sees a returned row — no transaction, no advisory
    * lock, and no window between a check and a write.
    *
+   * The same statement writes the Response Code's digest and deadline (#405):
+   * `responseCode` is minted by the caller BEFORE redemption and lands on the
+   * row in the one write that consumes it, so a code exists exactly when a
+   * redemption happened and there is no second statement that could fail
+   * between the two. It is written for EVERY redeemed row — one shape, no
+   * branch — and whether the code is then EMITTED is the caller's decision,
+   * read off the returned row's `sameDevice`; for a cross-device row the
+   * digest names a secret nobody holds.
+   *
    * @returns the redeemed row, or `undefined` when the state is unknown,
    * expired, or already consumed. Those three are DELIBERATELY indistinguishable
    * to the caller so the endpoint's rejection cannot be used to enumerate
    * request states.
    */
-  redeem(stateHash: string, tx?: DbClient): Promise<Oid4vpRequestState | undefined>;
+  redeem(
+    stateHash: string,
+    responseCode: NewOid4vpResponseCode,
+    tx?: DbClient
+  ): Promise<Oid4vpRequestState | undefined>;
   /**
    * ATOMICALLY consume a request state by its encryption `kid` (#377 Phase C)
    * — the SECOND correlator, for a `direct_post.jwt` response that carries no
@@ -496,12 +530,55 @@ export interface Oid4vpRequestStatesRepository {
    *
    * There is deliberately no `findByEncryptionKid`, for the reason the module
    * JSDoc gives: the only way to observe a row is to consume it.
+   *
+   * Writes the Response Code exactly as {@link redeem} does (#405), in the same
+   * statement as the erasure: `responseCode` is on the row the instant it is
+   * consumed, whichever correlator consumed it.
    */
-  redeemByEncryptionKid(kid: string, tx?: DbClient): Promise<Oid4vpRequestState | undefined>;
+  redeemByEncryptionKid(
+    kid: string,
+    responseCode: NewOid4vpResponseCode,
+    tx?: DbClient
+  ): Promise<Oid4vpRequestState | undefined>;
+  /**
+   * ATOMICALLY consume a Response Code (#405) — the THIRD correlator, presented
+   * back by the BROWSER on the same-device return leg rather than by the
+   * wallet — and learn which request it named.
+   *
+   * One guarded `UPDATE ... WHERE response_code_hash = $1 AND
+   * response_code_redeemed_at IS NULL AND response_code_expires_at > $now AND
+   * redeemed_at IS NOT NULL AND same_device = true SET response_code_redeemed_at
+   * = $now RETURNING state_hash`. Five predicates, each load-bearing: the digest
+   * finds the row; the marker makes the code single-use under concurrency
+   * (row lock, as with {@link redeem}); the code's OWN deadline bounds the
+   * return leg, independently of the request's `expires_at`; `redeemed_at IS
+   * NOT NULL` says a code is only good on a row a wallet actually answered;
+   * and `same_device = true` says a code that was never emitted — every
+   * cross-device row carries a digest it never sent anywhere — can never be
+   * presented, whatever a caller manages to guess.
+   *
+   * Returns ONLY `stateHash`, never the row: the return route needs the one
+   * value that joins the code to a browser flow, and the encrypted-response
+   * columns must never be projected on a path the browser drives. Unknown,
+   * expired, replayed, cross-device and never-answered are ONE `undefined`, so
+   * the landing page cannot be used to enumerate codes.
+   *
+   * Consuming, not finding — the code is SPENT by this call whatever the
+   * caller does next, which is what lets a foreign-session landing burn it
+   * (HAIP 1.0 §5.1) and guarantees the initiating flow can then never
+   * complete. There is deliberately no `findByResponseCode`.
+   */
+  redeemResponseCode(codeHash: string, tx?: DbClient): Promise<{ stateHash: string } | undefined>;
   /**
    * Delete expired rows. Cleanup only — expiry is already enforced by
    * {@link Oid4vpRequestStatesRepository.redeem}'s guard, so this never affects
    * whether a state is accepted.
+   *
+   * A row is expired only when BOTH its deadlines have passed: `expires_at`
+   * (the request's) and, where one was written, `response_code_expires_at`
+   * (the code's, #405). A request answered at its last second carries a code
+   * that outlives it, and sweeping the row would turn a wallet's on-time
+   * answer into a return leg that finds nothing.
    *
    * @returns count of deleted rows.
    */

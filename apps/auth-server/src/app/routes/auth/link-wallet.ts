@@ -68,10 +68,38 @@ import { isWalletLoginHandle } from '../../helpers/wallet-login-flow';
  * their own account, so "that credential belongs to another account" enumerates
  * nothing they could not already establish. It is only ever produced where a
  * stable per-wallet key exists (see `prepareWalletLink`).
+ *
+ * ## Same device or another device (#405, ADR-013)
+ *
+ * The start body accepts an optional `device` — `this` for a wallet on the
+ * device the browser runs on, `other` (the default, and the meaning of an
+ * absent body) for a wallet that will scan the invocation. The choice decides
+ * how the flow ENDS: a same-device link completes on the browser's return leg
+ * (`GET /ui/wallet-login/return`, reached through the `redirect_uri` the
+ * Response Endpoint hands the wallet), and the poll here reports `pending`
+ * until it does — OID4VP 1.0 §14.2, "MUST require the frontend to pass the
+ * respective Response Code" — then `linked` once, from the done-marker the
+ * return leg leaves. A cross-device link completes through this poll exactly
+ * as before. The status shape is unchanged; only its timing differs.
  */
 
 /** Header carrying the CSRF token on the state-changing POST. */
 const CSRF_HEADER = 'x-csrf-token';
+
+/**
+ * The start body (#405). Nullish rather than merely optional: a `POST` with no
+ * payload at all reaches the handler with a `null` body, and a caller built
+ * before #405 sends exactly that. Anything else is validated — `device` is
+ * one of two words or absent, never free text.
+ */
+const startRequestSchema = z
+  .object({
+    /** Where the wallet is. Absent — or an absent body — means `other`. */
+    device: z.enum(['this', 'other']).default('other'),
+  })
+  .nullish();
+
+type StartRequest = z.infer<typeof startRequestSchema>;
 
 const startResponseSchema = z.object({
   /** Opaque handle addressing this linking flow. */
@@ -104,8 +132,9 @@ export default async function (fastify: FastifyInstance) {
     {
       schema: {
         description:
-          "Start linking a wallet credential to the signed-in account. Requires a valid session cookie and an `X-CSRF-Token` header matching the per-session token returned by `GET /consents`. Issues an OID4VP 1.0 presentation request in LINKING mode: the validated response is bound to the caller's authenticated users.id and is never used to resolve or create an account (ADR-009 §5). Issue #238.",
+          "Start linking a wallet credential to the signed-in account. Requires a valid session cookie and an `X-CSRF-Token` header matching the per-session token returned by `GET /consents`. Issues an OID4VP 1.0 presentation request in LINKING mode: the validated response is bound to the caller's authenticated users.id and is never used to resolve or create an account (ADR-009 §5). The optional `device` field (`this` | `other`, default `other`) says where the wallet is: a same-device link completes on the browser's return leg at `GET /ui/wallet-login/return` and polls as `pending` until then (OID4VP 1.0 §14.2, HAIP 1.0 §5.1); a cross-device link completes by polling. Issues #238, #405.",
         tags: ['Auth'],
+        body: startRequestSchema,
         response: {
           200: startResponseSchema,
           401: errorResponseSchema,
@@ -143,8 +172,15 @@ export default async function (fastify: FastifyInstance) {
         throw new BadRequestError('invalid_csrf_token');
       }
 
+      // `null` for a payload-less POST, `undefined` under a test stub that
+      // sends no body; either is cross-device (#405). The helper compares the
+      // value itself against `'this'`, so nothing here has to.
+      const body = request.body as StartRequest | undefined;
+
       try {
-        const started = await startWalletLinkFlow(fastify, request, reply, session.userId);
+        const started = await startWalletLinkFlow(fastify, request, reply, session.userId, {
+          ...(body?.device === undefined ? {} : { device: body.device }),
+        });
         if (started === undefined) {
           reply.code(404);
           return reply.send({ message: WALLET_LINK_UNAVAILABLE });
@@ -170,7 +206,7 @@ export default async function (fastify: FastifyInstance) {
     {
       schema: {
         description:
-          'Poll a wallet-linking flow. Reports whether the direct_post presentation response has arrived, and COMPLETES the link when it has — writing a second user_credentials row (provider_type=wallet) under the same users.id. Issue #238.',
+          'Poll a wallet-linking flow. Reports whether the direct_post presentation response has arrived, and COMPLETES the link when it has — writing a second user_credentials row (provider_type=wallet) under the same users.id. A link started with `device=this` completes on the return leg instead and polls as `pending` until then, then `linked` once (#405). Issue #238.',
         tags: ['Auth'],
         params: z.object({ handle: z.string() }),
         response: { 200: statusResponseSchema, 401: errorResponseSchema },
@@ -198,7 +234,9 @@ export default async function (fastify: FastifyInstance) {
         return reply.send({ status: 'expired', message: WALLET_LINK_EXPIRED });
       }
 
-      const outcome = await advanceWalletLinkFlow(fastify, request, reply, handle, session.userId);
+      const outcome = await advanceWalletLinkFlow(fastify, request, reply, handle, session.userId, {
+        via: 'poll',
+      });
 
       switch (outcome.status) {
         case 'pending':

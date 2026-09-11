@@ -1,3 +1,6 @@
+import { createHash } from 'node:crypto';
+
+import formbody from '@fastify/formbody';
 import {
   exportEncryptionPrivateJwk,
   exportEncryptionPublicJwk,
@@ -8,11 +11,13 @@ import {
   OID4VP_REJECTION_DESCRIPTION,
 } from '@qauth-labs/fastify-plugin-federation';
 import { InvalidRequestError } from '@qauth-labs/shared-errors';
-import type { FastifyInstance } from 'fastify';
+import Fastify, { type FastifyInstance } from 'fastify';
+import { serializerCompiler, validatorCompiler } from 'fastify-type-provider-zod';
 import { CompactEncrypt, importJWK, type JWK } from 'jose';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createMockVerifierPki } from '../../../testing/mock-verifier-pki';
+import { WALLET_RETURN_CODE_TTL_MS } from '../../constants/security';
 
 /**
  * Route tests for the OID4VP `direct_post` response endpoint (#233).
@@ -20,6 +25,11 @@ import { createMockVerifierPki } from '../../../testing/mock-verifier-pki';
  * Two properties dominate here and are asserted repeatedly on purpose:
  *   - EVERY refusal is byte-identical on the wire (non-enumerating).
  *   - NOTHING on the accepted path authenticates anyone.
+ *
+ * A third joined them with the same-device return leg (#405): the 200 body
+ * carries a `redirect_uri` with a fresh Response Code for a SAME-DEVICE row
+ * and nothing at all for a cross-device one — and the code's plaintext exists
+ * nowhere but in that body.
  */
 
 const ISSUER_JWT = 'eyJhbGciOiJFUzI1NiJ9.eyJ2Y3QiOiJwaWQifQ.c2ln';
@@ -27,6 +37,28 @@ const PRESENTATION = `${ISSUER_JWT}~WyJzYWx0IiwiZ2l2ZW5fbmFtZSIsIkFsaWNlIl0~`;
 const VP_TOKEN = JSON.stringify({ pid: [PRESENTATION] });
 
 const STATE = 'state-value';
+
+/** The deployment's public origin, as `JWT_ISSUER` names it (trailing slash canonicalised away). */
+const ISSUER = 'https://auth.example.com';
+
+/**
+ * The exact wire shape of a Response Code: 32 bytes base64url, no padding —
+ * 43 characters, nothing else. Stated here independently of the module that
+ * mints it, so the test pins what OID4VP 1.0 §8.2 asks for ("fresh,
+ * cryptographically random", ≥ 128 bits) rather than what the code happens
+ * to export.
+ */
+const RESPONSE_CODE_SHAPE = /^[A-Za-z0-9_-]{43}$/;
+
+/**
+ * What the repository may see of a Response Code (#405): the SHA-256 hex
+ * digest and a deadline — never the code. The argument every redemption in
+ * this file is asserted to have been called with.
+ */
+const RESPONSE_CODE_DIGEST = expect.objectContaining({
+  codeHash: expect.stringMatching(/^[0-9a-f]{64}$/),
+  codeExpiresAt: expect.any(Number),
+});
 
 interface RouteOptions {
   config?: {
@@ -94,6 +126,9 @@ function makeReply() {
   const sent: unknown[] = [];
   let statusCode = 200;
   const reply = {
+    // Chainable, as Fastify's is: the handler sets `Cache-Control` on the
+    // acknowledgement and the assertion is on what it was called with.
+    header: vi.fn().mockReturnThis(),
     code(c: number) {
       statusCode = c;
       return reply;
@@ -129,8 +164,40 @@ function pendingState(overrides: Record<string, unknown> = {}) {
     responseEncryptionKid: null,
     responseEncryptionPrivateJwk: null,
     responseEncryptionKeyProtection: null,
+    // The device choice (#405), as written with the row at flow start. The
+    // default is the cross-device (QR) path every test written before #405
+    // exercised: no return leg, `{}` on the wire.
+    sameDevice: false,
+    // The Response Code columns (#405), left NULL on purpose: the handler
+    // never reads them back. What it WROTE is asserted on the mock's
+    // arguments, and the plaintext it emitted on the body.
+    responseCodeHash: null,
+    responseCodeExpiresAt: null,
+    responseCodeRedeemedAt: null,
     ...overrides,
   };
+}
+
+/** A row whose flow was started with `device=this` — the return leg is expected. */
+function sameDeviceState(overrides: Record<string, unknown> = {}) {
+  return pendingState({ sameDevice: true, ...overrides });
+}
+
+/** SHA-256 hex, computed here and not by the module under test. */
+function sha256Hex(value: string): string {
+  return createHash('sha256').update(value, 'utf8').digest('hex');
+}
+
+/**
+ * Pull the Response Code out of an acknowledgement body, refusing to guess:
+ * the body must carry exactly the `redirect_uri` shape §8.2 describes.
+ */
+function responseCodeOf(body: unknown): string {
+  const redirectUri = (body as { redirect_uri?: unknown }).redirect_uri;
+  expect(typeof redirectUri).toBe('string');
+  const code = new URL(redirectUri as string).searchParams.get('response_code');
+  expect(code).not.toBeNull();
+  return code as string;
 }
 
 /**
@@ -167,6 +234,10 @@ const ENABLED_ENV = {
   OID4VP_VERIFIER_PROFILE: 'oid4vp-1.0-base',
   OID4VP_RESPONSE_RATE_LIMIT: 30,
   OID4VP_RESPONSE_RATE_WINDOW: 60,
+  // The origin the same-device `redirect_uri` is built on (#405) — the ONLY
+  // source of it; the handler never reads `Host`. With the trailing slash the
+  // real config would canonicalise away, so the test proves it does.
+  JWT_ISSUER: `${ISSUER}/`,
   // The at-rest secret for the per-request decryption key (#377 Phase C):
   // unset, the default, so a stored key is the JWK document itself.
   OID4VP_RESPONSE_KEY_SECRET: undefined,
@@ -275,12 +346,19 @@ describe('POST /oid4vp/response — accepted submission', () => {
     await handler(makeRequest({ vp_token: VP_TOKEN, state: STATE }), reply);
 
     expect(fastify.repositories.oid4vpRequestStates.redeem).toHaveBeenCalledWith(
-      hashOid4vpState(STATE)
+      hashOid4vpState(STATE),
+      RESPONSE_CODE_DIGEST
     );
-    expect(fastify.repositories.oid4vpRequestStates.redeem).not.toHaveBeenCalledWith(STATE);
+    expect(fastify.repositories.oid4vpRequestStates.redeem).not.toHaveBeenCalledWith(
+      STATE,
+      expect.anything()
+    );
   });
 
-  it('answers 200 with a bare transport ack (OID4VP §8.3)', async () => {
+  it('(OID4VP 1.0 §8.2) answers 200 with a bare transport ack — the empty JSON object — for a cross-device request', async () => {
+    // The row is the cross-device default: no return leg, so the object §8.2
+    // requires is empty, and the wallet "is not required to perform any
+    // further steps". The same-device shape is pinned in its own block.
     const { reply, sent } = makeReply();
 
     await handler(makeRequest({ vp_token: VP_TOKEN, state: STATE }), reply);
@@ -511,7 +589,7 @@ describe('POST /oid4vp/response — refusals are indistinguishable', () => {
 
   const good = { vp_token: VP_TOKEN, state: STATE };
 
-  it('refuses an unknown / expired / already-redeemed state (all one outcome)', async () => {
+  it('(OID4VP 1.0 §14.3.2) refuses an unknown / expired / already-redeemed state — only a recent, unconsumed request is honoured (all one outcome)', async () => {
     const { error } = await refusalOf(good, undefined);
 
     // `name`, not `instanceof`: each `vi.resetModules()` re-instantiates the
@@ -651,71 +729,80 @@ describe('POST /oid4vp/response — refusals are indistinguishable', () => {
  * The ENCRYPTED intake — `response_mode=direct_post.jwt` (#377 Phase C,
  * OID4VP 1.0 §8.3, HAIP 1.0 §5.1).
  *
- * The wallet side is written against `jose` directly, with no import of the
- * code under test, so what the handler decrypts is what a conformant wallet
- * would have sent rather than a round trip through QAuth's own encoder.
+ * The wallet side (the helpers above) is written against `jose` directly,
+ * with no import of the code under test, so what the handler decrypts is what
+ * a conformant wallet would have sent rather than a round trip through
+ * QAuth's own encoder.
  *
  * Two properties dominate, as on the cleartext path, plus one more that only
  * exists here: the row is CONSUMED by its `kid` before the ciphertext is
  * touched, so a failed decrypt has already spent the request and cannot be
  * retried against a still-live key.
  */
+/**
+ * The wallet side of the ENCRYPTED intake (`direct_post.jwt`, #377 Phase C),
+ * written against `jose` directly with no import of the code under test, so
+ * what the handler decrypts is what a conformant wallet would have sent. At
+ * module scope because two blocks drive it: the encrypted-intake block below,
+ * and the same-device block, which must prove the return leg on BOTH modes.
+ */
+
+/** A per-request pair, as the request helper mints and stores it. */
+interface MintedPair {
+  readonly kid: string;
+  readonly publicJwk: JWK;
+  /** The `response_encryption_private_jwk` column under `plain`. */
+  readonly storedPrivateJwk: string;
+}
+
+async function mintPair(): Promise<MintedPair> {
+  const pair = await generateEphemeralEncryptionKeyPair({ extractable: true });
+  return {
+    kid: pair.kid,
+    publicJwk: await exportEncryptionPublicJwk(pair),
+    storedPrivateJwk: JSON.stringify(await exportEncryptionPrivateJwk(pair)),
+  };
+}
+
+/** A `direct_post.jwt` row, carrying the pair's private half in the clear. */
+function encryptedState(pair: MintedPair, overrides: Record<string, unknown> = {}) {
+  return pendingState({
+    verifierProfile: 'haip-1.0',
+    responseMode: 'direct_post.jwt',
+    responseEncryptionKid: pair.kid,
+    responseEncryptionPrivateJwk: pair.storedPrivateJwk,
+    responseEncryptionKeyProtection: 'plain',
+    ...overrides,
+  });
+}
+
+/**
+ * Encrypt an Authorization Response the way a wallet does (§8.3): ECDH-ES to
+ * the published key, `kid` echoed in the protected header, the parameters as
+ * a JSON object with `vp_token` as an OBJECT.
+ */
+async function encryptResponse(
+  to: JWK,
+  payload: Record<string, unknown>,
+  header: Record<string, unknown> = {}
+): Promise<string> {
+  return new CompactEncrypt(new TextEncoder().encode(JSON.stringify(payload)))
+    .setProtectedHeader({ alg: 'ECDH-ES', enc: 'A128GCM', kid: to.kid as string, ...header })
+    .encrypt(await importJWK(to, 'ECDH-ES'));
+}
+
+const SUCCESS_PAYLOAD = { state: STATE, vp_token: { pid: [PRESENTATION] } };
+
+async function registerHaip() {
+  const registered = await register(HAIP_ENV);
+  return {
+    fastify: registered.fastify,
+    store: registered.store,
+    handler: registered.ctx.handler as NonNullable<TestContext['handler']>,
+  };
+}
+
 describe('POST /oid4vp/response — the encrypted direct_post.jwt intake (#377 Phase C)', () => {
-  /** A per-request pair, as the request helper mints and stores it. */
-  interface MintedPair {
-    readonly kid: string;
-    readonly publicJwk: JWK;
-    /** The `response_encryption_private_jwk` column under `plain`. */
-    readonly storedPrivateJwk: string;
-  }
-
-  async function mintPair(): Promise<MintedPair> {
-    const pair = await generateEphemeralEncryptionKeyPair({ extractable: true });
-    return {
-      kid: pair.kid,
-      publicJwk: await exportEncryptionPublicJwk(pair),
-      storedPrivateJwk: JSON.stringify(await exportEncryptionPrivateJwk(pair)),
-    };
-  }
-
-  /** A `direct_post.jwt` row, carrying the pair's private half in the clear. */
-  function encryptedState(pair: MintedPair, overrides: Record<string, unknown> = {}) {
-    return pendingState({
-      verifierProfile: 'haip-1.0',
-      responseMode: 'direct_post.jwt',
-      responseEncryptionKid: pair.kid,
-      responseEncryptionPrivateJwk: pair.storedPrivateJwk,
-      responseEncryptionKeyProtection: 'plain',
-      ...overrides,
-    });
-  }
-
-  /**
-   * Encrypt an Authorization Response the way a wallet does (§8.3): ECDH-ES to
-   * the published key, `kid` echoed in the protected header, the parameters as
-   * a JSON object with `vp_token` as an OBJECT.
-   */
-  async function encryptResponse(
-    to: JWK,
-    payload: Record<string, unknown>,
-    header: Record<string, unknown> = {}
-  ): Promise<string> {
-    return new CompactEncrypt(new TextEncoder().encode(JSON.stringify(payload)))
-      .setProtectedHeader({ alg: 'ECDH-ES', enc: 'A128GCM', kid: to.kid as string, ...header })
-      .encrypt(await importJWK(to, 'ECDH-ES'));
-  }
-
-  const SUCCESS_PAYLOAD = { state: STATE, vp_token: { pid: [PRESENTATION] } };
-
-  async function registerHaip() {
-    const registered = await register(HAIP_ENV);
-    return {
-      fastify: registered.fastify,
-      store: registered.store,
-      handler: registered.ctx.handler as NonNullable<TestContext['handler']>,
-    };
-  }
-
   it('redeems by the JWE kid — read from the header alone — and never by a state hash', async () => {
     const pair = await mintPair();
     const { fastify, handler } = await registerHaip();
@@ -730,7 +817,8 @@ describe('POST /oid4vp/response — the encrypted direct_post.jwt intake (#377 P
     );
 
     expect(fastify.repositories.oid4vpRequestStates.redeemByEncryptionKid).toHaveBeenCalledWith(
-      pair.kid
+      pair.kid,
+      RESPONSE_CODE_DIGEST
     );
     expect(fastify.repositories.oid4vpRequestStates.redeem).not.toHaveBeenCalled();
     expect(reply.statusCode).toBe(200);
@@ -923,7 +1011,8 @@ describe('POST /oid4vp/response — the encrypted direct_post.jwt intake (#377 P
 
       expect(error.errorDescription).toBe(OID4VP_REJECTION_DESCRIPTION);
       expect(fastify.repositories.oid4vpRequestStates.redeemByEncryptionKid).toHaveBeenCalledWith(
-        pair.kid
+        pair.kid,
+        RESPONSE_CODE_DIGEST
       );
       expect(fastify.repositories.oid4vpRequestStates.redeemByEncryptionKid).toHaveBeenCalledOnce();
       expect(store.size).toBe(0);
@@ -1049,7 +1138,8 @@ describe('POST /oid4vp/response — the encrypted direct_post.jwt intake (#377 P
       expect(reply.statusCode).toBe(200);
       expect(sent).toEqual([{}]);
       expect(fastify.repositories.oid4vpRequestStates.redeem).toHaveBeenCalledWith(
-        hashOid4vpState(STATE)
+        hashOid4vpState(STATE),
+        RESPONSE_CODE_DIGEST
       );
       expect(fastify.repositories.oid4vpRequestStates.redeemByEncryptionKid).not.toHaveBeenCalled();
       // The browser learns the wallet said no — and nothing else: no bytes are
@@ -1228,7 +1318,8 @@ describe('POST /oid4vp/response — the encrypted direct_post.jwt intake (#377 P
       expect(reply.statusCode).toBe(200);
       expect(sent).toEqual([{}]);
       expect(fastify.repositories.oid4vpRequestStates.redeemByEncryptionKid).toHaveBeenCalledWith(
-        pair.kid
+        pair.kid,
+        RESPONSE_CODE_DIGEST
       );
       // The stray state found nothing: the cleartext correlator was never used.
       expect(fastify.repositories.oid4vpRequestStates.redeem).not.toHaveBeenCalled();
@@ -1236,5 +1327,521 @@ describe('POST /oid4vp/response — the encrypted direct_post.jwt intake (#377 P
         signal: 'received',
       });
     });
+  });
+});
+
+/**
+ * The same-device return leg (#405, ADR-013) — OID4VP 1.0 §8.2 / §14.2 /
+ * §13.3, HAIP 1.0 §5.1.
+ *
+ * What the endpoint adds for a row whose flow was started with `device=this`
+ * is ONE member on the 200 body: `redirect_uri`, an absolute URI under the
+ * issuer carrying a fresh Response Code. Everything else about the endpoint
+ * is unchanged and re-asserted here on purpose: the row is still consumed
+ * first, the refusals are still uniform, nothing new is written to the
+ * store, and nothing is authenticated. Titles cite the section each row of
+ * the conformance matrix pins.
+ *
+ * Both 200 paths (accepted presentation, wallet-reported error) on both modes
+ * (cleartext `direct_post`, encrypted `direct_post.jwt`) are driven, because
+ * the emitting decision is made once and must hold on all four.
+ */
+describe('POST /oid4vp/response — the same-device return leg (#405)', () => {
+  /** Drive one cleartext submission against a given row; hand back everything observable. */
+  async function submit(
+    body: Record<string, unknown>,
+    row: unknown,
+    env: Record<string, unknown> = ENABLED_ENV
+  ) {
+    const { fastify, ctx, store } = await register(env);
+    fastify.repositories.oid4vpRequestStates.redeem.mockResolvedValue(row);
+    const handler = ctx.handler as NonNullable<TestContext['handler']>;
+    const { reply, sent } = makeReply();
+
+    await handler(makeRequest(body), reply);
+
+    return { fastify, store, reply, sent, body: sent[0] as Record<string, unknown> };
+  }
+
+  /** Drive one encrypted submission against a given `direct_post.jwt` row. */
+  async function submitEncrypted(pair: MintedPair, payload: Record<string, unknown>, row: unknown) {
+    const { fastify, store, handler } = await registerHaip();
+    fastify.repositories.oid4vpRequestStates.redeemByEncryptionKid.mockResolvedValue(row);
+    const { reply, sent } = makeReply();
+
+    await handler(makeRequest({ response: await encryptResponse(pair.publicJwk, payload) }), reply);
+
+    return { fastify, store, reply, sent, body: sent[0] as Record<string, unknown> };
+  }
+
+  const accepted = { vp_token: VP_TOKEN, state: STATE };
+  const declined = { error: 'access_denied', state: STATE };
+
+  it('(OID4VP 1.0 §8.2) answers 200 with Content-Type application/json and a JSON object on both direct_post and direct_post.jwt', async () => {
+    // Through REAL Fastify, because a stub cannot see a Content-Type the
+    // handler never sets by hand: it is the serializer, driven by the route's
+    // declared Zod response schema, that writes `application/json`. This is
+    // the pattern `request-object.test.ts` uses for the same reason.
+    const pair = await mintPair();
+
+    for (const [env, row, post] of [
+      [
+        ENABLED_ENV,
+        sameDeviceState(),
+        { payload: `vp_token=${encodeURIComponent(VP_TOKEN)}&state=${STATE}`, byKid: false },
+      ],
+      [
+        HAIP_ENV,
+        encryptedState(pair, { sameDevice: true }),
+        {
+          payload: `response=${await encryptResponse(pair.publicJwk, SUCCESS_PAYLOAD)}`,
+          byKid: true,
+        },
+      ],
+      [
+        ENABLED_ENV,
+        pendingState(),
+        { payload: `error=access_denied&state=${STATE}`, byKid: false },
+      ],
+    ] as const) {
+      const route = await loadRoute(env);
+      const store = new Map<string, unknown>();
+      const app = Fastify({ logger: false });
+      app.setValidatorCompiler(validatorCompiler);
+      app.setSerializerCompiler(serializerCompiler);
+      await app.register(formbody);
+      app.decorate('repositories', {
+        oid4vpRequestStates: {
+          redeem: vi.fn().mockResolvedValue(post.byKid ? undefined : row),
+          redeemByEncryptionKid: vi.fn().mockResolvedValue(post.byKid ? row : undefined),
+        },
+        auditLogs: { create: vi.fn().mockResolvedValue(undefined) },
+      } as never);
+      app.decorate('sessionUtils', {
+        setSession: async (key: string, value: unknown) => {
+          store.set(key, value);
+        },
+        getSession: async (key: string) => store.get(key) ?? null,
+        deleteSession: async (key: string) => {
+          store.delete(key);
+        },
+      } as never);
+      await app.register(route, { prefix: '/oid4vp' });
+      await app.ready();
+
+      try {
+        const response = await app.inject({
+          method: 'POST',
+          url: '/oid4vp/response',
+          headers: { 'content-type': 'application/x-www-form-urlencoded' },
+          payload: post.payload,
+        });
+
+        expect(response.statusCode).toBe(200);
+        expect(response.headers['content-type']).toMatch(/^application\/json\b/);
+        expect(response.headers['cache-control']).toBe('no-store');
+        const parsed: unknown = JSON.parse(response.body);
+        expect(typeof parsed).toBe('object');
+        expect(parsed).not.toBeNull();
+        expect(Array.isArray(parsed)).toBe(false);
+        // The serializer wrote the schema's members and nothing else — and on
+        // the wire, not just in the handler, a same-device row carries the
+        // `redirect_uri` while a cross-device one is the empty object.
+        expect(parsed).toEqual(
+          (row as { sameDevice: boolean }).sameDevice
+            ? {
+                redirect_uri: expect.stringMatching(
+                  /^https:\/\/auth\.example\.com\/ui\/wallet-login\/return\?response_code=[A-Za-z0-9_-]{43}$/
+                ),
+              }
+            : {}
+        );
+      } finally {
+        await app.close();
+      }
+    }
+  });
+
+  it('(OID4VP 1.0 §8.2, HAIP 1.0 §5.1) returns redirect_uri carrying a fresh Response Code for a same-device request', async () => {
+    const { reply, body } = await submit(accepted, sameDeviceState());
+
+    expect(reply.statusCode).toBe(200);
+    expect(Object.keys(body)).toEqual(['redirect_uri']);
+    expect(responseCodeOf(body)).toMatch(RESPONSE_CODE_SHAPE);
+  });
+
+  it('(OID4VP 1.0 §8.2, HAIP 1.0 §5.1) returns redirect_uri for a same-device request on the encrypted direct_post.jwt path too', async () => {
+    // The same decision on the other correlator: the row was found by its
+    // kid, and its `sameDevice` — not anything in the ciphertext — is what
+    // puts the member on the body.
+    const pair = await mintPair();
+    const { fastify, reply, body } = await submitEncrypted(
+      pair,
+      SUCCESS_PAYLOAD,
+      encryptedState(pair, { sameDevice: true })
+    );
+
+    expect(reply.statusCode).toBe(200);
+    expect(Object.keys(body)).toEqual(['redirect_uri']);
+    expect(responseCodeOf(body)).toMatch(RESPONSE_CODE_SHAPE);
+    // The digest the kid-keyed redemption persisted IS the digest of the code
+    // the wallet was handed — the same join the cleartext path pins — so a
+    // HAIP return leg can redeem what this response emitted.
+    expect(fastify.repositories.oid4vpRequestStates.redeemByEncryptionKid).toHaveBeenCalledWith(
+      pair.kid,
+      { codeHash: sha256Hex(responseCodeOf(body)), codeExpiresAt: expect.any(Number) }
+    );
+  });
+
+  it('(OID4VP 1.0 §8.2) mints a fresh, cryptographically random Response Code per response — 43 base64url chars, never repeated across responses', async () => {
+    const { fastify, ctx } = await register();
+    fastify.repositories.oid4vpRequestStates.redeem.mockResolvedValue(sameDeviceState());
+    const handler = ctx.handler as NonNullable<TestContext['handler']>;
+    const codes = new Set<string>();
+
+    for (let i = 0; i < 50; i += 1) {
+      const { reply, sent } = makeReply();
+      await handler(makeRequest(accepted), reply);
+
+      const code = responseCodeOf(sent[0]);
+      expect(code).toMatch(RESPONSE_CODE_SHAPE);
+      // The digest the row was consumed WITH is the digest of the code the
+      // wallet was handed — the two halves of the return leg meet on it.
+      const [, written] = fastify.repositories.oid4vpRequestStates.redeem.mock.calls[i];
+      expect(written.codeHash).toBe(sha256Hex(code));
+      codes.add(code);
+    }
+
+    expect(codes.size).toBe(50);
+  });
+
+  it('(OID4VP 1.0 §8.2) Response Code carries at least 128 bits — 32 CSPRNG bytes', async () => {
+    // §8.2 RECOMMENDS "a cryptographic random value of 128 bits or more"; the
+    // code decodes to twice that. That the bytes come from `randomBytes` is
+    // pinned where they are drawn (`response-code.test.ts`); what this
+    // endpoint can prove is that it hands out that value undiminished.
+    const { body } = await submit(accepted, sameDeviceState());
+    const decoded = Buffer.from(responseCodeOf(body), 'base64url');
+
+    expect(decoded.length).toBe(32);
+    expect(decoded.length * 8).toBeGreaterThanOrEqual(128);
+  });
+
+  it('(OID4VP 1.0 §14.2) persists only the Response Code digest — the plaintext never reaches the repository', async () => {
+    const { fastify, store, body } = await submit(accepted, sameDeviceState());
+    const code = responseCodeOf(body);
+
+    const [stateHash, written] = fastify.repositories.oid4vpRequestStates.redeem.mock.calls[0];
+    expect(stateHash).toBe(hashOid4vpState(STATE));
+    expect(written).toEqual({ codeHash: sha256Hex(code), codeExpiresAt: expect.any(Number) });
+    expect(written.codeHash).not.toBe(code);
+    // Nowhere in anything the handler handed to a repository, the audit log
+    // or the store does the plaintext appear — only the wallet sees it.
+    const everythingPersisted = JSON.stringify([
+      fastify.repositories.oid4vpRequestStates.redeem.mock.calls,
+      fastify.repositories.auditLogs.create.mock.calls,
+      [...store.entries()],
+    ]);
+    expect(everythingPersisted).not.toContain(code);
+    expect(everythingPersisted).toContain(sha256Hex(code));
+  });
+
+  it('gives the code its own deadline, WALLET_RETURN_CODE_TTL_MS from now — not the request expiry', async () => {
+    const before = Date.now();
+    const { fastify } = await submit(accepted, sameDeviceState({ expiresAt: before + 999_999 }));
+    const after = Date.now();
+
+    const [, written] = fastify.repositories.oid4vpRequestStates.redeem.mock.calls[0];
+    expect(written.codeExpiresAt).toBeGreaterThanOrEqual(before + WALLET_RETURN_CODE_TTL_MS);
+    expect(written.codeExpiresAt).toBeLessThanOrEqual(after + WALLET_RETURN_CODE_TTL_MS);
+  });
+
+  it('(OID4VP 1.0 §14.2, §13.3) answers {} with no redirect_uri for a cross-device request', async () => {
+    // §14.2: the technique "is not applicable to cross-device scenarios";
+    // §13.3 step 6: without a redirect_uri "processing at the Wallet stops".
+    // The digest is still written — the repository has one shape — but the
+    // code never leaves the server.
+    const { fastify, reply, sent } = await submit(accepted, pendingState({ sameDevice: false }));
+
+    expect(reply.statusCode).toBe(200);
+    expect(sent).toEqual([{}]);
+    expect(JSON.stringify(sent[0])).toBe('{}');
+    expect(fastify.repositories.oid4vpRequestStates.redeem).toHaveBeenCalledWith(
+      hashOid4vpState(STATE),
+      RESPONSE_CODE_DIGEST
+    );
+  });
+
+  it('(OID4VP 1.0 §14.2, §13.3) answers {} for a cross-device request on the encrypted path and on a wallet-reported error', async () => {
+    const pair = await mintPair();
+    const encrypted = await submitEncrypted(pair, SUCCESS_PAYLOAD, encryptedState(pair));
+    expect(encrypted.sent).toEqual([{}]);
+
+    const errored = await submit(declined, pendingState());
+    expect(errored.sent).toEqual([{}]);
+  });
+
+  it('(OID4VP 1.0 §8.2) returns redirect_uri on a wallet-reported error for a same-device request', async () => {
+    // §8.2: the Response URI "MAY return the redirect_uri parameter in
+    // response to successful Authorization Responses or for Error Responses",
+    // and HAIP's MUST has no success qualifier. The user who declined on this
+    // device is looking at the tab that waits; the return leg is how it
+    // learns to stop.
+    const { fastify, store, reply, body } = await submit(declined, sameDeviceState());
+
+    expect(reply.statusCode).toBe(200);
+    expect(Object.keys(body)).toEqual(['redirect_uri']);
+    expect(responseCodeOf(body)).toMatch(RESPONSE_CODE_SHAPE);
+    // Still an error: signalled as one, nothing parked, nothing audited, the
+    // wallet's text nowhere.
+    expect(store.get(`wallet-login-signal:${hashOid4vpState(STATE)}`)).toMatchObject({
+      signal: 'wallet_error',
+    });
+    expect(store.get(`wallet-presentation:${hashOid4vpState(STATE)}`)).toBeUndefined();
+    expect(fastify.repositories.auditLogs.create).not.toHaveBeenCalled();
+    expect(JSON.stringify(body)).not.toContain('access_denied');
+  });
+
+  it('(OID4VP 1.0 §8.2) returns redirect_uri on a wallet error inside the JWE for a same-device request', async () => {
+    const pair = await mintPair();
+    const { store, body } = await submitEncrypted(
+      pair,
+      { state: STATE, error: 'access_denied' },
+      encryptedState(pair, { sameDevice: true })
+    );
+
+    expect(Object.keys(body)).toEqual(['redirect_uri']);
+    expect(responseCodeOf(body)).toMatch(RESPONSE_CODE_SHAPE);
+    expect(store.get(`wallet-login-signal:${hashOid4vpState(STATE)}`)).toMatchObject({
+      signal: 'wallet_error',
+    });
+  });
+
+  it('(OID4VP 1.0 §8.2, §8.3.1) returns redirect_uri on an unencrypted error against a same-device direct_post.jwt row', async () => {
+    // The §8.3.1 carve-out on a same-device row: the wallet that could not
+    // encrypt declined in the clear, the row was consumed by its state, and
+    // the user is still brought back to the waiting tab.
+    const pair = await mintPair();
+    const { fastify, ctx, store } = await register(HAIP_ENV);
+    fastify.repositories.oid4vpRequestStates.redeem.mockResolvedValue(
+      encryptedState(pair, { sameDevice: true })
+    );
+    const handler = ctx.handler as NonNullable<TestContext['handler']>;
+    const { reply, sent } = makeReply();
+
+    await handler(makeRequest(declined), reply);
+
+    expect(reply.statusCode).toBe(200);
+    expect(Object.keys(sent[0] as object)).toEqual(['redirect_uri']);
+    expect(responseCodeOf(sent[0])).toMatch(RESPONSE_CODE_SHAPE);
+    expect(fastify.repositories.oid4vpRequestStates.redeem).toHaveBeenCalledWith(
+      hashOid4vpState(STATE),
+      RESPONSE_CODE_DIGEST
+    );
+    expect(fastify.repositories.oid4vpRequestStates.redeemByEncryptionKid).not.toHaveBeenCalled();
+    expect(store.get(`wallet-login-signal:${hashOid4vpState(STATE)}`)).toMatchObject({
+      signal: 'wallet_error',
+    });
+  });
+
+  it('(OID4VP 1.0 §8.2) redirect_uri is an absolute URI under the issuer and carries nothing but the Response Code', async () => {
+    const { body } = await submit(accepted, sameDeviceState());
+    const redirectUri = body.redirect_uri as string;
+    const url = new URL(redirectUri);
+
+    // Absolute (RFC 3986 §4.3), on the ISSUER's origin — `JWT_ISSUER` with its
+    // trailing slash canonicalised away, never the request's `Host`.
+    expect(url.origin).toBe(ISSUER);
+    expect(url.protocol).toBe('https:');
+    expect(url.pathname).toBe('/ui/wallet-login/return');
+    expect(url.username).toBe('');
+    expect(url.password).toBe('');
+    expect(url.hash).toBe('');
+    // Exactly one query parameter, and it is the code.
+    expect([...url.searchParams.keys()]).toEqual(['response_code']);
+    expect(url.searchParams.get('response_code')).toMatch(RESPONSE_CODE_SHAPE);
+    expect(redirectUri).toBe(
+      `${ISSUER}/ui/wallet-login/return?response_code=${url.searchParams.get('response_code')}`
+    );
+    // Nothing browser- or request-derived rides along: not the state, not its
+    // digest, not the row, not the caller's address or agent.
+    for (const forbidden of [
+      STATE,
+      hashOid4vpState(STATE),
+      'req-state-1',
+      'realm-1',
+      'nonce-value',
+      '203.0.113.9',
+      'test-wallet',
+    ]) {
+      expect(redirectUri).not.toContain(forbidden);
+    }
+  });
+
+  it('builds redirect_uri from JWT_ISSUER — a different issuer moves the origin, nothing else', async () => {
+    const { body } = await submit(accepted, sameDeviceState(), {
+      ...ENABLED_ENV,
+      JWT_ISSUER: 'https://id.other.example',
+    });
+
+    expect(new URL(body.redirect_uri as string).origin).toBe('https://id.other.example');
+    expect(new URL(body.redirect_uri as string).pathname).toBe('/ui/wallet-login/return');
+  });
+
+  it('never returns redirect_uri on a refusal', async () => {
+    // Every refusal throws BEFORE `send`, so no body — and no code — ever
+    // leaves for an exchange that was not accepted. Two families, stated
+    // precisely: refusals reached AFTER redemption (the row is consumed and
+    // its digest written, but the code is dropped with the handler's stack),
+    // and refusals reached BEFORE any lookup (nothing touched at all).
+    const pair = await mintPair();
+    const other = await mintPair();
+
+    const afterRedemption: Array<[Record<string, unknown>, unknown, Record<string, unknown>]> = [
+      // Same-device rows throughout: the case where a code WOULD have been
+      // emitted had the exchange been accepted.
+      [{ vp_token: '{not json', state: STATE }, sameDeviceState(), ENABLED_ENV],
+      [{ state: STATE }, sameDeviceState(), ENABLED_ENV],
+      [accepted, sameDeviceState({ verifierProfile: 'haip-1.0' }), ENABLED_ENV],
+      [accepted, sameDeviceState({ dcqlQuery: { credentials: 'not-an-array' } }), ENABLED_ENV],
+      [accepted, sameDeviceState(), { ...ENABLED_ENV, OID4VP_VERIFIER_PROFILE: undefined }],
+      // The downgrade: a cleartext presentation against an encrypted row.
+      [accepted, encryptedState(pair, { sameDevice: true }), HAIP_ENV],
+    ];
+
+    for (const [body, row, env] of afterRedemption) {
+      const { fastify, ctx, store } = await register(env);
+      fastify.repositories.oid4vpRequestStates.redeem.mockResolvedValue(row);
+      const handler = ctx.handler as NonNullable<TestContext['handler']>;
+      const { reply, sent } = makeReply();
+
+      await expect(handler(makeRequest(body), reply)).rejects.toMatchObject({
+        statusCode: 400,
+        errorDescription: OID4VP_REJECTION_DESCRIPTION,
+      });
+
+      expect(sent).toEqual([]);
+      expect(reply.header).not.toHaveBeenCalled();
+      expect(fastify.repositories.oid4vpRequestStates.redeem).toHaveBeenCalledOnce();
+      expect(fastify.repositories.oid4vpRequestStates.redeem).toHaveBeenCalledWith(
+        hashOid4vpState(STATE),
+        RESPONSE_CODE_DIGEST
+      );
+      expect(store.size).toBe(0);
+    }
+
+    // Unknown state: the redemption ran (with a digest — the code is minted
+    // before the lookup, one shape) and found nothing.
+    {
+      const { fastify, ctx } = await register();
+      fastify.repositories.oid4vpRequestStates.redeem.mockResolvedValue(undefined);
+      const handler = ctx.handler as NonNullable<TestContext['handler']>;
+      const { reply, sent } = makeReply();
+
+      await expect(handler(makeRequest(accepted), reply)).rejects.toMatchObject({
+        statusCode: 400,
+      });
+
+      expect(sent).toEqual([]);
+      expect(fastify.repositories.oid4vpRequestStates.redeem).toHaveBeenCalledWith(
+        hashOid4vpState(STATE),
+        RESPONSE_CODE_DIGEST
+      );
+    }
+
+    // Encrypted, wrong key on a same-device row: consumed by kid, decrypt
+    // fails, nothing sent.
+    {
+      const { fastify, handler } = await registerHaip();
+      fastify.repositories.oid4vpRequestStates.redeemByEncryptionKid.mockResolvedValue(
+        encryptedState(pair, { sameDevice: true })
+      );
+      const { reply, sent } = makeReply();
+
+      await expect(
+        handler(
+          makeRequest({
+            response: await encryptResponse({ ...other.publicJwk, kid: pair.kid }, SUCCESS_PAYLOAD),
+          }),
+          reply
+        )
+      ).rejects.toMatchObject({ statusCode: 400 });
+
+      expect(sent).toEqual([]);
+      expect(reply.header).not.toHaveBeenCalled();
+      expect(fastify.repositories.oid4vpRequestStates.redeemByEncryptionKid).toHaveBeenCalledWith(
+        pair.kid,
+        RESPONSE_CODE_DIGEST
+      );
+    }
+
+    // Not a JOSE object: refused before any lookup — no redemption, no digest,
+    // no body.
+    {
+      const { fastify, handler } = await registerHaip();
+      const { reply, sent } = makeReply();
+
+      await expect(handler(makeRequest({ response: 'not.a.jwe' }), reply)).rejects.toMatchObject({
+        statusCode: 400,
+      });
+
+      expect(sent).toEqual([]);
+      expect(fastify.repositories.oid4vpRequestStates.redeem).not.toHaveBeenCalled();
+      expect(fastify.repositories.oid4vpRequestStates.redeemByEncryptionKid).not.toHaveBeenCalled();
+    }
+  });
+
+  it('sets Cache-Control: no-store on the transport acknowledgement', async () => {
+    // The spec's own example of the 200 carries it, and the body is a bearer
+    // secret on a same-device row. Pinned on all four 200 paths.
+    const pair = await mintPair();
+    const otherPair = await mintPair();
+
+    const cleartextAccepted = await submit(accepted, sameDeviceState());
+    const cleartextDeclined = await submit(declined, pendingState());
+    const encryptedAccepted = await submitEncrypted(
+      pair,
+      SUCCESS_PAYLOAD,
+      encryptedState(pair, { sameDevice: true })
+    );
+    const encryptedDeclined = await submitEncrypted(
+      otherPair,
+      { state: STATE, error: 'access_denied' },
+      encryptedState(otherPair)
+    );
+
+    for (const { reply } of [
+      cleartextAccepted,
+      cleartextDeclined,
+      encryptedAccepted,
+      encryptedDeclined,
+    ]) {
+      expect(reply.statusCode).toBe(200);
+      expect(reply.header).toHaveBeenCalledWith('Cache-Control', 'no-store');
+    }
+  });
+
+  it('writes nothing new to the store — the signal and the parked presentation only, as before', async () => {
+    // The endpoint's one store contract (#239) is unchanged by the return leg:
+    // no Redis record of the code, no flow handle, nothing addressed by it.
+    const { store, body } = await submit(accepted, sameDeviceState());
+    const code = responseCodeOf(body);
+
+    expect([...store.keys()].sort()).toEqual(
+      [
+        `wallet-login-signal:${hashOid4vpState(STATE)}`,
+        `wallet-presentation:${hashOid4vpState(STATE)}`,
+      ].sort()
+    );
+    expect(JSON.stringify([...store.entries()])).not.toContain(code);
+  });
+
+  it('still authenticates nobody: no session, no token, no user on a same-device acceptance', async () => {
+    const { fastify, body } = await submit(accepted, sameDeviceState());
+
+    expect(Object.keys(body)).toEqual(['redirect_uri']);
+    expect(fastify.providerRegistry).toBeUndefined();
+    expect(fastify.repositories.users).toBeUndefined();
+    expect(fastify.jwtUtils).toBeUndefined();
   });
 });

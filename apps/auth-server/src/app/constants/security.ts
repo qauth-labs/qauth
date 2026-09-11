@@ -158,6 +158,66 @@ export const AUTHORIZE_BODY_LIMIT_BYTES = 128 * 1024;
 export const WALLET_LOGIN_FLOW_TTL_MS = 6 * 60 * 1000;
 
 /**
+ * Lifetime of a same-device Response Code — the fresh secret the `direct_post`
+ * Response Endpoint puts in the `redirect_uri` it hands a wallet, which the
+ * wallet's browser must bring back to `/ui/wallet-login/return` (OID4VP 1.0
+ * §8.2 and §14.2, HAIP 1.0 §5.1; #405, ADR-013).
+ *
+ * Policy, not tuning, and so a constant rather than an environment variable
+ * (the precedent is the status-list checker's timeout in `server-config`:
+ * "policy rather than tuning"). It sets one window with TWO edges that must
+ * agree:
+ *
+ * - On the wallet's side it bounds the code in the database
+ *   (`response_code_expires_at`): the return route's guarded `UPDATE` refuses a
+ *   code older than this, so a value copied out of a log or a browser history
+ *   is worth nothing after three minutes even if it was never spent.
+ * - On the browser's side it is the poll's REJECTION DEADLINE. A same-device
+ *   flow is never completed by polling — OID4VP §14.2: the Response URI "MUST
+ *   require the frontend to pass the respective Response Code" — so the
+ *   original tab's status poll answers `pending` while the redirect could still
+ *   arrive, and once the `received` signal is older than this it terminates the
+ *   flow as `rejected`. That is HAIP §5.1's "Verifiers MUST reject presentations
+ *   if Wallets do not follow the redirect back", enforced ACTIVELY rather than
+ *   left to expire, which caps how long a user watches a spinner for a wallet
+ *   that never came back.
+ *
+ * One constant for both so the feedback and the expiry cannot disagree: a code
+ * the database would still accept is never one the flow has already given up
+ * on, and vice versa. Three minutes is long enough for wallets that require an
+ * explicit "Done" tap after presenting, and short because the code is a bearer
+ * secret riding in a URL. Shorter than {@link WALLET_LOGIN_FLOW_TTL_MS}
+ * deliberately: the flow's own expiry still governs, and a live code cannot
+ * revive a flow that is gone.
+ */
+export const WALLET_RETURN_CODE_TTL_MS = 3 * 60 * 1000;
+
+/**
+ * Lifetime of the done-marker a same-device return leg leaves for the tab
+ * that started the flow (`wallet-login-done:<handle>`; #405, ADR-013).
+ *
+ * Wallets open the `redirect_uri` in a NEW tab, while the OAuth client's
+ * `state` and PKCE verifier live in the ORIGINAL tab's `sessionStorage`. So the
+ * return leg mints the session in the shared cookie jar and leaves this marker
+ * for the original tab's poll to consume ONCE — the marker carries the flow's
+ * binder so only that browser can consume it, and it never mints anything
+ * itself.
+ *
+ * Deliberately DERIVED from {@link WALLET_LOGIN_FLOW_TTL_MS}, where the flow
+ * TTL is derived from nothing: the marker is the flow's last word, and it
+ * should survive as long as the browser can still be told anything about the
+ * flow. A backgrounded phone tab's poll gap routinely exceeds a minute, so a
+ * short marker would strand the very tab the leg exists to continue. The
+ * marker's clock starts at completion and the cookie binding's at flow start,
+ * so the marker can outlive the binding by the time the flow took — harmless,
+ * because a poll whose binding has expired presents no binder and answers
+ * `expired`, the documented fallback, without reading it. In practice the
+ * marker is therefore bounded by the binding's life; tying the two constants
+ * keeps that bound from drifting when the flow TTL changes.
+ */
+export const WALLET_LOGIN_DONE_MARKER_TTL_MS = WALLET_LOGIN_FLOW_TTL_MS;
+
+/**
  * How often the wallet-login page asks the server whether the presentation has
  * arrived (#239).
  *

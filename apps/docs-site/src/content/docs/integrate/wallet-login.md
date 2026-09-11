@@ -1,9 +1,9 @@
 ---
 title: Wallet sign-in (OID4VP)
-description: The browser wallet-login flow — the asserted-identifier step, QR / deep-link targeting, fail-closed gating, account linking, and how to turn the flow on.
+description: The browser wallet-login flow — the asserted-identifier step, the same-device / cross-device choice and the Response Code return leg, fail-closed gating, account linking, and how to turn the flow on.
 sidebar:
   order: 7
-lastVerified: '2026-08-07'
+lastVerified: '2026-09-11'
 ---
 
 How an end user signs in with a wallet credential, what the server does at each
@@ -31,26 +31,35 @@ step, and what is deliberately not built yet. Implements
 > The whole flow is covered end to end against real containers and a mock wallet
 > (#240) — see [End-to-end tests](#end-to-end-tests-and-the-mock-wallet-240).
 > Interoperability with a REAL wallet remains **unverified**.
+>
+> **Since #405 the user says where the wallet is.** A sign-in started with
+> **Use a wallet on this device** is finished on a browser return leg — the
+> Response Endpoint hands the wallet a `redirect_uri` carrying a single-use
+> Response Code (OID4VP 1.0 §8.2 / §14.2, HAIP 1.0 §5.1) and only the browser
+> that started the flow can spend it; a sign-in started with **Scan with a
+> wallet on another device** completes by polling exactly as before. See
+> [The flow](#the-flow) and [ADR-013](/reference/records/adr/013-same-device-return-leg/).
 
 ## Where it lives
 
 The browser-facing screens are server-rendered by `apps/auth-server`, next to the
 password login they extend:
 
-| Path                                  | What it does                                                                      |
-| ------------------------------------- | --------------------------------------------------------------------------------- |
-| `GET /ui/login`                       | Password form; offers a **Sign in with your wallet** link when the flow is usable |
-| `GET /ui/wallet-login`                | Collects the account identifier the user asserts                                  |
-| `POST /ui/wallet-login`               | Issues an OID4VP request and renders the QR code + deep link                      |
-| `GET /ui/wallet-login/:handle`        | Re-renders a flow in progress; the no-JavaScript refresh path                     |
-| `GET /ui/wallet-login/:handle/status` | Polled by the page; completes the sign-in when the wallet has responded           |
-| `GET /ui/wallet-link`                 | **Signed-in only.** Confirmation screen for linking a wallet credential (#238)    |
-| `POST /ui/wallet-link`                | Starts a linking flow and renders the QR code + deep link                         |
-| `GET /ui/wallet-link/:handle`         | Re-renders a linking flow; the no-JavaScript refresh path                         |
-| `POST /auth/link/wallet`              | JSON API: starts a linking flow (session cookie + `X-CSRF-Token`)                 |
-| `GET /auth/link/wallet/:handle`       | JSON API: polls, and completes the link when the wallet has responded             |
-| `POST /oid4vp/response`               | The `response_uri` the **wallet** posts to (issue #233) — not a browser surface   |
-| `GET /oid4vp/request/:handle`         | The `request_uri` a **wallet** fetches a signed request object from (#377)        |
+| Path                                  | What it does                                                                                                                       |
+| ------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| `GET /ui/login`                       | Password form; offers a **Sign in with your wallet** link when the flow is usable                                                  |
+| `GET /ui/wallet-login`                | Collects the account identifier the user asserts                                                                                   |
+| `POST /ui/wallet-login`               | Issues an OID4VP request; `device=this` renders the deep link, `device=other` (or absent) the QR code                              |
+| `GET /ui/wallet-login/:handle`        | Re-renders a flow in progress; the no-JavaScript refresh path                                                                      |
+| `GET /ui/wallet-login/:handle/status` | Polled by the page; completes a cross-device sign-in when the wallet has responded, and a same-device one once its return leg has  |
+| `GET /ui/wallet-login/return`         | The same-device **return leg** — the `redirect_uri` the wallet brings the browser back to, carrying the Response Code (#405)       |
+| `GET /ui/wallet-link`                 | **Signed-in only.** Confirmation screen for linking a wallet credential (#238)                                                     |
+| `POST /ui/wallet-link`                | Starts a linking flow; the same `device` choice, the same one-affordance page                                                      |
+| `GET /ui/wallet-link/:handle`         | Re-renders a linking flow; the no-JavaScript refresh path                                                                          |
+| `POST /auth/link/wallet`              | JSON API: starts a linking flow (session cookie + `X-CSRF-Token`; optional `{ "device" }`)                                         |
+| `GET /auth/link/wallet/:handle`       | JSON API: polls, and completes the link when the wallet has responded (or returned)                                                |
+| `POST /oid4vp/response`               | The `response_uri` the **wallet** posts to (issue #233) — not a browser surface; answers `{ redirect_uri }` for a same-device flow |
+| `GET /oid4vp/request/:handle`         | The `request_uri` a **wallet** fetches a signed request object from (#377)                                                         |
 
 `libs/ui` is the React primitive set used by the developer portal; it is not
 involved here.
@@ -65,34 +74,71 @@ involved here.
    the password provider normalizes an email, because it lands in the same
    `user_credentials.external_sub` column.
 
-   It is never looked up at this step. Every submission renders a QR code whether
-   or not the account exists, so the screen is not an account oracle.
+   It is never looked up at this step. Every submission renders the pending page
+   — a QR code or a deep link — whether or not the account exists, so the screen
+   is not an account oracle.
 
-2. **The server issues a presentation request.** An OID4VP 1.0 Authorization
+2. **The user says where the wallet is.** The identifier form has two submit
+   buttons on the one form — **Use a wallet on this device** (`device=this`) and
+   **Scan with a wallet on another device** (`device=other`). An absent field is
+   cross-device, so anything built before #405 keeps the path it had. The
+   choice is written atomically with the request: `same_device` on the
+   request-state row and `sameDevice` on the flow record. A boolean names no
+   browser, so the wallet-side row still cannot.
+
+3. **The server issues a presentation request.** An OID4VP 1.0 Authorization
    Request (`response_type=vp_token`, `response_mode=direct_post`) is built under
-   the active `VerifierProfile`, its `state` digest is persisted, and the wallet
-   invocation URI is rendered as a QR code and an **Open my wallet** deep link.
-   The URI is **opaque to the UI**: under `oid4vp-1.0-base` it carries the request
-   inline; under a profile that mandates signed requests it is a `request_uri`
-   reference to a signed JAR the wallet fetches from
-   `GET /oid4vp/request/:handle` (#377). The page renders what the backend
-   produced, and which form it is follows from the Client Identifier Prefix
-   rather than from a setting.
+   the active `VerifierProfile`, its `state` digest is persisted, and the pending
+   page renders **exactly one** affordance for the wallet invocation URI: the
+   **Open my wallet** deep link — a plain user-gesture `href` — for a
+   same-device flow ("Opening your wallet on this device… When you're done,
+   your wallet will bring you back here."), the QR code for a cross-device one
+   ("Waiting for your wallet…"). Both carry a **Start again** link to a fresh
+   flow with the other choice available. The URI itself is **opaque to the
+   UI**: under `oid4vp-1.0-base` it carries the request inline; under a profile
+   that mandates signed requests it is a `request_uri` reference to a signed JAR
+   the wallet fetches from `GET /oid4vp/request/:handle` (#377). The page
+   renders what the backend produced, and which form it is follows from the
+   Client Identifier Prefix rather than from a setting.
 
-3. **The wallet responds.** It posts the Authorization Response to
+4. **The wallet responds.** It posts the Authorization Response to
    `POST /oid4vp/response`, which redeems the single-use `state` and publishes a
    transport signal. That signal says a structurally valid `vp_token` came back —
-   nothing about who presented it.
+   nothing about who presented it. The endpoint answers `200` with a JSON object
+   (OID4VP 1.0 §8.2): `{}` for a cross-device flow, and for a same-device flow
+   `{ "redirect_uri": "<issuer>/ui/wallet-login/return?response_code=…" }` — a
+   fresh, single-use Response Code minted in the same statement that redeemed
+   the row, on the accepted path **and** on a wallet-reported error (§8.2
+   permits the member "for Error Responses"; HAIP 1.0 §5.1's MUST has no
+   success qualifier).
 
-4. **The browser is told.** The page polls the status endpoint every three
-   seconds. On completion it navigates to the original `return_to`; on any failure
-   it shows one fixed sentence.
+5. **The browser is told — two ways.**
+   - **Cross-device:** the page polls the status endpoint every three seconds.
+     On completion it navigates to the original `return_to`; on any failure it
+     shows one fixed sentence. Byte-for-byte the pre-#405 behaviour.
+   - **Same-device:** the wallet follows the `redirect_uri`, in a **new** tab,
+     to `GET /ui/wallet-login/return`. The route spends the code first (one
+     guarded `UPDATE` — unknown, expired, replayed and cross-device codes all
+     fail it identically), then matches the row against the flows this browser's
+     signed binder cookie names, and only then runs the one state machine: the
+     session is minted exactly as by polling and a "You're signed in" page tells
+     the user to go back to the tab where they started — that tab's next poll
+     consumes a done-marker and navigates to `return_to` on its own, so the
+     OAuth client's `state` and PKCE verifier are still in the tab that
+     continues. The poll **never** completes a same-device flow: it answers
+     `pending` after the presentation arrives, and if the redirect has not
+     landed within 180 s (the code's own lifetime) it rejects the presentation
+     outright, with a reason in the log. A landing in a browser that does not
+     hold the flow's binder — a different browser, an in-app browser with its
+     own cookie jar, a replayed code — spends the code, discards the parked
+     presentation, and the initiating tab is told `rejected`; the page it
+     renders is one refusal page for every such case, with no "Try again".
 
 ## Scope decision — QR / deep link only
 
 OID4VP 1.0 offers two ways to reach a wallet: the cross-device QR / same-device
-deep link, and the browser-native **Digital Credentials API**, whose `origin:`
-Client Identifier Prefix is reserved for it.
+deep link (the two `device` choices above), and the browser-native **Digital
+Credentials API**, whose `origin:` Client Identifier Prefix is reserved for it.
 
 **This ships QR/deep-link only.** The DC API path needs the `origin:` prefix,
 which QAuth's client-identifier module does not implement. Signed requests are no
@@ -324,6 +370,26 @@ never registered and no wallet login exists to produce a level.
   or replayed afterwards.
 - **Session fixation.** A fresh session id is minted on every successful
   authentication, exactly as the password login does.
+- **Response Code / same-device session binding.** For a flow started with
+  `device=this`, the Response Endpoint's `redirect_uri` carries a fresh 32-byte
+  Response Code whose SHA-256 digest is written in the same statement that
+  redeems the request (only the digest is stored); the return route spends it
+  in one guarded `UPDATE` **before** looking at the browser, then requires the
+  flow's binder cookie as well — two cryptographically random values, one
+  managing state with the wallet and one proving the browser, which is OID4VP
+  1.0 §14.3.3's second option. The poll never completes such a flow (§14.2:
+  the frontend MUST pass the Response Code), so the poll and the return leg
+  cannot race. A code that lands anywhere is dead everywhere: a return in a
+  different browser or user session spends it and discards the presentation
+  (HAIP 1.0 §5.1), and a redirect never followed rejects it at the 180 s
+  deadline. The code rides a query parameter so the `<noscript>` twin keeps
+  working; in return every response of the route is `Cache-Control: no-store`
+  and `Referrer-Policy: no-referrer`, both terminal pages scrub it from the
+  address bar with a nonced `history.replaceState`, and the request log
+  redacts `response_code`. The cross-device flow has no equivalent — §14.2
+  says the technique is not applicable there — and leans on the browser
+  binder and the asserted identifier instead; see
+  [ADR-013](/reference/records/adr/013-same-device-return-leg/).
 - **One refusal.** Expired request, wallet-reported error, unvalidatable
   presentation, untrusted issuer, unknown account and disabled account all render
   the same sentence. #236 requires that an untrusted issuer be indistinguishable
@@ -376,8 +442,10 @@ The wallet posts to an endpoint nobody authenticated (`POST /oid4vp/response`,
 OID4VP 1.0 §8.2 — a wallet has no client credentials). That endpoint decides
 nothing: it redeems the single-use `state`, structurally parses the `vp_token`,
 and **parks** the presented bytes under the `state` digest. Validation then runs
-on the cookie-bound browser poll, where the session and the asserted identifier
-exist — and where the expensive signature work is not on an anonymous surface.
+on the cookie-bound browser poll — or, for a same-device flow, on the
+cookie-bound return leg that also carries the Response Code — where the session
+and the asserted identifier exist, and where the expensive signature work is not
+on an anonymous surface.
 
 Everything a presentation is CHECKED AGAINST — the `nonce`, the `client_id`, the
 DCQL query, the realm — lives on the browser-side flow record. A wallet can
@@ -575,6 +643,18 @@ encrypted to a key QAuth never published is refused after consuming the row,
 and the same presentation posted in the clear is refused. The boot-gate half
 still asserts that a half-provisioned `haip-1.0` takes the deployment DOWN,
 naming the key-storage assurance count rather than any count #377 cleared.
+
+Both suites also drive the same-device return leg (#405) on their profile: a
+sign-in started with `device=this` whose mock wallet parses the `redirect_uri`
+out of the acknowledgement and follows it with the initiating browser's cookie
+jar, landing on the signed-in page and proving the session through the original
+jar once its poll has consumed the done-marker; a wrong or replayed code
+refused; a landing from a fresh cookie jar refused, with the initiating poll
+answering `rejected` and no session minted; a redirect never followed, with the
+poll pending until the deadline and rejected after it; a cross-device sign-in
+(`device` omitted) acknowledged with `{}` and completed by polling exactly as
+before; and the same-device link flow. The mock wallet's acknowledgement parser
+is I/O-free and imports nothing from the verifier.
 
 Interoperability with a REAL wallet is unverified, and which wallets implement
 HAIP 1.0 is an open research question. The procedure for a manual pass — and the

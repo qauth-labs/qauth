@@ -642,6 +642,92 @@ export function createMockWallet(credentials: readonly HeldCredential[] = []): M
   };
 }
 
+/** What a wallet took from the Response Endpoint's acknowledgement (§8.2). */
+export interface Oid4vpResponseAck {
+  /** Where to send the user agent next, when the Verifier asked for that. */
+  readonly redirectUri?: string;
+  /** The Response Code the `redirect_uri` carries, when it carries one. */
+  readonly responseCode?: string;
+}
+
+/** The one query parameter QAuth's `redirect_uri` carries (#405, ADR-013 D4). */
+const RESPONSE_CODE_PARAMETER = 'response_code';
+
+/**
+ * Read the Response Endpoint's HTTP 200 body as a wallet does (OID4VP 1.0
+ * §8.2; HAIP 1.0 §5.1; #405).
+ *
+ * §8.2: the Response Endpoint answers with a JSON object that MAY contain a
+ * `redirect_uri`; when it does, the wallet MUST redirect the user agent there
+ * (HAIP §5.1 "Wallets MUST follow the redirect to `redirect_uri`"), and the
+ * URI carries a fresh, single-use Response Code the frontend then passes back
+ * (§14.2). When it does not, the wallet is done. Two shapes, then: `{}` and
+ * `{ "redirect_uri": "…" }`.
+ *
+ * Everything else is REFUSED, in the spirit of {@link parseOid4vpRequest}: a
+ * wallet that shrugged at a body it did not expect would hide exactly the
+ * regression the E2E exists to catch — a `redirect_uri` emitted for a
+ * cross-device request, one dropped for a same-device one, a relative path
+ * the wallet could not open, a code smuggled into a fragment. QAuth's own
+ * contract, which this wallet knows out of band the way a real one knows its
+ * Verifier's, is that the code rides as the ONE query parameter
+ * `response_code` (a fragment would make the landing JS-only, and every
+ * wallet page has a noscript twin); so a `redirect_uri` with a fragment, with
+ * no `response_code`, with two, or with any other parameter beside it is a
+ * contract this wallet does not recognise and will not follow.
+ *
+ * I/O-free by construction — `JSON`-shaped input and `node:url` only — and,
+ * like the rest of this module, importing nothing from the code under test.
+ *
+ * @param body - the parsed JSON body of the 200 response.
+ * @throws Error naming the first check that refused.
+ */
+export function parseOid4vpResponseAck(body: unknown): Oid4vpResponseAck {
+  if (typeof body !== 'object' || body === null || Array.isArray(body)) {
+    throw new Error('the Response Endpoint did not answer with a JSON object (OID4VP 1.0 §8.2)');
+  }
+
+  const { redirect_uri: redirectUri } = body as { redirect_uri?: unknown };
+  if (redirectUri === undefined) return {};
+
+  if (typeof redirectUri !== 'string' || redirectUri === '') {
+    throw new Error('redirect_uri is present but is not a non-empty string');
+  }
+
+  let target: URL;
+  try {
+    target = new URL(redirectUri);
+  } catch {
+    throw new Error(`redirect_uri is not an absolute URI a wallet could open: '${redirectUri}'`);
+  }
+
+  if (target.protocol !== 'https:' && target.protocol !== 'http:') {
+    throw new Error(
+      `redirect_uri must be an http(s) URI for the user agent; got '${target.protocol}'`
+    );
+  }
+  if (target.hash !== '' || redirectUri.endsWith('#')) {
+    throw new Error(
+      'redirect_uri carries a fragment; QAuth passes the Response Code as a query parameter'
+    );
+  }
+
+  const parameters = [...target.searchParams.keys()];
+  const codes = target.searchParams.getAll(RESPONSE_CODE_PARAMETER);
+  if (parameters.length !== 1 || codes.length !== 1) {
+    throw new Error(
+      `redirect_uri must carry exactly one '${RESPONSE_CODE_PARAMETER}' query parameter and nothing else; got [${parameters.join(', ')}]`
+    );
+  }
+
+  const [responseCode] = codes;
+  if (responseCode === undefined || responseCode === '') {
+    throw new Error(`redirect_uri carries an empty '${RESPONSE_CODE_PARAMETER}'`);
+  }
+
+  return { redirectUri, responseCode };
+}
+
 /**
  * The `OID4VP_ISSUER_JWKS` value a deployment needs to verify these issuers.
  *

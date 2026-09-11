@@ -127,7 +127,7 @@ export const DELIVERY_TRACKS: DeliveryTrack[] = [
     name: 'Federation + PQC (long-term platform)',
     state: 'partial',
     summary:
-      'Identifier abstraction, the gate this track waited on, shipped and closed. Wallet federation completes a browser sign-in end to end behind a default-off flag, with HAIP profile wiring and the real-wallet interoperability pass still open; PQC hybrid signing shipped behind a default-off flag. See the feature rows below.',
+      'Identifier abstraction, the gate this track waited on, shipped and closed. Wallet federation completes a browser sign-in end to end behind a default-off flag — HAIP profile wiring (#377) and the same-device return leg (#405) both landed 2026-09-11 — with the real-wallet interoperability pass still open; PQC hybrid signing shipped behind a default-off flag. See the feature rows below.',
   },
 ];
 
@@ -155,7 +155,7 @@ export const FEATURE_STATUS: FeatureStatus[] = [
     feature: 'Wallet federation / OID4VP',
     state: 'partial',
     summary:
-      'Merged: `VerifierProfile` (#299), OID4VP 1.0 request generation and `direct_post` intake (#233), the per-realm issuer trust allowlist (#236), ES256 + JWE crypto (#298), SD-JWT VC presentation validation (#234), Token Status List revocation (#297), the wallet sign-in UI (#239) and the end-to-end mock-wallet suite (#240, `apps/auth-server/src/app/wallet-federation.integration.test.ts`). A browser completes a wallet sign-in — first-time enrolment, returning login, account linking and `acr` — once the flag is on and a `VerifierProfile` is named; with the flag on and no profile named the deployment refuses to start rather than falling back to a default posture. Validated so far only on the `oid4vp-1.0-base` profile against a mock wallet. Open: HAIP profile wiring (#377) and the real-wallet interoperability pass (#376). Key-storage assurance into the assurance policy (#379) closed 2026-08-26.',
+      'Merged: `VerifierProfile` (#299), OID4VP 1.0 request generation and `direct_post` intake (#233), the per-realm issuer trust allowlist (#236), ES256 + JWE crypto (#298), SD-JWT VC presentation validation (#234), Token Status List revocation (#297), the wallet sign-in UI (#239) and the end-to-end mock-wallet suite (#240, `apps/auth-server/src/app/wallet-federation.integration.test.ts`). A browser completes a wallet sign-in — first-time enrolment, returning login, account linking and `acr` — once the flag is on and a `VerifierProfile` is named; with the flag on and no profile named the deployment refuses to start rather than falling back to a default posture. Validated so far only against a mock wallet, on both profiles. HAIP profile wiring (#377) closed 2026-09-11 with Phase C (encrypted `direct_post.jwt`), so `haip-1.0` boots when provisioned; the same-device return leg (#405, ADR-013) landed the same day — the user picks the device on the sign-in form, a same-device flow is answered with an OID4VP 1.0 §8.2 `redirect_uri` carrying a single-use Response Code and completes only in the browser that started it, and the cross-device QR flow is unchanged. Open: the real-wallet interoperability pass (#376). Key-storage assurance into the assurance policy (#379) closed 2026-08-26.',
     flag: { name: 'WALLET_FEDERATION_ENABLED', default: 'off' },
   },
   {

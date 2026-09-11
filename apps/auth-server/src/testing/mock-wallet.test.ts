@@ -9,6 +9,7 @@ import {
   issuerJwksConfig,
   MOCK_WALLET_SD_JWT_VC_FORMAT,
   parseOid4vpRequest,
+  parseOid4vpResponseAck,
   presentCredential,
   selectResponseEncryptionKey,
   type VpToken,
@@ -397,6 +398,99 @@ describe('the encrypted-response seam — direct_post.jwt (#377 Phase C)', () =>
 
     expect(Object.keys(response.formBody).sort()).toEqual(['state', 'vp_token']);
     expect(response.formBody).not.toHaveProperty('response');
+  });
+});
+
+/**
+ * The acknowledgement seam (#405, OID4VP 1.0 §8.2, HAIP 1.0 §5.1).
+ *
+ * What the wallet does with the Response Endpoint's 200 body: follow a
+ * `redirect_uri` when there is one, stop when there is not, and refuse
+ * anything it was not built to follow — so the E2E fails at the wallet, with
+ * a reason, rather than driving a landing the product never emits.
+ */
+describe("parseOid4vpResponseAck — a wallet reads the Response Endpoint's answer (§8.2)", () => {
+  const RETURN = 'https://auth.example.com/ui/wallet-login/return';
+  const CODE = 'A'.repeat(43);
+
+  it('accepts the empty object — the cross-device acknowledgement — as "nothing to follow"', () => {
+    expect(parseOid4vpResponseAck({})).toEqual({});
+  });
+
+  it('accepts a redirect_uri carrying exactly one response_code, and hands both back', () => {
+    expect(parseOid4vpResponseAck({ redirect_uri: `${RETURN}?response_code=${CODE}` })).toEqual({
+      redirectUri: `${RETURN}?response_code=${CODE}`,
+      responseCode: CODE,
+    });
+  });
+
+  it('ignores members it does not know — §8.2 says the object MAY contain redirect_uri, not ONLY', () => {
+    expect(parseOid4vpResponseAck({ something_else: 1 })).toEqual({});
+  });
+
+  it.each([
+    ['null', null],
+    ['an array', []],
+    ['a string', '{}'],
+    ['undefined', undefined],
+  ])('refuses %s — the body must be a JSON object', (_label, body) => {
+    expect(() => parseOid4vpResponseAck(body)).toThrow(/JSON object/);
+  });
+
+  it.each([
+    ['a number', 42],
+    ['null', null],
+    ['an empty string', ''],
+  ])('refuses a redirect_uri that is %s', (_label, redirectUri) => {
+    expect(() => parseOid4vpResponseAck({ redirect_uri: redirectUri })).toThrow(
+      /not a non-empty string/
+    );
+  });
+
+  it('refuses a RELATIVE redirect_uri — a wallet has no base to resolve it against', () => {
+    expect(() =>
+      parseOid4vpResponseAck({ redirect_uri: `/ui/wallet-login/return?response_code=${CODE}` })
+    ).toThrow(/not an absolute URI/);
+  });
+
+  it('refuses a redirect_uri that is not http(s) — it is for the user agent to open', () => {
+    expect(() =>
+      parseOid4vpResponseAck({ redirect_uri: `javascript:alert(1)?response_code=${CODE}` })
+    ).toThrow(/http\(s\)/);
+  });
+
+  it.each([
+    ['a code in the fragment', `${RETURN}#response_code=${CODE}`],
+    ['a fragment beside the code', `${RETURN}?response_code=${CODE}#done`],
+    ['an empty fragment', `${RETURN}?response_code=${CODE}#`],
+  ])('refuses %s — QAuth passes the code as a query parameter', (_label, redirectUri) => {
+    expect(() => parseOid4vpResponseAck({ redirect_uri: redirectUri })).toThrow(/fragment/);
+  });
+
+  it.each([
+    ['no query at all', RETURN],
+    ['a different parameter', `${RETURN}?code=${CODE}`],
+    ['a second parameter beside the code', `${RETURN}?response_code=${CODE}&state=x`],
+    ['two response_code parameters', `${RETURN}?response_code=${CODE}&response_code=${CODE}`],
+  ])('refuses a redirect_uri with %s', (_label, redirectUri) => {
+    expect(() => parseOid4vpResponseAck({ redirect_uri: redirectUri })).toThrow(
+      /exactly one 'response_code'/
+    );
+  });
+
+  it('refuses an empty response_code', () => {
+    expect(() => parseOid4vpResponseAck({ redirect_uri: `${RETURN}?response_code=` })).toThrow(
+      /empty 'response_code'/
+    );
+  });
+
+  it("is opaque to the code — a wallet does not know the Verifier's code shape (§14.2)", () => {
+    // The code is the Verifier's secret in the Verifier's format; the wallet
+    // carries it and passes it on. Shape assertions belong in the E2E.
+    expect(parseOid4vpResponseAck({ redirect_uri: `${RETURN}?response_code=short` })).toEqual({
+      redirectUri: `${RETURN}?response_code=short`,
+      responseCode: 'short',
+    });
   });
 });
 

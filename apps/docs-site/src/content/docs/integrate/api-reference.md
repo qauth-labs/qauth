@@ -3,7 +3,7 @@ title: API Reference
 description: Hand-written reference for every path in QAuth's committed OpenAPI spec.
 sidebar:
   order: 4
-lastVerified: '2026-08-10'
+lastVerified: '2026-09-11'
 ---
 
 Hand-written reference for QAuth's HTTP endpoints. The **authoritative, always-current**
@@ -212,10 +212,20 @@ only when `WALLET_FEDERATION_ENABLED` is on; otherwise the path does not exist
 Requires a valid `__Host-qauth_session` cookie **and** an `X-CSRF-Token` header
 matching the per-session token returned by `GET /consents/`.
 
+**Request** (`application/json`, optional): `{ "device": "this" | "other" }` —
+where the wallet is (#405). `this` starts a **same-device** link: render
+`invocation_uri` as a deep link, and the link completes on the browser's
+return leg at `GET /ui/wallet-login/return` rather than by polling. `other`,
+an empty body, or no body at all is **cross-device**: render a QR code and poll.
+Any other value is a `400` validation error. The generated OpenAPI document
+marks this request body as required — the generator's default for any declared
+body schema — but a `POST` with no body at all is accepted and means
+`device: "other"`.
+
 **`200 OK`**: `{ "handle": "...", "invocation_uri": "openid4vp://...", "expires_at": 1730000000000 }`
 — render `invocation_uri` as a QR code or deep link; it is opaque.
-Errors: `401` (no session), `400` (`invalid_csrf_token`), `404` (no usable
-`VerifierProfile`), `500`.
+Errors: `401` (no session), `400` (`invalid_csrf_token`, or an invalid
+`device`), `404` (no usable `VerifierProfile`), `500`.
 
 ### `GET /auth/link/wallet/{handle}`
 
@@ -227,7 +237,11 @@ session must be the **same user** that started the flow.
 
 On `linked`, a second `user_credentials` row (`provider_type='wallet'`) now
 exists under the same `users.id`, keyed on the identifier the account already
-owned — so a later wallet sign-in returns tokens with the identical `sub`.
+owned — so a later wallet sign-in returns tokens with the identical `sub`. A
+link started with `device: "this"` is never completed by this poll: it answers
+`pending` after the wallet has responded, `linked` **once** after the return
+leg has completed it in the same browser, and `rejected` if the redirect has
+not landed within 180 s or landed in a different browser (#405).
 `conflict` is the one specific outcome (the credential belongs to another
 account) and is only reachable under the `issuer-scoped-claim` strategy; every
 other failure renders one uniform refusal. See
@@ -376,13 +390,14 @@ The wallet-login screens below are registered **only** when
 `WALLET_FEDERATION_ENABLED` is on; with the flag off (the default) every path
 404s. See [Wallet sign-in](/integrate/wallet-login/) for the flow they implement.
 
-| Endpoint                           | Method    | Purpose                                                                                                |
-| ---------------------------------- | --------- | ------------------------------------------------------------------------------------------------------ |
-| `/ui/wallet-login`                 | GET, POST | GET renders the ADR-009 identifier form; POST starts the sign-in and renders the QR / deep link.       |
-| `/ui/wallet-login/{handle}`        | GET       | The waiting screen for a pending presentation.                                                         |
-| `/ui/wallet-login/{handle}/status` | GET       | Poll the presentation's outcome, and complete the sign-in once it lands.                               |
-| `/ui/wallet-link`                  | GET, POST | GET renders the confirmation screen; POST starts the link and renders the QR / deep link (issue #238). |
-| `/ui/wallet-link/{handle}`         | GET       | The waiting/outcome screen for a pending link.                                                         |
+| Endpoint                           | Method    | Purpose                                                                                                                                                                                                                                             |
+| ---------------------------------- | --------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `/ui/wallet-login`                 | GET, POST | GET renders the ADR-009 identifier form; POST starts the sign-in. The form field `device` (`this` \| `other`, absent ⇒ `other`) says where the wallet is: `this` renders the deep link, `other` the QR code (#405).                                 |
+| `/ui/wallet-login/{handle}`        | GET       | The waiting screen for a pending presentation.                                                                                                                                                                                                      |
+| `/ui/wallet-login/{handle}/status` | GET       | Poll the presentation's outcome. Completes a cross-device sign-in once the presentation lands; a same-device one only once its return leg has, and rejects it if the redirect never arrives.                                                        |
+| `/ui/wallet-login/return`          | GET       | The same-device return leg: `?response_code=` carries the single-use Response Code the wallet received from `POST /oid4vp/response`. Spent first, then bound to the browser that started the flow; every refusal renders one identical page (#405). |
+| `/ui/wallet-link`                  | GET, POST | GET renders the confirmation screen; POST starts the link (issue #238) with the same `device` form field and the same one-affordance page as the sign-in.                                                                                           |
+| `/ui/wallet-link/{handle}`         | GET       | The waiting/outcome screen for a pending link.                                                                                                                                                                                                      |
 
 ---
 
@@ -723,9 +738,19 @@ credential, or issuer validation, and authenticates no user.**
 **Request** (form-urlencoded): `state` (required), `vp_token`, `error`,
 `error_description`.
 
-**`200 OK`** — an empty transport-level acknowledgement (OID4VP 1.0 §8.3)
-confirming the response was well-formed and correlated. It does **not** assert
-that any credential was verified or any user authenticated.
+**`200 OK`** — a transport-level acknowledgement: a JSON object, sent
+`Cache-Control: no-store` (OID4VP 1.0 §8.2). For a **cross-device** request
+the object is empty, `{}`, and the wallet is not required to do anything
+further. For a request the user started as **same-device** it is
+`{ "redirect_uri": "https://<issuer>/ui/wallet-login/return?response_code=<43 base64url chars>" }`
+— an absolute URI under the issuer carrying a fresh, single-use Response Code,
+which the wallet MUST redirect the user agent to (HAIP 1.0 §5.1); it is returned
+on the accepted path and on a wallet-reported error alike. Either way the
+acknowledgement confirms only that the response was well-formed and correlated.
+It does **not** assert that any credential was verified or any user
+authenticated — whoever follows the `redirect_uri` must also hold the browser
+binder of the flow the code names, and the return route decides that, not this
+body. Cross-device (QR) flows are unchanged by #405.
 
 ### `GET /oid4vp/request/{handle}`
 

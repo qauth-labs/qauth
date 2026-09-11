@@ -82,9 +82,20 @@ const SECTION_SHAPE = /^\d+(?:\.\d+)*$/;
  * Spec-name tokens that are NOT in the registry but must still anchor a
  * section reference, so that a bare `§X.Y` is never mis-attributed to a
  * registered spec named earlier in the same test name. `describe('key
- * attestation (HAIP §4.5.1)') > it('applies the §5.9.3 prohibition')` must
- * attribute both sections to HAIP — i.e. to nothing — rather than to whatever
- * registered spec an outer `describe` happened to mention.
+ * attestation (OID4VCI Appendix D)') > it('applies the §5.9.3 prohibition')`
+ * must attribute the section to OID4VCI — i.e. to nothing — rather than to
+ * whatever registered spec an outer `describe` happened to mention.
+ *
+ * `OID4VP` and `HAIP` stay in this list DELIBERATELY although `oid4vp-1_0` and
+ * `haip-1_0` are registered (#405): their registered aliases are the
+ * version-qualified spellings only (`OID4VP 1.0`, `HAIP 1.0`, …). The suite
+ * carried some hundred bare `OID4VP §…` / `HAIP §…` citations before those
+ * rows existed — signed JAR, `direct_post.jwt`, key attestations — and with the
+ * bare token foreign they neither falsely prove a new row at a shared section
+ * (three passing tests cite `HAIP §5.1` for other mandates) nor flood the
+ * orphan list. A registered alias still wins over the bare token at the same
+ * position because aliases precede this list in the alternation, so a title
+ * that spells out `HAIP 1.0 §5.1` reaches the registry.
  */
 const FOREIGN_ANCHOR =
   'RFC\\s?\\d{4}[a-z]*|draft-[A-Za-z0-9.-]+|ADR-\\d+|OID4VCI|OID4VP|HAIP|CIMD|SD-JWT|eIDAS|ISO\\/IEC|OpenID|OIDC|OAuth';
@@ -676,11 +687,7 @@ function tally(matrix) {
  * `applies`/`reason` are free prose, so neither is under this script's control.
  */
 function escapeCell(text) {
-  return String(text)
-    .replace(/\\/g, '\\\\')
-    .replace(/\|/g, '\\|')
-    .replace(/\n+/g, ' ')
-    .trim();
+  return String(text).replace(/\\/g, '\\\\').replace(/\|/g, '\\|').replace(/\n+/g, ' ').trim();
 }
 
 function renderMarkdown(matrix, meta) {

@@ -156,19 +156,52 @@ export function isEncryptedDirectPostRequest(
 }
 
 /**
- * `POST /oid4vp/response` success body.
+ * `POST /oid4vp/response` success body (OID4VP 1.0 §8.2; #405, ADR-013).
  *
- * OID4VP 1.0 §8.3: the Verifier answers a `direct_post` submission with HTTP
- * 200 and a JSON object, which MAY carry a `redirect_uri` for the wallet to send
- * the user to. QAuth emits the empty object: there is no post-presentation
- * destination to send anyone to, because nothing here logs anyone in. The wallet
- * login UI that would own such a destination is #239.
+ * §8.2: a Response URI that has processed an Authorization Response or an
+ * Authorization Error Response "MUST respond with an HTTP status code of 200
+ * with Content-Type of application/json and a JSON object in the response
+ * body", and defines exactly one member for that object — `redirect_uri`,
+ * OPTIONAL, "String containing a URI. When this parameter is present the
+ * Wallet MUST redirect the user agent to this URI." The URI "MUST include a
+ * fresh, cryptographically random value" — the Response Code of §14.2 — and
+ * "MAY" be returned "in response to successful Authorization Responses or for
+ * Error Responses".
  *
- * A TRANSPORT-LEVEL ACK. It means "this submission was well-formed and
- * correlated with a request we made" — never "you are authenticated".
+ * QAuth emits the member for a SAME-DEVICE request only: an absolute URI under
+ * the issuer, `/ui/wallet-login/return?response_code=<43 base64url chars>`,
+ * on both the accepted path and the wallet-reported-error path, because HAIP
+ * 1.0 §5.1 makes it a MUST there and its MUST has no success qualifier. A
+ * CROSS-DEVICE request gets the empty object — §14.2: the technique "is not
+ * applicable to cross-device scenarios because the browser used by the Wallet
+ * will not have the original session" — and the wallet stops, as §13.3's step
+ * 6 note describes; the waiting browser completes by polling as before.
+ *
+ * Declared with Zod's default strip behaviour, as every other response schema
+ * in this app is: the serializer writes the members it knows and nothing
+ * else, so the acknowledgement can never grow a field by accident. `z.url()`
+ * (the Zod v4 standalone form) rather than a bare string, because the ONE
+ * thing §8.2 says about the value's shape is that it is "an absolute URI as
+ * defined by RFC 3986 Section 4.3" — a serializer that let a relative path
+ * through would be handing the wallet something it cannot open.
+ *
+ * Still a TRANSPORT-LEVEL ACK. It means "this submission was well-formed and
+ * correlated with a request we made" — never "you are authenticated". The
+ * `redirect_uri` does not change that: whoever follows it must ALSO hold the
+ * binder cookie of the flow the code names, and the return route decides
+ * that, not this body.
  */
 export const oid4vpDirectPostResponseSchema = z
-  .object({})
+  .object({
+    /**
+     * Where the wallet MUST send the user agent (§8.2) — present for a
+     * same-device request only. Carries the Response Code as its
+     * `response_code` query parameter and nothing else.
+     */
+    redirect_uri: z.url().optional(),
+  })
   .describe(
-    'Transport-level acknowledgement (OID4VP 1.0 §8.3). Confirms the response was well-formed and correlated with a pending presentation request. It does NOT assert that any credential was verified or that any user was authenticated.'
+    'Transport-level acknowledgement (OID4VP 1.0 §8.2): HTTP 200 with a JSON object. Confirms the response was well-formed and correlated with a pending presentation request. For a same-device request the object carries `redirect_uri` — an absolute URI under the issuer with a fresh, single-use Response Code — which the wallet MUST redirect the user agent to (HAIP 1.0 §5.1); for a cross-device request it is empty and the wallet is not required to perform any further steps. It does NOT assert that any credential was verified or that any user was authenticated.'
   );
+
+export type Oid4vpDirectPostResponse = z.infer<typeof oid4vpDirectPostResponseSchema>;

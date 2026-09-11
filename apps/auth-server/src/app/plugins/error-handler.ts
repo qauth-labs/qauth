@@ -24,6 +24,7 @@ import type { FastifyError, FastifyInstance, FastifyReply, FastifyRequest } from
 import fp from 'fastify-plugin';
 
 import { env } from '../../config/env';
+import { redactLoggedUrl } from '../../config/logger';
 
 interface ErrorResponse {
   error: string;
@@ -166,10 +167,22 @@ export default fp(async function (fastify: FastifyInstance) {
       // 5xx is ours and stays `error`. 4xx is the caller's and is `warn`, which
       // keeps it queryable without letting it drown the level that pages
       // someone.
+      //
+      // The `url` is a plain string key on THIS line, so neither pino's
+      // path-based `redact` (which cannot reach inside a string) nor the `req`
+      // serializer (which only Fastify's own request/response lines go through)
+      // touches it. It is passed through the same censor the serializer uses,
+      // because on `/ui/wallet-login/return?response_code=…` the request-target
+      // carries the same-device Response Code (OID4VP 1.0 §14.2, #405, ADR-013)
+      // and the errors that reach this handler are exactly the ones that arrive
+      // with the code still redeemable: a 429 from `@fastify/rate-limit` is
+      // thrown from an `onRequest` hook before the route has run, a store
+      // failure inside the redemption is a 500 before the row was updated. The
+      // request line censors it; the error line beside it must not undo that.
       request.log[statusCode >= 500 ? 'error' : 'warn'](
         {
           err: error,
-          url: request.url,
+          url: redactLoggedUrl(request.url),
           method: request.method,
           statusCode,
         },
@@ -260,10 +273,12 @@ export default fp(async function (fastify: FastifyInstance) {
       // for operators but NEVER returned to the caller. The wire `error`
       // message is genericised for the same reason — `error.message` embeds the
       // constraint name. `code` + `statusCode` are preserved so legitimate
-      // clients can still branch on the conflict.
+      // clients can still branch on the conflict. The `url` is censored for the
+      // same reason as on the line above: a plain key the `req` serializer
+      // never sees.
       if (error instanceof UniqueConstraintError) {
         fastify.log.warn(
-          { constraint: error.constraint, url: request.url },
+          { constraint: error.constraint, url: redactLoggedUrl(request.url) },
           'Unique constraint violation'
         );
         const response: ErrorResponse = {

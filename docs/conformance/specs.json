@@ -83,6 +83,28 @@
       "aliases": ["RFC 9700"],
       "increment": 1,
       "sealed": false
+    },
+    {
+      "id": "oid4vp-1_0",
+      "name": "OpenID for Verifiable Presentations 1.0",
+      "url": "https://openid.net/specs/openid-4-verifiable-presentations-1_0.html",
+      "aliases": ["OpenID for Verifiable Presentations 1.0", "OpenID4VP 1.0", "OID4VP 1.0"],
+      "increment": 3,
+      "sealed": false,
+      "scopeNote": "§8.2 response body, §14.2, §14.3 only; request-side §8.2 rules are a later increment"
+    },
+    {
+      "id": "haip-1_0",
+      "name": "OpenID4VC High Assurance Interoperability Profile 1.0",
+      "url": "https://openid.net/specs/openid4vc-high-assurance-interoperability-profile-1_0.html",
+      "aliases": [
+        "OpenID4VC High Assurance Interoperability Profile 1.0",
+        "OpenID4VC HAIP 1.0",
+        "HAIP 1.0"
+      ],
+      "increment": 3,
+      "sealed": false,
+      "scopeNote": "the same-device bullets of §5.1 and its §14.3 pointer only"
     }
   ]
 }
