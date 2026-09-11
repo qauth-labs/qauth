@@ -28,13 +28,15 @@ import { describe, expect, it, vi } from 'vitest';
  *
  * ## Why it asserts on the LOG rather than on the return value
  *
- * `haip-1.0` still cannot serve a wallet login: `responseEncryption: 'required'`
- * waits on Phase C of #377, so the capability is `undefined` either way. What
- * differs is WHY. With the material threaded, the profile resolves and the
- * function walks on to the ordinary "this deployment configured no VCT" branch,
- * a `debug`. Without it, `resolveVerifierProfile` throws and the function bails
- * out at the top with an `error` naming an unprovisioned profile — on a
- * deployment that provisioned one and validated it at boot.
+ * `OID4VP_REQUESTED_VCT` is deliberately left unset, so the capability is
+ * `undefined` either way. What differs is WHY. With the material threaded, the
+ * profile resolves and the function walks on to the ordinary "this deployment
+ * configured no VCT" branch, a `debug`. Without it, `resolveVerifierProfile`
+ * throws and the function bails out at the top with an `error` naming an
+ * unprovisioned profile — on a deployment that provisioned one and validated it
+ * at boot. (Before #377 Phase C the encryption posture would have refused
+ * `haip-1.0` too; it no longer does, which is why the VCT is the variable held
+ * back here.)
  */
 
 /** Split a concatenated PEM bundle the way the env schema does. */

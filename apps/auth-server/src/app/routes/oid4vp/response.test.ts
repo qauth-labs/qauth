@@ -1,9 +1,15 @@
 import {
+  exportEncryptionPrivateJwk,
+  exportEncryptionPublicJwk,
+  generateEphemeralEncryptionKeyPair,
+} from '@qauth-labs/core-crypto';
+import {
   hashOid4vpState,
   OID4VP_REJECTION_DESCRIPTION,
 } from '@qauth-labs/fastify-plugin-federation';
 import { InvalidRequestError } from '@qauth-labs/shared-errors';
 import type { FastifyInstance } from 'fastify';
+import { CompactEncrypt, importJWK, type JWK } from 'jose';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createMockVerifierPki } from '../../../testing/mock-verifier-pki';
@@ -63,6 +69,7 @@ function createFastifyStub() {
     repositories: {
       oid4vpRequestStates: {
         redeem: vi.fn(),
+        redeemByEncryptionKid: vi.fn(),
       },
       auditLogs: {
         create: vi.fn().mockResolvedValue(undefined),
@@ -118,6 +125,10 @@ function pendingState(overrides: Record<string, unknown> = {}) {
     redeemedAt: Date.now(),
     createdAt: Date.now(),
     stateHash: hashOid4vpState(STATE),
+    // The encrypted-response columns (#377 Phase C), NULL on a plain row.
+    responseEncryptionKid: null,
+    responseEncryptionPrivateJwk: null,
+    responseEncryptionKeyProtection: null,
     ...overrides,
   };
 }
@@ -156,6 +167,9 @@ const ENABLED_ENV = {
   OID4VP_VERIFIER_PROFILE: 'oid4vp-1.0-base',
   OID4VP_RESPONSE_RATE_LIMIT: 30,
   OID4VP_RESPONSE_RATE_WINDOW: 60,
+  // The at-rest secret for the per-request decryption key (#377 Phase C):
+  // unset, the default, so a stored key is the JWK document itself.
+  OID4VP_RESPONSE_KEY_SECRET: undefined,
   ...VERIFIER_IDENTITY_UNSET,
 };
 
@@ -630,5 +644,470 @@ describe('POST /oid4vp/response — refusals are indistinguishable', () => {
     const { fastify } = await refusalOf(good, undefined);
 
     expect(fastify.repositories.oid4vpRequestStates.redeem).toHaveBeenCalledOnce();
+  });
+});
+
+/**
+ * The ENCRYPTED intake — `response_mode=direct_post.jwt` (#377 Phase C,
+ * OID4VP 1.0 §8.3, HAIP 1.0 §5.1).
+ *
+ * The wallet side is written against `jose` directly, with no import of the
+ * code under test, so what the handler decrypts is what a conformant wallet
+ * would have sent rather than a round trip through QAuth's own encoder.
+ *
+ * Two properties dominate, as on the cleartext path, plus one more that only
+ * exists here: the row is CONSUMED by its `kid` before the ciphertext is
+ * touched, so a failed decrypt has already spent the request and cannot be
+ * retried against a still-live key.
+ */
+describe('POST /oid4vp/response — the encrypted direct_post.jwt intake (#377 Phase C)', () => {
+  /** A per-request pair, as the request helper mints and stores it. */
+  interface MintedPair {
+    readonly kid: string;
+    readonly publicJwk: JWK;
+    /** The `response_encryption_private_jwk` column under `plain`. */
+    readonly storedPrivateJwk: string;
+  }
+
+  async function mintPair(): Promise<MintedPair> {
+    const pair = await generateEphemeralEncryptionKeyPair({ extractable: true });
+    return {
+      kid: pair.kid,
+      publicJwk: await exportEncryptionPublicJwk(pair),
+      storedPrivateJwk: JSON.stringify(await exportEncryptionPrivateJwk(pair)),
+    };
+  }
+
+  /** A `direct_post.jwt` row, carrying the pair's private half in the clear. */
+  function encryptedState(pair: MintedPair, overrides: Record<string, unknown> = {}) {
+    return pendingState({
+      verifierProfile: 'haip-1.0',
+      responseMode: 'direct_post.jwt',
+      responseEncryptionKid: pair.kid,
+      responseEncryptionPrivateJwk: pair.storedPrivateJwk,
+      responseEncryptionKeyProtection: 'plain',
+      ...overrides,
+    });
+  }
+
+  /**
+   * Encrypt an Authorization Response the way a wallet does (§8.3): ECDH-ES to
+   * the published key, `kid` echoed in the protected header, the parameters as
+   * a JSON object with `vp_token` as an OBJECT.
+   */
+  async function encryptResponse(
+    to: JWK,
+    payload: Record<string, unknown>,
+    header: Record<string, unknown> = {}
+  ): Promise<string> {
+    return new CompactEncrypt(new TextEncoder().encode(JSON.stringify(payload)))
+      .setProtectedHeader({ alg: 'ECDH-ES', enc: 'A128GCM', kid: to.kid as string, ...header })
+      .encrypt(await importJWK(to, 'ECDH-ES'));
+  }
+
+  const SUCCESS_PAYLOAD = { state: STATE, vp_token: { pid: [PRESENTATION] } };
+
+  async function registerHaip() {
+    const registered = await register(HAIP_ENV);
+    return {
+      fastify: registered.fastify,
+      store: registered.store,
+      handler: registered.ctx.handler as NonNullable<TestContext['handler']>,
+    };
+  }
+
+  it('redeems by the JWE kid — read from the header alone — and never by a state hash', async () => {
+    const pair = await mintPair();
+    const { fastify, handler } = await registerHaip();
+    fastify.repositories.oid4vpRequestStates.redeemByEncryptionKid.mockResolvedValue(
+      encryptedState(pair)
+    );
+    const { reply, sent } = makeReply();
+
+    await handler(
+      makeRequest({ response: await encryptResponse(pair.publicJwk, SUCCESS_PAYLOAD) }),
+      reply
+    );
+
+    expect(fastify.repositories.oid4vpRequestStates.redeemByEncryptionKid).toHaveBeenCalledWith(
+      pair.kid
+    );
+    expect(fastify.repositories.oid4vpRequestStates.redeem).not.toHaveBeenCalled();
+    expect(reply.statusCode).toBe(200);
+    expect(sent).toEqual([{}]);
+  });
+
+  it("parks the decrypted presentation and the signal under the ROW's state hash", async () => {
+    // No cleartext state was posted; the digest the browser polls on has to
+    // come from the row, and the row's digest has to match the `state` inside
+    // the ciphertext — which is what makes this the same key the flow record
+    // was written under.
+    const pair = await mintPair();
+    const { fastify, store, handler } = await registerHaip();
+    fastify.repositories.oid4vpRequestStates.redeemByEncryptionKid.mockResolvedValue(
+      encryptedState(pair)
+    );
+    const { reply } = makeReply();
+
+    await handler(
+      makeRequest({ response: await encryptResponse(pair.publicJwk, SUCCESS_PAYLOAD) }),
+      reply
+    );
+
+    expect(store.get(`wallet-login-signal:${hashOid4vpState(STATE)}`)).toMatchObject({
+      signal: 'received',
+    });
+    expect(store.get(`wallet-presentation:${hashOid4vpState(STATE)}`)).toMatchObject({
+      presentations: [expect.objectContaining({ format: 'dc+sd-jwt' })],
+    });
+  });
+
+  it('audits the accepted encrypted submission exactly as a cleartext one', async () => {
+    const pair = await mintPair();
+    const { fastify, handler } = await registerHaip();
+    fastify.repositories.oid4vpRequestStates.redeemByEncryptionKid.mockResolvedValue(
+      encryptedState(pair)
+    );
+    const { reply } = makeReply();
+
+    await handler(
+      makeRequest({ response: await encryptResponse(pair.publicJwk, SUCCESS_PAYLOAD) }),
+      reply
+    );
+
+    expect(fastify.repositories.auditLogs.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: 'oid4vp.response.received',
+        metadata: expect.objectContaining({
+          verifierProfile: 'haip-1.0',
+          presentationCount: 1,
+          authenticated: false,
+        }),
+      })
+    );
+  });
+
+  it('accepts vp_token as a JSON STRING inside the JWE as well as an object', async () => {
+    // The form-encoding shape, re-used by a wallet that did not special-case
+    // the encrypted mode. Unambiguous, so accepted; one structural parser sees
+    // both.
+    const pair = await mintPair();
+    const { fastify, handler } = await registerHaip();
+    fastify.repositories.oid4vpRequestStates.redeemByEncryptionKid.mockResolvedValue(
+      encryptedState(pair)
+    );
+    const { reply } = makeReply();
+
+    await handler(
+      makeRequest({
+        response: await encryptResponse(pair.publicJwk, { state: STATE, vp_token: VP_TOKEN }),
+      }),
+      reply
+    );
+
+    expect(reply.statusCode).toBe(200);
+  });
+
+  it('acks a wallet error carried inside the JWE, signalling wallet_error without its text', async () => {
+    const pair = await mintPair();
+    const { fastify, store, handler } = await registerHaip();
+    fastify.repositories.oid4vpRequestStates.redeemByEncryptionKid.mockResolvedValue(
+      encryptedState(pair)
+    );
+    const { reply, sent } = makeReply();
+
+    await handler(
+      makeRequest({
+        response: await encryptResponse(pair.publicJwk, { state: STATE, error: 'access_denied' }),
+      }),
+      reply
+    );
+
+    expect(reply.statusCode).toBe(200);
+    expect(sent).toEqual([{}]);
+    expect(store.get(`wallet-login-signal:${hashOid4vpState(STATE)}`)).toMatchObject({
+      signal: 'wallet_error',
+    });
+    expect(JSON.stringify([...store.values()])).not.toContain('access_denied');
+    expect(fastify.repositories.auditLogs.create).not.toHaveBeenCalled();
+  });
+
+  describe('refusals are indistinguishable, and the row is always consumed first', () => {
+    async function encryptedRefusalOf(
+      body: Record<string, unknown>,
+      redeemByKidResult: unknown,
+      redeemResult: unknown = undefined
+    ) {
+      const { fastify, store, handler } = await registerHaip();
+      fastify.repositories.oid4vpRequestStates.redeemByEncryptionKid.mockResolvedValue(
+        redeemByKidResult
+      );
+      fastify.repositories.oid4vpRequestStates.redeem.mockResolvedValue(redeemResult);
+      const { reply } = makeReply();
+
+      try {
+        await handler(makeRequest(body), reply);
+      } catch (error) {
+        return { error: error as InvalidRequestError, fastify, store };
+      }
+
+      throw new Error('expected the handler to reject');
+    }
+
+    it('refuses an unknown / expired / already-consumed kid', async () => {
+      const pair = await mintPair();
+      const { error, fastify } = await encryptedRefusalOf(
+        { response: await encryptResponse(pair.publicJwk, SUCCESS_PAYLOAD) },
+        undefined
+      );
+
+      expect(error.name).toBe('InvalidRequestError');
+      expect(error.statusCode).toBe(400);
+      expect(error.errorDescription).toBe(OID4VP_REJECTION_DESCRIPTION);
+      expect(fastify.repositories.oid4vpRequestStates.redeemByEncryptionKid).toHaveBeenCalledOnce();
+    });
+
+    it('refuses a JWE with no kid without touching the database at all', async () => {
+      // §8.3 makes the kid mandatory when the published key has one, and it is
+      // the ONLY correlator. Nothing to look up means nothing is looked up.
+      const pair = await mintPair();
+      const jwe = await new CompactEncrypt(
+        new TextEncoder().encode(JSON.stringify(SUCCESS_PAYLOAD))
+      )
+        .setProtectedHeader({ alg: 'ECDH-ES', enc: 'A128GCM' })
+        .encrypt(await importJWK(pair.publicJwk, 'ECDH-ES'));
+
+      const { error, fastify } = await encryptedRefusalOf({ response: jwe }, encryptedState(pair));
+
+      expect(error.errorDescription).toBe(OID4VP_REJECTION_DESCRIPTION);
+      expect(fastify.repositories.oid4vpRequestStates.redeemByEncryptionKid).not.toHaveBeenCalled();
+    });
+
+    it('refuses garbage that is not a JOSE object, without touching the database', async () => {
+      const { error, fastify } = await encryptedRefusalOf({ response: 'not.a.jwe' }, undefined);
+
+      expect(error.errorDescription).toBe(OID4VP_REJECTION_DESCRIPTION);
+      expect(fastify.repositories.oid4vpRequestStates.redeemByEncryptionKid).not.toHaveBeenCalled();
+    });
+
+    it('CONSUMES the row before a failed decrypt — a wrong key is not a retry', async () => {
+      // The invariant this path adds. A response encrypted to some OTHER key
+      // but naming this row's kid finds the row, spends it, and then fails to
+      // open. Leaving the row live here would let anyone who read
+      // client_metadata keep posting until something decrypted.
+      const pair = await mintPair();
+      const other = await mintPair();
+      const jwe = await encryptResponse({ ...other.publicJwk, kid: pair.kid }, SUCCESS_PAYLOAD);
+
+      const { error, fastify, store } = await encryptedRefusalOf(
+        { response: jwe },
+        encryptedState(pair)
+      );
+
+      expect(error.errorDescription).toBe(OID4VP_REJECTION_DESCRIPTION);
+      expect(fastify.repositories.oid4vpRequestStates.redeemByEncryptionKid).toHaveBeenCalledWith(
+        pair.kid
+      );
+      expect(fastify.repositories.oid4vpRequestStates.redeemByEncryptionKid).toHaveBeenCalledOnce();
+      expect(store.size).toBe(0);
+      expect(fastify.log.warn).toHaveBeenCalledWith(
+        expect.objectContaining({ reason: expect.stringContaining('did not decrypt') }),
+        expect.any(String)
+      );
+    });
+
+    it('refuses a tampered ciphertext, having consumed the row', async () => {
+      const pair = await mintPair();
+      const jwe = await encryptResponse(pair.publicJwk, SUCCESS_PAYLOAD);
+      const segments = jwe.split('.');
+      // Flip a character in the ciphertext segment; the AEAD tag refuses it.
+      const ciphertext = segments[3] as string;
+      segments[3] = `${ciphertext.slice(0, -2)}${ciphertext.endsWith('AA') ? 'BB' : 'AA'}`;
+
+      const { error, fastify } = await encryptedRefusalOf(
+        { response: segments.join('.') },
+        encryptedState(pair)
+      );
+
+      expect(error.errorDescription).toBe(OID4VP_REJECTION_DESCRIPTION);
+      expect(fastify.repositories.oid4vpRequestStates.redeemByEncryptionKid).toHaveBeenCalledOnce();
+    });
+
+    it('refuses a decrypted state that is not the one the row was issued with (§5.3)', async () => {
+      // The binding the kid cannot make (§14.5): the row was found by an index
+      // anyone could read; only the state inside the ciphertext ties the
+      // response to THIS request, and here it names another.
+      const pair = await mintPair();
+      const jwe = await encryptResponse(pair.publicJwk, {
+        ...SUCCESS_PAYLOAD,
+        state: 'some-other-state',
+      });
+
+      const { error, fastify, store } = await encryptedRefusalOf(
+        { response: jwe },
+        encryptedState(pair)
+      );
+
+      expect(error.errorDescription).toBe(OID4VP_REJECTION_DESCRIPTION);
+      expect(store.size).toBe(0);
+      expect(fastify.log.warn).toHaveBeenCalledWith(
+        expect.objectContaining({ reason: expect.stringContaining('§5.3') }),
+        expect.any(String)
+      );
+    });
+
+    it('refuses a decrypted response carrying no state at all', async () => {
+      const pair = await mintPair();
+      const jwe = await encryptResponse(pair.publicJwk, { vp_token: { pid: [PRESENTATION] } });
+
+      const { error } = await encryptedRefusalOf({ response: jwe }, encryptedState(pair));
+
+      expect(error.errorDescription).toBe(OID4VP_REJECTION_DESCRIPTION);
+    });
+
+    it('refuses a compressed JWE (zip), the CRIME/BREACH shape RFC 8725 §3.5 forbids', async () => {
+      const pair = await mintPair();
+      const jwe = await encryptResponse(pair.publicJwk, SUCCESS_PAYLOAD, { zip: 'DEF' });
+
+      const { error } = await encryptedRefusalOf({ response: jwe }, encryptedState(pair));
+
+      expect(error.errorDescription).toBe(OID4VP_REJECTION_DESCRIPTION);
+    });
+
+    it('refuses an encrypted submission against a row built for plain direct_post', async () => {
+      // Cannot correlate in production — a plain row has a NULL kid — but the
+      // mode check is stated symmetrically, and a repository that returned such
+      // a row must still be refused rather than decrypted with nothing.
+      const pair = await mintPair();
+      const jwe = await encryptResponse(pair.publicJwk, SUCCESS_PAYLOAD);
+
+      const { error } = await encryptedRefusalOf(
+        { response: jwe },
+        encryptedState(pair, { responseMode: 'direct_post' })
+      );
+
+      expect(error.errorDescription).toBe(OID4VP_REJECTION_DESCRIPTION);
+    });
+
+    it('refuses a CLEARTEXT post against a row that asked for direct_post.jwt — and consumes it', async () => {
+      // The downgrade: whoever read the signed request object holds its state.
+      // Under a profile whose encryption is REQUIRED, posting it plain must not
+      // work, and it must not leave the row live for the real wallet either —
+      // the exchange was answered in a way its posture forbids, so it is over.
+      const pair = await mintPair();
+
+      const { error, fastify } = await encryptedRefusalOf(
+        { vp_token: VP_TOKEN, state: STATE },
+        undefined,
+        encryptedState(pair)
+      );
+
+      expect(error.errorDescription).toBe(OID4VP_REJECTION_DESCRIPTION);
+      expect(fastify.repositories.oid4vpRequestStates.redeem).toHaveBeenCalledOnce();
+      expect(fastify.repositories.oid4vpRequestStates.redeemByEncryptionKid).not.toHaveBeenCalled();
+      expect(fastify.log.warn).toHaveBeenCalledWith(
+        expect.objectContaining({
+          reason: expect.stringContaining("asked for response_mode 'direct_post.jwt'"),
+        }),
+        expect.any(String)
+      );
+    });
+
+    it('refuses an unreadable stored key with the SAME wire response, logging it as a server failure', async () => {
+      // Reachable only after redemption, so a distinct status would be the one
+      // shape only a real kid can produce — the same reasoning as the corrupt
+      // dcql_query case on the cleartext path.
+      const pair = await mintPair();
+      const jwe = await encryptResponse(pair.publicJwk, SUCCESS_PAYLOAD);
+
+      const { error, fastify } = await encryptedRefusalOf(
+        { response: jwe },
+        encryptedState(pair, { responseEncryptionPrivateJwk: 'not json at all' })
+      );
+
+      expect(error.name).toBe('InvalidRequestError');
+      expect(error.errorDescription).toBe(OID4VP_REJECTION_DESCRIPTION);
+      expect(fastify.log.error).toHaveBeenCalledWith(
+        expect.objectContaining({ err: expect.any(Error), requestStateId: 'req-state-1' }),
+        expect.stringContaining('ephemeral encryption key')
+      );
+    });
+
+    it('refuses a stored key under a protection scheme this build cannot read', async () => {
+      const pair = await mintPair();
+      const jwe = await encryptResponse(pair.publicJwk, SUCCESS_PAYLOAD);
+
+      const { error } = await encryptedRefusalOf(
+        { response: jwe },
+        encryptedState(pair, { responseEncryptionKeyProtection: 'rot13' })
+      );
+
+      expect(error.errorDescription).toBe(OID4VP_REJECTION_DESCRIPTION);
+    });
+
+    it('renders every encrypted refusal identically on the wire — and identically to the cleartext ones', async () => {
+      const pair = await mintPair();
+      const other = await mintPair();
+      const good = await encryptResponse(pair.publicJwk, SUCCESS_PAYLOAD);
+
+      const cases: Array<[Record<string, unknown>, unknown, unknown]> = [
+        [{ response: good }, undefined, undefined],
+        [{ response: 'not.a.jwe' }, undefined, undefined],
+        [
+          {
+            response: await encryptResponse({ ...other.publicJwk, kid: pair.kid }, SUCCESS_PAYLOAD),
+          },
+          encryptedState(pair),
+          undefined,
+        ],
+        [
+          { response: await encryptResponse(pair.publicJwk, { ...SUCCESS_PAYLOAD, state: 'x' }) },
+          encryptedState(pair),
+          undefined,
+        ],
+        [{ response: good }, encryptedState(pair, { responseMode: 'direct_post' }), undefined],
+        [
+          { response: good },
+          encryptedState(pair, { responseEncryptionPrivateJwk: '{' }),
+          undefined,
+        ],
+        // The cleartext refusals, through the same handler: one wire shape.
+        [{ vp_token: VP_TOKEN, state: STATE }, undefined, undefined],
+        [{ vp_token: VP_TOKEN, state: STATE }, undefined, encryptedState(pair)],
+      ];
+
+      const wire = new Set<string>();
+
+      for (const [body, byKid, byState] of cases) {
+        const { error } = await encryptedRefusalOf(body, byKid, byState);
+        wire.add(
+          JSON.stringify({
+            error: error.message,
+            statusCode: error.statusCode,
+            code: error.code,
+            error_description: error.errorDescription,
+          })
+        );
+      }
+
+      expect(wire.size).toBe(1);
+    });
+  });
+
+  it('leaves the cleartext path bit-for-bit unchanged under the base profile', async () => {
+    // A cleartext body that ALSO carries a `response` parameter is the
+    // cleartext body it always was: `response` is stripped like any unknown
+    // field, the row is redeemed by the state digest, and the kid path is
+    // never entered. (Schema-level, so exercised through the schema directly;
+    // the handler sees only what the validator hands it.)
+    const { oid4vpDirectPostRequestSchema } = await import('../../schemas/oid4vp');
+    const parsed = oid4vpDirectPostRequestSchema.parse({
+      state: STATE,
+      vp_token: VP_TOKEN,
+      response: 'eyJ.something',
+    });
+
+    expect(parsed).toEqual({ state: STATE, vp_token: VP_TOKEN });
+    expect(parsed).not.toHaveProperty('response');
   });
 });

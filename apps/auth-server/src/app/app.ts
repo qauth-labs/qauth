@@ -29,6 +29,7 @@ import type { FastifyInstance } from 'fastify';
 import { env } from '../config/env';
 import { deriveCryptoCapabilities } from './crypto-capabilities';
 import { assertSubjectResolutionProvisioned } from './helpers/assert-subject-resolution';
+import { oid4vpResponseKeySecret } from './helpers/oid4vp-response-key';
 import { isJtiRevoked } from './helpers/token-revocation';
 import { provisionedVerifierMaterial } from './helpers/verifier-identity';
 import errorHandler from './plugins/error-handler';
@@ -52,9 +53,9 @@ import { securityHeadersPlugin } from './plugins/security-headers';
  * than written here, because the two questions "does the crypto library export
  * this algorithm" and "can this deployment sign with it" are not the same
  * question, and only the second one is what the gate is asking. See
- * `./crypto-capabilities` for which key material each entry is derived from and
- * why ES256 and the JWE stack are still answered `false` on a crypto layer that
- * implements both.
+ * `./crypto-capabilities` for which key material each entry is derived from,
+ * and why response encryption — which needs no operator key — is the one entry
+ * answered by the build rather than by the configuration (#377 Phase C).
  */
 const CRYPTO_CAPABILITIES: VerifierCryptoCapabilities = deriveCryptoCapabilities({
   rs256PrivateKey: env.JWT_RS256_PRIVATE_KEY,
@@ -195,6 +196,19 @@ export async function app(fastify: FastifyInstance, opts: object) {
   //
   // NOT gated on WALLET_FEDERATION_ENABLED, for the reason given twice above.
   assertAttestingIssuersUsable(env.OID4VP_ATTESTING_ISSUERS);
+
+  // The at-rest secret for the per-request `direct_post.jwt` decryption key
+  // (#377 Phase C), the same posture once more. `OID4VP_RESPONSE_KEY_SECRET` is
+  // OPTIONAL — unset stores the key in the clear, which is the default — but a
+  // value that is set and does not decode to exactly one AES-256 key is a
+  // misconfiguration whose only runtime symptom would be every wallet sign-in
+  // failing at the moment the request state is written. The helper memoises,
+  // so this is the one decode the process ever performs.
+  //
+  // NOT gated on WALLET_FEDERATION_ENABLED or on the selected profile, for the
+  // reason given repeatedly above: a mis-pasted secret is mis-pasted whether or
+  // not the profile that would use it is selected today.
+  oid4vpResponseKeySecret();
 
   // Subject resolution (#300/#238/#379, ADR-010 §6), the fourth gate in this
   // group and the one that IS flag-gated. #300 and #238 each deferred it "to

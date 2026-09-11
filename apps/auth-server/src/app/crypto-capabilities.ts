@@ -15,14 +15,25 @@
  *
  *   - `@qauth-labs/core-crypto` EXPORTING an algorithm means the code to compute
  *     it exists.
- *   - This deployment being able to SIGN WITH it means a key for it has been
- *     provisioned and there is a code path that uses it.
+ *   - This deployment being able to OPERATE it means there is a code path that
+ *     uses it AND whatever that path needs is in place — a provisioned key,
+ *     where the path needs one.
  *
  * `VerifierCryptoCapabilities` documents its fields with the second meaning
  * ("can sign a request with TODAY", "CAN encrypt an Authorization Response"), so
  * this module answers the second question. Deriving the answer from the first —
  * from the mere existence of a library function — is what makes a stale
  * descriptor, and a stale capability descriptor is worse than none.
+ *
+ * The two halves of that second question do not weigh the same for every
+ * capability, and the descriptor has one entry where they come apart. Every
+ * SIGNING algorithm needs operator material, so its answer is a predicate over
+ * provisioned keys. Response ENCRYPTION needs none — the pair is minted per
+ * request (HAIP §5) and the intake decrypts with it — so once the code path
+ * exists (#377 Phase C) its answer is a property of the BUILD, not of the
+ * configuration, and it is `true` for every deployment. It stays in this
+ * function rather than being hoisted to a constant elsewhere so that the whole
+ * descriptor is still derived in one place from one stated rule.
  */
 import type { JwsAlgorithm } from '@qauth-labs/core-crypto';
 import type { VerifierCryptoCapabilities } from '@qauth-labs/fastify-plugin-federation';
@@ -122,16 +133,26 @@ export function deriveCryptoCapabilities(keys: ProvisionedSigningKeys): Verifier
     signingAlgs: Object.entries(signingKeyProvisioned)
       .filter(([, provisioned]) => provisioned)
       .map(([alg]) => alg),
-    // FALSE, and for the reason ES256 no longer is. `@qauth-labs/core-crypto`
-    // exports `encryptJwe` / `decryptJwe` and the per-request ephemeral key
-    // helpers, but nothing in the workspace calls them: the federation layer has
-    // no `direct_post.jwt` response mode, no published `client_metadata`
-    // encryption JWK, and no intake route to decrypt at. A deployment that
-    // advertised `direct_post.jwt` to wallets on the strength of an uncalled
-    // library function would ask for a response it has nowhere to hand to —
-    // exactly the "asking a wallet for a response it cannot decrypt" the gate's
-    // refusal text names. Flips with Phase C of #377, which lands the response
-    // mode, the published encryption key and the decrypting intake together.
-    responseEncryption: false,
+    // TRUE, UNCONDITIONALLY — and deliberately so, in a function whose other
+    // entries are predicates over provisioned keys (#377 Phase C).
+    //
+    // The standard this module holds is "can this deployment OPERATE it", and
+    // for a signing algorithm that means a key exists here. Response encryption
+    // needs no operator key: the ECDH-ES pair is minted PER REQUEST (HAIP §5,
+    // "ephemeral encryption public keys specific to each Authorization
+    // Request"), its public half is published in `client_metadata`, its private
+    // half rides the request-state row, and `POST /oid4vp/response` decrypts
+    // with it. All of that ships in this build, so every deployment running it
+    // can operate the `direct_post.jwt` mode with nothing configured — which
+    // makes `true` the truthful answer and any predicate a lie by omission.
+    //
+    // It was FALSE before Phase C for the reason ES256 once was: the primitives
+    // existed and nothing called them, so a descriptor claiming the capability
+    // would have asked wallets for a response QAuth had nowhere to hand to.
+    // What changed is the code path, not the configuration, and that is why
+    // this entry reads no key. `OID4VP_RESPONSE_KEY_SECRET` is NOT a
+    // precondition: it changes how the private half is stored, not whether the
+    // path works, and a misconfigured value is a boot refusal in `app.ts`.
+    responseEncryption: true,
   };
 }

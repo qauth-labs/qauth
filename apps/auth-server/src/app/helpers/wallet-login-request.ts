@@ -1,24 +1,33 @@
 import {
+  exportEncryptionPrivateJwk,
+  exportEncryptionPublicJwk,
+  generateEphemeralEncryptionKeyPair,
+} from '@qauth-labs/core-crypto';
+import {
   buildOid4vpAuthorizationRequest,
   type CredentialRequestSpec,
-  DIRECT_POST_RESPONSE_MODE,
+  DIRECT_POST_JWT_RESPONSE_MODE,
   encodeOid4vpRequestUri,
   generateOid4vpRequestSecrets,
   hashOid4vpState,
   isSignedOid4vpRequest,
   type Oid4vpAuthorizationRequest,
+  type Oid4vpEphemeralKeyProtection,
   resolveOid4vpExpiry,
   resolveVerifierProfile,
   SD_JWT_VC_FORMAT,
+  selectOid4vpResponseMode,
   signOid4vpRequestObject,
   verifierMaterialProvisionedBy,
   type VerifierProfile,
   type VerifierSigningMaterial,
 } from '@qauth-labs/fastify-plugin-federation';
 import type { FastifyInstance } from 'fastify';
+import type { JWK } from 'jose';
 
 import { env } from '../../config/env';
 import { resolveIssuerIdentifier } from './discovery';
+import { oid4vpResponseKeySecret, protectOid4vpResponseKey } from './oid4vp-response-key';
 import { provisionedVerifierMaterial, verifierSigningMaterial } from './verifier-identity';
 import { storeWalletRequestObject } from './wallet-login-flow';
 
@@ -38,7 +47,8 @@ import { storeWalletRequestObject } from './wallet-login-flow';
  * - wallet federation is switched off (`WALLET_FEDERATION_ENABLED`, #232);
  * - no profile is selected, or the selected one is not provisioned (#299);
  * - the profile's posture needs capabilities this deployment does not have —
- *   a signed request or an encrypted response, both of which wait on #298;
+ *   a signed request on a deployment that provisioned no verifier identity
+ *   (#377), or a response mode its own table contradicts;
  * - the profile does not permit the one credential format QAuth ships an
  *   adapter for (`dc+sd-jwt`; `mso_mdoc` needs ISO/IEC 18013-5, epic #231);
  * - the operator has not said WHICH credential to ask for
@@ -52,6 +62,20 @@ import { storeWalletRequestObject } from './wallet-login-flow';
  * is called with the same profile and re-asks every question — so the two cannot
  * drift into disagreement about what is permitted, only about when it is
  * noticed.
+ *
+ * ## The encrypted response (#377 Phase C)
+ *
+ * Under a profile that requires encryption (`haip-1.0`, HAIP §5.1) the request
+ * asks for `direct_post.jwt`, and this helper MINTS the per-request ECDH-ES
+ * pair the wallet encrypts to — HAIP §5: *"ephemeral encryption public keys
+ * specific to each Authorization Request"*. The public half goes to the builder
+ * for `client_metadata`; the private half is serialized, protected for the row
+ * (plain by default, AES-256-GCM under `OID4VP_RESPONSE_KEY_SECRET`) and
+ * returned on {@link WalletLoginInvocation.responseEncryption} for the caller
+ * to PERSIST beside the state hash — it has to be, because the response arrives
+ * on a different HTTP request than the one that minted it. Nothing about it is
+ * operator material, which is why the gate above has no clause for it: a
+ * deployment can always encrypt, so encryption never makes the button vanish.
  */
 
 /** Path of the `direct_post` Response Endpoint (`routes/oid4vp/response.ts`). */
@@ -124,6 +148,29 @@ export interface WalletLoginInvocation {
   readonly nonce: string;
   /** Absolute expiry (epoch ms) of the request. */
   readonly expiresAt: number;
+  /**
+   * The per-request decryption key, PROTECTED for storage, when the request
+   * asked for `direct_post.jwt` (#377 Phase C). `undefined` under the plain
+   * mode, where there is nothing to decrypt.
+   *
+   * Three values that go into the row TOGETHER (the schema's CHECK insists):
+   * the `kid` the wallet will echo in the JWE header and the intake will look
+   * the row up by, the serialized private half, and the marker saying how it
+   * was serialized. The caller copies them onto the request-state row and
+   * nowhere else — not onto the browser's flow record, which is read under a
+   * cookie the wallet never holds and has no business carrying a private key.
+   */
+  readonly responseEncryption?: WalletLoginResponseEncryption;
+}
+
+/** The three encrypted-response columns, as {@link buildWalletLoginInvocation} fills them. */
+export interface WalletLoginResponseEncryption {
+  /** `response_encryption_kid` — the `kid` published in `client_metadata.jwks`. */
+  readonly kid: string;
+  /** `response_encryption_private_jwk` — the private half, as stored. */
+  readonly privateJwk: string;
+  /** `response_encryption_key_protection` — how {@link privateJwk} was written. */
+  readonly protection: Oid4vpEphemeralKeyProtection;
 }
 
 /**
@@ -176,10 +223,37 @@ export function resolveWalletLoginCapability(
   }
 
   if (!profile.credentialFormats.includes(SD_JWT_VC_FORMAT)) return undefined;
-  if (!profile.responseModes.includes(DIRECT_POST_RESPONSE_MODE)) return undefined;
-  // Waits on Phase C of #377. Refused here rather than downgraded — a downgrade
-  // is the "half-configured verifier" #299 forbids.
-  if (profile.responseEncryption === 'required') return undefined;
+
+  // The response mode follows from the profile (#377 Phase C), and the ONE way
+  // it can fail is a profile table that contradicts itself — a posture naming a
+  // mode its own list forbids. That is a refusal, never a downgrade: a downgrade
+  // is the "half-configured verifier" #299 forbids. Asked here with the same
+  // function the builder uses, so the two cannot disagree about the answer.
+  try {
+    selectOid4vpResponseMode(profile);
+  } catch (error) {
+    fastify.log.error(
+      { err: error },
+      'wallet login unavailable: the selected VerifierProfile declares a response posture its permitted modes contradict'
+    );
+    return undefined;
+  }
+
+  // The at-rest secret for the per-request decryption key, when the deployment
+  // opted into one. Resolved here so a MISCONFIGURED secret refuses the button
+  // rather than the sign-in: a wrong-length value throws at first use, and
+  // first use must not be a user's POST. A deployment that configured nothing
+  // resolves to `undefined` and stores the key in the clear, which is the
+  // default and needs no clause.
+  try {
+    oid4vpResponseKeySecret();
+  } catch (error) {
+    fastify.log.error(
+      { err: error },
+      'wallet login unavailable: OID4VP_RESPONSE_KEY_SECRET is misconfigured'
+    );
+    return undefined;
+  }
 
   // Signed requests are no longer a blanket refusal (#377): a deployment that
   // provisioned an ES256 key and a chain can sign one. What is still refused is
@@ -244,9 +318,11 @@ function resolveSigningMaterial(fastify: FastifyInstance): VerifierSigningMateri
  * request is signed, which follows from the Client Identifier Prefix the profile
  * presents and is not decided here.
  *
- * Asynchronous since #377, and only for the signed path: producing a JWS needs a
- * key import, and parking it for the wallet to fetch needs the session store. An
- * unsigned request does neither and takes the same shape it always had.
+ * Asynchronous since #377, for the signed path — producing a JWS needs a key
+ * import, and parking it for the wallet to fetch needs the session store — and,
+ * since Phase C, for the encrypted one, where minting the ECDH-ES pair is a key
+ * generation. An unsigned, unencrypted request does neither and takes the same
+ * shape it always had.
  *
  * @param fastify - server instance; the signed path parks the request object on
  * the session store this owns.
@@ -262,6 +338,7 @@ export async function buildWalletLoginInvocation(
   clientName?: string
 ): Promise<WalletLoginInvocation> {
   const secrets = generateOid4vpRequestSecrets();
+  const encryption = await mintResponseEncryption(capability.profile);
 
   const request = buildOid4vpAuthorizationRequest({
     profile: capability.profile,
@@ -274,6 +351,7 @@ export async function buildWalletLoginInvocation(
       ? {}
       : { signingMaterial: capability.signingMaterial }),
     ...(clientName === undefined ? {} : { clientName }),
+    ...(encryption === undefined ? {} : { responseEncryptionKey: encryption.publicJwk }),
   });
 
   const delivery = await deliverRequest(fastify, capability, request);
@@ -290,6 +368,58 @@ export async function buildWalletLoginInvocation(
     stateHash: hashOid4vpState(request.state),
     nonce: request.nonce,
     expiresAt: resolveOid4vpExpiry(),
+    ...(encryption === undefined ? {} : { responseEncryption: encryption.stored }),
+  };
+}
+
+/** What {@link mintResponseEncryption} produced for one request. */
+interface MintedResponseEncryption {
+  /** The public half, `kid` stamped, for `client_metadata.jwks`. */
+  readonly publicJwk: JWK;
+  /** The private half, protected for the request-state row. */
+  readonly stored: WalletLoginResponseEncryption;
+}
+
+/**
+ * Mint the per-request encryption pair, when the profile's mode calls for one
+ * (#377 Phase C, HAIP §5, OID4VP 1.0 §5.1).
+ *
+ * The decision is `selectOid4vpResponseMode`'s, made from the profile alone —
+ * the same call the builder makes, so what is minted here and what the builder
+ * expects cannot come apart. `undefined` under the plain mode: a pair minted
+ * for a profile that forbids encryption would have to be thrown away, and the
+ * builder refuses a key it did not ask for.
+ *
+ * The `kid` is the one `generateEphemeralEncryptionKeyPair` minted — 128 bits
+ * of CSPRNG output, base64url — and it is used for THREE things that must
+ * agree: the `kid` member of the published JWK (§5.1, the value the wallet
+ * echoes per §8.3), the row's lookup column, and the AAD of the at-rest
+ * envelope. Stamped once and read three times, never re-derived.
+ *
+ * `extractable: true` is required to serialize the private half at all. The
+ * crypto layer defaults it to `false` and says why: a single-instance
+ * deployment could keep the pair in memory. QAuth cannot — the response
+ * arrives on a different HTTP request, possibly a different instance — so the
+ * key leaves the runtime, and how it is written is the at-rest decision
+ * `protectOid4vpResponseKey` implements.
+ */
+async function mintResponseEncryption(
+  profile: VerifierProfile
+): Promise<MintedResponseEncryption | undefined> {
+  if (selectOid4vpResponseMode(profile) !== DIRECT_POST_JWT_RESPONSE_MODE) return undefined;
+
+  const pair = await generateEphemeralEncryptionKeyPair({ extractable: true });
+  const publicJwk = await exportEncryptionPublicJwk(pair);
+  const privateJwk = await exportEncryptionPrivateJwk(pair);
+  const protectedKey = protectOid4vpResponseKey(privateJwk, pair.kid);
+
+  return {
+    publicJwk,
+    stored: {
+      kid: pair.kid,
+      privateJwk: protectedKey.value,
+      protection: protectedKey.protection,
+    },
   };
 }
 
