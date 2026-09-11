@@ -100,7 +100,34 @@
         "tags": [
           "Auth"
         ],
-        "description": "Start linking a wallet credential to the signed-in account. Requires a valid session cookie and an `X-CSRF-Token` header matching the per-session token returned by `GET /consents`. Issues an OID4VP 1.0 presentation request in LINKING mode: the validated response is bound to the caller's authenticated users.id and is never used to resolve or create an account (ADR-009 §5). Issue #238.",
+        "description": "Start linking a wallet credential to the signed-in account. Requires a valid session cookie and an `X-CSRF-Token` header matching the per-session token returned by `GET /consents`. Issues an OID4VP 1.0 presentation request in LINKING mode: the validated response is bound to the caller's authenticated users.id and is never used to resolve or create an account (ADR-009 §5). The optional `device` field (`this` | `other`, default `other`) says where the wallet is: a same-device link completes on the browser's return leg at `GET /ui/wallet-login/return` and polls as `pending` until then (OID4VP 1.0 §14.2, HAIP 1.0 §5.1); a cross-device link completes by polling. Issues #238, #405.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "device": {
+                        "default": "other",
+                        "type": "string",
+                        "enum": [
+                          "this",
+                          "other"
+                        ]
+                      }
+                    }
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
             "description": "Default Response",
@@ -194,7 +221,7 @@
         "tags": [
           "Auth"
         ],
-        "description": "Poll a wallet-linking flow. Reports whether the direct_post presentation response has arrived, and COMPLETES the link when it has — writing a second user_credentials row (provider_type=wallet) under the same users.id. Issue #238.",
+        "description": "Poll a wallet-linking flow. Reports whether the direct_post presentation response has arrived, and COMPLETES the link when it has — writing a second user_credentials row (provider_type=wallet) under the same users.id. A link started with `device=this` completes on the return leg instead and polls as `pending` until then, then `linked` once (#405). Issue #238.",
         "parameters": [
           {
             "schema": {
@@ -3154,13 +3181,26 @@
         "tags": [
           "OID4VP"
         ],
-        "description": "OID4VP 1.0 direct_post Response Endpoint. Accepts a wallet Authorization Response as application/x-www-form-urlencoded: in the clear (vp_token + state, or error + state) under response_mode=direct_post, or as a single `response` parameter carrying a JWE (ECDH-ES P-256, A128GCM/A256GCM) encrypted to the per-request key published in client_metadata under response_mode=direct_post.jwt. TRANSPORT ONLY: the response is correlated against a single-use presentation request and structurally parsed. No signature, credential or issuer validation is performed and no user is authenticated (that is #234/#236).",
+        "description": "OID4VP 1.0 direct_post Response Endpoint. Accepts a wallet Authorization Response as application/x-www-form-urlencoded: in the clear (vp_token + state, or error + state) under response_mode=direct_post, or as a single `response` parameter carrying a JWE (ECDH-ES P-256, A128GCM/A256GCM) encrypted to the per-request key published in client_metadata under response_mode=direct_post.jwt. TRANSPORT ONLY: the response is correlated against a single-use presentation request and structurally parsed. No signature, credential or issuer validation is performed and no user is authenticated (that is #234/#236). Answers HTTP 200 with a JSON object (OID4VP 1.0 §8.2): `{}` for a cross-device request, or `{ redirect_uri }` for a same-device request — an absolute URI under the issuer carrying a fresh, single-use Response Code (HAIP 1.0 §5.1) that the wallet MUST redirect the user agent to.",
         "requestBody": {
           "required": true,
           "content": {
             "application/json": {
               "schema": {
                 "anyOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "response": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 706560
+                      }
+                    },
+                    "required": [
+                      "response"
+                    ]
+                  },
                   {
                     "type": "object",
                     "properties": {
@@ -3187,19 +3227,6 @@
                     "required": [
                       "state"
                     ]
-                  },
-                  {
-                    "type": "object",
-                    "properties": {
-                      "response": {
-                        "type": "string",
-                        "minLength": 1,
-                        "maxLength": 540672
-                      }
-                    },
-                    "required": [
-                      "response"
-                    ]
                   }
                 ]
               }
@@ -3208,14 +3235,19 @@
         },
         "responses": {
           "200": {
-            "description": "Transport-level acknowledgement (OID4VP 1.0 §8.3). Confirms the response was well-formed and correlated with a pending presentation request. It does NOT assert that any credential was verified or that any user was authenticated.",
+            "description": "Transport-level acknowledgement (OID4VP 1.0 §8.2): HTTP 200 with a JSON object. Confirms the response was well-formed and correlated with a pending presentation request. For a same-device request the object carries `redirect_uri` — an absolute URI under the issuer with a fresh, single-use Response Code — which the wallet MUST redirect the user agent to (HAIP 1.0 §5.1); for a cross-device request it is empty and the wallet is not required to perform any further steps. It does NOT assert that any credential was verified or that any user was authenticated.",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "properties": {},
+                  "properties": {
+                    "redirect_uri": {
+                      "type": "string",
+                      "format": "uri"
+                    }
+                  },
                   "additionalProperties": false,
-                  "description": "Transport-level acknowledgement (OID4VP 1.0 §8.3). Confirms the response was well-formed and correlated with a pending presentation request. It does NOT assert that any credential was verified or that any user was authenticated."
+                  "description": "Transport-level acknowledgement (OID4VP 1.0 §8.2): HTTP 200 with a JSON object. Confirms the response was well-formed and correlated with a pending presentation request. For a same-device request the object carries `redirect_uri` — an absolute URI under the issuer with a fresh, single-use Response Code — which the wallet MUST redirect the user agent to (HAIP 1.0 §5.1); for a cross-device request it is empty and the wallet is not required to perform any further steps. It does NOT assert that any credential was verified or that any user was authenticated."
                 }
               }
             }
@@ -3600,6 +3632,14 @@
                   "csrf_token": {
                     "type": "string",
                     "minLength": 1
+                  },
+                  "device": {
+                    "default": "other",
+                    "type": "string",
+                    "enum": [
+                      "this",
+                      "other"
+                    ]
                   }
                 },
                 "required": [
@@ -3692,6 +3732,14 @@
                   "csrf_token": {
                     "type": "string",
                     "minLength": 1
+                  },
+                  "device": {
+                    "default": "other",
+                    "type": "string",
+                    "enum": [
+                      "this",
+                      "other"
+                    ]
                   }
                 },
                 "required": [
@@ -3779,6 +3827,29 @@
                 }
               }
             }
+          }
+        }
+      }
+    },
+    "/ui/wallet-login/return": {
+      "get": {
+        "tags": [
+          "UI"
+        ],
+        "description": "Same-device return leg of a wallet sign-in (OID4VP 1.0 §8.2 / §14.2, HAIP 1.0 §5.1). The wallet redirects the browser here with the single-use Response Code (43 base64url characters) it received from the direct_post Response Endpoint; the code is spent first, then matched against the flows this browser holds, and the sign-in completes only in the browser that started it. Every refusal renders one identical page. Issue #405.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "query",
+            "name": "response_code",
+            "required": false
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response"
           }
         }
       }

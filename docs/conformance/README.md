@@ -120,10 +120,20 @@ Sections match **hierarchically**: a test citing `§2.4` proves a row declared a
 `§2` to `§4.2.1.3`, so nothing flatter works.
 
 A bare `§X.Y` is attributed to the nearest spec name to its left in the same
-`fullName`, which is how `describe('… (HAIP §4.5.1)') > it('the §5.9.3 prohibition')`
-keeps both sections on HAIP. Unregistered spec names still act as anchors
+`fullName`, which is how `describe('… (OID4VCI Appendix D)') > it('the §5.9.3 prohibition')`
+keeps the section on OID4VCI. Unregistered spec names still act as anchors
 precisely so they can block that mis-attribution; their citations are then
 dropped, because only registered specs participate.
+
+The same mechanism is why the two wallet specs are registered under
+**version-qualified aliases only** — `OID4VP 1.0`, `HAIP 1.0` and their long
+forms — while the bare `OID4VP` and `HAIP` tokens stay unregistered anchors in
+the joiner. The suite carried some hundred bare `OID4VP §…` / `HAIP §…`
+citations (signed JAR, `direct_post.jwt`, key attestations) before any row for
+those specs existed, and three of them cite `HAIP §5.1` for mandates the
+same-device rows are not about. Keeping the bare token foreign means an old
+citation can neither falsely prove a new row at a shared section nor swell the
+orphan list; a test earns its way into the matrix by spelling the version out.
 
 The section match is what **answers** a citation — it is why a citation counts
 as belonging to this spec rather than showing up under "Citations with no row".
@@ -152,9 +162,12 @@ The matrix is **requirement-driven**: rows pull tests, tests never push rows. A
 citation is added to a test title when a requirement row needs that test as its
 evidence, and for no other reason.
 
-Specs cited in test titles but absent from `specs.json` — ADR references, HAIP,
-OID4VP, OID4VCI and the rest — are ignored entirely. Registering one is a
-deliberate act that comes with writing its rows.
+Specs cited in test titles but absent from `specs.json` — ADR references,
+OID4VCI, SD-JWT and the rest — are dropped at the join: they anchor a section so
+it cannot be mis-attributed, and then contribute nothing. Registering one is a
+deliberate act that comes with writing its rows. OID4VP 1.0 and HAIP 1.0 crossed
+that line in increment 3, and only under their version-qualified spellings (see
+[How the join works](#how-the-join-works)).
 
 ## Scope of increment 1
 
@@ -176,3 +189,43 @@ Two of the runbook's nine Step 7 checkboxes have **no** row yet, and both for th
 same reason: **both client-auth methods demonstrated** and **authorization-code
 reuse** are RFC 6749 requirements, and RFC 6749 is one of the four stubs above.
 They arrive with its rows. Every other Step 7 checkbox is a row here.
+
+## Scope of increment 3 — the same-device return leg (#405)
+
+Populated, both unsealed and both deliberately partial: **OpenID for Verifiable
+Presentations 1.0** — the §8.2 response body (200 + JSON object, the
+`redirect_uri` member and its Response Code), §14.2 and §14.3 — and the
+**same-device bullets of HAIP 1.0 §5.1** plus its pointer to OID4VP §14.3. The
+rows are the join for [ADR-013](../adr/013-same-device-return-leg.md): the
+Response Code is minted at the `direct_post` Response Endpoint and returned
+only for a flow the user started as same-device; the browser-side poll never
+completes such a flow; the return leg spends the code and binds it to the
+browser that started the flow.
+
+Three things about these rows are worth knowing before adding to them:
+
+- **The precondition is in the quote where the text allows it.** HAIP's
+  mandates are bullets under "If "same-device" flow is used, then:" and the
+  matrix has no conditional status, so the first bullet's row quotes the
+  precondition contiguously, the later bullets' rows carry it in `applies`, and
+  every conditional row's `applies` begins "Conditional —" and names the
+  trigger (a flow started with `device=this`). §14.2's two MUSTs apply whenever
+  a `redirect_uri` is returned — the issue's "unconditional" reading is
+  narrowed to that, because §14.2 itself says the technique is not applicable
+  cross-device.
+- **HAIP's RECOMMENDED same-device-only is waived, not n/a.** The cross-device
+  QR flow stays on both profiles; the waiver names ADR-013 and a revisit date.
+  "Wallets MUST follow the redirect" and §14.3.1 are Wallet obligations and are
+  n/a.
+- **Two rows are proven by tests that predate the registry.** The §14.2
+  RECOMMENDED on strengthening `direct_post` without a redirect and §14.3.2's
+  state check were unit-tested before #405; those tests were re-titled to cite
+  the section with the version-qualified alias (and pinned by `evidenceMatch`)
+  rather than marking the rows `covered` on a title that cites nothing — the
+  same rule the rfc9700 note records: never mark a row covered to make the
+  gate pass.
+
+The request-side §8.2 rules (no `redirect_uri` parameter beside `response_uri`)
+and every other section the suite already cites for these two specs are the
+visible backlog under "Citations with no row" — only for titles that spell the
+version out; the bare-token citations stay foreign.

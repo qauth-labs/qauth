@@ -98,9 +98,12 @@ Each item is pass/fail. Record the wallet's behaviour even when it matches.
 - [ ] `GET /ui/wallet-login` renders, and asks for an account identifier. There
       is no usernameless wallet login (ADR-009 §1) — if the field is missing, the
       deployment is not on the shipped UI.
-- [ ] Submitting an identifier renders a QR code **and** an "Open my wallet"
-      deep link. Both encode the same invocation URI.
-- [ ] Decode the QR. The URI carries `client_id`, `response_type=vp_token`,
+- [ ] The identifier form offers two submit buttons — **Use a wallet on this
+      device** and **Scan with a wallet on another device** (#405). Submitting
+      with the second renders a QR code and no deep link; submitting with the
+      first renders an "Open my wallet" deep link and no QR code. Both encode
+      the same invocation URI, and both pages carry a "Start again" link.
+- [ ] Decode the QR (cross-device) or the deep link's `href` (same-device). The URI carries `client_id`, `response_type=vp_token`,
       `response_mode=direct_post`, `response_uri`, `nonce`, `state`,
       `dcql_query`, `client_metadata` — and **no** `redirect_uri`
       (OID4VP 1.0 §8.2 forbids it alongside `response_uri`).
@@ -110,7 +113,10 @@ Each item is pass/fail. Record the wallet's behaviour even when it matches.
 
 ### Wallet behaviour
 
-- [ ] The wallet opens from the QR / deep link without an error.
+- [ ] The wallet opens from the QR / deep link without an error. For a wallet
+      invoked by an `https://` universal link (`OID4VP_WALLET_INVOCATION_ENDPOINT`),
+      confirm the same-device button opens the wallet app rather than its web
+      fallback — the button is a plain anchor, never a server-side redirect.
 - [ ] The wallet shows a consent screen naming QAuth (from `client_metadata`)
       and the claims being requested.
 - [ ] The wallet lets the user decline. Declining POSTs an `error` to
@@ -119,14 +125,36 @@ Each item is pass/fail. Record the wallet's behaviour even when it matches.
 ### Response and sign-in
 
 - [ ] Approving posts to `response_uri`, form-encoded, and the endpoint answers
-      HTTP 200 with `{}`.
+      HTTP 200 with a JSON object: `{}` for a flow started with **Scan with a
+      wallet on another device**, and
+      `{ "redirect_uri": "https://<issuer>/ui/wallet-login/return?response_code=…" }`
+      (43 base64url characters) for one started with **Use a wallet on this
+      device** (OID4VP 1.0 §8.2; #405). Declining answers the same shape.
 - [ ] The `vp_token` is a JSON object **keyed by DCQL Credential Query id**, each
       value an **array** of presentations (§8.1). A wallet emitting a bare string,
       or a draft-era `presentation_submission` envelope, is refused — record it,
       it is an interop finding rather than a QAuth bug.
-- [ ] The waiting browser page advances on its own within one poll interval
-      (three seconds) and lands on `return_to`.
-- [ ] The session cookie is set and the user is signed in.
+- [ ] **Cross-device:** the waiting browser page advances on its own within one
+      poll interval (three seconds) and lands on `return_to`.
+- [ ] **Same-device:** the wallet follows the `redirect_uri` in the **same
+      browser** the flow started in. A "You're signed in" page opens (usually in
+      a new tab) telling the user to go back to the tab where they started; that
+      tab advances to `return_to` on its own within one poll interval. Record
+      which browser the wallet opened — the default browser, a Custom Tab, or an
+      in-app web view — because that decides the next item.
+- [ ] **Same-device, wrong browser:** start again, and this time make the
+      wallet return into a browser that does not hold the flow (a private
+      window, a different browser, or the wallet's in-app web view where it has
+      its own cookie jar). The landing renders "Finish signing in where you
+      started" with no "Try again", the original tab reports the standard
+      refusal within one poll interval, no session cookie is set anywhere, and
+      opening the same `redirect_uri` afterwards in the original browser renders
+      the same page (the code was spent by the first landing).
+- [ ] **Same-device, redirect not followed:** approve in the wallet but do not
+      let it return (or close the tab it opens before it loads). The original
+      tab stays "waiting" and then reports the standard refusal within three
+      minutes; no session is minted.
+- [ ] The session cookie is set and the user is signed in (happy paths only).
 
 ### What was written
 
@@ -210,6 +238,11 @@ against issuers who publish none has bought nothing.
 - [ ] Sign in with a password, visit `/ui/wallet-link`, and complete a link with
       the wallet. A second `user_credentials` row appears under the same
       `users.id`.
+- [ ] The confirmation screen offers the same two device buttons as the sign-in
+      (#405). A link started with **Use a wallet on this device** completes on
+      the wallet's return into the same browser ("Wallet credential linked"),
+      and the original tab reports `linked` once; one started with **Scan with
+      a wallet on another device** completes by polling.
 - [ ] A later wallet sign-in resolves to that same account, and its ID token's
       `sub` equals the password session's.
 
@@ -253,6 +286,18 @@ With everything provisioned, the additional items are:
       the same credential is accepted.
 - [ ] A key attestation (#308) is present and validated, and a credential
       without one is refused under `keyStorageAssurance: 'required'`.
+- [ ] The same-device leg (HAIP 1.0 §5.1; #405) behaves as under the base
+      profile: a flow started with **Use a wallet on this device** is answered
+      with `redirect_uri` on the encrypted `direct_post.jwt` path (and on a
+      wallet-reported error, encrypted or in the clear), the wallet follows it in
+      the same browser and the sign-in completes there; a landing in a different
+      browser is refused and the original tab reports the refusal; a redirect
+      never followed is rejected within three minutes; and a flow started with
+      **Scan with a wallet on another device** is acknowledged with `{}` and
+      completes by polling. Note in the wallet table whether the wallet follows
+      `redirect_uri` at all and which browser it opens — HAIP makes following
+      it a MUST, and QAuth rejects a same-device presentation whose redirect
+      does not come back.
 
 ## Reporting
 

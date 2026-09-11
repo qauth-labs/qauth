@@ -1,0 +1,87 @@
+{
+  "specId": "oid4vp-1_0",
+  "note": "Hand-authored, the §8.2 response body, §14.2 and §14.3 only (see the scopeNote in ../specs.json; #405, ADR-013). `quote` is verbatim from https://openid.net/specs/openid-4-verifiable-presentations-1_0.html (1.0 Final, 2025-07-09) with line wrapping removed and nothing else changed. The two §14.2 MUSTs share one sentence in the text; they are two rows here, each quoting its own clause of it, because they are proven by different tests (the Response Endpoint puts the secret in; the frontend must bring it back). §14.2's MUSTs apply whenever a `redirect_uri` is returned — in QAuth, to flows started with `device=this` — and the issue's 'unconditional' reading of §14.2 is narrowed accordingly: the section itself says the technique is not applicable to cross-device scenarios. The request-side §8.2 rules (no `redirect_uri` parameter beside `response_uri`) already have passing tests citing `§8.2` bare and are a later increment; bare `OID4VP` is a foreign anchor in the joiner, so those citations neither prove nor orphan against these rows, and every covered row carries an `evidenceMatch` besides. The §14.2 RECOMMENDED on strengthening `direct_post` without a redirect and the §14.3.2 state check are proven by tests that predate this registry, re-titled to cite the section with the version-qualified alias.",
+  "requirements": [
+    {
+      "id": "oid4vp-8_2-200-json-object",
+      "section": "8.2",
+      "level": "MUST",
+      "quote": "If the Response URI has successfully processed the Authorization Response or Authorization Error Response, it MUST respond with an HTTP status code of 200 with Content-Type of application/json and a JSON object in the response body.",
+      "applies": "apps/auth-server/src/app/routes/oid4vp/response.ts — both 200 paths (accepted presentation, wallet-reported error) on `direct_post` and `direct_post.jwt`; the object is `{}` for a cross-device request and `{ redirect_uri }` for a same-device one, sent `Cache-Control: no-store` as the spec's own example does.",
+      "status": "covered",
+      "evidenceMatch": "answers 200 with Content-Type application/json and a JSON object|answers 200 with a bare transport ack"
+    },
+    {
+      "id": "oid4vp-8_2-redirect-uri-fresh-random",
+      "section": "8.2",
+      "level": "MUST",
+      "quote": "The value of the redirect URI is an absolute URI as defined by [RFC3986] Section 4.3 and is chosen by the Verifier. The Verifier MUST include a fresh, cryptographically random value in the URL. This value is used to ensure only the receiver of the redirect can fetch and process the Authorization Response.",
+      "applies": "Conditional — triggers only when a redirect_uri is returned, which in QAuth means the flow was started with device=this; `redirect_uri` is `<JWT_ISSUER>/ui/wallet-login/return?response_code=<code>` — absolute, on the issuer origin (never the request's Host), carrying nothing but the code — and the code is 32 CSPRNG bytes minted per response by `generateOid4vpResponseCode` in libs/server/federation.",
+      "status": "covered",
+      "evidenceMatch": "fresh, cryptographically random|is an absolute URI (under|on) the issuer"
+    },
+    {
+      "id": "oid4vp-8_2-redirect-uri-128-bits",
+      "section": "8.2",
+      "level": "RECOMMENDED",
+      "quote": "It is RECOMMENDED to use a cryptographic random value of 128 bits or more.",
+      "applies": "Conditional — triggers only when a redirect_uri is returned, which in QAuth means the flow was started with device=this; the Response Code is 32 bytes (256 bits) of `randomBytes`, base64url-encoded to 43 characters.",
+      "status": "covered",
+      "evidenceMatch": "128 bits"
+    },
+    {
+      "id": "oid4vp-14_2-fresh-secret-in-redirect-uri",
+      "section": "14.2",
+      "level": "MUST",
+      "quote": "The Verifier's Response URI MUST include a fresh secret (Response Code) into the redirect URI returned to the Wallet",
+      "applies": "Conditional — triggers only when a redirect_uri is returned, which in QAuth means the flow was started with device=this; the Response Endpoint mints the code before the guarded redemption UPDATE, persists only its SHA-256 digest in that same statement, and puts the plaintext nowhere but the `redirect_uri` handed to the wallet. Freshness and entropy per response are the §8.2 rows above (oid4vp-8_2-redirect-uri-fresh-random, oid4vp-8_2-redirect-uri-128-bits).",
+      "status": "covered",
+      "evidenceMatch": "persists only the Response Code digest"
+    },
+    {
+      "id": "oid4vp-14_2-frontend-must-pass-code",
+      "section": "14.2",
+      "level": "MUST",
+      "quote": "the Verifier's Response URI MUST require the frontend to pass the respective Response Code when fetching the Authorization Response. That stops session fixation attacks as long as the attacker is unable to get access to the Response Code.",
+      "applies": "Conditional — triggers only when a redirect_uri is returned, which in QAuth means the flow was started with device=this; the browser-side state machine (login and link alike) never completes a same-device flow by polling — the poll answers `pending` after the presentation arrives — and only GET /ui/wallet-login/return, carrying the code AND the flow's `__Host-qauth_wallet_flow` binder, resolves the parked presentation; the code is spent in one guarded UPDATE before the browser is asked anything, so it is single-use everywhere.",
+      "status": "covered",
+      "evidenceMatch": "the poll never completes a same-device|only with the browser binder"
+    },
+    {
+      "id": "oid4vp-14_2-direct-post-without-redirect-strengthening",
+      "section": "14.2",
+      "level": "RECOMMENDED",
+      "quote": "When using the Response Mode direct_post without the further protection provided by the redirect URI, there is no session context for the Verifier to detect session fixation attempts. It is RECOMMENDED for the Verifiers to implement mechanisms to strengthen the security of the flow.",
+      "applies": "The cross-device (QR) flow on both profiles, which returns no `redirect_uri`. The mechanisms: the signed `__Host-qauth_wallet_flow` browser binder required on every poll (only the browser that started the flow can fetch its outcome), the asserted identifier the presentation must match (ADR-009 §1 — a request relayed to a victim whose credential carries a different identifier is refused), the six-minute flow lifetime, and one uniform refusal. See docs/adr/013-same-device-return-leg.md#residual-cross-device-risk.",
+      "status": "covered",
+      "evidenceMatch": "wrong binder as expired"
+    },
+    {
+      "id": "oid4vp-14_3_1-wallet-response-uri-validation",
+      "section": "14.3.1",
+      "level": "MUST",
+      "quote": "The Wallet MUST ensure the data in the Authorization Response cannot leak through Response URIs.",
+      "applies": "A Wallet obligation. QAuth's `response_uri` is derived from `JWT_ISSUER` and never from the request, which is what a wallet's validation would check against; nothing on the Verifier side can satisfy or fail this sentence.",
+      "status": "n/a",
+      "reason": "Binds the Wallet, not the Verifier."
+    },
+    {
+      "id": "oid4vp-14_3_2-state-corresponds-to-recent-request",
+      "section": "14.3.2",
+      "level": "SHOULD",
+      "quote": "The Verifier SHOULD protect its Response URI from inadvertent requests by checking that the value of the received state parameter corresponds to a recent Authorization Request.",
+      "applies": "apps/auth-server/src/app/routes/oid4vp/response.ts — the row is found by `sha256(state)` (or by the JWE `kid` under `direct_post.jwt`) in ONE guarded UPDATE whose predicates are `redeemed_at IS NULL AND expires_at > now`, so a state that is unknown, already consumed or older than the five-minute request lifetime is refused before anything is parsed, with one uniform 400.",
+      "status": "covered",
+      "evidenceMatch": "unknown / expired / already-redeemed state|unredeemed AND unexpired"
+    },
+    {
+      "id": "oid4vp-14_3_3-internal-interface",
+      "section": "14.3.3",
+      "level": "MUST",
+      "quote": "Implementations of this specification MUST have security mechanisms in place to prevent inadvertent requests against this internal interface.",
+      "applies": "The parked presentation (`wallet-presentation:<stateHash>` in Redis) is reachable only through the browser-side state machine, which the second of §14.3.3's listed options guards: the poll requires the flow's `__Host-qauth_wallet_flow` binder, and the same-device return leg requires that binder AND the single-use Response Code — two cryptographically random values, one managing state with the wallet, the other ensuring only the initiating browser can obtain the Authorization Response data.",
+      "status": "covered",
+      "evidenceMatch": "only with the browser binder"
+    }
+  ]
+}

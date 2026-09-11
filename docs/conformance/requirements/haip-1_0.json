@@ -1,0 +1,62 @@
+{
+  "specId": "haip-1_0",
+  "note": "Hand-authored, the same-device bullets of §5.1 and its §14.3 pointer only (see the scopeNote in ../specs.json; #405, ADR-013). `quote` is verbatim from https://openid.net/specs/openid4vc-high-assurance-interoperability-profile-1_0.html (1.0 Final, 2025-12-24) with line wrapping removed and nothing else changed. §5.1 lists its same-device mandates as bullets under the precondition 'If \"same-device\" flow is used, then:'; the row for the FIRST bullet quotes that precondition contiguously, and the rows for the later bullets — which are not adjacent to it in the text — quote the bullet sentence alone and carry the precondition in `applies`. The matrix has no conditional status, so `applies` on every conditional row begins \"Conditional —\" and names the trigger: a flow started with `device=this`. The three passing pre-#405 tests that cite `HAIP §5.1` bare (signed JAR, `direct_post.jwt`) never reach these rows — bare `HAIP` is a foreign anchor in the joiner, and every row here carries an `evidenceMatch` besides.",
+  "requirements": [
+    {
+      "id": "haip-5_1-same-device-supported",
+      "section": "5.1",
+      "level": "MUST",
+      "quote": "Verifiers and Wallets MUST support the \"same-device\" flow.",
+      "applies": "apps/auth-server — the wallet sign-in and account-link forms carry a `device` choice (`this` | `other`, absent ⇒ `other`); a `this` flow is recorded on the request-state row and the flow record at creation, renders the deep link, is answered with a `redirect_uri` by POST /oid4vp/response, and completes only on GET /ui/wallet-login/return. Cross-device (QR) is kept alongside — see haip-5_1-same-device-only.",
+      "status": "covered",
+      "evidenceMatch": "records the same-device choice|returns redirect_uri carrying a fresh Response Code for a same-device request"
+    },
+    {
+      "id": "haip-5_1-same-device-only",
+      "section": "5.1",
+      "level": "RECOMMENDED",
+      "quote": "Verifiers are RECOMMENDED to use only the \"same-device\" flow unless the Verifier does not rely on session binding for phishing resistance, e.g. in a proximity scenario.",
+      "applies": "Both verifier profiles (`oid4vp-1.0-base` and `haip-1.0`): the cross-device QR flow, completed by polling with no Response Code, stays available under both.",
+      "status": "waived",
+      "reason": "QAuth keeps the cross-device (QR) flow on both profiles: a desktop browser signing in with a phone wallet is the primary journey the product ships, and it has no same-device equivalent. The cross-device flow does not have Response-Code session binding — OID4VP 1.0 §14.2 says the technique is not applicable there — and QAuth relies on the `__Host-qauth_wallet_flow` browser binder, the asserted identifier (ADR-009 §1) and the six-minute flow lifetime instead. A per-profile `crossDevice` posture that would let a deployment turn the QR path off is recorded as a follow-up, not built.",
+      "decision": "docs/adr/013-same-device-return-leg.md",
+      "revisit": "2027-03-31"
+    },
+    {
+      "id": "haip-5_1-redirect-uri-in-response",
+      "section": "5.1",
+      "level": "MUST",
+      "quote": "If \"same-device\" flow is used, then: Verifiers MUST include redirect_uri in the HTTP response to the Wallet's HTTP POST to the response_uri, as defined in Section 8.2 of [OIDF.OID4VP].",
+      "applies": "Conditional — triggers only when the flow was started with device=this; apps/auth-server/src/app/routes/oid4vp/response.ts answers `{ redirect_uri }` on BOTH of its 200 paths (accepted presentation and wallet-reported error — §8.2 permits the member for Error Responses and HAIP's MUST has no success qualifier) when the redeemed row carries `same_device = true`, on `direct_post` and `direct_post.jwt` alike, and `{}` for a cross-device row.",
+      "status": "covered",
+      "evidenceMatch": "returns redirect_uri .*for a same-device request"
+    },
+    {
+      "id": "haip-5_1-wallet-follows-redirect",
+      "section": "5.1",
+      "level": "MUST",
+      "quote": "Wallets MUST follow the redirect to redirect_uri.",
+      "applies": "A Wallet obligation under the same 'If \"same-device\" flow is used, then:' precondition. The in-repo mock wallet models it (it parses the acknowledgement and hands the `redirect_uri` back to the E2E harness, which follows it with the initiating browser's cookie jar); a real wallet that does not follow it is caught by haip-5_1-reject-unreturned-or-cross-session.",
+      "status": "n/a",
+      "reason": "Binds the Wallet, not the Verifier. QAuth is the Verifier; what it owes for a wallet that ignores the redirect is the rejection in the next row."
+    },
+    {
+      "id": "haip-5_1-reject-unreturned-or-cross-session",
+      "section": "5.1",
+      "level": "MUST",
+      "quote": "Verifiers MUST reject presentations if Wallets do not follow the redirect back or the redirect back arrives in a different user session to the one the request was initiated in.",
+      "applies": "Conditional — triggers only when the flow was started with device=this; the sentence sits under HAIP §5.1's 'If \"same-device\" flow is used, then:' precondition. Two clauses, two mechanisms in apps/auth-server: (1) the poll never completes a same-device flow, and once the `received` signal is older than WALLET_RETURN_CODE_TTL_MS (180 s — the code's own expiry) it terminates the flow as `rejected` ACTIVELY, with a log line, rather than letting it expire; (2) a landing on GET /ui/wallet-login/return in a browser that does not hold the flow's `__Host-qauth_wallet_flow` binder spends the code first, discards the parked presentation, publishes `return_rejected`, and the initiating tab's poll answers `rejected`. The same two gates run in the account-link state machine.",
+      "status": "covered",
+      "evidenceMatch": "whose redirect was never followed|arrives in a different user session|landed in a foreign session"
+    },
+    {
+      "id": "haip-5_1-oid4vp-14_3-applied",
+      "section": "5.1",
+      "level": "MUST",
+      "quote": "Security considerations in Section 14.3 of [OIDF.OID4VP] MUST be applied.",
+      "applies": "A pointer row: the Verifier-side content of OID4VP 1.0 §14.3 is tracked as its own rows in ./oid4vp-1_0.json (§14.3.2 state ↔ recent request; §14.3.3 the internal interface to the parked Authorization Response data; §14.3.1 is a Wallet obligation). The evidence pinned here is the HAIP-cited test that shows §14.3.3's protection on the same-device leg: a landing outside the initiating session cannot obtain the parked presentation — the code is spent and the presentation discarded.",
+      "status": "covered",
+      "evidenceMatch": "spends the code, discards the presentation"
+    }
+  ]
+}

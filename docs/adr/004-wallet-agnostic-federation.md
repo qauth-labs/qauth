@@ -4,6 +4,8 @@
 **Date:** 2026-03-11
 **Authors:** QAuth Team
 
+> **Status (2026-09-11, #405): the same-device return leg has shipped, and the clause at the end of these notes that still lists HAIP profile wiring (#377) as outstanding is retired — #377 closed 2026-09-11 with Phase C (encrypted `direct_post.jwt`), so `haip-1.0` boots when provisioned.** The `direct_post` Response Endpoint now returns the OID4VP 1.0 §8.2 `redirect_uri` with a fresh Response Code for a flow the user started as same-device, the browser return leg binds that code to the browser that started the flow, and the cross-device QR flow keeps completing by polling on both profiles. That decision — and HAIP 1.0 §5.1's waived same-device-only recommendation — is [ADR-013](./013-same-device-return-leg.md), which also keeps this record's two request-side meanings of `redirect_uri` (the forbidden Authorization Request parameter; the Client Identifier Prefix) distinct from the response-body member it adds. Remaining T4 work is the real-wallet interoperability pass (#376).
+>
 > **Implementation status (2026-06-24):** Accepted as design; not implemented. Deferred per [ADR-007](./007-mcp-first-positioning.md) to the long-term platform; gated on the [ADR-002](./002-identifier-abstraction.md) migration.
 >
 > **Spec refresh (2026-07-19): this ADR predates the finalisation of its own core specs and MUST NOT be implemented as originally written.** It was authored 2026-03-11, before OpenID for Verifiable Presentations reached Final. See [Spec status](#spec-status-2026-07-19) — the credential query mechanism changed, and an interoperability profile now exists that this ADR does not name.
