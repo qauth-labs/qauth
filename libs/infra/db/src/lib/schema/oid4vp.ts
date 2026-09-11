@@ -1,6 +1,7 @@
 import { relations, sql } from 'drizzle-orm';
 import {
   bigint,
+  boolean,
   check,
   index,
   jsonb,
@@ -70,6 +71,30 @@ import { EPOCH_MS_NOW } from './sql-helpers';
  * carries no key, whichever correlator consumed it. See
  * `responseEncryptionPrivateJwk` below for why, and the repository for how the
  * private half still reaches the one caller that has to decrypt with it.
+ *
+ * ## The same-device return leg (#405): a THIRD single-use correlator
+ *
+ * A same-device presentation (HAIP 1.0 §5.1) ends with the wallet following a
+ * `redirect_uri` back into the browser the flow started in, and that URI has
+ * to carry "a fresh secret (Response Code)" the frontend must present before
+ * the presentation may complete (OID4VP 1.0 §14.2). The code is minted at the
+ * response endpoint and its digest written by the SAME `UPDATE` that consumes
+ * the row — `response_code_hash`, `response_code_expires_at` — so through the
+ * repository a code exists only for a row that was actually redeemed.
+ * `response_code_redeemed_at` is the code's own single-use marker, and
+ * `same_device` records, from the moment the row is created, whether a
+ * return leg is expected at all.
+ *
+ * Four columns, three of them nullable as a pair-plus-one: the hash and its
+ * expiry are set together or not at all (the `..._response_code_complete`
+ * CHECK), and a code can only have been redeemed if it was written
+ * (`..._response_code_redeemed_requires_hash`). The DDL deliberately does NOT
+ * tie the pair to `redeemed_at` — that would make the INSERT shape depend on
+ * the redemption shape — so `redeemResponseCode` requires `redeemed_at` in
+ * its own predicate. The digest is written for EVERY redeemed row — the
+ * repository has one shape — but the code itself leaves the server only for
+ * a `same_device` row, and `redeemResponseCode` refuses anything else, so a
+ * cross-device row's digest names a secret nobody holds.
  *
  * ## No user, no subject — on purpose
  *
@@ -197,6 +222,75 @@ export const oid4vpRequestStates = pgTable(
      * the database should say so too.
      */
     responseEncryptionKeyProtection: text('response_encryption_key_protection'),
+    /**
+     * Whether the flow that minted this request expects the wallet to bring
+     * the user agent BACK (#405, HAIP 1.0 §5.1 "same-device"), or was started
+     * as a cross-device (QR) flow that completes by polling. Chosen by the
+     * user at flow start and written with the row; default `false` so a row
+     * from a binary that predates the column, or a caller that says nothing,
+     * is a cross-device row and nothing about its behaviour changes.
+     *
+     * A BOOLEAN, deliberately — not a flow handle, a session id, or anything
+     * else that could name the browser. The wallet-facing side of this table
+     * (the response endpoint) must never be able to reach a browser session:
+     * the row is joined to its flow only by `state_hash`, one way, from the
+     * browser's side. This column says a return is EXPECTED; it says nothing
+     * about where. Projected by the redemption `UPDATE` so the response
+     * endpoint can decide whether a `redirect_uri` goes back to the wallet,
+     * and read by `redeemResponseCode` as a hard guard so a code that was
+     * never emitted can never be redeemed.
+     */
+    sameDevice: boolean('same_device').notNull().default(false),
+    /**
+     * SHA-256 hash of the Response Code (64 hex characters) minted for the
+     * same-device return leg (OID4VP 1.0 §8.2 / §14.2), written by the SAME
+     * `UPDATE` that sets `redeemed_at`; NULL until the row is consumed.
+     *
+     * Only the digest, for the reason `state_hash` gives: the code travels in
+     * a `redirect_uri` and is presented back to us as a bearer credential, so
+     * a read-only leak of this table must yield nothing a browser could hand
+     * in. It is a unique-index probe (`idx_oid4vp_request_states_response_code`,
+     * over codes not yet redeemed), so there is no comparison to make
+     * timing-safe. `varchar(64)` because a hex SHA-256 is exactly that wide.
+     */
+    responseCodeHash: varchar('response_code_hash', { length: 64 }),
+    /**
+     * The Response Code's OWN deadline (epoch ms), INDEPENDENT of `expires_at`.
+     *
+     * `expires_at` bounds how long a wallet may take to answer the request;
+     * it is consumed the moment the wallet posts. The code is minted at that
+     * same moment and has to survive the wallet's "Done" tap, an app switch
+     * and a browser cold start, none of which the request's budget was sized
+     * for — a code inheriting `expires_at` would be dead on arrival for any
+     * presentation posted near the end of the request's life. So the code
+     * carries its own, shorter, fixed TTL, set by the caller from
+     * `WALLET_RETURN_CODE_TTL_MS`, and `redeemResponseCode` guards on THIS
+     * column, never on `expires_at`.
+     *
+     * The housekeeping consequence: a row whose request expired may still
+     * carry a LIVE code (the request was answered at its last second), so
+     * `deleteExpired` spares a row until both deadlines have passed — see the
+     * repository. Set together with `response_code_hash` or not at all (the
+     * `..._response_code_complete` CHECK).
+     */
+    responseCodeExpiresAt: bigint('response_code_expires_at', { mode: 'number' }),
+    /**
+     * When the Response Code was presented back and accepted — and the code's
+     * single-use marker, for the reason `redeemed_at` is the row's: NULL means
+     * not yet redeemed, one nullable timestamp cannot disagree with itself,
+     * and the redemption `UPDATE` is guarded by `response_code_redeemed_at IS
+     * NULL`, which is what makes the return leg consume exactly once under
+     * concurrency. A second timestamp rather than reusing `redeemed_at`
+     * because the two events are distinct and ordered: the wallet's POST
+     * consumes the row (`redeemed_at`), then the browser's return consumes the
+     * code — and the second can only ever happen after the first, which is why
+     * `redeemResponseCode` also requires `redeemed_at IS NOT NULL`.
+     *
+     * Can only be set on a row that has a hash (the
+     * `..._response_code_redeemed_requires_hash` CHECK): a redeemed code that
+     * was never written is not a state a row may be in.
+     */
+    responseCodeRedeemedAt: bigint('response_code_redeemed_at', { mode: 'number' }),
     createdAt: bigint('created_at', { mode: 'number' }).notNull().default(EPOCH_MS_NOW),
   },
   (t) => [
@@ -216,6 +310,16 @@ export const oid4vpRequestStates = pgTable(
     uniqueIndex('idx_oid4vp_request_states_encryption_kid')
       .on(t.responseEncryptionKid)
       .where(sql`${t.redeemedAt} is null`),
+    // The RETURN-LEG redemption path (#405): Response Code digest lookup
+    // restricted to codes not yet presented back — the third correlator's
+    // mirror of the two indexes above. UNIQUE so `redeemResponseCode`'s
+    // guarded `UPDATE` can match at most one row; partial over
+    // `response_code_redeemed_at IS NULL` so a spent code leaves the index and
+    // so NULL digests (every row not yet consumed by a wallet, and every row
+    // from before the column existed) never enter it.
+    uniqueIndex('idx_oid4vp_request_states_response_code')
+      .on(t.responseCodeHash)
+      .where(sql`${t.responseCodeRedeemedAt} is null`),
     // Mirrors the `oauth_clients.audience` / `user_credentials.credential_data`
     // guards: a jsonb column that must hold an object should say so in the DB,
     // not only in the type parameter.
@@ -234,6 +338,21 @@ export const oid4vpRequestStates = pgTable(
     check(
       'oid4vp_request_states_response_encryption_key_protection_valid',
       sql`${t.responseEncryptionKeyProtection} is null or ${t.responseEncryptionKeyProtection} in ('plain', 'aes-256-gcm')`
+    ),
+    // The Response Code digest and its deadline are one value (#405): a hash
+    // with no expiry would be a code that never dies, and an expiry with no
+    // hash names nothing. Written together by the redemption `UPDATE`, and the
+    // database should refuse any other shape.
+    check(
+      'oid4vp_request_states_response_code_complete',
+      sql`(${t.responseCodeHash} is null) = (${t.responseCodeExpiresAt} is null)`
+    ),
+    // A code can only have been redeemed if it was written. `redeemResponseCode`
+    // guards on the hash so this cannot happen through the repository; the
+    // CHECK is what stops a hand-written statement from doing it.
+    check(
+      'oid4vp_request_states_response_code_redeemed_requires_hash',
+      sql`${t.responseCodeRedeemedAt} is null or ${t.responseCodeHash} is not null`
     ),
   ]
 );
