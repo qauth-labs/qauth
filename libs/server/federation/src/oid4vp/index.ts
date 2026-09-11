@@ -25,5 +25,6 @@ export * from './presentation-rejection';
 export * from './presentation-validation';
 export * from './request-object';
 export * from './request-state';
+export * from './response-encryption';
 export * from './sd-jwt-vc';
 export * from './validated-credential';
