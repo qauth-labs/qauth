@@ -6,15 +6,17 @@ import {
   type JwsAlgorithm,
   type SigningKeyPair,
 } from '@qauth-labs/core-crypto';
-import { CompactSign, compactVerify, importSPKI, type JWK } from 'jose';
+import { CompactEncrypt, CompactSign, compactVerify, importJWK, importSPKI, type JWK } from 'jose';
 
 /**
  * A REFERENCE / MOCK WALLET (issue #240, OID4VP 1.0, ADR-004).
  *
  * The counterparty QAuth's E2E suite talks to: it parses an OID4VP 1.0
- * Authorization Request off a wallet invocation URI, evaluates the request's
- * DCQL query against the credentials it holds, builds a `vp_token`, and POSTs it
- * to the `response_uri` with `response_mode=direct_post`.
+ * Authorization Request off a wallet invocation URI (or out of a verified JAR),
+ * evaluates the request's DCQL query against the credentials it holds, builds a
+ * `vp_token`, and POSTs it to the `response_uri` — in the clear under
+ * `response_mode=direct_post`, or encrypted to the Verifier's per-request key
+ * under `direct_post.jwt`.
  *
  * ## Why it lives here and not in `libs/server/federation/testing/`
  *
@@ -55,6 +57,19 @@ import { CompactSign, compactVerify, importSPKI, type JWK } from 'jose';
  * must not be the verifier's own chain reader. The anchor it validates against
  * is passed in from a trust list the wallet holds OUT OF BAND — never read from
  * the request — which is the property the whole exercise is about.
+ *
+ * ## The encrypted-response seam (#377 Phase C)
+ *
+ * Under `response_mode=direct_post.jwt` (OID4VP 1.0 §8.3, HAIP §5.1) the wallet
+ * does not post its parameters in the clear: it reads the Verifier's
+ * per-request encryption key out of `client_metadata.jwks`, encrypts the whole
+ * Authorization Response to it as a compact JWE, and posts ONE `response`
+ * parameter. {@link encryptAuthorizationResponse} is that step, written against
+ * `jose` directly for the reason everything else here is — a wallet that
+ * encrypted with the verifier's own helper would prove nothing about whether
+ * the verifier can open what a conformant peer sends. The `kid` the Verifier
+ * published is echoed in the JWE protected header (§8.3), which is the only
+ * thing the Verifier has to find its key with.
  *
  * ## What it is not
  *
@@ -375,10 +390,100 @@ export type VpToken = Record<string, readonly string[]>;
 export interface WalletAuthorizationResponse {
   /** The parsed request this answers. */
   readonly request: Oid4vpRequestView;
-  /** Form body to POST to `response_uri`. */
+  /**
+   * Form body to POST to `response_uri`.
+   *
+   * Under `direct_post` this is `state` + `vp_token` in the clear; under
+   * `direct_post.jwt` it is the single `response` parameter carrying the JWE
+   * (#377 Phase C). Which one is decided by the REQUEST's `response_mode`, as
+   * a wallet decides it, so a suite posts whatever this is without knowing.
+   */
   readonly formBody: Record<string, string>;
   /** The `vp_token` object, before serialization — for assertions. */
   readonly vpToken: VpToken;
+}
+
+/** The OID4VP Response Mode that carries a JWE (§8.3). */
+const DIRECT_POST_JWT = 'direct_post.jwt';
+
+/** The `enc` a wallet falls back to when the Verifier advertised none (HAIP §5). */
+const DEFAULT_ENC = 'A128GCM';
+
+/**
+ * Select the Verifier's encryption key out of `client_metadata` (§5.1).
+ *
+ * A wallet picks a key with `use: 'enc'` (or no `use`) from the published
+ * `jwks`, and refuses to encrypt to nothing — a request that asks for
+ * `direct_post.jwt` and publishes no key is unanswerable, and a wallet that
+ * fell back to posting plaintext would be the downgrade the mode exists to
+ * prevent. Every key QAuth publishes MUST carry a `kid` (§5.1), and it is
+ * required here so a Verifier that stopped stamping one fails the E2E rather
+ * than getting a JWE it cannot correlate.
+ *
+ * @throws Error when no usable key is published.
+ */
+export function selectResponseEncryptionKey(clientMetadata: Record<string, unknown>): JWK {
+  const jwks = clientMetadata['jwks'] as { keys?: unknown } | undefined;
+  const keys = Array.isArray(jwks?.keys) ? (jwks.keys as JWK[]) : [];
+  const key = keys.find((candidate) => candidate.use === undefined || candidate.use === 'enc');
+
+  if (key === undefined) {
+    throw new Error(
+      'the request asks for an encrypted response but client_metadata publishes no encryption key'
+    );
+  }
+  if (typeof key.kid !== 'string' || key.kid === '') {
+    throw new Error("the Verifier's encryption key carries no kid (OID4VP 1.0 §5.1)");
+  }
+  return key;
+}
+
+/**
+ * Choose the content-encryption algorithm from what the Verifier advertised.
+ *
+ * `encrypted_response_enc_values_supported` (§5.1) lists what the Verifier
+ * will open; a wallet takes the first it supports. Absent, HAIP §5 fixes the
+ * floor at `A128GCM`.
+ */
+function selectResponseEnc(clientMetadata: Record<string, unknown>): string {
+  const advertised = clientMetadata['encrypted_response_enc_values_supported'];
+  if (Array.isArray(advertised) && typeof advertised[0] === 'string') return advertised[0];
+  return DEFAULT_ENC;
+}
+
+/** What {@link encryptAuthorizationResponse} may vary, for the refusal tests. */
+export interface EncryptResponseOptions {
+  /** Override the `kid` echoed in the JWE header. Defaults to the key's own. */
+  readonly kid?: string;
+  /** Override the recipient key — e.g. one the Verifier never published. */
+  readonly recipient?: JWK;
+}
+
+/**
+ * Encrypt an Authorization Response as a wallet does under `direct_post.jwt`
+ * (OID4VP 1.0 §8.3; HAIP §5).
+ *
+ * The parameters — `state`, and `vp_token` as a JSON OBJECT, or `error` — are
+ * the JWE payload. `alg` is `ECDH-ES` (HAIP §5), `enc` is whatever the Verifier
+ * advertised, and the protected header carries the `kid` of the key selected
+ * from `client_metadata`, which is how the Verifier finds the private half
+ * without decrypting anything.
+ *
+ * Written against `jose` directly — no import of QAuth's JWE helper — so the
+ * ciphertext is what an independent implementation produces.
+ */
+export async function encryptAuthorizationResponse(
+  request: Oid4vpRequestView,
+  parameters: Record<string, unknown>,
+  options: EncryptResponseOptions = {}
+): Promise<string> {
+  const recipient = options.recipient ?? selectResponseEncryptionKey(request.clientMetadata);
+  const enc = selectResponseEnc(request.clientMetadata);
+  const kid = options.kid ?? (recipient.kid as string);
+
+  return new CompactEncrypt(new TextEncoder().encode(JSON.stringify(parameters)))
+    .setProtectedHeader({ alg: 'ECDH-ES', enc, kid } as never)
+    .encrypt(await importJWK(recipient, 'ECDH-ES'));
 }
 
 /** A wallet holding credentials, able to answer presentation requests. */
@@ -398,8 +503,16 @@ export interface MockWallet {
    * (#377). {@link MockWallet.buildResponse} is this, plus the parse.
    */
   buildResponseForRequest(request: Oid4vpRequestView): Promise<WalletAuthorizationResponse>;
-  /** Answer with an OAuth-style error instead of a `vp_token` (§8.2). */
-  buildErrorResponse(invocationUri: string, error?: string): WalletAuthorizationErrorResponse;
+  /**
+   * Answer with an OAuth-style error instead of a `vp_token` (§8.2).
+   *
+   * Asynchronous since #377 Phase C: under `direct_post.jwt` the error travels
+   * inside the JWE like every other parameter, so refusing is an encryption.
+   */
+  buildErrorResponse(
+    invocationUri: string,
+    error?: string
+  ): Promise<WalletAuthorizationErrorResponse>;
 }
 
 /** A wallet-reported failure, as `direct_post` accepts it. */
@@ -475,6 +588,24 @@ export function createMockWallet(credentials: readonly HeldCredential[] = []): M
         ];
       }
 
+      // The wire shape follows the REQUEST's Response Mode, as it would for a
+      // real wallet (#377 Phase C): an encrypted mode gets one `response`
+      // parameter carrying the JWE, with `vp_token` as an OBJECT inside it
+      // (§8.3 — the payload is JSON, so there is nothing to string-encode);
+      // the plain mode gets the form parameters it always got.
+      if (request.responseMode === DIRECT_POST_JWT) {
+        return {
+          request,
+          vpToken,
+          formBody: {
+            response: await encryptAuthorizationResponse(request, {
+              state: request.state,
+              vp_token: vpToken,
+            }),
+          },
+        };
+      }
+
       return {
         request,
         vpToken,
@@ -482,11 +613,21 @@ export function createMockWallet(credentials: readonly HeldCredential[] = []): M
       };
     },
 
-    buildErrorResponse(
+    async buildErrorResponse(
       invocationUri: string,
       error = 'access_denied'
-    ): WalletAuthorizationErrorResponse {
+    ): Promise<WalletAuthorizationErrorResponse> {
       const request = parseOid4vpRequest(invocationUri);
+
+      if (request.responseMode === DIRECT_POST_JWT) {
+        return {
+          request,
+          formBody: {
+            response: await encryptAuthorizationResponse(request, { state: request.state, error }),
+          },
+        };
+      }
+
       return { request, formBody: { state: request.state, error } };
     },
   };
