@@ -81,6 +81,55 @@ export function createOid4vpRequestStatesRepository(
     },
 
     /**
+     * Atomically consume a request state by its encryption `kid` (#377 Phase C).
+     *
+     * ```sql
+     * UPDATE oid4vp_request_states
+     *    SET redeemed_at = $now
+     *  WHERE response_encryption_kid = $kid AND redeemed_at IS NULL AND expires_at > $now
+     * RETURNING *
+     * ```
+     *
+     * Byte-for-byte the shape of {@link redeem} above, on the other correlator,
+     * and it is load-bearing that it stays so: the row lock serializes two
+     * concurrent posts carrying the same `kid`, and folding expiry into the
+     * predicate means an expired row is never "consumed then rejected". The
+     * lookup is a probe on `idx_oid4vp_request_states_encryption_kid`, the
+     * UNIQUE partial index over live rows — which is also what guarantees the
+     * predicate can match at most one row, so `RETURNING *` never has to pick.
+     *
+     * The `kid` is bounded by the caller before it reaches here
+     * (`MAX_ENCRYPTION_KID_LENGTH`), and NULL kids — every plain `direct_post`
+     * row — can never match, because `= $kid` is never true of NULL.
+     *
+     * @param kid - the `kid` read out of the JWE protected header, untrusted
+     * @param tx - Optional transaction client
+     * @returns the redeemed row, or undefined when unknown / expired / already
+     * consumed — three cases the caller must not be able to tell apart.
+     */
+    async redeemByEncryptionKid(
+      kid: string,
+      tx?: DbClient
+    ): Promise<Oid4vpRequestState | undefined> {
+      const invoker = tx ?? defaultDb;
+      const now = Date.now();
+
+      const [redeemed] = await invoker
+        .update(oid4vpRequestStates)
+        .set({ redeemedAt: now })
+        .where(
+          and(
+            eq(oid4vpRequestStates.responseEncryptionKid, kid),
+            isNull(oid4vpRequestStates.redeemedAt),
+            gt(oid4vpRequestStates.expiresAt, now)
+          )
+        )
+        .returning();
+
+      return redeemed;
+    },
+
+    /**
      * Delete expired rows (housekeeping).
      *
      * @param tx - Optional transaction client
