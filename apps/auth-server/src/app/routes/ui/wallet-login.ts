@@ -1,5 +1,10 @@
 import { randomUUID } from 'node:crypto';
 
+import {
+  hashOid4vpResponseCode,
+  isOid4vpResponseCode,
+  MAX_OID4VP_RESPONSE_CODE_LENGTH,
+} from '@qauth-labs/fastify-plugin-federation';
 import { normalizeEmail } from '@qauth-labs/shared-validation';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { ZodTypeProvider } from 'fastify-type-provider-zod';
@@ -11,7 +16,9 @@ import {
   WALLET_LOGIN_POLL_INTERVAL_MS,
   WALLET_LOGIN_STATUS_RATE_LIMIT,
   WALLET_LOGIN_STATUS_RATE_WINDOW_S,
+  WALLET_RETURN_CODE_TTL_MS,
 } from '../../constants';
+import { resolveBrowserSession } from '../../helpers/browser-session';
 import { html, render, safe, safeCustomSchemeUrl } from '../../helpers/html';
 import { encodeQrCode, renderQrCodeSvg } from '../../helpers/qr-code';
 import { getOrCreateDefaultRealm } from '../../helpers/realm';
@@ -32,22 +39,41 @@ import {
   WALLET_FLOW_COOKIE_NAME,
 } from '../../helpers/session-cookie';
 import {
+  advanceWalletLinkFlow,
+  WALLET_LINK_CONFLICT,
+  WALLET_LINK_REFUSAL,
+} from '../../helpers/wallet-link-flow';
+import {
   createWalletLoginFlow,
+  deleteWalletFlowDoneMarker,
   deleteWalletLoginFlow,
   deleteWalletPresentationSignal,
   deleteWalletPresentationStash,
+  discardWalletPresentation,
   generateWalletFlowSecret,
   isWalletLoginHandle,
+  readWalletFlowDoneMarker,
   readWalletLoginFlow,
-  readWalletPresentationSignal,
+  readWalletPresentationSignalRecord,
   type WalletLoginFlow,
+  writeWalletFlowDoneMarker,
 } from '../../helpers/wallet-login-flow';
 import {
   buildWalletLoginInvocation,
   resolveWalletLoginCapability,
+  WALLET_LOGIN_RETURN_PATH,
 } from '../../helpers/wallet-login-request';
 import { resolveWalletPresentation } from '../../helpers/wallet-presentation';
-import { walletPageStyles, walletTerminalPage } from '../../helpers/wallet-ui';
+import {
+  WALLET_LINK_CONFLICT_TITLE,
+  WALLET_LINK_REJECTED_TITLE,
+  walletLinkedPage,
+  walletLinkTerminalPage,
+  walletPageStyles,
+  walletReturnRefusalPage,
+  walletSignedInPage,
+  walletTerminalPage,
+} from '../../helpers/wallet-ui';
 import { runWithCredentialStatusAuditContext } from '../../helpers/wallet-verification';
 
 /**
@@ -102,6 +128,46 @@ import { runWithCredentialStatusAuditContext } from '../../helpers/wallet-verifi
  * difference between "no such account" and "credential rejected" would be an
  * account oracle available to anyone. The reason is logged server-side; the
  * browser gets one sentence.
+ *
+ * ## Same device or another device — the user says which (#405, ADR-013)
+ *
+ * The identifier form ends in TWO submit buttons, `device=this` ("Use a wallet
+ * on this device") and `device=other` ("Scan with a wallet on another device").
+ * The choice is the user's own form submission — the login-CSRF cookie already
+ * gates that POST — and it is recorded at flow start, in both records at once:
+ * `same_device` on the `oid4vp_request_states` row (what the wallet's POST
+ * redeems) and `sameDevice` on the flow record (what the browser's poll reads).
+ * An absent field is cross-device, so every existing client and harness keeps
+ * the QR path it had.
+ *
+ * The server needs to know because the two flows END differently, and OID4VP
+ * 1.0 §14.2 says why. With `direct_post` the wallet sends the response
+ * out-of-band, so an attacker who relayed the Authorization Request to a
+ * victim's wallet could conclude the flow on a device that never saw the
+ * victim; the fix — "the Verifier's Response URI MUST include a fresh secret
+ * (Response Code) into the redirect URI returned to the Wallet and […] MUST
+ * require the frontend to pass the respective Response Code" — only works when
+ * the wallet's browser IS the browser that started the flow, which §14.2
+ * concedes "is not applicable to cross-device scenarios". §13.3 draws the two
+ * models: a same-device flow ends with step 7, the wallet redirecting the user
+ * agent to the Verifier's frontend with the code; a cross-device flow ends at
+ * step 6 with no `redirect_uri`, and the frontend fetches the result on its
+ * own — this file's poll. HAIP 1.0 §5.1 makes the same-device leg a MUST:
+ * "Verifiers MUST include redirect_uri", "Wallets MUST follow the redirect",
+ * and "Verifiers MUST reject presentations if Wallets do not follow the
+ * redirect back or the redirect back arrives in a different user session to
+ * the one the request was initiated in".
+ *
+ * So the pending page renders exactly ONE affordance per flow — the deep link
+ * for `this`, the QR for `other` — and the state machine below treats a
+ * same-device flow's `received` signal as "wait for the return leg", never as
+ * "complete by polling". The return leg is `GET /ui/wallet-login/return`, whose
+ * JSDoc holds the order of operations; the deadline that turns a never-followed
+ * redirect into an active rejection is `WALLET_RETURN_CODE_TTL_MS`; and the
+ * done-marker that lets the ORIGINAL tab continue after the wallet completed
+ * the flow in a new one is `helpers/wallet-login-flow.ts`'s
+ * `WalletFlowDoneMarker`. The status JSON the poller reads is unchanged in
+ * shape.
  */
 
 /** The ONE sentence any wallet-login failure renders. */
@@ -119,7 +185,18 @@ export const WALLET_LOGIN_EXPIRED = 'This sign-in request has expired. Please st
  */
 const pageStyles = walletPageStyles;
 
-/** Screen 1 — assert an account, then start the presentation request. */
+/**
+ * Screen 1 — assert an account, then start the presentation request.
+ *
+ * Two submit buttons on the one form, named `device` (#405): the button the
+ * user taps IS the same-device choice, so there is no separate control to
+ * forget and no state to carry between screens. Both are plain submits — a
+ * browser with scripts off makes the same choice the same way. The first
+ * button in source order is the one an Enter key in the field triggers, and it
+ * is the cross-device one on purpose: that is the path every deployment served
+ * before #405, and the one that cannot strand a user on a device with no
+ * wallet.
+ */
 function identifierPage(opts: {
   returnTo: string;
   cspNonce: string;
@@ -166,7 +243,16 @@ function identifierPage(opts: {
               Your wallet does not tell us who you are, so we need you to say which account you
               mean.
             </p>
-            <button type="submit">Continue</button>
+            <button type="submit" name="device" value="other">
+              Scan with a wallet on another device
+            </button>
+            <button type="submit" name="device" value="this" class="secondary">
+              Use a wallet on this device
+            </button>
+            <p class="hint" id="device-hint">
+              Choose where your wallet is: scanning shows a code for a wallet on your phone; using
+              this device opens a wallet installed here and brings you back when you're done.
+            </p>
             <a class="footer-link" href="/ui/login?return_to=${encodeURIComponent(returnTo)}"
               >Sign in with a password instead</a
             >
@@ -193,25 +279,45 @@ function identifierPage(opts: {
  * branch is unreachable through configuration. That is deliberate: neither check
  * is load-bearing on its own, and the render path stays safe if a future caller
  * feeds this screen a URI from somewhere other than `OID4VP_WALLET_INVOCATION_
- * ENDPOINT`. When the link is refused the QR still renders — the page is
- * unusable either way, but it must not emit an executable href.
+ * ENDPOINT`. When the link is refused the page still renders, with an
+ * explanation where the anchor would be — unusable, but it must not emit an
+ * executable href.
+ *
+ * ## Exactly one affordance (#405)
+ *
+ * A same-device flow renders the anchor and NO QR; a cross-device flow renders
+ * the QR and NO anchor. The two are not interchangeable once the flow has
+ * started: the Response Endpoint hands a wallet a `redirect_uri` only for a
+ * same-device row, and the state machine completes a same-device flow only on
+ * the return leg. Offering both on one page would let a user scan a same-device
+ * request with a phone — whose wallet would then be sent to a browser that does
+ * not hold the flow, and refused — or tap a cross-device request's link and
+ * have the wallet complete a flow that is waiting on a poll. Each variant gets
+ * a "Start again" footer link instead, which begins a FRESH flow with the other
+ * choice available; the old one expires harmlessly.
+ *
+ * The anchor is a plain user-gesture `href`, exactly as before #405: a
+ * server-side redirect to the invocation URI would be refused by the page's
+ * `form-action 'self'` CSP in Chromium and WebKit, and iOS does not open an app
+ * for a universal link reached through a 3xx. No script handler, no form.
  *
  * The QR code degrades rather than throws: a payload past the encoder's maximum
- * (`QR_MAX_BYTES`) renders the deep-link button and an explanation, because an
- * over-long invocation URI is a configuration outcome and this screen must not
- * 500 on it.
+ * (`QR_MAX_BYTES`) renders an explanation and the "Start again" link, because
+ * an over-long invocation URI is a configuration outcome and this screen must
+ * not 500 on it. It no longer falls back to the deep link — a device that was
+ * asked to scan cannot use one.
  */
 function pendingPage(opts: {
   handle: string;
   invocationUri: string;
+  sameDevice: boolean;
   cspNonce: string;
   scriptNonce: string;
   returnTo: string;
 }): string {
-  const { handle, invocationUri, cspNonce, scriptNonce, returnTo } = opts;
-  const qr = encodeQrCode(invocationUri);
-  const deepLink = safeCustomSchemeUrl(invocationUri);
+  const { handle, invocationUri, sameDevice, cspNonce, scriptNonce, returnTo } = opts;
   const statusPath = `/ui/wallet-login/${handle}/status`;
+  const startAgainHref = `/ui/wallet-login?return_to=${encodeURIComponent(returnTo)}`;
 
   return render(
     html`<!doctype html>
@@ -226,26 +332,17 @@ function pendingPage(opts: {
         <body>
           <div class="card">
             <h1>Present a credential</h1>
-            <p>Scan this code with your wallet, or open your wallet on this device.</p>
             ${
-              qr === undefined
-                ? html`<p class="hint">
-                    This request is too large to show as a code. Use the button below on the device
-                    your wallet is installed on.
-                  </p>`
-                : html`<div class="qr">
-                    ${safe(renderQrCodeSvg(qr, 'QR code containing the wallet sign-in request'))}
-                  </div>`
-            }
-            ${
-              deepLink === undefined
-                ? html`<p class="hint">
-                    This deployment cannot offer an open-my-wallet link. Contact your administrator.
-                  </p>`
-                : html`<a class="alt-action" href="${deepLink}">Open my wallet</a>`
+              sameDevice
+                ? sameDeviceInvocation(invocationUri)
+                : crossDeviceInvocation(invocationUri, startAgainHref)
             }
             <div class="status" id="wallet-status" role="status" aria-live="polite">
-              Waiting for your wallet…
+              ${
+                sameDevice
+                  ? "Opening your wallet on this device… When you're done, your wallet will bring you back here."
+                  : 'Waiting for your wallet…'
+              }
             </div>
             <noscript>
               <p class="hint">
@@ -253,6 +350,7 @@ function pendingPage(opts: {
                 <a href="/ui/wallet-login/${handle}">Check whether your wallet has responded</a>.
               </p>
             </noscript>
+            <a class="footer-link" href="${startAgainHref}">Start again</a>
             <a class="footer-link" href="/ui/login?return_to=${encodeURIComponent(returnTo)}"
               >Cancel and sign in with a password</a
             >
@@ -293,6 +391,49 @@ function pendingPage(opts: {
   );
 }
 
+/**
+ * The same-device half of the pending page: the "Open my wallet" anchor.
+ *
+ * `safeCustomSchemeUrl()` rather than `safeUrl()`, for the reason the
+ * `pendingPage` JSDoc gives: the href is `openid4vp://…` by design, so the
+ * denylist is the right guard. When it refuses, the page renders an explanation
+ * and no href at all — it must not emit an executable one — and stays a page
+ * rather than a 500.
+ */
+function sameDeviceInvocation(invocationUri: string) {
+  const deepLink = safeCustomSchemeUrl(invocationUri);
+  return html`<p>Open your wallet on this device to present a credential.</p>
+    ${
+      deepLink === undefined
+        ? html`<p class="hint">
+            This deployment cannot offer an open-my-wallet link. Contact your administrator.
+          </p>`
+        : html`<a class="alt-action" href="${deepLink}">Open my wallet</a>`
+    }`;
+}
+
+/**
+ * The cross-device half of the pending page: the QR code.
+ *
+ * Over-long payloads (`QR_MAX_BYTES`) get an explanation and a way to start
+ * over rather than a deep link — see the `pendingPage` JSDoc.
+ */
+function crossDeviceInvocation(invocationUri: string, startAgainHref: string) {
+  const qr = encodeQrCode(invocationUri);
+  return html`<p>Scan this code with the wallet on your other device.</p>
+    ${
+      qr === undefined
+        ? html`<p class="hint">
+            This request is too large to show as a code, so it cannot be scanned. Contact your
+            administrator, or <a href="${startAgainHref}">start again</a> and use a wallet on this
+            device instead.
+          </p>`
+        : html`<div class="qr">
+            ${safe(renderQrCodeSvg(qr, 'QR code containing the wallet sign-in request'))}
+          </div>`
+    }`;
+}
+
 /** Screen 3 — a terminal state: expired, refused, or not available. */
 const terminalPage = walletTerminalPage;
 
@@ -305,6 +446,15 @@ const walletLoginFormSchema = z.object({
   identifier: z.string().min(1).max(ASSERTED_IDENTIFIER_MAX_LENGTH),
   return_to: z.string().optional(),
   csrf_token: z.string().min(1),
+  /**
+   * Which submit button was pressed (#405): `this` opens a wallet on this
+   * device and completes on the return leg; `other` renders a QR and completes
+   * by polling. Defaults to `other` so a body without the field — the E2E
+   * harness, a client built before #405 — keeps the cross-device path it had.
+   * The handler ALSO treats anything but `'this'` as `other`, so the default
+   * holds even for a caller that bypasses schema validation.
+   */
+  device: z.enum(['this', 'other']).default('other'),
 });
 
 type WalletLoginForm = z.infer<typeof walletLoginFormSchema>;
@@ -338,32 +488,88 @@ type FlowOutcome =
   | { status: 'rejected' };
 
 /**
+ * Which surface is asking the state machine to advance (#405).
+ *
+ * - `poll` — the status endpoint or the page re-render: the ORIGINAL tab,
+ *   holding the binder cookie and nothing else.
+ * - `return` — the same-device return leg: a tab holding the binder cookie AND
+ *   having just spent a Response Code that named this flow.
+ *
+ * A same-device flow's positive outcome is reserved for `return` (OID4VP 1.0
+ * §14.2: "MUST require the frontend to pass the respective Response Code");
+ * every negative outcome is reachable either way. Optional with `poll` as the
+ * default so a caller that predates #405 keeps its meaning.
+ */
+interface AdvanceOptions {
+  via?: 'poll' | 'return';
+}
+
+/**
  * Read a flow, apply the browser binder, and advance it as far as it can go.
  *
  * The ONE place a wallet-login flow changes state, shared by the page handler
- * (which redirects or re-renders) and the status handler (which answers JSON).
- * Two surfaces observing the same flow through two implementations is how one of
- * them ends up skipping the binder check.
+ * (which redirects or re-renders), the status handler (which answers JSON) and
+ * the return handler (#405, which renders a terminal page). Two surfaces
+ * observing the same flow through two implementations is how one of them ends
+ * up skipping the binder check; three would make it certain.
  *
  * Missing flow, wrong binder and expired flow all return `expired`: they are
  * indistinguishable to the caller by design, so a handle harvested from a screen
  * share or a log cannot be probed for whether it was ever real.
+ *
+ * ## The same-device gate (#405, ADR-013 D7)
+ *
+ * After the binder, expiry and mode gates, the signal record decides:
+ *
+ * - `wallet_error` or `return_rejected` → terminate, `rejected` — on EVERY
+ *   flow, via either surface. An error carries no presentation and surfacing
+ *   it mints nothing, so gating it would only leave a user who tapped "Decline"
+ *   in their wallet watching a spinner.
+ * - `received` on a same-device flow, via `poll` → `pending` while the redirect
+ *   could still arrive (`now <= at + WALLET_RETURN_CODE_TTL_MS`, the same
+ *   window the database gives the code), and once it cannot → terminate,
+ *   `rejected`, logged. That is HAIP 1.0 §5.1's "MUST reject presentations if
+ *   Wallets do not follow the redirect back", enforced ACTIVELY at the deadline
+ *   rather than left to the flow's expiry, so the wait is capped at three
+ *   minutes and the rejection is a logged event rather than a silence.
+ * - `received` via `return` → resolve, terminate, complete: the leg the code
+ *   was minted for.
+ * - `received` on a cross-device flow → complete by polling, exactly as before
+ *   #405. A return can never reach such a flow, because the Response Endpoint
+ *   emits no `redirect_uri` for a cross-device row and the repository refuses
+ *   to redeem a code for one.
+ *
+ * ## Completion differs by surface (D6, D8)
+ *
+ * Both surfaces mint the session identically. The poll then burns this flow's
+ * cookie binding and answers `complete`. The return leg does NOT burn the
+ * binding — the wallet opened it in a NEW tab, and the original tab's next poll
+ * must still be able to prove it holds the flow — and instead leaves a
+ * done-marker under the handle. When that poll finds the flow gone, it consults
+ * the marker: binder matches → marker deleted, binding burned, `complete` with
+ * `redirectTo`, exactly once, and no second session. Anything else about a
+ * missing flow is `expired`, as it always was.
  */
 async function advanceWalletLoginFlow(
   fastify: FastifyInstance,
   request: FastifyRequest,
   reply: FastifyReply,
-  handle: string
+  handle: string,
+  options: AdvanceOptions = {}
 ): Promise<FlowOutcome> {
-  const flow = await readWalletLoginFlow(fastify, handle);
-  if (flow === null) return { status: 'expired' };
+  const via = options.via ?? 'poll';
 
   // Browser binding. Without it, an attacker could start a flow, present their
   // own credential and hand the victim the URL — the victim's browser would
   // finish the flow and be signed in as the attacker. Looked up BY HANDLE, so a
   // second flow started in the same browser does not unbind this one. See
-  // `WALLET_FLOW_COOKIE_NAME`.
+  // `WALLET_FLOW_COOKIE_NAME`. Read before the flow because the done-marker
+  // path below needs it too.
   const binder = findWalletFlowBinder(readCookie(request, WALLET_FLOW_COOKIE_NAME), handle);
+
+  const flow = await readWalletLoginFlow(fastify, handle);
+  if (flow === null) return resolveDoneMarker(fastify, request, reply, handle, binder);
+
   if (!binder || !csrfTokensEqual(flow.binder, binder)) {
     fastify.log.warn(
       { ip: request.ip },
@@ -387,10 +593,33 @@ async function advanceWalletLoginFlow(
     return { status: 'rejected' };
   }
 
-  const signal = await readWalletPresentationSignal(fastify, flow.stateHash);
-  if (signal === null) return { status: 'pending', flow };
+  const record = await readWalletPresentationSignalRecord(fastify, flow.stateHash);
+  if (record === null) return { status: 'pending', flow };
 
-  if (signal === 'wallet_error') {
+  if (record.signal === 'wallet_error' || record.signal === 'return_rejected') {
+    if (record.signal === 'return_rejected') {
+      fastify.log.warn(
+        { ip: request.ip },
+        'same-device presentation rejected: redirect landed in a foreign session'
+      );
+    }
+    await terminate(fastify, handle, flow);
+    return { status: 'rejected' };
+  }
+
+  // A same-device presentation completes ONLY on the return leg (OID4VP 1.0
+  // §14.2). By polling, it is pending while the wallet could still bring the
+  // browser back, and rejected once the code it was handed can no longer be
+  // redeemed — HAIP 1.0 §5.1, "do not follow the redirect back". The deadline
+  // is measured from the signal's own timestamp, so a poll that arrives late
+  // cannot restart it, and it is the SAME constant the database applies to the
+  // code, so the two edges cannot disagree.
+  if (flow.sameDevice === true && via === 'poll') {
+    if (Date.now() <= record.at + WALLET_RETURN_CODE_TTL_MS) return { status: 'pending', flow };
+    fastify.log.warn(
+      { ip: request.ip },
+      'same-device presentation rejected: redirect not followed'
+    );
     await terminate(fastify, handle, flow);
     return { status: 'rejected' };
   }
@@ -479,11 +708,64 @@ async function advanceWalletLoginFlow(
   });
 
   setSessionCookie(reply, sessionId);
+
+  if (via === 'return') {
+    // The wallet opened this leg in a NEW tab. The binding stays in the shared
+    // cookie jar so the ORIGINAL tab's next poll can still prove it holds the
+    // flow, and the marker is what that poll will find where the flow was. It
+    // is written AFTER the session and the audit row, so a marker exists only
+    // for a sign-in that happened; it mints nothing when consumed.
+    await writeWalletFlowDoneMarker(fastify, handle, {
+      binder: flow.binder,
+      mode: 'login',
+      redirectTo: flow.returnTo,
+    });
+    return { status: 'complete', redirectTo: flow.returnTo };
+  }
+
   // Burn only THIS flow's binding: another flow may still be pending in the
   // same browser, and clearing the whole cookie would strand it.
   dropWalletFlowBinding(request, reply, handle);
 
   return { status: 'complete', redirectTo: flow.returnTo };
+}
+
+/**
+ * What a poll finds where a flow used to be (#405, ADR-013 D8).
+ *
+ * A same-device flow completed on the return leg — in the tab the wallet
+ * opened — has been terminated like any other, and the tab that started it is
+ * still polling. Before answering `expired` for a missing flow, look for the
+ * done-marker the return leg left under this handle. It is honoured only when
+ * this browser presents the flow's binder (timing-safe, as the flow itself was
+ * gated), only for a marker of THIS state machine's mode (a login poll must
+ * not eat a link flow's marker, whose page is waiting for a different word),
+ * and only once: the marker is deleted and the cookie binding burned in the
+ * same breath, so a second poll is `expired` again. Nothing is minted — the
+ * session cookie has been in the jar since the return leg — and `redirectTo`
+ * is the flow's validated `returnTo`, carried on the marker.
+ *
+ * A poll WITHOUT the binder learns nothing and burns nothing: the read and
+ * the delete are separate on purpose (see `readWalletFlowDoneMarker`), so a
+ * handle harvested from a screen share cannot strand the rightful tab.
+ */
+async function resolveDoneMarker(
+  fastify: FastifyInstance,
+  request: FastifyRequest,
+  reply: FastifyReply,
+  handle: string,
+  binder: string | null
+): Promise<FlowOutcome> {
+  const marker = await readWalletFlowDoneMarker(fastify, handle);
+  if (marker === null || !binder || !csrfTokensEqual(marker.binder, binder)) {
+    return { status: 'expired' };
+  }
+  if (marker.mode !== 'login') return { status: 'expired' };
+
+  await deleteWalletFlowDoneMarker(fastify, handle);
+  dropWalletFlowBinding(request, reply, handle);
+
+  return { status: 'complete', redirectTo: marker.redirectTo ?? '/' };
 }
 
 /** Drop every trace of a finished flow so nothing can be polled or replayed. */
@@ -653,6 +935,11 @@ export default async function (fastify: FastifyInstance) {
       // submission must produce the same page.
       const assertedIdentifier = normalizeAssertedIdentifier(body.identifier);
 
+      // The user's device choice (#405). Compared against the one value that
+      // means same-device rather than trusting the schema default, so a body
+      // that reached this handler without validation is still cross-device.
+      const sameDevice = body.device === 'this';
+
       let handle: string;
       let invocationUri: string;
       try {
@@ -664,6 +951,11 @@ export default async function (fastify: FastifyInstance) {
           stateHash: invocation.stateHash,
           nonce: invocation.nonce,
           verifierProfile: capability.profile.id,
+          // Written on the ROW because the Response Endpoint decides from the
+          // row alone whether to hand the wallet a `redirect_uri` (#405); it
+          // cannot read the flow record and must not be able to. A boolean
+          // names no browser. See `WalletLoginFlow.sameDevice`.
+          sameDevice,
           // The mode the request actually asked for, read off the built request
           // rather than restated (#377 Phase C): the intake refuses a submission
           // that arrives in the other mode, so this column has to be the truth.
@@ -704,6 +996,11 @@ export default async function (fastify: FastifyInstance) {
           nonce: invocation.nonce,
           clientId: invocation.request.client_id,
           dcqlQuery: { ...invocation.request.dcql_query },
+          // The same choice, on the record the poll reads (#405): this is what
+          // makes the state machine refuse to complete the flow by polling and
+          // wait for the return leg instead. Written only when true so a
+          // cross-device record looks exactly as it did before #405.
+          ...(sameDevice ? { sameDevice } : {}),
           returnTo,
           binder,
           realmId: realm.id,
@@ -752,6 +1049,7 @@ export default async function (fastify: FastifyInstance) {
         pendingPage({
           handle,
           invocationUri,
+          sameDevice,
           cspNonce: reply.cspNonce.style,
           scriptNonce: reply.cspNonce.script,
           returnTo,
@@ -793,7 +1091,9 @@ export default async function (fastify: FastifyInstance) {
         );
       }
 
-      const outcome = await advanceWalletLoginFlow(fastify, request, reply, handle);
+      const outcome = await advanceWalletLoginFlow(fastify, request, reply, handle, {
+        via: 'poll',
+      });
 
       switch (outcome.status) {
         case 'complete':
@@ -805,6 +1105,7 @@ export default async function (fastify: FastifyInstance) {
             pendingPage({
               handle,
               invocationUri: outcome.flow.invocationUri,
+              sameDevice: outcome.flow.sameDevice === true,
               cspNonce: reply.cspNonce.style,
               scriptNonce: reply.cspNonce.script,
               returnTo: outcome.flow.returnTo,
@@ -866,7 +1167,9 @@ export default async function (fastify: FastifyInstance) {
         return reply.send({ status: 'expired', message: WALLET_LOGIN_EXPIRED });
       }
 
-      const outcome = await advanceWalletLoginFlow(fastify, request, reply, handle);
+      const outcome = await advanceWalletLoginFlow(fastify, request, reply, handle, {
+        via: 'poll',
+      });
 
       switch (outcome.status) {
         case 'complete':
@@ -880,4 +1183,329 @@ export default async function (fastify: FastifyInstance) {
       }
     }
   );
+
+  /**
+   * The same-device RETURN LEG (#405, ADR-013 D5) — where a wallet on this
+   * device brings the browser back, carrying the Response Code the Response
+   * Endpoint handed it (OID4VP 1.0 §8.2, §13.3 step 7; HAIP 1.0 §5.1 "Wallets
+   * MUST follow the redirect to redirect_uri").
+   *
+   * Registered as the literal `'/wallet-login/return'` (the docs-site
+   * endpoint-coverage invariant reads route literals); static, so find-my-way
+   * prefers it over `/wallet-login/:handle`. Same registration gate and the
+   * same polling-shaped per-IP rate limit as the sibling GET routes. Every
+   * response it sends is `Cache-Control: no-store` and `Referrer-Policy:
+   * no-referrer`, set before any branch: the request URL carries a bearer
+   * secret, and neither a cache nor a `Referer` on an outbound link may keep
+   * it.
+   *
+   * ## Order: shape, BURN, then bind
+   *
+   * 1. Shape-check the code (`isOid4vpResponseCode`, exactly 43 base64url
+   *    characters). Anything else → the refusal page, nothing touched. The
+   *    querystring schema is `z.string().optional()` rather than a `.max()`
+   *    at the edge, deliberately: a Zod 400 for an over-long or missing value
+   *    would be a SECOND refusal shape, and this route has exactly one. A 400
+   *    would leak nothing about the code's validity, but a route that answers
+   *    one way to "too long" and another to "unknown" is a route whose
+   *    refusals can be told apart, and the point of the shape guard is that
+   *    they cannot. The regex is anchored and linear, so an over-long value
+   *    costs one pass and no database round trip.
+   * 2. `redeemResponseCode(sha256(code))` — ONE guarded `UPDATE` in the
+   *    repository that SPENDS the code whatever happens next (its five
+   *    predicates: digest, unspent, unexpired, row redeemed, `same_device`).
+   *    `undefined` — unknown, expired, replayed, cross-device — → the refusal
+   *    page. This runs BEFORE the browser is asked anything, and that order is
+   *    the security property: a code that lands anywhere is dead everywhere.
+   * 3. Read this browser's bindings from the binder cookie (at most three),
+   *    read each flow, and select the one whose `stateHash` is the one the
+   *    code named AND whose stored binder matches the cookie's, timing-safely.
+   *    None → a FOREIGN LANDING: the wallet opened a different browser than
+   *    the flow started in, an in-app browser with its own cookie jar, a
+   *    private window, or an attacker replaying a code from a log. OID4VP
+   *    §14.2 concedes the technique cannot serve that case ("the original
+   *    session will also not be available there") and HAIP §5.1 says what to
+   *    do: "reject presentations if […] the redirect back arrives in a
+   *    different user session". So: `discardWalletPresentation` (the parked
+   *    bytes go, the signal becomes `return_rejected`), a warning in the log,
+   *    the refusal page. The burned code is the hard guarantee — the
+   *    initiating flow is same-device, a same-device flow never completes by
+   *    polling, and the one code that could have completed it is spent — and
+   *    the discard is what lets that flow's poll say `rejected` promptly
+   *    rather than at the deadline.
+   * 4. Dispatch on `flow.mode`. `login` → the ONE state machine,
+   *    `advanceWalletLoginFlow(…, { via: 'return' })`, which re-applies the
+   *    binder, expiry and mode gates and completes the flow — session minted
+   *    exactly as by polling, done-marker written, binding KEPT (D6/D8).
+   *    `link` → {@link completeLinkModeReturn}: the browser session is
+   *    re-resolved (a link flow was initiated in a USER session, so a return
+   *    without one is a foreign landing in HAIP §5.1's sense), then the link
+   *    state machine, `advanceWalletLinkFlow(…, { via: 'return' })`, applies
+   *    its own mode, binder, same-user and expiry gates and links the
+   *    credential — done-marker written, binding KEPT, as for login.
+   *
+   * ## Outcomes
+   *
+   * `complete` → 200, {@link walletSignedInPage}: "You're signed in", go back
+   * to the tab where you started; `redirectTo` offered only as a secondary
+   * link. NOT a redirect — the wallet opened this leg in a new tab, and the
+   * original tab holds the OAuth client's `state` and PKCE verifier; it will
+   * continue on its own once its poll consumes the marker. `rejected` (a
+   * wallet-reported error on a same-device row — the Response Endpoint hands
+   * out a `redirect_uri` on that path too, §8.2 "or for Error Responses" — or
+   * an unresolvable presentation, or an unavailable user) → the EXISTING
+   * refusal terminal page, `WALLET_LOGIN_REFUSAL`, 401, byte-for-byte what
+   * the page GET renders for the same outcome. `expired` / `pending` (a flow
+   * that died between step 3 and the state machine; a signal write that had
+   * failed) → the refusal page. The link arm's outcome table is on
+   * {@link completeLinkModeReturn}.
+   *
+   * ## One refusal page
+   *
+   * Steps 1–3 and the `expired`/`pending` arm of step 4 render ONE
+   * byte-identical page ({@link walletReturnRefusalPage}): HTTP 200 (in-app
+   * browsers decorate non-2xx navigations), no "Try again" (a new flow in the
+   * wrong cookie jar is a trap), the password footer kept. The reason is
+   * logged server-side only; NOTHING is audited on refusal — the Response
+   * Endpoint audits nothing on its refusals either, and an audit row per
+   * junk landing would be a write primitive for anyone with a URL; and no
+   * request-supplied text is echoed — there is nothing to echo. Both terminal
+   * pages carry a nonced `history.replaceState` that scrubs the (already
+   * spent) code from the address bar; a browser without scripts loses only
+   * that hygiene.
+   */
+  fastify.withTypeProvider<ZodTypeProvider>().get(
+    '/wallet-login/return',
+    {
+      schema: {
+        description: `Same-device return leg of a wallet sign-in (OID4VP 1.0 §8.2 / §14.2, HAIP 1.0 §5.1). The wallet redirects the browser here with the single-use Response Code (${MAX_OID4VP_RESPONSE_CODE_LENGTH} base64url characters) it received from the direct_post Response Endpoint; the code is spent first, then matched against the flows this browser holds, and the sign-in completes only in the browser that started it. Every refusal renders one identical page. Issue #405.`,
+        tags: ['UI'],
+        querystring: z.object({
+          response_code: z.string().optional(),
+        }),
+      },
+      config: {
+        rateLimit: {
+          max: WALLET_LOGIN_STATUS_RATE_LIMIT,
+          timeWindow: WALLET_LOGIN_STATUS_RATE_WINDOW_S * 1000,
+          keyGenerator: (request) => request.ip || 'unknown',
+        },
+      },
+    },
+    async (request, reply) => {
+      reply.header('Cache-Control', 'no-store');
+      reply.header('Referrer-Policy', 'no-referrer');
+
+      const refusalPage = () =>
+        walletReturnRefusalPage({
+          cspNonce: reply.cspNonce.style,
+          scriptNonce: reply.cspNonce.script,
+          returnPath: WALLET_LOGIN_RETURN_PATH,
+        });
+
+      const { response_code: code } = request.query as { response_code?: string };
+
+      // (1) Shape. Nothing has been looked up yet, and for a value that was not
+      // minted here nothing will be.
+      if (!isOid4vpResponseCode(code)) {
+        fastify.log.warn({ ip: request.ip }, 'same-device return carried no well-formed code');
+        return sendHtml(reply, refusalPage(), 200);
+      }
+
+      // (2) Burn. The code is spent by this statement whatever follows.
+      const redeemed = await fastify.repositories.oid4vpRequestStates.redeemResponseCode(
+        hashOid4vpResponseCode(code)
+      );
+      if (redeemed === undefined) {
+        fastify.log.warn({ ip: request.ip }, 'same-device return code was not redeemable');
+        return sendHtml(reply, refusalPage(), 200);
+      }
+
+      // (3) Bind. Among the flows THIS browser can prove it holds, the one the
+      // code named — or nobody's.
+      const candidate = await findReturningFlow(fastify, request, redeemed.stateHash);
+      if (candidate === null) {
+        await discardWalletPresentation(fastify, redeemed.stateHash);
+        fastify.log.warn({ ip: request.ip }, 'same-device return arrived in a foreign session');
+        return sendHtml(reply, refusalPage(), 200);
+      }
+
+      // (4) Dispatch on what the flow is FOR.
+      if ((candidate.flow.mode ?? 'login') !== 'login') {
+        return completeLinkModeReturn(fastify, request, reply, candidate, refusalPage());
+      }
+
+      const outcome = await advanceWalletLoginFlow(fastify, request, reply, candidate.handle, {
+        via: 'return',
+      });
+
+      switch (outcome.status) {
+        case 'complete':
+          return sendHtml(
+            reply,
+            walletSignedInPage({
+              cspNonce: reply.cspNonce.style,
+              scriptNonce: reply.cspNonce.script,
+              redirectTo: outcome.redirectTo,
+              returnPath: WALLET_LOGIN_RETURN_PATH,
+            }),
+            200
+          );
+        case 'rejected':
+          return sendHtml(
+            reply,
+            terminalPage({
+              cspNonce: reply.cspNonce.style,
+              title: 'Sign-in was not completed',
+              message: WALLET_LOGIN_REFUSAL,
+              returnTo: '/',
+              retry: true,
+            }),
+            401
+          );
+        default:
+          return sendHtml(reply, refusalPage(), 200);
+      }
+    }
+  );
+}
+
+/**
+ * Among the flows this browser holds a binding for, the one a spent Response
+ * Code named — or null (#405, step 3 of the return route).
+ *
+ * The join runs from the browser's side: the binder cookie names at most three
+ * handles, each flow is read, and a flow is the candidate only if its
+ * `stateHash` is the one the code resolved to AND its stored binder matches the
+ * cookie's copy. Both comparisons are timing-safe. The state hash is a public
+ * digest and the row already proved it, but the two checks sit on one line and
+ * a reader should not have to work out which of them is the secret; the binder
+ * IS the secret, and it is compared the way the state machine compares it.
+ *
+ * Nothing here is written, and nothing here trusts the code beyond the one
+ * value the repository returned for it. A browser holding several bindings can
+ * only ever advance the flow that owns the code — consuming a code for a
+ * sibling flow the same browser also started is exactly right.
+ */
+async function findReturningFlow(
+  fastify: FastifyInstance,
+  request: FastifyRequest,
+  stateHash: string
+): Promise<{ handle: string; flow: WalletLoginFlow } | null> {
+  const bindings = readWalletFlowBindings(readCookie(request, WALLET_FLOW_COOKIE_NAME));
+
+  for (const binding of bindings) {
+    const flow = await readWalletLoginFlow(fastify, binding.handle);
+    if (flow === null) continue;
+    if (!csrfTokensEqual(flow.stateHash, stateHash)) continue;
+    if (!csrfTokensEqual(flow.binder, binding.binder)) continue;
+    return { handle: binding.handle, flow };
+  }
+
+  return null;
+}
+
+/**
+ * The return leg for an account-LINKING flow (#405, ADR-013 D5 step 4, link
+ * arm).
+ *
+ * Reached only after steps 1–3 of the return route: the code is spent, and
+ * the flow it named is one THIS browser holds the binder for. What is left
+ * is what the linking poll checks on every tick — a live session, and the
+ * same user the flow was started by — and the link state machine applies
+ * both, exactly as `routes/auth/link-wallet.ts` does, so the return leg is
+ * not the one surface that skips them.
+ *
+ * ## The session gate is a foreign-landing gate
+ *
+ * A link flow is initiated in a USER session (`linkUserId`, from a verified
+ * cookie), so a return that arrives with no session at all is "a different
+ * user session to the one the request was initiated in" — the case HAIP 1.0
+ * §5.1 says the Verifier MUST reject — even though the browser holds the
+ * binder. It is treated as step 3 treats a foreign landing:
+ * `discardWalletPresentation` (parked bytes gone, signal `return_rejected`),
+ * a warning, the refusal page. Nothing is audited, and the state machine is
+ * not entered (`advanceWalletLinkFlow` needs a `userId`; there is none). A
+ * DIFFERENT user's session is caught inside the machine by the same-user
+ * gate and answers `expired`, indistinguishable from its other gates by
+ * design; the presentation it leaves parked is rejected at the same-device
+ * deadline, and the spent code guarantees it can never be linked either way.
+ *
+ * ## Outcomes
+ *
+ * `linked` → 200, {@link walletLinkedPage} with the address-bar scrub: the
+ * same sentence `/ui/wallet-link/:handle` renders, from the same builder,
+ * plus the one script every page under this URL carries. A terminal page and
+ * not a redirect, and per-tab safe by construction — a link flow's
+ * `returnTo` is `/`, nothing in the original tab is waiting to continue, and
+ * that tab's own poll renders the same page from the done-marker the state
+ * machine left. `conflict` → 409, `rejected` → 401: the linking surface's
+ * existing terminal pages, byte for byte what `/ui/wallet-link/:handle`
+ * renders for the same outcomes — the browser DOES hold this flow, so their
+ * "Try again" / "Back" affordances are safe here, and like the login arm's
+ * 401 they carry no scrub so the bytes can be compared. `expired` / `pending`
+ * → the route's one refusal page, as for login.
+ */
+async function completeLinkModeReturn(
+  fastify: FastifyInstance,
+  request: FastifyRequest,
+  reply: FastifyReply,
+  candidate: { handle: string; flow: WalletLoginFlow },
+  refusalPage: string
+): Promise<FastifyReply> {
+  const session = await resolveBrowserSession(fastify, request, reply);
+  if (!session) {
+    await discardWalletPresentation(fastify, candidate.flow.stateHash);
+    fastify.log.warn(
+      { ip: request.ip },
+      'same-device return for a wallet LINK flow arrived without a session'
+    );
+    return sendHtml(reply, refusalPage, 200);
+  }
+
+  const outcome = await advanceWalletLinkFlow(
+    fastify,
+    request,
+    reply,
+    candidate.handle,
+    session.userId,
+    { via: 'return' }
+  );
+
+  switch (outcome.status) {
+    case 'linked':
+      return sendHtml(
+        reply,
+        walletLinkedPage({
+          cspNonce: reply.cspNonce.style,
+          rebound: outcome.rebound,
+          scrub: { scriptNonce: reply.cspNonce.script, returnPath: WALLET_LOGIN_RETURN_PATH },
+        }),
+        200
+      );
+    case 'conflict':
+      return sendHtml(
+        reply,
+        walletLinkTerminalPage({
+          cspNonce: reply.cspNonce.style,
+          title: WALLET_LINK_CONFLICT_TITLE,
+          message: WALLET_LINK_CONFLICT,
+          retry: false,
+        }),
+        409
+      );
+    case 'rejected':
+      return sendHtml(
+        reply,
+        walletLinkTerminalPage({
+          cspNonce: reply.cspNonce.style,
+          title: WALLET_LINK_REJECTED_TITLE,
+          message: WALLET_LINK_REFUSAL,
+          retry: true,
+        }),
+        401
+      );
+    default:
+      return sendHtml(reply, refusalPage, 200);
+  }
 }

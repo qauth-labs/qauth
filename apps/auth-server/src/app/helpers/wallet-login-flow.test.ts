@@ -1,16 +1,24 @@
 import type { FastifyInstance } from 'fastify';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { WALLET_LOGIN_DONE_MARKER_TTL_MS } from '../constants';
 import {
   createWalletLoginFlow,
+  deleteWalletFlowDoneMarker,
   deleteWalletLoginFlow,
   deleteWalletPresentationSignal,
+  discardWalletPresentation,
   generateWalletFlowSecret,
   isWalletLoginHandle,
   publishWalletPresentationSignal,
+  readWalletFlowDoneMarker,
   readWalletLoginFlow,
   readWalletPresentationSignal,
+  readWalletPresentationSignalRecord,
+  readWalletPresentationStash,
+  stashWalletPresentation,
   type WalletLoginFlow,
+  writeWalletFlowDoneMarker,
 } from './wallet-login-flow';
 
 /**
@@ -150,10 +158,50 @@ describe('the wallet presentation signal', () => {
     expect(await readWalletPresentationSignal(fastify, stateHash)).toBeNull();
   });
 
-  it('ignores a stored value that is not one of the two known markers', async () => {
+  it('ignores a stored value that is not one of the known markers', async () => {
     const { fastify, store } = makeFastify();
     store.set(`wallet-login-signal:${stateHash}`, { signal: 'authenticated' });
     expect(await readWalletPresentationSignal(fastify, stateHash)).toBeNull();
+    expect(await readWalletPresentationSignalRecord(fastify, stateHash)).toBeNull();
+  });
+
+  it('reads the whole record — which signal, and when — for the same-device deadline (#405)', async () => {
+    const { fastify } = makeFastify();
+    const before = Date.now();
+    await publishWalletPresentationSignal(fastify, stateHash, 'received');
+
+    const record = await readWalletPresentationSignalRecord(fastify, stateHash);
+    expect(record?.signal).toBe('received');
+    expect(record?.at).toBeGreaterThanOrEqual(before);
+    expect(record?.at).toBeLessThanOrEqual(Date.now());
+    // The bare reader is a thin wrapper over the same read.
+    expect(await readWalletPresentationSignal(fastify, stateHash)).toBe('received');
+  });
+
+  it('treats a record with no readable timestamp as arbitrarily old, never as now (#405)', async () => {
+    // The only consumer of `at` is a rejection deadline; an unreadable value
+    // must fail closed into that rejection rather than restart the clock.
+    const { fastify, store } = makeFastify();
+    store.set(`wallet-login-signal:${stateHash}`, { signal: 'received' });
+    expect(await readWalletPresentationSignalRecord(fastify, stateHash)).toEqual({
+      signal: 'received',
+      at: 0,
+    });
+    store.set(`wallet-login-signal:${stateHash}`, { signal: 'received', at: 'soon' });
+    expect(await readWalletPresentationSignalRecord(fastify, stateHash)).toEqual({
+      signal: 'received',
+      at: 0,
+    });
+  });
+
+  it('carries the return_rejected marker the return route publishes (HAIP 1.0 §5.1) (#405)', async () => {
+    const { fastify, store } = makeFastify();
+    await publishWalletPresentationSignal(fastify, stateHash, 'return_rejected');
+    expect(store.get(`wallet-login-signal:${stateHash}`)).toEqual({
+      signal: 'return_rejected',
+      at: expect.any(Number),
+    });
+    expect(await readWalletPresentationSignal(fastify, stateHash)).toBe('return_rejected');
   });
 
   it('never throws at the wallet: a failed publish only costs the browser a timeout', async () => {
@@ -171,5 +219,101 @@ describe('the wallet presentation signal', () => {
     await publishWalletPresentationSignal(fastify, stateHash, 'received');
     await deleteWalletPresentationSignal(fastify, stateHash);
     expect(await readWalletPresentationSignal(fastify, stateHash)).toBeNull();
+  });
+});
+
+/**
+ * The same-device return leg's records (#405, ADR-013). The flow record's
+ * `sameDevice`, the discard that turns a foreign landing into a rejection, and
+ * the done-marker the original tab consumes.
+ */
+describe('the same-device flag on the flow record (#405)', () => {
+  it('round-trips when set, and reads as absent for a record written without it', async () => {
+    const { fastify } = makeFastify();
+
+    const same = await createWalletLoginFlow(fastify, flowFixture({ sameDevice: true }));
+    expect((await readWalletLoginFlow(fastify, same))?.sameDevice).toBe(true);
+
+    // A record from the previous binary — or a cross-device start, which
+    // writes nothing — is cross-device by absence, never by a stored `false`
+    // the old binary would not have written either.
+    const cross = await createWalletLoginFlow(fastify, flowFixture());
+    expect((await readWalletLoginFlow(fastify, cross))?.sameDevice).toBeUndefined();
+  });
+});
+
+describe('discarding a presentation on a foreign landing (#405)', () => {
+  const stateHash = 'c'.repeat(64);
+
+  it('deletes the parked bytes and overwrites the signal with return_rejected', async () => {
+    const { fastify, store } = makeFastify();
+    await publishWalletPresentationSignal(fastify, stateHash, 'received');
+    await stashWalletPresentation(fastify, stateHash, [
+      { format: 'dc+sd-jwt', compact: 'a.b.c' } as never,
+    ]);
+
+    await discardWalletPresentation(fastify, stateHash);
+
+    expect(await readWalletPresentationStash(fastify, stateHash)).toBeNull();
+    expect(store.has(`wallet-presentation:${stateHash}`)).toBe(false);
+    expect(await readWalletPresentationSignal(fastify, stateHash)).toBe('return_rejected');
+  });
+
+  it('never throws: a failed write costs only a slower refusal', async () => {
+    const { fastify, raw } = makeFastify();
+    raw.sessionUtils.deleteSession.mockRejectedValueOnce(new Error('redis down'));
+    raw.sessionUtils.setSession.mockRejectedValueOnce(new Error('redis down'));
+
+    await expect(discardWalletPresentation(fastify, stateHash)).resolves.toBeUndefined();
+    expect(raw.log.warn).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('the done-marker for the original tab (#405)', () => {
+  const handle = generateWalletFlowSecret();
+  const marker = { binder: generateWalletFlowSecret(), mode: 'login' as const, redirectTo: '/x' };
+
+  it('is written under its own namespace, keyed by the flow handle, for the flow TTL', async () => {
+    const { fastify, store, raw } = makeFastify();
+    await writeWalletFlowDoneMarker(fastify, handle, marker);
+
+    expect([...store.keys()]).toEqual([`wallet-login-done:${handle}`]);
+    expect(raw.sessionUtils.setSession).toHaveBeenCalledWith(
+      `wallet-login-done:${handle}`,
+      marker,
+      Math.floor(WALLET_LOGIN_DONE_MARKER_TTL_MS / 1000)
+    );
+    expect(await readWalletFlowDoneMarker(fastify, handle)).toEqual(marker);
+  });
+
+  it('reads nothing for a malformed handle, an unknown one, or a marker without a binder', async () => {
+    const { fastify, store, raw } = makeFastify();
+    expect(await readWalletFlowDoneMarker(fastify, '../admin')).toBeNull();
+    expect(raw.sessionUtils.getSession).not.toHaveBeenCalled();
+
+    expect(await readWalletFlowDoneMarker(fastify, handle)).toBeNull();
+
+    store.set(`wallet-login-done:${handle}`, { mode: 'login', redirectTo: '/x' });
+    expect(await readWalletFlowDoneMarker(fastify, handle)).toBeNull();
+  });
+
+  it('is gone once deleted, so the original tab can consume it exactly once', async () => {
+    const { fastify } = makeFastify();
+    await writeWalletFlowDoneMarker(fastify, handle, marker);
+    await deleteWalletFlowDoneMarker(fastify, handle);
+    expect(await readWalletFlowDoneMarker(fastify, handle)).toBeNull();
+  });
+
+  it('never throws on a store failure: the sign-in already happened', async () => {
+    const { fastify, raw } = makeFastify();
+    raw.sessionUtils.setSession.mockRejectedValueOnce(new Error('redis down'));
+    await expect(writeWalletFlowDoneMarker(fastify, handle, marker)).resolves.toBeUndefined();
+
+    raw.sessionUtils.getSession.mockRejectedValueOnce(new Error('redis down'));
+    await expect(readWalletFlowDoneMarker(fastify, handle)).resolves.toBeNull();
+
+    raw.sessionUtils.deleteSession.mockRejectedValueOnce(new Error('redis down'));
+    await expect(deleteWalletFlowDoneMarker(fastify, handle)).resolves.toBeUndefined();
+    expect(raw.log.warn).toHaveBeenCalledTimes(3);
   });
 });

@@ -52,10 +52,23 @@ vi.mock('../../helpers/wallet-presentation', () => ({
 }));
 
 import {
+  generateOid4vpResponseCode,
+  hashOid4vpResponseCode,
+} from '@qauth-labs/fastify-plugin-federation';
+
+import { WALLET_RETURN_CODE_TTL_MS } from '../../constants';
+import {
   readWalletFlowBindings,
   WALLET_FLOW_COOKIE_MAX_BINDINGS,
 } from '../../helpers/session-cookie';
+import { WALLET_LOGIN_RETURN_PATH } from '../../helpers/wallet-login-request';
 import { resolveWalletPresentation } from '../../helpers/wallet-presentation';
+import {
+  WALLET_RETURN_REFUSAL,
+  walletReturnRefusalPage,
+  walletSignedInPage,
+  walletTerminalPage,
+} from '../../helpers/wallet-ui';
 import loginRoute from './login';
 import walletLoginRoute, { WALLET_LOGIN_EXPIRED, WALLET_LOGIN_REFUSAL } from './wallet-login';
 
@@ -111,9 +124,31 @@ function createSessionUtils() {
   };
 }
 
+/**
+ * Stand-in for the repository's `redeemResponseCode` (#405): ONE guarded
+ * consume, keyed by the code's sha256 digest exactly as the real statement is.
+ * Single-use (the entry is deleted on the first hit), deadline-checked, and
+ * `undefined` for anything else — unknown, expired and replayed are one answer,
+ * as the repository's own tests pin. `sameDevice` is not modelled here: the
+ * route never learns it, and the repository test is where that predicate lives.
+ */
+function createResponseCodes() {
+  const codes = new Map<string, { stateHash: string; expiresAt: number }>();
+  return {
+    codes,
+    redeemResponseCode: vi.fn(async (codeHash: string) => {
+      const entry = codes.get(codeHash);
+      if (entry === undefined || entry.expiresAt <= Date.now()) return undefined;
+      codes.delete(codeHash);
+      return { stateHash: entry.stateHash };
+    }),
+  };
+}
+
 function makeFastify() {
   const routes = new Map<string, Handler>();
   const sessionUtils = createSessionUtils();
+  const responseCodes = createResponseCodes();
   const register = (method: string) => (url: string, _opts: unknown, handler: Handler) => {
     routes.set(`${method} ${url}`, handler);
     return fastify;
@@ -135,6 +170,7 @@ function makeFastify() {
       },
       oid4vpRequestStates: {
         create: vi.fn(async (row: unknown) => row),
+        redeemResponseCode: responseCodes.redeemResponseCode,
       },
       auditLogs: { create: vi.fn().mockResolvedValue(undefined) },
     },
@@ -143,7 +179,7 @@ function makeFastify() {
     sessionUtils,
     log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
   };
-  return { fastify: fastify as FastifyInstance, routes, sessionUtils };
+  return { fastify: fastify as FastifyInstance, routes, sessionUtils, responseCodes };
 }
 
 function cookieValue(setCookies: string[], name: string): string {
@@ -161,10 +197,12 @@ async function startFlow(
     context?: ReturnType<typeof makeFastify>;
     /** The wallet-flow cookie this browser already holds, if any. */
     walletFlowCookie?: string;
+    /** Which submit button was pressed (#405). Absent = the field was not sent. */
+    device?: 'this' | 'other';
   } = {}
 ) {
   const context = overrides.context ?? makeFastify();
-  const { fastify, routes, sessionUtils } = context;
+  const { fastify, routes, sessionUtils, responseCodes } = context;
   if (overrides.context === undefined) await walletLoginRoute(fastify);
 
   const getReply = createReply();
@@ -188,6 +226,7 @@ async function startFlow(
         identifier: overrides.identifier ?? 'user@example.com',
         csrf_token: csrfToken,
         return_to: overrides.returnTo,
+        ...(overrides.device === undefined ? {} : { device: overrides.device }),
       },
       headers: { cookie: cookies.join('; ') },
       ip: '127.0.0.1',
@@ -203,16 +242,90 @@ async function startFlow(
   const handle = flowEntry[0].slice('wallet-login:'.length);
   const flow = flowEntry[1] as Record<string, any>;
 
-  return { context, fastify, routes, sessionUtils, postReply, handle, flow, binderCookie };
+  return {
+    context,
+    fastify,
+    routes,
+    sessionUtils,
+    responseCodes,
+    postReply,
+    handle,
+    flow,
+    binderCookie,
+  };
 }
 
-/** Simulate the direct_post endpoint publishing its transport signal. */
+/**
+ * Simulate the direct_post endpoint publishing its transport signal. `at`
+ * defaults to now; a test that needs the same-device deadline to have passed
+ * backdates it rather than faking the clock.
+ */
 function publishSignal(
   sessionUtils: ReturnType<typeof createSessionUtils>,
   stateHash: string,
-  signal: string
+  signal: string,
+  at: number = Date.now()
 ) {
-  sessionUtils.store.set(`wallet-login-signal:${stateHash}`, { signal, at: Date.now() });
+  sessionUtils.store.set(`wallet-login-signal:${stateHash}`, { signal, at });
+}
+
+/**
+ * Simulate the direct_post endpoint minting a Response Code for a same-device
+ * row (#405): the code the wallet is handed in `redirect_uri`, whose DIGEST the
+ * repository holds. Returns the raw code, as the wallet's browser would carry it.
+ */
+function issueResponseCode(
+  responseCodes: ReturnType<typeof createResponseCodes>,
+  stateHash: string,
+  expiresAt: number = Date.now() + WALLET_RETURN_CODE_TTL_MS
+): string {
+  const code = generateOid4vpResponseCode();
+  responseCodes.codes.set(hashOid4vpResponseCode(code), { stateHash, expiresAt });
+  return code;
+}
+
+/** Drive the wallet's browser onto the return leg. */
+async function followReturn(routes: Map<string, Handler>, responseCode: unknown, cookie?: string) {
+  const { reply, state } = createReply();
+  await routes.get('GET /wallet-login/return')!(
+    {
+      query: responseCode === undefined ? {} : { response_code: responseCode },
+      headers: cookie === undefined ? {} : { cookie },
+      ip: '127.0.0.1',
+    },
+    reply
+  );
+  return state;
+}
+
+/** Poll the status endpoint as the ORIGINAL tab. */
+async function pollStatus(routes: Map<string, Handler>, handle: string, cookie?: string) {
+  const { reply, state } = createReply();
+  await routes.get('GET /wallet-login/:handle/status')!(
+    { params: { handle }, headers: cookie === undefined ? {} : { cookie }, ip: '127.0.0.1' },
+    reply
+  );
+  return state;
+}
+
+/** The one refusal page the return route renders, with the stub's nonces. */
+const REFUSAL_PAGE = walletReturnRefusalPage({
+  cspNonce: 'test-style-nonce',
+  scriptNonce: 'test-script-nonce',
+  returnPath: WALLET_LOGIN_RETURN_PATH,
+});
+
+const AUTHENTICATED = {
+  status: 'authenticated',
+  userId: 'user-1',
+  externalSub: 'user@example.com',
+};
+
+/** Session-store writes that are browser SESSIONS, not flow/marker records. */
+function sessionMints(fastify: FastifyInstance): string[] {
+  return (fastify.sessionUtils.setSession as unknown as Mock).mock.calls
+    .map((c) => c[0] as string)
+    .filter((key) => !key.startsWith('wallet-'));
 }
 
 beforeEach(() => {
@@ -369,7 +482,7 @@ describe('wallet login — CSRF and the browser binder', () => {
 });
 
 describe('wallet login — the wallet invocation (QR + deep link)', () => {
-  it('renders a QR code and a deep link carrying the invocation the backend built', async () => {
+  it('renders a QR code carrying the invocation the backend built (cross-device)', async () => {
     const { postReply, flow } = await startFlow();
     const body = postReply.state.body as string;
 
@@ -383,9 +496,16 @@ describe('wallet login — the wallet invocation (QR + deep link)', () => {
 
     expect(body).toContain('<svg ');
     expect(body).toContain('role="img"');
+  });
+
+  it('renders a deep link carrying the same opaque invocation (same-device)', async () => {
+    const { postReply, flow } = await startFlow({ device: 'this' });
+    const body = postReply.state.body as string;
+
     // The deep link is the same opaque URI, HTML-escaped into the href.
     expect(body).toContain('Open my wallet');
     expect(body).toContain('openid4vp://?');
+    expect(body).toContain(`href="${flow.invocationUri.replace(/&/g, '&amp;')}"`);
   });
 
   it.each([
@@ -395,7 +515,7 @@ describe('wallet login — the wallet invocation (QR + deep link)', () => {
     'https://wallet.example/authorize',
   ])('keeps the deep link for the genuine wallet scheme %j', async (endpoint) => {
     envMock.OID4VP_WALLET_INVOCATION_ENDPOINT = endpoint;
-    const { postReply } = await startFlow();
+    const { postReply } = await startFlow({ device: 'this' });
     const body = postReply.state.body as string;
 
     // The point of the denylist: an open-ended set of wallet schemes still
@@ -421,7 +541,8 @@ describe('wallet login — the wallet invocation (QR + deep link)', () => {
     'javascript&colon;alert(1)//',
   ])('never renders %j as a clickable href', async (endpoint) => {
     envMock.OID4VP_WALLET_INVOCATION_ENDPOINT = endpoint;
-    const { postReply } = await startFlow();
+    // Same-device: the one variant that renders an href at all.
+    const { postReply } = await startFlow({ device: 'this' });
     const body = postReply.state.body as string;
 
     expect(body).not.toContain('Open my wallet');
@@ -893,5 +1014,542 @@ describe('wallet login — a LINK flow may never complete here (#238)', () => {
 
     expect(state.statusCode).toBe(302);
     expect(state.setCookies.some((c) => c.startsWith('__Host-qauth_session='))).toBe(true);
+  });
+});
+
+/**
+ * The same-device return leg (#405, ADR-013).
+ *
+ * Titles are conformance evidence: each cites the spec alias and section the
+ * matrix row pins, and the assertions are the observable form of that row.
+ * The Response Endpoint is not driven here — its own suite pins that it hands
+ * a `redirect_uri` only to a same-device row — so a wallet answering is
+ * simulated by `publishSignal` + `issueResponseCode`, and the wallet's browser
+ * following the redirect by `followReturn`.
+ */
+describe('wallet login — the device choice at flow start (#405)', () => {
+  it('defaults an absent device field to cross-device', async () => {
+    const { fastify, flow } = await startFlow();
+    const row = (fastify.repositories.oid4vpRequestStates.create as unknown as Mock).mock
+      .calls[0][0];
+
+    expect(row.sameDevice).toBe(false);
+    expect(flow.sameDevice).toBeUndefined();
+  });
+
+  it('(HAIP 1.0 §5.1) records the same-device choice on both the request-state row and the flow record', async () => {
+    const { fastify, flow } = await startFlow({ device: 'this' });
+    const row = (fastify.repositories.oid4vpRequestStates.create as unknown as Mock).mock
+      .calls[0][0];
+
+    expect(row.sameDevice).toBe(true);
+    expect(flow.sameDevice).toBe(true);
+    // Written together, from one choice: neither side can be same-device alone.
+    expect(row.stateHash).toBe(flow.stateHash);
+  });
+
+  it('offers both device choices on the identifier form, as plain submit buttons', async () => {
+    const { fastify, routes } = makeFastify();
+    await walletLoginRoute(fastify);
+
+    const { reply, state } = createReply();
+    await routes.get('GET /wallet-login')!({ query: {}, headers: {}, ip: '127.0.0.1' }, reply);
+
+    const body = state.body as string;
+    expect(body).toContain('name="device" value="this"');
+    expect(body).toContain('name="device" value="other"');
+    expect(body).toContain('Use a wallet on this device');
+    expect(body).toContain('Scan with a wallet on another device');
+  });
+
+  it('renders only the deep link for a same-device flow and only the QR for a cross-device flow', async () => {
+    const same = await startFlow({ device: 'this', returnTo: '/after' });
+    const cross = await startFlow({ device: 'other', returnTo: '/after' });
+    const sameBody = same.postReply.state.body as string;
+    const crossBody = cross.postReply.state.body as string;
+
+    expect(sameBody).toContain('Open my wallet');
+    expect(sameBody).toContain('href="openid4vp://?');
+    expect(sameBody).not.toContain('<svg ');
+    expect(sameBody).toContain('will bring you back here');
+
+    expect(crossBody).toContain('<svg ');
+    expect(crossBody).not.toContain('Open my wallet');
+    expect(crossBody).not.toContain('href="openid4vp://');
+    expect(crossBody).toContain('Waiting for your wallet');
+
+    // Both variants: the poller, the password footer, and a way to start over
+    // with the OTHER choice available.
+    for (const body of [sameBody, crossBody]) {
+      expect(body).toContain('/status');
+      expect(body).toContain('Cancel and sign in with a password');
+      expect(body).toContain('href="/ui/wallet-login?return_to=%2Fafter">Start again</a>');
+    }
+
+    // The noscript re-render keeps the variant the flow was started with.
+    const rerender = createReply();
+    await same.routes.get('GET /wallet-login/:handle')!(
+      {
+        params: { handle: same.handle },
+        headers: { cookie: `__Host-qauth_wallet_flow=${same.binderCookie}` },
+        ip: '127.0.0.1',
+      },
+      rerender.reply
+    );
+    expect(rerender.state.body as string).toContain('Open my wallet');
+    expect(rerender.state.body as string).not.toContain('<svg ');
+  });
+
+  it('renders an explanation, not a deep link, when a cross-device request is too large for a QR code', async () => {
+    // Past `QR_MAX_BYTES` (2331) by construction.
+    envMock.OID4VP_WALLET_INVOCATION_ENDPOINT = `openid4vp://${'x'.repeat(2500)}`;
+    const { postReply } = await startFlow({ device: 'other', returnTo: '/after' });
+    const body = postReply.state.body as string;
+
+    expect(body).not.toContain('<svg ');
+    expect(body).not.toContain('Open my wallet');
+    expect(body).toContain('too large to show as a code');
+    expect(body).toContain('href="/ui/wallet-login?return_to=%2Fafter"');
+    expect(body).toContain('Present a credential');
+  });
+});
+
+describe('wallet login — same-device flows never complete by polling (#405)', () => {
+  it('(OID4VP 1.0 §14.2) the poll never completes a same-device flow — it stays pending after the presentation arrives until the return leg lands', async () => {
+    const { fastify, routes, sessionUtils, handle, flow, binderCookie } = await startFlow({
+      device: 'this',
+    });
+    publishSignal(sessionUtils, flow.stateHash, 'received');
+    (resolveWalletPresentation as unknown as Mock).mockResolvedValue(AUTHENTICATED);
+    const cookie = `__Host-qauth_wallet_flow=${binderCookie}`;
+
+    // JSON poll and the noscript re-render alike.
+    const polled = await pollStatus(routes, handle, cookie);
+    expect(polled.body).toEqual({ status: 'pending' });
+
+    const rerender = createReply();
+    await routes.get('GET /wallet-login/:handle')!(
+      { params: { handle }, headers: { cookie }, ip: '127.0.0.1' },
+      rerender.reply
+    );
+    expect(rerender.state.body as string).toContain('Present a credential');
+
+    expect(resolveWalletPresentation).not.toHaveBeenCalled();
+    expect(sessionMints(fastify)).toEqual([]);
+    expect(polled.setCookies.some((c) => c.startsWith('__Host-qauth_session='))).toBe(false);
+    // The flow and its signal are still there: nothing was terminated.
+    expect(sessionUtils.store.has(`wallet-login:${handle}`)).toBe(true);
+    expect(sessionUtils.store.has(`wallet-login-signal:${flow.stateHash}`)).toBe(true);
+  });
+
+  it('(HAIP 1.0 §5.1) rejects a same-device presentation whose redirect was never followed once the Response Code deadline passes', async () => {
+    const { fastify, routes, sessionUtils, handle, flow, binderCookie } = await startFlow({
+      device: 'this',
+    });
+    (resolveWalletPresentation as unknown as Mock).mockResolvedValue(AUTHENTICATED);
+    const cookie = `__Host-qauth_wallet_flow=${binderCookie}`;
+
+    // One millisecond inside the window: still waiting for the wallet.
+    publishSignal(
+      sessionUtils,
+      flow.stateHash,
+      'received',
+      Date.now() - WALLET_RETURN_CODE_TTL_MS + 1000
+    );
+    expect((await pollStatus(routes, handle, cookie)).body).toEqual({ status: 'pending' });
+
+    // Past it: the code the wallet was handed can no longer be redeemed, so
+    // the presentation is rejected — actively, with a reason in the log.
+    publishSignal(
+      sessionUtils,
+      flow.stateHash,
+      'received',
+      Date.now() - WALLET_RETURN_CODE_TTL_MS - 1
+    );
+    const rejected = await pollStatus(routes, handle, cookie);
+    expect(rejected.body).toEqual({ status: 'rejected', message: WALLET_LOGIN_REFUSAL });
+    expect(fastify.log.warn).toHaveBeenCalledWith(
+      expect.anything(),
+      'same-device presentation rejected: redirect not followed'
+    );
+
+    expect(resolveWalletPresentation).not.toHaveBeenCalled();
+    expect(sessionMints(fastify)).toEqual([]);
+    // Terminal: flow, signal and stash are gone.
+    expect(sessionUtils.store.has(`wallet-login:${handle}`)).toBe(false);
+    expect(sessionUtils.store.has(`wallet-login-signal:${flow.stateHash}`)).toBe(false);
+    expect((await pollStatus(routes, handle, cookie)).body.status).toBe('expired');
+  });
+
+  it('surfaces a wallet error on a same-device flow via the poll', async () => {
+    const { routes, sessionUtils, handle, flow, binderCookie } = await startFlow({
+      device: 'this',
+    });
+    publishSignal(sessionUtils, flow.stateHash, 'wallet_error');
+
+    const polled = await pollStatus(routes, handle, `__Host-qauth_wallet_flow=${binderCookie}`);
+    expect(polled.body).toEqual({ status: 'rejected', message: WALLET_LOGIN_REFUSAL });
+    expect(sessionUtils.store.has(`wallet-login:${handle}`)).toBe(false);
+  });
+
+  it('cross-device flows still complete via the poll exactly as before', async () => {
+    const { fastify, routes, sessionUtils, handle, flow, binderCookie } = await startFlow({
+      device: 'other',
+      returnTo: '/after',
+    });
+    publishSignal(sessionUtils, flow.stateHash, 'received');
+    (resolveWalletPresentation as unknown as Mock).mockResolvedValue(AUTHENTICATED);
+
+    const polled = await pollStatus(routes, handle, `__Host-qauth_wallet_flow=${binderCookie}`);
+    expect(polled.body).toEqual({ status: 'complete', redirect_to: '/after' });
+    expect(polled.setCookies.some((c) => c.startsWith('__Host-qauth_session='))).toBe(true);
+    // The binding is burned by the poll, as it always was.
+    expect(polled.setCookies.some((c) => c.startsWith('__Host-qauth_wallet_flow='))).toBe(true);
+    // No Response Code exists for a cross-device flow, and none is looked for.
+    expect(fastify.repositories.oid4vpRequestStates.redeemResponseCode).not.toHaveBeenCalled();
+    expect([...sessionUtils.store.keys()].some((k) => k.startsWith('wallet-login-done:'))).toBe(
+      false
+    );
+  });
+});
+
+describe('wallet login — the return leg (#405)', () => {
+  it('(OID4VP 1.0 §14.2, §14.3.3) the return leg completes a same-device flow only with the browser binder and a spent-once Response Code', async () => {
+    const { fastify, routes, sessionUtils, responseCodes, handle, flow, binderCookie } =
+      await startFlow({ device: 'this', returnTo: '/ui/consent?client_id=abc' });
+    publishSignal(sessionUtils, flow.stateHash, 'received');
+    const code = issueResponseCode(responseCodes, flow.stateHash);
+    (resolveWalletPresentation as unknown as Mock).mockResolvedValue(AUTHENTICATED);
+
+    const landed = await followReturn(routes, code, `__Host-qauth_wallet_flow=${binderCookie}`);
+
+    // The code was redeemed by DIGEST — the raw value never reaches the
+    // repository — and exactly once.
+    expect(fastify.repositories.oid4vpRequestStates.redeemResponseCode).toHaveBeenCalledTimes(1);
+    expect(fastify.repositories.oid4vpRequestStates.redeemResponseCode).toHaveBeenCalledWith(
+      hashOid4vpResponseCode(code)
+    );
+    expect(hashOid4vpResponseCode(code)).toMatch(/^[0-9a-f]{64}$/);
+
+    // The session was minted exactly as by polling.
+    expect(landed.statusCode).toBe(200);
+    expect(landed.setCookies.some((c) => c.startsWith('__Host-qauth_session='))).toBe(true);
+    expect(sessionMints(fastify)).toHaveLength(1);
+    expect(fastify.repositories.users.updateLastLogin).toHaveBeenCalledWith('user-1');
+    const events = (fastify.repositories.auditLogs.create as unknown as Mock).mock.calls.map(
+      (c) => (c[0] as { event: string }).event
+    );
+    expect(events).toContain('ui.wallet_login.success');
+
+    // The signed-in page, byte for byte, with the ORIGINAL tab's continuation
+    // only as a secondary link.
+    expect(landed.body).toBe(
+      walletSignedInPage({
+        cspNonce: 'test-style-nonce',
+        scriptNonce: 'test-script-nonce',
+        redirectTo: '/ui/consent?client_id=abc',
+        returnPath: WALLET_LOGIN_RETURN_PATH,
+      })
+    );
+    expect(landed.redirected).toBeUndefined();
+    expect(landed.body as string).toContain('history.replaceState');
+
+    // The done-marker was written for the original tab, and the binding was
+    // NOT dropped: that tab must still be able to prove it holds the flow.
+    expect(sessionUtils.store.get(`wallet-login-done:${handle}`)).toEqual({
+      binder: flow.binder,
+      mode: 'login',
+      redirectTo: '/ui/consent?client_id=abc',
+    });
+    expect(landed.setCookies.some((c) => c.startsWith('__Host-qauth_wallet_flow='))).toBe(false);
+
+    // The flow itself is terminal.
+    expect(sessionUtils.store.has(`wallet-login:${handle}`)).toBe(false);
+    expect(sessionUtils.store.has(`wallet-login-signal:${flow.stateHash}`)).toBe(false);
+  });
+
+  it("(OID4VP 1.0 §14.2) the original tab's poll consumes the done-marker once — complete with redirect_to, then expired", async () => {
+    const { fastify, routes, sessionUtils, responseCodes, handle, flow, binderCookie } =
+      await startFlow({ device: 'this', returnTo: '/after' });
+    publishSignal(sessionUtils, flow.stateHash, 'received');
+    const code = issueResponseCode(responseCodes, flow.stateHash);
+    (resolveWalletPresentation as unknown as Mock).mockResolvedValue(AUTHENTICATED);
+    const cookie = `__Host-qauth_wallet_flow=${binderCookie}`;
+
+    await followReturn(routes, code, cookie);
+    expect(sessionMints(fastify)).toHaveLength(1);
+
+    // A poll WITHOUT the binder learns nothing and burns nothing.
+    expect((await pollStatus(routes, handle)).body.status).toBe('expired');
+    expect(sessionUtils.store.has(`wallet-login-done:${handle}`)).toBe(true);
+
+    // The original tab: complete, with the flow's return_to, no second session,
+    // and its binding dropped now that the marker is consumed.
+    const first = await pollStatus(routes, handle, cookie);
+    expect(first.body).toEqual({ status: 'complete', redirect_to: '/after' });
+    expect(sessionMints(fastify)).toHaveLength(1);
+    expect(first.setCookies.some((c) => c.startsWith('__Host-qauth_session='))).toBe(false);
+    expect(first.setCookies.some((c) => c.startsWith('__Host-qauth_wallet_flow='))).toBe(true);
+    expect(sessionUtils.store.has(`wallet-login-done:${handle}`)).toBe(false);
+
+    // Once.
+    const second = await pollStatus(routes, handle, cookie);
+    expect(second.body).toEqual({ status: 'expired', message: WALLET_LOGIN_EXPIRED });
+  });
+
+  it('refuses a malformed, unknown, expired or replayed Response Code with one identical page', async () => {
+    const bodies: unknown[] = [];
+    const statuses: unknown[] = [];
+
+    // (1) Malformed: the repository is never asked.
+    {
+      const { fastify, routes, binderCookie } = await startFlow({ device: 'this' });
+      for (const junk of [undefined, '', 'not-a-code', 'A'.repeat(42), 'A'.repeat(44)]) {
+        const landed = await followReturn(routes, junk, `__Host-qauth_wallet_flow=${binderCookie}`);
+        bodies.push(landed.body);
+        statuses.push(landed.statusCode);
+      }
+      expect(fastify.repositories.oid4vpRequestStates.redeemResponseCode).not.toHaveBeenCalled();
+    }
+
+    // (2) Unknown: well-formed, never minted.
+    {
+      const { routes, binderCookie } = await startFlow({ device: 'this' });
+      const landed = await followReturn(
+        routes,
+        generateOid4vpResponseCode(),
+        `__Host-qauth_wallet_flow=${binderCookie}`
+      );
+      bodies.push(landed.body);
+      statuses.push(landed.statusCode);
+    }
+
+    // (3) Expired: minted, but past its own deadline.
+    {
+      const { routes, sessionUtils, responseCodes, flow, binderCookie } = await startFlow({
+        device: 'this',
+      });
+      publishSignal(sessionUtils, flow.stateHash, 'received');
+      const code = issueResponseCode(responseCodes, flow.stateHash, Date.now() - 1);
+      const landed = await followReturn(routes, code, `__Host-qauth_wallet_flow=${binderCookie}`);
+      bodies.push(landed.body);
+      statuses.push(landed.statusCode);
+    }
+
+    // (4) Replayed: a code that already completed its flow.
+    {
+      const { routes, sessionUtils, responseCodes, flow, binderCookie } = await startFlow({
+        device: 'this',
+      });
+      publishSignal(sessionUtils, flow.stateHash, 'received');
+      (resolveWalletPresentation as unknown as Mock).mockResolvedValue(AUTHENTICATED);
+      const code = issueResponseCode(responseCodes, flow.stateHash);
+      const cookie = `__Host-qauth_wallet_flow=${binderCookie}`;
+      expect((await followReturn(routes, code, cookie)).body as string).toContain('signed in');
+      const landed = await followReturn(routes, code, cookie);
+      bodies.push(landed.body);
+      statuses.push(landed.statusCode);
+    }
+
+    expect(new Set(bodies).size).toBe(1);
+    expect(bodies[0]).toBe(REFUSAL_PAGE);
+    expect(new Set(statuses)).toEqual(new Set([200]));
+    expect(REFUSAL_PAGE).toContain(WALLET_RETURN_REFUSAL.replace(/'/g, '&#39;'));
+    expect(REFUSAL_PAGE).not.toContain('Try again');
+    expect(REFUSAL_PAGE).toContain('Sign in with a password');
+    expect(REFUSAL_PAGE).toContain('history.replaceState');
+  });
+
+  it('(HAIP 1.0 §5.1) rejects a presentation whose redirect back arrives in a different user session — spends the code, discards the presentation, and the initiating poll answers rejected', async () => {
+    const { fastify, routes, sessionUtils, responseCodes, handle, flow, binderCookie } =
+      await startFlow({ device: 'this' });
+    publishSignal(sessionUtils, flow.stateHash, 'received');
+    sessionUtils.store.set(`wallet-presentation:${flow.stateHash}`, {
+      presentations: [{ format: 'dc+sd-jwt', compact: 'a.b.c' }],
+      at: Date.now(),
+    });
+    const code = issueResponseCode(responseCodes, flow.stateHash);
+    (resolveWalletPresentation as unknown as Mock).mockResolvedValue(AUTHENTICATED);
+
+    // The wallet opened a browser with an EMPTY cookie jar.
+    const landed = await followReturn(routes, code);
+
+    expect(landed.body).toBe(REFUSAL_PAGE);
+    expect(landed.statusCode).toBe(200);
+    expect(landed.setCookies.some((c) => c.startsWith('__Host-qauth_session='))).toBe(false);
+    expect(fastify.log.warn).toHaveBeenCalledWith(
+      expect.anything(),
+      'same-device return arrived in a foreign session'
+    );
+
+    // Spent: the same code in the RIGHT browser is refused too.
+    expect(fastify.repositories.oid4vpRequestStates.redeemResponseCode).toHaveBeenCalledTimes(1);
+    const replayed = await followReturn(routes, code, `__Host-qauth_wallet_flow=${binderCookie}`);
+    expect(replayed.body).toBe(REFUSAL_PAGE);
+
+    // Discarded: the parked bytes are gone and the signal says why.
+    expect(sessionUtils.store.has(`wallet-presentation:${flow.stateHash}`)).toBe(false);
+    expect(sessionUtils.store.get(`wallet-login-signal:${flow.stateHash}`)).toEqual({
+      signal: 'return_rejected',
+      at: expect.any(Number),
+    });
+
+    // The initiating tab is told, promptly, and nothing was ever minted.
+    const polled = await pollStatus(routes, handle, `__Host-qauth_wallet_flow=${binderCookie}`);
+    expect(polled.body).toEqual({ status: 'rejected', message: WALLET_LOGIN_REFUSAL });
+    expect(resolveWalletPresentation).not.toHaveBeenCalled();
+    expect(sessionMints(fastify)).toEqual([]);
+    expect(sessionUtils.store.has(`wallet-login:${handle}`)).toBe(false);
+  });
+
+  it('refuses a login-mode return for a link-mode flow', async () => {
+    const { fastify, routes, sessionUtils, responseCodes, handle, flow, binderCookie } =
+      await startFlow({ device: 'this' });
+    sessionUtils.store.set(`wallet-login:${handle}`, {
+      ...flow,
+      mode: 'link',
+      linkUserId: 'user-1',
+    });
+    publishSignal(sessionUtils, flow.stateHash, 'received');
+    const code = issueResponseCode(responseCodes, flow.stateHash);
+    (resolveWalletPresentation as unknown as Mock).mockResolvedValue(AUTHENTICATED);
+
+    const landed = await followReturn(routes, code, `__Host-qauth_wallet_flow=${binderCookie}`);
+
+    expect(landed.body).toBe(REFUSAL_PAGE);
+    expect(landed.statusCode).toBe(200);
+    expect(resolveWalletPresentation).not.toHaveBeenCalled();
+    expect(sessionMints(fastify)).toEqual([]);
+    expect(landed.setCookies.some((c) => c.startsWith('__Host-qauth_session='))).toBe(false);
+    // The code is spent regardless: burn precedes bind.
+    expect(fastify.repositories.oid4vpRequestStates.redeemResponseCode).toHaveBeenCalledTimes(1);
+  });
+
+  it('a rejected outcome after a spent code renders the existing refusal terminal page (401)', async () => {
+    // The Response Endpoint hands out a redirect_uri on its wallet-error path
+    // too (OID4VP 1.0 §8.2 "or for Error Responses"), so a same-device wallet
+    // that declined still brings the browser here.
+    const { fastify, routes, sessionUtils, responseCodes, handle, flow, binderCookie } =
+      await startFlow({ device: 'this' });
+    publishSignal(sessionUtils, flow.stateHash, 'wallet_error');
+    const code = issueResponseCode(responseCodes, flow.stateHash);
+
+    const landed = await followReturn(routes, code, `__Host-qauth_wallet_flow=${binderCookie}`);
+
+    expect(landed.statusCode).toBe(401);
+    expect(landed.body).toBe(
+      walletTerminalPage({
+        cspNonce: 'test-style-nonce',
+        title: 'Sign-in was not completed',
+        message: WALLET_LOGIN_REFUSAL,
+        returnTo: '/',
+        retry: true,
+      })
+    );
+    expect(landed.setCookies.some((c) => c.startsWith('__Host-qauth_session='))).toBe(false);
+    expect(sessionMints(fastify)).toEqual([]);
+    expect(sessionUtils.store.has(`wallet-login:${handle}`)).toBe(false);
+
+    // Byte for byte what the page GET renders for the same outcome.
+    const other = await startFlow({ device: 'this' });
+    publishSignal(other.sessionUtils, other.flow.stateHash, 'wallet_error');
+    const rendered = createReply();
+    await other.routes.get('GET /wallet-login/:handle')!(
+      {
+        params: { handle: other.handle },
+        headers: { cookie: `__Host-qauth_wallet_flow=${other.binderCookie}` },
+        ip: '127.0.0.1',
+      },
+      rendered.reply
+    );
+    expect(rendered.state.statusCode).toBe(401);
+    expect(rendered.state.body).toBe(landed.body);
+  });
+
+  it('sets Cache-Control: no-store and Referrer-Policy: no-referrer on every return-route response', async () => {
+    const responses: ReturnType<typeof createReply>['state'][] = [];
+
+    // Malformed, unknown and foreign refusals.
+    {
+      const { routes, sessionUtils, responseCodes, flow, binderCookie } = await startFlow({
+        device: 'this',
+      });
+      responses.push(
+        await followReturn(routes, 'junk', `__Host-qauth_wallet_flow=${binderCookie}`)
+      );
+      responses.push(
+        await followReturn(
+          routes,
+          generateOid4vpResponseCode(),
+          `__Host-qauth_wallet_flow=${binderCookie}`
+        )
+      );
+      publishSignal(sessionUtils, flow.stateHash, 'received');
+      responses.push(await followReturn(routes, issueResponseCode(responseCodes, flow.stateHash)));
+    }
+    // A completed return.
+    {
+      const { routes, sessionUtils, responseCodes, flow, binderCookie } = await startFlow({
+        device: 'this',
+      });
+      publishSignal(sessionUtils, flow.stateHash, 'received');
+      (resolveWalletPresentation as unknown as Mock).mockResolvedValue(AUTHENTICATED);
+      responses.push(
+        await followReturn(
+          routes,
+          issueResponseCode(responseCodes, flow.stateHash),
+          `__Host-qauth_wallet_flow=${binderCookie}`
+        )
+      );
+    }
+    // A rejected return (401 terminal page).
+    {
+      const { routes, sessionUtils, responseCodes, flow, binderCookie } = await startFlow({
+        device: 'this',
+      });
+      publishSignal(sessionUtils, flow.stateHash, 'wallet_error');
+      responses.push(
+        await followReturn(
+          routes,
+          issueResponseCode(responseCodes, flow.stateHash),
+          `__Host-qauth_wallet_flow=${binderCookie}`
+        )
+      );
+    }
+
+    expect(responses).toHaveLength(5);
+    for (const response of responses) {
+      expect(response.headers['Cache-Control']).toBe('no-store');
+      expect(response.headers['Referrer-Policy']).toBe('no-referrer');
+    }
+  });
+
+  it('the return route never writes an audit row or a session on refusal', async () => {
+    const { fastify, routes, sessionUtils, responseCodes, flow, binderCookie } = await startFlow({
+      device: 'this',
+    });
+    const auditRowsAtStart = (fastify.repositories.auditLogs.create as unknown as Mock).mock.calls
+      .length;
+    publishSignal(sessionUtils, flow.stateHash, 'received');
+    (resolveWalletPresentation as unknown as Mock).mockResolvedValue(AUTHENTICATED);
+    const cookie = `__Host-qauth_wallet_flow=${binderCookie}`;
+
+    const refusals = [
+      await followReturn(routes, 'junk', cookie),
+      await followReturn(routes, generateOid4vpResponseCode(), cookie),
+      // Foreign landing: the initiating flow is rejected, and even that
+      // rejection audits nothing here.
+      await followReturn(routes, issueResponseCode(responseCodes, flow.stateHash)),
+    ];
+
+    for (const refusal of refusals) {
+      expect(refusal.body).toBe(REFUSAL_PAGE);
+      expect(refusal.setCookies).toEqual([]);
+    }
+    expect((fastify.repositories.auditLogs.create as unknown as Mock).mock.calls).toHaveLength(
+      auditRowsAtStart
+    );
+    expect(sessionMints(fastify)).toEqual([]);
+    expect(resolveWalletPresentation).not.toHaveBeenCalled();
   });
 });

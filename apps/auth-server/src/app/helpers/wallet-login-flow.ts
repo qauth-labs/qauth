@@ -3,7 +3,7 @@ import { randomBytes } from 'node:crypto';
 import type { PresentedCredential } from '@qauth-labs/fastify-plugin-federation';
 import type { FastifyInstance } from 'fastify';
 
-import { WALLET_LOGIN_FLOW_TTL_MS } from '../constants';
+import { WALLET_LOGIN_DONE_MARKER_TTL_MS, WALLET_LOGIN_FLOW_TTL_MS } from '../constants';
 
 /**
  * Wallet-login flow state (issue #239, ADR-004 / ADR-009).
@@ -32,6 +32,23 @@ import { WALLET_LOGIN_FLOW_TTL_MS } from '../constants';
  * module must treat the signal as "the transport step finished" and nothing
  * more; see `helpers/wallet-presentation.ts` for the boundary that turns it into
  * an authentication decision, and for why that boundary refuses today.
+ *
+ * ## The same-device return leg (#405, ADR-013)
+ *
+ * A third record joins the two above when a flow was started on the device the
+ * wallet lives on: **the done-marker** (`wallet-login-done:<handle>`). On a
+ * same-device flow the wallet does not merely post its response — it is handed
+ * a `redirect_uri` carrying a fresh Response Code (OID4VP 1.0 §8.2, §14.2;
+ * HAIP 1.0 §5.1) and brings the user's browser back to
+ * `/ui/wallet-login/return`, which is where the flow completes. Wallets open
+ * that URL in a NEW tab, and the tab that started the flow is still polling; the
+ * marker is how the return leg tells that tab it is done. It is browser-side
+ * state like the flow record (keyed by handle, gated by the same binder), never
+ * something the wallet can write, and it mints nothing — see
+ * {@link writeWalletFlowDoneMarker}.
+ *
+ * The signal grows a third value for the same leg, `'return_rejected'`, and the
+ * flow record grows `sameDevice`; both are documented where they are declared.
  *
  * ## Why Redis, and what is stored in it
  *
@@ -84,6 +101,21 @@ const WALLET_SIGNAL_KEY_PREFIX = 'wallet-login-signal:';
  */
 const WALLET_REQUEST_OBJECT_KEY_PREFIX = 'wallet-request-object:';
 
+/**
+ * Redis namespace for the DONE-MARKER a same-device return leg leaves for the
+ * tab that started the flow (#405).
+ *
+ * A fifth namespace, keyed by the flow HANDLE like the flow record — it is
+ * about the browser, not the wallet — but kept apart from the flow record
+ * rather than folded into it as a field: the flow record is deleted on every
+ * terminal outcome (`deleteWalletLoginFlow`, "so a completed or refused flow
+ * cannot be polled again"), and the marker exists precisely to outlive that
+ * deletion by one read. Writing "done" INTO the flow record would mean keeping
+ * a finished flow addressable, which is the property the deletion exists to
+ * deny.
+ */
+const WALLET_DONE_MARKER_KEY_PREFIX = 'wallet-login-done:';
+
 /** CSPRNG bytes per handle and per binder; 32 bytes → 43 base64url characters. */
 const HANDLE_BYTES = 32;
 
@@ -91,16 +123,50 @@ const HANDLE_BYTES = 32;
 const HANDLE_PATTERN = /^[A-Za-z0-9_-]{43}$/;
 
 /**
- * What the wallet-side POST reports back to the waiting browser.
+ * What arrived for the waiting browser, and from whom.
  *
- * Only two values, and neither is an identity claim:
+ * Three values, and none is an identity claim:
  *
  * - `received` — a structurally-valid `vp_token` redeemed the request `state`.
+ *   Written by the wallet-side POST.
  * - `wallet_error` — the wallet returned an OAuth-style error instead (§8.2).
- *   The wallet's own error code is NOT propagated: it is attacker-controllable
- *   text, and the UI shows one refusal for every failure anyway.
+ *   Written by the wallet-side POST. The wallet's own error code is NOT
+ *   propagated: it is attacker-controllable text, and the UI shows one refusal
+ *   for every failure anyway.
+ * - `return_rejected` — a same-device `redirect_uri` was followed into a
+ *   browser that does not hold the flow (#405). Written by the RETURN ROUTE,
+ *   never by a wallet: it is QAuth's own record that the redirect "arrives in a
+ *   different user session to the one the request was initiated in", the case
+ *   HAIP 1.0 §5.1 says the Verifier MUST reject (and OID4VP 1.0 §14.2 names —
+ *   "the Wallet uses a browser different from the one used on the presentation
+ *   request"). Consumers treat it exactly like `wallet_error`: the flow ends as
+ *   refused, nothing is minted, and the presented bytes are already gone (see
+ *   {@link discardWalletPresentation}). It overwrites the `received` the wallet
+ *   wrote moments earlier, which is the point — the hard guarantee is that the
+ *   Response Code was spent on the foreign landing and the initiating flow can
+ *   never complete; this value is what lets that flow's poll SAY so instead of
+ *   waiting for the deadline.
  */
-export type WalletPresentationSignal = 'received' | 'wallet_error';
+export type WalletPresentationSignal = 'received' | 'wallet_error' | 'return_rejected';
+
+/** The signal as stored: which one, and when it was written (epoch ms). */
+export interface WalletPresentationSignalRecord {
+  signal: WalletPresentationSignal;
+  /**
+   * When the signal was published. Read by exactly one consumer — the
+   * same-device rejection deadline in the login state machine — and carried on
+   * the record rather than recomputed so the deadline is measured from the
+   * moment the wallet answered, not from whenever a poll happened to look.
+   */
+  at: number;
+  [key: string]: unknown;
+}
+
+const KNOWN_SIGNALS: ReadonlySet<string> = new Set<WalletPresentationSignal>([
+  'received',
+  'wallet_error',
+  'return_rejected',
+]);
 
 /**
  * What a wallet flow is FOR (issue #238).
@@ -185,6 +251,32 @@ export interface WalletLoginFlow {
    * lifetime and there is no path that ends one and not the other.
    */
   requestObjectHandle?: string;
+  /**
+   * Whether the user chose to open a wallet on THIS device (#405, ADR-013).
+   *
+   * Decided by the user's own form submission at flow start (HAIP 1.0 §5.1
+   * "If same-device flow is used") and written in TWO places atomically with
+   * each record: here, and as `same_device` on the `oid4vp_request_states`
+   * row. Neither copy can stand in for the other, because each side of the
+   * exchange reads only its own record. The ROW is what the wallet's POST
+   * redeems, so it is the row the Response Endpoint reads to decide whether to
+   * hand the wallet a `redirect_uri` at all (OID4VP 1.0 §14.2: the technique
+   * "is not applicable to cross-device scenarios") — the endpoint cannot name
+   * a browser and must not be able to read a flow record. The FLOW is what the
+   * browser's poll reads, so it is the flow the login state machine consults to
+   * refuse completion by polling ("MUST require the frontend to pass the
+   * respective Response Code") and to reject a presentation whose redirect was
+   * never followed. A boolean names no browser, so the row-side copy keeps the
+   * "wallet side cannot name a browser" invariant intact.
+   *
+   * Optional in the TYPE only, for the reason {@link mode} is: Redis holds
+   * records written by the previous binary, and every reader treats an absent
+   * value as `false` — the cross-device path that existed before #405, which
+   * is the only path such a record could ever have been on. The same default
+   * makes the form's absent `device` field mean cross-device, so the E2E
+   * harness and older clients keep completing by polling exactly as before.
+   */
+  sameDevice?: boolean;
   /** Relative path to redirect to after a completed sign-in. */
   returnTo: string;
   /** Binder mirrored in the signed `__Host-` wallet-flow cookie. */
@@ -301,7 +393,7 @@ export async function publishWalletPresentationSignal(
   signal: WalletPresentationSignal
 ): Promise<void> {
   try {
-    await fastify.sessionUtils.setSession<{ signal: WalletPresentationSignal; at: number }>(
+    await fastify.sessionUtils.setSession<WalletPresentationSignalRecord>(
       `${WALLET_SIGNAL_KEY_PREFIX}${stateHash}`,
       { signal, at: Date.now() },
       Math.floor(WALLET_LOGIN_FLOW_TTL_MS / 1000)
@@ -314,21 +406,89 @@ export async function publishWalletPresentationSignal(
   }
 }
 
-/** Read the wallet-side signal for a request, or null while none has arrived. */
-export async function readWalletPresentationSignal(
+/**
+ * Read the whole signal record for a request — which signal, and when — or
+ * null while none has arrived.
+ *
+ * The timestamp matters to exactly one reader: the login state machine's
+ * same-device deadline (#405), which rejects a `received` presentation whose
+ * `redirect_uri` was never followed once `at` is older than
+ * `WALLET_RETURN_CODE_TTL_MS`. A stored record whose `at` is not a finite
+ * number — nothing this module writes, but the store is shared — reads as
+ * arbitrarily OLD (`0`) rather than as "now": the only decision that looks at
+ * the field is a rejection deadline, and an unreadable timestamp must fail
+ * closed into the rejection it guards, not restart the clock.
+ *
+ * A stored `signal` outside the known set is a MISS, as before: the value is
+ * trusted downstream because QAuth authored it, so anything that is not one of
+ * QAuth's three markers is treated as nothing having been written.
+ */
+export async function readWalletPresentationSignalRecord(
   fastify: FastifyInstance,
   stateHash: string
-): Promise<WalletPresentationSignal | null> {
+): Promise<WalletPresentationSignalRecord | null> {
   try {
-    const record = await fastify.sessionUtils.getSession<{ signal: WalletPresentationSignal }>(
+    const record = await fastify.sessionUtils.getSession<WalletPresentationSignalRecord>(
       `${WALLET_SIGNAL_KEY_PREFIX}${stateHash}`
     );
-    if (record?.signal === 'received' || record?.signal === 'wallet_error') return record.signal;
-    return null;
+    if (typeof record?.signal !== 'string' || !KNOWN_SIGNALS.has(record.signal)) return null;
+    const at = typeof record.at === 'number' && Number.isFinite(record.at) ? record.at : 0;
+    return { signal: record.signal, at };
   } catch (error) {
     fastify.log.warn({ err: error }, 'wallet presentation signal store unavailable');
     return null;
   }
+}
+
+/**
+ * Read the wallet-side signal for a request, or null while none has arrived.
+ *
+ * The signal alone, for callers that do not need the timestamp; a thin wrapper
+ * over {@link readWalletPresentationSignalRecord} so the two can never disagree
+ * about what counts as a signal. Note that `'return_rejected'` (#405) IS
+ * returned here: a consumer that only knows the two wallet-written values
+ * falls through to its presentation seam, finds no parked bytes (the return
+ * route discarded them), and refuses — the same terminal outcome, reached the
+ * slow way. Consumers should still treat the value like `wallet_error`
+ * explicitly, so the reason lands in the log.
+ */
+export async function readWalletPresentationSignal(
+  fastify: FastifyInstance,
+  stateHash: string
+): Promise<WalletPresentationSignal | null> {
+  const record = await readWalletPresentationSignalRecord(fastify, stateHash);
+  return record === null ? null : record.signal;
+}
+
+/**
+ * Reject a presentation whose same-device redirect landed in a browser that
+ * does not hold the flow (#405; HAIP 1.0 §5.1, third bullet: "Verifiers MUST
+ * reject presentations if […] the redirect back arrives in a different user
+ * session to the one the request was initiated in").
+ *
+ * Called by the return route AFTER it has spent the Response Code and found no
+ * flow of this browser's that the code names. Two writes, best-effort and in
+ * this order: the parked presentation is deleted (attacker-reachable text
+ * that no surface will ever validate now has no business staying addressable
+ * for the rest of its TTL), then the signal is overwritten with
+ * `'return_rejected'` so the initiating flow's poll answers `rejected` on its
+ * next tick instead of spinning to the deadline.
+ *
+ * Neither write is the guarantee. The guarantee is the spent code: the
+ * initiating flow is same-device (a code redeems only for a `same_device`
+ * row), a same-device flow never completes by polling, and the one code that
+ * could have completed it on the return leg is gone. So this never throws and
+ * a failed write costs nothing but a slower refusal — the same posture as
+ * {@link publishWalletPresentationSignal}, for the same reason: it runs on a
+ * response to an unauthenticated landing, and that response must not depend
+ * on the store.
+ */
+export async function discardWalletPresentation(
+  fastify: FastifyInstance,
+  stateHash: string
+): Promise<void> {
+  await deleteWalletPresentationStash(fastify, stateHash);
+  await publishWalletPresentationSignal(fastify, stateHash, 'return_rejected');
 }
 
 /** Delete a consumed signal so a terminal flow cannot be replayed. */
@@ -529,5 +689,136 @@ export async function deleteWalletRequestObject(
     await fastify.sessionUtils.deleteSession(`${WALLET_REQUEST_OBJECT_KEY_PREFIX}${handle}`);
   } catch (error) {
     fastify.log.warn({ err: error }, 'failed to delete a wallet request object');
+  }
+}
+
+/**
+ * What a same-device return leg leaves for the tab that started the flow
+ * (#405, ADR-013).
+ *
+ * ## Why it exists
+ *
+ * Wallets open the `redirect_uri` in a NEW tab (`UIApplication.open` on iOS, an
+ * `ACTION_VIEW` intent on Android), while the OAuth client's `state` and PKCE
+ * verifier live in the ORIGINAL tab's `sessionStorage` — so the tab that
+ * completes the sign-in is not the tab that can continue it. The return leg
+ * therefore mints the browser session in the shared cookie jar, renders a
+ * "you're signed in, go back" page, and leaves THIS record for the original
+ * tab's poll to find where the flow record used to be. The poll answers
+ * `complete` with `redirectTo` once, the original tab navigates, and the
+ * client's callback runs in the tab that holds its verifier.
+ *
+ * ## What it is, in trust terms
+ *
+ * Nothing that confers anything. It carries a COPY of the flow's binder — the
+ * secret the browser proves with its `__Host-` cookie — so only the browser
+ * that started the flow can read it as "done" (the state machine compares
+ * with `csrfTokensEqual` before honouring it), and an already-validated
+ * relative `redirectTo`. It is written ONLY by a completed return leg, after
+ * the session exists, so it cannot complete a flow the return leg refused;
+ * and consuming it mints nothing — the session cookie is already in the jar.
+ * A marker read with the wrong binder, or by a poll that arrives after the
+ * TTL, is an `expired`, exactly what a missing flow answered before #405.
+ *
+ * ## Single read
+ *
+ * Deleted the moment the rightful poll consumes it (the state machine's job,
+ * not this module's — see {@link deleteWalletFlowDoneMarker}), for the reason
+ * the flow record is deleted on every terminal outcome: a finished flow must
+ * not stay addressable. The TTL, `WALLET_LOGIN_DONE_MARKER_TTL_MS`, equals the
+ * flow TTL and not less: a backgrounded phone tab polls only when it is
+ * brought back, and a marker gone by then would strand the very tab the leg
+ * exists to continue.
+ */
+export interface WalletFlowDoneMarker {
+  /** The flow's binder, copied so the marker is gated the way the flow was. */
+  binder: string;
+  /** Which state machine may consume it; a login poll must not eat a link's. */
+  mode: WalletFlowMode;
+  /** Where the original tab should continue (login mode); already validated. */
+  redirectTo?: string;
+  /**
+   * How the flow ended, for surfaces that render an outcome rather than
+   * navigate (link mode: the word its terminal page shows). Absent for login,
+   * whose only completed outcome is "continue to `redirectTo`".
+   */
+  outcome?: string;
+  [key: string]: unknown;
+}
+
+/**
+ * Leave a done-marker for the tab that started `handle`'s flow (#405).
+ *
+ * Called by the return leg AFTER the session has been minted and the flow
+ * terminated — the order is what makes the marker safe to write best-effort:
+ * by the time this runs the user IS signed in, and the worst a failed write
+ * can do is leave the original tab on "expired" while the return tab's
+ * "Continue here instead" link still works. Never throws, for that reason; a
+ * completed sign-in must not turn into a 500 because a courtesy record for
+ * another tab could not be stored.
+ */
+export async function writeWalletFlowDoneMarker(
+  fastify: FastifyInstance,
+  handle: string,
+  marker: WalletFlowDoneMarker
+): Promise<void> {
+  try {
+    await fastify.sessionUtils.setSession<WalletFlowDoneMarker>(
+      `${WALLET_DONE_MARKER_KEY_PREFIX}${handle}`,
+      marker,
+      Math.floor(WALLET_LOGIN_DONE_MARKER_TTL_MS / 1000)
+    );
+  } catch (error) {
+    fastify.log.warn(
+      { err: error },
+      'failed to write a wallet-login done-marker; the original tab will report expired'
+    );
+  }
+}
+
+/**
+ * Read the done-marker for `handle`, or null (#405).
+ *
+ * A malformed handle, no marker, a marker without a binder and an unreachable
+ * store are ONE null, for the reason {@link readWalletLoginFlow} gives: to the
+ * poll, each of them is "this flow is gone", and the answer must not vary
+ * with which. The caller — the state machine, which holds the browser's
+ * cookie — compares `binder` timing-safely and only then calls
+ * {@link deleteWalletFlowDoneMarker}. That ordering is deliberate: a poll that
+ * arrives WITHOUT the binder (a handle harvested from a screen share) must
+ * learn nothing and must not burn the marker the rightful tab is about to
+ * consume, so the read and the delete are separate primitives rather than one
+ * "consume".
+ */
+export async function readWalletFlowDoneMarker(
+  fastify: FastifyInstance,
+  handle: unknown
+): Promise<WalletFlowDoneMarker | null> {
+  if (!isWalletLoginHandle(handle)) return null;
+  try {
+    const record = await fastify.sessionUtils.getSession<WalletFlowDoneMarker>(
+      `${WALLET_DONE_MARKER_KEY_PREFIX}${handle}`
+    );
+    if (typeof record?.binder !== 'string' || record.binder.length === 0) return null;
+    return record;
+  } catch (error) {
+    fastify.log.warn({ err: error }, 'wallet-login done-marker store unavailable');
+    return null;
+  }
+}
+
+/**
+ * Delete the done-marker for `handle` once the rightful tab has consumed it
+ * (#405). Best-effort: the TTL bounds it regardless, and a marker that
+ * lingers is readable only by the browser that already acted on it.
+ */
+export async function deleteWalletFlowDoneMarker(
+  fastify: FastifyInstance,
+  handle: string
+): Promise<void> {
+  try {
+    await fastify.sessionUtils.deleteSession(`${WALLET_DONE_MARKER_KEY_PREFIX}${handle}`);
+  } catch (error) {
+    fastify.log.warn({ err: error }, 'failed to delete a wallet-login done-marker');
   }
 }
