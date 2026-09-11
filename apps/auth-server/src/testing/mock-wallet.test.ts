@@ -1,13 +1,16 @@
+import { compactDecrypt, decodeProtectedHeader, exportJWK, generateKeyPair, type JWK } from 'jose';
 import { describe, expect, it } from 'vitest';
 
 import {
   createMockIssuer,
   createMockWallet,
   DEFAULT_VCT,
+  encryptAuthorizationResponse,
   issuerJwksConfig,
   MOCK_WALLET_SD_JWT_VC_FORMAT,
   parseOid4vpRequest,
   presentCredential,
+  selectResponseEncryptionKey,
   type VpToken,
   WALLET_PRESENTATION_BUILDERS,
 } from './mock-wallet';
@@ -233,10 +236,167 @@ describe('answering a DCQL query', () => {
 
   it('can answer with a wallet error instead of a vp_token (§8.2)', async () => {
     const wallet = createMockWallet();
-    const response = wallet.buildErrorResponse(invocationUri(LOGIN_QUERY));
+    const response = await wallet.buildErrorResponse(invocationUri(LOGIN_QUERY));
 
     expect(response.formBody).toEqual({ state: 'state-value', error: 'access_denied' });
     expect(response.formBody['vp_token']).toBeUndefined();
+  });
+});
+
+/**
+ * The encrypted-response seam (#377 Phase C, OID4VP 1.0 §8.3, HAIP §5).
+ *
+ * The "Verifier" here is a bare `jose` key pair standing in for the one QAuth
+ * publishes per request. Decrypting on this side with `jose` too — never with
+ * QAuth's helper — keeps the fixture's own contract independent of the code
+ * the E2E then checks it against.
+ */
+describe('the encrypted-response seam — direct_post.jwt (#377 Phase C)', () => {
+  /** A per-request Verifier key pair, as QAuth would publish and hold it. */
+  async function verifierKey(
+    kid = 'req-kid-1'
+  ): Promise<{ published: JWK; privateKey: CryptoKey }> {
+    const { publicKey, privateKey } = await generateKeyPair('ECDH-ES', { crv: 'P-256' });
+    const published = { ...(await exportJWK(publicKey)), alg: 'ECDH-ES', use: 'enc', kid };
+    return { published, privateKey };
+  }
+
+  function encryptedInvocation(published: JWK, metadata: Record<string, unknown> = {}): string {
+    return invocationUri(LOGIN_QUERY, {
+      response_mode: 'direct_post.jwt',
+      client_metadata: JSON.stringify({
+        client_name: 'QAuth',
+        jwks: { keys: [published] },
+        encrypted_response_enc_values_supported: ['A128GCM', 'A256GCM'],
+        ...metadata,
+      }),
+    });
+  }
+
+  it('posts ONE response parameter and no cleartext state under direct_post.jwt', async () => {
+    const issuer = await createMockIssuer('https://issuer.example.com');
+    const wallet = createMockWallet([await issuer.issue()]);
+    const { published } = await verifierKey();
+
+    const response = await wallet.buildResponse(encryptedInvocation(published));
+
+    expect(Object.keys(response.formBody)).toEqual(['response']);
+    expect(response.formBody['response']?.split('.')).toHaveLength(5);
+  });
+
+  it('echoes the published kid in the JWE protected header, with ECDH-ES and the advertised enc (§8.3)', async () => {
+    const issuer = await createMockIssuer('https://issuer.example.com');
+    const wallet = createMockWallet([await issuer.issue()]);
+    const { published } = await verifierKey('the-kid');
+
+    const response = await wallet.buildResponse(encryptedInvocation(published));
+    const header = decodeProtectedHeader(response.formBody['response'] as string);
+
+    expect(header.alg).toBe('ECDH-ES');
+    // Both advertised, so HAIP §5's SHOULD: A256GCM.
+    expect(header.enc).toBe('A256GCM');
+    expect(header.kid).toBe('the-kid');
+    expect(header.zip).toBeUndefined();
+  });
+
+  it('encrypts the state and the vp_token as a JSON OBJECT to the published key', async () => {
+    const issuer = await createMockIssuer('https://issuer.example.com');
+    const wallet = createMockWallet([await issuer.issue()]);
+    const { published, privateKey } = await verifierKey();
+
+    const response = await wallet.buildResponse(encryptedInvocation(published));
+    const { plaintext } = await compactDecrypt(response.formBody['response'] as string, privateKey);
+    const payload = JSON.parse(new TextDecoder().decode(plaintext)) as Record<string, unknown>;
+
+    expect(payload['state']).toBe('state-value');
+    // §8.3: the payload is JSON, so vp_token is the object itself, not a string.
+    expect(payload['vp_token']).toEqual(response.vpToken);
+    expect(typeof payload['vp_token']).toBe('object');
+  });
+
+  it('falls back to A128GCM when the Verifier advertised no enc values (HAIP §5 floor)', async () => {
+    const { published } = await verifierKey();
+    const request = parseOid4vpRequest(
+      invocationUri(LOGIN_QUERY, {
+        response_mode: 'direct_post.jwt',
+        client_metadata: JSON.stringify({ jwks: { keys: [published] } }),
+      })
+    );
+
+    const jwe = await encryptAuthorizationResponse(request, { state: 'state-value' });
+
+    expect(decodeProtectedHeader(jwe).enc).toBe('A128GCM');
+  });
+
+  it('PREFERS A256GCM whenever it is advertised, wherever it sits in the list (HAIP §5)', async () => {
+    // "If both are supported, the Wallet SHOULD use A256GCM for the JWE enc."
+    // A wallet that took the first advertised value would post an enc a real
+    // HAIP wallet never produces against a Verifier listing both.
+    const { published } = await verifierKey();
+    const request = parseOid4vpRequest(
+      encryptedInvocation(published, {
+        encrypted_response_enc_values_supported: ['A128GCM', 'A256GCM'],
+      })
+    );
+
+    const jwe = await encryptAuthorizationResponse(request, { state: 'state-value' });
+
+    expect(decodeProtectedHeader(jwe).enc).toBe('A256GCM');
+  });
+
+  it('takes the first advertised enc value when A256GCM is not among them', async () => {
+    const { published } = await verifierKey();
+    const request = parseOid4vpRequest(
+      encryptedInvocation(published, {
+        encrypted_response_enc_values_supported: ['A128GCM', 'A192GCM'],
+      })
+    );
+
+    const jwe = await encryptAuthorizationResponse(request, { state: 'state-value' });
+
+    expect(decodeProtectedHeader(jwe).enc).toBe('A128GCM');
+  });
+
+  it('encrypts a wallet error too — a refusal is not a downgrade to plaintext', async () => {
+    const wallet = createMockWallet();
+    const { published, privateKey } = await verifierKey();
+
+    const response = await wallet.buildErrorResponse(encryptedInvocation(published));
+    const { plaintext } = await compactDecrypt(response.formBody['response'] as string, privateKey);
+
+    expect(Object.keys(response.formBody)).toEqual(['response']);
+    expect(JSON.parse(new TextDecoder().decode(plaintext))).toEqual({
+      state: 'state-value',
+      error: 'access_denied',
+    });
+  });
+
+  it('refuses to answer an encrypted request that publishes no key, rather than posting plaintext', async () => {
+    const issuer = await createMockIssuer('https://issuer.example.com');
+    const wallet = createMockWallet([await issuer.issue()]);
+
+    await expect(
+      wallet.buildResponse(invocationUri(LOGIN_QUERY, { response_mode: 'direct_post.jwt' }))
+    ).rejects.toThrow(/publishes no encryption key/);
+  });
+
+  it('refuses a published key that carries no kid (§5.1)', async () => {
+    const { published } = await verifierKey();
+    const unnamed: JWK = { ...published, kid: undefined };
+
+    expect(() => selectResponseEncryptionKey({ jwks: { keys: [unnamed] } })).toThrow(
+      /carries no kid/
+    );
+  });
+
+  it('still posts in the clear under plain direct_post, exactly as before', async () => {
+    const issuer = await createMockIssuer('https://issuer.example.com');
+    const wallet = createMockWallet([await issuer.issue()]);
+
+    const response = await wallet.buildResponse(invocationUri(LOGIN_QUERY));
+
+    expect(Object.keys(response.formBody).sort()).toEqual(['state', 'vp_token']);
+    expect(response.formBody).not.toHaveProperty('response');
   });
 });
 

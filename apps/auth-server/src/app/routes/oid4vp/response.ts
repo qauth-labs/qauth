@@ -1,24 +1,34 @@
 import {
+  assertEncryptedResponseStateMatches,
   assertProfileUnchanged,
+  assertResponseModeUnchanged,
   type DcqlQuery,
+  decryptOid4vpAuthorizationResponse,
+  DIRECT_POST_JWT_RESPONSE_MODE,
+  DIRECT_POST_RESPONSE_MODE,
+  type EncryptedAuthorizationResponse,
   hashOid4vpState,
   type Oid4vpDirectPostOutcome,
   Oid4vpTransportRejection,
   parseStoredDcqlQuery,
   parseVpToken,
+  readEncryptedResponseKid,
   type RedeemedOid4vpRequestState,
   resolveVerifierProfile,
 } from '@qauth-labs/fastify-plugin-federation';
 import type { FastifyInstance } from 'fastify';
 import { ZodTypeProvider } from 'fastify-type-provider-zod';
+import type { JWK } from 'jose';
 
 import { env } from '../../../config/env';
+import { unprotectOid4vpResponseKey } from '../../helpers/oid4vp-response-key';
 import { provisionedVerifierMaterial } from '../../helpers/verifier-identity';
 import {
   publishWalletPresentationSignal,
   stashWalletPresentation,
 } from '../../helpers/wallet-login-flow';
 import {
+  isEncryptedDirectPostRequest,
   type Oid4vpDirectPostRequest,
   oid4vpDirectPostRequestSchema,
   oid4vpDirectPostResponseSchema,
@@ -30,16 +40,24 @@ import {
  *
  * This is the `response_uri` QAuth-as-Verifier puts in every presentation
  * request. A wallet POSTs the Authorization Response here as
- * `application/x-www-form-urlencoded` (OID4VP 1.0 §8.1–§8.2).
+ * `application/x-www-form-urlencoded` (OID4VP 1.0 §8.1–§8.2) — in the clear
+ * under `direct_post`, or as ONE `response` parameter carrying a JWE under
+ * `direct_post.jwt` (§8.3; HAIP 1.0 §5.1, #377 Phase C).
  *
  * ## THIS ENDPOINT AUTHENTICATES NOBODY
  *
  * It does exactly three things:
  *
- *   1. Redeems the request `state` — ATOMICALLY and exactly once.
+ *   1. Redeems the request — ATOMICALLY and exactly once — by whichever
+ *      correlator the submission carries: the cleartext `state`, or the JWE
+ *      `kid` read out of the protected header without decrypting anything.
  *   2. Confirms the deployment's verifier posture still matches the one the
- *      request was built under.
- *   3. STRUCTURALLY parses `vp_token` against the DCQL query that was sent.
+ *      request was built under — the profile, and the Response Mode (with the
+ *      one exception §8.3.1 grants: a wallet that cannot encrypt may decline
+ *      in the clear).
+ *   3. Opens the response if it is encrypted, binds it to the row by the
+ *      `state` inside it, and STRUCTURALLY parses `vp_token` against the DCQL
+ *      query that was sent.
  *
  * It performs NO signature, credential, issuer, revocation or key-binding
  * validation, and it creates no user, no session and no token. `WalletProvider`
@@ -70,6 +88,23 @@ import {
  * consumed — including from a deployment whose stored state is corrupt, since
  * that failure is only reachable AFTER redemption and would otherwise be the one
  * response shape a real `state` uniquely produces.
+ *
+ * The encrypted path adds unknown `kid`, undecryptable ciphertext, an unreadable
+ * stored key and a `state` that does not match the row to that list, and every
+ * one of them renders the same refusal — with the same ordering discipline:
+ * the row is CONSUMED by its `kid` before a single byte of ciphertext is
+ * touched, so a failed decrypt cannot be retried against a still-live row, and
+ * a caller who can choose the ciphertext learns nothing from which byte it
+ * failed on.
+ *
+ * ## The `kid` is an index, not a proof (OID4VP 1.0 §14.5)
+ *
+ * An encrypted Authorization Response carries no integrity protection tying it
+ * to a request, so the `kid` — the only thing outside the ciphertext — is
+ * attacker-controlled and is used ONLY to find a row. What binds the response
+ * to the request is the `state` INSIDE the decrypted payload, compared against
+ * the row's digest (§5.3). Nothing between finding the row and that comparison
+ * trusts anything.
  */
 export default async function (fastify: FastifyInstance) {
   // Flag gate (#232 / #299). Checked at REGISTRATION, not per request: an
@@ -89,7 +124,7 @@ export default async function (fastify: FastifyInstance) {
     {
       schema: {
         description:
-          'OID4VP 1.0 direct_post Response Endpoint. Accepts a wallet Authorization Response (vp_token + state, or error + state) as application/x-www-form-urlencoded. TRANSPORT ONLY: the response is correlated against a single-use presentation request and structurally parsed. No signature, credential or issuer validation is performed and no user is authenticated (that is #234/#236).',
+          'OID4VP 1.0 direct_post Response Endpoint. Accepts a wallet Authorization Response as application/x-www-form-urlencoded: in the clear (vp_token + state, or error + state) under response_mode=direct_post, or as a single `response` parameter carrying a JWE (ECDH-ES P-256, A128GCM/A256GCM) encrypted to the per-request key published in client_metadata under response_mode=direct_post.jwt. TRANSPORT ONLY: the response is correlated against a single-use presentation request and structurally parsed. No signature, credential or issuer validation is performed and no user is authenticated (that is #234/#236).',
         tags: ['OID4VP'],
         body: oid4vpDirectPostRequestSchema,
         response: { 200: oid4vpDirectPostResponseSchema },
@@ -111,19 +146,45 @@ export default async function (fastify: FastifyInstance) {
     },
     async (request, reply) => {
       const body = request.body as Oid4vpDirectPostRequest;
-      const stateHash = hashOid4vpState(body.state);
+
+      // Which Response Mode this submission ARRIVED in, decided by its shape
+      // and by nothing the caller says about itself: one `response` parameter
+      // is the encrypted mode (§8.3), a cleartext `state` is the plain one.
+      // Compared against the mode the request ASKED for once the row is read.
+      const arrivedMode = isEncryptedDirectPostRequest(body)
+        ? DIRECT_POST_JWT_RESPONSE_MODE
+        : DIRECT_POST_RESPONSE_MODE;
 
       try {
         // (1) Single-use redemption. One guarded UPDATE — see the repository.
         // Deliberately the FIRST thing that happens: a replayed or expired state
         // must be rejected before any work is done on attacker-supplied bytes.
-        const redeemed = await fastify.repositories.oid4vpRequestStates.redeem(stateHash);
+        //
+        // The ENCRYPTED submission is redeemed by the JWE `kid` (#377 Phase C),
+        // read out of the protected header alone — a base64 decode and a JSON
+        // parse, no key operation — so the ordering discipline survives the
+        // ciphertext: the row is consumed before anything is decrypted, and a
+        // decrypt that fails has already spent the request. Redeeming AFTER a
+        // failed decrypt would leave the row live for the next attempt, which
+        // turns an unauthenticated POST into a retry oracle against a key QAuth
+        // itself published.
+        const redeemed = isEncryptedDirectPostRequest(body)
+          ? await fastify.repositories.oid4vpRequestStates.redeemByEncryptionKid(
+              readEncryptedResponseKid(body.response)
+            )
+          : await fastify.repositories.oid4vpRequestStates.redeem(hashOid4vpState(body.state));
 
         if (redeemed === undefined) {
           throw new Oid4vpTransportRejection(
-            'state did not redeem (unknown, expired, or already consumed)'
+            `${arrivedMode === DIRECT_POST_JWT_RESPONSE_MODE ? 'encryption kid' : 'state'} did not redeem (unknown, expired, or already consumed)`
           );
         }
+
+        // The digest the flow record and the parked presentation are addressed
+        // by. On the cleartext path it is what the row was just found BY; on
+        // the encrypted path it is what the decrypted `state` is held to below
+        // — either way, the stored column and never a value the caller chose.
+        const stateHash = redeemed.stateHash;
 
         // (2) Posture. The realm argument is null because `realms.verifier_profile`
         // does not exist yet (#299); when it does, the redeemed row already
@@ -150,6 +211,57 @@ export default async function (fastify: FastifyInstance) {
         }
 
         assertProfileUnchanged(redeemed.verifierProfile, profile.id);
+
+        // The mode is posture too (#377 Phase C). A request built under a
+        // profile that REQUIRES encryption asked for `direct_post.jwt`, and a
+        // cleartext post holding its `state` — which anyone who read the signed
+        // request object has — must not consume it; the reverse mismatch cannot
+        // correlate at all, but the check is stated symmetrically anyway.
+        //
+        // ONE carve-out, and it is the specification's. OID4VP 1.0 §8.3.1: "If
+        // a Wallet is unable to generate an encrypted response, it MAY send an
+        // error response without encryption as per Section 8.2." So a cleartext
+        // body carrying `error` and NO `vp_token` is the wallet declining in the
+        // one unencrypted form the spec allows it, and is taken as such against
+        // a `direct_post.jwt` row: the row is consumed — it already was, above —
+        // and the browser is told the wallet said no, instead of spinning until
+        // the request expires because the refusal was itself refused. It is not
+        // a downgrade: nothing credential-shaped travelled in the clear, and
+        // there is nothing to accept on the strength of it — an error response
+        // authenticates nobody and parks no bytes. A cleartext body that DOES
+        // carry a `vp_token` against such a row, `error` beside it or not, is
+        // the downgrade and is still refused: a presentation in the clear is
+        // exactly what the required mode exists to prevent.
+        const arrivedAsUnencryptedError =
+          !isEncryptedDirectPostRequest(body) &&
+          body.error !== undefined &&
+          body.vp_token === undefined;
+        const declinedUnencryptedUnderEncryptedRequest =
+          arrivedAsUnencryptedError && redeemed.responseMode === DIRECT_POST_JWT_RESPONSE_MODE;
+
+        if (declinedUnencryptedUnderEncryptedRequest) {
+          fastify.log.info(
+            { requestStateId: redeemed.id },
+            'OID4VP wallet declined a direct_post.jwt request with an unencrypted error response (OID4VP 1.0 §8.3.1)'
+          );
+        } else {
+          assertResponseModeUnchanged(redeemed.responseMode, arrivedMode);
+        }
+
+        // (2b) The response parameters — decrypted, or as posted (#377 Phase C).
+        //
+        // For the encrypted mode this is where the ciphertext is finally
+        // touched: the row's private half is read back by the marker the ROW
+        // carries, the JWE is opened under the crypto layer's pinned
+        // algorithms, and the `state` inside is held to the row's digest. That
+        // last step is the ONLY thing binding this response to this request —
+        // the `kid` that found the row proves nothing (§14.5) — and it is a
+        // time-safe digest comparison because the caller could choose the
+        // plaintext. The cleartext mode's parameters need no such step: the row
+        // was found by the digest of the `state` they carry.
+        const parameters: EncryptedAuthorizationResponse = isEncryptedDirectPostRequest(body)
+          ? await openEncryptedResponse(fastify, body.response, redeemed)
+          : { state: body.state, vpToken: body.vp_token, error: body.error };
 
         // A stored `dcql_query` that no longer parses is a SERVER data-integrity
         // failure — the column is written by QAuth when the request is built, so
@@ -201,9 +313,9 @@ export default async function (fastify: FastifyInstance) {
         // (3) A wallet-reported error (§8.2). The state is already consumed
         // above, which is the correct outcome: the exchange is over. The wallet's
         // error code is logged, never echoed — it is attacker-controllable text.
-        if (body.error !== undefined) {
+        if (parameters.error !== undefined) {
           fastify.log.info(
-            { requestStateId: correlated.id, walletError: body.error },
+            { requestStateId: correlated.id, walletError: parameters.error },
             'OID4VP wallet returned an error response'
           );
           // Wake a browser waiting on this request (#239) so it shows a refusal
@@ -214,7 +326,7 @@ export default async function (fastify: FastifyInstance) {
           return reply.code(200).send({});
         }
 
-        if (body.vp_token === undefined) {
+        if (parameters.vpToken === undefined) {
           throw new Oid4vpTransportRejection('response carries neither vp_token nor error');
         }
 
@@ -230,7 +342,7 @@ export default async function (fastify: FastifyInstance) {
         const outcome: Oid4vpDirectPostOutcome = {
           state: correlated,
           presentations: parseVpToken(
-            body.vp_token,
+            parameters.vpToken,
             correlated.dcqlQuery,
             profile.credentialFormats
           ),
@@ -295,4 +407,89 @@ export default async function (fastify: FastifyInstance) {
       }
     }
   );
+}
+
+/**
+ * A redeemed request-state row, as the repository returns it.
+ *
+ * Derived from the decorated repository rather than imported: `apps/auth-server`
+ * is `scope:app` and may not reach `@qauth-labs/infra-db`, and the DB plugin
+ * re-exports the repository interfaces but not the row types. Naming it off the
+ * method this handler actually calls also means the helper below can never be
+ * handed a row shape the redemption did not produce.
+ */
+type RedeemedRequestStateRow = NonNullable<
+  Awaited<
+    ReturnType<FastifyInstance['repositories']['oid4vpRequestStates']['redeemByEncryptionKid']>
+  >
+>;
+
+/**
+ * Open an encrypted Authorization Response with the key its redeemed row holds
+ * (#377 Phase C).
+ *
+ * Three steps, each of which can only fail AFTER the row has been consumed —
+ * which is why every failure renders the uniform transport refusal, whatever
+ * its cause. The private half exists NOWHERE but in `redeemed` by the time
+ * this runs: the redemption erased it from the table in the statement that
+ * consumed the row, so a failure here is final rather than retryable — which
+ * is the point.
+ *
+ *  1. Read the private half back. A row with no key, an unrecognised
+ *     protection marker, or an envelope the configured secret cannot open is a
+ *     SERVER data or configuration failure, and would be a 500 in isolation.
+ *     It is rendered as the one refusal for the reason the stored `dcql_query`
+ *     case gives in the handler: it is reachable only through a real, live,
+ *     unconsumed row, so a distinct status would be the one response shape
+ *     only a genuine `kid` can produce. Logged at `error` with the row, which
+ *     is the channel an operator can act on.
+ *  2. Decrypt under the crypto layer's pinned `alg`/`enc`. Wrong key, tampered
+ *     ciphertext, refused algorithm, `zip`, non-JSON plaintext — all one
+ *     refusal, with the cause carried for the log.
+ *  3. Bind the `state` inside to the row's digest (§5.3). Until this passes,
+ *     all that is known is that SOMEONE encrypted something to a key QAuth
+ *     published — which anyone who read `client_metadata` could do.
+ *
+ * @throws Oid4vpTransportRejection on any failure.
+ */
+async function openEncryptedResponse(
+  fastify: FastifyInstance,
+  response: string,
+  redeemed: RedeemedRequestStateRow
+): Promise<EncryptedAuthorizationResponse> {
+  let privateJwk: JWK;
+
+  try {
+    if (redeemed.responseEncryptionKid === null || redeemed.responseEncryptionPrivateJwk === null) {
+      // Unreachable through the repository — the row was found BY its kid, the
+      // schema's CHECK makes the three columns all-or-nothing, and the
+      // redemption projects their PRE-erasure values into this row (the one
+      // hand-off of the key: the same statement NULLed them in the table) —
+      // but the types say nullable, and a narrowing cast here would be the
+      // thing that hid a future row written around the constraint, or a
+      // refactored redemption that returned the NULLs it had just written.
+      throw new Error('redeemed row carries no ephemeral encryption key');
+    }
+
+    privateJwk = unprotectOid4vpResponseKey(
+      redeemed.responseEncryptionPrivateJwk,
+      redeemed.responseEncryptionKeyProtection,
+      redeemed.responseEncryptionKid
+    );
+  } catch (error) {
+    fastify.log.error(
+      { err: error, requestStateId: redeemed.id, realmId: redeemed.realmId },
+      'OID4VP request state carries an unusable ephemeral encryption key — server data or configuration failure, not a client error'
+    );
+
+    throw new Oid4vpTransportRejection(
+      'stored ephemeral encryption key could not be read (server data or configuration)'
+    );
+  }
+
+  const parameters = await decryptOid4vpAuthorizationResponse(response, privateJwk);
+
+  assertEncryptedResponseStateMatches(parameters.state, redeemed.stateHash);
+
+  return parameters;
 }

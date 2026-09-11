@@ -1025,6 +1025,52 @@ export const federationEnvSchema = z.object({
     .transform(
       parseVerifierCertificateFile('OID4VP_VERIFIER_TRUST_ANCHORS_PATH', MAX_VERIFIER_TRUST_ANCHORS)
     ),
+
+  /**
+   * `OID4VP_RESPONSE_KEY_SECRET` (#377 Phase C) — the OPT-IN at-rest secret for
+   * the per-request ephemeral encryption key behind `direct_post.jwt`.
+   *
+   * ## Not a trust question, and not required by any profile
+   *
+   * Every other `OID4VP_*` variable in this file decides whom QAuth believes or
+   * how QAuth identifies itself. This one decides how one column —
+   * `oid4vp_request_states.response_encryption_private_jwk` — is written. No
+   * specification requires protecting that column (OID4VP 1.0, HAIP 1.0 and
+   * RFC 7516/7518/9101 are silent), the key opens exactly one response on a row
+   * that expires within minutes, and it sits beside a `nonce` the same row
+   * already stores in the clear. So the DEFAULT is plaintext, and this switch
+   * is for a deployment whose threat model includes a read-only database leak.
+   *
+   * ## Shape
+   *
+   * Exactly 32 bytes (one AES-256 key), base64 or base64url — both decode to the
+   * same bytes, and `openssl rand -base64 32` is the documented way to mint one.
+   * The LENGTH is checked in `apps/auth-server` (`resolveOid4vpResponseKeySecret`)
+   * rather than here, where only a size bound is applied: decoding and refusing
+   * belong next to the code that uses the key, so the two rule sets cannot
+   * drift. Same empty-is-unset handling as the variables above — `${VAR:-}` is
+   * how an orchestrator materialises an absent variable.
+   *
+   * ## Rotation has a bounded consequence
+   *
+   * Each row records which scheme wrote it, so turning the option on never
+   * orphans a request in flight. Turning it OFF or rotating the secret leaves
+   * rows written under the old secret unreadable until they expire — at most
+   * `MAX_OID4VP_REQUEST_TTL_MS` (15 minutes) — so the old secret should stay
+   * configured for that long. A deployment that cannot arrange that loses the
+   * sign-ins in progress at the moment of the change, and nothing else.
+   */
+  OID4VP_RESPONSE_KEY_SECRET: z.preprocess(
+    (value) => (typeof value === 'string' && value.trim() === '' ? undefined : value),
+    z
+      .string()
+      // A 32-byte key is 44 base64 characters; anything materially longer is
+      // not a key of the required length and is refused at decode time in the
+      // auth-server. This bound exists so a mis-pasted PEM cannot reach that
+      // decoder as a multi-kilobyte string.
+      .max(128)
+      .optional()
+  ),
 });
 
 /** Federation environment configuration type. */

@@ -16,6 +16,7 @@ import { randomBytes } from 'node:crypto';
 import { exportJWK, generateKeyPair, importJWK, type JWK } from 'jose';
 
 import { JOSE_P256_CURVE } from './algorithms';
+import { findPrivateJwkMember } from './keys';
 
 /**
  * One half of an ECDH-ES key-agreement pair. Aliases the runtime-agnostic
@@ -204,12 +205,6 @@ export async function exportEncryptionPrivateJwk(
 }
 
 /**
- * JWK members carrying private key material — refused by
- * {@link importEncryptionPublicJwk}.
- */
-const PRIVATE_JWK_MEMBERS = ['d', 'p', 'q', 'dp', 'dq', 'qi', 'k'] as const;
-
-/**
  * Validate the shared shape of an untrusted `ECDH-ES` P-256 JWK.
  *
  * `jose` does NOT pin the curve when importing for `ECDH-ES` — a `P-384` (or
@@ -243,20 +238,19 @@ function assertEcdhEsP256Jwk(jwk: JWK): void {
  *
  * Every member of the JWK is attacker-controlled, so the curve, key type, and
  * any declared `alg`/`use` are validated against this library's fixed policy
- * before `jose` sees them, and private members are refused outright rather than
- * stripped.
+ * before `jose` sees them, and private members (`PRIVATE_JWK_MEMBERS` in `keys.ts`)
+ * are refused outright rather than stripped.
  *
  * @param jwk - Untrusted public JWK.
  * @returns The imported public key, usable as an encryption recipient.
  * @throws Error if the JWK is not a public `ECDH-ES` P-256 key.
  */
 export async function importEncryptionPublicJwk(jwk: JWK): Promise<EncryptionKey> {
-  for (const member of PRIVATE_JWK_MEMBERS) {
-    if (jwk[member] !== undefined) {
-      throw new Error(
-        `Public encryption JWK must not carry private key material (found '${member}').`
-      );
-    }
+  const privateMember = findPrivateJwkMember(jwk);
+  if (privateMember !== undefined) {
+    throw new Error(
+      `Public encryption JWK must not carry private key material (found '${privateMember}').`
+    );
   }
   assertEcdhEsP256Jwk(jwk);
   const key = await importJWK(jwk, 'ECDH-ES');

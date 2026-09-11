@@ -11,6 +11,12 @@
  * than the deployment can do. That is exactly the regression these tests exist
  * to catch: a capability claimed on the strength of a library function existing,
  * rather than of key material being provisioned, silently LIFTS the gate.
+ *
+ * Response encryption is the one entry where "a library function exists" and
+ * "this deployment can operate it" are the SAME statement (#377 Phase C): the
+ * pair is minted per request and nothing is provisioned, so the honest answer
+ * is `true` for every build that ships the intake. The tests below hold the
+ * gate to still READING that answer rather than assuming it.
  */
 import { createConfiguredProviders } from '@qauth-labs/fastify-plugin-federation';
 import { describe, expect, it } from 'vitest';
@@ -132,14 +138,23 @@ describe('deriveCryptoCapabilities (#298 F1, #377)', () => {
     expect(capabilities.signingAlgs).not.toContain('RS256');
   });
 
-  it('does NOT claim response encryption, even though core-crypto ships encryptJwe/decryptJwe', () => {
-    // The distinction the module exists for, now visible in one descriptor: the
-    // JWE primitives exist and are tested, but nothing in the workspace calls
-    // them. There is no `direct_post.jwt` response mode, no published
-    // client_metadata encryption JWK and no intake route to decrypt at, so this
-    // deployment cannot operate an encrypted Authorization Response. Phase C of
-    // #377 flips it.
-    expect(deriveCryptoCapabilities(WITH_VERIFIER_IDENTITY).responseEncryption).toBe(false);
+  it('claims response encryption for EVERY deployment, because the path needs no operator key (#377 Phase C)', () => {
+    // The one entry answered by the build rather than by the configuration.
+    // The per-request ECDH-ES pair is minted at request time (HAIP §5), its
+    // public half is published in client_metadata, and the intake decrypts with
+    // the private half the row carries — nothing for an operator to provision,
+    // so a predicate here would only ever be false by mistake. Asserted on the
+    // EMPTIEST fixture, so the claim cannot be riding on the verifier identity.
+    expect(deriveCryptoCapabilities(NOTHING_OPTIONAL).responseEncryption).toBe(true);
+    expect(deriveCryptoCapabilities(WITH_VERIFIER_IDENTITY).responseEncryption).toBe(true);
+  });
+
+  it('claims response encryption without the at-rest secret — it changes storage, not capability', () => {
+    // `OID4VP_RESPONSE_KEY_SECRET` is not among the inputs at all: the pure
+    // function cannot read it, and it must not, because a deployment that
+    // configured nothing stores the key in the clear and still decrypts.
+    expect(Object.keys(NOTHING_OPTIONAL)).not.toContain('responseKeySecret');
+    expect(deriveCryptoCapabilities(NOTHING_OPTIONAL).responseEncryption).toBe(true);
   });
 });
 
@@ -158,12 +173,32 @@ describe('the #299 boot gate over the REAL bootstrap capabilities (#298 F1, #377
     ).not.toThrow(/accepts 'ES256' for request signing/);
   });
 
-  it('still refuses haip-1.0 on the response-encryption count (Phase C of #377)', () => {
+  it('no longer refuses haip-1.0 on the response-encryption count either (#377 Phase C)', () => {
+    // The count Phase C cleared. As with the ES256 test above, asserting the
+    // ABSENCE of the old message is what stops this suite passing for the old
+    // reason — the profile still refuses, on the next count, see below.
     expect(() =>
       createConfiguredProviders({
         walletFederationEnabled: true,
         verifierProfileId: 'haip-1.0',
         cryptoCapabilities: deriveCryptoCapabilities(WITH_VERIFIER_IDENTITY),
+        provisionedVerifierMaterial: WRPAC_PROVISIONED,
+      })
+    ).not.toThrow(/requires encrypted Authorization Responses/);
+  });
+
+  it('STILL refuses on the response-encryption count when a bootstrap answers false — the gate is not disabled', () => {
+    // The control: the refusal is a real predicate over the descriptor, and
+    // clearing it by answering `true` from the real bootstrap did not remove
+    // the check. A build that shipped without the intake and answered honestly
+    // would still be refused.
+    const real = deriveCryptoCapabilities(WITH_VERIFIER_IDENTITY);
+
+    expect(() =>
+      createConfiguredProviders({
+        walletFederationEnabled: true,
+        verifierProfileId: 'haip-1.0',
+        cryptoCapabilities: { signingAlgs: real.signingAlgs, responseEncryption: false },
         provisionedVerifierMaterial: WRPAC_PROVISIONED,
       })
     ).toThrow(/requires encrypted Authorization Responses/);
@@ -182,24 +217,43 @@ describe('the #299 boot gate over the REAL bootstrap capabilities (#298 F1, #377
     ).toThrow(/accepts 'ES256' for request signing/);
   });
 
-  it('lands on the key-storage assurance count once the encryption half is hypothetically met (#379)', () => {
-    // The count `haip-1.0` refuses on AFTER Phase C of #377 lands, asserted now
-    // so the ordering is proven rather than assumed. `responseEncryption` is
-    // forced true here — this is the ONE thing Phase C changes about this
-    // descriptor — and with the crypto half fully met the next guard in
-    // `createConfiguredProviders` is the #308/#379 one. Naming it specifically is
-    // what makes the boot-refusal suite honest: a test that merely asserted
-    // "haip-1.0 refuses" would pass for the counts #377 has already cleared.
-    const real = deriveCryptoCapabilities(WITH_VERIFIER_IDENTITY);
-
+  it('now lands on the key-storage assurance count with the REAL descriptor (#379)', () => {
+    // The count `haip-1.0` refuses on after Phase C, with nothing forced: the
+    // whole crypto half is met by the real bootstrap descriptor, so the next
+    // guard in `createConfiguredProviders` is the #308/#379 one. Naming it
+    // specifically is what makes the boot-refusal suite honest: a test that
+    // merely asserted "haip-1.0 refuses" would pass for the counts #377 has
+    // already cleared. (Before Phase C this test had to force
+    // `responseEncryption: true` by hand to reach this count.)
     expect(() =>
       createConfiguredProviders({
         walletFederationEnabled: true,
         verifierProfileId: 'haip-1.0',
-        cryptoCapabilities: { signingAlgs: real.signingAlgs, responseEncryption: true },
+        cryptoCapabilities: deriveCryptoCapabilities(WITH_VERIFIER_IDENTITY),
         provisionedVerifierMaterial: WRPAC_PROVISIONED,
       })
     ).toThrow(/requires key-storage assurance for every presentation/);
+  });
+
+  it('BOOTS haip-1.0 once the two operator-provisioned halves are also met', () => {
+    // The end state of #377: with the verifier identity, an attesting-issuer
+    // registry at the profile's floor and the status-list pair all provisioned,
+    // the real bootstrap descriptor clears every count and the gate admits the
+    // profile. Everything here is what an operator would actually configure;
+    // nothing about the crypto capabilities is forced.
+    expect(() =>
+      createConfiguredProviders({
+        walletFederationEnabled: true,
+        verifierProfileId: 'haip-1.0',
+        cryptoCapabilities: deriveCryptoCapabilities(WITH_VERIFIER_IDENTITY),
+        provisionedVerifierMaterial: WRPAC_PROVISIONED,
+        keyStorageAssuranceProvisioned: {
+          strongestAttestedKeyStorage: 'iso_18045_high',
+          hasKeyAttestationAnchors: false,
+        },
+        credentialStatusProvisioned: { trustAnchors: true, uriAllowlist: true },
+      })
+    ).not.toThrow();
   });
 
   it("still boots oid4vp-1.0-base — the profile that runs on today's crypto", () => {

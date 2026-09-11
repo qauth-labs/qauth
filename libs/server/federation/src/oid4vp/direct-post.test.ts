@@ -5,6 +5,7 @@ import type { CredentialFormat } from '../profiles/verifier-profile.types';
 import type { DcqlQuery } from './dcql';
 import {
   assertProfileUnchanged,
+  assertResponseModeUnchanged,
   MAX_PRESENTATIONS_PER_RESPONSE,
   MAX_VP_TOKEN_LENGTH,
   OID4VP_REJECTION_DESCRIPTION,
@@ -188,5 +189,38 @@ describe('assertProfileUnchanged', () => {
     expect(() => assertProfileUnchanged('oid4vp-1.0-base', 'haip-1.0')).toThrow(
       Oid4vpTransportRejection
     );
+  });
+});
+
+describe('assertResponseModeUnchanged (#377 Phase C)', () => {
+  it('accepts a submission that arrived in the mode its request asked for', () => {
+    expect(() => assertResponseModeUnchanged('direct_post', 'direct_post')).not.toThrow();
+    expect(() => assertResponseModeUnchanged('direct_post.jwt', 'direct_post.jwt')).not.toThrow();
+  });
+
+  it('refuses a cleartext post against a request that required encryption', () => {
+    // The downgrade: whoever read the signed request object holds its `state`,
+    // and "required" must not become "preferred" the moment they post it plain.
+    expect(() => assertResponseModeUnchanged('direct_post.jwt', 'direct_post')).toThrow(
+      Oid4vpTransportRejection
+    );
+  });
+
+  it('refuses an encrypted post against a request built for the plain mode', () => {
+    expect(() => assertResponseModeUnchanged('direct_post', 'direct_post.jwt')).toThrow(
+      Oid4vpTransportRejection
+    );
+  });
+
+  it('keeps the specific reason off the wire', () => {
+    try {
+      assertResponseModeUnchanged('direct_post.jwt', 'direct_post');
+    } catch (error) {
+      const rejection = error as Oid4vpTransportRejection;
+      expect(rejection.logReason).toContain('direct_post.jwt');
+      expect(rejection.toClientError().errorDescription).toBe(OID4VP_REJECTION_DESCRIPTION);
+      return;
+    }
+    throw new Error('expected a rejection');
   });
 });

@@ -1,6 +1,5 @@
 import { randomUUID } from 'node:crypto';
 
-import { DIRECT_POST_RESPONSE_MODE } from '@qauth-labs/fastify-plugin-federation';
 import { normalizeEmail } from '@qauth-labs/shared-validation';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { ZodTypeProvider } from 'fastify-type-provider-zod';
@@ -665,12 +664,28 @@ export default async function (fastify: FastifyInstance) {
           stateHash: invocation.stateHash,
           nonce: invocation.nonce,
           verifierProfile: capability.profile.id,
-          responseMode: DIRECT_POST_RESPONSE_MODE,
+          // The mode the request actually asked for, read off the built request
+          // rather than restated (#377 Phase C): the intake refuses a submission
+          // that arrives in the other mode, so this column has to be the truth.
+          responseMode: invocation.request.response_mode,
           // Spread into a fresh object literal: the column is typed
           // `Record<string, unknown>` and an interface has no implicit index
           // signature. Nothing is reshaped — this is the query that was sent.
           dcqlQuery: { ...invocation.request.dcql_query },
           expiresAt: invocation.expiresAt,
+          // The per-request decryption key, when the request is direct_post.jwt
+          // (#377 Phase C). All three columns or none — the schema's CHECK says
+          // so, and the helper hands them over as one value so a caller cannot
+          // copy two of them. It lands HERE and not on the flow record below:
+          // the row is what the wallet's response redeems, and the browser's
+          // record has no business carrying a private key.
+          ...(invocation.responseEncryption === undefined
+            ? {}
+            : {
+                responseEncryptionKid: invocation.responseEncryption.kid,
+                responseEncryptionPrivateJwk: invocation.responseEncryption.privateJwk,
+                responseEncryptionKeyProtection: invocation.responseEncryption.protection,
+              }),
         });
 
         const binder = generateWalletFlowSecret();

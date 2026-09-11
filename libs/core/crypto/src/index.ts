@@ -68,10 +68,12 @@ export {
 } from './lib/key-management';
 export {
   assertMlDsaSigningKey,
+  findPrivateJwkMember,
   isMlDsaKey,
   ML_DSA_65_LENGTHS,
   type MlDsaBackendId,
   MlDsaKey,
+  PRIVATE_JWK_MEMBERS,
   type RawSigningKeyPair,
   type SigningKey,
   type SigningKeyPair,

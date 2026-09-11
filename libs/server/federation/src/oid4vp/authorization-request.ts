@@ -2,8 +2,10 @@
  * OID4VP 1.0 Authorization Request generation (issues #233 Phase B, #377).
  *
  * Builds the request QAuth-as-Verifier sends to a wallet:
- * `response_type=vp_token`, `response_mode=direct_post`, a `response_uri`, a
- * `nonce`, a `state`, a DCQL `dcql_query` and `client_metadata`.
+ * `response_type=vp_token`, a `response_mode` (`direct_post`, or
+ * `direct_post.jwt` when the profile requires an encrypted response), a
+ * `response_uri`, a `nonce`, a `state`, a DCQL `dcql_query` and
+ * `client_metadata`.
  *
  * ## Everything here is profile-gated, fail-closed
  *
@@ -35,19 +37,42 @@
  * wire as query parameters at all — HAIP §5.1 mandates `request_uri`, so the
  * unsigned form has to be unreachable rather than merely unpreferred.
  *
+ * ## Encrypted responses (#377 Phase C)
+ *
+ * The Response Mode is a PROFILE decision, made by {@link selectOid4vpResponseMode}
+ * from the profile's `responseEncryption` posture and its `responseModes` list
+ * and nothing else. `required` selects `direct_post.jwt` (HAIP 1.0 §5.1 —
+ * *"Response encryption MUST be used by utilizing response mode
+ * direct_post.jwt"*); `forbidden` selects plain `direct_post`; `permitted`
+ * takes the profile's first listed mode. A profile whose two fields disagree is
+ * a misconfigured TABLE and is refused, never reconciled.
+ *
+ * Under `direct_post.jwt` the caller MINTS the per-request ECDH-ES pair (HAIP §5:
+ * *"ephemeral encryption public keys specific to each Authorization Request"*)
+ * and hands the public half in; this builder publishes it in `client_metadata`
+ * as `jwks` plus `encrypted_response_enc_values_supported` (OID4VP 1.0 §5.1),
+ * with the `kid` the wallet must echo in the JWE header (§8.3). Minting stays
+ * outside for the same reason signing does: the builder is pure, and the
+ * private half has to be PERSISTED by whoever owns the request state.
+ *
+ * The posture is enforced in both directions here: a key passed under a profile
+ * that forbids encryption is refused (forbidden means unreachable), and a
+ * profile that requires it refuses to build without one.
+ *
  * ## What is NOT here
  *
  * - **`x509_san_dns`.** The other signed prefix base OID4VP permits. HAIP
  *   mandates `x509_hash` and only that, so #377 builds one signed identity
  *   rather than two, and this refuses the other explicitly rather than
  *   silently downgrading it.
- * - **Encrypted responses** (`direct_post.jwt`). Phase C of #377: the response
- *   mode, the `client_metadata` encryption key and the decrypting intake all
- *   land together, because publishing any one of them alone asks a wallet for a
- *   response QAuth has nowhere to hand to.
+ * - **The intake.** Decrypting a `direct_post.jwt` response is
+ *   `response-encryption.ts`; this module only asks a wallet for one.
  *
  * @see https://openid.net/specs/openid-4-verifiable-presentations-1_0.html §5, §8
  */
+
+import { findPrivateJwkMember } from '@qauth-labs/core-crypto';
+import type { JWK } from 'jose';
 
 import {
   assertPrefixProvisioned,
@@ -72,12 +97,21 @@ import {
 } from './client-identifier';
 import { type CredentialRequestSpec, resolveCredentialFormatAdapter } from './credential-format';
 import { assertValidDcqlQuery, type DcqlQuery } from './dcql';
+import { OID4VP_ENCRYPTED_RESPONSE_ENC_VALUES } from './response-encryption';
 
 /** OID4VP 1.0 §5: the Response Type for a presentation request is always this. */
 export const OID4VP_RESPONSE_TYPE = 'vp_token';
 
 /** The base OID4VP 1.0 Response Mode this issue implements (§8.2). */
 export const DIRECT_POST_RESPONSE_MODE = 'direct_post' satisfies ResponseMode;
+
+/**
+ * The ENCRYPTED Response Mode (OID4VP 1.0 §8.3; HAIP 1.0 §5.1), #377 Phase C.
+ *
+ * The wallet's whole Authorization Response travels as one JWE in a single
+ * `response` parameter, encrypted to a key QAuth published for THIS request.
+ */
+export const DIRECT_POST_JWT_RESPONSE_MODE = 'direct_post.jwt' satisfies ResponseMode;
 
 /**
  * The Client Identifier Prefixes this builder can actually render.
@@ -104,6 +138,23 @@ export interface VerifierClientMetadata {
   readonly vp_formats_supported: Readonly<Record<string, Readonly<Record<string, string[]>>>>;
   /** Human-readable Verifier name, when the deployment configured one. */
   readonly client_name?: string;
+  /**
+   * The Verifier's encryption key set (OID4VP 1.0 §5.1), present only under
+   * `direct_post.jwt`.
+   *
+   * ONE key, minted for THIS request (HAIP §5), carrying `use: 'enc'`,
+   * `alg: 'ECDH-ES'` and the `kid` the wallet MUST echo in the JWE protected
+   * header (§8.3) — which is how the intake finds the private half without
+   * decrypting anything. A JWK Set rather than a bare key because that is the
+   * member's registered shape, and because §5.1 says the wallet selects from it.
+   */
+  readonly jwks?: { readonly keys: readonly JWK[] };
+  /**
+   * `enc` values the wallet may use (§5.1), present only under
+   * `direct_post.jwt`. Taken from the crypto layer's own decrypt allowlist so
+   * QAuth never advertises an algorithm it will then refuse.
+   */
+  readonly encrypted_response_enc_values_supported?: readonly string[];
 }
 
 /**
@@ -120,7 +171,13 @@ export interface VerifierClientMetadata {
 export interface Oid4vpAuthorizationRequest {
   readonly client_id: string;
   readonly response_type: typeof OID4VP_RESPONSE_TYPE;
-  readonly response_mode: typeof DIRECT_POST_RESPONSE_MODE;
+  /**
+   * `direct_post`, or `direct_post.jwt` when the profile requires encryption
+   * (#377 Phase C). Selected by {@link selectOid4vpResponseMode}; callers that
+   * persist the request state store THIS value, so the intake can refuse a
+   * submission that arrives in the other mode.
+   */
+  readonly response_mode: typeof DIRECT_POST_RESPONSE_MODE | typeof DIRECT_POST_JWT_RESPONSE_MODE;
   readonly response_uri: string;
   readonly nonce: string;
   readonly state: string;
@@ -164,6 +221,18 @@ export interface BuildOid4vpAuthorizationRequestOptions {
   readonly signingMaterial?: VerifierSigningMaterial;
   /** Optional human-readable Verifier name for `client_metadata`. */
   readonly clientName?: string;
+  /**
+   * The PUBLIC half of this request's ephemeral ECDH-ES pair (#377 Phase C),
+   * as `exportEncryptionPublicJwk` produces it — `kid` included.
+   *
+   * REQUIRED when {@link selectOid4vpResponseMode} answers `direct_post.jwt`
+   * for the profile, and REFUSED when the profile forbids encryption. The
+   * builder never mints one: minting produces a private half that has to be
+   * persisted with the request state, which is the caller's job, and a pure
+   * builder that generated key material would be a builder whose output could
+   * not be reproduced from its inputs.
+   */
+  readonly responseEncryptionKey?: JWK;
 }
 
 /**
@@ -250,6 +319,134 @@ function buildVpFormatsSupported(
   }
 
   return supported;
+}
+
+/**
+ * Choose the Response Mode a profile's posture dictates (#377 Phase C).
+ *
+ * A PURE function of the profile, exported because two callers have to agree
+ * on the answer before a request exists: the builder, which puts the mode on
+ * the wire, and the app's request helper, which has to know whether to MINT an
+ * encryption pair before it calls the builder. Reading `responseEncryption`
+ * here and `responseModes` there would let the two disagree; one function, one
+ * answer.
+ *
+ * The rule, from `CapabilityPosture`'s own definition:
+ *
+ *  - `required` → `direct_post.jwt`. HAIP 1.0 §5.1 makes response encryption a
+ *    MUST, and the encrypted mode is the only one that carries it.
+ *  - `forbidden` → `direct_post`. Forbidden means UNREACHABLE, so the encrypted
+ *    mode is never selected however the list is ordered.
+ *  - `permitted` → the profile's FIRST listed mode, the same preference rule
+ *    `presentedPrefixes[0]` follows. Neither shipped profile is `permitted`; a
+ *    future one states its preference by ordering its list.
+ *
+ * A profile whose posture names a mode its `responseModes` list does not permit
+ * is a contradiction in the TABLE — `haip-1.0` requiring encryption while
+ * listing only `direct_post`, say — and is refused here rather than resolved by
+ * picking a side. No profile is named; the data decides.
+ *
+ * @param profile - the ACTIVE profile.
+ * @returns the mode the request must ask for.
+ * @throws Error when the profile's posture and its permitted modes disagree,
+ * or when it permits no mode at all.
+ */
+export function selectOid4vpResponseMode(
+  profile: VerifierProfile
+): typeof DIRECT_POST_RESPONSE_MODE | typeof DIRECT_POST_JWT_RESPONSE_MODE {
+  const permitted = (mode: ResponseMode): boolean => profile.responseModes.includes(mode);
+
+  if (profile.responseEncryption === 'required') {
+    if (!permitted(DIRECT_POST_JWT_RESPONSE_MODE)) {
+      throw new Error(
+        `Verifier profile '${profile.id}' requires encrypted Authorization Responses but does not permit the '${DIRECT_POST_JWT_RESPONSE_MODE}' Response Mode that carries them (permitted: ${profile.responseModes.join(', ')}). The profile table contradicts itself; refusing rather than choosing which half to honour.`
+      );
+    }
+    return DIRECT_POST_JWT_RESPONSE_MODE;
+  }
+
+  if (profile.responseEncryption === 'forbidden') {
+    if (!permitted(DIRECT_POST_RESPONSE_MODE)) {
+      throw new Error(
+        `Verifier profile '${profile.id}' forbids encrypted Authorization Responses but does not permit the plain '${DIRECT_POST_RESPONSE_MODE}' Response Mode either (permitted: ${profile.responseModes.join(', ')}). The profile table contradicts itself; refusing rather than reaching for a mode the profile forbids.`
+      );
+    }
+    return DIRECT_POST_RESPONSE_MODE;
+  }
+
+  const preferred = profile.responseModes[0];
+
+  if (preferred === undefined) {
+    throw new Error(
+      `Verifier profile '${profile.id}' permits no Response Mode at all, so no Authorization Request can be built for it.`
+    );
+  }
+
+  return preferred;
+}
+
+/**
+ * Hold the encryption key the caller passed to the posture the profile declared
+ * (#377 Phase C) — both directions, because `CapabilityPosture` promises both.
+ *
+ * `direct_post.jwt` with no key is the "asking a wallet for a response we have
+ * nowhere to hand to" failure the Phase C design exists to prevent: the wallet
+ * would find no `jwks` in `client_metadata` and have nothing to encrypt to. It
+ * is a CALLER-WIRING bug, not an operator one — no operator material is needed
+ * for encryption, so the only way to get here is a caller that selected the
+ * mode and forgot to mint.
+ *
+ * `direct_post` WITH a key is refused rather than quietly left unpublished. A
+ * profile that forbids encryption forbids it — publishing a key would invite a
+ * wallet to encrypt a response the intake will not open — and a key that arrives
+ * anyway means the caller and the profile disagree about the posture.
+ *
+ * A key carrying PRIVATE material is refused whatever the posture: the builder
+ * publishes what it is handed, and the private half of the pair is the same
+ * `JWK` type as the public one.
+ */
+function assertResponseEncryptionKeyPosture(
+  profile: VerifierProfile,
+  mode: typeof DIRECT_POST_RESPONSE_MODE | typeof DIRECT_POST_JWT_RESPONSE_MODE,
+  key: JWK | undefined
+): void {
+  if (mode === DIRECT_POST_JWT_RESPONSE_MODE && key === undefined) {
+    throw new Error(
+      `Verifier profile '${profile.id}' selects the '${DIRECT_POST_JWT_RESPONSE_MODE}' Response Mode, so the request must publish a per-request encryption key in client_metadata (HAIP 1.0 §5, OID4VP 1.0 §5.1) — and none was passed to the builder. This is a caller-wiring bug rather than an operator misconfiguration: encryption needs no provisioned material, so the pair was simply not minted (#377 Phase C).`
+    );
+  }
+
+  if (mode === DIRECT_POST_RESPONSE_MODE && key !== undefined) {
+    throw new Error(
+      `Verifier profile '${profile.id}' selects the plain '${DIRECT_POST_RESPONSE_MODE}' Response Mode, and an encryption key was passed to the builder anyway. Refusing rather than publishing it: a profile whose posture is '${profile.responseEncryption}' for response encryption must not invite a wallet to encrypt a response this deployment will not open under that profile (#377 Phase C).`
+    );
+  }
+
+  if (key !== undefined && (typeof key.kid !== 'string' || key.kid.length === 0)) {
+    // OID4VP 1.0 §5.1: "Each JWK in the set MUST have a kid". It is also the
+    // ONLY thing the intake has to find the private half with (§8.3), so a key
+    // published without one produces a response QAuth cannot correlate.
+    throw new Error(
+      "The per-request encryption key passed to the builder carries no 'kid' (OID4VP 1.0 §5.1). The wallet echoes it in the JWE header and it is the only way the response can be matched to this request (#377 Phase C)."
+    );
+  }
+
+  const privateMember = key === undefined ? undefined : findPrivateJwkMember(key);
+
+  if (privateMember !== undefined) {
+    // The key goes into `client_metadata.jwks` EXACTLY as passed, inside a
+    // request object QAuth signs and serves to anyone holding the
+    // `request_uri`. The public and private halves of the pair are the same
+    // TypeScript type, differing only in the members they carry, so nothing
+    // but this check stands between a caller that passed the wrong half —
+    // `exportEncryptionPrivateJwk` where `exportEncryptionPublicJwk` was meant
+    // — and a signed document that hands every reader the scalar that decrypts
+    // the response. Refused by the crypto layer's own list of private members,
+    // so a member added there is refused here too.
+    throw new Error(
+      `The per-request encryption key passed to the builder carries private key material ('${privateMember}'). Only the PUBLIC half may be published in client_metadata.jwks — this is the private half, and publishing it inside the signed request object would hand every reader the key that decrypts the response (#377 Phase C).`
+    );
+  }
 }
 
 /**
@@ -340,25 +537,15 @@ export function buildOid4vpAuthorizationRequest(
 
   assertValidResponseUri(responseUri);
 
-  // Response mode. `haip-1.0` permits only 'direct_post.jwt' (HAIP §5.1), so it
-  // lands here — correctly: the encrypted mode is Phase C of #377 and arrives
-  // with the decrypting intake. The profile's own list decides, so no profile is
-  // named.
-  if (!profile.responseModes.includes(DIRECT_POST_RESPONSE_MODE)) {
-    throw new Error(
-      `Verifier profile '${profile.id}' does not permit the '${DIRECT_POST_RESPONSE_MODE}' Response Mode (permitted: ${profile.responseModes.join(', ')}). The encrypted 'direct_post.jwt' mode is Phase C of #377 and is not implemented yet.`
-    );
-  }
-
-  // Response encryption is a separate posture from the mode, and 'required'
-  // means the JWE stack must be WIRED outright — the primitives exist in
-  // `@qauth-labs/core-crypto` (#298), but nothing publishes an encryption key or
-  // decrypts a response until Phase C of #377.
-  if (profile.responseEncryption === 'required') {
-    throw new Error(
-      `Verifier profile '${profile.id}' requires encrypted Authorization Responses, and this deployment has no wired JWE path (Phase C of #377). Refusing rather than asking a wallet for a response it cannot encrypt to us.`
-    );
-  }
+  // Response mode and encryption, decided TOGETHER from the profile (#377 Phase
+  // C). The mode is a function of the posture — `required` is `direct_post.jwt`,
+  // `forbidden` is `direct_post` — and a table whose two fields disagree is
+  // refused. Then the key the caller passed is held to that answer in both
+  // directions: the encrypted mode without a key would ask a wallet for a
+  // response QAuth could not open, and the plain mode with a key would publish
+  // an invitation the profile forbids. No profile is named; the data decides.
+  const responseMode = selectOid4vpResponseMode(profile);
+  assertResponseEncryptionKeyPosture(profile, responseMode, options.responseEncryptionKey);
 
   // Verifier identity. Called for its refusals AND its answer: it narrows to the
   // prefixes this build can render, and every other outcome is a throw.
@@ -411,7 +598,7 @@ export function buildOid4vpAuthorizationRequest(
           // so this is a narrowing rather than an assumption.
           buildX509HashClientId((options.signingMaterial as VerifierSigningMaterial).leafDer),
     response_type: OID4VP_RESPONSE_TYPE,
-    response_mode: DIRECT_POST_RESPONSE_MODE,
+    response_mode: responseMode,
     response_uri: responseUri,
     nonce: options.nonce,
     state: options.state,
@@ -422,6 +609,18 @@ export function buildOid4vpAuthorizationRequest(
         dcqlQuery.credentials.map((credential) => credential.format)
       ),
       ...(options.clientName === undefined ? {} : { client_name: options.clientName }),
+      // The encryption key set and the `enc` allowlist (OID4VP 1.0 §5.1), only
+      // when the mode calls for them — `assertResponseEncryptionKeyPosture`
+      // has already made "key present" and "mode is direct_post.jwt" the same
+      // statement, so this spread branches on the key alone. The key goes in
+      // EXACTLY as minted, `kid` included: §8.3 has the wallet echo that `kid`,
+      // and the intake finds the private half by it.
+      ...(options.responseEncryptionKey === undefined
+        ? {}
+        : {
+            jwks: { keys: [options.responseEncryptionKey] },
+            encrypted_response_enc_values_supported: [...OID4VP_ENCRYPTED_RESPONSE_ENC_VALUES],
+          }),
     },
   };
 

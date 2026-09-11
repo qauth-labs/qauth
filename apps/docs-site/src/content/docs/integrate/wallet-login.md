@@ -117,9 +117,16 @@ button that fails:
   `OID4VP_VERIFIER_SIGNING_KEY` and its chain signs an `x509_hash`-identified
   request and delivers it by `request_uri`. What is refused is the profile
   mandating it with nothing to sign with.
-- The profile's posture needs an ENCRYPTED response. The JWE primitives shipped
-  with #298, but the `direct_post.jwt` path is Phase C of #377 — so `haip-1.0` is
-  still refused today, now on that count and on key-storage assurance (#379).
+- The profile's response posture contradicts its permitted modes — a table
+  entry requiring encryption while listing only plain `direct_post`, say. An
+  encrypted response itself is never a reason: `direct_post.jwt` is built (#377
+  Phase C) and needs nothing provisioned, because the ECDH-ES key is minted per
+  request, published in `client_metadata.jwks`, and the private half rides the
+  request-state row until the wallet's JWE arrives — and no longer: the same
+  statement that consumes the row erases the key, so a consumed row can never
+  decrypt its response again. `OID4VP_RESPONSE_KEY_SECRET` optionally wraps
+  that stored key in AES-256-GCM while the row is live; unset, it is stored in
+  the clear beside the `nonce` that already is.
 - The profile does not permit `dc+sd-jwt`, the one credential format QAuth ships
   an adapter for.
 - `OID4VP_REQUESTED_VCT` is unset. A DCQL query with no type constraint asks a
@@ -131,12 +138,13 @@ button that fails:
 | Variable                            | Default        | Notes                                                             |
 | ----------------------------------- | -------------- | ----------------------------------------------------------------- |
 | `WALLET_FEDERATION_ENABLED`         | `false`        | Registers the wallet provider and these routes                    |
-| `OID4VP_VERIFIER_PROFILE`           | _(none)_       | `oid4vp-1.0-base` is the only value that works today              |
+| `OID4VP_VERIFIER_PROFILE`           | _(none)_       | `oid4vp-1.0-base`, or `haip-1.0` once fully provisioned (#377)    |
 | `OID4VP_REQUESTED_VCT`              | _(none)_       | Comma-separated `vct` values; **no wallet flow without it**       |
 | `OID4VP_WALLET_INVOCATION_ENDPOINT` | `openid4vp://` | The wallet Authorization Endpoint the QR and deep link target     |
 | `OID4VP_VERIFIER_SIGNING_KEY`       | _(none)_       | ES256 key the Verifier signs a request object with (#377)         |
 | `OID4VP_VERIFIER_CERTIFICATE_CHAIN` | _(none)_       | `x5c` chain, leaf first, **anchor excluded** (#377)               |
 | `OID4VP_VERIFIER_TRUST_ANCHORS`     | _(none)_       | Anchors QAuth's OWN chain must terminate at (#377)                |
+| `OID4VP_RESPONSE_KEY_SECRET`        | _(none)_       | Opt-in AES-256-GCM wrap of the per-request decryption key (#377)  |
 | `OID4VP_TRUSTED_ISSUERS`            | _(empty)_      | Per-realm issuer allowlist (#236) — the opposite trust direction  |
 | `OID4VP_ISSUER_JWKS`                | _(empty)_      | Issuer public JWKs (#234) — **nothing verifies without it**       |
 | `OID4VP_SUBJECT_RESOLUTION`         | _(profile)_    | Account-resolution strategy (#300); defaults to `asserted-lookup` |
@@ -206,9 +214,10 @@ worse off than one conveying nothing. It grants no more than the operator's
 recorded claim, and the evidence still reports its source as `issuer-attested`.
 
 Note that `oid4vp-1.0-base` declares `keyStorageAssurance: forbidden`, so on the
-only profile that boots today this machinery establishes nothing and changes no
-behaviour. It becomes reachable when a profile whose posture is `permitted` or
-`required` can start — `haip-1.0` waits on Phase C of #377. See
+base profile this machinery establishes nothing and changes no behaviour. It is
+reachable under `haip-1.0`, whose posture is `required` at `iso_18045_high`, and
+which boots once the verifier identity, an attesting-issuer registry and the
+status-list pair are all provisioned (#377, #379). See
 [ADR-010](/reference/records/adr/010-acr-assurance-mapping/) §5.
 
 Three variables answer three different questions and must not be conflated:
@@ -555,13 +564,17 @@ against a trust anchor it holds **out of band** — never one the request carrie
 and checks `client_id` against the digest of the leaf before verifying the
 signature. That path is exercised by `helpers/wallet-login-request.test.ts`.
 
-A `haip-1.0` suite exists alongside it and is **pending Phase C of #377 and
-#379** (`wallet-federation-haip.integration.test.ts`): encrypted
-`direct_post.jwt` responses need the JWE path, and key-storage assurance needs an
-attesting-issuer registry. What it asserts today is that selecting that profile
-takes the deployment DOWN rather than serving wallet flows under a weaker
-posture — and, since #377, that the refusal names the response-encryption count
-specifically rather than the certificate and ES256 counts that are now cleared.
+A `haip-1.0` suite runs alongside it (`wallet-federation-haip.integration.test.ts`,
+#377 Phase C): the same wallet fetches and verifies the signed JAR, reads the
+per-request encryption key out of its `client_metadata`, encrypts the whole
+Authorization Response to it with `jose` directly, and posts one `response`
+parameter — which the intake finds by the JWE `kid`, consumes, decrypts and
+carries through to a session. It also proves what the encrypted mode adds: a
+replayed `response` is refused because its row was consumed, a response
+encrypted to a key QAuth never published is refused after consuming the row,
+and the same presentation posted in the clear is refused. The boot-gate half
+still asserts that a half-provisioned `haip-1.0` takes the deployment DOWN,
+naming the key-storage assurance count rather than any count #377 cleared.
 
 Interoperability with a REAL wallet is unverified, and which wallets implement
 HAIP 1.0 is an open research question. The procedure for a manual pass — and the

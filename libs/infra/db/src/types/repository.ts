@@ -466,6 +466,39 @@ export interface Oid4vpRequestStatesRepository {
    */
   redeem(stateHash: string, tx?: DbClient): Promise<Oid4vpRequestState | undefined>;
   /**
+   * ATOMICALLY consume a request state by its encryption `kid` (#377 Phase C)
+   * — the SECOND correlator, for a `direct_post.jwt` response that carries no
+   * cleartext `state`.
+   *
+   * The same single guarded `UPDATE` as {@link redeem}, on
+   * `response_encryption_kid` instead of `state_hash`, with the same
+   * consequences: exactly one caller sees a row, and unknown, expired and
+   * already-consumed are one indistinguishable `undefined`. The row is consumed
+   * BEFORE the ciphertext is decrypted, on purpose — a decrypt that failed
+   * against a still-live row would let a caller retry until something opened.
+   *
+   * The `kid` is attacker-controlled (OID4VP 1.0 §14.5) and is an OPAQUE lookup
+   * index here: a match proves only that a row with that `kid` was live. The
+   * binding that is trusted is the `state` inside the decrypted payload,
+   * checked against the returned row's `stateHash` by the caller.
+   *
+   * The returned row is the row AS CONSUMED, and this is the ONE hand-off of
+   * the private key: the same statement that sets `redeemed_at` NULLs
+   * `response_encryption_kid`, `response_encryption_private_jwk` and
+   * `response_encryption_key_protection` in the table, and projects their
+   * pre-update values into the result. The key's only job ends when the row is
+   * consumed, and a key that outlives its response is pure exposure — a later
+   * database dump plus retained POST bodies would decrypt historical
+   * presentations. The caller must decrypt from the returned value; no second
+   * read can ever produce it. {@link redeem} clears the same three columns
+   * (a consumed row keeps no key whichever correlator consumed it) but returns
+   * them NULL, because the cleartext path has no use for a key.
+   *
+   * There is deliberately no `findByEncryptionKid`, for the reason the module
+   * JSDoc gives: the only way to observe a row is to consume it.
+   */
+  redeemByEncryptionKid(kid: string, tx?: DbClient): Promise<Oid4vpRequestState | undefined>;
+  /**
    * Delete expired rows. Cleanup only — expiry is already enforced by
    * {@link Oid4vpRequestStatesRepository.redeem}'s guard, so this never affects
    * whether a state is accepted.

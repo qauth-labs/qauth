@@ -123,10 +123,10 @@ export function verifierSigningMaterial(): VerifierSigningMaterial | undefined {
  * default: `helpers/wallet-login-request.ts` and `routes/oid4vp/response.ts`.
  * They agreed with the boot gate only for as long as the boot gate refused
  * everything they would have refused. The moment a profile requiring a WRPAC can
- * actually START — Phase C of #377 — those two disagree with it: the deployment
- * boots on a validated chain, and then the login page renders no wallet link and
- * every presentation is rejected, both because the request path asked the
- * question with the material missing.
+ * actually START — which #377 Phase C made true — those two disagree with it:
+ * the deployment boots on a validated chain, and then the login page renders no
+ * wallet link and every presentation is rejected, both because the request path
+ * asked the question with the material missing.
  *
  * So the material is threaded from ONE place, exactly as `app.ts` derives its
  * gate marker from ONE call. A call site that computed its own answer is the

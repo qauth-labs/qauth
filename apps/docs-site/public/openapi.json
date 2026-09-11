@@ -3154,36 +3154,53 @@
         "tags": [
           "OID4VP"
         ],
-        "description": "OID4VP 1.0 direct_post Response Endpoint. Accepts a wallet Authorization Response (vp_token + state, or error + state) as application/x-www-form-urlencoded. TRANSPORT ONLY: the response is correlated against a single-use presentation request and structurally parsed. No signature, credential or issuer validation is performed and no user is authenticated (that is #234/#236).",
+        "description": "OID4VP 1.0 direct_post Response Endpoint. Accepts a wallet Authorization Response as application/x-www-form-urlencoded: in the clear (vp_token + state, or error + state) under response_mode=direct_post, or as a single `response` parameter carrying a JWE (ECDH-ES P-256, A128GCM/A256GCM) encrypted to the per-request key published in client_metadata under response_mode=direct_post.jwt. TRANSPORT ONLY: the response is correlated against a single-use presentation request and structurally parsed. No signature, credential or issuer validation is performed and no user is authenticated (that is #234/#236).",
         "requestBody": {
           "required": true,
           "content": {
             "application/json": {
               "schema": {
-                "type": "object",
-                "properties": {
-                  "vp_token": {
-                    "type": "string",
-                    "minLength": 1,
-                    "maxLength": 524288
+                "anyOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "vp_token": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 524288
+                      },
+                      "state": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 512
+                      },
+                      "error": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 256
+                      },
+                      "error_description": {
+                        "type": "string",
+                        "maxLength": 1024
+                      }
+                    },
+                    "required": [
+                      "state"
+                    ]
                   },
-                  "state": {
-                    "type": "string",
-                    "minLength": 1,
-                    "maxLength": 512
-                  },
-                  "error": {
-                    "type": "string",
-                    "minLength": 1,
-                    "maxLength": 256
-                  },
-                  "error_description": {
-                    "type": "string",
-                    "maxLength": 1024
+                  {
+                    "type": "object",
+                    "properties": {
+                      "response": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 540672
+                      }
+                    },
+                    "required": [
+                      "response"
+                    ]
                   }
-                },
-                "required": [
-                  "state"
                 ]
               }
             }

@@ -59,7 +59,39 @@ describe('federationEnvSchema (WALLET_FEDERATION_ENABLED — #232)', () => {
       'OID4VP_VERIFIER_CERTIFICATE_CHAIN_PATH',
       'OID4VP_VERIFIER_TRUST_ANCHORS',
       'OID4VP_VERIFIER_TRUST_ANCHORS_PATH',
+      'OID4VP_RESPONSE_KEY_SECRET',
     ]);
+  });
+});
+
+describe('federationEnvSchema (OID4VP_RESPONSE_KEY_SECRET — #377 Phase C)', () => {
+  it('is undefined when unset — the default posture stores the ephemeral key in the clear', () => {
+    expect(federationEnvSchema.parse({}).OID4VP_RESPONSE_KEY_SECRET).toBeUndefined();
+  });
+
+  it.each(['', '   '])(
+    'treats %o as unset, the way ${VAR:-} materialises an absent variable',
+    (raw) => {
+      expect(
+        federationEnvSchema.parse({ OID4VP_RESPONSE_KEY_SECRET: raw }).OID4VP_RESPONSE_KEY_SECRET
+      ).toBeUndefined();
+    }
+  );
+
+  it('passes a configured value through VERBATIM — decoding and the length rule live in auth-server', () => {
+    // 32 bytes, base64. Whether it decodes to exactly one AES-256 key is
+    // `resolveOid4vpResponseKeySecret`'s question, asked beside the code that
+    // uses it; this layer only bounds the size.
+    const secret = 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=';
+    expect(
+      federationEnvSchema.parse({ OID4VP_RESPONSE_KEY_SECRET: secret }).OID4VP_RESPONSE_KEY_SECRET
+    ).toBe(secret);
+  });
+
+  it('refuses a value that could not be a 32-byte key however it is encoded', () => {
+    expect(() =>
+      federationEnvSchema.parse({ OID4VP_RESPONSE_KEY_SECRET: 'A'.repeat(129) })
+    ).toThrow();
   });
 });
 

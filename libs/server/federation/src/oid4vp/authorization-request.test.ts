@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 
+import type { JWK } from 'jose';
 import { describe, expect, it } from 'vitest';
 
 import type { VerifierProfile } from '../profiles/verifier-profile.types';
@@ -14,12 +15,32 @@ import {
   assertNoRedirectUriParameter,
   assertValidResponseUri,
   buildOid4vpAuthorizationRequest,
+  DIRECT_POST_JWT_RESPONSE_MODE,
   DIRECT_POST_RESPONSE_MODE,
   encodeOid4vpRequestUri,
   OID4VP_RESPONSE_TYPE,
   QUERY_PARAMETER_DELIVERY,
+  selectOid4vpResponseMode,
 } from './authorization-request';
 import type { CredentialRequestSpec } from './credential-format';
+import { OID4VP_ENCRYPTED_RESPONSE_ENC_VALUES } from './response-encryption';
+
+/**
+ * A public JWK shaped as `exportEncryptionPublicJwk` produces it (#377 Phase C).
+ *
+ * A fixture rather than a minted key: the builder publishes the key it is
+ * handed and never performs a key operation on it, so what these tests need is
+ * the SHAPE — `kid` included — not a working curve point.
+ */
+const ENCRYPTION_JWK = {
+  kty: 'EC',
+  crv: 'P-256',
+  x: 'f83OJ3D2xF1Bg8vub9tLe1gHMzV76e8Tus9uPHvRVEU',
+  y: 'x_FEzRu9m36HLN_tue659LNpXW6pCyStikYjKIWI5a0',
+  alg: 'ECDH-ES',
+  use: 'enc',
+  kid: 'request-kid-1',
+} as const;
 
 const BASE = VERIFIER_PROFILES['oid4vp-1.0-base'];
 const HAIP = VERIFIER_PROFILES['haip-1.0'];
@@ -124,16 +145,31 @@ describe('buildOid4vpAuthorizationRequest — oid4vp-1.0-base', () => {
 });
 
 describe('buildOid4vpAuthorizationRequest — profile gating (fail-closed)', () => {
-  it('refuses a profile that does not permit direct_post (haip-1.0 requires direct_post.jwt)', () => {
-    expect(() => build({ profile: HAIP })).toThrow(
-      /does not permit the 'direct_post' Response Mode/
+  it('refuses a profile that requires encryption when no key was minted for the request', () => {
+    // Retargeted from the pre-Phase-C "not implemented" refusal. `haip-1.0`
+    // requires encryption, so the mode is `direct_post.jwt`, and a builder
+    // handed no per-request key would publish a request the wallet cannot
+    // answer. Asserted on the base profile with the posture flipped, so the
+    // refusal is about the POSTURE and not about haip-1.0's signed prefix.
+    const encryptedBase: VerifierProfile = {
+      ...BASE,
+      responseModes: ['direct_post.jwt'],
+      responseEncryption: 'required',
+    };
+
+    expect(() => build({ profile: encryptedBase })).toThrow(
+      /must publish a per-request encryption key in client_metadata/
     );
   });
 
-  it('refuses a profile that requires response encryption', () => {
-    const encryptedBase: VerifierProfile = { ...BASE, responseEncryption: 'required' };
+  it('refuses a profile whose posture requires encryption but whose mode list forbids it', () => {
+    // The table contradiction: `responseEncryption: 'required'` with only the
+    // plain mode permitted. Refused rather than resolved by picking a side.
+    const contradictory: VerifierProfile = { ...BASE, responseEncryption: 'required' };
 
-    expect(() => build({ profile: encryptedBase })).toThrow(/no wired JWE path/);
+    expect(() => build({ profile: contradictory, responseEncryptionKey: ENCRYPTION_JWK })).toThrow(
+      /does not permit the 'direct_post.jwt' Response Mode that carries them/
+    );
   });
 
   it('refuses a profile that requires signed requests, since this build cannot sign', () => {
@@ -248,12 +284,12 @@ describe('assertValidResponseUri', () => {
  * ## Why the profile below is a HAIP posture rather than `haip-1.0` itself
  *
  * `VERIFIER_PROFILES['haip-1.0']` also declares `direct_post.jwt` and
- * `responseEncryption: 'required'`, and the builder refuses BOTH — correctly:
- * they are Phase C of #377, which lands the encrypted response mode, the
- * published encryption key and the decrypting intake together. Relaxing exactly
- * those two members and nothing else is what isolates the signing half; every
- * other mandate — `clientIdPrefixes: ['x509_hash']`, `requestSigning:
- * 'required'`, `signingAlgs: ['ES256']` — is the shipped table's own.
+ * `responseEncryption: 'required'`, which the builder honours since #377 Phase
+ * C by demanding a per-request encryption key. Relaxing exactly those two
+ * members and nothing else is what isolates the signing half; every other
+ * mandate — `clientIdPrefixes: ['x509_hash']`, `requestSigning: 'required'`,
+ * `signingAlgs: ['ES256']` — is the shipped table's own. The literal entry,
+ * key and all, is driven in the Phase C block at the end of this file.
  */
 const HAIP_SIGNING_POSTURE: VerifierProfile = {
   ...HAIP,
@@ -385,10 +421,31 @@ describe('buildOid4vpAuthorizationRequest — the x509_hash prefix (#377)', () =
     );
   });
 
-  it('still refuses haip-1.0 itself, on the Phase C response-mode count', () => {
-    // The control for HAIP_SIGNING_POSTURE: the shipped table entry is NOT
-    // buildable yet, and this asserts it fails on the count Phase C owns rather
-    // than on anything #377 Phase B was supposed to clear.
+  it('builds haip-1.0 ITSELF once a per-request encryption key is supplied (Phase C)', () => {
+    // The control HAIP_SIGNING_POSTURE used to need: the shipped table entry is
+    // now buildable, and what it emits is the whole HAIP shape at once — the
+    // signed prefix from Phase A and the encrypted mode from Phase C.
+    const { material } = buildSigningMaterial();
+
+    const request = buildOid4vpAuthorizationRequest({
+      profile: HAIP,
+      responseUri: RESPONSE_URI,
+      credentials: [PID],
+      state: 'state-value',
+      nonce: 'nonce-value',
+      provisioned: verifierMaterialProvisionedBy(material),
+      signingMaterial: material,
+      responseEncryptionKey: ENCRYPTION_JWK,
+    });
+
+    expect(request.client_id.startsWith('x509_hash:')).toBe(true);
+    expect(request.response_mode).toBe(DIRECT_POST_JWT_RESPONSE_MODE);
+    expect(request.client_metadata.jwks?.keys).toEqual([ENCRYPTION_JWK]);
+  });
+
+  it('still refuses haip-1.0 itself when the encryption key is missing', () => {
+    // The fail-closed half of the test above: clearing Phase B must not have
+    // made the encrypted mode buildable WITHOUT its key.
     const { material } = buildSigningMaterial();
 
     expect(() =>
@@ -401,7 +458,7 @@ describe('buildOid4vpAuthorizationRequest — the x509_hash prefix (#377)', () =
         provisioned: verifierMaterialProvisionedBy(material),
         signingMaterial: material,
       })
-    ).toThrow(/does not permit the 'direct_post' Response Mode/);
+    ).toThrow(/must publish a per-request encryption key in client_metadata/);
   });
 
   it('leaves the unsigned base profile bit-for-bit unchanged', () => {
@@ -505,5 +562,188 @@ describe('encodeOid4vpRequestUri — delivery follows the prefix (#377)', () => 
         requestUri: REQUEST_URI,
       })
     ).toThrow(/MUST NOT carry a 'redirect_uri'/);
+  });
+});
+
+/**
+ * The encrypted Response Mode (#377 Phase C, HAIP 1.0 §5.1, OID4VP 1.0 §5.1).
+ *
+ * `haip-1.0` REQUIRES encryption and so is the natural fixture for the
+ * `direct_post.jwt` path; `ENCRYPTED_PERMITTED` below exists because neither
+ * shipped profile is `permitted`, and the preference rule for that posture has
+ * to be proven against something.
+ */
+describe('selectOid4vpResponseMode (#377 Phase C)', () => {
+  it('selects direct_post for the base profile, which forbids encryption', () => {
+    expect(selectOid4vpResponseMode(BASE)).toBe(DIRECT_POST_RESPONSE_MODE);
+  });
+
+  it('selects direct_post.jwt for haip-1.0, which requires it (HAIP §5.1)', () => {
+    expect(selectOid4vpResponseMode(HAIP)).toBe(DIRECT_POST_JWT_RESPONSE_MODE);
+  });
+
+  it('takes the FIRST listed mode when encryption is merely permitted', () => {
+    const preferEncrypted: VerifierProfile = {
+      ...BASE,
+      responseModes: ['direct_post.jwt', 'direct_post'],
+      responseEncryption: 'permitted',
+    };
+    const preferPlain: VerifierProfile = {
+      ...BASE,
+      responseModes: ['direct_post', 'direct_post.jwt'],
+      responseEncryption: 'permitted',
+    };
+
+    expect(selectOid4vpResponseMode(preferEncrypted)).toBe(DIRECT_POST_JWT_RESPONSE_MODE);
+    expect(selectOid4vpResponseMode(preferPlain)).toBe(DIRECT_POST_RESPONSE_MODE);
+  });
+
+  it('refuses a profile that forbids encryption but lists only the encrypted mode', () => {
+    // Forbidden means UNREACHABLE: the encrypted mode is never selected however
+    // the list is ordered, so a list with nothing else is a contradiction.
+    const contradictory: VerifierProfile = {
+      ...BASE,
+      responseModes: ['direct_post.jwt'],
+      responseEncryption: 'forbidden',
+    };
+
+    expect(() => selectOid4vpResponseMode(contradictory)).toThrow(
+      /forbids encrypted Authorization Responses but does not permit the plain/
+    );
+  });
+
+  it('refuses a profile that permits no mode at all', () => {
+    const empty: VerifierProfile = { ...BASE, responseModes: [], responseEncryption: 'permitted' };
+
+    expect(() => selectOid4vpResponseMode(empty)).toThrow(/permits no Response Mode at all/);
+  });
+});
+
+describe('buildOid4vpAuthorizationRequest — the encrypted direct_post.jwt mode (#377 Phase C)', () => {
+  /** The base profile with encryption REQUIRED — the posture without the signed prefix. */
+  const ENCRYPTED_BASE: VerifierProfile = {
+    ...BASE,
+    responseModes: ['direct_post.jwt'],
+    responseEncryption: 'required',
+  };
+
+  function buildEncrypted(
+    overrides: Partial<Parameters<typeof buildOid4vpAuthorizationRequest>[0]> = {}
+  ) {
+    return build({ profile: ENCRYPTED_BASE, responseEncryptionKey: ENCRYPTION_JWK, ...overrides });
+  }
+
+  it('asks for direct_post.jwt', () => {
+    expect(buildEncrypted().response_mode).toBe(DIRECT_POST_JWT_RESPONSE_MODE);
+  });
+
+  it('publishes the per-request key in client_metadata.jwks, kid included (§5.1)', () => {
+    const metadata = buildEncrypted().client_metadata;
+
+    expect(metadata.jwks?.keys).toHaveLength(1);
+    expect(metadata.jwks?.keys[0]).toEqual(ENCRYPTION_JWK);
+    // The `kid` is what the wallet echoes in the JWE header (§8.3) and the
+    // only thing the intake can find the private half with.
+    expect(metadata.jwks?.keys[0]?.kid).toBe('request-kid-1');
+  });
+
+  it("advertises exactly the crypto layer's decrypt allowlist as enc values (§5.1)", () => {
+    // By construction the same set `decryptJwe` pins, so QAuth cannot advertise
+    // an `enc` it would then refuse.
+    expect(buildEncrypted().client_metadata.encrypted_response_enc_values_supported).toEqual([
+      ...OID4VP_ENCRYPTED_RESPONSE_ENC_VALUES,
+    ]);
+    expect(buildEncrypted().client_metadata.encrypted_response_enc_values_supported).toContain(
+      'A128GCM'
+    );
+  });
+
+  it('keeps vp_formats_supported and client_name alongside the encryption members', () => {
+    const metadata = buildEncrypted({ clientName: 'QAuth' }).client_metadata;
+
+    expect(metadata.vp_formats_supported).toHaveProperty('dc+sd-jwt');
+    expect(metadata.client_name).toBe('QAuth');
+  });
+
+  it('refuses a key with no kid — the wallet could not name it back (§5.1, §8.3)', () => {
+    const unnamed: JWK = { ...ENCRYPTION_JWK, kid: undefined };
+
+    expect(() => buildEncrypted({ responseEncryptionKey: unnamed })).toThrow(/carries no 'kid'/);
+  });
+
+  /**
+   * The builder publishes the key it is handed inside a SIGNED request object
+   * (#377 Phase C review, F7). The private half is the same `JWK` type, so a
+   * caller that passed it would embed `d` in a document served to anyone
+   * holding the `request_uri`. Every private member the crypto layer knows
+   * about is refused, not just `d`.
+   */
+  it.each([
+    ['an EC private scalar', { d: 'ZJ6qKoJ9a4nXvDtUqQ3H5Rk3L1Xx0qXbJhfR9Wx8bR0' }],
+    ['an RSA prime', { p: 'not-actually-a-prime' }],
+    ['an RSA CRT exponent', { dp: 'crt' }],
+    ['a symmetric key', { k: 'AAAA' }],
+  ])('refuses a key carrying %s — only the public half may be published', (_, members) => {
+    const leaked: JWK = { ...ENCRYPTION_JWK, ...members };
+
+    expect(() => buildEncrypted({ responseEncryptionKey: leaked })).toThrow(
+      /carries private key material/
+    );
+  });
+
+  it('refuses the private half even under a profile where the mode check would refuse anyway', () => {
+    // Whichever refusal wins, the scalar never reaches a document.
+    const leaked: JWK = { ...ENCRYPTION_JWK, d: 'ZJ6qKoJ9a4nXvDtUqQ3H5Rk3L1Xx0qXbJhfR9Wx8bR0' };
+
+    expect(() => build({ profile: BASE, responseEncryptionKey: leaked })).toThrow();
+  });
+
+  it('never lets a private member into the serialised request, whichever form', () => {
+    const leaked: JWK = { ...ENCRYPTION_JWK, d: 'ZJ6qKoJ9a4nXvDtUqQ3H5Rk3L1Xx0qXbJhfR9Wx8bR0' };
+    let request: unknown;
+
+    try {
+      request = buildEncrypted({ responseEncryptionKey: leaked });
+    } catch {
+      request = undefined;
+    }
+
+    expect(JSON.stringify(request ?? {})).not.toContain(
+      'ZJ6qKoJ9a4nXvDtUqQ3H5Rk3L1Xx0qXbJhfR9Wx8bR0'
+    );
+  });
+
+  it('refuses a key under a profile that FORBIDS encryption (forbidden is unreachable)', () => {
+    expect(() => build({ profile: BASE, responseEncryptionKey: ENCRYPTION_JWK })).toThrow(
+      /must not invite a wallet to encrypt a response/
+    );
+  });
+
+  it('publishes NO encryption members under the plain mode', () => {
+    const metadata = build().client_metadata;
+
+    expect(metadata).not.toHaveProperty('jwks');
+    expect(metadata).not.toHaveProperty('encrypted_response_enc_values_supported');
+  });
+
+  it('leaves the base profile bit-for-bit unchanged', () => {
+    // The shape Phase C must not have touched: the base profile forbids
+    // encryption, so its request is exactly what it was before.
+    const request = build();
+
+    expect(request.response_mode).toBe(DIRECT_POST_RESPONSE_MODE);
+    expect(Object.keys(request.client_metadata).sort()).toEqual(['vp_formats_supported']);
+  });
+
+  it('serialises the encryption members into the inline query form', () => {
+    // An unsigned request under a `permitted` profile still carries the key set
+    // in `client_metadata`; the wallet reads it off the URI.
+    const encoded = new URL(encodeOid4vpRequestUri('openid4vp://', buildEncrypted()));
+    const metadata = JSON.parse(encoded.searchParams.get('client_metadata') as string) as {
+      jwks?: { keys: unknown[] };
+    };
+
+    expect(encoded.searchParams.get('response_mode')).toBe(DIRECT_POST_JWT_RESPONSE_MODE);
+    expect(metadata.jwks?.keys).toEqual([ENCRYPTION_JWK]);
   });
 });

@@ -30,10 +30,14 @@ Two things follow, and both are load-bearing:
 1. A **base-profile** (`oid4vp-1.0-base`) manual pass is possible today: unsigned
    request, `redirect_uri` Client Identifier Prefix, unencrypted `direct_post`.
    That is the pass described below.
-2. A **HAIP-profile** pass is blocked on #298 (ES256 + JWE) regardless of which
-   wallet is used, because QAuth cannot sign a request JAR or decrypt a
-   `direct_post.jwt` response yet. See
-   `apps/auth-server/src/app/wallet-federation-haip.integration.test.ts`.
+2. A **HAIP-profile** pass is possible against the mock wallet since #377
+   (Phases A–C): QAuth signs a request JAR under `x509_hash`, delivers it by
+   `request_uri`, publishes a per-request encryption key in `client_metadata`
+   and decrypts the `direct_post.jwt` response. It has not been attempted
+   against a real wallet. See
+   `apps/auth-server/src/app/wallet-federation-haip.integration.test.ts` for
+   what the automated pass covers, and the HAIP checklist below for what a
+   manual one adds.
 
 When someone evaluates a wallet, record the finding here: wallet, version, date,
 which profile it negotiated, and what failed. A "we tried X and it did not work"
@@ -209,23 +213,41 @@ against issuers who publish none has bought nothing.
 - [ ] A later wallet sign-in resolves to that same account, and its ID token's
       `sub` equals the password session's.
 
-## Checklist — HAIP profile (blocked on #298)
+## Checklist — HAIP profile
 
-Do not attempt until #298 lands; `haip-1.0` refuses to boot before then, which is
-itself worth confirming:
+`haip-1.0` boots only when every mandate is provisioned: the verifier identity
+(`OID4VP_VERIFIER_SIGNING_KEY` + chain + anchors), an attesting-issuer registry
+(`OID4VP_ATTESTING_ISSUERS`) and the status-list pair (`OID4VP_STATUS_LIST_*`).
+Response encryption needs nothing configured — the key is minted per request —
+so the fail-closed half is still worth confirming first:
 
-- [ ] Setting `OID4VP_VERIFIER_PROFILE=haip-1.0` makes the server refuse to
-      start, and the message names the missing capabilities rather than falling
-      back to the base profile.
+- [ ] Setting `OID4VP_VERIFIER_PROFILE=haip-1.0` with any of the above missing
+      makes the server refuse to start, and the message names the missing
+      capability rather than falling back to the base profile.
 
-When #298 lands, the additional items are:
+With everything provisioned, the additional items are:
 
 - [ ] The request is delivered as a **signed** JAR referenced by `request_uri`.
 - [ ] `client_id` carries the `x509_hash` prefix, and the wallet validates the
       `x5c` chain against a trust anchor **not** present in the header.
 - [ ] The response arrives as `direct_post.jwt`, encrypted with ECDH-ES over
       P-256 and A128GCM or A256GCM, to the encryption key QAuth published in
-      `client_metadata`.
+      `client_metadata.jwks`, with that key's `kid` echoed in the JWE protected
+      header (OID4VP 1.0 §8.3). A response whose header names no published
+      `kid` is refused, as is the same response posted twice.
+- [ ] The same presentation posted in the clear (`state` + `vp_token`) against
+      a request built under `haip-1.0` is refused: required encryption is not
+      preferred encryption.
+- [ ] A JWE posted with a stray cleartext `state` beside it (OID4VP 1.0 is
+      silent on whether a wallet may send both) is routed by the JWE and the
+      login completes; the cleartext copy is ignored.
+- [ ] A wallet that cannot encrypt and declines in the clear (`state` +
+      `error`, OID4VP 1.0 §8.3.1) is acknowledged, the browser is told the
+      wallet declined, and the request is consumed. A cleartext `error` that
+      carries a `vp_token` beside it is still refused.
+- [ ] After any of the above, the request-state row carries no
+      `response_encryption_private_jwk`: the key is erased by the redemption
+      itself.
 - [ ] A credential carrying **no** `status` claim is refused, because
       `haip-1.0` declares `requireCredentialStatus: true`. Under the base profile
       the same credential is accepted.

@@ -1,9 +1,16 @@
 import {
+  decryptJwe,
+  importEncryptionPrivateJwk,
+  JWE_CONTENT_ENCRYPTION_ALGORITHMS,
+  JWE_KEY_AGREEMENT_ALGORITHMS,
+} from '@qauth-labs/core-crypto';
+import {
   createVerifierSigningMaterial,
   VERIFIER_PROFILES,
   type VerifierProfile,
 } from '@qauth-labs/fastify-plugin-federation';
 import type { FastifyInstance } from 'fastify';
+import { CompactEncrypt, importJWK, type JWK } from 'jose';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const { envMock } = vi.hoisted(() => ({
@@ -23,6 +30,10 @@ const { envMock } = vi.hoisted(() => ({
     OID4VP_VERIFIER_CERTIFICATE_CHAIN_PATH: [] as readonly string[],
     OID4VP_VERIFIER_TRUST_ANCHORS: [] as readonly string[],
     OID4VP_VERIFIER_TRUST_ANCHORS_PATH: [] as readonly string[],
+    // The at-rest secret for the per-request decryption key (#377 Phase C).
+    // Unset is the default posture — the private half is stored in the clear —
+    // and it is what the encrypted-path tests below assert on.
+    OID4VP_RESPONSE_KEY_SECRET: undefined as string | undefined,
   },
 }));
 
@@ -116,9 +127,28 @@ describe('resolveWalletLoginCapability', () => {
     expect(resolveWalletLoginCapability(fakeFastify())).toBeUndefined();
   });
 
-  it('refuses haip-1.0, whose encrypted response is Phase C of #377', () => {
+  it('refuses haip-1.0 on a deployment that provisioned no verifier identity', () => {
+    // Not the encryption posture — #377 Phase C cleared that, and encryption
+    // needs nothing provisioned. What this env lacks is the X.509 identity the
+    // `x509_hash` prefix needs, so the profile does not resolve at all.
     envMock.OID4VP_VERIFIER_PROFILE = 'haip-1.0';
     expect(resolveWalletLoginCapability(fakeFastify())).toBeUndefined();
+  });
+
+  it('refuses a profile whose response posture contradicts its permitted modes', () => {
+    // A table that requires encryption while permitting only the plain mode is
+    // a refusal at the gate, never a downgrade to whichever half is buildable.
+    // Driven through the builder's own selector on a capability, since the env
+    // cannot express a profile the table does not ship.
+    const fastify = fakeFastify();
+    const contradictory: WalletLoginCapability = {
+      ...resolveWalletLoginCapability(fastify)!,
+      profile: { ...VERIFIER_PROFILES['oid4vp-1.0-base'], responseEncryption: 'required' },
+    };
+
+    return expect(buildWalletLoginInvocation(fastify, contradictory)).rejects.toThrow(
+      /does not permit the 'direct_post.jwt' Response Mode/
+    );
   });
 
   it('does not throw when the selected profile is not provisioned', () => {
@@ -225,13 +255,14 @@ describe('buildWalletLoginInvocation — the unsigned base path', () => {
 });
 
 /**
- * The HAIP signing posture, minus the two mandates Phase C of #377 owns.
+ * The HAIP signing posture with the encrypted response relaxed away.
  *
  * `haip-1.0` also declares `direct_post.jwt` and `responseEncryption:
- * 'required'`, and the builder refuses both — correctly, since the encrypted
- * response mode, the published encryption key and the decrypting intake land
- * together. Relaxing exactly those two isolates the signing half; every other
- * mandate here is the shipped table's own.
+ * 'required'`, which #377 Phase C made buildable — see the describe block
+ * after the signed one for the shipped table entry driven whole. Relaxing
+ * exactly those two here isolates the signing half, so a signed-delivery
+ * regression cannot hide behind an encryption one; every other mandate is the
+ * shipped table's own.
  */
 const HAIP_SIGNING_POSTURE: VerifierProfile = {
   ...VERIFIER_PROFILES['haip-1.0'],
@@ -342,5 +373,143 @@ describe('buildWalletLoginInvocation — the signed request_uri path (#377)', ()
         trustAnchorPem: createMockVerifierPki({ name: 'stranger.example' }).walletTrustAnchorPem,
       })
     ).rejects.toThrow(/does not terminate at the trust anchor/);
+  });
+});
+
+/**
+ * The encrypted response (#377 Phase C, HAIP 1.0 §5 / §5.1).
+ *
+ * Driven through the shipped `haip-1.0` entry WHOLE — signed prefix, encrypted
+ * mode — so what is asserted is the request an EU deployment actually sends.
+ * The decryption round trip below is the property that matters: the private
+ * half the helper hands back for storage must open a JWE encrypted to the
+ * public half it published, or the row would be a correlator for an exchange
+ * that can never complete.
+ */
+describe('buildWalletLoginInvocation — the encrypted direct_post.jwt path (#377 Phase C)', () => {
+  const pki = createMockVerifierPki();
+
+  function haipCapability(): WalletLoginCapability {
+    return {
+      profile: VERIFIER_PROFILES['haip-1.0'],
+      responseUri: `https://auth.example.com${OID4VP_RESPONSE_PATH}`,
+      requestObjectBaseUri: `https://auth.example.com${OID4VP_REQUEST_OBJECT_PATH_PREFIX}`,
+      walletInvocationEndpoint: 'openid4vp://',
+      credentials: [
+        { id: 'qauth_wallet_login', format: 'dc+sd-jwt', typeValues: ['urn:example:pid'] },
+      ],
+      signingMaterial: createVerifierSigningMaterial({
+        privateKeyPem: pki.signingKeyPem,
+        certificateChainPems: blocks(pki.certificateChainPem),
+        trustAnchorPems: blocks(pki.trustAnchorPem),
+      }),
+    };
+  }
+
+  it('asks for direct_post.jwt under haip-1.0', async () => {
+    const invocation = await buildWalletLoginInvocation(fakeFastify(), haipCapability());
+
+    expect(invocation.request.response_mode).toBe('direct_post.jwt');
+  });
+
+  it('publishes ONE per-request key in client_metadata, and hands back its private half for the row', async () => {
+    const invocation = await buildWalletLoginInvocation(fakeFastify(), haipCapability());
+    const keys = invocation.request.client_metadata.jwks?.keys ?? [];
+
+    expect(keys).toHaveLength(1);
+    expect(keys[0]?.kty).toBe('EC');
+    expect(keys[0]?.crv).toBe('P-256');
+    expect(keys[0]?.use).toBe('enc');
+    expect(keys[0]?.alg).toBe('ECDH-ES');
+    // The PUBLIC half is published: no private scalar on the wire.
+    expect(keys[0]).not.toHaveProperty('d');
+
+    // The three columns, all present, and the kid is THE kid — the same value
+    // the wallet will echo in the JWE header and the intake will look up by.
+    expect(invocation.responseEncryption).toBeDefined();
+    expect(invocation.responseEncryption?.kid).toBe(keys[0]?.kid);
+    expect(invocation.responseEncryption?.protection).toBe('plain');
+    expect(invocation.request.client_metadata.encrypted_response_enc_values_supported).toContain(
+      'A128GCM'
+    );
+  });
+
+  it('stores the private half in the clear by default, as a JWK document', async () => {
+    // The default posture: no `OID4VP_RESPONSE_KEY_SECRET` in this env, so the
+    // column holds the JWK itself, `d` included, under the `plain` marker.
+    const invocation = await buildWalletLoginInvocation(fakeFastify(), haipCapability());
+    const stored = JSON.parse(invocation.responseEncryption?.privateJwk as string) as JWK;
+
+    expect(stored.kty).toBe('EC');
+    expect(typeof stored.d).toBe('string');
+    expect(stored.kid).toBe(invocation.responseEncryption?.kid);
+  });
+
+  it('hands back a private half that opens a JWE encrypted to the published public half', async () => {
+    // The round trip, with the WALLET side written against `jose` directly —
+    // no import of the code under test — and the VERIFIER side using the
+    // crypto layer's own pinned decrypt.
+    const invocation = await buildWalletLoginInvocation(fakeFastify(), haipCapability());
+    const published = invocation.request.client_metadata.jwks?.keys[0] as JWK;
+    const stored = JSON.parse(invocation.responseEncryption?.privateJwk as string) as JWK;
+
+    const jwe = await new CompactEncrypt(
+      new TextEncoder().encode(JSON.stringify({ state: invocation.request.state, vp_token: {} }))
+    )
+      .setProtectedHeader({ alg: 'ECDH-ES', enc: 'A128GCM', kid: published.kid as string })
+      .encrypt(await importJWK(published, 'ECDH-ES'));
+
+    const { payload } = await decryptJwe(jwe, await importEncryptionPrivateJwk(stored), {
+      keyManagementAlgorithms: JWE_KEY_AGREEMENT_ALGORITHMS,
+      contentEncryptionAlgorithms: JWE_CONTENT_ENCRYPTION_ALGORITHMS,
+    });
+
+    expect(payload['state']).toBe(invocation.request.state);
+  });
+
+  it('mints a fresh pair and kid for every request (HAIP §5: specific to each request)', async () => {
+    const fastify = fakeFastify();
+    const first = await buildWalletLoginInvocation(fastify, haipCapability());
+    const second = await buildWalletLoginInvocation(fastify, haipCapability());
+
+    expect(first.responseEncryption?.kid).not.toBe(second.responseEncryption?.kid);
+    expect(first.request.client_metadata.jwks?.keys[0]?.x).not.toBe(
+      second.request.client_metadata.jwks?.keys[0]?.x
+    );
+  });
+
+  it('carries the encryption key set INSIDE the signed request object, not on the wire', async () => {
+    // Under haip-1.0 the request is delivered by reference, so the wallet reads
+    // `client_metadata` — key set included — out of the JAR it fetched and
+    // verified. The invocation URI itself carries neither.
+    const fastify = fakeFastify();
+    const invocation = await buildWalletLoginInvocation(fastify, haipCapability());
+    const reference = parseOid4vpRequestReference(invocation.invocationUri);
+    const stored = (await fastify.sessionUtils.getSession<{ requestObject: string }>(
+      `wallet-request-object:${invocation.requestObjectHandle as string}`
+    )) as { requestObject: string };
+
+    const verified = await verifyOid4vpRequestObject(stored.requestObject, {
+      trustAnchorPem: pki.walletTrustAnchorPem,
+    });
+
+    expect(reference.requestUri).toContain(invocation.requestObjectHandle);
+    expect(invocation.invocationUri).not.toContain('jwks');
+    expect(verified.request.responseMode).toBe('direct_post.jwt');
+    expect((verified.request.clientMetadata['jwks'] as { keys: JWK[] }).keys[0]?.kid).toBe(
+      invocation.responseEncryption?.kid
+    );
+  });
+
+  it('mints nothing for the base profile, whose posture forbids encryption', async () => {
+    const fastify = fakeFastify();
+    const invocation = await buildWalletLoginInvocation(
+      fastify,
+      resolveWalletLoginCapability(fastify)!
+    );
+
+    expect(invocation.request.response_mode).toBe('direct_post');
+    expect(invocation.responseEncryption).toBeUndefined();
+    expect(invocation.request.client_metadata).not.toHaveProperty('jwks');
   });
 });

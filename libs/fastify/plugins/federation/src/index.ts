@@ -200,6 +200,7 @@ export type {
 export {
   assertNoRedirectUriParameter,
   assertProfileUnchanged,
+  assertResponseModeUnchanged,
   assertValidResponseUri,
   buildOid4vpAuthorizationRequest,
   buildRedirectUriClientId,
@@ -207,6 +208,7 @@ export {
   createVerifierSigningMaterial,
   DEFAULT_OID4VP_REQUEST_TTL_MS,
   DEFAULT_REQUEST_OBJECT_LIFETIME_SECONDS,
+  DIRECT_POST_JWT_RESPONSE_MODE,
   DIRECT_POST_RESPONSE_MODE,
   encodeOid4vpRequestUri,
   generateOid4vpRequestSecrets,
@@ -223,6 +225,7 @@ export {
   resolveOid4vpExpiry,
   resolveVerifierProfile,
   SD_JWT_VC_FORMAT,
+  selectOid4vpResponseMode,
   signOid4vpRequestObject,
   verifierMaterialProvisionedBy,
   X509_HASH_CLIENT_ID_PREFIX,
@@ -288,4 +291,30 @@ export {
   assertIssuerTrusted,
   resolveTrustRegistry,
   ValidatedIssuer,
+} from '@qauth-labs/server-federation';
+
+// Encrypted Authorization Responses (#377 Phase C). The auth-server mints the
+// per-request ECDH-ES pair, protects the private half for the row (plain by
+// default, AES-256-GCM when `OID4VP_RESPONSE_KEY_SECRET` is set), and at the
+// response endpoint reads the JWE `kid` BEFORE decrypting to find that row.
+// None of that reaches `apps/auth-server` except through here.
+export type {
+  EncryptedAuthorizationResponse,
+  EphemeralKeyProtectionOptions,
+  Oid4vpEphemeralKeyProtection,
+  ProtectedEphemeralKey,
+} from '@qauth-labs/server-federation';
+export {
+  assertEncryptedResponseStateMatches,
+  decryptOid4vpAuthorizationResponse,
+  EPHEMERAL_KEY_PROTECTION_AES_256_GCM,
+  EPHEMERAL_KEY_PROTECTION_PLAIN,
+  EPHEMERAL_KEY_PROTECTION_SECRET_BYTES,
+  MAX_ENCRYPTED_RESPONSE_LENGTH,
+  MAX_ENCRYPTION_KID_LENGTH,
+  OID4VP_ENCRYPTED_RESPONSE_ENC_VALUES,
+  parseEphemeralKeyProtection,
+  protectEphemeralKey,
+  readEncryptedResponseKid,
+  unprotectEphemeralKey,
 } from '@qauth-labs/server-federation';

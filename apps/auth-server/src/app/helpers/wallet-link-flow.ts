@@ -1,4 +1,3 @@
-import { DIRECT_POST_RESPONSE_MODE } from '@qauth-labs/fastify-plugin-federation';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 
 import { getOrCreateDefaultRealm } from './realm';
@@ -112,9 +111,19 @@ export async function startWalletLinkFlow(
     stateHash: invocation.stateHash,
     nonce: invocation.nonce,
     verifierProfile: capability.profile.id,
-    responseMode: DIRECT_POST_RESPONSE_MODE,
+    // Read off the built request, as the login route does (#377 Phase C).
+    responseMode: invocation.request.response_mode,
     dcqlQuery: { ...invocation.request.dcql_query },
     expiresAt: invocation.expiresAt,
+    // The per-request decryption key under direct_post.jwt — the same three
+    // columns the login route writes, for the same reason. See there.
+    ...(invocation.responseEncryption === undefined
+      ? {}
+      : {
+          responseEncryptionKid: invocation.responseEncryption.kid,
+          responseEncryptionPrivateJwk: invocation.responseEncryption.privateJwk,
+          responseEncryptionKeyProtection: invocation.responseEncryption.protection,
+        }),
   });
 
   const binder = generateWalletFlowSecret();

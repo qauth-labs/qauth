@@ -296,6 +296,11 @@ services:
       OID4VP_VERIFIER_TRUST_ANCHORS: ${OID4VP_VERIFIER_TRUST_ANCHORS:-}
       OID4VP_VERIFIER_TRUST_ANCHORS_PATH: ${OID4VP_VERIFIER_TRUST_ANCHORS_PATH:-}
 
+      # Opt-in at-rest wrapping of the per-request `direct_post.jwt` decryption
+      # key (#377 Phase C). Unset is the default and stores it in the clear;
+      # 32 bytes base64 (`openssl rand -base64 32`) turns AES-256-GCM on.
+      OID4VP_RESPONSE_KEY_SECRET: ${OID4VP_RESPONSE_KEY_SECRET:-}
+
       # Rate Limiting (Global)
       RATE_LIMIT_ENABLED: ${RATE_LIMIT_ENABLED:-true}
       RATE_LIMIT_MAX: ${RATE_LIMIT_MAX:-100}

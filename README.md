@@ -601,7 +601,7 @@ docker compose up -d
 - [x] Wallet login UI flow (#239)
 - [x] Integration tests against a reference mock wallet (#240)
 - [x] Browser wallet sign-in completes end-to-end behind `WALLET_FEDERATION_ENABLED`
-- [ ] HAIP profile wiring — signed `x509_hash` requests, encrypted `direct_post.jwt` (#377)
+- [x] HAIP profile wiring — signed `x509_hash` requests, encrypted `direct_post.jwt` (#377)
 - [x] Key-storage assurance into the assurance policy (#379)
 - [ ] Real-wallet interoperability validation pass (#376)
 - [ ] Trust anchor validation against the EU Trusted List
