@@ -238,6 +238,16 @@ With everything provisioned, the additional items are:
 - [ ] The same presentation posted in the clear (`state` + `vp_token`) against
       a request built under `haip-1.0` is refused: required encryption is not
       preferred encryption.
+- [ ] A JWE posted with a stray cleartext `state` beside it (OID4VP 1.0 is
+      silent on whether a wallet may send both) is routed by the JWE and the
+      login completes; the cleartext copy is ignored.
+- [ ] A wallet that cannot encrypt and declines in the clear (`state` +
+      `error`, OID4VP 1.0 §8.3.1) is acknowledged, the browser is told the
+      wallet declined, and the request is consumed. A cleartext `error` that
+      carries a `vp_token` beside it is still refused.
+- [ ] After any of the above, the request-state row carries no
+      `response_encryption_private_jwk`: the key is erased by the redemption
+      itself.
 - [ ] A credential carrying **no** `status` claim is refused, because
       `haip-1.0` declares `requireCredentialStatus: true`. Under the base profile
       the same credential is accepted.

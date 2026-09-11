@@ -293,7 +293,8 @@ describe('the encrypted-response seam — direct_post.jwt (#377 Phase C)', () =>
     const header = decodeProtectedHeader(response.formBody['response'] as string);
 
     expect(header.alg).toBe('ECDH-ES');
-    expect(header.enc).toBe('A128GCM');
+    // Both advertised, so HAIP §5's SHOULD: A256GCM.
+    expect(header.enc).toBe('A256GCM');
     expect(header.kid).toBe('the-kid');
     expect(header.zip).toBeUndefined();
   });
@@ -327,15 +328,33 @@ describe('the encrypted-response seam — direct_post.jwt (#377 Phase C)', () =>
     expect(decodeProtectedHeader(jwe).enc).toBe('A128GCM');
   });
 
-  it('takes the FIRST advertised enc value', async () => {
+  it('PREFERS A256GCM whenever it is advertised, wherever it sits in the list (HAIP §5)', async () => {
+    // "If both are supported, the Wallet SHOULD use A256GCM for the JWE enc."
+    // A wallet that took the first advertised value would post an enc a real
+    // HAIP wallet never produces against a Verifier listing both.
     const { published } = await verifierKey();
     const request = parseOid4vpRequest(
-      encryptedInvocation(published, { encrypted_response_enc_values_supported: ['A256GCM'] })
+      encryptedInvocation(published, {
+        encrypted_response_enc_values_supported: ['A128GCM', 'A256GCM'],
+      })
     );
 
     const jwe = await encryptAuthorizationResponse(request, { state: 'state-value' });
 
     expect(decodeProtectedHeader(jwe).enc).toBe('A256GCM');
+  });
+
+  it('takes the first advertised enc value when A256GCM is not among them', async () => {
+    const { published } = await verifierKey();
+    const request = parseOid4vpRequest(
+      encryptedInvocation(published, {
+        encrypted_response_enc_values_supported: ['A128GCM', 'A192GCM'],
+      })
+    );
+
+    const jwe = await encryptAuthorizationResponse(request, { state: 'state-value' });
+
+    expect(decodeProtectedHeader(jwe).enc).toBe('A128GCM');
   });
 
   it('encrypts a wallet error too — a refusal is not a downgrade to plaintext', async () => {

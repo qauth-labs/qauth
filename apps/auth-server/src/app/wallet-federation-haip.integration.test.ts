@@ -374,6 +374,26 @@ describe('wallet federation E2E — haip-1.0 with direct_post.jwt (real containe
     return response.statusCode;
   }
 
+  /** The one request-state row's encryption columns, as the TABLE holds them. */
+  async function storedEncryptionColumns(app: FastifyInstance): Promise<{
+    redeemed: boolean;
+    response_encryption_kid: string | null;
+    response_encryption_private_jwk: string | null;
+    response_encryption_key_protection: string | null;
+  }> {
+    const { rows } = await app.dbPool.query<{
+      redeemed_at: string | null;
+      response_encryption_kid: string | null;
+      response_encryption_private_jwk: string | null;
+      response_encryption_key_protection: string | null;
+    }>(
+      'select redeemed_at, response_encryption_kid, response_encryption_private_jwk, response_encryption_key_protection from oid4vp_request_states'
+    );
+    expect(rows).toHaveLength(1);
+    const { redeemed_at, ...columns } = rows[0] as NonNullable<(typeof rows)[0]>;
+    return { redeemed: redeemed_at !== null, ...columns };
+  }
+
   async function pollStatus(
     app: FastifyInstance,
     flow: StartedFlow
@@ -452,14 +472,27 @@ describe('wallet federation E2E — haip-1.0 with direct_post.jwt (real containe
         'A128GCM'
       );
 
-      // What the wallet sent: one JWE, its header naming the published key.
+      // What the wallet sent: one JWE, its header naming the published key —
+      // under the `enc` HAIP §5 has a wallet prefer when both are advertised.
       expect(Object.keys(answer.formBody)).toEqual(['response']);
       const header = decodeProtectedHeader(answer.formBody['response'] as string);
       expect(header.alg).toBe('ECDH-ES');
+      expect(header.enc).toBe('A256GCM');
       expect(header.kid).toBe(published[0]?.kid);
 
       expect(await postWalletResponse(app, answer.formBody)).toBe(200);
       expect((await pollStatus(app, flow)).status).toBe('complete');
+
+      // The row was consumed — and its key went with it. The private half's
+      // only job ended with the response it opened; a key that outlived it
+      // would decrypt this login again from a later dump of the table plus a
+      // retained copy of the POST body.
+      expect(await storedEncryptionColumns(app)).toEqual({
+        redeemed: true,
+        response_encryption_kid: null,
+        response_encryption_private_jwk: null,
+        response_encryption_key_protection: null,
+      });
 
       // The login is real: an account, keyed on the ASSERTED identifier
       // (ADR-009 §1), with its wallet credential and verified attributes.
@@ -548,6 +581,58 @@ describe('wallet federation E2E — haip-1.0 with direct_post.jwt (real containe
 
       expect(plaintext).toBe(400);
       expect((await pollStatus(app, flow)).status).not.toBe('complete');
+    });
+  }, 180_000);
+
+  it('completes the login when the JWE arrives with a stray cleartext state beside it', async () => {
+    // OID4VP 1.0 is silent on whether `state` may ride beside `response`, so a
+    // conformant wallet MAY send both. The body has to be routed by the JWE —
+    // a cleartext-first parse stripped the `response`, consumed the row by the
+    // stray `state`, and refused the login as a mode downgrade.
+    const issuer = await createMockIssuer(TRUSTED_ISSUER, 'k1');
+    const wallet = await walletHolding(issuer);
+
+    await withDeployment(haipEnv([issuer]), async ({ app, ids }) => {
+      const asserted = 'haip-stray-state@example.com';
+      const { flow, request, answer } = await walletAnswers(app, wallet, asserted);
+
+      expect(await postWalletResponse(app, { ...answer.formBody, state: request.state })).toBe(200);
+      expect((await pollStatus(app, flow)).status).toBe('complete');
+
+      const rows = await app.repositories.userCredentials.findAllByRealmAndExternalSub(
+        ids.realmId,
+        asserted
+      );
+      expect(rows).toHaveLength(1);
+    });
+  }, 180_000);
+
+  it('tells the browser the wallet declined when the refusal arrives unencrypted (§8.3.1)', async () => {
+    // OID4VP 1.0 §8.3.1: a wallet unable to encrypt MAY send its error
+    // response in the clear. Refusing that refusal left the browser polling
+    // until the request expired, never learning the wallet said no.
+    const issuer = await createMockIssuer(TRUSTED_ISSUER, 'k1');
+    const wallet = await walletHolding(issuer);
+
+    await withDeployment(haipEnv([issuer]), async ({ app, ids }) => {
+      const asserted = 'haip-declined-clear@example.com';
+      const { flow, request } = await walletAnswers(app, wallet, asserted);
+
+      expect(await postWalletResponse(app, { state: request.state, error: 'access_denied' })).toBe(
+        200
+      );
+      expect((await pollStatus(app, flow)).status).toBe('rejected');
+
+      // Consumed, key erased, and nobody was created.
+      expect((await storedEncryptionColumns(app)).response_encryption_private_jwk).toBeNull();
+      expect(
+        await app.repositories.userCredentials.findAllByRealmAndExternalSub(ids.realmId, asserted)
+      ).toHaveLength(0);
+
+      // A replay of the same unencrypted refusal finds nothing.
+      expect(await postWalletResponse(app, { state: request.state, error: 'access_denied' })).toBe(
+        400
+      );
     });
   }, 180_000);
 
@@ -651,10 +736,15 @@ describe('wallet federation E2E — haip-1.0 with direct_post.jwt (real containe
       expect(refused.statusCode).toBe(400);
       expect(refused.json()).toMatchObject({ error: 'invalid_request' });
 
-      const redeemedAt = await second.app.dbPool
-        .query<{ redeemed_at: string | null }>('select redeemed_at from oid4vp_request_states')
-        .then((result) => result.rows[0]?.redeemed_at);
-      expect(redeemedAt).not.toBeNull();
+      // Consumed — and the envelope the rotated secret could not open is gone
+      // with it: erased by the redemption itself, whether or not the decrypt
+      // that followed succeeded.
+      expect(await storedEncryptionColumns(second.app)).toEqual({
+        redeemed: true,
+        response_encryption_kid: null,
+        response_encryption_private_jwk: null,
+        response_encryption_key_protection: null,
+      });
       expect((await pollStatus(second.app, flow)).status).not.toBe('complete');
     } finally {
       await second.close();

@@ -122,9 +122,11 @@ button that fails:
   encrypted response itself is never a reason: `direct_post.jwt` is built (#377
   Phase C) and needs nothing provisioned, because the ECDH-ES key is minted per
   request, published in `client_metadata.jwks`, and the private half rides the
-  request-state row until the wallet's JWE arrives. `OID4VP_RESPONSE_KEY_SECRET`
-  optionally wraps that stored key in AES-256-GCM; unset, it is stored in the
-  clear beside the `nonce` that already is.
+  request-state row until the wallet's JWE arrives — and no longer: the same
+  statement that consumes the row erases the key, so a consumed row can never
+  decrypt its response again. `OID4VP_RESPONSE_KEY_SECRET` optionally wraps
+  that stored key in AES-256-GCM while the row is live; unset, it is stored in
+  the clear beside the `nonce` that already is.
 - The profile does not permit `dc+sd-jwt`, the one credential format QAuth ships
   an adapter for.
 - `OID4VP_REQUESTED_VCT` is unset. A DCQL query with no type constraint asks a

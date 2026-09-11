@@ -482,6 +482,18 @@ export interface Oid4vpRequestStatesRepository {
    * binding that is trusted is the `state` inside the decrypted payload,
    * checked against the returned row's `stateHash` by the caller.
    *
+   * The returned row is the row AS CONSUMED, and this is the ONE hand-off of
+   * the private key: the same statement that sets `redeemed_at` NULLs
+   * `response_encryption_kid`, `response_encryption_private_jwk` and
+   * `response_encryption_key_protection` in the table, and projects their
+   * pre-update values into the result. The key's only job ends when the row is
+   * consumed, and a key that outlives its response is pure exposure — a later
+   * database dump plus retained POST bodies would decrypt historical
+   * presentations. The caller must decrypt from the returned value; no second
+   * read can ever produce it. {@link redeem} clears the same three columns
+   * (a consumed row keeps no key whichever correlator consumed it) but returns
+   * them NULL, because the cleartext path has no use for a key.
+   *
    * There is deliberately no `findByEncryptionKid`, for the reason the module
    * JSDoc gives: the only way to observe a row is to consume it.
    */

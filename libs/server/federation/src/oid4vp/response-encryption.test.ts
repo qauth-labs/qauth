@@ -7,6 +7,7 @@ import {
 import { CompactEncrypt, exportJWK, generateKeyPair, type JWK } from 'jose';
 import { describe, expect, it } from 'vitest';
 
+import { MAX_VP_TOKEN_LENGTH } from './direct-post';
 import { hashOid4vpState } from './request-state';
 import {
   assertEncryptedResponseStateMatches,
@@ -89,6 +90,42 @@ describe('readEncryptedResponseKid (OID4VP 1.0 §8.3)', () => {
     );
   });
 
+  /**
+   * Length is not the only thing a `kid` can do to a database (#377 Phase C
+   * review, F4). QAuth mints base64url kids and nothing else, so anything
+   * outside that alphabet is not a lookup that could succeed — and one of
+   * them, NUL, is a value Postgres refuses to bind (22021), which the route
+   * would have rendered as a 500 rather than the uniform 400.
+   */
+  it.each([
+    ['a NUL byte', '\u0000'],
+    ['a NUL byte inside an otherwise valid kid', 'GtuHqs4X\u0000ZKFV2wzsobBVRw'],
+    ['a slash (standard base64, not base64url)', 'GtuHqs4X/ZKFV2wzsobBVRw'],
+    ['a plus (standard base64, not base64url)', 'GtuHqs4X+ZKFV2wzsobBVRw'],
+    ['padding', 'GtuHqs4XZKFV2wzsobBVRw=='],
+    ['whitespace', 'GtuHqs4X ZKFV2wzsobBVRw'],
+  ])('refuses a kid containing %s as a transport rejection, before any query', (_, kid) => {
+    const header = Buffer.from(
+      JSON.stringify({ alg: 'ECDH-ES', enc: 'A256GCM', kid }),
+      'utf8'
+    ).toString('base64url');
+
+    expect(() => readEncryptedResponseKid(`${header}..a.b.c`)).toThrow(
+      expect.objectContaining({ name: 'Oid4vpTransportRejection' })
+    );
+    expect(() => readEncryptedResponseKid(`${header}..a.b.c`)).toThrow(/not base64url/);
+  });
+
+  it('accepts every character of the base64url alphabet, which is all QAuth ever mints', () => {
+    const kid = 'ABCXYZabcxyz0189-_';
+    const header = Buffer.from(
+      JSON.stringify({ alg: 'ECDH-ES', enc: 'A256GCM', kid }),
+      'utf8'
+    ).toString('base64url');
+
+    expect(readEncryptedResponseKid(`${header}..a.b.c`)).toBe(kid);
+  });
+
   it('refuses something that is not a JOSE object', () => {
     expect(() => readEncryptedResponseKid('not-a-jwe')).toThrow(
       /no readable JOSE protected header/
@@ -144,6 +181,40 @@ describe('decryptOid4vpAuthorizationResponse', () => {
 
     await expect(decryptOid4vpAuthorizationResponse(jwe, privateJwk)).rejects.toThrow(
       /did not decrypt/
+    );
+  });
+
+  /**
+   * The edge bound must not refuse what the cleartext mode accepts (#377 Phase
+   * C review, F5): compact JWE carries the ciphertext base64url-encoded, so a
+   * bound that ignored the ×4⁄3 expansion refused every `vp_token` above
+   * roughly 396 KiB. Proven with a real JWE of a maximum-length `vp_token`,
+   * not with arithmetic — the arithmetic is what was wrong.
+   */
+  it('admits a JWE carrying a vp_token of the maximum length the cleartext mode accepts', async () => {
+    const { publicKey, privateJwk } = await mintRecipient();
+    // A single presentation whose length lands the serialized map EXACTLY on
+    // the cleartext bound, with the longest `state` the cleartext schema takes.
+    const framing = JSON.stringify({ pid: [''] }).length;
+    const presentation = 'a'.repeat(MAX_VP_TOKEN_LENGTH - framing);
+    const vpToken = { pid: [presentation] };
+    expect(JSON.stringify(vpToken)).toHaveLength(MAX_VP_TOKEN_LENGTH);
+    const state = 's'.repeat(512);
+
+    const jwe = await encrypt(publicKey, { state, vp_token: vpToken });
+
+    expect(jwe.length).toBeLessThanOrEqual(MAX_ENCRYPTED_RESPONSE_LENGTH);
+    expect(readEncryptedResponseKid(jwe)).toBe(KID);
+    const decrypted = await decryptOid4vpAuthorizationResponse(jwe, privateJwk);
+    expect(decrypted.vpToken).toHaveLength(MAX_VP_TOKEN_LENGTH);
+  });
+
+  it('is still a bound: something not much larger than the ceiling is refused', () => {
+    // The point of the arithmetic is a bound that is tight to the wire
+    // format, not an unbounded one.
+    expect(MAX_ENCRYPTED_RESPONSE_LENGTH).toBeLessThan(MAX_VP_TOKEN_LENGTH * 1.4);
+    expect(() => readEncryptedResponseKid('x'.repeat(MAX_ENCRYPTED_RESPONSE_LENGTH + 1))).toThrow(
+      /exceeds the/
     );
   });
 

@@ -71,6 +71,7 @@
  * @see https://openid.net/specs/openid-4-verifiable-presentations-1_0.html §5, §8
  */
 
+import { findPrivateJwkMember } from '@qauth-labs/core-crypto';
 import type { JWK } from 'jose';
 
 import {
@@ -399,6 +400,10 @@ export function selectOid4vpResponseMode(
  * profile that forbids encryption forbids it — publishing a key would invite a
  * wallet to encrypt a response the intake will not open — and a key that arrives
  * anyway means the caller and the profile disagree about the posture.
+ *
+ * A key carrying PRIVATE material is refused whatever the posture: the builder
+ * publishes what it is handed, and the private half of the pair is the same
+ * `JWK` type as the public one.
  */
 function assertResponseEncryptionKeyPosture(
   profile: VerifierProfile,
@@ -423,6 +428,23 @@ function assertResponseEncryptionKeyPosture(
     // published without one produces a response QAuth cannot correlate.
     throw new Error(
       "The per-request encryption key passed to the builder carries no 'kid' (OID4VP 1.0 §5.1). The wallet echoes it in the JWE header and it is the only way the response can be matched to this request (#377 Phase C)."
+    );
+  }
+
+  const privateMember = key === undefined ? undefined : findPrivateJwkMember(key);
+
+  if (privateMember !== undefined) {
+    // The key goes into `client_metadata.jwks` EXACTLY as passed, inside a
+    // request object QAuth signs and serves to anyone holding the
+    // `request_uri`. The public and private halves of the pair are the same
+    // TypeScript type, differing only in the members they carry, so nothing
+    // but this check stands between a caller that passed the wrong half —
+    // `exportEncryptionPrivateJwk` where `exportEncryptionPublicJwk` was meant
+    // — and a signed document that hands every reader the scalar that decrypts
+    // the response. Refused by the crypto layer's own list of private members,
+    // so a member added there is refused here too.
+    throw new Error(
+      `The per-request encryption key passed to the builder carries private key material ('${privateMember}'). Only the PUBLIC half may be published in client_metadata.jwks — this is the private half, and publishing it inside the signed request object would hand every reader the key that decrypts the response (#377 Phase C).`
     );
   }
 }

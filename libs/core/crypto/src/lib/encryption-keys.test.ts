@@ -16,6 +16,7 @@ import {
   isEphemeralEncryptionKeyPairExpired,
 } from './encryption-keys';
 import { decryptJwe, encryptJwe } from './jwe';
+import { findPrivateJwkMember, PRIVATE_JWK_MEMBERS } from './keys';
 
 const PINS = {
   keyManagementAlgorithms: ['ECDH-ES'],
@@ -230,6 +231,26 @@ describe('importEncryptionPublicJwk (untrusted peer key)', () => {
     await expect(importEncryptionPublicJwk({ kty, crv, x, y })).resolves.toMatchObject({
       type: 'public',
     });
+  });
+});
+
+describe('findPrivateJwkMember (the one private-member list, exported)', () => {
+  // Exported so a caller about to PUBLISH a JWK — the OID4VP request builder
+  // (#377 Phase C review, F7) — can refuse the private half synchronously,
+  // from the same list the import paths refuse it with.
+  it('names the private member a JWK carries, and nothing for a public one', async () => {
+    const pair = await generateEphemeralEncryptionKeyPair({ extractable: true, kid: 'k' });
+
+    expect(findPrivateJwkMember(await exportEncryptionPublicJwk(pair))).toBeUndefined();
+    expect(findPrivateJwkMember(await exportEncryptionPrivateJwk(pair))).toBe('d');
+  });
+
+  it.each(PRIVATE_JWK_MEMBERS)("recognises '%s' as private material", (member) => {
+    expect(findPrivateJwkMember({ kty: 'EC', [member]: 'x' })).toBe(member);
+  });
+
+  it('covers every RFC 7518 private member: EC and OKP d, the RSA CRT set, and symmetric k', () => {
+    expect([...PRIVATE_JWK_MEMBERS].sort()).toEqual(['d', 'dp', 'dq', 'k', 'p', 'q', 'qi']);
   });
 });
 

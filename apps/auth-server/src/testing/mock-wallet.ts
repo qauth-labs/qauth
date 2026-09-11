@@ -409,6 +409,9 @@ const DIRECT_POST_JWT = 'direct_post.jwt';
 /** The `enc` a wallet falls back to when the Verifier advertised none (HAIP §5). */
 const DEFAULT_ENC = 'A128GCM';
 
+/** The `enc` HAIP §5 has a wallet PREFER when the Verifier supports it. */
+const PREFERRED_ENC = 'A256GCM';
+
 /**
  * Select the Verifier's encryption key out of `client_metadata` (§5.1).
  *
@@ -442,12 +445,18 @@ export function selectResponseEncryptionKey(clientMetadata: Record<string, unkno
  * Choose the content-encryption algorithm from what the Verifier advertised.
  *
  * `encrypted_response_enc_values_supported` (§5.1) lists what the Verifier
- * will open; a wallet takes the first it supports. Absent, HAIP §5 fixes the
- * floor at `A128GCM`.
+ * will open. HAIP 1.0 §5: "If both are supported, the Wallet SHOULD use
+ * A256GCM for the JWE enc." — so `A256GCM` is taken whenever it is advertised,
+ * wherever in the list it sits; otherwise the first advertised value; absent
+ * any list, the `A128GCM` floor §5 fixes. Taking `advertised[0]` would have
+ * had the E2E post an `enc` a real HAIP wallet never produces against a
+ * Verifier that lists both.
  */
 function selectResponseEnc(clientMetadata: Record<string, unknown>): string {
   const advertised = clientMetadata['encrypted_response_enc_values_supported'];
-  if (Array.isArray(advertised) && typeof advertised[0] === 'string') return advertised[0];
+  if (!Array.isArray(advertised)) return DEFAULT_ENC;
+  if (advertised.includes(PREFERRED_ENC)) return PREFERRED_ENC;
+  if (typeof advertised[0] === 'string') return advertised[0];
   return DEFAULT_ENC;
 }
 

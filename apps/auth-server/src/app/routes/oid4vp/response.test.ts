@@ -883,6 +883,23 @@ describe('POST /oid4vp/response — the encrypted direct_post.jwt intake (#377 P
       expect(fastify.repositories.oid4vpRequestStates.redeemByEncryptionKid).not.toHaveBeenCalled();
     });
 
+    it('refuses a kid outside the base64url alphabet with the uniform 400, without touching the database', async () => {
+      // A NUL in the kid used to reach `WHERE response_encryption_kid = $1`,
+      // where Postgres raises 22021 and the route answered 500 — the one status
+      // this endpoint promises never to produce on attacker input (#377 Phase C
+      // review, F4). No published kid was ever outside base64url, so the value
+      // is refused before any query.
+      const pair = await mintPair();
+      const jwe = await encryptResponse(pair.publicJwk, SUCCESS_PAYLOAD, { kid: '\u0000' });
+
+      const { error, fastify } = await encryptedRefusalOf({ response: jwe }, encryptedState(pair));
+
+      expect(error.name).toBe('InvalidRequestError');
+      expect(error.statusCode).toBe(400);
+      expect(error.errorDescription).toBe(OID4VP_REJECTION_DESCRIPTION);
+      expect(fastify.repositories.oid4vpRequestStates.redeemByEncryptionKid).not.toHaveBeenCalled();
+    });
+
     it('refuses garbage that is not a JOSE object, without touching the database', async () => {
       const { error, fastify } = await encryptedRefusalOf({ response: 'not.a.jwe' }, undefined);
 
@@ -1013,6 +1030,65 @@ describe('POST /oid4vp/response — the encrypted direct_post.jwt intake (#377 P
       );
     });
 
+    /**
+     * OID4VP 1.0 §8.3.1: "If a Wallet is unable to generate an encrypted
+     * response, it MAY send an error response without encryption as per
+     * Section 8.2." (#377 Phase C review, F3.) Two branches, both pinned: the
+     * unencrypted ERROR is accepted against an encrypted request — the browser
+     * must learn the wallet declined — and an unencrypted PRESENTATION against
+     * the same row is still the downgrade.
+     */
+    it('accepts a CLEARTEXT error against a direct_post.jwt row (§8.3.1), consuming it and signalling wallet_error', async () => {
+      const pair = await mintPair();
+      const { fastify, store, handler } = await registerHaip();
+      fastify.repositories.oid4vpRequestStates.redeem.mockResolvedValue(encryptedState(pair));
+      const { reply, sent } = makeReply();
+
+      await handler(makeRequest({ error: 'access_denied', state: STATE }), reply);
+
+      expect(reply.statusCode).toBe(200);
+      expect(sent).toEqual([{}]);
+      expect(fastify.repositories.oid4vpRequestStates.redeem).toHaveBeenCalledWith(
+        hashOid4vpState(STATE)
+      );
+      expect(fastify.repositories.oid4vpRequestStates.redeemByEncryptionKid).not.toHaveBeenCalled();
+      // The browser learns the wallet said no — and nothing else: no bytes are
+      // parked, the wallet's own text is not carried, nothing is audited.
+      expect(store.get(`wallet-login-signal:${hashOid4vpState(STATE)}`)).toMatchObject({
+        signal: 'wallet_error',
+      });
+      expect(store.get(`wallet-presentation:${hashOid4vpState(STATE)}`)).toBeUndefined();
+      expect(JSON.stringify([...store.values()])).not.toContain('access_denied');
+      expect(fastify.repositories.auditLogs.create).not.toHaveBeenCalled();
+      expect(fastify.log.info).toHaveBeenCalledWith(
+        expect.objectContaining({ requestStateId: 'req-state-1' }),
+        expect.stringContaining('§8.3.1')
+      );
+    });
+
+    it('still refuses a CLEARTEXT error that carries a vp_token beside it against a direct_post.jwt row', async () => {
+      // §8.3.1 permits an unencrypted ERROR, not an unencrypted presentation
+      // with an error label on it. A `vp_token` in the clear is the downgrade
+      // whatever else the body says.
+      const pair = await mintPair();
+
+      const { error, fastify, store } = await encryptedRefusalOf(
+        { error: 'access_denied', vp_token: VP_TOKEN, state: STATE },
+        undefined,
+        encryptedState(pair)
+      );
+
+      expect(error.errorDescription).toBe(OID4VP_REJECTION_DESCRIPTION);
+      expect(fastify.repositories.oid4vpRequestStates.redeem).toHaveBeenCalledOnce();
+      expect(store.size).toBe(0);
+      expect(fastify.log.warn).toHaveBeenCalledWith(
+        expect.objectContaining({
+          reason: expect.stringContaining("asked for response_mode 'direct_post.jwt'"),
+        }),
+        expect.any(String)
+      );
+    });
+
     it('refuses an unreadable stored key with the SAME wire response, logging it as a server failure', async () => {
       // Reachable only after redemption, so a distinct status would be the one
       // shape only a real kid can produce — the same reasoning as the corrupt
@@ -1094,20 +1170,71 @@ describe('POST /oid4vp/response — the encrypted direct_post.jwt intake (#377 P
     });
   });
 
-  it('leaves the cleartext path bit-for-bit unchanged under the base profile', async () => {
-    // A cleartext body that ALSO carries a `response` parameter is the
-    // cleartext body it always was: `response` is stripped like any unknown
-    // field, the row is redeemed by the state digest, and the kid path is
-    // never entered. (Schema-level, so exercised through the schema directly;
-    // the handler sees only what the validator hands it.)
-    const { oid4vpDirectPostRequestSchema } = await import('../../schemas/oid4vp');
-    const parsed = oid4vpDirectPostRequestSchema.parse({
-      state: STATE,
-      vp_token: VP_TOKEN,
-      response: 'eyJ.something',
+  /**
+   * The body union is ENCRYPTED-FIRST (#377 Phase C review, F2). OID4VP 1.0 is
+   * silent on whether `state` may ride beside `response` under
+   * `direct_post.jwt`, so a conformant wallet may send both — and a
+   * cleartext-first union parsed that body as cleartext, stripped the JWE,
+   * consumed the row by the stray `state`, and refused the login as a mode
+   * downgrade. These are schema-level properties, so they are exercised
+   * through the schema: the handler sees only what the validator hands it.
+   */
+  describe('a stray cleartext state beside the JWE', () => {
+    it('parses a body carrying response AND state as the ENCRYPTED member, state stripped', async () => {
+      const { oid4vpDirectPostRequestSchema } = await import('../../schemas/oid4vp');
+
+      const parsed = oid4vpDirectPostRequestSchema.parse({
+        response: 'eyJ.something',
+        state: STATE,
+        vp_token: VP_TOKEN,
+      });
+
+      expect(parsed).toEqual({ response: 'eyJ.something' });
+      expect(parsed).not.toHaveProperty('state');
     });
 
-    expect(parsed).toEqual({ state: STATE, vp_token: VP_TOKEN });
-    expect(parsed).not.toHaveProperty('response');
+    it('still parses a base-profile body — no response parameter — exactly as before', async () => {
+      // The base profile's wire contract, bit for bit: a `direct_post` wallet
+      // never sends `response`, so nothing it posts reaches the encrypted
+      // member and the cleartext member sees what it always saw.
+      const { oid4vpDirectPostRequestSchema } = await import('../../schemas/oid4vp');
+
+      expect(oid4vpDirectPostRequestSchema.parse({ state: STATE, vp_token: VP_TOKEN })).toEqual({
+        state: STATE,
+        vp_token: VP_TOKEN,
+      });
+      expect(oid4vpDirectPostRequestSchema.parse({ state: STATE, error: 'access_denied' })).toEqual(
+        { state: STATE, error: 'access_denied' }
+      );
+    });
+
+    it('completes a haip-1.0 login from a JWE posted with a stray cleartext state', async () => {
+      // End to end through the validator: the body a conformant wallet MAY
+      // send, redeemed by the kid, opened, and bound by the state INSIDE.
+      const pair = await mintPair();
+      const { fastify, store, handler } = await registerHaip();
+      fastify.repositories.oid4vpRequestStates.redeemByEncryptionKid.mockResolvedValue(
+        encryptedState(pair)
+      );
+      const { oid4vpDirectPostRequestSchema } = await import('../../schemas/oid4vp');
+      const body = oid4vpDirectPostRequestSchema.parse({
+        response: await encryptResponse(pair.publicJwk, SUCCESS_PAYLOAD),
+        state: STATE,
+      });
+      const { reply, sent } = makeReply();
+
+      await handler(makeRequest(body), reply);
+
+      expect(reply.statusCode).toBe(200);
+      expect(sent).toEqual([{}]);
+      expect(fastify.repositories.oid4vpRequestStates.redeemByEncryptionKid).toHaveBeenCalledWith(
+        pair.kid
+      );
+      // The stray state found nothing: the cleartext correlator was never used.
+      expect(fastify.repositories.oid4vpRequestStates.redeem).not.toHaveBeenCalled();
+      expect(store.get(`wallet-login-signal:${hashOid4vpState(STATE)}`)).toMatchObject({
+        signal: 'received',
+      });
+    });
   });
 });

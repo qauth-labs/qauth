@@ -66,6 +66,11 @@ import { EPOCH_MS_NOW } from './sql-helpers';
  * `@qauth-labs/server-federation`'s `response-encryption` module for why plain
  * is the default and what the envelope protects against.
  *
+ * All three are cleared by the redemption `UPDATE` itself — a consumed row
+ * carries no key, whichever correlator consumed it. See
+ * `responseEncryptionPrivateJwk` below for why, and the repository for how the
+ * private half still reaches the one caller that has to decrypt with it.
+ *
  * ## No user, no subject — on purpose
  *
  * There is no `user_id` column and there must not be one. This table records a
@@ -162,6 +167,20 @@ export const oid4vpRequestStates = pgTable(
      * `text` for the reason `nonce` is: the storage layer must never be the
      * thing that truncates a protocol value, and an envelope's length depends
      * on the scheme that wrote it.
+     *
+     * LIVES ONLY AS LONG AS THE ROW IS REDEEMABLE. The redemption `UPDATE`
+     * clears this column — and its two siblings — in the same statement that
+     * sets `redeemed_at`, projecting the pre-update value to the one caller
+     * that needs it (the repository's `redeemByEncryptionKid`). The key's only
+     * job is to open the one response its `kid` names, and that job ends the
+     * instant the row is consumed; a key that outlives its response is pure
+     * exposure, because a later dump of this table combined with the encrypted
+     * POST bodies a load balancer or WAF may have logged would decrypt every
+     * historical presentation retroactively. The at-rest envelope narrows that
+     * window for a LIVE row; erasure at consumption closes it for a consumed
+     * one, under either protection scheme. Expired-but-never-redeemed rows keep
+     * their key until `deleteExpired` removes them — they were never answered,
+     * so there is no response for the key to expose.
      */
     responseEncryptionPrivateJwk: text('response_encryption_private_jwk'),
     /**

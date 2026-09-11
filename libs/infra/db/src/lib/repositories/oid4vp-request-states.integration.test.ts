@@ -10,10 +10,11 @@
  * Requires Docker; self-skips without it, same as the sibling suites.
  */
 import { requireDockerOrSkip } from '@qauth-labs/shared-testing';
+import { eq } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import type { Oid4vpRequestStatesRepository } from '../../types';
-import { realms } from '../schema';
+import { oid4vpRequestStates, realms } from '../schema';
 import { type IntegrationDb, setupIntegrationDb } from './integration-setup';
 import { createOid4vpRequestStatesRepository } from './oid4vp-request-states.repository';
 
@@ -200,6 +201,21 @@ describe('oid4vp_request_states integration (real Postgres)', () => {
       expect(created.responseEncryptionKeyProtection).toBeNull();
     });
 
+    /** The row as the TABLE holds it — the repository exposes no read on purpose. */
+    async function storedRow(id: string) {
+      if (!ctx) throw new Error('no ctx');
+      const [row] = await ctx.database.db
+        .select({
+          redeemedAt: oid4vpRequestStates.redeemedAt,
+          responseEncryptionKid: oid4vpRequestStates.responseEncryptionKid,
+          responseEncryptionPrivateJwk: oid4vpRequestStates.responseEncryptionPrivateJwk,
+          responseEncryptionKeyProtection: oid4vpRequestStates.responseEncryptionKeyProtection,
+        })
+        .from(oid4vpRequestStates)
+        .where(eq(oid4vpRequestStates.id, id));
+      return row;
+    }
+
     it('redeems by kid exactly once — a replay returns undefined', async () => {
       const created = await seedEncryptedState();
       const kid = created.responseEncryptionKid as string;
@@ -211,6 +227,47 @@ describe('oid4vp_request_states integration (real Postgres)', () => {
       expect(first?.stateHash).toBe(created.stateHash);
       expect(first?.responseEncryptionPrivateJwk).toBe(created.responseEncryptionPrivateJwk);
       expect(second).toBeUndefined();
+    });
+
+    it('hands the private key over ONCE and leaves none of it in the table (#377 F1)', async () => {
+      // The property a mocked client cannot prove: `RETURNING` sees the row
+      // after the write, so the pre-update projection has to be shown to work
+      // against real Postgres — and the erasure has to be shown to have
+      // happened in the same statement, not in a later pass.
+      const created = await seedEncryptedState({ kid: 'kid-handoff' });
+
+      const redeemed = await requestStates.redeemByEncryptionKid('kid-handoff');
+
+      // The caller gets the row AS CONSUMED: redeemed, and carrying the key.
+      expect(redeemed?.redeemedAt).toBeGreaterThan(0);
+      expect(redeemed?.responseEncryptionKid).toBe('kid-handoff');
+      expect(redeemed?.responseEncryptionPrivateJwk).toBe(created.responseEncryptionPrivateJwk);
+      expect(redeemed?.responseEncryptionKeyProtection).toBe('plain');
+
+      // The table keeps none of it — all three, or the CHECK would refuse.
+      const stored = await storedRow(created.id);
+      expect(stored?.redeemedAt).toBe(redeemed?.redeemedAt);
+      expect(stored?.responseEncryptionKid).toBeNull();
+      expect(stored?.responseEncryptionPrivateJwk).toBeNull();
+      expect(stored?.responseEncryptionKeyProtection).toBeNull();
+    });
+
+    it('a cleartext redemption of an encrypted row erases its key too', async () => {
+      // Consumed is consumed: the caller will refuse the mode mismatch, but the
+      // row is spent and a spent row keeps no key. The cleartext path has no
+      // use for it, so it is not handed back either.
+      const created = await seedEncryptedState({ kid: 'kid-cleartext-consumed' });
+
+      const redeemed = await requestStates.redeem(created.stateHash);
+
+      expect(redeemed?.id).toBe(created.id);
+      expect(redeemed?.responseEncryptionPrivateJwk).toBeNull();
+
+      const stored = await storedRow(created.id);
+      expect(stored?.redeemedAt).not.toBeNull();
+      expect(stored?.responseEncryptionKid).toBeNull();
+      expect(stored?.responseEncryptionPrivateJwk).toBeNull();
+      expect(stored?.responseEncryptionKeyProtection).toBeNull();
     });
 
     it('consuming by kid also consumes the state, and vice versa — one row, one redemption', async () => {
@@ -238,7 +295,12 @@ describe('oid4vp_request_states integration (real Postgres)', () => {
         Array.from({ length: 12 }, () => requestStates.redeemByEncryptionKid(kid))
       );
 
-      expect(results.filter((row) => row !== undefined)).toHaveLength(1);
+      const winners = results.filter((row) => row !== undefined);
+      expect(winners).toHaveLength(1);
+      // The self-join that projects the pre-update key does not weaken the
+      // guard, and the one winner is the one holder of the key.
+      expect(winners[0]?.responseEncryptionPrivateJwk).toBe(created.responseEncryptionPrivateJwk);
+      expect((await storedRow(created.id))?.responseEncryptionPrivateJwk).toBeNull();
     });
 
     it('refuses an expired kid, and leaves the row unredeemed', async () => {

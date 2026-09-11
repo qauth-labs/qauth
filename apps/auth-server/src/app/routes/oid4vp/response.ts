@@ -52,7 +52,9 @@ import {
  *      correlator the submission carries: the cleartext `state`, or the JWE
  *      `kid` read out of the protected header without decrypting anything.
  *   2. Confirms the deployment's verifier posture still matches the one the
- *      request was built under — the profile, and the Response Mode.
+ *      request was built under — the profile, and the Response Mode (with the
+ *      one exception §8.3.1 grants: a wallet that cannot encrypt may decline
+ *      in the clear).
  *   3. Opens the response if it is encrypted, binds it to the row by the
  *      `state` inside it, and STRUCTURALLY parses `vp_token` against the DCQL
  *      query that was sent.
@@ -215,7 +217,36 @@ export default async function (fastify: FastifyInstance) {
         // cleartext post holding its `state` — which anyone who read the signed
         // request object has — must not consume it; the reverse mismatch cannot
         // correlate at all, but the check is stated symmetrically anyway.
-        assertResponseModeUnchanged(redeemed.responseMode, arrivedMode);
+        //
+        // ONE carve-out, and it is the specification's. OID4VP 1.0 §8.3.1: "If
+        // a Wallet is unable to generate an encrypted response, it MAY send an
+        // error response without encryption as per Section 8.2." So a cleartext
+        // body carrying `error` and NO `vp_token` is the wallet declining in the
+        // one unencrypted form the spec allows it, and is taken as such against
+        // a `direct_post.jwt` row: the row is consumed — it already was, above —
+        // and the browser is told the wallet said no, instead of spinning until
+        // the request expires because the refusal was itself refused. It is not
+        // a downgrade: nothing credential-shaped travelled in the clear, and
+        // there is nothing to accept on the strength of it — an error response
+        // authenticates nobody and parks no bytes. A cleartext body that DOES
+        // carry a `vp_token` against such a row, `error` beside it or not, is
+        // the downgrade and is still refused: a presentation in the clear is
+        // exactly what the required mode exists to prevent.
+        const arrivedAsUnencryptedError =
+          !isEncryptedDirectPostRequest(body) &&
+          body.error !== undefined &&
+          body.vp_token === undefined;
+        const declinedUnencryptedUnderEncryptedRequest =
+          arrivedAsUnencryptedError && redeemed.responseMode === DIRECT_POST_JWT_RESPONSE_MODE;
+
+        if (declinedUnencryptedUnderEncryptedRequest) {
+          fastify.log.info(
+            { requestStateId: redeemed.id },
+            'OID4VP wallet declined a direct_post.jwt request with an unencrypted error response (OID4VP 1.0 §8.3.1)'
+          );
+        } else {
+          assertResponseModeUnchanged(redeemed.responseMode, arrivedMode);
+        }
 
         // (2b) The response parameters — decrypted, or as posted (#377 Phase C).
         //
@@ -399,7 +430,10 @@ type RedeemedRequestStateRow = NonNullable<
  *
  * Three steps, each of which can only fail AFTER the row has been consumed —
  * which is why every failure renders the uniform transport refusal, whatever
- * its cause:
+ * its cause. The private half exists NOWHERE but in `redeemed` by the time
+ * this runs: the redemption erased it from the table in the statement that
+ * consumed the row, so a failure here is final rather than retryable — which
+ * is the point.
  *
  *  1. Read the private half back. A row with no key, an unrecognised
  *     protection marker, or an envelope the configured secret cannot open is a
@@ -427,10 +461,13 @@ async function openEncryptedResponse(
 
   try {
     if (redeemed.responseEncryptionKid === null || redeemed.responseEncryptionPrivateJwk === null) {
-      // Unreachable through the repository — the row was found BY its kid, and
-      // the schema's CHECK makes the three columns all-or-nothing — but the
-      // types say nullable, and a narrowing cast here would be the thing that
-      // hid a future row written around the constraint.
+      // Unreachable through the repository — the row was found BY its kid, the
+      // schema's CHECK makes the three columns all-or-nothing, and the
+      // redemption projects their PRE-erasure values into this row (the one
+      // hand-off of the key: the same statement NULLed them in the table) —
+      // but the types say nullable, and a narrowing cast here would be the
+      // thing that hid a future row written around the constraint, or a
+      // refactored redemption that returned the NULLs it had just written.
       throw new Error('redeemed row carries no ephemeral encryption key');
     }
 

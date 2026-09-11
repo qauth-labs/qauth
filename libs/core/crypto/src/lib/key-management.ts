@@ -7,7 +7,7 @@
 import { exportJWK, generateKeyPair, importJWK, importPKCS8, importSPKI, type JWK } from 'jose';
 
 import { JOSE_P256_CURVE, type JwsAlgorithm } from './algorithms';
-import type { SigningKey, SigningKeyPair } from './keys';
+import { findPrivateJwkMember, type SigningKey, type SigningKeyPair } from './keys';
 
 /** Options for {@link generateSigningKeyPair}. */
 export interface GenerateSigningKeyPairOptions {
@@ -109,14 +109,6 @@ export async function exportPublicSigningJwk(
   };
 }
 
-/**
- * JWK members that carry PRIVATE key material. A "public key" JWK containing any
- * of them is rejected outright rather than being stripped: a peer that sent us
- * its private key is either broken or hostile, and quietly repairing the input
- * hides both cases.
- */
-const PRIVATE_JWK_MEMBERS = ['d', 'p', 'q', 'dp', 'dq', 'qi', 'k'] as const;
-
 /** The `kty` an `alg` must be published under (fully-specified key, RFC 9864 spirit). */
 const EXPECTED_KTY: Record<JwsAlgorithm, string> = {
   EdDSA: 'OKP',
@@ -143,7 +135,7 @@ const EXPECTED_KTY: Record<JwsAlgorithm, string> = {
  * - a JWK `alg` member that CONTRADICTS the pin is rejected rather than ignored:
  *   the disagreement means the peer and this deployment do not agree on what the
  *   key is for, and guessing which one is right is exactly the wrong move.
- * - private members ({@link PRIVATE_JWK_MEMBERS}) are refused.
+ * - private members (`PRIVATE_JWK_MEMBERS` in `keys.ts`) are refused.
  * - `use: 'enc'` is refused — a key its own publisher marked as an encryption
  *   key must not become a signature verification key.
  *
@@ -153,12 +145,11 @@ const EXPECTED_KTY: Record<JwsAlgorithm, string> = {
  * @throws Error if the JWK contradicts the pin or carries private material.
  */
 export async function importPublicSigningJwk(jwk: JWK, alg: JwsAlgorithm): Promise<SigningKey> {
-  for (const member of PRIVATE_JWK_MEMBERS) {
-    if (jwk[member] !== undefined) {
-      throw new Error(
-        `Public signing JWK must not carry private key material (found '${member}').`
-      );
-    }
+  const privateMember = findPrivateJwkMember(jwk);
+  if (privateMember !== undefined) {
+    throw new Error(
+      `Public signing JWK must not carry private key material (found '${privateMember}').`
+    );
   }
   const expectedKty = EXPECTED_KTY[alg];
   if (jwk.kty !== expectedKty) {

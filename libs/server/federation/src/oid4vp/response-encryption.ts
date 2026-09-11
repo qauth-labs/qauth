@@ -83,15 +83,53 @@ export const OID4VP_ENCRYPTED_RESPONSE_ENC_VALUES: readonly string[] = Object.fr
 ]);
 
 /**
+ * Allowance, in plaintext bytes, for everything in the JWE payload that is not
+ * the `vp_token` itself: the `state` (QAuth mints 43 characters; the cleartext
+ * schema accepts up to 512), the JSON framing (`{"state":"…","vp_token":…}`),
+ * an `error`/`error_description` a wallet might add, and the escaping a wallet
+ * that sends `vp_token` as a JSON *string* rather than an object pays on the
+ * quotes of its query ids. 4 KiB is generous for all of it together.
+ */
+const ENCRYPTED_RESPONSE_PAYLOAD_FRAMING_ALLOWANCE = 4 * 1024;
+
+/**
+ * Allowance, in compact-serialization characters, for the four JWE segments
+ * that are not the ciphertext: the base64url protected header (`alg`, `enc`,
+ * `kid`, the ECDH-ES `epk` — a P-256 public JWK — and whatever else a wallet
+ * adds), the empty encrypted key, the 12-byte IV and the 16-byte tag, plus the
+ * four dots. Well under 1 KiB in practice; 2 KiB leaves room for a verbose
+ * header.
+ */
+const ENCRYPTED_RESPONSE_JOSE_OVERHEAD_ALLOWANCE = 2 * 1024;
+
+/**
  * Bound on the `response` parameter accepted at the edge.
  *
  * The same reasoning as {@link MAX_VP_TOKEN_LENGTH}, one layer out: the endpoint
  * is unauthenticated by construction, so nothing but this stands between an
- * anonymous POST and a JOSE parse. Sized above the `vp_token` bound because the
- * ciphertext CONTAINS a `vp_token` plus base64 and AEAD overhead — a bound below
- * it would refuse responses to requests QAuth itself is willing to accept.
+ * anonymous POST and a JOSE parse. Sized ABOVE the `vp_token` bound, and by
+ * the arithmetic the wire format dictates rather than by a flat margin: the
+ * ciphertext CONTAINS the `vp_token` plus its framing, and compact JWE carries
+ * that ciphertext base64url-encoded — 4 characters for every 3 bytes. A bound
+ * that ignored the expansion (the original `+ 16 KiB`) refused every `vp_token`
+ * above roughly 396 KiB that the cleartext mode accepts, i.e. responses to
+ * requests QAuth itself is willing to accept.
+ *
+ *   ⌈(MAX_VP_TOKEN_LENGTH + framing) × 4 ⁄ 3⌉ + JOSE overhead
+ *   = ⌈(524 288 + 4 096) × 4 ⁄ 3⌉ + 2 048
+ *   = 704 512 + 2 048
+ *   = 706 560 characters
+ *
+ * AES-GCM adds no padding, so the ciphertext is exactly the plaintext length;
+ * the tag is counted in the JOSE overhead. `vp_token` is measured in UTF-16
+ * code units by `parseVpToken` and in UTF-8 bytes here; the two coincide for
+ * the base64url-and-tilde alphabet an SD-JWT presentation is made of, and a
+ * `vp_token` that spends its budget on multi-byte characters is one the
+ * structural parser would refuse anyway.
  */
-export const MAX_ENCRYPTED_RESPONSE_LENGTH = MAX_VP_TOKEN_LENGTH + 16 * 1024;
+export const MAX_ENCRYPTED_RESPONSE_LENGTH =
+  Math.ceil(((MAX_VP_TOKEN_LENGTH + ENCRYPTED_RESPONSE_PAYLOAD_FRAMING_ALLOWANCE) * 4) / 3) +
+  ENCRYPTED_RESPONSE_JOSE_OVERHEAD_ALLOWANCE;
 
 /**
  * Bound on the `kid` read out of an untrusted JWE protected header.
@@ -101,6 +139,21 @@ export const MAX_ENCRYPTED_RESPONSE_LENGTH = MAX_VP_TOKEN_LENGTH + 16 * 1024;
  * this Verifier ever published, so it is refused before it reaches a query.
  */
 export const MAX_ENCRYPTION_KID_LENGTH = 64;
+
+/**
+ * The alphabet a `kid` must be drawn from to reach a query: base64url, no
+ * padding — the ONLY alphabet QAuth ever mints a `kid` in.
+ *
+ * Length alone is not a bound on what a string can do to a database. A `kid`
+ * of `"\u0000"` is one character long, passes a length check, and makes
+ * Postgres raise `22021` (`invalid byte sequence`) on `WHERE
+ * response_encryption_kid = $1` — which the route would answer with a 500,
+ * the one status this endpoint promises never to produce on attacker input.
+ * Since no published `kid` can contain anything outside this alphabet, a
+ * `kid` that does is not a lookup that could succeed; it is refused as the
+ * same uniform transport rejection as every other unusable header.
+ */
+const ENCRYPTION_KID_ALPHABET = /^[A-Za-z0-9_-]+$/;
 
 /** How the ephemeral private JWK is stored at rest. */
 export type Oid4vpEphemeralKeyProtection = 'plain' | 'aes-256-gcm';
@@ -162,9 +215,11 @@ export interface EncryptedAuthorizationResponse {
  * that the response belongs to the request it found.
  *
  * @param response - the raw `response` form parameter.
- * @returns the `kid`, bounded and non-empty.
+ * @returns the `kid`, bounded, non-empty and base64url — safe to bind to a
+ * query, and never anything QAuth could not have minted.
  * @throws Oid4vpTransportRejection when the parameter is oversized, not a JOSE
- * object, or carries no usable `kid`.
+ * object, or carries no usable `kid` — including one outside the base64url
+ * alphabet, which no published key ever had.
  */
 export function readEncryptedResponseKid(response: string): string {
   if (response.length > MAX_ENCRYPTED_RESPONSE_LENGTH) {
@@ -192,6 +247,15 @@ export function readEncryptedResponseKid(response: string): string {
   if (kid.length > MAX_ENCRYPTION_KID_LENGTH) {
     throw new Oid4vpTransportRejection(
       `encrypted response 'kid' exceeds the ${MAX_ENCRYPTION_KID_LENGTH}-character bound`
+    );
+  }
+
+  if (!ENCRYPTION_KID_ALPHABET.test(kid)) {
+    // Checked AFTER the length bound so the regex never runs over an
+    // unbounded string. The value is not echoed: it is attacker-supplied and
+    // may be exactly the byte sequence that would corrupt a log line.
+    throw new Oid4vpTransportRejection(
+      "encrypted response 'kid' is not base64url — not a value this Verifier ever published"
     );
   }
 

@@ -671,6 +671,48 @@ describe('buildOid4vpAuthorizationRequest — the encrypted direct_post.jwt mode
     expect(() => buildEncrypted({ responseEncryptionKey: unnamed })).toThrow(/carries no 'kid'/);
   });
 
+  /**
+   * The builder publishes the key it is handed inside a SIGNED request object
+   * (#377 Phase C review, F7). The private half is the same `JWK` type, so a
+   * caller that passed it would embed `d` in a document served to anyone
+   * holding the `request_uri`. Every private member the crypto layer knows
+   * about is refused, not just `d`.
+   */
+  it.each([
+    ['an EC private scalar', { d: 'ZJ6qKoJ9a4nXvDtUqQ3H5Rk3L1Xx0qXbJhfR9Wx8bR0' }],
+    ['an RSA prime', { p: 'not-actually-a-prime' }],
+    ['an RSA CRT exponent', { dp: 'crt' }],
+    ['a symmetric key', { k: 'AAAA' }],
+  ])('refuses a key carrying %s — only the public half may be published', (_, members) => {
+    const leaked: JWK = { ...ENCRYPTION_JWK, ...members };
+
+    expect(() => buildEncrypted({ responseEncryptionKey: leaked })).toThrow(
+      /carries private key material/
+    );
+  });
+
+  it('refuses the private half even under a profile where the mode check would refuse anyway', () => {
+    // Whichever refusal wins, the scalar never reaches a document.
+    const leaked: JWK = { ...ENCRYPTION_JWK, d: 'ZJ6qKoJ9a4nXvDtUqQ3H5Rk3L1Xx0qXbJhfR9Wx8bR0' };
+
+    expect(() => build({ profile: BASE, responseEncryptionKey: leaked })).toThrow();
+  });
+
+  it('never lets a private member into the serialised request, whichever form', () => {
+    const leaked: JWK = { ...ENCRYPTION_JWK, d: 'ZJ6qKoJ9a4nXvDtUqQ3H5Rk3L1Xx0qXbJhfR9Wx8bR0' };
+    let request: unknown;
+
+    try {
+      request = buildEncrypted({ responseEncryptionKey: leaked });
+    } catch {
+      request = undefined;
+    }
+
+    expect(JSON.stringify(request ?? {})).not.toContain(
+      'ZJ6qKoJ9a4nXvDtUqQ3H5Rk3L1Xx0qXbJhfR9Wx8bR0'
+    );
+  });
+
   it('refuses a key under a profile that FORBIDS encryption (forbidden is unreachable)', () => {
     expect(() => build({ profile: BASE, responseEncryptionKey: ENCRYPTION_JWK })).toThrow(
       /must not invite a wallet to encrypt a response/

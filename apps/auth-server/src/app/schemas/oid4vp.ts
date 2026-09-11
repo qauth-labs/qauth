@@ -86,7 +86,10 @@ export type Oid4vpCleartextDirectPostRequest = z.infer<
  * The cleartext members are NOT declared here and are therefore STRIPPED if a
  * wallet sends them beside `response`, rather than refused: the same tolerance
  * the cleartext schema extends to unknown fields, for the same reason. What the
- * handler acts on is `response`, and only `response`.
+ * handler acts on is `response`, and only `response` — a `state` riding beside
+ * it is never a correlator, because the one that counts is INSIDE the JWE
+ * (§5.3), and a cleartext copy anyone who read the request object could send
+ * must not be what finds the row.
  */
 export const oid4vpEncryptedDirectPostRequestSchema = z.object({
   response: z.string().min(1).max(MAX_ENCRYPTED_RESPONSE_LENGTH),
@@ -105,13 +108,24 @@ export type Oid4vpEncryptedDirectPostRequest = z.infer<
  * instead of re-checking presence by hand on every path.
  *
  * ORDER IS LOAD-BEARING. Zod tries members in sequence and returns the first
- * that parses, and the cleartext member is listed FIRST so that any body
- * carrying a usable `state` is the cleartext body it always was — including one
- * that also happens to carry a `response`, which the cleartext schema strips
- * like any other unknown field. That is what keeps the base profile's intake
- * bit-for-bit unchanged: no body the endpoint accepted before Phase C parses
- * differently now. Only a body with NO cleartext `state` reaches the encrypted
- * member, which is exactly the body §8.3 describes.
+ * that parses, and the ENCRYPTED member is listed FIRST: a body carrying a
+ * usable `response` is an encrypted submission, whatever else rides beside it.
+ *
+ * It has to be this way round because OID4VP 1.0 is SILENT on whether a wallet
+ * may send `state` next to `response` under `direct_post.jwt` — §8.3 says the
+ * response "is a single JWE" and says nothing forbidding extra form fields — so
+ * a conformant wallet MAY post both. Cleartext-first would parse that body as
+ * the cleartext member, strip the `response`, consume the row by the stray
+ * `state`, and then refuse the submission as a mode downgrade: a conformant
+ * wallet's user locked out, with the row spent. Encrypted-first routes the same
+ * body by the JWE `kid`, opens it, and binds it by the `state` INSIDE — the
+ * cleartext copy is stripped and never looked at.
+ *
+ * The base profile's intake is still bit-for-bit unchanged: a `direct_post`
+ * wallet never sends `response` — the parameter exists only in §8.3 — so no
+ * body the endpoint accepted before Phase C reaches the encrypted member, and
+ * the cleartext member parses it exactly as it always did. The fallback is
+ * the old contract; only bodies that carry `response` see the new one.
  *
  * Neither member is refused for carrying the OTHER's fields: a refusal there
  * would have to name which field was unexpected, and this endpoint's refusals
@@ -120,8 +134,8 @@ export type Oid4vpEncryptedDirectPostRequest = z.infer<
  * is the one its request asked for.
  */
 export const oid4vpDirectPostRequestSchema = z.union([
-  oid4vpCleartextDirectPostRequestSchema,
   oid4vpEncryptedDirectPostRequestSchema,
+  oid4vpCleartextDirectPostRequestSchema,
 ]);
 
 export type Oid4vpDirectPostRequest = z.infer<typeof oid4vpDirectPostRequestSchema>;

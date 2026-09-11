@@ -1,4 +1,30 @@
-import type { CryptoKey } from 'jose';
+import type { CryptoKey, JWK } from 'jose';
+
+/**
+ * JWK members that carry PRIVATE key material (RFC 7518 §6.2.2, §6.3.2, §6.4).
+ *
+ * The ONE list every "this JWK must be public" check in the workspace reads,
+ * so a member added here is refused everywhere at once. A public-key JWK
+ * carrying any of them is rejected outright rather than stripped: a peer that
+ * sent us its private key is either broken or hostile, and a caller about to
+ * PUBLISH a JWK that carries one is about to leak a secret — quietly repairing
+ * the input hides both cases.
+ */
+export const PRIVATE_JWK_MEMBERS = ['d', 'p', 'q', 'dp', 'dq', 'qi', 'k'] as const;
+
+/**
+ * The first private member a JWK carries, or `undefined` for a public one.
+ *
+ * Synchronous and import-free on purpose: it is the check a caller runs
+ * BEFORE handing a JWK to anything — `jose`, a signed request object, a
+ * database — and it must be usable from code that never imports the key.
+ *
+ * @param jwk - Any JWK, trusted or not.
+ * @returns The offending member name, for the caller's error message.
+ */
+export function findPrivateJwkMember(jwk: JWK): (typeof PRIVATE_JWK_MEMBERS)[number] | undefined {
+  return PRIVATE_JWK_MEMBERS.find((member) => jwk[member] !== undefined);
+}
 
 /**
  * A single classical (Ed25519) asymmetric signing/verification key.

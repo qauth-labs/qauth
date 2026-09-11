@@ -90,6 +90,22 @@ describe('createOid4vpRequestStatesRepository.redeem', () => {
     await expect(createOid4vpRequestStatesRepository(db).redeem(STATE_HASH)).resolves.toBeDefined();
   });
 
+  it('erases the encrypted-response columns in the SAME statement that consumes the row', async () => {
+    // A cleartext redemption should never find a row carrying a key — such a
+    // row asked for `direct_post.jwt` — but it consumes the row either way, and
+    // a consumed row must not keep a key (#377 Phase C review, F1).
+    const { db, queries } = createRecordingDb();
+
+    await createOid4vpRequestStatesRepository(db).redeem(STATE_HASH);
+
+    const sql = queries[0].text.toLowerCase();
+    const setClause = sql.slice(sql.indexOf(' set '), sql.indexOf(' where '));
+
+    expect(setClause).toContain('"response_encryption_kid" = null');
+    expect(setClause).toContain('"response_encryption_private_jwk" = null');
+    expect(setClause).toContain('"response_encryption_key_protection" = null');
+  });
+
   it('exposes no way to read a row without consuming it', () => {
     const { db } = createRecordingDb();
     const repository = createOid4vpRequestStatesRepository(db);
@@ -165,6 +181,52 @@ describe('createOid4vpRequestStatesRepository.redeemByEncryptionKid', () => {
     await expect(
       createOid4vpRequestStatesRepository(db).redeemByEncryptionKid(KID)
     ).resolves.toBeDefined();
+  });
+
+  /**
+   * The key is handed over EXACTLY ONCE and erased in the same statement (#377
+   * Phase C review, F1). Two halves, both pinned here because a refactor could
+   * break either one silently: forget the erasure and every login leaves a
+   * private key in the table forever; forget the pre-update projection and the
+   * caller is handed the NULL it just wrote and cannot decrypt anything.
+   */
+  it('erases the encrypted-response columns in the SAME statement that consumes the row', async () => {
+    const { db, queries } = createRecordingDb();
+
+    await createOid4vpRequestStatesRepository(db).redeemByEncryptionKid(KID);
+
+    expect(queries).toHaveLength(1);
+    const sql = queries[0].text.toLowerCase();
+    const setClause = sql.slice(sql.indexOf(' set '), sql.indexOf(' from '));
+
+    expect(setClause).toContain('"redeemed_at" =');
+    expect(setClause).toContain('"response_encryption_kid" = null');
+    expect(setClause).toContain('"response_encryption_private_jwk" = null');
+    expect(setClause).toContain('"response_encryption_key_protection" = null');
+  });
+
+  it('projects the PRE-update key columns into RETURNING via a primary-key self-join', async () => {
+    const { db, queries } = createRecordingDb();
+
+    await createOid4vpRequestStatesRepository(db).redeemByEncryptionKid(KID);
+
+    const sql = queries[0].text.toLowerCase();
+    const returning = sql.slice(sql.indexOf('returning'));
+
+    // The second image of the row, joined by primary key — and the guard still
+    // reads the TARGET's columns, which is what keeps it a guard under EPQ.
+    expect(sql).toContain('from "oid4vp_request_states" "before"');
+    expect(sql).toContain('"before"."id" = "oid4vp_request_states"."id"');
+    expect(sql).toContain('"oid4vp_request_states"."redeemed_at" is null');
+    // The three key columns come from the snapshot image, never from the row
+    // as just written.
+    expect(returning).toContain('"before"."response_encryption_kid"');
+    expect(returning).toContain('"before"."response_encryption_private_jwk"');
+    expect(returning).toContain('"before"."response_encryption_key_protection"');
+    expect(returning).not.toContain('"oid4vp_request_states"."response_encryption_private_jwk"');
+    // Everything else is the row as it now stands, `redeemed_at` included.
+    expect(returning).toContain('"oid4vp_request_states"."redeemed_at"');
+    expect(returning).toContain('"oid4vp_request_states"."state_hash"');
   });
 });
 
