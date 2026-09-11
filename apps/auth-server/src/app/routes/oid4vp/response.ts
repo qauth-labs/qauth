@@ -7,6 +7,8 @@ import {
   DIRECT_POST_JWT_RESPONSE_MODE,
   DIRECT_POST_RESPONSE_MODE,
   type EncryptedAuthorizationResponse,
+  generateOid4vpResponseCode,
+  hashOid4vpResponseCode,
   hashOid4vpState,
   type Oid4vpDirectPostOutcome,
   Oid4vpTransportRejection,
@@ -21,16 +23,19 @@ import { ZodTypeProvider } from 'fastify-type-provider-zod';
 import type { JWK } from 'jose';
 
 import { env } from '../../../config/env';
+import { WALLET_RETURN_CODE_TTL_MS } from '../../constants/security';
 import { unprotectOid4vpResponseKey } from '../../helpers/oid4vp-response-key';
 import { provisionedVerifierMaterial } from '../../helpers/verifier-identity';
 import {
   publishWalletPresentationSignal,
   stashWalletPresentation,
 } from '../../helpers/wallet-login-flow';
+import { buildWalletLoginReturnUri } from '../../helpers/wallet-login-request';
 import {
   isEncryptedDirectPostRequest,
   type Oid4vpDirectPostRequest,
   oid4vpDirectPostRequestSchema,
+  type Oid4vpDirectPostResponse,
   oid4vpDirectPostResponseSchema,
 } from '../../schemas/oid4vp';
 
@@ -46,7 +51,7 @@ import {
  *
  * ## THIS ENDPOINT AUTHENTICATES NOBODY
  *
- * It does exactly three things:
+ * It does exactly four things:
  *
  *   1. Redeems the request — ATOMICALLY and exactly once — by whichever
  *      correlator the submission carries: the cleartext `state`, or the JWE
@@ -58,6 +63,10 @@ import {
  *   3. Opens the response if it is encrypted, binds it to the row by the
  *      `state` inside it, and STRUCTURALLY parses `vp_token` against the DCQL
  *      query that was sent.
+ *   4. Acknowledges — HTTP 200, `application/json`, a JSON object (§8.2) —
+ *      and, for a SAME-DEVICE flow only, puts in that object the one thing
+ *      §8.2 lets a Response Endpoint add: a `redirect_uri` carrying a fresh
+ *      Response Code, which brings the user back to the tab that is waiting.
  *
  * It performs NO signature, credential, issuer, revocation or key-binding
  * validation, and it creates no user, no session and no token. `WalletProvider`
@@ -105,6 +114,69 @@ import {
  * to the request is the `state` INSIDE the decrypted payload, compared against
  * the row's digest (§5.3). Nothing between finding the row and that comparison
  * trusts anything.
+ *
+ * ## The Response Code and the same-device return leg (#405, ADR-013)
+ *
+ * The 200 is a transport acknowledgement — and for a SAME-DEVICE flow it is
+ * also the `redirect_uri` OID4VP 1.0 §8.2 lets a Response Endpoint return,
+ * which the wallet "MUST redirect the user agent to". §8.2 puts exactly one
+ * requirement on that URL: "The Verifier MUST include a fresh, cryptographically
+ * random value in the URL", RECOMMENDED at 128 bits or more. §14.2 names that
+ * value the Response Code and states what it is for: the Response URI "MUST
+ * require the frontend to pass the respective Response Code", which "stops
+ * session fixation attacks as long as the attacker is unable to get access to
+ * the Response Code" — an attacker who relayed the request to a victim's
+ * wallet cannot conclude the flow on a device that never received the
+ * redirect. HAIP 1.0 §5.1 makes the whole arrangement a MUST when the
+ * same-device flow is used: "Verifiers MUST include redirect_uri in the HTTP
+ * response to the Wallet's HTTP POST to the response_uri".
+ *
+ * The code is minted here, BEFORE redemption — 32 CSPRNG bytes, base64url —
+ * and its SHA-256 digest and deadline travel INTO the redemption `UPDATE`,
+ * whichever correlator that runs on. So a code exists exactly when a row was
+ * consumed, in the one statement that consumed it, and there is no second
+ * write that could fail between the two. The plaintext exists in exactly two
+ * places: this handler's stack, and the 200 body. Only the digest is persisted
+ * (`response_code_hash`, mirroring `state_hash`); nothing under a Redis key
+ * carries the code — the signal and the parked presentation are keyed by the
+ * state digest as before, and this endpoint writes nothing new to the store;
+ * nothing here logs it, and the request logger redacts the `response_code`
+ * query value when a browser brings it back (`config/logger.ts`).
+ *
+ * The `redirect_uri` is `<issuer>/ui/wallet-login/return?response_code=<code>`,
+ * built from `JWT_ISSUER` by `buildWalletLoginReturnUri` — never from `Host`.
+ * It carries NOTHING browser-derived: no flow handle, no cookie, no session,
+ * no IP, nothing from the row beyond the code itself. That is not a gap but
+ * the posture: this endpoint cannot name a browser, and the wallet it answers
+ * is not the browser that will present the code. WHICH browser may finish the
+ * flow is decided on the return leg, by the binder cookie that browser holds
+ * against the flow the code names — and a valid code landing in a browser
+ * without it is burned and the presentation rejected (HAIP §5.1, third
+ * bullet), never accepted on the strength of the code alone.
+ *
+ * A CROSS-DEVICE row gets `{}` and no code. §14.2 is explicit that the
+ * technique "is not applicable to cross-device scenarios because the browser
+ * used by the Wallet will not have the original session", and §13.3's model
+ * of the cross-device flow says the same in its step 6 note: if the Response
+ * URI "does not return a redirect_uri, processing at the Wallet stops at that
+ * step" and the Verifier's frontend fetches the result on its own — which is
+ * the QR path's poll, unchanged. The digest is still written for such a row,
+ * because the repository has one redemption shape and no branch; but the code
+ * it names leaves neither this stack nor the server, and `redeemResponseCode`
+ * additionally refuses any row that is not `same_device`, so it is inert even
+ * in theory. Whether a row is same-device was the user's own choice at flow
+ * start, written with the row; it is READ off the redeemed row here, never
+ * inferred from anything the wallet sent.
+ *
+ * Both 200 sites answer this way — the accepted presentation AND the
+ * wallet-reported error. §8.2 permits the `redirect_uri` "in response to
+ * successful Authorization Responses or for Error Responses", and HAIP's MUST
+ * carries no success qualifier: a wallet that declined on this device still
+ * brings its user back to the tab that is waiting, where the refusal renders
+ * instead of a spinner. Every refusal on this endpoint throws BEFORE either
+ * `send`, so a code is never returned for an exchange that was not accepted.
+ * The acknowledgement is sent `Cache-Control: no-store`, as the spec's own
+ * example shows it: the body carries a bearer secret.
  */
 export default async function (fastify: FastifyInstance) {
   // Flag gate (#232 / #299). Checked at REGISTRATION, not per request: an
@@ -124,7 +196,7 @@ export default async function (fastify: FastifyInstance) {
     {
       schema: {
         description:
-          'OID4VP 1.0 direct_post Response Endpoint. Accepts a wallet Authorization Response as application/x-www-form-urlencoded: in the clear (vp_token + state, or error + state) under response_mode=direct_post, or as a single `response` parameter carrying a JWE (ECDH-ES P-256, A128GCM/A256GCM) encrypted to the per-request key published in client_metadata under response_mode=direct_post.jwt. TRANSPORT ONLY: the response is correlated against a single-use presentation request and structurally parsed. No signature, credential or issuer validation is performed and no user is authenticated (that is #234/#236).',
+          'OID4VP 1.0 direct_post Response Endpoint. Accepts a wallet Authorization Response as application/x-www-form-urlencoded: in the clear (vp_token + state, or error + state) under response_mode=direct_post, or as a single `response` parameter carrying a JWE (ECDH-ES P-256, A128GCM/A256GCM) encrypted to the per-request key published in client_metadata under response_mode=direct_post.jwt. TRANSPORT ONLY: the response is correlated against a single-use presentation request and structurally parsed. No signature, credential or issuer validation is performed and no user is authenticated (that is #234/#236). Answers HTTP 200 with a JSON object (OID4VP 1.0 §8.2): `{}` for a cross-device request, or `{ redirect_uri }` for a same-device request — an absolute URI under the issuer carrying a fresh, single-use Response Code (HAIP 1.0 §5.1) that the wallet MUST redirect the user agent to.',
         tags: ['OID4VP'],
         body: oid4vpDirectPostRequestSchema,
         response: { 200: oid4vpDirectPostResponseSchema },
@@ -156,6 +228,21 @@ export default async function (fastify: FastifyInstance) {
         : DIRECT_POST_RESPONSE_MODE;
 
       try {
+        // The Response Code (#405) — minted BEFORE the redemption so that its
+        // digest and deadline ride in the statement that consumes the row, and
+        // a code therefore exists exactly when a redemption happened. Minted
+        // for EVERY submission, whatever the row turns out to be: the
+        // repository has one redemption shape, and whether the code is then
+        // EMITTED is read off the redeemed row's `sameDevice` below. This is
+        // the only variable in the handler that holds the plaintext; the
+        // repository sees the digest, the wallet sees the `redirect_uri`, and
+        // nothing else sees either.
+        const code = generateOid4vpResponseCode();
+        const responseCode = {
+          codeHash: hashOid4vpResponseCode(code),
+          codeExpiresAt: Date.now() + WALLET_RETURN_CODE_TTL_MS,
+        };
+
         // (1) Single-use redemption. One guarded UPDATE — see the repository.
         // Deliberately the FIRST thing that happens: a replayed or expired state
         // must be rejected before any work is done on attacker-supplied bytes.
@@ -170,9 +257,13 @@ export default async function (fastify: FastifyInstance) {
         // itself published.
         const redeemed = isEncryptedDirectPostRequest(body)
           ? await fastify.repositories.oid4vpRequestStates.redeemByEncryptionKid(
-              readEncryptedResponseKid(body.response)
+              readEncryptedResponseKid(body.response),
+              responseCode
             )
-          : await fastify.repositories.oid4vpRequestStates.redeem(hashOid4vpState(body.state));
+          : await fastify.repositories.oid4vpRequestStates.redeem(
+              hashOid4vpState(body.state),
+              responseCode
+            );
 
         if (redeemed === undefined) {
           throw new Oid4vpTransportRejection(
@@ -323,7 +414,14 @@ export default async function (fastify: FastifyInstance) {
           // error code is NOT carried across — it is attacker-controllable text
           // and every failure renders the same refusal anyway.
           await publishWalletPresentationSignal(fastify, stateHash, 'wallet_error');
-          return reply.code(200).send({});
+          // The same acknowledgement as the accepted path, Response Code
+          // included on a same-device row: §8.2 permits the `redirect_uri`
+          // "for Error Responses" too, and a wallet that declined on THIS
+          // device is the one whose user is looking at the tab that waits.
+          return reply
+            .header('Cache-Control', 'no-store')
+            .code(200)
+            .send(transportAcknowledgement(redeemed.sameDevice, code));
         }
 
         if (parameters.vpToken === undefined) {
@@ -391,8 +489,16 @@ export default async function (fastify: FastifyInstance) {
         // store the wallet has no relationship with.
         await publishWalletPresentationSignal(fastify, stateHash, 'received');
 
-        // OID4VP 1.0 §8.3 — a transport-level acknowledgement, nothing more.
-        return reply.code(200).send({});
+        // OID4VP 1.0 §8.2 — a transport-level acknowledgement: `{}` for a
+        // cross-device row, `{ redirect_uri }` carrying the Response Code for
+        // a same-device one. Still not an authentication — the return leg the
+        // URI points at is where the browser that holds the flow's binder gets
+        // to finish it. `no-store`, as the spec's example sends it: the body
+        // is a bearer secret for the next three minutes.
+        return reply
+          .header('Cache-Control', 'no-store')
+          .code(200)
+          .send(transportAcknowledgement(redeemed.sameDevice, code));
       } catch (error) {
         if (error instanceof Oid4vpTransportRejection) {
           // The detailed reason stays here. The wire gets one fixed sentence.
@@ -423,6 +529,31 @@ type RedeemedRequestStateRow = NonNullable<
     ReturnType<FastifyInstance['repositories']['oid4vpRequestStates']['redeemByEncryptionKid']>
   >
 >;
+
+/**
+ * The body of the 200 (OID4VP 1.0 §8.2; #405): `{}` for a cross-device row,
+ * `{ redirect_uri }` carrying the Response Code for a same-device one.
+ *
+ * ONE decision, made in one place and read off ONE column: `same_device` was
+ * written with the row when the user chose how to present, and nothing the
+ * wallet posted can change it. A pure function of that flag and the code so
+ * both 200 sites — the accepted presentation and the wallet-reported error —
+ * answer identically, and so that a refactor cannot leave one of them handing
+ * a code to a cross-device row, where §14.2 says the technique "is not
+ * applicable" and §13.3's step 6 note says the wallet simply stops.
+ *
+ * The `redirect_uri` is built by `buildWalletLoginReturnUri` from the issuer
+ * identifier, so this function contributes nothing of its own to the URL —
+ * in particular nothing from the row, the request or the caller. The code is
+ * the only variable part, by construction.
+ *
+ * @param sameDevice - the redeemed row's `sameDevice` column, as returned.
+ * @param code - the Response Code minted before the redemption that returned
+ *   the row; its digest is already on that row.
+ */
+function transportAcknowledgement(sameDevice: boolean, code: string): Oid4vpDirectPostResponse {
+  return sameDevice ? { redirect_uri: buildWalletLoginReturnUri(code) } : {};
+}
 
 /**
  * Open an encrypted Authorization Response with the key its redeemed row holds
