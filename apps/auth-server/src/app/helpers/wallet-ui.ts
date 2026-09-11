@@ -340,9 +340,12 @@ function scrubResponseCodeScript(scriptNonce: string, returnPath: string): SafeH
  * The ONE page every refusal on `/ui/wallet-login/return` renders (#405).
  *
  * Byte-identical for a malformed code, an unknown one, an expired one, a
- * replayed one, a code whose flow this browser does not hold, a code that
- * named a link-mode flow, and a return the state machine could not advance:
- * the reason is logged server-side and nothing about it reaches the page. HTTP
+ * replayed one, a code whose flow this browser does not hold, a link-mode
+ * flow whose browser has no session (or another user's), and a return the
+ * state machine could not advance: the reason is logged server-side and
+ * nothing about it reaches the page. (A link-mode code in a browser that
+ * holds the flow AND the same user's session completes, on the linking
+ * surface's own page.) HTTP
  * 200, decided by the caller rather than here, because in-app browsers
  * decorate non-2xx navigations with their own chrome; the status carries no
  * information the body does not. No "Try again" (`walletTerminalPage`'s

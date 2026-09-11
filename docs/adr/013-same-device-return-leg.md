@@ -102,12 +102,23 @@ secret transits a URL that logs, caches and referrers can see, so it is fenced:
 - 180 s deadline in the database;
 - `Cache-Control: no-store` and `Referrer-Policy: no-referrer` on every response
   of the return route;
-- a nonced `history.replaceState(null, '', '/ui/wallet-login/return')` on both
-  terminal pages, scrubbing the (already spent) code from the address bar and
-  history entry — a browser without scripts loses only that hygiene;
+- a nonced `history.replaceState(null, '', '/ui/wallet-login/return')` on the
+  refusal page and the completed pages, scrubbing the (already spent) code from
+  the address bar and history entry — a browser without scripts loses only that
+  hygiene. The 401/409 terminal pages the return route renders for a refusal
+  after the code was spent (a wallet-reported error, an unresolvable
+  presentation, a link conflict) carry **no** scrub, by design: they are the
+  linking and login surfaces' existing pages, and the tests hold them
+  byte-identical to what the page GET renders for the same outcome. The trade
+  is a spent code left in the address bar of a page that says "not completed";
+  step 2 below has already burned it before any page renders;
 - pino request logging redacts the `response_code` query value from `req.url`
   (`config/logger.ts`), because §14.2 names the code the secret and Fastify's
-  default request line would otherwise write it at `info`.
+  default request line would otherwise write it at `info`. The global error
+  handler's own `url` field is redacted the same way, so a 429 from the rate
+  limiter, a 5xx from the store, or a validation 400 on the return route logs
+  `response_code=[Redacted]` too — those are precisely the paths on which the
+  code is still unspent.
 
 ### 5. The return route burns first, then binds
 
@@ -131,8 +142,11 @@ of operations is the security property:
    renders. This is HAIP §5.1's "arrives in a different user session" clause,
    enforced.
 4. **Advance.** `login` → `advanceWalletLoginFlow(…, { via: 'return' })`;
-   `link` → resolve the browser session (a link flow was initiated in a user
-   session, so a return without one is a foreign landing too), then
+   `link` → resolve the browser session and compare it, timing-safely, with the
+   user the flow was started by (a link flow was initiated in a user session,
+   so a return without one — or in a _different_ user's session, the jar
+   having changed hands while the wallet was open — is a foreign landing too,
+   handled exactly as step 3: discard, warn, refuse), then
    `advanceWalletLinkFlow(…, { via: 'return' })`. Both re-apply the binder,
    expiry and mode gates they always applied.
 
@@ -144,7 +158,8 @@ reason is logged server-side only; nothing is audited on refusal; no
 wallet-supplied text is echoed. A `rejected` outcome after a spent code (the
 wallet declined; the presentation did not resolve; the user is unavailable)
 renders the existing 401 refusal terminal page, byte-for-byte what the page GET
-renders for the same outcome.
+renders for the same outcome — and leaves a `rejected` done-marker (decision 8)
+so the original tab reports the same word.
 
 ### 6. Completion on the return leg — the original tab continues
 
@@ -154,10 +169,10 @@ the **original** tab's `sessionStorage`. So the return leg mints the session
 exactly as the poll does — fresh session id, `updateLastLogin`, the
 `ui.wallet_login.success` audit row, the session cookie into the shared jar — but
 does **not** drop the flow's cookie binding, writes the done-marker (decision 8)
-and renders a 200 terminal page: "You're signed in — go back to the tab or
-window where you started; it's continuing there on its own", with `returnTo`
-offered only as a secondary "Continue here instead" link for a purged original
-tab. Redirecting here would hand a server-side client two authorization codes
+**before** deleting the flow, and renders a 200 terminal page: "You're signed
+in — go back to the tab or window where you started; it's continuing there on
+its own", with `returnTo` offered only as a secondary "Continue here instead"
+link for a purged original tab. Redirecting here would hand a server-side client two authorization codes
 for one login and an SPA client a "state mismatch" error in the foreground tab.
 Link mode renders its own linked page. The status endpoints' JSON shapes are
 unchanged.
@@ -165,7 +180,11 @@ unchanged.
 ### 7. Same-device gating inside the one state machine
 
 `advanceWalletLoginFlow` and `advanceWalletLinkFlow` take `via: 'poll' | 'return'`.
-After the binder, expiry and mode gates, on the signal record `{ signal, at }`:
+After the binder, expiry and mode gates, on the signal record `{ signal, at }`,
+the decision is taken by one shared, pure function — `decideSignalGate` in
+`helpers/wallet-login-flow.ts` — that both machines call and act on, so the
+one piece of security-relevant timing logic the two flows share cannot drift
+between them:
 
 - `wallet_error` or `return_rejected` → terminate, `rejected` — on every flow,
   via poll or return. An error carries no presentation; surfacing it mints
@@ -184,18 +203,47 @@ After the binder, expiry and mode gates, on the signal record `{ signal, at }`:
 - No flow → consult the done-marker before answering `expired`.
 
 Because the poll never completes a same-device flow, the poll and the return
-leg cannot both complete it: there is no race to lose.
+leg cannot both complete it: there is no race to lose. There is one edge the
+two surfaces can disagree on, and it is accepted rather than closed: neither
+consumes the signal atomically, so a return that spends its code in the last
+few hundred milliseconds of the window can still be resolving the presentation
+when a poll fires past `at + WALLET_RETURN_CODE_TTL_MS`, terminates the flow as
+`rejected`, and the return then completes anyway — session minted, success
+audited, marker written — while the original tab has already rendered the
+refusal and will not read the marker. Sub-second, the rightful user, a
+legitimate code, and no bypass: the code was redeemable, the browser held the
+binder, and the return tab shows "You're signed in" with its "Continue here
+instead" link. It is an inconsistent pair of pages, not a security outcome.
+What would close it is making the signal read a consume (a `GETDEL`-style
+helper) or taking a `SETNX` "completing" marker keyed by `stateHash` before
+`resolveWalletPresentation` on both surfaces, so exactly one caller can proceed
+past the signal; neither is worth a second Redis write on every poll for a
+window this narrow.
 
 ### 8. The done-marker for the original tab
 
-`wallet-login-done:<handle>` = `{ binder, mode, redirectTo?, outcome? }`, TTL
-equal to the flow's (six minutes — a backgrounded phone tab's poll gap routinely
-exceeds a minute). Written by return-leg completion, consulted inside the state
-machines when the flow is missing, and consumed **once** by a poll that presents
-the binder: marker deleted, binding dropped, `{ status: 'complete', redirect_to }`
-(or the link outcome). It never mints a session — the cookie is already in the
-shared jar — and a poll without the binder, or with the wrong mode, learns
-nothing and burns nothing.
+`wallet-login-done:<handle>` = `{ binder, mode, redirectTo?, outcome?, sessionId? }`,
+TTL equal to the flow's (six minutes — a backgrounded phone tab's poll gap
+routinely exceeds a minute). Written by **every** terminal outcome of the return
+leg — a completion, and a refusal with `outcome: 'rejected'` (or `'conflict'`
+for a link) — so the original tab reports the word the return tab showed rather
+than an "expired" that would depend on whether its poll or the redirect got
+there first. Written **before** the flow record is deleted: the state machines
+answer the original tab from the flow while one exists and from the marker once
+there is not, and the other order left a window, a few store round trips wide,
+in which that tab found neither, reported `expired`, and stopped polling for
+good. Consulted inside the state machines when the flow is missing, and consumed
+**once** by a poll that presents the binder: marker deleted, binding dropped,
+`{ status: 'complete', redirect_to }` / `{ status: 'rejected' }` (or the link
+outcome). It never mints a session — but a completed login's marker carries the
+`sessionId` the return leg minted, and consuming it re-issues that session's
+cookie on the poll's own response, so the original tab's navigation does not
+depend on the return tab's `Set-Cookie` having landed first (two requests on two
+connections, unordered). That is safe because the binder that unlocks the
+marker is proven by an HMAC-signed `__Host-` cookie only the browser which
+started the flow holds, and the session was minted for exactly that flow. A
+poll without the binder, or with the wrong mode, learns nothing and burns
+nothing.
 
 ## Alternatives considered
 
@@ -289,6 +337,9 @@ Only the third is this record's subject.
   from its own wallet.
 - A same-device flow whose wallet never returns fails in three minutes, with a
   reason in the log, instead of spinning for six.
+- The tab that started a same-device flow and the tab the wallet opened end on
+  the same word, completed or refused; the one sub-second edge on which they
+  can differ is recorded under decision 7.
 - The cross-device journey is byte-for-byte what it was: `device` absent, QR
   only, `200 {}`, completion by polling, status JSON unchanged.
 - The new surfaces to keep uniform are the return route's one refusal page and

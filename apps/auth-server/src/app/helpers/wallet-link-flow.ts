@@ -1,6 +1,5 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 
-import { WALLET_RETURN_CODE_TTL_MS } from '../constants';
 import { getOrCreateDefaultRealm } from './realm';
 import {
   csrfTokensEqual,
@@ -13,6 +12,7 @@ import {
 } from './session-cookie';
 import {
   createWalletLoginFlow,
+  decideSignalGate,
   deleteWalletFlowDoneMarker,
   deleteWalletLoginFlow,
   deleteWalletPresentationSignal,
@@ -21,6 +21,7 @@ import {
   readWalletFlowDoneMarker,
   readWalletLoginFlow,
   readWalletPresentationSignalRecord,
+  type WalletFlowSurface,
   type WalletLoginFlow,
   writeWalletFlowDoneMarker,
 } from './wallet-login-flow';
@@ -117,24 +118,23 @@ export interface StartWalletLinkFlowOptions {
 }
 
 /**
- * Which surface is asking the state machine to advance (#405).
- *
- * - `poll` — the JSON status endpoint or the page re-render: the ORIGINAL tab,
- *   holding the binder cookie and a session.
- * - `return` — the same-device return leg: a tab holding the binder cookie
- *   and a session AND having just spent a Response Code that named this flow.
- *
- * A same-device flow's positive outcome is reserved for `return` (OID4VP 1.0
- * §14.2: "MUST require the frontend to pass the respective Response Code");
- * every negative outcome is reachable either way. Optional with `poll` as the
- * default so a caller that predates #405 keeps its meaning.
+ * Which surface is asking the state machine to advance (#405); see
+ * `WalletFlowSurface`. Optional with `poll` as the default so a caller that
+ * predates #405 keeps its meaning.
  */
 export interface AdvanceWalletLinkFlowOptions {
-  via?: 'poll' | 'return';
+  via?: WalletFlowSurface;
 }
 
-/** The word the done-marker carries for a completed link (#405). */
-type WalletLinkDoneOutcome = 'linked' | 'rebound';
+/**
+ * The word the done-marker carries for a link that ended on the return leg
+ * (#405): the two completions the linking page has a sentence for, and the
+ * two refusals the return tab rendered, so the original tab renders the
+ * same one. Any other word on a link marker is read as `rejected` — the
+ * marker is QAuth-authored and cannot carry one, but nothing unrecognised
+ * may read as a completion.
+ */
+type WalletLinkDoneOutcome = 'linked' | 'rebound' | 'conflict' | 'rejected';
 
 /** Copy the linking surfaces share. One sentence per outcome. */
 export const WALLET_LINK_REFUSAL = 'We could not link that credential. Please try again.';
@@ -259,6 +259,37 @@ async function terminate(
   await deleteWalletPresentationStash(fastify, flow.stateHash);
 }
 
+/**
+ * End a linking flow on the RETURN leg (#405, ADR-013 D8): the done-marker
+ * first, the flow second.
+ *
+ * The order is the point, and `WalletFlowDoneMarker` says why at length: the
+ * original tab is answered from the flow record while one exists and from
+ * the marker once there is not, so the marker must exist before the flow
+ * stops existing or a poll in between finds neither and reports "expired".
+ * Safe on this leg specifically, because nothing can complete a same-device
+ * link while it stays addressable for these two writes — the poll is gated
+ * and the code is spent. The user the outcome belongs to rides on the
+ * marker's open index signature — the marker type is deliberately
+ * mode-agnostic and lives with the login flow — so the replay can apply the
+ * same-user gate the live flow did.
+ */
+async function concludeReturnLeg(
+  fastify: FastifyInstance,
+  handle: string,
+  flow: WalletLoginFlow,
+  userId: string,
+  outcome: WalletLinkDoneOutcome
+): Promise<void> {
+  await writeWalletFlowDoneMarker(fastify, handle, {
+    binder: flow.binder,
+    mode: 'link',
+    outcome,
+    linkUserId: userId,
+  });
+  await terminate(fastify, handle, flow);
+}
+
 async function auditWalletLink(
   fastify: FastifyInstance,
   request: FastifyRequest,
@@ -292,24 +323,14 @@ async function auditWalletLink(
  * ## The same-device gate (#405, ADR-013 D7)
  *
  * After the mode, binder, same-user and expiry gates, the signal record
- * decides:
- *
- * - `wallet_error` or `return_rejected` → terminate, `rejected` — on EVERY
- *   flow, via either surface. An error carries no presentation and surfacing
- *   it links nothing, so gating it would only leave a user who tapped
- *   "Decline" in their wallet watching a spinner.
- * - `received` on a same-device flow, via `poll` → `pending` while the
- *   redirect could still arrive (`now <= at + WALLET_RETURN_CODE_TTL_MS`, the
- *   same window the database gives the code), and once it cannot →
- *   terminate, `rejected`, logged. That is HAIP 1.0 §5.1's "MUST reject
- *   presentations if Wallets do not follow the redirect back", enforced
- *   ACTIVELY at the deadline rather than left to the flow's expiry.
- * - `received` via `return` → resolve, terminate, link: the leg the code was
- *   minted for.
- * - `received` on a cross-device flow → link by polling, exactly as before
- *   #405. A return can never reach such a flow, because the Response Endpoint
- *   emits no `redirect_uri` for a cross-device row and the repository refuses
- *   to redeem a code for one.
+ * decides — in `decideSignalGate`, the ONE function both this machine and
+ * the login machine call, documented there: a wallet error or a foreign
+ * landing is `rejected` on every flow via either surface; `received` on a
+ * same-device flow is `pending` by poll until the Response Code deadline and
+ * `rejected` after it; `received` via the return leg, or on a cross-device
+ * flow by poll, proceeds to the link. This machine does what the verdict
+ * says — logs the reason, terminates, answers — so the flow still changes
+ * state in one place while the rule lives in one place.
  *
  * ## Completion differs by surface (D6, D8)
  *
@@ -317,15 +338,18 @@ async function auditWalletLink(
  * this flow's cookie binding on every terminal outcome, as it always has. The
  * return leg does NOT touch the binder cookie — the wallet opened it in a NEW
  * tab, and the original tab's next poll must still be able to prove it holds
- * the flow — and on `linked` leaves a done-marker under the handle carrying
- * the word its page should show. When that poll finds the flow gone, it
- * consults the marker: binder matches, mode is `link`, and the session is the
- * user the flow was started by → marker deleted, binding burned, `linked`
- * answered exactly once, and no second write. Anything else about a missing
- * flow is `expired`, as it always was. `conflict` and `rejected` on the return
- * leg leave no marker: the original tab then reports `expired`, which is the
- * refusal the login state machine gives its original tab for the same case,
- * and the return tab has already shown the specific outcome.
+ * the flow — and on EVERY terminal outcome leaves a done-marker under the
+ * handle carrying the word its page should show: `linked` or `rebound` for a
+ * completion, `conflict` or `rejected` for a refusal, so the original tab
+ * renders exactly what the return tab did instead of an "expired" that would
+ * depend on whether its poll or the redirect got there first. The marker is
+ * written BEFORE the flow is terminated (`concludeReturnLeg`; the poll never
+ * completes a same-device link, so a poll that lands mid-completion is
+ * `pending`, never a second write). When that poll finds the flow gone, it
+ * consults the marker: binder matches, mode is `link`, and the session is
+ * the user the flow was started by → marker deleted, binding burned, the
+ * word answered exactly once, and no second write. Anything else about a
+ * missing flow is `expired`, as it always was.
  *
  * @param fastify - server instance.
  * @param request - the authenticated request.
@@ -382,31 +406,20 @@ export async function advanceWalletLinkFlow(
   const record = await readWalletPresentationSignalRecord(fastify, flow.stateHash);
   if (record === null) return { status: 'pending', flow };
 
-  if (record.signal === 'wallet_error' || record.signal === 'return_rejected') {
-    if (record.signal === 'return_rejected') {
-      fastify.log.warn(
-        { ip: request.ip },
-        'same-device presentation rejected: redirect landed in a foreign session'
-      );
+  // The same-device gate, shared with the login machine (D7). A same-device
+  // presentation links ONLY on the return leg (OID4VP 1.0 §14.2); by polling
+  // it is pending while the wallet could still bring the browser back, and
+  // rejected once the code it was handed can no longer be redeemed (HAIP
+  // 1.0 §5.1, "do not follow the redirect back").
+  const gate = decideSignalGate(record, flow, via);
+  if (gate.verdict === 'pending') return { status: 'pending', flow };
+  if (gate.verdict === 'rejected') {
+    if (gate.warn !== undefined) fastify.log.warn({ ip: request.ip }, gate.warn);
+    if (via === 'return') {
+      await concludeReturnLeg(fastify, handle, flow, userId, 'rejected');
+    } else {
+      await terminate(fastify, handle, flow);
     }
-    await terminate(fastify, handle, flow);
-    return { status: 'rejected' };
-  }
-
-  // A same-device presentation links ONLY on the return leg (OID4VP 1.0
-  // §14.2). By polling, it is pending while the wallet could still bring the
-  // browser back, and rejected once the code it was handed can no longer be
-  // redeemed — HAIP 1.0 §5.1, "do not follow the redirect back". The deadline
-  // is measured from the signal's own timestamp, so a poll that arrives late
-  // cannot restart it, and it is the SAME constant the database applies to the
-  // code, so the two edges cannot disagree.
-  if (flow.sameDevice === true && via === 'poll') {
-    if (Date.now() <= record.at + WALLET_RETURN_CODE_TTL_MS) return { status: 'pending', flow };
-    fastify.log.warn(
-      { ip: request.ip },
-      'same-device presentation rejected: redirect not followed'
-    );
-    await terminate(fastify, handle, flow);
     return { status: 'rejected' };
   }
 
@@ -419,9 +432,13 @@ export async function advanceWalletLinkFlow(
     dcqlQuery: flow.dcqlQuery ?? {},
   });
 
-  await terminate(fastify, handle, flow);
-
   if (via === 'poll') {
+    // By POLL the flow ends here, before the audit row, as it always has: a
+    // cross-device link CAN be reached by a concurrent poll, so the window in
+    // which two of them read the same presentation stays as narrow as it
+    // was. By RETURN it ends in `concludeReturnLeg` below, AFTER the marker
+    // for the original tab is written.
+    await terminate(fastify, handle, flow);
     // Burn only THIS flow's binding: another flow may still be pending in the
     // same browser, and clearing the whole cookie would strand it. The return
     // leg leaves the binding alone — see the JSDoc — so the original tab can
@@ -444,18 +461,16 @@ export async function advanceWalletLinkFlow(
     if (via === 'return') {
       // The wallet opened this leg in a NEW tab; the marker is what the
       // original tab's poll will find where the flow was. Written AFTER the
-      // credential row and the audit row, so a marker exists only for a link
-      // that happened, and it writes nothing when consumed. The user the
-      // outcome belongs to rides on the marker's open index signature — the
-      // marker type is deliberately mode-agnostic and lives with the login
-      // flow — so the replay can apply the same-user gate the live flow did.
-      const outcome: WalletLinkDoneOutcome = resolution.rebound ? 'rebound' : 'linked';
-      await writeWalletFlowDoneMarker(fastify, handle, {
-        binder: flow.binder,
-        mode: 'link',
-        outcome,
-        linkUserId: userId,
-      });
+      // credential row and the audit row, so a completion marker exists only
+      // for a link that happened, and BEFORE the flow is deleted, so that
+      // poll never finds neither. It writes nothing when consumed.
+      await concludeReturnLeg(
+        fastify,
+        handle,
+        flow,
+        userId,
+        resolution.rebound ? 'rebound' : 'linked'
+      );
     }
 
     return { status: 'linked', rebound: resolution.rebound };
@@ -467,7 +482,10 @@ export async function advanceWalletLinkFlow(
     metadata: { reason: resolution.status, verifierProfile: flow.verifierProfile },
   });
 
-  return resolution.status === 'conflict' ? { status: 'conflict' } : { status: 'rejected' };
+  const refused: WalletLinkDoneOutcome = resolution.status === 'conflict' ? 'conflict' : 'rejected';
+  if (via === 'return') await concludeReturnLeg(fastify, handle, flow, userId, refused);
+
+  return refused === 'conflict' ? { status: 'conflict' } : { status: 'rejected' };
 }
 
 /**
@@ -486,7 +504,10 @@ export async function advanceWalletLinkFlow(
  * once: the marker is deleted and the cookie binding burned in the same
  * breath, so a second poll is `expired` again. Nothing is written to the
  * account — the credential row has existed since the return leg — and the
- * word answered is the one the marker recorded.
+ * word answered is the one the marker recorded: `linked` / `rebound` for a
+ * completion, `conflict` / `rejected` for a refusal the return tab already
+ * showed, and `rejected` for any word this machine does not know, because
+ * nothing unrecognised may read as a completion.
  *
  * A poll that fails any gate learns nothing and burns nothing: the read and
  * the delete are separate on purpose (see `readWalletFlowDoneMarker`), so a
@@ -518,5 +539,14 @@ async function resolveDoneMarker(
   await deleteWalletFlowDoneMarker(fastify, handle);
   dropWalletFlowBinding(request, reply, handle);
 
-  return { status: 'linked', rebound: marker.outcome === 'rebound' };
+  switch (marker.outcome) {
+    case 'linked':
+      return { status: 'linked', rebound: false };
+    case 'rebound':
+      return { status: 'linked', rebound: true };
+    case 'conflict':
+      return { status: 'conflict' };
+    default:
+      return { status: 'rejected' };
+  }
 }

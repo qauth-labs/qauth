@@ -60,34 +60,107 @@ export const LOG_REDACT_PATHS = [
  * redirect can fetch and process the Authorization Response" has no business
  * in a log shipper.
  *
- * Names are matched exactly and case-sensitively, as query parameter names
- * are; the value is censored up to the next `&`. Add to this list rather than
- * to `LOG_REDACT_PATHS` when the next bearer value has to ride in a URL.
+ * Names are matched case-sensitively, as query parameter names are, and in
+ * every spelling the route would accept: Fastify's querystring parser
+ * percent-DECODES the key before the handler sees it, so a wallet or in-app
+ * browser that re-encodes the `redirect_uri` QAuth issued into
+ * `?response%5Fcode=…` (or `%5f`, or any other character of the name in its
+ * `%XX` form) still lands on `request.query.response_code`, and the return
+ * route burns and redeems that code exactly as it would the plain spelling.
+ * The censor therefore tolerates a percent-encoded spelling of every character
+ * of every listed name (see {@link percentEncodingTolerantPattern}); the plain
+ * name is one of those spellings. The value is censored up to the next `&`.
+ * Add to this list rather than to `LOG_REDACT_PATHS` when the next bearer
+ * value has to ride in a URL.
+ *
+ * Every consumer of a request-target that reaches the log must go through
+ * {@link redactLoggedUrl}: Fastify's own request/response lines do via the
+ * `req` serializer below, and the global error handler
+ * (`plugins/error-handler.ts`) does on the plain `url` key of its own lines —
+ * a 429 from `@fastify/rate-limit` is thrown from an `onRequest` hook BEFORE the
+ * return route runs, so on that line the code is not even spent yet.
  */
 export const LOG_REDACTED_QUERY_PARAMETERS = ['response_code'] as const;
 
 /**
+ * Query parameter names this module knows how to spell tolerantly: the RFC
+ * 3986 §2.3 unreserved set, which is every character a QAuth query parameter
+ * name uses and every character a client may equally send plain or
+ * percent-encoded (the two are equivalent by that section, and Fastify treats
+ * them so). Kept narrow so the per-character pattern below never has to
+ * reason about multi-byte UTF-8 sequences.
+ */
+const REDACTABLE_QUERY_PARAMETER_NAME = /^[A-Za-z0-9\-._~]+$/;
+
+/**
+ * A regular-expression source that matches `name` whether each of its
+ * characters arrives plain or percent-encoded, in either hex case: for
+ * `response_code`, the spellings `response_code`, `response%5Fcode`,
+ * `response%5fcode` and `%72esponse_code` alike.
+ *
+ * Built character by character — `(?:_|%5[Ff])` for `_`, `(?:r|%72)` for `r` —
+ * rather than by decoding the URL first, because the logged URL is kept as the
+ * client sent it (see {@link redactLoggedUrl}) and a decoder run over the whole
+ * line would rewrite every request to redact one parameter on one route.
+ * Only `=` and `&` are NOT tolerated in encoded form, deliberately: the parser
+ * splits on the literal separators before it decodes anything, so an encoded
+ * `%3D` or `%26` never delimits the parameter it would have named.
+ *
+ * @param name - a query parameter name from the unreserved set; anything else
+ * throws at module load, where a bad entry in
+ * {@link LOG_REDACTED_QUERY_PARAMETERS} is found by every test rather than by
+ * the first log line that should have been censored.
+ */
+export function percentEncodingTolerantPattern(name: string): string {
+  if (!REDACTABLE_QUERY_PARAMETER_NAME.test(name)) {
+    throw new TypeError(
+      `Redacted query parameter name ${JSON.stringify(name)} must use only RFC 3986 unreserved characters`
+    );
+  }
+
+  return [...name]
+    .map((character) => {
+      // `.` is the one unreserved character with a meaning inside a pattern.
+      const literal = character === '.' ? '\\.' : character;
+      const hex = character.charCodeAt(0).toString(16).toUpperCase().padStart(2, '0');
+      const encoded = [...hex]
+        .map((digit) => (/[A-F]/.test(digit) ? `[${digit}${digit.toLowerCase()}]` : digit))
+        .join('');
+
+      return `(?:${literal}|%${encoded})`;
+    })
+    .join('');
+}
+
+/**
  * One regular expression over {@link LOG_REDACTED_QUERY_PARAMETERS}, compiled
- * once: the separator, the name and the `=` captured (and kept), then
- * everything up to the next `&` (censored).
+ * once: the separator, the name (in any spelling
+ * {@link percentEncodingTolerantPattern} admits) and the `=` captured (and
+ * kept), then everything up to the next `&` (censored).
  *
  * Anchored on the `?` or `&` that precedes the name so `x_response_code=` is
  * left alone, and stopping at `&` so the parameters after the censored one
  * stay readable in the line.
  */
 const REDACTED_QUERY_VALUE_PATTERN = new RegExp(
-  `([?&](?:${LOG_REDACTED_QUERY_PARAMETERS.join('|')})=)[^&]*`,
+  `([?&](?:${LOG_REDACTED_QUERY_PARAMETERS.map(percentEncodingTolerantPattern).join('|')})=)[^&]*`,
   'g'
 );
 
 /**
  * Censor the value of every {@link LOG_REDACTED_QUERY_PARAMETERS} entry in a
- * request URL, leaving everything else byte-for-byte as it was.
+ * request URL, leaving everything else byte-for-byte as it was — including the
+ * spelling of the censored parameter's name, encoded or not.
  *
  * A string rewrite rather than `new URL(...)` round-tripping deliberately: the
  * logged URL is the request-target as the client sent it, and re-serialising it
  * would normalise percent-encoding and case on EVERY request just to redact one
  * parameter on one route.
+ *
+ * Used by the `req` serializer for Fastify's request/response lines AND by the
+ * global error handler for the `url` it logs beside every error, so a thrown
+ * 429 / 5xx / validation 400 on the return route carries no more than the
+ * request line does.
  *
  * @param url - the raw request-target (`req.url`), path plus query string.
  */

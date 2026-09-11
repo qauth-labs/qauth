@@ -204,13 +204,16 @@ export const WALLET_RETURN_CODE_TTL_MS = 3 * 60 * 1000;
  * itself.
  *
  * Deliberately DERIVED from {@link WALLET_LOGIN_FLOW_TTL_MS}, where the flow
- * TTL is derived from nothing: the marker is the flow's last word, and it must
- * survive exactly as long as the browser can still be told anything about the
+ * TTL is derived from nothing: the marker is the flow's last word, and it
+ * should survive as long as the browser can still be told anything about the
  * flow. A backgrounded phone tab's poll gap routinely exceeds a minute, so a
- * short marker would strand the very tab the leg exists to continue; one
- * outliving the flow's cookie binding would be unreachable, because the binder
- * it is checked against would already be gone. Tying the two makes drift
- * impossible in either direction.
+ * short marker would strand the very tab the leg exists to continue. The
+ * marker's clock starts at completion and the cookie binding's at flow start,
+ * so the marker can outlive the binding by the time the flow took — harmless,
+ * because a poll whose binding has expired presents no binder and answers
+ * `expired`, the documented fallback, without reading it. In practice the
+ * marker is therefore bounded by the binding's life; tying the two constants
+ * keeps that bound from drifting when the flow TTL changes.
  */
 export const WALLET_LOGIN_DONE_MARKER_TTL_MS = WALLET_LOGIN_FLOW_TTL_MS;
 

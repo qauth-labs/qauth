@@ -1,3 +1,6 @@
+import { Writable } from 'node:stream';
+
+import rateLimit from '@fastify/rate-limit';
 import {
   ForbiddenError,
   InvalidClientError,
@@ -7,8 +10,10 @@ import {
   UniqueConstraintError,
 } from '@qauth-labs/shared-errors';
 import type { FastifyInstance } from 'fastify';
-import Fastify from 'fastify';
+import Fastify, { LogController } from 'fastify';
 import { describe, expect, it, vi } from 'vitest';
+
+import { LOG_REDACT_CENSOR } from '../../config/logger';
 
 // F-05: error-handler now reads the validated `env.NODE_ENV` instead of the
 // raw `process.env.NODE_ENV`. Mock the env module so the test doesn't trigger
@@ -491,6 +496,77 @@ describe('error-handler plugin', () => {
       const { calls } = await captureLogs('/client-error');
 
       expect(calls[0]?.payload['statusCode']).toBe(401);
+    });
+
+    it('(OID4VP 1.0 §14.2) redacts the response_code query value from the error log line too', async () => {
+      // The `url` on the handler's line is a plain string key: pino's path
+      // redaction cannot reach inside it and the `req` serializer never sees
+      // it, so before #405's follow-up a 429 / 5xx / 409 on
+      // `/ui/wallet-login/return` wrote the same-device Response Code to the
+      // sink in the clear — and the 429 is thrown by `@fastify/rate-limit`
+      // from an `onRequest` hook BEFORE the route burns the code, so that
+      // line carried a code still redeemable for up to 3 min.
+      //
+      // Asserted on the serialised stream through a REAL pino logger, as
+      // `config/logger.test.ts` does, with Fastify's own request/response
+      // lines switched off: every line that carries a `url` below is one this
+      // handler wrote, so nothing else can be censoring on its behalf. The
+      // limiter is the real plugin on its in-memory store, `max: 2`, so the
+      // third arrival is the genuine hook-thrown 429.
+      const captured: string[] = [];
+      const stream = new Writable({
+        write(chunk, _enc, cb) {
+          captured.push(chunk.toString());
+          cb();
+        },
+      });
+
+      const app = Fastify({
+        logger: { level: 'info', stream },
+        logController: new LogController({ disableRequestLogging: true }),
+      });
+      await app.register(errorHandler);
+      await app.register(rateLimit, { max: 2, timeWindow: 60_000 });
+      app.get('/ui/wallet-login/return', async (request) => {
+        if (request.headers['x-fail'] === 'unique') {
+          throw new UniqueConstraintError('oid4vp_request_states_response_code_hash_unique');
+        }
+        throw new Error('redemption store unavailable');
+      });
+
+      const code = 'gLDFeWTVs5PTZcgEjhwwPpTmxIkXIv0CpyHiURdO_-A';
+      const url = `/ui/wallet-login/return?response_code=${code}`;
+
+      const thrown = await app.inject({ method: 'GET', url });
+      const conflict = await app.inject({ method: 'GET', url, headers: { 'x-fail': 'unique' } });
+      const limited = await app.inject({ method: 'GET', url });
+      await app.close();
+
+      expect(thrown.statusCode).toBe(500);
+      expect(conflict.statusCode).toBe(409);
+      expect(limited.statusCode).toBe(429);
+
+      const serialized = captured.join('');
+      expect(serialized).not.toContain(code);
+
+      // Each of the three errors logged its line, the 409 logged its
+      // operator-only constraint line as well, and every one of them carries
+      // the path with the value censored — never the raw request-target.
+      const lines = captured
+        .map((line) => JSON.parse(line) as { msg?: string; url?: string; statusCode?: number })
+        .filter((line) => typeof line.url === 'string');
+      const redactedUrl = `/ui/wallet-login/return?response_code=${LOG_REDACT_CENSOR}`;
+
+      expect(lines.map((line) => line.msg)).toEqual([
+        'Error occurred',
+        'Error occurred',
+        'Unique constraint violation',
+        'Error occurred',
+      ]);
+      expect(lines.map((line) => line.url)).toEqual(Array(4).fill(redactedUrl));
+      expect(
+        lines.filter((line) => line.msg === 'Error occurred').map((line) => line.statusCode)
+      ).toEqual([500, 409, 429]);
     });
   });
 });

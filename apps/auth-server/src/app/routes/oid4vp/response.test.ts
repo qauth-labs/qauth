@@ -1484,9 +1484,12 @@ describe('POST /oid4vp/response — the same-device return leg (#405)', () => {
     expect(reply.statusCode).toBe(200);
     expect(Object.keys(body)).toEqual(['redirect_uri']);
     expect(responseCodeOf(body)).toMatch(RESPONSE_CODE_SHAPE);
+    // The digest the kid-keyed redemption persisted IS the digest of the code
+    // the wallet was handed — the same join the cleartext path pins — so a
+    // HAIP return leg can redeem what this response emitted.
     expect(fastify.repositories.oid4vpRequestStates.redeemByEncryptionKid).toHaveBeenCalledWith(
       pair.kid,
-      RESPONSE_CODE_DIGEST
+      { codeHash: sha256Hex(responseCodeOf(body)), codeExpiresAt: expect.any(Number) }
     );
   });
 

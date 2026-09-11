@@ -643,8 +643,8 @@ describe('wallet-link UI — the return leg (#405)', () => {
     expect(linkWalletPresentation).toHaveBeenCalledTimes(1);
   });
 
-  it("refuses a link return without a session, or with a different user's session, with the refusal page", async () => {
-    // (1) No session at all: the browser holds the binder, but a link flow was
+  it('refuses a link return without a session with the refusal page, discarding the presentation', async () => {
+    // No session at all: the browser holds the binder, but a link flow was
     // initiated in a USER session, so this is a foreign landing in HAIP §5.1's
     // sense — the code is spent and the presentation discarded.
     {
@@ -696,34 +696,85 @@ describe('wallet-link UI — the return leg (#405)', () => {
       expect(String(rendered.body)).toContain(WALLET_LINK_REFUSAL);
       expect(linkWalletPresentation).not.toHaveBeenCalled();
     }
+  });
 
-    // (2) A DIFFERENT user's session in the same browser: the state machine's
-    // same-user gate answers expired, and the route renders the one refusal.
-    {
-      const { fastify, routes, sessionUtils, responseCodes, handle, flow, binderCookie } =
-        await startLink({ userId: 'user-1', device: 'this' });
-      publishSignal(sessionUtils, flow['stateHash'], 'received');
-      const code = issueResponseCode(responseCodes, flow['stateHash']);
-      (linkWalletPresentation as unknown as Mock).mockResolvedValue(LINKED);
-      const other = signIn(sessionUtils, 'user-2');
-      const auditRowsAtStart = auditEvents(fastify).length;
+  it("(HAIP 1.0 §5.1) link return with another user's session discards the presentation and the original poll answers rejected", async () => {
+    // The jar's session was replaced — a logout and a login in another tab —
+    // while the wallet was open. The browser holds the binder, but this is
+    // "a different user session to the one the request was initiated in":
+    // handled like the no-session landing, not left to the same-user gate,
+    // which would answer expired and leave the parked bytes addressable.
+    const {
+      fastify,
+      routes,
+      sessionUtils,
+      responseCodes,
+      handle,
+      flow,
+      sessionCookie,
+      binderCookie,
+    } = await startLink({ userId: 'user-1', device: 'this' });
+    publishSignal(sessionUtils, flow['stateHash'], 'received');
+    sessionUtils.store.set(`wallet-presentation:${flow['stateHash']}`, {
+      presentations: [{ format: 'dc+sd-jwt', compact: 'a.b.c' }],
+      at: Date.now(),
+    });
+    const code = issueResponseCode(responseCodes, flow['stateHash']);
+    (linkWalletPresentation as unknown as Mock).mockResolvedValue(LINKED);
+    const other = signIn(sessionUtils, 'user-2');
+    const auditRowsAtStart = auditEvents(fastify).length;
 
-      const landed = await followReturn(
-        routes,
-        code,
-        `${other}; __Host-qauth_wallet_flow=${binderCookie}`
-      );
+    const landed = await followReturn(
+      routes,
+      code,
+      `${other}; __Host-qauth_wallet_flow=${binderCookie}`
+    );
 
-      expect(landed.body).toBe(REFUSAL_PAGE);
-      expect(landed.statusCode).toBe(200);
-      expect(linkWalletPresentation).not.toHaveBeenCalled();
-      expect(auditEvents(fastify)).toHaveLength(auditRowsAtStart);
-      expect(landed.setCookies.some((c) => c.startsWith('__Host-qauth_wallet_flow='))).toBe(false);
-      // The flow is untouched, and the code is spent regardless: burn precedes bind.
-      expect(sessionUtils.store.has(`wallet-login:${handle}`)).toBe(true);
-      expect(fastify.repositories.oid4vpRequestStates.redeemResponseCode).toHaveBeenCalledTimes(1);
-      expect(sessionUtils.store.has(`wallet-login-done:${handle}`)).toBe(false);
-    }
+    expect(landed.body).toBe(REFUSAL_PAGE);
+    expect(landed.statusCode).toBe(200);
+    expect(fastify.log.warn).toHaveBeenCalledWith(
+      expect.anything(),
+      'same-device return for a wallet LINK flow arrived in a different user session'
+    );
+    expect(linkWalletPresentation).not.toHaveBeenCalled();
+    expect(auditEvents(fastify)).toHaveLength(auditRowsAtStart);
+    expect(sessionMints(fastify)).toEqual([]);
+    expect(landed.setCookies).toEqual([]);
+
+    // Spent, and discarded: the parked bytes are gone, the signal says why,
+    // the flow itself is left for its owner's poll, and no marker exists.
+    expect(fastify.repositories.oid4vpRequestStates.redeemResponseCode).toHaveBeenCalledTimes(1);
+    expect(sessionUtils.store.has(`wallet-presentation:${flow['stateHash']}`)).toBe(false);
+    expect(sessionUtils.store.get(`wallet-login-signal:${flow['stateHash']}`)).toEqual({
+      signal: 'return_rejected',
+      at: expect.any(Number),
+    });
+    expect(sessionUtils.store.has(`wallet-login:${handle}`)).toBe(true);
+    expect(sessionUtils.store.has(`wallet-login-done:${handle}`)).toBe(false);
+
+    // The other user's poll in this browser learns nothing (the same-user
+    // gate); the original user's poll is told, promptly, and nothing was linked.
+    const foreign = await renderLinkPage(
+      routes,
+      handle,
+      `${other}; __Host-qauth_wallet_flow=${binderCookie}`
+    );
+    expect(foreign.statusCode).toBe(410);
+    expect(sessionUtils.store.has(`wallet-login:${handle}`)).toBe(true);
+
+    const rendered = await renderLinkPage(
+      routes,
+      handle,
+      `${sessionCookie}; __Host-qauth_wallet_flow=${binderCookie}`
+    );
+    expect(rendered.statusCode).toBe(401);
+    expect(String(rendered.body)).toContain(WALLET_LINK_REFUSAL);
+    expect(fastify.log.warn).toHaveBeenCalledWith(
+      expect.anything(),
+      'same-device presentation rejected: redirect landed in a foreign session'
+    );
+    expect(linkWalletPresentation).not.toHaveBeenCalled();
+    expect(sessionUtils.store.has(`wallet-login:${handle}`)).toBe(false);
   });
 
   it('the original link tab consumes the done-marker once', async () => {
@@ -911,7 +962,17 @@ describe('wallet-link UI — the return leg (#405)', () => {
       expect(linkWalletPresentation).not.toHaveBeenCalled();
       expect(sessionMints(fastify)).toEqual([]);
       expect(sessionUtils.store.has(`wallet-login:${handle}`)).toBe(false);
+      // The word is left for the original tab, which renders the SAME page
+      // — once — rather than "expired".
+      expect(sessionUtils.store.get(`wallet-login-done:${handle}`)).toMatchObject({
+        mode: 'link',
+        outcome: 'rejected',
+      });
+      const original = await renderLinkPage(routes, handle, cookie);
+      expect(original.statusCode).toBe(401);
+      expect(original.body).toBe(landed.body);
       expect(sessionUtils.store.has(`wallet-login-done:${handle}`)).toBe(false);
+      expect((await renderLinkPage(routes, handle, cookie)).statusCode).toBe(410);
 
       // Byte for byte what the page GET renders for the same outcome.
       const other = await startLink({ device: 'this' });
@@ -927,17 +988,14 @@ describe('wallet-link UI — the return leg (#405)', () => {
 
     // conflict: the one specific outcome, 409 on both surfaces.
     {
-      const { routes, sessionUtils, responseCodes, flow, sessionCookie, binderCookie } =
+      const { routes, sessionUtils, responseCodes, handle, flow, sessionCookie, binderCookie } =
         await startLink({ device: 'this' });
       publishSignal(sessionUtils, flow['stateHash'], 'received');
       const code = issueResponseCode(responseCodes, flow['stateHash']);
       (linkWalletPresentation as unknown as Mock).mockResolvedValue({ status: 'conflict' });
+      const cookie = `${sessionCookie}; __Host-qauth_wallet_flow=${binderCookie}`;
 
-      const landed = await followReturn(
-        routes,
-        code,
-        `${sessionCookie}; __Host-qauth_wallet_flow=${binderCookie}`
-      );
+      const landed = await followReturn(routes, code, cookie);
 
       expect(landed.statusCode).toBe(409);
       expect(landed.body).toBe(
@@ -948,6 +1006,14 @@ describe('wallet-link UI — the return leg (#405)', () => {
           retry: false,
         })
       );
+      // The original tab renders the same 409, once.
+      expect(sessionUtils.store.get(`wallet-login-done:${handle}`)).toMatchObject({
+        outcome: 'conflict',
+      });
+      const original = await renderLinkPage(routes, handle, cookie);
+      expect(original.statusCode).toBe(409);
+      expect(original.body).toBe(landed.body);
+      expect((await renderLinkPage(routes, handle, cookie)).statusCode).toBe(410);
 
       // Byte for byte what the page GET renders for the same outcome — on a
       // CROSS-device flow, since a same-device one never resolves by polling.
@@ -1004,5 +1070,32 @@ describe('wallet-link UI — the return leg (#405)', () => {
     );
     expect(linkWalletPresentation).not.toHaveBeenCalled();
     expect(sessionUtils.store.has(`wallet-login:${handle}`)).toBe(false);
+  });
+
+  it('a link return the state machine cannot advance (code spent, flow found, no signal) renders the one refusal page, byte for byte', async () => {
+    // A signal write that had failed at the Response Endpoint: the code was
+    // minted, the browser and the session are the right ones, but the machine
+    // has nothing to advance on. `pending` on the return leg is the refusal
+    // page — the same bytes as a foreign landing — and the code is spent.
+    const { fastify, routes, responseCodes, handle, flow, sessionCookie, binderCookie } =
+      await startLink({ device: 'this' });
+    const code = issueResponseCode(responseCodes, flow['stateHash']);
+    (linkWalletPresentation as unknown as Mock).mockResolvedValue(LINKED);
+    const cookie = `${sessionCookie}; __Host-qauth_wallet_flow=${binderCookie}`;
+
+    const landed = await followReturn(routes, code, cookie);
+
+    expect(landed.body).toBe(REFUSAL_PAGE);
+    expect(landed.statusCode).toBe(200);
+    expect(fastify.repositories.oid4vpRequestStates.redeemResponseCode).toHaveBeenCalledTimes(1);
+    expect(linkWalletPresentation).not.toHaveBeenCalled();
+    expect(auditEvents(fastify)).toEqual([]);
+    expect(landed.setCookies).toEqual([]);
+    // The flow is still there for the original tab, which is still pending.
+    expect(String((await renderLinkPage(routes, handle, cookie)).body)).toContain(
+      'Present a credential'
+    );
+    // And the code is spent: the same landing again is the same page.
+    expect((await followReturn(routes, code, cookie)).body).toBe(REFUSAL_PAGE);
   });
 });

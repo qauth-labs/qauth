@@ -217,7 +217,10 @@ where the wallet is (#405). `this` starts a **same-device** link: render
 `invocation_uri` as a deep link, and the link completes on the browser's
 return leg at `GET /ui/wallet-login/return` rather than by polling. `other`,
 an empty body, or no body at all is **cross-device**: render a QR code and poll.
-Any other value is a `400` validation error.
+Any other value is a `400` validation error. The generated OpenAPI document
+marks this request body as required — the generator's default for any declared
+body schema — but a `POST` with no body at all is accepted and means
+`device: "other"`.
 
 **`200 OK`**: `{ "handle": "...", "invocation_uri": "openid4vp://...", "expires_at": 1730000000000 }`
 — render `invocation_uri` as a QR code or deep link; it is opaque.

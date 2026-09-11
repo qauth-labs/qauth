@@ -49,7 +49,11 @@ vi.mock('../../helpers/wallet-presentation', () => ({
 
 import { WALLET_RETURN_CODE_TTL_MS } from '../../constants';
 import { signSessionId } from '../../helpers/session-cookie';
-import { WALLET_LINK_EXPIRED, WALLET_LINK_REFUSAL } from '../../helpers/wallet-link-flow';
+import {
+  WALLET_LINK_CONFLICT,
+  WALLET_LINK_EXPIRED,
+  WALLET_LINK_REFUSAL,
+} from '../../helpers/wallet-link-flow';
 import { linkWalletPresentation } from '../../helpers/wallet-presentation';
 import linkWalletRoute from './link-wallet';
 
@@ -657,7 +661,7 @@ describe('wallet linking API — the done-marker the return leg leaves (#405)', 
     sessionUtils: ReturnType<typeof createSessionUtils>,
     handle: string,
     flow: Record<string, any>,
-    outcome: 'linked' | 'rebound',
+    outcome: 'linked' | 'rebound' | 'conflict' | 'rejected',
     linkUserId = flow['linkUserId'] as string
   ) {
     sessionUtils.store.delete(`wallet-login:${handle}`);
@@ -720,6 +724,33 @@ describe('wallet linking API — the done-marker the return leg leaves (#405)', 
       status: 'linked',
       message: 'Your wallet credential was updated.',
     });
+  });
+
+  it('reports a refusal marker with the word the return tab showed, once', async () => {
+    // A same-device link the wallet declined, or that conflicted, ended on the
+    // return leg; the original tab's poll must say so, not "expired".
+    for (const [outcome, expected] of [
+      ['rejected', { status: 'rejected', message: WALLET_LINK_REFUSAL }],
+      ['conflict', { status: 'conflict', message: WALLET_LINK_CONFLICT }],
+    ] as const) {
+      const { routes, sessionUtils, session, handle, flow, binderCookie } = await startLink(
+        'user-1',
+        { device: 'this' }
+      );
+      completeOnReturnLeg(sessionUtils, handle, flow, outcome);
+      const cookie = `${session.cookie}; __Host-qauth_wallet_flow=${binderCookie}`;
+
+      const first = await pollStatus(routes, handle, cookie);
+      expect(first.body).toEqual(expected);
+      expect(first.setCookies.some((c) => c.startsWith('__Host-qauth_wallet_flow='))).toBe(true);
+      expect(sessionUtils.store.has(`wallet-login-done:${handle}`)).toBe(false);
+      expect(linkWalletPresentation).not.toHaveBeenCalled();
+
+      expect((await pollStatus(routes, handle, cookie)).body).toEqual({
+        status: 'expired',
+        message: WALLET_LINK_EXPIRED,
+      });
+    }
   });
 
   it('refuses the marker to a different signed-in user, without burning it', async () => {

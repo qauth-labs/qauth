@@ -1254,12 +1254,14 @@ describe('wallet login — the return leg (#405)', () => {
     expect(landed.redirected).toBeUndefined();
     expect(landed.body as string).toContain('history.replaceState');
 
-    // The done-marker was written for the original tab, and the binding was
-    // NOT dropped: that tab must still be able to prove it holds the flow.
+    // The done-marker was written for the original tab — naming the session
+    // this leg minted, and nothing else — and the binding was NOT dropped:
+    // that tab must still be able to prove it holds the flow.
     expect(sessionUtils.store.get(`wallet-login-done:${handle}`)).toEqual({
       binder: flow.binder,
       mode: 'login',
       redirectTo: '/ui/consent?client_id=abc',
+      sessionId: sessionMints(fastify)[0],
     });
     expect(landed.setCookies.some((c) => c.startsWith('__Host-qauth_wallet_flow='))).toBe(false);
 
@@ -1276,19 +1278,25 @@ describe('wallet login — the return leg (#405)', () => {
     (resolveWalletPresentation as unknown as Mock).mockResolvedValue(AUTHENTICATED);
     const cookie = `__Host-qauth_wallet_flow=${binderCookie}`;
 
-    await followReturn(routes, code, cookie);
+    const landed = await followReturn(routes, code, cookie);
     expect(sessionMints(fastify)).toHaveLength(1);
 
     // A poll WITHOUT the binder learns nothing and burns nothing.
-    expect((await pollStatus(routes, handle)).body.status).toBe('expired');
+    const unbound = await pollStatus(routes, handle);
+    expect(unbound.body.status).toBe('expired');
+    expect(unbound.setCookies).toEqual([]);
     expect(sessionUtils.store.has(`wallet-login-done:${handle}`)).toBe(true);
 
-    // The original tab: complete, with the flow's return_to, no second session,
-    // and its binding dropped now that the marker is consumed.
+    // The original tab: complete, with the flow's return_to, no second session
+    // — but the SAME session's cookie re-issued on this response, so its
+    // navigation does not depend on the return tab's Set-Cookie having
+    // landed first — and its binding dropped now that the marker is consumed.
     const first = await pollStatus(routes, handle, cookie);
     expect(first.body).toEqual({ status: 'complete', redirect_to: '/after' });
     expect(sessionMints(fastify)).toHaveLength(1);
-    expect(first.setCookies.some((c) => c.startsWith('__Host-qauth_session='))).toBe(false);
+    expect(cookieValue(first.setCookies, '__Host-qauth_session')).toBe(
+      cookieValue(landed.setCookies, '__Host-qauth_session')
+    );
     expect(first.setCookies.some((c) => c.startsWith('__Host-qauth_wallet_flow='))).toBe(true);
     expect(sessionUtils.store.has(`wallet-login-done:${handle}`)).toBe(false);
 
@@ -1402,7 +1410,11 @@ describe('wallet login — the return leg (#405)', () => {
     expect(sessionUtils.store.has(`wallet-login:${handle}`)).toBe(false);
   });
 
-  it('refuses a login-mode return for a link-mode flow', async () => {
+  it('refuses a link-mode return that arrives without a session', async () => {
+    // The route is mode-agnostic: a link-mode code reaches the link arm, whose
+    // first gate is the session. (The cross-mode proof — each code names its
+    // own flow — is wallet-link.test.ts, "a link-mode Response Code cannot
+    // complete a login-mode flow and vice versa".)
     const { fastify, routes, sessionUtils, responseCodes, handle, flow, binderCookie } =
       await startFlow({ device: 'this' });
     sessionUtils.store.set(`wallet-login:${handle}`, {
@@ -1464,6 +1476,244 @@ describe('wallet login — the return leg (#405)', () => {
     );
     expect(rendered.state.statusCode).toBe(401);
     expect(rendered.state.body).toBe(landed.body);
+  });
+
+  it('a wallet error on the return leg is reported to the original tab as rejected, once', async () => {
+    // The user who tapped "Decline" is looking at the ORIGINAL tab. It must
+    // say what the return tab said — not "expired", and not a sentence that
+    // depends on whether its poll or the redirect got there first.
+    const { context, fastify, routes, sessionUtils, responseCodes, handle, flow, binderCookie } =
+      await startFlow({ device: 'this' });
+    publishSignal(sessionUtils, flow.stateHash, 'wallet_error');
+    const code = issueResponseCode(responseCodes, flow.stateHash);
+    const cookie = `__Host-qauth_wallet_flow=${binderCookie}`;
+
+    const landed = await followReturn(routes, code, cookie);
+    expect(landed.statusCode).toBe(401);
+    expect(sessionUtils.store.has(`wallet-login:${handle}`)).toBe(false);
+    expect(sessionUtils.store.get(`wallet-login-done:${handle}`)).toEqual({
+      binder: flow.binder,
+      mode: 'login',
+      outcome: 'rejected',
+    });
+
+    // Once, with the binding dropped, no session and no cookie for one.
+    const first = await pollStatus(routes, handle, cookie);
+    expect(first.body).toEqual({ status: 'rejected', message: WALLET_LOGIN_REFUSAL });
+    expect(first.setCookies.some((c) => c.startsWith('__Host-qauth_session='))).toBe(false);
+    expect(first.setCookies.some((c) => c.startsWith('__Host-qauth_wallet_flow='))).toBe(true);
+    expect(sessionUtils.store.has(`wallet-login-done:${handle}`)).toBe(false);
+    expect(sessionMints(fastify)).toEqual([]);
+
+    const second = await pollStatus(routes, handle, cookie);
+    expect(second.body).toEqual({ status: 'expired', message: WALLET_LOGIN_EXPIRED });
+
+    // The same for a presentation that did not resolve, and for one that
+    // resolved to an unavailable user: every rejected exit the return leg can
+    // reach leaves the word behind.
+    for (const setup of [
+      () =>
+        (resolveWalletPresentation as unknown as Mock).mockResolvedValue({ status: 'rejected' }),
+      () => {
+        (resolveWalletPresentation as unknown as Mock).mockResolvedValue(AUTHENTICATED);
+        (fastify.repositories.users.findById as unknown as Mock).mockResolvedValueOnce({
+          id: 'user-1',
+          enabled: false,
+        });
+      },
+    ]) {
+      const other = await startFlow({ context, device: 'this' });
+      publishSignal(sessionUtils, other.flow.stateHash, 'received');
+      setup();
+      const otherCookie = `__Host-qauth_wallet_flow=${other.binderCookie}`;
+
+      expect(
+        (
+          await followReturn(
+            routes,
+            issueResponseCode(responseCodes, other.flow.stateHash),
+            otherCookie
+          )
+        ).statusCode
+      ).toBe(401);
+      expect(sessionUtils.store.get(`wallet-login-done:${other.handle}`)).toMatchObject({
+        outcome: 'rejected',
+      });
+      expect((await pollStatus(routes, other.handle, otherCookie)).body).toEqual({
+        status: 'rejected',
+        message: WALLET_LOGIN_REFUSAL,
+      });
+      expect((await pollStatus(routes, other.handle, otherCookie)).body.status).toBe('expired');
+    }
+    expect(sessionMints(fastify)).toEqual([]);
+  });
+
+  it('writes the marker BEFORE deleting the flow, so a poll mid-completion is pending, never expired', async () => {
+    const { fastify, routes, sessionUtils, responseCodes, handle, flow, binderCookie } =
+      await startFlow({ device: 'this', returnTo: '/after' });
+    publishSignal(sessionUtils, flow.stateHash, 'received');
+    const code = issueResponseCode(responseCodes, flow.stateHash);
+    (resolveWalletPresentation as unknown as Mock).mockResolvedValue(AUTHENTICATED);
+    const cookie = `__Host-qauth_wallet_flow=${binderCookie}`;
+
+    // Hold the return leg between the session mint and its conclusion: the
+    // audit row is the last write before the marker and the deletion.
+    let releaseAudit!: () => void;
+    const auditHeld = new Promise<void>((resolve) => {
+      releaseAudit = resolve;
+    });
+    (fastify.repositories.auditLogs.create as unknown as Mock).mockImplementationOnce(
+      () => auditHeld
+    );
+    const returning = followReturn(routes, code, cookie);
+    await vi.waitFor(() => expect(fastify.repositories.auditLogs.create).toHaveBeenCalled());
+    expect(sessionMints(fastify)).toHaveLength(1);
+
+    // The original tab polls while the return leg is mid-completion: the flow
+    // is still there, so it is `pending` — and the poll resolves nothing and
+    // mints nothing of its own.
+    const polled = await pollStatus(routes, handle, cookie);
+    expect(polled.body).toEqual({ status: 'pending' });
+    expect(resolveWalletPresentation).toHaveBeenCalledTimes(1);
+    expect(sessionMints(fastify)).toHaveLength(1);
+
+    releaseAudit();
+    expect((await returning).statusCode).toBe(200);
+
+    // Spy call order: the marker was set before the flow was deleted.
+    const markerWrite = (sessionUtils.setSession as Mock).mock.calls.findIndex(
+      (c) => c[0] === `wallet-login-done:${handle}`
+    );
+    const flowDelete = (sessionUtils.deleteSession as Mock).mock.calls.findIndex(
+      (c) => c[0] === `wallet-login:${handle}`
+    );
+    expect(markerWrite).toBeGreaterThanOrEqual(0);
+    expect(flowDelete).toBeGreaterThanOrEqual(0);
+    expect((sessionUtils.setSession as Mock).mock.invocationCallOrder[markerWrite]).toBeLessThan(
+      (sessionUtils.deleteSession as Mock).mock.invocationCallOrder[flowDelete]
+    );
+
+    // And the first poll after the deletion finds the marker.
+    expect((await pollStatus(routes, handle, cookie)).body).toEqual({
+      status: 'complete',
+      redirect_to: '/after',
+    });
+  });
+
+  it('(OID4VP 1.0 §14.2) a code completes the one same-device flow it names among several in this browser, and no other', async () => {
+    // Two same-device LOGIN flows in one jar — a user who started twice. The
+    // code the wallet was handed for the second names it by state hash; the
+    // first is untouched, still pending by poll.
+    const first = await startFlow({ device: 'this', returnTo: '/first' });
+    const second = await startFlow({
+      context: first.context,
+      device: 'this',
+      returnTo: '/second',
+      walletFlowCookie: first.binderCookie,
+    });
+    const { fastify, routes, sessionUtils, responseCodes } = first.context;
+    const cookie = `__Host-qauth_wallet_flow=${second.binderCookie}`;
+    publishSignal(sessionUtils, first.flow.stateHash, 'received');
+    publishSignal(sessionUtils, second.flow.stateHash, 'received');
+    (resolveWalletPresentation as unknown as Mock).mockResolvedValue(AUTHENTICATED);
+
+    const landed = await followReturn(
+      routes,
+      issueResponseCode(responseCodes, second.flow.stateHash),
+      cookie
+    );
+
+    expect(landed.statusCode).toBe(200);
+    expect(landed.body as string).toContain('signed in');
+    expect(resolveWalletPresentation).toHaveBeenCalledTimes(1);
+    expect(resolveWalletPresentation).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ stateHash: second.flow.stateHash })
+    );
+    expect(sessionUtils.store.get(`wallet-login-done:${second.handle}`)).toMatchObject({
+      redirectTo: '/second',
+    });
+
+    // The first flow: its record and signal untouched, no marker, still pending.
+    expect(sessionUtils.store.has(`wallet-login:${first.handle}`)).toBe(true);
+    expect(sessionUtils.store.has(`wallet-login-signal:${first.flow.stateHash}`)).toBe(true);
+    expect(sessionUtils.store.has(`wallet-login-done:${first.handle}`)).toBe(false);
+    expect((await pollStatus(routes, first.handle, cookie)).body).toEqual({ status: 'pending' });
+    expect(sessionMints(fastify)).toHaveLength(1);
+
+    // The second flow's original tab continues; the first's does not.
+    expect((await pollStatus(routes, second.handle, cookie)).body).toEqual({
+      status: 'complete',
+      redirect_to: '/second',
+    });
+    expect((await pollStatus(routes, first.handle, cookie)).body).toEqual({ status: 'pending' });
+  });
+
+  it("a login poll never consumes a LINK flow's marker", async () => {
+    const { routes, sessionUtils, handle, flow, binderCookie } = await startFlow({
+      device: 'this',
+    });
+    // A link return would leave this shape; the login page is waiting for a
+    // different word and must not eat it — nor navigate anywhere on it.
+    sessionUtils.store.delete(`wallet-login:${handle}`);
+    sessionUtils.store.set(`wallet-login-done:${handle}`, {
+      binder: flow.binder,
+      mode: 'link',
+      outcome: 'linked',
+      linkUserId: 'user-1',
+    });
+
+    const polled = await pollStatus(routes, handle, `__Host-qauth_wallet_flow=${binderCookie}`);
+
+    expect(polled.body).toEqual({ status: 'expired', message: WALLET_LOGIN_EXPIRED });
+    expect(polled.setCookies).toEqual([]);
+    expect(sessionUtils.store.has(`wallet-login-done:${handle}`)).toBe(true);
+  });
+
+  it('a marker of this mode carrying any word is a refusal, never a completion', async () => {
+    const { routes, sessionUtils, handle, flow, binderCookie } = await startFlow({
+      device: 'this',
+    });
+    sessionUtils.store.delete(`wallet-login:${handle}`);
+    sessionUtils.store.set(`wallet-login-done:${handle}`, {
+      binder: flow.binder,
+      mode: 'login',
+      outcome: 'linked',
+      redirectTo: '/after',
+      sessionId: 'session-x',
+    });
+
+    const polled = await pollStatus(routes, handle, `__Host-qauth_wallet_flow=${binderCookie}`);
+
+    expect(polled.body).toEqual({ status: 'rejected', message: WALLET_LOGIN_REFUSAL });
+    expect(polled.setCookies.some((c) => c.startsWith('__Host-qauth_session='))).toBe(false);
+    expect(sessionUtils.store.has(`wallet-login-done:${handle}`)).toBe(false);
+  });
+
+  it('a return the state machine cannot advance (code spent, flow found, no signal) renders the one refusal page, byte for byte', async () => {
+    // A signal write that had failed at the Response Endpoint: the code was
+    // minted and the browser is the right one, but the machine has nothing
+    // to advance on. `pending` on the return leg is the refusal page — the
+    // same bytes as a foreign landing — and the code is spent regardless.
+    const { fastify, routes, responseCodes, handle, flow, binderCookie } = await startFlow({
+      device: 'this',
+    });
+    const code = issueResponseCode(responseCodes, flow.stateHash);
+    (resolveWalletPresentation as unknown as Mock).mockResolvedValue(AUTHENTICATED);
+    const cookie = `__Host-qauth_wallet_flow=${binderCookie}`;
+
+    const landed = await followReturn(routes, code, cookie);
+
+    expect(landed.body).toBe(REFUSAL_PAGE);
+    expect(landed.statusCode).toBe(200);
+    expect(fastify.repositories.oid4vpRequestStates.redeemResponseCode).toHaveBeenCalledTimes(1);
+    expect(resolveWalletPresentation).not.toHaveBeenCalled();
+    expect(sessionMints(fastify)).toEqual([]);
+    expect(landed.setCookies).toEqual([]);
+    // The flow is still there for the original tab, which is still pending.
+    expect((await pollStatus(routes, handle, cookie)).body).toEqual({ status: 'pending' });
+    // And the code is spent: the same landing again is the same page.
+    expect((await followReturn(routes, code, cookie)).body).toBe(REFUSAL_PAGE);
   });
 
   it('sets Cache-Control: no-store and Referrer-Policy: no-referrer on every return-route response', async () => {

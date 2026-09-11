@@ -8,6 +8,7 @@ import {
   LOG_REDACT_CENSOR,
   LOG_REDACT_PATHS,
   LOG_REDACTED_QUERY_PARAMETERS,
+  percentEncodingTolerantPattern,
   redactLoggedUrl,
   serializeRequestForLog,
 } from './logger';
@@ -155,6 +156,68 @@ describe('buildLoggerOptions', () => {
       expect(['method', 'url', 'version', 'host', 'remoteAddress', 'remotePort']).toContain(key);
     }
   });
+
+  it('(OID4VP 1.0 §14.2) censors a percent-encoded spelling of the name that the route would still accept', async () => {
+    // The premise, proven on the real parser rather than assumed: Fastify
+    // percent-decodes the query KEY, so `response%5Fcode=` reaches the handler
+    // as `request.query.response_code` and the return route would burn and
+    // redeem that code like any other. A wallet or in-app browser that
+    // re-encodes the redirect_uri QAuth issued must therefore not be a way to
+    // log every live code in the clear.
+    const captured: string[] = [];
+    const stream = new Writable({
+      write(chunk, _enc, cb) {
+        captured.push(chunk.toString());
+        cb();
+      },
+    });
+
+    const loggerOptions = buildLoggerOptions(baseEnv) as LoggerOptions;
+    const app = Fastify({ logger: { ...loggerOptions, stream } });
+    app.get('/ui/wallet-login/return', async (request) => ({
+      query: request.query as Record<string, unknown>,
+    }));
+
+    const code = 'M2vYt0a7pQxWJ1nR8sKd4LcE9bFgHiUoZ6yT3jN5wA0';
+    const response = await app.inject({
+      method: 'GET',
+      url: `/ui/wallet-login/return?response%5Fcode=${code}`,
+    });
+    await app.close();
+
+    expect(response.json()).toEqual({ query: { response_code: code } });
+
+    const serialized = captured.join('');
+    expect(serialized).not.toContain(code);
+    // The name keeps the spelling the client used; only the value goes.
+    expect(serialized).toContain(`/ui/wallet-login/return?response%5Fcode=${LOG_REDACT_CENSOR}`);
+  });
+});
+
+describe('percentEncodingTolerantPattern', () => {
+  it('admits each character plain or percent-encoded, in either hex case', () => {
+    const pattern = new RegExp(`^${percentEncodingTolerantPattern('a_b')}$`);
+
+    for (const spelling of ['a_b', 'a%5Fb', 'a%5fb', '%61_b', '%61%5F%62']) {
+      expect(pattern.test(spelling)).toBe(true);
+    }
+    // Case-sensitive on the character (`%41` is `A`), tolerant on the hex
+    // digits only; a different character or a malformed escape is not the name.
+    for (const spelling of ['%41_b', 'A_b', 'a-b', 'a%5Gb', 'a%5b', 'a_b_']) {
+      expect(pattern.test(spelling)).toBe(false);
+    }
+  });
+
+  it('spells the underscore as the alternation the review asked for', () => {
+    expect(percentEncodingTolerantPattern('_')).toBe('(?:_|%5[Ff])');
+    expect(percentEncodingTolerantPattern('.')).toBe('(?:\\.|%2[Ee])');
+  });
+
+  it('refuses a name outside the RFC 3986 unreserved set at build time', () => {
+    for (const name of ['', 'a b', 'a&b', 'a=b', 'a%5Fb', 'ç']) {
+      expect(() => percentEncodingTolerantPattern(name)).toThrow(TypeError);
+    }
+  });
 });
 
 describe('redactLoggedUrl', () => {
@@ -169,6 +232,37 @@ describe('redactLoggedUrl', () => {
     expect(redactLoggedUrl('/r?a=1&response_code=abc&b=%2F')).toBe(
       `/r?a=1&response_code=${LOG_REDACT_CENSOR}&b=%2F`
     );
+  });
+
+  it('censors the value behind a percent-encoded spelling of the name, keeping that spelling', () => {
+    // What Fastify's querystring parser decodes to `response_code`, in the
+    // spellings a re-encoding client is likeliest to produce and one it is
+    // not, so the tolerance is per character rather than a special case for
+    // the underscore.
+    for (const name of [
+      'response%5Fcode',
+      'response%5fcode',
+      '%72esponse_code',
+      '%72%65%73%70%6F%6E%73%65%5F%63%6F%64%65',
+      'response_%63ode',
+    ]) {
+      expect(redactLoggedUrl(`/ui/wallet-login/return?${name}=abc-_XYZ`)).toBe(
+        `/ui/wallet-login/return?${name}=${LOG_REDACT_CENSOR}`
+      );
+      expect(redactLoggedUrl(`/r?a=1&${name}=abc&b=%2F`)).toBe(
+        `/r?a=1&${name}=${LOG_REDACT_CENSOR}&b=%2F`
+      );
+    }
+  });
+
+  it('does not treat an encoded separator as the separator', () => {
+    // `%3D` and `%26` are decoded AFTER the split, so `response_code%3Dabc`
+    // is a parameter NAMED `response_code=abc` with no value, and
+    // `x%26response_code=abc` is a parameter named `x&response_code`. Neither
+    // carries a code under our name, and neither is rewritten.
+    for (const url of ['/r?response_code%3Dabc', '/r?x%26response_code=abc']) {
+      expect(redactLoggedUrl(url)).toBe(url);
+    }
   });
 
   it('censors every occurrence, including a repeated parameter', () => {
