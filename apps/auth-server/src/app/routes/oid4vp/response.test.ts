@@ -589,7 +589,7 @@ describe('POST /oid4vp/response — refusals are indistinguishable', () => {
 
   const good = { vp_token: VP_TOKEN, state: STATE };
 
-  it('refuses an unknown / expired / already-redeemed state (all one outcome)', async () => {
+  it('(OID4VP 1.0 §14.3.2) refuses an unknown / expired / already-redeemed state — only a recent, unconsumed request is honoured (all one outcome)', async () => {
     const { error } = await refusalOf(good, undefined);
 
     // `name`, not `instanceof`: each `vi.resetModules()` re-instantiates the

@@ -464,7 +464,7 @@ describe('wallet login — CSRF and the browser binder', () => {
     expect(resolveWalletPresentation).not.toHaveBeenCalled();
   });
 
-  it('treats a valid-looking but wrong binder as expired', async () => {
+  it('(OID4VP 1.0 §14.2) treats a valid-looking but wrong binder as expired — only the browser that started a cross-device flow can fetch its outcome', async () => {
     const { routes, handle } = await startFlow();
 
     const { reply, state } = createReply();

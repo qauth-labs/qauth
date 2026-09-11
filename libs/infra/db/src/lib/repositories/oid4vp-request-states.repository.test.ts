@@ -66,7 +66,7 @@ describe('createOid4vpRequestStatesRepository.redeem', () => {
     expect(queries[0].text.toLowerCase()).not.toContain('select');
   });
 
-  it('guards the update on unredeemed AND unexpired, and returns the row', async () => {
+  it('(OID4VP 1.0 §14.3.2) guards the update on unredeemed AND unexpired, and returns the row', async () => {
     const { db, queries } = createRecordingDb();
 
     await createOid4vpRequestStatesRepository(db).redeem(STATE_HASH, RESPONSE_CODE);

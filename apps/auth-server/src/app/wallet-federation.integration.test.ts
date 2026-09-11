@@ -3,20 +3,28 @@ import type { FastifyInstance } from 'fastify';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import {
+  backdateWalletPresentationSignal,
   baseEnvironment,
   bootAuthServer,
   type BootedAuthServer,
   CookieJar,
+  decodeHtmlEntities,
   decodeJwtClaims,
   type E2eInfrastructure,
   extractCsrfToken,
   extractFlowHandle,
-  extractInvocationUri,
+  followRedirect,
   generateJwtPem,
   type PemKeyPair,
   pkcePair,
+  readInvocationUriFromPendingPage,
+  REQUIRED_TEST_ENVIRONMENT,
   resetE2eState,
   startE2eInfrastructure,
+  type StartedWalletFlow,
+  startWalletLogin,
+  type WalletDeviceChoice,
+  withoutNonces,
 } from '../testing/e2e-harness';
 import {
   createMockIssuer,
@@ -27,7 +35,9 @@ import {
   type MockCredentialIssuer,
   type MockWallet,
   parseOid4vpRequest,
+  parseOid4vpResponseAck,
 } from '../testing/mock-wallet';
+import { WALLET_RETURN_CODE_TTL_MS } from './constants';
 
 /**
  * WALLET FEDERATION, END TO END (issue #240, ADR-004 / ADR-009 / ADR-010).
@@ -54,7 +64,13 @@ import {
  * - `acr` reaches the ID token on the wallet path (#237) and NEVER on the
  *   password path — the invariant most likely to break silently;
  * - a deployment with no `VerifierProfile` serves no wallet flow at all
- *   (#296 Q1, LOCKED).
+ *   (#296 Q1, LOCKED);
+ * - a flow started for a wallet on THIS device completes only on the return
+ *   leg, in the browser that started it, and a cross-device flow completes by
+ *   polling exactly as before (#405, OID4VP 1.0 §8.2 / §14.2, HAIP 1.0 §5.1) —
+ *   the Response Code is minted by the response endpoint, spent by the return
+ *   route and matched against the browser's binder cookie, three seams no
+ *   unit test holds at once.
  *
  * ## The wallet is not the code under test
  *
@@ -172,58 +188,66 @@ describe('wallet federation E2E (oid4vp-1.0-base, real containers)', () => {
     return userId;
   }
 
-  /** What a started wallet flow gives the browser. */
-  interface StartedFlow {
-    readonly jar: CookieJar;
-    readonly handle: string;
-    readonly invocationUri: string;
-  }
+  /** A started wallet sign-in — the harness's shape, named for the reader. */
+  type StartedFlow = StartedWalletFlow;
 
   /**
-   * Drive `GET /ui/wallet-login` then `POST /ui/wallet-login` exactly as a
-   * browser would, cookies and CSRF included.
+   * POST a wallet response to the `direct_post` endpoint.
+   *
+   * @returns the status code AND the parsed JSON body: since #405 the body
+   * is the wallet's next instruction — `{}` to stop, `{ redirect_uri }` to
+   * bring the user agent back (OID4VP 1.0 §8.2) — so a suite has to read it.
    */
-  async function startWalletLogin(app: FastifyInstance, identifier: string): Promise<StartedFlow> {
-    const jar = new CookieJar();
-
-    const form = await app.inject({ method: 'GET', url: '/ui/wallet-login' });
-    expect(form.statusCode).toBe(200);
-    jar.absorb(form.headers['set-cookie']);
-
-    const started = await app.inject({
-      method: 'POST',
-      url: '/ui/wallet-login',
-      headers: {
-        'content-type': 'application/x-www-form-urlencoded',
-        ...(jar.header() === undefined ? {} : { cookie: jar.header() as string }),
-      },
-      payload: new URLSearchParams({
-        identifier,
-        csrf_token: extractCsrfToken(form.body),
-      }).toString(),
-    });
-    expect(started.statusCode).toBe(200);
-    jar.absorb(started.headers['set-cookie']);
-
-    return {
-      jar,
-      handle: extractFlowHandle(started.body),
-      invocationUri: extractInvocationUri(started.body),
-    };
-  }
-
-  /** POST a wallet response to the `direct_post` endpoint. */
   async function postWalletResponse(
     app: FastifyInstance,
     formBody: Record<string, string>
-  ): Promise<number> {
+  ): Promise<{ statusCode: number; body: unknown }> {
     const response = await app.inject({
       method: 'POST',
       url: '/oid4vp/response',
       headers: { 'content-type': 'application/x-www-form-urlencoded' },
       payload: new URLSearchParams(formBody).toString(),
     });
-    return response.statusCode;
+    return { statusCode: response.statusCode, body: JSON.parse(response.body) as unknown };
+  }
+
+  /**
+   * The session cookie's name — `SESSION_COOKIE_NAME` in
+   * `helpers/session-cookie.ts`, which reads `env` at load and so cannot be
+   * imported by a file that boots deployments with different environments.
+   */
+  const SESSION_COOKIE = '__Host-qauth_session';
+
+  /** The one refusal page `/ui/wallet-login/return` renders, by its title. */
+  const RETURN_REFUSAL_TITLE = 'Finish signing in where you started';
+
+  /**
+   * Whether a browser holding this jar can obtain an authorization code.
+   *
+   * The strongest available statement of "no session was created": not that a
+   * cookie is absent, but that the OAuth authorization endpoint will not mint
+   * a code for whatever the browser is holding.
+   */
+  async function canMintAuthorizationCode(app: FastifyInstance, jar: CookieJar): Promise<boolean> {
+    const pkce = pkcePair();
+    const authorize = await app.inject({
+      method: 'GET',
+      url: `/oauth/authorize?${new URLSearchParams({
+        response_type: 'code',
+        client_id: CLIENT_ID,
+        redirect_uri: REDIRECT_URI,
+        scope: SCOPES.join(' '),
+        code_challenge: pkce.challenge,
+        code_challenge_method: 'S256',
+        state: 'e2e-state',
+      }).toString()}`,
+      headers: { ...(jar.header() === undefined ? {} : { cookie: jar.header() as string }) },
+    });
+
+    const location = authorize.headers['location'];
+    if (typeof location !== 'string') return false;
+    if (!location.startsWith(REDIRECT_URI)) return false;
+    return new URL(location).searchParams.get('code') !== null;
   }
 
   /** Poll the flow's status endpoint once, absorbing any cookie it sets. */
@@ -243,7 +267,13 @@ describe('wallet federation E2E (oid4vp-1.0-base, real containers)', () => {
   }
 
   /**
-   * Run a complete wallet sign-in: start the flow, let the wallet answer, poll.
+   * Run a complete CROSS-DEVICE wallet sign-in: start the flow with no device
+   * choice (the pre-#405 default), let the wallet answer, poll.
+   *
+   * Asserts on the way that the response endpoint acknowledged with exactly
+   * `{}` — OID4VP 1.0 §14.2: the Response Code technique "is not applicable to
+   * cross-device scenarios", so a `redirect_uri` here would be a wallet sent
+   * to a browser that does not hold the flow.
    *
    * @returns the terminal status and the browser's cookie jar (which carries the
    * session cookie on success).
@@ -255,9 +285,49 @@ describe('wallet federation E2E (oid4vp-1.0-base, real containers)', () => {
   ): Promise<{ status: string; jar: CookieJar; flow: StartedFlow }> {
     const flow = await startWalletLogin(app, identifier);
     const response = await wallet.buildResponse(flow.invocationUri);
-    expect(await postWalletResponse(app, response.formBody)).toBe(200);
+    const posted = await postWalletResponse(app, response.formBody);
+    expect(posted.statusCode).toBe(200);
+    expect(posted.body).toEqual({});
     const outcome = await pollStatus(app, flow);
     return { status: outcome.status, jar: flow.jar, flow };
+  }
+
+  /**
+   * Start a SAME-DEVICE flow and let the wallet answer it, returning the
+   * `redirect_uri` the response endpoint handed the wallet — the leg every
+   * #405 scenario begins with. The user agent has NOT followed it yet.
+   */
+  async function presentOnThisDevice(
+    app: FastifyInstance,
+    wallet: MockWallet,
+    identifier: string
+  ): Promise<{ flow: StartedFlow; redirectUri: string; responseCode: string }> {
+    const flow = await startWalletLogin(app, identifier, { device: 'this' });
+    const response = await wallet.buildResponse(flow.invocationUri);
+    const posted = await postWalletResponse(app, response.formBody);
+    expect(posted.statusCode).toBe(200);
+
+    // What the wallet does with the body (HAIP 1.0 §5.1: "Wallets MUST follow
+    // the redirect to redirect_uri") — read by the wallet's own parser, which
+    // refuses every shape but the two the spec allows.
+    const ack = parseOid4vpResponseAck(posted.body);
+    if (ack.redirectUri === undefined || ack.responseCode === undefined) {
+      throw new Error(`a same-device presentation was acknowledged without a redirect_uri`);
+    }
+    return { flow, redirectUri: ack.redirectUri, responseCode: ack.responseCode };
+  }
+
+  /** The `users.id` behind the wallet credential enrolled for `asserted`, if any. */
+  async function enrolledUserId(
+    app: FastifyInstance,
+    realmId: string,
+    asserted: string
+  ): Promise<string | undefined> {
+    const rows = await app.repositories.userCredentials.findAllByRealmAndExternalSub(
+      realmId,
+      asserted
+    );
+    return rows[0]?.userId;
   }
 
   /**
@@ -517,6 +587,89 @@ describe('wallet federation E2E (oid4vp-1.0-base, real containers)', () => {
   });
 
   describe('account linking (#238)', () => {
+    /** Sign a password account in through the real login form; returns its jar. */
+    async function passwordSession(
+      app: FastifyInstance,
+      email: string,
+      password: string
+    ): Promise<CookieJar> {
+      const jar = new CookieJar();
+      const loginPage = await app.inject({ method: 'GET', url: '/ui/login' });
+      jar.absorb(loginPage.headers['set-cookie']);
+      const login = await app.inject({
+        method: 'POST',
+        url: '/ui/login',
+        headers: {
+          'content-type': 'application/x-www-form-urlencoded',
+          ...(jar.header() === undefined ? {} : { cookie: jar.header() as string }),
+        },
+        payload: new URLSearchParams({
+          email,
+          password,
+          csrf_token: extractCsrfToken(loginPage.body),
+        }).toString(),
+      });
+      expect(login.statusCode).toBe(302);
+      jar.absorb(login.headers['set-cookie']);
+      return jar;
+    }
+
+    /**
+     * Start a linking flow through the server-rendered screen, as the signed-in
+     * browser holding `jar`, choosing where the wallet is (#405) — or not
+     * choosing, which is the cross-device default every pre-#405 client gets.
+     */
+    async function startWalletLink(
+      app: FastifyInstance,
+      jar: CookieJar,
+      device?: WalletDeviceChoice
+    ): Promise<{ handle: string; invocationUri: string; page: string }> {
+      const confirm = await app.inject({
+        method: 'GET',
+        url: '/ui/wallet-link',
+        headers: { cookie: jar.header() as string },
+      });
+      expect(confirm.statusCode).toBe(200);
+      jar.absorb(confirm.headers['set-cookie']);
+
+      const started = await app.inject({
+        method: 'POST',
+        url: '/ui/wallet-link',
+        headers: {
+          'content-type': 'application/x-www-form-urlencoded',
+          cookie: jar.header() as string,
+        },
+        payload: new URLSearchParams({
+          csrf_token: extractCsrfToken(confirm.body),
+          ...(device === undefined ? {} : { device }),
+        }).toString(),
+      });
+      expect(started.statusCode).toBe(200);
+      jar.absorb(started.headers['set-cookie']);
+
+      return {
+        handle: extractFlowHandle(started.body),
+        invocationUri: await readInvocationUriFromPendingPage(app, started.body, device === 'this'),
+        page: started.body,
+      };
+    }
+
+    /** Poll the JSON linking status once, as the signed-in browser. */
+    async function pollLink(
+      app: FastifyInstance,
+      jar: CookieJar,
+      handle: string
+    ): Promise<{ status: string; message?: string }> {
+      const response = await app.inject({
+        method: 'GET',
+        url: `/auth/link/wallet/${handle}`,
+        headers: { cookie: jar.header() as string },
+      });
+      jar.absorb(response.headers['set-cookie']);
+      expect(response.statusCode).toBe(200);
+      return response.json() as { status: string; message?: string };
+    }
+
     it('links a wallet to a password account, and both mint the identical sub', async () => {
       const issuer = await createMockIssuer(TRUSTED_ISSUER, 'k1');
       const { wallet } = await walletHolding(issuer);
@@ -532,56 +685,20 @@ describe('wallet federation E2E (oid4vp-1.0-base, real containers)', () => {
           const userId = await registerPasswordUser(app, email, password);
 
           // (1) Sign in with the password so the linking flow has a session.
-          const jar = new CookieJar();
-          const loginPage = await app.inject({ method: 'GET', url: '/ui/login' });
-          jar.absorb(loginPage.headers['set-cookie']);
-          const login = await app.inject({
-            method: 'POST',
-            url: '/ui/login',
-            headers: {
-              'content-type': 'application/x-www-form-urlencoded',
-              ...(jar.header() === undefined ? {} : { cookie: jar.header() as string }),
-            },
-            payload: new URLSearchParams({
-              email,
-              password,
-              csrf_token: extractCsrfToken(loginPage.body),
-            }).toString(),
-          });
-          expect(login.statusCode).toBe(302);
-          jar.absorb(login.headers['set-cookie']);
+          const jar = await passwordSession(app, email, password);
 
-          // (2) Link the wallet through the server-rendered linking screen.
-          const confirm = await app.inject({
-            method: 'GET',
-            url: '/ui/wallet-link',
-            headers: { cookie: jar.header() as string },
-          });
-          expect(confirm.statusCode).toBe(200);
-          jar.absorb(confirm.headers['set-cookie']);
-
-          const started = await app.inject({
-            method: 'POST',
-            url: '/ui/wallet-link',
-            headers: {
-              'content-type': 'application/x-www-form-urlencoded',
-              cookie: jar.header() as string,
-            },
-            payload: new URLSearchParams({
-              csrf_token: extractCsrfToken(confirm.body),
-            }).toString(),
-          });
-          expect(started.statusCode).toBe(200);
-          jar.absorb(started.headers['set-cookie']);
-
-          const linkHandle = extractFlowHandle(started.body);
-          const linkUri = extractInvocationUri(started.body);
-          const walletResponse = await wallet.buildResponse(linkUri);
-          expect(await postWalletResponse(app, walletResponse.formBody)).toBe(200);
+          // (2) Link the wallet through the server-rendered linking screen —
+          // CROSS-device, the path that existed before #405: no device field,
+          // a QR, and completion by polling.
+          const link = await startWalletLink(app, jar);
+          const walletResponse = await wallet.buildResponse(link.invocationUri);
+          const posted = await postWalletResponse(app, walletResponse.formBody);
+          expect(posted.statusCode).toBe(200);
+          expect(posted.body).toEqual({});
 
           const linked = await app.inject({
             method: 'GET',
-            url: `/ui/wallet-link/${linkHandle}`,
+            url: `/ui/wallet-link/${link.handle}`,
             headers: { cookie: jar.header() as string },
           });
           jar.absorb(linked.headers['set-cookie']);
@@ -605,6 +722,79 @@ describe('wallet federation E2E (oid4vp-1.0-base, real containers)', () => {
 
           expect(walletClaims['sub']).toBe(passwordClaims['sub']);
           expect(walletClaims['sub']).toBe(userId);
+        }
+      );
+    }, 180_000);
+
+    it('(HAIP 1.0 §5.1) links a wallet on THIS device via the return leg, and the original tab learns it once (#405)', async () => {
+      const issuer = await createMockIssuer(TRUSTED_ISSUER, 'k1');
+      const { wallet } = await walletHolding(issuer);
+
+      await withDeployment(
+        walletEnabledEnv({
+          OID4VP_ISSUER_JWKS: issuerJwksConfig([issuer]),
+          OID4VP_TRUSTED_ISSUERS: JSON.stringify({ [REALM]: [TRUSTED_ISSUER] }),
+        }),
+        async ({ app, ids }) => {
+          const email = 'linked-same-device@example.com';
+          const password = 'Correct-Horse-Battery-Staple-42!';
+          const userId = await registerPasswordUser(app, email, password);
+          const jar = await passwordSession(app, email, password);
+
+          // `device=this`: the pending page offers the deep link and no QR.
+          const link = await startWalletLink(app, jar, 'this');
+          expect(link.page).toMatch(/href="openid4vp:/);
+          expect(link.page).not.toContain('<svg');
+
+          // The wallet answers; the acknowledgement carries the return leg.
+          const walletResponse = await wallet.buildResponse(link.invocationUri);
+          const posted = await postWalletResponse(app, walletResponse.formBody);
+          expect(posted.statusCode).toBe(200);
+          const ack = parseOid4vpResponseAck(posted.body);
+          if (ack.redirectUri === undefined)
+            throw new Error('no redirect_uri for a same-device link');
+
+          // Until the browser comes back, the link poll must NOT complete it
+          // (OID4VP 1.0 §14.2) — and nothing has been written.
+          expect(await pollLink(app, jar, link.handle)).toEqual({ status: 'pending' });
+          expect(
+            (
+              await app.repositories.userCredentials.findAllByRealmAndExternalSub(
+                ids.realmId,
+                email
+              )
+            ).map((row) => row.providerType)
+          ).toEqual(['password']);
+
+          // The wallet brings the SAME browser back: session cookie + binder.
+          const landed = await followRedirect(app, jar, ack.redirectUri);
+          expect(landed.statusCode).toBe(200);
+          expect(landed.body).toContain('Wallet credential linked');
+          expect(landed.body).toContain('history.replaceState');
+          expect(landed.headers['cache-control']).toBe('no-store');
+          expect(landed.headers['referrer-policy']).toBe('no-referrer');
+
+          // The original tab's poll finds the done-marker: `linked` ONCE, then
+          // the flow is gone.
+          expect(await pollLink(app, jar, link.handle)).toEqual({
+            status: 'linked',
+            message: 'Your wallet credential is now linked to this account.',
+          });
+          expect((await pollLink(app, jar, link.handle)).status).toBe('expired');
+
+          // The account holds two credentials under one users.id — exactly as
+          // the cross-device link leaves it.
+          const rows = await app.repositories.userCredentials.findAllByRealmAndExternalSub(
+            ids.realmId,
+            email
+          );
+          expect(rows.map((row) => row.providerType).sort()).toEqual(['password', 'wallet']);
+          expect(new Set(rows.map((row) => row.userId))).toEqual(new Set([userId]));
+
+          // The spent code buys nothing a second time.
+          const replay = await followRedirect(app, jar, ack.redirectUri);
+          expect(replay.statusCode).toBe(200);
+          expect(replay.body).toContain(RETURN_REFUSAL_TITLE);
         }
       );
     }, 180_000);
@@ -853,17 +1043,268 @@ describe('wallet federation E2E (oid4vp-1.0-base, real containers)', () => {
               },
             }),
           });
-          expect(legacy).toBe(400);
+          expect(legacy.statusCode).toBe(400);
 
           // The `state` is single-use, so the legacy attempt consumed it. Start a
           // fresh flow to prove the DCQL-keyed shape IS accepted.
           const second = await startWalletLogin(app, 'dcql@example.com');
           const response = await wallet.buildResponse(second.invocationUri);
           expect(Object.keys(response.vpToken)).toEqual(queryIds);
-          expect(await postWalletResponse(app, response.formBody)).toBe(200);
+          expect((await postWalletResponse(app, response.formBody)).statusCode).toBe(200);
           expect((await pollStatus(app, second)).status).toBe('complete');
         }
       );
+    }, 120_000);
+  });
+
+  describe('same-device return leg (#405 — OID4VP 1.0 §8.2 / §14.2, HAIP 1.0 §5.1)', () => {
+    /**
+     * Every scenario here runs the SAME deployment shape as the first-time
+     * login above; what varies is only the `device` the user chose at the
+     * sign-in form, and therefore how the flow is allowed to end.
+     */
+    function sameDeviceEnv(issuer: MockCredentialIssuer): Record<string, string> {
+      return walletEnabledEnv({
+        OID4VP_ISSUER_JWKS: issuerJwksConfig([issuer]),
+        OID4VP_TRUSTED_ISSUERS: JSON.stringify({ [REALM]: [TRUSTED_ISSUER] }),
+      });
+    }
+
+    it('(HAIP 1.0 §5.1) completes a same-device login on the return leg, in the browser that started it — never by polling', async () => {
+      const issuer = await createMockIssuer(TRUSTED_ISSUER, 'k1');
+      const { wallet } = await walletHolding(issuer);
+
+      await withDeployment(sameDeviceEnv(issuer), async ({ app, ids }) => {
+        const asserted = 'same-device@example.com';
+        const flow = await startWalletLogin(app, asserted, { device: 'this' });
+
+        // Exactly one affordance: the deep link, and no QR.
+        expect(flow.page).toMatch(/href="openid4vp:/);
+        expect(flow.page).not.toContain('<svg');
+        expect(flow.page).toContain('Opening your wallet on this device');
+
+        // The wallet answers, and is told where to bring the user agent
+        // (OID4VP 1.0 §8.2). The URI is absolute and under the ISSUER, not
+        // under whatever `Host` the wallet's POST carried.
+        const response = await wallet.buildResponse(flow.invocationUri);
+        const posted = await postWalletResponse(app, response.formBody);
+        expect(posted.statusCode).toBe(200);
+        const ack = parseOid4vpResponseAck(posted.body);
+        if (ack.redirectUri === undefined) throw new Error('no redirect_uri in the ack');
+        const target = new URL(ack.redirectUri);
+        expect(target.origin).toBe(
+          new URL(REQUIRED_TEST_ENVIRONMENT['JWT_ISSUER'] as string).origin
+        );
+        expect(target.pathname).toBe('/ui/wallet-login/return');
+        // §8.2 "fresh, cryptographically random"; RECOMMENDED ≥ 128 bits — QAuth
+        // mints 32 bytes, base64url: 43 characters.
+        expect(ack.responseCode).toMatch(/^[A-Za-z0-9_-]{43}$/);
+
+        // §14.2: the Verifier "MUST require the frontend to pass the respective
+        // Response Code" — so the poll, which never sees one, cannot finish it.
+        expect((await pollStatus(app, flow)).status).toBe('pending');
+        expect(await canMintAuthorizationCode(app, flow.jar)).toBe(false);
+
+        // The wallet brings the SAME browser back. The landing signs it in.
+        const landed = await followRedirect(app, flow.jar, ack.redirectUri);
+        expect(landed.statusCode).toBe(200);
+        expect(decodeHtmlEntities(landed.body)).toContain("You're signed in");
+        expect(landed.body).toContain('history.replaceState');
+        expect(landed.headers['cache-control']).toBe('no-store');
+        expect(landed.headers['referrer-policy']).toBe('no-referrer');
+        const setCookie = landed.headers['set-cookie'];
+        const cookiesSet = Array.isArray(setCookie)
+          ? setCookie
+          : typeof setCookie === 'string'
+            ? [setCookie]
+            : [];
+        expect(cookiesSet.some((header) => header.startsWith(`${SESSION_COOKIE}=`))).toBe(true);
+        expect(flow.jar.get(SESSION_COOKIE)).toBeDefined();
+
+        // The ORIGINAL tab's poll consumes the done-marker: `complete` with the
+        // flow's `redirect_to`, ONCE; then the flow is gone.
+        expect(await pollStatus(app, flow)).toEqual({ status: 'complete', redirect_to: '/' });
+        expect((await pollStatus(app, flow)).status).toBe('expired');
+
+        // The session is real, in that jar, for the enrolled account — proven
+        // through the real authorize → token path like every login above.
+        const userId = await enrolledUserId(app, ids.realmId, asserted);
+        if (userId === undefined) throw new Error('the same-device login enrolled no account');
+        const claims = await idTokenFor(app, flow.jar, ids, userId);
+        expect(claims['sub']).toBe(userId);
+      });
+    }, 120_000);
+
+    it('refuses a tampered, a malformed and a replayed Response Code with ONE identical page, and mints nothing for them', async () => {
+      const issuer = await createMockIssuer(TRUSTED_ISSUER, 'k1');
+      const { wallet } = await walletHolding(issuer);
+
+      await withDeployment(sameDeviceEnv(issuer), async ({ app, ids }) => {
+        const asserted = 'same-device-codes@example.com';
+        const { flow, redirectUri, responseCode } = await presentOnThisDevice(
+          app,
+          wallet,
+          asserted
+        );
+        const returnPath = new URL(redirectUri).pathname;
+
+        // A well-formed code that was never minted, and one that is not a
+        // code at all. Neither touches the flow: it is still pending after.
+        const other = Buffer.from(responseCode, 'base64url').map((byte) => byte ^ 0xff);
+        const tampered = await followRedirect(
+          app,
+          flow.jar,
+          redirectUri.replace(responseCode, Buffer.from(other).toString('base64url'))
+        );
+        expect(tampered.statusCode).toBe(200);
+        expect(tampered.body).toContain(RETURN_REFUSAL_TITLE);
+        expect(decodeHtmlEntities(tampered.body)).not.toContain("You're signed in");
+
+        const malformed = await followRedirect(
+          app,
+          flow.jar,
+          `${new URL(redirectUri).origin}${returnPath}?response_code=not-a-code`
+        );
+        expect(withoutNonces(malformed.body)).toBe(withoutNonces(tampered.body));
+        expect((await pollStatus(app, flow)).status).toBe('pending');
+        expect(flow.jar.get(SESSION_COOKIE)).toBeUndefined();
+
+        // The genuine code, once: signed in.
+        const landed = await followRedirect(app, flow.jar, redirectUri);
+        expect(decodeHtmlEntities(landed.body)).toContain("You're signed in");
+        expect((await pollStatus(app, flow)).status).toBe('complete');
+
+        // Replayed — from a browser that never held the flow, and from the
+        // one that did — the spent code renders the SAME refusal page, and
+        // the stranger's jar ends up with nothing an authorization endpoint
+        // will honour.
+        const stranger = new CookieJar();
+        const replayed = await followRedirect(app, stranger, redirectUri);
+        expect(withoutNonces(replayed.body)).toBe(withoutNonces(tampered.body));
+        expect(stranger.get(SESSION_COOKIE)).toBeUndefined();
+        expect(await canMintAuthorizationCode(app, stranger)).toBe(false);
+
+        const replayedAtHome = await followRedirect(app, flow.jar, redirectUri);
+        expect(withoutNonces(replayedAtHome.body)).toBe(withoutNonces(tampered.body));
+
+        // One account, from the one genuine landing.
+        expect(
+          await app.repositories.userCredentials.findAllByRealmAndExternalSub(ids.realmId, asserted)
+        ).toHaveLength(1);
+      });
+    }, 120_000);
+
+    it('(HAIP 1.0 §5.1) rejects a presentation whose redirect back arrives in a different user session — the code is spent, the initiating tab learns it, nobody is signed in', async () => {
+      const issuer = await createMockIssuer(TRUSTED_ISSUER, 'k1');
+      const { wallet } = await walletHolding(issuer);
+
+      await withDeployment(sameDeviceEnv(issuer), async ({ app, ids }) => {
+        const asserted = 'same-device-foreign@example.com';
+        const { flow, redirectUri } = await presentOnThisDevice(app, wallet, asserted);
+
+        // The wallet opens a DIFFERENT browser: an in-app webview, a private
+        // window, a non-default browser — or an attacker who read the URL. A
+        // fresh jar holds none of the flow's cookies.
+        const elsewhere = new CookieJar();
+        const landed = await followRedirect(app, elsewhere, redirectUri);
+        expect(landed.statusCode).toBe(200);
+        expect(landed.body).toContain(RETURN_REFUSAL_TITLE);
+        expect(decodeHtmlEntities(landed.body)).toContain(
+          'go back to where you started and try again'
+        );
+        expect(elsewhere.get(SESSION_COOKIE)).toBeUndefined();
+
+        // The tab that started the flow is told promptly, not at the deadline.
+        expect((await pollStatus(app, flow)).status).toBe('rejected');
+
+        // Neither browser can obtain a code, and nobody was enrolled: the
+        // presentation was DISCARDED, not parked for a later landing.
+        expect(await canMintAuthorizationCode(app, elsewhere)).toBe(false);
+        expect(await canMintAuthorizationCode(app, flow.jar)).toBe(false);
+        expect(await enrolledUserId(app, ids.realmId, asserted)).toBeUndefined();
+
+        // Even the right browser, arriving afterwards with the same code,
+        // finds it spent — the burn is the hard guarantee, the discard only
+        // made the refusal prompt.
+        const late = await followRedirect(app, flow.jar, redirectUri);
+        expect(withoutNonces(late.body)).toBe(withoutNonces(landed.body));
+        expect(flow.jar.get(SESSION_COOKIE)).toBeUndefined();
+        expect((await pollStatus(app, flow)).status).toBe('expired');
+      });
+    }, 120_000);
+
+    it('(HAIP 1.0 §5.1) rejects a same-device presentation whose redirect was never followed, once the Response Code deadline passes', async () => {
+      const issuer = await createMockIssuer(TRUSTED_ISSUER, 'k1');
+      const { wallet } = await walletHolding(issuer);
+
+      await withDeployment(sameDeviceEnv(issuer), async ({ app, ids }) => {
+        const asserted = 'same-device-unfollowed@example.com';
+        const { flow, redirectUri } = await presentOnThisDevice(app, wallet, asserted);
+
+        // The wallet posted and stopped. However often the original tab asks,
+        // the presentation is parked, not accepted: pending, no session.
+        for (let attempt = 0; attempt < 3; attempt += 1) {
+          expect((await pollStatus(app, flow)).status).toBe('pending');
+        }
+        expect(await canMintAuthorizationCode(app, flow.jar)).toBe(false);
+
+        // Age the wallet-side signal past the deadline — in the server's own
+        // store, so the decision below is the server's — and the next poll
+        // rejects it ACTIVELY: the user is not left watching a spinner until
+        // the flow expires.
+        await backdateWalletPresentationSignal(app, flow.handle, WALLET_RETURN_CODE_TTL_MS + 1);
+        expect((await pollStatus(app, flow)).status).toBe('rejected');
+        expect((await pollStatus(app, flow)).status).toBe('expired');
+        expect(await canMintAuthorizationCode(app, flow.jar)).toBe(false);
+        expect(await enrolledUserId(app, ids.realmId, asserted)).toBeUndefined();
+
+        // A late return cannot revive it: the flow is gone, so the landing is
+        // a landing nobody holds — refused, and still no session.
+        const late = await followRedirect(app, flow.jar, redirectUri);
+        expect(late.statusCode).toBe(200);
+        expect(late.body).toContain(RETURN_REFUSAL_TITLE);
+        expect(flow.jar.get(SESSION_COOKIE)).toBeUndefined();
+        expect(await enrolledUserId(app, ids.realmId, asserted)).toBeUndefined();
+      });
+    }, 120_000);
+
+    it('(OID4VP 1.0 §14.2) a cross-device flow is acknowledged with exactly {} and completes by polling, as before', async () => {
+      const issuer = await createMockIssuer(TRUSTED_ISSUER, 'k1');
+      const { wallet } = await walletHolding(issuer);
+
+      await withDeployment(sameDeviceEnv(issuer), async ({ app, ids }) => {
+        const asserted = 'cross-device@example.com';
+
+        // No device field at all — every client built before #405.
+        const flow = await startWalletLogin(app, asserted);
+        expect(flow.page).toContain('<svg');
+        expect(flow.page).not.toMatch(/href="openid4vp:/);
+        expect(flow.page).toContain('Scan this code with the wallet on your other device');
+
+        const response = await wallet.buildResponse(flow.invocationUri);
+        const posted = await postWalletResponse(app, response.formBody);
+        expect(posted.statusCode).toBe(200);
+        expect(posted.body).toEqual({});
+        expect(parseOid4vpResponseAck(posted.body)).toEqual({});
+
+        expect(await pollStatus(app, flow)).toEqual({ status: 'complete', redirect_to: '/' });
+        expect(flow.jar.get(SESSION_COOKIE)).toBeDefined();
+
+        // The explicit choice lands on the identical path.
+        const explicit = await startWalletLogin(app, asserted, { device: 'other' });
+        expect(explicit.page).toContain('<svg');
+        expect(explicit.page).not.toMatch(/href="openid4vp:/);
+        const again = await postWalletResponse(
+          app,
+          (await wallet.buildResponse(explicit.invocationUri)).formBody
+        );
+        expect(again.body).toEqual({});
+        expect((await pollStatus(app, explicit)).status).toBe('complete');
+
+        const userId = await enrolledUserId(app, ids.realmId, asserted);
+        if (userId === undefined) throw new Error('the cross-device login enrolled no account');
+        expect((await idTokenFor(app, flow.jar, ids, userId))['sub']).toBe(userId);
+      });
     }, 120_000);
   });
 });

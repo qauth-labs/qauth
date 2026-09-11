@@ -254,7 +254,7 @@ describe('rewriteRecordLink — the real docs/adr and docs/security corpus, enum
     return links;
   }
 
-  it('extracts exactly 197 links across the 11 ADRs, the ADR README, and the security review — the corpus the counts below are checked against', () => {
+  it('extracts exactly 214 links across the 13 ADRs, the ADR README, and the security review — the corpus the counts below are checked against', () => {
     // A fixed count, not a lower bound: this test's whole point is that the
     // categorisation below is checked against the FULL corpus, not a
     // sample. If a future ADR amendment changes the link count, this
@@ -279,7 +279,14 @@ describe('rewriteRecordLink — the real docs/adr and docs/security corpus, enum
     // link to ADR-007 (a rendered record → ROUTE bucket) and two external RFC
     // links (7591, 7592). Predicted from the ADR's own link list before
     // running, so the buckets below are a check and not a readjustment.
-    expect(extractAllLinks()).toHaveLength(203);
+    //
+    // 203 → 214 with #405's ADR-013 (same-device return leg): eight links in
+    // the new record (two bare anchors, four in-tree links to rendered records
+    // → ROUTE, two external spec links), one in-tree link from ADR-004's dated
+    // status note pointing at ADR-013, and two new rows in the ADR README
+    // index (012 and 013). Recounted mechanically with the plugin's own
+    // extractor before the buckets below were touched.
+    expect(extractAllLinks()).toHaveLength(214);
   });
 
   it('every link falls into exactly one of the four outcomes, with none left unresolved', () => {
@@ -346,8 +353,14 @@ describe('rewriteRecordLink — the real docs/adr and docs/security corpus, enum
     // (its ADR-007 link). The blob bucket is unchanged, which is the check that
     // the ADR-007 link really did resolve to a rendered record rather than
     // falling back to a GitHub blob URL.
-    expect(untouchedExternalOrAnchor).toBe(96 + 17);
-    expect(rewrittenToRoute).toBe(79);
+    //
+    // ADR-013 (#405): 96 → 98 external (the OID4VP 1.0 and HAIP 1.0
+    // specifications) and 17 → 19 bare anchors; 79 → 86 route (ADR-013's four
+    // record links, ADR-004's note, and the two README index rows). Blob and
+    // unresolved unchanged — the check that every new in-tree link resolved
+    // to a rendered record.
+    expect(untouchedExternalOrAnchor).toBe(98 + 19);
+    expect(rewrittenToRoute).toBe(86);
     expect(rewrittenToBlob).toBe(11);
     expect(leftUnresolved).toBe(0);
   });

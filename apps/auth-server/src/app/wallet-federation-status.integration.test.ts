@@ -8,14 +8,12 @@ import {
   type BootedAuthServer,
   CookieJar,
   type E2eInfrastructure,
-  extractCsrfToken,
-  extractFlowHandle,
-  extractInvocationUri,
   generateJwtPem,
   type PemKeyPair,
   pkcePair,
   resetE2eState,
   startE2eInfrastructure,
+  startWalletLogin,
 } from '../testing/e2e-harness';
 import {
   createMockStatusList,
@@ -182,41 +180,6 @@ describe('credential revocation E2E (Token Status List, #297/#378)', () => {
     return { realmId: realm.id, clientId: client.id };
   }
 
-  interface StartedFlow {
-    readonly jar: CookieJar;
-    readonly handle: string;
-    readonly invocationUri: string;
-  }
-
-  async function startWalletLogin(app: FastifyInstance, identifier: string): Promise<StartedFlow> {
-    const jar = new CookieJar();
-
-    const form = await app.inject({ method: 'GET', url: '/ui/wallet-login' });
-    expect(form.statusCode).toBe(200);
-    jar.absorb(form.headers['set-cookie']);
-
-    const started = await app.inject({
-      method: 'POST',
-      url: '/ui/wallet-login',
-      headers: {
-        'content-type': 'application/x-www-form-urlencoded',
-        ...(jar.header() === undefined ? {} : { cookie: jar.header() as string }),
-      },
-      payload: new URLSearchParams({
-        identifier,
-        csrf_token: extractCsrfToken(form.body),
-      }).toString(),
-    });
-    expect(started.statusCode).toBe(200);
-    jar.absorb(started.headers['set-cookie']);
-
-    return {
-      jar,
-      handle: extractFlowHandle(started.body),
-      invocationUri: extractInvocationUri(started.body),
-    };
-  }
-
   /** Everything a caller could observe about one sign-in attempt. */
   interface SignInObservation {
     /** HTTP status of the `direct_post` response endpoint. */
@@ -228,7 +191,12 @@ describe('credential revocation E2E (Token Status List, #297/#378)', () => {
     readonly jar: CookieJar;
   }
 
-  /** Run a complete wallet sign-in and record everything a caller sees. */
+  /**
+   * Run a complete wallet sign-in and record everything a caller sees.
+   *
+   * Cross-device throughout — no `device` choice is posted (#405), so the
+   * flow is the QR-and-poll one every scenario here was written against.
+   */
   async function signInWithWallet(
     app: FastifyInstance,
     wallet: MockWallet,
