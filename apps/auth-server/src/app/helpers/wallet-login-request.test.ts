@@ -6,6 +6,7 @@ import {
 } from '@qauth-labs/core-crypto';
 import {
   createVerifierSigningMaterial,
+  generateOid4vpResponseCode,
   VERIFIER_PROFILES,
   type VerifierProfile,
 } from '@qauth-labs/fastify-plugin-federation';
@@ -43,9 +44,11 @@ import { createMockVerifierPki } from '../../testing/mock-verifier-pki';
 import { parseOid4vpRequestReference, verifyOid4vpRequestObject } from '../../testing/mock-wallet';
 import {
   buildWalletLoginInvocation,
+  buildWalletLoginReturnUri,
   OID4VP_REQUEST_OBJECT_PATH_PREFIX,
   OID4VP_RESPONSE_PATH,
   resolveWalletLoginCapability,
+  WALLET_LOGIN_RETURN_PATH,
   type WalletLoginCapability,
 } from './wallet-login-request';
 
@@ -511,5 +514,41 @@ describe('buildWalletLoginInvocation — the encrypted direct_post.jwt path (#37
     expect(invocation.request.response_mode).toBe('direct_post');
     expect(invocation.responseEncryption).toBeUndefined();
     expect(invocation.request.client_metadata).not.toHaveProperty('jwks');
+  });
+});
+
+describe('buildWalletLoginReturnUri — the same-device redirect_uri (#405)', () => {
+  const code = generateOid4vpResponseCode();
+
+  it('(OID4VP 1.0 §8.2) is an absolute URI on the issuer origin carrying the code as response_code', () => {
+    expect(WALLET_LOGIN_RETURN_PATH).toBe('/ui/wallet-login/return');
+    // The same canonicalised issuer `responseUri` is built on: the trailing
+    // slash on JWT_ISSUER is dropped, the `Host` header is never consulted.
+    expect(buildWalletLoginReturnUri(code)).toBe(
+      `https://auth.example.com${WALLET_LOGIN_RETURN_PATH}?response_code=${code}`
+    );
+    expect(new URL(buildWalletLoginReturnUri(code)).searchParams.get('response_code')).toBe(code);
+  });
+
+  it('shares its origin with response_uri, so the two wallet-facing URLs cannot drift apart', () => {
+    const capability = resolveWalletLoginCapability(fakeFastify())!;
+
+    expect(new URL(buildWalletLoginReturnUri(code)).origin).toBe(
+      new URL(capability.responseUri).origin
+    );
+  });
+
+  it('places the code in the query, never the fragment, so the noscript landing can read it', () => {
+    const uri = buildWalletLoginReturnUri(code);
+
+    expect(uri).not.toContain('#');
+    expect(new URL(uri).hash).toBe('');
+    expect(new URL(uri).pathname).toBe(WALLET_LOGIN_RETURN_PATH);
+  });
+
+  it('percent-encodes a value outside the base64url alphabet rather than trusting its caller', () => {
+    expect(buildWalletLoginReturnUri('a&b=c#d')).toBe(
+      `https://auth.example.com${WALLET_LOGIN_RETURN_PATH}?response_code=a%26b%3Dc%23d`
+    );
   });
 });

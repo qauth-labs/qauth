@@ -318,3 +318,18 @@ export {
   readEncryptedResponseKid,
   unprotectEphemeralKey,
 } from '@qauth-labs/server-federation';
+
+// The same-device return leg (#405, ADR-013). The response endpoint mints a
+// Response Code and writes its digest into the row's redemption `UPDATE`; the
+// return route shape-checks the code the wallet's browser brought back and
+// redeems it by digest BEFORE asking whose browser it landed in (OID4VP 1.0
+// §8.2/§14.2, HAIP 1.0 §5.1). Both live in `apps/auth-server` and reach these
+// only through here.
+export {
+  generateOid4vpResponseCode,
+  hashOid4vpResponseCode,
+  isOid4vpResponseCode,
+  MAX_OID4VP_RESPONSE_CODE_LENGTH,
+  OID4VP_RESPONSE_CODE_BYTES,
+  OID4VP_RESPONSE_CODE_PATTERN,
+} from '@qauth-labs/server-federation';
