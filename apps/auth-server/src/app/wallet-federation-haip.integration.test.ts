@@ -941,8 +941,8 @@ describe('wallet federation E2E — haip-1.0 with direct_post.jwt (real containe
       expect(polledFirst.flow.jar.get(SESSION_COOKIE)).toBeUndefined();
 
       // (b) The wallet brings the browser back first: the landing renders the
-      // existing "not completed" refusal (401), and the original tab then
-      // finds the flow gone.
+      // existing "not completed" refusal (401), and the original tab is told
+      // once, then finds the flow gone.
       const returnedFirst = await walletAnswers(app, wallet, 'haip-declined-return@example.com', {
         device: 'this',
       });
@@ -959,6 +959,11 @@ describe('wallet federation E2E — haip-1.0 with direct_post.jwt (real containe
       expect(landed.headers['cache-control']).toBe('no-store');
       expect(landed.headers['referrer-policy']).toBe('no-referrer');
       expect(returnedFirst.flow.jar.get(SESSION_COOKIE)).toBeUndefined();
+      // The original tab learns the refusal ONCE through the done-marker the
+      // return leg left behind (its outcome word is `rejected`), then finds
+      // the flow gone — the same shape as a completed return, so the user
+      // reads "not completed" in the tab they started in, never "expired".
+      expect((await pollStatus(app, returnedFirst.flow)).status).toBe('rejected');
       expect((await pollStatus(app, returnedFirst.flow)).status).toBe('expired');
 
       // Nobody was created, nobody can mint, on either path.
