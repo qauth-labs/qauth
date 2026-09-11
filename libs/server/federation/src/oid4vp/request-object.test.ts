@@ -27,11 +27,12 @@ import {
  * ## Why the profile here is a HAIP posture rather than `haip-1.0` itself
  *
  * `VERIFIER_PROFILES['haip-1.0']` also declares `direct_post.jwt` and
- * `responseEncryption: 'required'`, and the builder refuses BOTH — correctly:
- * they are Phase C of #377, which lands the encrypted response mode, the
- * published encryption key and the decrypting intake together. Relaxing exactly
- * those two members and nothing else is what isolates the signing half. When
- * Phase C lands, the literal table entry flows through this path unchanged.
+ * `responseEncryption: 'required'`, which the builder honours since #377 Phase
+ * C by demanding a per-request encryption key. Relaxing exactly those two
+ * members and nothing else is what isolates the SIGNING half: a JAR test that
+ * also minted a key would fail for an encryption reason and look like a signing
+ * one. The literal table entry, key included, is driven in
+ * `authorization-request.test.ts`.
  */
 const HAIP_SIGNING_POSTURE: VerifierProfile = {
   ...VERIFIER_PROFILES['haip-1.0'],

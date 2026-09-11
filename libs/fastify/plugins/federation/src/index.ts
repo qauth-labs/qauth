@@ -200,6 +200,7 @@ export type {
 export {
   assertNoRedirectUriParameter,
   assertProfileUnchanged,
+  assertResponseModeUnchanged,
   assertValidResponseUri,
   buildOid4vpAuthorizationRequest,
   buildRedirectUriClientId,
@@ -207,6 +208,7 @@ export {
   createVerifierSigningMaterial,
   DEFAULT_OID4VP_REQUEST_TTL_MS,
   DEFAULT_REQUEST_OBJECT_LIFETIME_SECONDS,
+  DIRECT_POST_JWT_RESPONSE_MODE,
   DIRECT_POST_RESPONSE_MODE,
   encodeOid4vpRequestUri,
   generateOid4vpRequestSecrets,
@@ -223,6 +225,7 @@ export {
   resolveOid4vpExpiry,
   resolveVerifierProfile,
   SD_JWT_VC_FORMAT,
+  selectOid4vpResponseMode,
   signOid4vpRequestObject,
   verifierMaterialProvisionedBy,
   X509_HASH_CLIENT_ID_PREFIX,
@@ -303,6 +306,7 @@ export type {
 } from '@qauth-labs/server-federation';
 export {
   assertEncryptedResponseStateMatches,
+  decryptOid4vpAuthorizationResponse,
   EPHEMERAL_KEY_PROTECTION_AES_256_GCM,
   EPHEMERAL_KEY_PROTECTION_PLAIN,
   EPHEMERAL_KEY_PROTECTION_SECRET_BYTES,

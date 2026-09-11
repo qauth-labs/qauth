@@ -292,3 +292,34 @@ export function assertProfileUnchanged(requestProfileId: string, activeProfileId
     );
   }
 }
+
+/**
+ * Assert a submission arrived in the Response Mode its request asked for
+ * (#377 Phase C).
+ *
+ * The other half of the bidirectional enforcement `CapabilityPosture`
+ * promises. A request built for `direct_post.jwt` under a profile whose
+ * response encryption is REQUIRED must not be consumable by a cleartext post —
+ * anyone who read the signed request object holds its `state`, and accepting
+ * the plaintext form from them would make "required" mean "preferred". The
+ * reverse holds too: a row built for plain `direct_post` carries no decryption
+ * key, so an encrypted submission naming it could never have been correlated —
+ * but the check is stated symmetrically rather than relying on that accident.
+ *
+ * Reached only AFTER redemption, like {@link assertProfileUnchanged}, and for
+ * the same reason: the row has to be read to know what it asked for, and
+ * reading it means consuming it. A mismatch therefore ends the exchange, which
+ * is the correct outcome — the request was answered in a way its posture
+ * forbids, and a pending correlator must not survive that.
+ *
+ * @param requestMode - the `response_mode` stored when the request was built.
+ * @param arrivedMode - the mode the submission's shape implies.
+ * @throws Oid4vpTransportRejection when they differ.
+ */
+export function assertResponseModeUnchanged(requestMode: string, arrivedMode: string): void {
+  if (requestMode !== arrivedMode) {
+    throw new Oid4vpTransportRejection(
+      `request asked for response_mode '${requestMode}' but the submission arrived as '${arrivedMode}'`
+    );
+  }
+}

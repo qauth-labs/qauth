@@ -47,8 +47,9 @@ export { VERIFIER_PROFILE_IDS, VERIFIER_PROFILES } from '@qauth-labs/server-fede
  *
  * The bootstrap must answer "can this deployment DO it", never "does the crypto
  * library export it". The two diverge the moment an algorithm is implemented
- * before it is provisionable — which is the state ES256 and the JWE stack are in
- * after #298 — and answering the second question silently lifts the gate below.
+ * before it is provisionable — the state ES256 and the JWE stack were in
+ * between #298 and #377 — and answering the second question silently lifts the
+ * gate below.
  *
  * `signingAlgs` is `readonly string[]` rather than either union in play, on
  * purpose: `VerifierSigningAlgorithm` (`'EdDSA' | 'ES256'`) is what a profile
@@ -71,8 +72,11 @@ export interface VerifierCryptoCapabilities {
    *
    * Same standard as above: the primitives shipping in `@qauth-labs/core-crypto`
    * (#298) is not the question. The question is whether this deployment
-   * publishes an encryption key in `client_metadata` and has a response path
-   * that decrypts — which is #233/#234's work.
+   * publishes a per-request encryption key in `client_metadata` and has a
+   * response path that decrypts — which #377 Phase C built. Unlike the signing
+   * entries it needs no operator material (the pair is minted per request), so
+   * a bootstrap that ships that path answers `true` unconditionally, and the
+   * boot gate below keeps reading the answer rather than assuming it.
    */
   readonly responseEncryption: boolean;
 }
@@ -228,7 +232,7 @@ function assertProfileWithinCryptoCapabilities(
 
   if (profile.responseEncryption === 'required' && !capabilities.responseEncryption) {
     throw new Error(
-      `Verifier profile '${profile.id}' requires encrypted Authorization Responses — the 'direct_post.jwt' response mode of HAIP §5.1 — and this deployment has no JWE stack. Refusing to start rather than asking a wallet for a response it cannot decrypt (#299). The JWE primitives exist in the crypto layer (#298) but the encrypted-response path lands with Phase C of #377.`
+      `Verifier profile '${profile.id}' requires encrypted Authorization Responses — the 'direct_post.jwt' response mode of HAIP §5.1 — and this deployment's crypto capabilities do not claim response encryption. Refusing to start rather than asking a wallet for a response it cannot decrypt (#299). The encrypted-response path ships with #377 Phase C and needs no operator material, so a bootstrap answering false here has been built without it.`
     );
   }
 }
