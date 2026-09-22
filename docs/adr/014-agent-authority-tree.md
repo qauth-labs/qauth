@@ -13,6 +13,17 @@
 > exchange whose subject token carries `cnf`, with 3d's denylist and ledger
 > checks on every exchange (§4). The vitrin composition is a proposal into
 > vitrin's open questions, not a description of anything vitrin does today.
+>
+> **Amended 2026-09-22** (before any implementation): a durable agent
+> principal with an owner (§13), agent-transmitted action events and the
+> members that name the agent and the model it reports (§7), and a
+> provenance convention for commits (§9). Every addition sits behind the same
+> switch; the rows it adds — an agent, its bindings, its transmitters — are
+> the owner's to create and exist for nobody until an owner creates them,
+> the way a client registration is a developer's (ADR-012). QAuth holds the
+> identity, the ledger and the log, and nothing about what an agent does
+> with its identity elsewhere — that is the owner's own record
+> ([Explicitly out of scope](#explicitly-out-of-scope)).
 
 ## Context
 
@@ -23,7 +34,7 @@ server and equally at the CLI tools the agent can run (`gh`, `psql`) — on a
 host where the model's uid holds no other credential (§9). The agent then
 spawns helpers: teammates, sub-agents, one process per task. Today QAuth can
 express one thing about that spawn — the RFC 8693 `act` chain of `client_id`
-values — and nothing else. The deployment needs three more things:
+values — and nothing else. The deployment needs four more things:
 
 1. **Recursive, inspectable delegation.** Every agent has its own scope, and
    the record shows from which agent it inherited what. Today `act` carries
@@ -34,6 +45,13 @@ values — and nothing else. The deployment needs three more things:
    token the child holds, not by a hook, a classifier or a model's restraint.
 3. **Live observation.** Which agent, in which session, with which scopes, for
    what purpose, did what — as a tree on the dashboard, while it runs.
+4. **A durable agent identity with an owner.** Every name this record had for
+   an agent is either shared or ephemeral: a `client_id` names a harness
+   _type_ (`claude-code`) that every user and every box runs, a `cnf.jkt`
+   names a process that dies with it, a `sid` names one grant. Nothing names
+   "the agent that belongs to this person", so nothing can be attributed to
+   it across sessions, bound to a platform identity, or shown to the public
+   with its owner's name on it (§13).
 
 The CLI leg is designed with Vitrin OS in mind, and vitrin's rules are the
 posture adopted here: a scope is a ceiling on what may be asked for, never a
@@ -41,28 +59,30 @@ grant; the verifier canonicalises identity, the agent does not assert it;
 expiry refreshes and revocation kills; the authorization server is never on
 the actuation hot path. The standards cover the grammar of a hop (RFC 8693),
 sender constraint (RFC 9449), typed rights (RFC 9396), introspection and
-revocation (RFC 7662, RFC 7009), events (RFC 8417, SSF/CAEP) and decisions
-(AuthZEN 1.0) — and nothing about sessions, instances, spawn, or a tree. Three
-2026 individual drafts partition the rest (McGuinness: actor identity and
+revocation (RFC 7662, RFC 7009), events (RFC 8417, SSF/CAEP), decisions
+(AuthZEN 1.0) and, since June 2026, the shape of an agent identity record
+(SCIM Agent resource, an individual draft) — and nothing about sessions,
+instances, spawn, or a tree. Three 2026 individual drafts partition the rest (McGuinness: actor identity and
 chain shape; Liu: signed per-hop records; Niyikiza: offline attenuation); none
 is adopted by a working group. QAuth defines the seams itself and says so
 ([Standards position](#standards-position)).
 
 ### What exists today and what this record adds
 
-| Concern           | Today (verified 2026-09-21)                                                                                                                                                                                                                                                                                                                                          | This record adds                                                                                                                                                     |
-| ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Delegation hop    | `handleTokenExchange`, `apps/auth-server/src/app/routes/oauth/token.ts:1207` — confidential-only, gates 1–4c, `act = { sub: client_id, act? }`, depth ≤ `MAX_DELEGATION_DEPTH` (`apps/auth-server/src/app/helpers/agent-audit.ts:22`), lifetime capped by the subject's remaining life, no refresh token issued                                                      | A spawn assertion signed by the parent's key, a DPoP proof from the child, an instance thumbprint, and a ledger row per hop                                          |
-| Session root      | None. `jti` is `randomUUID()` and never persisted in Postgres — no issued-token row, no parent link (`libs/server/jwt/src/lib/jwt-service.ts:80`); Redis holds it only as a TTL'd denylist key (and, with hybrid signing on, the PQC sidecar key); no `sid` in non-test code; `sessions` is the browser login session (`libs/infra/db/src/lib/schema/sessions.ts:7`) | `sid` on every agent access token, inherited unchanged by every exchange                                                                                             |
-| Instance identity | None. No `cnf`, no DPoP, no mTLS; every agent token is a plain bearer                                                                                                                                                                                                                                                                                                | DPoP-bound agent tokens (`cnf.jkt`), key held by a local helper                                                                                                      |
-| Chain record      | `audit_logs.delegation_chain` (flattened `client_id` list, `libs/infra/db/src/lib/schema/audit.ts:54`); `findByRealmAndActorClientId` has no HTTP caller (`libs/infra/db/src/lib/repositories/audit-logs.repository.ts:218`)                                                                                                                                         | An agent-token ledger keyed by `jti` with `parent_jti` and a stable node id, served by introspection and the dashboard                                               |
-| Introspection     | `POST /oauth/introspect` returns no `act`, `jti` or `token_use` (response built at `apps/auth-server/src/app/routes/oauth/introspect.ts:229`); secret-based client auth only                                                                                                                                                                                         | `act`, `jti`, `sid`, `token_use`, `cnf`, `authorization_details`, `qauth_delegation`; `private_key_jwt` accepted                                                     |
-| Revocation        | Per-`jti` Redis denylist with TTL (`revokeJti`, `apps/auth-server/src/app/helpers/token-revocation.ts:30`); ownership = `client_id` of the token (`apps/auth-server/src/app/routes/oauth/revoke.ts:164`); `family_id` cascade for refresh tokens only                                                                                                                | Revocation by `sid` (tree) and `jti` (subtree) with cascade; the user and any live ancestor node in the tree (by its key) may revoke; CAEP `session-revoked` emitted |
-| Purpose / rights  | RFC 9396 absent; the only reference rejects inbound `authorization_details` on the ID-JAG path (`apps/auth-server/src/app/helpers/id-jag.ts:433`)                                                                                                                                                                                                                    | One RAR type, narrow-only across hops, returned in introspection                                                                                                     |
-| Consent           | `consentPage` has no agent input; `agent:*` renders raw (`apps/auth-server/src/app/routes/ui/consent.ts:134`, `describeScope` in `apps/auth-server/src/app/helpers/consent.ts:114`)                                                                                                                                                                                  | The tree ceiling on the consent screen                                                                                                                               |
-| Resource side     | `McpGuard` validates `iss`/`aud`/`exp`/scope exactly, normalises no `act`/`jti`, emits nothing back (`libs/fastify/plugins/mcp-guard/src/lib/core.ts:60`, `ValidatedToken` in `libs/fastify/plugins/mcp-guard/src/types.ts:31`)                                                                                                                                      | `act`/`sid`/`jti` normalised, DPoP verified per resource, optional event emission and online decisions                                                               |
-| Events            | None — no SSF, SET, CAEP or webhooks                                                                                                                                                                                                                                                                                                                                 | An SSF transmitter (revocation) and an RFC 8935 push endpoint (resource-side actions)                                                                                |
-| CLI               | Nothing                                                                                                                                                                                                                                                                                                                                                              | `qauth-broker` (keys, spawn, `git`/`gh`/`psql` credentials), a QAuth-side GitHub STS and a PostgreSQL 18 validator module                                            |
+| Concern           | Today (verified 2026-09-21)                                                                                                                                                                                                                                                                                                                                                                                                                      | This record adds                                                                                                                                                     |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Delegation hop    | `handleTokenExchange`, `apps/auth-server/src/app/routes/oauth/token.ts:1207` — confidential-only, gates 1–4c, `act = { sub: client_id, act? }`, depth ≤ `MAX_DELEGATION_DEPTH` (`apps/auth-server/src/app/helpers/agent-audit.ts:22`), lifetime capped by the subject's remaining life, no refresh token issued                                                                                                                                  | A spawn assertion signed by the parent's key, a DPoP proof from the child, an instance thumbprint, and a ledger row per hop                                          |
+| Session root      | None. `jti` is `randomUUID()` and never persisted in Postgres — no issued-token row, no parent link (`libs/server/jwt/src/lib/jwt-service.ts:80`); Redis holds it only as a TTL'd denylist key (and, with hybrid signing on, the PQC sidecar key); no `sid` in non-test code; `sessions` is the browser login session (`libs/infra/db/src/lib/schema/sessions.ts:7`)                                                                             | `sid` on every agent access token, inherited unchanged by every exchange                                                                                             |
+| Instance identity | None. No `cnf`, no DPoP, no mTLS; every agent token is a plain bearer                                                                                                                                                                                                                                                                                                                                                                            | DPoP-bound agent tokens (`cnf.jkt`), key held by a local helper                                                                                                      |
+| Chain record      | `audit_logs.delegation_chain` (flattened `client_id` list, `libs/infra/db/src/lib/schema/audit.ts:54`); `findByRealmAndActorClientId` has no HTTP caller (`libs/infra/db/src/lib/repositories/audit-logs.repository.ts:218`)                                                                                                                                                                                                                     | An agent-token ledger keyed by `jti` with `parent_jti` and a stable node id, served by introspection and the dashboard                                               |
+| Introspection     | `POST /oauth/introspect` returns no `act`, `jti` or `token_use` (response built at `apps/auth-server/src/app/routes/oauth/introspect.ts:229`); secret-based client auth only                                                                                                                                                                                                                                                                     | `act`, `jti`, `sid`, `token_use`, `cnf`, `authorization_details`, `qauth_delegation`; `private_key_jwt` accepted                                                     |
+| Revocation        | Per-`jti` Redis denylist with TTL (`revokeJti`, `apps/auth-server/src/app/helpers/token-revocation.ts:30`); ownership = `client_id` of the token (`apps/auth-server/src/app/routes/oauth/revoke.ts:164`); `family_id` cascade for refresh tokens only                                                                                                                                                                                            | Revocation by `sid` (tree) and `jti` (subtree) with cascade; the user and any live ancestor node in the tree (by its key) may revoke; CAEP `session-revoked` emitted |
+| Purpose / rights  | RFC 9396 absent; the only reference rejects inbound `authorization_details` on the ID-JAG path (`apps/auth-server/src/app/helpers/id-jag.ts:433`)                                                                                                                                                                                                                                                                                                | One RAR type, narrow-only across hops, returned in introspection                                                                                                     |
+| Consent           | `consentPage` has no agent input; `agent:*` renders raw (`apps/auth-server/src/app/routes/ui/consent.ts:134`, `describeScope` in `apps/auth-server/src/app/helpers/consent.ts:114`)                                                                                                                                                                                                                                                              | The tree ceiling on the consent screen                                                                                                                               |
+| Resource side     | `McpGuard` validates `iss`/`aud`/`exp`/scope exactly, normalises no `act`/`jti`, emits nothing back (`libs/fastify/plugins/mcp-guard/src/lib/core.ts:60`, `ValidatedToken` in `libs/fastify/plugins/mcp-guard/src/types.ts:31`)                                                                                                                                                                                                                  | `act`/`sid`/`jti` normalised, DPoP verified per resource, optional event emission and online decisions                                                               |
+| Events            | None — no SSF, SET, CAEP or webhooks                                                                                                                                                                                                                                                                                                                                                                                                             | An SSF transmitter (revocation) and an RFC 8935 push endpoint (resource-side and agent-side actions), with a registered-transmitter roster the owner can extend      |
+| CLI               | Nothing                                                                                                                                                                                                                                                                                                                                                                                                                                          | `qauth-broker` (keys, spawn, `git`/`gh`/`psql` credentials), a QAuth-side GitHub STS and a PostgreSQL 18 validator module                                            |
+| Agent identity    | None. `oauth_clients.is_agent` is a self-asserted flag on a client registration (`libs/infra/db/src/lib/schema/core.ts:234`); `developer_id` is the only ownership signal and is NULL for every anonymous DCR client ([ADR-012](./012-dynamic-client-ownership.md)); `logo_uri` and `client_uri` land in the `metadata` jsonb at registration (`apps/auth-server/src/app/routes/oauth/register.ts:178`) and are shown on the consent screen only | An `agents` table — a principal with an owner, a name, an avatar and per-platform bindings — served as a SCIM `Agent` resource and a public profile (§13)            |
 
 Two facts in that table shape everything below. GATE 3c requires the subject
 token's `aud` to contain the exchanging client's `client_id`
@@ -262,7 +282,9 @@ Every mint of a `sid`-carrying token for an agent client — the
 `authorization_code`, `refresh_token` and exchange grants; a
 `client_credentials` token (§1) writes nothing — writes one row to a new
 table, `agent_token_ledger`: `jti` (key),
-`sid`, `realm_id`, `user_id`, `node_id`, `parent_node_id` and `parent_jti`
+`sid`, `realm_id`, `user_id`, `agent_id` (nullable; the principal the tree
+roots in, §13, copied from the root row to every descendant), `node_id`,
+`parent_node_id` and `parent_jti`
 (null at the root), `kind` (`root` | `refresh` | `spawn` | `narrow` |
 `id-jag`), `origin_jti` and `origin_client_id` (set only on the `kind: root`
 row a sid-less subject started, §1), `client_id`, `instance_jkt`,
@@ -285,7 +307,8 @@ nodes. Until §3 lands a node is one token.
 Introspection serves the row: `POST /oauth/introspect` adds `act`, `jti`,
 `cnf` and `authorization_details` (registered members), the QAuth markers
 `sid` and `token_use`, and one service-specific member, **`qauth_delegation`**
-— `node_id`, `parent_jti`, `depth`, `revoked` and `chain`, a root-first array
+— `node_id`, `parent_jti`, `depth`, `revoked`, `agent` (the row's
+`agent_id` handle, absent when NULL, §13) and `chain`, a root-first array
 of `{ jti, client_id, issued_at }` for a resource caller; ancestors' `jkt` and
 `scope` are returned only to the session owner's portal and to a node of the
 same tree presenting its own DPoP-bound token (§6), which already hold them
@@ -610,7 +633,7 @@ start; with its keys gone it cannot cut them itself (type authentication
 alone revokes nothing, above), so the session owner's revoke-by-`sid` from
 the portal is the remedy.
 
-### 7. Telemetry — resource-side action events into QAuth
+### 7. Telemetry — action events into QAuth, from resources and from the agent's own side
 
 QAuth exposes an RFC 8935 push endpoint, `POST /events/push`, accepting SETs
 (RFC 8417, `typ: secevent+jwt`) signed by registered transmitters — an
@@ -639,6 +662,54 @@ indexed by the subject `jti`; a SET whose `iat` is older than
 and best-effort. The dashboard's tree is the ledger joined with
 these rows, streamed live from the portal (`GET /api/agent-sessions`,
 `GET /api/agent-sessions/{sid}` and `/{sid}/events` over server-sent events).
+
+**Agent-side transmitters.** The roster above is the operator's. An agent's
+owner (§13) runs things beside the harness that see what the resource never
+does — a loopback proxy that knows which model actually served a request, a
+runtime that knows why a step was taken, a git hook that knows which commits
+left the box — and QAuth takes their events on the same endpoint under the
+same rule, with two additions. First, the owner, not only the operator, may
+register a transmitter: an `agent_transmitters` row keyed by the `agents`
+row it reports for, holding a `jwks` and the `event_audiences` it may name,
+created through the owner's portal or the developer API with the same
+ownership check ADR-012 uses for clients; the owner is the responsible party
+for what it sends. Second, the subject check is widened by one hop: an
+agent-side SET is accepted when the subject `jti`'s ledger row belongs to a
+tree whose root `agent_id` is the transmitter's agent. It is still refused
+for any `jti` outside that agent's trees, and it is still a claim: every
+member an agent-side transmitter writes lands in `agent_actions` with
+`source: agent`, is shown apart from the other rows, and is never an
+input to §8. `agent_actions.source` is one of `resource` (an mcp-guard host
+or a validator), `broker` (the broker's vends and its push report, §9,
+signed as the harness type from the operator's roster) and `agent` (an
+owner-registered transmitter); the dashboard labels all three. Registration is by out-of-band exchange of the transmitter's
+public keys and the push URL — RFC 8935 alone. SSF stream management (SSF 1.0
+§7, §8) is receiver-initiated: the receiver reads the transmitter's
+`/.well-known/ssf-configuration` and creates the stream there, which a
+daemon on a laptop behind NAT cannot serve. A transmitter-initiated
+registration and an `agent-action` event type are what QAuth would take to
+the Shared Signals WG, which is extending SSF and CAEP toward agentic use
+cases; until either exists the out-of-band row is the mechanism, and the
+event URI stays QAuth's.
+
+**The agent on a stored row, and the members that name a model.** Every
+`agent_actions` row gains an `agent_id` column that QAuth fills from the
+subject `jti`'s ledger row; it is not an event-type member, and a SET that
+carries an `agent` member is refused (the `caused_by` rule, §5). Two
+optional members join the event type. `model` — the model identifier the
+transmitter reports for the request the action came from, a string ≤ 128
+bytes matching `^[A-Za-z0-9._:/-]+$`, bounded like `task` (§5). `reason` —
+the transmitter's free text for why the step was taken, bounded exactly as
+`purpose` is (§5, ≤ 200 bytes of printable Unicode) and rendered exactly as
+`purpose` is: escaped, in a box attributed to the transmitter, never inline.
+`model` and `reason` are recorded, displayed and never evaluated (T6, T7): a
+model name reaches QAuth only as a harness's or proxy's report of itself —
+the harness hooks expose a model only at session start and on a switch, and
+a loopback proxy sees the model on the wire — and QAuth has no way to check
+it. The dashboard shows them under "reported by the agent", beside and never
+inside the ledger's "verified" column, and introspection never returns them.
+The one model fact QAuth does hold is which agent _type_ minted the token,
+which is the `client_id` and always was.
 
 ### 8. Decision API — AuthZEN 1.0, off the hot path
 
@@ -734,7 +805,28 @@ attributes callers as §12 says.
   pointer to the ledger row, not a proof — both identifiers are public and
   confer nothing (§6). GitHub attributes installation-token activity to the
   App's bot identity and records no token identifier, so the trailer is the
-  only GitHub-side key; the proof is the STS log row it names.
+  only GitHub-side key; the proof is the STS log row it names. Where the
+  tree roots in an agent principal (§13) the broker also sets
+  `GIT_AUTHOR_NAME`/`GIT_AUTHOR_EMAIL` and `GIT_COMMITTER_*` in the node's
+  environment from the agent's GitHub binding — the App's bot login and its
+  `<id>+<slug>[bot]@users.noreply.github.com` address, which QAuth records
+  on the binding at provisioning — so a commit the agent wrote is authored
+  by the agent, and the hook adds `Model: <model>` from the node's reported
+  model (§7, a report) and `Agent: <agent_id>`. The broker writes no
+  `Signed-off-by`, `Reviewed-by` or `Assisted-by` line and refuses a commit
+  message that carries one from the node: the first two certify a human's
+  act and only a human adds them at review or merge; the third means a
+  human wrote the code with an agent's help, the kernel's `Assisted-by:
+AGENT:MODEL` convention (`Documentation/process/coding-assistants.rst`,
+  merged April 2026), and never appears on an agent-authored commit. A
+  `pre-push` hook reports the pushed commit hashes to the broker, which
+  emits them as one §7 SET (`action: git-push`, `resource` the repository,
+  a `commits` member listing the hashes, stored as `source: broker`) so the
+  owner's record can resolve
+  a hash to a node; a squash- or rebase-merged hash is GitHub's, not the
+  agent's, and resolves through the merged pull request instead. Every line
+  of it is a claim where it lands (T7); the ledger row it points at is the
+  fact.
 - **psql** — libpq's built-in OAuth flow is device-code only and `psql` has no
   authdata hook, so the broker ships a preloaded library (or a thin
   `qauth-psql` wrapper) that installs `PQsetAuthDataHook` and answers
@@ -787,7 +879,12 @@ promises, proposes and must not claim is in
 ### 11. Consent — the tree ceiling on the screen
 
 For an agent client the consent screen states that the client is an AI agent
-and shows the ceiling of the tree it may grow: the scopes with descriptions
+— and, when the root names an agent principal (§13), which one: its
+`display_name` and its owner's display name, each escaped by the same
+`html` tag as the client name (§5), and its avatar, served from QAuth's own
+origin at the fixed path §13 gives, so the person sees "Majordomo, owned by
+you" and not only "claude-code" — and shows the ceiling of the tree
+it may grow: the scopes with descriptions
 (today `agent:*` and `write:*` render raw), including the **union** of agent
 modes the tree may use, since no mode implies another; the agent types it may
 spawn — the client's operator-set `spawn_allowlist`, written into the root
@@ -848,24 +945,129 @@ shares the session node; that is the harness limit, not a default. Which
 nodes can be bound today, and which cannot, is in
 [Harness reality](#harness-reality).
 
+### 13. Agent identity — a principal with an owner, held by QAuth and asserted nowhere else
+
+An **agent** is a new principal in the realm: neither a user nor a client
+registration, but a durable record that a user owns and that a tree can root
+in. It lives in a new table, `agents`: `id` (uuid), `realm_id`, `handle`
+(unique within the realm, `^[a-z0-9][a-z0-9-]{1,62}$`, immutable once a
+binding exists), `display_name`, `description`, `avatar` (a PNG QAuth
+stores and serves at `/agents/{handle}/avatar.png` on its own origin, ≤ 512
+KiB, decoded and re-encoded on upload so nothing but pixels survives — no
+SVG, which can carry script, and never a URL QAuth would dereference on
+render), `active`, `profile_visibility` (`public` | `private`, default
+`public`), `owner_user_id` (a `users`
+row, `onDelete: 'restrict'` — an agent never outlives its owner silently;
+the owner deactivates or transfers it first), `created_at`, `updated_at`.
+The owner is the person the SCIM Agent draft calls the responsible party,
+and the only party who may edit the row, bind it to a platform, register a
+transmitter for it (§7) or deactivate it. The harness hooks' own `agent_id`
+(a sub-agent instance, [Harness reality](#harness-reality)) is a different
+thing with the same name and is never written to the ledger. There is no email on an agent and
+none is needed: [ADR-002](./002-identifier-abstraction.md) already made
+email a credential, not an identity, and an agent has no credential of its
+own — it acts through the harness types and keys this record already binds.
+
+**Where it sits in the tree.** `sub` stays the human (§1); nothing here
+touches the root invariant. The agent is named in the root grant: an agent
+client that authorizes with `agent_id=<handle or uuid>` on the authorization
+request roots the tree in that agent, and QAuth refuses the request
+(`invalid_request`, audited) unless the row is active and its
+`owner_user_id` is the authenticating `sub` — the consent screen then names
+the agent (§11). The ledger's `kind: root` row records `agent_id`; every
+descendant row inherits it unchanged as `sid` is inherited (§2); introspection
+returns it in `qauth_delegation` as `agent`; revocation gains one more
+identifier, `POST /api/agents/{id}/revoke`, which cuts every live tree of
+that agent by the §6 walk and may be called by the agent's current
+`owner_user_id` or a realm admin — not by a node, whose reach stays its own
+subtree (§6). After a transfer (decision 10) the trees the previous owner
+consented to keep their `user_id`, so that person can still cut them one
+`sid` at a time as session owner, while the new owner cuts all of them by
+agent. `act` is untouched: `act.sub` remains the harness
+type's `client_id`, because draft-mcguinness's actor identifier is a client
+identifier and §14.12 wants it durable, and the agent is not a client. A
+grant with no `agent_id` is byte-for-byte today's grant: the column is NULL
+and every consumer treats NULL as "no agent named".
+
+**SCIM projection.** `agents` is served as the SCIM `Agent` resource of
+`draft-wzdk-scim-agent-resource-00` (June 2026, individual, Informational) at
+`/scim/v2/Agents`, schema `urn:ietf:params:scim:schemas:core:2.0:Agent`:
+`agentUserName` ← `handle`, `displayName`, `description`, `active`, and
+`owners[]` ← one value whose `$ref` is the owner's User resource. The draft
+defines no avatar and no platform binding, so both go in a QAuth extension
+schema, `urn:qauth:params:scim:schemas:extension:agent:1.0`, with `avatar`
+(a URI on QAuth) and `bindings[]` (below) — named as an extension, never as
+a core attribute, and offered to the SCIM WG list as feedback on the draft.
+The projection is read-only in the first slice; the developer API and the
+portal write the row. QAuth has no SCIM endpoint today, so this is the first
+one, scoped to this resource, `GET` only, authenticated as the realm's
+developer API is.
+
+**Bindings.** A binding is one row per (agent, platform) in
+`agent_bindings`: `platform` (`github` first; others as they are provisioned),
+`external_id` (the platform's identifier for the identity that acts — on
+GitHub the _bot user's_ numeric id from `GET /users/{slug}[bot]`, which is
+what the `noreply` address carries, not the App id), `external_app_id` (the
+App id, where the platform has one), `external_login`, `external_email`
+(the attribution address the platform assigns), `sts_app_ref` (the key in
+QAuth configuration naming the App and private key the STS mints from for
+this agent, §9), `proof` (how QAuth learned it; for GitHub, the STS App's
+own `GET /app` and `GET /users/{slug}[bot]` answers at provisioning),
+`bound_at`. For GitHub the binding _is_ the STS App of §9: the App's slug
+is the agent's public name on that platform, its bot login the author of
+every commit and pull request the agent makes (§9, provenance), its App page
+the place GitHub itself shows the owner account as the developer. One STS
+App per agent, then, not one per organisation — decision 4 is amended below
+— and the App's private key stays where §9 puts it. The avatar the platform
+shows is the platform's; GitHub exposes no API to set an App's logo, so the
+owner sets it by hand from the same file QAuth serves, and QAuth records
+nothing about whether they did.
+
+**Public profile.** `GET /agents/{handle}` on the realm's public origin
+serves the profile, unauthenticated: `display_name`, `description`, avatar,
+the owner's display name, the bindings' `external_login`s, `active`, and a
+fixed statement of what the page attests — that this agent is a principal of
+this issuer owned by this person, and nothing about any commit, message or
+action that names it elsewhere (T7). The same at `Accept: application/json`.
+No `sid`, `jti`, node, scope, model or event ever appears on it; those are
+the owner's and the realm admin's (§2, §6). An agent whose
+`profile_visibility` is `private` answers 404, indistinguishable from a
+handle that does not exist.
+
+**What QAuth does not do here.** It does not provision the platform side —
+create the GitHub App, upload its logo, set a Matrix avatar — and it does not
+verify what the agent says about itself on those platforms (T7). It does not
+sign commits, evaluate a model name, or hold a memory, a runtime or a reason
+for a step beyond the bounded `reason` member of §7. Those are the owner's
+systems, recorded in the owner's own decision record; QAuth's part is the
+row, the binding, the profile, the tree that roots in it and the log that
+names it.
+
 ## Alternatives considered
 
-| Alternative                                                             | Why not                                                                                                                                                                                                                                                                                               |
-| ----------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Adopt draft-liu's `delegation_chain` in the token now                   | Individual `-00`, June 2026; records of 500–1000 bytes per hop; `wit://` identifiers defined only in its own terminology; signed-field set still moving. Ledger plus `qauth_delegation` carries the same facts; revisit on the §2 trigger.                                                            |
-| draft-niyikiza offline attenuation (holder-derived child tokens, no AS) | No `sub`, so no on-behalf-of; no ledger, so no dashboard or cascade; not an access token at any RS. Its `par_hash` binding is borrowed as `ath` in the spawn assertion.                                                                                                                               |
-| Transaction Tokens as the session identifier                            | Per-invocation, minutes-scale, single trust domain, "MUST NOT be used as an access token" (-11 §13.13). Not a durable root.                                                                                                                                                                           |
-| One DCR client per agent instance                                       | Anonymous DCR clients are unowned ([ADR-012](./012-dynamic-client-ownership.md)), get `NULL` `max_agent_mode` and a secret to keep; a `client_id` names a registration, not an instance. The instance is the key.                                                                                     |
-| `may_act` as the allowed-children carrier                               | RFC 8693 §4.4 `may_act` is one party, a JSON object; a set of agent types is not expressible. `aud` ∋ client identifier is an example value §2.1 allows, read as "who may present this at the STS" per the splicing thread, and it is what GATE 3c already checks.                                    |
-| A ledger `aud_ceiling` in place of GATE 4b's subject-`aud` bound        | Moves the on-token invariant `aud(c) ⊆ aud(p)` into a table; a resource server could no longer verify audience monotonicity from the tokens alone, and the consent screen would lose the resource ceiling it shows today. Enrichment keeps 4b byte-identical.                                         |
-| A refresh token per spawned node                                        | Reverses "no refresh token for a delegated token", replaces the on-token floor `exp(c) ≤ exp(p)` with a ledger check, and inherits a seven-day default; RFC 9449 §5 says a confidential client's refresh token is not DPoP-bound, so the node's key would not even protect it. Renewal is a re-spawn. |
-| The child's client assertion as `actor_token` (draft-mcguinness §6.3.1) | The conformant rebind shape, and a second URN relaxation on GATE 2; it names the child, not the parent's authorisation. Named as the future path, not adopted.                                                                                                                                        |
-| The spawn assertion in the `actor_token` slot                           | RFC 8693's `actor_token` is the acting party's own identity, and GATE 2 pins it to access tokens. A parent-signed statement about a child is a different object; a new parameter keeps the semantics honest and GATE 2 untouched.                                                                     |
-| mTLS instead of DPoP                                                    | A certificate per process needs a CA on the box; DPoP needs a JWK. Vitrin's wire is bearer-shaped either way; the JWT stays the credential.                                                                                                                                                           |
-| A local broker that mints GitHub installation tokens itself             | Puts the App's long-lived private key and the vend policy on the developer box, same uid as the model's shell: the agent could widen its own ceiling by editing a file. The STS keeps both server-side; the broker forwards, caches and deletes.                                                      |
-| Hooks as the enforcement point                                          | `PreToolUse` cannot inject or remove a credential and cannot attribute an in-process sub-agent's CLI call. Hooks stay UX.                                                                                                                                                                             |
-| Short lifetimes only, no ledger cascade                                 | The floor, kept. The user must be able to kill a tree from the dashboard within the window, and a refused refresh is not an audit trail.                                                                                                                                                              |
-| Macaroons / Biscuits                                                    | HMAC chaining gives attenuation without proof of possession; Biscuits need a Datalog engine at every RS; neither is an OAuth token at mcp-guard, GitHub or PostgreSQL.                                                                                                                                |
+| Alternative                                                             | Why not                                                                                                                                                                                                                                                                                                       |
+| ----------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Adopt draft-liu's `delegation_chain` in the token now                   | Individual `-00`, June 2026; records of 500–1000 bytes per hop; `wit://` identifiers defined only in its own terminology; signed-field set still moving. Ledger plus `qauth_delegation` carries the same facts; revisit on the §2 trigger.                                                                    |
+| draft-niyikiza offline attenuation (holder-derived child tokens, no AS) | No `sub`, so no on-behalf-of; no ledger, so no dashboard or cascade; not an access token at any RS. Its `par_hash` binding is borrowed as `ath` in the spawn assertion.                                                                                                                                       |
+| Transaction Tokens as the session identifier                            | Per-invocation, minutes-scale, single trust domain, "MUST NOT be used as an access token" (-11 §13.13). Not a durable root.                                                                                                                                                                                   |
+| One DCR client per agent instance                                       | Anonymous DCR clients are unowned ([ADR-012](./012-dynamic-client-ownership.md)), get `NULL` `max_agent_mode` and a secret to keep; a `client_id` names a registration, not an instance. The instance is the key.                                                                                             |
+| `may_act` as the allowed-children carrier                               | RFC 8693 §4.4 `may_act` is one party, a JSON object; a set of agent types is not expressible. `aud` ∋ client identifier is an example value §2.1 allows, read as "who may present this at the STS" per the splicing thread, and it is what GATE 3c already checks.                                            |
+| A ledger `aud_ceiling` in place of GATE 4b's subject-`aud` bound        | Moves the on-token invariant `aud(c) ⊆ aud(p)` into a table; a resource server could no longer verify audience monotonicity from the tokens alone, and the consent screen would lose the resource ceiling it shows today. Enrichment keeps 4b byte-identical.                                                 |
+| A refresh token per spawned node                                        | Reverses "no refresh token for a delegated token", replaces the on-token floor `exp(c) ≤ exp(p)` with a ledger check, and inherits a seven-day default; RFC 9449 §5 says a confidential client's refresh token is not DPoP-bound, so the node's key would not even protect it. Renewal is a re-spawn.         |
+| The child's client assertion as `actor_token` (draft-mcguinness §6.3.1) | The conformant rebind shape, and a second URN relaxation on GATE 2; it names the child, not the parent's authorisation. Named as the future path, not adopted.                                                                                                                                                |
+| The spawn assertion in the `actor_token` slot                           | RFC 8693's `actor_token` is the acting party's own identity, and GATE 2 pins it to access tokens. A parent-signed statement about a child is a different object; a new parameter keeps the semantics honest and GATE 2 untouched.                                                                             |
+| mTLS instead of DPoP                                                    | A certificate per process needs a CA on the box; DPoP needs a JWK. Vitrin's wire is bearer-shaped either way; the JWT stays the credential.                                                                                                                                                                   |
+| A local broker that mints GitHub installation tokens itself             | Puts the App's long-lived private key and the vend policy on the developer box, same uid as the model's shell: the agent could widen its own ceiling by editing a file. The STS keeps both server-side; the broker forwards, caches and deletes.                                                              |
+| Hooks as the enforcement point                                          | `PreToolUse` cannot inject or remove a credential and cannot attribute an in-process sub-agent's CLI call. Hooks stay UX.                                                                                                                                                                                     |
+| Short lifetimes only, no ledger cascade                                 | The floor, kept. The user must be able to kill a tree from the dashboard within the window, and a refused refresh is not an audit trail.                                                                                                                                                                      |
+| Macaroons / Biscuits                                                    | HMAC chaining gives attenuation without proof of possession; Biscuits need a Datalog engine at every RS; neither is an OAuth token at mcp-guard, GitHub or PostgreSQL.                                                                                                                                        |
+| The agent as a `users` row (a service account)                          | A user is the on-behalf-of `sub`; making the agent one would let a tree root in it with no human, which the exchange gate refuses on purpose (§1). A user also holds credentials of its own; an agent holds none (§13).                                                                                       |
+| The agent as an `oauth_clients` row                                     | A `client_id` names a harness type shared across users and boxes (§6, §9); one client per agent recreates the per-instance registration ADR-012 rejected, and `developer_id` is NULL for every anonymous client. A client is not owned by a user the way an agent is.                                         |
+| Agent identity in `act` (`act.sub` = agent)                             | draft-mcguinness §3.2 makes `act.sub` a client identifier and §14.12 wants it durable and never key-derived; the agent is not a client, and the harness type still has to be named. The agent is a ledger column and an introspection member, not an `act` member (§13).                                      |
+| A public per-`jti` or per-commit resolver on QAuth                      | Puts ledger rows behind a URL anyone can enumerate from public commits; `sid` and `jti` confer nothing, but the rows are the owner's (§2, §6). The profile shows the principal and nothing below it; resolving a commit is the owner's record's job (§9, §13).                                                |
+| Model name as a ledger fact                                             | QAuth never sees the model: the harness hooks report it at session start and on a switch, a loopback proxy sees it on the wire, and neither is QAuth's own observation. A report stays a report (§7, T7).                                                                                                     |
+| SSF stream management for agent-side transmitters                       | Receiver-initiated by design (SSF 1.0 §7, §8): the receiver reads the transmitter's well-known configuration and creates the stream there, which a local daemon behind NAT cannot serve. RFC 8935 with an out-of-band `agent_transmitters` row now; a transmitter-initiated registration goes to the WG (§7). |
+| Commit signing by the broker or by QAuth                                | A broker-held per-node key verifies against the ledger but GitHub reports it `unknown_key` and shows every agent commit Unverified; a QAuth-side signer with a registered key shows Verified but puts the AS on every commit, against the hot-path rule. Parked (decision 12).                                |
 
 ## Standards position
 
@@ -875,27 +1077,30 @@ and RFC 9700 never mention token exchange, and RFC 8693 never mentions `cnf`.**
 hops" are QAuth rules anchored on RFC 9449 §5's "regardless of grant type" and
 RFC 9396 §6.1's "fewer permissions" — composition by analogy, not text.
 
-| Piece                                                   | Position                                       | Hook                                                                                                                                                                                                                                    |
-| ------------------------------------------------------- | ---------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Hop grammar, `act` nesting, top-level-only policy       | Covered                                        | RFC 8693 §2.1, §4.1                                                                                                                                                                                                                     |
-| Who may present a token at the STS                      | Covered by analogy; list-thread guidance       | RFC 8693 §2.1 (client identifier as an example `audience` value), §4.4 `may_act`; the splicing thread's `aud(N) = sub(N+1)`; GATE 3c                                                                                                    |
-| Sender constraint, `cnf.jkt`, DPoP at the RS            | Covered by composition                         | RFC 9449 §4.2, §5 ("regardless of grant type"), §5.2, §6, §7, §7.2; RFC 9700 §2.2.1; RFC 9449 never mentions exchange                                                                                                                   |
-| Audience narrowing per hop                              | Covered by analogy                             | RFC 8707 §2.2 "subset thereof" (code and refresh only), §3 multi-audience caveat; RFC 8693 §2.2.2 `invalid_target`; monotonicity across exchange is GATE 4b                                                                             |
-| Purpose and ceilings                                    | Covered (mechanism); QAuth-defined (type)      | RFC 9396 §2, §2.2, §6, §7, §9.1, §9.2, §12 (sanitise; bound by the type); RFC 9728 `authorization_details_types_supported`; the `agent-task` type and its subset rule are QAuth's, and §6.1 says no comparison is standardised          |
-| `act.iss`, `sub_profile`, loose schema, preserve/extend | Proposed by draft                              | draft-mcguinness-oauth-actor-profile-00 §3.2, §3.4, §3.5, §3.6.3.1, §3.6.3.2, §3.7.1, §6.3.1.2, §14.7 (deviates), §14.12                                                                                                                |
-| Presenter transition on spawn                           | QAuth-defined                                  | Neither §3.7.2 continuation (that is the narrow) nor §3.7.3 rebind (no `actor_token`); §6.3.1 named as the future path                                                                                                                  |
-| Spawn assertion                                         | QAuth-defined                                  | Nearest: RFC 6749 §8.2 extension parameter, RFC 7521 assertion framework, rfc7523bis `aud` rule, RFC 8725 §3.11 explicit `typ`, draft-liu §5.2 `delegatee_id`, RFC 9449 §4.2 `ath` computation                                          |
-| Per-hop lineage                                         | Proposed by draft (not adopted); QAuth ledger  | draft-liu-oauth-chain-delegation-00 §4, §10.6 chain by reference                                                                                                                                                                        |
-| Child bound to the exact parent token                   | Proposed by draft (idea reused)                | draft-niyikiza-oauth-attenuating-agent-tokens-01 §4.6 `par_hash`                                                                                                                                                                        |
-| Session identifier in access tokens                     | Registered claim; placement QAuth-defined      | IANA JWT Claims `sid` (Front-Channel Logout 1.0 §3; Back-Channel Logout 1.0 §2.1); RFC 8417 §2.1.2 precedent; not in RFC 9068, not in the introspection registry                                                                        |
-| Introspection members                                   | Covered / QAuth-defined                        | RFC 7662 §2.2; registered `act`, `cnf`, `authorization_details`, `jti`; extension `sid`, `token_use`, `qauth_delegation` (cross-domain use would need Specification Required registration; `delegation` is OpenID Federation 1.0 §13.6) |
-| Revocation cascade                                      | Covered (policy); QAuth-defined (API)          | RFC 7009 §2.1 "related tokens and the underlying authorization grant"; revoke-by-`sid`/`jti` endpoints are QAuth's                                                                                                                      |
-| Session-revoked signal                                  | Covered                                        | SSF 1.0 §3.3 `complex`, §3.5 `jwt_id`, §7, §8.1.1; RFC 8935 push, RFC 8936 poll; CAEP 1.0 §3.1 (Final, 29 August 2025; approval announced 2 September 2025); RFC 9493 `opaque`, `iss_sub`                                               |
-| Resource-side action events                             | Covered (envelope); QAuth-defined (event type) | RFC 8417 §2.2 (`events`, `txn`, `toe`), RFC 8935 push; the `agent-action` URI is QAuth's                                                                                                                                                |
-| Decision API                                            | Covered; WG-draft binding; QAuth context       | AuthZEN 1.0 §6.1, §9.2, §10.1, §11.2 (Final, 11 January 2026); COAZ-MCP Binding §7.1, §11.2 (WG Draft 1); `context.qauth` is QAuth's; AARP noted                                                                                        |
-| Agent framework vocabulary                              | WG draft (Informational)                       | draft-ietf-wimse-aims-00 §8 (LLM never holds credentials), §10.3 (`client_id` = agent, `sub` = user), §11 (audit minimums)                                                                                                              |
-| CLI credentials                                         | Product documentation                          | PostgreSQL 18 `oauth` HBA and validator API; GitHub App installation tokens; git-credential protocol; `gh` environment precedence; octo-sts                                                                                             |
-| Vitrin                                                  | Workstream prose, no decision-log id           | WS-D §7.2, §7.3, §7.5 (workstream prose) and §7.6 (the one section headed DECIDED in `docs/plan/13-workstream-agent-integration.md`); vitrin's normative entry is owed and may amend the 300 s figure                                   |
+| Piece                                                   | Position                                                              | Hook                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| ------------------------------------------------------- | --------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Hop grammar, `act` nesting, top-level-only policy       | Covered                                                               | RFC 8693 §2.1, §4.1                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| Who may present a token at the STS                      | Covered by analogy; list-thread guidance                              | RFC 8693 §2.1 (client identifier as an example `audience` value), §4.4 `may_act`; the splicing thread's `aud(N) = sub(N+1)`; GATE 3c                                                                                                                                                                                                                                                                                                                                                |
+| Sender constraint, `cnf.jkt`, DPoP at the RS            | Covered by composition                                                | RFC 9449 §4.2, §5 ("regardless of grant type"), §5.2, §6, §7, §7.2; RFC 9700 §2.2.1; RFC 9449 never mentions exchange                                                                                                                                                                                                                                                                                                                                                               |
+| Audience narrowing per hop                              | Covered by analogy                                                    | RFC 8707 §2.2 "subset thereof" (code and refresh only), §3 multi-audience caveat; RFC 8693 §2.2.2 `invalid_target`; monotonicity across exchange is GATE 4b                                                                                                                                                                                                                                                                                                                         |
+| Purpose and ceilings                                    | Covered (mechanism); QAuth-defined (type)                             | RFC 9396 §2, §2.2, §6, §7, §9.1, §9.2, §12 (sanitise; bound by the type); RFC 9728 `authorization_details_types_supported`; the `agent-task` type and its subset rule are QAuth's, and §6.1 says no comparison is standardised                                                                                                                                                                                                                                                      |
+| `act.iss`, `sub_profile`, loose schema, preserve/extend | Proposed by draft                                                     | draft-mcguinness-oauth-actor-profile-00 §3.2, §3.4, §3.5, §3.6.3.1, §3.6.3.2, §3.7.1, §6.3.1.2, §14.7 (deviates), §14.12                                                                                                                                                                                                                                                                                                                                                            |
+| Presenter transition on spawn                           | QAuth-defined                                                         | Neither §3.7.2 continuation (that is the narrow) nor §3.7.3 rebind (no `actor_token`); §6.3.1 named as the future path                                                                                                                                                                                                                                                                                                                                                              |
+| Spawn assertion                                         | QAuth-defined                                                         | Nearest: RFC 6749 §8.2 extension parameter, RFC 7521 assertion framework, rfc7523bis `aud` rule, RFC 8725 §3.11 explicit `typ`, draft-liu §5.2 `delegatee_id`, RFC 9449 §4.2 `ath` computation                                                                                                                                                                                                                                                                                      |
+| Per-hop lineage                                         | Proposed by draft (not adopted); QAuth ledger                         | draft-liu-oauth-chain-delegation-00 §4, §10.6 chain by reference                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| Child bound to the exact parent token                   | Proposed by draft (idea reused)                                       | draft-niyikiza-oauth-attenuating-agent-tokens-01 §4.6 `par_hash`                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| Session identifier in access tokens                     | Registered claim; placement QAuth-defined                             | IANA JWT Claims `sid` (Front-Channel Logout 1.0 §3; Back-Channel Logout 1.0 §2.1); RFC 8417 §2.1.2 precedent; not in RFC 9068, not in the introspection registry                                                                                                                                                                                                                                                                                                                    |
+| Introspection members                                   | Covered / QAuth-defined                                               | RFC 7662 §2.2; registered `act`, `cnf`, `authorization_details`, `jti`; extension `sid`, `token_use`, `qauth_delegation` (cross-domain use would need Specification Required registration; `delegation` is OpenID Federation 1.0 §13.6)                                                                                                                                                                                                                                             |
+| Revocation cascade                                      | Covered (policy); QAuth-defined (API)                                 | RFC 7009 §2.1 "related tokens and the underlying authorization grant"; revoke-by-`sid`/`jti` endpoints are QAuth's                                                                                                                                                                                                                                                                                                                                                                  |
+| Session-revoked signal                                  | Covered                                                               | SSF 1.0 §3.3 `complex`, §3.5 `jwt_id`, §7, §8.1.1; RFC 8935 push, RFC 8936 poll; CAEP 1.0 §3.1 (Final, 29 August 2025; approval announced 2 September 2025); RFC 9493 `opaque`, `iss_sub`                                                                                                                                                                                                                                                                                           |
+| Resource-side action events                             | Covered (envelope); QAuth-defined (event type)                        | RFC 8417 §2.2 (`events`, `txn`, `toe`), RFC 8935 push; the `agent-action` URI is QAuth's                                                                                                                                                                                                                                                                                                                                                                                            |
+| Agent-side transmitters and their registration          | Covered (envelope); gap (registration); QAuth-defined (members)       | RFC 8935 push with out-of-band keys; SSF 1.0 §7–§8 stream management is receiver-initiated and does not fit a NAT'd transmitter; no CAEP or SSF event type describes an agent's action (CAEP 1.0 §3 defines session, token-claims, credential, assurance-level, device-compliance and risk-level changes — states, never acts); the `model` and `reason` members and the server-written `agent_id` column are QAuth's; both gaps are what QAuth takes to the Shared Signals WG (§7) |
+| Agent identity record                                   | Proposed by draft (shape adopted); QAuth extension (avatar, bindings) | draft-wzdk-scim-agent-resource-00 §3, §4.1, §4.2 (`Agent` resource, `agentUserName`, `displayName`, `description`, `active`, `owners`; no email, no avatar, no binding), RFC 7643 §3.3 extension schemas; the `urn:qauth:…:extension:agent:1.0` schema is QAuth's; draft-ietf-wimse-aims-00 §10.3 keeps `client_id` = the acting workload, which is why the agent is not in `act` (§13)                                                                                             |
+| Commit provenance                                       | Product convention; kernel process document                           | git author/committer identities; GitHub App bot login and `noreply` address; `Documentation/process/coding-assistants.rst` (`Assisted-by: AGENT:MODEL`, humans only add `Signed-off-by`); GitHub signature verification reasons (`unknown_key`) for the parked signing question                                                                                                                                                                                                     |
+| Decision API                                            | Covered; WG-draft binding; QAuth context                              | AuthZEN 1.0 §6.1, §9.2, §10.1, §11.2 (Final, 11 January 2026); COAZ-MCP Binding §7.1, §11.2 (WG Draft 1); `context.qauth` is QAuth's; AARP noted                                                                                                                                                                                                                                                                                                                                    |
+| Agent framework vocabulary                              | WG draft (Informational)                                              | draft-ietf-wimse-aims-00 §8 (LLM never holds credentials), §10.3 (`client_id` = agent, `sub` = user), §11 (audit minimums)                                                                                                                                                                                                                                                                                                                                                          |
+| CLI credentials                                         | Product documentation                                                 | PostgreSQL 18 `oauth` HBA and validator API; GitHub App installation tokens; git-credential protocol; `gh` environment precedence; octo-sts                                                                                                                                                                                                                                                                                                                                         |
+| Vitrin                                                  | Workstream prose, no decision-log id                                  | WS-D §7.2, §7.3, §7.5 (workstream prose) and §7.6 (the one section headed DECIDED in `docs/plan/13-workstream-agent-integration.md`); vitrin's normative entry is owed and may amend the 300 s figure                                                                                                                                                                                                                                                                               |
 
 ### Watch list
 
@@ -905,21 +1110,25 @@ build on a past date — so the rfc7523bis row cannot be pinned at `-11` past
 27 Sep 2026: the P0 pin carries a re-check date on or before that day and is
 re-pinned to the successor revision when it lands.
 
-| Document                                                                    | Revision · date                                              | Expires                           | Why watched                                                                                                                              |
-| --------------------------------------------------------------------------- | ------------------------------------------------------------ | --------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
-| draft-mcguinness-oauth-actor-profile (individual)                           | `-00` · 30 Apr 2026                                          | 1 Nov 2026                        | `act` shape adopted; depends on entity-profiles                                                                                          |
-| draft-liu-oauth-chain-delegation (individual)                               | `-00` · 6 Jun 2026                                           | 8 Dec 2026                        | `delegation_chain` trigger                                                                                                               |
-| draft-niyikiza-oauth-attenuating-agent-tokens (individual)                  | `-01` · 15 Jun 2026                                          | 17 Dec 2026                       | attenuation invariants                                                                                                                   |
-| draft-asor-wimse-agent-delegation-chain (individual)                        | `-01` · 3 Sep 2026                                           | 7 Mar 2027                        | header only; open before citing                                                                                                          |
-| draft-ietf-wimse-aims (WG, Informational; replaces draft-klrc-aiagent-auth) | `-00` · 15 Sep 2026                                          | 19 Mar 2027                       | audit minimums; "LLM MUST NOT hold credentials"                                                                                          |
-| draft-ietf-oauth-transaction-tokens (WG)                                    | `-11` · 30 Jul 2026                                          | 31 Jan 2027                       | rejected as session id; `txn` reused                                                                                                     |
-| draft-ietf-oauth-identity-assertion-authz-grant (WG)                        | `-04` · 21 May 2026                                          | 22 Nov 2026                       | ADR-011 pin; actor profile layers on it                                                                                                  |
-| draft-ietf-oauth-client-id-metadata-document (WG)                           | `-02` · 6 Jul 2026                                           | 7 Jan 2027                        | agent client naming                                                                                                                      |
-| draft-ietf-oauth-rfc7523bis (WG)                                            | `-11` · 26 Mar 2026                                          | 27 Sep 2026                       | `aud` = issuer only; expires six days from now — the P0 pin needs a `Re-check by` on or before that day and a re-pin to the successor    |
-| draft-ietf-wimse-workload-creds / -wpt (WG; s2s-protocol is dead)           | `-02` · 2 Jul / 27 Aug 2026                                  | 3 Jan / 28 Feb 2027               | one identity per credential                                                                                                              |
-| draft-oauth-ai-agents-on-behalf-of-user (individual)                        | `-02` · 26 Aug 2025                                          | expired 27 Feb 2026, no successor | expired; its consent-time disclosure of the acting party is the precedent for §11's allowlist line; `requested_actor` itself not adopted |
-| AuthZEN COAZ-MCP Binding / AARP (OIDF WG drafts)                            | Draft 1 · 13 Feb / 17 Sep 2026 (both WG-adopted 15 Jun 2026) | —                                 | request shape; park-and-approve                                                                                                          |
-| MCP Authorization                                                           | 2026-07-28                                                   | —                                 | EMA still the only STABLE `ext-auth` extension                                                                                           |
+| Document                                                                    | Revision · date                                              | Expires                           | Why watched                                                                                                                                                  |
+| --------------------------------------------------------------------------- | ------------------------------------------------------------ | --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| draft-mcguinness-oauth-actor-profile (individual)                           | `-00` · 30 Apr 2026                                          | 1 Nov 2026                        | `act` shape adopted; depends on entity-profiles                                                                                                              |
+| draft-liu-oauth-chain-delegation (individual)                               | `-00` · 6 Jun 2026                                           | 8 Dec 2026                        | `delegation_chain` trigger                                                                                                                                   |
+| draft-niyikiza-oauth-attenuating-agent-tokens (individual)                  | `-01` · 15 Jun 2026                                          | 17 Dec 2026                       | attenuation invariants                                                                                                                                       |
+| draft-asor-wimse-agent-delegation-chain (individual)                        | `-01` · 3 Sep 2026                                           | 7 Mar 2027                        | header only; open before citing                                                                                                                              |
+| draft-ietf-wimse-aims (WG, Informational; replaces draft-klrc-aiagent-auth) | `-00` · 15 Sep 2026                                          | 19 Mar 2027                       | audit minimums; "LLM MUST NOT hold credentials"                                                                                                              |
+| draft-ietf-oauth-transaction-tokens (WG)                                    | `-11` · 30 Jul 2026                                          | 31 Jan 2027                       | rejected as session id; `txn` reused                                                                                                                         |
+| draft-ietf-oauth-identity-assertion-authz-grant (WG)                        | `-04` · 21 May 2026                                          | 22 Nov 2026                       | ADR-011 pin; actor profile layers on it                                                                                                                      |
+| draft-ietf-oauth-client-id-metadata-document (WG)                           | `-02` · 6 Jul 2026                                           | 7 Jan 2027                        | agent client naming                                                                                                                                          |
+| draft-ietf-oauth-rfc7523bis (WG)                                            | `-11` · 26 Mar 2026                                          | 27 Sep 2026                       | `aud` = issuer only; expires six days from now — the P0 pin needs a `Re-check by` on or before that day and a re-pin to the successor                        |
+| draft-ietf-wimse-workload-creds / -wpt (WG; s2s-protocol is dead)           | `-02` · 2 Jul / 27 Aug 2026                                  | 3 Jan / 28 Feb 2027               | one identity per credential                                                                                                                                  |
+| draft-oauth-ai-agents-on-behalf-of-user (individual)                        | `-02` · 26 Aug 2025                                          | expired 27 Feb 2026, no successor | expired; its consent-time disclosure of the acting party is the precedent for §11's allowlist line; `requested_actor` itself not adopted                     |
+| AuthZEN COAZ-MCP Binding / AARP (OIDF WG drafts)                            | Draft 1 · 13 Feb / 17 Sep 2026 (both WG-adopted 15 Jun 2026) | —                                 | request shape; park-and-approve                                                                                                                              |
+| MCP Authorization                                                           | 2026-07-28                                                   | —                                 | EMA still the only STABLE `ext-auth` extension                                                                                                               |
+| draft-wzdk-scim-agent-resource (individual, Informational)                  | `-00` · 5 Jun 2026                                           | 7 Dec 2026                        | `Agent` resource shape adopted (§13); the SCIM WG is consolidating it with draft-abbey-scim-agent-extension (IETF 125 slides) — re-pin to whichever survives |
+| draft-kushwaha-scim-agent-governance (individual)                           | `-00` · Jul 2026                                             | —                                 | lifecycle and autonomy extension on the same resource; not adopted, watched for the avatar/binding question                                                  |
+| Shared Signals WG agentic extension (OIDF)                                  | announced Jul 2026, no draft yet                             | —                                 | where the `agent-action` event type and a transmitter-initiated registration would be proposed (§7)                                                          |
+| Linux `Documentation/process/coding-assistants.rst`                         | merged Apr 2026                                              | —                                 | `Assisted-by` semantics reused in §9; a change there changes the convention                                                                                  |
 
 ## Explicitly out of scope
 
@@ -1014,7 +1223,11 @@ gate.
   installation tokens; a foreign local process — another uid, or a container
   on host networking — cannot obtain a signed request or a DPoP proof from the
   proxy; mcp-guard with DPoP on rejects a bound token presented as Bearer
-  (RFC 9449 §7.2), with DPoP off accepts it.
+  (RFC 9449 §7.2), with DPoP off accepts it; an agent-side SET for a `jti`
+  outside the transmitter's agent's trees is refused; a transmitter-supplied
+  `agent` member is refused and the stored row carries the ledger's; `model`
+  and `reason` never reach introspection or the §8 request; the SCIM
+  projection returns the owner as `owners[0]` and rejects writes.
 - **P4 — the database, the decision API and vitrin.** `qauth_pg_validator`,
   the libpq hook library and the `psql` path; AuthZEN evaluation and metadata,
   default off; COAZ-MCP online mode in mcp-guard; the vitrin verifier
@@ -1129,6 +1342,14 @@ parent is T2's residual; a sub-agent cannot be gated at all (§12).
   user or any live ancestor node, not only the agent (§6).
 - The CLI leg gets the MCP leg's discipline with no new token format; the App
   key never leaves the server and the type key on the box is one box's (§9).
+- Attributable: a tree can root in a principal a person owns, so "whose
+  agent" has one answer across sessions, platforms and time; the public
+  profile states it, the consent screen names it, and a commit the agent
+  wrote is authored by it rather than by a shared harness name or the
+  person's own address (§9, §11, §13).
+- Separable: what QAuth verified and what an agent reported about itself
+  are stored, shown and served apart, so a model name or a reason can be
+  logged without ever being mistaken for QAuth's word (T7, §7).
 
 ### Negative
 
@@ -1149,6 +1370,16 @@ parent is T2's residual; a sub-agent cannot be gated at all (§12).
 - Three of the shapes followed are individual drafts that may expire without
   successors (Watch list); the `act` object may need a second migration.
 - The MCP leg is outside the tree until P3 (Phasing; Harness reality, row 8).
+- A public profile is a new unauthenticated surface on the realm, and an
+  owner-registered transmitter is a new party whose SETs QAuth stores; both
+  are bounded (the profile shows the principal and nothing below it, the
+  transmitter reaches one agent's trees and its rows are marked as reports),
+  but each is one more thing to enumerate and one more `jwks` to rotate
+  (§7, §13).
+- Every provenance line outside QAuth is forgeable, by anyone and by the
+  agent itself; the record can only make its own store honest about the
+  difference (T7). Commit signing, the one thing that would change that, is
+  parked (decision 12).
 
 ### Neutral
 
@@ -1156,7 +1387,8 @@ parent is T2's residual; a sub-agent cannot be gated at all (§12).
   ([Decision](#decision)), and with it on, no agent client is DPoP-required,
   no `spawn_allowlist` exists and so no root token's `aud` is enriched, no
   lifetime row changes, no transmitter or push endpoint is configured, until
-  an operator says so.
+  an operator says so — and no agent, binding or agent-side transmitter
+  exists until an owner creates one (§7, §13).
 - `MAX_DELEGATION_DEPTH` stays 4; draft-mcguinness's "at least depth 4" is
   met and draft-liu's recommended 5 is not adopted. A narrowing spends no
   depth, so lead → teammate → process → tool with a leaf per level fits.
@@ -1178,10 +1410,17 @@ proceeds on that default until the maintainer decides otherwise.
    identifiers? Default: free text; `caused_by` server-written.
 3. **GitHub attribution.** App installation tokens (attributed to the App's
    bot) or user-to-server tokens (the user's avatar with an app badge)?
-   Default: installation tokens; the trailer carries the agent.
+   Default: installation tokens; the trailer carries the agent. _Amended
+   2026-09-22:_ where the tree roots in an agent principal, the App is the
+   agent's binding and its bot identity is the author (§9, §13), which
+   settles this on installation tokens for that case; the user-to-server
+   option remains open only for trees with no agent named.
 4. **Which GitHub App and installation** the STS mints from — one App per
    organisation or one shared. Default: one per organisation, installation
-   ids in QAuth configuration.
+   ids in QAuth configuration. _Amended 2026-09-22:_ one App per agent
+   principal where one is named (§13), the App's slug being the agent's
+   public name on GitHub; the per-organisation default holds for trees with
+   no agent named. Installation ids stay in QAuth configuration either way.
 5. **Where `qauth-broker` lives** — a TypeScript app in the Nx monorepo or a
    separate crate beside vitrin; the PostgreSQL validator is C either way.
    Default: `apps/qauth-broker` in the monorepo.
@@ -1197,6 +1436,37 @@ proceeds on that default until the maintainer decides otherwise.
 8. **Root-grant cadence.** One root per main-agent process (a login per
    session, per-session attribution) or one root per broker start (one login,
    concurrent sessions share a `sid` and a node)? Default: per process.
+   _Note 2026-09-22:_ an unattended runtime — a daemon with no
+   `SessionStart` hook, restarted independently of the broker, started
+   through the executor path — cannot carry a per-process root, since its
+   every restart would cut the `sid` (§6); it needs the per-broker-start
+   shape. A per-host setting choosing between the two, rather than one
+   answer for every host, is the likely resolution.
+9. **Agent handle namespace.** Realm-unique (`majordomo` is one agent per
+   realm) or user-scoped (`taha/majordomo`, so two owners may share a
+   handle)? The SCIM draft wants `agentUserName` unique across the
+   provisioning domain, which is the realm. Default: realm-unique, first
+   come; the profile URL is `/agents/{handle}`.
+10. **Ownership transfer.** May an owner hand an agent to another user, and
+    does the agent's history (ledger rows, bindings, events) move with it?
+    Default: transfer allowed by the current owner through the portal,
+    history stays attached to the agent, and the old owner's name leaves the
+    profile at transfer.
+11. **Agent-side transmitter trust.** Does an owner-registered transmitter
+    (§7) need the realm admin's approval before its SETs are stored, or is
+    the owner's registration enough? Default: the owner's registration is
+    enough, because the rows it produces are already marked as reports and
+    reach only that agent's trees; an admin may disable a transmitter.
+12. **Commit signing.** Leave agent commits unsigned (pointer only), sign
+    with the broker's per-node key (verifiable against the ledger, shown
+    Unverified by GitHub as `unknown_key`), or sign server-side with a key
+    registered to a machine user (shown Verified, the AS on every commit)?
+    Default: unsigned; the trigger to reopen is a requirement that
+    provenance be evidence rather than a pointer.
+13. **`model` on the ledger row?** Keep the reported model only in
+    `agent_actions` (§7), or copy the first report onto the ledger's root
+    row for the dashboard's convenience? Default: `agent_actions` only; the
+    ledger holds what QAuth verified and nothing it did not.
 
 ## Related
 
@@ -1210,8 +1480,11 @@ proceeds on that default until the maintainer decides otherwise.
   [ADR-011](./011-enterprise-managed-authorization.md) — the exchange gate
   discipline, gate 15, `private_key_jwt`, the operator-config trust posture;
   [ADR-012](./012-dynamic-client-ownership.md) — why per-instance DCR clients
-  were rejected; [ADR-013](./013-same-device-return-leg.md) — the
-  burn-then-bind idiom the spawn assertion's single-use `jti` follows
+  were rejected, and the ownership check §13 reuses;
+  [ADR-013](./013-same-device-return-leg.md) — the
+  burn-then-bind idiom the spawn assertion's single-use `jti` follows;
+  [ADR-002](./002-identifier-abstraction.md) — email as credential, not
+  identity, which is why an agent has neither (§13)
 - [Agent Authorization guide](https://docs.qauth.dev/integrate/agent-authorization/) —
   the shipped agent layer this record builds on;
   [`docs/spec-pin-log.md`](../spec-pin-log.md) — where the watch list will be
@@ -1229,3 +1502,6 @@ proceeds on that default until the maintainer decides otherwise.
 - [OpenID AuthZEN Authorization API 1.0](https://openid.net/specs/authorization-api-1_0.html) · [COAZ-MCP Binding 1.0 (WG draft)](https://openid.github.io/authzen/authzen-coaz-mcp-binding-1_0.html) · [Access Request and Approval Profile 1.0 (WG draft)](https://openid.github.io/authzen/authzen-access-request-approval-profile-1_0.html) · [Shared Signals Framework 1.0](https://openid.net/specs/openid-sharedsignals-framework-1_0-final.html) · [CAEP 1.0](https://openid.net/specs/openid-caep-1_0-final.html) · [OIDC Front-Channel Logout 1.0 §3 (`sid`)](https://openid.net/specs/openid-connect-frontchannel-1_0.html) · [IANA JWT Claims registry](https://www.iana.org/assignments/jwt/jwt.xhtml)
 - [MCP Authorization 2026-07-28](https://modelcontextprotocol.io/specification/2026-07-28/basic/authorization) · [PostgreSQL 18 OAuth authentication](https://www.postgresql.org/docs/18/auth-oauth.html) · [GitHub App installation access tokens](https://docs.github.com/en/rest/apps/apps?apiVersion=2022-11-28#create-an-installation-access-token-for-an-app) · [octo-sts](https://github.com/octo-sts/app) · [gitcredentials](https://git-scm.com/docs/gitcredentials)
 - [Claude Code hooks](https://code.claude.com/docs/en/hooks.md) · [sub-agents](https://code.claude.com/docs/en/sub-agents.md) · [agent teams](https://code.claude.com/docs/en/agent-teams.md) · [MCP](https://code.claude.com/docs/en/mcp.md) · [Agent SDK MCP](https://code.claude.com/docs/en/agent-sdk/mcp.md)
+- [draft-wzdk-scim-agent-resource-00](https://datatracker.ietf.org/doc/html/draft-wzdk-scim-agent-resource-00) · [draft-abbey-scim-agent-extension](https://datatracker.ietf.org/doc/draft-abbey-scim-agent-extension/) · [draft-kushwaha-scim-agent-governance](https://datatracker.ietf.org/doc/draft-kushwaha-scim-agent-governance/) · [SCIM WG agentic-draft progress, IETF 125](https://datatracker.ietf.org/meeting/125/materials/slides-125-scim-scim-agentic-draft-progress-00) · [RFC 7643](https://www.rfc-editor.org/rfc/rfc7643.html) · [RFC 7644](https://www.rfc-editor.org/rfc/rfc7644.html)
+- [CAEP Interoperability Profile 1.0 (draft 01)](https://openid.net/specs/openid-caep-interoperability-profile-1_0-01.html) · [OpenID Foundation on SSF/CAEP and agentic use cases (July 2026)](https://openid.net/authzen-at-identiverse-2026-authorization-in-the-agent-era/)
+- [Linux kernel: AI Coding Assistants](https://docs.kernel.org/process/coding-assistants.html) · [GitHub App visibility](https://docs.github.com/en/apps/creating-github-apps/registering-a-github-app/making-a-github-app-public-or-private) · [GitHub commit signature verification reasons](https://docs.github.com/en/rest/commits/commits) · [GitHub REST: pull requests associated with a commit](https://docs.github.com/en/rest/commits/commits#list-pull-requests-associated-with-a-commit)

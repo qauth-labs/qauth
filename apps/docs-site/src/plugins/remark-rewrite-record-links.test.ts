@@ -254,7 +254,7 @@ describe('rewriteRecordLink — the real docs/adr and docs/security corpus, enum
     return links;
   }
 
-  it('extracts exactly 290 links across the 14 ADRs, the ADR README, and the security review — the corpus the counts below are checked against', () => {
+  it('extracts exactly 307 links across the 14 ADRs, the ADR README, and the security review — the corpus the counts below are checked against', () => {
     // A fixed count, not a lower bound: this test's whole point is that the
     // categorisation below is checked against the FULL corpus, not a
     // sample. If a future ADR amendment changes the link count, this
@@ -293,7 +293,15 @@ describe('rewriteRecordLink — the real docs/adr and docs/security corpus, enum
     // `../spec-pin-log.md` (→ BLOB) — plus the README index row for 014
     // (→ ROUTE). Recounted with the plugin's own extractor and
     // rewriteRecordLink before the buckets below were touched.
-    expect(extractAllLinks()).toHaveLength(290);
+    //
+    // 290 → 307 with ADR-014's 2026-09-22 amendment (agent identity,
+    // agent-side transmitters, commit provenance): the record now carries
+    // 92 links — 66 external, 11 bare anchors, 13 in-tree record links
+    // (002/006/007/008/011/012/013 → ROUTE) and the same 2 to
+    // `../spec-pin-log.md`. Recounted the same way, and the +3 route links
+    // are the check that the new ADR-002 and ADR-012 references really did
+    // resolve to rendered records.
+    expect(extractAllLinks()).toHaveLength(307);
   });
 
   it('every link falls into exactly one of the four outcomes, with none left unresolved', () => {
@@ -372,8 +380,8 @@ describe('rewriteRecordLink — the real docs/adr and docs/security corpus, enum
     // 11 → 13 blob (its two `../spec-pin-log.md` links, the pin-log group
     // above). Unresolved unchanged — the check that nothing in the new record
     // points at a doc the plugin cannot place.
-    expect(untouchedExternalOrAnchor).toBe(152 + 28);
-    expect(rewrittenToRoute).toBe(97);
+    expect(untouchedExternalOrAnchor).toBe(164 + 30);
+    expect(rewrittenToRoute).toBe(100);
     expect(rewrittenToBlob).toBe(13);
     expect(leftUnresolved).toBe(0);
   });
