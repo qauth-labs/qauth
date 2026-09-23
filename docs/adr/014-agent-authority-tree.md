@@ -186,6 +186,20 @@ _within_ the ceiling, and the free-text `purpose` a model writes about itself,
 which is display, never policy. QAuth authenticates a workload, not an
 intelligence (vitrin WS-D §7.7(2)).
 
+**T7 — Forged attribution.** Anything an agent writes about itself outside
+QAuth is unauthenticated where it lands: a `Co-authored-by` or `Author` line
+in a commit, a `QAuth-Session` trailer, a model name, a `purpose`. Anyone can
+write any of them into any commit in any repository, and the agent itself can
+(T2: a same-uid process edits the hooks that write them). Closed for what
+QAuth records and only there: an agent identity is a row QAuth owns (§13), a
+node is a key QAuth verified (§3), an action event is a SET whose transmitter
+QAuth registered and whose subject `jti` the ledger knows (§7), and a public
+profile states what it does and does not attest. Not closed: the world
+outside the ledger. A commit that names an agent is a claim until the owner's
+record ties its hash to a node (§9, provenance), and a model name is a
+harness's report of itself, never something QAuth verified (§7). No surface
+in this record presents either as QAuth's word.
+
 The invariant the record exists to make provable: for every child token `c`
 with parent `p`, `scope(c) ⊆ scope(p)`, `scope(c) ⊆ registered(type(c))`,
 `aud(c) ⊆ aud(p)`, `mode(c) ≤ cap(type(c))`, `exp(c) ≤ exp(p)`,
@@ -220,7 +234,10 @@ minted once per `authorization_code` grant and bound to that grant's consent
 record. It is a column on the `refresh_tokens` row, copied on rotation as
 `family_id` already is (`libs/infra/db/src/lib/schema/tokens.ts:178`), so a
 refreshed token keeps it; every token derived by exchange inherits it
-unchanged. The ID token issued by the same code exchange does **not** carry
+unchanged. The agent the grant names (§13), when it names one, travels the
+same way: a nullable `refresh_tokens.agent_id` beside `sid`, copied on
+rotation, inherited by every exchange. The ID token issued by the same code
+exchange does **not** carry
 it: the registered ID-token `sid` (Front-Channel Logout 1.0 §3) identifies a
 User-Agent or device session for logout, which QAuth's `sessions` row is and
 this grant identifier is not, and one browser session may root several
@@ -1144,6 +1161,19 @@ policy language for the PDP: AuthZEN carries the question, not the policy.
 Attestation of the process that holds a key:
 draft-ietf-oauth-attestation-based-client-auth is not evaluated here.
 
+**The agent's own systems.** Everything an agent principal (§13) does with
+its identity outside QAuth is the owner's domain, recorded in the owner's own
+decision record, not this one: provisioning the platform side of a binding
+(creating the GitHub App, uploading its logo, setting a Matrix avatar); the
+runtime, memory and planning layers that produce a `reason`; the proxy or
+harness that reports a `model`; the index that resolves a commit hash to a
+node (QAuth stores the pushed hashes the broker's `git-push` SET carries, §9,
+and serves them to the owner — it builds no resolver, §13); the wording of a
+commit message beyond the lines the broker writes or refuses (§9); commit
+signing (decision 12); and any public claim made in the agent's name that
+QAuth did not itself record. QAuth's rule for all of it is T7: a claim stays
+a claim, the ledger row is the fact, and nothing QAuth serves blurs the two.
+
 ## Phasing
 
 Each phase is one or two mergeable PRs with named tests; no phase loosens a
@@ -1176,10 +1206,24 @@ gate.
   logged, a `setsid`/double-forked descendant of a read-only node is refused,
   not attributed to the session; a process that reuses an exited teammate's
   pid is refused; installation token deleted at node end; a trailer resolves
-  to a ledger row. Honest limits: the spawn proof is possession-only until
-  P1; the MCP leg is still Claude Code's own non-agent DCR/CIMD client, which
-  never sends `is_agent`, so it is outside the tree until P3 (Harness
-  reality, row 8); and same-type children are told apart by ledger rows only.
+  to a ledger row. **0c, agent identity:** the `agents` and `agent_bindings`
+  tables, `agent_id` on the authorization request, on `refresh_tokens` and on
+  the ledger's root row (§1, §2), the owner check at authorization,
+  `qauth_delegation.agent`, the consent line (§11), the public profile, and
+  the broker's author identity and `Agent:`/`Model:` lines from the binding
+  (§9); revocation by agent waits for the §6 walk in P2. Tests: a grant
+  naming an agent the `sub` does not own fails `invalid_request`; a grant
+  naming an inactive agent fails the same way; a grant naming none is
+  byte-identical to today's; every descendant row carries the root's
+  `agent_id`; the profile of a private agent is 404 and the profile of a
+  public one carries no `sid`, `jti` or scope; a commit made through the
+  broker under an agent root is authored by the binding's login and address;
+  a node-supplied `Signed-off-by` is refused. Honest limits: the spawn proof
+  is possession-only until P1; the MCP leg is still Claude Code's own
+  non-agent DCR/CIMD client, which never sends `is_agent`, so it is outside
+  the tree until P3 (Harness reality, row 8); same-type children are told
+  apart by ledger rows only; and the platform side of a binding is
+  provisioned by the owner, outside this record.
 - **P1 — keys and the tree.** **1a:** DPoP at the token endpoint (`cnf.jkt`,
   `token_type`, nonce), `dpop_bound_access_tokens` in the seed manifest,
   `AGENT_BEARER_LEAF_RESOURCES`, key custody in the broker, `private_key_jwt`
@@ -1202,8 +1246,11 @@ gate.
   `authorization_details`; the consent ceiling; revocation by `sid`
   and `jti`, the identifier API, the cascade and ancestry ownership; the
   `agentAccessTokenLifespan` row; the CAEP transmitter; the STS narrowed by
-  `authorization_details`. Tests: widened `locations` fails
+  `authorization_details`; `POST /api/agents/{id}/revoke` with its
+  owner-or-admin rule (§13). Tests: widened `locations` fails
   `invalid_authorization_details`; a client-supplied `caused_by` is rejected;
+  revoke-by-agent makes every tree rooted in the agent inactive and leaves
+  the owner's other agents' trees alone, and a node calling it is refused;
   revoke-by-`sid` makes every descendant inactive at introspection and in the
   denylist; a spawn or renewal whose parent row is revoked fails
   `invalid_grant`; a denylist write failure mid-cascade answers 503 and leaves
@@ -1217,7 +1264,11 @@ gate.
   `oauth_clients` and `AGENT_EVENT_WINDOW`; mcp-guard normalises
   `act`/`sid`/`jti`, verifies DPoP per resource, emits events; the
   broker's proxy and `headersHelper` leaves so the MCP leg joins the broker's
-  root and gains its `sid`; the portal's live tree. Tests: an event by `jti`
+  root and gains its `sid`; the portal's live tree; the `agent_transmitters`
+  row and the one-hop subject rule for agent-side SETs, the `model` and
+  `reason` members and the server-written `agent_id` column, the `source`
+  column with its three values shown apart, the broker's `pre-push` SET (§7,
+  §9), and the SCIM `GET /scim/v2/Agents` projection (§13). Tests: an event by `jti`
   lands on the right node; a revoked `sid` reaches the broker by poll, and a
   refused re-spawn reaches it with polling off; either deletes its
   installation tokens; a foreign local process — another uid, or a container
