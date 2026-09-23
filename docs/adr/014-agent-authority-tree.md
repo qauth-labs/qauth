@@ -159,6 +159,12 @@ installation token is cached per node for at most its GitHub hour. Residual:
 a leaf replayed inside its lifetime at a resource that does not verify the
 proof — PostgreSQL, vitrin, an mcp-guard host with DPoP off — which RFC 9449
 §7.2 concedes for any DPoP-unaware resource; the answer is the lifetime (§6).
+Vitrin is in that list for its wire alone, bearer-shaped and DPoP-unaware,
+not as a CLI resource a scope opens: it is the actuation gate one layer
+below QAuth, where `vitrin:observe` and `vitrin:actuate` only cap what an
+agent may petition, the grant comes from vitrin's own consent card and
+powerbox, and a delivered file descriptor is kernel authority no QAuth
+revocation reaches (§10).
 
 **T4 — Confused deputy.** Every agent holds its own token, mcp-guard never
 forwards a bearer upstream
