@@ -254,7 +254,7 @@ describe('rewriteRecordLink — the real docs/adr and docs/security corpus, enum
     return links;
   }
 
-  it('extracts exactly 307 links across the 14 ADRs, the ADR README, and the security review — the corpus the counts below are checked against', () => {
+  it('extracts exactly 313 links across the 14 ADRs, the ADR README, and the security review — the corpus the counts below are checked against', () => {
     // A fixed count, not a lower bound: this test's whole point is that the
     // categorisation below is checked against the FULL corpus, not a
     // sample. If a future ADR amendment changes the link count, this
@@ -301,7 +301,13 @@ describe('rewriteRecordLink — the real docs/adr and docs/security corpus, enum
     // `../spec-pin-log.md`. Recounted the same way, and the +3 route links
     // are the check that the new ADR-002 and ADR-012 references really did
     // resolve to rendered records.
-    expect(extractAllLinks()).toHaveLength(307);
+    //
+    // 307 → 313 with ADR-014's 2026-09-24 amendment (remote approval, §14):
+    // five external links in Related (CIBA Core 1.0, OID4VP 1.0, WebAuthn
+    // Level 3, NIST SP 800-63B-4, Claude Code Remote Control) and one in-tree
+    // link to ADR-004 (→ ROUTE). Predicted from the amendment's own link list
+    // before running, so the buckets below are a check.
+    expect(extractAllLinks()).toHaveLength(313);
   });
 
   it('every link falls into exactly one of the four outcomes, with none left unresolved', () => {
@@ -380,8 +386,11 @@ describe('rewriteRecordLink — the real docs/adr and docs/security corpus, enum
     // 11 → 13 blob (its two `../spec-pin-log.md` links, the pin-log group
     // above). Unresolved unchanged — the check that nothing in the new record
     // points at a doc the plugin cannot place.
-    expect(untouchedExternalOrAnchor).toBe(164 + 30);
-    expect(rewrittenToRoute).toBe(100);
+    //
+    // ADR-014's 2026-09-24 amendment: 164 → 169 external, 100 → 101 route
+    // (its ADR-004 link). Anchors, blob and unresolved unchanged.
+    expect(untouchedExternalOrAnchor).toBe(169 + 30);
+    expect(rewrittenToRoute).toBe(101);
     expect(rewrittenToBlob).toBe(13);
     expect(leftUnresolved).toBe(0);
   });

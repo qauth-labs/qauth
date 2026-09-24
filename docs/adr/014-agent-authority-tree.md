@@ -24,6 +24,13 @@
 > identity, the ledger and the log, and nothing about what an agent does
 > with its identity elsewhere — that is the owner's own record
 > ([Explicitly out of scope](#explicitly-out-of-scope)).
+>
+> **Amended 2026-09-24** (before any implementation): remote approval (§14)
+> — a refused request the owner approves from a phone with a passkey, as a
+> separate elevation leaf that never widens a token or a tree — with its
+> threat, T8, and parked decisions 14–16; a clause in T3 on why vitrin is
+> listed beside PostgreSQL; and the 2026-09-22 text its first commit dropped.
+> Remote approval sits behind a second switch, `AGENT_APPROVAL_ENABLED`.
 
 ## Context
 
@@ -34,7 +41,7 @@ server and equally at the CLI tools the agent can run (`gh`, `psql`) — on a
 host where the model's uid holds no other credential (§9). The agent then
 spawns helpers: teammates, sub-agents, one process per task. Today QAuth can
 express one thing about that spawn — the RFC 8693 `act` chain of `client_id`
-values — and nothing else. The deployment needs four more things:
+values — and nothing else. The deployment needs five more things:
 
 1. **Recursive, inspectable delegation.** Every agent has its own scope, and
    the record shows from which agent it inherited what. Today `act` carries
@@ -52,6 +59,11 @@ values — and nothing else. The deployment needs four more things:
    "the agent that belongs to this person", so nothing can be attributed to
    it across sessions, bound to a platform identity, or shown to the public
    with its owner's name on it (§13).
+5. **Approval from a distance.** The owner sometimes drives a session from a
+   phone, through Claude Code's Remote Control, with no shell and no SSH.
+   When an agent hits its ceiling, the owner needs to approve one step from
+   there — once, or for a while — without widening what the tree was
+   granted (§14).
 
 The CLI leg is designed with Vitrin OS in mind, and vitrin's rules are the
 posture adopted here: a scope is a ceiling on what may be asked for, never a
@@ -83,6 +95,7 @@ is adopted by a working group. QAuth defines the seams itself and says so
 | Events            | None — no SSF, SET, CAEP or webhooks                                                                                                                                                                                                                                                                                                                                                                                                             | An SSF transmitter (revocation) and an RFC 8935 push endpoint (resource-side and agent-side actions), with a registered-transmitter roster the owner can extend      |
 | CLI               | Nothing                                                                                                                                                                                                                                                                                                                                                                                                                                          | `qauth-broker` (keys, spawn, `git`/`gh`/`psql` credentials), a QAuth-side GitHub STS and a PostgreSQL 18 validator module                                            |
 | Agent identity    | None. `oauth_clients.is_agent` is a self-asserted flag on a client registration (`libs/infra/db/src/lib/schema/core.ts:234`); `developer_id` is the only ownership signal and is NULL for every anonymous DCR client ([ADR-012](./012-dynamic-client-ownership.md)); `logo_uri` and `client_uri` land in the `metadata` jsonb at registration (`apps/auth-server/src/app/routes/oauth/register.ts:178`) and are shown on the consent screen only | An `agents` table — a principal with an owner, a name, an avatar and per-platform bindings — served as a SCIM `Agent` resource and a public profile (§13)            |
+| Human approval    | None. The only step-up is a fresh browser login during authorization (`evaluateStepUp`, `apps/auth-server/src/app/helpers/step-up.ts:196`); no passkey, TOTP or CIBA code                                                                                                                                                                                                                                                                        | A CIBA poll-mode approval request, a passkey-confirmed approval page and a separate elevation leaf for the approved step (§14)                                       |
 
 Two facts in that table shape everything below. GATE 3c requires the subject
 token's `aud` to contain the exchanging client's `client_id`
@@ -206,6 +219,18 @@ record ties its hash to a node (§9, provenance), and a model name is a
 harness's report of itself, never something QAuth verified (§7). No surface
 in this record presents either as QAuth's word.
 
+**T8 — Approval fatigue.** An agent under prompt injection asks for more
+rights again and again, until a tired owner taps yes — the push-bombing
+pattern known from MFA. Closed as far as a gate can close it (§14). Asking
+needs a scope of its own, which no approval can grant or extend. A per-`sid`
+budget caps how often a node may ask. A mute turns further asks into silent
+denials. The approval page shows the typed request from QAuth's own records;
+the model's words appear only in an attributed box. And an approval covers
+one delta, for one node, for a bounded time, and is never passed down. Not
+closed: an owner who approves what they should not. The record can make each
+approval small, specific and costly to ask for; it cannot make the owner
+read it.
+
 The invariant the record exists to make provable: for every child token `c`
 with parent `p`, `scope(c) ⊆ scope(p)`, `scope(c) ⊆ registered(type(c))`,
 `aud(c) ⊆ aud(p)`, `mode(c) ≤ cap(type(c))`, `exp(c) ≤ exp(p)`,
@@ -217,7 +242,10 @@ root, and the root by the human's consent. One consequence of
 independent scopes and the check is exact set inclusion, so **a parent holding
 only `agent:exec` cannot hand out `agent:readonly`**. The root grant carries
 the union of the modes the tree may use, each child takes a subset, and the
-consent screen shows the union (§11).
+consent screen shows the union (§11). An elevation (§14) stands outside this
+chain on purpose: no exchange derives it, a passkey-confirmed approval of one
+delta bounds it instead of a parent, and it can neither spawn nor narrow — so
+no child ever holds what it grants.
 
 ## Decision
 
@@ -228,7 +256,9 @@ nothing in this record runs: no `sid` is minted, no ledger row is written,
 no new gate is evaluated, and the token exchange is byte-for-byte today's,
 whatever the seed manifest or any other `AGENT_*` setting says. When true,
 P0's behaviour applies to every agent-client mint, and the new exchange
-gates, as each phase lands them, run as §4 states.
+gates, as each phase lands them, run as §4 states. Remote approval (§14) has
+a second switch, `AGENT_APPROVAL_ENABLED`, default `false`, which does
+nothing unless `AGENT_TREE_ENABLED` is on.
 
 ### 1. Session root — `sid` on agent access tokens
 
@@ -309,10 +339,11 @@ table, `agent_token_ledger`: `jti` (key),
 roots in, §13, copied from the root row to every descendant), `node_id`,
 `parent_node_id` and `parent_jti`
 (null at the root), `kind` (`root` | `refresh` | `spawn` | `narrow` |
-`id-jag`), `origin_jti` and `origin_client_id` (set only on the `kind: root`
+`id-jag` | `elevation`, §14), `origin_jti` and `origin_client_id` (set only on the `kind: root`
 row a sid-less subject started, §1), `client_id`, `instance_jkt`,
 `scope`, `aud`, `authorization_details`, `depth`, `spawn_receipt` (the
-verified spawn assertion's claims, §4), `issued_at`, `expires_at`,
+verified spawn assertion's claims, §4), `approval_receipt` (the owner's
+approval of an elevation, §14), `issued_at`, `expires_at`,
 `revoked_at`, `revoked_by`, `revoke_reason`. Only public identifiers are stored
 — never a token, key or secret, the rule `audit_logs` already keeps. Rows
 outlive their tokens and are purged by `AGENT_LEDGER_RETENTION_DAYS` (default
@@ -755,8 +786,12 @@ from the ledger row (`scope`, `aud`, `authorization_details`, `revoked_at`)
 and answers `false` when the claims refuse, whatever the policy says, so a
 PEP that forgets to check the claims cannot be widened by the PDP. PDP
 unreachable ⇒ existing credentials run to expiry, new vends refuse. AuthZEN's
-Access Request and Approval profile is where a requestable denial would later
-be parked for a human approval. Noted, not built.
+Access Request and Approval Profile (Draft 1) is the shape of a requestable
+denial: a `false` decision carrying `context.access_request` (§7), and an
+approval that expires at `approved_until` (§12). It leaves binding an
+approval to OAuth token issuance to a profile; §14 is that binding on
+QAuth's side, with CIBA as the wire. The evaluation endpoint does not
+return `context.access_request` yet.
 
 ### 9. CLI — `qauth-broker` and a QAuth-side STS; the credential is the gate
 
@@ -1066,6 +1101,138 @@ systems, recorded in the owner's own decision record; QAuth's part is the
 row, the binding, the profile, the tree that roots in it and the log that
 names it.
 
+### 14. Remote approval — a refused request the owner approves out of band
+
+The ceiling is fixed at the root, and every hop can only narrow it (the
+invariant). Sometimes the owner wants to lift it for one step. An agent
+needs `contents: write` on one repository, once. The owner is away from
+the terminal and drives the session from a phone, through Claude Code's
+Remote Control, with no shell and no SSH. This section lets the owner
+approve that one step from the phone. It widens no token and no tree. It is
+not Claude Code's own permission prompt: that prompt is the harness asking,
+and hooks are UX (§9); this is the credential gate. It sits behind
+`AGENT_TREE_ENABLED` and its own switch, `AGENT_APPROVAL_ENABLED` (default
+`false`).
+
+**Nothing that exists is widened.** A refusal stays a refusal. If the owner
+approves, QAuth mints a separate token for exactly what was asked: an
+**elevation leaf**. It is bound to the requesting node's key, it can
+neither spawn nor narrow, and nothing below the node inherits it. The
+invariant still holds for every token an exchange derives; an elevation is
+bounded by its own approval, not by a parent.
+
+**The flow.**
+
+1. **Refusal.** A node asks for more than its ceiling: at the token
+   endpoint (`invalid_scope` from GATE 4a or 4d,
+   `invalid_authorization_details` from §5), at the STS (§9), or at an
+   mcp-guard resource (`403 insufficient_scope`). The broker sees the
+   refusal.
+2. **Request.** If the node's token carries `agent:request` (below), the
+   broker files an approval request: an OpenID CIBA backchannel
+   authentication request (CIBA Core 1.0 §7.1), in poll mode — poll,
+   because the broker sits behind NAT, the same reason §6 polls its SSF
+   stream. The broker
+   authenticates as the node's agent type and adds a DPoP proof under the
+   node's key. It sends:
+   - `login_hint_token` = the node's own DPoP-bound token. CIBA requires
+     exactly one of its three hints and leaves this one's format to the
+     deployment; QAuth defines it as the requesting node's token, which
+     names the user, the `sid` and the node;
+   - the delta asked for: `scope` (with the `openid` value CIBA requires)
+     and one `agent-task` entry in `authorization_details` (§5) naming one
+     resource — RFC 9396 §3 lists CIBA requests among the places
+     `authorization_details` may appear;
+   - `binding_message`: a short code the broker shows in the session, which
+     the approval page shows too — CIBA's own purpose for it, a visual cue
+     that interlocks the two devices;
+   - `requested_expiry`: at most `AGENT_APPROVAL_EXPIRY` (default 300 s);
+   - `qauth_approval_duration`: `once` or `window` — what the agent asks
+     for; the owner decides. CIBA lets a profile add parameters (§7.1).
+3. **Notification.** QAuth notifies the session owner — the ledger row's
+   `user_id`, never anyone else — through a channel the owner registered
+   (decision 16): web push to the portal, or an owner-registered webhook. A
+   notification carries only the request id, the agent's handle and the URL
+   of QAuth's approval page. It never carries an approve action: approval
+   happens only on QAuth's origin.
+4. **Approval page.** QAuth renders it from the typed request, never from
+   the model's text: the agent (principal and type, §13), the session, the
+   node, the exact delta, the resource and the duration asked. The node's
+   `purpose` appears below, in the box attributed to the client (§5). The
+   `binding_message` is shown for matching. The owner answers with a
+   passkey: a WebAuthn assertion with user verification, whose challenge
+   QAuth binds to this request. A live browser session is not enough. The
+   choices:
+   - **Approve once** — one elevation leaf for the one resource, with the
+     `agentAccessTokenLifespan` lifetime (§6), or one STS vend.
+   - **Approve for a while** — the owner picks the window: 15 minutes, one
+     hour, or until the session's grant ends. A window never outlives the
+     root's refresh family and never reaches a durable rung.
+   - **Deny.**
+   - **Deny and mute** — for this session, or for a chosen time. Further
+     requests from that `sid` are refused with `access_denied` and notify no
+     one.
+5. **Token.** After an approval, the broker's next poll at the token
+   endpoint (`grant_type=urn:openid:params:grant-type:ciba` and the
+   `auth_req_id`, CIBA §10.1, with a DPoP proof under the same key)
+   returns the elevation leaf; until then it gets `authorization_pending`,
+   and on a denial `access_denied` (§11):
+   - `sub` = the user, `client_id` = the node's type, `cnf.jkt` = the
+     node's key, `sid` and `act` = the node's;
+   - scope and `authorization_details` = exactly the approved delta — not
+     the node's scope plus the delta;
+   - one audience, the resource; no refresh token.
+
+   The ledger records it as `kind: elevation`, with `parent_jti` = the
+   requesting node's token and an `approval_receipt`: the request id, the
+   approved delta, the duration, the passkey's credential id and the time
+   of the assertion. Any token exchange whose subject is a
+   `kind: elevation` token is refused with `invalid_grant`, spawn and narrow
+   alike: the leaf is used where it was approved, by the node that asked,
+   and nowhere else.
+
+6. **A window.** While a window is open, the node renews its elevation leaf
+   with a token exchange whose subject is its current node token, naming
+   the approval id, under the same key. The renewal is a new
+   `kind: elevation` row under the same approval.
+   The window ends at its time, when the node's process dies (the dead-man
+   switch, §6), when the `sid` is revoked, or when the owner ends it from
+   the portal. The §6 walk treats elevation rows like any other row.
+
+**Asking is a scope of its own.** `agent:request` is the right to file an
+approval request at all. It sits in the root grant like any other scope,
+and the consent screen shows it (§11). An approval can never grant or
+extend it, an elevation never carries it, and a child gets it only by
+narrowing from a parent that holds it. A per-`sid` budget caps asking —
+`AGENT_APPROVAL_BUDGET`, operator-set, default three pending and ten an
+hour — and no approval raises it. A node without the scope, over its
+budget, or muted gets `access_denied`, and nobody is notified.
+
+**Why a mute only denies.** In a chat client, "don't ask again" usually
+means "allow from now on". Here it means "stop asking me". If it meant
+allow, one tap would become a standing grant for whatever the agent asks
+next — the approval-fatigue attack of T8. Repeated identical requests are
+what "approve for a while" is for: it covers the same delta for the window,
+so the agent has no reason to ask again. Decision 14 records the owner's
+framing next to this default.
+
+**Authenticators.** A passkey is the default and, in `production` and
+`staging`, the only accepted factor: it is phishing-resistant and bound to
+QAuth's origin, so a relayed link cannot capture it. A TOTP or other
+offline code can be relayed by a phishing page — NIST SP 800-63B-4 §3.2.5
+says manually entered OTPs "SHALL NOT be considered phishing-resistant" —
+so it is weaker here (decision 15). A synced passkey is acceptable up to
+AAL2 (SP 800-63B-4, Appendix B). No current standard lets the
+authenticator itself show the request it signs — WebAuthn Level 1's
+`txAuthSimple` extension is gone from Levels 2 and 3 — so what the owner
+reads is the page QAuth renders, and the binding is QAuth's own: the
+challenge is minted for this request and accepted for nothing else. A
+wallet presentation bound to the request through OID4VP `transaction_data`
+(OID4VP 1.0 §8.4; [ADR-004](./004-wallet-agnostic-federation.md)) is a
+request-bound option behind `WALLET_FEDERATION_ENABLED`, not in the first
+slice. QAuth has no passkey or TOTP support today (verified 2026-09-24), so
+a WebAuthn credential provider is a precondition (P5).
+
 ## Alternatives considered
 
 | Alternative                                                             | Why not                                                                                                                                                                                                                                                                                                       |
@@ -1091,6 +1258,10 @@ names it.
 | Model name as a ledger fact                                             | QAuth never sees the model: the harness hooks report it at session start and on a switch, a loopback proxy sees it on the wire, and neither is QAuth's own observation. A report stays a report (§7, T7).                                                                                                     |
 | SSF stream management for agent-side transmitters                       | Receiver-initiated by design (SSF 1.0 §7, §8): the receiver reads the transmitter's well-known configuration and creates the stream there, which a local daemon behind NAT cannot serve. RFC 8935 with an out-of-band `agent_transmitters` row now; a transmitter-initiated registration goes to the WG (§7). |
 | Commit signing by the broker or by QAuth                                | A broker-held per-node key verifies against the ledger but GitHub reports it `unknown_key` and shows every agent commit Unverified; a QAuth-side signer with a registered key shows Verified but puts the AS on every commit, against the hot-path rule. Parked (decision 12).                                |
+| Widen the live token or tree when the owner approves                    | Breaks the invariant: every child spawned afterwards inherits the extra right, and the root consent no longer bounds the tree. An elevation is a separate leaf for one node (§14).                                                                                                                            |
+| An approve button in the notification (chat bot, email)                 | The button is not bound to a passkey on QAuth's origin: anyone who can read the channel — or the agent, if it can post there — could approve. A notification carries a link only (§14).                                                                                                                       |
+| "Don't ask again" as an automatic approval                              | One tap becomes a standing grant for whatever the agent asks next; "approve for a while" already covers repeats of the same delta. A mute only denies (§14, decision 14).                                                                                                                                     |
+| A TOTP code as the approval factor                                      | A one-time code can be relayed by a phishing page; a passkey is bound to QAuth's origin. Parked for non-production profiles (decision 15).                                                                                                                                                                    |
 
 ## Standards position
 
@@ -1120,6 +1291,7 @@ RFC 9396 §6.1's "fewer permissions" — composition by analogy, not text.
 | Agent-side transmitters and their registration          | Covered (envelope); gap (registration); QAuth-defined (members)       | RFC 8935 push with out-of-band keys; SSF 1.0 §7–§8 stream management is receiver-initiated and does not fit a NAT'd transmitter; no CAEP or SSF event type describes an agent's action (CAEP 1.0 §3 defines session, token-claims, credential, assurance-level, device-compliance and risk-level changes — states, never acts); the `model` and `reason` members and the server-written `agent_id` column are QAuth's; both gaps are what QAuth takes to the Shared Signals WG (§7) |
 | Agent identity record                                   | Proposed by draft (shape adopted); QAuth extension (avatar, bindings) | draft-wzdk-scim-agent-resource-00 §3, §4.1, §4.2 (`Agent` resource, `agentUserName`, `displayName`, `description`, `active`, `owners`; no email, no avatar, no binding), RFC 7643 §3.3 extension schemas; the `urn:qauth:…:extension:agent:1.0` schema is QAuth's; draft-ietf-wimse-aims-00 §10.3 keeps `client_id` = the acting workload, which is why the agent is not in `act` (§13)                                                                                             |
 | Commit provenance                                       | Product convention; kernel process document                           | git author/committer identities; GitHub App bot login and `noreply` address; `Documentation/process/coding-assistants.rst` (`Assisted-by: AGENT:MODEL`, humans only add `Signed-off-by`); GitHub signature verification reasons (`unknown_key`) for the parked signing question                                                                                                                                                                                                     |
+| Out-of-band approval                                    | Covered (decoupled flow); QAuth-defined (elevation, mute, budget)     | OpenID CIBA Core 1.0 §7.1 (one hint of three, `binding_message`, `requested_expiry`, profile parameters), §10.1 (poll), §11 (errors); RFC 9396 §3 (`authorization_details` in CIBA); FAPI-CIBA working copy §4.1.1 (poll, `binding_message`, confidential clients); AuthZEN AARP Draft 1 §7, §12; OID4VP 1.0 §8.4; WebAuthn Level 3; NIST SP 800-63B-4 §3.2.5                                                                                                                       |
 | Decision API                                            | Covered; WG-draft binding; QAuth context                              | AuthZEN 1.0 §6.1, §9.2, §10.1, §11.2 (Final, 11 January 2026); COAZ-MCP Binding §7.1, §11.2 (WG Draft 1); `context.qauth` is QAuth's; AARP noted                                                                                                                                                                                                                                                                                                                                    |
 | Agent framework vocabulary                              | WG draft (Informational)                                              | draft-ietf-wimse-aims-00 §8 (LLM never holds credentials), §10.3 (`client_id` = agent, `sub` = user), §11 (audit minimums)                                                                                                                                                                                                                                                                                                                                                          |
 | CLI credentials                                         | Product documentation                                                 | PostgreSQL 18 `oauth` HBA and validator API; GitHub App installation tokens; git-credential protocol; `gh` environment precedence; octo-sts                                                                                                                                                                                                                                                                                                                                         |
@@ -1147,6 +1319,7 @@ re-pinned to the successor revision when it lands.
 | draft-ietf-wimse-workload-creds / -wpt (WG; s2s-protocol is dead)           | `-02` · 2 Jul / 27 Aug 2026                                  | 3 Jan / 28 Feb 2027               | one identity per credential                                                                                                                                  |
 | draft-oauth-ai-agents-on-behalf-of-user (individual)                        | `-02` · 26 Aug 2025                                          | expired 27 Feb 2026, no successor | expired; its consent-time disclosure of the acting party is the precedent for §11's allowlist line; `requested_actor` itself not adopted                     |
 | AuthZEN COAZ-MCP Binding / AARP (OIDF WG drafts)                            | Draft 1 · 13 Feb / 17 Sep 2026 (both WG-adopted 15 Jun 2026) | —                                 | request shape; park-and-approve                                                                                                                              |
+| FAPI-CIBA (OIDF, Implementer's Draft)                                       | working copy · 26 Jun 2026                                   | —                                 | §14 follows its choices: poll, `binding_message`, confidential clients                                                                                       |
 | MCP Authorization                                                           | 2026-07-28                                                   | —                                 | EMA still the only STABLE `ext-auth` extension                                                                                                               |
 | draft-wzdk-scim-agent-resource (individual, Informational)                  | `-00` · 5 Jun 2026                                           | 7 Dec 2026                        | `Agent` resource shape adopted (§13); the SCIM WG is consolidating it with draft-abbey-scim-agent-extension (IETF 125 slides) — re-pin to whichever survives |
 | draft-kushwaha-scim-agent-governance (individual)                           | `-00` · Jul 2026                                             | —                                 | lifecycle and autonomy extension on the same resource; not adopted, watched for the avatar/binding question                                                  |
@@ -1292,6 +1465,22 @@ gate.
   scheduled; re-pin every watch-list row; `delegation_chain` if its trigger
   fired. Tests: the validator refuses a token whose `aud` is not the database
   and a role outside `actions`; the PDP can deny but never widen.
+- **P5 — remote approval (after P2).** A WebAuthn credential provider —
+  passkey registration and assertion in the portal; QAuth has none today;
+  the CIBA backchannel endpoint in poll mode, with `login_hint_token` = the
+  requesting node's token; `AGENT_APPROVAL_ENABLED`,
+  `AGENT_APPROVAL_EXPIRY` and `AGENT_APPROVAL_BUDGET`; the `agent:request`
+  scope; the `agent_approvals` table; the `kind: elevation` ledger row with
+  its `approval_receipt`; the approval page; web push and the
+  owner-registered webhook; mutes. Tests: an elevation carries exactly the
+  approved delta and one audience; a `kind: elevation` subject cannot spawn
+  or narrow; a request without `agent:request`, or over budget, is refused
+  and notifies no one; a muted `sid` is refused and notifies no one; an
+  approval without a fresh passkey assertion bound to the request is
+  refused; the page's headline is the typed delta and `purpose` renders
+  only in the attributed box; revoke-by-`sid` ends an open window; a window
+  never outlives the refresh family; a notification body carries only the
+  request id, the agent's handle and the URL.
 
 ## Vitrin composition
 
@@ -1407,6 +1596,8 @@ parent is T2's residual; a sub-agent cannot be gated at all (§12).
 - Separable: what QAuth verified and what an agent reported about itself
   are stored, shown and served apart, so a model name or a reason can be
   logged without ever being mistaken for QAuth's word (T7, §7).
+- Reachable: the owner can lift a ceiling for one step from a phone, with a
+  passkey, without a shell or SSH, and without widening the tree (§14).
 
 ### Negative
 
@@ -1437,6 +1628,11 @@ parent is T2's residual; a sub-agent cannot be gated at all (§12).
   agent itself; the record can only make its own store honest about the
   difference (T7). Commit signing, the one thing that would change that, is
   parked (decision 12).
+- QAuth grows a CIBA endpoint, a WebAuthn credential provider, a
+  notification path and an approvals table (§14). The owner's phone joins
+  the approval path: a lost, unlocked phone with a synced passkey is a way
+  in, bounded by the delta, the budget and the window — and a human who
+  approves carelessly is T8's residual.
 
 ### Neutral
 
@@ -1445,7 +1641,9 @@ parent is T2's residual; a sub-agent cannot be gated at all (§12).
   no `spawn_allowlist` exists and so no root token's `aud` is enriched, no
   lifetime row changes, no transmitter or push endpoint is configured, until
   an operator says so — and no agent, binding or agent-side transmitter
-  exists until an owner creates one (§7, §13).
+  exists until an owner creates one (§7, §13). No approval request is
+  possible until an operator sets `AGENT_APPROVAL_ENABLED` and an owner
+  registers a passkey (§14).
 - `MAX_DELEGATION_DEPTH` stays 4; draft-mcguinness's "at least depth 4" is
   met and draft-liu's recommended 5 is not adopted. A narrowing spends no
   depth, so lead → teammate → process → tool with a leaf per level fits.
@@ -1524,6 +1722,28 @@ proceeds on that default until the maintainer decides otherwise.
     `agent_actions` (§7), or copy the first report onto the ledger's root
     row for the dashboard's convenience? Default: `agent_actions` only; the
     ledger holds what QAuth verified and nothing it did not.
+14. **"Don't ask again": a mute or an allow?** The owner's framing
+    (2026-09-23): approval fatigue is prevented by "don't ask again for this
+    session" and "don't ask for a while", and asking has its own permission
+    scope, which cannot be extended. Default: both are mutes — further
+    requests from that session, or in that window, are refused without a
+    notification — and repeated identical requests are what "approve for a
+    while" covers, on the same delta, as an explicit passkey-confirmed
+    choice. The alternative, a "don't ask again" that approves the same
+    delta for the rest of the session, is "approve for a while" with the
+    session as the window, reached in one tap instead of one choice (§14).
+15. **Which factors may approve?** A passkey only, or also a TOTP or other
+    offline code, or a wallet presentation bound by `transaction_data`?
+    Default: a passkey only in `production` and `staging`; a TOTP code also
+    accepted in `development`; the wallet later, behind
+    `WALLET_FEDERATION_ENABLED`, as a request-bound option (§14).
+16. **Where a request reaches the owner.** Web push to the portal, email, an
+    owner-registered webhook, or all three — and what happens while the
+    owner does not want to be reached? Default: web push, plus an optional
+    owner-registered webhook that receives only the request id, the agent's
+    handle and the approval URL; no email. A request nobody answers expires
+    at `requested_expiry` and counts as denied; quiet hours are the owner's
+    channel's business, not QAuth's (§14).
 
 ## Related
 
@@ -1561,4 +1781,5 @@ proceeds on that default until the maintainer decides otherwise.
 - [Claude Code hooks](https://code.claude.com/docs/en/hooks.md) · [sub-agents](https://code.claude.com/docs/en/sub-agents.md) · [agent teams](https://code.claude.com/docs/en/agent-teams.md) · [MCP](https://code.claude.com/docs/en/mcp.md) · [Agent SDK MCP](https://code.claude.com/docs/en/agent-sdk/mcp.md)
 - [draft-wzdk-scim-agent-resource-00](https://datatracker.ietf.org/doc/html/draft-wzdk-scim-agent-resource-00) · [draft-abbey-scim-agent-extension](https://datatracker.ietf.org/doc/draft-abbey-scim-agent-extension/) · [draft-kushwaha-scim-agent-governance](https://datatracker.ietf.org/doc/draft-kushwaha-scim-agent-governance/) · [SCIM WG agentic-draft progress, IETF 125](https://datatracker.ietf.org/meeting/125/materials/slides-125-scim-scim-agentic-draft-progress-00) · [RFC 7643](https://www.rfc-editor.org/rfc/rfc7643.html) · [RFC 7644](https://www.rfc-editor.org/rfc/rfc7644.html)
 - [CAEP Interoperability Profile 1.0 (draft 01)](https://openid.net/specs/openid-caep-interoperability-profile-1_0-01.html) · [OpenID Foundation on SSF/CAEP and agentic use cases (July 2026)](https://openid.net/authzen-at-identiverse-2026-authorization-in-the-agent-era/)
+- [OpenID CIBA Core 1.0](https://openid.net/specs/openid-client-initiated-backchannel-authentication-core-1_0.html) · [OpenID for Verifiable Presentations 1.0](https://openid.net/specs/openid-4-verifiable-presentations-1_0.html) · [WebAuthn Level 3](https://www.w3.org/TR/webauthn-3/) · [NIST SP 800-63B-4](https://csrc.nist.gov/pubs/sp/800/63/b/4/final) · [Claude Code Remote Control](https://code.claude.com/docs/en/remote-control)
 - [Linux kernel: AI Coding Assistants](https://docs.kernel.org/process/coding-assistants.html) · [GitHub App visibility](https://docs.github.com/en/apps/creating-github-apps/registering-a-github-app/making-a-github-app-public-or-private) · [GitHub commit signature verification reasons](https://docs.github.com/en/rest/commits/commits) · [GitHub REST: pull requests associated with a commit](https://docs.github.com/en/rest/commits/commits#list-pull-requests-associated-with-a-commit)
