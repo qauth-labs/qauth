@@ -365,13 +365,14 @@ export const authServerClient = {
   },
 
   /**
-   * POST, token in the body: verification is a state change, and the
-   * auth-server no longer accepts it as a GET (a link fetch must not verify).
+   * POST, token and password in the body: verification is a state change (a
+   * link fetch must not verify), and it needs both the mailbox (token) and the
+   * registrant (password).
    */
-  verifyEmail(token: string): Promise<Result<VerifyEmailData>> {
+  verifyEmail(token: string, password: string): Promise<Result<VerifyEmailData>> {
     return apiRequest<VerifyEmailData>('/auth/verify', {
       method: 'POST',
-      body: JSON.stringify({ token }),
+      body: JSON.stringify({ token, password }),
     });
   },
 

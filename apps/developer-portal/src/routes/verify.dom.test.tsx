@@ -73,7 +73,24 @@ function renderPage() {
   });
 }
 
-describe('VerifyPage — verification needs an explicit confirmation', () => {
+/** Type into a React-controlled input the way a user would. */
+function typeInto(input: HTMLInputElement, value: string) {
+  const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
+  setter?.call(input, value);
+  input.dispatchEvent(new Event('input', { bubbles: true }));
+}
+
+async function submitWithPassword(password: string) {
+  const input = container.querySelector('input[type="password"]') as HTMLInputElement | null;
+  expect(input).not.toBeNull();
+  act(() => typeInto(input as HTMLInputElement, password));
+  const form = container.querySelector('form') as HTMLFormElement;
+  await act(async () => {
+    form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+  });
+}
+
+describe('VerifyPage — verification needs the registrant, not just the mailbox', () => {
   it('does not verify when the page loads (a link fetch or prefetch must not verify)', () => {
     renderPage();
 
@@ -81,24 +98,33 @@ describe('VerifyPage — verification needs an explicit confirmation', () => {
     expect(container.textContent).toContain('Confirm your email address');
   });
 
-  it('verifies only when the reader presses the confirm button', async () => {
+  it('sends the token together with the password the reader typed', async () => {
     vi.mocked(verifyFn).mockResolvedValue({
       ok: true,
       data: { message: 'Email verified successfully', email: 'dev@example.com' },
     } as never);
     renderPage();
 
-    const button = Array.from(container.querySelectorAll('button')).find(
-      (b) => b.textContent === 'Confirm email address'
-    );
-    expect(button).toBeDefined();
-
-    await act(async () => {
-      button?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-    });
+    await submitWithPassword('registrant-password');
 
     expect(verifyFn).toHaveBeenCalledOnce();
-    expect(verifyFn).toHaveBeenCalledWith({ data: { token: VALID_TOKEN } });
+    expect(verifyFn).toHaveBeenCalledWith({
+      data: { token: VALID_TOKEN, password: 'registrant-password' },
+    });
     expect(container.textContent).toContain('dev@example.com');
+  });
+
+  it('keeps the form on a wrong password, so the registrant can try again', async () => {
+    vi.mocked(verifyFn).mockResolvedValue({
+      ok: false,
+      error: { code: 'INVALID_CREDENTIALS', message: 'Incorrect password', status: 401 },
+    } as never);
+    renderPage();
+
+    await submitWithPassword('wrong');
+
+    expect(container.textContent).toContain('That password does not match this account.');
+    expect(container.querySelector('input[type="password"]')).not.toBeNull();
+    expect(container.textContent).not.toContain('Verification failed');
   });
 });

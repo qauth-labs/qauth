@@ -183,16 +183,21 @@ Errors: `401` (missing/invalid bearer).
 
 ### `POST /auth/verify`
 
-Confirm an email address with the token from the verification email. This is a
-POST so that no fetch or prefetch of the emailed link can verify an address by
-itself. The link opens the developer portal's verification page, which calls
-this endpoint only when the reader confirms.
+Confirm an email address with the token from the verification email and the
+account's password. The token proves control of the mailbox. The password proves
+the person who registered. Both are required, so someone who registered with
+another person's address cannot get it verified by that person clicking a link.
+This is a POST, so no fetch or prefetch of the emailed link can verify an address
+by itself. The link opens the developer portal's verification page, which asks
+for the password.
 
-**Body**: `{ "token": "<64-char hex string>" }`
+**Body**: `{ "token": "<64-char hex string>", "password": "<the account's password>" }`
 
 **`200 OK`**: `{ "message": "...", "email": "dev@example.com" }`
 
-Errors: `400` (malformed token), `404`/`400` (unknown or expired token).
+Errors: `400` (malformed token), `404`/`400` (unknown or expired token), `401`
+`INVALID_CREDENTIALS` (wrong password; the token is not consumed, so the request
+can be retried).
 
 ### `POST /auth/resend-verification`
 

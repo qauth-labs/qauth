@@ -34,13 +34,16 @@ export type RegisterResponse = z.infer<typeof registerResponseSchema>;
 
 /**
  * Email verification request body schema (POST /auth/verify)
- * Token must be a 64-character hex string (256-bit random value)
+ * Token must be a 64-character hex string (256-bit random value). The password
+ * is the one chosen at registration: the token proves the mailbox, the password
+ * proves the registrant, and verification needs both to be the same person.
  */
 export const verifyBodySchema = z.object({
   token: z
     .string()
     .length(64, 'Token must be exactly 64 characters')
     .regex(/^[0-9a-fA-F]{64}$/, 'Token must be a valid hex string'),
+  password: z.string().min(1).max(PASSWORD_MAX_LENGTH),
 });
 
 /**

@@ -1,4 +1,8 @@
-import { EmailAlreadyVerifiedError, InvalidTokenError } from '@qauth-labs/shared-errors';
+import {
+  EmailAlreadyVerifiedError,
+  InvalidCredentialsError,
+  InvalidTokenError,
+} from '@qauth-labs/shared-errors';
 import type { FastifyInstance } from 'fastify';
 import { describe, expect, it, type Mock, vi } from 'vitest';
 
@@ -73,12 +77,16 @@ function createFastifyStub() {
     emailVerificationTokenUtils: {
       hashToken: vi.fn().mockReturnValue('hashed'),
     },
+    // The registrant's password is checked against credential_data.password_hash.
+    passwordHasher: {
+      verifyPassword: vi.fn().mockResolvedValue(true),
+    },
     log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
   };
   return { fastify: fastify as FastifyInstance, ctx };
 }
 
-const request = { body: { token: 'a'.repeat(64) } };
+const request = { body: { token: 'a'.repeat(64), password: 'registrant-password' } };
 
 describe('POST /auth/verify', () => {
   it('is registered as POST with the token in the body — never a state-changing GET', async () => {
@@ -132,6 +140,64 @@ describe('POST /auth/verify', () => {
       message: 'Email verified successfully',
       email: 'user@example.com',
     });
+  });
+
+  // The token proves the mailbox, not who registered. A person who registered
+  // with someone else's address holds the password; the mailbox owner holds
+  // the token. Verification must need both, so neither can do it alone.
+  it('checks the password against the credential the token targets', async () => {
+    const { fastify, ctx } = createFastifyStub();
+    await verifyRoute(fastify);
+    if (!ctx.handler) throw new Error('Handler missing');
+    (
+      fastify.repositories.emailVerificationTokens.findByTokenHash as unknown as Mock
+    ).mockResolvedValue(tokenFixture());
+    (fastify.repositories.userCredentials.findById as unknown as Mock).mockResolvedValue(
+      credentialFixture()
+    );
+
+    await ctx.handler(request);
+
+    expect(fastify.passwordHasher.verifyPassword).toHaveBeenCalledWith(
+      (credentialFixture().credentialData as { password_hash: string }).password_hash,
+      'registrant-password'
+    );
+  });
+
+  it('refuses a wrong password and consumes NOTHING — the mailbox alone cannot verify', async () => {
+    const { fastify, ctx } = createFastifyStub();
+    await verifyRoute(fastify);
+    if (!ctx.handler) throw new Error('Handler missing');
+    (
+      fastify.repositories.emailVerificationTokens.findByTokenHash as unknown as Mock
+    ).mockResolvedValue(tokenFixture());
+    (fastify.repositories.userCredentials.findById as unknown as Mock).mockResolvedValue(
+      credentialFixture()
+    );
+    (fastify.passwordHasher.verifyPassword as unknown as Mock).mockResolvedValue(false);
+
+    await expect(
+      ctx.handler({ body: { token: 'a'.repeat(64), password: 'mailbox-owner-guess' } })
+    ).rejects.toThrow(InvalidCredentialsError);
+    // The token survives, so the genuine registrant can still verify.
+    expect(fastify.db.transaction).not.toHaveBeenCalled();
+    expect(fastify.repositories.emailVerificationTokens.markUsed).not.toHaveBeenCalled();
+    expect(fastify.repositories.userCredentials.setEmailVerified).not.toHaveBeenCalled();
+    expect(fastify.repositories.userAttributes.setVerified).not.toHaveBeenCalled();
+  });
+
+  it('requires a password in the request body schema', async () => {
+    const { fastify, ctx } = createFastifyStub();
+    await verifyRoute(fastify);
+    const body = (
+      ctx.registered?.opts as {
+        schema: { body: { safeParse: (v: unknown) => { success: boolean } } };
+      }
+    ).schema.body;
+
+    expect(body.safeParse({ token: 'a'.repeat(64) }).success).toBe(false);
+    expect(body.safeParse({ token: 'a'.repeat(64), password: '' }).success).toBe(false);
+    expect(body.safeParse({ token: 'a'.repeat(64), password: 'x' }).success).toBe(true);
   });
 
   it('throws InvalidTokenError for an unknown/expired/used token', async () => {

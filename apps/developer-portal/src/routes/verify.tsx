@@ -19,12 +19,14 @@ export const Route = createFileRoute('/verify')({
   component: VerifyPage,
 });
 
-// The page opens on 'confirm' and verifies only when the reader presses the
-// button. Verifying on load meant any fetch of the emailed link — a mail
-// gateway's link scanner, a prefetch — verified an account someone else may
-// have registered with this address and whose password they hold.
+// The page opens on 'confirm' and verifies only when the reader submits the
+// account's password. Verifying on load meant any fetch of the emailed link —
+// a mail gateway's link scanner, a prefetch — verified the account. And a
+// button alone would still let the mailbox owner verify an account someone
+// else registered with their address: the token proves the mailbox, the
+// password proves the registrant, and verification needs both.
 type VerifyState =
-  | { stage: 'confirm' }
+  | { stage: 'confirm'; error?: string }
   | { stage: 'pending' }
   | { stage: 'success'; email: string }
   | { stage: 'already-verified' }
@@ -35,12 +37,14 @@ type ResendState = 'idle' | 'sending' | 'sent' | { error: string };
 function VerifyPage() {
   const { token } = Route.useSearch();
   const [state, setState] = useState<VerifyState>({ stage: 'confirm' });
+  const [password, setPassword] = useState('');
   const [resendEmail, setResendEmail] = useState('');
   const [resendState, setResendState] = useState<ResendState>('idle');
 
-  async function handleConfirm() {
+  async function handleConfirm(e: React.FormEvent<HTMLFormElement>) {
+    e.preventDefault();
     setState({ stage: 'pending' });
-    const result = await verifyFn({ data: { token } });
+    const result = await verifyFn({ data: { token, password } });
 
     if (result.ok) {
       setState({ stage: 'success', email: result.data.email });
@@ -51,6 +55,13 @@ function VerifyPage() {
 
     if (code === 'EMAIL_ALREADY_VERIFIED') {
       setState({ stage: 'already-verified' });
+      return;
+    }
+
+    // A wrong password consumes nothing on the auth-server: stay on the form.
+    if (code === 'INVALID_CREDENTIALS') {
+      setPassword('');
+      setState({ stage: 'confirm', error: 'That password does not match this account.' });
       return;
     }
 
@@ -75,14 +86,31 @@ function VerifyPage() {
           <h1 className="text-xl font-semibold">Confirm your email address</h1>
           <p className="text-sm text-gray-600">
             Someone used this email address to create a QAuth developer account. If that was you,
-            confirm below.
+            enter the password you chose for it.
           </p>
           <p className="text-sm text-gray-600">
-            If it wasn&apos;t you, close this page. The account stays unverified.
+            If it wasn&apos;t you, close this page. Without that account&apos;s password this
+            address cannot be verified.
           </p>
-          <Button type="button" onClick={() => void handleConfirm()}>
-            Confirm email address
-          </Button>
+          <form onSubmit={(e) => void handleConfirm(e)} className="space-y-3">
+            <FormField label="Password" htmlFor="verify-password">
+              <Input
+                id="verify-password"
+                name="password"
+                type="password"
+                autoComplete="current-password"
+                required
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+              />
+            </FormField>
+            {state.error ? (
+              <p role="alert" className="text-sm text-red-600">
+                {state.error}
+              </p>
+            ) : null}
+            <Button type="submit">Confirm email address</Button>
+          </form>
         </div>
       </main>
     );

@@ -86,6 +86,8 @@ describe('VerifyPage component', () => {
     );
     expect(html).toContain('Confirm your email address');
     expect(html).toContain('Confirm email address');
+    // Verification needs the account's password as well as the emailed token.
+    expect(html).toContain('type="password"');
     expect(html).not.toContain('Verifying your email');
   });
 });

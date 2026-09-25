@@ -303,7 +303,8 @@
                     "pattern": "^(?!\\.)(?!.*\\.\\.)([A-Za-z0-9_'+\\-\\.]*)[A-Za-z0-9_+-]@([A-Za-z0-9][A-Za-z0-9\\-]*\\.)+[A-Za-z]{2,}$"
                   },
                   "password": {
-                    "type": "string"
+                    "type": "string",
+                    "maxLength": 256
                   }
                 },
                 "required": [
@@ -421,7 +422,8 @@
                     "pattern": "^(?!\\.)(?!.*\\.\\.)([A-Za-z0-9_'+\\-\\.]*)[A-Za-z0-9_+-]@([A-Za-z0-9][A-Za-z0-9\\-]*\\.)+[A-Za-z]{2,}$"
                   },
                   "password": {
-                    "type": "string"
+                    "type": "string",
+                    "maxLength": 256
                   },
                   "realmId": {
                     "type": "string",
@@ -583,10 +585,16 @@
                     "minLength": 64,
                     "maxLength": 64,
                     "pattern": "^[0-9a-fA-F]{64}$"
+                  },
+                  "password": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 256
                   }
                 },
                 "required": [
-                  "token"
+                  "token",
+                  "password"
                 ]
               }
             }
@@ -3564,7 +3572,8 @@
                   },
                   "password": {
                     "type": "string",
-                    "minLength": 1
+                    "minLength": 1,
+                    "maxLength": 256
                   },
                   "return_to": {
                     "type": "string"
