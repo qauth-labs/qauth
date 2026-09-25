@@ -14,6 +14,7 @@ import type {
   UserAttribute,
   VerifiedIdentity,
 } from './credential-provider.interface';
+import { EMAIL_ATTR_KEY } from './password.provider';
 import { MAX_WALLET_BINDING_LENGTH } from './wallet-credential-data';
 
 /**
@@ -426,6 +427,20 @@ export interface WalletAttributeSource extends CredentialClaimSet {
 }
 
 /**
+ * Whether the issuer itself signed that the holder's email is NOT verified: an
+ * own `email_verified` claim (OIDC Core §5.1) whose value is exactly `false`.
+ * A missing claim, or any other value, is not a denial.
+ */
+export function issuerDeniesEmailVerification(source: WalletAttributeSource): boolean {
+  const claims: unknown = source.claims;
+  if (claims === null || typeof claims !== 'object') return false;
+  return (
+    Object.hasOwn(claims, 'email_verified') &&
+    (claims as Record<string, unknown>)['email_verified'] === false
+  );
+}
+
+/**
  * Normalize a validated credential's claims into `user_attributes` rows (#235).
  *
  * The workhorse behind {@link CredentialProvider.extractAttributes}, exported
@@ -433,12 +448,16 @@ export interface WalletAttributeSource extends CredentialClaimSet {
  * credential it holds directly, without round-tripping through an envelope it
  * would have to build only to have this function take it apart again.
  *
- * Every row is `source='wallet'` and `verified=true`. The `verified` flag is not
- * read from the credential and CANNOT be: #234 proved the issuer's signature
- * over these exact claims and #236 accepted that issuer, so an issuer-supplied
- * `email_verified: false` may not downgrade what QAuth cryptographically
- * established — nor may its absence. (`email_verified` is in
- * `SD_JWT_VC_UNMAPPED_CLAIMS` for the same reason.)
+ * Every row is `source='wallet'` and `verified=true`, with one exception. #234
+ * proved the issuer's signature over these exact claims and #236 accepted that
+ * issuer, so what a row asserts is what the issuer said. That is exactly why an
+ * issuer's own `email_verified: false` must be honoured: the issuer signed
+ * "this is the holder's address, and it is NOT verified", and storing the
+ * address as verified would claim more than the issuer did. Such an email row
+ * is written `verified=false` ({@link issuerDeniesEmailVerification}), so
+ * `resolveEmailClaims` never emits it as `email_verified: true`. The flag can
+ * only lower the email row. It never raises anything, and when it is absent
+ * the row stays verified as the issuer's signed assertion.
  *
  * Every row's `expiresAt` is the CREDENTIAL's `exp`, or absent when it carries
  * none. ADR-002's rule, and the reason `selectTrustedAttribute` filters on
@@ -465,11 +484,13 @@ export function extractWalletAttributes(
   const adapter = resolveCredentialClaimAdapter(source.format, adapters);
   const expiresAt = validityExpirySeconds(source.validity);
 
+  const emailUnverified = issuerDeniesEmailVerification(source);
+
   return adapter.normalizeClaims(source).map((claim) => ({
     source: WALLET_SOURCE,
     attrKey: claim.attrKey,
     attrValue: claim.attrValue,
-    verified: true,
+    verified: !(emailUnverified && claim.attrKey === EMAIL_ATTR_KEY),
     ...(expiresAt === undefined ? {} : { expiresAt: new Date(expiresAt * 1000) }),
   }));
 }
