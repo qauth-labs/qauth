@@ -1104,6 +1104,7 @@ describe('POST /oauth/token route — authorization_code grant', () => {
       id: 'user-uuid-1',
       email: 'user@example.com',
       emailVerified: true,
+      enabled: true,
       firstName: 'Ada',
       lastName: 'Lovelace',
     };
@@ -1615,6 +1616,30 @@ describe('POST /oauth/token route — authorization_code grant', () => {
 
     const reply = createReply();
     await expect(handler(baseRequest(), reply)).rejects.toThrow(InvalidGrantError);
+  });
+
+  // RFC 9700 §4.14: a user disabled between code issuance and redemption gets
+  // no tokens — the same gate the refresh, exchange and jwt-bearer grants apply.
+  it('rejects a code whose user has been disabled (invalid_grant, no tokens)', async () => {
+    const { fastify, ctx } = setupAuthCodeStub();
+    (fastify.repositories.users.findById as unknown as Mock).mockResolvedValue({
+      id: 'user-uuid-1',
+      email: 'u@example.com',
+      emailVerified: true,
+      enabled: false,
+    });
+    await tokenRoute(fastify);
+    const handler = ctx.handler;
+    if (!handler) throw new Error('Handler missing');
+
+    await expect(handler(baseRequest(), createReply())).rejects.toThrow(InvalidGrantError);
+    expect(fastify.jwtUtils.signAccessToken).not.toHaveBeenCalled();
+    expect(fastify.repositories.refreshTokens.create).not.toHaveBeenCalled();
+    expect(fastify.repositories.auditLogs.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        metadata: { error: 'invalid_grant: user_disabled' },
+      })
+    );
   });
 
   it('rejects when the user bound to the code cannot be found', async () => {

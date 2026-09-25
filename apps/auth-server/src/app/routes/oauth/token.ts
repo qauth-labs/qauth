@@ -545,6 +545,23 @@ async function handleAuthorizationCode(
     });
     throw new NotFoundError('User', authCode.userId);
   }
+  // A code outlives the session that produced it by up to its TTL, and a user
+  // disabled in between must not receive tokens for it — the same gate the
+  // refresh, token-exchange and jwt-bearer grants apply (RFC 9700 §4.14). The
+  // code is already burned above, so it cannot be retried.
+  if (!user.enabled) {
+    await fastify.repositories.auditLogs.create({
+      userId: user.id,
+      oauthClientId: client.id,
+      event: 'oauth.token.exchange.failure',
+      eventType: 'token',
+      success: false,
+      ipAddress: request.ip,
+      userAgent: request.headers['user-agent'] || null,
+      metadata: { error: 'invalid_grant: user_disabled' },
+    });
+    throw new InvalidGrantError('Invalid or expired authorization code');
+  }
 
   const scopeString = authCode.scopes.length > 0 ? authCode.scopes.join(' ') : undefined;
 

@@ -132,8 +132,11 @@ export default async function (fastify: FastifyInstance) {
           );
         }
 
-        // If credentials are invalid, throw generic error
-        if (check.status !== 'ok' || !user) {
+        // If credentials are invalid, or the account is disabled, throw the
+        // same generic error. A disabled account must not get a token, and
+        // must not be distinguishable from a wrong password (same 401, same
+        // timing floor, same failed-attempt accounting) — as /ui/login does.
+        if (check.status !== 'ok' || !user || !user.enabled) {
           // Record the failed attempt for throttling/lockout (#115).
           await recordFailedAttempt(fastify.redis, lockoutIdentifiers);
 

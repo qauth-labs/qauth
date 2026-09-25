@@ -396,6 +396,35 @@ describe('POST /auth/login', () => {
     await expect(handler(request, reply)).rejects.toThrow(InvalidCredentialsError);
   });
 
+  it('rejects a DISABLED user with the correct password exactly like a wrong password', async () => {
+    // A disabled account must get no token, and must be indistinguishable from
+    // a bad password — the same 401 the browser login already returns.
+    const { fastify, ctx } = createFastifyStub();
+    await loginRoute(fastify);
+    const handler = ctx.handler;
+
+    (
+      fastify.repositories.userCredentials.findByRealmProviderSub as unknown as Mock
+    ).mockResolvedValue(credentialFixture());
+    (fastify.repositories.users.findById as unknown as Mock).mockResolvedValue(
+      userFixture({ enabled: false })
+    );
+    (fastify.passwordHasher.verifyPassword as unknown as Mock).mockResolvedValue(true);
+
+    const request = {
+      body: { email: 'user@example.com', password: 'correct' },
+      ip: '127.0.0.1',
+      headers: { 'user-agent': 'vitest' },
+      log: requestLog(),
+    };
+    const reply = createReply();
+    if (!handler) throw new Error('Handler missing');
+
+    await expect(handler(request, reply)).rejects.toThrow(InvalidCredentialsError);
+    expect(fastify.jwtUtils.signAccessToken).not.toHaveBeenCalled();
+    expect(fastify.repositories.users.updateLastLogin).not.toHaveBeenCalled();
+  });
+
   it('treats malformed credential_data as invalid credentials (401), logs for operators, skips argon2', async () => {
     const { fastify, ctx } = createFastifyStub();
     await loginRoute(fastify);
