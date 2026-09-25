@@ -185,6 +185,9 @@ function createFastifyStub() {
         create: vi.fn(),
         findByTokenHashIncludingRevoked: vi.fn(),
         revoke: vi.fn().mockResolvedValue(undefined),
+        // Rotation's compare-and-set: resolves the revoked row when this
+        // request won the race, undefined when the token was already rotated.
+        revokeIfActive: vi.fn().mockResolvedValue({ id: 'rotated-row' }),
         revokeFamily: vi.fn().mockResolvedValue(0),
       },
       auditLogs: {
@@ -1814,9 +1817,10 @@ describe('POST /oauth/token route — refresh_token grant', () => {
     const reply = createReply();
     const result = await handler(refreshRequest(), reply);
 
-    // Old token revoked as 'rotated' BEFORE new token persisted. Third
-    // arg is the tx handle propagated from fastify.db.transaction.
-    expect(fastify.repositories.refreshTokens.revoke).toHaveBeenCalledWith(
+    // Old token revoked as 'rotated' BEFORE new token persisted, through the
+    // compare-and-set. Third arg is the tx handle propagated from
+    // fastify.db.transaction.
+    expect(fastify.repositories.refreshTokens.revokeIfActive).toHaveBeenCalledWith(
       storedToken.id,
       'rotated',
       expect.anything()
@@ -1904,6 +1908,48 @@ describe('POST /oauth/token route — refresh_token grant', () => {
     expect(fastify.repositories.refreshTokens.create).not.toHaveBeenCalled();
   });
 
+  // Two concurrent presentations of one live token both pass the snapshot
+  // liveness check; only one can win the compare-and-set. The loser must not
+  // mint a second child in the family — it is a replay, so the family goes.
+  it('treats losing the rotation compare-and-set as replay: no token, family revoked', async () => {
+    const { fastify, ctx, confidentialClient, storedToken } = setupRefreshStub();
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(
+      confidentialClient
+    );
+    (
+      fastify.repositories.refreshTokens.findByTokenHashIncludingRevoked as unknown as Mock
+    ).mockResolvedValue(storedToken); // live on read …
+    (fastify.repositories.refreshTokens.revokeIfActive as unknown as Mock).mockResolvedValue(
+      undefined // … but a concurrent request rotated it first
+    );
+    (fastify.repositories.refreshTokens.revokeFamily as unknown as Mock).mockResolvedValue(2);
+
+    await tokenRoute(fastify);
+    const handler = ctx.handler;
+    if (!handler) throw new Error('Handler missing');
+
+    const reply = createReply();
+    await expect(handler(refreshRequest(), reply)).rejects.toThrow(InvalidGrantError);
+
+    expect(fastify.repositories.refreshTokens.revokeIfActive).toHaveBeenCalledWith(
+      storedToken.id,
+      'rotated',
+      expect.anything()
+    );
+    expect(fastify.repositories.refreshTokens.create).not.toHaveBeenCalled();
+    expect(fastify.jwtUtils.signAccessToken).not.toHaveBeenCalled();
+    expect(fastify.repositories.refreshTokens.revokeFamily).toHaveBeenCalledWith(
+      storedToken.familyId,
+      'replay_detected'
+    );
+    expect(fastify.repositories.auditLogs.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        eventType: 'security',
+        metadata: expect.objectContaining({ detection: 'lost_rotation_race' }),
+      })
+    );
+  });
+
   it('rejects when the refresh token is bound to a different client (cross-client)', async () => {
     const { fastify, ctx, confidentialClient, storedToken } = setupRefreshStub();
     (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(
@@ -1924,6 +1970,7 @@ describe('POST /oauth/token route — refresh_token grant', () => {
     // the other client's family.
     expect(fastify.repositories.refreshTokens.revokeFamily).not.toHaveBeenCalled();
     expect(fastify.repositories.refreshTokens.revoke).not.toHaveBeenCalled();
+    expect(fastify.repositories.refreshTokens.revokeIfActive).not.toHaveBeenCalled();
   });
 
   it('carries RFC 8707 resource binding across a refresh rotation', async () => {
@@ -2016,6 +2063,7 @@ describe('POST /oauth/token route — refresh_token grant', () => {
 
     // No rotation when the grant fails validation.
     expect(fastify.repositories.refreshTokens.revoke).not.toHaveBeenCalled();
+    expect(fastify.repositories.refreshTokens.revokeIfActive).not.toHaveBeenCalled();
     expect(fastify.repositories.refreshTokens.create).not.toHaveBeenCalled();
   });
 
@@ -2117,6 +2165,7 @@ describe('POST /oauth/token route — refresh_token grant', () => {
     const reply = createReply();
     await expect(handler(refreshRequest(), reply)).rejects.toThrow(InvalidGrantError);
     expect(fastify.repositories.refreshTokens.revoke).not.toHaveBeenCalled();
+    expect(fastify.repositories.refreshTokens.revokeIfActive).not.toHaveBeenCalled();
   });
 
   it('rejects with unauthorized_client when the client lacks refresh_token grant', async () => {
