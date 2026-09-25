@@ -83,8 +83,10 @@ function makeFastify() {
         listActiveForUser: vi.fn().mockResolvedValue([CONSENT_ROW]),
         revoke: vi.fn().mockResolvedValue(undefined),
       },
+      refreshTokens: { revokeAllForUserAndClient: vi.fn().mockResolvedValue(2) },
       auditLogs: { create: vi.fn().mockResolvedValue(undefined) },
     },
+    db: { transaction: vi.fn(async (cb: (tx: unknown) => Promise<unknown>) => cb('tx')) },
   };
 
   return { fastify: fastify as FastifyInstance, ctx, requireJwt };
@@ -145,15 +147,47 @@ describe('/api/consents', () => {
 
     await ctx.delete!(request({ params: { id: CONSENT_ROW.id } }), reply);
 
-    expect(fastify.repositories.oauthConsents.revoke).toHaveBeenCalledWith(CONSENT_ROW.id);
+    expect(fastify.repositories.oauthConsents.revoke).toHaveBeenCalledWith(CONSENT_ROW.id, 'tx');
     expect(state.statusCode).toBe(204);
     expect(fastify.repositories.auditLogs.create).toHaveBeenCalledWith(
       expect.objectContaining({
         userId: 'user-1',
         event: 'oauth.consent.revoked',
         success: true,
+        metadata: expect.objectContaining({ refreshTokensRevoked: 2 }),
       })
     );
+  });
+
+  it('revokes the refresh tokens minted under the consent, in the same transaction', async () => {
+    // A withdrawn grant must stop refreshing too — otherwise the client keeps
+    // minting access tokens on a consent that no longer exists.
+    const { fastify, ctx } = makeFastify();
+    await consentsApiRoute(fastify);
+    const { reply } = createReply();
+
+    await ctx.delete!(request({ params: { id: CONSENT_ROW.id } }), reply);
+
+    expect(fastify.repositories.refreshTokens.revokeAllForUserAndClient).toHaveBeenCalledWith(
+      'user-1',
+      CONSENT_ROW.oauthClientId,
+      'consent_revoked',
+      'tx'
+    );
+  });
+
+  it('still revokes the refresh tokens when another tab already revoked the consent', async () => {
+    const { fastify, ctx } = makeFastify();
+    (fastify.repositories.oauthConsents.revoke as unknown as Mock).mockRejectedValue(
+      new NotFoundError('OAuthConsent', CONSENT_ROW.id)
+    );
+    await consentsApiRoute(fastify);
+    const { reply, state } = createReply();
+
+    await ctx.delete!(request({ params: { id: CONSENT_ROW.id } }), reply);
+
+    expect(state.statusCode).toBe(204);
+    expect(fastify.repositories.refreshTokens.revokeAllForUserAndClient).toHaveBeenCalledOnce();
   });
 
   it("reports another user's consent as 404, never 403 (no enumeration)", async () => {

@@ -215,6 +215,39 @@ export function createRefreshTokensRepository(defaultDb: DbClient): RefreshToken
     },
 
     /**
+     * Revoke every active refresh token a user holds for one client
+     * (consent revocation). Already-revoked rows keep their original reason.
+     *
+     * @returns Count of rows revoked by this call
+     */
+    async revokeAllForUserAndClient(
+      userId: string,
+      oauthClientId: string,
+      reason: string,
+      tx?: DbClient
+    ): Promise<number> {
+      const invoker = tx ?? defaultDb;
+
+      const updated = await invoker
+        .update(refreshTokens)
+        .set({
+          revoked: true,
+          revokedAt: Date.now(),
+          revokedReason: reason,
+        })
+        .where(
+          and(
+            eq(refreshTokens.userId, userId),
+            eq(refreshTokens.oauthClientId, oauthClientId),
+            eq(refreshTokens.revoked, false)
+          )
+        )
+        .returning({ id: refreshTokens.id });
+
+      return updated.length;
+    },
+
+    /**
      * Delete expired tokens
      * Useful for cleanup operations
      *
