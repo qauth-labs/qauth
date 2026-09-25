@@ -15,7 +15,7 @@ vi.mock('../auth-server-client', () => ({
 }));
 
 import { authServerClient } from '../auth-server-client';
-import { resendVerificationHandler } from './resend-verification';
+import { resendVerificationHandler } from './resend-verification.server';
 
 describe('resendVerificationHandler', () => {
   it('returns ok result on success', async () => {

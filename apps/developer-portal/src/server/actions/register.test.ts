@@ -15,7 +15,7 @@ vi.mock('../auth-server-client', () => ({
 }));
 
 import { authServerClient } from '../auth-server-client';
-import { registerHandler } from './register';
+import { registerHandler } from './register.server';
 
 describe('registerHandler', () => {
   it('returns the result from authServerClient.register on success', async () => {
