@@ -254,7 +254,7 @@ describe('rewriteRecordLink — the real docs/adr and docs/security corpus, enum
     return links;
   }
 
-  it('extracts exactly 214 links across the 13 ADRs, the ADR README, and the security review — the corpus the counts below are checked against', () => {
+  it('extracts exactly 313 links across the 14 ADRs, the ADR README, and the security review — the corpus the counts below are checked against', () => {
     // A fixed count, not a lower bound: this test's whole point is that the
     // categorisation below is checked against the FULL corpus, not a
     // sample. If a future ADR amendment changes the link count, this
@@ -286,7 +286,28 @@ describe('rewriteRecordLink — the real docs/adr and docs/security corpus, enum
     // status note pointing at ADR-013, and two new rows in the ADR README
     // index (012 and 013). Recounted mechanically with the plugin's own
     // extractor before the buckets below were touched.
-    expect(extractAllLinks()).toHaveLength(214);
+    //
+    // 214 → 290 with ADR-014 (agent authority tree, 2026-09-21): 75 links in
+    // the new record — 54 external, 9 bare anchors, 10 in-tree links to
+    // rendered records (006/007/008/011/012/013 → ROUTE), 2 to
+    // `../spec-pin-log.md` (→ BLOB) — plus the README index row for 014
+    // (→ ROUTE). Recounted with the plugin's own extractor and
+    // rewriteRecordLink before the buckets below were touched.
+    //
+    // 290 → 307 with ADR-014's 2026-09-22 amendment (agent identity,
+    // agent-side transmitters, commit provenance): the record now carries
+    // 92 links — 66 external, 11 bare anchors, 13 in-tree record links
+    // (002/006/007/008/011/012/013 → ROUTE) and the same 2 to
+    // `../spec-pin-log.md`. Recounted the same way, and the +3 route links
+    // are the check that the new ADR-002 and ADR-012 references really did
+    // resolve to rendered records.
+    //
+    // 307 → 313 with ADR-014's 2026-09-24 amendment (remote approval, §14):
+    // five external links in Related (CIBA Core 1.0, OID4VP 1.0, WebAuthn
+    // Level 3, NIST SP 800-63B-4, Claude Code Remote Control) and one in-tree
+    // link to ADR-004 (→ ROUTE). Predicted from the amendment's own link list
+    // before running, so the buckets below are a check.
+    expect(extractAllLinks()).toHaveLength(313);
   });
 
   it('every link falls into exactly one of the four outcomes, with none left unresolved', () => {
@@ -359,9 +380,18 @@ describe('rewriteRecordLink — the real docs/adr and docs/security corpus, enum
     // record links, ADR-004's note, and the two README index rows). Blob and
     // unresolved unchanged — the check that every new in-tree link resolved
     // to a rendered record.
-    expect(untouchedExternalOrAnchor).toBe(98 + 19);
-    expect(rewrittenToRoute).toBe(86);
-    expect(rewrittenToBlob).toBe(11);
+    //
+    // ADR-014 (2026-09-21): 98 → 152 external and 19 → 28 bare anchors;
+    // 86 → 97 route (ADR-014's ten record links and the README index row);
+    // 11 → 13 blob (its two `../spec-pin-log.md` links, the pin-log group
+    // above). Unresolved unchanged — the check that nothing in the new record
+    // points at a doc the plugin cannot place.
+    //
+    // ADR-014's 2026-09-24 amendment: 164 → 169 external, 100 → 101 route
+    // (its ADR-004 link). Anchors, blob and unresolved unchanged.
+    expect(untouchedExternalOrAnchor).toBe(169 + 30);
+    expect(rewrittenToRoute).toBe(101);
+    expect(rewrittenToBlob).toBe(13);
     expect(leftUnresolved).toBe(0);
   });
 });
