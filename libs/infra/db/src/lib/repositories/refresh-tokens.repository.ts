@@ -130,6 +130,32 @@ export function createRefreshTokensRepository(defaultDb: DbClient): RefreshToken
     },
 
     /**
+     * Revoke a token only if it is still live (compare-and-set on
+     * `revoked = false`), mirroring `authorizationCodes.markUsed`.
+     *
+     * @returns The revoked row, or `undefined` when nothing was updated
+     */
+    async revokeIfActive(
+      id: string,
+      reason: string,
+      tx?: DbClient
+    ): Promise<RefreshToken | undefined> {
+      const invoker = tx ?? defaultDb;
+
+      const [token] = await invoker
+        .update(refreshTokens)
+        .set({
+          revoked: true,
+          revokedAt: Date.now(),
+          revokedReason: reason,
+        })
+        .where(and(eq(refreshTokens.id, id), eq(refreshTokens.revoked, false)))
+        .returning();
+
+      return token;
+    },
+
+    /**
      * Revoke every token in a refresh-token family in a single statement.
      *
      * When a revoked refresh token is replayed, OAuth 2.1 §4.3.1 /

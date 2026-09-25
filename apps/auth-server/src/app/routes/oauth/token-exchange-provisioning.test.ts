@@ -235,6 +235,7 @@ function createTokenStub(persistedClient: {
         create: vi.fn(),
         findByTokenHashIncludingRevoked: vi.fn(),
         revoke: vi.fn(),
+        revokeIfActive: vi.fn(),
         revokeFamily: vi.fn(),
       },
       auditLogs: { create: vi.fn() },
