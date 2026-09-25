@@ -566,24 +566,32 @@
       }
     },
     "/auth/verify": {
-      "get": {
+      "post": {
         "tags": [
           "Auth"
         ],
-        "description": "Verify email address using token sent via email. Single-use; marks token as used. Returns success message.",
-        "parameters": [
-          {
-            "schema": {
-              "type": "string",
-              "minLength": 64,
-              "maxLength": 64,
-              "pattern": "^[0-9a-fA-F]{64}$"
-            },
-            "in": "query",
-            "name": "token",
-            "required": true
+        "description": "Verify email address using the token sent via email, in the request body. Single-use; marks token as used. POST so no link fetch or prefetch can verify an address on its own.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "token": {
+                    "type": "string",
+                    "minLength": 64,
+                    "maxLength": 64,
+                    "pattern": "^[0-9a-fA-F]{64}$"
+                  }
+                },
+                "required": [
+                  "token"
+                ]
+              }
+            }
           }
-        ],
+        },
         "responses": {
           "200": {
             "description": "Default Response",

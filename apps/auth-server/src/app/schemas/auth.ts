@@ -32,10 +32,10 @@ export const registerResponseSchema = z.object({
 export type RegisterResponse = z.infer<typeof registerResponseSchema>;
 
 /**
- * Email verification query parameter schema
+ * Email verification request body schema (POST /auth/verify)
  * Token must be a 64-character hex string (256-bit random value)
  */
-export const verifyQuerySchema = z.object({
+export const verifyBodySchema = z.object({
   token: z
     .string()
     .length(64, 'Token must be exactly 64 characters')
@@ -43,9 +43,9 @@ export const verifyQuerySchema = z.object({
 });
 
 /**
- * Email verification query parameter type
+ * Email verification request body type
  */
-export type VerifyQuery = z.infer<typeof verifyQuerySchema>;
+export type VerifyBody = z.infer<typeof verifyBodySchema>;
 
 /**
  * Email verification response schema

@@ -364,10 +364,14 @@ export const authServerClient = {
     });
   },
 
+  /**
+   * POST, token in the body: verification is a state change, and the
+   * auth-server no longer accepts it as a GET (a link fetch must not verify).
+   */
   verifyEmail(token: string): Promise<Result<VerifyEmailData>> {
-    return apiRequest<VerifyEmailData>(`/auth/verify?token=${encodeURIComponent(token)}`, {
-      method: 'GET',
-      skipContentType: true,
+    return apiRequest<VerifyEmailData>('/auth/verify', {
+      method: 'POST',
+      body: JSON.stringify({ token }),
     });
   },
 

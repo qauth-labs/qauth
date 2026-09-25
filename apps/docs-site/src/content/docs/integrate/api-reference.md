@@ -181,11 +181,14 @@ Revoke the caller's session/token.
 
 Errors: `401` (missing/invalid bearer).
 
-### `GET /auth/verify`
+### `POST /auth/verify`
 
-Confirm an email address from the link in the verification email.
+Confirm an email address with the token from the verification email. This is a
+POST so that no fetch or prefetch of the emailed link can verify an address by
+itself. The link opens the developer portal's verification page, which calls
+this endpoint only when the reader confirms.
 
-**Query**: `token` — 64-char hex string.
+**Body**: `{ "token": "<64-char hex string>" }`
 
 **`200 OK`**: `{ "message": "...", "email": "dev@example.com" }`
 

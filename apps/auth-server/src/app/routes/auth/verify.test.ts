@@ -13,6 +13,7 @@ import verifyRoute from './verify';
 
 interface TestContext {
   handler?: (request: any) => Promise<unknown>;
+  registered?: { method: string; url: string; opts: unknown };
 }
 
 /** Sentinel transaction client shared by the completion write set. */
@@ -46,8 +47,9 @@ function createFastifyStub() {
   const ctx: TestContext = {};
   const fastify: any = {
     withTypeProvider: () => ({
-      get: (_url: string, _opts: unknown, handler: any) => {
+      post: (url: string, opts: unknown, handler: any) => {
         ctx.handler = handler;
+        ctx.registered = { method: 'POST', url, opts };
         return fastify;
       },
     }),
@@ -76,9 +78,23 @@ function createFastifyStub() {
   return { fastify: fastify as FastifyInstance, ctx };
 }
 
-const request = { query: { token: 'a'.repeat(64) } };
+const request = { body: { token: 'a'.repeat(64) } };
 
-describe('GET /auth/verify', () => {
+describe('POST /auth/verify', () => {
+  it('is registered as POST with the token in the body — never a state-changing GET', async () => {
+    // A GET verified on any fetch of the emailed link (link scanners,
+    // prefetch, a page calling the API on load). Verification must take an
+    // explicit POST.
+    const { fastify, ctx } = createFastifyStub();
+    await verifyRoute(fastify);
+
+    expect(ctx.registered?.method).toBe('POST');
+    expect(ctx.registered?.url).toBe('/verify');
+    const schema = (ctx.registered?.opts as { schema: Record<string, unknown> }).schema;
+    expect(schema.body).toBeDefined();
+    expect(schema.querystring).toBeUndefined();
+  });
+
   it('completes verification with the completion write set in one transaction and exact body', async () => {
     const { fastify, ctx } = createFastifyStub();
     await verifyRoute(fastify);

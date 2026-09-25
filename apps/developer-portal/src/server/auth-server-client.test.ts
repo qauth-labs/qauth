@@ -141,6 +141,20 @@ describe('authServerClient.logout', () => {
 describe('authServerClient.verifyEmail', () => {
   const validToken = 'a'.repeat(64);
 
+  it('POSTs the token in a JSON body — never a GET with the token in the URL', async () => {
+    mockFetch(200, { message: 'Email verified successfully', email: 'test@example.com' });
+    await authServerClient.verifyEmail(validToken);
+
+    const [url, init] = (global.fetch as unknown as ReturnType<typeof vi.fn>).mock.calls[0] as [
+      string,
+      RequestInit,
+    ];
+    expect(url.endsWith('/auth/verify')).toBe(true);
+    expect(url).not.toContain(validToken);
+    expect(init.method).toBe('POST');
+    expect(JSON.parse(String(init.body))).toEqual({ token: validToken });
+  });
+
   it('returns ok result on 200', async () => {
     mockFetch(200, { message: 'Email verified successfully', email: 'test@example.com' });
     const result = await authServerClient.verifyEmail(validToken);

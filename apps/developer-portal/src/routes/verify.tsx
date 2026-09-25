@@ -1,6 +1,6 @@
 import { Button, FormField, Input } from '@qauth-labs/ui';
 import { createFileRoute, Link } from '@tanstack/react-router';
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 
 import { resendVerificationFn } from '../server/actions/resend-verification';
 import { verifyFn } from '../server/actions/verify';
@@ -19,7 +19,12 @@ export const Route = createFileRoute('/verify')({
   component: VerifyPage,
 });
 
+// The page opens on 'confirm' and verifies only when the reader presses the
+// button. Verifying on load meant any fetch of the emailed link — a mail
+// gateway's link scanner, a prefetch — verified an account someone else may
+// have registered with this address and whose password they hold.
 type VerifyState =
+  | { stage: 'confirm' }
   | { stage: 'pending' }
   | { stage: 'success'; email: string }
   | { stage: 'already-verified' }
@@ -29,35 +34,28 @@ type ResendState = 'idle' | 'sending' | 'sent' | { error: string };
 
 function VerifyPage() {
   const { token } = Route.useSearch();
-  const [state, setState] = useState<VerifyState>({ stage: 'pending' });
+  const [state, setState] = useState<VerifyState>({ stage: 'confirm' });
   const [resendEmail, setResendEmail] = useState('');
   const [resendState, setResendState] = useState<ResendState>('idle');
 
-  useEffect(() => {
-    let cancelled = false;
+  async function handleConfirm() {
+    setState({ stage: 'pending' });
+    const result = await verifyFn({ data: { token } });
 
-    verifyFn({ data: { token } }).then((result) => {
-      if (cancelled) return;
+    if (result.ok) {
+      setState({ stage: 'success', email: result.data.email });
+      return;
+    }
 
-      if (result.ok) {
-        setState({ stage: 'success', email: result.data.email });
-        return;
-      }
+    const { code, message } = result.error;
 
-      const { code, message } = result.error;
+    if (code === 'EMAIL_ALREADY_VERIFIED') {
+      setState({ stage: 'already-verified' });
+      return;
+    }
 
-      if (code === 'EMAIL_ALREADY_VERIFIED') {
-        setState({ stage: 'already-verified' });
-        return;
-      }
-
-      setState({ stage: 'error', message });
-    });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [token]);
+    setState({ stage: 'error', message });
+  }
 
   async function handleResend(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -68,6 +66,26 @@ function VerifyPage() {
     } else {
       setResendState({ error: result.error.message });
     }
+  }
+
+  if (state.stage === 'confirm') {
+    return (
+      <main className="flex min-h-screen items-center justify-center bg-gray-50 px-4">
+        <div className="w-full max-w-md space-y-4 rounded-lg border border-gray-200 bg-white p-8 shadow-sm">
+          <h1 className="text-xl font-semibold">Confirm your email address</h1>
+          <p className="text-sm text-gray-600">
+            Someone used this email address to create a QAuth developer account. If that was you,
+            confirm below.
+          </p>
+          <p className="text-sm text-gray-600">
+            If it wasn&apos;t you, close this page. The account stays unverified.
+          </p>
+          <Button type="button" onClick={() => void handleConfirm()}>
+            Confirm email address
+          </Button>
+        </div>
+      </main>
+    );
   }
 
   if (state.stage === 'pending') {

@@ -8,7 +8,7 @@ import type { FastifyInstance } from 'fastify';
 import { ZodTypeProvider } from 'fastify-type-provider-zod';
 
 import { env } from '../../../config/env';
-import { type VerifyQuery, verifyQuerySchema, verifyResponseSchema } from '../../schemas/auth';
+import { type VerifyBody, verifyBodySchema, verifyResponseSchema } from '../../schemas/auth';
 
 /**
  * Email verification route
@@ -24,16 +24,25 @@ import { type VerifyQuery, verifyQuerySchema, verifyResponseSchema } from '../..
  * Note on timing attacks: Database index lookups have consistent timing.
  * Combined with rate limiting and high-entropy tokens, timing-based
  * enumeration is not a practical attack vector for this endpoint.
+ *
+ * POST, never GET. Verifying is a state change with consequences: it marks
+ * the credential's email as verified, and relying parties may link accounts
+ * by verified email. A GET verified on any fetch of the emailed link — a mail
+ * gateway's link scanner, a browser prefetch, or a page that calls the API as
+ * it loads — so an account someone else registered with this address, and
+ * whose password they hold, could be verified without the mailbox owner ever
+ * choosing to. The token travels in the body, and the portal's /verify page
+ * calls this only when the reader presses its confirm button.
  */
 export default async function (fastify: FastifyInstance) {
-  fastify.withTypeProvider<ZodTypeProvider>().get(
+  fastify.withTypeProvider<ZodTypeProvider>().post(
     '/verify',
     {
       schema: {
         description:
-          'Verify email address using token sent via email. Single-use; marks token as used. Returns success message.',
+          'Verify email address using the token sent via email, in the request body. Single-use; marks token as used. POST so no link fetch or prefetch can verify an address on its own.',
         tags: ['Auth'],
-        querystring: verifyQuerySchema,
+        body: verifyBodySchema,
         response: {
           200: verifyResponseSchema,
         },
@@ -47,7 +56,7 @@ export default async function (fastify: FastifyInstance) {
       },
     },
     async (request) => {
-      const { token } = request.query as VerifyQuery;
+      const { token } = request.body as VerifyBody;
 
       // Token format already validated by Zod schema (64-char hex string)
       // This prevents CVE-2025-12374 style attacks at schema level

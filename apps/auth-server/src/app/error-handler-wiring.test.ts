@@ -332,7 +332,7 @@ describe('assembled app — global error handler reachability (#365)', () => {
       ['POST /auth/login', { method: 'POST', url: '/auth/login', payload: { bad: true } }],
       ['POST /auth/register', { method: 'POST', url: '/auth/register', payload: { bad: true } }],
       ['POST /auth/logout', { method: 'POST', url: '/auth/logout', payload: { bad: true } }],
-      ['GET /auth/verify', { method: 'GET', url: '/auth/verify' }],
+      ['POST /auth/verify', { method: 'POST', url: '/auth/verify', payload: { bad: true } }],
       [
         'POST /auth/resend-verification',
         { method: 'POST', url: '/auth/resend-verification', payload: { bad: true } },
