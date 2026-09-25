@@ -364,10 +364,15 @@ export const authServerClient = {
     });
   },
 
-  verifyEmail(token: string): Promise<Result<VerifyEmailData>> {
-    return apiRequest<VerifyEmailData>(`/auth/verify?token=${encodeURIComponent(token)}`, {
-      method: 'GET',
-      skipContentType: true,
+  /**
+   * POST, token and password in the body: verification is a state change (a
+   * link fetch must not verify), and it needs both the mailbox (token) and the
+   * registrant (password).
+   */
+  verifyEmail(token: string, password: string): Promise<Result<VerifyEmailData>> {
+    return apiRequest<VerifyEmailData>('/auth/verify', {
+      method: 'POST',
+      body: JSON.stringify({ token, password }),
     });
   },
 

@@ -141,9 +141,23 @@ describe('authServerClient.logout', () => {
 describe('authServerClient.verifyEmail', () => {
   const validToken = 'a'.repeat(64);
 
+  it('POSTs the token and password in a JSON body — never a GET with the token in the URL', async () => {
+    mockFetch(200, { message: 'Email verified successfully', email: 'test@example.com' });
+    await authServerClient.verifyEmail(validToken, 'registrant-pw');
+
+    const [url, init] = (global.fetch as unknown as ReturnType<typeof vi.fn>).mock.calls[0] as [
+      string,
+      RequestInit,
+    ];
+    expect(url.endsWith('/auth/verify')).toBe(true);
+    expect(url).not.toContain(validToken);
+    expect(init.method).toBe('POST');
+    expect(JSON.parse(String(init.body))).toEqual({ token: validToken, password: 'registrant-pw' });
+  });
+
   it('returns ok result on 200', async () => {
     mockFetch(200, { message: 'Email verified successfully', email: 'test@example.com' });
-    const result = await authServerClient.verifyEmail(validToken);
+    const result = await authServerClient.verifyEmail(validToken, 'registrant-pw');
     expect(result.ok).toBe(true);
     if (result.ok) expect(result.data.email).toBe('test@example.com');
   });
@@ -154,7 +168,7 @@ describe('authServerClient.verifyEmail', () => {
       { error: 'Invalid or expired token', statusCode: 400, code: 'INVALID_TOKEN' },
       false
     );
-    const result = await authServerClient.verifyEmail(validToken);
+    const result = await authServerClient.verifyEmail(validToken, 'registrant-pw');
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error.code).toBe('INVALID_TOKEN');
   });
@@ -165,7 +179,7 @@ describe('authServerClient.verifyEmail', () => {
       { error: 'Email already verified', statusCode: 409, code: 'EMAIL_ALREADY_VERIFIED' },
       false
     );
-    const result = await authServerClient.verifyEmail(validToken);
+    const result = await authServerClient.verifyEmail(validToken, 'registrant-pw');
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error.code).toBe('EMAIL_ALREADY_VERIFIED');
   });

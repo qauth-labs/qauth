@@ -75,14 +75,19 @@ describe('verify validateSearch', () => {
 });
 
 describe('VerifyPage component', () => {
-  it('renders the pending state on initial render (useEffect not called in SSR)', () => {
-    // useEffect is not invoked by renderToString, so the component always
-    // starts in the "pending" stage.
+  it('opens on a confirmation step, not a verification in progress', () => {
+    // Verification waits for the reader's button press, so the first render
+    // (server or client) is the confirmation step. See verify.dom.test.tsx for
+    // the proof that nothing is sent until the button is pressed.
     const html = renderToString(
       <RouterContextProvider router={fakeRouter}>
         <PageComponent />
       </RouterContextProvider>
     );
-    expect(html).toContain('Verifying your email');
+    expect(html).toContain('Confirm your email address');
+    expect(html).toContain('Confirm email address');
+    // Verification needs the account's password as well as the emailed token.
+    expect(html).toContain('type="password"');
+    expect(html).not.toContain('Verifying your email');
   });
 });

@@ -1,6 +1,6 @@
 import { Button, FormField, Input } from '@qauth-labs/ui';
 import { createFileRoute, Link } from '@tanstack/react-router';
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 
 import { resendVerificationFn } from '../server/actions/resend-verification';
 import { verifyFn } from '../server/actions/verify';
@@ -19,7 +19,14 @@ export const Route = createFileRoute('/verify')({
   component: VerifyPage,
 });
 
+// The page opens on 'confirm' and verifies only when the reader submits the
+// account's password. Verifying on load meant any fetch of the emailed link —
+// a mail gateway's link scanner, a prefetch — verified the account. And a
+// button alone would still let the mailbox owner verify an account someone
+// else registered with their address: the token proves the mailbox, the
+// password proves the registrant, and verification needs both.
 type VerifyState =
+  | { stage: 'confirm'; error?: string }
   | { stage: 'pending' }
   | { stage: 'success'; email: string }
   | { stage: 'already-verified' }
@@ -29,35 +36,37 @@ type ResendState = 'idle' | 'sending' | 'sent' | { error: string };
 
 function VerifyPage() {
   const { token } = Route.useSearch();
-  const [state, setState] = useState<VerifyState>({ stage: 'pending' });
+  const [state, setState] = useState<VerifyState>({ stage: 'confirm' });
+  const [password, setPassword] = useState('');
   const [resendEmail, setResendEmail] = useState('');
   const [resendState, setResendState] = useState<ResendState>('idle');
 
-  useEffect(() => {
-    let cancelled = false;
+  async function handleConfirm(e: React.FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    setState({ stage: 'pending' });
+    const result = await verifyFn({ data: { token, password } });
 
-    verifyFn({ data: { token } }).then((result) => {
-      if (cancelled) return;
+    if (result.ok) {
+      setState({ stage: 'success', email: result.data.email });
+      return;
+    }
 
-      if (result.ok) {
-        setState({ stage: 'success', email: result.data.email });
-        return;
-      }
+    const { code, message } = result.error;
 
-      const { code, message } = result.error;
+    if (code === 'EMAIL_ALREADY_VERIFIED') {
+      setState({ stage: 'already-verified' });
+      return;
+    }
 
-      if (code === 'EMAIL_ALREADY_VERIFIED') {
-        setState({ stage: 'already-verified' });
-        return;
-      }
+    // A wrong password consumes nothing on the auth-server: stay on the form.
+    if (code === 'INVALID_CREDENTIALS') {
+      setPassword('');
+      setState({ stage: 'confirm', error: 'That password does not match this account.' });
+      return;
+    }
 
-      setState({ stage: 'error', message });
-    });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [token]);
+    setState({ stage: 'error', message });
+  }
 
   async function handleResend(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -68,6 +77,43 @@ function VerifyPage() {
     } else {
       setResendState({ error: result.error.message });
     }
+  }
+
+  if (state.stage === 'confirm') {
+    return (
+      <main className="flex min-h-screen items-center justify-center bg-gray-50 px-4">
+        <div className="w-full max-w-md space-y-4 rounded-lg border border-gray-200 bg-white p-8 shadow-sm">
+          <h1 className="text-xl font-semibold">Confirm your email address</h1>
+          <p className="text-sm text-gray-600">
+            Someone used this email address to create a QAuth developer account. If that was you,
+            enter the password you chose for it.
+          </p>
+          <p className="text-sm text-gray-600">
+            If it wasn&apos;t you, close this page. Without that account&apos;s password this
+            address cannot be verified.
+          </p>
+          <form onSubmit={(e) => void handleConfirm(e)} className="space-y-3">
+            <FormField label="Password" htmlFor="verify-password">
+              <Input
+                id="verify-password"
+                name="password"
+                type="password"
+                autoComplete="current-password"
+                required
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+              />
+            </FormField>
+            {state.error ? (
+              <p role="alert" className="text-sm text-red-600">
+                {state.error}
+              </p>
+            ) : null}
+            <Button type="submit">Confirm email address</Button>
+          </form>
+        </div>
+      </main>
+    );
   }
 
   if (state.stage === 'pending') {

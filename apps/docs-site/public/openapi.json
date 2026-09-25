@@ -303,7 +303,8 @@
                     "pattern": "^(?!\\.)(?!.*\\.\\.)([A-Za-z0-9_'+\\-\\.]*)[A-Za-z0-9_+-]@([A-Za-z0-9][A-Za-z0-9\\-]*\\.)+[A-Za-z]{2,}$"
                   },
                   "password": {
-                    "type": "string"
+                    "type": "string",
+                    "maxLength": 256
                   }
                 },
                 "required": [
@@ -421,7 +422,8 @@
                     "pattern": "^(?!\\.)(?!.*\\.\\.)([A-Za-z0-9_'+\\-\\.]*)[A-Za-z0-9_+-]@([A-Za-z0-9][A-Za-z0-9\\-]*\\.)+[A-Za-z]{2,}$"
                   },
                   "password": {
-                    "type": "string"
+                    "type": "string",
+                    "maxLength": 256
                   },
                   "realmId": {
                     "type": "string",
@@ -566,24 +568,38 @@
       }
     },
     "/auth/verify": {
-      "get": {
+      "post": {
         "tags": [
           "Auth"
         ],
-        "description": "Verify email address using token sent via email. Single-use; marks token as used. Returns success message.",
-        "parameters": [
-          {
-            "schema": {
-              "type": "string",
-              "minLength": 64,
-              "maxLength": 64,
-              "pattern": "^[0-9a-fA-F]{64}$"
-            },
-            "in": "query",
-            "name": "token",
-            "required": true
+        "description": "Verify email address using the token sent via email, in the request body. Single-use; marks token as used. POST so no link fetch or prefetch can verify an address on its own.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "token": {
+                    "type": "string",
+                    "minLength": 64,
+                    "maxLength": 64,
+                    "pattern": "^[0-9a-fA-F]{64}$"
+                  },
+                  "password": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 256
+                  }
+                },
+                "required": [
+                  "token",
+                  "password"
+                ]
+              }
+            }
           }
-        ],
+        },
         "responses": {
           "200": {
             "description": "Default Response",
@@ -3556,7 +3572,8 @@
                   },
                   "password": {
                     "type": "string",
-                    "minLength": 1
+                    "minLength": 1,
+                    "maxLength": 256
                   },
                   "return_to": {
                     "type": "string"

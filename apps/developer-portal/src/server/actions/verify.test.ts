@@ -26,10 +26,10 @@ describe('verifyHandler', () => {
       data: { message: 'Email verified successfully', email: 'test@example.com' },
     });
 
-    const result = await verifyHandler({ data: { token: validToken } });
+    const result = await verifyHandler({ data: { token: validToken, password: 'registrant-pw' } });
     expect(result.ok).toBe(true);
     if (result.ok) expect(result.data.email).toBe('test@example.com');
-    expect(authServerClient.verifyEmail).toHaveBeenCalledWith(validToken);
+    expect(authServerClient.verifyEmail).toHaveBeenCalledWith(validToken, 'registrant-pw');
   });
 
   it('propagates INVALID_TOKEN error', async () => {
@@ -38,7 +38,7 @@ describe('verifyHandler', () => {
       error: { code: 'INVALID_TOKEN', message: 'Invalid or expired token', status: 400 },
     });
 
-    const result = await verifyHandler({ data: { token: validToken } });
+    const result = await verifyHandler({ data: { token: validToken, password: 'registrant-pw' } });
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error.code).toBe('INVALID_TOKEN');
   });
@@ -49,7 +49,7 @@ describe('verifyHandler', () => {
       error: { code: 'EMAIL_ALREADY_VERIFIED', message: 'Email already verified', status: 409 },
     });
 
-    const result = await verifyHandler({ data: { token: validToken } });
+    const result = await verifyHandler({ data: { token: validToken, password: 'registrant-pw' } });
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error.code).toBe('EMAIL_ALREADY_VERIFIED');
   });

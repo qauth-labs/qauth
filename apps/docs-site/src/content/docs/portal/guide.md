@@ -104,9 +104,13 @@ always empty, so the check is scoped to avoid a false failure in the browser.
   `/auth/register`. On success the page shows a "check your inbox" screen with a resend option;
   it does not log the developer in.
 - **Verify** (`/verify?token=...`, `apps/developer-portal/src/routes/verify.tsx`) validates the
-  token shape client-side (64 hex characters, `apps/developer-portal/src/routes/verify.tsx:9`)
-  before calling `verifyFn` (`apps/developer-portal/src/server/actions/verify.ts:13`), which
-  hits the auth-server's `/auth/verify`.
+  token shape client-side (64 hex characters) and opens on a confirmation step that asks for the
+  account's password. Submitting calls `verifyFn`
+  (`apps/developer-portal/src/server/actions/verify.ts`), which sends the token and the password
+  to the auth-server's `POST /auth/verify`. The token proves the mailbox and the password proves
+  the registrant, so the owner of an address cannot verify an account someone else registered
+  with it by following the link. The page does not verify on load, so a link scanner or a
+  prefetch cannot either. A wrong password keeps the form open, and the token is not consumed.
 - **Login** (`/login`, `apps/developer-portal/src/routes/login.tsx`) — see the session model
   above. On failure the page always shows the same generic "Invalid email or password" message
   regardless of the underlying error code, an explicit anti-enumeration choice

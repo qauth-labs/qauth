@@ -3,12 +3,16 @@ import {
   passwordCredentialDataSchema,
   SELF_REPORTED_SOURCE,
 } from '@qauth-labs/fastify-plugin-federation';
-import { EmailAlreadyVerifiedError, InvalidTokenError } from '@qauth-labs/shared-errors';
+import {
+  EmailAlreadyVerifiedError,
+  InvalidCredentialsError,
+  InvalidTokenError,
+} from '@qauth-labs/shared-errors';
 import type { FastifyInstance } from 'fastify';
 import { ZodTypeProvider } from 'fastify-type-provider-zod';
 
 import { env } from '../../../config/env';
-import { type VerifyQuery, verifyQuerySchema, verifyResponseSchema } from '../../schemas/auth';
+import { type VerifyBody, verifyBodySchema, verifyResponseSchema } from '../../schemas/auth';
 
 /**
  * Email verification route
@@ -24,16 +28,34 @@ import { type VerifyQuery, verifyQuerySchema, verifyResponseSchema } from '../..
  * Note on timing attacks: Database index lookups have consistent timing.
  * Combined with rate limiting and high-entropy tokens, timing-based
  * enumeration is not a practical attack vector for this endpoint.
+ *
+ * POST, never GET. Verifying is a state change with consequences: it marks
+ * the credential's email as verified, and relying parties may link accounts
+ * by verified email. A GET verified on any fetch of the emailed link — a mail
+ * gateway's link scanner, a browser prefetch, or a page that calls the API as
+ * it loads — so an account someone else registered with this address, and
+ * whose password they hold, could be verified without the mailbox owner ever
+ * choosing to. The token travels in the body, and the portal's /verify page
+ * calls this only when the reader presses its confirm button.
+ *
+ * Token AND password. The token proves control of the mailbox; it cannot say
+ * who registered. Someone who registers with another person's address holds
+ * the password, and the mailbox owner holds the token; a confirm button alone
+ * would let the owner verify the other person's account by clicking it. So the
+ * request must also carry the account's password, checked against the
+ * credential the token targets: only a person who has both the mailbox and the
+ * password (the genuine registrant) can verify. A wrong password consumes
+ * nothing, so the registrant can retry within the token's lifetime.
  */
 export default async function (fastify: FastifyInstance) {
-  fastify.withTypeProvider<ZodTypeProvider>().get(
+  fastify.withTypeProvider<ZodTypeProvider>().post(
     '/verify',
     {
       schema: {
         description:
-          'Verify email address using token sent via email. Single-use; marks token as used. Returns success message.',
+          'Verify email address using the token sent via email, in the request body. Single-use; marks token as used. POST so no link fetch or prefetch can verify an address on its own.',
         tags: ['Auth'],
-        querystring: verifyQuerySchema,
+        body: verifyBodySchema,
         response: {
           200: verifyResponseSchema,
         },
@@ -47,7 +69,7 @@ export default async function (fastify: FastifyInstance) {
       },
     },
     async (request) => {
-      const { token } = request.query as VerifyQuery;
+      const { token, password } = request.body as VerifyBody;
 
       // Token format already validated by Zod schema (64-char hex string)
       // This prevents CVE-2025-12374 style attacks at schema level
@@ -89,6 +111,17 @@ export default async function (fastify: FastifyInstance) {
       }
       if (parsed.data.email_verified) {
         throw new EmailAlreadyVerifiedError();
+      }
+
+      // 4b. The registrant, not just the mailbox (see the route comment). Checked
+      // BEFORE the completion transaction, so a wrong password leaves the token
+      // unconsumed and nothing verified.
+      const passwordValid = await fastify.passwordHasher.verifyPassword(
+        parsed.data.password_hash,
+        password
+      );
+      if (!passwordValid) {
+        throw new InvalidCredentialsError('Incorrect password for this account');
       }
 
       // 5.-6. Completion write set (one transaction): consume the token and
