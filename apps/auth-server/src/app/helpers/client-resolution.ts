@@ -121,6 +121,45 @@ export function cimdSentinelSecretHash(): string {
   return `$argon2id$v=19$m=65536,t=3,p=4$${salt}$${digest}`;
 }
 
+/** The document-derived columns `upsertCimdClient` refreshes on conflict. */
+const CIMD_REFRESHED_FIELDS = [
+  'name',
+  'description',
+  'redirectUris',
+  'grantTypes',
+  'responseTypes',
+  'tokenEndpointAuthMethod',
+  'jwks',
+  'jwksUri',
+  'isAgent',
+  'metadata',
+  'enabled',
+] as const;
+
+/** JSON with object keys sorted at every level, so jsonb key order cannot matter. */
+function canonicalJson(value: unknown): string {
+  return JSON.stringify(value, (_key, v: unknown) =>
+    v && typeof v === 'object' && !Array.isArray(v)
+      ? Object.fromEntries(
+          Object.entries(v as Record<string, unknown>).sort(([a], [b]) => a.localeCompare(b))
+        )
+      : v
+  );
+}
+
+/**
+ * True when a materialised CIMD row already holds every document-derived value
+ * a fresh resolution would write — so re-resolution costs no write when the
+ * document has not changed.
+ */
+function cimdRowMatchesInsert(row: object, insert: object): boolean {
+  const current = row as Record<string, unknown>;
+  const next = insert as Record<string, unknown>;
+  return CIMD_REFRESHED_FIELDS.every(
+    (field) => canonicalJson(current[field] ?? null) === canonicalJson(next[field] ?? null)
+  );
+}
+
 /**
  * Resolve a client_id to a client record, honouring the pre-registered →
  * CIMD priority. Returns `{ client: null, reason }` when no client can be
@@ -134,15 +173,22 @@ export async function resolveClient(
   realmId: string,
   clientId: string
 ): Promise<{ client: ResolvedClient | null; reason?: string }> {
-  // 1. Pre-registered (DB) — highest priority. A previously-materialised
-  //    CIMD client also lives here once its first authorize succeeded.
+  // 1. Pre-registered (DB) — highest priority.
   const persisted = await fastify.repositories.oauthClients.findByClientId(realmId, clientId);
-  if (persisted) {
+  if (persisted && !isCimdClient(persisted)) {
     return { client: persisted };
   }
 
-  // 2. CIMD — URL-formatted client_id resolved + materialised on demand.
-  if (isCimdClientId(clientId)) {
+  // 2. CIMD — URL-formatted client_id resolved + materialised on demand, and
+  //    RE-resolved on every use once materialised (ADR-012 §3: the metadata
+  //    document is the management surface). A materialised row is only a
+  //    cache of the document. Serving it without re-resolving would freeze the
+  //    client at its first authorize: document edits, key rotation, a host
+  //    removed from the trust allowlist and `CIMD_ENABLED=false` would never
+  //    take effect, because all of those live in
+  //    `fetchAndValidateCimdDocument`. That call is cheap within the cache
+  //    TTL: the switch and trust policy run first, then a cache read.
+  if (isCimdClientId(clientId) || persisted) {
     try {
       const doc = await fetchAndValidateCimdDocument(fastify, clientId);
 
@@ -150,10 +196,18 @@ export async function resolveClient(
       // shaped like a real argon2id hash so the NOT-NULL column is satisfied
       // and any client_secret attempt fails closed. Built synchronously
       // (no Argon2id) — see cimdSentinelSecretHash for the DoS rationale.
+      // (Ignored on conflict: the upsert never rewrites an existing secret.)
       const sentinelSecretHash = cimdSentinelSecretHash();
 
       const insert = toCimdClientInsert(realmId, clientId, doc, sentinelSecretHash);
-      const row = await fastify.repositories.oauthClients.upsertCimdClient(insert);
+      // An operator's `enabled = false` survives re-resolution; the document
+      // can never re-enable a client the server disabled.
+      const data = persisted ? { ...insert, enabled: persisted.enabled } : insert;
+      // Unchanged document (the common, cache-served case) → no write.
+      if (persisted && cimdRowMatchesInsert(persisted, data)) {
+        return { client: persisted };
+      }
+      const row = await fastify.repositories.oauthClients.upsertCimdClient(data);
       return { client: row };
     } catch (err) {
       // `errorDescription` before `message` (#365): since `InvalidClientError`
