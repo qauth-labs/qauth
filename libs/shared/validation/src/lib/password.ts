@@ -64,6 +64,27 @@ export interface PasswordValidator {
 /**
  * Default password validation configuration
  */
+/**
+ * Longest password accepted anywhere, in UTF-16 code units (JavaScript string
+ * length). NIST SP 800-63B-4 §3.1.1.2 asks verifiers to accept at least 64
+ * characters; 256 leaves ample room for passphrases and password managers.
+ *
+ * The bound exists because a password is attacker-sized input to CPU-bound
+ * work: zxcvbn's matchers grow super-linearly with length, and Argon2id
+ * hashes every byte. Request schemas reject anything longer before a handler
+ * runs; `validatePasswordStrength` enforces it again for any other caller.
+ */
+export const PASSWORD_MAX_LENGTH = 256;
+
+/**
+ * How much of a password zxcvbn scores. zxcvbn's cost grows super-linearly
+ * with input length, and its own guidance is to score a bounded prefix. A
+ * 100-character prefix that is weak makes the whole password weak for our
+ * purposes (it errs towards rejecting), and one that is strong already
+ * saturates zxcvbn's score of 4.
+ */
+export const ZXCVBN_MAX_INPUT_LENGTH = 100;
+
 export const DEFAULT_PASSWORD_VALIDATION_CONFIG: PasswordValidationConfig = {
   minScore: 2, // Fair
 };
@@ -106,8 +127,17 @@ export function createPasswordValidator(
         };
       }
 
-      // Use zxcvbn to analyze password strength
-      const analysis = zxcvbn(password);
+      if (password.length > PASSWORD_MAX_LENGTH) {
+        return {
+          valid: false,
+          score: 0,
+          feedback: [`Password must be at most ${PASSWORD_MAX_LENGTH} characters`],
+        };
+      }
+
+      // Use zxcvbn to analyze password strength, on a bounded prefix
+      // (see ZXCVBN_MAX_INPUT_LENGTH).
+      const analysis = zxcvbn(password.slice(0, ZXCVBN_MAX_INPUT_LENGTH));
 
       // Extract feedback messages
       const feedback: string[] = [];
