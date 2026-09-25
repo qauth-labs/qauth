@@ -243,6 +243,21 @@ describe('subject binding derivation (#300, ADR-009)', () => {
     ])('refuses %s', (_label, raw) => {
       expect(normalizeAssertedIdentifier(raw)).toBeUndefined();
     });
+
+    // An asserted identifier shares the external_sub column with issuer-scoped
+    // subjects, whose `isc1:` hash is computed from public inputs. A typed value
+    // of that form would pre-register someone else's future subject.
+    it.each([
+      ['an issuer-scoped subject', `${ISSUER_SCOPED_SUBJECT_PREFIX}${'a'.repeat(64)}`],
+      ['an issuer-scoped subject in upper case with padding', `  ISC1:${'A'.repeat(64)}  `],
+      ['a wallet binding', `${WALLET_BINDING_PREFIX}${'b'.repeat(64)}`],
+    ])('refuses %s (a server-derived form)', (_label, raw) => {
+      expect(normalizeAssertedIdentifier(raw)).toBeUndefined();
+    });
+
+    it('still accepts an ordinary identifier that merely contains the prefix text', () => {
+      expect(normalizeAssertedIdentifier('user+isc1:@example.com')).toBe('user+isc1:@example.com');
+    });
   });
 
   describe('constantTimeEquals', () => {

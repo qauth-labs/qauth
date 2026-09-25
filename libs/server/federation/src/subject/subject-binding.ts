@@ -82,6 +82,17 @@ export const WALLET_BINDING_PREFIX = 'wb1:';
 export const ISSUER_SCOPED_SUBJECT_PREFIX = 'isc1:';
 
 /**
+ * Prefixes of values the SERVER derives into `external_sub` (an issuer-scoped
+ * subject) or into credential data (a wallet binding). An asserted identifier
+ * is typed by the user and shares the `(realm, 'wallet', external_sub)` column
+ * with issuer-scoped subjects, so it must never take one of these forms: a
+ * user who typed `isc1:<hash>` — the hash is computed from public inputs —
+ * would otherwise enrol an account under someone else's future issuer-scoped
+ * subject, and that person's first wallet login would land in it.
+ */
+const RESERVED_DERIVED_VALUE_PREFIXES = [ISSUER_SCOPED_SUBJECT_PREFIX, WALLET_BINDING_PREFIX];
+
+/**
  * Longest asserted identifier accepted.
  *
  * 320 = the RFC 5321 maximum email address length, and the same cap
@@ -180,15 +191,22 @@ export function constantTimeEquals(left: string, right: string): boolean {
  * @param raw - the identifier as typed; `unknown` because it arrives as form
  * input and, later, from a session store.
  * @returns the normalized identifier, or `undefined` when it is not usable at
- * all. Never throws — callers decide what a rejection means.
+ * all — including one that normalizes into a server-derived form
+ * ({@link RESERVED_DERIVED_VALUE_PREFIXES}). Never throws — callers decide what
+ * a rejection means.
  */
 export function normalizeAssertedIdentifier(raw: unknown): string | undefined {
   if (typeof raw !== 'string') return undefined;
   if (raw.length > MAX_ASSERTED_IDENTIFIER_LENGTH) return undefined;
 
   const normalized = normalizeEmail(raw);
-
-  return normalized.length === 0 ? undefined : normalized;
+  if (normalized.length === 0) return undefined;
+  // Checked AFTER normalization, so `  ISC1:…` cannot slip past as a
+  // different string that normalizes into the reserved form.
+  if (RESERVED_DERIVED_VALUE_PREFIXES.some((prefix) => normalized.startsWith(prefix))) {
+    return undefined;
+  }
+  return normalized;
 }
 
 /**
