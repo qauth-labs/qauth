@@ -8,6 +8,16 @@ vi.mock('./config', () => ({
   },
 }));
 
+// Outside a request the real helpers throw; the tests drive them explicitly.
+const { mockGetRequestIP, mockGetRequestHeader } = vi.hoisted(() => ({
+  mockGetRequestIP: vi.fn(),
+  mockGetRequestHeader: vi.fn(),
+}));
+vi.mock('@tanstack/react-start/server', () => ({
+  getRequestIP: mockGetRequestIP,
+  getRequestHeader: mockGetRequestHeader,
+}));
+
 import { authServerClient } from './auth-server-client';
 
 function mockFetch(status: number, body: unknown, ok = status >= 200 && status < 300) {
@@ -20,6 +30,54 @@ function mockFetch(status: number, body: unknown, ok = status >= 200 && status <
 
 afterEach(() => {
   vi.restoreAllMocks();
+});
+
+// The portal is a proxy hop in front of the auth-server: without forwarding
+// the caller's address, every developer shares the portal's IP, and one caller
+// can fill the per-IP limits and the ip: lockout for all of them.
+describe('client address forwarding (X-Forwarded-For)', () => {
+  function sentHeaders(): Record<string, string> {
+    const [, init] = (global.fetch as unknown as ReturnType<typeof vi.fn>).mock.calls[0] as [
+      string,
+      RequestInit,
+    ];
+    return (init.headers ?? {}) as Record<string, string>;
+  }
+
+  it('sends the TCP peer of the request being served', async () => {
+    mockGetRequestIP.mockReturnValue('203.0.113.9');
+    mockGetRequestHeader.mockReturnValue(undefined);
+    mockFetch(200, { accessToken: 't', refreshToken: 'r', expiresIn: 900 });
+
+    await authServerClient.login('dev@example.com', 'pw');
+
+    expect(sentHeaders()['X-Forwarded-For']).toBe('203.0.113.9');
+    // The TCP peer, never an address the caller reported.
+    expect(mockGetRequestIP).toHaveBeenCalledWith();
+  });
+
+  it('appends the peer to an X-Forwarded-For the portal received, like any proxy hop', async () => {
+    mockGetRequestIP.mockReturnValue('10.0.0.3');
+    mockGetRequestHeader.mockImplementation((name: string) =>
+      name === 'x-forwarded-for' ? '203.0.113.9' : undefined
+    );
+    mockFetch(200, { accessToken: 't', refreshToken: 'r', expiresIn: 900 });
+
+    await authServerClient.login('dev@example.com', 'pw');
+
+    expect(sentHeaders()['X-Forwarded-For']).toBe('203.0.113.9, 10.0.0.3');
+  });
+
+  it('sends no header outside a request context', async () => {
+    mockGetRequestIP.mockImplementation(() => {
+      throw new Error('no request context');
+    });
+    mockFetch(200, { accessToken: 't', refreshToken: 'r', expiresIn: 900 });
+
+    await authServerClient.login('dev@example.com', 'pw');
+
+    expect(sentHeaders()['X-Forwarded-For']).toBeUndefined();
+  });
 });
 
 describe('authServerClient.register', () => {

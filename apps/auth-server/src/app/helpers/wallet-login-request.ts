@@ -320,9 +320,10 @@ export function resolveWalletLoginCapability(
  * The origin is `resolveIssuerIdentifier(env.JWT_ISSUER)` — the base
  * `responseUri` and `requestObjectBaseUri` are built on a few lines up, and the
  * ONLY sanctioned source of this deployment's public origin. Never the `Host`
- * header or `X-Forwarded-*`: Fastify runs without `trustProxy`, nothing in the
- * app reads them, and a redirect target shaped by a request header would hand
- * an attacker the host in the URL a wallet is told to open.
+ * header or `X-Forwarded-*`: `TRUST_PROXY` only lets named proxies report the
+ * client address, nothing in the app reads the host or protocol headers, and a
+ * redirect target shaped by a request header would hand an attacker the host in
+ * the URL a wallet is told to open.
  *
  * The code rides as a query parameter, not a fragment, though §8.2 permits
  * either (its fragment example is non-normative): a fragment never reaches the
