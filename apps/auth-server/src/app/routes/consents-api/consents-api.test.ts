@@ -2,6 +2,13 @@ import { JWTInvalidError, NotFoundError } from '@qauth-labs/shared-errors';
 import type { FastifyInstance } from 'fastify';
 import { describe, expect, it, type Mock, vi } from 'vitest';
 
+// The management-token guard has its own tests (helpers/management-token.test.ts).
+// Here it is a seam: every route must be registered behind exactly this guard.
+const { managementGuard } = vi.hoisted(() => ({ managementGuard: vi.fn() }));
+vi.mock('../../helpers/management-token', () => ({
+  createRequireManagementJwt: () => managementGuard,
+}));
+
 import consentsApiRoute, { autoPrefix } from './index';
 
 /**
@@ -98,12 +105,14 @@ describe('/api/consents', () => {
     expect(autoPrefix).toBe('/api/consents');
   });
 
-  it('gates BOTH endpoints on requireJwt', async () => {
-    const { fastify, ctx, requireJwt } = makeFastify();
+  it('gates BOTH endpoints on the management-token guard', async () => {
+    const { fastify, ctx } = makeFastify();
     await consentsApiRoute(fastify);
     expect(ctx.routes).toHaveLength(2);
     for (const route of ctx.routes) {
-      expect(route.preHandler, `${route.method} ${route.url} is unauthenticated`).toBe(requireJwt);
+      expect(route.preHandler, `${route.method} ${route.url} is unauthenticated`).toBe(
+        managementGuard
+      );
     }
   });
 
