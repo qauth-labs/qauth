@@ -40,20 +40,38 @@ interface TokenValidator {
   validate(token: string): Promise<ValidatedToken>;
 }
 
+/** `Bearer` plus the spaces after it; anchored, one quantifier, so matching is linear. */
+const BEARER_SCHEME = /^Bearer +/i;
+
+/** Line terminators, which a credential may not contain (RFC 6750 §2.1 b64token). */
+const LINE_TERMINATOR = /[\n\r\u2028\u2029]/;
+
 /**
  * Extract a bearer token from an `Authorization` header value (RFC 6750 §2.1).
  * The scheme match is case-insensitive; the credential is returned verbatim.
  * Returns `null` when the header is absent or not a non-empty Bearer.
+ *
+ * Parsed by slicing after a linear scheme match rather than with one
+ * `/^Bearer[ ]+(.+)$/i`: that pattern backtracks polynomially when many spaces
+ * precede a line terminator, and this function is exported for callers that
+ * may not have an HTTP parser's header rules in front of it.
  */
 export function extractBearerToken(authorization: string | undefined | null): string | null {
   if (!authorization) {
     return null;
   }
-  const match = /^Bearer[ ]+(.+)$/i.exec(authorization.trim());
-  if (!match) {
+  const value = authorization.trim();
+  const scheme = BEARER_SCHEME.exec(value);
+  if (!scheme) {
     return null;
   }
-  const token = match[1].trim();
+  // Checked before trimming: `trim()` would strip a leading line terminator
+  // and let `"Bearer \nx"` through, which the regex form never accepted.
+  const rest = value.slice(scheme[0].length);
+  if (LINE_TERMINATOR.test(rest)) {
+    return null;
+  }
+  const token = rest.trim();
   return token.length > 0 ? token : null;
 }
 

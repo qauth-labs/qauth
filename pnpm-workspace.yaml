@@ -75,6 +75,11 @@ overrides:
   browserslist: '>=4.28.7'
   smol-toml: '>=1.7.1'
   baseline-browser-mapping: '>=2.11.0'
+  # GHSA-9rgm-9g3h-6x36 (CVE-2026-81176): DoS on malformed input to devalue's
+  # parse, patched in 5.9.2. Reached only through astro (the docs-site build);
+  # nothing QAuth ships imports it. Caret, not '>=': astro depends on the 5.x
+  # line, and '>=' resolved straight to 6.x.
+  devalue: '^5.9.2'
   # `qs` is pulled only by express / body-parser / superagent, i.e. the test
   # tooling. QAuth serves on Fastify and imports `qs` nowhere, so neither the
   # array-limit bypass nor the isBuffer DoS is reachable from shipped code.
