@@ -562,7 +562,15 @@ This Docker setup is designed for **local development**. For production:
 1. **Use secrets management** (Vault, AWS Secrets Manager) instead of `.env` files
 2. **Use managed databases** (RDS, Cloud SQL) instead of containerized PostgreSQL
 3. **Use managed Redis** (ElastiCache, Memorystore) for high availability
-4. **Add reverse proxy** (nginx, Traefik) with TLS termination
+4. **Add reverse proxy** (nginx, Traefik) with TLS termination, and set
+   `TRUST_PROXY` to the proxy's address or CIDR (for example `10.0.0.0/8`, or
+   `uniquelocal` for a private network). Every per-IP rate limit and the
+   failed-login lockout key on the client address. Without `TRUST_PROXY`, the
+   auth-server sees every request as coming from the proxy, so all users share
+   one bucket and one caller can lock everyone out. The developer portal counts
+   as a proxy too: it forwards each visitor's address, so include the portal's
+   address as well. `TRUST_PROXY=true` and hop counts are rejected, because
+   they would let any caller choose its own address.
 5. **Configure resource limits** in Docker/Kubernetes
 6. **Set up monitoring** (Prometheus, Grafana)
 7. **Enable logging aggregation** (ELK, Loki)

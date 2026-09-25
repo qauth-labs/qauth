@@ -1,3 +1,5 @@
+import { getRequestHeader, getRequestIP } from '@tanstack/react-start/server';
+
 import { env } from './config';
 
 export type Result<T> =
@@ -278,6 +280,30 @@ async function apiRequestNoContent(
   }
 }
 
+/**
+ * The `X-Forwarded-For` value to send upstream, or `undefined` outside a
+ * request (tests, build).
+ *
+ * The portal calls the auth-server server-to-server, so without this every
+ * developer reaches it from the portal's address: one shared bucket for the
+ * per-IP login, registration and resend limits and the `ip:` failed-login
+ * lockout, which one caller could fill to lock everyone out. The portal acts
+ * as a proxy hop: it appends the TCP peer of the request it is serving to any
+ * `X-Forwarded-For` it received. The auth-server believes the header only when
+ * the portal's address (and any proxy in front of the portal) is in its
+ * `TRUST_PROXY` list, so a caller cannot choose its address by sending one.
+ */
+function forwardedFor(): string | undefined {
+  try {
+    const peer = getRequestIP();
+    if (!peer) return undefined;
+    const incoming = getRequestHeader('x-forwarded-for');
+    return incoming ? `${incoming}, ${peer}` : peer;
+  } catch {
+    return undefined;
+  }
+}
+
 async function apiRequest<T>(
   path: string,
   init: RequestInit & { skipContentType?: boolean }
@@ -288,6 +314,10 @@ async function apiRequest<T>(
   };
   if (!skipContentType && fetchInit.method !== 'GET') {
     headers['Content-Type'] = 'application/json';
+  }
+  const xff = forwardedFor();
+  if (xff) {
+    headers['X-Forwarded-For'] = xff;
   }
 
   try {

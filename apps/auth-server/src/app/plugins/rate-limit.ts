@@ -26,7 +26,8 @@ export const rateLimitPlugin = fp<FastifyPluginOptions>(
       timeWindow: defaultTimeWindow * 1000,
       redis: fastify.redis,
       keyGenerator: (request) => {
-        // TODO: Consider using a more secure key generator
+        // `request.ip` is the TCP peer unless TRUST_PROXY names the proxies
+        // allowed to report the client address (see main.ts).
         return request.ip || request.socket.remoteAddress || 'unknown';
       },
     });
