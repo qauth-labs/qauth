@@ -99,6 +99,101 @@ describe('resolveClient — pre-registered → CIMD priority (MCP 2025-11-25)', 
     expect(ssrfSafeGet).not.toHaveBeenCalled();
   });
 
+  // ADR-012 §3: the metadata document is the management surface. A
+  // materialised row is a cache of it, so every resolution re-applies the
+  // document, CIMD_ENABLED and the trust policy.
+  describe('re-resolves a materialised CIMD client on every use', () => {
+    const DOC = {
+      client_id: CIMD_ID,
+      client_name: 'Example',
+      redirect_uris: ['https://app.example.com/cb'],
+    };
+
+    async function materialise() {
+      const stub = fastifyStub();
+      stub.fastify.repositories.oauthClients.findByClientId.mockResolvedValue(undefined);
+      ssrfSafeGet.mockResolvedValue(ok(DOC));
+      const { client } = await resolveClient(stub.fastify, 'realm-1', CIMD_ID);
+      expect(client).not.toBeNull();
+      // From here on the row exists, exactly as after a first authorize.
+      stub.fastify.repositories.oauthClients.findByClientId.mockResolvedValue(stub.upserted[0]);
+      stub.fastify.repositories.oauthClients.upsertCimdClient.mockClear();
+      stub.fastify.redis.get.mockResolvedValue(null); // expire the document cache
+      return stub;
+    }
+
+    it('applies an edited document (new redirect_uris) to the stored client', async () => {
+      const { fastify } = await materialise();
+      ssrfSafeGet.mockResolvedValue(
+        ok({ ...DOC, redirect_uris: ['https://app.example.com/new-cb'] })
+      );
+
+      const { client } = await resolveClient(fastify, 'realm-1', CIMD_ID);
+
+      expect(fastify.repositories.oauthClients.upsertCimdClient).toHaveBeenCalledOnce();
+      expect(client!.redirectUris).toEqual(['https://app.example.com/new-cb']);
+    });
+
+    it('writes nothing when the document is unchanged', async () => {
+      const { fastify, upserted } = await materialise();
+      ssrfSafeGet.mockResolvedValue(ok(DOC));
+
+      const { client } = await resolveClient(fastify, 'realm-1', CIMD_ID);
+
+      expect(client).toBe(upserted[0]);
+      expect(fastify.repositories.oauthClients.upsertCimdClient).not.toHaveBeenCalled();
+    });
+
+    it('fails closed once CIMD is switched off, even for a stored client', async () => {
+      const { fastify } = await materialise();
+      ENV.CIMD_ENABLED = false;
+
+      const { client, reason } = await resolveClient(fastify, 'realm-1', CIMD_ID);
+
+      expect(client).toBeNull();
+      expect(reason).toBeDefined();
+    });
+
+    it('fails closed once the host leaves the trust allowlist', async () => {
+      const { fastify } = await materialise();
+      (ENV as { CIMD_TRUST_POLICY: string }).CIMD_TRUST_POLICY = 'allowlist';
+      ENV.CIMD_TRUSTED_DOMAINS = ['other.example.com'];
+      try {
+        const { client } = await resolveClient(fastify, 'realm-1', CIMD_ID);
+        expect(client).toBeNull();
+      } finally {
+        (ENV as { CIMD_TRUST_POLICY: string }).CIMD_TRUST_POLICY = 'accept-any-https';
+        ENV.CIMD_TRUSTED_DOMAINS = [];
+      }
+    });
+
+    it('fails closed when the document can no longer be fetched', async () => {
+      const { fastify } = await materialise();
+      ssrfSafeGet.mockResolvedValue({ status: 404, body: '', headers: {} });
+
+      const { client } = await resolveClient(fastify, 'realm-1', CIMD_ID);
+
+      expect(client).toBeNull();
+    });
+
+    it('never lets the document re-enable a client the server disabled', async () => {
+      const { fastify, upserted } = await materialise();
+      fastify.repositories.oauthClients.findByClientId.mockResolvedValue({
+        ...upserted[0],
+        enabled: false,
+      });
+      ssrfSafeGet.mockResolvedValue(
+        ok({ ...DOC, redirect_uris: ['https://app.example.com/new-cb'] })
+      );
+
+      await resolveClient(fastify, 'realm-1', CIMD_ID);
+
+      expect(fastify.repositories.oauthClients.upsertCimdClient).toHaveBeenCalledWith(
+        expect.objectContaining({ enabled: false })
+      );
+    });
+  });
+
   it('materialises a CIMD client when not pre-registered (priority 2)', async () => {
     const { fastify, upserted } = fastifyStub();
     fastify.repositories.oauthClients.findByClientId.mockResolvedValue(undefined);
