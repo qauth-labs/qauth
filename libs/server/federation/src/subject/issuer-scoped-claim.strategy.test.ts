@@ -281,6 +281,59 @@ describe('createIssuerScopedClaimStrategy (ADR-009 §2)', () => {
     });
   });
 
+  // The issuer-scoped subject is `isc1:` + a hash of PUBLIC inputs (issuer,
+  // claim name, claim value), and it shares the external_sub column with typed
+  // identifiers. If an attacker could type a victim's future subject while
+  // withholding the claim, the fallback would enrol an account under it, and
+  // the victim's first real login would land in that account.
+  describe('an asserted identifier cannot take the issuer-scoped form', () => {
+    async function victimSubject() {
+      const victimCredential = await validatedFixtureCredential({
+        issuer: OPTED_IN_ISSUER,
+        claims: { ...EMPLOYEE_CLAIMS, employee_number: 'E-VICTIM' },
+      });
+      return deriveIssuerScopedSubject(victimCredential, SUBJECT_CLAIM) as string;
+    }
+
+    it('refuses (not no-match) a presentation that asserts an isc1: identifier', async () => {
+      const subject = await victimSubject();
+      // The attacker's own credential, with the subject claim withheld so the
+      // strategy falls back to the typed identifier.
+      const attackerCredential = await validatedFixtureCredential({
+        issuer: OPTED_IN_ISSUER,
+        claims: { given_name: 'Mallory', family_name: 'Doe' },
+      });
+      const lookup = lookupOf({});
+
+      await expect(
+        strategy().resolve(attackerCredential, contextOf(lookup, { assertedIdentifier: subject }))
+      ).resolves.toEqual({ kind: 'rejected' });
+      // No lookup was keyed on the victim's subject, and nothing can be enrolled.
+      expect(lookup.assertedCalls).toEqual([]);
+      expect(
+        strategy().deriveExternalSub(
+          attackerCredential,
+          contextOf(lookup, { assertedIdentifier: subject })
+        )
+      ).toBeNull();
+    });
+
+    it('refuses the same identifier typed in upper case with padding', async () => {
+      const subject = await victimSubject();
+      const attackerCredential = await validatedFixtureCredential({
+        issuer: OTHER_ISSUER,
+        claims: EMPLOYEE_CLAIMS,
+      });
+
+      expect(
+        strategy().deriveExternalSub(
+          attackerCredential,
+          contextOf(lookupOf({}), { assertedIdentifier: `  ${subject.toUpperCase()} ` })
+        )
+      ).toBeNull();
+    });
+  });
+
   describe('configuration is validated once, loudly', () => {
     it.each([
       ['no issuers', []],
