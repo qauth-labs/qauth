@@ -117,7 +117,7 @@ export const SD_JWT_VC_UNMAPPED_CLAIMS: Readonly<Record<string, string>> = Objec
     'a biometric, and a large binary; recording it as an attribute serves no claim QAuth emits',
   picture: 'as `portrait`',
   email_verified:
-    'a verification FLAG, not an attribute. Wallet rows are written `verified=true` because a trusted issuer signed the claim; a credential-supplied flag must never be able to lower that, and cannot be allowed to raise anything either',
+    'a verification FLAG, not an attribute. It is not a row of its own: `extractWalletAttributes` reads it to write the EMAIL row `verified=false` when the issuer signed `email_verified: false`. It can only lower the email row, never raise anything',
   issuing_authority:
     'metadata about the ATTESTATION rather than an assertion about the person; it belongs in `user_credentials.credential_data`, which is where `buildWalletCredentialData` records it',
   issuing_country: 'as `issuing_authority`',

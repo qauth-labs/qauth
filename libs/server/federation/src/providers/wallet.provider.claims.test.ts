@@ -54,18 +54,58 @@ describe('extractWalletAttributes (#235)', () => {
     }
   });
 
-  it('marks every row verified, because the ISSUER signed it and #236 accepted the issuer', async () => {
-    // Not read from the credential, and it must not be: a credential asserting
-    // `email_verified: false` may not downgrade what QAuth cryptographically
-    // established about the claim it signed.
+  it('marks rows verified because the ISSUER signed them and #236 accepted the issuer', async () => {
     const credential = await validatedFixtureCredential({
-      claims: { email: 'alice@example.com', email_verified: false },
+      claims: { email: 'alice@example.com', given_name: 'Alice' },
     });
 
     expect(extractWalletAttributes(credential)).toEqual([
       { source: 'wallet', attrKey: EMAIL_ATTR_KEY, attrValue: 'alice@example.com', verified: true },
+      { source: 'wallet', attrKey: 'given_name', attrValue: 'Alice', verified: true },
     ]);
   });
+
+  // The issuer signed "this is the holder's address, and it is NOT verified".
+  // Storing it verified would claim more than the issuer did, and
+  // resolveEmailClaims would emit email_verified: true downstream.
+  it('writes the email row UNVERIFIED when the issuer itself signed email_verified: false', async () => {
+    const credential = await validatedFixtureCredential({
+      claims: { email: 'alice@example.com', email_verified: false, given_name: 'Alice' },
+    });
+
+    expect(extractWalletAttributes(credential)).toEqual([
+      {
+        source: 'wallet',
+        attrKey: EMAIL_ATTR_KEY,
+        attrValue: 'alice@example.com',
+        verified: false,
+      },
+      // Only the email row: the flag says nothing about any other claim.
+      { source: 'wallet', attrKey: 'given_name', attrValue: 'Alice', verified: true },
+    ]);
+  });
+
+  it.each([
+    ['true', true],
+    ['the string "false"', 'false'],
+    ['null', null],
+  ])(
+    'treats email_verified=%s as no denial (only a signed boolean false lowers the row)',
+    async (_label, value) => {
+      const credential = await validatedFixtureCredential({
+        claims: { email: 'alice@example.com', email_verified: value },
+      });
+
+      expect(extractWalletAttributes(credential)).toEqual([
+        {
+          source: 'wallet',
+          attrKey: EMAIL_ATTR_KEY,
+          attrValue: 'alice@example.com',
+          verified: true,
+        },
+      ]);
+    }
+  );
 
   describe('expiry (ADR-002: an attribute must not outlive the credential asserting it)', () => {
     it("carries the credential's exp onto every row", async () => {
