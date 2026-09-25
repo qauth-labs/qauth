@@ -972,6 +972,60 @@ describe('GET /oauth/authorize — step-up authentication (ADR-007 §2, #185)', 
     expect(state.redirected).toContain('code=');
     expect(fastify.repositories.authorizationCodes.create).toHaveBeenCalledOnce();
   });
+
+  // Step-up compares requested scopes against a prior grant, so an EMPTY scope
+  // set (every CIMD client; any client that omits `scope`) elevates nothing.
+  // That must not read as "no interaction required": with no stored grant the
+  // interactive path shows the consent screen, so prompt=none answers
+  // consent_required and mints nothing.
+  it('prompt=none returns consent_required when NO consent exists and the scope set is empty', async () => {
+    const { fastify, state } = await run({
+      client: CLIENT,
+      scope: '',
+      priorConsent: null,
+      createdAt: Date.now() - 1000,
+      prompt: 'none',
+      sid: 'sid-su-11',
+    });
+    expect(state.redirected).toContain('https://example.com/cb');
+    expect(state.redirected).toContain('error=consent_required');
+    expect(state.redirected).not.toContain('/ui/consent');
+    expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
+  });
+
+  it('prompt=none returns consent_required for a dynamic client still in its badge window', async () => {
+    // The interactive path always re-shows consent for a freshly registered
+    // dynamic client, even over a remembered grant; prompt=none must not be
+    // the way around that.
+    const freshDynamicClient = {
+      ...CLIENT,
+      clientId: 'app-fresh-dcr',
+      dynamicRegisteredAt: Date.now() - 60 * 1000,
+    } as unknown as typeof CLIENT;
+    const { fastify, state } = await run({
+      client: freshDynamicClient,
+      scope: 'email',
+      priorConsent: ['email'],
+      createdAt: Date.now() - 1000,
+      prompt: 'none',
+      sid: 'sid-su-12',
+    });
+    expect(state.redirected).toContain('error=consent_required');
+    expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
+  });
+
+  it('prompt=none still mints when a stored grant covers an empty scope set', async () => {
+    const { fastify, state } = await run({
+      client: CLIENT,
+      scope: '',
+      priorConsent: ['email'],
+      createdAt: Date.now() - 1000,
+      prompt: 'none',
+      sid: 'sid-su-13',
+    });
+    expect(state.redirected).toContain('code=');
+    expect(fastify.repositories.authorizationCodes.create).toHaveBeenCalledOnce();
+  });
 });
 
 describe('GET /oauth/authorize — Bearer path step-up (ADR-007 §2, #185)', () => {
