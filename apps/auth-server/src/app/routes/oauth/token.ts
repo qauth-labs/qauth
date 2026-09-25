@@ -46,6 +46,7 @@ import { getOrCreateDefaultRealm } from '../../helpers/realm';
 import { resolveRealmRateLimitMax } from '../../helpers/realm-rate-limit';
 import { highestAgentModeInScopes } from '../../helpers/scope-modes';
 import { ensureMinimumResponseTime } from '../../helpers/timing';
+import { isJtiRevoked } from '../../helpers/token-revocation';
 import {
   type IdJagTokenResponse,
   JWT_BEARER_GRANT_TYPE,
@@ -544,6 +545,23 @@ async function handleAuthorizationCode(
     });
     throw new NotFoundError('User', authCode.userId);
   }
+  // A code outlives the session that produced it by up to its TTL, and a user
+  // disabled in between must not receive tokens for it — the same gate the
+  // refresh, token-exchange and jwt-bearer grants apply (RFC 9700 §4.14). The
+  // code is already burned above, so it cannot be retried.
+  if (!user.enabled) {
+    await fastify.repositories.auditLogs.create({
+      userId: user.id,
+      oauthClientId: client.id,
+      event: 'oauth.token.exchange.failure',
+      eventType: 'token',
+      success: false,
+      ipAddress: request.ip,
+      userAgent: request.headers['user-agent'] || null,
+      metadata: { error: 'invalid_grant: user_disabled' },
+    });
+    throw new InvalidGrantError('Invalid or expired authorization code');
+  }
 
   const scopeString = authCode.scopes.length > 0 ? authCode.scopes.join(' ') : undefined;
 
@@ -846,6 +864,43 @@ async function handleClientCredentials(
 }
 
 /**
+ * Revoke a refresh-token family on replay and answer `invalid_grant`.
+ *
+ * RFC 9700 §2.2.2 / OAuth 2.1 §4.3.1: presenting a refresh token that is no
+ * longer live means either the client or an attacker holds a copy, so every
+ * token descended from the same grant is revoked. Reached two ways — the token
+ * was already revoked when read, or a concurrent request rotated it between
+ * the read and this request's compare-and-set — and both are the same event.
+ */
+async function rejectRefreshTokenReplay(
+  ctx: HandlerContext<TokenExchangeRefreshBody>,
+  storedToken: { userId: string; familyId: string },
+  detection: 'revoked_on_read' | 'lost_rotation_race'
+): Promise<never> {
+  const { fastify, request, client } = ctx;
+  const familyRevokedCount = await fastify.repositories.refreshTokens.revokeFamily(
+    storedToken.familyId,
+    'replay_detected'
+  );
+  await fastify.repositories.auditLogs.create({
+    userId: storedToken.userId,
+    oauthClientId: client.id,
+    event: 'oauth.token.exchange.failure',
+    eventType: 'security',
+    success: false,
+    ipAddress: request.ip,
+    userAgent: request.headers['user-agent'] || null,
+    metadata: {
+      error: 'invalid_grant: refresh token replay detected',
+      detection,
+      familyId: storedToken.familyId,
+      familyTokensRevoked: familyRevokedCount,
+    },
+  });
+  throw new InvalidGrantError('Invalid or expired refresh token');
+}
+
+/**
  * Handle the refresh_token grant (RFC 6749 §6, OAuth 2.1 §4.3.1).
  *
  * Security invariants enforced here:
@@ -859,8 +914,9 @@ async function handleClientCredentials(
  *   revoke the entire family (every rotation sharing `family_id`) so any
  *   still-active descendant cannot be exchanged.
  * - Rotation: the presented token is marked `revoked='rotated'` BEFORE
- *   the new refresh token is persisted — never issue two concurrently
- *   live tokens for the same link in the family chain.
+ *   the new refresh token is persisted, by a compare-and-set that only one
+ *   concurrent request can win — never issue two concurrently live tokens
+ *   for the same link in the family chain. The loser is a replay.
  * - Down-scoping: a `scope` param may request a subset of the original
  *   scopes; any scope not present in the original set → `invalid_scope`.
  *   Omitting the parameter reuses the original scopes verbatim.
@@ -941,25 +997,7 @@ async function handleRefreshToken(
   // Replay detection — a revoked token in the correct family MUST trigger
   // family-wide revocation per RFC 9700 §2.2.2 / OAuth 2.1 §4.3.1.
   if (storedToken.revoked) {
-    const familyRevokedCount = await fastify.repositories.refreshTokens.revokeFamily(
-      storedToken.familyId,
-      'replay_detected'
-    );
-    await fastify.repositories.auditLogs.create({
-      userId: storedToken.userId,
-      oauthClientId: client.id,
-      event: 'oauth.token.exchange.failure',
-      eventType: 'security',
-      success: false,
-      ipAddress: request.ip,
-      userAgent: request.headers['user-agent'] || null,
-      metadata: {
-        error: 'invalid_grant: refresh token replay detected',
-        familyId: storedToken.familyId,
-        familyTokensRevoked: familyRevokedCount,
-      },
-    });
-    throw new InvalidGrantError('Invalid or expired refresh token');
+    return rejectRefreshTokenReplay(ctx, storedToken, 'revoked_on_read');
   }
 
   if (storedToken.expiresAt <= Date.now()) {
@@ -1034,6 +1072,33 @@ async function handleRefreshToken(
     grantedScopes = storedToken.scopes;
   }
 
+  // Clamp to the agent's CURRENT server-side `max_agent_mode` (ADR-007 §2,
+  // #184), exactly as client_credentials, jwt-bearer and token exchange do. A
+  // refresh token carries the scopes of the grant it came from; if the
+  // operator has since lowered the cap (or the client is no longer an agent),
+  // refreshing must not keep minting the old mode. The client may narrow with
+  // `scope` to continue within the new cap. Fail-closed via
+  // `toAgentScopeContext`.
+  try {
+    enforceAgentScopeCap(grantedScopes, toAgentScopeContext(client));
+  } catch (err) {
+    await fastify.repositories.auditLogs.create({
+      userId: user.id,
+      oauthClientId: client.id,
+      event: 'oauth.token.exchange.failure',
+      eventType: 'token',
+      success: false,
+      ipAddress: request.ip,
+      userAgent: request.headers['user-agent'] || null,
+      metadata: {
+        error: 'invalid_scope: refreshed scope exceeds the agent scope mode',
+        grantedScopes,
+        maxAgentMode: client.maxAgentMode ?? null,
+      },
+    });
+    throw err;
+  }
+
   // RFC 8707 §2.2: refresh requests MAY include `resource` to narrow the
   // audience of the minted access token, but MUST NOT request a resource
   // outside the set bound to the refresh token (which itself descends
@@ -1065,16 +1130,26 @@ async function handleRefreshToken(
   // Rotate atomically: revoke the presented token and insert the new one
   // inside a single transaction so a crash/failure between the two steps
   // can never leave the user with a revoked token and no replacement.
-  // The revoke runs first inside the transaction so a concurrent replay
-  // attempt waits on the row lock and then sees the token as already
-  // revoked (→ family-revoke path). The unique index on `token_hash`
+  //
+  // The revoke is a compare-and-set on `revoked = false`
+  // (`revokeIfActive`). The liveness check above read a snapshot, and two
+  // concurrent presentations of the same token can both pass it; the second
+  // UPDATE then waits on the first's row lock, re-evaluates the predicate,
+  // and matches nothing. That request writes nothing, and the lost race is
+  // handled as the replay it is (family revoke + invalid_grant) — never as a
+  // second child in the same family. The unique index on `token_hash`
   // protects against the degenerate collision case.
   const { token: newRefreshToken, tokenHash: newRefreshTokenHash } =
     fastify.jwtUtils.generateRefreshToken();
   const refreshTokenExpiresAt = Date.now() + fastify.jwtUtils.getRefreshTokenLifespan() * 1000;
 
-  await fastify.db.transaction(async (tx) => {
-    await fastify.repositories.refreshTokens.revoke(storedToken.id, 'rotated', tx);
+  const rotated = await fastify.db.transaction(async (tx) => {
+    const revoked = await fastify.repositories.refreshTokens.revokeIfActive(
+      storedToken.id,
+      'rotated',
+      tx
+    );
+    if (!revoked) return false;
     await fastify.repositories.refreshTokens.create(
       {
         userId: user.id,
@@ -1091,7 +1166,12 @@ async function handleRefreshToken(
       },
       tx
     );
+    return true;
   });
+
+  if (!rotated) {
+    return rejectRefreshTokenReplay(ctx, storedToken, 'lost_rotation_race');
+  }
 
   const scopeString = grantedScopes.length > 0 ? grantedScopes.join(' ') : undefined;
 
@@ -1342,6 +1422,26 @@ async function handleTokenExchange(
       await auditFailure('invalid_request: actor_token failed verification');
       throw new InvalidRequestError('actor_token is not a valid access token');
     }
+  }
+
+  // GATE 3a — RFC 7009 revocation. `verifyAccessToken` checks signature,
+  // expiry and issuer only; the jti denylist `/oauth/revoke` writes is applied
+  // by `requireJwt` and introspection, not by the bare verifier. Without this
+  // check a revoked subject or actor token would still be exchanged for a
+  // fresh delegated token with a new, non-revoked jti. A revoked token is
+  // "unacceptable" under RFC 8693 §2.2.2 → invalid_request. A denylist store
+  // outage throws out of `isJtiRevoked` and fails the exchange closed.
+  if (await isJtiRevoked(fastify, subjectPayload.jti)) {
+    await auditFailure('invalid_request: subject_token has been revoked', {
+      jti: subjectPayload.jti,
+    });
+    throw new InvalidRequestError('subject_token has been revoked');
+  }
+  if (actorPayload && (await isJtiRevoked(fastify, actorPayload.jti))) {
+    await auditFailure('invalid_request: actor_token has been revoked', {
+      jti: actorPayload.jti,
+    });
+    throw new InvalidRequestError('actor_token has been revoked');
   }
 
   // GATE 3c — bind the subject token to the requesting agent (RFC 8693 leaves

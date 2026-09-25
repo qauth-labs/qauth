@@ -495,8 +495,17 @@ export default async function (fastify: FastifyInstance) {
       // OIDC Core §3.1.2.1: `prompt=none` forbids ANY user-facing UI. If
       // step-up would otherwise show the login or consent screen, return the
       // matching bare OIDC error to the client instead of redirecting to UI.
+      //
+      // Step-up only compares the requested scopes against a prior grant, so
+      // it reports nothing when the scope set is empty (every CIMD client, or
+      // any client that omits `scope`). The consent screen below is gated on
+      // `canSkipConsent` as well, and `prompt=none` must answer the same
+      // question: no stored, unrevoked grant covering this request (or a
+      // dynamic client still in its badge window) means `consent_required`.
       if (prompt === 'none') {
-        const oidcError = stepUpErrorForPromptNone(stepUp);
+        const oidcError =
+          stepUpErrorForPromptNone(stepUp) ??
+          (canSkipConsent(existingConsent, client, scopes) ? null : 'consent_required');
         if (oidcError) {
           await fastify.repositories.auditLogs.create({
             userId,
@@ -517,7 +526,7 @@ export default async function (fastify: FastifyInstance) {
           return reply.redirect(
             buildRedirectUrl(redirectUri, {
               error: oidcError,
-              error_description: 'step-up interaction is required but prompt=none was requested',
+              error_description: 'user interaction is required but prompt=none was requested',
               state: state ?? undefined,
               iss,
             }),

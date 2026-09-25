@@ -4,6 +4,7 @@ import { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 
 import { listConsentsForUser, revokeConsentForUser } from '../../helpers/consent-management';
+import { createRequireManagementJwt } from '../../helpers/management-token';
 
 /**
  * Consent management for the developer portal (issue #366).
@@ -51,7 +52,7 @@ const listResponseSchema = z.object({
 /**
  * The authenticated developer's `users.id`.
  *
- * `fastify.requireJwt` has already rejected a missing or invalid token by the
+ * The management-token guard has already rejected a missing or invalid token by the
  * time a handler runs, so an absent `sub` here is an internal invariant
  * violation rather than a client error — thrown as `JWTInvalidError` (401)
  * rather than trusted, matching `/api/clients`'s `requireDeveloperId`.
@@ -65,10 +66,12 @@ function requireUserId(request: FastifyRequest): string {
 }
 
 export default async function (fastify: FastifyInstance) {
+  const requireManagementJwt = createRequireManagementJwt(fastify);
+
   fastify.withTypeProvider<ZodTypeProvider>().get(
     '/',
     {
-      preHandler: fastify.requireJwt,
+      preHandler: requireManagementJwt,
       schema: {
         description:
           'List the active OAuth consents belonging to the authenticated user. Requires a developer Bearer access token. Drives the developer portal revocation screen (issue #366).',
@@ -88,7 +91,7 @@ export default async function (fastify: FastifyInstance) {
   fastify.withTypeProvider<ZodTypeProvider>().delete(
     '/:id',
     {
-      preHandler: fastify.requireJwt,
+      preHandler: requireManagementJwt,
       schema: {
         description:
           "Revoke one of the authenticated user's OAuth consents. Returns 404 if the consent does not exist or belongs to another user, so the API never reveals that another user's consent id exists. Requires a developer Bearer access token.",

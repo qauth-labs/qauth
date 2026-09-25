@@ -2,6 +2,8 @@ import { JWTInvalidError } from '@qauth-labs/shared-errors';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 
+import { assertManagementToken } from './management-token';
+
 /**
  * Who owns a dynamically registered client (issue #374).
  *
@@ -39,7 +41,9 @@ import { z } from 'zod';
  *
  * SECURITY. This is strictly additive. The token goes through the same
  * verification `requireJwt` uses — this server's issuer pinned (RFC 9700
- * mix-up defence), signature checked, revocation honoured — and a developer can
+ * mix-up defence), signature checked, revocation honoured — and must be the
+ * developer-portal management token (`assertManagementToken`), the same one
+ * `POST /api/clients` requires. A developer can
  * only ever attribute a client to themselves, because the owner is taken from
  * the token's own `sub`. It grants no capability that authenticating to
  * `POST /api/clients` would not already grant.
@@ -89,6 +93,9 @@ export async function resolveRegistrationDeveloperId(
   // one is used.
   const verify = fastify.requireJwt as unknown as (req: FastifyRequest) => Promise<void>;
   await verify(request);
+  // Attribution makes the caller a client's owner, so it takes the same
+  // management token `POST /api/clients` does — not any token for this user.
+  await assertManagementToken(fastify, request.jwtPayload);
 
   const sub = request.jwtPayload?.sub;
   if (!sub || !uuidSubjectSchema.safeParse(sub).success) {

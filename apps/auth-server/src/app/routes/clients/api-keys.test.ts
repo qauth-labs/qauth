@@ -16,6 +16,13 @@ vi.mock('../../../config/env', () => ({
   },
 }));
 
+// The management-token guard has its own tests (helpers/management-token.test.ts).
+// Here it is a seam: every route must be registered behind exactly this guard.
+const { managementGuard } = vi.hoisted(() => ({ managementGuard: vi.fn() }));
+vi.mock('../../helpers/management-token', () => ({
+  createRequireManagementJwt: () => managementGuard,
+}));
+
 import { registerApiKeyRoutes } from './api-keys';
 
 type RouteHandler = (request: FastifyRequest, reply: FastifyReply) => Promise<unknown>;
@@ -132,7 +139,7 @@ function authedRequest(overrides: Record<string, unknown> = {}): FastifyRequest 
 }
 
 describe('API key routes — registration & auth', () => {
-  it('registers POST/GET/DELETE under the client-scoped paths, all behind requireJwt', async () => {
+  it('registers POST/GET/DELETE under the client-scoped paths, all behind the management-token guard', async () => {
     const { fastify, ctx } = makeFastify();
     await registerApiKeyRoutes(fastify);
 
@@ -140,9 +147,9 @@ describe('API key routes — registration & auth', () => {
     const get = route(ctx, 'GET /:clientId/api-keys');
     const del = route(ctx, 'DELETE /:clientId/api-keys/:keyId');
 
-    expect(post.options.preHandler).toBe(fastify.requireJwt);
-    expect(get.options.preHandler).toBe(fastify.requireJwt);
-    expect(del.options.preHandler).toBe(fastify.requireJwt);
+    expect(post.options.preHandler).toBe(managementGuard);
+    expect(get.options.preHandler).toBe(managementGuard);
+    expect(del.options.preHandler).toBe(managementGuard);
   });
 });
 

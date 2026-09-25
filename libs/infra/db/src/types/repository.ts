@@ -269,6 +269,19 @@ export interface RefreshTokensRepository {
    */
   revoke(id: string, reason?: string, tx?: DbClient): Promise<RefreshToken>;
   /**
+   * Revoke a token by ID only if it is still live: a compare-and-set on
+   * `revoked = false`.
+   *
+   * Refresh-token rotation uses this instead of `revoke`. Two concurrent
+   * presentations of one token serialise on the row lock; Postgres then
+   * re-evaluates the predicate for the second, finds `revoked = true`, and
+   * updates nothing. The caller treats that as a replay.
+   *
+   * @returns The revoked row, or `undefined` when the token was already
+   *   revoked (or does not exist).
+   */
+  revokeIfActive(id: string, reason: string, tx?: DbClient): Promise<RefreshToken | undefined>;
+  /**
    * Revoke all tokens in a refresh-token family.
    *
    * Triggered when a revoked token is replayed: the whole family (every
@@ -284,6 +297,21 @@ export interface RefreshTokensRepository {
    * Useful for "logout all sessions" functionality
    */
   revokeAllForUser(userId: string, reason?: string, tx?: DbClient): Promise<void>;
+  /**
+   * Revoke every active refresh token one user holds for one client.
+   *
+   * Consent revocation calls this: withdrawing a grant must also end the
+   * refresh tokens minted under it, or the client keeps refreshing on a grant
+   * that no longer exists.
+   *
+   * @returns Count of rows revoked by this call.
+   */
+  revokeAllForUserAndClient(
+    userId: string,
+    oauthClientId: string,
+    reason: string,
+    tx?: DbClient
+  ): Promise<number>;
   /**
    * Delete expired tokens
    * Returns count of deleted tokens

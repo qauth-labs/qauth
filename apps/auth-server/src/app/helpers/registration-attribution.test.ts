@@ -1,7 +1,12 @@
 import { JWTInvalidError } from '@qauth-labs/shared-errors';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+// The management-token check has its own tests (management-token.test.ts);
+// here it is a seam, so these tests keep exercising attribution alone.
+vi.mock('./management-token', () => ({ assertManagementToken: vi.fn(async () => undefined) }));
+
+import { assertManagementToken } from './management-token';
 import { resolveRegistrationDeveloperId } from './registration-attribution';
 
 /**
@@ -28,6 +33,11 @@ function makeRequest(authorization?: string): FastifyRequest {
 }
 
 describe('resolveRegistrationDeveloperId', () => {
+  beforeEach(() => {
+    vi.mocked(assertManagementToken).mockClear();
+    vi.mocked(assertManagementToken).mockImplementation(async () => undefined);
+  });
+
   it('returns null with no Authorization header — open-mode DCR is unchanged', async () => {
     const fastify = makeFastify();
     const request = makeRequest();
@@ -97,5 +107,37 @@ describe('resolveRegistrationDeveloperId', () => {
     await expect(
       resolveRegistrationDeveloperId(fastify, makeRequest('Bearer subless.token'))
     ).rejects.toThrow(JWTInvalidError);
+  });
+  it('requires the developer-portal management token, not any token for the user', async () => {
+    // Attribution makes the caller a client's owner, so it takes the token
+    // POST /api/clients takes. A token issued to another client carries the
+    // same sub and must not be enough.
+    const fastify = makeFastify((request) => {
+      (request as { jwtPayload?: unknown }).jwtPayload = {
+        sub: DEVELOPER_ID,
+        clientId: 'third-party-app',
+      };
+    });
+    vi.mocked(assertManagementToken).mockRejectedValueOnce(
+      new JWTInvalidError('Access token was not issued for the management API')
+    );
+    const request = makeRequest('Bearer other-client.token');
+
+    await expect(resolveRegistrationDeveloperId(fastify, request)).rejects.toThrow(JWTInvalidError);
+    expect(assertManagementToken).toHaveBeenCalledWith(fastify, {
+      sub: DEVELOPER_ID,
+      clientId: 'third-party-app',
+    });
+  });
+
+  it('checks the management token only after requireJwt verified it', async () => {
+    const fastify = makeFastify(() => {
+      throw new JWTInvalidError('bad signature');
+    });
+
+    await expect(
+      resolveRegistrationDeveloperId(fastify, makeRequest('Bearer forged.token'))
+    ).rejects.toThrow('bad signature');
+    expect(assertManagementToken).not.toHaveBeenCalled();
   });
 });

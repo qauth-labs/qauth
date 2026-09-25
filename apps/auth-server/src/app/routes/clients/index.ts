@@ -8,6 +8,7 @@ import { z } from 'zod';
 import { env } from '../../../config/env';
 import { validateRedirectUri } from '../../helpers/dynamic-client-registration';
 import { type EnvironmentPolicy, resolveEnvironmentPolicy } from '../../helpers/environment-policy';
+import { createRequireManagementJwt } from '../../helpers/management-token';
 import { getOrCreateDefaultRealm } from '../../helpers/realm';
 import {
   clientSchema,
@@ -45,12 +46,14 @@ type OAuthClientRow = Awaited<
  *
  * Auth model
  * ----------
- * Every endpoint requires a developer access token via `fastify.requireJwt`
- * (Bearer JWT), mirroring `/oauth/userinfo`. This is the same credential the
- * developer portal already holds: the portal stores the access token from the
- * login flow and sends it as `Authorization: Bearer <token>`. `requireJwt`
- * throws `JWTInvalidError` (HTTP 401) for a missing/malformed/invalid token,
- * so unauthenticated callers never reach a handler.
+ * Every endpoint requires the developer-portal management token via
+ * `createRequireManagementJwt` (Bearer JWT): the access token `/auth/login`
+ * mints for the system client, which the portal stores and sends as
+ * `Authorization: Bearer <token>`. The guard runs `fastify.requireJwt`
+ * (signature, issuer, revocation) and then `assertManagementToken`, which
+ * rejects a token issued to any other client, bound to any other audience, or
+ * carrying an `act` claim. Both throw `JWTInvalidError` (HTTP 401), so
+ * unauthenticated callers never reach a handler.
  *
  * `request.jwtPayload.sub` is the developer's `users.id`. Ownership is scoped
  * strictly by `oauth_clients.developer_id`, so a developer can only ever see
@@ -119,7 +122,7 @@ function toClientResponse(client: OAuthClientRow, policy: EnvironmentPolicy) {
 const clientIdParamsSchema = z.object({ id: z.uuid() });
 
 /**
- * Pull the developer's `users.id` off the verified JWT. `requireJwt` populates
+ * Pull the developer's `users.id` off the verified JWT. The guard populates
  * `jwtPayload`, but we guard `sub` explicitly so we never act with an
  * undefined owner (defense-in-depth, matching the list route).
  */
@@ -301,10 +304,12 @@ async function auditBestEffort(fastify: FastifyInstance, entry: ClientAuditEntry
 }
 
 export default async function (fastify: FastifyInstance) {
+  const requireManagementJwt = createRequireManagementJwt(fastify);
+
   fastify.withTypeProvider<ZodTypeProvider>().get(
     '/',
     {
-      preHandler: fastify.requireJwt,
+      preHandler: requireManagementJwt,
       schema: {
         description:
           'List the OAuth clients owned by the authenticated developer. Scoped by oauth_clients.developer_id. Requires a developer Bearer access token. Never returns the client secret. (Phase 2.2, issue #85.)',
@@ -316,7 +321,7 @@ export default async function (fastify: FastifyInstance) {
     async (request, reply) => {
       const payload = request.jwtPayload;
       if (!payload || !payload.sub) {
-        // Defense-in-depth: requireJwt populates jwtPayload, but guard the
+        // Defense-in-depth: the guard populates jwtPayload, but guard the
         // sub explicitly so we never query with an undefined owner.
         throw new JWTInvalidError('Missing JWT payload');
       }
@@ -382,7 +387,7 @@ export default async function (fastify: FastifyInstance) {
   fastify.withTypeProvider<ZodTypeProvider>().post(
     '/',
     {
-      preHandler: fastify.requireJwt,
+      preHandler: requireManagementJwt,
       schema: {
         description:
           'Create an OAuth client owned by the authenticated developer. The server generates the client_id and (for confidential clients) a client_secret; the plaintext secret is returned in THIS response only and never again. Requires a developer Bearer access token. (Phase 2.2, issue #86.)',
@@ -512,7 +517,7 @@ export default async function (fastify: FastifyInstance) {
   fastify.withTypeProvider<ZodTypeProvider>().get(
     '/:id',
     {
-      preHandler: fastify.requireJwt,
+      preHandler: requireManagementJwt,
       schema: {
         description:
           "Get one of the authenticated developer's OAuth clients by id. Returns 404 if the client does not exist or is owned by another developer (no existence enumeration). Never returns the client secret. (Phase 2.2, issue #87.)",
@@ -537,7 +542,7 @@ export default async function (fastify: FastifyInstance) {
   fastify.withTypeProvider<ZodTypeProvider>().patch(
     '/:id',
     {
-      preHandler: fastify.requireJwt,
+      preHandler: requireManagementJwt,
       schema: {
         description:
           "Update mutable fields of one of the developer's OAuth clients (name, description, redirectUris, scopes, grantTypes, responseTypes, tokenEndpointAuthMethod, enabled). client_id and client_secret are immutable here. Returns 404 if the client does not exist or is owned by another developer. (Phase 2.2, issue #88.)",
@@ -620,7 +625,7 @@ export default async function (fastify: FastifyInstance) {
   fastify.withTypeProvider<ZodTypeProvider>().delete(
     '/:id',
     {
-      preHandler: fastify.requireJwt,
+      preHandler: requireManagementJwt,
       schema: {
         description:
           "Delete one of the developer's OAuth clients. Returns 404 if the client does not exist or is owned by another developer. After deletion the client can no longer authenticate. (Phase 2.2, issue #89.)",
@@ -659,7 +664,7 @@ export default async function (fastify: FastifyInstance) {
   fastify.withTypeProvider<ZodTypeProvider>().post(
     '/:id/regenerate-secret',
     {
-      preHandler: fastify.requireJwt,
+      preHandler: requireManagementJwt,
       schema: {
         description:
           "Issue a new client_secret for one of the developer's OAuth clients. The previous secret is invalidated immediately and the new plaintext secret is returned in THIS response only. Returns 404 if the client does not exist or is owned by another developer; 400 for a public client that has no secret. (Phase 2.2, issue #90.)",
@@ -723,6 +728,6 @@ export default async function (fastify: FastifyInstance) {
 
   // ── Static developer API keys (ADR-008 §6, issue #97) ───────────────────
   // Registered here so they share this module's `/api/clients` autoPrefix,
-  // auth model (requireJwt + developer-id ownership), and error shapes.
+  // auth model (management token + developer-id ownership), and error shapes.
   await registerApiKeyRoutes(fastify);
 }

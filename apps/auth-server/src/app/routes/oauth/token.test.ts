@@ -185,6 +185,9 @@ function createFastifyStub() {
         create: vi.fn(),
         findByTokenHashIncludingRevoked: vi.fn(),
         revoke: vi.fn().mockResolvedValue(undefined),
+        // Rotation's compare-and-set: resolves the revoked row when this
+        // request won the race, undefined when the token was already rotated.
+        revokeIfActive: vi.fn().mockResolvedValue({ id: 'rotated-row' }),
         revokeFamily: vi.fn().mockResolvedValue(0),
       },
       auditLogs: {
@@ -217,6 +220,8 @@ function createFastifyStub() {
     // that always says 'OK' would make every replay test pass vacuously.
     redis: {
       get: vi.fn(async (key: string) => redisStore.get(key) ?? null),
+      // RFC 7009 jti denylist lookups (`isJtiRevoked`).
+      exists: vi.fn(async (key: string) => (redisStore.has(key) ? 1 : 0)),
       set: vi.fn(async (key: string, value: string, _ex?: string, _ttl?: number, nx?: string) => {
         if (nx === 'NX' && redisStore.has(key)) return null;
         redisStore.set(key, value);
@@ -1099,6 +1104,7 @@ describe('POST /oauth/token route — authorization_code grant', () => {
       id: 'user-uuid-1',
       email: 'user@example.com',
       emailVerified: true,
+      enabled: true,
       firstName: 'Ada',
       lastName: 'Lovelace',
     };
@@ -1612,6 +1618,30 @@ describe('POST /oauth/token route — authorization_code grant', () => {
     await expect(handler(baseRequest(), reply)).rejects.toThrow(InvalidGrantError);
   });
 
+  // RFC 9700 §4.14: a user disabled between code issuance and redemption gets
+  // no tokens — the same gate the refresh, exchange and jwt-bearer grants apply.
+  it('rejects a code whose user has been disabled (invalid_grant, no tokens)', async () => {
+    const { fastify, ctx } = setupAuthCodeStub();
+    (fastify.repositories.users.findById as unknown as Mock).mockResolvedValue({
+      id: 'user-uuid-1',
+      email: 'u@example.com',
+      emailVerified: true,
+      enabled: false,
+    });
+    await tokenRoute(fastify);
+    const handler = ctx.handler;
+    if (!handler) throw new Error('Handler missing');
+
+    await expect(handler(baseRequest(), createReply())).rejects.toThrow(InvalidGrantError);
+    expect(fastify.jwtUtils.signAccessToken).not.toHaveBeenCalled();
+    expect(fastify.repositories.refreshTokens.create).not.toHaveBeenCalled();
+    expect(fastify.repositories.auditLogs.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        metadata: { error: 'invalid_grant: user_disabled' },
+      })
+    );
+  });
+
   it('rejects when the user bound to the code cannot be found', async () => {
     const { fastify, ctx } = setupAuthCodeStub();
     (fastify.repositories.users.findById as unknown as Mock).mockResolvedValue(null);
@@ -1814,9 +1844,10 @@ describe('POST /oauth/token route — refresh_token grant', () => {
     const reply = createReply();
     const result = await handler(refreshRequest(), reply);
 
-    // Old token revoked as 'rotated' BEFORE new token persisted. Third
-    // arg is the tx handle propagated from fastify.db.transaction.
-    expect(fastify.repositories.refreshTokens.revoke).toHaveBeenCalledWith(
+    // Old token revoked as 'rotated' BEFORE new token persisted, through the
+    // compare-and-set. Third arg is the tx handle propagated from
+    // fastify.db.transaction.
+    expect(fastify.repositories.refreshTokens.revokeIfActive).toHaveBeenCalledWith(
       storedToken.id,
       'rotated',
       expect.anything()
@@ -1904,6 +1935,105 @@ describe('POST /oauth/token route — refresh_token grant', () => {
     expect(fastify.repositories.refreshTokens.create).not.toHaveBeenCalled();
   });
 
+  // Two concurrent presentations of one live token both pass the snapshot
+  // liveness check; only one can win the compare-and-set. The loser must not
+  // mint a second child in the family — it is a replay, so the family goes.
+  it('treats losing the rotation compare-and-set as replay: no token, family revoked', async () => {
+    const { fastify, ctx, confidentialClient, storedToken } = setupRefreshStub();
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(
+      confidentialClient
+    );
+    (
+      fastify.repositories.refreshTokens.findByTokenHashIncludingRevoked as unknown as Mock
+    ).mockResolvedValue(storedToken); // live on read …
+    (fastify.repositories.refreshTokens.revokeIfActive as unknown as Mock).mockResolvedValue(
+      undefined // … but a concurrent request rotated it first
+    );
+    (fastify.repositories.refreshTokens.revokeFamily as unknown as Mock).mockResolvedValue(2);
+
+    await tokenRoute(fastify);
+    const handler = ctx.handler;
+    if (!handler) throw new Error('Handler missing');
+
+    const reply = createReply();
+    await expect(handler(refreshRequest(), reply)).rejects.toThrow(InvalidGrantError);
+
+    expect(fastify.repositories.refreshTokens.revokeIfActive).toHaveBeenCalledWith(
+      storedToken.id,
+      'rotated',
+      expect.anything()
+    );
+    expect(fastify.repositories.refreshTokens.create).not.toHaveBeenCalled();
+    expect(fastify.jwtUtils.signAccessToken).not.toHaveBeenCalled();
+    expect(fastify.repositories.refreshTokens.revokeFamily).toHaveBeenCalledWith(
+      storedToken.familyId,
+      'replay_detected'
+    );
+    expect(fastify.repositories.auditLogs.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        eventType: 'security',
+        metadata: expect.objectContaining({ detection: 'lost_rotation_race' }),
+      })
+    );
+  });
+
+  // ADR-007 §2 (#184): the refresh grant enforces the agent's CURRENT cap,
+  // like every other grant. A token issued under agent:exec must not keep
+  // refreshing into agent:exec after the operator lowers the cap.
+  it("rejects refreshing into an agent scope above the client's current max_agent_mode", async () => {
+    const { fastify, ctx, confidentialClient, storedToken } = setupRefreshStub();
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue({
+      ...confidentialClient,
+      isAgent: true,
+      maxAgentMode: 'readonly',
+    });
+    (
+      fastify.repositories.refreshTokens.findByTokenHashIncludingRevoked as unknown as Mock
+    ).mockResolvedValue({ ...storedToken, scopes: ['read:foo', 'agent:exec'] });
+
+    await tokenRoute(fastify);
+    const handler = ctx.handler;
+    if (!handler) throw new Error('Handler missing');
+
+    await expect(handler(refreshRequest(), createReply())).rejects.toThrow(InvalidScopeError);
+    // Rejected before rotation: the presented token is neither revoked nor replaced.
+    expect(fastify.repositories.refreshTokens.revokeIfActive).not.toHaveBeenCalled();
+    expect(fastify.repositories.refreshTokens.revoke).not.toHaveBeenCalled();
+    expect(fastify.repositories.refreshTokens.create).not.toHaveBeenCalled();
+    expect(fastify.jwtUtils.signAccessToken).not.toHaveBeenCalled();
+    expect(fastify.repositories.auditLogs.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        metadata: expect.objectContaining({
+          error: 'invalid_scope: refreshed scope exceeds the agent scope mode',
+        }),
+      })
+    );
+  });
+
+  it('lets a capped agent keep refreshing within its current mode by narrowing scope', async () => {
+    const { fastify, ctx, confidentialClient, storedToken } = setupRefreshStub();
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue({
+      ...confidentialClient,
+      isAgent: true,
+      maxAgentMode: 'readonly',
+    });
+    (
+      fastify.repositories.refreshTokens.findByTokenHashIncludingRevoked as unknown as Mock
+    ).mockResolvedValue({ ...storedToken, scopes: ['read:foo', 'agent:exec'] });
+
+    await tokenRoute(fastify);
+    const handler = ctx.handler;
+    if (!handler) throw new Error('Handler missing');
+
+    await expect(
+      handler(refreshRequest({ scope: 'read:foo' }), createReply())
+    ).resolves.toBeDefined();
+    expect(fastify.repositories.refreshTokens.create).toHaveBeenCalledWith(
+      expect.objectContaining({ scopes: ['read:foo'] }),
+      expect.anything()
+    );
+  });
+
   it('rejects when the refresh token is bound to a different client (cross-client)', async () => {
     const { fastify, ctx, confidentialClient, storedToken } = setupRefreshStub();
     (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(
@@ -1924,6 +2054,7 @@ describe('POST /oauth/token route — refresh_token grant', () => {
     // the other client's family.
     expect(fastify.repositories.refreshTokens.revokeFamily).not.toHaveBeenCalled();
     expect(fastify.repositories.refreshTokens.revoke).not.toHaveBeenCalled();
+    expect(fastify.repositories.refreshTokens.revokeIfActive).not.toHaveBeenCalled();
   });
 
   it('carries RFC 8707 resource binding across a refresh rotation', async () => {
@@ -2016,6 +2147,7 @@ describe('POST /oauth/token route — refresh_token grant', () => {
 
     // No rotation when the grant fails validation.
     expect(fastify.repositories.refreshTokens.revoke).not.toHaveBeenCalled();
+    expect(fastify.repositories.refreshTokens.revokeIfActive).not.toHaveBeenCalled();
     expect(fastify.repositories.refreshTokens.create).not.toHaveBeenCalled();
   });
 
@@ -2117,6 +2249,7 @@ describe('POST /oauth/token route — refresh_token grant', () => {
     const reply = createReply();
     await expect(handler(refreshRequest(), reply)).rejects.toThrow(InvalidGrantError);
     expect(fastify.repositories.refreshTokens.revoke).not.toHaveBeenCalled();
+    expect(fastify.repositories.refreshTokens.revokeIfActive).not.toHaveBeenCalled();
   });
 
   it('rejects with unauthorized_client when the client lacks refresh_token grant', async () => {
@@ -2269,6 +2402,52 @@ describe('POST /oauth/token route — token-exchange grant (RFC 8693, ADR-007 §
     if (!handler) throw new Error('Handler missing');
     return handler(req, createReply());
   }
+
+  // GATE 3a — a subject or actor token that was revoked through /oauth/revoke
+  // (RFC 7009 jti denylist) must not be exchangeable for a fresh delegated
+  // token with a new, non-revoked jti.
+  it('rejects a subject_token whose jti is on the revocation denylist', async () => {
+    const { fastify, ctx, subjectPayload } = setupExchangeStub();
+    (subjectPayload as { jti?: string }).jti = 'revoked-subject-jti';
+    await fastify.redis.set('revoked-access-token:revoked-subject-jti', '1');
+
+    await expect(invoke(fastify, ctx, exchangeRequest())).rejects.toThrow(InvalidRequestError);
+    expect(fastify.jwtUtils.signAccessToken).not.toHaveBeenCalled();
+    expect(fastify.repositories.auditLogs.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        metadata: expect.objectContaining({
+          error: 'invalid_request: subject_token has been revoked',
+        }),
+      })
+    );
+  });
+
+  it('rejects an actor_token whose jti is on the revocation denylist', async () => {
+    const { fastify, ctx, subjectPayload } = setupExchangeStub();
+    const actorPayload = { ...subjectPayload, jti: 'revoked-actor-jti' };
+    (fastify.jwtUtils.verifyAccessToken as unknown as Mock).mockImplementation((token: string) =>
+      Promise.resolve(token === 'actor.jwt.token' ? actorPayload : subjectPayload)
+    );
+    await fastify.redis.set('revoked-access-token:revoked-actor-jti', '1');
+
+    await expect(
+      invoke(
+        fastify,
+        ctx,
+        exchangeRequest({ actor_token: 'actor.jwt.token', actor_token_type: ACCESS_TOKEN_TYPE })
+      )
+    ).rejects.toThrow(InvalidRequestError);
+    expect(fastify.jwtUtils.signAccessToken).not.toHaveBeenCalled();
+  });
+
+  it('fails the exchange closed when the revocation denylist cannot be read', async () => {
+    const { fastify, ctx, subjectPayload } = setupExchangeStub();
+    (subjectPayload as { jti?: string }).jti = 'some-jti';
+    (fastify.redis.exists as unknown as Mock).mockRejectedValueOnce(new Error('redis down'));
+
+    await expect(invoke(fastify, ctx, exchangeRequest())).rejects.toThrow('redis down');
+    expect(fastify.jwtUtils.signAccessToken).not.toHaveBeenCalled();
+  });
 
   it('mints a delegated token: sub=user, act.sub=agent, preserved scope+aud', async () => {
     // Subject token minted for both a resource and the agent (so GATE 3c binds);

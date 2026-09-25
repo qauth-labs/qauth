@@ -1,13 +1,15 @@
 import { randomUUID } from 'node:crypto';
 
-import { normalizeEmail } from '@qauth-labs/shared-validation';
+import { normalizeEmail, PASSWORD_MAX_LENGTH } from '@qauth-labs/shared-validation';
 import type { FastifyInstance } from 'fastify';
 import { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 
 import { env } from '../../../config/env';
 import { MIN_RESPONSE_TIME_MS } from '../../constants';
+import { hashEmail } from '../../helpers/auth-events';
 import { verifyPasswordCredential } from '../../helpers/credential-auth';
+import { checkLockout, recordFailedAttempt, resetFailedAttempts } from '../../helpers/failed-login';
 import { html, render } from '../../helpers/html';
 import { getOrCreateDefaultRealm } from '../../helpers/realm';
 import { isSafeReturnTo } from '../../helpers/return-to';
@@ -193,7 +195,7 @@ function loginPage(opts: {
 
 const loginFormSchema = z.object({
   email: z.string().min(1),
-  password: z.string().min(1),
+  password: z.string().min(1).max(PASSWORD_MAX_LENGTH),
   return_to: z.string().optional(),
   // Signed double-submit CSRF token (login CSRF defence). Compared against the
   // value carried in the __Host- login-CSRF cookie.
@@ -300,6 +302,47 @@ export default async function (fastify: FastifyInstance) {
       }
 
       const normalizedEmail = normalizeEmail(body.email);
+      // Failed-login throttling (#115), with the SAME identifiers as
+      // POST /auth/login so both front doors share one counter: guesses spread
+      // across them add up, and an account locked on one is locked on both.
+      const lockoutIdentifiers = [`email:${hashEmail(normalizedEmail)}`, `ip:${request.ip}`];
+
+      const renderRefusal = (statusCode: number, error: string) => {
+        reply.header('Content-Type', 'text/html; charset=utf-8');
+        reply.header('Cache-Control', 'no-store');
+        reply.code(statusCode);
+        return reply.send(
+          loginPage({
+            returnTo,
+            cspNonce: reply.cspNonce.style,
+            // The CSRF cookie is still valid on a refusal — reuse it so the
+            // re-rendered form keeps matching the cookie.
+            csrfToken: cookieCsrf,
+            error,
+            email: body.email,
+            walletLoginOffered: resolveWalletLoginCapability(fastify) !== undefined,
+          })
+        );
+      };
+
+      const lockout = await checkLockout(fastify.redis, lockoutIdentifiers);
+      if (lockout.locked) {
+        await ensureMinimumResponseTime(startTime, MIN_RESPONSE_TIME_MS.LOGIN);
+        await fastify.repositories.auditLogs.create({
+          userId: null,
+          oauthClientId: null,
+          event: 'ui.login.failure',
+          eventType: 'auth',
+          success: false,
+          ipAddress: request.ip,
+          userAgent: request.headers['user-agent'] || null,
+          metadata: { email: normalizedEmail, reason: 'locked_out' },
+        });
+        if (lockout.retryAfterSeconds !== undefined) {
+          reply.header('Retry-After', String(lockout.retryAfterSeconds));
+        }
+        return renderRefusal(429, 'Too many failed sign-in attempts. Please try again later.');
+      }
 
       const realm = await getOrCreateDefaultRealm(fastify);
 
@@ -325,6 +368,7 @@ export default async function (fastify: FastifyInstance) {
       }
 
       if (check.status !== 'ok' || !user || !user.enabled) {
+        await recordFailedAttempt(fastify.redis, lockoutIdentifiers);
         await ensureMinimumResponseTime(startTime, MIN_RESPONSE_TIME_MS.LOGIN);
         await fastify.repositories.auditLogs.create({
           userId: null,
@@ -336,22 +380,30 @@ export default async function (fastify: FastifyInstance) {
           userAgent: request.headers['user-agent'] || null,
           metadata: { email: normalizedEmail },
         });
-        reply.header('Content-Type', 'text/html; charset=utf-8');
-        reply.header('Cache-Control', 'no-store');
-        reply.code(401);
-        return reply.send(
-          loginPage({
-            returnTo,
-            cspNonce: reply.cspNonce.style,
-            // The CSRF cookie is still valid on a credential failure — reuse it
-            // so the re-rendered form keeps matching the cookie.
-            csrfToken: cookieCsrf,
-            error: 'Invalid email or password.',
-            email: body.email,
-            walletLoginOffered: resolveWalletLoginCapability(fastify) !== undefined,
-          })
-        );
+        return renderRefusal(401, 'Invalid email or password.');
       }
+
+      // Email-verified gate (F-08), identical to POST /auth/login: with
+      // `REQUIRE_EMAIL_VERIFIED=true` an unverified credential gets no session,
+      // so it cannot complete an OAuth/OIDC flow through the hosted UI either.
+      // Counted as a failed attempt, as on the API route.
+      if (!check.emailVerified && env.REQUIRE_EMAIL_VERIFIED) {
+        await recordFailedAttempt(fastify.redis, lockoutIdentifiers);
+        await ensureMinimumResponseTime(startTime, MIN_RESPONSE_TIME_MS.LOGIN);
+        await fastify.repositories.auditLogs.create({
+          userId: user.id,
+          oauthClientId: null,
+          event: 'ui.login.failure',
+          eventType: 'auth',
+          success: false,
+          ipAddress: request.ip,
+          userAgent: request.headers['user-agent'] || null,
+          metadata: { email: normalizedEmail, reason: 'email_not_verified' },
+        });
+        return renderRefusal(403, 'Verify your email address before signing in. Check your inbox.');
+      }
+
+      await resetFailedAttempts(fastify.redis, lockoutIdentifiers);
 
       // Session-fixation defense: always mint a fresh session id on a
       // successful credential check, even if the browser already had one.

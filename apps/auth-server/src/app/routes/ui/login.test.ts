@@ -17,6 +17,17 @@ vi.mock('../../../config/env', () => ({
   },
 }));
 
+// Failed-login throttling has its own tests (helpers/failed-login.test.ts);
+// here it is a seam, so these tests assert the route wires it in.
+vi.mock('../../helpers/failed-login', () => ({
+  checkLockout: vi.fn().mockResolvedValue({ locked: false }),
+  recordFailedAttempt: vi.fn().mockResolvedValue({ lockedOut: false }),
+  resetFailedAttempts: vi.fn().mockResolvedValue(undefined),
+}));
+
+import { env } from '../../../config/env';
+import { hashEmail } from '../../helpers/auth-events';
+import { checkLockout, recordFailedAttempt, resetFailedAttempts } from '../../helpers/failed-login';
 import loginRoute from './login';
 
 interface TestContext {
@@ -219,6 +230,99 @@ describe('UI /ui/login — CSRF defence', () => {
     const sessionPayload = (fastify.sessionUtils.setSession as unknown as Mock).mock
       .calls[0][1] as Record<string, unknown>;
     expect('assuranceLevel' in sessionPayload).toBe(false);
+  });
+
+  describe("POST shares the API login's failed-login lockout and email-verified gate", () => {
+    const LOCKOUT_IDS = [`email:${hashEmail('user@example.com')}`, 'ip:127.0.0.1'];
+
+    async function postLogin(options: { verifies: boolean; emailVerified?: boolean }) {
+      const { fastify, ctx } = makeFastify();
+      await loginRoute(fastify);
+      const getReply = createReply();
+      await ctx.get!({ query: {}, headers: {}, ip: '127.0.0.1' }, getReply.reply);
+      const cookieValue = csrfCookieValue(getReply.state.setCookies);
+      const rawToken = cookieValue.split('.')[0];
+
+      (
+        fastify.repositories.userCredentials.findByRealmProviderSub as unknown as Mock
+      ).mockResolvedValue(
+        credentialFixture({
+          credentialData: { password_hash: 'hash', email_verified: options.emailVerified ?? true },
+        })
+      );
+      (fastify.repositories.users.findById as unknown as Mock).mockResolvedValue({
+        id: 'user-1',
+        email: 'user@example.com',
+        passwordHash: 'hash',
+        enabled: true,
+      });
+      (fastify.passwordHasher.verifyPassword as unknown as Mock).mockResolvedValue(
+        options.verifies
+      );
+
+      const { reply, state } = createReply();
+      await ctx.post!(
+        {
+          body: { email: 'User@Example.com', password: 'pw', csrf_token: rawToken },
+          headers: { cookie: `__Host-qauth_login_csrf=${cookieValue}` },
+          ip: '127.0.0.1',
+        },
+        reply
+      );
+      return { fastify, state };
+    }
+
+    beforeEach(() => {
+      vi.mocked(checkLockout).mockClear().mockResolvedValue({ locked: false });
+      vi.mocked(recordFailedAttempt).mockClear();
+      vi.mocked(resetFailedAttempts).mockClear();
+      (env as { REQUIRE_EMAIL_VERIFIED?: boolean }).REQUIRE_EMAIL_VERIFIED = false;
+    });
+
+    it('refuses a locked-out identifier (429) before any credential check', async () => {
+      vi.mocked(checkLockout).mockResolvedValue({ locked: true, retryAfterSeconds: 120 });
+
+      const { fastify, state } = await postLogin({ verifies: true });
+
+      expect(checkLockout).toHaveBeenCalledWith(undefined, LOCKOUT_IDS);
+      expect(state.statusCode).toBe(429);
+      expect(state.headers['Retry-After']).toBe('120');
+      expect(fastify.passwordHasher.verifyPassword).not.toHaveBeenCalled();
+      expect(fastify.sessionUtils.setSession).not.toHaveBeenCalled();
+    });
+
+    it('records a failed attempt on a wrong password, with the API login identifiers', async () => {
+      const { state } = await postLogin({ verifies: false });
+
+      expect(state.statusCode).toBe(401);
+      expect(recordFailedAttempt).toHaveBeenCalledWith(undefined, LOCKOUT_IDS);
+      expect(resetFailedAttempts).not.toHaveBeenCalled();
+    });
+
+    it('clears failed-login state on success', async () => {
+      const { state } = await postLogin({ verifies: true });
+
+      expect(state.statusCode).toBe(302);
+      expect(resetFailedAttempts).toHaveBeenCalledWith(undefined, LOCKOUT_IDS);
+      expect(recordFailedAttempt).not.toHaveBeenCalled();
+    });
+
+    it('refuses an unverified credential (403, no session) when REQUIRE_EMAIL_VERIFIED is on', async () => {
+      (env as { REQUIRE_EMAIL_VERIFIED?: boolean }).REQUIRE_EMAIL_VERIFIED = true;
+
+      const { fastify, state } = await postLogin({ verifies: true, emailVerified: false });
+
+      expect(state.statusCode).toBe(403);
+      expect(fastify.sessionUtils.setSession).not.toHaveBeenCalled();
+      expect(recordFailedAttempt).toHaveBeenCalledWith(undefined, LOCKOUT_IDS);
+    });
+
+    it('still signs in an unverified credential when REQUIRE_EMAIL_VERIFIED is off (default)', async () => {
+      const { fastify, state } = await postLogin({ verifies: true, emailVerified: false });
+
+      expect(state.statusCode).toBe(302);
+      expect(fastify.sessionUtils.setSession).toHaveBeenCalledOnce();
+    });
   });
 
   it('POST rejects a disabled user (401 re-render) even with valid credentials', async () => {

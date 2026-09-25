@@ -399,6 +399,82 @@ describe('repository integration (real Postgres)', () => {
       expect(await tokens.findByUserId(userA.id)).toHaveLength(0);
       expect(await tokens.findByUserId(userB.id)).toHaveLength(1);
     });
+
+    it('only one of two concurrent rotation compare-and-sets wins (race)', async () => {
+      const realm = await seedRealm();
+      const user = await seedUser(realm.id);
+      const client = await seedClient(realm.id);
+      const tokens = createRefreshTokensRepository(db().database.db);
+      const token = await seedToken(user.id, client.id, 'r'.repeat(64), 'fam-race', {
+        familyId: undefined,
+      });
+
+      // Each attempt runs in its own transaction, as rotation does, so the
+      // second UPDATE blocks on the first's row lock and then re-evaluates
+      // `revoked = false` against the committed row.
+      const attempt = () =>
+        db().database.db.transaction((tx) => tokens.revokeIfActive(token.id, 'rotated', tx));
+      const results = await Promise.all([attempt(), attempt()]);
+
+      expect(results.filter((row) => row !== undefined)).toHaveLength(1);
+      expect(results.filter((row) => row === undefined)).toHaveLength(1);
+    });
+
+    it('revokeIfActive leaves an already-revoked token untouched and returns undefined', async () => {
+      const realm = await seedRealm();
+      const user = await seedUser(realm.id);
+      const client = await seedClient(realm.id);
+      const tokens = createRefreshTokensRepository(db().database.db);
+      const token = await seedToken(user.id, client.id, 's'.repeat(64), 'fam-cas', {
+        familyId: undefined,
+      });
+
+      expect(await tokens.revokeIfActive(token.id, 'rotated')).toMatchObject({
+        revoked: true,
+        revokedReason: 'rotated',
+      });
+      expect(await tokens.revokeIfActive(token.id, 'rotated-again')).toBeUndefined();
+
+      const [row] = await db()
+        .database.db.select()
+        .from(refreshTokens)
+        .where(eq(refreshTokens.id, token.id));
+      expect(row.revokedReason).toBe('rotated');
+    });
+
+    it('revokeAllForUserAndClient ends only that user-client pair (consent revocation)', async () => {
+      const realm = await seedRealm();
+      const user = await seedUser(realm.id);
+      const client = await seedClient(realm.id, 'client-consent');
+      const otherClient = await seedClient(realm.id, 'client-untouched');
+      const tokens = createRefreshTokensRepository(db().database.db);
+
+      await seedToken(user.id, client.id, 'm'.repeat(64), 'fam-m', { familyId: undefined });
+      await seedToken(user.id, client.id, 'n'.repeat(64), 'fam-n', { familyId: undefined });
+      const alreadyRevoked = await seedToken(user.id, client.id, 'o'.repeat(64), 'fam-o', {
+        familyId: undefined,
+      });
+      await tokens.revoke(alreadyRevoked.id, 'rotated');
+      const untouched = await seedToken(user.id, otherClient.id, 'p'.repeat(64), 'fam-p', {
+        familyId: undefined,
+      });
+
+      const revokedCount = await tokens.revokeAllForUserAndClient(
+        user.id,
+        client.id,
+        'consent_revoked'
+      );
+      expect(revokedCount).toBe(2);
+
+      const remaining = await tokens.findByUserId(user.id);
+      expect(remaining.map((t) => t.id)).toEqual([untouched.id]);
+
+      const [previous] = await db()
+        .database.db.select()
+        .from(refreshTokens)
+        .where(eq(refreshTokens.id, alreadyRevoked.id));
+      expect(previous.revokedReason).toBe('rotated');
+    });
   });
 
   // --- consent soft-delete + scope union ------------------------------------

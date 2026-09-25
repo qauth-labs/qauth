@@ -1,3 +1,4 @@
+import { PASSWORD_MAX_LENGTH } from '@qauth-labs/shared-validation';
 import { z } from 'zod';
 
 /**
@@ -5,7 +6,7 @@ import { z } from 'zod';
  */
 export const registerSchema = z.object({
   email: z.email('Invalid email format'),
-  password: z.string(),
+  password: z.string().max(PASSWORD_MAX_LENGTH),
   realmId: z.uuid('Invalid realm ID format').optional(),
 });
 
@@ -89,7 +90,9 @@ export type ResendVerificationResponse = z.infer<typeof resendVerificationRespon
  */
 export const loginSchema = z.object({
   email: z.email('Invalid email format'),
-  password: z.string(),
+  // Bounded like registration: Argon2id verification hashes every byte, so an
+  // unbounded field is attacker-sized CPU work on the login path too.
+  password: z.string().max(PASSWORD_MAX_LENGTH),
 });
 
 /**
