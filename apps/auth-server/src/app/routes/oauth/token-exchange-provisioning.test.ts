@@ -253,7 +253,11 @@ function createTokenStub(persistedClient: {
     },
     pkceUtils: { verifyCodeChallenge: vi.fn() },
     sessionUtils: { setSession: vi.fn() },
-    redis: { get: vi.fn().mockResolvedValue(null), set: vi.fn().mockResolvedValue('OK') },
+    redis: {
+      get: vi.fn().mockResolvedValue(null),
+      set: vi.fn().mockResolvedValue('OK'),
+      exists: vi.fn().mockResolvedValue(0),
+    },
     db: { transaction: vi.fn(async (cb: (tx: unknown) => Promise<unknown>) => cb({})) },
     log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
     metrics: { loginAttempts: { inc: vi.fn() }, tokensIssued: { inc: vi.fn() } },

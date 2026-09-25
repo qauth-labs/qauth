@@ -66,8 +66,10 @@ function makeFastify() {
       oauthClients: {
         findById: vi.fn(),
       },
+      refreshTokens: { revokeAllForUserAndClient: vi.fn().mockResolvedValue(0) },
       auditLogs: { create: vi.fn().mockResolvedValue(undefined) },
     },
+    db: { transaction: vi.fn(async (cb: (tx: unknown) => Promise<unknown>) => cb('tx')) },
     sessionUtils: { getSession: vi.fn(), setSession: vi.fn().mockResolvedValue(undefined) },
     log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
   };
@@ -239,7 +241,13 @@ describe('/consents JSON API', () => {
       reply
     );
     expect(state.statusCode).toBe(204);
-    expect(fastify.repositories.oauthConsents.revoke).toHaveBeenCalledWith('c1');
+    expect(fastify.repositories.oauthConsents.revoke).toHaveBeenCalledWith('c1', 'tx');
+    expect(fastify.repositories.refreshTokens.revokeAllForUserAndClient).toHaveBeenCalledWith(
+      'u1',
+      'cli1',
+      'consent_revoked',
+      'tx'
+    );
     expect(fastify.repositories.auditLogs.create).toHaveBeenCalledWith(
       expect.objectContaining({ event: 'oauth.consent.revoked', success: true })
     );

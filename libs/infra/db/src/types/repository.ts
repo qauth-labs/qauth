@@ -285,6 +285,21 @@ export interface RefreshTokensRepository {
    */
   revokeAllForUser(userId: string, reason?: string, tx?: DbClient): Promise<void>;
   /**
+   * Revoke every active refresh token one user holds for one client.
+   *
+   * Consent revocation calls this: withdrawing a grant must also end the
+   * refresh tokens minted under it, or the client keeps refreshing on a grant
+   * that no longer exists.
+   *
+   * @returns Count of rows revoked by this call.
+   */
+  revokeAllForUserAndClient(
+    userId: string,
+    oauthClientId: string,
+    reason: string,
+    tx?: DbClient
+  ): Promise<number>;
+  /**
    * Delete expired tokens
    * Returns count of deleted tokens
    */

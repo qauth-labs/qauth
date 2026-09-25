@@ -46,6 +46,7 @@ import { getOrCreateDefaultRealm } from '../../helpers/realm';
 import { resolveRealmRateLimitMax } from '../../helpers/realm-rate-limit';
 import { highestAgentModeInScopes } from '../../helpers/scope-modes';
 import { ensureMinimumResponseTime } from '../../helpers/timing';
+import { isJtiRevoked } from '../../helpers/token-revocation';
 import {
   type IdJagTokenResponse,
   JWT_BEARER_GRANT_TYPE,
@@ -1034,6 +1035,33 @@ async function handleRefreshToken(
     grantedScopes = storedToken.scopes;
   }
 
+  // Clamp to the agent's CURRENT server-side `max_agent_mode` (ADR-007 §2,
+  // #184), exactly as client_credentials, jwt-bearer and token exchange do. A
+  // refresh token carries the scopes of the grant it came from; if the
+  // operator has since lowered the cap (or the client is no longer an agent),
+  // refreshing must not keep minting the old mode. The client may narrow with
+  // `scope` to continue within the new cap. Fail-closed via
+  // `toAgentScopeContext`.
+  try {
+    enforceAgentScopeCap(grantedScopes, toAgentScopeContext(client));
+  } catch (err) {
+    await fastify.repositories.auditLogs.create({
+      userId: user.id,
+      oauthClientId: client.id,
+      event: 'oauth.token.exchange.failure',
+      eventType: 'token',
+      success: false,
+      ipAddress: request.ip,
+      userAgent: request.headers['user-agent'] || null,
+      metadata: {
+        error: 'invalid_scope: refreshed scope exceeds the agent scope mode',
+        grantedScopes,
+        maxAgentMode: client.maxAgentMode ?? null,
+      },
+    });
+    throw err;
+  }
+
   // RFC 8707 §2.2: refresh requests MAY include `resource` to narrow the
   // audience of the minted access token, but MUST NOT request a resource
   // outside the set bound to the refresh token (which itself descends
@@ -1342,6 +1370,26 @@ async function handleTokenExchange(
       await auditFailure('invalid_request: actor_token failed verification');
       throw new InvalidRequestError('actor_token is not a valid access token');
     }
+  }
+
+  // GATE 3a — RFC 7009 revocation. `verifyAccessToken` checks signature,
+  // expiry and issuer only; the jti denylist `/oauth/revoke` writes is applied
+  // by `requireJwt` and introspection, not by the bare verifier. Without this
+  // check a revoked subject or actor token would still be exchanged for a
+  // fresh delegated token with a new, non-revoked jti. A revoked token is
+  // "unacceptable" under RFC 8693 §2.2.2 → invalid_request. A denylist store
+  // outage throws out of `isJtiRevoked` and fails the exchange closed.
+  if (await isJtiRevoked(fastify, subjectPayload.jti)) {
+    await auditFailure('invalid_request: subject_token has been revoked', {
+      jti: subjectPayload.jti,
+    });
+    throw new InvalidRequestError('subject_token has been revoked');
+  }
+  if (actorPayload && (await isJtiRevoked(fastify, actorPayload.jti))) {
+    await auditFailure('invalid_request: actor_token has been revoked', {
+      jti: actorPayload.jti,
+    });
+    throw new InvalidRequestError('actor_token has been revoked');
   }
 
   // GATE 3c — bind the subject token to the requesting agent (RFC 8693 leaves

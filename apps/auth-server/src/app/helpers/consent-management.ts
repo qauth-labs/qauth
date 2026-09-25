@@ -51,7 +51,8 @@ export async function listConsentsForUser(
 
 /**
  * Revoke one consent row on behalf of `userId`, with the ownership check and
- * the audit entry both surfaces owe.
+ * the audit entry both surfaces owe. Every refresh token the user holds for
+ * that client is revoked in the same transaction.
  *
  * Throws `NotFoundError` when the row does not exist OR belongs to another
  * user — deliberately the same outcome, so the API never reveals that someone
@@ -74,18 +75,30 @@ export async function revokeConsentForUser(
     throw new NotFoundError('OAuthConsent', consentId);
   }
 
-  try {
-    await fastify.repositories.oauthConsents.revoke(consentId);
-  } catch (err) {
-    if (err instanceof NotFoundError) {
-      // Raced with another tab — idempotent success, fall through to the audit
-      // entry so the intent is still recorded.
-    } else if (err instanceof BadRequestError) {
-      throw err;
-    } else {
-      throw err;
+  // Withdrawing a grant also ends the refresh tokens minted under it, in the
+  // same transaction: otherwise the client keeps refreshing on a grant that no
+  // longer exists, and a failure between the two steps could leave the
+  // consent gone (so a retry 404s) with its refresh tokens still live.
+  const refreshTokensRevoked = await fastify.db.transaction(async (tx) => {
+    try {
+      await fastify.repositories.oauthConsents.revoke(consentId, tx);
+    } catch (err) {
+      if (err instanceof NotFoundError) {
+        // Raced with another tab — idempotent success. The refresh tokens are
+        // still revoked below and the intent is still audited.
+      } else if (err instanceof BadRequestError) {
+        throw err;
+      } else {
+        throw err;
+      }
     }
-  }
+    return fastify.repositories.refreshTokens.revokeAllForUserAndClient(
+      userId,
+      owned.oauthClientId,
+      'consent_revoked',
+      tx
+    );
+  });
 
   await fastify.repositories.auditLogs.create({
     userId,
@@ -95,6 +108,6 @@ export async function revokeConsentForUser(
     success: true,
     ipAddress: request.ip,
     userAgent: request.headers['user-agent'] || null,
-    metadata: { consentId },
+    metadata: { consentId, refreshTokensRevoked },
   });
 }
