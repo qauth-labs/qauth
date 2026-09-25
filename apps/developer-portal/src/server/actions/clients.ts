@@ -1,11 +1,11 @@
 import { createServerFn } from '@tanstack/react-start';
 
-import {
-  type CreateClientInput,
-  type GrantType,
-  type Result,
-  type TokenEndpointAuthMethod,
-  type UpdateClientInput,
+import type {
+  CreateClientInput,
+  GrantType,
+  Result,
+  TokenEndpointAuthMethod,
+  UpdateClientInput,
 } from '../auth-server-client';
 import {
   createClientHandler,

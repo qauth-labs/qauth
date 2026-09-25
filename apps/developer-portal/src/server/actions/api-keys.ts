@@ -1,6 +1,6 @@
 import { createServerFn } from '@tanstack/react-start';
 
-import { type CreateApiKeyInput } from '../auth-server-client';
+import type { CreateApiKeyInput } from '../auth-server-client';
 import { createApiKeyHandler, listApiKeysHandler, revokeApiKeyHandler } from './api-keys.server';
 
 /**

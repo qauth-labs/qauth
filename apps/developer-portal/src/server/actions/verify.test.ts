@@ -15,7 +15,7 @@ vi.mock('../auth-server-client', () => ({
 }));
 
 import { authServerClient } from '../auth-server-client';
-import { verifyHandler } from './verify';
+import { verifyHandler } from './verify.server';
 
 const validToken = 'a'.repeat(64);
 

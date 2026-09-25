@@ -1,14 +1,6 @@
 import { createServerFn } from '@tanstack/react-start';
 
-import { authServerClient, type ResendVerificationData, type Result } from '../auth-server-client';
-
-export async function resendVerificationHandler({
-  data,
-}: {
-  data: { email: string };
-}): Promise<Result<ResendVerificationData>> {
-  return authServerClient.resendVerification(data.email);
-}
+import { resendVerificationHandler } from './resend-verification.server';
 
 export const resendVerificationFn = createServerFn({ method: 'POST' })
   .validator((data: unknown): { email: string } => {
