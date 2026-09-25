@@ -57,6 +57,23 @@ describe('extractBearerToken', () => {
     expect(extractBearerToken('Basic abc')).toBeNull();
     expect(extractBearerToken('Bearer ')).toBeNull();
   });
+  it('requires a space after the scheme, and allows several', () => {
+    expect(extractBearerToken('Bearerabc')).toBeNull();
+    expect(extractBearerToken('Bearer    abc')).toBe('abc');
+  });
+  it('refuses a credential containing a line terminator', () => {
+    expect(extractBearerToken('Bearer abc\ndef')).toBeNull();
+    expect(extractBearerToken('Bearer abc\u2028def')).toBeNull();
+  });
+  // CodeQL js/polynomial-redos: the old single regex backtracked quadratically
+  // on "bearer" + many spaces + a line terminator. Linear now; a 100k-space
+  // input finishes far inside any budget a quadratic scan would blow.
+  it('stays linear on many spaces before a line terminator', () => {
+    const hostile = `bearer ${' '.repeat(100_000)}\nx`;
+    const started = performance.now();
+    expect(extractBearerToken(hostile)).toBeNull();
+    expect(performance.now() - started).toBeLessThan(250);
+  });
 });
 
 describe('McpGuard config validation', () => {
