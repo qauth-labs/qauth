@@ -277,6 +277,13 @@ async function register(env: Record<string, unknown> = ENABLED_ENV) {
   return { fastify: fastify as any, ctx, store };
 }
 
+// Every test re-imports the route after `vi.resetModules()` (the env mock is
+// per test), so each one pays a cold evaluation of the route's module graph —
+// the federation plugin, core-crypto and jose. That fits in the 5 s default on
+// an idle machine, but not in a saturated `nx run-many -t test --all`, where
+// whichever test runs first times out. Give this file the headroom it needs.
+vi.setConfig({ testTimeout: 30_000 });
+
 afterEach(() => {
   vi.doUnmock('../../../config/env');
   vi.resetModules();
