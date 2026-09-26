@@ -145,7 +145,15 @@ const savedEnv = new Map<string, string | undefined>();
 async function buildAssembledApp(): Promise<FastifyInstance> {
   const { app } = await import('./app');
 
-  const instance = Fastify({ logger: false, routerOptions: { ignoreTrailingSlash: true } });
+  const instance = Fastify({
+    logger: false,
+    routerOptions: { ignoreTrailingSlash: true },
+    // avvio's default 10 s per-plugin start budget covers the `autoload` of
+    // every route module, which Vite transforms on first import. Under the
+    // doubled full-workspace run (see the `beforeAll` timeout) that alone can
+    // exceed 10 s; the suite's own hook timeout is the real bound.
+    pluginTimeout: 0,
+  });
   instance.setValidatorCompiler(validatorCompiler);
   instance.setSerializerCompiler(serializerCompiler);
 
@@ -199,7 +207,11 @@ beforeAll(async () => {
   }
 
   server = await buildAssembledApp();
-}, 60_000);
+  // The boot transforms and evaluates the whole autoloaded app (~20 s cold on
+  // an idle machine; the instance's `pluginTimeout` is off for the same reason). `pnpm test` runs this file twice at once — under
+  // `auth-server:test` and the workspace-root `qauth:test` — alongside every
+  // other project, and there 60 s was not always enough.
+}, 180_000);
 
 afterAll(async () => {
   await server?.close();

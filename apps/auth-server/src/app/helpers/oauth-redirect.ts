@@ -40,6 +40,88 @@ export function isHttpLocalhostRedirect(redirectUri: string): boolean {
 }
 
 /**
+ * Lexical shape of a loopback redirect URI: `http://` + loopback host literal
+ * + optional port + the rest. The host MUST be followed by `:`, `/`, `?` or
+ * the end of the string, so userinfo (`http://127.0.0.1@evil.example/`),
+ * backslash tricks and host suffixes (`http://localhost.evil.example/`) never
+ * match. Groups: 1 = host, 2 = port digits (absent when portless), 3 = rest.
+ */
+const LOOPBACK_REDIRECT_SHAPE =
+  /^http:\/\/(\[::1\]|localhost|127(?:\.\d{1,3}){3})(?::(\d{1,5}))?([/?#].*)?$/;
+
+/**
+ * Split a loopback redirect URI into its port-free form and its port, or
+ * return null when `uri` is not a loopback redirect. Purely lexical — see
+ * {@link redirectUriMatchesRegistered} for why no URI parser is involved.
+ */
+function splitLoopbackRedirect(uri: string): { withoutPort: string; port?: string } | null {
+  const m = LOOPBACK_REDIRECT_SHAPE.exec(uri);
+  if (!m) return null;
+  const [, host, port, rest = ''] = m;
+  if (host.startsWith('127.') && !isIpv4LoopbackHost(host)) return null;
+  if (port !== undefined) {
+    // RFC 3986 allows leading zeros, but a canonical 1–65535 port is the only
+    // shape a real listener hands back; anything else is refused outright.
+    if (!/^[1-9]\d*$/.test(port) || Number(port) > 65535) return null;
+  }
+  return { withoutPort: `http://${host}${rest}`, port };
+}
+
+/**
+ * Whether the `redirect_uri` of an authorization request matches one
+ * registered for the client (the pre-registered set, the DCR set, or a CIMD
+ * document's `redirect_uris`).
+ *
+ * Exact string comparison (RFC 9700 §2.1, OAuth 2.1 §2.3.1), with the ONE
+ * exception both specs carve out: loopback redirects of native apps may carry
+ * any port. RFC 8252 §7.3 — the AS "MUST allow any port to be specified at the
+ * time of the request for loopback IP redirect URIs", because the OS hands the
+ * client an ephemeral port only when it opens its listener. So when BOTH the
+ * requested and the registered URI are loopback redirects, they match if they
+ * are byte-identical once the port (`:NNNN`, if any) is removed from each.
+ * Scheme, host literal, path, query — everything else — must still be exactly
+ * equal; there are no wildcards and no prefix matching.
+ *
+ * - Loopback means the `http` scheme and a host of `127.0.0.0/8` (dotted
+ *   decimal), `[::1]`, or `localhost`. `https`, custom schemes and every other
+ *   host keep exact matching, port included.
+ * - `localhost` IS included. RFC 8252 §8.3 calls it NOT RECOMMENDED (a client
+ *   should listen on the IP literal so a resolver or firewall cannot redirect
+ *   the name), but RFC 9700 §2.1 names "localhost redirection URIs" in the port
+ *   exception, and real native MCP clients register it — Claude Code's CIMD
+ *   document declares `http://localhost/callback` and calls back on
+ *   `http://localhost:<ephemeral>/callback`. The name is never resolved here;
+ *   the exception only lets the port vary, and the browser is what connects.
+ *   The literal hosts are never interchangeable: `localhost` does not match
+ *   `127.0.0.1`, nor `127.0.0.1` `[::1]`.
+ * - The comparison is lexical — no URI parser takes part in the decision
+ *   (see the SECURITY INVARIANT in `main.ts`). A parser would normalise case,
+ *   percent-encoding, dot segments and default ports, and any divergence
+ *   between the parser used here and the one the client or browser uses is a
+ *   redirect-confusion bug. Stripping a strictly-shaped `:digits` after a
+ *   literal host from both sides and comparing the rest byte-for-byte keeps
+ *   the old exact-match guarantee for every other character.
+ * - PKCE (S256), mandatory for every client, is what protects a loopback
+ *   redirect on a shared host from a local listener on another port
+ *   (RFC 8252 §8.1).
+ *
+ * The caller MUST redirect to the REQUESTED URI (it carries the port the
+ * client is listening on) and store it on the authorization code; the token
+ * endpoint then compares the token request's `redirect_uri` with the stored
+ * value by exact string, port included (RFC 6749 §4.1.3) — this helper is not
+ * used there.
+ */
+export function redirectUriMatchesRegistered(
+  requested: string,
+  registered: readonly string[]
+): boolean {
+  if (registered.includes(requested)) return true;
+  const req = splitLoopbackRedirect(requested);
+  if (!req) return false;
+  return registered.some((r) => splitLoopbackRedirect(r)?.withoutPort === req.withoutPort);
+}
+
+/**
  * Whether a (already registered, exact-matched) `redirect_uri` is permitted
  * under the effective environment policy (ADR-008 §5, #197).
  *
@@ -61,9 +143,11 @@ export function isHttpLocalhostRedirect(redirectUri: string): boolean {
  * hardened direction. An unset client/realm still resolves to `production`,
  * which requires PKCE and therefore now permits loopback + PKCE.
  *
- * NB: this is a SECOND gate, layered after the existing exact-match check
- * (`client.redirectUris.includes(redirect_uri)`) — it does not replace it. A
- * URI must be both registered AND allowed by the environment.
+ * NB: this is a SECOND gate, layered after the registered-set check
+ * ({@link redirectUriMatchesRegistered}) — it does not replace it. A URI must
+ * be both registered AND allowed by the environment. The two agree by
+ * construction: every URI that matches only through the loopback-port
+ * exception is an `http://` loopback URI, so it always reaches this gate.
  */
 export function isRedirectUriAllowedForPolicy(
   redirectUri: string,

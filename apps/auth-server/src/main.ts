@@ -57,8 +57,9 @@ const server = Fastify({
 // `fast-uri: '>=3.1.4 <4'` floor in `pnpm-workspace.yaml` exists so this stops being the
 // only mitigation, but do not rely on it alone.
 // The second leg of the same invariant lives in the redirect_uri checks: matching is an
-// exact string comparison (`client.redirectUris.includes(...)`, RFC 9700) with no URI
-// parser in the security decision — see `app/helpers/oauth-redirect.ts`.
+// exact string comparison (RFC 9700) with no URI parser in the security decision; the
+// only relaxation, the port of a loopback redirect (RFC 8252 §7.3, #414), is lexical
+// too — see `redirectUriMatchesRegistered` in `app/helpers/oauth-redirect.ts`.
 //
 // POSITION IS PART OF THE INVARIANT (#365). These two calls MUST run before
 // `server.register(app)` below. A child scope snapshots the parent's validator and

@@ -30,7 +30,9 @@ import { SsrfBlockedError, ssrfSafeGet } from './ssrf-safe-fetch';
  *     from, byte-for-byte. This binds the document to its own URL and
  *     prevents a document hosted at URL A from claiming to be client B.
  *   - The authorization request's `redirect_uri` MUST be one of the
- *     document's `redirect_uris` (exact match — no wildcards).
+ *     document's `redirect_uris` (exact match — no wildcards; only the port
+ *     of a loopback redirect may differ, RFC 8252 §7.3 — see
+ *     `redirectUriMatchesRegistered`).
  *   - An optional deployment-configured domain trust policy gates which
  *     hosts may act as CIMD clients at all.
  *

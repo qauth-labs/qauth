@@ -529,6 +529,137 @@ describe('UI /ui/consent POST — allow/deny', () => {
   });
 });
 
+describe('UI /ui/consent — loopback redirect on any port (RFC 8252 §7.3, #414)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  const REGISTERED = 'http://127.0.0.1/callback';
+
+  async function setup(registered: string[]) {
+    const { fastify, ctx } = makeFastify();
+    await consentRoute(fastify);
+    const { signSessionId } = await import('../../helpers/session-cookie');
+    const signed = signSessionId('sid-loop');
+    const csrf = 'csrf-loop';
+    (fastify.sessionUtils.getSession as unknown as Mock).mockResolvedValue({
+      userId: 'user-1',
+      email: 'a@b.com',
+      sessionId: 'sid-loop',
+      csrfToken: csrf,
+      createdAt: Date.now(),
+      consentScopes: { 'app-123': ['email'] },
+    });
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue({
+      ...CLIENT,
+      redirectUris: registered,
+    });
+    const headers = { cookie: `__Host-qauth_session=${signed}` };
+    const { reply, state } = createReply();
+    return {
+      fastify,
+      state,
+      get: (redirectUri: string) =>
+        ctx.get!(
+          {
+            query: { ...BASE_QUERY, redirect_uri: redirectUri },
+            url: '/ui/consent?...',
+            headers,
+            ip: '127.0.0.1',
+          },
+          reply
+        ),
+      post: (redirectUri: string, decision: 'allow' | 'deny' = 'allow') =>
+        ctx.post!(
+          {
+            body: {
+              decision,
+              csrf_token: csrf,
+              client_id: 'app-123',
+              redirect_uri: redirectUri,
+              state: 'xyz',
+              scope: 'email',
+              code_challenge: 'A'.repeat(43),
+              code_challenge_method: 'S256',
+              response_type: 'code',
+            },
+            headers,
+            ip: '127.0.0.1',
+          },
+          reply
+        ),
+    };
+  }
+
+  it.each([
+    [REGISTERED, 'http://127.0.0.1:53817/callback'],
+    ['http://[::1]/callback', 'http://[::1]:53817/callback'],
+    ['http://localhost/callback', 'http://localhost:53817/callback'],
+  ])('GET renders the consent screen for %s requested as %s', async (registered, requested) => {
+    const { state, get } = await setup([registered]);
+    await get(requested);
+
+    const html = state.body as string;
+    expect(html).toContain('Test App wants to access your account');
+    // The form carries the requested URI forward to the POST, port included.
+    expect(html).toContain(requested.replace(/&/g, '&amp;'));
+  });
+
+  it.each([
+    [REGISTERED, 'http://127.0.0.1:53817/callback'],
+    ['http://[::1]/callback', 'http://[::1]:53817/callback'],
+    ['http://localhost/callback', 'http://localhost:53817/callback'],
+  ])(
+    'POST allow for %s requested as %s binds the code to the requested port',
+    async (registered, requested) => {
+      const { fastify, state, post } = await setup([registered]);
+      await post(requested);
+
+      expect(fastify.repositories.authorizationCodes.create).toHaveBeenCalledWith(
+        expect.objectContaining({ redirectUri: requested })
+      );
+      expect(state.redirected!.startsWith(`${requested}?`)).toBe(true);
+      expect(new URL(state.redirected!).searchParams.get('code')).toBeTruthy();
+    }
+  );
+
+  it('POST deny redirects the error to the requested port', async () => {
+    const { state, post } = await setup([REGISTERED]);
+    await post('http://127.0.0.1:53817/callback', 'deny');
+
+    expect(state.redirected!.startsWith('http://127.0.0.1:53817/callback?')).toBe(true);
+    expect(state.redirected).toContain('error=access_denied');
+  });
+
+  const REJECTED: Array<[string, string, string]> = [
+    ['a different path', REGISTERED, 'http://127.0.0.1:53817/other'],
+    ['a different host', REGISTERED, 'http://127.0.0.2:53817/callback'],
+    ['a different scheme', REGISTERED, 'https://127.0.0.1:53817/callback'],
+    ['an added query', REGISTERED, 'http://127.0.0.1:53817/callback?x=1'],
+    ['a different https port', 'https://example.com/cb', 'https://example.com:8443/cb'],
+    [
+      'a different custom-scheme port',
+      'com.example.app://localhost/cb',
+      'com.example.app://localhost:1234/cb',
+    ],
+  ];
+
+  it.each(REJECTED)('GET rejects %s', async (_label, registered, requested) => {
+    const { get } = await setup([registered]);
+    await expect(get(requested)).rejects.toThrow('redirect_uri not registered');
+  });
+
+  it.each(REJECTED)(
+    'POST rejects %s without issuing a code',
+    async (_label, registered, requested) => {
+      const { fastify, state, post } = await setup([registered]);
+      await expect(post(requested)).rejects.toThrow('redirect_uri not registered');
+      expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
+      expect(state.redirected).toBeUndefined();
+    }
+  );
+});
+
 describe('UI /ui/consent — agent scope-mode cap (ADR-007 §2, #184)', () => {
   beforeEach(() => {
     vi.clearAllMocks();

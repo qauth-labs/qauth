@@ -133,13 +133,39 @@ http://localhost:3000/oauth/authorize
 | ----------------------- | ----------- | --------------------------------------------------------------- |
 | `response_type`         | yes         | Must be `code`.                                                 |
 | `client_id`             | yes         | Your client.                                                    |
-| `redirect_uri`          | yes         | Must exactly match a registered URI.                            |
+| `redirect_uri`          | yes         | Must match a registered URI — see below.                        |
 | `code_challenge`        | yes         | From step 1.                                                    |
 | `code_challenge_method` | yes         | Must be `S256`.                                                 |
 | `scope`                 | no          | Space-separated; filtered to the client's allowlist.            |
 | `state`                 | recommended | Opaque CSRF value; echoed back verbatim.                        |
 | `nonce`                 | OIDC        | Bound into the ID token when issued.                            |
 | `resource`              | no          | RFC 8707 target(s); binds the token `aud`. Repeat for multiple. |
+
+#### Redirect URI matching
+
+`redirect_uri` is compared with the client's registered set (or, for a
+[CIMD](/integrate/mcp-quickstart/) client, the document's `redirect_uris`) by
+**exact string** — no wildcards, no prefix matching, no normalisation
+(RFC 9700 §2.1). There is one exception, required by RFC 8252 §7.3 for native
+apps: a **loopback** redirect may carry **any port**.
+
+- Loopback means the `http` scheme and a host of `127.0.0.0/8`, `[::1]` or
+  `localhost`. A native / CLI client can register `http://127.0.0.1/callback`
+  (no port) and call back on whatever port the OS gave its listener, e.g.
+  `redirect_uri=http://127.0.0.1:53817/callback`.
+- Only the port may differ. Scheme, host, path and query must still match
+  byte for byte, and the host literals are not interchangeable
+  (`localhost` ≠ `127.0.0.1` ≠ `[::1]`) — register each one you use.
+- `localhost` is accepted because real clients (Claude Code among them) use
+  it, but RFC 8252 §8.3 recommends the IP literal: prefer `127.0.0.1` or
+  `[::1]` for clients you write.
+- `https` and custom-scheme redirects always need an exact match, port
+  included.
+- QAuth redirects to the port you **requested** and binds the code to that
+  exact URI, so the token request must repeat it verbatim — port included
+  (RFC 6749 §4.1.3).
+- PKCE (mandatory for every client) is what keeps another listener on the
+  same host from redeeming an intercepted code (RFC 8252 §8.1).
 
 QAuth flow: if there's no active session it shows the **login** page; then a
 **consent** screen for the requested scopes (skipped if a prior consent already
@@ -187,7 +213,8 @@ Notes:
   (`-u "CLIENT_ID:CLIENT_SECRET"`, `client_secret_basic`) or by adding
   `-d client_secret=…` (`client_secret_post`). Public clients send neither.
 - The authorization code is single-use and short-lived; the same
-  `redirect_uri` and a PKCE-matching `code_verifier` are mandatory.
+  `redirect_uri` (exactly as sent to `/oauth/authorize`, loopback port
+  included) and a PKCE-matching `code_verifier` are mandatory.
 - `resource` here must be a **subset** of the resource set bound at authorize
   time, or you get `invalid_target`. Omit it to inherit the code's binding.
 - **`id_token` is issued only for this grant** (`authorization_code`), and

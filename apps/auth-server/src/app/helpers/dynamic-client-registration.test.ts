@@ -14,6 +14,12 @@ describe('validateRedirectUri', () => {
     expect(() => validateRedirectUri('http://localhost:9000/cb')).not.toThrow();
   });
 
+  it('accepts portless loopback redirects (RFC 8252 §7.3 — the port is chosen per request, #414)', () => {
+    expect(() => validateRedirectUri('http://127.0.0.1/callback')).not.toThrow();
+    expect(() => validateRedirectUri('http://[::1]/callback')).not.toThrow();
+    expect(() => validateRedirectUri('http://localhost/callback')).not.toThrow();
+  });
+
   it('rejects http for non-loopback hosts', () => {
     expect(() => validateRedirectUri('http://app.example/cb')).toThrow(BadRequestError);
   });
@@ -40,6 +46,16 @@ describe('validateAndNormalize', () => {
     expect(n.responseTypes).toEqual(['code']);
     expect(n.tokenEndpointAuthMethod).toBe('none');
     expect(n.isPublic).toBe(true);
+  });
+
+  it('registers a portless loopback redirect verbatim (#414)', () => {
+    const uris = [
+      'http://127.0.0.1/callback',
+      'http://[::1]/callback',
+      'http://localhost/callback',
+    ];
+    const n = validateAndNormalize({ redirect_uris: uris }, allowedScopes);
+    expect(n.redirectUris).toEqual(uris);
   });
 
   it('caps requested scopes to the realm allowlist', () => {

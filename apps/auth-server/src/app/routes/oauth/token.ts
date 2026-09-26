@@ -421,6 +421,10 @@ async function handleAuthorizationCode(
     throw new InvalidGrantError('Invalid or expired authorization code');
   }
 
+  // Exact string match, port included (RFC 6749 §4.1.3). The loopback-port
+  // relaxation of `redirectUriMatchesRegistered` (#414) applies only at the
+  // authorization request: the code stores the URI as requested, with the
+  // port the client actually listened on, so there is nothing to relax here.
   if (body.redirect_uri !== authCode.redirectUri) {
     await fastify.repositories.auditLogs.create({
       userId: null,

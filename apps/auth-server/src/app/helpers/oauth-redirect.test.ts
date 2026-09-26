@@ -5,6 +5,7 @@ import {
   buildRedirectUrl,
   isHttpLocalhostRedirect,
   isRedirectUriAllowedForPolicy,
+  redirectUriMatchesRegistered,
 } from './oauth-redirect';
 
 const ISS = 'https://auth.example.com';
@@ -162,5 +163,93 @@ describe('oauth-redirect — buildRedirectUrl RFC 9207 `iss` (#282)', () => {
       })
     );
     expect(url.searchParams.getAll('iss')).toEqual([ISS]);
+  });
+});
+
+describe('oauth-redirect — redirectUriMatchesRegistered (RFC 8252 §7.3, #414)', () => {
+  const match = (requested: string, ...registered: string[]) =>
+    redirectUriMatchesRegistered(requested, registered);
+
+  it('matches any exact registered string', () => {
+    expect(
+      match('https://app.example.com/cb', 'https://x.example/cb', 'https://app.example.com/cb')
+    ).toBe(true);
+    expect(match('com.example.app:/oauth', 'com.example.app:/oauth')).toBe(true);
+    expect(match('http://127.0.0.1:8080/cb', 'http://127.0.0.1:8080/cb')).toBe(true);
+  });
+
+  it('lets only the port vary for a registered loopback redirect (127.0.0.0/8, [::1], localhost)', () => {
+    expect(match('http://127.0.0.1:53817/callback', 'http://127.0.0.1/callback')).toBe(true);
+    expect(match('http://127.0.0.1/callback', 'http://127.0.0.1:8080/callback')).toBe(true);
+    expect(match('http://127.0.0.1:1/callback', 'http://127.0.0.1:65535/callback')).toBe(true);
+    expect(match('http://127.4.5.6:9000/cb', 'http://127.4.5.6/cb')).toBe(true);
+    expect(match('http://[::1]:53817/callback', 'http://[::1]/callback')).toBe(true);
+    expect(match('http://localhost:53817/callback', 'http://localhost/callback')).toBe(true);
+    expect(match('http://127.0.0.1:53817/cb?x=1', 'http://127.0.0.1/cb?x=1')).toBe(true);
+    expect(match('http://127.0.0.1:53817', 'http://127.0.0.1')).toBe(true);
+  });
+
+  it('matches the CIMD document Claude Code publishes', () => {
+    const doc = ['http://localhost/callback', 'http://127.0.0.1/callback'];
+    expect(redirectUriMatchesRegistered('http://localhost:61234/callback', doc)).toBe(true);
+    expect(redirectUriMatchesRegistered('http://127.0.0.1:61234/callback', doc)).toBe(true);
+  });
+
+  it('still rejects a different path, query, host or scheme on a loopback redirect', () => {
+    const reg = 'http://127.0.0.1/callback';
+    expect(match('http://127.0.0.1:53817/other', reg)).toBe(false);
+    expect(match('http://127.0.0.1:53817/callback/', reg)).toBe(false);
+    expect(match('http://127.0.0.1:53817/callbackx', reg)).toBe(false);
+    expect(match('http://127.0.0.1:53817/Callback', reg)).toBe(false);
+    expect(match('http://127.0.0.1:53817/callback?x=1', reg)).toBe(false);
+    expect(match('http://127.0.0.1:53817/callback#f', reg)).toBe(false);
+    expect(match('http://127.0.0.2:53817/callback', reg)).toBe(false);
+    expect(match('http://localhost:53817/callback', reg)).toBe(false);
+    expect(match('http://[::1]:53817/callback', reg)).toBe(false);
+    expect(match('https://127.0.0.1:53817/callback', reg)).toBe(false);
+    expect(match('http://127.0.0.1/callback', 'http://localhost/callback')).toBe(false);
+    expect(match('http://LOCALHOST:53817/callback', 'http://localhost/callback')).toBe(false);
+  });
+
+  it('keeps exact matching, port included, for https, custom schemes and non-loopback hosts', () => {
+    expect(match('https://localhost:8443/cb', 'https://localhost/cb')).toBe(false);
+    expect(match('https://127.0.0.1:8443/cb', 'https://127.0.0.1:8080/cb')).toBe(false);
+    expect(match('https://app.example.com:8443/cb', 'https://app.example.com/cb')).toBe(false);
+    expect(match('http://example.com:8080/cb', 'http://example.com/cb')).toBe(false);
+    expect(match('http://169.254.169.254:80/cb', 'http://169.254.169.254/cb')).toBe(false);
+    expect(match('com.example.app://localhost:1234/cb', 'com.example.app://localhost/cb')).toBe(
+      false
+    );
+  });
+
+  it('refuses host-confusion and malformed-port shapes', () => {
+    const reg = 'http://127.0.0.1/cb';
+    expect(match('http://127.0.0.1@evil.example/cb', reg)).toBe(false);
+    expect(match('http://127.0.0.1:80@evil.example/cb', reg)).toBe(false);
+    expect(match('http://127.0.0.1.evil.example/cb', reg)).toBe(false);
+    expect(match('http://localhost.evil.example:80/cb', 'http://localhost/cb')).toBe(false);
+    expect(match('http://127.0.0.1\\@evil.example/cb', reg)).toBe(false);
+    expect(match('http://127.0.0.1:/cb', reg)).toBe(false);
+    expect(match('http://127.0.0.1:0/cb', reg)).toBe(false);
+    expect(match('http://127.0.0.1:08080/cb', reg)).toBe(false);
+    expect(match('http://127.0.0.1:65536/cb', reg)).toBe(false);
+    expect(match('http://127.0.0.1:99999/cb', reg)).toBe(false);
+    expect(match('http://127.0.0.1:8080:9090/cb', reg)).toBe(false);
+    expect(match('http://127.0.0.300:8080/cb', 'http://127.0.0.300/cb')).toBe(false);
+    expect(match('http://[::1]:8080/cb', 'http://[0:0:0:0:0:0:0:1]/cb')).toBe(false);
+  });
+
+  it('never matches against an empty registered set', () => {
+    expect(match('http://127.0.0.1:53817/cb')).toBe(false);
+  });
+
+  it('every URI admitted through the port exception is gated by the environment policy', () => {
+    for (const uri of [
+      'http://127.0.0.1:53817/callback',
+      'http://[::1]:53817/callback',
+      'http://localhost:53817/callback',
+    ]) {
+      expect(isHttpLocalhostRedirect(uri)).toBe(true);
+    }
   });
 });
