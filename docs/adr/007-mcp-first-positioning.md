@@ -291,7 +291,8 @@ core, an Extensions framework, Tasks, and MCP Apps.
 
 ### Underlying spec drift
 
-- **OAuth 2.1 is at `draft-ietf-oauth-v2-1-15`** and is still not an RFC. The
+- **OAuth 2.1 is at `draft-ietf-oauth-v2-1-16`** (re-pinned from `-15` on
+  2026-09-26; see `docs/spec-pin-log.md`) and is still not an RFC. The
   published MCP 2026-07-28 specification cites `-13` (Standards Compliance,
   Access Token Usage) and `-14` (Refresh Tokens). QAuth's "OAuth 2.1"
   positioning is accurate but the base is still moving.
