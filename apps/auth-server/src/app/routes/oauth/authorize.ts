@@ -18,7 +18,11 @@ import { canSkipConsent, filterRequestedScopes } from '../../helpers/consent';
 import { resolveIssuerIdentifier } from '../../helpers/discovery';
 import { resolveEnvironmentPolicy } from '../../helpers/environment-policy';
 import { getOrCreateSystemClient } from '../../helpers/oauth-client';
-import { buildRedirectUrl, isRedirectUriAllowedForPolicy } from '../../helpers/oauth-redirect';
+import {
+  buildRedirectUrl,
+  isRedirectUriAllowedForPolicy,
+  redirectUriMatchesRegistered,
+} from '../../helpers/oauth-redirect';
 import { redirectToLoginWithPendingAuthorization } from '../../helpers/pending-authorization';
 import { getOrCreateDefaultRealm } from '../../helpers/realm';
 import { resolveRealmRateLimitMax } from '../../helpers/realm-rate-limit';
@@ -170,8 +174,11 @@ export default async function (fastify: FastifyInstance) {
     // CIMD §: the authorization request's redirect_uri MUST exactly match
     // one of the document's redirect_uris (this list came from the
     // metadata document for a CIMD client, or the registered set for a
-    // pre-registered one). No wildcards.
-    if (!client.redirectUris.includes(redirectUri)) {
+    // pre-registered one). No wildcards. The one exception is the port of a
+    // loopback redirect, which RFC 8252 §7.3 requires us to let vary (#414);
+    // everything downstream uses the REQUESTED URI, so the code is bound to
+    // and the response goes to the port the client is listening on.
+    if (!redirectUriMatchesRegistered(redirectUri, client.redirectUris)) {
       await fastify.repositories.auditLogs.create({
         userId: null,
         oauthClientId: client.id,

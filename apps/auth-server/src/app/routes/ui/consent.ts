@@ -27,7 +27,11 @@ import {
 import { resolveIssuerIdentifier } from '../../helpers/discovery';
 import { resolveEnvironmentPolicy } from '../../helpers/environment-policy';
 import { html, render, safe, safeUrl } from '../../helpers/html';
-import { buildRedirectUrl, isRedirectUriAllowedForPolicy } from '../../helpers/oauth-redirect';
+import {
+  buildRedirectUrl,
+  isRedirectUriAllowedForPolicy,
+  redirectUriMatchesRegistered,
+} from '../../helpers/oauth-redirect';
 import { redirectToLoginWithPendingAuthorization } from '../../helpers/pending-authorization';
 import { getOrCreateDefaultRealm } from '../../helpers/realm';
 import { highestAgentModeInScopes } from '../../helpers/scope-modes';
@@ -379,7 +383,7 @@ export default async function (fastify: FastifyInstance) {
       if (!client || !client.enabled) {
         throw new BadRequestError('invalid_client');
       }
-      if (!client.redirectUris.includes(query.redirect_uri)) {
+      if (!redirectUriMatchesRegistered(query.redirect_uri, client.redirectUris)) {
         throw new BadRequestError('redirect_uri not registered');
       }
 
@@ -587,7 +591,7 @@ export default async function (fastify: FastifyInstance) {
       if (!client || !client.enabled) {
         throw new BadRequestError('invalid_client');
       }
-      if (!client.redirectUris.includes(body.redirect_uri)) {
+      if (!redirectUriMatchesRegistered(body.redirect_uri, client.redirectUris)) {
         throw new BadRequestError('redirect_uri not registered');
       }
 
