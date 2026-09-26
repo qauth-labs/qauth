@@ -89,7 +89,9 @@ Notes:
 - `staging` and `production` are **https-only** for redirect URIs. The RFC 8252
   `http://` loopback carve-out for native / CLI clients (including MCP clients) is
   handled by redirect validation and is permitted in any PKCE-enforcing
-  environment — it is not the same flag as `localhostRedirectAllowed`.
+  environment — it is not the same flag as `localhostRedirectAllowed`. Loopback
+  redirects may use any port at request time (RFC 8252 §7.3); see
+  [Redirect URI matching](/integrate/oauth-flow/#redirect-uri-matching).
 - Hard security floors always hold and are **not** environment-tunable: client
   secrets are always hashed (Argon2id), and audience (`aud`) binding always holds.
 

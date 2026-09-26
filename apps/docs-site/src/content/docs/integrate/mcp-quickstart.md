@@ -294,7 +294,11 @@ CIMD for anything you deploy.
 
 - **CIMD** is on by default (`CIMD_ENABLED=true`). It requires the client's
   `client_id` URL to be fetchable over HTTPS; the AS validates it (URL ==
-  `client_id`, redirect-URI checks, SSRF guards, size/TTL limits). For purely
+  `client_id`, redirect-URI checks, SSRF guards, size/TTL limits). A document
+  may declare portless loopback redirects such as `http://127.0.0.1/callback`
+  (Claude Code does); the client's ephemeral port is accepted at authorization
+  time ([Redirect URI matching](/integrate/oauth-flow/#redirect-uri-matching)).
+  For purely
   local testing over `http://localhost`, CIMD is impractical — use DCR.
   MCP 2026-07-28 still cites `draft-ietf-oauth-client-id-metadata-document-00`;
   the IETF draft has since reached **-02** (6 July 2026), and QAuth's
