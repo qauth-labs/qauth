@@ -254,7 +254,7 @@ describe('rewriteRecordLink — the real docs/adr and docs/security corpus, enum
     return links;
   }
 
-  it('extracts exactly 313 links across the 14 ADRs, the ADR README, and the security review — the corpus the counts below are checked against', () => {
+  it('extracts exactly 393 links across the 15 ADRs, the ADR README, and the security review — the corpus the counts below are checked against', () => {
     // A fixed count, not a lower bound: this test's whole point is that the
     // categorisation below is checked against the FULL corpus, not a
     // sample. If a future ADR amendment changes the link count, this
@@ -307,7 +307,13 @@ describe('rewriteRecordLink — the real docs/adr and docs/security corpus, enum
     // Level 3, NIST SP 800-63B-4, Claude Code Remote Control) and one in-tree
     // link to ADR-004 (→ ROUTE). Predicted from the amendment's own link list
     // before running, so the buckets below are a check.
-    expect(extractAllLinks()).toHaveLength(313);
+    //
+    // 313 → 393 with ADR-015 (first-party login, 2026-09-26): 79 links in the
+    // new record — 44 external, 6 bare anchors, 29 in-tree links to rendered
+    // records (002/003/007–014 → ROUTE) — plus the README index row for 015
+    // (→ ROUTE). Recounted with the plugin's own extractor and
+    // rewriteRecordLink before the buckets below were touched.
+    expect(extractAllLinks()).toHaveLength(393);
   });
 
   it('every link falls into exactly one of the four outcomes, with none left unresolved', () => {
@@ -389,8 +395,13 @@ describe('rewriteRecordLink — the real docs/adr and docs/security corpus, enum
     //
     // ADR-014's 2026-09-24 amendment: 164 → 169 external, 100 → 101 route
     // (its ADR-004 link). Anchors, blob and unresolved unchanged.
-    expect(untouchedExternalOrAnchor).toBe(169 + 30);
-    expect(rewrittenToRoute).toBe(101);
+    //
+    // ADR-015 (2026-09-26): 169 → 213 external and 30 → 36 bare anchors;
+    // 101 → 131 route (ADR-015's 29 record links and the README index row).
+    // Blob and unresolved unchanged — the check that every new in-tree link
+    // resolved to a rendered record.
+    expect(untouchedExternalOrAnchor).toBe(213 + 36);
+    expect(rewrittenToRoute).toBe(131);
     expect(rewrittenToBlob).toBe(13);
     expect(leftUnresolved).toBe(0);
   });
