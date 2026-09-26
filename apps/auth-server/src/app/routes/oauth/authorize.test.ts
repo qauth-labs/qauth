@@ -1156,6 +1156,89 @@ describe('GET /oauth/authorize — environment localhost redirect gate (ADR-008 
   });
 });
 
+describe('GET /oauth/authorize — loopback redirect on any port (RFC 8252 §7.3, #414)', () => {
+  // A logged-in user with standing consent, so a matching request issues a
+  // code straight away: the test sees both the stored redirect_uri and the
+  // Location header.
+  async function authorize(registered: string[], redirectUri: string) {
+    const { fastify, ctx } = makeFastify();
+    await authorizeRoute(fastify);
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue({
+      ...CLIENT,
+      redirectUris: registered,
+    });
+    (fastify.jwtUtils.extractFromHeader as unknown as Mock).mockReturnValue(null);
+    (fastify.repositories.oauthConsents.findActive as unknown as Mock).mockResolvedValue({
+      scopes: ['email'],
+      revokedAt: null,
+    });
+    const { signSessionId } = await import('../../helpers/session-cookie');
+    const signed = signSessionId('sid-loopback');
+    (fastify.sessionUtils.getSession as unknown as Mock).mockResolvedValue({
+      userId: 'user-1',
+      email: 'a@b.com',
+      sessionId: 'sid-loopback',
+      createdAt: Date.now(),
+    });
+
+    const { reply, state } = createReply();
+    const call = () =>
+      ctx.handler!(
+        {
+          query: { ...BASE_QUERY, redirect_uri: redirectUri },
+          url: '/oauth/authorize?response_type=code&client_id=app-123&scope=email',
+          headers: { cookie: `__Host-qauth_session=${signed}` },
+          ip: '127.0.0.1',
+        },
+        reply
+      );
+    return { fastify, state, call };
+  }
+
+  it.each([
+    ['http://127.0.0.1/callback', 'http://127.0.0.1:53817/callback'],
+    ['http://[::1]/callback', 'http://[::1]:53817/callback'],
+    ['http://localhost/callback', 'http://localhost:53817/callback'],
+    ['http://127.0.0.1:8080/callback', 'http://127.0.0.1:53817/callback'],
+  ])(
+    'registered %s accepts %s, binds the code to it and redirects to that port',
+    async (registered, requested) => {
+      const { fastify, state, call } = await authorize([registered], requested);
+      await call();
+
+      expect(fastify.repositories.authorizationCodes.create).toHaveBeenCalledWith(
+        expect.objectContaining({ redirectUri: requested })
+      );
+      expect(state.redirected!.startsWith(`${requested}?`)).toBe(true);
+      expect(new URL(state.redirected!).searchParams.get('code')).toBeTruthy();
+    }
+  );
+
+  it.each([
+    ['a different path', 'http://127.0.0.1:53817/other'],
+    ['a different host', 'http://127.0.0.2:53817/callback'],
+    ['a different loopback literal', 'http://localhost:53817/callback'],
+    ['a different scheme', 'https://127.0.0.1:53817/callback'],
+    ['an added query', 'http://127.0.0.1:53817/callback?x=1'],
+    ['userinfo host confusion', 'http://127.0.0.1:53817@evil.example/callback'],
+  ])('rejects %s on a registered loopback redirect', async (_label, requested) => {
+    const { fastify, state, call } = await authorize(['http://127.0.0.1/callback'], requested);
+    await expect(call()).rejects.toThrow('redirect_uri not registered');
+    expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
+    expect(state.redirected).toBeUndefined();
+  });
+
+  it.each([
+    ['https', 'https://app.example.com/cb', 'https://app.example.com:8443/cb'],
+    ['https loopback', 'https://127.0.0.1/cb', 'https://127.0.0.1:8443/cb'],
+    ['a custom scheme', 'com.example.app://localhost/cb', 'com.example.app://localhost:1234/cb'],
+  ])('keeps exact matching, port included, for %s', async (_label, registered, requested) => {
+    const { fastify, call } = await authorize([registered], requested);
+    await expect(call()).rejects.toThrow('redirect_uri not registered');
+    expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
+  });
+});
+
 describe('GET /oauth/authorize — RFC 9207 §2 `iss` on every authorization response (#282)', () => {
   // The issuer this suite's makeFastify() advertises via jwtUtils.getIssuer().
   const RAW_ISSUER = 'https://auth.example.com';

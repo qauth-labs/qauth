@@ -1544,6 +1544,46 @@ describe('POST /oauth/token route — authorization_code grant', () => {
     ).rejects.toThrow(InvalidGrantError);
   });
 
+  describe('loopback redirect_uri port (RFC 8252 §7.3 / RFC 6749 §4.1.3, #414)', () => {
+    // The authorization request may use any port on a registered loopback
+    // redirect, but the code stores the URI AS REQUESTED — so the token
+    // request must repeat it exactly, port included.
+    const ISSUED_TO = 'http://127.0.0.1:53817/callback';
+
+    function setupLoopbackCode() {
+      const stub = setupAuthCodeStub();
+      (
+        stub.fastify.repositories.authorizationCodes.findByCode as unknown as Mock
+      ).mockResolvedValue({ ...stub.authCode, redirectUri: ISSUED_TO });
+      return stub;
+    }
+
+    it('exchanges the code when redirect_uri repeats the requested port', async () => {
+      const { fastify, ctx } = setupLoopbackCode();
+      await tokenRoute(fastify);
+      const handler = ctx.handler;
+      if (!handler) throw new Error('Handler missing');
+
+      await handler(baseRequest({ redirect_uri: ISSUED_TO }), createReply());
+      expect(fastify.jwtUtils.signAccessToken).toHaveBeenCalledOnce();
+    });
+
+    it.each([
+      ['the portless registered form', 'http://127.0.0.1/callback'],
+      ['another port', 'http://127.0.0.1:53818/callback'],
+    ])('rejects %s — only the port differs, still invalid_grant', async (_label, redirectUri) => {
+      const { fastify, ctx } = setupLoopbackCode();
+      await tokenRoute(fastify);
+      const handler = ctx.handler;
+      if (!handler) throw new Error('Handler missing');
+
+      await expect(
+        handler(baseRequest({ redirect_uri: redirectUri }), createReply())
+      ).rejects.toThrow(InvalidGrantError);
+      expect(fastify.jwtUtils.signAccessToken).not.toHaveBeenCalled();
+    });
+  });
+
   it('rejects a used / expired / unknown code (findByCode filters them out → invalid_grant)', async () => {
     // Single-use + expiry are enforced at the repository layer: findByCode
     // returns ONLY codes that are `used = false` AND unexpired (see the

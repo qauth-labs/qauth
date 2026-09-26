@@ -250,6 +250,16 @@ describe('toCimdClientInsert — grant/response type tolerance (RFC 7591 §2)', 
   const REALM = 'realm-1';
   const SENTINEL = '$argon2id$v=19$m=65536,t=3,p=4$c2FsdA$ZGlnZXN0';
 
+  it('materialises portless loopback redirect_uris verbatim (Claude Code shape, #414)', () => {
+    // Claude Code's CIMD document declares its loopback callbacks without a
+    // port; the ephemeral port only exists at authorization time and is
+    // matched by redirectUriMatchesRegistered (RFC 8252 §7.3).
+    const redirectUris = ['http://localhost/callback', 'http://127.0.0.1/callback'];
+    const doc = cimdDocumentSchema.parse(validDoc({ redirect_uris: redirectUris }));
+    const insert = toCimdClientInsert(REALM, CLIENT_ID, doc, SENTINEL);
+    expect(insert.redirectUris).toEqual(redirectUris);
+  });
+
   it('accepts unknown grant_types and keeps only the supported ones (claude.ai shape)', () => {
     // Real-world shape: claude.ai's metadata document declares jwt-bearer
     // alongside the grants QAuth implements. The document must validate and
