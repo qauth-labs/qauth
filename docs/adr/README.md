@@ -24,6 +24,7 @@ An ADR is a document that captures an important architectural decision made alon
 | [012](./012-dynamic-client-ownership.md)         | Ownership of Dynamically Registered Clients                                          | Accepted    | 2026-08-31 |
 | [013](./013-same-device-return-leg.md)           | Same-Device Return Leg — the OID4VP Response Code on Both Verifier Profiles          | Accepted    | 2026-09-11 |
 | [014](./014-agent-authority-tree.md)             | Agent Authority Tree — Session-Rooted, Sender-Constrained Delegation for AI Agents   | Proposed    | 2026-09-21 |
+| [015](./015-first-party-login.md)                | First-Party Login — Headless Sign-In on the Authorization Challenge Endpoint         | Proposed    | 2026-09-26 |
 
 ⚠️ **ADR-009** — findings partially superseded by CIR (EU) 2026/1730 and 2026/1731
 (published 22 July 2026, in force 11 August 2026). No Decision has been changed;
