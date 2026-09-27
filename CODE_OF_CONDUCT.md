@@ -58,10 +58,11 @@ appointed representative at an online or offline event.
 ## Enforcement
 
 Instances of abusive, harassing, or otherwise unacceptable behavior may be
-reported to the QAuth Labs maintainers responsible for enforcement by
-contacting them directly and privately on GitHub — [@EsTharian](https://github.com/EsTharian)
-or [@tahirayan](https://github.com/tahirayan). All complaints will be
-reviewed and investigated promptly and fairly.
+reported privately by email to the QAuth Labs maintainers responsible for
+enforcement: [taha@qauth.dev](mailto:taha@qauth.dev) or
+[tahir@qauth.dev](mailto:tahir@qauth.dev). If your report concerns one of them,
+write to the other. All complaints will be reviewed and investigated promptly
+and fairly.
 
 All community leaders are obligated to respect the privacy and security of the
 reporter of any incident.
