@@ -5,6 +5,9 @@ OIDC identity server for the agent era, built as a federation hub and crypto-agi
 for the post-quantum transition. This guide covers how to get set up and the
 conventions the repo enforces.
 
+By participating in this project, you are expected to uphold our
+[Code of Conduct](./CODE_OF_CONDUCT.md).
+
 ## Prerequisites
 
 - **Node.js** ≥ 24.7.0 (see `.nvmrc` — `nvm use`)
