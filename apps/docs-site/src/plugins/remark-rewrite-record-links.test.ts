@@ -254,7 +254,7 @@ describe('rewriteRecordLink — the real docs/adr and docs/security corpus, enum
     return links;
   }
 
-  it('extracts exactly 313 links across the 14 ADRs, the ADR README, and the security review — the corpus the counts below are checked against', () => {
+  it('extracts exactly 361 links across the 16 ADRs, the ADR README, and the security review — the corpus the counts below are checked against', () => {
     // A fixed count, not a lower bound: this test's whole point is that the
     // categorisation below is checked against the FULL corpus, not a
     // sample. If a future ADR amendment changes the link count, this
@@ -307,7 +307,13 @@ describe('rewriteRecordLink — the real docs/adr and docs/security corpus, enum
     // Level 3, NIST SP 800-63B-4, Claude Code Remote Control) and one in-tree
     // link to ADR-004 (→ ROUTE). Predicted from the amendment's own link list
     // before running, so the buckets below are a check.
-    expect(extractAllLinks()).toHaveLength(313);
+    //
+    // 313 → 361 with ADR-015 (agent tree hardening) and ADR-016 (agent forge
+    // bindings), 2026-09-30: 18 and 26 links in the two records — 18 external
+    // in all, 26 in-tree record links (002/011/012/014/015/016 → ROUTE) — plus
+    // two ADR-014 Related links and the two README index rows (→ ROUTE).
+    // Recounted with the plugin's own extractor before the buckets were set.
+    expect(extractAllLinks()).toHaveLength(361);
   });
 
   it('every link falls into exactly one of the four outcomes, with none left unresolved', () => {
@@ -389,8 +395,13 @@ describe('rewriteRecordLink — the real docs/adr and docs/security corpus, enum
     //
     // ADR-014's 2026-09-24 amendment: 164 → 169 external, 100 → 101 route
     // (its ADR-004 link). Anchors, blob and unresolved unchanged.
-    expect(untouchedExternalOrAnchor).toBe(169 + 30);
-    expect(rewrittenToRoute).toBe(101);
+    //
+    // ADR-015 and ADR-016 (2026-09-30): 169 → 187 external; 101 → 131 route
+    // (the two records' 26 record links, two ADR-014 Related links and two
+    // README index rows). Anchors, blob and unresolved unchanged — the check
+    // that every new in-tree link resolved to a rendered record.
+    expect(untouchedExternalOrAnchor).toBe(187 + 30);
+    expect(rewrittenToRoute).toBe(131);
     expect(rewrittenToBlob).toBe(13);
     expect(leftUnresolved).toBe(0);
   });
