@@ -1812,7 +1812,12 @@ proceeds on that default until the maintainer decides otherwise.
   [ADR-013](./013-same-device-return-leg.md) — the
   burn-then-bind idiom the spawn assertion's single-use `jti` follows;
   [ADR-002](./002-identifier-abstraction.md) — email as credential, not
-  identity, which is why an agent has neither (§13)
+  identity, which is why an agent has neither (§13);
+  [ADR-015](./015-agent-tree-hardening.md) — the tree's fail-closed rules
+  and the questions the 2026-09-30 amendment left out;
+  [ADR-016](./016-agent-forge-bindings.md) — the forge side of an agent's
+  identity: the public GitHub App, approval-only repositories, the Bitbucket
+  leg and `handle@issuer`
 - [Agent Authorization guide](https://docs.qauth.dev/integrate/agent-authorization/) —
   the shipped agent layer this record builds on;
   [`docs/spec-pin-log.md`](../spec-pin-log.md) — where the watch list will be
