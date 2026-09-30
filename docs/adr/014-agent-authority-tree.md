@@ -10,8 +10,8 @@
 > [Decision](#decision)), so a default deployment's behaviour is byte-for-byte
 > unchanged by this record. No existing token-exchange gate is loosened; with
 > the flag on, two are added — GATE 4d on every exchange, GATE 3d on every
-> exchange whose subject token carries `cnf`, with 3d's denylist and ledger
-> checks on every exchange (§4). The vitrin composition is a proposal into
+> exchange whose subject token carries `cnf`, with 3d's ledger check on
+> every exchange (§4). The vitrin composition is a proposal into
 > vitrin's open questions, not a description of anything vitrin does today.
 >
 > **Amended 2026-09-22** (before any implementation): a durable agent
@@ -31,6 +31,18 @@
 > threat, T8, and parked decisions 14–16; a clause in T3 on why vitrin is
 > listed beside PostgreSQL; and the 2026-09-22 text its first commit dropped.
 > Remote approval sits behind a second switch, `AGENT_APPROVAL_ENABLED`.
+>
+> **Amended 2026-09-30** (before any implementation): the maintainer decided
+> four parked questions. Agent trees survive sign-out, and a separate
+> revoke-all ends them (decision 1). History keeps the owner of its time, and
+> a transfer ends the agent's live trees (decision 10). Five of six lasting
+> approval answers are settled (decision 14). A passkey is the only approval
+> factor, in every profile (decision 15). Decision 12 stays open; "always
+> allow" is parked as decision 17. Four statements are corrected against
+> main: GATE 3a already refuses a revoked subject or actor token
+> (GHSA-6fcx-34r3-24v4); a refused subject token or spawn assertion
+> answers `invalid_request` (RFC 8693 §2.2.2); a loopback redirect URI takes any port (PR #415); and
+> draft-ietf-oauth-rfc7523bis-11 is in the RFC Editor queue.
 
 ## Context
 
@@ -81,34 +93,34 @@ is adopted by a working group. QAuth defines the seams itself and says so
 
 ### What exists today and what this record adds
 
-| Concern           | Today (verified 2026-09-21)                                                                                                                                                                                                                                                                                                                                                                                                                      | This record adds                                                                                                                                                     |
-| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Delegation hop    | `handleTokenExchange`, `apps/auth-server/src/app/routes/oauth/token.ts:1207` — confidential-only, gates 1–4c, `act = { sub: client_id, act? }`, depth ≤ `MAX_DELEGATION_DEPTH` (`apps/auth-server/src/app/helpers/agent-audit.ts:22`), lifetime capped by the subject's remaining life, no refresh token issued                                                                                                                                  | A spawn assertion signed by the parent's key, a DPoP proof from the child, an instance thumbprint, and a ledger row per hop                                          |
-| Session root      | None. `jti` is `randomUUID()` and never persisted in Postgres — no issued-token row, no parent link (`libs/server/jwt/src/lib/jwt-service.ts:80`); Redis holds it only as a TTL'd denylist key (and, with hybrid signing on, the PQC sidecar key); no `sid` in non-test code; `sessions` is the browser login session (`libs/infra/db/src/lib/schema/sessions.ts:7`)                                                                             | `sid` on every agent access token, inherited unchanged by every exchange                                                                                             |
-| Instance identity | None. No `cnf`, no DPoP, no mTLS; every agent token is a plain bearer                                                                                                                                                                                                                                                                                                                                                                            | DPoP-bound agent tokens (`cnf.jkt`), key held by a local helper                                                                                                      |
-| Chain record      | `audit_logs.delegation_chain` (flattened `client_id` list, `libs/infra/db/src/lib/schema/audit.ts:54`); `findByRealmAndActorClientId` has no HTTP caller (`libs/infra/db/src/lib/repositories/audit-logs.repository.ts:218`)                                                                                                                                                                                                                     | An agent-token ledger keyed by `jti` with `parent_jti` and a stable node id, served by introspection and the dashboard                                               |
-| Introspection     | `POST /oauth/introspect` returns no `act`, `jti` or `token_use` (response built at `apps/auth-server/src/app/routes/oauth/introspect.ts:229`); secret-based client auth only                                                                                                                                                                                                                                                                     | `act`, `jti`, `sid`, `token_use`, `cnf`, `authorization_details`, `qauth_delegation`; `private_key_jwt` accepted                                                     |
-| Revocation        | Per-`jti` Redis denylist with TTL (`revokeJti`, `apps/auth-server/src/app/helpers/token-revocation.ts:30`); ownership = `client_id` of the token (`apps/auth-server/src/app/routes/oauth/revoke.ts:164`); `family_id` cascade for refresh tokens only                                                                                                                                                                                            | Revocation by `sid` (tree) and `jti` (subtree) with cascade; the user and any live ancestor node in the tree (by its key) may revoke; CAEP `session-revoked` emitted |
-| Purpose / rights  | RFC 9396 absent; the only reference rejects inbound `authorization_details` on the ID-JAG path (`apps/auth-server/src/app/helpers/id-jag.ts:433`)                                                                                                                                                                                                                                                                                                | One RAR type, narrow-only across hops, returned in introspection                                                                                                     |
-| Consent           | `consentPage` has no agent input; `agent:*` renders raw (`apps/auth-server/src/app/routes/ui/consent.ts:134`, `describeScope` in `apps/auth-server/src/app/helpers/consent.ts:114`)                                                                                                                                                                                                                                                              | The tree ceiling on the consent screen                                                                                                                               |
-| Resource side     | `McpGuard` validates `iss`/`aud`/`exp`/scope exactly, normalises no `act`/`jti`, emits nothing back (`libs/fastify/plugins/mcp-guard/src/lib/core.ts:60`, `ValidatedToken` in `libs/fastify/plugins/mcp-guard/src/types.ts:31`)                                                                                                                                                                                                                  | `act`/`sid`/`jti` normalised, DPoP verified per resource, optional event emission and online decisions                                                               |
-| Events            | None — no SSF, SET, CAEP or webhooks                                                                                                                                                                                                                                                                                                                                                                                                             | An SSF transmitter (revocation) and an RFC 8935 push endpoint (resource-side and agent-side actions), with a registered-transmitter roster the owner can extend      |
-| CLI               | Nothing                                                                                                                                                                                                                                                                                                                                                                                                                                          | `qauth-broker` (keys, spawn, `git`/`gh`/`psql` credentials), a QAuth-side GitHub STS and a PostgreSQL 18 validator module                                            |
-| Agent identity    | None. `oauth_clients.is_agent` is a self-asserted flag on a client registration (`libs/infra/db/src/lib/schema/core.ts:234`); `developer_id` is the only ownership signal and is NULL for every anonymous DCR client ([ADR-012](./012-dynamic-client-ownership.md)); `logo_uri` and `client_uri` land in the `metadata` jsonb at registration (`apps/auth-server/src/app/routes/oauth/register.ts:178`) and are shown on the consent screen only | An `agents` table — a principal with an owner, a name, an avatar and per-platform bindings — served as a SCIM `Agent` resource and a public profile (§13)            |
-| Human approval    | None. The only step-up is a fresh browser login during authorization (`evaluateStepUp`, `apps/auth-server/src/app/helpers/step-up.ts:196`); no passkey, TOTP or CIBA code                                                                                                                                                                                                                                                                        | A CIBA poll-mode approval request, a passkey-confirmed approval page and a separate elevation leaf for the approved step (§14)                                       |
+| Concern           | Today (re-verified 2026-09-30)                                                                                                                                                                                                                                                                                                                                                                            | This record adds                                                                                                                                                     |
+| ----------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Delegation hop    | `handleTokenExchange`, `apps/auth-server/src/app/routes/oauth/token.ts:1291` — confidential-only, gates 1–4c, `act = { sub: client_id, act? }`, depth ≤ `MAX_DELEGATION_DEPTH` (`apps/auth-server/src/app/helpers/agent-audit.ts:22`), lifetime capped by the subject's remaining life, no refresh token issued                                                                                           | A spawn assertion signed by the parent's key, a DPoP proof from the child, an instance thumbprint, and a ledger row per hop                                          |
+| Session root      | None. `jti` is `randomUUID()` with no issued-token row in Postgres and no parent link (`libs/server/jwt/src/lib/jwt-service.ts:80`); Redis holds it only as a TTL'd denylist key (and, with hybrid signing on, the PQC sidecar key); no `sid` in non-test code; `sessions` is the browser login session (`libs/infra/db/src/lib/schema/sessions.ts:7`)                                                    | `sid` on every agent access token, inherited unchanged by every exchange                                                                                             |
+| Instance identity | None. No `cnf`, no DPoP, no mTLS; every agent token is a plain bearer                                                                                                                                                                                                                                                                                                                                     | DPoP-bound agent tokens (`cnf.jkt`), key held by a local helper                                                                                                      |
+| Chain record      | `audit_logs.delegation_chain` (flattened `client_id` list, `libs/infra/db/src/lib/schema/audit.ts:54`); `findByRealmAndActorClientId` has no HTTP caller (`libs/infra/db/src/lib/repositories/audit-logs.repository.ts:218`)                                                                                                                                                                              | An agent-token ledger keyed by `jti` with `parent_jti` and a stable node id, served by introspection and the dashboard                                               |
+| Introspection     | `POST /oauth/introspect` returns no `act`, `jti` or `token_use` (response built at `apps/auth-server/src/app/routes/oauth/introspect.ts:229`); secret-based client auth only                                                                                                                                                                                                                              | `act`, `jti`, `sid`, `token_use`, `cnf`, `authorization_details`, `qauth_delegation`; `private_key_jwt` accepted                                                     |
+| Revocation        | Per-`jti` Redis denylist with TTL (`revokeJti`, `apps/auth-server/src/app/helpers/token-revocation.ts:30`); ownership = `client_id` of the token (`apps/auth-server/src/app/routes/oauth/revoke.ts:164`); `family_id` cascade for refresh tokens only; token exchange refuses a revoked subject or actor token (GATE 3a, `apps/auth-server/src/app/routes/oauth/token.ts:1431-1449`, GHSA-6fcx-34r3-24v4) | Revocation by `sid` (tree) and `jti` (subtree) with cascade; the user and any live ancestor node in the tree (by its key) may revoke; CAEP `session-revoked` emitted |
+| Purpose / rights  | RFC 9396 absent; the only reference rejects inbound `authorization_details` on the ID-JAG path (`apps/auth-server/src/app/helpers/id-jag.ts:433`)                                                                                                                                                                                                                                                         | One RAR type, narrow-only across hops, returned in introspection                                                                                                     |
+| Consent           | `consentPage` has no agent input; `agent:*` renders raw (`apps/auth-server/src/app/routes/ui/consent.ts:138`, `describeScope` in `apps/auth-server/src/app/helpers/consent.ts:114`)                                                                                                                                                                                                                       | The tree ceiling on the consent screen                                                                                                                               |
+| Resource side     | `McpGuard` validates `iss`/`aud`/`exp`/scope exactly, normalises no `act`/`jti`, emits nothing back (`libs/fastify/plugins/mcp-guard/src/lib/core.ts:78`, `ValidatedToken` in `libs/fastify/plugins/mcp-guard/src/types.ts:31`)                                                                                                                                                                           | `act`/`sid`/`jti` normalised, DPoP verified per resource, optional event emission and online decisions                                                               |
+| Events            | None — no SSF, SET, CAEP or webhooks                                                                                                                                                                                                                                                                                                                                                                      | An SSF transmitter (revocation) and an RFC 8935 push endpoint (resource-side and agent-side actions), with a registered-transmitter roster the owner can extend      |
+| CLI               | Nothing                                                                                                                                                                                                                                                                                                                                                                                                   | `qauth-broker` (keys, spawn, `git`/`gh`/`psql` credentials), a QAuth-side GitHub STS and a PostgreSQL 18 validator module                                            |
+| Agent identity    | None. `oauth_clients.is_agent` is a self-asserted flag on a client registration (`libs/infra/db/src/lib/schema/core.ts:234`); `developer_id` is the only ownership signal and is NULL for every anonymous DCR client ([ADR-012](./012-dynamic-client-ownership.md)); `logo_uri` and `client_uri` land in the `metadata` jsonb at registration (`apps/auth-server/src/app/routes/oauth/register.ts:178`)   | An `agents` table — a principal with an owner, a name, an avatar and per-platform bindings — served as a SCIM `Agent` resource and a public profile (§13)            |
+| Human approval    | None. The only step-up is a fresh browser login during authorization (`evaluateStepUp`, `apps/auth-server/src/app/helpers/step-up.ts:196`); no passkey, TOTP or CIBA code                                                                                                                                                                                                                                 | A CIBA poll-mode approval request, a passkey-confirmed approval page and a separate elevation leaf for the approved step (§14)                                       |
 
 Two facts in that table shape everything below. GATE 3c requires the subject
 token's `aud` to contain the exchanging client's `client_id`
-(`apps/auth-server/src/app/routes/oauth/token.ts:1354`), and `resolveAudience`
+(`apps/auth-server/src/app/routes/oauth/token.ts:1458`), and `resolveAudience`
 sets `aud` to the RFC 8707 `resource` when one is present, else the client's
 audience allowlist, else the client's own id
 (`apps/auth-server/src/app/helpers/client-auth.ts:521`) — so a child with a
 distinct `client_id` can exchange only if the root token already named it, and
 an MCP client that sends `resource`, as MCP 2026-07-28 requires, gets a root
 token that names nobody. And exchange is confidential-only at three layers
-(`allowPublic: false` at `apps/auth-server/src/app/routes/oauth/token.ts:204`,
+(`allowPublic: false` at `apps/auth-server/src/app/routes/oauth/token.ts:204-205`,
 DCR refusal at `apps/auth-server/src/app/helpers/dynamic-client-registration.ts:224`,
-CIMD drop at `apps/auth-server/src/app/helpers/cimd.ts:366`) — so a child needs
+CIMD drop at `apps/auth-server/src/app/helpers/cimd.ts:368`) — so a child needs
 a credential something other than the model holds.
 
 ### Threat model
@@ -279,7 +291,7 @@ User-Agent or device session for logout, which QAuth's `sessions` row is and
 this grant identifier is not, and one browser session may root several
 grants. A `client_credentials` token carries none and cannot root a tree:
 exchange already requires an enabled user
-(`apps/auth-server/src/app/routes/oauth/token.ts:1365`), so the root of a tree
+(`apps/auth-server/src/app/routes/oauth/token.ts:1474`), so the root of a tree
 is always a human `sub`.
 
 **One root per main-agent process.** The broker runs the `authorization_code`
@@ -295,20 +307,21 @@ decision 8.
 
 The return leg is a native app's (RFC 8252 §7.3): the broker opens the user's
 browser on the authorization URL with PKCE `S256` and a `state` it minted,
-listens once on a loopback redirect URI — `http://127.0.0.1:<port>/callback`,
-the IP literal rather than `localhost`, which §8.3 says is NOT RECOMMENDED —
-receives the code there, checks `state`, closes the listener (§8.3: open the
-port for the request, close it on the response) and exchanges the code as
-the type's confidential `private_key_jwt` client. QAuth matches
-`redirect_uri` exactly (`redirectUris`,
-`apps/auth-server/src/app/routes/oauth/authorize.ts:174`) and does not
-implement §7.3's "MUST allow any port" for loopback, so the port is fixed,
-the URI is the one entry in the type's seeded `redirect_uris` (decision 7),
-and a broker that cannot bind that port refuses `login` rather than pick
-another. Plain-HTTP loopback passes the environment gate in every profile —
+binds an ephemeral port and listens once on a loopback redirect URI —
+`http://127.0.0.1:<port>/callback`, the IP literal rather than `localhost`,
+which §8.3 says is NOT RECOMMENDED — receives the code there, checks
+`state`, closes the listener (§8.3: open the port for the request, close it
+on the response) and exchanges the code as the type's confidential
+`private_key_jwt` client. QAuth accepts any port on a registered `http`
+loopback redirect URI, as §7.3 requires (`redirectUriMatchesRegistered`,
+`apps/auth-server/src/app/helpers/oauth-redirect.ts:114`, called at
+`apps/auth-server/src/app/routes/oauth/authorize.ts:181`; PR #415). So no
+port is fixed, and the type's seeded `redirect_uris` holds one portless
+entry (decision 7). Plain-HTTP loopback passes the environment gate in
+every profile —
 `development` allows it outright, `staging` and `production` because they
 require PKCE (`isRedirectUriAllowedForPolicy`,
-`apps/auth-server/src/app/helpers/oauth-redirect.ts:68`).
+`apps/auth-server/src/app/helpers/oauth-redirect.ts:152`).
 
 A subject token with no `sid` — a legacy token, or one issued to a non-agent
 client whose `aud` happens to name the agent — is neither refused nor left
@@ -466,11 +479,10 @@ broker on the child's behalf: `subject_token` is the parent's token,
   = the child's purpose and rights (§5), optional `resource`/`audience`.
 
 The AS adds one gate, **3d**, after GATE 3c and before the enabled-user check:
-the subject token's `jti` is not in the Redis denylist (`isJtiRevoked`, which
-no exchange path calls today — `verifyAccessToken` at
-`apps/auth-server/src/app/routes/oauth/token.ts:1298` is signature, `exp` and
-issuer only) and, when the subject has a ledger row, that row has
-`revoked_at IS NULL`; `typ` exact; header `jwk` thumbprint equals the subject
+when the subject has a ledger row, that row has `revoked_at IS NULL` (the
+denylist half already ships: GATE 3a refuses a revoked subject or actor token
+on every exchange, `apps/auth-server/src/app/routes/oauth/token.ts:1431-1449`,
+GHSA-6fcx-34r3-24v4); `typ` exact; header `jwk` thumbprint equals the subject
 token's `cnf.jkt`; signature verifies under that key; `aud` equals the issuer;
 unexpired, lifetime ≤ 60 s; `jti` unseen (Redis, the `consumeIdJagJti` idiom,
 `apps/auth-server/src/app/helpers/id-jag.ts:244`; store unavailable ⇒ refuse);
@@ -484,11 +496,12 @@ presents no assertion and never reaches this check; `cnf.jkt` equals the DPoP
 proof's key; and when (`sid`, `cnf.jkt`) already names a node, that node has
 `revoked_at IS NULL`, the same `client_id` as the assertion's `sub` and the
 same parent node as the subject token's — a spawn onto a revoked or foreign
-key is `invalid_grant`, so a revoked node cannot be renewed by the next sweep
-and two agent types can never share one node. Any failure is `invalid_grant`,
-audited (the denylist and ledger checks also run for a legacy bearer subject,
-where they are the only new part of 3d; GATE 4d below runs for every subject,
-bearer or bound). The DPoP key is generated per process and
+key is `invalid_request`, so a revoked node cannot be renewed by the next
+sweep and two agent types can never share one node. Any failure is
+`invalid_request` (RFC 8693 §2.2.2), as the shipped subject-token gates
+(GATE 3, 3a, 3b and 3c) answer, and is audited (the ledger check also runs for a legacy bearer subject, where
+it is the only new part of 3d; GATE 4d below runs for every subject, bearer
+or bound). The DPoP key is generated per process and
 is never a key registered in the type's `jwks`, so no assertion it signs can
 authenticate the client; the client-assertion verifier additionally rejects
 `typ: spawn-assertion+jwt` and DPoP-proof verification rejects any JWT
@@ -507,7 +520,7 @@ top-level `sub` names it, and there is no `actor_token` here. The profile's
 conformant shape is §6.3.1 — the child's RFC 7523 client assertion as
 `actor_token` with `actor_token_type=urn:ietf:params:oauth:token-type:jwt`,
 which GATE 2 refuses today
-(`apps/auth-server/src/app/routes/oauth/token.ts:1282`) — the future
+(`apps/auth-server/src/app/routes/oauth/token.ts:1366`) — the future
 conformance path, **not adopted** for the reason the Alternatives table gives.
 
 The existing gates all still run and all still narrow: **(c)** GATE 3c and
@@ -518,7 +531,7 @@ new **GATE 4d**, scope ⊆ the child type's registered `oauth_clients.scopes`
 check `client_credentials` already runs), so a type registered without
 `write:*` can never hold it whatever its parent grants — GATE 4c gives the
 same floor for `agent:*` through `max_agent_mode` (`enforceAgentScopeCap`,
-`apps/auth-server/src/app/routes/oauth/token.ts:1405`); GATE 4b `aud` ⊆
+`apps/auth-server/src/app/routes/oauth/token.ts:1509`); GATE 4b `aud` ⊆
 subject `aud`; the lifetime clamp; the depth cap; rights narrowing (§5).
 **(e)** The requesting client is the child's agent type, authenticated with
 `private_key_jwt` or a client secret the broker holds; exchange stays
@@ -572,7 +585,7 @@ Unicode (NFC, no C0/C1 controls, no bidi overrides); anything else is a field
 with an invalid value for the type and is refused with
 `invalid_authorization_details` (RFC 9396 §5). Every render escapes them —
 the consent page through the `html` tag that already guards the client name
-and homepage (#112, `apps/auth-server/src/app/routes/ui/consent.ts:190`), the
+and homepage (#112, `apps/auth-server/src/app/routes/ui/consent.ts:194`), the
 dashboard the same way — and the consent page shows `purpose` in a box
 attributed to the client ("The application says: …"), below the operator's
 scope descriptions, never inline with them. Logs write both as JSON string
@@ -598,12 +611,12 @@ denylist with its remaining TTL (`revokeJti`), so the hot path —
 introspection — stays a Redis lookup. The walk and a mint must not race. A
 mint (root, spawn, narrow or renewal) inserts its row in a transaction that
 first locks its parent's ledger row (`SELECT ... FOR UPDATE` on `parent_jti`)
-and refuses with `invalid_grant` when that row carries `revoked_at` — the
-denylist and `revoked_at` checks GATE 3d adds (§4) are new: today the
-`isTokenRevoked` hook runs only inside `requireJwt`
-(`libs/fastify/plugins/jwt/src/lib/fastify-plugin-jwt.ts:367`), so this is the
-only thing that stops a revoked parent from renewing or spawning within its
-remaining lifetime. The walk marks top-down: it updates a node's `revoked_at`
+and refuses when that row carries `revoked_at`: `invalid_request` on an
+exchange (RFC 8693 §2.2.2), `invalid_grant` on a refresh. GATE 3a already
+refuses a denylisted subject (§4), but denylist writes follow the walk's
+commit (below), so this lock and GATE 3d's `revoked_at` check stop a marked
+parent from renewing or spawning in between. The walk marks top-down: it
+updates a node's `revoked_at`
 before it reads that node's children, so a mint holding the parent's lock
 either commits before the mark (and is then found as a child) or reads the
 mark and refuses. Denylist writes run after the ledger transaction commits.
@@ -637,7 +650,11 @@ named on the token can revoke it, by `client_id` — cannot be carried over to
 identifier-keyed revocation without letting any instance of the type kill
 any user's tree. `sid` and `jti` are public (§2) and confer nothing. Foreign
 identifiers, identifiers outside the caller's subtree and a same-type tree
-whose keys the caller does not hold answer 200 and revoke nothing.
+whose keys the caller does not hold answer 200 and revoke nothing. The
+session owner also has a kill switch, `POST /api/agent-sessions/revoke-all`:
+it revokes every live tree the user rooted, each by the walk above. Only the
+owner may call it, never a node, and it asks for no step-up, because an
+emergency stop must not wait (decision 1).
 
 The revocation window equals the access-token lifetime, so that lifetime is a
 policy parameter: a profile row consulted through `resolveEnvironmentPolicy`
@@ -951,7 +968,7 @@ so GATE 3c stays byte-identical; the client-attributed `purpose` from
 `authorization_details` (§5), in its own box beneath the scope descriptions;
 and the persistence rung, "may keep working until you revoke it" — a code
 grant always issues a refresh token
-(`apps/auth-server/src/app/routes/oauth/token.ts:603`), so every root can renew
+(`apps/auth-server/src/app/routes/oauth/token.ts:625`), so every root can renew
 until `sid` revocation or the refresh family expires. One sentence says the
 agent may delegate downwards within this ceiling and never beyond it.
 `spawn_allowlist` follows `max_agent_mode`: seed manifest only, never DCR,
@@ -1038,10 +1055,10 @@ returns it in `qauth_delegation` as `agent`; revocation gains one more
 identifier, `POST /api/agents/{id}/revoke`, which cuts every live tree of
 that agent by the §6 walk and may be called by the agent's current
 `owner_user_id` or a realm admin — not by a node, whose reach stays its own
-subtree (§6). After a transfer (decision 10) the trees the previous owner
-consented to keep their `user_id`, so that person can still cut them one
-`sid` at a time as session owner, while the new owner cuts all of them by
-agent. `act` is untouched: `act.sub` remains the harness
+subtree (§6). A transfer (decision 10) revokes every live tree of the agent
+by the §6 walk, so from then on the agent acts only under trees the new
+owner roots; the old trees' rows keep their `user_id`. `act` is untouched:
+`act.sub` remains the harness
 type's `client_id`, because draft-mcguinness's actor identifier is a client
 identifier and §14.12 wants it durable, and the agent is not a client. A
 grant with no `agent_id` is byte-for-byte today's grant: the column is NULL
@@ -1172,6 +1189,9 @@ bounded by its own approval, not by a parent.
    - **Deny and mute** — for this session, or for a chosen time. Further
      requests from that `sid` are refused with `access_denied` and notify no
      one.
+   - **Always block** — a standing deny the owner sets for the same delta
+     from this agent. It lasts across sessions, refuses like a mute, and is
+     removed only in the portal.
 5. **Token.** After an approval, the broker's next poll at the token
    endpoint (`grant_type=urn:openid:params:grant-type:ciba` and the
    `auth_req_id`, CIBA §10.1, with a DPoP proof under the same key)
@@ -1187,7 +1207,7 @@ bounded by its own approval, not by a parent.
    requesting node's token and an `approval_receipt`: the request id, the
    approved delta, the duration, the passkey's credential id and the time
    of the assertion. Any token exchange whose subject is a
-   `kind: elevation` token is refused with `invalid_grant`, spawn and narrow
+   `kind: elevation` token is refused with `invalid_request`, spawn and narrow
    alike: the leaf is used where it was approved, by the node that asked,
    and nowhere else.
 
@@ -1216,12 +1236,12 @@ what "approve for a while" is for: it covers the same delta for the window,
 so the agent has no reason to ask again. Decision 14 records the owner's
 framing next to this default.
 
-**Authenticators.** A passkey is the default and, in `production` and
-`staging`, the only accepted factor: it is phishing-resistant and bound to
-QAuth's origin, so a relayed link cannot capture it. A TOTP or other
-offline code can be relayed by a phishing page — NIST SP 800-63B-4 §3.2.5
-says manually entered OTPs "SHALL NOT be considered phishing-resistant" —
-so it is weaker here (decision 15). A synced passkey is acceptable up to
+**Authenticators.** A passkey is the only accepted factor, in every profile
+(decision 15): it is phishing-resistant and bound to QAuth's origin, so a
+relayed link cannot capture it. No TOTP or other offline code is accepted:
+a phishing page can relay one — NIST SP 800-63B-4 §3.2.5 says manually
+entered OTPs "SHALL NOT be considered phishing-resistant" — and an agent can
+type one into a form. A synced passkey is acceptable up to
 AAL2 (SP 800-63B-4, Appendix B). No current standard lets the
 authenticator itself show the request it signs — WebAuthn Level 1's
 `txAuthSimple` extension is gone from Levels 2 and 3 — so what the owner
@@ -1261,7 +1281,7 @@ a WebAuthn credential provider is a precondition (P5).
 | Widen the live token or tree when the owner approves                    | Breaks the invariant: every child spawned afterwards inherits the extra right, and the root consent no longer bounds the tree. An elevation is a separate leaf for one node (§14).                                                                                                                            |
 | An approve button in the notification (chat bot, email)                 | The button is not bound to a passkey on QAuth's origin: anyone who can read the channel — or the agent, if it can post there — could approve. A notification carries a link only (§14).                                                                                                                       |
 | "Don't ask again" as an automatic approval                              | One tap becomes a standing grant for whatever the agent asks next; "approve for a while" already covers repeats of the same delta. A mute only denies (§14, decision 14).                                                                                                                                     |
-| A TOTP code as the approval factor                                      | A one-time code can be relayed by a phishing page; a passkey is bound to QAuth's origin. Parked for non-production profiles (decision 15).                                                                                                                                                                    |
+| A TOTP code as the approval factor                                      | A one-time code can be relayed by a phishing page; a passkey is bound to QAuth's origin. Not accepted in any profile (decision 15).                                                                                                                                                                           |
 
 ## Standards position
 
@@ -1301,9 +1321,7 @@ RFC 9396 §6.1's "fewer permissions" — composition by analogy, not text.
 
 Rows go into [`docs/spec-pin-log.md`](../spec-pin-log.md) with P0, each with
 a `Re-check by` date no later than its expiry — `spec-pins.test.ts` fails the
-build on a past date — so the rfc7523bis row cannot be pinned at `-11` past
-27 Sep 2026: the P0 pin carries a re-check date on or before that day and is
-re-pinned to the successor revision when it lands.
+build on a past date. A draft in the RFC Editor queue does not expire.
 
 | Document                                                                    | Revision · date                                              | Expires                           | Why watched                                                                                                                                                  |
 | --------------------------------------------------------------------------- | ------------------------------------------------------------ | --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -1315,7 +1333,7 @@ re-pinned to the successor revision when it lands.
 | draft-ietf-oauth-transaction-tokens (WG)                                    | `-11` · 30 Jul 2026                                          | 31 Jan 2027                       | rejected as session id; `txn` reused                                                                                                                         |
 | draft-ietf-oauth-identity-assertion-authz-grant (WG)                        | `-04` · 21 May 2026                                          | 22 Nov 2026                       | ADR-011 pin; actor profile layers on it                                                                                                                      |
 | draft-ietf-oauth-client-id-metadata-document (WG)                           | `-02` · 6 Jul 2026                                           | 7 Jan 2027                        | agent client naming                                                                                                                                          |
-| draft-ietf-oauth-rfc7523bis (WG)                                            | `-11` · 26 Mar 2026                                          | 27 Sep 2026                       | `aud` = issuer only; expires six days from now — the P0 pin needs a `Re-check by` on or before that day and a re-pin to the successor                        |
+| draft-ietf-oauth-rfc7523bis (WG)                                            | `-11` · 28 Apr 2026                                          | none: in the RFC Editor queue     | `aud` = issuer only                                                                                                                                          |
 | draft-ietf-wimse-workload-creds / -wpt (WG; s2s-protocol is dead)           | `-02` · 2 Jul / 27 Aug 2026                                  | 3 Jan / 28 Feb 2027               | one identity per credential                                                                                                                                  |
 | draft-oauth-ai-agents-on-behalf-of-user (individual)                        | `-02` · 26 Aug 2025                                          | expired 27 Feb 2026, no successor | expired; its consent-time disclosure of the acting party is the precedent for §11's allowlist line; `requested_actor` itself not adopted                     |
 | AuthZEN COAZ-MCP Binding / AARP (OIDF WG drafts)                            | Draft 1 · 13 Feb / 17 Sep 2026 (both WG-adopted 15 Jun 2026) | —                                 | request shape; park-and-approve                                                                                                                              |
@@ -1379,7 +1397,7 @@ gate.
   fails the mint; a sid-less subject starts a new tree with a `kind: root`
   row; a pre-migration refresh family gains a `sid` on its next refresh; the
   introspection schema; the STS refuses a repository outside policy, against
-  a mock GitHub. **0b, broker:** `login` on the fixed loopback port with
+  a mock GitHub. **0b, broker:** `login` on an ephemeral loopback port with
   PKCE, git-credential `get`, the `gh`
   shim, the commit trailer, the log. Tests: vend within policy, refusal
   logged, a `setsid`/double-forked descendant of a read-only node is refused,
@@ -1412,7 +1430,7 @@ gate.
   schema, `spawn_allowlist` and `aud` enrichment with the 3d allowlist check,
   `spawn_receipt`, the renewal sweep. Tests: a proof under the wrong key
   fails; a `cnf` subject exchanged to a new key without an assertion fails
-  `invalid_grant`; a replayed assertion fails; a root grant carrying
+  `invalid_request`; a replayed assertion fails; a root grant carrying
   `agent:exec agent:readonly write:foo read:foo` spawns a read-only child and
   the child's exchange for `write:foo` fails `invalid_scope` at 4a, and at 4d
   when its type is registered without it; a `reviewer` seeded without an
@@ -1426,16 +1444,18 @@ gate.
   and `jti`, the identifier API, the cascade and ancestry ownership; the
   `agentAccessTokenLifespan` row; the CAEP transmitter; the STS narrowed by
   `authorization_details`; `POST /api/agents/{id}/revoke` with its
-  owner-or-admin rule (§13). Tests: widened `locations` fails
+  owner-or-admin rule (§13); `POST /api/agent-sessions/revoke-all`, with
+  sign-out leaving refresh families that carry a `sid` (decision 1). Tests:
+  widened `locations` fails
   `invalid_authorization_details`; a client-supplied `caused_by` is rejected;
   revoke-by-agent makes every tree rooted in the agent inactive and leaves
   the owner's other agents' trees alone, and a node calling it is refused;
   revoke-by-`sid` makes every descendant inactive at introspection and in the
   denylist; a spawn or renewal whose parent row is revoked fails
-  `invalid_grant`; a denylist write failure mid-cascade answers 503 and leaves
+  `invalid_request`; a denylist write failure mid-cascade answers 503 and leaves
   every marked row inactive at introspection; revoke-by-`jti` leaves siblings
   active; a revoked node is not renewed by the next sweep (the re-spawn for
-  its key fails `invalid_grant`); a denylisted or `revoked_at` subject token
+  its key fails `invalid_request`); a denylisted or `revoked_at` subject token
   cannot spawn; revoking the root's `jti` refuses the next refresh; the
   consent screen shows the union of modes and the allowlist.
 - **P3 — observation.** The RFC 8935 push endpoint and event type, the
@@ -1656,10 +1676,19 @@ parent is T2's residual; a sub-agent cannot be gated at all (§12).
 Each question carries the default the record was written on; the record
 proceeds on that default until the maintainer decides otherwise.
 
-1. **Browser logout and agent trees.** Should a QAuth logout revoke the user's
-   agent `sid` trees? RFC 9700 §4.14.2 leaves automatic refresh-token
-   revocation on logout a MAY, and says nothing about the access tokens below
-   it. Default: trees survive logout and die by explicit revocation or expiry.
+1. **Browser logout and agent trees.** _Decided 2026-09-30 (maintainer)._
+   Should a QAuth logout revoke the user's agent `sid` trees? RFC 9700
+   §4.14.2 leaves automatic refresh-token revocation on logout a MAY, and
+   says nothing about the access tokens below it. The maintainer's words:
+   there will be a separate method that revokes all agents; agents survive
+   the browser logout. Decision: trees survive sign-out. Today
+   `POST /auth/logout` revokes every refresh token of the user
+   (`revokeAllForUser`, `apps/auth-server/src/app/routes/auth/logout.ts:79`).
+   With `AGENT_TREE_ENABLED` on, sign-out no longer ends a refresh family that
+   carries a `sid`; with the flag off nothing changes. The separate method is
+   `POST /api/agent-sessions/revoke-all` (§6). By the §6 walk, it ends every
+   live tree the user rooted. It has no step-up; in his words, an emergency
+   stop must not wait.
 2. **`purpose` and `task` provenance.** Model-authored free text, shown and
    never a policy input, or `task` restricted to operator- or executor-issued
    identifiers? Default: free text; `caused_by` server-written.
@@ -1685,8 +1714,8 @@ proceeds on that default until the maintainer decides otherwise.
 7. **First seed manifest** — agent types with `max_agent_mode`, `scopes`,
    `spawn_allowlist`, `jwks` and, for a root type, `redirect_uris`. Default:
    `claude-code` (root, `exec`, allowlist naming itself and `reviewer`, one
-   `redirect_uris` entry, `http://127.0.0.1:<port>/callback` on the fixed
-   port the broker binds, §1), `reviewer` (`readonly`, no `write:*`),
+   `redirect_uris` entry, the portless loopback URI
+   `http://127.0.0.1/callback`, §1), `reviewer` (`readonly`, no `write:*`),
    `executor` (`exec`); one `jwks` key per box, distinct `kid`.
 8. **Root-grant cadence.** One root per main-agent process (a login per
    session, per-session attribution) or one root per broker start (one login,
@@ -1702,11 +1731,19 @@ proceeds on that default until the maintainer decides otherwise.
    handle)? The SCIM draft wants `agentUserName` unique across the
    provisioning domain, which is the realm. Default: realm-unique, first
    come; the profile URL is `/agents/{handle}`.
-10. **Ownership transfer.** May an owner hand an agent to another user, and
-    does the agent's history (ledger rows, bindings, events) move with it?
-    Default: transfer allowed by the current owner through the portal,
-    history stays attached to the agent, and the old owner's name leaves the
-    profile at transfer.
+10. **Ownership transfer.** _Decided 2026-09-30 (maintainer)._ May an owner
+    hand an agent to another user, and does the agent's history (ledger
+    rows, bindings, events) move with it? The maintainer's words: activity
+    before the transfer was done under the previous owner; that history is
+    not rewritten or removed; from the transfer it continues under the new
+    owner's name. Decision: the current owner may transfer through the
+    portal. Every ledger row keeps the `user_id` of its time, and every
+    `agent_actions` row keeps it through its subject's ledger row. History
+    renders from those rows; nothing is rewritten. The transfer revokes the
+    agent's live trees by the §6 walk, which follows from his words: a live
+    tree runs under the old owner's consent. So from the transfer the agent
+    acts only under trees the new owner roots. The old owner's name leaves
+    only the public profile.
 11. **Agent-side transmitter trust.** Does an owner-registered transmitter
     (§7) need the realm admin's approval before its SETs are stored, or is
     the owner's registration enough? Default: the owner's registration is
@@ -1717,7 +1754,11 @@ proceeds on that default until the maintainer decides otherwise.
     Unverified by GitHub as `unknown_key`), or sign server-side with a key
     registered to a machine user (shown Verified, the AS on every commit)?
     Default: unsigned; the trigger to reopen is a requirement that
-    provenance be evidence rather than a pointer.
+    provenance be evidence rather than a pointer. _Still parked 2026-09-30._
+    The maintainer asked whether signing is meant to stop a malicious force
+    push under the agent's identity. Branch protection and rulesets prevent
+    that; the ledger detects it after the fact (§9); a signature lets a third
+    party verify authorship offline.
 13. **`model` on the ledger row?** Keep the reported model only in
     `agent_actions` (§7), or copy the first report onto the ledger's root
     row for the dashboard's convenience? Default: `agent_actions` only; the
@@ -1725,18 +1766,23 @@ proceeds on that default until the maintainer decides otherwise.
 14. **"Don't ask again": a mute or an allow?** The owner's framing
     (2026-09-23): approval fatigue is prevented by "don't ask again for this
     session" and "don't ask for a while", and asking has its own permission
-    scope, which cannot be extended. Default: both are mutes — further
-    requests from that session, or in that window, are refused without a
-    notification — and repeated identical requests are what "approve for a
-    while" covers, on the same delta, as an explicit passkey-confirmed
-    choice. The alternative, a "don't ask again" that approves the same
-    delta for the rest of the session, is "approve for a while" with the
-    session as the window, reached in one tap instead of one choice (§14).
+    scope, which cannot be extended. _Decided 2026-09-30 (maintainer), five
+    of six answers._ The maintainer's words: it can work both ways — always
+    allow, allow for a while, allow for this session, always block, mute and
+    block for a while, mute and block for this session. Decision: "allow for
+    a while" and "allow for this session" are the approval windows (§14,
+    step 4). The two mutes stay as written. "Always block" is a standing deny
+    the owner sets; it lasts across sessions and is removed in the portal
+    (§14, step 4). "Always allow" is not decided: it conflicts with §14's
+    rule that an approval never reaches a durable rung, so it is parked as
+    decision 17.
 15. **Which factors may approve?** A passkey only, or also a TOTP or other
     offline code, or a wallet presentation bound by `transaction_data`?
-    Default: a passkey only in `production` and `staging`; a TOTP code also
-    accepted in `development`; the wallet later, behind
-    `WALLET_FEDERATION_ENABLED`, as a request-bound option (§14).
+    _Decided 2026-09-30 (maintainer)._ The maintainer's words: passkey
+    first, the wallet later; TOTP is dangerous, because agents can fill forms
+    where vitrin is not used. Decision: a passkey only, in every profile,
+    `development` included; a wallet presentation later, behind
+    `WALLET_FEDERATION_ENABLED`, as a request-bound option (§14); no TOTP.
 16. **Where a request reaches the owner.** Web push to the portal, email, an
     owner-registered webhook, or all three — and what happens while the
     owner does not want to be reached? Default: web push, plus an optional
@@ -1744,6 +1790,11 @@ proceeds on that default until the maintainer decides otherwise.
     handle and the approval URL; no email. A request nobody answers expires
     at `requested_expiry` and counts as denied; quiet hours are the owner's
     channel's business, not QAuth's (§14).
+17. **"Always allow".** The maintainer named it among the lasting answers
+    (decision 14). As an approval it would be a standing grant, which breaks
+    §14's rule that an approval never reaches a durable rung. Default: not
+    offered. The alternative: the owner raises the agent's default root
+    ceiling in the portal, and the next root takes it through consent (§11).
 
 ## Related
 
