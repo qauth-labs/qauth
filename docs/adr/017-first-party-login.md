@@ -1,4 +1,4 @@
-# ADR-015: First-Party Login — Headless Sign-In on the Authorization Challenge Endpoint
+# ADR-017: First-Party Login — Headless Sign-In on the Authorization Challenge Endpoint
 
 **Status:** Proposed
 **Date:** 2026-09-26
@@ -1140,7 +1140,7 @@ native experience is identical across all the first-party applications."
 
 ### 14. One DPoP verifier, one WebAuthn provider — fit with ADR-007 and ADR-014
 
-**ADR-015 adds a human-login product line beside ADR-007's near-term identity without changing it.**
+**ADR-017 adds a human-login product line beside ADR-007's near-term identity without changing it.**
 It shares one DPoP verifier and one WebAuthn `CredentialProvider` with ADR-014. The DPoP verifier is
 flag-neutral, under `DPOP_ENABLED`, which `AGENT_TREE_ENABLED` requires. The WebAuthn provider sits
 under `WEBAUTHN_ENABLED`. This record pulls `private_key_jwt` at revocation and introspection
@@ -1158,7 +1158,7 @@ client never uses the first-party door.
   `DPOP_ENABLED`; `AGENT_TREE_ENABLED` requires `DPOP_ENABLED`; the operator-set
   `dpop_bound_access_tokens` column is shared; whichever phase lands first builds it.
   `private_key_jwt` at `/oauth/revoke` and `/oauth/introspect`, also in P1a, needs no DPoP and is
-  opt-in per client, so it moves to ADR-015 F0: a backend cannot log out without it.
+  opt-in per client, so it moves to ADR-017 F0: a backend cannot log out without it.
 - WebAuthn. ADR-014 §14 "Remote approval — a refused request the owner approves out of band" makes a
   passkey the default factor, and its phase P5 needs "A WebAuthn credential provider — passkey
   registration and assertion in the portal". F2b builds it once, as an
@@ -1213,7 +1213,7 @@ verifiers or two providers would have to be kept in step.
 | `amr: ["pwd"]` after a reset                                                                          | The user set a password; they did not prove one.                                                                                                                                                                                                                     |
 | A flag-gated `grant_type=password` for compatibility                                                  | Either not ROPC or not safe (Decision 12); RFC 9700 §2.4.                                                                                                                                                                                                            |
 | A backend callback URL for the browser leg                                                            | A backend that completes from `state` alone cannot tell which browser returned the code.                                                                                                                                                                             |
-| Fold ADR-015 into ADR-014, or wait for it                                                             | Puts human login behind `AGENT_TREE_ENABLED`, or loses the window for apps leaving ROPC.                                                                                                                                                                             |
+| Fold ADR-017 into ADR-014, or wait for it                                                             | Puts human login behind `AGENT_TREE_ENABLED`, or loses the window for apps leaving ROPC.                                                                                                                                                                             |
 
 ## Standards position
 
@@ -1531,7 +1531,7 @@ Questions 1–10 are true forks; questions 11–29 record defaults that are unli
     under `DPOP_ENABLED`, which `AGENT_TREE_ENABLED` requires; a shared `dpop_bound_access_tokens`;
     one flag-neutral WebAuthn provider with one hosted enrolment and management page;
     `AGENT_APPROVAL_ENABLED` requires `WEBAUTHN_ENABLED`; revocation and introspection
-    `private_key_jwt` moved to ADR-015 F0._
+    `private_key_jwt` moved to ADR-017 F0._
 
 Other recorded defaults:
 

@@ -308,9 +308,9 @@ describe('rewriteRecordLink — the real docs/adr and docs/security corpus, enum
     // link to ADR-004 (→ ROUTE). Predicted from the amendment's own link list
     // before running, so the buckets below are a check.
     //
-    // 313 → 393 with ADR-015 (first-party login, 2026-09-26): 79 links in the
+    // 313 → 393 with ADR-017 (first-party login, 2026-09-26): 79 links in the
     // new record — 44 external, 6 bare anchors, 29 in-tree links to rendered
-    // records (002/003/007–014 → ROUTE) — plus the README index row for 015
+    // records (002/003/007–014 → ROUTE) — plus the README index row for 017
     // (→ ROUTE). Recounted with the plugin's own extractor and
     // rewriteRecordLink before the buckets below were touched.
     expect(extractAllLinks()).toHaveLength(393);
@@ -396,8 +396,8 @@ describe('rewriteRecordLink — the real docs/adr and docs/security corpus, enum
     // ADR-014's 2026-09-24 amendment: 164 → 169 external, 100 → 101 route
     // (its ADR-004 link). Anchors, blob and unresolved unchanged.
     //
-    // ADR-015 (2026-09-26): 169 → 213 external and 30 → 36 bare anchors;
-    // 101 → 131 route (ADR-015's 29 record links and the README index row).
+    // ADR-017 (2026-09-26): 169 → 213 external and 30 → 36 bare anchors;
+    // 101 → 131 route (ADR-017's 29 record links and the README index row).
     // Blob and unresolved unchanged — the check that every new in-tree link
     // resolved to a rendered record.
     expect(untouchedExternalOrAnchor).toBe(213 + 36);
