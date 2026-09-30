@@ -254,7 +254,7 @@ describe('rewriteRecordLink — the real docs/adr and docs/security corpus, enum
     return links;
   }
 
-  it('extracts exactly 344 links across the 14 ADRs, the ADR README, and the security review — the corpus the counts below are checked against', () => {
+  it('extracts exactly 313 links across the 14 ADRs, the ADR README, and the security review — the corpus the counts below are checked against', () => {
     // A fixed count, not a lower bound: this test's whole point is that the
     // categorisation below is checked against the FULL corpus, not a
     // sample. If a future ADR amendment changes the link count, this
@@ -307,26 +307,7 @@ describe('rewriteRecordLink — the real docs/adr and docs/security corpus, enum
     // Level 3, NIST SP 800-63B-4, Claude Code Remote Control) and one in-tree
     // link to ADR-004 (→ ROUTE). Predicted from the amendment's own link list
     // before running, so the buckets below are a check.
-    //
-    // 313 → 344 with ADR-014's 2026-09-30 amendment (maintainer decisions,
-    // corrections against main): 26 external links in Related (RFC 9207,
-    // RFC 10027, RFC 9110, RFC 9562, fifteen versioned drafts, two unversioned drafts,
-    // three AuthZEN documents, the IETF 126 SCIM slides, OIDC Core 1.0), two
-    // bare `#explicitly-out-of-scope` anchors, and three in-tree record links
-    // (one to ADR-011, two to ADR-012 → ROUTE). Recounted mechanically by
-    // diffing the extracted link lists of the two revisions.
-    //
-    // 344 → 345 with the same amendment's review fixes: one external link,
-    // RFC 8141, cited for the SCIM extension schema URI in §13.
-    //
-    // 345 → 346 with its second review pass: one external link, the OpenID
-    // Foundation's 15 June 2026 post on the ARAP and COAZ WG drafts.
-    //
-    // 346 → 344 with its third review pass: the §13 sentence restating that
-    // QAuth has no realm-admin role is cut, taking one bare
-    // `#explicitly-out-of-scope` anchor and one ADR-012 link (→ ROUTE) with
-    // it; the rule and its ADR-012 §4 citation stay in Explicitly out of scope.
-    expect(extractAllLinks()).toHaveLength(344);
+    expect(extractAllLinks()).toHaveLength(313);
   });
 
   it('every link falls into exactly one of the four outcomes, with none left unresolved', () => {
@@ -408,18 +389,8 @@ describe('rewriteRecordLink — the real docs/adr and docs/security corpus, enum
     //
     // ADR-014's 2026-09-24 amendment: 164 → 169 external, 100 → 101 route
     // (its ADR-004 link). Anchors, blob and unresolved unchanged.
-    //
-    // ADR-014's 2026-09-30 amendment: 169 → 195 external, 30 → 32 bare
-    // anchors, 101 → 104 route (one ADR-011 and two ADR-012 links). Blob and
-    // unresolved unchanged — the check that every new in-tree link resolved to
-    // a rendered record. Its review fixes add one external link (RFC 8141):
-    // 195 → 196 external, every other bucket unchanged. The second review
-    // pass adds one more (the OpenID Foundation's WG-draft post): 196 → 197.
-    // The third review pass cuts one bare anchor and one ADR-012 route link:
-    // 32 → 31 anchors, 104 → 103 route; external, blob and unresolved
-    // unchanged.
-    expect(untouchedExternalOrAnchor).toBe(197 + 31);
-    expect(rewrittenToRoute).toBe(103);
+    expect(untouchedExternalOrAnchor).toBe(169 + 30);
+    expect(rewrittenToRoute).toBe(101);
     expect(rewrittenToBlob).toBe(13);
     expect(leftUnresolved).toBe(0);
   });
