@@ -493,10 +493,17 @@ account recovery.
 
 ### 5. Email codes verify and recover; they are never a sign-in factor
 
-**An emailed code proves control of a mailbox and is never a sign-in factor.** It is used for
-address verification, recovery and an optional per-client check after the password. It never adds an
-`amr` value, never counts toward `mfa`, never raises `acr` and carries no NIST AAL claim.
-Passwordless email-code sign-in is not offered.
+**An emailed code proves control of a mailbox and is never a sign-in factor.** It is used to verify
+a password account's address, for recovery and for an optional per-client check after the password.
+It never adds an `amr` value, never counts toward `mfa`, never raises `acr` and carries no NIST AAL
+claim. Passwordless email-code sign-in is not offered.
+
+The code has a narrow job. A password account's identifier is its address (ADR-002), so for that
+account the mailbox proof is the proof of its primary identity. That makes the code one way to
+verify an account. It is not the definition of a verified account. An account is verified when its
+primary identity is proved securely, of whatever type; ADR-015 decision 8 (PR #420) lists the proof
+for each type. An email address is an attribute, and an account may have none. An account whose
+primary identity is a passkey or a wallet has no address to prove and never meets this step.
 
 One exception is stated openly: a headless reset of a password-only account ends in a code after a
 mailbox proof alone. That is an email-recovery sign-in at mailbox assurance (Decision 8); it carries
@@ -685,11 +692,15 @@ password-grant AS to protect its endpoint against brute force, which applies her
 
 ### 8. Registration, verification and reset in the same flow; one password policy
 
-**Registration, address verification and password reset run inside the authorization challenge
-endpoint as operator-enabled flows that end in an authorization code.** No account exists until the
-mailbox is proven and the password passes policy. Every response is identical whether or not the
-address exists. A reset never unlocks an account whose strongest authenticator is stronger than
-email. One password policy module sets every password QAuth stores.
+**Registration, the verification of a password account's address and password reset run inside the
+authorization challenge endpoint as operator-enabled flows that end in an authorization code.** No
+account exists until the mailbox is proven and the password passes policy. Every response is
+identical whether or not the address exists. A reset never unlocks an account whose strongest
+authenticator is stronger than email. One password policy module sets every password QAuth stores.
+
+These flows create and prove password accounts, whose primary identity is an address. They do not
+define a verified account (Decision 5). F1 registers password accounts only. An account whose
+primary identity is a passkey, with no address, is designed in F2b (parked 30).
 
 Registration. In F1 the signal is the path marker `urn:qauth:ia:register`, allowed when the client's
 `flows` contains `register`; `realms.registration_allowed` is not read, since nothing writes it as
@@ -725,7 +736,7 @@ Request").
   of the user. It also advances the user's browser-session epoch and ends every live `auth_session`
   of the user. Then the address is marked verified and `new_password` comes next. No other
   authenticator is asked for, so step 3 of the reset finds none. From F2b, the hosted enrolment and
-  management page refuses an account whose address was never verified. The post-password
+  management page refuses an unclaimed account. The post-password
   verification step keeps every credential, because there the same person proved both the password
   and the mailbox.
 - The browser-session epoch is a per-user Redis value whose TTL is at least the browser-session TTL;
@@ -733,9 +744,9 @@ Request").
   absent and clears its cookie. A reset, an unclaimed-account verification and an explicit "sign out
   everywhere" advance it. It lives in Redis because ADR-002 keeps `users` a pure identity anchor,
   and with the switch off nothing advances it.
-- Verification. At this endpoint an unverified address is always verified after a correct password,
-  whatever `REQUIRE_EMAIL_VERIFIED` says, so no code from this endpoint belongs to an unverified
-  address. This replaces `/auth/verify` for native clients.
+- Verification. At this endpoint the unverified address of a password account is always verified
+  after a correct password, whatever `REQUIRE_EMAIL_VERIFIED` says, so no code from this endpoint
+  belongs to an unverified address. This replaces `/auth/verify` for native clients.
 
 Reset is a QAuth extension. FiPA Appendix A.2 "Redirect to Authorization Server" and §5.2.2.1.1
 "Redirect to Web Error Response" route recovery to the browser instead.
@@ -1382,7 +1393,8 @@ on. A phase whose target is the train ships no later than F1's release.
   a browser session that could satisfy `max_age` or `prompt=login` (Decision 10). Target: the F1
   release train.
 - F2b — passkeys, behind `WEBAUTHN_ENABLED=false`: the shared WebAuthn `CredentialProvider`;
-  `webauthn_get` and `webauthn_create`; passkey-first; the downgrade rule binding; UV verified
+  `webauthn_get` and `webauthn_create`; passkey-first; registration of an account whose primary
+  identity is a passkey, with no address (parked 30); the downgrade rule binding; UV verified
   server-side; optional enrolment; the hosted enrolment and management page shared with ADR-014's
   P5; an operator-set RP ID, per-client origins and the association files, after re-reading the
   platform rules; passkeys on the hosted `/ui/login` on the same engine. Depends on F1, and on F2a
@@ -1475,7 +1487,7 @@ on. A phase whose target is the train ships no later than F1's release.
 ## Decisions parked for the maintainer
 
 Each question carries the default this record proceeds on until the maintainer decides otherwise.
-Questions 1–10 are true forks; questions 11–29 record defaults that are unlikely to change.
+Questions 1–10 are true forks; questions 11–30 record defaults that are unlikely to change.
 
 1. Web front-ends behind a backend. FiPA §9.8 and RFC 10017 §7.3 and §6.1.3.1 reach them. Should
    QAuth offer them as a per-client, operator-set, recorded deviation? The minimum would be an
@@ -1556,6 +1568,7 @@ Other recorded defaults:
 | 27  | Dangerous scopes at the endpoint                       | `redirect_to_web` in every environment                                                                                 |
 | 28  | Endpoint path                                          | `/oauth/authorize-challenge`                                                                                           |
 | 29  | Known-IP exemption from the per-account wait           | on; the attempt still counts toward the ceiling                                                                        |
+| 30  | Account with no address                                | F1 registers password accounts only; F2b designs registration by passkey alone, proved by the registration ceremony    |
 
 ## Related
 
