@@ -316,7 +316,7 @@ export const authEnvSchema = z.object({
    * empty. Used at /oauth/register time to seed the realm on first use.
    *
    * Intentionally tight: only OIDC core scopes. Admin / tenant-scoped
-   * grants (e.g. `memory:admin`, `akinon:*`) MUST be added explicitly by
+   * grants (e.g. `example:admin`, `tenant-a:*`) MUST be added explicitly by
    * an operator and MUST NOT live in this default.
    */
   DEFAULT_DYNAMIC_REGISTRATION_SCOPES: z

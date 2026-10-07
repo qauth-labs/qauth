@@ -755,8 +755,8 @@ describe('scope allowlist enforcement (#86/#88)', () => {
       body: {
         name: 'Over-scoped',
         redirectUris: ['https://app.example.com/cb'],
-        // `memory:admin` is not in the realm allowlist.
-        scopes: ['openid', 'memory:admin'],
+        // `example:admin` is not in the realm allowlist.
+        scopes: ['openid', 'example:admin'],
         tokenEndpointAuthMethod: 'client_secret_post',
       },
     });
@@ -800,7 +800,7 @@ describe('scope allowlist enforcement (#86/#88)', () => {
 
     const request = authedRequest({
       params: { id: '0190a000-0000-7000-8000-000000000001' },
-      body: { scopes: ['openid', 'akinon:write'] },
+      body: { scopes: ['openid', 'tenant-a:write'] },
     });
     const { reply } = createReply();
 

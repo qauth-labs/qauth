@@ -208,7 +208,7 @@ describe('POST /oauth/register — Dynamic Client Registration (RFC 7591)', () =
 
     // A discover-then-register MCP client echoes back the resource's full
     // advertised `scopes_supported`, which can include privileged scopes a
-    // public dynamic client may not hold (here `memory:admin`). Rather than
+    // public dynamic client may not hold (here `example:admin`). Rather than
     // failing the whole registration, we register the permitted subset.
     const result = (await ctx.handler!(
       {
@@ -216,7 +216,7 @@ describe('POST /oauth/register — Dynamic Client Registration (RFC 7591)', () =
           redirect_uris: ['https://app.example/cb'],
           grant_types: ['authorization_code'],
           response_types: ['code'],
-          scope: 'openid memory:admin',
+          scope: 'openid example:admin',
         },
         ip: '127.0.0.1',
         headers: {},

@@ -74,7 +74,7 @@ describe('validateAndNormalize', () => {
     const n = validateAndNormalize(
       {
         redirect_uris: ['https://app.example/cb'],
-        scope: 'openid memory:admin',
+        scope: 'openid example:admin',
       },
       allowedScopes
     );
@@ -86,7 +86,7 @@ describe('validateAndNormalize', () => {
     const n = validateAndNormalize(
       {
         redirect_uris: ['https://app.example/cb'],
-        scope: 'openid openid email memory:admin',
+        scope: 'openid openid email example:admin',
       },
       allowedScopes
     );
