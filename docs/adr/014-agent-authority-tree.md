@@ -1795,6 +1795,9 @@ proceeds on that default until the maintainer decides otherwise.
     §14's rule that an approval never reaches a durable rung. Default: not
     offered. The alternative: the owner raises the agent's default root
     ceiling in the portal, and the next root takes it through consent (§11).
+    _Decided 2026-10-06 (maintainer): the alternative._ An approval prompt
+    has no "always allow". The owner raises the agent's default root ceiling
+    in the portal, proving it is the owner with a passkey.
 
 ## Related
 

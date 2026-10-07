@@ -509,17 +509,20 @@ maintainer decides.
    `apps/auth-server/src/app/helpers/consent.ts:77`), which `prompt=none`
    also consults since GHSA-46p8-vmjm-2jpq. Options: keep it; no skip for an
    agent client; skip only when a stored consent records the same agent,
-   allowlist and purpose. **Default:** keep it; either option changes §11.
-   Why ask: the screen shows each tree's agent, allowlist, purpose and
-   persistence. Decide with 8.
+   allowlist and purpose. _Decided 2026-10-06 (maintainer): no skip for an
+   agent client._ The consent screen always shows when an agent root starts.
+   ADR-014 §11 changes to match when this record is accepted. The default
+   was to keep the fast path. Why ask: the screen shows each tree's agent,
+   allowlist, purpose and persistence. Decided with 8.
 7. **Which proofs count for a verified account.** Options: only a proof
    QAuth performs itself, for the types in decision 8's table; also an
    identity an external issuer asserts, as an upstream OIDC provider would.
-   **Default:** QAuth's own only, in the first slice. Why: an assertion
-   shows what the issuer says, not that QAuth saw control, and an upstream
-   provider is not built. The maintainer's rule of 2026-10-06: an account is
+   **Default:** QAuth's own only, in the first slice. _Decided 2026-10-06
+   (maintainer): the default stands, with his rule that an account is
    verified when its primary identity is proved securely, of whatever type;
-   an email address is an attribute, never the default proof.
+   an email address is an attribute, never the default proof._ Why: an
+   assertion shows what the issuer says, not that QAuth saw control, and an
+   upstream provider is not built.
 8. **When a root ends.** ADR-014 §1 lets a resume (`--resume`, `--continue`,
    same `session_id`) reuse its root while the refresh token lives. §6's
    dead-man switch revokes the root, its `sid` and its refresh family when
@@ -528,7 +531,8 @@ maintainer decides.
    stricter — never reuse an exited root, end a root on a new `session_id`,
    and from P1a refresh it only under its own DPoP key; looser — a root
    outlives its process. **Default:** keep the merged rules; either option
-   changes §1 or §6. Why ask: the stricter option closes T2's residual of a
+   changes §1 or §6. _Decided 2026-10-06 (maintainer): keep the merged
+   rules._ Why ask: the stricter option closes T2's residual of a
    root refreshed from another host, at a new root on every `/clear`.
    ADR-014 decision 8, the root-grant cadence, stays parked there. As input,
    a daemon host has no session start: there the broker's process is the
@@ -536,7 +540,8 @@ maintainer decides.
 9. **Freezing an agent during a transfer.** Options: no freeze; freeze the
    agent after the acceptance until its cut trees' last token expires,
    including one GitHub hour after their last vend. **Default:** no freeze;
-   the moment is the acceptance. Why ask: a freeze keeps the two owners'
+   the moment is the acceptance. _Decided 2026-10-06 (maintainer): no
+   freeze._ Why ask: a freeze keeps the two owners'
    activity apart, at up to an hour in which neither can use the agent.
 10. **Realm-admin powers.** ADR-014 gives a realm admin revoke-by-agent (§13,
     P2), the view the public profile withholds (§13), and disabling a
