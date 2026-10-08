@@ -38,7 +38,8 @@ mkdir -p "$STATE_DIR"
 log() { printf '[start-stack] %s\n' "$*"; }
 
 # --- PostgreSQL --------------------------------------------------------------
-if ! pg_lsclusters --no-header | awk '{print $1, $2}' | grep -qx "$PG_VERSION main"; then
+# grep without -q reads all of its input, so `pipefail` never sees a SIGPIPE.
+if ! pg_lsclusters --no-header | awk '{print $1, $2}' | grep -x "$PG_VERSION main" >/dev/null; then
   pg_createcluster "$PG_VERSION" main >/dev/null
 fi
 if ! pg_isready -q -h 127.0.0.1 -p 5432; then
