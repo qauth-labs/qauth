@@ -51,6 +51,20 @@ through the same private channel. The same rules apply to them:
 - A suggested patch is welcome. It is reviewed like any other change and needs
   a regression test.
 
+## What to expect
+
+QAuth is maintained by a small team. There is no on-call rotation, so these are
+realistic expectations, not a service-level agreement:
+
+| Stage                                                         | Expectation                        |
+| ------------------------------------------------------------- | ---------------------------------- |
+| Acknowledgement that the report arrived                       | usually within 7 days              |
+| First assessment: is it a bug, is it in scope, rough severity | within 30 days                     |
+| A fix                                                         | depends on severity; no fixed date |
+
+If you have heard nothing after 14 days, reply on the advisory thread. Silence
+is a dropped ball, not a policy.
+
 ## Supported versions
 
 Only `main` and the latest pre-release receive fixes. There are no maintenance
