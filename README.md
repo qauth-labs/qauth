@@ -32,6 +32,8 @@ MCP / AI-agent authorization ships today. Wallet federation works end-to-end aga
 ## ⚠️ AI-Assisted Development & Security Notice
 
 > This project is developed **with extensive AI assistance**. Every change goes through human review before it is merged; even so, at this stage we cannot yet promise a high level of security assurance — **use it with care** and run your own evaluation before trusting it in sensitive or production deployments. Our long-term goal is enterprise-grade security with the lightest possible processing footprint: to that end, we are rewriting QAuth **module by module in Rust**.
+>
+> To report a vulnerability, follow [SECURITY.md](./SECURITY.md). The [threat model](./docs/security/threat-model.md) states what QAuth promises and how findings are rated.
 
 ## 🎯 How to Use QAuth
 

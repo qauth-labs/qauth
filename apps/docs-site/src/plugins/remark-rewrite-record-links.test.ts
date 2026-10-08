@@ -254,7 +254,7 @@ describe('rewriteRecordLink — the real docs/adr and docs/security corpus, enum
     return links;
   }
 
-  it('extracts exactly 313 links across the 14 ADRs, the ADR README, and the security review — the corpus the counts below are checked against', () => {
+  it('extracts exactly 323 links across the 14 ADRs, the ADR README, the security review and the threat model — the corpus the counts below are checked against', () => {
     // A fixed count, not a lower bound: this test's whole point is that the
     // categorisation below is checked against the FULL corpus, not a
     // sample. If a future ADR amendment changes the link count, this
@@ -307,7 +307,13 @@ describe('rewriteRecordLink — the real docs/adr and docs/security corpus, enum
     // Level 3, NIST SP 800-63B-4, Claude Code Remote Control) and one in-tree
     // link to ADR-004 (→ ROUTE). Predicted from the amendment's own link list
     // before running, so the buckets below are a check.
-    expect(extractAllLinks()).toHaveLength(313);
+    //
+    // 313 → 323 with docs/security/threat-model.md: seven external links to
+    // published security advisories, two in-tree links to rendered records
+    // (ADR-006, ADR-012 → ROUTE) and one to the root SECURITY.md, which is not
+    // a record (→ BLOB). Predicted from the document's own link list before
+    // running, so the buckets below are a check.
+    expect(extractAllLinks()).toHaveLength(323);
   });
 
   it('every link falls into exactly one of the four outcomes, with none left unresolved', () => {
@@ -389,9 +395,13 @@ describe('rewriteRecordLink — the real docs/adr and docs/security corpus, enum
     //
     // ADR-014's 2026-09-24 amendment: 164 → 169 external, 100 → 101 route
     // (its ADR-004 link). Anchors, blob and unresolved unchanged.
-    expect(untouchedExternalOrAnchor).toBe(169 + 30);
-    expect(rewrittenToRoute).toBe(101);
-    expect(rewrittenToBlob).toBe(13);
+    //
+    // The threat model: 169 → 176 external (seven advisory URLs), 101 → 103
+    // route (ADR-006, ADR-012) and 13 → 14 blob (SECURITY.md, a root file that
+    // is not rendered as a record). Anchors and unresolved unchanged.
+    expect(untouchedExternalOrAnchor).toBe(176 + 30);
+    expect(rewrittenToRoute).toBe(103);
+    expect(rewrittenToBlob).toBe(14);
     expect(leftUnresolved).toBe(0);
   });
 });
