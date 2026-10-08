@@ -1,0 +1,30 @@
+# Build-context ignore for tools/security-review/Dockerfile.
+#
+# BuildKit prefers a `<dockerfile>.dockerignore` over the root `.dockerignore`
+# when one exists, so this file applies ONLY to the review image. The root
+# file drops tests, `.git` and the CI configuration to keep the runtime images small; a
+# review image needs all three, so this file keeps them and drops only what
+# the image rebuilds itself or must never contain.
+
+# Rebuilt inside the image from the lockfile.
+node_modules
+**/node_modules
+
+# Build outputs and caches, rebuilt inside the image.
+dist
+.nx
+coverage
+.vitest
+.nitro
+.output
+**/.astro
+
+# Local agent worktrees, if any.
+.claude/worktrees
+
+# Secrets must never reach an image.
+.env
+.env.*
+!.env.example
+!.env.docker.example
+*.pem
