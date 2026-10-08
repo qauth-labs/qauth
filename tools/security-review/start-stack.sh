@@ -29,13 +29,29 @@ case "$MODE" in
 esac
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-BIN="$ROOT/node_modules/.bin"
 STATE_DIR="${STATE_DIR:-/tmp/qauth-review}"
 PG_VERSION=18
 DB_PASSWORD='qauth_review_only'
 mkdir -p "$STATE_DIR"
 
 log() { printf '[start-stack] %s\n' "$*"; }
+
+# A tool's binary sits in the package that depends on it. Whether pnpm also
+# links it at the workspace root depends on the pnpm version, so look in the
+# package first and fall back to the root.
+package_bin() {
+  local package_dir="$1" name="$2"
+  for candidate in "$ROOT/$package_dir/node_modules/.bin/$name" "$ROOT/node_modules/.bin/$name"; do
+    if [ -x "$candidate" ]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+  echo "cannot find $name for $package_dir" >&2
+  return 1
+}
+DRIZZLE_KIT="$(package_bin libs/infra/db drizzle-kit)"
+TSX="$(package_bin apps/auth-server tsx)"
 
 # --- PostgreSQL --------------------------------------------------------------
 # grep without -q reads all of its input, so `pipefail` never sees a SIGPIPE.
@@ -116,7 +132,7 @@ export NODE_ENV HOST PORT LOG_LEVEL DATABASE_URL REDIS_URL REDIS_HOST REDIS_PORT
 
 # --- Migrations, the way the migration-runner image applies them -------------
 log "applying migrations"
-(cd "$ROOT/libs/infra/db" && "$BIN/drizzle-kit" migrate) >"$STATE_DIR/migrate.log" 2>&1 || {
+(cd "$ROOT/libs/infra/db" && "$DRIZZLE_KIT" migrate) >"$STATE_DIR/migrate.log" 2>&1 || {
   cat "$STATE_DIR/migrate.log" >&2
   echo "migrations failed" >&2
   exit 1
@@ -126,7 +142,7 @@ log "applying migrations"
 log "starting auth-server on http://localhost:${PORT}"
 (
   cd "$ROOT/apps/auth-server"
-  nohup "$BIN/tsx" src/main.ts >"$STATE_DIR/auth-server.log" 2>&1 &
+  nohup "$TSX" src/main.ts >"$STATE_DIR/auth-server.log" 2>&1 &
   echo $! >"$STATE_DIR/auth-server.pid"
 )
 
