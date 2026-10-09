@@ -4,6 +4,13 @@
 **Date:** 2026-10-09
 **Authors:** QAuth Team
 
+> **Amended 2026-10-09** with the effects of the maintainer's 2026-10-09 answers to ADR-014 to
+> ADR-017. Those records hold the reasons. This record names only what changes in its scope.
+>
+> - §3, human accounts: a bot challenge on sign-up, and passkey-only accounts.
+> - §4: two more experimental items, and the PKCE rule on the FiPA endpoint.
+> - §5: `REQUIRE_EMAIL_VERIFIED` is renamed `REQUIRE_VERIFIED_ACCOUNT`.
+
 ## Context
 
 QAuth is pre-1.0. The latest tag is `v0.1.0-rc.2`. [`SECURITY.md`](../../SECURITY.md) says that no
@@ -122,7 +129,10 @@ The PQC library in §7 implements it as experimental.
 **Human accounts**
 
 - Hosted sign-up, account verification, password reset and an account page.
-- TOTP, and passkeys (WebAuthn) with recovery codes.
+- A provider-neutral bot challenge on sign-up. Decided 2026-10-09 (maintainer).
+- TOTP, passkeys (WebAuthn) and recovery codes. Decided 2026-10-09 (maintainer).
+- Passkey-only accounts, with no email. Recovery codes are mandatory for them. Decided 2026-10-09
+  (maintainer).
 - Upstream OIDC login through an AuthMethod contract. The TypeScript plugin API behind it stays
   internal and is not promised.
 
@@ -146,9 +156,16 @@ Experimental items ship in 1.0 but stay outside the stability promise.
 
 - The FiPA authorization challenge endpoint (ADR-017). It stays experimental until FiPA is an RFC.
   The engine behind it is stable, because the hosted pages use it.
+  - PKCE on this endpoint is on by default. A per-client setting can switch it off. This is the
+    single exception to mandatory PKCE. Decided 2026-10-09 (maintainer).
 - The `/first-party` subpath of `@qauth-labs/node`, which serves FiPA.
 - The `oid4vp-1.0-base` verifier profile. It stays supported, but it allows looser options than
   HAIP 1.0, such as unsigned requests. Decided 2026-10-09.
+- Attestation-based client authentication for native apps, ADR-017's phase F4. It stays
+  experimental unless `draft-ietf-oauth-attestation-based-client-auth` is an RFC before 1.0 is cut.
+  Decided 2026-10-09 (maintainer).
+- The pass-through leg of ADR-016 §4. The rest of the Authority Tree is stable (§3). Decided
+  2026-10-09 (maintainer).
 
 How an item is marked experimental, and how it becomes stable, is set in §5.
 
@@ -170,6 +187,9 @@ The contract covers:
   provider, proxy trust, and the switches of stable features. Other keys are marked advanced or
   experimental. A renamed key keeps working under its old name, with a warning, for the
   deprecation window.
+  - `REQUIRE_EMAIL_VERIFIED` is renamed `REQUIRE_VERIFIED_ACCOUNT`. The old name stays an alias
+    for the deprecation window. The key exists on `main` today, default `false`. Decided 2026-10-09
+    (maintainer).
 - **Upgrades within 1.x.** Migrations only go forward. Every upgrade completes by running the
   migration runner, with no manual step. No 1.x migration is destructive; changes use
   expand-then-contract. CI tests an upgrade from every earlier 1.x minor release. Downgrades are not
