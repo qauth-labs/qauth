@@ -41,8 +41,9 @@
 > revoke-all ends them (decision 1). History keeps the owner of its time, and
 > a transfer ends the agent's live trees (decision 10). Five of six lasting
 > approval answers are settled (decision 14). A passkey is the only approval
-> factor, in every profile (decision 15). Decision 12 stays open; "always
-> allow" is parked as decision 17. Four statements are corrected against
+> factor, in every profile (decision 15). Decision 12 stayed open then.
+> "Always allow" became decision 17, which the maintainer decided on
+> 2026-10-06 (no "always allow"). Four statements are corrected against
 > main: GATE 3a already refuses a revoked subject or actor token
 > (GHSA-6fcx-34r3-24v4); a refused subject token or spawn assertion
 > answers `invalid_request` (RFC 8693 §2.2.2); a loopback redirect URI takes any port (PR #415); and
@@ -75,6 +76,16 @@
 > names. The file name is kept, so links stay stable. No rule changed; the
 > root of a tree is still always a human `sub` (§1). QAuth-defined
 > identifiers will carry a version when implemented (ADR-018, a separate PR).
+>
+> **Amended 2026-10-09, decisions** (before any implementation): the
+> maintainer decided parked decisions 2 to 9, 11 to 13 and 16. Each is marked
+> decided below, with its date. The seed manifest's example root type is now
+> `lead` (decision 7). Decision 17, decided 2026-10-06, is now in the body:
+> the agent's root ceiling (§13, §11), no "always allow" (§14) and the portal
+> setting (P5). Two 2026-10-06 answers recorded in ADR-015 are written into
+> §1 and §11. The DPoP verifier, the WebAuthn provider and `private_key_jwt`
+> at revocation and introspection are shared with ADR-017 (proposed in a
+> separate PR), as its question 10 proposed (§2, §3, §14, P1a, P5).
 
 ## Context
 
@@ -356,9 +367,12 @@ hook), so one harness session is one `sid`, the ledger's root row records the
 harness `session_id`, and the root key is the one keyed to that process. A
 resumed session (same `session_id`; for example, Claude Code's `--resume` and
 `--continue`) reuses
-its root while the grant's refresh token lives; a second harness process is a
-second root with its own `sid`. The alternative, one root per broker start, is
-parked as decision 8.
+its root only when the dead-man walk (§6) did not reach QAuth at the
+process's exit. Even then, the root lives only while the grant's refresh
+token lives (ADR-015 question 8, decided 2026-10-06). A second harness
+process is a second root with its own `sid`. The cadence is a per-host
+setting, default one root per process. A host may choose one root per broker
+start instead, as a daemon host does (decision 8, decided 2026-10-09).
 
 The return leg is a native app's (RFC 8252 §7.3): the broker opens the user's
 browser on the authorization URL with PKCE `S256` and a `state` it minted,
@@ -440,6 +454,8 @@ vendor-prefixed on purpose: `delegation` is already a registered JWT claim
 using prior actors in access-control decisions; the chain is for audit and
 display. Introspection and revocation also start accepting `private_key_jwt`
 (`apps/auth-server/src/app/helpers/discovery.ts:147` is secret-only today).
+_Amended 2026-10-09 (maintainer):_ that change moves to ADR-017's F0, not
+this record's P1a.
 
 **draft-liu's `delegation_chain` claim is not adopted** (the Alternatives
 table has the size, the `wit://` scheme — WIMSE defines `wimse://` and has
@@ -460,6 +476,9 @@ a token request without a `DPoP` header is refused (§5.2); §5's "regardless
 of grant type" makes the exchange grant carry the proof. The root client is
 confidential (`private_key_jwt`), so its refresh token is sender-constrained
 by client authentication, not by the key — §5 says exactly that.
+
+_Amended 2026-10-09 (maintainer, ADR-017 question 10):_ QAuth has one DPoP
+verifier, behind `DPOP_ENABLED`. This record and ADR-017 share it.
 
 **Node and leaf.** A **node token** — `aud` names an agent type, itself or a
 child — can spawn or narrow and is always DPoP-bound. A **leaf token** is
@@ -638,7 +657,9 @@ filtered to the audience (§9.1) and in introspection (§9.2):
 The `locations` and `actions` above are a git host's, as the worked example.
 Each credential adapter defines the strings it maps to its upstream (§9).
 
-`purpose` and `task` are recorded, displayed and never evaluated. Both are
+`purpose` and `task` are recorded, displayed and never evaluated. Version 1
+of the type says so: `task` is free text, a label shown to people and never
+a policy input (decision 2). Both are
 client-authored at the root and model-authored at every hop, so they are
 data, never markup or policy (RFC 9396 §12: the AS MUST sanitise
 `authorization_details` against injection). The type bounds them: `task` ≤ 64
@@ -915,8 +936,10 @@ GitHub, `gh` or PostgreSQL below are examples.
   configuration, octo-sts-shaped — and mints with the upstream app identity's
   private key (the GitHub App's), which lives in QAuth's configuration and
   never on the developer box; Chainguard's octo-sts is the prior art and an
-  interim option. Once P1a lands the STS accepts `Authorization: DPoP` only,
-  checks `htu`/`htm`/`ath` and `aud` = its own identifier exactly, and
+  interim option. For an agent's identity it vends only for an installation
+  on an allowlisted account (§13). Once P1a lands the STS accepts
+  `Authorization: DPoP` only, checks `htu`/`htm`/`ath` and `aud` = its own
+  identifier exactly, and
   refuses to start if its identifier appears in `AGENT_BEARER_LEAF_RESOURCES`:
   the one endpoint family that turns a 300 s sender-constrained token into a
   longer-lived unconstrained credential never accepts a bearer, on any
@@ -1085,7 +1108,10 @@ and the persistence rung, "may keep working until you revoke it" — a code
 grant always issues a refresh token
 (`apps/auth-server/src/app/routes/oauth/token.ts:625`), so every root can renew
 until `sid` revocation or the refresh family expires. One sentence says the
-agent may delegate downwards within this ceiling and never beyond it.
+agent may delegate downwards within this ceiling and never beyond it. A root
+that names an agent asks for that agent's root ceiling (§13). The owner
+raises that ceiling in the portal with a passkey, and the next root takes the
+raised ceiling only through this screen (decision 17).
 `spawn_allowlist` follows `max_agent_mode`: seed manifest only, never DCR,
 CIMD or the developer API. Enrichment is conditional on the column:
 `resolveAudience` adds the client's own `client_id` and its `spawn_allowlist`
@@ -1110,9 +1136,12 @@ multi-audience, which RFC 8707 §3 reserves for parties that trust
 each other highly; every member here is the operator's own resource server or
 agent-type registration, and the enriched root token is held by the broker
 and never presented at a resource — every resource sees a single-audience
-leaf. The skip-consent fast path is untouched, and a `sid` is minted per
-grant, not per screen — but a root grant that names a dangerous scope
-(`agent:exec`, `agent:admin`, any `write:*`) never takes that path in
+leaf. An agent root never takes the skip-consent fast path
+(`canSkipConsent`, `apps/auth-server/src/app/helpers/consent.ts:77`), and
+`prompt=none` for an agent root answers `consent_required` (decided
+2026-10-06; ADR-015 decision 11). A `sid` is minted per
+grant, not per screen. A root grant that names a dangerous scope
+(`agent:exec`, `agent:admin`, any `write:*`) also needs a fresh login in
 `staging` or `production`: step-up rule 3 (`evaluateStepUp`,
 `apps/auth-server/src/app/helpers/step-up.ts:196`) forces a fresh login
 for the whole requested set unless the browser session is under two minutes
@@ -1148,7 +1177,10 @@ stores and serves at `/agents/{handle}/avatar.png` on its own origin, ≤ 512
 KiB, decoded and re-encoded on upload so nothing but pixels survives — no
 SVG, which can carry script, and never a URL QAuth would dereference on
 render), `active`, `profile_visibility` (`public` | `private`, default
-`public`), `owner_user_id` (a `users`
+`public`), `root_ceiling` (the agent's default root ceiling: the scopes a new
+root that names this agent asks for; the owner raises it in the portal with a
+passkey, and the next root takes it only through consent, §11; decision 17),
+`owner_user_id` (a `users`
 row, `onDelete: 'restrict'` — an agent never outlives its owner silently;
 the owner deactivates or transfers it first), `created_at`, `updated_at`.
 The owner is the person the SCIM Agent draft calls the responsible party,
@@ -1219,7 +1251,10 @@ every commit and pull request the agent makes (§9, provenance), its App page
 the place GitHub itself shows the owner account as the developer. One
 upstream app identity per agent, then — for GitHub, one STS App per agent,
 not one per organisation (decision 4 is amended below) — and its private key
-stays where §9 puts it. The avatar the platform
+stays where §9 puts it. The STS vends for that identity only on accounts the
+binding's allowlist names, by account, and removes every other installation
+of it (decided 2026-09-30; ADR-016 §2). Installation ids are read from the
+platform, not configured. The avatar the platform
 shows is the platform's (example: GitHub exposes no API to set an App's logo),
 so the owner sets it by hand from the same file QAuth serves, and QAuth
 records nothing about whether they did.
@@ -1296,7 +1331,8 @@ bounded by its own approval, not by a parent.
      for; the owner decides. CIBA lets a profile add parameters (§7.1).
 3. **Notification.** QAuth notifies the session owner — the ledger row's
    `user_id`, never anyone else — through a channel the owner registered
-   (decision 16): web push to the portal, or an owner-registered webhook. A
+   (decision 16): web push to the portal, plus an optional owner-registered
+   webhook; never email. A
    notification carries only the request id, the agent's handle and the URL
    of QAuth's approval page. It never carries an approve action: approval
    happens only on QAuth's origin.
@@ -1320,6 +1356,11 @@ bounded by its own approval, not by a parent.
    - **Always block** — a standing deny the owner sets for the same delta
      from this agent. It lasts across sessions, refuses like a mute, and is
      removed only in the portal.
+
+   There is no "always allow" (decision 17). A lasting rise is the owner's
+   change to the agent's root ceiling (§13), which the next root takes
+   through consent (§11).
+
 5. **Token.** After an approval, the broker's next poll at the token
    endpoint (`grant_type=urn:openid:params:grant-type:ciba` and the
    `auth_req_id`, CIBA §10.1, with a DPoP proof under the same key)
@@ -1379,7 +1420,9 @@ wallet presentation bound to the request through OID4VP `transaction_data`
 (OID4VP 1.0 §8.4; [ADR-004](./004-wallet-agnostic-federation.md)) is a
 request-bound option behind `WALLET_FEDERATION_ENABLED`, not in the first
 slice. QAuth has no passkey or TOTP support today (verified 2026-09-24), so
-a WebAuthn credential provider is a precondition (P5).
+a WebAuthn credential provider is a precondition (P5). _Amended 2026-10-09
+(maintainer, ADR-017 question 10):_ it is one WebAuthn provider, shared by
+this record and ADR-017.
 
 ## Alternatives considered
 
@@ -1405,7 +1448,7 @@ a WebAuthn credential provider is a precondition (P5).
 | A public per-`jti` or per-commit resolver on QAuth                                             | Puts ledger rows behind a URL anyone can enumerate from public commits; `sid` and `jti` confer nothing, but the rows are the owner's (§2, §6). The profile shows the principal and nothing below it; resolving a commit is the owner's own systems' job (§9, §13).                                                           |
 | Model name as a ledger fact                                                                    | QAuth never sees the model: the harness hooks report it at session start and on a switch, a loopback proxy sees it on the wire, and neither is QAuth's own observation. A report stays a report (§7, T7).                                                                                                                    |
 | SSF stream management for agent-side transmitters                                              | Receiver-initiated by design (SSF 1.0 §7, §8): the receiver reads the transmitter's well-known configuration and creates the stream there, which a local daemon behind NAT cannot serve. RFC 8935 with an out-of-band `agent_transmitters` row now; a transmitter-initiated registration goes to the WG (§7).                |
-| Commit signing by the broker or by QAuth                                                       | A broker-held per-node key verifies against the ledger but a git host that does not know the key shows every agent commit Unverified (for example, GitHub reports `unknown_key`); a QAuth-side signer with a registered key shows Verified but puts the AS on every commit, against the hot-path rule. Parked (decision 12). |
+| Commit signing by the broker or by QAuth                                                       | A broker-held per-node key verifies against the ledger but a git host that does not know the key shows each agent commit Unverified (for example, GitHub reports `unknown_key`); a QAuth-side signer with a registered key shows Verified but puts the AS on each commit, against the hot-path rule. Unsigned (decision 12). |
 | Widen the live token or tree when the owner approves                                           | Breaks the invariant: every child spawned afterwards inherits the extra right, and the root consent no longer bounds the tree. An elevation is a separate leaf for one node (§14).                                                                                                                                           |
 | An approve button in the notification (chat bot, email)                                        | The button is not bound to a passkey on QAuth's origin: anyone who can read the channel — or the agent, if it can post there — could approve. A notification carries a link only (§14).                                                                                                                                      |
 | "Don't ask again" as an automatic approval                                                     | One tap becomes a standing grant for whatever the agent asks next; "approve for a while" already covers repeats of the same delta. A mute only denies (§14, decision 14).                                                                                                                                                    |
@@ -1438,7 +1481,7 @@ RFC 9396 §6.1's "fewer permissions" — composition by analogy, not text.
 | Resource-side action events                             | Covered (envelope); QAuth-defined (event type)                        | RFC 8417 §2.2 (`events`, `txn`, `toe`), RFC 8935 push; the `agent-action` URI is QAuth's                                                                                                                                                                                                                                                                                                                                                                                            |
 | Agent-side transmitters and their registration          | Covered (envelope); gap (registration); QAuth-defined (members)       | RFC 8935 push with out-of-band keys; SSF 1.0 §7–§8 stream management is receiver-initiated and does not fit a NAT'd transmitter; no CAEP or SSF event type describes an agent's action (CAEP 1.0 §3 defines session, token-claims, credential, assurance-level, device-compliance and risk-level changes — states, never acts); the `model` and `reason` members and the server-written `agent_id` column are QAuth's; both gaps are what QAuth takes to the Shared Signals WG (§7) |
 | Agent identity record                                   | Proposed by draft (shape adopted); QAuth extension (avatar, bindings) | draft-wzdk-scim-agent-resource-00 §3, §4.1, §4.2 (`Agent` resource, `agentUserName`, `displayName`, `description`, `active`, `owners`; no email, no avatar, no binding), RFC 7643 §3.3 extension schemas; the `urn:qauth:…:extension:agent:1.0` schema is QAuth's; draft-ietf-wimse-aims-00 §10.3 keeps `client_id` = the acting workload, which is why the agent is not in `act` (§13)                                                                                             |
-| Commit provenance                                       | Product convention; kernel process document                           | git author/committer identities; the platform-assigned attribution address (example, GitHub: App bot login and `noreply` address); `Documentation/process/coding-assistants.rst` (`Assisted-by: AGENT:MODEL`, humans only add `Signed-off-by`); a git host's signature verification reasons (example, GitHub: `unknown_key`) for the parked signing question                                                                                                                        |
+| Commit provenance                                       | Product convention; kernel process document                           | git author/committer identities; the platform-assigned attribution address (example, GitHub: App bot login and `noreply` address); `Documentation/process/coding-assistants.rst` (`Assisted-by: AGENT:MODEL`, humans only add `Signed-off-by`); a git host's signature verification reasons (example, GitHub: `unknown_key`) for the signing question (decision 12)                                                                                                                 |
 | Out-of-band approval                                    | Covered (decoupled flow); QAuth-defined (elevation, mute, budget)     | OpenID CIBA Core 1.0 §7.1 (one hint of three, `binding_message`, `requested_expiry`, profile parameters), §10.1 (poll), §11 (errors); RFC 9396 §3 (`authorization_details` in CIBA); FAPI-CIBA working copy §4.1.1 (poll, `binding_message`, confidential clients); AuthZEN AARP Draft 1 §7, §12; OID4VP 1.0 §8.4; WebAuthn Level 3; NIST SP 800-63B-4 §3.2.5                                                                                                                       |
 | Decision API                                            | Covered; WG-draft binding; QAuth context                              | AuthZEN 1.0 §6.1, §9.2, §10.1, §11.2 (Final, 11 January 2026); COAZ-MCP Binding §7.1, §11.2 (WG Draft 1); `context.qauth` is QAuth's; AARP noted                                                                                                                                                                                                                                                                                                                                    |
 | Agent framework vocabulary                              | WG draft (Informational)                                              | draft-ietf-wimse-aims-00 §8 (LLM never holds credentials), §10.3 (`client_id` = agent, `sub` = user), §11 (audit minimums)                                                                                                                                                                                                                                                                                                                                                          |
@@ -1560,9 +1603,11 @@ gate.
   apart by ledger rows only; and the platform side of a binding is
   provisioned by the owner, outside this record.
 - **P1 — keys and the tree.** **1a:** DPoP at the token endpoint (`cnf.jkt`,
-  `token_type`, nonce), `dpop_bound_access_tokens` in the seed manifest,
-  `AGENT_BEARER_LEAF_RESOURCES`, key custody in the broker, `private_key_jwt`
-  at introspection and revocation, the introspection member `cnf`. **1b:**
+  `token_type`, nonce) through the shared verifier behind `DPOP_ENABLED`
+  (§3), `dpop_bound_access_tokens` in the seed manifest,
+  `AGENT_BEARER_LEAF_RESOURCES`, key custody in the broker, the
+  introspection member `cnf`; `private_key_jwt` at introspection and
+  revocation moved to ADR-017's F0 (§2). **1b:**
   `spawn_assertion` and GATE 3d,
   GATE 4d, narrow versus spawn and node identity, the `act` shape and loose
   schema, `spawn_allowlist` and `aud` enrichment with the 3d allowlist check,
@@ -1574,7 +1619,7 @@ gate.
   when its type is registered without it; a `reviewer` seeded without an
   allowlist cannot spawn a `reviewer` even when its `aud` names it;
   a root type spawning its own type fails when its allowlist omits itself
-  (the example seed's `claude-code`, decision 7);
+  (the example seed's `lead`, decision 7);
   a same-key narrow leaves `act` byte-identical and depth unchanged; a new
   key nests `act` once; a leaf cannot spawn.
 - **P2 — purpose, ceiling, revocation.** The `agent-task` RAR type end to end
@@ -1628,8 +1673,11 @@ gate.
   re-pin every watch-list row; `delegation_chain` if its trigger
   fired. Tests: the validator refuses a token whose `aud` is not the database
   and a role outside `actions`; the PDP can deny but never widen.
-- **P5 — remote approval (after P2).** A WebAuthn credential provider —
+- **P5 — remote approval (after P2).** A WebAuthn credential provider, the
+  one shared with ADR-017 —
   passkey registration and assertion in the portal; QAuth has none today;
+  the portal setting that raises an agent's root ceiling with a passkey
+  (§13, decision 17);
   the CIBA backchannel endpoint in poll mode, with `login_hint_token` = the
   requesting node's token; `REMOTE_APPROVAL_ENABLED`,
   `REMOTE_APPROVAL_EXPIRY` and `REMOTE_APPROVAL_BUDGET`; the `agent:request`
@@ -1643,7 +1691,8 @@ gate.
   refused; the page's headline is the typed delta and `purpose` renders
   only in the attributed box; revoke-by-`sid` ends an open window; a window
   never outlives the refresh family; a notification body carries only the
-  request id, the agent's handle and the URL.
+  request id, the agent's handle and the URL; raising a root ceiling without
+  a passkey assertion is refused, and a live tree keeps its ceiling.
 
 ## OS-level authority manager composition
 
@@ -1866,7 +1915,10 @@ on 401; the Agent SDK passes `mcpServers` and headers per `query()`.
   broker's deletion (§9).
 - One browser login per new session whenever the root names a dangerous
   scope, which every root of an `exec` type does (decision 7's example is
-  one); resume reuses the root, a second process does not (§1, §11).
+  one); resume reuses the root only when the dead-man walk did not reach
+  QAuth, and a second process does not (§1, §11).
+- Every new root shows the consent screen, even when a stored consent
+  covers it, and `prompt=none` cannot start one (§11).
 - Three of the shapes followed are individual drafts that may expire without
   successors (Watch list); the `act` object may need a second migration.
 - The MCP leg is outside the tree until P3 (Phasing; harness adapter contract,
@@ -1880,7 +1932,8 @@ on 401; the Agent SDK passes `mcpServers` and headers per `query()`.
 - Every provenance line outside QAuth is forgeable, by anyone and by the
   agent itself; the record can only make its own store honest about the
   difference (T7). Commit signing, the one thing that would change that, is
-  parked (decision 12).
+  not done: agent commits stay unsigned until provenance must become
+  evidence (decision 12).
 - QAuth grows a CIBA endpoint, a WebAuthn credential provider, a
   notification path and an approvals table (§14). The owner's phone joins
   the approval path: a lost, unlocked phone with a synced passkey is a way
@@ -1907,7 +1960,8 @@ on 401; the Agent SDK passes `mcpServers` and headers per `query()`.
 ## Decisions parked for the maintainer
 
 Each question carries the default the record was written on; the record
-proceeds on that default until the maintainer decides otherwise.
+proceeds on that default until the maintainer decides otherwise. As of
+2026-10-09 the maintainer has decided every question below.
 
 1. **Browser logout and authority trees.** _Decided 2026-09-30 (maintainer)._
    Should a QAuth logout revoke the user's authority trees (`sid`)? RFC 9700
@@ -1925,6 +1979,8 @@ proceeds on that default until the maintainer decides otherwise.
 2. **`purpose` and `task` provenance.** Model-authored free text, shown and
    never a policy input, or `task` restricted to operator- or spawner-issued
    identifiers? Default: free text; `caused_by` server-written.
+   _Decided 2026-10-09 (maintainer):_ `task` stays free text, a label shown
+   to people and never a policy input. Version 1 of the type says so (§5).
 3. **Whose identity an adapter's credential carries** (example, GitHub).
    Credentials that carry the upstream app identity (GitHub: App
    installation tokens, attributed to the App's bot) or credentials that act
@@ -1934,7 +1990,9 @@ proceeds on that default until the maintainer decides otherwise.
    principal, the upstream app identity is the agent's binding and its bot
    identity is the author (§9, §13), which settles this on app-identity
    credentials for that case; the user-acting option remains open only for
-   trees with no agent named.
+   trees with no agent named. _Decided 2026-10-09 (maintainer):_ adapter
+   credentials carry the app identity for every tree. A user-acting token
+   exists only on ADR-016's pass-through leg.
 4. **Which upstream app identity the adapter mints from** (example, GitHub:
    which App and installation the STS mints from) — one app identity per
    organisation or one shared. Default: one per organisation, with
@@ -1943,13 +2001,22 @@ proceeds on that default until the maintainer decides otherwise.
    agent's public name on the platform (GitHub: the App's slug); the
    per-organisation default holds for trees with no agent named. For GitHub,
    installation ids stay in QAuth configuration either way.
+   _Decided 2026-10-09 (maintainer):_ one upstream app identity per
+   organisation, never one shared, so no key is shared. An agent's own
+   identity (§13) stands where an agent is named. For that identity the
+   2026-09-30 decision replaced configured installation ids: the allowlist is
+   by account, and foreign installations are removed (§9, §13; ADR-016 §2).
 5. **Where `qauth-broker` lives** — a TypeScript app in the Nx monorepo or a
    separate project beside an OS-level authority manager's own (a Rust
    crate, for example); the PostgreSQL validator is C either way.
-   Default: `apps/qauth-broker` in the monorepo.
+   Default: `apps/qauth-broker` in the monorepo. _Decided 2026-10-09
+   (maintainer):_ it lives in the QAuth monorepo. Its language is chosen
+   separately. Its stable surface is its language-neutral protocol.
 6. **Same-type teammates** as one registered type (told apart by `cnf.jkt`
    and `parent_jti`) or a distinct type per role for a separate
-   `max_agent_mode` cap? Default: one type.
+   `max_agent_mode` cap? Default: one type. _Decided 2026-10-09
+   (maintainer):_ teammates of one role share one registered type. An
+   operator may split them into separate types.
 7. **First seed manifest** — agent types with `max_agent_mode`, `scopes`,
    `spawn_allowlist`, `jwks` and, for a root type, `redirect_uris`. The
    default root type is operator-defined; the entries below are an example
@@ -1958,6 +2025,9 @@ proceeds on that default until the maintainer decides otherwise.
    `redirect_uris` entry, the portless loopback URI
    `http://127.0.0.1/callback`, §1), `reviewer` (`readonly`, no `write:*`),
    `worker` (`exec`); one `jwks` key per box, distinct `kid`.
+   _Decided 2026-10-09 (maintainer):_ the example root type is renamed to the
+   neutral `lead`. `claude-code` appears only as a labelled example in docs.
+   `reviewer` and `worker` stay.
 8. **Root-grant cadence.** One root per main-agent process (a login per
    session, per-session attribution) or one root per broker start (one login,
    concurrent sessions share a `sid` and a node)? Default: per process.
@@ -1968,12 +2038,15 @@ proceeds on that default until the maintainer decides otherwise.
    through the spawner path — cannot carry a per-process root, since its
    every restart would cut the `sid` (§6); it needs the per-broker-start
    shape. A per-host setting choosing between the two, rather than one
-   answer for every host, is the likely resolution.
+   answer for every host, is the likely resolution. _Decided 2026-10-09
+   (maintainer):_ a per-host setting, default one root per process. A daemon
+   host may choose one root per broker start (§1).
 9. **Agent handle namespace.** Realm-unique (`build-bot` is one agent per
    realm) or user-scoped (`alice/build-bot`, so two owners may share a
    handle)? The SCIM draft wants `agentUserName` unique across the
    provisioning domain, which is the realm. Default: realm-unique, first
-   come; the profile URL is `/agents/{handle}`.
+   come; the profile URL is `/agents/{handle}`. _Decided 2026-10-09
+   (maintainer):_ unique within the realm.
 10. **Ownership transfer.** _Decided 2026-09-30 (maintainer)._ May an owner
     hand an agent to another user, and does the agent's history (ledger
     rows, bindings, events) move with it? The maintainer's words: activity
@@ -1992,6 +2065,9 @@ proceeds on that default until the maintainer decides otherwise.
     the owner's registration enough? Default: the owner's registration is
     enough, because the rows it produces are already marked as reports and
     reach only that agent's trees; an admin may disable a transmitter.
+    _Decided 2026-10-09 (maintainer):_ the owner's registration is enough. A
+    realm admin may disable a transmitter, through the permission catalog of
+    ADR-019 (proposed in a separate PR; ADR-015 question 10).
 12. **Commit signing.** Leave agent commits unsigned (pointer only), sign
     with the broker's per-node key (verifiable against the ledger, shown
     Unverified by a git host that does not know the key; for example, GitHub
@@ -2002,11 +2078,15 @@ proceeds on that default until the maintainer decides otherwise.
     The maintainer asked whether signing is meant to stop a malicious force
     push under the agent's identity. Branch protection and rulesets prevent
     that; the ledger detects it after the fact (§9); a signature lets a third
-    party verify authorship offline.
+    party verify authorship offline. _Decided 2026-10-09 (maintainer):_
+    agent commits stay unsigned. The question reopens if provenance must
+    become evidence (ADR-016 §6).
 13. **`model` on the ledger row?** Keep the reported model only in
     `agent_actions` (§7), or copy the first report onto the ledger's root
     row for the dashboard's convenience? Default: `agent_actions` only; the
-    ledger holds what QAuth verified and nothing it did not.
+    ledger holds what QAuth verified and nothing it did not. _Decided
+    2026-10-09 (maintainer):_ the reported model stays only in
+    `agent_actions`.
 14. **"Don't ask again": a mute or an allow?** The owner's framing
     (2026-09-23): approval fatigue is prevented by "don't ask again for this
     session" and "don't ask for a while", and asking has its own permission
@@ -2018,8 +2098,8 @@ proceeds on that default until the maintainer decides otherwise.
     step 4). The two mutes stay as written. "Always block" is a standing deny
     the owner sets; it lasts across sessions and is removed in the portal
     (§14, step 4). "Always allow" is not decided: it conflicts with §14's
-    rule that an approval never reaches a durable rung, so it is parked as
-    decision 17.
+    rule that an approval never reaches a durable rung, so it was parked as
+    decision 17, which the maintainer decided on 2026-10-06.
 15. **Which factors may approve?** A passkey only, or also a TOTP or other
     offline code, or a wallet presentation bound by `transaction_data`?
     _Decided 2026-09-30 (maintainer)._ The maintainer's words: passkey
@@ -2033,7 +2113,10 @@ proceeds on that default until the maintainer decides otherwise.
     owner-registered webhook that receives only the request id, the agent's
     handle and the approval URL; no email. A request nobody answers expires
     at `requested_expiry` and counts as denied; quiet hours are the owner's
-    channel's business, not QAuth's (§14).
+    channel's business, not QAuth's (§14). _Decided 2026-10-09
+    (maintainer):_ web push plus an optional webhook that carries only the
+    request id, the handle and the URL. No email. An unanswered request
+    expires as denied.
 17. **"Always allow".** The maintainer named it among the lasting answers
     (decision 14). As an approval it would be a standing grant, which breaks
     §14's rule that an approval never reaches a durable rung. Default: not
@@ -2041,7 +2124,9 @@ proceeds on that default until the maintainer decides otherwise.
     ceiling in the portal, and the next root takes it through consent (§11).
     _Decided 2026-10-06 (maintainer): the alternative._ An approval prompt
     has no "always allow". The owner raises the agent's default root ceiling
-    in the portal, proving it is the owner with a passkey.
+    in the portal, proving it is the owner with a passkey. The body carries
+    it since 2026-10-09: the `root_ceiling` field (§13), the consent screen
+    (§11), §14's step 4 and P5.
 
 ## Related
 
