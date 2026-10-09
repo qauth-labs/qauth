@@ -15,6 +15,13 @@
 >
 > For production, it supersedes the environment-variable key model of
 > [ADR-001](./001-jwt-key-management.md). See Decision 9.
+>
+> **Amended 2026-10-09** with the effects of the maintainer's 2026-10-09 answers to ADR-014 to
+> ADR-017. Those records hold the reasons.
+>
+> - Decision 3: a realm's `ssoMaxLifespan` also caps refresh families, and "sign out everywhere"
+>   is defined.
+> - Decision 7: the Authority Tree's realm-admin powers map onto the permission catalog.
 
 ## Context
 
@@ -108,6 +115,13 @@ Storage:
 
 Today browser sessions live only in Redis. The `sessions` table exists in the schema, but the auth
 server does not use it.
+
+Lifetime and sign-out everywhere, decided 2026-10-09 (maintainer):
+
+- When a realm sets `ssoMaxLifespan`, that limit also caps the realm's refresh-token families.
+  Today the `realms` table has the column, but no code reads it.
+- "Sign out everywhere" revokes the user's session rows in Postgres and clears them from the
+  cache. It also sends back-channel logout (Decision 4).
 
 ### 4. Logout
 
@@ -224,6 +238,13 @@ There are three API families. Each token carries one audience.
 - Scopes are coarse and independent: `admin:read`, `admin:write` and `admin:security`.
 - Scopes are intersected with roles.
 - Roles are built from a permission catalog. Custom roles are allowed.
+
+**Authority Tree powers.** ADR-014 gives a realm admin three powers. They map onto the permission
+catalog. This answers ADR-015 parked question 10. Decided 2026-10-09 (maintainer).
+
+- Revoke-by-agent needs `admin:security`, with a fresh passkey approval for each operation.
+- Disabling a transmitter needs the same.
+- The view the agent's public profile withholds needs `admin:read`.
 
 **Credentials.**
 
