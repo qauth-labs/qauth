@@ -27,8 +27,9 @@
 > were answered on 2026-10-06, and question 6 is now decision 11. The rest
 > were answered on 2026-10-09. Each is marked decided below, with its date.
 > Where an answer changes ADR-014's text, the question names the place.
-> ADR-014 changes to match when this record is accepted. ADR-014 §1 and §11
-> already carry the 2026-10-06 answers.
+> On 2026-10-09 the maintainer approved ADR-014, this record and ADR-016
+> together, and ADR-014 was updated that day to match. ADR-014 §1 and §11
+> also carry the 2026-10-06 answers.
 
 ## Context
 
@@ -283,13 +284,13 @@ bearer-leaf election.**
   listed resource reject a bound token sent as Bearer.
 - The checks run again at every elevation mint, so a lowered cap ends an open
   window at its next renewal.
-- §14's step 1 lists refusals by GATE 4a, 4d, §5, the STS and mcp-guard.
-  Some lead to requests this rule refuses: a mode above the cap, which 4a
-  refuses first, and a listed mcp-guard resource. Beyond `agent:request`,
+- §14's step 1 lists refusals by GATE 4a, §5, the STS and mcp-guard. A
+  GATE 4d refusal is final (question 4). Some refusals lead to requests this
+  rule refuses: a mode above the cap, which 4a refuses first, and a listed
+  mcp-guard resource. Beyond `agent:request` and a type's registered scopes,
   ADR-014 does not say what an approval may carry, so this is a new
-  fail-closed rule. A GATE 4d refusal is final (question 4), and a window
-  renews by a matched CIBA request (question 5). What the STS lets an
-  approval open is ADR-016's.
+  fail-closed rule. A window renews by a matched CIBA request (question 5).
+  What the STS lets an approval open is ADR-016's.
 
 **Why.** The operator's mode cap is a ceiling the owner's consent sits
 under, and a passkey tap is not an operator change. An elevation outside the
@@ -507,8 +508,8 @@ test that proves it.
 
 - With the switches off, nothing here runs. Every other client keeps today's
   client-assertion rule, and no existing rate limit is raised.
-- ADR-014's rules stand as written until this record is accepted; its §1
-  and §11 already carry the 2026-10-06 answers. Thirteen questions were
+- ADR-014 was updated on 2026-10-09 to match questions 1 to 5 and 12. Its
+  §1 and §11 also carry the 2026-10-06 answers. Thirteen questions were
   parked below, and the maintainer has decided all of them.
 
 ## Decisions parked for the maintainer
@@ -521,42 +522,42 @@ question below.
    CIMD client's `is_agent` follows its document at every re-resolution
    (`apps/auth-server/src/app/helpers/client-resolution.ts:134`). Options:
    spare every `sid` family; end such a family, and so its tree.
-   **Default:** spare it, as ADR-014 decision 1 says; the option would change
+   **Default:** spare it, as ADR-014 decision 1 said; the option would change
    that decision's text. Why ask: the maintainer's words spare agents, and
    this client is no longer one. _Decided 2026-10-09 (maintainer): end it._
    Sign-out ends a `sid` family whose CIMD client has stopped declaring
-   `is_agent`, and so its tree. ADR-014 decision 1 changes to match when this
-   record is accepted.
+   `is_agent`, and so its tree. ADR-014 decision 1 was updated to match on
+   2026-10-09.
 2. **Client assertion only for agent types.** Options: an assertion or a
-   secret, as ADR-014 §4(e), §9 and T2 allow; an assertion only. The code
+   secret, as ADR-014 §4(e), §9 and T2 allowed; an assertion only. The code
    already refuses a secret from a `private_key_jwt` client
    (`client-auth.ts:183`), so the option is a registration rule.
    **Default:** either; the option would change those three places. Why
    ask: a secret is shared and on disk; an assertion key can be one per box.
    _Decided 2026-10-09 (maintainer): an assertion only._ Agent types
    authenticate by `private_key_jwt`, never by a client secret. ADR-014
-   §4(e), §9 and T2 change to match when this record is accepted.
+   §4(e), §9 and T2 were updated to match on 2026-10-09.
 3. **An ID-JAG minted by an agent type.** Its targets are the client's
    `audience` column (`token.ts:1682`), which also sets a root's `aud`
    without `resource`; it carries no `cnf` or `sid`. Options: allow; refuse
    at GATE 2 for an agent type. **Default:** allow, as ADR-014's
    [Explicitly out of scope](./014-agent-authority-tree.md#explicitly-out-of-scope)
-   says: a `kind: id-jag` row, and the tree ends at the domain boundary. The
+   said: a `kind: id-jag` row, and the tree ends at the domain boundary. The
    option would change that paragraph. Why ask: a listed target sits in every
    root token, and the assertion leaves the key binding and the walk behind.
    _Decided 2026-10-09 (maintainer): refuse._ In 1.0 an agent type cannot
-   mint an ID-JAG; GATE 2 refuses the request. That paragraph changes to
-   match when this record is accepted.
+   mint an ID-JAG; GATE 2 refuses the request. That paragraph was updated to
+   match on 2026-10-09.
 4. **May an approval lift a type's registered scopes?** ADR-014 §14 step 1
-   lists a GATE 4d refusal among those that may lead to a request. Options:
+   listed a GATE 4d refusal among those that may lead to a request. Options:
    keep that; make a 4d refusal final. **Default:** step 1 as written; the
    option would change it. Why ask: the registration is the operator's
    ceiling, and the invariant bounds every derived token by it. _Decided
    2026-10-09 (maintainer): a 4d refusal is final._ No approval lifts a
    type's registered scopes. The owner's route to more is ADR-014 decision
-   17: raising the agent's root ceiling with a passkey. Step 1 changes to
-   match when this record is accepted.
-5. **How an approval window renews.** §14 step 6 renews the elevation by a
+   17: raising the agent's root ceiling with a passkey. Step 1 was updated
+   to match on 2026-10-09.
+5. **How an approval window renews.** §14 step 6 renewed the elevation by a
    token exchange, yet the invariant paragraph says "no exchange derives" an
    elevation, and GATE 4a would refuse the delta. Options: step 6, with the
    renewal a named exception to 4a; a new CIBA request that QAuth matches to
@@ -567,8 +568,7 @@ question below.
    elevation leaf by a new CIBA request. QAuth matches it to the open window
    and resolves it silently, with no notification or passkey. GATE 4a has no
    exception. The match may reuse the canonical-request hash of ADR-019
-   (proposed in a separate PR). Step 6 changes to match when this record is
-   accepted.
+   (proposed in a separate PR). Step 6 was updated to match on 2026-10-09.
 6. **Skipping the consent screen for an agent root.** ADR-014 §11 keeps the
    fast path (`canSkipConsent`,
    `apps/auth-server/src/app/helpers/consent.ts:77`), which `prompt=none`
@@ -640,8 +640,8 @@ question below.
     revoke-all cannot reach such a token, which has no ledger row.
     _Decided 2026-10-09 (maintainer): refuse._ A sid-less subject token whose
     `iat` is earlier than the user's last revoke-all is refused. That time is
-    a per-user timestamp in Postgres, cached in Redis. ADR-014 §1 changes to
-    match when this record is accepted.
+    a per-user timestamp in Postgres, cached in Redis. ADR-014 §1 was
+    updated to match on 2026-10-09.
 13. **Which credential is the primary identity.** Decision 8 took the
     credential that created the account, the user's oldest
     `user_credentials` row, and added no column. Options: that; an explicit

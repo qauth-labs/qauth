@@ -86,6 +86,19 @@
 > §1 and §11. The DPoP verifier, the WebAuthn provider and `private_key_jwt`
 > at revocation and introspection are shared with ADR-017 (proposed in a
 > separate PR), as its question 10 proposed (§2, §3, §14, P1a, P5).
+>
+> On 2026-10-09 the maintainer also decided that this record, ADR-015 and
+> ADR-016 are approved together. So their answers that change this record
+> are written in now. From ADR-015: sign-out ends a `sid` family whose CIMD
+> client stopped declaring `is_agent` (decision 1; question 1). Agent types
+> authenticate by client assertion only (§4(e), §9, T2; question 2). An agent
+> type cannot mint an ID-JAG in 1.0; GATE 2 refuses it (Explicitly out of
+> scope; question 3). A GATE 4d refusal is final (§14, step 1; question 4). A
+> window renews by a CIBA request matched to it, with no exception to GATE 4a
+> (§14, step 6; question 5). A sid-less subject token older than the user's
+> last revoke-all is refused (§1, §6; question 12). From ADR-016: the
+> `Agent:` trailer carries the `agent_id` and `handle@issuer-host`, with a
+> version marker (§9; question 5).
 
 ## Context
 
@@ -189,9 +202,9 @@ outlive a process on the CLI leg. The upstream app identity's private key
 (for the `github` adapter, the GitHub App's) lives in
 QAuth's configuration beside the vend policy and never on the developer box,
 so an agent with a shell cannot edit its own ceiling (§9). The other two are
-on the box: the agent type's `private_key_jwt` key (or client secret), which
-the broker must load from storage — the user keyring or a 0600 file readable
-by the broker's uid only — because its public half is operator-provisioned in
+on the box: the agent type's `private_key_jwt` key (never a client secret,
+§4(e)), which the broker must load from storage — the user keyring or a 0600
+file readable by the broker's uid only — because its public half is operator-provisioned in
 the type's `jwks` (§3, §9); and the root refresh token, which the broker keeps
 in memory only — a broker restart means a new `login` — and which RFC 9449 §5
 leaves bound to client authentication, not to the DPoP key (§3). A same-uid
@@ -321,7 +334,8 @@ the union of the modes the tree may use, each child takes a subset, and the
 consent screen shows the union (§11). An elevation (§14) stands outside this
 chain on purpose: no exchange derives it, a passkey-confirmed approval of one
 delta bounds it instead of a parent, and it can neither spawn nor narrow — so
-no child ever holds what it grants.
+no child ever holds what it grants. Its type's registered scopes still bound
+it (§14, step 1).
 
 ## Decision
 
@@ -393,12 +407,17 @@ require PKCE (`isRedirectUriAllowedForPolicy`,
 `apps/auth-server/src/app/helpers/oauth-redirect.ts:152`).
 
 A subject token with no `sid` — a legacy token, or one issued to a non-agent
-client whose `aud` happens to name the agent — is neither refused nor left
-sid-less: the exchanged token **starts a new tree** with a fresh `sid`, depth
-0, and a `kind: root` ledger row (§2) whose `origin_jti` and
-`origin_client_id` record the subject's `jti` and `client_id`. Refusing
-would break an exchange that works today; a sid-less agent token is one no
-tree can revoke. The same rule covers a `refresh_tokens` row that predates
+client whose `aud` happens to name the agent — is not left sid-less: the
+exchanged token **starts a new tree** with a fresh `sid`, depth 0, and a
+`kind: root` ledger row (§2) whose `origin_jti` and `origin_client_id` record
+the subject's `jti` and `client_id`. Refusing would break an exchange that
+works today; a sid-less agent token is one no tree can revoke. One case is
+refused (decided 2026-10-09, ADR-015 question 12). A sid-less subject token
+whose `iat` is earlier than the user's last revoke-all (§6) is refused. Such
+a token has no ledger row, so revoke-all cannot reach it. That time is a
+per-user timestamp in Postgres, cached in Redis. The refusal is
+`invalid_request`, as for any refused subject token (RFC 8693 §2.2.2). The
+same rule covers a `refresh_tokens` row that predates
 the migration and so carries a NULL `sid`: the first `refresh_token` grant on
 that family mints a `sid`, writes it onto the rotated row, and writes a
 `kind: root` row for the token it issues, so the family joins a tree at its
@@ -610,10 +629,13 @@ check `client_credentials` already runs), so a type registered without
 same floor for `agent:*` through `max_agent_mode` (`enforceAgentScopeCap`,
 `apps/auth-server/src/app/routes/oauth/token.ts:1509`); GATE 4b `aud` ⊆
 subject `aud`; the lifetime clamp; the depth cap; rights narrowing (§5).
-**(e)** The requesting client is the child's agent type, authenticated with
-`private_key_jwt` or a client secret the broker holds; exchange stays
-confidential-only. The client credential names the type, not the instance
-(§9); the instance is the DPoP key (§3). The minted token: `sub` = user,
+**(e)** The requesting client is the child's agent type, authenticated by a
+`private_key_jwt` client assertion under a key the broker holds; exchange
+stays confidential-only. An agent type never authenticates by client secret
+(decided 2026-10-09, ADR-015 question 2). It is registered with
+`private_key_jwt`, and the code already refuses a secret from such a client
+(`apps/auth-server/src/app/helpers/client-auth.ts:183`). The client
+credential names the type, not the instance (§9); the instance is the DPoP key (§3). The minted token: `sub` = user,
 `client_id` = child type, `cnf.jkt` = child key, `act` extended (§3), `sid`
 inherited, new `jti`, **no refresh token** — the code's invariant stands, so
 `exp(c) ≤ exp(p)` holds on the token itself. A node renews by re-spawn under
@@ -737,7 +759,8 @@ whose keys the caller does not hold answer 200 and revoke nothing. The
 session owner also has a kill switch, `POST /api/agent-sessions/revoke-all`:
 it revokes every live tree the user rooted, each by the walk above. Only the
 owner may call it, never a node, and it asks for no step-up, because an
-emergency stop must not wait (decision 1).
+emergency stop must not wait (decision 1). Each call records its time as the
+user's last revoke-all, which §1 checks for a sid-less subject token.
 
 The revocation window equals the access-token lifetime, so that lifetime is a
 policy parameter: a profile row consulted through `resolveEnvironmentPolicy`
@@ -906,8 +929,8 @@ return `context.access_request` yet.
 
 `qauth-broker` is a local daemon on `$XDG_RUNTIME_DIR/qauth-broker.sock`: the
 OAuth client role for the CLI leg — it holds the client credentials
-(`private_key_jwt` key or secret) of every agent type that host runs and
-authenticates to QAuth as the type of the node it is acting for, the
+(`private_key_jwt` keys, never a secret, §4(e)) of every agent type that
+host runs and authenticates to QAuth as the type of the node it is acting for, the
 session's main-agent type at the root, the child's type on a spawn (§4(e)),
 never as a client of its own; there is no broker entry in the seed manifest
 — the key custodian (§3), the maker of spawn exchanges (§4) and the
@@ -1010,8 +1033,10 @@ GitHub, `gh` or PostgreSQL below are examples.
   its `<id>+<slug>[bot]@users.noreply.github.com` address) — so a commit the
   agent wrote is authored
   by the agent, and the hook adds `Model: <model>` from the node's reported
-  model (§7, a report) and `Agent: <agent_id>`. The broker writes no
-  `Signed-off-by`, `Reviewed-by` or `Assisted-by` line and refuses a commit
+  model (§7, a report) and an `Agent:` line. That trailer carries the
+  agent's `agent_id` and its `handle@issuer-host` form (ADR-016 §5), with a
+  version marker (decided 2026-10-09, ADR-016 question 5). The broker writes
+  no `Signed-off-by`, `Reviewed-by` or `Assisted-by` line and refuses a commit
   message that carries one from the node: the first two certify a human's
   act and only a human adds them at review or merge; the third means a
   human wrote the code with an agent's help, the kernel's `Assisted-by:
@@ -1304,10 +1329,13 @@ bounded by its own approval, not by a parent.
 **The flow.**
 
 1. **Refusal.** A node asks for more than its ceiling: at the token
-   endpoint (`invalid_scope` from GATE 4a or 4d,
+   endpoint (`invalid_scope` from GATE 4a,
    `invalid_authorization_details` from §5), at the STS (§9), or at an
    mcp-guard resource (`403 insufficient_scope`). The broker sees the
-   refusal.
+   refusal. A GATE 4d refusal is final and leads to no request. No approval
+   lifts a type's registered scopes (decided 2026-10-09, ADR-015 question
+   4). The owner's route to more is decision 17: raising the agent's root
+   ceiling with a passkey (§13).
 2. **Request.** If the node's token carries `agent:request` (below), the
    broker files an approval request: an OpenID CIBA backchannel
    authentication request (CIBA Core 1.0 §7.1), in poll mode — poll,
@@ -1381,9 +1409,13 @@ bounded by its own approval, not by a parent.
    and nowhere else.
 
 6. **A window.** While a window is open, the node renews its elevation leaf
-   with a token exchange whose subject is its current node token, naming
-   the approval id, under the same key. The renewal is a new
-   `kind: elevation` row under the same approval.
+   by a new CIBA request (step 2) for the same delta, under the same key.
+   QAuth matches it to the open window and resolves it silently, with no
+   notification and no passkey. The broker's next poll returns the new leaf
+   (step 5). The match may reuse the canonical-request hash of ADR-019
+   (proposed in a separate PR). No token exchange renews an elevation, so
+   GATE 4a has no exception (decided 2026-10-09, ADR-015 question 5). The
+   renewal is a new `kind: elevation` row under the same approval.
    The window ends at its time, when the node's process dies (the dead-man
    switch, §6), when the `sid` is revoked, or when the owner ends it from
    the portal. The §6 walk treats elevation rows like any other row.
@@ -1518,8 +1550,10 @@ build on a past date. A draft in the RFC Editor queue does not expire.
 ## Explicitly out of scope
 
 Machine-to-machine trees with no human root: exchange refuses a
-`client_credentials` subject, and this record keeps it so. Cross-domain trees:
-an ID-JAG or identity-chaining hop ends the tree at the domain boundary, and
+`client_credentials` subject, and this record keeps it so. Cross-domain trees.
+In 1.0 an agent type cannot mint an ID-JAG: GATE 2 refuses the request
+(decided 2026-10-09, ADR-015 question 3). Any other ID-JAG or
+identity-chaining hop ends the tree at the domain boundary, and
 the ID-JAG mint path of ADR-011 stays outside it — an assertion minted from a
 tree token carries no `act` and no `sid`, the ledger records the mint as a
 `kind: id-jag` row that can have no children, and the foreign AS's tokens are
@@ -1629,7 +1663,8 @@ gate.
   `agentAccessTokenLifespan` row; the CAEP transmitter; the STS narrowed by
   `authorization_details`; `POST /api/agents/{id}/revoke` with its
   owner-or-admin rule (§13); `POST /api/agent-sessions/revoke-all`, with
-  sign-out leaving refresh families that carry a `sid` (decision 1). Tests:
+  sign-out leaving refresh families that carry a `sid`, except a CIMD
+  client's that no longer declares `is_agent` (decision 1). Tests:
   widened `locations` fails
   `invalid_authorization_details`; a client-supplied `caused_by` is rejected;
   revoke-by-agent makes every tree rooted in the agent inactive and leaves
@@ -1972,8 +2007,12 @@ proceeds on that default until the maintainer decides otherwise. As of
    `POST /auth/logout` revokes every refresh token of the user
    (`revokeAllForUser`, `apps/auth-server/src/app/routes/auth/logout.ts:79`).
    With `AUTHORITY_TREE_ENABLED` on, sign-out no longer ends a refresh family that
-   carries a `sid`; with the flag off nothing changes. The separate method is
-   `POST /api/agent-sessions/revoke-all` (§6). By the §6 walk, it ends every
+   carries a `sid`; with the flag off nothing changes. One exception was
+   decided on 2026-10-09 (ADR-015 question 1). Sign-out ends a `sid` family
+   whose CIMD client has stopped declaring `is_agent`, and so its tree. A
+   CIMD client's `is_agent` follows its document at every re-resolution
+   (`apps/auth-server/src/app/helpers/client-resolution.ts:134`). The
+   separate method is `POST /api/agent-sessions/revoke-all` (§6). By the §6 walk, it ends every
    live tree the user rooted. It has no step-up; in his words, an emergency
    stop must not wait.
 2. **`purpose` and `task` provenance.** Model-authored free text, shown and

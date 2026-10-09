@@ -33,7 +33,9 @@
 > token rests QAuth-side under a per-realm key, the leg has an end date, and
 > it is experimental in 1.0 (§4). The maintainer also chose that an
 > approval-only resource may be opened for a window, not only once (§3).
-> Unsigned commits are confirmed with ADR-014 decision 12 (§6).
+> Unsigned commits are confirmed with ADR-014 decision 12 (§6). The
+> maintainer approved ADR-014, ADR-015 and this record together on
+> 2026-10-09, and ADR-014 §9 was updated that day to match question 5.
 
 ## Context
 
@@ -485,11 +487,11 @@ Each piece lands in the ADR-014 phase that builds what it depends on
 
 - Default off. With `AUTHORITY_TREE_ENABLED` off none of this runs, and the
   pass-through leg needs its own switch as well.
-- This record does not edit ADR-014's text. ADR-014 §9 and §13 name §2's
-  account allowlist since 2026-10-09. By the maintainer's decisions,
-  decision 4 changes (§2), §9's author rule narrows (§4), and §9's `Agent:`
-  line changes (question 5). §14's step 4 applies to approval-only
-  resources as written, window included (§3).
+- ADR-014 §9 and §13 name §2's account allowlist since 2026-10-09. By the
+  maintainer's decisions, decision 4 changes (§2) and §9's author rule
+  narrows (§4). ADR-014 §9's `Agent:` line was updated on 2026-10-09 to match
+  question 5. §14's step 4 applies to approval-only resources as written,
+  window included (§3).
 
 ## Decisions parked for the maintainer
 
@@ -532,8 +534,8 @@ Each question carries the default this record was written on. As of
    ADR-014's text. A deployment that writes the bare handle would have §5
    write it as `<handle>@<issuer-host>`. _Decided 2026-10-09 (maintainer):_
    both. The `Agent:` trailer carries the `agent_id` and
-   `handle@issuer-host`, with a version marker. ADR-014 §9 changes to match
-   when this record is accepted.
+   `handle@issuer-host`, with a version marker. ADR-014 §9 was updated to
+   match on 2026-10-09.
 
 ## Related
 
