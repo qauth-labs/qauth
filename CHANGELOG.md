@@ -213,3 +213,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     OID4VP request/response correlation. Unused unless wallet federation is on.
   - `0016` — adds `authorization_codes.assurance_level`, constrained to
     `substantial` / `high` or NULL, feeding the `acr` mapping in ADR-010.
+
+### Deprecated
+
+- **`REQUIRE_EMAIL_VERIFIED` is renamed `REQUIRE_VERIFIED_ACCOUNT`.** Email is a
+  user attribute, not the trust gate. The gate is a verified account.
+  **The gate behaves the same**: for a password account, the proof is still
+  the confirmed address, and the default is still `false`.
+  - The old name keeps working as an alias through the 1.x deprecation window
+    of at least 12 months.
+  - A deployment that sets only the old name logs a deprecation warning at
+    boot.
+  - Setting both names to different values fails the boot with a message that
+    names both.
+  - `docker-compose.yml` forwards both names, so a deployment that still sets
+    only the old one keeps its gate.
+  - A blank value of either name now reads as unset, instead of failing the
+    boot. This lets compose forward both names when they are unset.
+
+  **Action for operators**: rename the variable to `REQUIRE_VERIFIED_ACCOUNT`.

@@ -91,9 +91,10 @@ On email verification (one transaction): mark the token used, set
 - `name` — derived from `users.first_name` + `users.last_name` (omitted when
   both are empty, never an empty string).
 
-> The login-time `REQUIRE_EMAIL_VERIFIED` gate (F-08) is a SEPARATE control:
-> it blocks unverified logins pre-token (reading
-> `credential_data.email_verified`) and does not affect claim resolution.
+> The login-time `REQUIRE_VERIFIED_ACCOUNT` gate (F-08) is a SEPARATE control:
+> it blocks logins by an unverified account pre-token and does not affect claim
+> resolution. For a password account it reads `credential_data.email_verified`.
+> `REQUIRE_EMAIL_VERIFIED` is its deprecated alias (renamed 2026-10-09).
 
 ## Core Tables (shipped)
 
