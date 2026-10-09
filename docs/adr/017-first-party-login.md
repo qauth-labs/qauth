@@ -47,6 +47,10 @@
 > - Registration uses the standard `prompt=create` from F1. It needs both the realm's
 >   `registration_allowed` and the client's `flows`.
 > - `/auth/login` and the headless hand-off are removed with no freeze phase, before 1.0.
+> - `/auth/register` is removed before 1.0 too. This is an explicit exception to the rule that a
+>   legacy route stays while its replacement is off by default. Its replacement, the hosted sign-up
+>   page, exists but is off by default (question 6). An operator who wants sign-up turns it on. The
+>   portal then signs up through that page by redirect.
 > - The bot challenge and passkey-only accounts are in 1.0. F4 joins 1.0 only if the attestation
 >   draft becomes an RFC first.
 > - Alignment with the 1.0 decisions (ADR-018 and ADR-019, proposed in a separate PR). TOTP moves
@@ -72,7 +76,7 @@ standards-based first-party login, and give apps that use a password grant a cle
 | Concern                           | As of 2026-09-26                                                                                                                                                                                                                                         | This record adds                                                                                                                                                                                                           |
 | --------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Password-to-token route           | `POST /auth/login` (`routes/auth/login.ts`) exchanges `{ email, password }` for tokens of the internal `system` client (`getOrCreateSystemClient`, `helpers/oauth-client.ts`), without client authentication. `/oauth/token` offers no `password` grant. | Removed in F1c, before 1.0, with no freeze phase; the authorization challenge endpoint replaces it (Decision 12)                                                                                                           |
-| QAuth's own app                   | The developer portal (`apps/developer-portal/src/server/auth-server-client.ts`) calls `/auth/login`, `/auth/register`, `/auth/verify`, `/auth/resend-verification` and `/auth/logout` server-to-server                                                   | In F0 the portal signs in through `/oauth/authorize` and keeps its tokens server-side (Decision 12)                                                                                                                        |
+| QAuth's own app                   | The developer portal (`apps/developer-portal/src/server/auth-server-client.ts`) calls `/auth/login`, `/auth/register`, `/auth/verify`, `/auth/resend-verification` and `/auth/logout` server-to-server                                                   | In F0 the portal signs in through `/oauth/authorize` and keeps its tokens server-side; from F2a it signs up on the hosted sign-up page, by redirect, while sign-up is on (Decision 12)                                     |
 | Headless hand-off                 | `/oauth/authorize` accepts `Authorization: Bearer` with a `system`-client access token in place of a browser session                                                                                                                                     | Follows the consent rule from F0; removed in F1c, before 1.0 (Decision 9)                                                                                                                                                  |
 | Client authentication             | `private_key_jwt` at `/oauth/token` ([ADR-011 §7](./011-enterprise-managed-authorization.md) "`private_key_jwt` (#384) — additive, no flag"); `/oauth/revoke` and `/oauth/introspect` accept `client_secret_basic` and `client_secret_post`              | `private_key_jwt` at both in F0 (Decision 14)                                                                                                                                                                              |
 | First-party marking               | No client attribute marks a client as first-party. Operator-set attributes such as `max_agent_mode` are written only by the seed manifest (`clientSpecSchema`)                                                                                           | An operator-set `first_party_profile`, seed-only and CHECK-constrained (Decision 2)                                                                                                                                        |
@@ -81,7 +85,7 @@ standards-based first-party login, and give apps that use a password grant a cle
 | Sender constraint                 | No DPoP                                                                                                                                                                                                                                                  | DPoP in F3, one verifier shared with ADR-014 (Decision 14)                                                                                                                                                                 |
 | `acr` and `amr`                   | `acr` only from wallet sign-in ([ADR-010](./010-acr-assurance-mapping.md)); no `amr`                                                                                                                                                                     | `amr` and `auth_time` on tokens from challenge-issued codes (Decision 10)                                                                                                                                                  |
 | Password policy                   | zxcvbn score ≥ `PASSWORD_MIN_SCORE` (default 2), with `PASSWORD_MAX_LENGTH` (256) checked first, applied by `/auth/register` (`libs/shared/validation/src/lib/password.ts`)                                                                              | One policy for every newly set password, per NIST SP 800-63B-4 §3.1.1.2 "Password Verifiers" (Decision 8)                                                                                                                  |
-| Registration, verification, reset | `/auth/register`, `/auth/verify` and `/auth/resend-verification` JSON routes; no password-reset route                                                                                                                                                    | All three inside the authorization challenge endpoint (F1); hosted pages (F2a) (Decision 8)                                                                                                                                |
+| Registration, verification, reset | `/auth/register`, `/auth/verify` and `/auth/resend-verification` JSON routes; no password-reset route                                                                                                                                                    | All three inside the authorization challenge endpoint (F1); hosted pages (F2a) (Decision 8); `/auth/register` removed in F1c, before 1.0 (Decision 12)                                                                     |
 | Factors and challenges            | Password; wallet sign-in behind `WALLET_FEDERATION_ENABLED`; no TOTP, passkey, emailed code or bot challenge                                                                                                                                             | Passkeys (F2b, Decision 14) and TOTP (F2c) as factors; emailed codes for verification, recovery and an optional per-client check after the password, never as a factor (F1, Decision 5); a bot challenge (F1b, Decision 7) |
 | Abuse controls                    | `@fastify/rate-limit` keyed on the TCP peer (`request.ip`); failed-login counters in `helpers/failed-login.ts`; `TRUST_PROXY` as an address or CIDR list                                                                                                 | A layered limiter, a failure ladder per NIST SP 800-63B-4 §3.2.2 "Rate Limiting (Throttling)", and an asserted end-user IP (Decision 7)                                                                                    |
 | Client SDK                        | None; the README lists `@qauth-labs/node` as planned                                                                                                                                                                                                     | `@qauth-labs/node` in F1 (Decision 13)                                                                                                                                                                                     |
@@ -869,7 +873,7 @@ address state changes, and no notice is sent. Each round re-reads the flag befor
 or mints a code.
 
 One password policy, in `libs/shared/validation/src/lib/password.ts`, used by this endpoint and,
-while it exists, by `/auth/register`. Any future admin or SCIM API creates users without a password
+until F1c, by `/auth/register`. Any future admin or SCIM API creates users without a password
 or through this module; the F1d import tool only carries existing hashes. The raw length (at most
 256 UTF-16 code units) is checked first, then NFC normalisation, then `PASSWORD_MIN_LENGTH` (new),
 which defaults to 15 code points. An operator may lower it to no fewer than 8. While any account can
@@ -1193,9 +1197,12 @@ no freeze phase (question 19, decided 2026-10-09). Removal comes as soon as F0's
 CLI client of question 8 exist, and before 1.0. Until then, `/auth/login` refuses any account with a
 bound passkey, with its ordinary invalid-credentials answer. `/auth/register`,
 `/auth/verify` and `/auth/resend-verification` issue no tokens; they adopt the one password policy
-in F1. Each stays until its hosted replacement is on for the portal in a default deployment (F2a),
-because a legacy route is never removed while its replacement is off by default. Hosted sign-up is
-off by default (question 6), so `/auth/register` stays while that holds.
+in F1. A legacy route is never removed while its replacement is off by default. So `/auth/verify`
+and `/auth/resend-verification` stay until their hosted replacements are on for the portal in a
+default deployment (F2a). `/auth/register` is the one exception (decided 2026-10-09). F1c removes
+it too, once F2a's hosted sign-up page exists. That page replaces it. It is off by default
+(question 6). An operator who wants sign-up turns it on. While sign-up is on, the portal signs up
+through that page by redirect.
 
 ### 13. SDK scope — a server-side Node SDK and a language-neutral kit
 
@@ -1480,8 +1487,9 @@ on. A phase whose target is the train ships no later than F1's release.
   `urn:qauth:ia:captcha`, and a per-client requirement for registration. Depends on F1. F1b is in
   1.0 and stays provider-neutral (question 15, decided 2026-10-09).
 - F1c — removal of `/auth/login`, `/auth/logout` and the headless hand-off (question 19, decided
-  2026-10-09). They are removed directly, with no freeze phase. Removal comes as soon as F0's portal
-  move and the CLI client for scripted management tokens (question 8) exist. All of this lands
+  2026-10-09), and of `/auth/register` (Decision 12). They are removed directly, with no freeze
+  phase. Removal comes as soon as F0's portal move and the CLI client for scripted management tokens
+  (question 8) exist. `/auth/register` also waits for F2a's hosted sign-up page. All of this lands
   before 1.0.
 - F1d — user import, a switch-free operator tool (question 5): `db:import-users` in the seed-script
   pattern; records carry the address, whether the source proved the account's primary identity, and
@@ -1499,9 +1507,11 @@ on. A phase whose target is the train ships no later than F1's release.
   reference ceremony app, a separate app that uses only the Interaction API (ADR-019). The reset,
   verification and account pages are on whenever hosted pages are on. Only sign-up sits behind its
   own switch, and it is off by default. F2a also adds a "Forgot password" link on `/ui/login`, a
-  "Create account" link while sign-up is on, `prompt=create` at `/oauth/authorize`, and the portal's
-  sign-up. The account page offers "sign out everywhere" (question 9). A legacy route is removed
-  only once its hosted replacement is on for the portal in a default deployment. Depends on F1's
+  "Create account" link while sign-up is on, and `prompt=create` at `/oauth/authorize`. While
+  sign-up is on, the portal signs up through the hosted sign-up page by redirect. The account page
+  offers "sign out everywhere" (question 9). A legacy route is removed only once its hosted
+  replacement is on for the portal in a default deployment. `/auth/register` is the exception: F1c
+  removes it although hosted sign-up is off by default (Decision 12). Depends on F1's
   registration and reset flows. A hosted reset or registration sets no `auth_time`. It ends without
   a browser session that could satisfy `max_age` or `prompt=login` (Decision 10). Target: the F1
   release train.
@@ -1582,8 +1592,9 @@ on. A phase whose target is the train ships no later than F1's release.
   DPoP off for a client.
 - QAuth cannot verify the asserted end-user IP, only who asserted it.
 - Headless login is unavailable while Redis is unavailable, by design.
-- Two registration paths coexist while hosted sign-up is off by default (question 6), and
-  `/auth/login` stays until F1c.
+- `/auth/register` and `/auth/login` stay until F1c. Once `/auth/register` is gone, a default
+  deployment has no sign-up page, because hosted sign-up is off by default (question 6). An
+  operator who wants sign-up turns it on.
 - The app changes too, not only its backend. It renders the `email_code`, `new_password` and
   `redirect_to_web` steps. After a correct password, a user whose account is not yet verified (for a
   password account, its address is unproved) is asked for an email code. This includes an imported
