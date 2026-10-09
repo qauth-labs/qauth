@@ -35,7 +35,10 @@
 > approval-only resource may be opened for a window, not only once (§3).
 > Unsigned commits are confirmed with ADR-014 decision 12 (§6). The
 > maintainer approved ADR-014, ADR-015 and this record together on
-> 2026-10-09, and ADR-014 §9 was updated that day to match question 5.
+> 2026-10-09, and ADR-014 §9 was updated that day to match question 5. The
+> maintainer also renamed the pass-through leg's switch that day:
+> `AGENT_OWNER_TOKEN_LEG_ENABLED` is now `PASS_THROUGH_LEG_ENABLED` (§4). The
+> leg stays experimental in 1.0.
 
 ## Context
 
@@ -76,7 +79,7 @@ Verified 2026-09-30 against ADR-014 as amended and the working tree.
 Every rule below runs only with `AUTHORITY_TREE_ENABLED` on (ADR-014,
 [Decision](./014-agent-authority-tree.md#decision)). The approval path
 of §3 also needs `REMOTE_APPROVAL_ENABLED`. The pass-through leg of §4 has its
-own operator switch, `AGENT_OWNER_TOKEN_LEG_ENABLED`, default `false`. It does
+own operator switch, `PASS_THROUGH_LEG_ENABLED`, default `false`. It does
 nothing unless `AUTHORITY_TREE_ENABLED` is on. With the switches off, the STS
 and the broker behave as ADR-014 says.
 
