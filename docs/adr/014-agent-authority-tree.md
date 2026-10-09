@@ -88,8 +88,9 @@
 > separate PR), as its question 10 proposed (§2, §3, §14, P1a, P5).
 >
 > On 2026-10-09 the maintainer also decided that this record, ADR-015 and
-> ADR-016 are approved together. So their answers that change this record
-> are written in now. From ADR-015: sign-out ends a `sid` family whose CIMD
+> ADR-016 will be approved together; until then all three stay Proposed.
+> So their answers that change this record are written in now. From
+> ADR-015: sign-out ends a `sid` family whose CIMD
 > client stopped declaring `is_agent` (decision 1; question 1). Agent types
 > authenticate by client assertion only (§4(e), §9, T2; question 2). An agent
 > type cannot mint an ID-JAG in 1.0; GATE 2 refuses it (Explicitly out of
@@ -98,7 +99,9 @@
 > (§14, step 6; question 5). A sid-less subject token older than the user's
 > last revoke-all is refused (§1, §6; question 12). From ADR-016: the
 > `Agent:` trailer carries the `agent_id` and `handle@issuer-host`, with a
-> version marker (§9; question 5).
+> version marker (§9; question 5). The maintainer also decided that a renewal
+> matched to an open window does not count against `REMOTE_APPROVAL_BUDGET`;
+> QAuth accepts one only in the last 60 seconds of the live leaf (§14, step 6).
 
 ## Context
 
@@ -411,17 +414,18 @@ client whose `aud` happens to name the agent — is not left sid-less: the
 exchanged token **starts a new tree** with a fresh `sid`, depth 0, and a
 `kind: root` ledger row (§2) whose `origin_jti` and `origin_client_id` record
 the subject's `jti` and `client_id`. Refusing would break an exchange that
-works today; a sid-less agent token is one no tree can revoke. One case is
-refused (decided 2026-10-09, ADR-015 question 12). A sid-less subject token
-whose `iat` is earlier than the user's last revoke-all (§6) is refused. Such
-a token has no ledger row, so revoke-all cannot reach it. That time is a
-per-user timestamp in Postgres, cached in Redis. The refusal is
-`invalid_request`, as for any refused subject token (RFC 8693 §2.2.2). The
-same rule covers a `refresh_tokens` row that predates
+works today; a sid-less agent token is one no tree can revoke. The same
+new-tree rule covers a `refresh_tokens` row that predates
 the migration and so carries a NULL `sid`: the first `refresh_token` grant on
 that family mints a `sid`, writes it onto the rotated row, and writes a
 `kind: root` row for the token it issues, so the family joins a tree at its
 next refresh rather than staying sid-less until an exchange.
+
+One case is refused (decided 2026-10-09, ADR-015 question 12). A sid-less
+subject token whose `iat` is earlier than the user's last revoke-all (§6) is
+refused. Such a token has no ledger row, so revoke-all cannot reach it. That
+time is a per-user timestamp in Postgres, cached in Redis. The refusal is
+`invalid_request`, as for any refused subject token (RFC 8693 §2.2.2).
 
 `sid` is the IANA-registered "Session ID" claim (OIDC Front-Channel Logout 1.0
 §3; Back-Channel Logout 1.0 §2.4 carries it in the Logout Token; the Standards
@@ -1416,6 +1420,12 @@ bounded by its own approval, not by a parent.
    (proposed in a separate PR). No token exchange renews an elevation, so
    GATE 4a has no exception (decided 2026-10-09, ADR-015 question 5). The
    renewal is a new `kind: elevation` row under the same approval.
+   QAuth accepts a renewal only in the last 60 seconds of the live leaf's
+   lifetime. An earlier one is refused with `invalid_request` and notifies
+   no one, so a node gets at most one leaf per leaf lifetime. A matched
+   renewal does not count against `REMOTE_APPROVAL_BUDGET`, which caps the
+   questions that reach the owner. It still needs `agent:request`, and a
+   mute or an always-block refuses it like any request (decided 2026-10-09).
    The window ends at its time, when the node's process dies (the dead-man
    switch, §6), when the `sid` is revoked, or when the owner ends it from
    the portal. The §6 walk treats elevation rows like any other row.
@@ -1426,7 +1436,8 @@ and the consent screen shows it (§11). An approval can never grant or
 extend it, an elevation never carries it, and a child gets it only by
 narrowing from a parent that holds it. A per-`sid` budget caps asking —
 `REMOTE_APPROVAL_BUDGET`, operator-set, default three pending and ten an
-hour — and no approval raises it. A node without the scope, over its
+hour — and no approval raises it. A renewal matched to an open window
+asks no one and does not count (step 6). A node without the scope, over its
 budget, or muted gets `access_denied`, and nobody is notified.
 
 **Why a mute only denies.** In a chat client, "don't ask again" usually
@@ -1551,7 +1562,8 @@ build on a past date. A draft in the RFC Editor queue does not expire.
 
 Machine-to-machine trees with no human root: exchange refuses a
 `client_credentials` subject, and this record keeps it so. Cross-domain trees.
-In 1.0 an agent type cannot mint an ID-JAG: GATE 2 refuses the request
+In 1.0, with `AUTHORITY_TREE_ENABLED` on, an agent type cannot mint an
+ID-JAG: GATE 2 refuses the request
 (decided 2026-10-09, ADR-015 question 3). Any other ID-JAG or
 identity-chaining hop ends the tree at the domain boundary, and
 the ID-JAG mint path of ADR-011 stays outside it — an assertion minted from a
@@ -1607,8 +1619,11 @@ gate.
   `sid`-carrying mint and none for `client_credentials`, and a failed write
   fails the mint; a sid-less subject starts a new tree with a `kind: root`
   row; a pre-migration refresh family gains a `sid` on its next refresh; the
-  introspection schema; the STS refuses a resource outside policy, against a
-  mock upstream (for `github`, a repository, against a mock GitHub).
+  introspection schema; with the switch on, an agent type's ID-JAG request
+  fails `invalid_request` at GATE 2; the seed manifest refuses an agent type
+  registered with any method but `private_key_jwt`; the STS refuses a
+  resource outside policy, against a mock upstream (for `github`, a
+  repository, against a mock GitHub).
   **0b, broker:** `login` on an ephemeral loopback port with
   PKCE, git-credential `get`, the platform-CLI shim (`gh`, for the first
   adapter), the commit trailer, the log. Tests: vend within policy, refusal
@@ -1675,7 +1690,10 @@ gate.
   every marked row inactive at introspection; revoke-by-`jti` leaves siblings
   active; a revoked node is not renewed by the next sweep (the re-spawn for
   its key fails `invalid_request`); a denylisted or `revoked_at` subject token
-  cannot spawn; revoking the root's `jti` refuses the next refresh; the
+  cannot spawn; revoking the root's `jti` refuses the next refresh; sign-out
+  ends the refresh family of a CIMD client that no longer declares
+  `is_agent` and leaves a `sid`-carrying agent family; after revoke-all, a
+  sid-less subject token issued before it fails `invalid_request`; the
   consent screen shows the union of modes and the allowlist.
 - **P3 — observation.** The RFC 8935 push endpoint and event type, the
   `agent_actions` table, the operator-set `event_audiences` column on
@@ -1721,7 +1739,14 @@ gate.
   owner-registered webhook; mutes. Tests: an elevation carries exactly the
   approved delta and one audience; a `kind: elevation` subject cannot spawn
   or narrow; a request without `agent:request`, or over budget, is refused
-  and notifies no one; a muted `sid` is refused and notifies no one; an
+  and notifies no one; a muted `sid` is refused and notifies no one; a
+  request for a scope outside the type's registered scopes is refused and
+  notifies no one (GATE 4d is final); a renewal matched to an open window
+  resolves with no notification and no passkey, writes a new
+  `kind: elevation` row under the same approval and leaves the budget
+  untouched; a renewal before the live leaf's last 60 seconds fails
+  `invalid_request` and notifies no one; a muted `sid`'s renewal is
+  refused; an
   approval without a fresh passkey assertion bound to the request is
   refused; the page's headline is the typed delta and `purpose` renders
   only in the attributed box; revoke-by-`sid` ends an open window; a window

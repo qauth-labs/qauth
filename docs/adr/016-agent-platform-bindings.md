@@ -33,12 +33,12 @@
 > token rests QAuth-side under a per-realm key, the leg has an end date, and
 > it is experimental in 1.0 (§4). The maintainer also chose that an
 > approval-only resource may be opened for a window, not only once (§3).
-> Unsigned commits are confirmed with ADR-014 decision 12 (§6). The
-> maintainer approved ADR-014, ADR-015 and this record together on
-> 2026-10-09, and ADR-014 §9 was updated that day to match question 5. The
-> maintainer also renamed the pass-through leg's switch that day:
-> `AGENT_OWNER_TOKEN_LEG_ENABLED` is now `PASS_THROUGH_LEG_ENABLED` (§4). The
-> leg stays experimental in 1.0.
+> Unsigned commits are confirmed with ADR-014 decision 12 (§6). On
+> 2026-10-09 the maintainer decided that ADR-014, ADR-015 and this record
+> will be approved together, so ADR-014 §9 was updated that day to match
+> question 5. The maintainer also renamed the pass-through leg's switch
+> that day: `AGENT_OWNER_TOKEN_LEG_ENABLED` is now
+> `PASS_THROUGH_LEG_ENABLED` (§4). The leg stays experimental in 1.0.
 
 ## Context
 

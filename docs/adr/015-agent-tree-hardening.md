@@ -27,9 +27,9 @@
 > were answered on 2026-10-06, and question 6 is now decision 11. The rest
 > were answered on 2026-10-09. Each is marked decided below, with its date.
 > Where an answer changes ADR-014's text, the question names the place.
-> On 2026-10-09 the maintainer approved ADR-014, this record and ADR-016
-> together, and ADR-014 was updated that day to match. ADR-014 §1 and §11
-> also carry the 2026-10-06 answers.
+> On 2026-10-09 the maintainer decided that ADR-014, this record and ADR-016
+> will be approved together, so ADR-014 was updated that day to match.
+> ADR-014 §1 and §11 also carry the 2026-10-06 answers.
 
 ## Context
 
@@ -569,6 +569,9 @@ question below.
    and resolves it silently, with no notification or passkey. GATE 4a has no
    exception. The match may reuse the canonical-request hash of ADR-019
    (proposed in a separate PR). Step 6 was updated to match on 2026-10-09.
+   A matched renewal does not count against `REMOTE_APPROVAL_BUDGET`, and
+   QAuth accepts one only in the last 60 seconds of the live leaf (decided
+   2026-10-09).
 6. **Skipping the consent screen for an agent root.** ADR-014 §11 keeps the
    fast path (`canSkipConsent`,
    `apps/auth-server/src/app/helpers/consent.ts:77`), which `prompt=none`
