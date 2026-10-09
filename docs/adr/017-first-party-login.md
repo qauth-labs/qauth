@@ -29,6 +29,18 @@
 > - Names. ADR-014's tree mechanism is now the Authority Tree. `AGENT_TREE_ENABLED` becomes
 >   `AUTHORITY_TREE_ENABLED`, and `AGENT_APPROVAL_ENABLED` becomes `REMOTE_APPROVAL_ENABLED`. File
 >   names, and so link targets, are unchanged.
+>
+> **Amended 2026-10-09 (questions 2–30).** The maintainer decided the remaining parked questions on
+> 2026-10-09. They now sit under "Decided by the maintainer", with their numbers kept. The sections
+> they touch are edited in place.
+>
+> - Questions 2–10. Emailed codes are never a sign-in factor. The check after the password exists
+>   only at the FiPA endpoint. The import tool stays, for Argon2id hashes only. Other migrated users
+>   sign in through upstream OIDC login with their old provider.
+> - Hosted pages. The reset, verification and account pages are on whenever hosted pages are on.
+>   Only sign-up is off by default. So the disable ceiling is armed by default.
+> - Scripts get management tokens from an operator-listed public CLI client, before 1.0. "Sign out
+>   everywhere" also sends back-channel logout, and it is on the hosted account page.
 
 ## Context
 
@@ -456,7 +468,7 @@ response.
 6. The identifier: `login_hint`, or a discoverable passkey from F2b.
 7. The first factor: passkey (F2b) before password.
 8. After a first factor only: the downgrade rule, address verification, the per-client post-password
-   email check, TOTP (F5), and from F2b an optional passkey enrolment offer.
+   email check (FiPA endpoint only), TOTP (F5), and from F2b an optional passkey enrolment offer.
 9. Mint the code.
 
 Any other rule that needs a step the client did not list answers `redirect_to_web`.
@@ -521,6 +533,9 @@ account recovery.
 a password account's address, for recovery and for an optional per-client check after the password.
 It never adds an `amr` value, never counts toward `mfa`, never raises `acr` and carries no NIST AAL
 claim. Passwordless email-code sign-in is not offered.
+
+The maintainer decided this on 2026-10-09 (question 2). The per-client check after the password
+exists only at the FiPA endpoint, which stays experimental. The Interaction API never offers it.
 
 The code has a narrow job. A password account's identifier is its address (ADR-002), so for that
 account the mailbox proof is the proof of its primary identity. That makes the code one way to
@@ -624,22 +639,23 @@ credential round runs a dummy Argon2id verify and meets a timing floor. Input bo
 before any expensive work.
 
 The end-user IP. The `qauth_end_user_ip` claim is required for `native_backend`: an IPv4 or IPv6
-literal of at most 45 characters. QAuth canonicalises it, and turns an IPv4-mapped IPv6 address into
-IPv4, before any check or key. Outside `development` it refuses private, loopback, link-local,
-unique-local, shared (100.64.0.0/10), unspecified and multicast addresses. No IETF standard carries
-this value, so the claim is QAuth-defined. The signature proves who asserted the value and binds it
-to one request; it does not prove the value is right. RFC 9700 §4.13 "TLS Terminating Reverse
-Proxies" puts that duty on the component that receives the original request: "A reverse proxy MUST
-therefore sanitize any inbound requests to ensure the authenticity and integrity of all header
-values relevant for the security of the application servers". That is the vendor's ingress, so QAuth
-makes it a profile requirement: the backend derives the value from its peer address or a proxy chain
-it operates and lists, as QAuth's own `TRUST_PROXY` does, and the SDK derives it from typed inputs.
-The SDK canonicalises each address the same way. It takes the peer address unless that address is in
-`trustedProxies`. Otherwise it reads the forwarded chain from the right and takes the first address
-not in `trustedProxies`, the same walk Fastify's `trustProxy` makes for `TRUST_PROXY`. QAuth never
-reads `X-Forwarded-For` for this, `TRUST_PROXY` is unchanged, and audit rows record
-`ip_source: asserted`. The TCP peer and `client_id` keep their own caps, so a lying backend evades
-only the per-IP limits.
+literal of at most 45 characters. The maintainer chose this carrier on 2026-10-09 (question 4). The
+claim belongs to the FiPA endpoint only. QAuth canonicalises it, and turns an IPv4-mapped IPv6
+address into IPv4, before any check or key. Outside `development` it refuses private, loopback,
+link-local, unique-local, shared (100.64.0.0/10), unspecified and multicast addresses. No IETF
+standard carries this value, so the claim is QAuth-defined. The signature proves who asserted the
+value and binds it to one request; it does not prove the value is right. RFC 9700 §4.13 "TLS
+Terminating Reverse Proxies" puts that duty on the component that receives the original request: "A
+reverse proxy MUST therefore sanitize any inbound requests to ensure the authenticity and integrity
+of all header values relevant for the security of the application servers". That is the vendor's
+ingress, so QAuth makes it a profile requirement: the backend derives the value from its peer
+address or a proxy chain it operates and lists, as QAuth's own `TRUST_PROXY` does, and the SDK
+derives it from typed inputs. The SDK canonicalises each address the same way. It takes the peer
+address unless that address is in `trustedProxies`. Otherwise it reads the forwarded chain from the
+right and takes the first address not in `trustedProxies`, the same walk Fastify's `trustProxy`
+makes for `TRUST_PROXY`. QAuth never reads `X-Forwarded-For` for this, `TRUST_PROXY` is unchanged,
+and audit rows record `ip_source: asserted`. The TCP peer and `client_id` keep their own caps, so a
+lying backend evades only the per-IP limits.
 
 Limits (configurable; `development` may relax them per
 [ADR-008 §5](./008-environment-aware-authorization.md) "The profiles"; `staging` keeps production
@@ -681,11 +697,12 @@ values):
   unusable, so no verifier can miss it. Every password surface then refuses it with its ordinary
   invalid-credentials answer.
 - The hard action is armed only while every account it can reach has a self-service rebind path.
-  Web-only users have one only through F2a's hosted reset, so the rule is checked at run time
-  against that page's switch, not per release. While the hosted reset is off, no password is
-  disabled, and the lookup ignores any mark set earlier. Every surface keeps its other throttling. A
-  successful sign-in clears an ignored mark, as a reset does. The default ships F2a in the F1
-  release train (parked question 7).
+  Web-only users have one only through F2a's hosted reset, so the rule is checked at run time, not
+  per release. While the hosted reset is off, no password is disabled, and the lookup ignores any
+  mark set earlier. Every surface keeps its other throttling. A successful sign-in clears an ignored
+  mark, as a reset does. The maintainer kept this rule on 2026-10-09 (question 7). The hosted reset
+  is on whenever hosted pages are on (question 6), so the hard action is armed by default. F2a ships
+  in the F1 release train.
 - Fail closed: at the new endpoint, an error from any counter, session or bot-challenge store
   answers 503 `temporarily_unavailable`. That answer comes before any credential is checked.
 - Timing: an unknown identifier runs one Argon2id verify against a fixed dummy hash, and every round
@@ -765,9 +782,13 @@ Request").
   and the mailbox.
 - The browser-session epoch is a per-user Redis value whose TTL is at least the browser-session TTL;
   `resolveBrowserSession` (`helpers/browser-session.ts`) treats a session created before it as
-  absent and clears its cookie. A reset, an unclaimed-account verification and an explicit "sign out
-  everywhere" advance it. It lives in Redis because ADR-002 keeps `users` a pure identity anchor,
-  and with the switch off nothing advances it.
+  absent and clears its cookie. A reset and an unclaimed-account verification advance it, at this
+  endpoint or on the hosted pages (F2a). It lives in Redis because ADR-002 keeps `users` a pure
+  identity anchor.
+- "Sign out everywhere" ends the user's sessions directly (question 9, decided 2026-10-09). It
+  revokes the user's session rows in Postgres and clears their Redis cache. It sends a back-channel
+  logout to every app with a session. It also revokes every refresh family of the user, as
+  `/auth/logout` does today. The portal and the hosted account page (F2a) both offer it.
 - Verification. At this endpoint the unverified address of a password account is always verified
   after a correct password, whatever `REQUIRE_EMAIL_VERIFIED` says, so no code from this endpoint
   belongs to an unverified address. This replaces `/auth/verify` for native clients.
@@ -828,8 +849,8 @@ normalisation, and the credential records a marker, declared as an optional fiel
 (`helpers/credential-auth.ts`, which serves `/auth/login`, `/ui/login` and the new endpoint) and the
 direct `verifyPassword` call in `routes/auth/verify.ts`; a credential without the marker is verified
 on the raw input. Applying the minimum to `/auth/register` is an announced, listed F1 change on
-every deployment, with a release note and the portal form showing the new reasons (parked question
-3). Existing passwords are grandfathered.
+every deployment, with a release note and the portal form showing the new reasons. The maintainer
+decided this on 2026-10-09 (question 3). Existing passwords are kept.
 
 Why. NIST SP 800-63B-4 §3.1.1.2 "Password Verifiers": single-factor passwords must be "a minimum of
 15 characters in length"; only passwords used solely within multi-factor processes may be shorter,
@@ -997,7 +1018,8 @@ their authorization challenge endpoint in their authorization server metadata do
 authorization challenge call plus one token call, with the same happy-path shape. An app leaving
 another IdP also needs its users imported, as a separate step. QAuth applies the rule to itself. Its
 portal moves to the redirect flow in F0. `/auth/login` and the headless hand-off are removed in F1c,
-after a supported replacement for scripted management tokens exists.
+after a supported replacement for scripted management tokens exists. That replacement is an
+operator-listed public CLI client, shipped before 1.0 (question 8, decided 2026-10-09).
 
 Why no compatibility mode. RFC 9700 §2.4 says the grant "MUST NOT be used", with no first-party
 exception; OAuth 2.1 -16 §10 "Differences from OAuth 2.0" omits it "as per Section 2.4 of
@@ -1088,16 +1110,14 @@ hashes, so they need only the protocol change and the app changes above. Such an
 is a web app takes the redirect flow instead (table below). Apps on another IdP's password grant are
 the main population. As of 2026-09-26 QAuth has no user import path (password users are created only
 by `routes/auth/register.ts`), so these apps need the protocol change and a user migration. The
-default is an operator import tool in F1d for Argon2id PHC hashes (parked question 5). If that
-default is declined, no migrated user exists in QAuth. The migration guide says so in its first
-paragraph and names the bulk path: every user goes through `register` with the same address, because
-`reset` mails a code only to an existing account with a password (Decision 8). The client's `flows`
-must then contain `register`. Sign-in and reset answer an unknown address the same way as a known
-one, so the app points returning users to registration. Registration is safe for a user who already
-has an account: a verified address is helped to sign in (Decision 8). The same path serves users
-whose source hash is not Argon2id PHC, because F1d does not import them.
+maintainer decided the migration on 2026-10-09 (question 5):
 
-Both paths need an email address for each user. The sign-in identifier is an email address:
+- An operator import tool in F1d imports Argon2id PHC hashes only.
+- An imported account counts as verified only if the source proved its primary identity.
+- Users whose hashes cannot be imported sign in through 1.0's upstream OIDC login (ADR-018). Their
+  old provider is the upstream. That path is a redirect flow, not a password grant.
+
+An imported password account needs an email address. The sign-in identifier is an email address:
 `login_hint` must have email syntax, and a password credential is keyed by the normalised address
 ([ADR-002](./002-identifier-abstraction.md)). An app whose users sign in with a user name or a phone
 number gives each user an email address before it moves.
@@ -1108,7 +1128,7 @@ number gives each user an email address before it moves.
 | Native app whose backend calls a password grant and passes the tokens to the device | The authorization challenge endpoint, with the tokens kept on the backend (Decision 1, requirement 8). The device holds only its session with the backend. The backend calls the APIs itself, or forwards the app's calls only to an allowlist of APIs (by analogy with RFC 10017 §6.1.3.6 "Proxy Restrictions"). Tokens held on the device arrive with attested apps (F4) |
 | Native app whose device calls a password grant directly (a public client)           | The RFC 8252 browser flow, or add a backend; headless public clients arrive with attestation (F4)                                                                                                                                                                                                                                                                          |
 | Web app (SPA with a BFF, or server-rendered)                                        | The redirect flow at `/oauth/authorize`; hosted registration and reset in F2a                                                                                                                                                                                                                                                                                              |
-| Scripts that obtain a developer token from `/auth/login`                            | The replacement of parked question 8, shipped before F1c                                                                                                                                                                                                                                                                                                                   |
+| Scripts that obtain a developer token from `/auth/login`                            | The operator-listed public CLI client of question 8: the code flow with PKCE and a loopback redirect. It ships before F1c and before 1.0                                                                                                                                                                                                                                   |
 
 QAuth's own surfaces move in these steps. In F0 the portal moves first: its `SYSTEM_CLIENT_ID` row
 becomes a `private_key_jwt` `web_redirect` client (`assertManagementToken` keeps working because it
@@ -1119,8 +1139,9 @@ with its ordinary invalid-credentials answer. The refusal holds until `/auth/log
 F1c, `/auth/login`, `/auth/logout` and the hand-off are removed, at least one minor release after
 F1's release, once the replacement for scripted management tokens has shipped. `/auth/register`,
 `/auth/verify` and `/auth/resend-verification` issue no tokens; they adopt the one password policy
-in F1 and stay until hosted pages are on for the portal (F2a), because a legacy route is never
-removed while its replacement is off by default.
+in F1. Each stays until its hosted replacement is on for the portal in a default deployment (F2a),
+because a legacy route is never removed while its replacement is off by default. Hosted sign-up is
+off by default (question 6), so `/auth/register` stays while that holds.
 
 ### 13. SDK scope — a server-side Node SDK and a language-neutral kit
 
@@ -1189,7 +1210,7 @@ client never uses the first-party door.
   Authority Tree, MCP, DCR and CIMD clients are refused, and there is no SSO carry-over into the
   browser.
 - DPoP. [ADR-014](./014-agent-authority-tree.md) "Phasing" plans DPoP at the token endpoint in P1a,
-  behind `AUTHORITY_TREE_ENABLED`. The proposed amendment (parked question 10): the verifier
+  behind `AUTHORITY_TREE_ENABLED`. The amendment (question 10, decided 2026-10-09): the verifier
   (RFC 9449 §4.3 "Checking DPoP Proofs", a `jti` burn, nonces per §8 "Authorization Server-Provided
   Nonce" with §11.3 "DPoP Nonce Downgrade", `cnf.jkt`) lands once in a flag-neutral library behind
   `DPOP_ENABLED`; `AUTHORITY_TREE_ENABLED` requires `DPOP_ENABLED`; the operator-set
@@ -1244,7 +1265,7 @@ verifiers or two providers would have to be kept in step.
 | A 429 when a per-address send cap is reached                                                          | A different answer at the cap is an enumeration signal; quiet suppression keeps one shape.                                                                                                                                                                           |
 | DPoP for every client in the first release                                                            | Blocks F1 on a verifier QAuth does not have as of 2026-09-26, and adds little for a confidential backend.                                                                                                                                                            |
 | Long-lived post-code sessions for step-up (FiPA §6.1 "Token Endpoint Successful Response") in F1      | The right later design, but long-lived state in a first release; deferred to F5.                                                                                                                                                                                     |
-| A form parameter or `TRUST_PROXY` for the end-user IP                                                 | A form parameter is workable (parked question 4); `TRUST_PROXY` makes every route believe `X-Forwarded-For` from a backend on the public internet.                                                                                                                   |
+| A form parameter or `TRUST_PROXY` for the end-user IP                                                 | A form parameter is workable, but the maintainer chose the signed claim on 2026-10-09 (question 4); `TRUST_PROXY` makes every route believe `X-Forwarded-For` from a backend on the public internet.                                                                 |
 | Bot challenge mandatory for registration in the first release                                         | Makes F1 depend on a third-party provider and an unbuilt egress helper; F1b, per client.                                                                                                                                                                             |
 | `prompt=create` in F1, or gating registration on `realms.registration_allowed`                        | Would breach the OIDF §4.2 MUST or over-advertise `/oauth/authorize`; the realm column has no write path.                                                                                                                                                            |
 | `amr: ["pwd"]` after a reset                                                                          | The user set a password; they did not prove one.                                                                                                                                                                                                                     |
@@ -1298,7 +1319,7 @@ makes no claim the text governs), Deferred.
 | Password verifiers                                                                | Conformant for new and changed passwords at the default minimum of 15 (whole-password blocklist); an operator-set minimum below 15 is a knowing deviation while a password can be the only factor; Stricter by a zxcvbn score floor, which requires no character mix and so is not read as a composition rule; blocklist partial until a breach corpus (F5)                                                                                                                                                                                  | NIST SP 800-63B-4 §3.1.1.2                                                                                                                                                                                 |
 | Email as an authenticator                                                         | Not claimed: no `amr`, `acr`, `mfa` or AAL                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   | NIST SP 800-63B-4 §3.1.3.1 SHALL NOT                                                                                                                                                                       |
 | Email code parameters                                                             | Conformant as address-verification and issued recovery codes: each code is disabled after 5 wrong answers; across codes, a per-identifier wait ladder, not a stop, so the recovery path stays open. The optional per-client `confirm_sign_in` check is outside the §3.1.3.1 carve-out and claims no authenticator status (no `amr`, `acr`, `mfa` or AAL)                                                                                                                                                                                     | NIST SP 800-63B-4 §4.2.1.2 "Issued Recovery Codes"; §3.2.2; §3.1.3.1                                                                                                                                       |
-| Throttling                                                                        | Conformant while the hard action is armed; partial in a deployment where it is not (parked question 7)                                                                                                                                                                                                                                                                                                                                                                                                                                       | NIST SP 800-63B-4 §3.2.2                                                                                                                                                                                   |
+| Throttling                                                                        | Conformant while the hard action is armed, which is the default (question 7); partial in a deployment where it is not                                                                                                                                                                                                                                                                                                                                                                                                                        | NIST SP 800-63B-4 §3.2.2                                                                                                                                                                                   |
 
 ### Watch list
 
@@ -1318,12 +1339,12 @@ Rows for these documents go into `docs/spec-pin-log.md` in a follow-up change, n
 ## Explicitly out of scope
 
 A password grant in any form. Headless login for web front-ends (question 1, decided 2026-10-08).
-Password-hash import in formats other than Argon2id PHC (bcrypt and PBKDF2 later, and only after the
-dependency and advisory check of parked question 5). All import if parked question 5 is declined.
-SMS and phone steps. User-name and phone-number identifiers. Social or wallet steps inside the flow
-(they are `redirect_to_web` targets). An admin user API or an operator role. OpenID Connect Native
-SSO and an MCP-elicitation binding (later), and TOTP before F5. SSO carry-over from a headless login
-into the browser: FiPA is silent on it, and the user meets `/ui/login` fresh.
+Password-hash import in formats other than Argon2id PHC (question 5, decided 2026-10-09); those
+users sign in through upstream OIDC login. SMS and phone steps. User-name and phone-number
+identifiers. Social or wallet steps inside the flow (they are `redirect_to_web` targets). An admin
+user API or an operator role. OpenID Connect Native SSO and an MCP-elicitation binding (later), and
+TOTP before F5. SSO carry-over from a headless login into the browser: FiPA is silent on it, and the
+user meets `/ui/login` fresh.
 
 ## Phasing
 
@@ -1354,7 +1375,7 @@ on. A phase whose target is the train ships no later than F1's release.
     `authorization_endpoint` from discovery. It keeps its tokens server-side, so its cookie
     (`__Host-qauth_portal_session`) carries only a session id. It signs out by revoking its refresh
     token and calling the end-session route. It keeps "sign out everywhere" as an explicit action
-    (parked question 9) and keeps its "Create account" link until F2a.
+    (question 9; Decision 8 says what it ends) and keeps its "Create account" link until F2a.
   - Listed deltas: (1) a replayed code revokes its family, for every client; (2) discovery gains
     `private_key_jwt` for revocation and introspection, the matching
     `revocation_endpoint_auth_signing_alg_values_supported` and
@@ -1396,28 +1417,33 @@ on. A phase whose target is the train ships no later than F1's release.
     - With the switch off, discovery is byte-identical except the listed deltas.
     - `@qauth-labs/node` installs from npm.
     - The disable ceiling is armed only while F2a's hosted reset is on, and a test shows that a mark
-      set before that switch goes off is ignored and no longer blocks sign-in.
+      set before hosted pages go off is ignored and no longer blocks sign-in.
   - Dependencies: F0. None on ADR-014. No third-party provider.
 - F1b — bot challenge (same switch): the provider-neutral verifier, the SSRF-safe POST helper,
   `urn:qauth:ia:captcha`, and a per-client requirement for registration. Depends on F1.
 - F1c — removal of `/auth/login`, `/auth/logout` and the headless hand-off, at least one minor
   release after F1's release, on the version and date F1's deprecation notice names. Depends on F0's
-  portal move and on the replacement for scripted management tokens (parked question 8).
-- F1d — user import, a switch-free operator tool (parked question 5): `db:import-users` in the
-  seed-script pattern; records carry the address, whether it is verified, and an Argon2id PHC hash,
-  which QAuth's hasher already verifies; each import writes `user.imported`. A record in any other
-  hash format is not imported. The tool lists it in its report, and that user takes the `register`
-  path (Decision 12). A record may also carry the source IdP's subject identifier. The tool then
-  writes a report that maps it to the new `sub`, and the `user.imported` row records it. An app that
-  keys its data by the old issuer and subject re-keys from that report, not by address (OpenID
-  Connect Core 1.0 §5.7 "Claim Stability and Uniqueness"). Depends on F0. Target: the F1 release
-  train, so the migration guide that ships with F1 can name the tool.
-- F2a — hosted account pages with no WebAuthn dependency, behind their own default-off switch
-  (parked question 6): registration and reset pages on the F1 engine, in the reference ceremony
-  app, a separate app that uses only the Interaction API (ADR-019); "Create account" and "Forgot
-  password" links on `/ui/login`; `prompt=create` at both endpoints with `prompt_values_supported`;
-  and the portal's sign-up. The legacy registration routes are removed only once the hosted pages
-  are on for the portal in a default deployment. Depends on F1's registration and reset flows. A
+  portal move and on the CLI client for scripted management tokens (question 8).
+- F1d — user import, a switch-free operator tool (question 5): `db:import-users` in the seed-script
+  pattern; records carry the address, whether the source proved the account's primary identity, and
+  an Argon2id PHC hash, which QAuth's hasher already verifies; each import writes `user.imported`.
+  An imported account counts as verified only if the source proved its primary identity. A record in
+  any other hash format is not imported. The tool lists it in its report. That user signs in through
+  upstream OIDC login, with the old provider as the upstream (Decision 12). A record may also carry
+  the source IdP's subject identifier. The tool then writes a report that maps it to the new `sub`,
+  and the `user.imported` row records it. An app that keys its data by the old issuer and subject
+  re-keys from that report, not by address (OpenID Connect Core 1.0 §5.7 "Claim Stability and
+  Uniqueness"). Depends on F0. Target: the F1 release train, so the migration guide that ships with
+  F1 can name the tool.
+- F2a — hosted account pages with no WebAuthn dependency (question 6, decided 2026-10-09):
+  registration, verification and reset pages on the F1 engine, and an account page. They live in
+  the reference ceremony app, a separate app that uses only the Interaction API (ADR-019). The
+  reset, verification and account pages are on whenever hosted pages are on. Only sign-up sits
+  behind its own switch, and it is off by default. F2a also adds a "Forgot password" link on
+  `/ui/login`, a "Create account" link while sign-up is on, `prompt=create` at both endpoints with
+  `prompt_values_supported`, and the portal's sign-up. The account page offers "sign out
+  everywhere" (question 9). A legacy route is removed only once its hosted replacement is on for the
+  portal in a default deployment. Depends on F1's registration and reset flows. A
   hosted reset or registration sets no `auth_time`. It ends without a browser session that could
   satisfy `max_age` or `prompt=login` (Decision 10). Target: the F1 release train.
 - F2b — passkeys, behind `WEBAUTHN_ENABLED=false`: the shared WebAuthn `CredentialProvider`;
@@ -1459,7 +1485,7 @@ on. A phase whose target is the train ships no later than F1's release.
 | `prompt=create`                                                          | 400 `invalid_request` (use the `register` path marker) | F2a                                   |
 | No `interaction_types_supported`                                         | 403 `redirect_to_web`                                  | never                                 |
 | Passkey, TOTP and bot-challenge steps                                    | not offered                                            | F2b, F5, F1b                          |
-| Passwordless email-code sign-in                                          | not offered                                            | parked question 2                     |
+| Passwordless email-code sign-in                                          | not offered                                            | never (question 2)                    |
 | `request_uri` in `redirect_to_web`                                       | never returned                                         | F5                                    |
 | `auth_session` after a code; token-endpoint `insufficient_authorization` | `invalid_session`; never emitted                       | F5                                    |
 
@@ -1489,12 +1515,13 @@ on. A phase whose target is the train ships no later than F1's release.
   recorded deviation from FiPA §9.5 "Sender-Constrained Tokens".
 - QAuth cannot verify the asserted end-user IP, only who asserted it.
 - Headless login is unavailable while Redis is unavailable, by design.
-- Two registration paths coexist until F2a, and `/auth/login` stays, frozen, until F1c.
+- Two registration paths coexist while hosted sign-up is off by default (question 6), and
+  `/auth/login` stays, frozen, until F1c.
 - The app changes too, not only its backend. It renders the `email_code`, `new_password` and
   `redirect_to_web` steps. After a correct password, a user whose address is unverified is asked for
-  an email code; this includes an imported record the source did not mark verified. New passwords
-  need 15 code points. An app build that cannot render these steps cannot complete them, so the
-  build that renders them ships before its backend switches.
+  an email code; this includes an imported account whose source did not prove its primary identity.
+  New passwords need 15 code points. An app build that cannot render these steps cannot complete
+  them, so the build that renders them ships before its backend switches.
 - An app whose backend passed password-grant tokens to its device must route its API calls through
   the backend until attested apps (F4).
 - The one password policy changes `/auth/register` on every deployment in F1 (15 code points), and
@@ -1527,58 +1554,80 @@ on. A phase whose target is the train ships no later than F1's release.
    use the redirect flow at `/oauth/authorize`, and hosted pages (F2a) are the web answer. The FiPA
    endpoint serves first-party native apps only._
 
+Questions 2–10 were the true forks. Each keeps its question and the default this record proposed.
+The maintainer's decision follows in italics.
+
+2. Email codes: a sign-in factor, a check after every password, or passwordless sign-in? Proposed
+   default: address verification and recovery, plus an optional per-client check after the password
+   (`email_code_after_password: false`). They never produce `amr`, `acr`, `mfa` or an AAL claim.
+   Passwordless email-code sign-in is not offered. A reset of a password-only account is labelled an
+   email-recovery sign-in. _Decided by the maintainer, 2026-10-09: emailed codes are never a sign-in
+   factor. The per-client check after the password exists only at the experimental FiPA endpoint.
+   The Interaction API never offers it._
+3. Password minimum on `/auth/register`. Proposed default: the 15-code-point minimum applies to
+   every newly set password, including `/auth/register`, as an announced F1 change on every
+   deployment, with a release note and the portal form showing the new reasons. An operator may
+   lower it to 8, a knowing deviation while a password can be the only factor. Alternatives: gate it
+   behind the switch, or keep the legacy route on its old rule until F2a. _Decided by the
+   maintainer, 2026-10-09: the 15-code-point minimum applies to every newly set password,
+   `/auth/register` included. It is an announced F1 change. Operators may lower it to 8. Existing
+   passwords are kept._
+4. End-user IP carriage. Proposed default: the `qauth_end_user_ip` claim inside the signed
+   assertion, derived by the backend from its peer or a listed proxy chain. Alternatives: a form
+   parameter from an authenticated first-party client; accepting either carrier is not recommended
+   (two parsers and a precedence rule for one security input). _Decided by the maintainer,
+   2026-10-09: the end-user IP travels as a claim in the signed client assertion. It belongs to the
+   FiPA endpoint only._
+5. Users migrating from another IdP. Proposed default: an operator import tool in F1d, in the
+   seed-script pattern (the only operator surface; ADR-012 §4); Argon2id PHC hashes only, with
+   bcrypt and PBKDF2 only after the dependency and advisory check; addresses verified only if the
+   source says so; a source subject identifier, when given, is mapped to the new `sub` in the tool's
+   report; audited as `user.imported`. Alternative: no import, with the migration guide saying so
+   and naming the `register` flow as the bulk path, since `reset` mails only an existing account.
+   Lazy migration against the old IdP is rejected, because it keeps a password grant alive there.
+   _Decided by the maintainer, 2026-10-09: the import tool stays, for Argon2id hashes only. An
+   imported account counts as verified only if the source proved its primary identity. Users whose
+   hashes cannot be imported sign in through 1.0's upstream OIDC login, via their old provider._
+6. Hosted account pages: timing and switch. Proposed default: the hosted registration and reset
+   pages ship in the F1 release train, independent of WebAuthn, behind their own default-off switch,
+   because opening hosted registration is an operator decision. _Decided by the maintainer,
+   2026-10-09: the switch is split. The reset, verification and account pages are on whenever hosted
+   pages are on. Only sign-up is off by default._
+7. Arming the disable ceiling. NIST SP 800-63B-4 §3.2.2 says disabled authenticators "SHALL be
+   required to rebind". Proposed default: the disable at 100 is armed only while every account it
+   can reach has a self-service rebind path, checked at run time. The headless reset serves native
+   users only, so in practice the ceiling is armed only while F2a's hosted reset is on. Otherwise
+   the soft ladder runs alone, marks set earlier are ignored, and the standards position records
+   §3.2.2 as partial. _Decided by the maintainer, 2026-10-09: the default is kept. The ceiling is
+   active only while self-service recovery exists. With question 6, it is active by default._
+8. Scripted management tokens after F1c. The public API reference names `/auth/login` as the source
+   of the developer token. Proposed default: before F1c, ship an operator-listed public CLI client
+   with no `first_party_profile`, so the CHECKs of Decision 2 stay unchanged and the ordinary
+   consent rules of Decision 9 apply. It uses the code flow with a loopback redirect (RFC 8252 §7.3
+   "Loopback Interface Redirection"); as of 2026-09-26 `redirectUriMatchesRegistered` accepts any
+   loopback port. `assertManagementToken` accepts its tokens through an operator-set, seed-only
+   allowlist field. Alternative: record that scripted management ends at F1c. _Decided by the
+   maintainer, 2026-10-09: an operator-listed public CLI client gives scripts their management
+   tokens. It uses the code flow with PKCE and a loopback redirect. It ships before 1.0._
+9. "Sign out everywhere". As of 2026-09-26 `/auth/logout` revokes every refresh token of the user.
+   Proposed default: the portal keeps that action after F0, through a management-API call guarded
+   by `assertManagementToken`; it revokes every refresh family and advances the browser-session
+   epoch. The ordinary sign-out ends only the current session. _Decided by the maintainer,
+   2026-10-09: "sign out everywhere" revokes the user's session rows in Postgres and clears the
+   Redis cache. It sends a back-channel logout to every app with a session. The hosted account page
+   offers it too._
+10. ADR-014 amendment. Proposed default: yes, as a separate dated change after this record is
+    accepted: DPoP under `DPOP_ENABLED`, which `AUTHORITY_TREE_ENABLED` requires; a shared
+    `dpop_bound_access_tokens`; one flag-neutral WebAuthn provider with one hosted enrolment and
+    management page; `REMOTE_APPROVAL_ENABLED` requires `WEBAUTHN_ENABLED`; revocation and
+    introspection `private_key_jwt` moved to ADR-017 F0. _Decided by the maintainer, 2026-10-09:
+    one DPoP verifier behind `DPOP_ENABLED` and one WebAuthn provider, both shared with ADR-014.
+    `private_key_jwt` at revocation and introspection lands in F0._
+
 ## Decisions parked for the maintainer
 
 Each question carries the default this record proceeds on until the maintainer decides otherwise.
-Question 1 is decided (above). Questions 2–10 are true forks; questions 11–30 record defaults that
-are unlikely to change.
-
-2. Email codes: a sign-in factor, a check after every password, or passwordless sign-in? _Default:
-   address verification and recovery, plus an optional per-client check after the password
-   (`email_code_after_password: false`). They never produce `amr`, `acr`, `mfa` or an AAL claim.
-   Passwordless email-code sign-in is not offered. A reset of a password-only account is labelled an
-   email-recovery sign-in._
-3. Password minimum on `/auth/register`. _Default: the 15-code-point minimum applies to every newly
-   set password, including `/auth/register`, as an announced F1 change on every deployment, with a
-   release note and the portal form showing the new reasons. An operator may lower it to 8, a
-   knowing deviation while a password can be the only factor. Alternatives: gate it behind the
-   switch, or keep the legacy route on its old rule until F2a._
-4. End-user IP carriage. _Default: the `qauth_end_user_ip` claim inside the signed assertion,
-   derived by the backend from its peer or a listed proxy chain. Alternatives: a form parameter from
-   an authenticated first-party client; accepting either carrier is not recommended (two parsers and
-   a precedence rule for one security input)._
-5. Users migrating from another IdP. _Default: an operator import tool in F1d, in the seed-script
-   pattern (the only operator surface; ADR-012 §4); Argon2id PHC hashes only, with bcrypt and PBKDF2
-   only after the dependency and advisory check; addresses verified only if the source says so; a
-   source subject identifier, when given, is mapped to the new `sub` in the tool's report; audited
-   as `user.imported`. Alternative: no import, with the migration guide saying so and naming the
-   `register` flow as the bulk path, since `reset` mails only an existing account. Lazy migration
-   against the old IdP is rejected, because it keeps a password grant alive there._
-6. Hosted account pages: timing and switch. _Default: the hosted registration and reset pages ship
-   in the F1 release train, independent of WebAuthn, behind their own default-off switch, because
-   opening hosted registration is an operator decision._
-7. Arming the disable ceiling. NIST SP 800-63B-4 §3.2.2 says disabled authenticators "SHALL be
-   required to rebind". _Default: the disable at 100 is armed only while every account it can reach
-   has a self-service rebind path, checked at run time. The headless reset serves native users only,
-   so in practice the ceiling is armed only while F2a's hosted reset is on. Otherwise the soft
-   ladder runs alone, marks set earlier are ignored, and the standards position records §3.2.2 as
-   partial._
-8. Scripted management tokens after F1c. The public API reference names `/auth/login` as the source
-   of the developer token. _Default: before F1c, ship an operator-listed public CLI client with no
-   `first_party_profile`, so the CHECKs of Decision 2 stay unchanged and the ordinary consent rules
-   of Decision 9 apply. It uses the code flow with a loopback redirect (RFC 8252 §7.3 "Loopback
-   Interface Redirection"); as of 2026-09-26 `redirectUriMatchesRegistered` accepts any loopback
-   port. `assertManagementToken` accepts its tokens through an operator-set, seed-only allowlist
-   field. Alternative: record that scripted management ends at F1c._
-9. "Sign out everywhere". As of 2026-09-26 `/auth/logout` revokes every refresh token of the user.
-   _Default: the portal keeps that action after F0, through a management-API call guarded by
-   `assertManagementToken`; it revokes every refresh family and advances the browser-session epoch.
-   The ordinary sign-out ends only the current session._
-10. ADR-014 amendment. _Default: yes, as a separate dated change after this record is accepted: DPoP
-    under `DPOP_ENABLED`, which `AUTHORITY_TREE_ENABLED` requires; a shared
-    `dpop_bound_access_tokens`; one flag-neutral WebAuthn provider with one hosted enrolment and
-    management page; `REMOTE_APPROVAL_ENABLED` requires `WEBAUTHN_ENABLED`; revocation and
-    introspection `private_key_jwt` moved to ADR-017 F0._
+Questions 1–10 are decided (above). Questions 11–30 record defaults that are unlikely to change.
 
 Other recorded defaults:
 
@@ -1617,7 +1666,7 @@ Other recorded defaults:
   and why the seed manifest is the operator surface.
 - [ADR-013](./013-same-device-return-leg.md) — the burn-then-bind idiom of the `auth_session`.
 - [ADR-014](./014-agent-authority-tree.md) — the DPoP verifier and WebAuthn provider this record
-  shares, and the amendment of parked question 10.
+  shares, and the amendment of question 10.
 - ADR-018 and ADR-019, each proposed in a separate PR — the 1.0 promise that covers the engine, and
   the Interaction API that shares it.
 - [ADR-002](./002-identifier-abstraction.md), [ADR-003](./003-credential-provider-interface.md)
