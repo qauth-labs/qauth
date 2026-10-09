@@ -8,6 +8,13 @@
 >
 > **Correction (2026-07-21, #304): IMPLEMENTED — the note above is superseded.** The `CredentialProvider` interface and provider registry landed in PR #227 (Epic #224): `libs/server/federation/src/providers/credential-provider.interface.ts` and `password.provider.ts` exist, and the auth engine calls `provider.verify()` in production. A second provider — `WalletProvider` (ADR-004) — has since shipped as a skeleton (#232). Federation (T4) is now the **active** track, not deferred; see the [ADR-007](./007-mcp-first-positioning.md) Activation note (decision #296).
 
+> **Amendment (2026-10-09): the AuthMethod contract extends this interface.** ADR-018 (proposed
+> in PR #424) decides that upstream sign-in methods plug in through an AuthMethod contract.
+> AuthMethod extends `CredentialProvider`. `CredentialProvider` stays the verification half.
+> AuthMethod adds the Interaction API steps that ADR-019 defines and the routes an upstream needs.
+> The TypeScript plugin API stays internal and outside the 1.0 promise. `WalletProvider.verify()`
+> keeps throwing, as a deliberate fail-closed property; wallet sign-in keeps its dedicated seam.
+
 ## Context
 
 Phase 1 authentication logic (password verification, email claim extraction) is implemented directly in the auth service routes. Login looks up a user by email, verifies the password hash, and builds JWT claims from the user record. This works for a single authentication method, but it cannot accommodate multiple methods without expanding the service layer with provider-specific conditionals.

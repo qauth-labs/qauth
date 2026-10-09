@@ -364,23 +364,32 @@ production. Today every instance reads its keys from environment variables or fi
   engine behind it is stable, because the hosted pages use it.
 - Web front-ends keep the standard redirect flow.
 
-## Open questions
+## Answers to the open questions (2026-10-09)
 
-None of these is decided.
+The maintainer answered these on 2026-10-09. Each answer is a decision of this record.
+
+- **Breadth of administration.** SAML, LDAP, Kerberos and UMA are not in 1.0. ADR-018 says when
+  SAML and LDAP come.
+- **Support window.** ADR-018 sets it: a deprecation waits at least 12 months, and removal happens
+  only in a new major release. So `/interaction/v1` stays served for at least 12 months after a
+  successor ships, and until the next major release.
+- **Session write throttle.** By default a session's last-seen time is written at most once a
+  minute. The operator can change the interval.
+- **Retired-key lifetime.** The next key is published in the JWKS 7 days before it starts signing.
+  A retired key stays published for 14 days after rotation, and never for less than the longest
+  lifetime of a token it signed. These defaults cover relying parties' JWKS caches.
+- **Existing issuers.** On upgrade, a deployment's current `JWT_ISSUER` becomes the issuer of its
+  default realm, in single-realm mode. Keys from environment variables are imported once into the
+  encrypted store at first boot. Existing clients and tokens keep working.
+- **ADR-013's return leg.** The endpoint the wallet returns to stays on the auth server, under the
+  Interaction API path `/interaction/v1/`. The Response Code binding and the signed `__Host-` binder
+  cookie stay as they are. The ceremony app shares the realm origin, so the cookie keeps working.
+  The ceremony app reads the flow's status only through the Interaction API.
+
+## Open questions
 
 - **UI screen list.** The exact screens of the reference ceremony app, the admin console and the
   account page are the subject of the next conversation.
-- **Breadth of administration.** 1.0 targets the administration breadth of an established
-  open-source identity server, for example Keycloak. Whether that includes SAML, LDAP or Kerberos
-  federation, and UMA, is open.
-- **Support window.** The deprecation window and the support period of 1.x. This sets how long
-  `/interaction/v1` stays served after a successor ships.
-- **Session write throttle.** The interval between last-seen writes.
-- **Retired-key lifetime.** How long a retired signing key stays published after rotation.
-- **Existing issuers.** How a deployment's current `JWT_ISSUER` becomes the default realm's issuer.
-- **ADR-013's return leg.** How the same-device return leg moves onto the Interaction API. Today the
-  wallet returns to `/ui/wallet-login/return` on the auth server. Every status poll needs the signed
-  `__Host-qauth_wallet_flow` binder cookie.
 
 ## Related
 

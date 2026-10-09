@@ -147,6 +147,10 @@ Experimental items ship in 1.0 but stay outside the stability promise.
 - The FiPA authorization challenge endpoint (ADR-017). It stays experimental until FiPA is an RFC.
   The engine behind it is stable, because the hosted pages use it.
 - The `/first-party` subpath of `@qauth-labs/node`, which serves FiPA.
+- The `oid4vp-1.0-base` verifier profile. It stays supported, but it allows looser options than
+  HAIP 1.0, such as unsigned requests. Decided 2026-10-09.
+
+How an item is marked experimental, and how it becomes stable, is set in §5.
 
 ### 5. The stability contract
 
@@ -162,9 +166,31 @@ The contract covers:
 - **Stable SDKs**, per major version.
 - **QAuth-defined identifiers.** Each carries a version, for example a `urn:qauth:...:v1` form. A
   future standard identifier can then sit beside it without breaking 1.x.
+- **A documented subset of configuration keys:** issuer and host, the database, Redis, the KEK
+  provider, proxy trust, and the switches of stable features. Other keys are marked advanced or
+  experimental. A renamed key keeps working under its old name, with a warning, for the
+  deprecation window.
+- **Upgrades within 1.x.** Migrations only go forward. Every upgrade completes by running the
+  migration runner, with no manual step. No 1.x migration is destructive; changes use
+  expand-then-contract. CI tests an upgrade from every earlier 1.x minor release. Downgrades are not
+  supported, so the upgrade guide tells operators to back up first.
 
 The contract does not cover the experimental items in §4, the TypeScript plugin API, or internal
 code that no stable surface exposes.
+
+**Deprecation and support.** A deprecation is announced in a minor release. Removal comes no sooner
+than 12 months later, and only in a new major release. Security fixes land on the latest 1.x minor
+release. The 1.x line is supported for at least five years after 1.0.
+
+**Experimental items.** An experimental item sits behind a switch. Discovery does not mention it
+unless the switch is on. The server logs a warning at boot when the switch is on. The docs label it
+"Experimental". It may change in a minor release without a deprecation window. It becomes stable in
+a minor release once four conditions hold:
+
+1. the spec it implements is an RFC or a Final specification;
+2. it has seen external use in a beta;
+3. the external audit covered it;
+4. conformance tests exist for it.
 
 ### 6. SDKs and the Rust core
 
@@ -257,24 +283,42 @@ Custom domains themselves are in 1.0, as ADR-019 records.
 boundaries that 1.0 is built on. That includes realms, hosts, issuers, sessions, UIs, the
 Interaction API, the API families and keys. This record does not restate those rules.
 
+## Answers to the open questions (2026-10-09)
+
+The maintainer answered this record's open questions on 2026-10-09. The answers below are
+decisions; §4 and §5 carry the ones that change the contract.
+
+1. **SAML, LDAP, Kerberos and UMA** are not in 1.0.
+   - SAML comes in 1.x, first as an identity provider, then as an upstream where needed. XML
+     signature handling is a defect-prone area, and it would widen the audit.
+   - LDAP comes in 1.x as an extension of the AuthMethod contract.
+   - Kerberos and UMA are not planned. Fine-grained authorization uses RAR and the AuthZEN decision
+     API that ADR-014 §8 describes.
+2. **Deprecation and support:** see §5.
+3. **Configuration keys:** a documented subset is inside the promise; see §5.
+4. **Database migrations:** forward-only, with tested upgrades within 1.x; see §5.
+5. **OID4VP profiles:** HAIP 1.0 is stable; `oid4vp-1.0-base` is experimental; see §4.
+6. **Audit timing.** The main audit runs on the frozen release candidate, so it covers the code that
+   ships. Before that, each area beta gets an internal review and automated scanning. Findings are
+   fixed before 1.0, and the report is published.
+7. **PQC draft and library.** The Internet-Draft's first revision is submitted before 1.0, so the
+   stable hybrid format has a published definition. The library's verification half ships before
+   1.0, because `@qauth-labs/resource-guard` promises hybrid verification. Composite support can
+   follow later.
+8. **Rust layering.** Three layers: a vendor-neutral PQC and JOSE crate in its own repository;
+   `qauth-core` on top of it; and its bindings. The napi binding replaces today's
+   `@qauth-labs/crypto-native`; WASM and PyO3 serve the SDKs.
+9. **Experimental items:** marking and promotion are in §5.
+10. **Composite in the server.** Not in 1.0. The server emits only the parallel hybrid. This is
+    revisited when the composite draft becomes an RFC.
+11. **AuthMethod and CredentialProvider.** AuthMethod extends the `CredentialProvider` interface of
+    [ADR-003](./003-credential-provider-interface.md). `CredentialProvider` stays the verification
+    half. AuthMethod adds the Interaction API steps and the routes an upstream needs. ADR-003 carries
+    a note saying so. `WalletProvider.verify()` keeps throwing, as a deliberate fail-closed property.
+
 ## Open questions
 
-Each item below is **not decided**.
-
-1. Whether the administration breadth includes SAML, LDAP or Kerberos federation, and UMA.
-2. The UI screen list. It is the subject of the next conversation.
-3. The deprecation window and the support period of 1.x.
-4. Whether the promise covers any configuration keys, and if so which ones.
-5. Whether the promise covers database migrations within 1.x, and what upgrade guarantee it gives.
-6. Whether the `oid4vp-1.0-base` verifier profile is inside the promise, or only HAIP 1.0.
-7. When the external audit runs, relative to the release candidate and the freeze.
-8. Whether the PQC Internet-Draft or the PQC library must exist before 1.0.
-9. How `qauth-core`, the vendor-neutral PQC library and today's `@qauth-labs/crypto-native`
-   binding relate to each other.
-10. How an experimental item is marked, and how it becomes stable.
-11. Whether the QAuth server itself offers the composite construction.
-12. How the AuthMethod contract relates to the `CredentialProvider` interface of
-    [ADR-003](./003-credential-provider-interface.md).
+- The UI screen list. It is the subject of the next conversation.
 
 ## Consequences
 
