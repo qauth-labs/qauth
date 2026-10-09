@@ -9,7 +9,8 @@
 > and changes none of its rules. Every rule sits behind `AUTHORITY_TREE_ENABLED`;
 > the approval rules also sit behind `REMOTE_APPROVAL_ENABLED`. With the
 > switches off, nothing changes. Every decision here is this record's
-> proposal. Decision 9 builds on the maintainer's decision 10 in ADR-014.
+> proposal unless it is marked decided. Decision 9 builds on the maintainer's
+> decision 10 in ADR-014.
 >
 > **Amended 2026-10-09** (before any implementation): the maintainer
 > decided a rename on 2026-10-08. "Agent Tree" and "agent authority tree" are
@@ -20,6 +21,14 @@
 > `REMOTE_APPROVAL_ENABLED`. The agent principal, agent types, agent
 > identities and every identifier that names an agent keep their names. The
 > file name is kept, so links stay stable. No rule changed.
+>
+> **Amended 2026-10-09, decisions** (before any implementation): the
+> maintainer has answered all thirteen parked questions. Questions 6 to 9
+> were answered on 2026-10-06, and question 6 is now decision 11. The rest
+> were answered on 2026-10-09. Each is marked decided below, with its date.
+> Where an answer changes ADR-014's text, the question names the place.
+> ADR-014 changes to match when this record is accepted. ADR-014 §1 and §11
+> already carry the 2026-10-06 answers.
 
 ## Context
 
@@ -52,7 +61,7 @@ Verified 2026-09-30 against the working tree at `2c901d4`.
 | Client assertions       | `aud` may be the issuer or the token endpoint URL; no `typ` check (`apps/auth-server/src/app/helpers/client-assertion.ts:96`)                                                                                          | Issuer as sole `aud`, explicit `typ`, for agent types (d.4) |
 | Rate limits             | A global 100 per 3600 s per address; `/oauth/token` 30 per 60 s per address in a production realm                                                                                                                      | Each added route names its own limit (decision 6)           |
 | Owner's proof           | `email_verified` lives on the `password` credential; `REQUIRE_EMAIL_VERIFIED` defaults to `false`. `users` has no verified flag and no marker for a primary credential (checked 2026-10-06)                            | An agent owner needs a verified account (decision 8)        |
-| Realm admin             | No role: `users` has no role column (ADR-012 §4), and no code reads the `roles` and `user_roles` tables                                                                                                                | Parked (parked 10)                                          |
+| Realm admin             | No role: `users` has no role column (ADR-012 §4), and no code reads the `roles` and `user_roles` tables                                                                                                                | Realm-local admins, through ADR-019 (question 10)           |
 
 ## Decision
 
@@ -90,8 +99,9 @@ deleted, the tree ends with it.**
 
 **At the edge of a tree.** ADR-014 decision 1 spares at sign-out only a
 family that carries a `sid`, so sign-out still ends an agent client's family
-whose `sid` is NULL (parked 11). Revoke-all also reaches what would become a
-tree next:
+whose `sid` is NULL (question 11, decided). Sign-out also ends a `sid` family
+whose CIMD client has stopped declaring `is_agent` (question 1, decided).
+Revoke-all also reaches what would become a tree next:
 
 - every live refresh family of an agent client with no `sid` yet, which
   ADR-014 §1 would root at its next refresh;
@@ -164,8 +174,8 @@ refuses every tree token: root, node or leaf.**
   page.
 - On the identifier routes the scheme picks the leg: `Bearer` is the owner
   leg, under the guard. `DPoP` is the node leg, with its client
-  authentication in the body: an assertion under decision 4, or the type's
-  secret while parked 2 allows one. A request mixing the two is refused.
+  authentication in the body: an assertion under decision 4, never a
+  secret (question 2). A request mixing the two is refused.
 
 **Ancestors' `jkt` and `scope` reach the owner through the portal route.**
 ADR-014 §2 returns them only to the owner's portal and to a node of the same
@@ -195,7 +205,8 @@ and carries `typ: client-authentication+jwt`.**
   client. Other clients keep today's rule at `/oauth/token`
   (`client-assertion.ts:96`;
   [ADR-011 §7](./011-enterprise-managed-authorization.md#7-private_key_jwt-384--additive-no-flag)).
-- Whether an agent type may still use a client secret is parked (parked 2).
+- An agent type never authenticates by client secret (question 2, decided
+  2026-10-09).
 
 **Why.** draft-ietf-oauth-rfc7523bis-11 is in the RFC Editor queue (received
 2026-04-30). Its §4, item (b): for client authentication, `aud` "MUST use
@@ -276,8 +287,9 @@ bearer-leaf election.**
   Some lead to requests this rule refuses: a mode above the cap, which 4a
   refuses first, and a listed mcp-guard resource. Beyond `agent:request`,
   ADR-014 does not say what an approval may carry, so this is a new
-  fail-closed rule. GATE 4d is parked (parked 4), and so is how a window
-  renews (parked 5). What the STS lets an approval open is ADR-016's.
+  fail-closed rule. A GATE 4d refusal is final (question 4), and a window
+  renews by a matched CIBA request (question 5). What the STS lets an
+  approval open is ADR-016's.
 
 **Why.** The operator's mode cap is a ceiling the owner's consent sits
 under, and a passkey tap is not an operator change. An elevation outside the
@@ -285,7 +297,7 @@ node's audience would reach a resource the root consent never showed.
 
 ### 8. An agent owner is a verified account
 
-_Proposal (this record)._
+_Decided 2026-10-06 (maintainer), with question 7._
 
 **Unless the user's account is verified, QAuth refuses, audited:**
 
@@ -295,24 +307,25 @@ _Proposal (this record)._
 - registering an agent-side transmitter, an approval channel or a passkey.
 
 **An account is verified when its primary identity is proved.** The primary
-identity is the credential that created the account: the user's oldest
-`user_credentials` row. It can be of any type. An email address is one
-attribute an account may have. No account needs one, and no address counts on
-its own. Each type has its own proof, as ADR-002 and ADR-003 place it:
+identity is the credential that created the account. An explicit marker names
+it, set at account creation and not movable in 1.0 (question 13). It can be
+of any type. An email address is one attribute an account may have. No
+account needs one, and no address counts on its own. Each type has its own
+proof, as ADR-002 and ADR-003 place it:
 
-| Primary identity (`provider_type`)    | Proved when                                                                                                       | On main, 2026-10-06                                        |
-| ------------------------------------- | ----------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------- |
-| Password with an address (`password`) | The mailbox code for that address was entered, and `email_verified` is `true` on the credential                   | Yes. `/auth/verify` sets it                                |
-| Passkey (`webauthn`)                  | The registration ceremony finished, and QAuth checked the user-verification flag in the signed authenticator data | No. ADR-017 (PR #417) proposes the provider                |
-| Wallet presentation (`wallet`)        | QAuth's own verifier accepted the presentation                                                                    | Behind `WALLET_FEDERATION_ENABLED`, on its own seam        |
-| Upstream OIDC (`oidc_*`)              | An upstream issuer says so; QAuth proves nothing itself                                                           | Not built. It does not count in the first slice (parked 7) |
+| Primary identity (`provider_type`)    | Proved when                                                                                                       | On main, 2026-10-06                                                   |
+| ------------------------------------- | ----------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------- |
+| Password with an address (`password`) | The mailbox code for that address was entered, and `email_verified` is `true` on the credential                   | Yes. `/auth/verify` sets it                                           |
+| Passkey (`webauthn`)                  | The registration ceremony finished, and QAuth checked the user-verification flag in the signed authenticator data | No. ADR-017 (PR #417) proposes the provider                           |
+| Wallet presentation (`wallet`)        | QAuth's own verifier accepted the presentation                                                                    | Behind `WALLET_FEDERATION_ENABLED`, on its own seam                   |
+| Upstream OIDC (`oidc_*`)              | An upstream issuer says so; QAuth proves nothing itself                                                           | Not built. It does not count in the first slice (decided, question 7) |
 
 The rule asks that the identity is proved, not how strongly. Assurance
 (`acr`) is another question: the password credential stays `low` (ADR-003),
 and this rule does not change that. Only the primary identity counts. If a
 later credential could make an account verified, someone who registers an
 address they do not control could add a key of their own and pass the check
-(parked 13).
+(question 13).
 
 The rule holds whatever `REQUIRE_EMAIL_VERIFIED` says. That flag defaults to
 `false` (`libs/server/config/src/lib/schemas/auth.ts:53`) and governs sign-in
@@ -362,7 +375,8 @@ the moment of transfer.**
 **Why.** The owner is the name on the profile and answers for the agent (T7),
 so nobody should become one without accepting. One transaction makes the
 moment exact: no tree of the previous owner mints after it, and none of the
-new owner's roots before it. A freeze is parked (parked 9).
+new owner's roots before it. There is no freeze (question 9, decided
+2026-10-06).
 
 ### 10. Approve from a separate device
 
@@ -389,6 +403,23 @@ why. The same-machine case is a stated residual under T8.**
 PIN typed into an operating-system prompt on the agent's machine is the same
 weakness. The recommendation is the most the protocol allows.
 
+### 11. No consent skip for an agent root
+
+_Decided 2026-10-06 (maintainer), question 6._
+
+**Every new agent root shows the consent screen.**
+
+- The fast path (`canSkipConsent`,
+  `apps/auth-server/src/app/helpers/consent.ts:77`) never applies to an
+  agent root, even when a stored consent covers the request.
+- `prompt=none` for an agent root answers `consent_required`. Today it asks
+  the same `canSkipConsent` question
+  (`apps/auth-server/src/app/routes/oauth/authorize.ts:509-515`).
+- ADR-014 §11 already says so.
+
+**Why.** The screen shows each tree's agent, allowlist, purpose and
+persistence. A stored consent does not show them again.
+
 ## Threats
 
 Only threats this record adds or changes. T-numbers are ADR-014's.
@@ -398,10 +429,10 @@ Only threats this record adds or changes. T-numbers are ADR-014's.
 | A tree outlives its root's grant: consent withdrawn, reuse, client deleted | Decision 1: the walk runs with the write that ends it     | A resource that verifies offline accepts a token to `exp`, §6's window   |
 | A tree grows after consent through an operator change                      | Decision 2: stored `aud`, cap walk, no narrower retry     | A cap changed outside the seed tool waits for the next mint              |
 | A tree token acts as its owner                                             | Decision 3: the guard on every owner route; `sid` refused | A stolen portal session is the owner, as today                           |
-| An agent type's assertion accepted at an audience it was not minted for    | Decision 4: issuer as sole `aud`, explicit `typ`          | A type that authenticates by secret keeps T2's secret on disk (parked 2) |
+| An agent type's assertion accepted at an audience it was not minted for    | Decision 4: issuer as sole `aud`, explicit `typ`          | The type's assertion key on the box stays T2's residual, one key per box |
 | A captured bound token spliced between P1a and P1b (T1)                    | Decision 5                                                | No spawn to a new key until P1b                                          |
 | A 429 read as a grant, or a revocation dropped on a 429                    | Decision 6                                                | Every broker behind one address shares the token limit                   |
-| An approval lifts an operator's ceiling (T8)                               | Decision 7                                                | GATE 4d is parked (parked 4)                                             |
+| An approval lifts an operator's ceiling (T8)                               | Decision 7                                                | None new: a GATE 4d refusal is final (question 4)                        |
 | An agent owned through an identity nobody proved                           | Decision 8                                                | A control lost after the proof (a mailbox, a device) goes unnoticed      |
 | An agent handed to a person who never agreed                               | Decision 9                                                | The previous owner's cut tokens run to `exp` after the acceptance        |
 | A computer-use agent approves on its own machine with an OS PIN (T8)       | Decision 10: the page recommends a separate device        | Not closed: WebAuthn cannot enforce it                                   |
@@ -448,6 +479,8 @@ test that proves it.
 - **9 — P2:** an unaccepted offer changes nothing, and an acceptance cuts
   every live tree in its own transaction.
 - **10 — P5:** the approval page carries the separate-device notice.
+- **11 — P2:** a stored consent does not skip the screen for an agent root,
+  and `prompt=none` answers `consent_required`.
 
 ## Consequences
 
@@ -474,12 +507,15 @@ test that proves it.
 
 - With the switches off, nothing here runs. Every other client keeps today's
   client-assertion rule, and no existing rate limit is raised.
-- ADR-014's rules stand as written; twelve questions are parked below.
+- ADR-014's rules stand as written until this record is accepted; its §1
+  and §11 already carry the 2026-10-06 answers. Thirteen questions were
+  parked below, and the maintainer has decided all of them.
 
 ## Decisions parked for the maintainer
 
 Each question carries the default this record proceeds on until the
-maintainer decides.
+maintainer decides. As of 2026-10-09 the maintainer has decided every
+question below.
 
 1. **Sign-out and a `sid` family whose client is no longer an agent.** A
    CIMD client's `is_agent` follows its document at every re-resolution
@@ -487,13 +523,19 @@ maintainer decides.
    spare every `sid` family; end such a family, and so its tree.
    **Default:** spare it, as ADR-014 decision 1 says; the option would change
    that decision's text. Why ask: the maintainer's words spare agents, and
-   this client is no longer one.
+   this client is no longer one. _Decided 2026-10-09 (maintainer): end it._
+   Sign-out ends a `sid` family whose CIMD client has stopped declaring
+   `is_agent`, and so its tree. ADR-014 decision 1 changes to match when this
+   record is accepted.
 2. **Client assertion only for agent types.** Options: an assertion or a
    secret, as ADR-014 §4(e), §9 and T2 allow; an assertion only. The code
    already refuses a secret from a `private_key_jwt` client
    (`client-auth.ts:183`), so the option is a registration rule.
    **Default:** either; the option would change those three places. Why
    ask: a secret is shared and on disk; an assertion key can be one per box.
+   _Decided 2026-10-09 (maintainer): an assertion only._ Agent types
+   authenticate by `private_key_jwt`, never by a client secret. ADR-014
+   §4(e), §9 and T2 change to match when this record is accepted.
 3. **An ID-JAG minted by an agent type.** Its targets are the client's
    `audience` column (`token.ts:1682`), which also sets a root's `aud`
    without `resource`; it carries no `cnf` or `sid`. Options: allow; refuse
@@ -502,18 +544,31 @@ maintainer decides.
    says: a `kind: id-jag` row, and the tree ends at the domain boundary. The
    option would change that paragraph. Why ask: a listed target sits in every
    root token, and the assertion leaves the key binding and the walk behind.
+   _Decided 2026-10-09 (maintainer): refuse._ In 1.0 an agent type cannot
+   mint an ID-JAG; GATE 2 refuses the request. That paragraph changes to
+   match when this record is accepted.
 4. **May an approval lift a type's registered scopes?** ADR-014 §14 step 1
    lists a GATE 4d refusal among those that may lead to a request. Options:
    keep that; make a 4d refusal final. **Default:** step 1 as written; the
    option would change it. Why ask: the registration is the operator's
-   ceiling, and the invariant bounds every derived token by it.
+   ceiling, and the invariant bounds every derived token by it. _Decided
+   2026-10-09 (maintainer): a 4d refusal is final._ No approval lifts a
+   type's registered scopes. The owner's route to more is ADR-014 decision
+   17: raising the agent's root ceiling with a passkey. Step 1 changes to
+   match when this record is accepted.
 5. **How an approval window renews.** §14 step 6 renews the elevation by a
    token exchange, yet the invariant paragraph says "no exchange derives" an
    elevation, and GATE 4a would refuse the delta. Options: step 6, with the
    renewal a named exception to 4a; a new CIBA request that QAuth matches to
    the open window and resolves with no notification or passkey.
    **Default:** step 6 as written; the option would change it. Why ask:
-   every elevation would then come from CIBA.
+   every elevation would then come from CIBA. _Decided 2026-10-09
+   (maintainer): the CIBA option._ The node renews an open window's
+   elevation leaf by a new CIBA request. QAuth matches it to the open window
+   and resolves it silently, with no notification or passkey. GATE 4a has no
+   exception. The match may reuse the canonical-request hash of ADR-019
+   (proposed in a separate PR). Step 6 changes to match when this record is
+   accepted.
 6. **Skipping the consent screen for an agent root.** ADR-014 §11 keeps the
    fast path (`canSkipConsent`,
    `apps/auth-server/src/app/helpers/consent.ts:77`), which `prompt=none`
@@ -521,20 +576,22 @@ maintainer decides.
    agent client; skip only when a stored consent records the same agent,
    allowlist and purpose. _Decided 2026-10-06 (maintainer): no skip for an
    agent client._ The consent screen always shows when an agent root starts.
-   ADR-014 §11 changes to match when this record is accepted. The default
+   It is now decision 11, and ADR-014 §11 says so (2026-10-09). The default
    was to keep the fast path. Why ask: the screen shows each tree's agent,
    allowlist, purpose and persistence. Decided with 8.
 7. **Which proofs count for a verified account.** Options: only a proof
    QAuth performs itself, for the types in decision 8's table; also an
    identity an external issuer asserts, as an upstream OIDC provider would.
    **Default:** QAuth's own only, in the first slice. _Decided 2026-10-06
-   (maintainer): the default stands, with his rule that an account is
-   verified when its primary identity is proved securely, of whatever type;
+   (maintainer): the default stands, with the maintainer's rule that an
+   account is verified when its primary identity is proved securely, of
+   whatever type;
    an email address is an attribute, never the default proof._ Why: an
    assertion shows what the issuer says, not that QAuth saw control, and an
    upstream provider is not built.
-8. **When a root ends.** ADR-014 §1 lets a resume (`--resume`, `--continue`,
-   same `session_id`) reuse its root while the refresh token lives. §6's
+8. **When a root ends.** ADR-014 §1 lets a resume (same `session_id`; for
+   example, Claude Code's `--resume` and `--continue`) reuse its root while
+   the refresh token lives. §6's
    dead-man switch revokes the root, its `sid` and its refresh family when
    the process exits, whenever the walk reaches QAuth. So a resume reuses a
    root only when that walk failed. Options: keep both, read together;
@@ -543,16 +600,18 @@ maintainer decides.
    outlives its process. **Default:** keep the merged rules; either option
    changes §1 or §6. _Decided 2026-10-06 (maintainer): keep the merged
    rules._ Why ask: the stricter option closes T2's residual of a
-   root refreshed from another host, at a new root on every `/clear`.
-   ADR-014 decision 8, the root-grant cadence, stays parked there. As input,
+   root refreshed from another host, at a new root on every session reset
+   (for example, Claude Code's `/clear`). ADR-014 decision 8, the root-grant
+   cadence, was decided there on 2026-10-09: a per-host setting. As input,
    a daemon host has no session start: there the broker's process is the
    root, so a runtime restart keeps it, which asks for a per-host cadence.
 9. **Freezing an agent during a transfer.** Options: no freeze; freeze the
    agent after the acceptance until its cut trees' last token expires,
-   including one GitHub hour after their last vend. **Default:** no freeze;
+   including the vended credential's lifetime after their last vend (an hour
+   on one git host, as an example). **Default:** no freeze;
    the moment is the acceptance. _Decided 2026-10-06 (maintainer): no
    freeze._ Why ask: a freeze keeps the two owners'
-   activity apart, at up to an hour in which neither can use the agent.
+   activity apart, at up to that lifetime in which neither can use the agent.
 10. **Realm-admin powers.** ADR-014 gives a realm admin revoke-by-agent (§13,
     P2), the view the public profile withholds (§13), and disabling a
     transmitter (decision 11). QAuth has no such role: `users` has no role
@@ -563,23 +622,36 @@ maintainer decides.
     powers for a future role; the owner's alone for good. **Default:**
     ADR-014's text stands, but no route checks for an admin until a role
     exists, so each power is the owner's alone. Why: a power with no holder
-    is a check nobody can pass.
+    is a check nobody can pass. _Decided 2026-10-09 (maintainer):_ the
+    powers go to realm-local admins, through the permission catalog of
+    ADR-019 (proposed in a separate PR). Revoke-by-agent and disabling a
+    transmitter need `admin:security` and a passkey approval per operation.
+    The view the public profile withholds needs `admin:read`.
 11. **Sign-out and an agent client's family with no `sid` yet.** Options:
     end it, as ADR-014 decision 1's text does; spare it, as "agents survive
     the browser logout" reads. **Default:** end it; the option would change
     that text. Why ask: decision 1 here treats that family as an agent's.
+    _Decided 2026-10-09 (maintainer): end it, the default._ Sign-out ends an
+    agent client's refresh family that has no `sid`, as ADR-014 decision 1's
+    text already says.
 12. **Revoke-all and a sid-less subject issued before it.** Options: keep
     ADR-014 §1, where the exchange starts a new tree; refuse the exchange.
     **Default:** §1 as written; the option would change it. Why ask:
     revoke-all cannot reach such a token, which has no ledger row.
-13. **Which credential is the primary identity.** Decision 8 takes the
+    _Decided 2026-10-09 (maintainer): refuse._ A sid-less subject token whose
+    `iat` is earlier than the user's last revoke-all is refused. That time is
+    a per-user timestamp in Postgres, cached in Redis. ADR-014 §1 changes to
+    match when this record is accepted.
+13. **Which credential is the primary identity.** Decision 8 took the
     credential that created the account, the user's oldest
-    `user_credentials` row, and adds no column. Options: that; an explicit
+    `user_credentials` row, and added no column. Options: that; an explicit
     marker the user may move to another proved credential; any proved
     credential makes the account verified. **Default:** the oldest row, no
     marker. Why ask: an explicit marker needs a migration and a rule for
     moving it. The last option lets someone who registers an address they
-    do not control add a key of their own and pass the check.
+    do not control add a key of their own and pass the check. _Decided
+    2026-10-09 (maintainer): an explicit marker._ It is set at account
+    creation and cannot move in 1.0. Decision 8 says so.
 
 ## Related
 
