@@ -254,7 +254,7 @@ describe('rewriteRecordLink — the real docs/adr and docs/security corpus, enum
     return links;
   }
 
-  it('extracts exactly 393 links across the 15 ADRs, the ADR README, and the security review — the corpus the counts below are checked against', () => {
+  it('extracts exactly 394 links across the 15 ADRs, the ADR README, and the security review — the corpus the counts below are checked against', () => {
     // A fixed count, not a lower bound: this test's whole point is that the
     // categorisation below is checked against the FULL corpus, not a
     // sample. If a future ADR amendment changes the link count, this
@@ -313,7 +313,10 @@ describe('rewriteRecordLink — the real docs/adr and docs/security corpus, enum
     // records (002/003/007–014 → ROUTE) — plus the README index row for 017
     // (→ ROUTE). Recounted with the plugin's own extractor and
     // rewriteRecordLink before the buckets below were touched.
-    expect(extractAllLinks()).toHaveLength(393);
+    //
+    // 393 → 394 with ADR-017's 2026-10-09 amendment: one external link in
+    // Related (OpenID Connect Back-Channel Logout 1.0).
+    expect(extractAllLinks()).toHaveLength(394);
   });
 
   it('every link falls into exactly one of the four outcomes, with none left unresolved', () => {
@@ -400,7 +403,10 @@ describe('rewriteRecordLink — the real docs/adr and docs/security corpus, enum
     // 101 → 131 route (ADR-017's 29 record links and the README index row).
     // Blob and unresolved unchanged — the check that every new in-tree link
     // resolved to a rendered record.
-    expect(untouchedExternalOrAnchor).toBe(213 + 36);
+    //
+    // ADR-017's 2026-10-09 amendment: 213 → 214 external (Back-Channel
+    // Logout 1.0). Anchors, route, blob and unresolved unchanged.
+    expect(untouchedExternalOrAnchor).toBe(214 + 36);
     expect(rewrittenToRoute).toBe(131);
     expect(rewrittenToBlob).toBe(13);
     expect(leftUnresolved).toBe(0);

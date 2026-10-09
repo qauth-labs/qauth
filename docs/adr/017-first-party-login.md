@@ -49,6 +49,12 @@
 > - `/auth/login` and the headless hand-off are removed with no freeze phase, before 1.0.
 > - The bot challenge and passkey-only accounts are in 1.0. F4 joins 1.0 only if the attestation
 >   draft becomes an RFC first.
+> - Alignment with the 1.0 decisions (ADR-018 and ADR-019, proposed in a separate PR). TOTP moves
+>   from F5 into the 1.0 train, as the new phase F2c. The browser-session reset counter keeps
+>   Postgres as its source of truth, with a Redis cache. Back-channel logout sits beside the
+>   end-session route. The passkey RP ID defaults to the realm's exact host.
+> - Gates now speak of a verified account, not a verified address. `REQUIRE_EMAIL_VERIFIED` becomes
+>   `REQUIRE_VERIFIED_ACCOUNT`, and the old name stays as a deprecated alias.
 
 ## Context
 
@@ -57,29 +63,29 @@ screen, the app's backend talks to the identity provider (IdP), and no browser o
 to get that is the resource owner password credentials grant (ROPC): an app that calls a password
 grant at another IdP sends a username and a password and receives tokens. RFC 9700 §2.4 "Resource
 Owner Password Credentials Grant" says the grant "MUST NOT be used". ROPC also drops the IdP's own
-controls (MFA, step-up, brute-force defence, email verification), so each app rebuilds them on its
+controls (MFA, step-up, brute-force defence, account verification), so each app rebuilds them on its
 own. QAuth should offer the same experience without ROPC and without a browser, as a headless,
 standards-based first-party login, and give apps that use a password grant a clear path off it.
 
 ### What exists and what this record adds (verified 2026-09-26)
 
-| Concern                           | As of 2026-09-26                                                                                                                                                                                                                                         | This record adds                                                                                                                                                                                                          |
-| --------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Password-to-token route           | `POST /auth/login` (`routes/auth/login.ts`) exchanges `{ email, password }` for tokens of the internal `system` client (`getOrCreateSystemClient`, `helpers/oauth-client.ts`), without client authentication. `/oauth/token` offers no `password` grant. | Removed in F1c, before 1.0, with no freeze phase; the authorization challenge endpoint replaces it (Decision 12)                                                                                                          |
-| QAuth's own app                   | The developer portal (`apps/developer-portal/src/server/auth-server-client.ts`) calls `/auth/login`, `/auth/register`, `/auth/verify`, `/auth/resend-verification` and `/auth/logout` server-to-server                                                   | In F0 the portal signs in through `/oauth/authorize` and keeps its tokens server-side (Decision 12)                                                                                                                       |
-| Headless hand-off                 | `/oauth/authorize` accepts `Authorization: Bearer` with a `system`-client access token in place of a browser session                                                                                                                                     | Follows the consent rule from F0; removed in F1c, before 1.0 (Decision 9)                                                                                                                                                 |
-| Client authentication             | `private_key_jwt` at `/oauth/token` ([ADR-011 §7](./011-enterprise-managed-authorization.md) "`private_key_jwt` (#384) — additive, no flag"); `/oauth/revoke` and `/oauth/introspect` accept `client_secret_basic` and `client_secret_post`              | `private_key_jwt` at both in F0 (Decision 14)                                                                                                                                                                             |
-| First-party marking               | No client attribute marks a client as first-party. Operator-set attributes such as `max_agent_mode` are written only by the seed manifest (`clientSpecSchema`)                                                                                           | An operator-set `first_party_profile`, seed-only and CHECK-constrained (Decision 2)                                                                                                                                       |
-| Consent                           | Skipped when an active consent row covers the requested scopes (`canSkipConsent`, `helpers/consent.ts`)                                                                                                                                                  | Audited administrative consent for flagged clients (Decision 9)                                                                                                                                                           |
-| Authorization codes               | Two mint sites; every code is S256 PKCE-bound; `authorization_codes.redirect_uri` is NOT NULL and the token endpoint requires `redirect_uri`                                                                                                             | One mint helper, an `issued_via` marker, and codes without a redirect URI (Decision 10)                                                                                                                                   |
-| Sender constraint                 | No DPoP                                                                                                                                                                                                                                                  | DPoP in F3, one verifier shared with ADR-014 (Decision 14)                                                                                                                                                                |
-| `acr` and `amr`                   | `acr` only from wallet sign-in ([ADR-010](./010-acr-assurance-mapping.md)); no `amr`                                                                                                                                                                     | `amr` and `auth_time` on tokens from challenge-issued codes (Decision 10)                                                                                                                                                 |
-| Password policy                   | zxcvbn score ≥ `PASSWORD_MIN_SCORE` (default 2), with `PASSWORD_MAX_LENGTH` (256) checked first, applied by `/auth/register` (`libs/shared/validation/src/lib/password.ts`)                                                                              | One policy for every newly set password, per NIST SP 800-63B-4 §3.1.1.2 "Password Verifiers" (Decision 8)                                                                                                                 |
-| Registration, verification, reset | `/auth/register`, `/auth/verify` and `/auth/resend-verification` JSON routes; no password-reset route                                                                                                                                                    | All three inside the authorization challenge endpoint (F1); hosted pages (F2a) (Decision 8)                                                                                                                               |
-| Factors and challenges            | Password; wallet sign-in behind `WALLET_FEDERATION_ENABLED`; no TOTP, passkey, emailed code or bot challenge                                                                                                                                             | Passkeys (F2b, Decision 14) and TOTP (F5) as factors; emailed codes for verification, recovery and an optional per-client check after the password, never as a factor (F1, Decision 5); a bot challenge (F1b, Decision 7) |
-| Abuse controls                    | `@fastify/rate-limit` keyed on the TCP peer (`request.ip`); failed-login counters in `helpers/failed-login.ts`; `TRUST_PROXY` as an address or CIDR list                                                                                                 | A layered limiter, a failure ladder per NIST SP 800-63B-4 §3.2.2 "Rate Limiting (Throttling)", and an asserted end-user IP (Decision 7)                                                                                   |
-| Client SDK                        | None; the README lists `@qauth-labs/node` as planned                                                                                                                                                                                                     | `@qauth-labs/node` in F1 (Decision 13)                                                                                                                                                                                    |
-| Discovery                         | `authorization_response_iss_parameter_supported: true`; no `authorization_challenge_endpoint`                                                                                                                                                            | Members that appear only while the endpoint accepts them (Decision 11)                                                                                                                                                    |
+| Concern                           | As of 2026-09-26                                                                                                                                                                                                                                         | This record adds                                                                                                                                                                                                           |
+| --------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Password-to-token route           | `POST /auth/login` (`routes/auth/login.ts`) exchanges `{ email, password }` for tokens of the internal `system` client (`getOrCreateSystemClient`, `helpers/oauth-client.ts`), without client authentication. `/oauth/token` offers no `password` grant. | Removed in F1c, before 1.0, with no freeze phase; the authorization challenge endpoint replaces it (Decision 12)                                                                                                           |
+| QAuth's own app                   | The developer portal (`apps/developer-portal/src/server/auth-server-client.ts`) calls `/auth/login`, `/auth/register`, `/auth/verify`, `/auth/resend-verification` and `/auth/logout` server-to-server                                                   | In F0 the portal signs in through `/oauth/authorize` and keeps its tokens server-side (Decision 12)                                                                                                                        |
+| Headless hand-off                 | `/oauth/authorize` accepts `Authorization: Bearer` with a `system`-client access token in place of a browser session                                                                                                                                     | Follows the consent rule from F0; removed in F1c, before 1.0 (Decision 9)                                                                                                                                                  |
+| Client authentication             | `private_key_jwt` at `/oauth/token` ([ADR-011 §7](./011-enterprise-managed-authorization.md) "`private_key_jwt` (#384) — additive, no flag"); `/oauth/revoke` and `/oauth/introspect` accept `client_secret_basic` and `client_secret_post`              | `private_key_jwt` at both in F0 (Decision 14)                                                                                                                                                                              |
+| First-party marking               | No client attribute marks a client as first-party. Operator-set attributes such as `max_agent_mode` are written only by the seed manifest (`clientSpecSchema`)                                                                                           | An operator-set `first_party_profile`, seed-only and CHECK-constrained (Decision 2)                                                                                                                                        |
+| Consent                           | Skipped when an active consent row covers the requested scopes (`canSkipConsent`, `helpers/consent.ts`)                                                                                                                                                  | Audited administrative consent for flagged clients (Decision 9)                                                                                                                                                            |
+| Authorization codes               | Two mint sites; every code is S256 PKCE-bound; `authorization_codes.redirect_uri` is NOT NULL and the token endpoint requires `redirect_uri`                                                                                                             | One mint helper, an `issued_via` marker, and codes without a redirect URI (Decision 10)                                                                                                                                    |
+| Sender constraint                 | No DPoP                                                                                                                                                                                                                                                  | DPoP in F3, one verifier shared with ADR-014 (Decision 14)                                                                                                                                                                 |
+| `acr` and `amr`                   | `acr` only from wallet sign-in ([ADR-010](./010-acr-assurance-mapping.md)); no `amr`                                                                                                                                                                     | `amr` and `auth_time` on tokens from challenge-issued codes (Decision 10)                                                                                                                                                  |
+| Password policy                   | zxcvbn score ≥ `PASSWORD_MIN_SCORE` (default 2), with `PASSWORD_MAX_LENGTH` (256) checked first, applied by `/auth/register` (`libs/shared/validation/src/lib/password.ts`)                                                                              | One policy for every newly set password, per NIST SP 800-63B-4 §3.1.1.2 "Password Verifiers" (Decision 8)                                                                                                                  |
+| Registration, verification, reset | `/auth/register`, `/auth/verify` and `/auth/resend-verification` JSON routes; no password-reset route                                                                                                                                                    | All three inside the authorization challenge endpoint (F1); hosted pages (F2a) (Decision 8)                                                                                                                                |
+| Factors and challenges            | Password; wallet sign-in behind `WALLET_FEDERATION_ENABLED`; no TOTP, passkey, emailed code or bot challenge                                                                                                                                             | Passkeys (F2b, Decision 14) and TOTP (F2c) as factors; emailed codes for verification, recovery and an optional per-client check after the password, never as a factor (F1, Decision 5); a bot challenge (F1b, Decision 7) |
+| Abuse controls                    | `@fastify/rate-limit` keyed on the TCP peer (`request.ip`); failed-login counters in `helpers/failed-login.ts`; `TRUST_PROXY` as an address or CIDR list                                                                                                 | A layered limiter, a failure ladder per NIST SP 800-63B-4 §3.2.2 "Rate Limiting (Throttling)", and an asserted end-user IP (Decision 7)                                                                                    |
+| Client SDK                        | None; the README lists `@qauth-labs/node` as planned                                                                                                                                                                                                     | `@qauth-labs/node` in F1 (Decision 13)                                                                                                                                                                                     |
+| Discovery                         | `authorization_response_iss_parameter_supported: true`; no `authorization_challenge_endpoint`                                                                                                                                                            | Members that appear only while the endpoint accepts them (Decision 11)                                                                                                                                                     |
 
 ### The draft this record builds on
 
@@ -172,7 +178,8 @@ password-to-token route.
 
 One switch gates the endpoint: `FIRST_PARTY_LOGIN_ENABLED`, a boolean in the auth environment
 schema, default `false`. Phases are named F0 to F5. Some have lettered sub-phases (F1b, F1c, F1d,
-F2a, F2b), and [Phasing](#phasing) lists them all. These names are distinct from ADR-014's P0–P5.
+F2a, F2b, F2c), and [Phasing](#phasing) lists them all. These names are distinct from ADR-014's
+P0–P5.
 
 ### 1. Scope — a first-party-only endpoint for native front-ends, behind one switch
 
@@ -378,7 +385,7 @@ Proof-of-Possession" code binding and §9.6.1 "Auth Session DPoP Binding" (F3), 
 | `captcha`                     | F1b   | `provider`, `site_key`                                                                                       | `captcha_token`                               | —             |
 | `webauthn_get`                | F2b   | WebAuthn Level 3 request options JSON                                                                        | `webauthn_response`                           | `pop`, `mfa`  |
 | `webauthn_create`             | F2b   | WebAuthn Level 3 creation options JSON, `optional`                                                           | `webauthn_response`                           | — (enrolment) |
-| `totp`                        | F5    | `digits`                                                                                                     | `otp`                                         | `otp`         |
+| `totp`                        | F2c   | `digits`                                                                                                     | `otp`                                         | `otp`         |
 
 | Situation (every body carries `iss`)                                                                                                                         | HTTP                      | `error`                                      | Notes                                                                                                                        |
 | ------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------- | -------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
@@ -417,8 +424,8 @@ HTTP/1.1 200 OK
 The next block shows two exchanges. The first is the uniform 403 returned when the request carries
 no credential. It is the same for every account and for none. A wrong password, an unknown account
 and a disabled account add only `"qauth_interaction_error": "invalid_credentials"`, after the same
-timing floor. The second is an email-code verify step after a correct password on an unverified
-address, followed by its answer:
+timing floor. The second is an email-code verify step after a correct password on an account that
+is not yet verified (a password account whose address is unproved), followed by its answer:
 
 ```text
 ← 403 { "error": "insufficient_authorization", "iss": "https://auth.acme.example",
@@ -488,8 +495,9 @@ response.
    step 3 apply (Decision 7).
 6. The identifier: `login_hint`, or a discoverable passkey from F2b.
 7. The first factor: passkey (F2b) before password.
-8. After a first factor only: the downgrade rule, address verification, the per-client post-password
-   email check (FiPA endpoint only), TOTP (F5), and from F2b an optional passkey enrolment offer.
+8. After a first factor only: the downgrade rule, verification of an account that is not yet
+   verified (for a password account, its address is unproved), the per-client post-password email
+   check (FiPA endpoint only), TOTP (F2c), and from F2b an optional passkey enrolment offer.
 9. Mint the code.
 
 Any other rule that needs a step the client did not list answers `redirect_to_web`.
@@ -786,39 +794,43 @@ OpenID Connect 1.0, an OIDF specification. There is no path marker (question 14,
 - The first answer is always 403 `email_code` (`verify_address`, 8 digits), identical for new and
   existing addresses; an existing address receives a code with an "account exists" notice. After the
   code, a new address gets `new_password` (and, from F2b, an offered `webauthn_create`). An existing
-  account whose address is verified is helped to sign in (`password`, `webauthn_get` from F2b, or
-  `redirect_to_web` without a password), as the OIDF text allows: "Whether the AS creates a brand
-  new identity or helps the user authenticate an identity they already have is out of scope for this
-  specification". An unclaimed account (defined below) follows the unclaimed-account rule.
+  verified account is helped to sign in (`password`, `webauthn_get` from F2b, or `redirect_to_web`
+  without a password), as the OIDF text allows: "Whether the AS creates a brand new identity or
+  helps the user authenticate an identity they already have is out of scope for this specification".
+  An unclaimed account (defined below) follows the unclaimed-account rule.
 - Creation happens in one transaction after the policy passes: `users`, the verified `password`
   `user_credentials` row with the NFC marker, and the verified `email` `user_attributes` row.
   ADR-002's tables and claim rules are unchanged; only the order differs from ADR-002 "Phase 1 Flow
   Mapping". A unique-constraint race answers `invalid_session`. The code carries no `amr` or
   `auth_time` (Decision 10). FiPA Appendix A.8 "Registration" (non-normative) also runs registration
   inside the flow.
-- Unclaimed accounts. An account is unclaimed when it holds a password credential and its address
-  was never verified. An account that a wallet presentation created is never unclaimed. The first
-  successful mailbox proof (registration or reset) on an unclaimed account runs one transaction. It
-  removes every credential of the user: the password, any wallet binding, any passkey (from F2b) and
-  any TOTP secret (from F5). It revokes every active `oauth_consents` row and every refresh family
-  of the user. It also advances the user's browser-session epoch and ends every live `auth_session`
-  of the user. Then the address is marked verified and `new_password` comes next. No other
-  authenticator is asked for, so step 3 of the reset finds none. From F2b, the hosted enrolment and
-  management page refuses an unclaimed account. The post-password
-  verification step keeps every credential, because there the same person proved both the password
-  and the mailbox.
-- The browser-session epoch is a per-user Redis value whose TTL is at least the browser-session TTL;
-  `resolveBrowserSession` (`helpers/browser-session.ts`) treats a session created before it as
-  absent and clears its cookie. A reset and an unclaimed-account verification advance it, at this
-  endpoint or on the hosted pages (F2a). It lives in Redis because ADR-002 keeps `users` a pure
-  identity anchor.
+- Unclaimed accounts. An account is unclaimed when it holds a password credential and is not yet
+  verified (its address is unproved). An account that a wallet presentation created is never
+  unclaimed. The first successful mailbox proof (registration or reset) on an unclaimed account runs
+  one transaction. It removes every credential of the user: the password, any wallet binding, any
+  passkey (from F2b) and any TOTP secret (from F2c). It revokes every active `oauth_consents` row
+  and every refresh family of the user. It also advances the user's browser-session epoch and ends
+  every live `auth_session` of the user. Then the address is marked verified and `new_password`
+  comes next. No other authenticator is asked for, so step 3 of the reset finds none. From F2b, the
+  hosted enrolment and management page refuses an unclaimed account. The post-password verification
+  step keeps every credential, because there the same person proved both the password and the
+  mailbox.
+- The browser-session epoch is a per-user reset counter. It follows ADR-019's session storage:
+  Postgres is the source of truth, and Redis is a cache in front of it. `resolveBrowserSession`
+  (`helpers/browser-session.ts`) treats a session created before it as absent and clears its
+  cookie. A reset and an unclaimed-account verification advance it, at this endpoint or on the
+  hosted pages (F2a). It is not a `users` column, because ADR-002 keeps `users` a pure identity
+  anchor. As of 2026-10-09 browser sessions live only in Redis, and the `sessions` table is unused.
 - "Sign out everywhere" ends the user's sessions directly (question 9, decided 2026-10-09). It
   revokes the user's session rows in Postgres and clears their Redis cache. It sends a back-channel
   logout to every app with a session. It also revokes every refresh family of the user, as
   `/auth/logout` does today. The portal and the hosted account page (F2a) both offer it.
-- Verification. At this endpoint the unverified address of a password account is always verified
-  after a correct password, whatever `REQUIRE_EMAIL_VERIFIED` says, so no code from this endpoint
-  belongs to an unverified address. This replaces `/auth/verify` for native clients.
+- Verification. At this endpoint, an account that is not yet verified (for a password account, its
+  address is unproved) is always verified after a correct password. This holds whatever
+  `REQUIRE_VERIFIED_ACCOUNT` says. So no code from this endpoint belongs to an account that is not
+  yet verified. This replaces `/auth/verify` for native clients.
+- `REQUIRE_VERIFIED_ACCOUNT` is today's `REQUIRE_EMAIL_VERIFIED` (default `false`), renamed. The old
+  name stays as a deprecated alias. A separate code change makes the rename.
 
 Reset is a QAuth extension. FiPA Appendix A.2 "Redirect to Authorization Server" and §5.2.2.1.1
 "Redirect to Web Error Response" route recovery to the browser instead.
@@ -826,7 +838,7 @@ Reset is a QAuth extension. FiPA Appendix A.2 "Redirect to Authorization Server"
 1. The client selects `urn:qauth:ia:password_reset`. The client's `flows` must contain `reset`.
 2. QAuth answers 403 `email_code` (`recovery`, 8 digits) for every address. Mail goes only to a
    known address with a password.
-3. If the account has another bound authenticator (a passkey from F2b, TOTP from F5), that
+3. If the account has another bound authenticator (a passkey from F2b, TOTP from F2c), that
    authenticator is required next. If the client cannot render it, the answer is `redirect_to_web`.
 4. The `new_password` answer must pass the policy.
 5. One transaction replaces the hash through a new password-update method on the credential
@@ -975,7 +987,7 @@ refresh_tokens.authorization_code_id uuid NULL → authorization_codes(id) ON DE
 | Password (with or without the post-password email check) | `["pwd"]`                                         |
 | Passkey with user verification (F2b)                     | `["pop","mfa"]`                                   |
 | Password, then passkey (downgrade rule, F2b)             | `["pwd","pop","mfa"]`                             |
-| Password and TOTP (F5)                                   | `["pwd","otp","mfa"]`                             |
+| Password and TOTP (F2c)                                  | `["pwd","otp","mfa"]`                             |
 | Registration, reset                                      | `amr` and `auth_time` omitted                     |
 
 `hwk` and `swk` are never claimed: QAuth requests `attestation: "none"` and cannot know the key
@@ -1025,6 +1037,7 @@ HMACs.**
 | `authorization_challenge_endpoint`                                                                                                                                                                                                                                                                                                                | `FIRST_PARTY_LOGIN_ENABLED` (FiPA §8 "Authorization Server Metadata")                                                                                                                             |
 | `private_key_jwt` in `revocation_endpoint_auth_methods_supported` and `introspection_endpoint_auth_methods_supported`, with `revocation_endpoint_auth_signing_alg_values_supported` and `introspection_endpoint_auth_signing_alg_values_supported` from the same constant as the token endpoint's list (`ASSERTION_SIGNING_ALG_VALUES_SUPPORTED`) | F0, when those endpoints accept it (RFC 8414 §2 "Authorization Server Metadata": MUST when `private_key_jwt` is listed)                                                                           |
 | `end_session_endpoint`                                                                                                                                                                                                                                                                                                                            | F0, once the browser end-session route exists (OpenID Connect RP-Initiated Logout 1.0 §2.1 "OpenID Provider Discovery Metadata")                                                                  |
+| `backchannel_logout_supported`                                                                                                                                                                                                                                                                                                                    | F0, once back-channel logout ships (OpenID Connect Back-Channel Logout 1.0 §2.1 "Indicating OP Support for Back-Channel Logout")                                                                  |
 | `amr` in `claims_supported`                                                                                                                                                                                                                                                                                                                       | F1, switch on                                                                                                                                                                                     |
 | `prompt_values_supported` listing every supported prompt value, `create` included                                                                                                                                                                                                                                                                 | F1's release, when both endpoints honour it (F2a ships in the same train)                                                                                                                         |
 | `dpop_signing_alg_values_supported`                                                                                                                                                                                                                                                                                                               | `DPOP_ENABLED` (RFC 9449 §5.1 "Authorization Server Metadata"); its algorithms apply at the token endpoint and, from F3, at the authorization challenge endpoint, which refuses `DPoP` until then |
@@ -1141,8 +1154,8 @@ What an app with a backend changes, beyond the wire mapping:
   flows.
 - Tokens stay on the backend, and logout revokes the refresh token at `/oauth/revoke` (Decision 1,
   requirement 8).
-- A user whose address was never verified enters an email code after the first correct password
-  (Decision 8).
+- A user whose account is not yet verified (for a password account, its address is unproved)
+  enters an email code after the first correct password (Decision 8).
 - Passkey screens come in F2b.
 
 Two populations migrate. QAuth's `/oauth/token` has never offered `grant_type=password` (the enum
@@ -1266,12 +1279,13 @@ client never uses the first-party door.
   for second-factor use, optional enrolment after sign-in, the NIST SP 800-63B-4 §4.1.2.1 "Binding
   an Additional Authenticator" notice, and a hosted enrolment and management page that ADR-014's P5
   reuses; the amendment makes `REMOTE_APPROVAL_ENABLED` require `WEBAUTHN_ENABLED`. The RP ID
-  (`WEBAUTHN_RP_ID`, a registrable suffix of the issuer host) and per-client origins are
-  operator-set; when the RP ID is the issuer host, QAuth serves the platform association files
-  (`apple-app-site-association`, `assetlinks.json`) from operator-set app identifiers, so one
-  passkey works across every first-party app and the hosted `/ui/login`. F2b also clears the first
-  gate of [ADR-009 §3](./009-wallet-account-resolution.md) "`rp-pseudonym` is the intended endpoint,
-  and is gated" ("a WebAuthn workstream").
+  (`WEBAUTHN_RP_ID`) defaults to the realm's exact host. A parent domain is allowed only by explicit
+  operator opt-in, with a warning (ADR-019). Per-client origins are operator-set. When the RP ID is
+  the realm's host, QAuth serves the platform association files (`apple-app-site-association`,
+  `assetlinks.json`) from operator-set app identifiers, so one passkey works across every
+  first-party app and the hosted `/ui/login`. F2b also clears the first gate of
+  [ADR-009 §3](./009-wallet-account-resolution.md) "`rp-pseudonym` is the intended endpoint, and is
+  gated" ("a WebAuthn workstream").
 - Wallet, agents and MCP. `WalletProvider.verify()` keeps throwing; wallet login is never a
   challenge step, only a `redirect_to_web` target. `first_party_profile` excludes `is_agent` by
   CHECK, so a challenge-issued code never roots an Authority Tree
@@ -1382,9 +1396,9 @@ A password grant in any form. Headless login for web front-ends (question 1, dec
 Password-hash import in formats other than Argon2id PHC (question 5, decided 2026-10-09); those
 users sign in through upstream OIDC login. SMS and phone steps. User-name and phone-number
 identifiers. Social or wallet steps inside the flow (they are `redirect_to_web` targets). An admin
-user API or an operator role. OpenID Connect Native SSO and an MCP-elicitation binding (later), and
-TOTP before F5. SSO carry-over from a headless login into the browser: FiPA is silent on it, and the
-user meets `/ui/login` fresh.
+user API or an operator role. OpenID Connect Native SSO and an MCP-elicitation binding (later). SSO
+carry-over from a headless login into the browser: FiPA is silent on it, and the user meets
+`/ui/login` fresh.
 
 ## Phasing
 
@@ -1408,7 +1422,10 @@ on. A phase whose target is the train ships no later than F1's release.
     and the limited hand-off (Decision 9); a fresh login at `/oauth/authorize` for native profiles
     (Decision 9); an atomic `GETDEL`; a browser end-session route (`id_token_hint`, a registered
     `post_logout_redirect_uri`; it clears `__Host-qauth_session`) per OpenID Connect RP-Initiated
-    Logout 1.0 §2 "RP-Initiated Logout" and §3.1 "Client Registration Metadata"; the portal's move.
+    Logout 1.0 §2 "RP-Initiated Logout" and §3.1 "Client Registration Metadata"; OpenID Connect
+    Back-Channel Logout 1.0 beside the end-session route (ADR-019): QAuth sends a logout token to
+    every app with a session that registered a `backchannel_logout_uri` (§2.2 "Indicating RP Support
+    for Back-Channel Logout"); the portal's move.
     The `SYSTEM_CLIENT_ID` row is re-provisioned as a `private_key_jwt` `web_redirect` client with
     the portal's callback. The `migration-runner` job and the seed provisioner do this from operator
     configuration. The portal refuses to start on any other row shape and takes
@@ -1419,11 +1436,11 @@ on. A phase whose target is the train ships no later than F1's release.
   - Listed deltas: (1) a replayed code revokes its family, for every client; (2) discovery gains
     `private_key_jwt` for revocation and introspection, the matching
     `revocation_endpoint_auth_signing_alg_values_supported` and
-    `introspection_endpoint_auth_signing_alg_values_supported` members, and `end_session_endpoint`;
-    (3) the headless hand-off follows Decision 9; (4) a browser-code token request without
-    `redirect_uri` answers `invalid_grant` (Decision 10) instead of a schema `VALIDATION_ERROR`; (5)
-    a new end-session route; (6) the portal signs in through the redirect flow and keeps its tokens
-    server-side.
+    `introspection_endpoint_auth_signing_alg_values_supported` members, `end_session_endpoint` and
+    `backchannel_logout_supported`; (3) the headless hand-off follows Decision 9; (4) a browser-code
+    token request without `redirect_uri` answers `invalid_grant` (Decision 10) instead of a schema
+    `VALIDATION_ERROR`; (5) a new end-session route and back-channel logout; (6) the portal signs in
+    through the redirect flow and keeps its tokens server-side.
   - Exit criteria:
     - Byte identity except the listed deltas.
     - The CHECKs hold: no browser code without `redirect_uri`; no profile from DCR, CIMD or
@@ -1493,9 +1510,13 @@ on. A phase whose target is the train ships no later than F1's release.
   identity is a passkey, with no address (question 30); recovery codes, issued at the first passkey
   enrolment and redeemed on the hosted page, while the FiPA endpoint answers `redirect_to_web` for
   that recovery (question 25); the downgrade rule binding; UV verified server-side; optional
-  enrolment; the hosted enrolment and management page shared with ADR-014's P5; an operator-set RP
-  ID, per-client origins and the association files, after re-reading the platform rules; passkeys on
-  the hosted `/ui/login` on the same engine. Depends on F1, and on F2a for hosted passkey login.
+  enrolment; the hosted enrolment and management page shared with ADR-014's P5; the RP ID (the
+  realm's exact host by default, a parent domain only by explicit operator opt-in with a warning),
+  per-client origins and the association files, after re-reading the platform rules; passkeys on the
+  hosted `/ui/login` on the same engine. Depends on F1, and on F2a for hosted passkey login.
+- F2c — TOTP, in the 1.0 train. It moved out of F5 on 2026-10-09, to match the 1.0 scope (ADR-018).
+  It adds the `totp` step and its `amr` (Decisions 3 and 10), and TOTP's place in the step order,
+  the reset and the unclaimed-account rule (Decisions 4 and 8). Depends on F1.
 - F3 — DPoP, behind `DPOP_ENABLED=false`: the shared verifier; FiPA §9.5.1 code binding and §9.6.1
   session binding at the endpoint, which ends its `DPoP` refusal; `cnf.jkt`, `token_type: DPoP` and
   nonces at the token endpoint; the shared `dpop_bound_access_tokens` column; DPoP on by default for
@@ -1510,7 +1531,7 @@ on. A phase whose target is the train ships no later than F1's release.
   first-party only here; the Flutter SDK in a separate repository. F4 is in 1.0 if the attestation
   draft becomes an RFC before 1.0 is cut. Otherwise F4 stays experimental (question 20, decided
   2026-10-09).
-- F5 — later, unscheduled: TOTP; an established post-code `auth_session` and FiPA §6.2 refresh-time
+- F5 — later, unscheduled: an established post-code `auth_session` and FiPA §6.2 refresh-time
   step-up; a pushed-request `request_uri` (RFC 9126 §2.2 "Successful Response") in `redirect_to_web`
   once [WG issue #179](https://github.com/oauth-wg/oauth-first-party-apps/issues/179) settles; the
   FiPA Appendix A.4 "Email Confirmation Code" link variant; `amr` on browser logins; a
@@ -1529,7 +1550,7 @@ on. A phase whose target is the train ships no later than F1's release.
 | `prompt=consent`, dangerous scopes                                       | 403 `redirect_to_web`                   | not planned                           |
 | Reset or registration under `max_age` or `prompt=login`                  | 403 `redirect_to_web`                   | never                                 |
 | No `interaction_types_supported`                                         | 403 `redirect_to_web`                   | never                                 |
-| Passkey, TOTP and bot-challenge steps                                    | not offered                             | F2b, F5, F1b                          |
+| Passkey, TOTP and bot-challenge steps                                    | not offered                             | F2b, F2c, F1b                         |
 | Passwordless email-code sign-in                                          | not offered                             | never (question 2)                    |
 | `request_uri` in `redirect_to_web`                                       | never returned                          | F5                                    |
 | `auth_session` after a code; token-endpoint `insufficient_authorization` | `invalid_session`; never emitted        | F5                                    |
@@ -1564,10 +1585,11 @@ on. A phase whose target is the train ships no later than F1's release.
 - Two registration paths coexist while hosted sign-up is off by default (question 6), and
   `/auth/login` stays until F1c.
 - The app changes too, not only its backend. It renders the `email_code`, `new_password` and
-  `redirect_to_web` steps. After a correct password, a user whose address is unverified is asked for
-  an email code; this includes an imported account whose source did not prove its primary identity.
-  New passwords need 15 code points. An app build that cannot render these steps cannot complete
-  them, so the build that renders them ships before its backend switches.
+  `redirect_to_web` steps. After a correct password, a user whose account is not yet verified (for a
+  password account, its address is unproved) is asked for an email code. This includes an imported
+  account whose source did not prove its primary identity. New passwords need 15 code points. An app
+  build that cannot render these steps cannot complete them, so the build that renders them ships
+  before its backend switches.
 - An app whose backend passed password-grant tokens to its device must route its API calls through
   the backend until attested apps (F4).
 - The one password policy changes `/auth/register` on every deployment in F1 (15 code points), and
@@ -1735,6 +1757,7 @@ No question is parked. The maintainer decided questions 1–30 on 2026-10-08 and
   · [OpenID Connect Core 1.0](https://openid.net/specs/openid-connect-core-1_0.html)
   · [OpenID Connect Core Error Code unmet_authentication_requirements 1.0](https://openid.net/specs/openid-connect-unmet-authentication-requirements-1_0.html)
   · [OpenID Connect RP-Initiated Logout 1.0](https://openid.net/specs/openid-connect-rpinitiated-1_0.html)
+  · [OpenID Connect Back-Channel Logout 1.0](https://openid.net/specs/openid-connect-backchannel-1_0.html)
   · [Initiating User Registration via OpenID Connect 1.0](https://openid.net/specs/openid-connect-prompt-create-1_0.html)
   · [OpenID4VCI 1.1 editor's draft `-01`, repository commit of 2026-09-25](https://github.com/openid/OpenID4VCI/blob/8cb80d2b82171e5e7ed81c42ca97103ef75d11cd/1.1/openid-4-verifiable-credential-issuance-1_1.md)
   · [OpenID4VCI issue #595](https://github.com/openid/OpenID4VCI/issues/595)
