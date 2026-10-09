@@ -256,7 +256,7 @@ audited.
 ```text
 -- F0 migration on oauthClients (libs/infra/db/src/lib/schema/core.ts)
 first_party_profile  enum('web_redirect','native_backend') NULL  -- 'native_attested' added in F4
-first_party_policy   jsonb NULL      -- native profiles only: { flows, email_code_after_password }
+first_party_policy   jsonb NULL      -- native profiles only: { flows, email_code_after_password, pkce_required }
 CHECK (first_party_profile IS NULL OR (dynamic_registered_at IS NULL AND developer_id IS NULL
        AND is_agent = false AND coalesce(metadata->>'registrationType','') NOT IN ('dynamic','cimd')))
 CHECK (first_party_profile IS NULL OR token_endpoint_auth_method = 'private_key_jwt')
