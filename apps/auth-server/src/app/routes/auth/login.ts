@@ -87,16 +87,16 @@ export default async function (fastify: FastifyInstance) {
           password,
         });
 
-        // Email-verified gate (F-08): config-driven, MVP default is `false`
-        // (unverified-email login allowed per PRD "optional for MVP"). An
-        // operator who needs a verified-email guarantee flips
-        // `REQUIRE_EMAIL_VERIFIED=true`; the login then fails closed with
-        // `EmailNotVerifiedError` BEFORE tokens are issued, so the OIDC
-        // `email_verified` claim is always trustworthy when that flag is on.
-        // Since #228 the gate reads credential_data.email_verified — the
-        // authoritative source (the legacy users.email_verified column was
-        // dropped in #261).
-        if (check.status === 'ok' && !check.emailVerified && env.REQUIRE_EMAIL_VERIFIED) {
+        // Verified-account gate (F-08): config-driven, MVP default is `false`
+        // (an unverified account may sign in, per PRD "optional for MVP"). An
+        // operator who needs a verified account sets
+        // `REQUIRE_VERIFIED_ACCOUNT=true` (deprecated alias:
+        // `REQUIRE_EMAIL_VERIFIED`). The login then fails closed with
+        // `EmailNotVerifiedError` BEFORE tokens are issued. For a password
+        // account the proof is the confirmed address: since #228 the gate reads
+        // credential_data.email_verified, the authoritative source (the legacy
+        // users.email_verified column was dropped in #261).
+        if (check.status === 'ok' && !check.emailVerified && env.REQUIRE_VERIFIED_ACCOUNT) {
           await recordFailedAttempt(fastify.redis, lockoutIdentifiers);
           fastify.metrics.loginAttempts.inc({ result: 'failure', reason: 'email_not_verified' });
           logAuthEvent(request, 'user.login.failure', false, {

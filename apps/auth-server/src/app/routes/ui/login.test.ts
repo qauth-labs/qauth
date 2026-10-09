@@ -276,7 +276,7 @@ describe('UI /ui/login — CSRF defence', () => {
       vi.mocked(checkLockout).mockClear().mockResolvedValue({ locked: false });
       vi.mocked(recordFailedAttempt).mockClear();
       vi.mocked(resetFailedAttempts).mockClear();
-      (env as { REQUIRE_EMAIL_VERIFIED?: boolean }).REQUIRE_EMAIL_VERIFIED = false;
+      (env as { REQUIRE_VERIFIED_ACCOUNT?: boolean }).REQUIRE_VERIFIED_ACCOUNT = false;
     });
 
     it('refuses a locked-out identifier (429) before any credential check', async () => {
@@ -307,8 +307,8 @@ describe('UI /ui/login — CSRF defence', () => {
       expect(recordFailedAttempt).not.toHaveBeenCalled();
     });
 
-    it('refuses an unverified credential (403, no session) when REQUIRE_EMAIL_VERIFIED is on', async () => {
-      (env as { REQUIRE_EMAIL_VERIFIED?: boolean }).REQUIRE_EMAIL_VERIFIED = true;
+    it('refuses an unverified credential (403, no session) when REQUIRE_VERIFIED_ACCOUNT is on', async () => {
+      (env as { REQUIRE_VERIFIED_ACCOUNT?: boolean }).REQUIRE_VERIFIED_ACCOUNT = true;
 
       const { fastify, state } = await postLogin({ verifies: true, emailVerified: false });
 
@@ -317,7 +317,7 @@ describe('UI /ui/login — CSRF defence', () => {
       expect(recordFailedAttempt).toHaveBeenCalledWith(undefined, LOCKOUT_IDS);
     });
 
-    it('still signs in an unverified credential when REQUIRE_EMAIL_VERIFIED is off (default)', async () => {
+    it('still signs in an unverified credential when REQUIRE_VERIFIED_ACCOUNT is off (default)', async () => {
       const { fastify, state } = await postLogin({ verifies: true, emailVerified: false });
 
       expect(state.statusCode).toBe(302);
