@@ -41,6 +41,14 @@
 >   Only sign-up is off by default. So the disable ceiling is armed by default.
 > - Scripts get management tokens from an operator-listed public CLI client, before 1.0. "Sign out
 >   everywhere" also sends back-channel logout, and it is on the hosted account page.
+> - PKCE S256 stays mandatory on the redirect flow. At the FiPA endpoint it is mandatory by default,
+>   and an operator may switch it off per client. From F3, DPoP is on by default for
+>   `native_backend` clients, with the same per-client switch-off.
+> - Registration uses the standard `prompt=create` from F1. It needs both the realm's
+>   `registration_allowed` and the client's `flows`.
+> - `/auth/login` and the headless hand-off are removed with no freeze phase, before 1.0.
+> - The bot challenge and passkey-only accounts are in 1.0. F4 joins 1.0 only if the attestation
+>   draft becomes an RFC first.
 
 ## Context
 
@@ -57,9 +65,9 @@ standards-based first-party login, and give apps that use a password grant a cle
 
 | Concern                           | As of 2026-09-26                                                                                                                                                                                                                                         | This record adds                                                                                                                                                                                                          |
 | --------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Password-to-token route           | `POST /auth/login` (`routes/auth/login.ts`) exchanges `{ email, password }` for tokens of the internal `system` client (`getOrCreateSystemClient`, `helpers/oauth-client.ts`), without client authentication. `/oauth/token` offers no `password` grant. | Frozen in F1, removed in F1c; the authorization challenge endpoint replaces it (Decision 12)                                                                                                                              |
+| Password-to-token route           | `POST /auth/login` (`routes/auth/login.ts`) exchanges `{ email, password }` for tokens of the internal `system` client (`getOrCreateSystemClient`, `helpers/oauth-client.ts`), without client authentication. `/oauth/token` offers no `password` grant. | Removed in F1c, before 1.0, with no freeze phase; the authorization challenge endpoint replaces it (Decision 12)                                                                                                          |
 | QAuth's own app                   | The developer portal (`apps/developer-portal/src/server/auth-server-client.ts`) calls `/auth/login`, `/auth/register`, `/auth/verify`, `/auth/resend-verification` and `/auth/logout` server-to-server                                                   | In F0 the portal signs in through `/oauth/authorize` and keeps its tokens server-side (Decision 12)                                                                                                                       |
-| Headless hand-off                 | `/oauth/authorize` accepts `Authorization: Bearer` with a `system`-client access token in place of a browser session                                                                                                                                     | Follows the consent rule from F0; frozen in F1; removed in F1c (Decision 9)                                                                                                                                               |
+| Headless hand-off                 | `/oauth/authorize` accepts `Authorization: Bearer` with a `system`-client access token in place of a browser session                                                                                                                                     | Follows the consent rule from F0; removed in F1c, before 1.0 (Decision 9)                                                                                                                                                 |
 | Client authentication             | `private_key_jwt` at `/oauth/token` ([ADR-011 §7](./011-enterprise-managed-authorization.md) "`private_key_jwt` (#384) — additive, no flag"); `/oauth/revoke` and `/oauth/introspect` accept `client_secret_basic` and `client_secret_post`              | `private_key_jwt` at both in F0 (Decision 14)                                                                                                                                                                             |
 | First-party marking               | No client attribute marks a client as first-party. Operator-set attributes such as `max_agent_mode` are written only by the seed manifest (`clientSpecSchema`)                                                                                           | An operator-set `first_party_profile`, seed-only and CHECK-constrained (Decision 2)                                                                                                                                       |
 | Consent                           | Skipped when an active consent row covers the requested scopes (`canSkipConsent`, `helpers/consent.ts`)                                                                                                                                                  | Audited administrative consent for flagged clients (Decision 9)                                                                                                                                                           |
@@ -116,7 +124,8 @@ open as of 2026-09-26:
    front-ends only (Decision 1; question 1, decided 2026-10-08).
 2. PKCE (RFC 7636). A natural reading suggests that FiPA requires PKCE, as OAuth 2.1 does. The text
    of FiPA §5.1 "Authorization Challenge Request" makes `code_challenge` and `code_challenge_method`
-   OPTIONAL. QAuth requires S256, a stricter choice (Decision 3).
+   OPTIONAL. QAuth requires S256 by default, a stricter choice (Decision 3). An operator may switch
+   it off for one client at this endpoint only (question 11).
 3. FiPA §1.1. A natural reading suggests that §1.1 obliges every deployment to describe how it
    avoids third-party risks. The text binds only "Profiles of this specification that extend the
    usage to non-first-party use cases"; for other uses its sentence is descriptive ("Using this
@@ -143,13 +152,13 @@ open as of 2026-09-26:
 | Lockout as denial of service                                          | Soft ladder first, consulted by every surface before it verifies; known-IP exemption from the wait; disable only at 100 counted failures and only while a self-service rebind path exists; notice to the user                                                        | A per-account wait also delays the real user from an unknown IP. An attacker who knows an address can wait out the delays (or solve bot challenges from F1b) and disable its password after 100 counted failures, in under a day with the default waits. The user then needs a reset. The per-client hard cap and per-IPv4 limits affect every user behind them.        |
 | Forged end-user IP                                                    | IP inside the signed, single-use assertion; derived by the backend from its peer or a listed proxy chain (the SDK does it); audit rows mark it `asserted`; TCP peer and `client_id` keep their own caps                                                              | QAuth verifies who asserted the value, not the value; a misconfigured backend skews per-IP limits and audit rows; a forged or shared IP that matches a known IP skips the per-account wait (it still counts toward the ceiling), which also shows that the account exists                                                                                               |
 | Script on a web origin driving a backend                              | Web front-ends outside the profile; browser-origin guard; no CORS; a signed assertion on every request                                                                                                                                                               | An operator can flag a web backend as native. Script running in that web front-end could then drive the backend's login actions. RFC 10017 §5.1.4 "Proxying Requests via the User's Browser" says this scenario "cannot be stopped or prevented by application-level security measures"                                                                                 |
-| Code interception, replay or AS mix-up                                | PKCE S256 required; 60-second single-use codes; a replay revokes the family; `iss` on every response; the SDK pins one issuer and its metadata                                                                                                                       | Raw-wire clients that ignore `iss`                                                                                                                                                                                                                                                                                                                                      |
+| Code interception, replay or AS mix-up                                | PKCE S256 required by default (an operator may switch it off per client at this endpoint); 60-second single-use codes; a replay revokes the family; `iss` on every response; the SDK pins one issuer and its metadata                                                | Raw-wire clients that ignore `iss`                                                                                                                                                                                                                                                                                                                                      |
 | Downgrade and factor mixing                                           | A transaction completes only after the account's strongest bound factor; one subject per transaction; an email code never replaces an authenticator; `/auth/login` refuses passkey-bound accounts while it exists                                                    | Until the hosted `/ui/login` runs on the same engine (F2b), the browser path keeps its own rules                                                                                                                                                                                                                                                                        |
 | Account takeover through a mailbox                                    | 8-digit recovery code, 10 minutes, 5 tries per code, a per-identifier wait ladder across codes (bot challenge from F1b), send caps; a stronger bound authenticator required; every refresh family revoked, live transactions and browser sessions ended; notice sent | Mailbox takeover of a password-only account is an account takeover; codes can be relayed in real time; an attacker who waits out the ladder can keep guessing slowly, and every code guessed at was also mailed to the user                                                                                                                                             |
 | Registration abuse (squatting, pre-hijacking, mail bombing)           | Verify first, then create; the first mailbox proof on an unclaimed account removes every credential and consent bound before it; send caps per address, IP and client; per-client opt-in; bot challenge from F1b                                                     | Bot sign-ups with real mailboxes before F1b; state that downstream apps keep for the account's `sub` from before the proof survives                                                                                                                                                                                                                                     |
 | Third-party, MCP or agent client; consent waived for the wrong client | CHECKs exclude DCR, CIMD and agent clients; the waiver covers only flagged clients and non-dangerous allowlisted scopes; a written reason per flag; removing a flag revokes families                                                                                 | Operator error in the seed manifest                                                                                                                                                                                                                                                                                                                                     |
 | Browser-leg session swap                                              | App-claimed redirect URI; completion only over the originating app session with a matching `state`; a fresh login that QAuth requires for every `/oauth/authorize` request of a native profile                                                                       | The app-side half is vendor code until the mobile SDK (F4)                                                                                                                                                                                                                                                                                                              |
-| Bearer access-token theft from a backend                              | Tokens stay on the backend; short access-token life; refresh tokens bound to the client                                                                                                                                                                              | The deviation from FiPA §9.5 "Sender-Constrained Tokens" until a client opts into DPoP (F3)                                                                                                                                                                                                                                                                             |
+| Bearer access-token theft from a backend                              | Tokens stay on the backend; short access-token life; refresh tokens bound to the client                                                                                                                                                                              | The deviation from FiPA §9.5 "Sender-Constrained Tokens" until F3, where DPoP is on by default; afterwards only for a client whose operator switched DPoP off                                                                                                                                                                                                           |
 
 ### The question this ADR settles
 
@@ -212,7 +221,8 @@ QAuth enforces three things. A request that carries `Origin` or `Sec-Fetch-Site`
 without either of the other two). The route has no CORS, by analogy with RFC 9700 §2.6 "Other
 Recommendations": "CORS MUST NOT be supported at the authorization endpoint". Every request carries
 a signed client assertion. Together they stop browser script from calling the endpoint; they cannot
-stop a web backend's server.
+stop a web backend's server. The browser-origin guard sits in this endpoint's transport only, never
+in the shared engine (question 26, decided 2026-10-09). The Interaction API serves browsers.
 
 Why. FiPA §9.8 and RFC 10017 §7.3 and §6.1.3.1, as in
 [Four readings this record corrects](#four-readings-this-record-corrects). FiPA §1 "Introduction":
@@ -254,32 +264,37 @@ CHECK (first_party_profile IS DISTINCT FROM 'native_backend' OR grant_types ? 'a
 `web_redirect` earns only the consent waiver on `/oauth/authorize` (Decision 9) and is refused at
 the new endpoint; `native_backend` reaches it; `native_attested` (F4) is an attested native app. No
 value admits a public (`none`) or secret-based client in any phase. `first_party_policy` is a strict
-object: `flows` (a non-empty subset of `login`, `register`, `reset`; default `login`) and
-`email_code_after_password` (default `false`); a policy that does not parse makes the client not
-first-party. One new resolver, `resolveFirstPartyProfile(client)`, serves the endpoint gate and the
-consent waiver. Write paths follow the pattern of `max_agent_mode`: the seed manifest
-(`clientSpecSchema`, `buildInsert`, `buildUpdate` in
-`libs/infra/db/src/scripts/seed-oauth-clients.ts`) is the only positive write path; DCR pins NULL;
-CIMD omits the fields; the developer API (`createClientRequestSchema`, `updateClientRequestSchema`)
-can read but not write them. For native profiles the seed requires `jwks` or `jwks_uri`,
-`authorization_code`, a `reason`, and at least one browser-leg redirect URI that is `https`,
-private-use or loopback. The seed cannot check that an `https` URI is app-claimed and never served
-by the backend. That stays a profile requirement (Decision 1, requirement 6). Removing a profile
-revokes every refresh family of the client, audited.
+object: `flows` (a non-empty subset of `login`, `register`, `reset`; default `login`),
+`email_code_after_password` (default `false`) and `pkce_required` (default `true`); a policy that
+does not parse makes the client not first-party. One new resolver,
+`resolveFirstPartyProfile(client)`, serves the endpoint gate and the consent waiver. Write paths
+follow the pattern of `max_agent_mode`: the seed manifest (`clientSpecSchema`, `buildInsert`,
+`buildUpdate` in `libs/infra/db/src/scripts/seed-oauth-clients.ts`) is the only positive write path;
+DCR pins NULL; CIMD omits the fields; the developer API (`createClientRequestSchema`,
+`updateClientRequestSchema`) can read but not write them. For native profiles the seed requires
+`jwks` or `jwks_uri`, `authorization_code`, a `reason`, and at least one browser-leg redirect URI
+that is `https`, private-use or loopback. The seed cannot check that an `https` URI is app-claimed
+and never served by the backend. That stays a profile requirement (Decision 1, requirement 6).
+Removing a profile revokes every refresh family of the client, audited.
+
+PKCE S256 stays mandatory on the redirect flow, always. At this endpoint it is mandatory by default.
+An operator may set `pkce_required: false` for one client in the seed manifest. QAuth then logs a
+warning at boot that names the client. The standards position records the deviation. The maintainer
+decided this on 2026-10-09 (question 11).
 
 The runtime gate runs after client authentication on every round (client enabled, profile
-`native_backend` or, from F4, `native_attested`, `authorization_code` granted, flow in `flows`);
-failure is 400 `unauthorized_client`, audited. Client authentication uses
-`authenticateClientRequest` and `authenticateClientAssertion` with three stricter rules. `aud` is
-the issuer identifier as its sole value (a string or a one-element array), so the token endpoint URL
-that `acceptedClientAssertionAudiences` also accepts at `/oauth/token` is refused here and, from F0,
-at `/oauth/revoke` and `/oauth/introspect`. At `/oauth/token`, where challenge-issued codes are
-redeemed, a client with a `first_party_profile` also needs the issuer as its sole `aud`. Flagged
-rows exist only from F0, so no existing client is affected. For every other client, `/oauth/token`
-keeps the rule of ADR-011 §7 (watch list). `iat` is required and `exp − iat` is at most 60 s; with
-`CLIENT_ASSERTION_CLOCK_SKEW_LEEWAY_SECONDS` (60) on `exp`, an assertion is accepted up to about
-120 s after `iat`, and the burned `jti` keeps it single-use. The assertion must carry
-`qauth_end_user_ip` (Decision 7), or the answer is 400 `invalid_request`. The SDK always sets
+`native_backend` or, from F4, `native_attested`, `authorization_code` granted, flow in `flows`, and
+for registration the realm's `registration_allowed`); failure is 400 `unauthorized_client`, audited.
+Client authentication uses `authenticateClientRequest` and `authenticateClientAssertion` with three
+stricter rules. `aud` is the issuer identifier as its sole value (a string or a one-element array),
+so the token endpoint URL that `acceptedClientAssertionAudiences` also accepts at `/oauth/token` is
+refused here and, from F0, at `/oauth/revoke` and `/oauth/introspect`. At `/oauth/token`, where
+challenge-issued codes are redeemed, a client with a `first_party_profile` also needs the issuer as
+its sole `aud`. Flagged rows exist only from F0, so no existing client is affected. For every other
+client, `/oauth/token` keeps the rule of ADR-011 §7 (watch list). `iat` is required and `exp − iat`
+is at most 60 s; with `CLIENT_ASSERTION_CLOCK_SKEW_LEEWAY_SECONDS` (60) on `exp`, an assertion is
+accepted up to about 120 s after `iat`, and the burned `jti` keeps it single-use. The assertion must
+carry `qauth_end_user_ip` (Decision 7), or the answer is 400 `invalid_request`. The SDK always sets
 `typ: client-authentication+jwt`; the server does not require it.
 
 Public native clients get 400 `unauthorized_client` in every environment until F4, for three
@@ -308,6 +323,11 @@ a client assertion.
 QAuth-defined member is prefixed `qauth_`. No QAuth value ever appears in `error`. No prose goes on
 the wire. Every response carries `iss`.
 
+The `urn:qauth:ia:` step names become stable through the Interaction API's `/interaction/v1`
+(ADR-018 and ADR-019, each proposed in a separate PR). If a registry of standard step names
+appears, its names are added as aliases. QAuth never renames a step. The maintainer decided this on
+2026-10-09 (question 18).
+
 The envelope. `POST {issuer}/oauth/authorize-challenge`, `https` only. Every request, initial and
 intermediate, is `application/x-www-form-urlencoded`, UTF-8; a JSON-valued answer (a WebAuthn
 response) travels as a JSON string in one form parameter. Every response is `application/json` with
@@ -322,12 +342,12 @@ exists, or which factors an account has.
 | Initial-request parameter                 | Handling                                                                                                                                                                                                                                                                                                                  |
 | ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `response_type`                           | `code` required; otherwise 400 `unsupported_response_type`                                                                                                                                                                                                                                                                |
-| `code_challenge`, `code_challenge_method` | required, `S256`, bounds as in `authorizeQuerySchema`; stricter than FiPA §5.1, where both are OPTIONAL; keeps a future `request_uri` legal (FiPA §5.2.2.1.1 "Redirect to Web Error Response")                                                                                                                            |
+| `code_challenge`, `code_challenge_method` | required, `S256`, bounds as in `authorizeQuerySchema`, unless the client's `pkce_required` is `false` (Decision 2); stricter than FiPA §5.1, where both are OPTIONAL; keeps a future `request_uri` legal (FiPA §5.2.2.1.1 "Redirect to Web Error Response")                                                               |
 | `scope`, `resource`, `nonce`              | as at `/oauth/authorize`                                                                                                                                                                                                                                                                                                  |
 | `state`                                   | accepted and bounded as at `/oauth/authorize`, as FiPA §4.1 "Authorization Challenge Endpoint" requires ("MUST accept the authorization request parameters"); otherwise unused: the authorization challenge endpoint never redirects, so no response carries it; the browser leg sends the app's own `state` (Decision 1) |
 | `login_hint`                              | at most 254 bytes, email syntax, then `normalizeEmail`; the identifier answer; new handling (`authorizeQuerySchema` has no `login_hint` as of 2026-09-26)                                                                                                                                                                 |
 | `max_age`                                 | satisfied, because every sign-in is a fresh authentication; `auth_time` is when the last authenticator succeeded; reset and registration are not offered (403 `redirect_to_web` if selected)                                                                                                                              |
-| `prompt`                                  | `login` a no-op (and, like `max_age`, rules out reset and registration); `consent` 403 `redirect_to_web`; `none` 400 `login_required` (OpenID Connect Core 1.0 §3.1.2.6 "Authentication Error Response"); `create` refused until F2a (Decision 8); others 400 `invalid_request`                                           |
+| `prompt`                                  | `login` a no-op (and, like `max_age`, rules out reset and registration); `consent` 403 `redirect_to_web`; `none` 400 `login_required` (OpenID Connect Core 1.0 §3.1.2.6 "Authentication Error Response"); `create` starts registration (Decision 8); others 400 `invalid_request`                                         |
 | `acr_values`                              | 400 `unmet_authentication_requirements` (Decision 4)                                                                                                                                                                                                                                                                      |
 | `redirect_uri`                            | accepted if `redirectUriMatchesRegistered` agrees; used for the browser leg and stored for the token-endpoint rule (Decision 10)                                                                                                                                                                                          |
 | `interaction_types_supported`             | comma-separated step URNs, at most 1024 bytes and 16 entries; unknown URNs ignored; if absent, 403 `redirect_to_web`, FiPA's own continuation, so a generic FiPA client never dead-ends                                                                                                                                   |
@@ -341,7 +361,7 @@ Proof-of-Possession" code binding and §9.6.1 "Auth Session DPoP Binding" (F3), 
 
 | QAuth member                      | Where       | Meaning                                                                                                                                                                                                                                                                |
 | --------------------------------- | ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `qauth_interaction_type`          | any request | the step URN this request answers or selects; required when several were offered; with no answer field other than `login_hint` it selects a path (reset, registration, resend)                                                                                         |
+| `qauth_interaction_type`          | any request | the step URN this request answers or selects; required when several were offered; with no answer field other than `login_hint` it selects a path (reset, resend)                                                                                                       |
 | `interaction_type_required`       | 403 body    | always a value the client listed                                                                                                                                                                                                                                       |
 | `qauth_interaction_types_offered` | 403 body    | every step the AS accepts next, preferred first; the first equals `interaction_type_required`                                                                                                                                                                          |
 | `qauth_interaction_params`        | 403 body    | one object keyed by step URN with only what each offered step's screen needs                                                                                                                                                                                           |
@@ -354,27 +374,27 @@ Proof-of-Possession" code binding and §9.6.1 "Auth Session DPoP Binding" (F3), 
 | `password`                    | F1    | `{}`                                                                                                         | `password` (+ `login_hint` if none was given) | `pwd`         |
 | `email_code`                  | F1    | `purpose` (`verify_address`, `recovery`, `confirm_sign_in`), `length` (6 or 8), `expires_in`, `resend_after` | `otp`; none = resend                          | —             |
 | `new_password`                | F1    | `min_length`, `max_length`, optional `reasons`                                                               | `new_password`                                | —             |
-| `password_reset`, `register`  | F1    | path markers, no data                                                                                        | — (+ `login_hint`)                            | —             |
+| `password_reset`              | F1    | a path marker, no data                                                                                       | — (+ `login_hint`)                            | —             |
 | `captcha`                     | F1b   | `provider`, `site_key`                                                                                       | `captcha_token`                               | —             |
 | `webauthn_get`                | F2b   | WebAuthn Level 3 request options JSON                                                                        | `webauthn_response`                           | `pop`, `mfa`  |
 | `webauthn_create`             | F2b   | WebAuthn Level 3 creation options JSON, `optional`                                                           | `webauthn_response`                           | — (enrolment) |
 | `totp`                        | F5    | `digits`                                                                                                     | `otp`                                         | `otp`         |
 
-| Situation (every body carries `iss`)                                                                                                          | HTTP                      | `error`                                      | Notes                                                                                                                        |
-| --------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------- | -------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
-| Code issued                                                                                                                                   | 200                       | —                                            | `authorization_code`; no `auth_session` (FiPA §5.2.1)                                                                        |
-| Next step, or a rejected answer                                                                                                               | 403                       | `insufficient_authorization`                 | new `auth_session`, `interaction_type_required`, `qauth_*` (FiPA §5.2.2.1 "Error Codes")                                     |
-| Continue in a browser                                                                                                                         | 403                       | `redirect_to_web`                            | no `request_uri` before F5 (FiPA §5.2.2.1.1)                                                                                 |
-| Handle unknown, expired, completed, replayed, bound elsewhere; budget spent                                                                   | 400                       | `invalid_session`                            | one body for every reason                                                                                                    |
-| Malformed or oversized input, PKCE missing, repeated or frozen parameter, browser origin, IP claim missing, a header the endpoint cannot bind | 400                       | `invalid_request`                            | —                                                                                                                            |
-| Client authentication failed                                                                                                                  | 401, as at `/oauth/token` | `invalid_client`                             | RFC 6749 §5.2 "Error Response"                                                                                               |
-| Not first-party, wrong profile, flow not allowed                                                                                              | 400                       | `unauthorized_client`                        | code from RFC 6749 §4.1.2.1 "Error Response"                                                                                 |
-| Scope refused; `response_type` not `code`                                                                                                     | 400                       | `invalid_scope`; `unsupported_response_type` | RFC 6749 §4.1.2.1                                                                                                            |
-| `acr_values` present                                                                                                                          | 400                       | `unmet_authentication_requirements`          | RFC 9470 §5 "Authorization Response"; code defined by OpenID Connect Core Error Code `unmet_authentication_requirements` 1.0 |
-| `prompt=none`                                                                                                                                 | 400                       | `login_required`                             | OpenID Connect Core 1.0 §3.1.2.6                                                                                             |
-| Throttled                                                                                                                                     | 429 + `Retry-After`       | `temporarily_unavailable`                    | new `auth_session` if the transaction may continue                                                                           |
-| Counter, session or bot-challenge store unavailable                                                                                           | 503                       | `temporarily_unavailable`                    | fail closed (Decision 7)                                                                                                     |
-| DPoP proof missing or invalid; nonce needed (F3)                                                                                              | 400                       | `invalid_dpop_proof`; `use_dpop_nonce`       | with `DPoP-Nonce`                                                                                                            |
+| Situation (every body carries `iss`)                                                                                                                         | HTTP                      | `error`                                      | Notes                                                                                                                        |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------- | -------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| Code issued                                                                                                                                                  | 200                       | —                                            | `authorization_code`; no `auth_session` (FiPA §5.2.1)                                                                        |
+| Next step, or a rejected answer                                                                                                                              | 403                       | `insufficient_authorization`                 | new `auth_session`, `interaction_type_required`, `qauth_*` (FiPA §5.2.2.1 "Error Codes")                                     |
+| Continue in a browser                                                                                                                                        | 403                       | `redirect_to_web`                            | no `request_uri` before F5 (FiPA §5.2.2.1.1)                                                                                 |
+| Handle unknown, expired, completed, replayed, bound elsewhere; budget spent                                                                                  | 400                       | `invalid_session`                            | one body for every reason                                                                                                    |
+| Malformed or oversized input, PKCE missing where required, repeated or frozen parameter, browser origin, IP claim missing, a header the endpoint cannot bind | 400                       | `invalid_request`                            | —                                                                                                                            |
+| Client authentication failed                                                                                                                                 | 401, as at `/oauth/token` | `invalid_client`                             | RFC 6749 §5.2 "Error Response"                                                                                               |
+| Not first-party, wrong profile, flow not allowed                                                                                                             | 400                       | `unauthorized_client`                        | code from RFC 6749 §4.1.2.1 "Error Response"                                                                                 |
+| Scope refused; `response_type` not `code`                                                                                                                    | 400                       | `invalid_scope`; `unsupported_response_type` | RFC 6749 §4.1.2.1                                                                                                            |
+| `acr_values` present                                                                                                                                         | 400                       | `unmet_authentication_requirements`          | RFC 9470 §5 "Authorization Response"; code defined by OpenID Connect Core Error Code `unmet_authentication_requirements` 1.0 |
+| `prompt=none`                                                                                                                                                | 400                       | `login_required`                             | OpenID Connect Core 1.0 §3.1.2.6                                                                                             |
+| Throttled                                                                                                                                                    | 429 + `Retry-After`       | `temporarily_unavailable`                    | new `auth_session` if the transaction may continue                                                                           |
+| Counter, session or bot-challenge store unavailable                                                                                                          | 503                       | `temporarily_unavailable`                    | fail closed (Decision 7)                                                                                                     |
+| DPoP proof missing or invalid; nonce needed (F3)                                                                                                             | 400                       | `invalid_dpop_proof`; `use_dpop_nonce`       | with `DPoP-Nonce`                                                                                                            |
 
 Wire examples (`CA` stands for
 `client_assertion_type=urn%3Aietf%3Aparams%3Aoauth%3Aclient-assertion-type%3Ajwt-bearer&client_assertion=eyJ…`).
@@ -456,7 +476,8 @@ endpoint for native apps.
 The engine evaluates these rules in order on every round. The first unmet rule produces the
 response.
 
-1. Transport: per-peer cap, 16 KiB body, repeated parameters, schema bounds, origin guard.
+1. Transport: each transport's own checks. At this endpoint they are the per-peer cap, the 16 KiB
+   body, repeated parameters, schema bounds and the browser-origin guard (Decision 1).
 2. Client authentication, the first-partyness gate and the IP claim.
 3. Per-client limits; the `auth_session` lookup, binding and budgets; per-end-user-IP limits; the
    per-account ladder for credential rounds.
@@ -740,21 +761,27 @@ identical whether or not the address exists. A reset never unlocks an account wh
 authenticator is stronger than email. One password policy module sets every password QAuth stores.
 
 These flows create and prove password accounts, whose primary identity is an address. They do not
-define a verified account (Decision 5). F1 registers password accounts only. An account whose
-primary identity is a passkey, with no address, is designed in F2b (parked 30).
+define a verified account (Decision 5). F1 registers password accounts only. F2b adds accounts whose
+primary identity is a passkey, with no address. They are in 1.0. Their registration ceremony proves
+them. Recovery codes are mandatory for them (question 30, decided 2026-10-09).
 
-Registration. In F1 the signal is the path marker `urn:qauth:ia:register`, allowed when the client's
-`flows` contains `register`; `realms.registration_allowed` is not read, since nothing writes it as
-of 2026-09-26. From F2a, `prompt=create` becomes the standard signal at both endpoints, the marker
-stays as an alias, and discovery publishes `prompt_values_supported` listing every prompt value
-QAuth supports: `create` and the values `/oauth/authorize` accepts (`none`, `login` and `consent` as
-of 2026-09-26). It waits for F2a for two reasons. Initiating User Registration via OpenID Connect
-1.0, an OIDF specification, says an OpenID Provider that supports it "MUST define this metadata
-element in the openid-configuration file" (§4.2 "Discovery Metadata"). And `/oauth/authorize` cannot
-honour `create` before hosted registration pages exist. §4.2 also says the provider "must also
-specify all other prompt values which it supports". With `prompt=create`, `openid` is required: the
-flow "MUST NOT be considered successful without the return of a valid id_token" (§4.1 "Authorization
-Request").
+Registration. From F1 the signal is the standard `prompt=create` of Initiating User Registration via
+OpenID Connect 1.0, an OIDF specification. There is no path marker (question 14, decided
+2026-10-09).
+
+- Registration needs both the realm's `registration_allowed` and the client's `flows` containing
+  `register`. This holds for native sign-up here and for hosted sign-up (F2a), which extends the
+  per-client list to the redirect flow (question 13, decided 2026-10-09). As of 2026-10-09 the
+  column defaults to `false`, and nothing reads or writes it.
+- Discovery publishes `prompt_values_supported` from F1's release. It lists every prompt value QAuth
+  supports: `create` and the values `/oauth/authorize` accepts (`none`, `login` and `consent` as of
+  2026-10-09). §4.2 "Discovery Metadata" says a provider that supports the specification "MUST
+  define this metadata element in the openid-configuration file". It also says the provider "must
+  also specify all other prompt values which it supports".
+- `/oauth/authorize` honours `create` through the hosted pages of F2a. F2a ships in the F1 release
+  train, so both endpoints honour it by F1's release.
+- With `prompt=create`, `openid` is required: the flow "MUST NOT be considered successful without
+  the return of a valid id_token" (§4.1 "Authorization Request").
 
 - The first answer is always 403 `email_code` (`verify_address`, 8 digits), identical for new and
   existing addresses; an existing address receives a code with an "account exists" notice. After the
@@ -811,16 +838,16 @@ For a password-only account, the reset proves only the mailbox and then signs th
 an email-recovery sign-in at mailbox assurance, with no `amr`, `acr` or `auth_time` (Decision 10).
 It is never offered under `max_age` or `prompt=login`, so it never satisfies a step-up.
 
-On the wire, both paths start with `qauth_interaction_type` set to the path marker. `login_hint`
-carries the address unless the transaction already has one. Registration starts on the initial
-request. Its `interaction_types_supported` lists `urn:qauth:ia:register`, `urn:qauth:ia:email_code`
-and `urn:qauth:ia:new_password`, plus `urn:qauth:ia:password` so that an existing account can sign
-in. Reset starts on the initial request, or from any 403 that offers `urn:qauth:ia:password_reset`.
-Its initial `interaction_types_supported` lists `urn:qauth:ia:password_reset`,
-`urn:qauth:ia:email_code` and `urn:qauth:ia:new_password`, because the list is frozen at round 0.
-For a new address, or for a password-only account, the answers are 403 `email_code` (8 digits), then
-403 `new_password`, then 200 with the code. A step the client did not list answers `redirect_to_web`
-(Decision 4).
+On the wire, registration starts on an initial request with `prompt=create`. Reset starts with
+`qauth_interaction_type` set to its path marker. On both paths `login_hint` carries the address
+unless the transaction already has one. The registration request's `interaction_types_supported`
+lists `urn:qauth:ia:email_code` and `urn:qauth:ia:new_password`, plus `urn:qauth:ia:password` so
+that an existing account can sign in. Reset starts on the initial request, or from any 403 that
+offers `urn:qauth:ia:password_reset`. Its initial `interaction_types_supported` lists
+`urn:qauth:ia:password_reset`, `urn:qauth:ia:email_code` and `urn:qauth:ia:new_password`, because
+the list is frozen at round 0. For a new address, or for a password-only account, the answers are
+403 `email_code` (8 digits), then 403 `new_password`, then 200 with the code. A step the client did
+not list answers `redirect_to_web` (Decision 4).
 
 Disabled users. These flows never change a user whose `users.enabled` is false, and never give that
 user a code. Registration and reset send that address no mail, as at a send cap (Decision 5), so the
@@ -884,8 +911,8 @@ every other path requires consent.**
   Error Response"). Before F5 the client builds the browser-leg URL, so QAuth does not rely on the
   parameter arriving intact. So the waiver never lets a native app's browser leg complete without a
   visible login.
-- From F0, the headless hand-off on `/oauth/authorize` follows this decision. F1 freezes it; F1c
-  removes it with `/auth/login`.
+- From F0, the headless hand-off on `/oauth/authorize` follows this decision. F1c removes it with
+  `/auth/login`, with no freeze phase (question 19).
 
 Why. FiPA says nothing about consent. OpenID Connect Core 1.0 §3.1.2.4 "Authorization Server Obtains
 End-User Consent/Authorization": the AS "MUST obtain an authorization decision", and may establish
@@ -894,12 +921,13 @@ administrative consent)".
 
 ### 10. Codes, tokens, `amr` and sender-constraint phasing
 
-**Challenge-issued codes carry no `redirect_uri`, live 60 s, stay PKCE-bound, and yield tokens with
-`auth_time` and RFC 8176 `amr` (neither after registration or reset).** Each code is marked
-`issued_via = 'authorization_challenge'`, and a CHECK enforces the missing `redirect_uri`. Each code
-is linked to the refresh family it creates, so a replay revokes that family. `amr` and `auth_time`
-stay fixed across refreshes, and no new `acr` is added. Access tokens stay Bearer until DPoP (F3).
-This is a knowing deviation from FiPA §9.5's SHOULD.
+**Challenge-issued codes carry no `redirect_uri`, live 60 s, stay PKCE-bound by default, and yield
+tokens with `auth_time` and RFC 8176 `amr` (neither after registration or reset).** Each code is
+marked `issued_via = 'authorization_challenge'`, and a CHECK enforces the missing `redirect_uri`.
+Each code is linked to the refresh family it creates, so a replay revokes that family. `amr` and
+`auth_time` stay fixed across refreshes, and no new `acr` is added. Access tokens stay Bearer until
+F3. This is a knowing deviation from FiPA §9.5's SHOULD. From F3, DPoP is on by default for
+`native_backend` clients (question 24).
 
 ```text
 -- F0
@@ -915,8 +943,10 @@ refresh_tokens.authorization_code_id uuid NULL → authorization_codes(id) ON DE
 
 - One new helper, `mintAuthorizationCode`, replaces the two mint sites (`createCode` in
   `routes/oauth/authorize.ts` and the consent POST in `routes/ui/consent.ts`) and serves the new
-  endpoint. It refuses to mint without an S256 challenge of 43–128 characters, in every environment,
-  so every authorization code QAuth mints is PKCE-bound by construction.
+  endpoint. It refuses to mint without an S256 challenge of 43–128 characters, in every environment.
+  It has one exception: a challenge code for a client whose operator set `pkce_required: false`
+  (Decision 2, question 11). So every browser code is PKCE-bound by construction. Without PKCE, a
+  challenge code is bound only to the authenticated client. It never passes through a browser.
 - The token endpoint's `redirect_uri` rule (optional in `tokenExchangeAuthCodeBodySchema`, applied
   in `handleAuthorizationCode`): a browser code needs it, equal to the stored value; a challenge
   code with a `challenge_redirect_uri` accepts it absent or identical; a challenge code without one
@@ -927,6 +957,10 @@ refresh_tokens.authorization_code_id uuid NULL → authorization_codes(id) ON DE
   (`invalid_request`).
 - Challenge codes live 60 s; browser codes keep `AUTHORIZATION_CODE_TTL_MS`. A second redemption of
   any code is denied and revokes the family issued from it, audited as `oauth.token.code_replay`.
+- Refresh-family lifetime (question 23, decided 2026-10-09). When a realm's `sso_max_lifespan` is
+  set, it caps every refresh family in that realm. When it is unset, today's sliding
+  `REFRESH_TOKEN_LIFESPAN` is unchanged. As of 2026-10-09 the column exists on `realms`, is
+  nullable, and nothing reads it.
 - `amr` and `auth_time` appear in the ID token and the JWT access token for challenge-issued codes,
   fixed across refreshes. Browser-flow tokens are unchanged in F1; `amr` on browser logins is F5.
 - A registration or reset code carries neither `amr` nor `auth_time`, and neither do the tokens it
@@ -950,11 +984,19 @@ assertion and refuses an assertion without it, so `["pop","mfa"]` means a posses
 authenticator reported a local verification, not an attested multi-factor authenticator. No factor
 here produces `acr`; an authenticator-strength `acr` is an ADR-010 amendment.
 
-| Client                                                        | Access token                                                                                                  | Refresh token                                                                | Phase |
-| ------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- | ----- |
-| `native_backend`                                              | Bearer, kept on the backend; the FiPA §9.5 "Sender-Constrained Tokens" SHOULD is not met, a knowing deviation | bound to the client (the ownership check in `handleRefreshToken`), rotated   | F1    |
-| `native_backend` with operator-set `dpop_bound_access_tokens` | `cnf.jkt`, `token_type: DPoP`                                                                                 | bound to the client                                                          | F3    |
-| `native_attested`                                             | DPoP-bound                                                                                                    | bound to the client instance (attestation -11 §10.3 "Refresh token binding") | F4    |
+| Client                                                      | Access token                                                                                                  | Refresh token                                                                | Phase |
+| ----------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- | ----- |
+| `native_backend` before F3                                  | Bearer, kept on the backend; the FiPA §9.5 "Sender-Constrained Tokens" SHOULD is not met, a knowing deviation | bound to the client (the ownership check in `handleRefreshToken`), rotated   | F1    |
+| `native_backend` from F3, DPoP on (the default)             | `cnf.jkt`, `token_type: DPoP`                                                                                 | bound to the client                                                          | F3    |
+| `native_backend` from F3, DPoP switched off by the operator | Bearer; a boot warning names the client, and the FiPA §9.5 deviation is recorded for it                       | bound to the client                                                          | F3    |
+| `native_attested`                                           | DPoP-bound                                                                                                    | bound to the client instance (attestation -11 §10.3 "Refresh token binding") | F4    |
+
+From F3, DPoP is on by default for every `native_backend` client (question 24, decided 2026-10-09).
+It binds the access tokens, the code and the `auth_session` to the backend's DPoP key. The seed
+manifest sets `dpop_bound_access_tokens` for such a client unless the operator switches it off. A
+switched-off client keeps Bearer access tokens. QAuth logs a warning at boot that names it, and the
+FiPA §9.5 deviation is recorded for that client. While `DPOP_ENABLED` is off, no client is
+DPoP-bound, and QAuth logs the same warning for every `native_backend` client.
 
 Why. RFC 6749 §4.1.3 "Access Token Request" requires `redirect_uri`, identical, when the
 authorization request included it. OAuth 2.1 -16 §10.2 "Redirect URI Parameter in Token Request": an
@@ -984,7 +1026,7 @@ HMACs.**
 | `private_key_jwt` in `revocation_endpoint_auth_methods_supported` and `introspection_endpoint_auth_methods_supported`, with `revocation_endpoint_auth_signing_alg_values_supported` and `introspection_endpoint_auth_signing_alg_values_supported` from the same constant as the token endpoint's list (`ASSERTION_SIGNING_ALG_VALUES_SUPPORTED`) | F0, when those endpoints accept it (RFC 8414 §2 "Authorization Server Metadata": MUST when `private_key_jwt` is listed)                                                                           |
 | `end_session_endpoint`                                                                                                                                                                                                                                                                                                                            | F0, once the browser end-session route exists (OpenID Connect RP-Initiated Logout 1.0 §2.1 "OpenID Provider Discovery Metadata")                                                                  |
 | `amr` in `claims_supported`                                                                                                                                                                                                                                                                                                                       | F1, switch on                                                                                                                                                                                     |
-| `prompt_values_supported` listing every supported prompt value, `create` included                                                                                                                                                                                                                                                                 | F2a, when both endpoints honour it                                                                                                                                                                |
+| `prompt_values_supported` listing every supported prompt value, `create` included                                                                                                                                                                                                                                                                 | F1's release, when both endpoints honour it (F2a ships in the same train)                                                                                                                         |
 | `dpop_signing_alg_values_supported`                                                                                                                                                                                                                                                                                                               | `DPOP_ENABLED` (RFC 9449 §5.1 "Authorization Server Metadata"); its algorithms apply at the token endpoint and, from F3, at the authorization challenge endpoint, which refuses `DPoP` until then |
 | `attest_jwt_client_auth_dpop` in `token_endpoint_auth_methods_supported`; the attestation algorithm members                                                                                                                                                                                                                                       | F4 (attestation -11 §8 "Authorization Server and Resource Server Metadata")                                                                                                                       |
 | `acr_values_supported`                                                                                                                                                                                                                                                                                                                            | not published; an ADR-010 amendment that makes both endpoints honour `acr_values` would add it (RFC 9470 §7 "Authorization Server Metadata")                                                      |
@@ -1133,11 +1175,10 @@ number gives each user an email address before it moves.
 QAuth's own surfaces move in these steps. In F0 the portal moves first: its `SYSTEM_CLIENT_ID` row
 becomes a `private_key_jwt` `web_redirect` client (`assertManagementToken` keeps working because it
 pins that row), and portal login moves to `/oauth/authorize`. The portal's tokens move server-side
-(Phasing, F0). In F1, `/auth/login` and the hand-off are frozen and marked deprecated with a named
-version and date. Before F2b ships, `/auth/login` starts refusing any account with a bound passkey,
-with its ordinary invalid-credentials answer. The refusal holds until `/auth/login` is removed. In
-F1c, `/auth/login`, `/auth/logout` and the hand-off are removed, at least one minor release after
-F1's release, once the replacement for scripted management tokens has shipped. `/auth/register`,
+(Phasing, F0). In F1c, `/auth/login`, `/auth/logout` and the hand-off are removed directly, with
+no freeze phase (question 19, decided 2026-10-09). Removal comes as soon as F0's portal move and the
+CLI client of question 8 exist, and before 1.0. Until then, `/auth/login` refuses any account with a
+bound passkey, with its ordinary invalid-credentials answer. `/auth/register`,
 `/auth/verify` and `/auth/resend-verification` issue no tokens; they adopt the one password policy
 in F1. Each stays until its hosted replacement is on for the portal in a default deployment (F2a),
 because a legacy route is never removed while its replacement is off by default. Hosted sign-up is
@@ -1267,7 +1308,6 @@ verifiers or two providers would have to be kept in step.
 | Long-lived post-code sessions for step-up (FiPA §6.1 "Token Endpoint Successful Response") in F1      | The right later design, but long-lived state in a first release; deferred to F5.                                                                                                                                                                                     |
 | A form parameter or `TRUST_PROXY` for the end-user IP                                                 | A form parameter is workable, but the maintainer chose the signed claim on 2026-10-09 (question 4); `TRUST_PROXY` makes every route believe `X-Forwarded-For` from a backend on the public internet.                                                                 |
 | Bot challenge mandatory for registration in the first release                                         | Makes F1 depend on a third-party provider and an unbuilt egress helper; F1b, per client.                                                                                                                                                                             |
-| `prompt=create` in F1, or gating registration on `realms.registration_allowed`                        | Would breach the OIDF §4.2 MUST or over-advertise `/oauth/authorize`; the realm column has no write path.                                                                                                                                                            |
 | `amr: ["pwd"]` after a reset                                                                          | The user set a password; they did not prove one.                                                                                                                                                                                                                     |
 | A flag-gated `grant_type=password` for compatibility                                                  | Either not ROPC or not safe (Decision 12); RFC 9700 §2.4.                                                                                                                                                                                                            |
 | A backend callback URL for the browser leg                                                            | A backend that completes from `state` alone cannot tell which browser returned the code.                                                                                                                                                                             |
@@ -1276,19 +1316,19 @@ verifiers or two providers would have to be kept in step.
 ## Standards position
 
 Positions: Conformant, Stricter (QAuth requires more), QAuth-defined (an extension the text allows),
-Knowing deviation (recorded, with an end or a parked question), Partial (part of the text is met;
-the row names that part, and the phase or parked question for the rest), Shared responsibility
+Knowing deviation (recorded, with an end or a decided question), Partial (part of the text is met;
+the row names that part, and the phase or question for the rest), Shared responsibility
 (QAuth meets its part; the rest is a profile requirement on the vendor's app), Not claimed (QAuth
 makes no claim the text governs), Deferred.
 
 | Piece                                                                             | Position                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     | Hook                                                                                                                                                                                                       |
 | --------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `https` endpoint; client authentication at the endpoint                           | Conformant                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   | FiPA §4.1 MUSTs                                                                                                                                                                                            |
-| Accept authorization-request parameters                                           | Conformant: `state` accepted and unused; `login_hint` new handling; `prompt=create` from F2a                                                                                                                                                                                                                                                                                                                                                                                                                                                 | FiPA §4.1 "Authorization Challenge Endpoint" MUST                                                                                                                                                          |
+| Accept authorization-request parameters                                           | Conformant: `state` accepted and unused; `login_hint` new handling; `prompt=create` from F1                                                                                                                                                                                                                                                                                                                                                                                                                                                  | FiPA §4.1 "Authorization Challenge Endpoint" MUST                                                                                                                                                          |
 | Verify first-partyness                                                            | Conformant (operator profile and `private_key_jwt`; attestation for native apps in F4)                                                                                                                                                                                                                                                                                                                                                                                                                                                       | FiPA §5 MUST; §9.1                                                                                                                                                                                         |
 | Browser leg: external user agent                                                  | Shared responsibility until F4: a profile requirement, shown in the guide; the app code is the vendor's                                                                                                                                                                                                                                                                                                                                                                                                                                      | FiPA §5 SHOULD; RFC 8252 §8.12                                                                                                                                                                             |
 | Browser leg: redirect URI and completion                                          | Conformant as a profile requirement                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          | FiPA §5 SHOULD; RFC 8252 §7.1–§7.3, §8.9                                                                                                                                                                   |
-| PKCE                                                                              | Stricter: S256 required; FiPA makes it OPTIONAL                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              | FiPA §5.1; RFC 9700 §4.8.2 "Countermeasures"                                                                                                                                                               |
+| PKCE                                                                              | Stricter by default: S256 required; FiPA makes it OPTIONAL. The redirect flow always requires it. An operator may switch it off for one client at this endpoint only; that is a knowing deviation from QAuth's own rule, still conformant with FiPA §5.1, with a boot warning (question 11)                                                                                                                                                                                                                                                  | FiPA §5.1; RFC 9700 §4.8.2 "Countermeasures"                                                                                                                                                               |
 | Next-step signal                                                                  | QAuth-defined members inside `insufficient_authorization`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    | FiPA §5.2.2 MAY; [WG issue #133](https://github.com/oauth-wg/oauth-first-party-apps/issues/133)                                                                                                            |
 | 403 for `insufficient_authorization` and `redirect_to_web`; 400 `invalid_session` | Conformant ([WG issue #177](https://github.com/oauth-wg/oauth-first-party-apps/issues/177) open)                                                                                                                                                                                                                                                                                                                                                                                                                                             | FiPA §5.2.2.1 MUST; §5.2.2 default                                                                                                                                                                         |
 | 429 for throttling, 503 for store outages                                         | QAuth-defined: outside §5.2.2's default of 400, which applies "unless specified otherwise by a particular error code"                                                                                                                                                                                                                                                                                                                                                                                                                        | FiPA §5.2.2                                                                                                                                                                                                |
@@ -1296,12 +1336,12 @@ makes no claim the text governs), Deferred.
 | `iss` on every response                                                           | QAuth-defined on the 200                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     | FiPA §5.2.2.1.1 SHOULD (RFC 9207) for the browser leg                                                                                                                                                      |
 | `auth_session` device binding                                                     | Partial for backends (bound to client authentication); DPoP F3; instance key F4                                                                                                                                                                                                                                                                                                                                                                                                                                                              | FiPA §5.3.1 SHOULD; §9.6                                                                                                                                                                                   |
 | Client keeps `auth_session` beyond the code                                       | Conformant in the SDK: the last handle is kept per `sessionKey` until logout                                                                                                                                                                                                                                                                                                                                                                                                                                                                 | FiPA §5.3.1 "Auth Session" MUST                                                                                                                                                                            |
-| Client includes a stored `auth_session` in later requests                         | Knowing deviation in the SDK until F5 (parked question 17): the SDK does not present the last handle on a new transaction, because QAuth ends every `auth_session` at the code; a client that presents it gets `invalid_session` and pays one round trip (Decision 6)                                                                                                                                                                                                                                                                        | FiPA §5.3.1 "Auth Session" MUST; §9.6.2 "Auth Session Lifetime"                                                                                                                                            |
+| Client includes a stored `auth_session` in later requests                         | Knowing deviation in the SDK until F5 (question 17): the SDK does not present the last handle on a new transaction, because QAuth ends every `auth_session` at the code; a client that presents it gets `invalid_session` and pays one round trip (Decision 6)                                                                                                                                                                                                                                                                               | FiPA §5.3.1 "Auth Session" MUST; §9.6.2 "Auth Session Lifetime"                                                                                                                                            |
 | `redirect_uri` at the token endpoint                                              | Conformant. Browser codes: required and identical (RFC 6749 §4.1.3). Challenge codes: the OAuth 2.1 -16 rule, absent or identical to a value sent on the authorization challenge request; RFC 6749 §4.1.3's presence rule is not applied to them ([WG issue #179](https://github.com/oauth-wg/oauth-first-party-apps/issues/179) open as of 2026-09-26)                                                                                                                                                                                      | FiPA §6; RFC 6749 §4.1.3; OAuth 2.1 -16 §4.1.3, §10.2                                                                                                                                                      |
 | Client assertion `aud`                                                            | Conformant for every client with a `first_party_profile` at every endpoint it uses, and for every client at `/oauth/revoke` and `/oauth/introspect`: the issuer as sole value. For other clients at `/oauth/token`, the rule of ADR-011 §7 is unchanged by this record (watch list). The SDK sends the issuer as sole value at every endpoint                                                                                                                                                                                                | draft-ietf-oauth-rfc7523bis-11 §4 "Updates to RFC 7523" MUST, MUST NOT                                                                                                                                     |
 | `acr_values`                                                                      | Conformant: refused with `unmet_authentication_requirements`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 | RFC 9470 §5 SHOULD; §7                                                                                                                                                                                     |
 | Attestation for native apps                                                       | Deferred to F4 (not applicable to backends)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  | FiPA §9.3, §9.4 SHOULD                                                                                                                                                                                     |
-| Sender-constrained tokens                                                         | Knowing deviation for `native_backend` without operator-set DPoP; F3 option, F4 DPoP for attested apps                                                                                                                                                                                                                                                                                                                                                                                                                                       | FiPA §9.5 SHOULD                                                                                                                                                                                           |
+| Sender-constrained tokens                                                         | Knowing deviation for `native_backend` until F3. From F3, DPoP is on by default; a client whose operator switched it off keeps the deviation, recorded for that client with a boot warning (question 24). F4: DPoP for attested apps                                                                                                                                                                                                                                                                                                         | FiPA §9.5 SHOULD                                                                                                                                                                                           |
 | Identical experience across first-party apps                                      | Shared responsibility: AS behaviour, `StepView` and SDK; app UIs are the vendor's                                                                                                                                                                                                                                                                                                                                                                                                                                                            | FiPA §9.7.1 MUST; §9.7.3 RECOMMENDED                                                                                                                                                                       |
 | Browser-based applications                                                        | Conformant (native front-ends only; the web variant was declined on 2026-10-08)                                                                                                                                                                                                                                                                                                                                                                                                                                                              | FiPA §9.8 NOT RECOMMENDED; RFC 10017 §7.3, §6.1.3.1 MUSTs                                                                                                                                                  |
 | Registration inside the flow                                                      | QAuth-defined, following the non-normative example with verify-first                                                                                                                                                                                                                                                                                                                                                                                                                                                                         | FiPA Appendix A.8                                                                                                                                                                                          |
@@ -1312,8 +1352,8 @@ makes no claim the text governs), Deferred.
 | Code replay                                                                       | Conformant (deny and revoke the family)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      | OAuth 2.1 -16 §4.1.3 MUST, SHOULD                                                                                                                                                                          |
 | `invalid_dpop_proof`, `use_dpop_nonce` at this endpoint (F3)                      | QAuth-defined use beyond the registered locations                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            | RFC 9449 §12.2 "OAuth Extensions Error Registration"                                                                                                                                                       |
 | `interaction_types_supported`, `interaction_type_required`                        | Knowing deviation: the names are borrowed and the rules differ. OpenID4VCI requires the list and says an AS that cannot serve it "MUST reject the request"; QAuth answers `redirect_to_web`, as FiPA allows (Decision 3)                                                                                                                                                                                                                                                                                                                     | OpenID4VCI 1.1 "Initial Request"; "Interaction Required Response"; "Authorization Challenge Error Response"                                                                                                |
-| Step values "MUST be valid URNs"                                                  | Knowing deviation: `urn:qauth:` is not a registered namespace (parked question 18)                                                                                                                                                                                                                                                                                                                                                                                                                                                           | OpenID4VCI 1.1 "Initial Request"                                                                                                                                                                           |
-| `prompt=create` metadata and ID token                                             | Conformant from F2a                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          | OIDF prompt=create §4.1, §4.2 MUSTs                                                                                                                                                                        |
+| Step values "MUST be valid URNs"                                                  | Knowing deviation: `urn:qauth:` is not a registered namespace; the names become stable through `/interaction/v1`, and standard names would be added as aliases (question 18)                                                                                                                                                                                                                                                                                                                                                                 | OpenID4VCI 1.1 "Initial Request"                                                                                                                                                                           |
+| `prompt=create` metadata and ID token                                             | Conformant from F1's release                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 | OIDF prompt=create §4.1, §4.2 MUSTs                                                                                                                                                                        |
 | Administrative consent                                                            | Conformant                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   | OpenID Connect Core 1.0 §3.1.2.4                                                                                                                                                                           |
 | `amr` vocabulary                                                                  | Conformant (RFC 8176 and IANA `pop`; no email value)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         | RFC 8176 §2; RFC 9068 §2.2.1                                                                                                                                                                               |
 | Password verifiers                                                                | Conformant for new and changed passwords at the default minimum of 15 (whole-password blocklist); an operator-set minimum below 15 is a knowing deviation while a password can be the only factor; Stricter by a zxcvbn score floor, which requires no character mix and so is not read as a composition rule; blocklist partial until a breach corpus (F5)                                                                                                                                                                                  | NIST SP 800-63B-4 §3.1.1.2                                                                                                                                                                                 |
@@ -1332,7 +1372,7 @@ makes no claim the text governs), Deferred.
 | draft-ietf-oauth-rfc7523bis (WG)                                 | `-11`, in the RFC Editor queue per the IETF index of 2026-09-26                              | —          | `aud` = issuer as sole value; the token endpoint's accepted values; also watched by ADR-014                                  |
 | draft-embesozzi-oauth-agent-native-authorization (individual)    | `-00` · 2026-04-03                                                                           | 2026-10-05 | MCP elicitation over FiPA                                                                                                    |
 | OpenID Connect Native SSO for Mobile Apps                        | draft 07 · 2025-01-16 (Second Implementer's Draft)                                           | —          | F5                                                                                                                           |
-| OIDF Initiating User Registration via OpenID Connect 1.0         | Final · 2022-12-02                                                                           | —          | `prompt=create` in F2a                                                                                                       |
+| OIDF Initiating User Registration via OpenID Connect 1.0         | Final · 2022-12-02                                                                           | —          | `prompt=create` from F1                                                                                                      |
 
 Rows for these documents go into `docs/spec-pin-log.md` in a follow-up change, not in this record.
 
@@ -1420,10 +1460,12 @@ on. A phase whose target is the train ships no later than F1's release.
       set before hosted pages go off is ignored and no longer blocks sign-in.
   - Dependencies: F0. None on ADR-014. No third-party provider.
 - F1b — bot challenge (same switch): the provider-neutral verifier, the SSRF-safe POST helper,
-  `urn:qauth:ia:captcha`, and a per-client requirement for registration. Depends on F1.
-- F1c — removal of `/auth/login`, `/auth/logout` and the headless hand-off, at least one minor
-  release after F1's release, on the version and date F1's deprecation notice names. Depends on F0's
-  portal move and on the CLI client for scripted management tokens (question 8).
+  `urn:qauth:ia:captcha`, and a per-client requirement for registration. Depends on F1. F1b is in
+  1.0 and stays provider-neutral (question 15, decided 2026-10-09).
+- F1c — removal of `/auth/login`, `/auth/logout` and the headless hand-off (question 19, decided
+  2026-10-09). They are removed directly, with no freeze phase. Removal comes as soon as F0's portal
+  move and the CLI client for scripted management tokens (question 8) exist. All of this lands
+  before 1.0.
 - F1d — user import, a switch-free operator tool (question 5): `db:import-users` in the seed-script
   pattern; records carry the address, whether the source proved the account's primary identity, and
   an Argon2id PHC hash, which QAuth's hasher already verifies; each import writes `user.imported`.
@@ -1436,58 +1478,61 @@ on. A phase whose target is the train ships no later than F1's release.
   Uniqueness"). Depends on F0. Target: the F1 release train, so the migration guide that ships with
   F1 can name the tool.
 - F2a — hosted account pages with no WebAuthn dependency (question 6, decided 2026-10-09):
-  registration, verification and reset pages on the F1 engine, and an account page. They live in
-  the reference ceremony app, a separate app that uses only the Interaction API (ADR-019). The
-  reset, verification and account pages are on whenever hosted pages are on. Only sign-up sits
-  behind its own switch, and it is off by default. F2a also adds a "Forgot password" link on
-  `/ui/login`, a "Create account" link while sign-up is on, `prompt=create` at both endpoints with
-  `prompt_values_supported`, and the portal's sign-up. The account page offers "sign out
-  everywhere" (question 9). A legacy route is removed only once its hosted replacement is on for the
-  portal in a default deployment. Depends on F1's registration and reset flows. A
-  hosted reset or registration sets no `auth_time`. It ends without a browser session that could
-  satisfy `max_age` or `prompt=login` (Decision 10). Target: the F1 release train.
+  registration, verification and reset pages on the F1 engine, and an account page. They live in the
+  reference ceremony app, a separate app that uses only the Interaction API (ADR-019). The reset,
+  verification and account pages are on whenever hosted pages are on. Only sign-up sits behind its
+  own switch, and it is off by default. F2a also adds a "Forgot password" link on `/ui/login`, a
+  "Create account" link while sign-up is on, `prompt=create` at `/oauth/authorize`, and the portal's
+  sign-up. The account page offers "sign out everywhere" (question 9). A legacy route is removed
+  only once its hosted replacement is on for the portal in a default deployment. Depends on F1's
+  registration and reset flows. A hosted reset or registration sets no `auth_time`. It ends without
+  a browser session that could satisfy `max_age` or `prompt=login` (Decision 10). Target: the F1
+  release train.
 - F2b — passkeys, behind `WEBAUTHN_ENABLED=false`: the shared WebAuthn `CredentialProvider`;
   `webauthn_get` and `webauthn_create`; passkey-first; registration of an account whose primary
-  identity is a passkey, with no address (parked 30); the downgrade rule binding; UV verified
-  server-side; optional enrolment; the hosted enrolment and management page shared with ADR-014's
-  P5; an operator-set RP ID, per-client origins and the association files, after re-reading the
-  platform rules; passkeys on the hosted `/ui/login` on the same engine. Depends on F1, and on F2a
-  for hosted passkey login.
+  identity is a passkey, with no address (question 30); recovery codes, issued at the first passkey
+  enrolment and redeemed on the hosted page, while the FiPA endpoint answers `redirect_to_web` for
+  that recovery (question 25); the downgrade rule binding; UV verified server-side; optional
+  enrolment; the hosted enrolment and management page shared with ADR-014's P5; an operator-set RP
+  ID, per-client origins and the association files, after re-reading the platform rules; passkeys on
+  the hosted `/ui/login` on the same engine. Depends on F1, and on F2a for hosted passkey login.
 - F3 — DPoP, behind `DPOP_ENABLED=false`: the shared verifier; FiPA §9.5.1 code binding and §9.6.1
   session binding at the endpoint, which ends its `DPoP` refusal; `cnf.jkt`, `token_type: DPoP` and
-  nonces at the token endpoint; the shared `dpop_bound_access_tokens` column. Depends on F1; shares
-  the verifier with ADR-014's P1a.
+  nonces at the token endpoint; the shared `dpop_bound_access_tokens` column; DPoP on by default for
+  `native_backend` clients, with a per-client operator switch-off and its boot warning (question
+  24). Depends on F1; shares the verifier with ADR-014's P1a.
 - F4 — attested native apps, behind `CLIENT_ATTESTATION_ENABLED=false` (which requires
   `DPOP_ENABLED`): attestation -11, or its post-WGLC revision, in DPoP combined mode; the
   `native_attested` profile, with the auth-method CHECK replaced so that `native_attested` is tied
   to `attest_jwt_client_auth[_dpop]` and the other profiles stay on `private_key_jwt`; attester keys
   per client (`CLIENT_ATTESTATION_TRUSTED_ATTESTERS`, in the pattern of `ID_JAG_TRUSTED_ISSUERS`);
   instance-bound refresh tokens; the attestation metadata; public native clients may become
-  first-party only here; the Flutter SDK in a separate repository.
+  first-party only here; the Flutter SDK in a separate repository. F4 is in 1.0 if the attestation
+  draft becomes an RFC before 1.0 is cut. Otherwise F4 stays experimental (question 20, decided
+  2026-10-09).
 - F5 — later, unscheduled: TOTP; an established post-code `auth_session` and FiPA §6.2 refresh-time
   step-up; a pushed-request `request_uri` (RFC 9126 §2.2 "Successful Response") in `redirect_to_web`
   once [WG issue #179](https://github.com/oauth-wg/oauth-first-party-apps/issues/179) settles; the
   FiPA Appendix A.4 "Email Confirmation Code" link variant; `amr` on browser logins; a
   breached-password corpus; an authenticator-strength `acr`; OpenID Connect Native SSO.
 
-| What the first release refuses                                           | Answer                                                 | Lifted in                             |
-| ------------------------------------------------------------------------ | ------------------------------------------------------ | ------------------------------------- |
-| Public client (`none`)                                                   | 400 `unauthorized_client`                              | F4                                    |
-| Secret-based client; DCR, CIMD or agent client; `web_redirect` profile   | 400 `unauthorized_client`                              | never                                 |
-| `DPoP` or `OAuth-Client-Attestation` headers                             | 400 `invalid_request`                                  | when the endpoint binds them (F3, F4) |
-| Browser-originated request (`Origin`, `Sec-Fetch-Site`)                  | 400 `invalid_request`                                  | never                                 |
-| Missing `qauth_end_user_ip` claim                                        | 400 `invalid_request`                                  | never for `native_backend`            |
-| A frozen authorization-request parameter on a later round                | 400 `invalid_request`                                  | never                                 |
-| `acr_values`                                                             | 400 `unmet_authentication_requirements`                | with an ADR-010 amendment             |
-| `prompt=none`                                                            | 400 `login_required`                                   | F5, with established sessions         |
-| `prompt=consent`, dangerous scopes                                       | 403 `redirect_to_web`                                  | not planned                           |
-| Reset or registration under `max_age` or `prompt=login`                  | 403 `redirect_to_web`                                  | never                                 |
-| `prompt=create`                                                          | 400 `invalid_request` (use the `register` path marker) | F2a                                   |
-| No `interaction_types_supported`                                         | 403 `redirect_to_web`                                  | never                                 |
-| Passkey, TOTP and bot-challenge steps                                    | not offered                                            | F2b, F5, F1b                          |
-| Passwordless email-code sign-in                                          | not offered                                            | never (question 2)                    |
-| `request_uri` in `redirect_to_web`                                       | never returned                                         | F5                                    |
-| `auth_session` after a code; token-endpoint `insufficient_authorization` | `invalid_session`; never emitted                       | F5                                    |
+| What the first release refuses                                           | Answer                                  | Lifted in                             |
+| ------------------------------------------------------------------------ | --------------------------------------- | ------------------------------------- |
+| Public client (`none`)                                                   | 400 `unauthorized_client`               | F4                                    |
+| Secret-based client; DCR, CIMD or agent client; `web_redirect` profile   | 400 `unauthorized_client`               | never                                 |
+| `DPoP` or `OAuth-Client-Attestation` headers                             | 400 `invalid_request`                   | when the endpoint binds them (F3, F4) |
+| Browser-originated request (`Origin`, `Sec-Fetch-Site`)                  | 400 `invalid_request`                   | never                                 |
+| Missing `qauth_end_user_ip` claim                                        | 400 `invalid_request`                   | never for `native_backend`            |
+| A frozen authorization-request parameter on a later round                | 400 `invalid_request`                   | never                                 |
+| `acr_values`                                                             | 400 `unmet_authentication_requirements` | with an ADR-010 amendment             |
+| `prompt=none`                                                            | 400 `login_required`                    | F5, with established sessions         |
+| `prompt=consent`, dangerous scopes                                       | 403 `redirect_to_web`                   | not planned                           |
+| Reset or registration under `max_age` or `prompt=login`                  | 403 `redirect_to_web`                   | never                                 |
+| No `interaction_types_supported`                                         | 403 `redirect_to_web`                   | never                                 |
+| Passkey, TOTP and bot-challenge steps                                    | not offered                             | F2b, F5, F1b                          |
+| Passwordless email-code sign-in                                          | not offered                             | never (question 2)                    |
+| `request_uri` in `redirect_to_web`                                       | never returned                          | F5                                    |
+| `auth_session` after a code; token-endpoint `insufficient_authorization` | `invalid_session`; never emitted        | F5                                    |
 
 ## Consequences
 
@@ -1502,21 +1547,22 @@ on. A phase whose target is the train ships no later than F1's release.
   gives the app no password.
 - QAuth applies the rule to itself: its portal moves to the redirect flow in F0, and its
   password-to-token route retires in F1c.
-- Every authorization code QAuth mints is PKCE-bound by construction, and every code replay revokes
-  its family, for every client. Revocation and introspection gain `private_key_jwt`, which ADR-014
-  also needs.
+- Every browser code QAuth mints is PKCE-bound by construction. So is every challenge code, unless
+  an operator switched PKCE off for that client (question 11). Every code replay revokes its family,
+  for every client. Revocation and introspection gain `private_key_jwt`, which ADR-014 also needs.
 
 ### Negative
 
 - A new endpoint with a step engine, a session store, a layered limiter and an SDK is a large
   surface, and the most branch-heavy login path QAuth has.
 - A password step shows the password to the app. Passkeys (F2b) avoid this only for users who sign
-  in with one. `native_backend` access tokens stay Bearer until a client opts into DPoP (F3), a
-  recorded deviation from FiPA §9.5 "Sender-Constrained Tokens".
+  in with one. `native_backend` access tokens stay Bearer until F3, a recorded deviation from FiPA
+  §9.5 "Sender-Constrained Tokens". From F3 the deviation remains only where an operator switched
+  DPoP off for a client.
 - QAuth cannot verify the asserted end-user IP, only who asserted it.
 - Headless login is unavailable while Redis is unavailable, by design.
 - Two registration paths coexist while hosted sign-up is off by default (question 6), and
-  `/auth/login` stays, frozen, until F1c.
+  `/auth/login` stays until F1c.
 - The app changes too, not only its backend. It renders the `email_code`, `new_password` and
   `redirect_to_web` steps. After a correct password, a user whose address is unverified is asked for
   an email code; this includes an imported account whose source did not prove its primary identity.
@@ -1624,35 +1670,36 @@ The maintainer's decision follows in italics.
     one DPoP verifier behind `DPOP_ENABLED` and one WebAuthn provider, both shared with ADR-014.
     `private_key_jwt` at revocation and introspection lands in F0._
 
+Questions 11–30 recorded defaults that were unlikely to change. The maintainer decided each of
+them on 2026-10-09. The table keeps the proposed default beside the decision.
+
+| #   | Question                                               | Proposed default                                                                                                       | Decided by the maintainer, 2026-10-09                                                                                                                                                                                               |
+| --- | ------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 11  | PKCE                                                   | S256 required, recorded as Stricter; `mintAuthorizationCode` refuses to mint without it                                | PKCE S256 stays mandatory on the redirect flow, always. At the FiPA endpoint it is mandatory by default; an operator may switch it off per client, with a boot warning and a recorded deviation                                     |
+| 12  | FiPA §1.1                                              | the profile's rules are stated as QAuth's own requirements                                                             | the profile rules are QAuth's own requirements                                                                                                                                                                                      |
+| 13  | Registration gate                                      | per-client `flows`; `realms.registration_allowed` stays unread; F2a extends the per-client list to hosted registration | registration needs both the realm's `registration_allowed` and the client's `flows`, for hosted and native sign-up                                                                                                                  |
+| 14  | `prompt=create`                                        | the path marker in F1; `prompt=create` with its metadata in F2a                                                        | the standard `prompt=create` is used from F1, instead of a path marker, with `prompt_values_supported` in discovery                                                                                                                 |
+| 15  | Bot challenge for registration                         | not required in F1; per client from F1b                                                                                | the bot challenge (F1b) is in 1.0, provider-neutral                                                                                                                                                                                 |
+| 16  | Consecutive-failure ceiling                            | 100 with the soft ladder; lower values make lockout cheaper                                                            | a ceiling of 100 with the soft ladder                                                                                                                                                                                               |
+| 17  | Established post-code `auth_session` (FiPA §6.1, §6.2) | none before F5; step-up is a fresh transaction                                                                         | no post-code `auth_session` before F5; step-up is a fresh transaction                                                                                                                                                               |
+| 18  | Step identifier namespace                              | `urn:qauth:ia:`, recorded as a deviation; revisit if a WG type registry appears                                        | the `urn:qauth:ia:` step names become stable through `/interaction/v1`; standard names, if a registry appears, are added as aliases, never renames                                                                                  |
+| 19  | Hand-off and legacy removal                            | limited in F0, frozen in F1, removed in F1c; `/auth/login` refuses passkey-bound accounts until then                   | `/auth/login` and the headless hand-off are removed directly, with no freeze phase, as soon as F0's portal move and the CLI client of question 8 exist, all before 1.0; until removal, `/auth/login` refuses passkey-bound accounts |
+| 20  | Attestation revision                                   | wait for the post-WGLC revision of -11, re-pin, then build F4                                                          | F4 goes into 1.0 if the attestation draft becomes an RFC before 1.0 is cut; otherwise F4 stays experimental                                                                                                                         |
+| 21  | Pre-attestation native clients                         | refused in every environment until F4; no value exempts a public client                                                | public native clients are refused until F4                                                                                                                                                                                          |
+| 22  | `amr` for passkeys                                     | `["pop","mfa"]` when the server verified the UV flag, never `hwk`; no ADR-010 change here                              | passkey `amr` is `["pop","mfa"]` when user verification was verified, never `hwk`                                                                                                                                                   |
+| 23  | Absolute refresh-family lifetime                       | none; the sliding `REFRESH_TOKEN_LIFESPAN` is unchanged                                                                | when the realm's `sso_max_lifespan` is set, it caps refresh families; unset keeps today's sliding behaviour                                                                                                                         |
+| 24  | DPoP for `native_backend` in F3                        | operator opt-in per client; the FiPA §9.5 deviation stays recorded for the rest                                        | DPoP for `native_backend` is on by default from F3; an operator may switch it off per client, with a boot warning, and the FiPA §9.5 deviation is then recorded for that client                                                     |
+| 25  | Recovery after losing the only passkey                 | `redirect_to_web`; F2b designs the hosted policy (NIST SP 800-63B-4 §4.2.2.1 "Recovery Without Identity Proofing")     | recovery codes are issued at the first passkey enrolment and redeemed on the hosted page; the FiPA endpoint keeps `redirect_to_web`                                                                                                 |
+| 26  | Browser-origin guard                                   | on, keyed on `Origin` and `Sec-Fetch-Site` only                                                                        | the browser-origin guard applies only on the FiPA endpoint's transport, never in the shared engine                                                                                                                                  |
+| 27  | Dangerous scopes at the endpoint                       | `redirect_to_web` in every environment                                                                                 | dangerous scopes answer `redirect_to_web`                                                                                                                                                                                           |
+| 28  | Endpoint path                                          | `/oauth/authorize-challenge`                                                                                           | the path is `/oauth/authorize-challenge`                                                                                                                                                                                            |
+| 29  | Known-IP exemption from the per-account wait           | on; the attempt still counts toward the ceiling                                                                        | the known-IP exemption is on; the attempt still counts                                                                                                                                                                              |
+| 30  | Account with no address                                | F1 registers password accounts only; F2b designs registration by passkey alone, proved by the registration ceremony    | passkey-only accounts (no address) are in 1.0; their registration ceremony proves them; recovery codes are mandatory for them                                                                                                       |
+
 ## Decisions parked for the maintainer
 
-Each question carries the default this record proceeds on until the maintainer decides otherwise.
-Questions 1–10 are decided (above). Questions 11–30 record defaults that are unlikely to change.
-
-Other recorded defaults:
-
-| #   | Question                                               | Default                                                                                                                |
-| --- | ------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------- |
-| 11  | PKCE                                                   | S256 required, recorded as Stricter; `mintAuthorizationCode` refuses to mint without it                                |
-| 12  | FiPA §1.1                                              | the profile's rules are stated as QAuth's own requirements                                                             |
-| 13  | Registration gate                                      | per-client `flows`; `realms.registration_allowed` stays unread; F2a extends the per-client list to hosted registration |
-| 14  | `prompt=create`                                        | the path marker in F1; `prompt=create` with its metadata in F2a                                                        |
-| 15  | Bot challenge for registration                         | not required in F1; per client from F1b                                                                                |
-| 16  | Consecutive-failure ceiling                            | 100 with the soft ladder; lower values make lockout cheaper                                                            |
-| 17  | Established post-code `auth_session` (FiPA §6.1, §6.2) | none before F5; step-up is a fresh transaction                                                                         |
-| 18  | Step identifier namespace                              | `urn:qauth:ia:`, recorded as a deviation; revisit if a WG type registry appears                                        |
-| 19  | Hand-off and legacy removal                            | limited in F0, frozen in F1, removed in F1c; `/auth/login` refuses passkey-bound accounts until then                   |
-| 20  | Attestation revision                                   | wait for the post-WGLC revision of -11, re-pin, then build F4                                                          |
-| 21  | Pre-attestation native clients                         | refused in every environment until F4; no value exempts a public client                                                |
-| 22  | `amr` for passkeys                                     | `["pop","mfa"]` when the server verified the UV flag, never `hwk`; no ADR-010 change here                              |
-| 23  | Absolute refresh-family lifetime                       | none; the sliding `REFRESH_TOKEN_LIFESPAN` is unchanged                                                                |
-| 24  | DPoP for `native_backend` in F3                        | operator opt-in per client; the FiPA §9.5 deviation stays recorded for the rest                                        |
-| 25  | Recovery after losing the only passkey                 | `redirect_to_web`; F2b designs the hosted policy (NIST SP 800-63B-4 §4.2.2.1 "Recovery Without Identity Proofing")     |
-| 26  | Browser-origin guard                                   | on, keyed on `Origin` and `Sec-Fetch-Site` only                                                                        |
-| 27  | Dangerous scopes at the endpoint                       | `redirect_to_web` in every environment                                                                                 |
-| 28  | Endpoint path                                          | `/oauth/authorize-challenge`                                                                                           |
-| 29  | Known-IP exemption from the per-account wait           | on; the attempt still counts toward the ceiling                                                                        |
-| 30  | Account with no address                                | F1 registers password accounts only; F2b designs registration by passkey alone, proved by the registration ceremony    |
+No question is parked. The maintainer decided questions 1–30 on 2026-10-08 and 2026-10-09 (see
+"Decided by the maintainer" above).
 
 ## Related
 
