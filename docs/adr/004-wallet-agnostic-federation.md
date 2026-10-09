@@ -6,6 +6,18 @@
 
 > **Status (2026-09-11, #405): the same-device return leg has shipped, and the clause at the end of these notes that still lists HAIP profile wiring (#377) as outstanding is retired — #377 closed 2026-09-11 with Phase C (encrypted `direct_post.jwt`), so `haip-1.0` boots when provisioned.** The `direct_post` Response Endpoint now returns the OID4VP 1.0 §8.2 `redirect_uri` with a fresh Response Code for a flow the user started as same-device, the browser return leg binds that code to the browser that started the flow, and the cross-device QR flow keeps completing by polling on both profiles. That decision — and HAIP 1.0 §5.1's waived same-device-only recommendation — is [ADR-013](./013-same-device-return-leg.md), which also keeps this record's two request-side meanings of `redirect_uri` (the forbidden Authorization Request parameter; the Client Identifier Prefix) distinct from the response-body member it adds. Remaining T4 work is the real-wallet interoperability pass (#376).
 >
+> **Amendment (2026-10-09): [ADR-018](./018-1-0-scope-and-stability.md) sets the 1.0 wallet scope.**
+>
+> - 1.0 promises the OID4VP 1.0 + HAIP 1.0 profile as stable. SD-JWT VC follows the revision that HAIP 1.0 pins.
+> - #296 settled the HAIP question this record marks OPEN, on 2026-07-20. #377 shipped the HAIP profile. ADR-018 adds that HAIP 1.0 is inside the 1.0 promise.
+> - Before 1.0, the verifier self-certifies against OID4VP 1.0 and HAIP 1.0.
+> - Real-wallet testing before 1.0 runs against the EUDI reference wallet.
+> - Japan's My Number enters 1.0 through upstream OIDC login, not through this wallet path. My Number is not an OID4VP wallet today.
+> - That upstream is the authentication app API of Japan's Digital Agency. It requires `private_key_jwt`.
+> - The first wallet expansion is ISO mdoc with the W3C Digital Credentials API, in 1.1. It covers ISO/IEC 18013-7 Annex C and OID4VP over the DC API.
+> - OpenID Federation 1.0 is in 1.0 in full. See ADR-018 and [ADR-019](./019-deployment-topology-and-trust-boundaries.md).
+> - The OID4VP `openid_federation` Client Identifier Prefix is in scope. So is issuer trust through federation trust chains.
+>
 > **Implementation status (2026-06-24):** Accepted as design; not implemented. Deferred per [ADR-007](./007-mcp-first-positioning.md) to the long-term platform; gated on the [ADR-002](./002-identifier-abstraction.md) migration.
 >
 > **Spec refresh (2026-07-19): this ADR predates the finalisation of its own core specs and MUST NOT be implemented as originally written.** It was authored 2026-03-11, before OpenID for Verifiable Presentations reached Final. See [Spec status](#spec-status-2026-07-19) — the credential query mechanism changed, and an interoperability profile now exists that this ADR does not name.
