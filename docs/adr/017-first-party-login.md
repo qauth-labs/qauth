@@ -10,6 +10,25 @@
 > flag-free changes before the endpoint exists; each is a listed delta with its own test
 > ([Phasing](#phasing)). The client profile this record adds is inert for every client an operator
 > has not flagged, so for those clients nothing else changes.
+>
+> **Amended 2026-10-09** (before any implementation) with the maintainer's decisions of 2026-10-08
+> and 2026-10-09. The sections they touch are edited in place.
+>
+> - Web front-ends. On 2026-10-08 the maintainer answered parked question 1. Web front-ends use the
+>   redirect flow. The FiPA endpoint (the authorization challenge endpoint) serves first-party
+>   native apps only. The question now sits under "Decided by the maintainer".
+> - One engine, two transports. The F1 engine is shared with the Interaction API that ADR-019
+>   defines (proposed in a separate PR). One step grammar (Decision 3) has two transports: the
+>   Interaction API for browser ceremonies and the FiPA endpoint for native apps. F2a's hosted pages
+>   live in the reference ceremony app, a separate app that uses only the Interaction API.
+> - Stability. The FiPA endpoint and the first-party subpath of `@qauth-labs/node` stay experimental
+>   until FiPA is an RFC. The engine is part of the 1.0 promise, because the hosted pages use it
+>   (ADR-018, proposed in a separate PR).
+> - The portal's tokens. F0 also moves the developer portal's tokens server-side. The portal cookie
+>   then carries only a session id.
+> - Names. ADR-014's tree mechanism is now the Authority Tree. `AGENT_TREE_ENABLED` becomes
+>   `AUTHORITY_TREE_ENABLED`, and `AGENT_APPROVAL_ENABLED` becomes `REMOTE_APPROVAL_ENABLED`. File
+>   names, and so link targets, are unchanged.
 
 ## Context
 
@@ -27,7 +46,7 @@ standards-based first-party login, and give apps that use a password grant a cle
 | Concern                           | As of 2026-09-26                                                                                                                                                                                                                                         | This record adds                                                                                                                                                                                                          |
 | --------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Password-to-token route           | `POST /auth/login` (`routes/auth/login.ts`) exchanges `{ email, password }` for tokens of the internal `system` client (`getOrCreateSystemClient`, `helpers/oauth-client.ts`), without client authentication. `/oauth/token` offers no `password` grant. | Frozen in F1, removed in F1c; the authorization challenge endpoint replaces it (Decision 12)                                                                                                                              |
-| QAuth's own app                   | The developer portal (`apps/developer-portal/src/server/auth-server-client.ts`) calls `/auth/login`, `/auth/register`, `/auth/verify`, `/auth/resend-verification` and `/auth/logout` server-to-server                                                   | The portal signs in through `/oauth/authorize` in F0 (Decision 12)                                                                                                                                                        |
+| QAuth's own app                   | The developer portal (`apps/developer-portal/src/server/auth-server-client.ts`) calls `/auth/login`, `/auth/register`, `/auth/verify`, `/auth/resend-verification` and `/auth/logout` server-to-server                                                   | In F0 the portal signs in through `/oauth/authorize` and keeps its tokens server-side (Decision 12)                                                                                                                       |
 | Headless hand-off                 | `/oauth/authorize` accepts `Authorization: Bearer` with a `system`-client access token in place of a browser session                                                                                                                                     | Follows the consent rule from F0; frozen in F1; removed in F1c (Decision 9)                                                                                                                                               |
 | Client authentication             | `private_key_jwt` at `/oauth/token` ([ADR-011 §7](./011-enterprise-managed-authorization.md) "`private_key_jwt` (#384) — additive, no flag"); `/oauth/revoke` and `/oauth/introspect` accept `client_secret_basic` and `client_secret_post`              | `private_key_jwt` at both in F0 (Decision 14)                                                                                                                                                                             |
 | First-party marking               | No client attribute marks a client as first-party. Operator-set attributes such as `max_agent_mode` are written only by the seed manifest (`clientSpecSchema`)                                                                                           | An operator-set `first_party_profile`, seed-only and CHECK-constrained (Decision 2)                                                                                                                                       |
@@ -82,7 +101,7 @@ open as of 2026-09-26:
    grant". A backend that serves a native app is not a browser-based application in that sense, and
    FiPA §1.1 "Usage and Applicability" says the draft "is designed to be used by first-party native
    applications, which includes both mobile and desktop applications". So this record serves native
-   front-ends only (Decision 1; parked question 1).
+   front-ends only (Decision 1; question 1, decided 2026-10-08).
 2. PKCE (RFC 7636). A natural reading suggests that FiPA requires PKCE, as OAuth 2.1 does. The text
    of FiPA §5.1 "Authorization Challenge Request" makes `code_challenge` and `code_challenge_method`
    OPTIONAL. QAuth requires S256, a stricter choice (Decision 3).
@@ -139,7 +158,8 @@ F2a, F2b), and [Phasing](#phasing) lists them all. These names are distinct from
 **QAuth adds the FiPA -04 authorization challenge endpoint at `POST /oauth/authorize-challenge`,
 behind `FIRST_PARTY_LOGIN_ENABLED`, for one client shape in the first release: an operator-flagged
 confidential backend (`private_key_jwt`) whose user-facing front-end is a native mobile or desktop
-app.** Web front-ends use the redirect-based code flow.
+app.** Web front-ends use the redirect-based code flow. The maintainer decided this on 2026-10-08
+(question 1).
 
 With the switch off, the route is not registered (404), discovery omits every member this record
 would add, and flagged rows do nothing at the endpoint. The profile is the confidential backend for
@@ -416,6 +436,10 @@ emits the core equivalent beside its own members.
 same whatever the account's state.** A transaction completes only if it proved the account's
 strongest bound factor. Step-up is a fresh transaction. `acr_values` is refused with the
 `unmet_authentication_requirements` error that RFC 9470 §5 names.
+
+The engine is shared with the Interaction API that ADR-019 defines (proposed in a separate PR). The
+step grammar of Decision 3 has two transports: the Interaction API for browser ceremonies and this
+endpoint for native apps.
 
 The engine evaluates these rules in order on every round. The first unmet rule produces the
 response.
@@ -1088,15 +1112,15 @@ number gives each user an email address before it moves.
 
 QAuth's own surfaces move in these steps. In F0 the portal moves first: its `SYSTEM_CLIENT_ID` row
 becomes a `private_key_jwt` `web_redirect` client (`assertManagementToken` keeps working because it
-pins that row), and portal login moves to `/oauth/authorize` (Phasing, F0). In F1, `/auth/login` and
-the hand-off are frozen and marked deprecated with a named version and date. Before F2b ships,
-`/auth/login` starts refusing any account with a bound passkey, with its ordinary
-invalid-credentials answer. The refusal holds until `/auth/login` is removed. In F1c, `/auth/login`,
-`/auth/logout` and the hand-off are removed, at least one minor release after F1's release, once the
-replacement for scripted management tokens has shipped. `/auth/register`, `/auth/verify` and
-`/auth/resend-verification` issue no tokens; they adopt the one password policy in F1 and stay until
-hosted pages are on for the portal (F2a), because a legacy route is never removed while its
-replacement is off by default.
+pins that row), and portal login moves to `/oauth/authorize`. The portal's tokens move server-side
+(Phasing, F0). In F1, `/auth/login` and the hand-off are frozen and marked deprecated with a named
+version and date. Before F2b ships, `/auth/login` starts refusing any account with a bound passkey,
+with its ordinary invalid-credentials answer. The refusal holds until `/auth/login` is removed. In
+F1c, `/auth/login`, `/auth/logout` and the hand-off are removed, at least one minor release after
+F1's release, once the replacement for scripted management tokens has shipped. `/auth/register`,
+`/auth/verify` and `/auth/resend-verification` issue no tokens; they adopt the one password policy
+in F1 and stay until hosted pages are on for the portal (F2a), because a legacy route is never
+removed while its replacement is off by default.
 
 ### 13. SDK scope — a server-side Node SDK and a language-neutral kit
 
@@ -1112,7 +1136,8 @@ clients in F4. There is no browser SDK.
   `signInWithPassword` (the eager path), `register.start`, `reset.start`, `tokens.refresh()`,
   `signOut()` (revoke, then drop state), and `redirectToWeb.start` and `.complete`, which refuses a
   `state` stored under another `sessionKey` and is called only over the app session that started the
-  leg.
+  leg. These functions sit in the package's first-party subpath. Like the endpoint, it stays
+  experimental until FiPA is an RFC (ADR-018, proposed in a separate PR).
 - Results are values; only programmer or infrastructure faults throw. `StepView` is a discriminated
   union with one variant per step of the catalogue, carrying only what a screen needs (for example
   `purpose`, `length` and `resendAfter` for a code, or `minLength`, `maxLength` and `reasons` for a
@@ -1153,20 +1178,21 @@ native experience is identical across all the first-party applications."
 
 **ADR-017 adds a human-login product line beside ADR-007's near-term identity without changing it.**
 It shares one DPoP verifier and one WebAuthn `CredentialProvider` with ADR-014. The DPoP verifier is
-flag-neutral, under `DPOP_ENABLED`, which `AGENT_TREE_ENABLED` requires. The WebAuthn provider sits
-under `WEBAUTHN_ENABLED`. This record pulls `private_key_jwt` at revocation and introspection
+flag-neutral, under `DPOP_ENABLED`, which `AUTHORITY_TREE_ENABLED` requires. The WebAuthn provider
+sits under `WEBAUTHN_ENABLED`. This record pulls `private_key_jwt` at revocation and introspection
 forward into its F0. A first-party client never uses the MCP or agent door, and an MCP or agent
 client never uses the first-party door.
 
 - Positioning. [ADR-007](./007-mcp-first-positioning.md) "Decision" sets "The open-source,
   self-hostable OAuth 2.1 authorization server for MCP servers and AI agents" and does not exclude
-  human login. This record feeds no agent path in any phase: a challenge code never roots an agent
-  tree, MCP, DCR and CIMD clients are refused, and there is no SSO carry-over into the browser.
+  human login. This record feeds no agent path in any phase: a challenge code never roots an
+  Authority Tree, MCP, DCR and CIMD clients are refused, and there is no SSO carry-over into the
+  browser.
 - DPoP. [ADR-014](./014-agent-authority-tree.md) "Phasing" plans DPoP at the token endpoint in P1a,
-  behind `AGENT_TREE_ENABLED`. The proposed amendment (parked question 10): the verifier (RFC 9449
-  §4.3 "Checking DPoP Proofs", a `jti` burn, nonces per §8 "Authorization Server-Provided Nonce"
-  with §11.3 "DPoP Nonce Downgrade", `cnf.jkt`) lands once in a flag-neutral library behind
-  `DPOP_ENABLED`; `AGENT_TREE_ENABLED` requires `DPOP_ENABLED`; the operator-set
+  behind `AUTHORITY_TREE_ENABLED`. The proposed amendment (parked question 10): the verifier
+  (RFC 9449 §4.3 "Checking DPoP Proofs", a `jti` burn, nonces per §8 "Authorization Server-Provided
+  Nonce" with §11.3 "DPoP Nonce Downgrade", `cnf.jkt`) lands once in a flag-neutral library behind
+  `DPOP_ENABLED`; `AUTHORITY_TREE_ENABLED` requires `DPOP_ENABLED`; the operator-set
   `dpop_bound_access_tokens` column is shared; whichever phase lands first builds it.
   `private_key_jwt` at `/oauth/revoke` and `/oauth/introspect`, also in P1a, needs no DPoP and is
   opt-in per client, so it moves to ADR-017 F0: a backend cannot log out without it.
@@ -1177,7 +1203,7 @@ client never uses the first-party door.
   `webauthn`, `external_sub` = credential id), with step verifiers above the single-shot `verify()`
   for second-factor use, optional enrolment after sign-in, the NIST SP 800-63B-4 §4.1.2.1 "Binding
   an Additional Authenticator" notice, and a hosted enrolment and management page that ADR-014's P5
-  reuses; the amendment makes `AGENT_APPROVAL_ENABLED` require `WEBAUTHN_ENABLED`. The RP ID
+  reuses; the amendment makes `REMOTE_APPROVAL_ENABLED` require `WEBAUTHN_ENABLED`. The RP ID
   (`WEBAUTHN_RP_ID`, a registrable suffix of the issuer host) and per-client origins are
   operator-set; when the RP ID is the issuer host, QAuth serves the platform association files
   (`apple-app-site-association`, `assetlinks.json`) from operator-set app identifiers, so one
@@ -1186,7 +1212,7 @@ client never uses the first-party door.
   and is gated" ("a WebAuthn workstream").
 - Wallet, agents and MCP. `WalletProvider.verify()` keeps throwing; wallet login is never a
   challenge step, only a `redirect_to_web` target. `first_party_profile` excludes `is_agent` by
-  CHECK, so a challenge-issued code never roots an agent tree
+  CHECK, so a challenge-issued code never roots an Authority Tree
   ([ADR-014 §1](./014-agent-authority-tree.md) "Session root — `sid` on agent access tokens"). DCR
   and CIMD clients cannot be first-party, so MCP clients reach the endpoint only as
   `unauthorized_client`. draft-embesozzi-oauth-agent-native-authorization-00 binds MCP Elicitation
@@ -1201,7 +1227,7 @@ verifiers or two providers would have to be kept in step.
 
 | Alternative                                                                                           | Why not                                                                                                                                                                                                                                                              |
 | ----------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Web front-ends as a per-client operator opt-in with compensating controls                             | A knowing breach of RFC 10017 §7.3 (MUST) and FiPA §9.8 (NOT RECOMMENDED) in the first release; §9.8's user-experience reason does not hold on the web. Parked (question 1) with its mitigation list.                                                                |
+| Web front-ends as a per-client operator opt-in with compensating controls                             | A knowing breach of RFC 10017 §7.3 (MUST) and FiPA §9.8 (NOT RECOMMENDED) in the first release; §9.8's user-experience reason does not hold on the web. Declined on 2026-10-08 (question 1 keeps its mitigation list).                                               |
 | Argue that a server-rendered web app is not a browser-based application                               | RFC 10017 §3 turns on "dynamically downloaded and executed in a web browser"; a framework app with server actions, such as QAuth's own portal, is one.                                                                                                               |
 | Only attested native apps, no backends                                                                | Blocks the first release on a draft whose WGLC ended 2026-09-22, and leaves the main case, an app backend, unserved.                                                                                                                                                 |
 | Keep extending the `/auth/*` JSON routes                                                              | A proprietary surface with no client authentication and no step signalling; FiPA Appendix C "Design Goals" puts the answer in an endpoint that returns a code.                                                                                                       |
@@ -1224,7 +1250,7 @@ verifiers or two providers would have to be kept in step.
 | `amr: ["pwd"]` after a reset                                                                          | The user set a password; they did not prove one.                                                                                                                                                                                                                     |
 | A flag-gated `grant_type=password` for compatibility                                                  | Either not ROPC or not safe (Decision 12); RFC 9700 §2.4.                                                                                                                                                                                                            |
 | A backend callback URL for the browser leg                                                            | A backend that completes from `state` alone cannot tell which browser returned the code.                                                                                                                                                                             |
-| Fold ADR-017 into ADR-014, or wait for it                                                             | Puts human login behind `AGENT_TREE_ENABLED`, or loses the window for apps leaving ROPC.                                                                                                                                                                             |
+| Fold ADR-017 into ADR-014, or wait for it                                                             | Puts human login behind `AUTHORITY_TREE_ENABLED`, or loses the window for apps leaving ROPC.                                                                                                                                                                         |
 
 ## Standards position
 
@@ -1256,7 +1282,7 @@ makes no claim the text governs), Deferred.
 | Attestation for native apps                                                       | Deferred to F4 (not applicable to backends)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  | FiPA §9.3, §9.4 SHOULD                                                                                                                                                                                     |
 | Sender-constrained tokens                                                         | Knowing deviation for `native_backend` without operator-set DPoP; F3 option, F4 DPoP for attested apps                                                                                                                                                                                                                                                                                                                                                                                                                                       | FiPA §9.5 SHOULD                                                                                                                                                                                           |
 | Identical experience across first-party apps                                      | Shared responsibility: AS behaviour, `StepView` and SDK; app UIs are the vendor's                                                                                                                                                                                                                                                                                                                                                                                                                                                            | FiPA §9.7.1 MUST; §9.7.3 RECOMMENDED                                                                                                                                                                       |
-| Browser-based applications                                                        | Conformant (native front-ends only; web variant parked)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      | FiPA §9.8 NOT RECOMMENDED; RFC 10017 §7.3, §6.1.3.1 MUSTs                                                                                                                                                  |
+| Browser-based applications                                                        | Conformant (native front-ends only; the web variant was declined on 2026-10-08)                                                                                                                                                                                                                                                                                                                                                                                                                                                              | FiPA §9.8 NOT RECOMMENDED; RFC 10017 §7.3, §6.1.3.1 MUSTs                                                                                                                                                  |
 | Registration inside the flow                                                      | QAuth-defined, following the non-normative example with verify-first                                                                                                                                                                                                                                                                                                                                                                                                                                                                         | FiPA Appendix A.8                                                                                                                                                                                          |
 | Headless reset                                                                    | QAuth-defined: an email-recovery sign-in at mailbox assurance, with no `amr` or `auth_time`                                                                                                                                                                                                                                                                                                                                                                                                                                                  | FiPA Appendix A.2, §5.2.2.1.1; NIST SP 800-63B-4 §4.2                                                                                                                                                      |
 | No ROPC                                                                           | Conformant at `/oauth/token`, which has never offered `grant_type=password`; QAuth's own password-to-token route, `/auth/login`, is removed in F1c (Decision 12)                                                                                                                                                                                                                                                                                                                                                                             | RFC 9700 §2.4 "Resource Owner Password Credentials Grant" MUST NOT; OAuth 2.1 -16 §10 "Differences from OAuth 2.0"                                                                                         |
@@ -1291,7 +1317,7 @@ Rows for these documents go into `docs/spec-pin-log.md` in a follow-up change, n
 
 ## Explicitly out of scope
 
-A password grant in any form. Headless login for web front-ends, unless parked question 1 changes.
+A password grant in any form. Headless login for web front-ends (question 1, decided 2026-10-08).
 Password-hash import in formats other than Argon2id PHC (bcrypt and PBKDF2 later, and only after the
 dependency and advisory check of parked question 5). All import if parked question 5 is declined.
 SMS and phone steps. User-name and phone-number identifiers. Social or wallet steps inside the flow
@@ -1325,16 +1351,18 @@ on. A phase whose target is the train ships no later than F1's release.
     The `SYSTEM_CLIENT_ID` row is re-provisioned as a `private_key_jwt` `web_redirect` client with
     the portal's callback. The `migration-runner` job and the seed provisioner do this from operator
     configuration. The portal refuses to start on any other row shape and takes
-    `authorization_endpoint` from discovery. It signs out by revoking its refresh token and calling
-    the end-session route. It keeps "sign out everywhere" as an explicit action (parked question 9)
-    and keeps its "Create account" link until F2a.
+    `authorization_endpoint` from discovery. It keeps its tokens server-side, so its cookie
+    (`__Host-qauth_portal_session`) carries only a session id. It signs out by revoking its refresh
+    token and calling the end-session route. It keeps "sign out everywhere" as an explicit action
+    (parked question 9) and keeps its "Create account" link until F2a.
   - Listed deltas: (1) a replayed code revokes its family, for every client; (2) discovery gains
     `private_key_jwt` for revocation and introspection, the matching
     `revocation_endpoint_auth_signing_alg_values_supported` and
     `introspection_endpoint_auth_signing_alg_values_supported` members, and `end_session_endpoint`;
     (3) the headless hand-off follows Decision 9; (4) a browser-code token request without
     `redirect_uri` answers `invalid_grant` (Decision 10) instead of a schema `VALIDATION_ERROR`; (5)
-    a new end-session route; (6) the portal signs in through the redirect flow.
+    a new end-session route; (6) the portal signs in through the redirect flow and keeps its tokens
+    server-side.
   - Exit criteria:
     - Byte identity except the listed deltas.
     - The CHECKs hold: no browser code without `redirect_uri`; no profile from DCR, CIMD or
@@ -1385,13 +1413,13 @@ on. A phase whose target is the train ships no later than F1's release.
   Connect Core 1.0 §5.7 "Claim Stability and Uniqueness"). Depends on F0. Target: the F1 release
   train, so the migration guide that ships with F1 can name the tool.
 - F2a — hosted account pages with no WebAuthn dependency, behind their own default-off switch
-  (parked question 6): server-rendered `/ui/register` and `/ui/reset` on the F1 engine, "Create
-  account" and "Forgot password" links on `/ui/login`, `prompt=create` at both endpoints with
-  `prompt_values_supported`, and the portal's sign-up. The legacy registration routes are removed
-  only once the hosted pages are on for the portal in a default deployment. Depends on F1's
-  registration and reset flows. A hosted reset or registration sets no `auth_time`. It ends without
-  a browser session that could satisfy `max_age` or `prompt=login` (Decision 10). Target: the F1
-  release train.
+  (parked question 6): registration and reset pages on the F1 engine, in the reference ceremony
+  app, a separate app that uses only the Interaction API (ADR-019); "Create account" and "Forgot
+  password" links on `/ui/login`; `prompt=create` at both endpoints with `prompt_values_supported`;
+  and the portal's sign-up. The legacy registration routes are removed only once the hosted pages
+  are on for the portal in a default deployment. Depends on F1's registration and reset flows. A
+  hosted reset or registration sets no `auth_time`. It ends without a browser session that could
+  satisfy `max_age` or `prompt=login` (Decision 10). Target: the F1 release train.
 - F2b — passkeys, behind `WEBAUTHN_ENABLED=false`: the shared WebAuthn `CredentialProvider`;
   `webauthn_get` and `webauthn_create`; passkey-first; registration of an account whose primary
   identity is a passkey, with no address (parked 30); the downgrade rule binding; UV verified
@@ -1477,17 +1505,16 @@ on. A phase whose target is the train ships no later than F1's release.
 ### Neutral
 
 - FiPA is a WG draft. The profile absorbs likely changes (status codes, negotiation, custom members)
-  by emitting core equivalents beside its own members and classifying by `error`.
+  by emitting core equivalents beside its own members and classifying by `error`. The endpoint and
+  the SDK's first-party subpath stay experimental until FiPA is an RFC. The engine is part of the
+  1.0 promise, because the hosted pages use it (ADR-018).
 - ADR-007's positioning is unchanged; human login is a product line beside it and feeds no agent
   path. `acr` semantics are unchanged (ADR-010); `amr` appears only on tokens from challenge-issued
   codes until F5.
 - `WalletProvider.verify()` keeps throwing; wallet login stays on its own seam.
 - The ADR-014 amendment is a separate, dated change after this record is accepted.
 
-## Decisions parked for the maintainer
-
-Each question carries the default this record proceeds on until the maintainer decides otherwise.
-Questions 1–10 are true forks; questions 11–30 record defaults that are unlikely to change.
+## Decided by the maintainer
 
 1. Web front-ends behind a backend. FiPA §9.8 and RFC 10017 §7.3 and §6.1.3.1 reach them. Should
    QAuth offer them as a per-client, operator-set, recorded deviation? The minimum would be an
@@ -1496,8 +1523,16 @@ Questions 1–10 are true forks; questions 11–30 record defaults that are unli
    `unsafe-inline` and no third-party script on credential pages; passkey-first with the web origin
    as the WebAuthn origin; a mandatory end-user IP and a bot challenge at thresholds; lower
    per-client limits; `redirect_to_web` on any risk signal; dangerous scopes always refused; audit
-   rows tagged as web; and the ADR naming the deviation. _Default: no. Web front-ends use
-   `/oauth/authorize`, and hosted pages (F2a) are the web answer._
+   rows tagged as web; and the ADR naming the deviation. _Decided 2026-10-08: no. Web front-ends
+   use the redirect flow at `/oauth/authorize`, and hosted pages (F2a) are the web answer. The FiPA
+   endpoint serves first-party native apps only._
+
+## Decisions parked for the maintainer
+
+Each question carries the default this record proceeds on until the maintainer decides otherwise.
+Question 1 is decided (above). Questions 2–10 are true forks; questions 11–30 record defaults that
+are unlikely to change.
+
 2. Email codes: a sign-in factor, a check after every password, or passwordless sign-in? _Default:
    address verification and recovery, plus an optional per-client check after the password
    (`email_code_after_password: false`). They never produce `amr`, `acr`, `mfa` or an AAL claim.
@@ -1519,9 +1554,9 @@ Questions 1–10 are true forks; questions 11–30 record defaults that are unli
    as `user.imported`. Alternative: no import, with the migration guide saying so and naming the
    `register` flow as the bulk path, since `reset` mails only an existing account. Lazy migration
    against the old IdP is rejected, because it keeps a password grant alive there._
-6. Hosted account pages: timing and switch. _Default: `/ui/register` and `/ui/reset` ship in the F1
-   release train, independent of WebAuthn, behind their own default-off switch, because opening
-   hosted registration is an operator decision._
+6. Hosted account pages: timing and switch. _Default: the hosted registration and reset pages ship
+   in the F1 release train, independent of WebAuthn, behind their own default-off switch, because
+   opening hosted registration is an operator decision._
 7. Arming the disable ceiling. NIST SP 800-63B-4 §3.2.2 says disabled authenticators "SHALL be
    required to rebind". _Default: the disable at 100 is armed only while every account it can reach
    has a self-service rebind path, checked at run time. The headless reset serves native users only,
@@ -1540,10 +1575,10 @@ Questions 1–10 are true forks; questions 11–30 record defaults that are unli
    `assertManagementToken`; it revokes every refresh family and advances the browser-session epoch.
    The ordinary sign-out ends only the current session._
 10. ADR-014 amendment. _Default: yes, as a separate dated change after this record is accepted: DPoP
-    under `DPOP_ENABLED`, which `AGENT_TREE_ENABLED` requires; a shared `dpop_bound_access_tokens`;
-    one flag-neutral WebAuthn provider with one hosted enrolment and management page;
-    `AGENT_APPROVAL_ENABLED` requires `WEBAUTHN_ENABLED`; revocation and introspection
-    `private_key_jwt` moved to ADR-017 F0._
+    under `DPOP_ENABLED`, which `AUTHORITY_TREE_ENABLED` requires; a shared
+    `dpop_bound_access_tokens`; one flag-neutral WebAuthn provider with one hosted enrolment and
+    management page; `REMOTE_APPROVAL_ENABLED` requires `WEBAUTHN_ENABLED`; revocation and
+    introspection `private_key_jwt` moved to ADR-017 F0._
 
 Other recorded defaults:
 
@@ -1583,6 +1618,8 @@ Other recorded defaults:
 - [ADR-013](./013-same-device-return-leg.md) — the burn-then-bind idiom of the `auth_session`.
 - [ADR-014](./014-agent-authority-tree.md) — the DPoP verifier and WebAuthn provider this record
   shares, and the amendment of parked question 10.
+- ADR-018 and ADR-019, each proposed in a separate PR — the 1.0 promise that covers the engine, and
+  the Interaction API that shares it.
 - [ADR-002](./002-identifier-abstraction.md), [ADR-003](./003-credential-provider-interface.md)
   and [ADR-009](./009-wallet-account-resolution.md) — the identity tables, the `CredentialProvider`
   a passkey plugs into, and the wallet boundary.
