@@ -1,4 +1,4 @@
-# ADR-014: Agent Authority Tree — Session-Rooted, Sender-Constrained Delegation for AI Agents
+# ADR-014: Authority Tree — Session-Rooted, Sender-Constrained Delegation
 
 **Status:** Proposed
 **Date:** 2026-09-21
@@ -6,7 +6,7 @@
 
 > **Proposed 2026-09-21.** Nothing below is implemented. Every fork takes the
 > fail-closed option, every new surface is inert until an operator provisions
-> it, and the whole record sits behind `AGENT_TREE_ENABLED` (default `false`,
+> it, and the whole record sits behind `AUTHORITY_TREE_ENABLED` (default `false`,
 > [Decision](#decision)), so a default deployment's behaviour is byte-for-byte
 > unchanged by this record. No existing token-exchange gate is loosened; with
 > the flag on, two are added — GATE 4d on every exchange, GATE 3d on every
@@ -34,10 +34,10 @@
 > threat, T8, and parked decisions 14–16; a clause in T3 on why an OS-level
 > authority manager is listed beside PostgreSQL; and the 2026-09-22 text its
 > first commit dropped.
-> Remote approval sits behind a second switch, `AGENT_APPROVAL_ENABLED`.
+> Remote approval sits behind a second switch, `REMOTE_APPROVAL_ENABLED`.
 >
 > **Amended 2026-09-30** (before any implementation): the maintainer decided
-> four parked questions. Agent trees survive sign-out, and a separate
+> four parked questions. Authority trees survive sign-out, and a separate
 > revoke-all ends them (decision 1). History keeps the owner of its time, and
 > a transfer ends the agent's live trees (decision 10). Five of six lasting
 > approval answers are settled (decision 14). A passkey is the only approval
@@ -60,6 +60,18 @@
 > third example seed type is now called `worker` (decision 7), and the 300 s
 > rule for a manager's leaf became a per-resource cap that an operator sets
 > (§6).
+>
+> **Amended 2026-10-09** (before any implementation): the maintainer
+> decided a rename on 2026-10-08. "Agent Authority Tree" is now "Authority
+> Tree". The mechanism is generic machine-to-machine and process delegation.
+> AI agents are one client class, so the title no longer ends "for AI
+> Agents". Two switches are renamed with it: `AGENT_TREE_ENABLED` is now
+> `AUTHORITY_TREE_ENABLED`, and `AGENT_APPROVAL_ENABLED` is now
+> `REMOTE_APPROVAL_ENABLED`. The agent principal (§13), the agent client
+> type, agent identities and every identifier that names an agent keep their
+> names. The file name is kept, so links stay stable. No rule changed; the
+> root of a tree is still always a human `sub` (§1). QAuth-defined
+> identifiers will carry a version when implemented (ADR-018, a separate PR).
 
 ## Context
 
@@ -299,16 +311,16 @@ no child ever holds what it grants.
 
 ## Decision
 
-One switch gates all of it: `AGENT_TREE_ENABLED`, a boolean in the auth env
+One switch gates all of it: `AUTHORITY_TREE_ENABLED`, a boolean in the auth env
 schema, default **`false`** — the shape `ID_JAG_ENABLED`,
 `WALLET_FEDERATION_ENABLED` and `HYBRID_SIGNING_ENABLED` set. When false,
 nothing in this record runs: no `sid` is minted, no ledger row is written,
 no new gate is evaluated, and the token exchange is byte-for-byte today's,
-whatever the seed manifest or any other `AGENT_*` setting says. When true,
+whatever the seed manifest or any `AGENT_*` setting says. When true,
 P0's behaviour applies to every agent-client mint, and the new exchange
 gates, as each phase lands them, run as §4 states. Remote approval (§14) has
-a second switch, `AGENT_APPROVAL_ENABLED`, default `false`, which does
-nothing unless `AGENT_TREE_ENABLED` is on.
+a second switch, `REMOTE_APPROVAL_ENABLED`, default `false`, which does
+nothing unless `AUTHORITY_TREE_ENABLED` is on.
 
 ### 1. Session root — `sid` on agent access tokens
 
@@ -1241,7 +1253,7 @@ such as a phone, with no shell and no SSH. This section lets the owner
 approve that one step from there. It widens no token and no tree. It is
 not a harness's own permission prompt: that prompt is the harness asking,
 and hooks are UX (§9); this is the credential gate. It sits behind
-`AGENT_TREE_ENABLED` and its own switch, `AGENT_APPROVAL_ENABLED` (default
+`AUTHORITY_TREE_ENABLED` and its own switch, `REMOTE_APPROVAL_ENABLED` (default
 `false`).
 
 **Nothing that exists is widened.** A refusal stays a refusal. If the owner
@@ -1495,7 +1507,7 @@ gate.
 
 - **P0 — the root is observable, and answers "which agent, in which session,
   with which scopes, opened this PR".** **0a, server:** the
-  `AGENT_TREE_ENABLED` switch as the Decision defines it; `sid` on agent
+  `AUTHORITY_TREE_ENABLED` switch as the Decision defines it; `sid` on agent
   tokens (code, refresh, exchange) and the `refresh_tokens.sid` column;
   `agent_token_ledger` and
   its repository; ledger writes at the three mint sites; the sid-less-subject
@@ -1616,7 +1628,7 @@ gate.
 - **P5 — remote approval (after P2).** A WebAuthn credential provider —
   passkey registration and assertion in the portal; QAuth has none today;
   the CIBA backchannel endpoint in poll mode, with `login_hint_token` = the
-  requesting node's token; `AGENT_APPROVAL_ENABLED`,
+  requesting node's token; `REMOTE_APPROVAL_ENABLED`,
   `AGENT_APPROVAL_EXPIRY` and `AGENT_APPROVAL_BUDGET`; the `agent:request`
   scope; the `agent_approvals` table; the `kind: elevation` ledger row with
   its `approval_receipt`; the approval page; web push and the
@@ -1874,13 +1886,13 @@ on 401; the Agent SDK passes `mcpServers` and headers per `query()`.
 
 ### Neutral
 
-- Default off in every dimension: `AGENT_TREE_ENABLED=false` runs none of it
+- Default off in every dimension: `AUTHORITY_TREE_ENABLED=false` runs none of it
   ([Decision](#decision)), and with it on, no agent client is DPoP-required,
   no `spawn_allowlist` exists and so no root token's `aud` is enriched, no
   lifetime row changes, no transmitter or push endpoint is configured, until
   an operator says so — and no agent, binding or agent-side transmitter
   exists until an owner creates one (§7, §13). No approval request is
-  possible until an operator sets `AGENT_APPROVAL_ENABLED` and an owner
+  possible until an operator sets `REMOTE_APPROVAL_ENABLED` and an owner
   registers a passkey (§14).
 - `MAX_DELEGATION_DEPTH` stays 4; draft-mcguinness's "at least depth 4" is
   met and draft-liu's recommended 5 is not adopted. A narrowing spends no
@@ -1894,15 +1906,15 @@ on 401; the Agent SDK passes `mcpServers` and headers per `query()`.
 Each question carries the default the record was written on; the record
 proceeds on that default until the maintainer decides otherwise.
 
-1. **Browser logout and agent trees.** _Decided 2026-09-30 (maintainer)._
-   Should a QAuth logout revoke the user's agent `sid` trees? RFC 9700
+1. **Browser logout and authority trees.** _Decided 2026-09-30 (maintainer)._
+   Should a QAuth logout revoke the user's authority trees (`sid`)? RFC 9700
    §4.14.2 leaves automatic refresh-token revocation on logout a MAY, and
    says nothing about the access tokens below it. The maintainer's words:
    there will be a separate method that revokes all agents; agents survive
    the browser logout. Decision: trees survive sign-out. Today
    `POST /auth/logout` revokes every refresh token of the user
    (`revokeAllForUser`, `apps/auth-server/src/app/routes/auth/logout.ts:79`).
-   With `AGENT_TREE_ENABLED` on, sign-out no longer ends a refresh family that
+   With `AUTHORITY_TREE_ENABLED` on, sign-out no longer ends a refresh family that
    carries a `sid`; with the flag off nothing changes. The separate method is
    `POST /api/agent-sessions/revoke-all` (§6). By the §6 walk, it ends every
    live tree the user rooted. It has no step-up; in his words, an emergency

@@ -8,13 +8,23 @@
 > on [ADR-014](./014-agent-authority-tree.md) as amended 2026-09-30 (PR #419).
 > It records what the maintainer decided that day about how an agent's identity
 > on an external platform is made, limited and approved. Every rule sits behind
-> `AGENT_TREE_ENABLED`; the approval path also needs `AGENT_APPROVAL_ENABLED`.
+> `AUTHORITY_TREE_ENABLED`; the approval path also needs `REMOTE_APPROVAL_ENABLED`.
 > With the switches off, nothing changes.
 >
 > **The rules are platform-agnostic.** A git host is the worked example,
 > because ADR-014 §9 and §13 use one. No rule depends on it. GitHub and
 > Bitbucket Cloud appear only as labelled examples, and in the links of
 > Related.
+>
+> **Amended 2026-10-09** (before any implementation): the maintainer
+> decided a rename on 2026-10-08. ADR-014's "Agent Authority Tree" is now
+> "Authority Tree". The mechanism is generic machine-to-machine and process
+> delegation; AI agents are one client class. Two switches are renamed with
+> it: `AGENT_TREE_ENABLED` is now `AUTHORITY_TREE_ENABLED`, and
+> `AGENT_APPROVAL_ENABLED` is now `REMOTE_APPROVAL_ENABLED`. This record's
+> title names agent identities, not the tree, so it is kept. So is every
+> identifier that names an agent. File names are kept, so links stay stable.
+> No rule changed.
 
 ## Context
 
@@ -51,11 +61,11 @@ Verified 2026-09-30 against ADR-014 as amended and the working tree.
 
 ## Decision
 
-Every rule below runs only with `AGENT_TREE_ENABLED` on (ADR-014,
+Every rule below runs only with `AUTHORITY_TREE_ENABLED` on (ADR-014,
 [Decision](./014-agent-authority-tree.md#decision)). The approve-once path
-of §3 also needs `AGENT_APPROVAL_ENABLED`. The pass-through leg of §4 has its
+of §3 also needs `REMOTE_APPROVAL_ENABLED`. The pass-through leg of §4 has its
 own operator switch, `AGENT_OWNER_TOKEN_LEG_ENABLED`, default `false`. It does
-nothing unless `AGENT_TREE_ENABLED` is on. With the switches off, the STS
+nothing unless `AUTHORITY_TREE_ENABLED` is on. With the switches off, the STS
 and the broker behave as ADR-014 says.
 
 ### 1. A public platform identity per agent, on the owner's own account
@@ -172,7 +182,7 @@ host a resource is a repository.
   that no approval lifts. Approval-only is a standing "closed until
   approved". Precedence: always block, then approval-only, then the tree's
   ceiling.
-- **Approval off means closed.** With `AGENT_APPROVAL_ENABLED` off, an
+- **Approval off means closed.** With `REMOTE_APPROVAL_ENABLED` off, an
   approval-only resource simply stays closed.
 
 An approval-only resource is one an agent might change but the owner does not
@@ -454,7 +464,7 @@ Each piece lands in the ADR-014 phase that builds what it depends on
 
 ### Neutral
 
-- Default off. With `AGENT_TREE_ENABLED` off none of this runs, and the
+- Default off. With `AUTHORITY_TREE_ENABLED` off none of this runs, and the
   pass-through leg needs its own switch as well.
 - ADR-014's text is not edited here. By the maintainer's decisions,
   decision 4 changes (§2), and §9's author rule (§4) and §14's step 4 (§3)

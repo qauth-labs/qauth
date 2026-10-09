@@ -1,4 +1,4 @@
-# ADR-015: Agent Tree Hardening — Where a Tree Ends, Who May Act on It, How an Agent Changes Hands
+# ADR-015: Authority Tree Hardening — Where a Tree Ends, Who May Act on It, How an Agent Changes Hands
 
 **Status:** Proposed
 **Date:** 2026-09-30
@@ -6,14 +6,24 @@
 
 > **Proposed 2026-09-30.** Nothing below is implemented. This record builds
 > on [ADR-014](./014-agent-authority-tree.md) as amended 2026-09-30 (PR #419)
-> and changes none of its rules. Every rule sits behind `AGENT_TREE_ENABLED`;
-> the approval rules also sit behind `AGENT_APPROVAL_ENABLED`. With the
+> and changes none of its rules. Every rule sits behind `AUTHORITY_TREE_ENABLED`;
+> the approval rules also sit behind `REMOTE_APPROVAL_ENABLED`. With the
 > switches off, nothing changes. Every decision here is this record's
 > proposal. Decision 9 builds on the maintainer's decision 10 in ADR-014.
+>
+> **Amended 2026-10-09** (before any implementation): the maintainer
+> decided a rename on 2026-10-08. "Agent Tree" and "agent authority tree" are
+> now "Authority Tree", as in ADR-014. The mechanism is generic
+> machine-to-machine and process delegation; AI agents are one client class.
+> Two switches are renamed with it: `AGENT_TREE_ENABLED` is now
+> `AUTHORITY_TREE_ENABLED`, and `AGENT_APPROVAL_ENABLED` is now
+> `REMOTE_APPROVAL_ENABLED`. The agent principal, agent types, agent
+> identities and every identifier that names an agent keep their names. The
+> file name is kept, so links stay stable. No rule changed.
 
 ## Context
 
-ADR-014 defines the agent authority tree: a root grant, a ledger, DPoP-bound
+ADR-014 defines the authority tree: a root grant, a ledger, DPoP-bound
 nodes, revocation, an agent principal with an owner (§13) and remote
 approval (§14). On 2026-09-30 the maintainer decided four of its parked
 questions (PR #419). The first draft of that amendment grew ADR-014 to 3308
@@ -46,8 +56,8 @@ Verified 2026-09-30 against the working tree at `2c901d4`.
 
 ## Decision
 
-Every rule below runs only with `AGENT_TREE_ENABLED` on; rules about approval
-also need `AGENT_APPROVAL_ENABLED`. With a switch off, its paths are
+Every rule below runs only with `AUTHORITY_TREE_ENABLED` on; rules about approval
+also need `REMOTE_APPROVAL_ENABLED`. With a switch off, its paths are
 byte-for-byte today's. "This family of records" means ADR-014, this record
 and any record built on them.
 
