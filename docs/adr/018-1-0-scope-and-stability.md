@@ -230,6 +230,9 @@ Number is not an OID4VP wallet today.
 - `AGENT_TREE_ENABLED` becomes `AUTHORITY_TREE_ENABLED`.
 - `AGENT_APPROVAL_ENABLED` becomes `REMOTE_APPROVAL_ENABLED`. ADR-014 §14 is titled remote
   approval.
+- The two approval settings follow the switch: `AGENT_APPROVAL_EXPIRY` becomes
+  `REMOTE_APPROVAL_EXPIRY`, and `AGENT_APPROVAL_BUDGET` becomes `REMOTE_APPROVAL_BUDGET`. The
+  maintainer decided this on 2026-10-09.
 - Identifiers that name an agent keep their names. Examples are the agent principal and the agent
   client type.
 - File names stay unchanged, so links keep working.
