@@ -67,7 +67,10 @@
 > AI agents are one client class, so the title no longer ends "for AI
 > Agents". Two switches are renamed with it: `AGENT_TREE_ENABLED` is now
 > `AUTHORITY_TREE_ENABLED`, and `AGENT_APPROVAL_ENABLED` is now
-> `REMOTE_APPROVAL_ENABLED`. The agent principal (§13), the agent client
+> `REMOTE_APPROVAL_ENABLED`. On 2026-10-09 the maintainer also renamed the
+> two approval settings of §14: `AGENT_APPROVAL_EXPIRY` is now
+> `REMOTE_APPROVAL_EXPIRY`, and `AGENT_APPROVAL_BUDGET` is now
+> `REMOTE_APPROVAL_BUDGET`. The agent principal (§13), the agent client
 > type, agent identities and every identifier that names an agent keep their
 > names. The file name is kept, so links stay stable. No rule changed; the
 > root of a tree is still always a human `sub` (§1). QAuth-defined
@@ -1288,7 +1291,7 @@ bounded by its own approval, not by a parent.
    - `binding_message`: a short code the broker shows in the session, which
      the approval page shows too — CIBA's own purpose for it, a visual cue
      that interlocks the two devices;
-   - `requested_expiry`: at most `AGENT_APPROVAL_EXPIRY` (default 300 s);
+   - `requested_expiry`: at most `REMOTE_APPROVAL_EXPIRY` (default 300 s);
    - `qauth_approval_duration`: `once` or `window` — what the agent asks
      for; the owner decides. CIBA lets a profile add parameters (§7.1).
 3. **Notification.** QAuth notifies the session owner — the ledger row's
@@ -1349,7 +1352,7 @@ approval request at all. It sits in the root grant like any other scope,
 and the consent screen shows it (§11). An approval can never grant or
 extend it, an elevation never carries it, and a child gets it only by
 narrowing from a parent that holds it. A per-`sid` budget caps asking —
-`AGENT_APPROVAL_BUDGET`, operator-set, default three pending and ten an
+`REMOTE_APPROVAL_BUDGET`, operator-set, default three pending and ten an
 hour — and no approval raises it. A node without the scope, over its
 budget, or muted gets `access_denied`, and nobody is notified.
 
@@ -1629,7 +1632,7 @@ gate.
   passkey registration and assertion in the portal; QAuth has none today;
   the CIBA backchannel endpoint in poll mode, with `login_hint_token` = the
   requesting node's token; `REMOTE_APPROVAL_ENABLED`,
-  `AGENT_APPROVAL_EXPIRY` and `AGENT_APPROVAL_BUDGET`; the `agent:request`
+  `REMOTE_APPROVAL_EXPIRY` and `REMOTE_APPROVAL_BUDGET`; the `agent:request`
   scope; the `agent_approvals` table; the `kind: elevation` ledger row with
   its `approval_receipt`; the approval page; web push and the
   owner-registered webhook; mutes. Tests: an elevation carries exactly the
