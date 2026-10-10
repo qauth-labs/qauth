@@ -7,6 +7,15 @@
 > **Status (2026-08-08): the "Future — JWKS Support" framing below is superseded; the JWKS endpoint and multi-key publication have shipped.** `GET /.well-known/jwks.json` is registered (`apps/auth-server/src/app/routes/well-known.ts`) and serves `fastify.jwtUtils.getJwks()`. The key set is genuinely multi-entry (`libs/fastify/plugins/jwt/src/lib/fastify-plugin-jwt.ts`): the active Ed25519 key, an optional RS256 key (#309), ML-DSA `AKP` entries (#246), and retired Ed25519 keys published under their own `kid` so in-flight tokens keep verifying across a rotation (#248 F9).
 >
 > **What is still accurate:** `apps/auth-server/src/app/app.ts` does not currently pass retired keys when it constructs the JWT plugin, so a deployed server publishes a single EdDSA key and the "users must re-login on rotation" consequence below still holds in practice. The distinction matters — the JWKS _machinery_ is built, its retired-key _configuration_ is not yet wired at the app layer. Read the "Future" headings below as "not yet wired", not "not yet built".
+>
+> **Status (2026-10-09): [ADR-019](./019-deployment-topology-and-trust-boundaries.md) supersedes this record's production key model.**
+>
+> - This record injects keys as environment variables or files on every instance. ADR-019 replaces that model for production.
+> - Under ADR-019, each realm holds one key per purpose. Keys are stored envelope-encrypted in Postgres.
+> - The key-encryption key comes from a pluggable provider. Environment variables or a file remain the default source.
+> - Per-realm keys follow from ADR-019's rule that each realm has its own host and its own issuer.
+> - Rotation becomes automatic and overlapping. The next key is pre-published in JWKS, and the old key stays for verification.
+> - ADR-019 decides to close the retired-key wiring gap described above. Until that change lands, the note above still describes a deployed server.
 
 ## Context
 

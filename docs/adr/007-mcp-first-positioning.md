@@ -14,6 +14,18 @@
 > - **ADR-005** — "no ML-DSA-signed token emitted yet" no longer holds. #245–#247 landed the JWS carrier, mixed `AKP`+`OKP` JWKS and the introspection-first posture, and **#275 wired live hybrid issuance** into `/oauth/token`, `/auth/login` and `/oauth/introspect`. A deployment that enables `HYBRID_SIGNING_ENABLED` (default off) does emit ML-DSA-65 material.
 >
 > Both features remain **off by default**, so a default deployment's behaviour is unchanged. Open: #376, #377 and the tracking epic #231.
+>
+> **Status (2026-10-09): [ADR-018](./018-1-0-scope-and-stability.md) sets the 1.0 scope.** ADR-018 names self-hosting developers as the first audience of 1.0. Whether this changes the MCP-first positioning of this record is not decided. 1.0 widens the stable promise to cover:
+>
+> - OAuth 2.1 / OIDC core and the MCP authorization profile of revision 2026-07-28. Dynamic client registration stays supported and gated, but deprecated.
+> - Enterprise-Managed Authorization with ID-JAG, in both the consuming and the minting role ([ADR-011](./011-enterprise-managed-authorization.md)).
+> - The shipped agent layer, the environment-aware posture of [ADR-008](./008-environment-aware-authorization.md), and the Authority Tree of [ADR-014](./014-agent-authority-tree.md) to ADR-016.
+> - Human accounts with TOTP, passkeys and upstream OIDC login. Logout covers RP-initiated logout and OIDC Back-Channel Logout 1.0.
+> - Wallet sign-in on the OID4VP 1.0 + HAIP 1.0 profile, and OpenID Federation 1.0 in full.
+> - Post-quantum hybrid signing with ML-DSA-65. Its default stays off.
+> - The `@qauth-labs/resource-guard`, `node`, `agent` and `admin` SDKs. `resource-guard` is today's `@qauth-labs/mcp-guard`, renamed.
+>
+> [ADR-019](./019-deployment-topology-and-trust-boundaries.md) sets the topology and trust boundaries behind that promise.
 
 ## Context
 
