@@ -254,7 +254,7 @@ describe('rewriteRecordLink — the real docs/adr and docs/security corpus, enum
     return links;
   }
 
-  it('extracts exactly 398 links across the 16 ADRs, the ADR README, the security review and the threat model — the corpus the counts below are checked against', () => {
+  it('extracts exactly 415 links across the 17 ADRs, the ADR README, the security review and the threat model — the corpus the counts below are checked against', () => {
     // A fixed count, not a lower bound: this test's whole point is that the
     // categorisation below is checked against the FULL corpus, not a
     // sample. If a future ADR amendment changes the link count, this
@@ -329,7 +329,14 @@ describe('rewriteRecordLink — the real docs/adr and docs/security corpus, enum
     // ADR-019: five external links added (RFC 8628 and Standard Webhooks in
     // both records, the Shared Signals Framework in ADR-018) and one bare
     // anchor removed (ADR-018's link to its closed open question).
-    expect(extractAllLinks()).toHaveLength(398);
+    //
+    // 398 → 415 with ADR-020 (the 1.0 UI surfaces), 2026-10-10: 16 links in
+    // the new record (6 external, 1 bare anchor to its own appendix, 9
+    // in-tree record links → ROUTE) plus the README index row for 020
+    // (→ ROUTE). ADR-015, ADR-016 and ADR-017 are named without links, as in
+    // ADR-018. Counted per file with this test's own extraction regex before
+    // the buckets below were touched.
+    expect(extractAllLinks()).toHaveLength(415);
   });
 
   it('every link falls into exactly one of the four outcomes, with none left unresolved', () => {
@@ -425,8 +432,12 @@ describe('rewriteRecordLink — the real docs/adr and docs/security corpus, enum
     //
     // The 2026-10-10 UI-scope amendments: 199 → 204 external and 31 → 30
     // bare anchors. Route, blob and unresolved unchanged.
-    expect(untouchedExternalOrAnchor).toBe(204 + 30);
-    expect(rewrittenToRoute).toBe(142);
+    //
+    // ADR-020: 204 → 210 external and 30 → 31 bare anchors; 142 → 152 route
+    // (its nine record links and the README index row). Blob and unresolved
+    // unchanged.
+    expect(untouchedExternalOrAnchor).toBe(210 + 31);
+    expect(rewrittenToRoute).toBe(152);
     expect(rewrittenToBlob).toBe(22);
     expect(leftUnresolved).toBe(0);
   });
