@@ -81,8 +81,8 @@ export const realms = pgTable(
      * Scopes that may be requested by clients created via Dynamic Client
      * Registration (RFC 7591). This is the hard cap enforced by the
      * `/oauth/register` endpoint: any scope outside this list is rejected
-     * with `invalid_client_metadata`. Admin-level scopes (e.g. `memory:admin`)
-     * and tenant-scoped grants (e.g. `akinon:*`) MUST NOT appear here.
+     * with `invalid_client_metadata`. Admin-level scopes (e.g. `example:admin`)
+     * and tenant-scoped grants (e.g. `tenant-a:*`) MUST NOT appear here.
      */
     dynamicRegistrationAllowedScopes: jsonb('dynamic_registration_allowed_scopes')
       .notNull()
