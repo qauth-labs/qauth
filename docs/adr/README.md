@@ -30,6 +30,7 @@ An ADR is a document that captures an important architectural decision made alon
 | [018](./018-1-0-scope-and-stability.md)                  | QAuth 1.0 — Scope, Stability Promise and Release Path                                       | Proposed    | 2026-10-09 |
 | [019](./019-deployment-topology-and-trust-boundaries.md) | Deployment Topology, Trust Boundaries and Key Custody                                       | Proposed    | 2026-10-09 |
 | [020](./020-ui-surfaces-and-acceptance-criteria.md)      | 1.0 UI Surfaces and Acceptance Criteria                                                     | Proposed    | 2026-10-10 |
+| [021](./021-flows-and-ui-as-semantic-graphs.md)          | Flows and UI as Semantic Graphs                                                             | Proposed    | 2026-10-10 |
 
 ⚠️ **ADR-009** — findings partially superseded by CIR (EU) 2026/1730 and 2026/1731
 (published 22 July 2026, in force 11 August 2026). No Decision has been changed;
