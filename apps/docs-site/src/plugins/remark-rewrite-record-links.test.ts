@@ -254,7 +254,7 @@ describe('rewriteRecordLink — the real docs/adr and docs/security corpus, enum
     return links;
   }
 
-  it('extracts exactly 394 links across the 16 ADRs, the ADR README, the security review and the threat model — the corpus the counts below are checked against', () => {
+  it('extracts exactly 398 links across the 16 ADRs, the ADR README, the security review and the threat model — the corpus the counts below are checked against', () => {
     // A fixed count, not a lower bound: this test's whole point is that the
     // categorisation below is checked against the FULL corpus, not a
     // sample. If a future ADR amendment changes the link count, this
@@ -324,7 +324,12 @@ describe('rewriteRecordLink — the real docs/adr and docs/security corpus, enum
     // ADR-016 and ADR-017 are named without links until their files are on
     // main. Counted per file against origin/main before the buckets below
     // were touched.
-    expect(extractAllLinks()).toHaveLength(394);
+    //
+    // 394 → 398 with the 2026-10-10 UI-scope amendments to ADR-018 and
+    // ADR-019: five external links added (RFC 8628 and Standard Webhooks in
+    // both records, the Shared Signals Framework in ADR-018) and one bare
+    // anchor removed (ADR-018's link to its closed open question).
+    expect(extractAllLinks()).toHaveLength(398);
   });
 
   it('every link falls into exactly one of the four outcomes, with none left unresolved', () => {
@@ -417,7 +422,10 @@ describe('rewriteRecordLink — the real docs/adr and docs/security corpus, enum
     // SECURITY.md, the spec pin log, the OIDF runbook and the conformance
     // matrix). Unresolved unchanged — the check that no new link points at a
     // record that is not on main yet.
-    expect(untouchedExternalOrAnchor).toBe(199 + 31);
+    //
+    // The 2026-10-10 UI-scope amendments: 199 → 204 external and 31 → 30
+    // bare anchors. Route, blob and unresolved unchanged.
+    expect(untouchedExternalOrAnchor).toBe(204 + 30);
     expect(rewrittenToRoute).toBe(142);
     expect(rewrittenToBlob).toBe(22);
     expect(leftUnresolved).toBe(0);
