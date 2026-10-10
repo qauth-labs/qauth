@@ -102,6 +102,24 @@
 > version marker (§9; question 5). The maintainer also decided that a renewal
 > matched to an open window does not count against `REMOTE_APPROVAL_BUDGET`;
 > QAuth accepts one only in the last 60 seconds of the live leaf (§14, step 6).
+>
+> **Amended 2026-10-10** (before any implementation): fail-closed rules
+> added where the record left a choice to the caller. The broker, not the
+> registering process, decides a new node's parent and type, and the
+> socket's permission model is stated (§12, Harness adapter contract). An
+> agent type has registered rights beside its registered scopes, and only
+> the grants a tree uses (§1, §5). The root consent shows the root's rights
+> (§11). A binding's upstream identity belongs to one owner (§13). The
+> broker signs an action event with the reporting node's own key (§7). A
+> family with no `sid` gains none by refresh (§1). A resume rebinds its root
+> only through the consent screen, and only a process under the broker's own
+> process joins a host's one root per broker start (§1). The broker resolves
+> a caller by a pidfd, on the socket and on the loopback listener alike
+> (§12). A token the ledger does not know is refused on every route this
+> record adds (§2). The STS sends explicit lists and refuses when an
+> upstream read fails (§9), and mints only while the binding's upstream
+> identity is assigned to the agent's current owner (§13). A pass-through
+> leg's scope is a dangerous scope (§11). No maintainer decision changed.
 
 ## Context
 
@@ -202,8 +220,9 @@ placed where the process can. Closed by
 custody for per-process keys and node tokens: they live in `qauth-broker`'s
 memory behind a unix socket, never on disk or in env. Three credentials
 outlive a process on the CLI leg. The upstream app identity's private key
-(for the `github` adapter, the GitHub App's) lives in
-QAuth's configuration beside the vend policy and never on the developer box,
+(for the `github` adapter, the GitHub App's) lives QAuth-side — in QAuth's
+configuration, or for an agent's own identity in QAuth's store, uploaded by
+its one owner (§13) — beside the vend policy and never on the developer box,
 so an agent with a shell cannot edit its own ceiling (§9). The other two are
 on the box: the agent type's `private_key_jwt` key (never a client secret,
 §4(e)), which the broker must load from storage — the user keyring or a 0600
@@ -213,10 +232,14 @@ in memory only — a broker restart means a new `login` — and which RFC 9449 �
 leaves bound to client authentication, not to the DPoP key (§3). A same-uid
 process that reads both can authenticate as the type and refresh the root
 from any host, minting DPoP-bound tokens under its own key with the same
-`sid`, until the user revokes the `sid` (§6). The type key alone buys less: it
-cannot spawn (GATE 3d needs the parent's DPoP key, held only in broker
-memory) and cannot root a tree (a `client_credentials` token roots nothing,
-§1; a root needs a browser consent the user sees). To keep such a leak to one
+`sid`, until the user revokes the `sid` (§6). The type key alone buys client
+assertions and nothing they mint on their own: an agent type is registered
+without the `client_credentials` and JWT-bearer grants (§1), so the key
+mints no token by itself; it cannot spawn (GATE 3d needs the parent's DPoP
+key, held only in broker memory), cannot root a tree (a root needs a browser
+consent the user sees, §1), cannot sign an action event (the broker signs
+one with the reporting node's own key, §7), and no endpoint this record adds
+accepts a token the ledger does not know (§2). To keep such a leak to one
 box, the operator registers one key per box in the type's `jwks` with a
 distinct `kid`, never one key per type. **Not closed for what the broker
 vends.** A vended platform credential is a plain bearer that
@@ -244,9 +267,12 @@ its refresh token), but it can read any same-uid process's
 write to the user's tmux socket, and edit the shim, the git config and the
 hooks the parent process will execute, so a same-uid child can make its
 parent act; a hard gate between two agents needs two uids or a user namespace
-(§12). Sender constraint stops off-host replay of QAuth node
-tokens, not of the root refresh path, not of vended bearers, and not misuse
-within the ceiling.
+(§12). Whatever the uid, the broker and not the caller decides where a new
+node sits (§12): a process that reaches the broker spends the ceiling of the
+bound node it resolves to, never a wider one, and can neither graft a node
+under another parent nor start a root while it stays under a node. Sender
+constraint stops off-host replay of QAuth node tokens, not of the root
+refresh path, not of vended bearers, and not misuse within the ceiling.
 
 **T3 — Replay.** DPoP proofs carry `jti`, `iat`, `htu`, `htm`, `ath` and are
 accepted for a bounded window (RFC 9449 §11.1); spawn assertions are
@@ -288,7 +314,8 @@ QAuth.
 A read-only child persuaded to write gets `403 insufficient_scope` from
 mcp-guard's exact match (`missingScopes`,
 `libs/fastify/plugins/mcp-guard/src/lib/scope.ts:41`), no write permission
-from the STS (for `github`, no `contents: write`), no writable role from the
+from the STS (for `github`, no `contents: write`) — its type's registered
+rights exclude it whatever its parent grants (§5) — no writable role from the
 validator, and cannot forge its
 lineage because `caused_by` is written by QAuth (§5). Not closed: actions
 _within_ the ceiling, and the free-text `purpose` a model writes about itself,
@@ -303,7 +330,8 @@ write any of them into any commit in any repository, and the agent itself can
 (T2: a same-uid process edits the hooks that write them). Closed for what
 QAuth records and only there: an agent identity is a row QAuth owns (§13), a
 node is a key QAuth verified (§3), an action event is a SET whose transmitter
-QAuth registered and whose subject `jti` the ledger knows (§7), and a public
+QAuth registered and whose subject `jti` the ledger knows — from the broker,
+signed by that node's own key (§7) — and a public
 profile states what it does and does not attest. Not closed: the world
 outside the ledger. A commit that names an agent is a claim until the owner's
 own systems tie its hash to a node (§9, provenance; those systems are out of
@@ -326,10 +354,14 @@ read it.
 The invariant the record exists to make provable: for every child token `c`
 with parent `p`, `scope(c) ⊆ scope(p)`, `scope(c) ⊆ registered(type(c))`,
 `aud(c) ⊆ aud(p)`, `mode(c) ≤ cap(type(c))`, `exp(c) ≤ exp(p)`,
-`rights(c) ⊆ rights(p)`, `depth(c) ≤ 4`, `sid(c) = sid(p)`, `cnf(c)` = the key
-that presented the exchange, and the exchange was authorised by the holder of
-`cnf(p)`. Each is one check at mint; by induction every leaf is bounded by the
-root, and the root by the human's consent. One consequence of
+`rights(c) ⊆ rights(p)`, `rights(c) ⊆ registered_rights(type(c))`,
+`depth(c) ≤ 4`, `sid(c) = sid(p)`, `cnf(c)` = the key that presented the
+exchange, and the exchange was authorised by the holder of `cnf(p)` — the
+node the broker resolved the caller to, never one a request named (§12).
+Each is one check at mint; by induction every leaf is bounded by the root,
+and the root by the human's consent, which shows its scopes and its rights
+(§11), within its type's registration and, when it names an agent, that
+agent's root ceiling (§13). One consequence of
 [ADR-007](./007-mcp-first-positioning.md)'s maintainer decision: the modes are
 independent scopes and the check is exact set inclusion, so **a parent holding
 only `agent:exec` cannot hand out `agent:readonly`**. The root grant carries
@@ -337,8 +369,8 @@ the union of the modes the tree may use, each child takes a subset, and the
 consent screen shows the union (§11). An elevation (§14) stands outside this
 chain on purpose: no exchange derives it, a passkey-confirmed approval of one
 delta bounds it instead of a parent, and it can neither spawn nor narrow — so
-no child ever holds what it grants. Its type's registered scopes still bound
-it (§14, step 1).
+no child ever holds what it grants. Its type's registered scopes and rights
+still bound it (§14, step 1).
 
 ## Decision
 
@@ -373,7 +405,16 @@ this grant identifier is not, and one browser session may root several
 grants. A `client_credentials` token carries none and cannot root a tree:
 exchange already requires an enabled user
 (`apps/auth-server/src/app/routes/oauth/token.ts:1474`), so the root of a tree
-is always a human `sub`.
+is always a human `sub`. An agent type (an agent client whose
+`max_agent_mode` the seed manifest set) holds only the grants a tree uses:
+`authorization_code` and `refresh_token` for a root type, the token-exchange
+grant and, from P5, the CIBA grant (§14). With the switch on, the seed
+manifest refuses `client_credentials` and the JWT-bearer grant for an agent
+type, as it refuses a client secret (§4(e)), and the token endpoint refuses
+both grants to an agent type whatever its stored row says. So an agent
+type's key mints no token on its own (T2). An agent client that is not an
+agent type keeps the grants it has today, and its `client_credentials` token
+reaches nothing this record adds (§2).
 
 **One root per main-agent process.** The broker runs the `authorization_code`
 grant when a main agent's harness adapter registers its harness
@@ -381,15 +422,40 @@ grant when a main agent's harness adapter registers its harness
 [Harness adapter contract](#harness-adapter-contract) describes for
 teammates; for example, Claude Code's adapter does it from its `SessionStart`
 hook), so one harness session is one `sid`, the ledger's root row records the
-harness `session_id`, and the root key is the one keyed to that process. A
-resumed session (same `session_id`; for example, Claude Code's `--resume` and
-`--continue`) reuses
-its root only when the dead-man walk (§6) did not reach QAuth at the
-process's exit. Even then, the root lives only while the grant's refresh
-token lives (ADR-015 question 8, decided 2026-10-06). A second harness
-process is a second root with its own `sid`. The cadence is a per-host
-setting, default one root per process. A host may choose one root per broker
-start instead, as a daemon host does (decision 8, decided 2026-10-09).
+harness `session_id`, and the root key is the one keyed to that process. The
+broker starts a root only for a registration whose caller resolves to no
+bound node (§12). From under a bound node a session registration is a child
+of that node, never a new root, so no process can log in its way out of a
+node's ceiling while it stays under that node (§12). The broker's
+authorization request carries
+`qauth_binding_code`, a short code the broker also returns to the
+registering adapter, which shows it in the session; the consent screen shows
+the same code (§11), so the person can match the screen to the session they
+started. The code is a matching aid and proves nothing, since a model can
+print any code into its own session. It is display only and never
+evaluated, and QAuth accepts it only on an agent type's authorization
+request (any other client's is `invalid_request`): at most 8 bytes
+matching `^[A-Z0-9]+$`, and anything else is `invalid_request`. A resumed
+session (same `session_id`; for example, Claude Code's `--resume` and
+`--continue`) reuses its root only when the dead-man walk (§6) did not
+reach QAuth at the process's exit. Even then, the root lives only while the
+grant's refresh token lives (ADR-015 question 8, decided 2026-10-06), and
+the broker binds the resumed process to that root only after the person
+approves the root's consent screen again (§11). The broker's authorization
+request for it names the live root's `sid`; QAuth shows the screen only to
+the root's own user for the root's own type, with the root's ceiling
+unchanged and the resumed session's binding code, and the code exchange
+continues that `sid` and refresh family without extending the family's
+expiry. Until then the resumed process is under no node. A
+second harness process is a second root with its own `sid`. The cadence is a
+per-host setting, default one root per process. A host may choose one root
+per broker start instead, as a daemon host does (decision 8, decided
+2026-10-09). On such a host the shared root's node is the broker's own
+process (ADR-015 question 8), so a process the broker starts is under it,
+and a session registration whose caller resolves to that node joins it; one
+from under a node below it is a child registration there (§12). A
+registration from any other process under no node starts a root of its own,
+through its own consent screen.
 
 The return leg is a native app's (RFC 8252 §7.3): the broker opens the user's
 browser on the authorization URL with PKCE `S256` and a `state` it minted,
@@ -414,12 +480,19 @@ client whose `aud` happens to name the agent — is not left sid-less: the
 exchanged token **starts a new tree** with a fresh `sid`, depth 0, and a
 `kind: root` ledger row (§2) whose `origin_jti` and `origin_client_id` record
 the subject's `jti` and `client_id`. Refusing would break an exchange that
-works today; a sid-less agent token is one no tree can revoke. The same
-new-tree rule covers a `refresh_tokens` row that predates
-the migration and so carries a NULL `sid`: the first `refresh_token` grant on
-that family mints a `sid`, writes it onto the rotated row, and writes a
-`kind: root` row for the token it issues, so the family joins a tree at its
-next refresh rather than staying sid-less until an exchange.
+works today; a sid-less agent token is one no tree can revoke.
+
+A `refresh_tokens` row with a NULL `sid` gains none by refresh. Such a row
+predates the migration, or its code grant was issued while its client did
+not declare `is_agent`. A `sid` is minted only by a code grant whose consent
+screen showed the persistence rung (§11). A client that starts declaring
+`is_agent` after consent (for example, a CIMD document that changes) was
+never shown it. So the family keeps today's lifecycle, and it is the one
+agent-client grant whose tokens carry no `sid`: sign-out ends it (decision
+1; ADR-015 question 11), revoke-all reaches it (ADR-015 §1), and its tokens
+reach a tree only by the exchange rule above, which bounds that tree by the
+subject token's remaining life. A longer tree takes a new authorization,
+through its consent screen.
 
 One case is refused (decided 2026-10-09, ADR-015 question 12). A sid-less
 subject token whose `iat` is earlier than the user's last revoke-all (§6) is
@@ -453,7 +526,14 @@ approval of an elevation, §14), `issued_at`, `expires_at`,
 — never a token, key or secret, the rule `audit_logs` already keeps. Rows
 outlive their tokens and are purged by `AGENT_LEDGER_RETENTION_DAYS` (default
 90). **A ledger write failure fails the mint**: a token the ledger does not
-know is a token the tree cannot revoke.
+know is a token the tree cannot revoke. **And a token the ledger does not
+know is refused everywhere this record adds**: the STS on every adapter's
+route (§9), the CIBA backchannel endpoint (§14), the node leg of the
+identifier API (§6), the push endpoint's subject check (§7), and
+introspection's answer to a node about its ancestors (below). A
+`client_credentials` token, a token of a family with no `sid` (§1) and any
+other token without a row reach none of them; at the token endpoint a
+sid-less subject keeps §1's rules.
 
 A **node** is a process, not a token — or, for the by-type case in
 [Harness adapter contract](#harness-adapter-contract), a key the session
@@ -604,9 +684,11 @@ it is the only new part of 3d; GATE 4d below runs for every subject, bearer
 or bound). The DPoP key is generated per process and
 is never a key registered in the type's `jwks`, so no assertion it signs can
 authenticate the client; the client-assertion verifier additionally rejects
-`typ: spawn-assertion+jwt` and DPoP-proof verification rejects any JWT
-carrying `sub` or `cnf`, so the three JWT types the key family produces are
-disjoint by `typ` and by claim set, not by `typ` alone. The verified claims
+`typ: spawn-assertion+jwt` and `typ: secevent+jwt`, DPoP-proof verification
+rejects any JWT carrying `sub`, `cnf` or `events`, and the push endpoint
+requires `events` and rejects `cnf` and `htm` in a SET the key signs (§7), so
+the four JWT types the key family produces are disjoint by `typ` and by
+claim set, not by `typ` alone. The verified claims
 become the row's `spawn_receipt` — the post-hoc proof the OAuth-list thread
 distinguishes from cross-validation, and the dashboard's "who authorised this
 hop". **A subject token that carries `cnf` cannot be exchanged to a new key
@@ -631,8 +713,12 @@ new **GATE 4d**, scope ⊆ the child type's registered `oauth_clients.scopes`
 check `client_credentials` already runs), so a type registered without
 `write:*` can never hold it whatever its parent grants — GATE 4c gives the
 same floor for `agent:*` through `max_agent_mode` (`enforceAgentScopeCap`,
-`apps/auth-server/src/app/routes/oauth/token.ts:1509`); GATE 4b `aud` ⊆
-subject `aud`; the lifetime clamp; the depth cap; rights narrowing (§5).
+`apps/auth-server/src/app/routes/oauth/token.ts:1509`), and GATE 4d's second
+half gives it for rights: the child's `authorization_details` ⊆ its type's
+`registered_rights` (§5), `invalid_authorization_details` otherwise, so a
+type registered without a write action never holds one either; GATE 4b
+`aud` ⊆ subject `aud`; the lifetime clamp; the depth cap; rights narrowing
+(§5).
 **(e)** The requesting client is the child's agent type, authenticated by a
 `private_key_jwt` client assertion under a key the broker holds; exchange
 stays confidential-only. An agent type never authenticates by client secret
@@ -710,6 +796,21 @@ cleverer. Every other `type` is rejected, not ignored —
 [ADR-011](./011-enterprise-managed-authorization.md) gate 15's posture — and
 the ID-JAG consume path keeps refusing `authorization_details` outright.
 `authorization_details_types_supported` joins AS and resource metadata.
+
+**Two bounds come from outside the chain.** Each agent type has
+`registered_rights`, operator-set in the seed manifest like `max_agent_mode`
+and never through DCR, CIMD or the developer API: per credential adapter
+(§9), the `actions` the type may ever hold and, optionally, the `locations`
+it may ever name, exact strings compared as above. An adapter the column
+does not name gives the type no rights there, so a type nobody provisioned
+holds none. Every mint checks it — the root at `/authorize`, a spawn or a
+narrow at GATE 4d (§4), an elevation (§14) — and the STS checks it again at
+every vend (§9). At the root, `locations` and `actions` are client-authored,
+and the consent screen is not their only bound: a root whose rights exceed
+its type's `registered_rights` or, when it names an agent, that agent's
+`root_ceiling` (§13) is refused at `/authorize` with
+`invalid_authorization_details` and never reaches the screen. What passes is
+rendered there in full (§11).
 
 ### 6. Revocation — by `sid` and by `jti`, cascading, with a written window
 
@@ -827,9 +928,10 @@ the portal is the remedy.
 
 QAuth exposes an RFC 8935 push endpoint, `POST /events/push`, accepting SETs
 (RFC 8417, `typ: secevent+jwt`) signed by registered transmitters — an
-mcp-guard host as a resource client, the broker as the type of the node whose
-action it reports (signing with that type's registered key), a validator —
-each an `oauth_clients` row whose `jwks` verifies its SETs. SSF stream
+mcp-guard host as a resource client and a validator, each an `oauth_clients`
+row whose `jwks` verifies its SETs — and by the broker for the node whose
+action it reports, which signs with that node's own DPoP key and never with
+the type's registered key (below). SSF stream
 management is not required inbound in the first slice; RFC 8935 stands alone
 and SSF layers on later. One event type,
 `https://schemas.qauth.dev/secevent/agent-action`, with members `action`,
@@ -839,11 +941,16 @@ the SETs of one tool call; the subject is `sub_id` in the `jwt_id` format
 naming `iss` and `jti` (SSF 1.0 §3.5). The endpoint verifies the SET, then
 looks the subject `jti` up in `agent_token_ledger` and refuses (400, one
 audit line) unless the row's `aud` contains an identifier the transmitter is
-registered to report for — its own `client_id` for the broker, the resource
-identifiers listed on its `oauth_clients` row (`event_audiences`,
-operator-set, the same identifiers `AGENT_BEARER_LEAF_RESOURCES` names) for
-an mcp-guard host or a validator — so a transmitter may report only on
-tokens minted for it; an unknown `jti` is refused the same way. It never
+registered to report for — the resource identifiers listed on its
+`oauth_clients` row (`event_audiences`, operator-set, the same identifiers
+`AGENT_BEARER_LEAF_RESOURCES` names) for an mcp-guard host or a validator —
+so a transmitter may report only on tokens minted for it. A broker SET names
+the node's type as `iss`, carries the node's public key as its `jwk` header
+and an `events` claim but no `cnf` or `htm` (§4), and is accepted only when
+that key's thumbprint equals the subject row's `instance_jkt` and the node has
+`revoked_at IS NULL`. So a node reports only on itself, and a type key, of
+which every box of the type holds one (T2), is never accepted as a SET
+signer. An unknown `jti` is refused the same way. It never
 reads the token itself. `agent_actions` is keyed by the SET's `jti` scoped to
 the transmitter (RFC 8417 §2.2: unique within a feed; a duplicate is
 acknowledged and dropped), records the transmitter's `client_id`, and is
@@ -871,7 +978,8 @@ member an agent-side transmitter writes lands in `agent_actions` with
 `source: agent`, is shown apart from the other rows, and is never an
 input to §8. `agent_actions.source` is one of `resource` (an mcp-guard host
 or a validator), `broker` (the broker's vends and its push report, §9,
-signed as the harness type from the operator's roster) and `agent` (an
+signed with the subject node's own key: that node's report, shown as
+"reported by the node", never as a resource's observation) and `agent` (an
 owner-registered transmitter); the dashboard labels all three. Registration is by out-of-band exchange of the transmitter's
 public keys and the push URL — RFC 8935 alone. SSF stream management (SSF 1.0
 §7, §8) is receiver-initiated: the receiver reads the transmitter's
@@ -946,8 +1054,15 @@ node, and the part of the broker that holds and deletes it. ADR-016 calls the
 same thing a vendor kind. A vend names its adapter in the route,
 `POST /api/credentials/{adapter}`. An adapter that mints a narrowed credential
 follows these rules: the node's DPoP-bound leaf for that resource and its
-proof, a ledger check, a ceiling taken from the token (T4), the upstream app
-identity's private key in QAuth's configuration, and a log row per vend.
+proof; a ledger check, which refuses a token with no row (§2); a ceiling
+taken from the token (T4) and bounded by its type's `registered_rights`
+(§5); explicit resource and permission lists upstream, where an empty list
+refuses the vend rather than omitting the parameter; a refusal whenever an
+upstream read the vend depends on fails, answers not-found or is
+rate-limited; the upstream app identity's private key held QAuth-side,
+never on the box (§13); a binding that belongs to the token's own agent and
+whose `adapter_ref` is assigned to that agent's current owner at the vend
+(§13); and a log row per vend.
 `github` is the first adapter. ADR-016 adds a weaker kind for a platform that
 cannot narrow, the pass-through leg, and states what it gives up. A git host
 is the worked example, and no rule here depends on it. Another platform
@@ -957,16 +1072,21 @@ GitHub, `gh` or PostgreSQL below are examples.
 - **Example adapter, `github`** — installation tokens are minted by the
   QAuth-side STS at `POST /api/credentials/github`, presented with the node's
   DPoP-bound leaf for that resource and its proof (a bearer node token until
-  P1a). QAuth verifies the proof, reads the ledger row (not revoked), restricts
-  `repositories` ⊆ the token's `locations` and `permissions` ⊆ its `actions`
-  — until §5 lands, ⊆ an operator-set policy per agent type in QAuth
-  configuration, octo-sts-shaped — and mints with the upstream app identity's
-  private key (the GitHub App's), which lives in QAuth's configuration and
-  never on the developer box; Chainguard's octo-sts is the prior art and an
-  interim option. For an agent's identity it vends only for an installation
-  on an allowlisted account (§13). Once P1a lands the STS accepts
-  `Authorization: DPoP` only, checks `htu`/`htm`/`ath` and `aud` = its own
-  identifier exactly, and
+  P1a). QAuth verifies the proof, reads the ledger row (not revoked; no row
+  refuses), restricts `repositories` ⊆ the token's `locations` and
+  `permissions` ⊆ its `actions`, both within the type's `registered_rights`
+  — until §5 lands, that column alone is the per-type policy,
+  octo-sts-shaped — and mints with the upstream app identity's private key
+  (the GitHub App's), which lives QAuth-side (§13) and never on the
+  developer box; Chainguard's octo-sts is the prior art and an interim
+  option. It always sends `repositories` and `permissions`: without
+  `permissions` GitHub grants every permission the installation holds, so
+  an empty `actions` refuses the vend. For an agent's identity it vends only
+  for an installation on an allowlisted account, and only from the binding
+  of the ledger row's own `agent_id` (§13); a tree with no agent named mints
+  only from the per-organisation identity of decision 4. Once P1a lands the
+  STS accepts `Authorization: DPoP` only, checks `htu`/`htm`/`ath` and `aud` =
+  its own identifier exactly, and
   refuses to start if its identifier appears in `AGENT_BEARER_LEAF_RESOURCES`:
   the one endpoint family that turns a 300 s sender-constrained token into a
   longer-lived unconstrained credential never accepts a bearer, on any
@@ -1048,7 +1168,8 @@ AGENT:MODEL` convention (`Documentation/process/coding-assistants.rst`,
   merged April 2026), and never appears on an agent-authored commit. A
   `pre-push` hook reports the pushed commit hashes to the broker, which
   emits them as one §7 SET (`action: git-push`, `resource` the repository,
-  a `commits` member listing the hashes, stored as `source: broker`) so the
+  a `commits` member listing the hashes, signed with the pushing node's own
+  key and stored as `source: broker`, that node's report) so the
   owner's own systems can resolve
   a hash to a node; a squash- or rebase-merged hash is the git host's, not
   the agent's, and resolves through the merged pull request instead. Every
@@ -1087,8 +1208,10 @@ AGENT:MODEL` convention (`Documentation/process/coding-assistants.rst`,
   `headersHelper`, in P3), the broker listens on a random loopback port
   and requires a per-node secret in a request header that it writes into that
   node's server definition (`headers`); a request without the node's secret is
-  refused. A path or a header naming the agent type is routing, never
-  attribution.
+  refused, and the listener resolves its caller as the socket does (§12). A
+  path or a header naming the agent type is routing, never
+  attribution, and picks only among the types the caller's node may spawn
+  (§12).
 
 **The credential is the gate; hooks are UX** (the Alternatives table;
 [Harness adapter contract](#harness-adapter-contract)). The broker **must
@@ -1131,14 +1254,26 @@ it may grow: the scopes with descriptions
 modes the tree may use, since no mode implies another; the agent types it may
 spawn — the client's operator-set `spawn_allowlist`, written into the root
 token's `aud` beside the requested `resource` and the client's own `client_id`
-so GATE 3c stays byte-identical; the client-attributed `purpose` from
-`authorization_details` (§5), in its own box beneath the scope descriptions;
-and the persistence rung, "may keep working until you revoke it" — a code
-grant always issues a refresh token
+so GATE 3c stays byte-identical; every other member of that `aud`, the
+resources the tree may reach; the root's `locations` and `actions` from
+`authorization_details` (§5), rendered from QAuth's typed record of the
+request in the operator's part of the page — every string escaped, one per
+line, grouped by credential adapter, never summarised by `purpose` or by a
+count; the client-attributed `purpose` from
+`authorization_details` (§5), in its own box beneath the scope descriptions
+and those rights; the persistence rung, "may keep working until you revoke
+it" — a code grant always issues a refresh token
 (`apps/auth-server/src/app/routes/oauth/token.ts:625`), so every root can renew
-until `sid` revocation or the refresh family expires. One sentence says the
+until `sid` revocation or the refresh family expires — with the date that
+family expires; the depth cap, `MAX_DELEGATION_DEPTH`; and, from the broker,
+the `qauth_binding_code` its session shows (§1). One sentence says the
 agent may delegate downwards within this ceiling and never beyond it. A root
-that names an agent asks for that agent's root ceiling (§13). The owner
+whose `authorization_details` the screen cannot render in full is refused,
+never shown in part; one beyond its type's `registered_rights` or its
+agent's root ceiling never reaches the screen (§5). A root
+that names an agent asks for that agent's root ceiling (§13) and never more:
+scopes beyond it are `invalid_scope` and rights beyond it
+`invalid_authorization_details`, at `/authorize`. The owner
 raises that ceiling in the portal with a passkey, and the next root takes the
 raised ceiling only through this screen (decision 17).
 `spawn_allowlist` follows `max_agent_mode`: seed manifest only, never DCR,
@@ -1169,8 +1304,10 @@ leaf. An agent root never takes the skip-consent fast path
 (`canSkipConsent`, `apps/auth-server/src/app/helpers/consent.ts:77`), and
 `prompt=none` for an agent root answers `consent_required` (decided
 2026-10-06; ADR-015 decision 11). A `sid` is minted per
-grant, not per screen. A root grant that names a dangerous scope
-(`agent:exec`, `agent:admin`, any `write:*`) also needs a fresh login in
+grant, not per screen, and only by a grant whose screen showed the
+persistence rung (§1). A root grant that names a dangerous scope
+(`agent:exec`, `agent:admin`, any `write:*`, or a pass-through leg's
+`<kind>:owner-token`, ADR-016 §4) also needs a fresh login in
 `staging` or `production`: step-up rule 3 (`evaluateStepUp`,
 `apps/auth-server/src/app/helpers/step-up.ts:196`) forces a fresh login
 for the whole requested set unless the browser session is under two minutes
@@ -1181,19 +1318,89 @@ root does not.
 
 ### 12. Harness — a node is a process
 
-A node exists only where a process holds its own handle. The broker resolves
-a caller by walking the `SO_PEERCRED` pid's parent chain to the first bound
-pid; a chain that reaches no bound node is refused and logged — never
-attributed to the session. The session node is bound like every other node:
-`qauth-broker login` opens a pidfd on the session process (fallback: pid plus
-`/proc/<pid>/stat` start time, field 22), and every binding — session,
-teammate, spawner-started child — is a pidfd or pid+start-time pair, so a
-recycled pid never inherits a node, and the broker unbinds a node the moment
-its pidfd signals exit. An in-process sub-agent shares the session process
-and so shares the session node; that is the harness limit, not a default.
-Which nodes a harness can bind, and which it cannot, is in the
-[Harness adapter contract](#harness-adapter-contract), with the Claude Code
-adapter (read 2026-09-21) as its example.
+A node exists only where a process holds its own handle. The broker resolves a
+caller by walking the `SO_PEERCRED` pid's parent chain to the first bound pid
+— or, on a connection the broker issued as a spawn handle (below), to that
+connection's node; a chain that reaches no bound node is refused and logged —
+never attributed to the session — unless it is a session registration, which
+starts a root, or presents a spawn handle (below). On every other
+connection the broker takes the peer as a pidfd (`SO_PEERPIDFD`) or, on a
+kernel without one, checks at each call that the process at the peer's pid
+still holds the connection's other end; a peer that has exited resolves to
+nothing, so a recycled pid never stands in for a caller. The session node is
+bound like every other node: `qauth-broker login` opens a pidfd on the session
+process (fallback: pid plus `/proc/<pid>/stat` start time, field 22), and
+every binding — session, teammate, spawner-started child — is a pidfd or
+pid+start-time pair, so a recycled pid never inherits a node, and the broker
+unbinds a node the moment its pidfd signals exit. An in-process sub-agent
+shares the session process and so shares the session node; that is the harness
+limit, not a default. Which nodes a harness can bind, and which it cannot, is
+in the [Harness adapter contract](#harness-adapter-contract), with the Claude
+Code adapter (read 2026-09-21) as its example.
+
+**The broker places a new node; the caller does not.** A registration — of
+a session, a teammate, a spawner-started child or a by-type key — carries
+what only the harness knows. The broker decides the rest from what the
+kernel tells it:
+
+- **Parent.** A new node's parent is the bound node the caller resolves to,
+  and the broker signs its spawn assertion (§4) with that node's key and no
+  other. A lead, parent or session id that a request names is checked
+  against that node, and a mismatch is refused and logged. A process that a
+  request names must be the caller, an ancestor of it below any bound pid
+  that is an ancestor of no other bound node's process and of no other
+  registered session, or the caller's own child passed as a pidfd (the
+  spawner path).
+- **Type.** The child's type must be in the parent type's `spawn_allowlist`,
+  GATE 3d's rule, which the broker checks before it signs. A proxy's
+  `--type`, a header or a hook's agent type picks among those types and adds
+  none. The node it yields is a spawn by the parent, with its receipt and its
+  ledger row (§2, §4).
+- **Root.** A session registration starts a root (§1) only when its caller
+  resolves to no bound node. Under a bound node it is a child registration
+  under that node, except that on a host with one root per broker start a
+  registration whose caller resolves to the root's own node joins it (§1). A
+  resume rebinds a root only as §1 says. No path gives a process under no
+  node a root's ceiling without the person's consent screen.
+- **Outside the parent's process tree.** A child that does not descend from
+  its parent's process — a teammate in its own terminal pane, a child under
+  another uid or in a sandbox — binds only through a **spawn handle** that its
+  parent's node obtained. The parent's call, resolved as above, asks for one
+  naming the child type, which the broker checks as above. A handle binds once
+  and lapses unless presented within 60 s; the registration that presents it
+  binds its process, with a pidfd, under the node that issued it. The handle
+  is a connected socket that the broker passes to the parent over `SCM_RIGHTS`
+  and the parent leaves open in the child. Where the launch path keeps no
+  descriptors, it is an opaque single-use value in the child's environment,
+  which a same-uid process can read (T2), and never in a command line, which
+  every user on the host can read. A child registration that presents
+  no handle and resolves to no bound node is refused, never read as a root.
+  Nothing else a child reads — a harness's team configuration, a log, another
+  process's environment — is authority.
+- **The socket.** The broker creates `qauth-broker.sock` with mode 0600 in
+  the user's `$XDG_RUNTIME_DIR` (mode 0700) and refuses a peer whose
+  `SO_PEERCRED` uid is not its own. A child under another uid or in a sandbox
+  is never given the path and needs nothing under the parent's `HOME`: it
+  reaches the broker only through the connected socket its spawner obtained
+  as its handle, and every call on that connection resolves to the child's
+  node, whatever the child's own ancestry says.
+- **The loopback listener.** The listener of §9 follows the socket's rules.
+  It maps each connection to the process holding its other end through the
+  kernel's socket table, refuses a connection it cannot map or whose uid is
+  not its own, and resolves that process as above. It serves a request only
+  when the per-node secret names the node that process resolves to or a
+  node below it.
+
+The residual, stated plainly: any process that reaches the broker under a
+bound node — a same-uid descendant, or a holder of that node's connection —
+can spend that node's ceiling, never a wider one; whoever reads an
+unconsumed environment handle first can bind in the child's place, within
+what the parent granted; and a same-uid process under no node — a node's
+descendant that left its ancestry by a double fork among them — can ask for
+a root, or for a resume of one, which reaches nothing until the person
+approves its consent screen (§1, §11). The binding code helps the person
+match a screen to a session but proves nothing, since a model can print any
+code into its own session.
 
 ### 13. Agent identity — a principal with an owner, held by QAuth and asserted nowhere else
 
@@ -1206,9 +1413,11 @@ stores and serves at `/agents/{handle}/avatar.png` on its own origin, ≤ 512
 KiB, decoded and re-encoded on upload so nothing but pixels survives — no
 SVG, which can carry script, and never a URL QAuth would dereference on
 render), `active`, `profile_visibility` (`public` | `private`, default
-`public`), `root_ceiling` (the agent's default root ceiling: the scopes a new
-root that names this agent asks for; the owner raises it in the portal with a
-passkey, and the next root takes it only through consent, §11; decision 17),
+`public`), `root_ceiling` (the agent's default root ceiling: the scopes, and
+per credential adapter the `locations` and `actions` (§5), that a new root
+naming this agent asks for and never exceeds; the owner raises it in the
+portal with a passkey, and the next root takes it only through consent, §11;
+decision 17),
 `owner_user_id` (a `users`
 row, `onDelete: 'restrict'` — an agent never outlives its owner silently;
 the owner deactivates or transfers it first), `created_at`, `updated_at`.
@@ -1266,9 +1475,10 @@ GitHub, as the example, the _bot user's_ numeric id from
 what the `noreply` address carries, not the App id), `upstream_id` (the id of
 the application or integration record that identity belongs to, where the
 platform has one — on GitHub the App id), `external_login`, `external_email`
-(the attribution address the platform assigns), `adapter_ref` (the key in
-QAuth configuration naming the upstream app identity and private key the
-adapter mints from for this agent, §9), `proof` (how QAuth learned it; for
+(the attribution address the platform assigns), `adapter_ref` (the reference
+naming the upstream app identity and private key the adapter mints from for
+this agent: a key in QAuth configuration, or one its owner uploaded; below,
+§9), `proof` (how QAuth learned it; for
 GitHub, the STS App's
 own `GET /app` and `GET /users/{slug}[bot]` answers at provisioning),
 `bound_at`. A column an adapter has no use for stays NULL; the adapter
@@ -1287,6 +1497,30 @@ platform, not configured. The avatar the platform
 shows is the platform's (example: GitHub exposes no API to set an App's logo),
 so the owner sets it by hand from the same file QAuth serves, and QAuth
 records nothing about whether they did.
+
+**Whose upstream identity a binding may name.** An `adapter_ref` belongs to
+exactly one owner, and QAuth refuses, audited, a binding whose `adapter_ref`
+is not assigned to the authenticating owner. It is assigned in one of two
+ways. The operator's configuration entry for it names that owner's `user_id`.
+Or the owner uploads the upstream identity's private key through an owner
+route (ADR-015 §3's guard, a passkey approval per operation); QAuth stores it
+envelope-encrypted under a per-realm key used only for this purpose, as
+ADR-016 §4 keeps the pass-through token, no route returns it, and `proof` is
+the platform's answer under that key (for GitHub, `GET /app`), so holding the
+key is the proof. Either way the key stays QAuth-side, never on the box. The
+per-organisation identity of decision 4 is assigned to no owner, so no binding
+can name it. An uploaded key that opens it, or any other upstream identity
+QAuth's configuration already holds (compared by `upstream_id` and
+`external_id`), is refused and audited, as a binding naming it is.
+`agent_bindings` is unique on (`platform`, `adapter_ref`) and on (`platform`,
+`external_id`), so one upstream identity serves one agent, and the STS refuses
+a vend whose binding's agent is not the ledger row's `agent_id`, or whose
+`adapter_ref` is not assigned, at that vend, to the agent's current owner
+(§9); an uploaded key stays assigned to the owner who uploaded it. So after an
+operator reassigns the `adapter_ref` or the agent is transferred (decision
+10), the binding mints nothing until one assigned to the new owner replaces
+it. Neither `proof` nor the allowlist stands in for this check: the platform's
+answers say which identity the key opens, not which QAuth user may use it.
 
 **Public profile.** `GET /agents/{handle}` on the realm's public origin
 serves the profile, unauthenticated: `display_name`, `description`, avatar,
@@ -1338,8 +1572,9 @@ bounded by its own approval, not by a parent.
    mcp-guard resource (`403 insufficient_scope`). The broker sees the
    refusal. A GATE 4d refusal is final and leads to no request. No approval
    lifts a type's registered scopes (decided 2026-10-09, ADR-015 question
-   4). The owner's route to more is decision 17: raising the agent's root
-   ceiling with a passkey (§13).
+   4), and so none lifts its `registered_rights` either, 4d's other half
+   (§4, §5). The owner's route to more is decision 17: raising the agent's
+   root ceiling with a passkey (§13).
 2. **Request.** If the node's token carries `agent:request` (below), the
    broker files an approval request: an OpenID CIBA backchannel
    authentication request (CIBA Core 1.0 §7.1), in poll mode — poll,
@@ -1364,7 +1599,9 @@ bounded by its own approval, not by a parent.
 3. **Notification.** QAuth notifies the session owner — the ledger row's
    `user_id`, never anyone else — through a channel the owner registered
    (decision 16): web push to the portal, plus an optional owner-registered
-   webhook; never email. A
+   webhook; never email. The webhook goes through the egress client of
+   ADR-019 Decision 8, which checks its URL when the owner registers it and
+   again at every delivery. A
    notification carries only the request id, the agent's handle and the URL
    of QAuth's approval page. It never carries an approve action: approval
    happens only on QAuth's origin.
@@ -1606,7 +1843,8 @@ gate.
   rule and the NULL-`sid` refresh rule; introspection members `jti`, `sid`,
   `token_use`, `act`, `qauth_delegation`; `GET /api/agent-sessions` and
   `/{sid}`; the
-  STS with its first adapter, `github`, on an operator-set per-type policy;
+  STS with its first adapter, `github`, on an operator-set per-type policy,
+  the type's `registered_rights` (§5); the agent type's grant rule (§1);
   spec-pin rows with their
   `Re-check by` dates. In P0 the STS accepts the node's bearer token (no proof
   until P1a); the broker's root `aud` is the seeded `audience` allowlist —
@@ -1618,12 +1856,16 @@ gate.
   inheritance across code → refresh → exchange; one ledger row per
   `sid`-carrying mint and none for `client_credentials`, and a failed write
   fails the mint; a sid-less subject starts a new tree with a `kind: root`
-  row; a pre-migration refresh family gains a `sid` on its next refresh; the
-  introspection schema; with the switch on, an agent type's ID-JAG request
-  fails `invalid_request` at GATE 2; the seed manifest refuses an agent type
-  registered with any method but `private_key_jwt`; the STS refuses a
-  resource outside policy, against a mock upstream (for `github`, a
-  repository, against a mock GitHub).
+  row; a refresh family with a NULL `sid` gets none at its next refresh,
+  including one whose CIMD client starts declaring `is_agent` after consent;
+  the introspection schema; with the switch on, an agent type's ID-JAG
+  request fails `invalid_request` at GATE 2; the seed manifest refuses an
+  agent type registered with any method but `private_key_jwt`, or with the
+  `client_credentials` or JWT-bearer grant, and the token endpoint refuses
+  both grants to one; the STS refuses a resource outside policy, against a
+  mock upstream (for `github`, a repository, against a mock GitHub), a token
+  with no ledger row, an empty `actions` set and a vend whose platform read
+  fails.
   **0b, broker:** `login` on an ephemeral loopback port with
   PKCE, git-credential `get`, the platform-CLI shim (`gh`, for the first
   adapter), the commit trailer, the log. Tests: vend within policy, refusal
@@ -1631,7 +1873,20 @@ gate.
   not attributed to the session; a process that reuses an exited teammate's
   pid is refused; vended credential deleted at node end (for `github`, the
   installation token); a trailer resolves
-  to a ledger row. **0c, agent identity:** the `agents` and `agent_bindings`
+  to a ledger row; a teammate registration naming a lead its caller does not
+  descend from, with no handle, is refused, one presenting the lead's handle
+  binds under the lead, and a second use of that handle is refused; a
+  session registration from under a bound node starts no root; a resumed
+  session binds under its root only after the person approves the root's
+  screen again; on a host with one root per broker start, a registration
+  from outside the broker's process starts a root of its own through its
+  screen; a call on a connection whose peer has exited is refused,
+  whatever process now has its pid; a peer of
+  another uid is refused at the socket and at the loopback listener, and a
+  loopback request whose secret names a node above or beside its caller's is
+  refused; a child under another uid
+  reaches the broker only through its spawner's connection. **0c, agent
+  identity:** the `agents` and `agent_bindings`
   tables, `agent_id` on the authorization request, on `refresh_tokens` and on
   the ledger's root row (§1, §2), the owner check at authorization,
   `qauth_delegation.agent`, the consent line (§11), the public profile, and
@@ -1643,7 +1898,14 @@ gate.
   `agent_id`; the profile of a private agent is 404 and the profile of a
   public one carries no `sid`, `jti` or scope; a commit made through the
   broker under an agent root is authored by the binding's login and address;
-  a node-supplied `Signed-off-by` is refused. Honest limits: the spawn proof
+  a node-supplied `Signed-off-by` is refused; a binding whose `adapter_ref`
+  is assigned to another owner, or to none, fails, and so does a second
+  binding with the same `adapter_ref` or `external_id`, and so does an
+  upload of a key that opens a configured identity; the STS refuses a
+  vend from the binding of an agent other than the token's, and one from a
+  binding whose `adapter_ref` is no longer assigned to the agent's owner
+  after a reassignment or a transfer. Honest limits:
+  the spawn proof
   is possession-only until P1; the MCP leg is still the harness's own
   non-agent DCR/CIMD client (Claude Code's, in the example adapter), which
   never sends `is_agent`, so it is outside
@@ -1679,9 +1941,14 @@ gate.
   `authorization_details`; `POST /api/agents/{id}/revoke` with its
   owner-or-admin rule (§13); `POST /api/agent-sessions/revoke-all`, with
   sign-out leaving refresh families that carry a `sid`, except a CIMD
-  client's that no longer declares `is_agent` (decision 1). Tests:
+  client's that no longer declares `is_agent` (decision 1); GATE 4d's rights
+  half and the root's rights bound at `/authorize` (§5). Tests:
   widened `locations` fails
-  `invalid_authorization_details`; a client-supplied `caused_by` is rejected;
+  `invalid_authorization_details`; a child whose type's `registered_rights`
+  lack a write action fails `invalid_authorization_details` at 4d although
+  its parent grants it; a root beyond its type's `registered_rights` or its
+  agent's root ceiling fails at `/authorize` and never reaches the screen;
+  a client-supplied `caused_by` is rejected;
   revoke-by-agent makes every tree rooted in the agent inactive and leaves
   the owner's other agents' trees alone, and a node calling it is refused;
   revoke-by-`sid` makes every descendant inactive at introspection and in the
@@ -1694,7 +1961,9 @@ gate.
   ends the refresh family of a CIMD client that no longer declares
   `is_agent` and leaves a `sid`-carrying agent family; after revoke-all, a
   sid-less subject token issued before it fails `invalid_request`; the
-  consent screen shows the union of modes and the allowlist.
+  consent screen shows the union of modes, the allowlist, every `locations`
+  and `actions` entry escaped, the `aud` resources, the refresh family's
+  expiry, the depth cap and the binding code.
 - **P3 — observation.** The RFC 8935 push endpoint and event type, the
   `agent_actions` table, the operator-set `event_audiences` column on
   `oauth_clients` and `AGENT_EVENT_WINDOW`; mcp-guard normalises
@@ -1715,7 +1984,10 @@ gate.
   outside the transmitter's agent's trees is refused; a transmitter-supplied
   `agent` member is refused and the stored row carries the ledger's; `model`
   and `reason` never reach introspection or the §8 request; the SCIM
-  projection returns the owner as `owners[0]` and rejects writes.
+  projection returns the owner as `owners[0]` and rejects writes; a broker
+  SET signed with a type key, or with any key but the subject row's
+  `instance_jkt`, is refused; a by-type proxy naming a type outside its
+  session type's allowlist gets no node.
 - **P4 — the example database adapter, the decision API and an OS-level
   authority manager.** `qauth_pg_validator`,
   the libpq hook library and the `psql` path (the PostgreSQL example adapter);
@@ -1730,7 +2002,8 @@ gate.
   one shared with ADR-017 —
   passkey registration and assertion in the portal; QAuth has none today;
   the portal setting that raises an agent's root ceiling with a passkey
-  (§13, decision 17);
+  (§13, decision 17); the owner route that uploads an upstream identity's
+  key (§13);
   the CIBA backchannel endpoint in poll mode, with `login_hint_token` = the
   requesting node's token; `REMOTE_APPROVAL_ENABLED`,
   `REMOTE_APPROVAL_EXPIRY` and `REMOTE_APPROVAL_BUDGET`; the `agent:request`
@@ -1740,8 +2013,10 @@ gate.
   approved delta and one audience; a `kind: elevation` subject cannot spawn
   or narrow; a request without `agent:request`, or over budget, is refused
   and notifies no one; a muted `sid` is refused and notifies no one; a
-  request for a scope outside the type's registered scopes is refused and
-  notifies no one (GATE 4d is final); a renewal matched to an open window
+  request for a scope outside the type's registered scopes, or for rights
+  outside its `registered_rights`, is refused and notifies no one (GATE 4d
+  is final); a request whose `login_hint_token` has no ledger row is
+  refused; a renewal matched to an open window
   resolves with no notification and no passkey, writes a new
   `kind: elevation` row under the same approval and leaves the budget
   untouched; a renewal before the live leaf's last 60 seconds fails
@@ -1752,7 +2027,9 @@ gate.
   only in the attributed box; revoke-by-`sid` ends an open window; a window
   never outlives the refresh family; a notification body carries only the
   request id, the agent's handle and the URL; raising a root ceiling without
-  a passkey assertion is refused, and a live tree keeps its ceiling.
+  a passkey assertion is refused, and a live tree keeps its ceiling; an
+  uploaded key whose platform answer names no identity is refused, and the
+  stored key is never returned by any route.
 
 ## OS-level authority manager composition
 
@@ -1876,10 +2153,19 @@ An adapter must do four things.
 
 1. **Register the session.** When a main agent starts, send the broker the
    harness session id and the process id over the socket. The broker opens a
-   pidfd on the process (§12) and runs the root grant (§1).
+   pidfd on the process (§12) and runs the root grant (§1) only when the
+   caller resolves to no bound node; under a bound node the registration is
+   a child of that node, or joins a host's one root per broker start when
+   its caller resolves to that root's node (§1, §12). Show the binding code
+   the broker returns in the session (§1).
 2. **Link the parent.** For a child that runs as a separate process, send its
-   session id, pid, process start time and its lead's session id. The broker
-   binds the child and spawns its node under the lead's (§4).
+   session id, pid and process start time from the child, or let the parent
+   register it before exec (the spawner path). The broker spawns its node
+   under the bound node the caller resolves to — or, for a child outside its
+   parent's process tree, under the node that issued the spawn handle the
+   child presents — never under a lead the request names (§4, §12). Where
+   the parent starts such a child, obtain the handle on the parent's side
+   and pass it to the child's start.
 3. **Report sub-agent start and stop.** For a sub-agent that runs inside the
    session process, send its instance identifier and type when it starts and
    when it stops. The report is advice. With reporting off, a by-type node's
@@ -1891,7 +2177,8 @@ An adapter must do four things.
    only through the broker's proxy (§9), or stays outside it.
 
 An adapter holds no key and no credential. It names no node as an
-attribution: a handle or label in a log is never a binding. It is never the
+attribution: a handle or label in a log is never a binding. It never chooses
+a node's parent or type; the broker does (§12). It is never the
 only thing that stops an action. A process that no adapter registered reaches
 no bound node, and the broker refuses it (§12).
 
@@ -1899,7 +2186,11 @@ The consequence is a rule, not a caveat: **a child that needs a hard read-only
 gate is spawned as a process under a different uid, or in a sandbox that
 denies it ptrace-read of the parent, the parent's tmux socket and every
 user-writable directory on the parent's `PATH` and `HOME`** (the spawner's
-job — e.g. `bwrap --unshare-user` or a `DynamicUser=` unit); a process is
+job — e.g. `bwrap --unshare-user` or a `DynamicUser=` unit). Such a child
+reaches the broker only through the connection its spawner holds open for
+it, never through the socket's path, and reads nothing under the parent's
+`HOME` to bind; its node's parent and type are the spawner's node's choice,
+never its own (§12). A process is
 necessary for the gate on both legs and, until P3, sufficient on the CLI leg
 only (the example adapter's row 8, P0b's honest limits). What a same-uid
 child can still do to its parent is T2's residual; a sub-agent cannot be
@@ -1907,7 +2198,8 @@ gated at all (§12).
 
 ### Example adapter: Claude Code and the Agent SDK
 
-Claude Code does duty 1 and 2 from its `SessionStart` hook, duty 3 from
+Claude Code does duty 1 and the child's half of duty 2 from its
+`SessionStart` hook, duty 3 from
 `SubagentStart` and `SubagentStop`, and duty 4 from `headersHelper`. From the
 Claude Code and Agent SDK documentation (fetched 2026-09-21): every
 hook payload carries `session_id`; `SubagentStart`/`SubagentStop` carry
@@ -1919,16 +2211,16 @@ teammates are separate processes with their own `session_id`; MCP tokens are
 stored per server, not per session, and `headersHelper` re-runs on connect and
 on 401; the Agent SDK passes `mcpServers` and headers per `query()`.
 
-| Tree node                                     | Bindable (read 2026-09-21) | How                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
-| --------------------------------------------- | -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| The session's main agent                      | yes                        | The broker holds its key and tokens and a pidfd on the session process opened at `login`, when the main agent's `SessionStart` hook registers `session_id` and pid; a Bash subprocess maps to that session's root node only when its `SO_PEERCRED` parent chain reaches that pid. An orphaned descendant (`( cmd & )`, `nohup`, `setsid`, double fork — reparented to pid 1 or a subreaper) reaches no bound node and is refused; a child that must outlive its parent is started through the spawner path below, which passes a handle.                                                                                                                                                                                                                     |
-| Spawner-started process                       | yes                        | The spawner is any runtime helper that starts nodes and sandboxes them: it spawns the node and registers the child's pid with the broker over the socket before exec (a pidfd passed with `SCM_RIGHTS`, so pid reuse cannot rebind it); the handle in the child's environment is a label for logs, never a binding — the broker binds by `SO_PEERCRED` and ancestry and refuses a handle whose node is not on the caller's ancestry. Full CLI and MCP attribution.                                                                                                                                                                                                                                                                                           |
-| Teammate                                      | yes                        | A separate process; its `SessionStart` hook registers `session_id`, pid, process start time and its lead's `session_id` (read from the team config under `~/.claude/teams/`) with the broker, which opens a pidfd on it (fallback pid + start time) and spawns the teammate node under the lead's. The ancestry check maps every call that reaches the broker from that process, or from a descendant whose chain reaches it, to the teammate node — the CLI leg from P0b, the MCP leg once its `headersHelper` reaches the broker (P3); until then its MCP calls carry Claude Code's per-server token, the same one the lead presents (row 8). The binding ends when the pidfd signals exit, not when a pid is reused.                                      |
-| Agent SDK agent                               | yes                        | The application is the runtime: it obtains leaf tokens from the broker per `query()` and passes them in `mcpServers` headers; one process per agent is the application's choice.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
-| Sub-agent with its own inline `mcpServers`    | by type                    | The inline server is a `stdio` entry running the broker's proxy with the agent type as an argument; the broker attributes the child by `SO_PEERCRED` and ancestry, and `SubagentStart` says which instance of that type is live. Two concurrent sub-agents of one type share a node. Its key is created on the first `SubagentStart` of that type in the session — or, when no hook has announced the type (hooks disabled), on the proxy's first call under it — and retired on the last `SubagentStop` of that type or at session end; the start and stop events reach the broker by hooks (advice, not authority), so with hooks off the key lives until session end, and the node's dead-man switch is the session process's pidfd either way. MCP only. |
-| Sub-agent sharing the session's connections   | no                         | Same connection, same token: the session node.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
-| Any in-process sub-agent's CLI call           | no                         | The Bash tool runs in the session process; `SO_PEERCRED` sees the session; the credential vended is the session node's. `PreToolUse` can refuse as advice; it cannot make it a different principal.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
-| Claude Code's own per-server OAuth (DCR/CIMD) | outside the tree           | A non-agent client under §1: no `sid`, no ledger row, no node. It joins the broker's root only when the server is reached through the proxy or `headersHelper` → broker (P3). An operator who seeds it as an agent client and points Claude Code at those pre-configured credentials gets a `sid` and ledger rows — but a root of its own.                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| Tree node                                     | Bindable (read 2026-09-21) | How                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| --------------------------------------------- | -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| The session's main agent                      | yes                        | The broker holds its key and tokens and a pidfd on the session process opened at `login`, when the main agent's `SessionStart` hook registers `session_id` and pid; a Bash subprocess maps to that session's root node only when its `SO_PEERCRED` parent chain reaches that pid. An orphaned descendant (`( cmd & )`, `nohup`, `setsid`, double fork — reparented to pid 1 or a subreaper) reaches no bound node and is refused; a child that must outlive its parent is started through the spawner path below, which passes a handle.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| Spawner-started process                       | yes                        | The spawner is any runtime helper that starts nodes and sandboxes them: it spawns the node and registers the child's pid with the broker over the socket before exec (a pidfd passed with `SCM_RIGHTS`, so pid reuse cannot rebind it); the child's node is a spawn by the node the spawner's own call resolves to, of a type that node may spawn (§12). For a child under another uid or in a sandbox the broker returns a connected socket, which the spawner leaves open across the exec and which is the child's only way to the broker (§12). A label in the child's environment is for logs, never a binding; it is not the single-use environment handle of §12, which only the broker issues. The broker binds by `SO_PEERCRED`, ancestry, the connection or such a handle, and refuses a label whose node is not on the caller's ancestry. Full CLI and MCP attribution.                                                                                                                                                                       |
+| Teammate                                      | yes, by ancestry or handle | A separate process; its `SessionStart` hook registers `session_id`, pid and process start time with the broker, which opens a pidfd on it (fallback pid + start time). A teammate that descends from the lead's process is spawned under the lead's node by ancestry. One that does not (for example, in its own terminal pane) presents a spawn handle that the adapter obtained under the lead and passed to the teammate's start (§12); where the harness gives the lead no way to pass one, that teammate is refused. The team config under `~/.claude/teams/` names the lead for display only and is never read as authority. The ancestry check maps every call that reaches the broker from that process, or from a descendant whose chain reaches it, to the teammate node — the CLI leg from P0b, the MCP leg once its `headersHelper` reaches the broker (P3); until then its MCP calls carry Claude Code's per-server token, the same one the lead presents (row 8). The binding ends when the pidfd signals exit, not when a pid is reused. |
+| Agent SDK agent                               | yes                        | The application is the runtime: it obtains leaf tokens from the broker per `query()` and passes them in `mcpServers` headers; one process per agent is the application's choice.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| Sub-agent with its own inline `mcpServers`    | by type                    | The inline server is a `stdio` entry running the broker's proxy with the agent type as an argument; the broker attributes the child by `SO_PEERCRED` and ancestry, and `SubagentStart` says which instance of that type is live. The node is a spawn by the session node, so its type must be in the session type's `spawn_allowlist`; the argument picks among those types and adds none (§12). Two concurrent sub-agents of one type share a node. Its key is created on the first `SubagentStart` of that type in the session — or, when no hook has announced the type (hooks disabled), on the proxy's first call under it — and retired on the last `SubagentStop` of that type or at session end; the start and stop events reach the broker by hooks (advice, not authority), so with hooks off the key lives until session end, and the node's dead-man switch is the session process's pidfd either way. MCP only.                                                                                                                            |
+| Sub-agent sharing the session's connections   | no                         | Same connection, same token: the session node.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| Any in-process sub-agent's CLI call           | no                         | The Bash tool runs in the session process; `SO_PEERCRED` sees the session; the credential vended is the session node's. `PreToolUse` can refuse as advice; it cannot make it a different principal.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| Claude Code's own per-server OAuth (DCR/CIMD) | outside the tree           | A non-agent client under §1: no `sid`, no ledger row, no node. It joins the broker's root only when the server is reached through the proxy or `headersHelper` → broker (P3). An operator who seeds it as an agent client and points Claude Code at those pre-configured credentials gets a `sid` and ledger rows — but a root of its own.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 
 ## Consequences
 
@@ -1968,7 +2260,10 @@ on 401; the Agent SDK passes `mcpServers` and headers per `query()`.
   GitHub App's, for the `github` adapter); the on-box type key and root
   refresh token, and the soft same-uid isolation, are T2's residuals, and a
   hard child gate costs a uid or a sandbox per node (harness adapter
-  contract).
+  contract). A child outside its parent's process tree binds only with a
+  handle its parent passes: a harness that cannot pass one leaves such a
+  child refused, and a handle passed in the environment is readable by a
+  same-uid process until it is used (§12).
 - Revocation is fail-open for one lifetime (T5, §6); at 300 s that is one
   root-down re-spawn per node every five minutes (§4), and a vended
   credential's upstream lifetime (an hour, for `github`) shortens only by the
@@ -1976,7 +2271,8 @@ on 401; the Agent SDK passes `mcpServers` and headers per `query()`.
 - One browser login per new session whenever the root names a dangerous
   scope, which every root of an `exec` type does (decision 7's example is
   one); resume reuses the root only when the dead-man walk did not reach
-  QAuth, and a second process does not (§1, §11).
+  QAuth, and then only through the root's consent screen again; a second
+  process does not (§1, §11).
 - Every new root shows the consent screen, even when a stored consent
   covers it, and `prompt=none` cannot start one (§11).
 - Three of the shapes followed are individual drafts that may expire without
@@ -2091,7 +2387,9 @@ proceeds on that default until the maintainer decides otherwise. As of
    `worker` (`exec`); one `jwks` key per box, distinct `kid`.
    _Decided 2026-10-09 (maintainer):_ the example root type is renamed to the
    neutral `lead`. `claude-code` appears only as a labelled example in docs.
-   `reviewer` and `worker` stay.
+   `reviewer` and `worker` stay. _Amended 2026-10-10:_ each type also
+   carries `registered_rights` (§5) and only the grants a tree uses (§1);
+   the decision is unchanged.
 8. **Root-grant cadence.** One root per main-agent process (a login per
    session, per-session attribution) or one root per broker start (one login,
    concurrent sessions share a `sid` and a node)? Default: per process.
@@ -2104,7 +2402,11 @@ proceeds on that default until the maintainer decides otherwise. As of
    shape. A per-host setting choosing between the two, rather than one
    answer for every host, is the likely resolution. _Decided 2026-10-09
    (maintainer):_ a per-host setting, default one root per process. A daemon
-   host may choose one root per broker start (§1).
+   host may choose one root per broker start (§1). _Amended 2026-10-10:_ on
+   such a host the shared root's node is the broker's own process, and a
+   session registration joins it only when its caller resolves to that node;
+   one from a process under no node starts a root of its own through its
+   consent screen (§1, §12). The decision is unchanged.
 9. **Agent handle namespace.** Realm-unique (`build-bot` is one agent per
    realm) or user-scoped (`alice/build-bot`, so two owners may share a
    handle)? The SCIM draft wants `agentUserName` unique across the

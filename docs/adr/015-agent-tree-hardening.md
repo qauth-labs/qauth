@@ -30,6 +30,14 @@
 > On 2026-10-09 the maintainer decided that ADR-014, this record and ADR-016
 > will be approved together, so ADR-014 was updated that day to match.
 > ADR-014 §1 and §11 also carry the 2026-10-06 answers.
+>
+> **Amended 2026-10-10** (before any implementation): §1, §3 and §7 follow
+> ADR-014's amendment of that date. A family with no `sid` gains none by
+> refresh, an owner may upload a binding's upstream key, and a type's
+> registered rights bound an approval as its registered scopes do. §9 now
+> says what a transfer does to a binding, and question 8 notes that a resume
+> rebinds its root only through the consent screen. No maintainer decision
+> changed.
 
 ## Context
 
@@ -104,13 +112,15 @@ whose `sid` is NULL (question 11, decided). Sign-out also ends a `sid` family
 whose CIMD client has stopped declaring `is_agent` (question 1, decided).
 Revoke-all also reaches what would become a tree next:
 
-- every live refresh family of an agent client with no `sid` yet, which
-  ADR-014 §1 would root at its next refresh;
+- every live refresh family of an agent client with no `sid`, which gains
+  none by refresh (ADR-014 §1) but whose tokens can still start a tree by
+  exchange;
 - a code issued before the revoke-all: its redemption is refused
   (`invalid_grant`).
 
 The maintainer asked for "a separate method that revokes all agents"
-(ADR-014 decision 1). A family one refresh away from a tree is an agent's.
+(ADR-014 decision 1). A family whose tokens can still start a tree by
+exchange is an agent's.
 
 **Why.** Without the walk, a tree whose grant has ended runs until the root's
 last access token expires, and the ledger shows it live. A deleted client's
@@ -169,7 +179,8 @@ refuses every tree token: root, node or leaf.**
   token's `sub`. Accepting a transfer is the one exception (decision 9).
 - The routes: the session reads and events stream; the owner leg of the two
   identifier revocation routes; revoke-all and revoke-by-agent; writes to
-  agents, bindings and transmitters; transfer offers; ending a window,
+  agents, bindings (an upstream identity's key among them, ADR-014 §13) and
+  transmitters; transfer offers; ending a window,
   removing a block, registering a channel or passkey; the SCIM read; and the
   owner settings ADR-016 adds. No tree token ever authenticates the approval
   page.
@@ -184,7 +195,7 @@ tree. The owner reads them from `GET /api/agent-sessions/{sid}`; introspection
 returns them only to a node. Introspection authenticates a client by secret
 (`apps/auth-server/src/app/routes/oauth/introspect.ts:101-102`) and names no
 user. The portal calls `/api/*` with the owner's management token and never
-introspects (`apps/developer-portal/src/server/auth-server-client.ts:425-427`).
+introspects (`apps/developer-portal/src/server/auth-server-client.ts:445-447`).
 This narrows no caller §2 names.
 
 **Why.** A tree token is the agent's, and T6 says a model's restraint is no
@@ -287,10 +298,10 @@ bearer-leaf election.**
 - §14's step 1 lists refusals by GATE 4a, §5, the STS and mcp-guard. A
   GATE 4d refusal is final (question 4). Some refusals lead to requests this
   rule refuses: a mode above the cap, which 4a refuses first, and a listed
-  mcp-guard resource. Beyond `agent:request` and a type's registered scopes,
-  ADR-014 does not say what an approval may carry, so this is a new
-  fail-closed rule. A window renews by a matched CIBA request (question 5).
-  What the STS lets an approval open is ADR-016's.
+  mcp-guard resource. Beyond `agent:request` and a type's registered scopes
+  and rights, ADR-014 does not say what an approval may carry, so this is a
+  new fail-closed rule. A window renews by a matched CIBA request (question
+  5). What the STS lets an approval open is ADR-016's.
 
 **Why.** The operator's mode cap is a ceiling the owner's consent sits
 under, and a passkey tap is not an operator change. An elevation outside the
@@ -370,8 +381,9 @@ the moment of transfer.**
 - The same transaction disables, and keeps, the previous owner's agent-side
   transmitters: a transmitter's owner answers for what it sends (ADR-014 §7).
   Standing blocks stay, since a block only denies.
-- Every step is audited. What a transfer does to platform bindings is not
-  decided here.
+- Every step is audited. A binding whose `adapter_ref` is not assigned to
+  the new owner vends nothing until one assigned to them replaces it
+  (ADR-014 §13).
 
 **Why.** The owner is the name on the profile and answers for the agent (T7),
 so nobody should become one without accepting. One transaction makes the
@@ -490,8 +502,8 @@ test that proves it.
 - A tree follows its grant, and the ledger stops showing dead trees as live.
 - Nothing an operator does after consent widens a live tree, and no tree
   token acts as its owner on any route this family adds.
-- The kill switch reaches families one refresh away from a tree, and a
-  neighbour cannot rate-limit it away.
+- The kill switch reaches agent families with no `sid`, whose tokens can
+  still start a tree by exchange, and a neighbour cannot rate-limit it away.
 - Every agent owner has a proved primary identity and agreed to the role.
 
 ### Negative
@@ -608,6 +620,10 @@ question below.
    cadence, was decided there on 2026-10-09: a per-host setting. As input,
    a daemon host has no session start: there the broker's process is the
    root, so a runtime restart keeps it, which asks for a per-host cadence.
+   _Amended 2026-10-10:_ a resumed process binds to the reused root only
+   after the person approves that root's consent screen again (ADR-014 §1);
+   the root, its `sid` and its refresh family are still reused. The decision
+   is unchanged.
 9. **Freezing an agent during a transfer.** Options: no freeze; freeze the
    agent after the acceptance until its cut trees' last token expires,
    including the vended credential's lifetime after their last vend (an hour

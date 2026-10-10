@@ -39,6 +39,13 @@
 > question 5. The maintainer also renamed the pass-through leg's switch
 > that day: `AGENT_OWNER_TOKEN_LEG_ENABLED` is now
 > `PASS_THROUGH_LEG_ENABLED` (§4). The leg stays experimental in 1.0.
+>
+> **Amended 2026-10-10** (before any implementation): fail-closed rules
+> added. A binding's upstream identity belongs to one owner, checked at
+> every vend (§1, §2; ADR-014 §13). Approval-only is keyed by the platform's
+> immutable resource id, and the STS always sends explicit lists (§3). The
+> pass-through leg's scope is a dangerous scope (§4). The `git-push` hashes
+> are the pushing node's report (§4). No maintainer decision changed.
 
 ## Context
 
@@ -101,6 +108,12 @@ than the agent's handle.** Decided 2026-09-30 (maintainer).
   2026-09-30). Where another account holds the handle on a platform, the
   handle stays as it is, and the platform identity carries another name of
   the owner's choosing.
+- QAuth does not take the platform's word for whose identity it is. A
+  binding names an `adapter_ref` assigned to its owner, in operator
+  configuration or by the owner's own upload of the key, and QAuth refuses
+  any other (§13). The STS checks that assignment again at every vend, so a
+  reassignment or a transfer stops the binding minting until one assigned
+  to the new owner replaces it. One upstream identity serves one agent.
 
 This record's rule ties the two names together. The QAuth profile names the
 platform identity, and the platform identity's website points at the profile.
@@ -148,7 +161,9 @@ endpoints named are GitHub's, as the example.
   whether the webhook or the sweep found it. A failed removal is retried by
   the next sweep; it changes no vend.
 - For a tree with no agent named, decision 4's per-organisation App is
-  untouched. Its installation ids stay in configuration.
+  untouched. Its installation ids stay in configuration. It is assigned to
+  no owner, so no agent's binding can name it, and an owner's upload of its
+  key is refused (§13).
 
 **This changes decision 4.** Decision 4 says "installation ids stay in
 QAuth configuration either way". For the agent's identity that no longer
@@ -157,7 +172,8 @@ installation ids from the platform. The change is the maintainer's decision.
 The allowlist is a per-binding list in the transactional store. The owner
 edits it through an owner route, under ADR-015 §3's guard, with a passkey
 approval per operation. An operator may cap it in configuration (question 2,
-decided 2026-10-09).
+decided 2026-10-09). The cap is the set of account ids a binding's allowlist
+may name.
 
 **Why.** An installation id is a fact about one install. An account is whom
 the owner trusts, and a reinstall on it needs no configuration change. The
@@ -183,12 +199,21 @@ host a resource is a repository.
   every vend (§9).
 - **An explicit list, always.** The STS never mints an installation token
   without a resource list. Without one, GitHub grants every repository of the
-  installation (GitHub docs, checked 2026-09-30), closed ones included.
+  installation (GitHub docs, checked 2026-09-30), closed ones included. The
+  same holds for permissions: the STS always sends a permission map, and an
+  empty `actions` set refuses the vend (§9).
 - **Approval-only is an owner setting per agent × resource.** The owner
-  sets and clears it through an owner route (ADR-015). No node can.
+  sets and clears it through an owner route (ADR-015). No node can. It is
+  keyed by the platform's immutable resource id (GitHub: the repository's
+  numeric id), which the STS reads from the platform when the owner sets
+  it, never by the name the owner typed.
 - **Closed at the STS.** An approval-only resource is outside every node's
   ceiling at the STS, whatever the root's consent named. A vend for it is
-  refused. That refusal is §14's step 1, as written.
+  refused. That refusal is §14's step 1, as written. The STS resolves every
+  resource a vend names to its immutable id at the platform and compares
+  ids, so a case variant, a former name or a redirected path is the same
+  resource. A failed lookup, a not-found answer or a rate limit refuses the
+  vend.
 - **One way in.** The only opening is a §14 approval with a passkey
   assertion. "Approve once" buys one elevation leaf and one STS vend. "Approve
   for a while" opens a window. Each renewal inside it goes through the
@@ -200,7 +225,7 @@ host a resource is a repository.
 - **Always block is different.** §14's "always block" is a standing deny
   that no approval lifts. Approval-only is a standing "closed until
   approved". Precedence: always block, then approval-only, then the tree's
-  ceiling.
+  ceiling. At the STS both are compared by the resolved resource id.
 - **Approval off means closed.** With `REMOTE_APPROVAL_ENABLED` off, an
   approval-only resource simply stays closed.
 
@@ -270,7 +295,9 @@ Cloud is the example throughout.
   broker's use of it, not the token.
 - §9's gate does not hold on this leg. Only detection remains: the ledger's
   hash match (T7). A commit carrying `Agent:` whose hash the ledger never
-  recorded is a forgery or an unlogged push.
+  recorded is a forgery or an unlogged push. The recorded hashes are the
+  pushing node's own report, signed with its key (§7): a match says that node
+  reported the push, not that anyone outside the node saw it.
 - The platform shows the owner as author. The trailers are claims (T7).
 
 **The fail-closed parts (proposal).**
@@ -284,6 +311,12 @@ Cloud is the example throughout.
 - The consent screen describes that scope as acting on the platform with the
   owner's full rights (§11). A child gets it only by narrowing. No approval
   grants it, as with `agent:request`.
+- `<kind>:owner-token` is a dangerous scope. `isDangerousScope` classifies
+  it with `write:*`, `agent:exec` and `agent:admin`, so a root that names it
+  needs a fresh login in `staging` and `production` (§11, step-up rule 3),
+  and ADR-017 never grants it headlessly.
+- The owner stores, replaces and renews the token through an owner route,
+  under ADR-015 §3's guard, with a passkey approval per operation.
 - Once ADR-014 §5 lands, the node's `locations` must also name the resource
   on the platform. That narrows who receives the token, not what the token
   can do.
@@ -401,16 +434,20 @@ detected by the hash match; nothing yet needs offline verification.
 Only threats this record adds or changes. T-numbers are ADR-014's
 ([Threat model](./014-agent-authority-tree.md#threat-model)).
 
-| Threat                                                                                              | Control                                                                                                                 | Residual                                                                                                                         |
-| --------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
-| A stranger installs the public identity, and an injected node (T6) asks to push to their repository | Vend only for installations on allowlisted account ids (§2)                                                             | Allowlisted resources within the ceiling (T6)                                                                                    |
-| A stranger takes a freed login that the allowlist once named                                        | Numeric account ids, never logins (§2)                                                                                  | None new                                                                                                                         |
-| A forged or replayed installation webhook                                                           | Signature check; the payload is a trigger only; re-read from the platform; allowlisted installations never deleted (§2) | Request volume; rate limits are ADR-015's                                                                                        |
-| A node's ceiling names an approval-only resource                                                    | Approval-only at the STS; one vend per approval or window renewal; token deleted with the leaf (§3)                     | A vended token is readable while it lives (T2); the identity's key or an ambient credential bypasses the STS (§9's precondition) |
-| Approval fatigue on an approval-only resource (T8)                                                  | §14's scope, budget and mute; a passkey per approval (§3)                                                               | An owner who taps yes                                                                                                            |
-| The pass-through token leaks from a node (T2)                                                       | The leg's scope; `locations` once ADR-014 §5 lands; every vend logged; the owner's token scopes and expiry (§4)         | The owner's full rights on the platform until rotation or expiry; T4 does not hold                                               |
-| A forged `Agent:` line on a commit of the pass-through leg (T7)                                     | The ledger's hash match (§4)                                                                                            | Detection only                                                                                                                   |
-| A self-hosted deployment registers the same handle                                                  | `handle@issuer-host` outside the issuer; the profile as anchor; two-way links (§5)                                      | Platform names stay first come; a reader who ignores the host                                                                    |
+| Threat                                                                                              | Control                                                                                                                                                                                                                                                               | Residual                                                                                                                         |
+| --------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| A stranger installs the public identity, and an injected node (T6) asks to push to their repository | Vend only for installations on allowlisted account ids (§2)                                                                                                                                                                                                           | Allowlisted resources within the ceiling (T6)                                                                                    |
+| A stranger takes a freed login that the allowlist once named                                        | Numeric account ids, never logins (§2)                                                                                                                                                                                                                                | None new                                                                                                                         |
+| An owner binds an agent to an upstream identity they do not control                                 | An `adapter_ref` is assigned to one owner, in configuration or by that owner's upload of the key; QAuth refuses any other, at binding and at every vend; one identity per agent; the per-organisation identity is never assignable, by binding or by upload (§1, §13) | An operator who assigns a key to the wrong owner                                                                                 |
+| A forged or replayed installation webhook                                                           | Signature check; the payload is a trigger only; re-read from the platform; allowlisted installations never deleted (§2)                                                                                                                                               | Request volume; rate limits are ADR-015's                                                                                        |
+| A node's ceiling names an approval-only resource                                                    | Approval-only at the STS, keyed by the platform's immutable resource id; one vend per approval or window renewal; token deleted with the leaf (§3)                                                                                                                    | A vended token is readable while it lives (T2); the identity's key or an ambient credential bypasses the STS (§9's precondition) |
+| A node names an approval-only resource by another spelling: case, a former name, a redirect         | The STS resolves each named resource to its immutable id and compares ids; a failed, not-found or rate-limited lookup refuses (§3)                                                                                                                                    | None new                                                                                                                         |
+| A vend without a resource list or a permission map                                                  | Explicit lists always; an empty `actions` set refuses (§3)                                                                                                                                                                                                            | None new                                                                                                                         |
+| Approval fatigue on an approval-only resource (T8)                                                  | §14's scope, budget and mute; a passkey per approval (§3)                                                                                                                                                                                                             | An owner who taps yes                                                                                                            |
+| The pass-through token leaks from a node (T2)                                                       | The leg's scope; `locations` once ADR-014 §5 lands; every vend logged; the owner's token scopes and expiry (§4)                                                                                                                                                       | The owner's full rights on the platform until rotation or expiry; T4 does not hold                                               |
+| A stale browser session roots a tree that holds the pass-through scope                              | A dangerous scope: a fresh login in `staging` and `production`, never granted headlessly; a passkey to store, replace or renew the token (§4)                                                                                                                         | `development` relaxes the fresh login, as for every dangerous scope                                                              |
+| A forged `Agent:` line on a commit of the pass-through leg (T7)                                     | The ledger's hash match (§4)                                                                                                                                                                                                                                          | Detection only; the hashes are the pushing node's report (§4)                                                                    |
+| A self-hosted deployment registers the same handle                                                  | `handle@issuer-host` outside the issuer; the profile as anchor; two-way links (§5)                                                                                                                                                                                    | Platform names stay first come; a reader who ignores the host                                                                    |
 
 ## Alternatives considered
 
@@ -436,23 +473,29 @@ Each piece lands in the ADR-014 phase that builds what it depends on
 
 - **P0a — the STS.** The explicit resource list (§3) and the vendor
   interface with its `github` kind. Test: against a mock platform, every
-  installation-token request the STS sends names its resources.
+  installation-token request the STS sends names its resources and its
+  permissions, and a vend whose `actions` set is empty is refused.
 - **P0c — the platform identity (§1), with the account allowlist at vend,
   the sweep and audited removal (§2), and authorship (§6).** Test: a binding
   whose platform identity name differs from the handle provisions, and the
-  profile lists the identity's bot login. For §2, against a mock platform, a
-  vend on an unlisted account is refused. The sweep deletes that installation
-  with one audit row, while an allowlisted installation survives. For §6,
-  ADR-014's P0c authorship test suffices.
+  profile lists the identity's bot login; one naming an `adapter_ref` that is
+  not assigned to its owner fails (ADR-014 P0c). For §2, against a mock
+  platform, a vend on an unlisted account is refused. The sweep deletes that
+  installation with one audit row, while an allowlisted installation survives.
+  For §6, ADR-014's P0c authorship test suffices.
 - **P0c — approval-only, closed half (§3).** The owner setting, and the
-  STS refusal. Test: a node whose ceiling names an approval-only resource
-  gets no vend, and the refusal is logged.
+  STS refusal, keyed by the resolved resource id. Test: a node whose
+  ceiling names an approval-only resource gets no vend, and the refusal is
+  logged; so does one that names it by a case variant or a former name, and
+  a failed platform lookup refuses the vend.
 - **P0c — the pass-through leg (§4).** The leg's kind, the switch, the
   scope, the broker's helper for the platform's host and the precondition.
   Test: a node without the scope gets nothing; a node with it gets one vend,
   logged by `jti` without the token, and its commit is owner-authored with
-  both trailers; a vend after the leg's end date is refused. ADR-014's P0c
-  authorship test then covers git-host bindings only.
+  both trailers; a vend after the leg's end date is refused; a root that names
+  the leg's scope from a browser session older than two minutes is sent to a
+  fresh login in `staging`; storing the token without a passkey assertion is
+  refused. ADR-014's P0c authorship test then covers git-host bindings only.
 - **P0c — the display form (§5).** Test: the profile's JSON names the agent
   as `handle@issuer-host`, with the host taken from `JWT_ISSUER`.
 - **P2 — `locations` on the pass-through leg (§4).** Test: a vend for a node
