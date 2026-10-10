@@ -8,13 +8,37 @@
 > on [ADR-014](./014-agent-authority-tree.md) as amended 2026-09-30 (PR #419).
 > It records what the maintainer decided that day about how an agent's identity
 > on an external platform is made, limited and approved. Every rule sits behind
-> `AGENT_TREE_ENABLED`; the approval path also needs `AGENT_APPROVAL_ENABLED`.
+> `AUTHORITY_TREE_ENABLED`; the approval path also needs `REMOTE_APPROVAL_ENABLED`.
 > With the switches off, nothing changes.
 >
 > **The rules are platform-agnostic.** A git host is the worked example,
 > because ADR-014 §9 and §13 use one. No rule depends on it. GitHub and
 > Bitbucket Cloud appear only as labelled examples, and in the links of
 > Related.
+>
+> **Amended 2026-10-09** (before any implementation): the maintainer
+> decided a rename on 2026-10-08. ADR-014's "Agent Authority Tree" is now
+> "Authority Tree". The mechanism is generic machine-to-machine and process
+> delegation; AI agents are one client class. Two switches are renamed with
+> it: `AGENT_TREE_ENABLED` is now `AUTHORITY_TREE_ENABLED`, and
+> `AGENT_APPROVAL_ENABLED` is now `REMOTE_APPROVAL_ENABLED`. This record's
+> title names agent identities, not the tree, so it is kept. So is every
+> identifier that names an agent. File names are kept, so links stay stable.
+> No rule changed.
+>
+> **Amended 2026-10-09, decisions** (before any implementation): the
+> maintainer answered parked questions 2 to 5, and ADR-019 (proposed in a
+> separate PR) closes question 1. Each is marked decided below. The account
+> allowlist is a per-binding list the owner edits (§2). The pass-through
+> token rests QAuth-side under a per-realm key, the leg has an end date, and
+> it is experimental in 1.0 (§4). The maintainer also chose that an
+> approval-only resource may be opened for a window, not only once (§3).
+> Unsigned commits are confirmed with ADR-014 decision 12 (§6). On
+> 2026-10-09 the maintainer decided that ADR-014, ADR-015 and this record
+> will be approved together, so ADR-014 §9 was updated that day to match
+> question 5. The maintainer also renamed the pass-through leg's switch
+> that day: `AGENT_OWNER_TOKEN_LEG_ENABLED` is now
+> `PASS_THROUGH_LEG_ENABLED` (§4). The leg stays experimental in 1.0.
 
 ## Context
 
@@ -29,8 +53,9 @@ on a wrong assumption; the table below names each.
 The maintainer decided five of the six on 2026-09-30. The sixth, handle scope,
 the maintainer raised; this record proposes its answer (§5).
 
-A rule marked "Decided 2026-09-30 (maintainer)" rests on the maintainer's words, quoted
-in English. Everything else is this record's proposal. Here §1 to §6 are
+A rule marked "Decided" with a date and "(maintainer)" rests on the
+maintainer's decision; the maintainer's words are quoted in English.
+Everything else is this record's proposal. Here §1 to §6 are
 this record's decisions. §7 to §14, T-numbers and "decision N" are
 ADR-014's, and its first six sections are written "ADR-014 §N".
 [ADR-015](./015-agent-tree-hardening.md) holds the tree's own hardening;
@@ -47,15 +72,15 @@ Verified 2026-09-30 against ADR-014 as amended and the working tree.
 | Resource reach    | The STS narrows to `locations` and `actions`, or to an operator policy until ADR-014 §5 lands (§9)                       | An owner setting, "approval-only", opened by one §14 approval at a time (§3)                       |
 | Pass-through leg  | Nothing                                                                                                                  | A temporary vendor kind that hands out the owner's own token (§4)                                  |
 | Handle            | Realm-unique, first come (decision 9); one `JWT_ISSUER` per deployment (`libs/server/config/src/lib/schemas/jwt.ts:124`) | `handle@issuer-host` outside the issuer; the profile URL as the anchor (§5)                        |
-| Authorship        | Parked (decision 12)                                                                                                     | The binding's identity is the author; unsigned, read from the maintainer's 2026-09-30 comment (§6) |
+| Authorship        | Unsigned (decision 12, decided 2026-10-09)                                                                               | The binding's identity is the author; unsigned, as the maintainer decided again on 2026-10-09 (§6) |
 
 ## Decision
 
-Every rule below runs only with `AGENT_TREE_ENABLED` on (ADR-014,
-[Decision](./014-agent-authority-tree.md#decision)). The approve-once path
-of §3 also needs `AGENT_APPROVAL_ENABLED`. The pass-through leg of §4 has its
-own operator switch, `AGENT_OWNER_TOKEN_LEG_ENABLED`, default `false`. It does
-nothing unless `AGENT_TREE_ENABLED` is on. With the switches off, the STS
+Every rule below runs only with `AUTHORITY_TREE_ENABLED` on (ADR-014,
+[Decision](./014-agent-authority-tree.md#decision)). The approval path
+of §3 also needs `REMOTE_APPROVAL_ENABLED`. The pass-through leg of §4 has its
+own operator switch, `PASS_THROUGH_LEG_ENABLED`, default `false`. It does
+nothing unless `AUTHORITY_TREE_ENABLED` is on. With the switches off, the STS
 and the broker behave as ADR-014 says.
 
 ### 1. A public platform identity per agent, on the owner's own account
@@ -127,9 +152,12 @@ endpoints named are GitHub's, as the example.
 
 **This changes decision 4.** Decision 4 says "installation ids stay in
 QAuth configuration either way". For the agent's identity that no longer
-holds. Configuration names accounts, and the STS reads installation ids from
-the platform. The change is the maintainer's decision. Where the account list
-lives is parked question 2.
+holds. The binding's allowlist names accounts, and the STS reads
+installation ids from the platform. The change is the maintainer's decision.
+The allowlist is a per-binding list in the transactional store. The owner
+edits it through an owner route, under ADR-015 §3's guard, with a passkey
+approval per operation. An operator may cap it in configuration (question 2,
+decided 2026-10-09).
 
 **Why.** An installation id is a fact about one install. An account is whom
 the owner trusts, and a reinstall on it needs no configuration change. The
@@ -142,8 +170,9 @@ webhook action and signature header checked against GitHub's documentation,
 ### 3. Resource reach, and approval-only resources
 
 **The identity is installed wherever the tree reaches; a resource the owner
-marks approval-only stays closed to agents until a §14 passkey "approve once"
-opens it for one vend.** Decided 2026-09-30 (maintainer). The maintainer
+marks approval-only stays closed to agents until a §14 passkey approval
+opens it, once or for a window.** Decided 2026-09-30 (maintainer); the
+window was added on 2026-10-09 (maintainer). The maintainer
 decided that the identity is installed on every resource the agent's tree can
 touch, including one the owner keeps closed to agents, so that an emergency
 path exists. The generalisation below is this record's proposal. On a git
@@ -160,10 +189,10 @@ host a resource is a repository.
 - **Closed at the STS.** An approval-only resource is outside every node's
   ceiling at the STS, whatever the root's consent named. A vend for it is
   refused. That refusal is §14's step 1, as written.
-- **One way in.** The only opening is §14's "approve once": a passkey
-  assertion, one elevation leaf, one STS vend. For an approval-only resource
-  the STS vends once per approval id. A window's renewals buy no second
-  vend.
+- **One way in.** The only opening is a §14 approval with a passkey
+  assertion. "Approve once" buys one elevation leaf and one STS vend. "Approve
+  for a while" opens a window. Each renewal inside it goes through the
+  matched CIBA request of ADR-015 question 5, and each may buy a new vend.
 - **Gone with the leaf.** The broker deletes that installation token (GitHub:
   `DELETE /installation/token`) when the elevation leaf that bought it
   expires. ADR-014 §6's other deletion triggers still apply. No lasting
@@ -172,7 +201,7 @@ host a resource is a repository.
   that no approval lifts. Approval-only is a standing "closed until
   approved". Precedence: always block, then approval-only, then the tree's
   ceiling.
-- **Approval off means closed.** With `AGENT_APPROVAL_ENABLED` off, an
+- **Approval off means closed.** With `REMOTE_APPROVAL_ENABLED` off, an
   approval-only resource simply stays closed.
 
 An approval-only resource is one an agent might change but the owner does not
@@ -180,21 +209,20 @@ want changed as a rule. Example: the repository that holds the rules of an
 OS-level authority manager. vitrin is one such project, and it is not the
 only one. Such a resource is not the actuation gate of ADR-014 §10.
 
-**It fits §14, narrowed at step 4.** Approval-only is the one owner-set
+**It fits §14 as written.** Approval-only is the one owner-set
 bound an approval lifts; ADR-015 §7 leaves it to this record. Step 1 already
 lists a refusal at the STS. Step 4's "approve once" already means one
 elevation leaf or one STS vend. Step 5's leaf carries exactly the approved
-delta. For these resources the page offers approve once, deny, deny and
-mute, and always block, with no window. This narrows §14's step 4. The
-maintainer's decision named "approve once"; offering no window is this
-record's reading of it.
+delta. For these resources the page offers every choice of step 4, the
+window included. _Decided 2026-10-09 (maintainer):_ this reverses the
+record's earlier reading, which offered "approve once" only.
 
 **Why.** Some resources the owner does not touch as a hard gate, but might in
 an emergency. With the identity left off the resource, the emergency path
 would be the owner's own credential, outside the tree and its log. Installed
-but closed, the path exists, costs a passkey each time and is logged. "Always
-block" would close it for good. The setting binds the STS, not the platform;
-its residual is in the Threats table.
+but closed, the path exists, costs a passkey per approval and is logged.
+"Always block" would close it for good. The setting binds the STS, not the
+platform; its residual is in the Threats table.
 
 ### 4. The pass-through leg — temporary, and weaker by design
 
@@ -214,11 +242,17 @@ Cloud is the example throughout.
   per-resource narrowing. It is meant to end. Each leg names the condition
   that removes it, such as the work moving to a platform that can narrow a
   credential.
+- It has a mandatory end date, no later than the token's own expiry and at
+  most 90 days away. The owner renews it with a passkey (question 4, decided
+  2026-10-09).
+- It is experimental in 1.0, outside the stability promise (ADR-018,
+  proposed in a separate PR; decided 2026-10-09).
 - The credential is the owner's personal API token, used for git over HTTPS.
   Example: an Atlassian API token for Bitbucket Cloud, limited by scopes and
   by an expiry of one day to one year. Its documentation offers no
-  per-repository limit (both checked 2026-09-30). Where it rests between
-  vends is parked question 3.
+  per-repository limit (both checked 2026-09-30). Between vends it rests
+  QAuth-side, encrypted under a per-realm key used only for this purpose. The
+  broker holds it in memory only (question 3, decided 2026-10-09).
 - It is a vendor kind, not a binding. The acting identity is the owner, so
   no `agent_bindings` row exists and the profile lists nothing for it.
 - The broker's hook writes `Agent:` and `QAuth-Session:`, the two lines the
@@ -314,8 +348,8 @@ default is realm-unique handles.
 
 In such a single-realm deployment, uniqueness within the issuer and decision
 9's realm-unique rule are one rule. This record adds only the display form.
-A deployment that serves agents in a second realm would split them. That
-case is parked question 1, and decision 9 stands.
+ADR-019 gives each realm its own host and issuer, so a realm-unique handle is
+also issuer-unique. That closes question 1 (2026-10-09).
 
 **Why.** An email address has the same shape and the same answer: the
 domain is the namespace. A global registry of handles would need an
@@ -326,7 +360,8 @@ authority that no open-source server can run.
 **Where a platform keeps an authored record, the binding's identity is the
 author, whoever pushes it, and the record stays unsigned. On GitHub an
 agent's commit is authored by the App's bot; per-agent email aliases are
-dropped.** Decided 2026-09-30 (maintainer), with the flag on signing below.
+dropped.** Decided 2026-09-30 (maintainer); unsigned confirmed 2026-10-09
+(maintainer, with ADR-014 decision 12).
 
 - **Author.** As §9 says, the broker sets the author from the binding: the
   bot's login and `<bot-id>+<app-slug>[bot]@users.noreply.github.com`. This
@@ -338,9 +373,8 @@ dropped.** Decided 2026-09-30 (maintainer), with the flag on signing below.
   and a name. After the bot address was explained, the maintainer's words: "OK, the bot
   continues then".
 - **Unsigned.** The maintainer wrote: "it won't be signed anyway;
-  that was the decision too". This record reads that as settling decision
-  12 on its default, unsigned. **Flag:** PR #419 left decision 12 parked;
-  this record reads the maintainer's 2026-09-30 comment as confirming the default.
+  that was the decision too". _Decided 2026-10-09 (maintainer):_ unsigned,
+  confirmed with ADR-014 decision 12.
 - **The reopen trigger stays:** a requirement that provenance be evidence
   rather than a pointer. The purpose stays in the three layers PR #419 wrote:
   a ruleset prevents, the ledger detects, a signature lets a third party
@@ -372,8 +406,8 @@ Only threats this record adds or changes. T-numbers are ADR-014's
 | A stranger installs the public identity, and an injected node (T6) asks to push to their repository | Vend only for installations on allowlisted account ids (§2)                                                             | Allowlisted resources within the ceiling (T6)                                                                                    |
 | A stranger takes a freed login that the allowlist once named                                        | Numeric account ids, never logins (§2)                                                                                  | None new                                                                                                                         |
 | A forged or replayed installation webhook                                                           | Signature check; the payload is a trigger only; re-read from the platform; allowlisted installations never deleted (§2) | Request volume; rate limits are ADR-015's                                                                                        |
-| A node's ceiling names an approval-only resource                                                    | Approval-only at the STS; one vend per approval; token deleted with the leaf (§3)                                       | A vended token is readable while it lives (T2); the identity's key or an ambient credential bypasses the STS (§9's precondition) |
-| Approval fatigue on an approval-only resource (T8)                                                  | §14's scope, budget and mute; a passkey per vend (§3)                                                                   | An owner who taps yes                                                                                                            |
+| A node's ceiling names an approval-only resource                                                    | Approval-only at the STS; one vend per approval or window renewal; token deleted with the leaf (§3)                     | A vended token is readable while it lives (T2); the identity's key or an ambient credential bypasses the STS (§9's precondition) |
+| Approval fatigue on an approval-only resource (T8)                                                  | §14's scope, budget and mute; a passkey per approval (§3)                                                               | An owner who taps yes                                                                                                            |
 | The pass-through token leaks from a node (T2)                                                       | The leg's scope; `locations` once ADR-014 §5 lands; every vend logged; the owner's token scopes and expiry (§4)         | The owner's full rights on the platform until rotation or expiry; T4 does not hold                                               |
 | A forged `Agent:` line on a commit of the pass-through leg (T7)                                     | The ledger's hash match (§4)                                                                                            | Detection only                                                                                                                   |
 | A self-hosted deployment registers the same handle                                                  | `handle@issuer-host` outside the issuer; the profile as anchor; two-way links (§5)                                      | Platform names stay first come; a reader who ignores the host                                                                    |
@@ -417,8 +451,8 @@ Each piece lands in the ADR-014 phase that builds what it depends on
   scope, the broker's helper for the platform's host and the precondition.
   Test: a node without the scope gets nothing; a node with it gets one vend,
   logged by `jti` without the token, and its commit is owner-authored with
-  both trailers. ADR-014's P0c authorship test then covers git-host bindings
-  only.
+  both trailers; a vend after the leg's end date is refused. ADR-014's P0c
+  authorship test then covers git-host bindings only.
 - **P0c — the display form (§5).** Test: the profile's JSON names the agent
   as `handle@issuer-host`, with the host taken from `JWT_ISSUER`.
 - **P2 — `locations` on the pass-through leg (§4).** Test: a vend for a node
@@ -426,10 +460,10 @@ Each piece lands in the ADR-014 phase that builds what it depends on
 - **P3 — the installation webhook (§2).** Test: a badly signed webhook
   changes nothing; a valid one deletes an unlisted account's installation
   and never an allowlisted one.
-- **P5 — approve once opens an approval-only resource (§3).** Test: one
-  approve-once elevation buys exactly one vend, a second vend under the same
-  approval is refused, and the broker deletes the token at the leaf's
-  expiry.
+- **P5 — an approval opens an approval-only resource (§3).** Test: one
+  approve-once elevation buys exactly one vend, and a second vend under it is
+  refused. Inside a window, each matched renewal may buy one new vend. The
+  broker deletes each token at its leaf's expiry.
 
 ## Consequences
 
@@ -438,7 +472,7 @@ Each piece lands in the ADR-014 phase that builds what it depends on
 - One agent, one bot name, every resource it works in (§1); a stranger's
   installation buys nothing and does not stay (§2).
 - A resource can be closed to agents without losing the emergency path;
-  each opening costs a passkey and leaves a record (§3).
+  each approval costs a passkey, and every vend leaves a record (§3).
 - Work on a platform without narrowed credentials enters the tree's log
   (§4), and a handle always travels with its issuer (§5).
 
@@ -454,15 +488,18 @@ Each piece lands in the ADR-014 phase that builds what it depends on
 
 ### Neutral
 
-- Default off. With `AGENT_TREE_ENABLED` off none of this runs, and the
+- Default off. With `AUTHORITY_TREE_ENABLED` off none of this runs, and the
   pass-through leg needs its own switch as well.
-- ADR-014's text is not edited here. By the maintainer's decisions,
-  decision 4 changes (§2), and §9's author rule (§4) and §14's step 4 (§3)
-  narrow.
+- ADR-014 §9 and §13 name §2's account allowlist since 2026-10-09. By the
+  maintainer's decisions, decision 4 changes (§2) and §9's author rule
+  narrows (§4). ADR-014 §9's `Agent:` line was updated on 2026-10-09 to match
+  question 5. §14's step 4 applies to approval-only resources as written,
+  window included (§3).
 
 ## Decisions parked for the maintainer
 
-Each question carries the default this record was written on.
+Each question carries the default this record was written on. As of
+2026-10-09 every question below is decided.
 
 1. **Handles when one issuer serves agents in more than one realm.** Should
    a handle be unique across the issuer, or stay realm-unique with a
@@ -471,23 +508,37 @@ Each question carries the default this record was written on.
    handles. The display form and the profile path carry whatever makes them
    unique, the realm or the issuer's path, spelled when the routing for a
    second realm is built. Why: decision 9 stands until the maintainer decides.
+   _Closed 2026-10-09 by ADR-019:_ each realm has its own host and issuer, so
+   a realm-unique handle is issuer-unique.
 2. **Where the account allowlist lives.** In QAuth configuration, where
    decision 4 put installation ids, or as an owner-edited list per binding
    through an owner route (ADR-015)? Default: QAuth configuration, beside the
-   identity's key. Why: nothing a node reaches can edit it.
+   identity's key. Why: nothing a node reaches can edit it. _Decided
+   2026-10-09 (maintainer):_ a per-binding list in the transactional store.
+   The owner edits it through an owner route, under ADR-015 §3's guard, with
+   a passkey approval per operation. An operator may cap it in configuration.
 3. **Where the pass-through token rests between vends.** QAuth-side, released
    by the STS per vend, or on the box, in the broker's keyring? Default:
    QAuth-side; the broker holds it in memory for the nodes it serves. Why:
    ADR-014 keeps the App's private key and the vend policy off the box (T2).
+   _Decided 2026-10-09 (maintainer):_ QAuth-side, encrypted under a
+   dedicated per-realm key for this purpose; the broker holds it in memory
+   only. The pass-through leg is experimental in 1.0, outside the stability
+   promise.
 4. **An owner-visible end date for the pass-through leg.** Should the leg
    carry a date after which it stops? Default: no date for the leg. The
    token's own expiry is recorded when it is stored, and the STS stops
    vending after it. Why: the end condition is the owner's to name, and the
-   token expiry already forces a yearly review at most.
+   token expiry already forces a yearly review at most. _Decided 2026-10-09
+   (maintainer):_ a mandatory end date, no later than the token's own expiry
+   and at most 90 days away. The owner renews it with a passkey.
 5. **The `Agent:` trailer outside the issuer.** Keep §9's `<agent_id>`, or
    write `handle@issuer-host`, or both? Default: §9 as written. Why: §9 is
    ADR-014's text. A deployment that writes the bare handle would have §5
-   write it as `<handle>@<issuer-host>`.
+   write it as `<handle>@<issuer-host>`. _Decided 2026-10-09 (maintainer):_
+   both. The `Agent:` trailer carries the `agent_id` and
+   `handle@issuer-host`, with a version marker. ADR-014 §9 was updated to
+   match on 2026-10-09.
 
 ## Related
 
