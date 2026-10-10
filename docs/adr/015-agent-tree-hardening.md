@@ -61,7 +61,7 @@ Verified 2026-09-30 against the working tree at `2c901d4`.
 | Owner routes            | The management guard admits only the system client's token, with its full `aud` and no `act` (`apps/auth-server/src/app/helpers/management-token.ts:34`)                                                               | Every owner route runs it; it also refuses `sid` (dec. 3)   |
 | Client assertions       | `aud` may be the issuer or the token endpoint URL; no `typ` check (`apps/auth-server/src/app/helpers/client-assertion.ts:96`)                                                                                          | Issuer as sole `aud`, explicit `typ`, for agent types (d.4) |
 | Rate limits             | A global 100 per 3600 s per address; `/oauth/token` 30 per 60 s per address in a production realm                                                                                                                      | Each added route names its own limit (decision 6)           |
-| Owner's proof           | `email_verified` lives on the `password` credential; `REQUIRE_EMAIL_VERIFIED` defaults to `false`. `users` has no verified flag and no marker for a primary credential (checked 2026-10-06)                            | An agent owner needs a verified account (decision 8)        |
+| Owner's proof           | `email_verified` lives on the `password` credential; `REQUIRE_VERIFIED_ACCOUNT` defaults to `false`. `users` has no verified flag and no marker for a primary credential (checked 2026-10-06)                          | An agent owner needs a verified account (decision 8)        |
 | Realm admin             | No role: `users` has no role column (ADR-012 §4), and no code reads the `roles` and `user_roles` tables                                                                                                                | Realm-local admins, through ADR-019 (question 10)           |
 
 ## Decision
@@ -328,8 +328,8 @@ later credential could make an account verified, someone who registers an
 address they do not control could add a key of their own and pass the check
 (question 13).
 
-The rule holds whatever `REQUIRE_EMAIL_VERIFIED` says. That flag defaults to
-`false` (`libs/server/config/src/lib/schemas/auth.ts:53`) and governs sign-in
+The rule holds whatever `REQUIRE_VERIFIED_ACCOUNT` says. That flag defaults to
+`false` (`libs/server/config/src/lib/schemas/auth.ts:75`) and governs sign-in
 for password accounts, not the ownership of an agent. How a later wallet
 presentation finds the same account is ADR-009's question, and this record
 does not change it.
@@ -473,7 +473,7 @@ test that proves it.
   and a renewal answered 429 mints nothing and ends no node.
 - **7 — P5:** a delta above the mode cap, outside the node's `aud` or naming
   a bearer-leaf resource is refused and notifies no one.
-- **8 — P0c**, then P3 and P5: whatever `REQUIRE_EMAIL_VERIFIED` says, an
+- **8 — P0c**, then P3 and P5: whatever `REQUIRE_VERIFIED_ACCOUNT` says, an
   account whose primary identity is not proved cannot create an agent. One
   case per row of decision 8's table that exists, and one for an account with
   no email address.
