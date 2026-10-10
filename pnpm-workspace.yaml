@@ -170,12 +170,14 @@ overrides:
   # this is a floor against a future http2 switch, not a live fix.
   find-my-way: '>=9.7.0'
   form-data: '>=4.0.6'
-  # h3's only consumers are the Nitro v2 subtree (nitropack/listhen/unstorage),
-  # which require h3 1.x (Nitro v2 imports `send`, removed in h3 2.x). Floor at
-  # the patched 1.x line — 1.15.11 clears GHSA-4hxc-9384-m385 (fixed in 1.15.9).
-  # The earlier `>=2.0.1` floor was inert (nothing pulled h3) and would force
-  # the wrong major onto Nitro. Revisit if anything ever needs h3 2.x.
-  h3: '^1.15.11'
+  # GHSA-4hxc-9384-m385, fixed in 1.15.9; 1.15.11 is the floor. SELECTOR: the
+  # 1.x consumer is unstorage 1.x under astro (the docs-site build), which asks
+  # for '^1.15.4'. @tanstack/start-server-core also depends on h3, on the 2.x
+  # line (an exact 2.0.1 rc, aliased as `h3-v2`), so an unscoped 1.x range is
+  # the wrong major for anything that ever asks for h3 2.x by name. Like
+  # undici, pnpm matches the selector against the range the dependent
+  # declares, so `h3@1` floors only the 1.x consumer. Bounded to that line.
+  'h3@1': '>=1.15.11 <2'
   # GHSA: a custom alphabet can make the generator loop indefinitely. Build-time
   # only (postcss/vite), and QAuth passes no custom alphabet, so this is board
   # hygiene rather than a shipped fix. Bounded to the 3.x line the sole consumer
@@ -226,11 +228,6 @@ overrides:
   # optimizer, which docs-site does not enable. Bounded to the 4.x line astro
   # requests.
   svgo: '>=4.1.0 <5'
-  # Build-time only: @mapbox/node-pre-gyp -> @vercel/nft -> nitropack, i.e. the
-  # developer-portal build, and excluded from the auth-server image by
-  # `pnpm deploy --prod`. Every advisory here needs a hostile archive to parse
-  # and QAuth parses none, so the floor clears the board without shipping a fix.
-  tar: '>=7.5.21'
   tmp: '>=0.2.7'
   # Ten advisories on each line, all patched together in 7.29.1 / 8.10.2: TLS
   # certificate validation dropped by BalancedPool (GHSA-w293-vg96-wgc3) and a
@@ -291,7 +288,6 @@ catalog:
   '@swc-node/register': '~1.12.1'
   '@swc/core': '~1.15.46'
   '@swc/helpers': '~0.5.23'
-  '@tanstack/nitro-v2-vite-plugin': '^1.155.0'
   # Keep the Start/Router suite in lockstep: react-start 1.168.60 pins exact
   # tanstack deps including start-server-core 1.169.39 and react-router
   # 1.170.41, all on router-core 1.171.34. Mismatched lines load two
@@ -312,6 +308,17 @@ catalog:
   # react-router's. The catalog floor above carries the fix instead.
   '@tanstack/react-start': '^1.168.60'
   '@tanstack/react-router': '^1.170.41'
+  # The developer-portal's Node server (apps/developer-portal/src/node-entry.ts):
+  # serves the built client assets and hands everything else to TanStack
+  # Start's fetch handler. Replaces Nitro (@tanstack/nitro-v2-vite-plugin),
+  # whose nitropack subtree pulled node-forge (GHSA-86w9-cpqp-85rv, via
+  # listhen) and braces (GHSA-vfj7-8cjw-p6xm, via globby -> fast-glob ->
+  # micromatch), neither with a patched release. srvx has no dependencies, is
+  # the server layer Nitro v3 itself uses, and is the option TanStack's hosting
+  # guide shows for serving a Start build on Node without Nitro. Bundled into
+  # the server output at build time, so the image carries no node_modules for
+  # it.
+  srvx: '^1.0.5'
   '@types/node': '^26.1.1'
   '@types/pg': '^8.20.0'
   '@types/react': '^19.2.17'
@@ -451,8 +458,6 @@ catalog:
 # script (it no longer infers them from onlyBuiltDependencies). Mirror the
 # approved set; cpu-features is an optional ssh2 native accel we don't build.
 allowBuilds:
-  # Nitro's dev file-watcher; ships prebuilt binaries, so skip the native build.
-  '@parcel/watcher': false
   '@swc/core': true
   cpu-features: false
   esbuild: true

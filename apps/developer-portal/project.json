@@ -24,7 +24,7 @@
       "continuous": true,
       "dependsOn": ["build"],
       "metadata": {
-        "description": "Serve the production build. Nitro emits a self-listening Node server with deps bundled, so this is just `node server/index.mjs` (mirrors the Docker entrypoint). Honours PORT (default 3000); requires AUTH_SERVER_URL + PORTAL_SESSION_SECRET."
+        "description": "Serve the production build. The build emits a self-listening Node server (src/node-entry.ts, on srvx) with deps bundled, so this is just `node server/index.mjs` (mirrors the Docker entrypoint). Honours PORT (default 3000); requires AUTH_SERVER_URL + PORTAL_SESSION_SECRET."
       },
       "options": {
         "command": "node dist/apps/developer-portal/server/index.mjs"
