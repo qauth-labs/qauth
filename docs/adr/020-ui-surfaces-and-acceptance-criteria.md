@@ -317,6 +317,11 @@ a regression fails the build.
 - A short spike checks that the ceremony app's forms work without JavaScript (criterion 5).
 - If the spike fails, only the ceremony app moves to React Router's framework mode. The components
   stay shared.
+- The developer portal is served by a small [srvx](https://srvx.h3.dev/) entry around TanStack
+  Start's server handler, with no Nitro. The maintainer chose this on 2026-10-10; a separate change
+  implements it.
+- Each flow and screen is first written as a graph, which this stack implements
+  ([ADR-021](./021-flows-and-ui-as-semantic-graphs.md)).
 
 ### 7. Delivery
 

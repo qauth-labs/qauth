@@ -254,7 +254,7 @@ describe('rewriteRecordLink — the real docs/adr and docs/security corpus, enum
     return links;
   }
 
-  it('extracts exactly 415 links across the 17 ADRs, the ADR README, the security review and the threat model — the corpus the counts below are checked against', () => {
+  it('extracts exactly 431 links across the 18 ADRs, the ADR README, the security review and the threat model — the corpus the counts below are checked against', () => {
     // A fixed count, not a lower bound: this test's whole point is that the
     // categorisation below is checked against the FULL corpus, not a
     // sample. If a future ADR amendment changes the link count, this
@@ -336,7 +336,15 @@ describe('rewriteRecordLink — the real docs/adr and docs/security corpus, enum
     // (→ ROUTE). ADR-015, ADR-016 and ADR-017 are named without links, as in
     // ADR-018. Counted per file with this test's own extraction regex before
     // the buckets below were touched.
-    expect(extractAllLinks()).toHaveLength(415);
+    //
+    // 415 → 431 with ADR-021 (flows and UI as semantic graphs), 2026-10-10:
+    // 13 links in the new record (5 external, 7 in-tree record links → ROUTE,
+    // 1 to the conformance matrix → BLOB), plus ADR-020 §6's pointer to
+    // ADR-021 (→ ROUTE) and its srvx link (external), plus the README index
+    // row for 021 (→ ROUTE). ADR-017 is named without a link, as elsewhere.
+    // Counted per file with this test's own extraction regex before the
+    // buckets below were touched.
+    expect(extractAllLinks()).toHaveLength(431);
   });
 
   it('every link falls into exactly one of the four outcomes, with none left unresolved', () => {
@@ -436,9 +444,14 @@ describe('rewriteRecordLink — the real docs/adr and docs/security corpus, enum
     // ADR-020: 204 → 210 external and 30 → 31 bare anchors; 142 → 152 route
     // (its nine record links and the README index row). Blob and unresolved
     // unchanged.
-    expect(untouchedExternalOrAnchor).toBe(210 + 31);
-    expect(rewrittenToRoute).toBe(152);
-    expect(rewrittenToBlob).toBe(22);
+    //
+    // ADR-021: 210 → 216 external (five in the record, srvx in ADR-020 §6);
+    // 152 → 161 route (the record's seven record links, ADR-020's pointer and
+    // the README index row); 22 → 23 blob (the conformance matrix). Anchors
+    // and unresolved unchanged.
+    expect(untouchedExternalOrAnchor).toBe(216 + 31);
+    expect(rewrittenToRoute).toBe(161);
+    expect(rewrittenToBlob).toBe(23);
     expect(leftUnresolved).toBe(0);
   });
 });
