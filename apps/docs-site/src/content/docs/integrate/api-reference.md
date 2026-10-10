@@ -364,7 +364,8 @@ authentication failure (`invalid_client`).
 
 ## Discovery
 
-Unauthenticated, cacheable (`Cache-Control: public, max-age=3600`).
+Unauthenticated and cacheable. The discovery documents carry
+`Cache-Control: public, max-age=3600`; the JWKS carries `public, max-age=300`.
 
 | Endpoint                                      | Returns                                      |
 | --------------------------------------------- | -------------------------------------------- |

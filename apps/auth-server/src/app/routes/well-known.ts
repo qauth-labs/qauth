@@ -6,10 +6,15 @@ import { buildAuthorizationServerMetadata, buildOpenIdConfiguration } from '../h
 /**
  * RFC 8414 §3.1 and OIDC Discovery 1.0 §4 describe these as highly
  * cacheable documents that change rarely. One hour is a common default
- * used by major IdPs (Google, Okta) and is short enough that clients pick
- * up JWKS rotations without manual intervention.
+ * for the discovery documents.
  */
 const DISCOVERY_CACHE_CONTROL = 'public, max-age=3600';
+
+/**
+ * The key set is cached for at most five minutes (ADR-019 Decision 9), so a
+ * key that is unpublished leaves relying parties' caches within that window.
+ */
+const JWKS_CACHE_CONTROL = 'public, max-age=300';
 
 /**
  * Well-known discovery endpoints:
@@ -90,7 +95,7 @@ export default async function (fastify: FastifyInstance) {
       // A classical Ed25519-only verifier does not understand `AKP` and simply
       // ignores that entry — mixed-key clients pick the key they need by `kty`.
       reply
-        .header('Cache-Control', DISCOVERY_CACHE_CONTROL)
+        .header('Cache-Control', JWKS_CACHE_CONTROL)
         .header('Content-Type', 'application/jwk-set+json; charset=utf-8');
       const jwks = await fastify.jwtUtils.getJwks();
       return reply.send(jwks);
