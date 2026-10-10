@@ -325,17 +325,17 @@ describe('rewriteRecordLink — the real docs/adr and docs/security corpus, enum
     // main. Counted per file against origin/main before the buckets below
     // were touched.
     //
-    // 394 → 411 with ADR-020 (the 1.0 UI surfaces), 2026-10-10: 16 links in
+    // 394 → 398 with the 2026-10-10 UI-scope amendments to ADR-018 and
+    // ADR-019: five external links added (RFC 8628 and Standard Webhooks in
+    // both records, the Shared Signals Framework in ADR-018) and one bare
+    // anchor removed (ADR-018's link to its closed open question).
+    //
+    // 398 → 415 with ADR-020 (the 1.0 UI surfaces), 2026-10-10: 16 links in
     // the new record (6 external, 1 bare anchor to its own appendix, 9
     // in-tree record links → ROUTE) plus the README index row for 020
     // (→ ROUTE). ADR-015, ADR-016 and ADR-017 are named without links, as in
     // ADR-018. Counted per file with this test's own extraction regex before
     // the buckets below were touched.
-    //
-    // 411 → 415 with the 2026-10-10 UI-scope amendments to ADR-018 and
-    // ADR-019: five external links (RFC 8628 twice, Standard Webhooks twice,
-    // OpenID Shared Signals Framework 1.0), and ADR-018's one bare anchor to
-    // its open-questions section removed with the question it pointed at.
     expect(extractAllLinks()).toHaveLength(415);
   });
 
@@ -430,12 +430,12 @@ describe('rewriteRecordLink — the real docs/adr and docs/security corpus, enum
     // matrix). Unresolved unchanged — the check that no new link points at a
     // record that is not on main yet.
     //
-    // ADR-020: 199 → 205 external and 31 → 32 bare anchors; 142 → 152 route
+    // The 2026-10-10 UI-scope amendments: 199 → 204 external and 31 → 30
+    // bare anchors. Route, blob and unresolved unchanged.
+    //
+    // ADR-020: 204 → 210 external and 30 → 31 bare anchors; 142 → 152 route
     // (its nine record links and the README index row). Blob and unresolved
     // unchanged.
-    //
-    // The ADR-018 and ADR-019 UI-scope amendments: 205 → 210 external and
-    // 32 → 31 bare anchors. Route, blob and unresolved unchanged.
     expect(untouchedExternalOrAnchor).toBe(210 + 31);
     expect(rewrittenToRoute).toBe(152);
     expect(rewrittenToBlob).toBe(22);
