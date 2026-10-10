@@ -39,7 +39,7 @@ export function parseTrustProxy(raw: string | undefined, ctx: z.RefinementCtx): 
     ctx.addIssue({
       code: 'custom',
       message:
-        'TRUST_PROXY=true would trust every X-Forwarded-For hop, letting any caller pick its own client IP. Set the proxy addresses/CIDRs (e.g. 10.0.0.0/8) instead.',
+        'TRUST_PROXY=true would trust every X-Forwarded-For hop, letting any caller pick its own client IP. Set the proxy addresses/CIDRs (e.g. 10.0.4.12) instead.',
     });
     return z.NEVER;
   }
@@ -47,7 +47,7 @@ export function parseTrustProxy(raw: string | undefined, ctx: z.RefinementCtx): 
     ctx.addIssue({
       code: 'custom',
       message:
-        'TRUST_PROXY takes the proxy addresses/CIDRs (e.g. 10.0.0.0/8), not a hop count: a count cannot tell a proxy from a direct client, and Fastify ignores it.',
+        'TRUST_PROXY takes the proxy addresses/CIDRs (e.g. 10.0.4.12), not a hop count: a count cannot tell a proxy from a direct client, and Fastify ignores it.',
     });
     return z.NEVER;
   }

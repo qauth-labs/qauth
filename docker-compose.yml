@@ -266,6 +266,14 @@ services:
       JWT_MLDSA_PRIVATE_KEY:
       JWT_MLDSA_PRIVATE_KEY_PATH:
 
+      # Which proxies may report the client address (X-Forwarded-For). List
+      # only the developer portal's fixed address (172.30.80.10 by default; see
+      # `networks:` at the end of this file) and any reverse proxy in front of
+      # this server, never a range clients can connect from. Each reverse proxy
+      # listed must append the address it accepted the connection from to
+      # X-Forwarded-For. Unset trusts no proxy.
+      TRUST_PROXY:
+
       # Observability
       METRICS_ENABLED:
       LOG_PRETTY:
@@ -328,6 +336,11 @@ services:
       LOGOUT_RATE_WINDOW: ${LOGOUT_RATE_WINDOW:-60}
       INTROSPECT_RATE_LIMIT: ${INTROSPECT_RATE_LIMIT:-30}
       INTROSPECT_RATE_WINDOW: ${INTROSPECT_RATE_WINDOW:-60}
+    # Bounded memory, and back up after a crash or an out-of-memory kill. 1 GiB
+    # holds the Node heap plus four concurrent Argon2id hashes (one per libuv
+    # worker thread, PASSWORD_MEMORY_COST each); raise it if you raise that.
+    mem_limit: 1g
+    restart: unless-stopped
     ports:
       - '3000:3000'
     depends_on:
@@ -372,6 +385,16 @@ services:
       # 32+ char secret used to sign the portal session cookie.
       PORTAL_SESSION_SECRET: ${PORTAL_SESSION_SECRET}
       PORTAL_SESSION_TTL: ${PORTAL_SESSION_TTL:-900}
+      # The address of a reverse proxy in front of the portal (TLS), so the
+      # portal forwards each visitor's address rather than the proxy's. Single
+      # addresses only, never a range clients can connect from. The proxy must
+      # append the address it accepted the connection from to X-Forwarded-For.
+      # Unset trusts no proxy. Bare form: omitted when unset (see the
+      # auth-server's map).
+      PORTAL_TRUST_PROXY:
+    # Bounded memory, and back up after a crash or an out-of-memory kill.
+    mem_limit: 512m
+    restart: unless-stopped
     ports:
       - '3001:3001'
     depends_on:
@@ -393,7 +416,10 @@ services:
       start_period: 20s
       retries: 3
     networks:
-      - qauth-network
+      qauth-network:
+        # A fixed address, so the auth-server's TRUST_PROXY can name the portal
+        # alone (see `networks:` below).
+        ipv4_address: ${QAUTH_NETWORK_PREFIX:-172.30.80}.10
 
 volumes:
   postgres_data:
@@ -402,3 +428,15 @@ volumes:
 networks:
   qauth-network:
     driver: bridge
+    # A fixed /24, so the developer portal has a fixed address, <prefix>.10
+    # (172.30.80.10 by default): the value for the auth-server's TRUST_PROXY.
+    # Other containers get addresses from <prefix>.128/25, so none can take
+    # it. Never list the gateway, <prefix>.1, or the whole subnet: connections
+    # from the host, and to the published ports, can arrive from the gateway.
+    # If 172.30.80.0/24 overlaps a network on your host, set
+    # QAUTH_NETWORK_PREFIX in `.env` to the first three octets of a free /24.
+    ipam:
+      config:
+        - subnet: ${QAUTH_NETWORK_PREFIX:-172.30.80}.0/24
+          ip_range: ${QAUTH_NETWORK_PREFIX:-172.30.80}.128/25
+          gateway: ${QAUTH_NETWORK_PREFIX:-172.30.80}.1
