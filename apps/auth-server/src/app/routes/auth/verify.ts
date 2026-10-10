@@ -12,6 +12,7 @@ import type { FastifyInstance } from 'fastify';
 import { ZodTypeProvider } from 'fastify-type-provider-zod';
 
 import { env } from '../../../config/env';
+import { clientAddressKey } from '../../helpers/client-address';
 import { type VerifyBody, verifyBodySchema, verifyResponseSchema } from '../../schemas/auth';
 
 /**
@@ -64,7 +65,7 @@ export default async function (fastify: FastifyInstance) {
         rateLimit: {
           max: env.VERIFICATION_RATE_LIMIT,
           timeWindow: env.VERIFICATION_RATE_WINDOW * 1000,
-          keyGenerator: (request) => request.ip || 'unknown',
+          keyGenerator: clientAddressKey,
         },
       },
     },

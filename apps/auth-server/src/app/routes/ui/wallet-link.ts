@@ -9,6 +9,7 @@ import {
   WALLET_LOGIN_STATUS_RATE_WINDOW_S,
 } from '../../constants';
 import { resolveBrowserSession } from '../../helpers/browser-session';
+import { clientAddressKey } from '../../helpers/client-address';
 import { html, render, safe, safeCustomSchemeUrl } from '../../helpers/html';
 import { encodeQrCode, renderQrCodeSvg } from '../../helpers/qr-code';
 import {
@@ -343,7 +344,7 @@ export default async function (fastify: FastifyInstance) {
         rateLimit: {
           max: env.LOGIN_RATE_LIMIT,
           timeWindow: env.LOGIN_RATE_WINDOW * 1000,
-          keyGenerator: (request) => request.ip || 'unknown',
+          keyGenerator: clientAddressKey,
         },
       },
     },
@@ -447,7 +448,7 @@ export default async function (fastify: FastifyInstance) {
         rateLimit: {
           max: WALLET_LOGIN_STATUS_RATE_LIMIT,
           timeWindow: WALLET_LOGIN_STATUS_RATE_WINDOW_S * 1000,
-          keyGenerator: (request) => request.ip || 'unknown',
+          keyGenerator: clientAddressKey,
         },
       },
     },

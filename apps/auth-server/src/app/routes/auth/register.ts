@@ -9,6 +9,7 @@ import { ZodTypeProvider } from 'fastify-type-provider-zod';
 
 import { env } from '../../../config/env';
 import { logAuthEvent } from '../../helpers/auth-events';
+import { clientAddressKey } from '../../helpers/client-address';
 import { getOrCreateDefaultRealm } from '../../helpers/realm';
 import { type RegisterRequest, registerResponseSchema, registerSchema } from '../../schemas/auth';
 
@@ -33,7 +34,7 @@ export default async function (fastify: FastifyInstance) {
         rateLimit: {
           max: env.REGISTRATION_RATE_LIMIT,
           timeWindow: env.REGISTRATION_RATE_WINDOW * 1000,
-          keyGenerator: (request) => request.ip || 'unknown',
+          keyGenerator: clientAddressKey,
         },
       },
     },

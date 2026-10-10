@@ -8,6 +8,7 @@ import { z } from 'zod';
 import { env } from '../../../config/env';
 import { MIN_RESPONSE_TIME_MS } from '../../constants';
 import { hashEmail } from '../../helpers/auth-events';
+import { clientAddressKey } from '../../helpers/client-address';
 import { verifyPasswordCredential } from '../../helpers/credential-auth';
 import { checkLockout, recordFailedAttempt, resetFailedAttempts } from '../../helpers/failed-login';
 import { html, render } from '../../helpers/html';
@@ -257,7 +258,7 @@ export default async function (fastify: FastifyInstance) {
         rateLimit: {
           max: env.LOGIN_RATE_LIMIT,
           timeWindow: env.LOGIN_RATE_WINDOW * 1000,
-          keyGenerator: (request) => request.ip || 'unknown',
+          keyGenerator: clientAddressKey,
         },
       },
     },
@@ -305,7 +306,10 @@ export default async function (fastify: FastifyInstance) {
       // Failed-login throttling (#115), with the SAME identifiers as
       // POST /auth/login so both front doors share one counter: guesses spread
       // across them add up, and an account locked on one is locked on both.
-      const lockoutIdentifiers = [`email:${hashEmail(normalizedEmail)}`, `ip:${request.ip}`];
+      const lockoutIdentifiers = [
+        `email:${hashEmail(normalizedEmail)}`,
+        `ip:${clientAddressKey(request)}`,
+      ];
 
       const renderRefusal = (statusCode: number, error: string) => {
         reply.header('Content-Type', 'text/html; charset=utf-8');

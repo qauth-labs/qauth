@@ -517,4 +517,28 @@ describe('POST /auth/login', () => {
     // Retry-After advertised.
     expect(reply.headers['Retry-After']).toBe('300');
   });
+
+  it('keys the ip: lockout identifier on the /64 of an IPv6 client', async () => {
+    const { fastify, ctx } = createFastifyStub();
+    await loginRoute(fastify);
+    const handler = ctx.handler;
+    if (!handler) throw new Error('Handler missing');
+
+    // Only the /64 key is locked; every address inside it must hit that key.
+    const ttl = fastify.redis.ttl as unknown as Mock;
+    ttl.mockImplementation(async (key: string) =>
+      key === 'failed-login:lockout:ip:2001:db8:1:2::' ? 300 : -2
+    );
+
+    for (const ip of ['2001:db8:1:2::1', '2001:db8:1:2:ffff:eeee:dddd:cccc']) {
+      const request = {
+        body: { email: 'user@example.com', password: 'p' },
+        ip,
+        headers: { 'user-agent': 'vitest' },
+        log: requestLog(),
+      };
+      await expect(handler(request, createReply())).rejects.toThrow(TooManyRequestsError);
+    }
+    expect(fastify.passwordHasher.verifyPassword).not.toHaveBeenCalled();
+  });
 });

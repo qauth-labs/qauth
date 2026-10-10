@@ -36,8 +36,9 @@ const server = Fastify({
   // Which reverse-proxy hops may set `request.ip` (validated TRUST_PROXY: off
   // by default, or the proxies' addresses/CIDRs — never `true` or a hop count).
   // Every per-IP rate limit and the `ip:` failed-login lockout key on
-  // `request.ip`; behind a proxy with this unset, all callers share one
-  // bucket. The public origin still comes only from JWT_ISSUER — nothing reads
+  // `request.ip` (an IPv6 client by its /64; app/helpers/client-address.ts);
+  // behind a proxy with this unset, all callers share one bucket. The public
+  // origin still comes only from JWT_ISSUER — nothing reads
   // `request.hostname`/`request.protocol` (ADR-013).
   trustProxy: env.TRUST_PROXY,
   routerOptions: {

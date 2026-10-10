@@ -35,8 +35,8 @@ catalogs:
       specifier: ^13.1.0
       version: 13.1.0
     '@fastify/rate-limit':
-      specifier: ^11.1.0
-      version: 11.1.0
+      specifier: ^11.2.1
+      version: 11.2.1
     '@fastify/swagger':
       specifier: ^9.8.1
       version: 9.8.1
@@ -272,6 +272,7 @@ catalogs:
 overrides:
   '@fastify/proxy-addr': '>=5.1.1 <6'
   '@fastify/static': ^10.1.2
+  ip-address: '>=10.7.1 <11'
   '@grpc/grpc-js': '>=1.14.6 <2'
   brace-expansion@1: '>=1.1.21 <2'
   brace-expansion@2: '>=2.1.7 <3'
@@ -445,7 +446,7 @@ importers:
         version: 13.1.0
       '@fastify/rate-limit':
         specifier: 'catalog:'
-        version: 11.1.0
+        version: 11.2.1
       '@fastify/swagger':
         specifier: 'catalog:'
         version: 9.8.1
@@ -2449,8 +2450,8 @@ packages:
   '@fastify/proxy-addr@5.1.1':
     resolution: {integrity: sha512-zv07Y9GEuDsJPegZoDFd4SDWaZOW8N2pa0GSrYmKpId/tjt1Hgo3BjZBVjdVpfVrHaA+Qv5jawtS2O50J5xM9g==}
 
-  '@fastify/rate-limit@11.1.0':
-    resolution: {integrity: sha512-BeJ9tizLvmTXGD7deYU5G04OtHhwk5uHxbpEPVp09gKvUBIXmau/4Bshxhu9ci54MvVWfGjCEx4RzvsTntojwA==}
+  '@fastify/rate-limit@11.2.1':
+    resolution: {integrity: sha512-uTQjii3tJUnb6ZyEMcunuvKE3FDKNZEaPpxdyWADDgthHnUV1swdvwuiZfi3DDDgxm1iBrhOkQ/w0yDBQ8qJtA==}
 
   '@fastify/send@4.1.0':
     resolution: {integrity: sha512-TMYeQLCBSy2TOFmV95hQWkiTYgC/SEx7vMdV+wnZVX4tt8VBLKzmH8vV9OzJehV0+XBfg+WxPMt5wp+JBUKsVw==}
@@ -6695,6 +6696,10 @@ packages:
   ioredis@5.11.1:
     resolution: {integrity: sha512-ehuGcf94bQXhfagULNXrJdfnWO38v070jxSx/qE87Kjzmu2fU7ro5EFAb+OPituLqgfyuQaym5DlrNydW2sJ9A==}
     engines: {node: '>=12.22.0'}
+
+  ip-address@10.7.3:
+    resolution: {integrity: sha512-A1kdq/tSb5QjvKvAMgIoEvDBIgL7qaqVP/jkvSwYYRZ9iEzvPpopxp2wQfu3SuZRHtpHNxMn8Fs0bS+gf5Xmwg==}
+    engines: {node: '>= 12'}
 
   ip-regex@2.1.0:
     resolution: {integrity: sha512-58yWmlHpp7VYfcdTwMTvwMmqx/Elfxjd9RXTDyMsbL7lLWmhMylLEqiYVLKuLzOZqVgiWXD9MfR62Vv89VRxkw==}
@@ -11145,10 +11150,11 @@ snapshots:
       '@fastify/forwarded': 3.0.1
       ipaddr.js: 2.3.0
 
-  '@fastify/rate-limit@11.1.0':
+  '@fastify/rate-limit@11.2.1':
     dependencies:
       '@lukeed/ms': 2.0.2
       fastify-plugin: 6.0.0
+      ip-address: 10.7.3
       toad-cache: 3.7.0
 
   '@fastify/send@4.1.0':
@@ -15748,6 +15754,8 @@ snapshots:
       standard-as-callback: 2.1.0
     transitivePeerDependencies:
       - supports-color
+
+  ip-address@10.7.3: {}
 
   ip-regex@2.1.0: {}
 

@@ -12,6 +12,7 @@ import {
 } from '../../constants';
 import { toStoredAssuranceLevel } from '../../helpers/acr-claims';
 import { resolveBrowserSession } from '../../helpers/browser-session';
+import { clientAddressKey } from '../../helpers/client-address';
 import { findExceedingAgentScopesForClient, resolveAudience } from '../../helpers/client-auth';
 import { resolveClient } from '../../helpers/client-resolution';
 import { canSkipConsent, filterRequestedScopes } from '../../helpers/consent';
@@ -123,7 +124,7 @@ export default async function (fastify: FastifyInstance) {
           strictMax: env.AUTHORIZE_RATE_LIMIT,
         }),
       timeWindow: env.AUTHORIZE_RATE_WINDOW * 1000,
-      keyGenerator: (req: FastifyRequest) => req.ip || 'unknown',
+      keyGenerator: clientAddressKey,
     },
   };
 

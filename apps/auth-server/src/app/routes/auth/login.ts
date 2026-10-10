@@ -11,6 +11,7 @@ import { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { env } from '../../../config/env';
 import { MIN_RESPONSE_TIME_MS } from '../../constants';
 import { hashEmail, logAuthEvent } from '../../helpers/auth-events';
+import { clientAddressKey } from '../../helpers/client-address';
 import { resolveAudience } from '../../helpers/client-auth';
 import { verifyPasswordCredential } from '../../helpers/credential-auth';
 import { resolveEmailClaims } from '../../helpers/email-claims';
@@ -43,7 +44,7 @@ export default async function (fastify: FastifyInstance) {
         rateLimit: {
           max: env.LOGIN_RATE_LIMIT,
           timeWindow: env.LOGIN_RATE_WINDOW * 1000,
-          keyGenerator: (request) => request.ip || 'unknown',
+          keyGenerator: clientAddressKey,
         },
       },
     },
@@ -55,9 +56,10 @@ export default async function (fastify: FastifyInstance) {
       // structured logging on every code path (#115, #124, #125).
       const normalizedEmail = normalizeEmail(email);
       // Identifiers tracked for failed-login throttling (#115): the email is
-      // hashed so the cache never stores raw addresses, plus the source IP.
+      // hashed so the cache never stores raw addresses, plus the source IP
+      // (an IPv6 client by its /64, as in the rate limits).
       const emailHash = hashEmail(normalizedEmail);
-      const lockoutIdentifiers = [`email:${emailHash}`, `ip:${request.ip}`];
+      const lockoutIdentifiers = [`email:${emailHash}`, `ip:${clientAddressKey(request)}`];
 
       try {
         // Reject early if this identifier is currently locked out (#115).

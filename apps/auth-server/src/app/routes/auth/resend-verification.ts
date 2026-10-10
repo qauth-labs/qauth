@@ -14,6 +14,7 @@ import {
   REDIS_KEYS,
   SUCCESS_MESSAGES,
 } from '../../constants';
+import { clientAddressKey } from '../../helpers/client-address';
 import { getOrCreateDefaultRealm } from '../../helpers/realm';
 import {
   type ResendVerificationRequest,
@@ -57,7 +58,7 @@ export default async function (fastify: FastifyInstance) {
         rateLimit: {
           max: env.RESEND_VERIFICATION_RATE_LIMIT,
           timeWindow: env.RESEND_VERIFICATION_RATE_WINDOW * 1000,
-          keyGenerator: (request) => request.ip || 'unknown',
+          keyGenerator: clientAddressKey,
         },
       },
     },

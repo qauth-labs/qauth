@@ -235,7 +235,7 @@ describe('UI /ui/login — CSRF defence', () => {
   describe("POST shares the API login's failed-login lockout and email-verified gate", () => {
     const LOCKOUT_IDS = [`email:${hashEmail('user@example.com')}`, 'ip:127.0.0.1'];
 
-    async function postLogin(options: { verifies: boolean; emailVerified?: boolean }) {
+    async function postLogin(options: { verifies: boolean; emailVerified?: boolean; ip?: string }) {
       const { fastify, ctx } = makeFastify();
       await loginRoute(fastify);
       const getReply = createReply();
@@ -265,7 +265,7 @@ describe('UI /ui/login — CSRF defence', () => {
         {
           body: { email: 'User@Example.com', password: 'pw', csrf_token: rawToken },
           headers: { cookie: `__Host-qauth_login_csrf=${cookieValue}` },
-          ip: '127.0.0.1',
+          ip: options.ip ?? '127.0.0.1',
         },
         reply
       );
@@ -297,6 +297,15 @@ describe('UI /ui/login — CSRF defence', () => {
       expect(state.statusCode).toBe(401);
       expect(recordFailedAttempt).toHaveBeenCalledWith(undefined, LOCKOUT_IDS);
       expect(resetFailedAttempts).not.toHaveBeenCalled();
+    });
+
+    it('keys the ip: identifier on the /64 of an IPv6 client', async () => {
+      await postLogin({ verifies: false, ip: '2001:db8:1:2:aaaa:bbbb:cccc:7' });
+
+      expect(recordFailedAttempt).toHaveBeenCalledWith(undefined, [
+        LOCKOUT_IDS[0],
+        'ip:2001:db8:1:2::',
+      ]);
     });
 
     it('clears failed-login state on success', async () => {

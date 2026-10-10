@@ -14,6 +14,7 @@ import {
 } from '../../constants';
 import { toStoredAssuranceLevel } from '../../helpers/acr-claims';
 import { resolveBrowserSession } from '../../helpers/browser-session';
+import { clientAddressKey } from '../../helpers/client-address';
 import { findExceedingAgentScopesForClient } from '../../helpers/client-auth';
 import { isAgentClient, resolveClient } from '../../helpers/client-resolution';
 import {
@@ -528,7 +529,7 @@ export default async function (fastify: FastifyInstance) {
         rateLimit: {
           max: env.AUTHORIZE_RATE_LIMIT,
           timeWindow: env.AUTHORIZE_RATE_WINDOW * 1000,
-          keyGenerator: (req) => req.ip || 'unknown',
+          keyGenerator: clientAddressKey,
         },
       },
     },

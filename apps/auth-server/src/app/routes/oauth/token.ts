@@ -19,6 +19,7 @@ import { env } from '../../../config/env';
 import { MIN_RESPONSE_TIME_MS } from '../../constants';
 import { resolveAcrClaims } from '../../helpers/acr-claims';
 import { flattenActChain, MAX_DELEGATION_DEPTH } from '../../helpers/agent-audit';
+import { clientAddressKey } from '../../helpers/client-address';
 import {
   authenticateClientRequest,
   enforceAgentScopeCap,
@@ -121,7 +122,7 @@ export default async function (fastify: FastifyInstance) {
               strictMax: env.TOKEN_RATE_LIMIT,
             }),
           timeWindow: env.TOKEN_RATE_WINDOW * 1000,
-          keyGenerator: (req) => req.ip || 'unknown',
+          keyGenerator: clientAddressKey,
         },
       },
     },
