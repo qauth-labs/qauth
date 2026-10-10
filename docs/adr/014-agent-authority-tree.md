@@ -957,7 +957,7 @@ For an agent client the consent screen states that the client is an AI agent
 — and, when the root names an agent principal (§13), which one: its
 `display_name` and its owner's display name, each escaped by the same
 `html` tag as the client name (§5), and its avatar, served from QAuth's own
-origin at the fixed path §13 gives, so the person sees "Majordomo, owned by
+origin at the fixed path §13 gives, so the person sees "Release bot, owned by
 you" and not only "claude-code" — and shows the ceiling of the tree
 it may grow: the scopes with descriptions
 (today `agent:*` and `write:*` render raw), including the **union** of agent
@@ -1726,8 +1726,8 @@ proceeds on that default until the maintainer decides otherwise.
    every restart would cut the `sid` (§6); it needs the per-broker-start
    shape. A per-host setting choosing between the two, rather than one
    answer for every host, is the likely resolution.
-9. **Agent handle namespace.** Realm-unique (`majordomo` is one agent per
-   realm) or user-scoped (`taha/majordomo`, so two owners may share a
+9. **Agent handle namespace.** Realm-unique (`builder` is one agent per
+   realm) or user-scoped (`alice/builder`, so two owners may share a
    handle)? The SCIM draft wants `agentUserName` unique across the
    provisioning domain, which is the realm. Default: realm-unique, first
    come; the profile URL is `/agents/{handle}`.
@@ -1795,6 +1795,9 @@ proceeds on that default until the maintainer decides otherwise.
     §14's rule that an approval never reaches a durable rung. Default: not
     offered. The alternative: the owner raises the agent's default root
     ceiling in the portal, and the next root takes it through consent (§11).
+    _Decided 2026-10-06 (maintainer): the alternative._ An approval prompt
+    has no "always allow". The owner raises the agent's default root ceiling
+    in the portal, proving it is the owner with a passkey.
 
 ## Related
 
@@ -1812,7 +1815,12 @@ proceeds on that default until the maintainer decides otherwise.
   [ADR-013](./013-same-device-return-leg.md) — the
   burn-then-bind idiom the spawn assertion's single-use `jti` follows;
   [ADR-002](./002-identifier-abstraction.md) — email as credential, not
-  identity, which is why an agent has neither (§13)
+  identity, which is why an agent has neither (§13);
+  [ADR-015](./015-agent-tree-hardening.md) — the tree's fail-closed rules
+  and the questions the 2026-09-30 amendment left out;
+  [ADR-016](./016-agent-platform-bindings.md) — the platform side of an agent's
+  identity: a public platform identity, approval-only resources, the
+  pass-through leg and `handle@issuer`
 - [Agent Authorization guide](https://docs.qauth.dev/integrate/agent-authorization/) —
   the shipped agent layer this record builds on;
   [`docs/spec-pin-log.md`](../spec-pin-log.md) — where the watch list will be
