@@ -112,7 +112,12 @@ Everything in this section is inside the stability promise and inside the audit 
   ID-JAG revision in its own row.
 - The OAuth 2.0 device authorization grant (RFC 8628), with a code-entry page in the ceremony app.
   Against device-code phishing, that page shows the client's verified domain before the user
-  approves. Decided 2026-10-10 (maintainer).
+  approves. Decided 2026-10-10 (maintainer). The verified domain alone does not stop a real
+  client's code from being passed to a victim (RFC 8628 §5.4), so the stable page also asks for an
+  explicit confirmation, including after `verification_uri_complete`. It warns that nobody else
+  should have given the user the code, and shows the requesting device's approximate location,
+  network and user agent. User codes are short-lived and single use, and code entry is
+  rate-limited. ADR-020 §3 lists the controls.
 
 **Agents and delegation**
 
@@ -260,7 +265,9 @@ The contract covers:
   (maintainer).
 - **The declarative realm file.** It describes a realm's configuration and leaves out every secret
   value. The admin API and the CLI export it and import it, and an import first shows a dry-run
-  diff. Today's seed manifest becomes a subset of it. Decided 2026-10-10 (maintainer).
+  diff. Today's seed manifest becomes a subset of it. Decided 2026-10-10 (maintainer). An import is
+  authorized change by change, as the operations it contains, and the strictest change gates it
+  (ADR-019 Decisions 7 and 11).
 - **Realm policies in the admin API's realm representation.** Realm policies live on the realm row
   and change through the admin API and the console, so the representation is the stable surface for
   them. Environment keys only seed a new realm's defaults. ADR-019 Decision 10 draws the line.
@@ -298,7 +305,7 @@ a minor release once four conditions hold:
 
 - There is no browser token SDK. Browser apps use a BFF.
 - `qauth-broker` is a local process with a language-neutral protocol. It keeps DPoP keys away from
-  the model.
+  the model, and it alone decides a new node's parent and type (ADR-014 §12).
 - A Python `resource-guard` comes next. Go comes later.
 - Every SDK runs shared, language-neutral test vectors.
 - This set replaces the README's SDK plan. The vanilla JS and React SDKs listed there are dropped.
