@@ -79,7 +79,7 @@ standards-based first-party login, and give apps that use a password grant a cle
 | QAuth's own app                   | The developer portal (`apps/developer-portal/src/server/auth-server-client.ts`) calls `/auth/login`, `/auth/register`, `/auth/verify`, `/auth/resend-verification` and `/auth/logout` server-to-server                                                   | In F0 the portal signs in through `/oauth/authorize` and keeps its tokens server-side; from F2a it signs up on the hosted sign-up page, by redirect, while sign-up is on (Decision 12)                                     |
 | Headless hand-off                 | `/oauth/authorize` accepts `Authorization: Bearer` with a `system`-client access token in place of a browser session                                                                                                                                     | Follows the consent rule from F0; removed in F1c, before 1.0 (Decision 9)                                                                                                                                                  |
 | Client authentication             | `private_key_jwt` at `/oauth/token` ([ADR-011 §7](./011-enterprise-managed-authorization.md) "`private_key_jwt` (#384) — additive, no flag"); `/oauth/revoke` and `/oauth/introspect` accept `client_secret_basic` and `client_secret_post`              | `private_key_jwt` at both in F0 (Decision 14)                                                                                                                                                                              |
-| First-party marking               | No client attribute marks a client as first-party. Operator-set attributes such as `max_agent_mode` are written only by the seed manifest (`clientSpecSchema`)                                                                                           | An operator-set `first_party_profile`, seed-only and CHECK-constrained (Decision 2)                                                                                                                                        |
+| First-party marking               | No client attribute marks a client as first-party. Operator-set attributes such as `max_agent_mode` are written only by the seed manifest (`clientSpecSchema`)                                                                                           | An operator-set `first_party_profile`, written only by the seed manifest or an `admin:security` operation, and CHECK-constrained (Decision 2)                                                                              |
 | Consent                           | Skipped when an active consent row covers the requested scopes (`canSkipConsent`, `helpers/consent.ts`)                                                                                                                                                  | Audited administrative consent for flagged clients (Decision 9)                                                                                                                                                            |
 | Authorization codes               | Two mint sites; every code is S256 PKCE-bound; `authorization_codes.redirect_uri` is NOT NULL and the token endpoint requires `redirect_uri`                                                                                                             | One mint helper, an `issued_via` marker, and codes without a redirect URI (Decision 10)                                                                                                                                    |
 | Sender constraint                 | No DPoP                                                                                                                                                                                                                                                  | DPoP in F3, one verifier shared with ADR-014 (Decision 14)                                                                                                                                                                 |
@@ -151,24 +151,25 @@ open as of 2026-09-26:
 
 ### Threat model
 
-| Threat                                                                | Control                                                                                                                                                                                                                                                              | Residual                                                                                                                                                                                                                                                                                                                                                                |
-| --------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Credential stuffing and spraying through a first-party backend        | Per-account ladder (delay, bot challenge from F1b, disable at 100), per-end-user-IP limits, per-client failure-ratio breaker, per-session budget, dummy Argon2id verify and a timing floor, optional post-password email check, attestation as a bot signal (F4)     | A correct password is learned when a second step appears. A distributed campaign below per-IP thresholds trips the per-client breaker only if it lifts the client's failure ratio above 50 %. A campaign diluted by successful sign-ins, including the client's own traffic, is bounded only by the per-client cap of 600 rounds per minute and the per-account ladder. |
-| Phishing by a look-alike app                                          | Only operator-flagged confidential backends reach the endpoint; public clients refused until attestation and DPoP (F4); passkey-first (F2b); `redirect_to_web` on a risk rule (none in F1)                                                                           | A look-alike app can collect a password and relay an email code; from F2b a password alone no longer completes a login on a passkey-bound account; manually entered codes are not phishing-resistant (NIST SP 800-63B-4 §3.2.5 "Phishing Resistance")                                                                                                                   |
-| Client impersonation and assertion misuse                             | `private_key_jwt` on every round at the authorization challenge endpoint, with `aud` = the issuer as sole value, a life of at most 60 s and a burned `jti`; public clients refused until F4                                                                          | A stolen backend key impersonates the backend until the operator rotates its keys                                                                                                                                                                                                                                                                                       |
-| Scripts calling the vendor's backend                                  | Asserted end-user IP, per-client breaker, per-account ladder; app attestation between app and backend is the vendor's job until F4                                                                                                                                   | QAuth cannot tell a real app from a script behind a real backend before F4                                                                                                                                                                                                                                                                                              |
-| `auth_session` theft or replay                                        | 256-bit handle, hashed at rest, consumed atomically, rotated every round, bound to client authentication, 10-minute absolute life, dead at the code, never logged; a replay ends the live transaction                                                                | A backend that mixes its own users' transactions (the SDK enforces one per app session)                                                                                                                                                                                                                                                                                 |
-| Account enumeration                                                   | Uniform first response; identical registration and reset bodies; counters keyed on an identifier HMAC for known and unknown addresses; send caps met by quiet suppression; dummy hash; timing floor on every identifier-resolving round                              | Email content differs; only the mailbox owner sees it                                                                                                                                                                                                                                                                                                                   |
-| Lockout as denial of service                                          | Soft ladder first, consulted by every surface before it verifies; known-IP exemption from the wait; disable only at 100 counted failures and only while a self-service rebind path exists; notice to the user                                                        | A per-account wait also delays the real user from an unknown IP. An attacker who knows an address can wait out the delays (or solve bot challenges from F1b) and disable its password after 100 counted failures, in under a day with the default waits. The user then needs a reset. The per-client hard cap and per-IPv4 limits affect every user behind them.        |
-| Forged end-user IP                                                    | IP inside the signed, single-use assertion; derived by the backend from its peer or a listed proxy chain (the SDK does it); audit rows mark it `asserted`; TCP peer and `client_id` keep their own caps                                                              | QAuth verifies who asserted the value, not the value; a misconfigured backend skews per-IP limits and audit rows; a forged or shared IP that matches a known IP skips the per-account wait (it still counts toward the ceiling), which also shows that the account exists                                                                                               |
-| Script on a web origin driving a backend                              | Web front-ends outside the profile; browser-origin guard; no CORS; a signed assertion on every request                                                                                                                                                               | An operator can flag a web backend as native. Script running in that web front-end could then drive the backend's login actions. RFC 10017 §5.1.4 "Proxying Requests via the User's Browser" says this scenario "cannot be stopped or prevented by application-level security measures"                                                                                 |
-| Code interception, replay or AS mix-up                                | PKCE S256 required by default (an operator may switch it off per client at this endpoint); 60-second single-use codes; a replay revokes the family; `iss` on every response; the SDK pins one issuer and its metadata                                                | Raw-wire clients that ignore `iss`                                                                                                                                                                                                                                                                                                                                      |
-| Downgrade and factor mixing                                           | A transaction completes only after the account's strongest bound factor; one subject per transaction; an email code never replaces an authenticator; `/auth/login` refuses passkey-bound accounts while it exists                                                    | Until the hosted `/ui/login` runs on the same engine (F2b), the browser path keeps its own rules                                                                                                                                                                                                                                                                        |
-| Account takeover through a mailbox                                    | 8-digit recovery code, 10 minutes, 5 tries per code, a per-identifier wait ladder across codes (bot challenge from F1b), send caps; a stronger bound authenticator required; every refresh family revoked, live transactions and browser sessions ended; notice sent | Mailbox takeover of a password-only account is an account takeover; codes can be relayed in real time; an attacker who waits out the ladder can keep guessing slowly, and every code guessed at was also mailed to the user                                                                                                                                             |
-| Registration abuse (squatting, pre-hijacking, mail bombing)           | Verify first, then create; the first mailbox proof on an unclaimed account removes every credential and consent bound before it; send caps per address, IP and client; per-client opt-in; bot challenge from F1b                                                     | Bot sign-ups with real mailboxes before F1b; state that downstream apps keep for the account's `sub` from before the proof survives                                                                                                                                                                                                                                     |
-| Third-party, MCP or agent client; consent waived for the wrong client | CHECKs exclude DCR, CIMD and agent clients; the waiver covers only flagged clients and non-dangerous allowlisted scopes; a written reason per flag; removing a flag revokes families                                                                                 | Operator error in the seed manifest                                                                                                                                                                                                                                                                                                                                     |
-| Browser-leg session swap                                              | App-claimed redirect URI; completion only over the originating app session with a matching `state`; a fresh login that QAuth requires for every `/oauth/authorize` request of a native profile                                                                       | The app-side half is vendor code until the mobile SDK (F4)                                                                                                                                                                                                                                                                                                              |
-| Bearer access-token theft from a backend                              | Tokens stay on the backend; short access-token life; refresh tokens bound to the client                                                                                                                                                                              | The deviation from FiPA §9.5 "Sender-Constrained Tokens" until F3, where DPoP is on by default; afterwards only for a client whose operator switched DPoP off                                                                                                                                                                                                           |
+| Threat                                                                | Control                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  | Residual                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| --------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Credential stuffing and spraying through a first-party backend        | Per-account ladder (delay, bot challenge from F1b, disable at 100), with every counter reserved before the verifier runs; per-end-user-IP limits and a distinct-identifier count per IP bucket; a per-client failure-ratio breaker that counts each account's success once, and an absolute per-client failure budget; per-session budget, dummy Argon2id verify and a timing floor, optional post-password email check, attestation as a bot signal (F4)                                                                                                                | A correct password is learned when a second step appears. Successful sign-ins do not dilute the breaker: each account's success counts once per window, and the absolute failure budget fires whatever the ratio. A campaign kept below every threshold is bounded by them: at the defaults, 300 failed rounds per 5 minutes per client before the bot challenge (about 86,000 a day), spread over IP buckets that each fail on at most 20 identifiers per 15 minutes, with 5 free tries per account.                                                                                                                                                                                                                                                |
+| Phishing by a look-alike app                                          | Only operator-flagged confidential backends reach the endpoint; public clients refused until attestation and DPoP (F4); passkey-first (F2b); `redirect_to_web` on a risk rule (none in F1)                                                                                                                                                                                                                                                                                                                                                                               | A look-alike app can collect a password and relay an email code; from F2b a password alone no longer completes a login on a passkey-bound account; manually entered codes are not phishing-resistant (NIST SP 800-63B-4 §3.2.5 "Phishing Resistance")                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| Client impersonation and assertion misuse                             | `private_key_jwt` on every round at the authorization challenge endpoint, with `aud` = the issuer as sole value, a life of at most 60 s and a burned `jti`; public clients refused until F4                                                                                                                                                                                                                                                                                                                                                                              | A stolen backend key impersonates the backend until the operator rotates its keys                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| Scripts calling the vendor's backend                                  | Asserted end-user IP, per-client breaker, per-account ladder; app attestation between app and backend is the vendor's job until F4                                                                                                                                                                                                                                                                                                                                                                                                                                       | QAuth cannot tell a real app from a script behind a real backend before F4                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| `auth_session` theft or replay                                        | 256-bit handle, hashed at rest, consumed atomically, rotated every round, bound to client authentication, 10-minute absolute life, dead at the code, never logged; a replay ends the live transaction                                                                                                                                                                                                                                                                                                                                                                    | A backend that mixes its own users' transactions (the SDK enforces one per app session)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| Account enumeration                                                   | Uniform first response; identical registration and reset bodies; counters keyed on an identifier HMAC for known and unknown addresses; a per-address-and-IP send tier met by quiet suppression; a per-address-and-client tier and a per-address send ceiling that count unknown addresses too and answer every address with the same 429; dummy hash; timing floor on every identifier-resolving round                                                                                                                                                                   | Email content differs; only the mailbox owner sees it                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| Lockout as denial of service                                          | Soft ladder first, reserved by every surface before it verifies; known-IP exemption from the wait; disable only at 100 counted failures and only while the owner has a rebind path that a third party cannot exhaust (no quiet suppression at the per-address send ceiling, a known IP of a verified account never meets the per-address tiers, a pass past the per-address tiers in the disable and send-ceiling notices, which a realm cannot turn off); notice to the user                                                                                            | A per-account wait also delays the real user from an unknown IP. An attacker who knows an address can wait out the delays (or solve bot challenges from F1b) and disable its password after 100 counted failures, in under a day with the default waits. The user then needs a reset, which the attacker cannot silence: a known IP still gets the mail, and a user on an unknown IP who meets the send ceiling's 429 starts the reset from the pass in the notice; the operator is alerted. The per-client hard cap and per-IPv4 limits affect every user behind them. A third party who sends about 300 failed rounds in 5 minutes through a client puts every user of that client behind the delay or the bot challenge; the operator is alerted. |
+| Forged end-user IP                                                    | IP inside the signed, single-use assertion; derived by the backend from its peer or a listed proxy chain (the SDK does it); audit rows mark it `asserted`; TCP peer and `client_id` keep their own caps                                                                                                                                                                                                                                                                                                                                                                  | QAuth verifies who asserted the value, not the value; a misconfigured backend skews per-IP limits and audit rows; a forged or shared IP that matches a known IP skips the per-account wait (it still counts toward the disable ceiling) and the per-address send tiers, which also shows that the account exists                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| Script on a web origin driving a backend                              | Web front-ends outside the profile; browser-origin guard; no CORS; a signed assertion on every request                                                                                                                                                                                                                                                                                                                                                                                                                                                                   | An operator can flag a web backend as native. Script running in that web front-end could then drive the backend's login actions. RFC 10017 §5.1.4 "Proxying Requests via the User's Browser" says this scenario "cannot be stopped or prevented by application-level security measures"                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| Code interception, replay or AS mix-up                                | PKCE S256 required by default (an operator may switch it off per client at this endpoint); 60-second single-use codes; a replay revokes the family; `iss` on every response; the SDK pins one issuer and its metadata                                                                                                                                                                                                                                                                                                                                                    | Raw-wire clients that ignore `iss`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| Downgrade and factor mixing                                           | A transaction completes only after the account's strongest bound factor; one subject per transaction; an email code never replaces an authenticator; `/auth/login` refuses passkey-bound accounts while it exists; the realm's and client's MFA policy is enforced after the first factor on every transport; a disabled second factor still counts as bound, and email never replaces a lost one                                                                                                                                                                        | Until the hosted `/ui/login` runs on the same engine (F2b), the browser path keeps its own rules                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| Second-factor guessing with a known password                          | One counter per account and second-factor type across transactions, clients, transports and IPs, never cleared by a correct first factor; the ladder from 5 failures; TOTP disabled at 100 while the hosted pages are on and the account keeps an unused recovery code, or while it keeps another usable second factor; a notice to the user on a wrong second factor after a correct password; binding the first passkey or TOTP of a password-only account also needs a code mailed to its address; recovery codes of at least 64 bits; a TOTP time step accepted once | At most 100 consecutive TOTP guesses between two sign-ins by the owner, who is notified of a wrong second factor after a correct password: about 0.03 % at three valid codes in 10^6 per guess, and reaching 100 takes about 21.5 hours whatever the number of IPs. The owner then recovers with a recovery code. Each sign-in by the owner starts a new run, worth about 13 more guesses than the steady ladder, until the notified owner changes the password. An account without such a rebind path keeps the ladder alone: about 96 guesses a day plus about 13 per sign-in by the owner, about 0.03 % a day at one sign-in a day                                                                                                                |
+| Account takeover through a mailbox                                    | 8-digit recovery code, 10 minutes, 5 tries per code, a per-identifier wait ladder across codes (bot challenge from F1b), send caps; a stronger bound authenticator required; every refresh family revoked, live transactions and browser sessions ended; notice sent                                                                                                                                                                                                                                                                                                     | Mailbox takeover of a password-only account is an account takeover; codes can be relayed in real time; an attacker who waits out the ladder can keep guessing slowly, and every code guessed at was also mailed to the user                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| Registration abuse (squatting, pre-hijacking, mail bombing)           | Verify first, then create; the first mailbox proof on an unclaimed account ends that account and creates a new one with a new `sub`, so nothing bound before the proof carries over; send caps per address, IP and client; per-client opt-in; bot challenge from F1b                                                                                                                                                                                                                                                                                                     | Bot sign-ups with real mailboxes before F1b; downstream apps keep state for the ended `sub` until they act on its back-channel logout, and none of it reaches the new account; where hosted sign-up is off, a third party can delay one new address's native sign-up by holding it at its send ceiling, which the 429 and the operator alert make visible                                                                                                                                                                                                                                                                                                                                                                                            |
+| Third-party, MCP or agent client; consent waived for the wrong client | CHECKs exclude DCR, CIMD and agent clients; the waiver covers only flagged clients and non-dangerous allowlisted scopes; flags written only by the seed manifest or an `admin:security` operation, each with a written reason; removing a flag revokes families                                                                                                                                                                                                                                                                                                          | Operator error in the seed manifest, or by an admin who holds `admin:security`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| Browser-leg session swap                                              | App-claimed redirect URI; completion only over the originating app session with a matching `state`; a fresh login that QAuth requires for every `/oauth/authorize` request of a native profile                                                                                                                                                                                                                                                                                                                                                                           | The app-side half is vendor code until the mobile SDK (F4)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| Bearer access-token theft from a backend                              | Tokens stay on the backend; short access-token life; refresh tokens bound to the client                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  | The deviation from FiPA §9.5 "Sender-Constrained Tokens" until F3, where DPoP is on by default; afterwards only for a client whose operator switched DPoP off                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 
 ### The question this ADR settles
 
@@ -246,9 +247,10 @@ the default-off switch.
 ### 2. First-partyness — an operator-set client profile, never self-asserted
 
 **First-partyness is an operator-set `oauth_clients.first_party_profile`, written only by the seed
-manifest and tied by database CHECKs to `private_key_jwt`, non-DCR, non-CIMD, non-agent,
-developer-less rows.** Public native clients are refused until attestation-based client
-authentication and DPoP both exist. DPoP proves key continuity, not app identity.
+manifest or a security-class admin operation and tied by database CHECKs to `private_key_jwt`,
+non-DCR, non-CIMD, non-agent, developer-less rows.** Public native clients are refused until
+attestation-based client authentication and DPoP both exist. DPoP proves key continuity, not app
+identity.
 
 FiPA §1.1 and §9.1 "First-Party Applications" define first-party apps as "controlled by the same
 entity as the authorization server" and that "users understand as belonging to the same entity". An
@@ -280,18 +282,27 @@ object: `flows` (a non-empty subset of `login`, `register`, `reset`; default `lo
 does not parse makes the client not first-party. One new resolver,
 `resolveFirstPartyProfile(client)`, serves the endpoint gate and the consent waiver. Write paths
 follow the pattern of `max_agent_mode`: the seed manifest (`clientSpecSchema`, `buildInsert`,
-`buildUpdate` in `libs/infra/db/src/scripts/seed-oauth-clients.ts`) is the only positive write path;
-DCR pins NULL; CIMD omits the fields; the developer API (`createClientRequestSchema`,
-`updateClientRequestSchema`) can read but not write them. For native profiles the seed requires
-`jwks` or `jwks_uri`, `authorization_code`, a `reason`, and at least one browser-leg redirect URI
-that is `https`, private-use or loopback. The seed cannot check that an `https` URI is app-claimed
-and never served by the backend. That stays a profile requirement (Decision 1, requirement 6).
-Removing a profile revokes every refresh family of the client, audited.
+`buildUpdate` in `libs/infra/db/src/scripts/seed-oauth-clients.ts`) is the only positive write path
+at deploy time; DCR pins NULL; CIMD omits the fields; the developer API
+(`createClientRequestSchema`, `updateClientRequestSchema`) can read but not write them. Once the
+declarative realm file (ADR-018) and the admin API (ADR-019) can carry these fields, the only other
+write path is a security operation of ADR-019 Decision 7. Setting, changing or removing
+`first_party_profile` or `first_party_policy`, setting `pkce_required: false` and switching DPoP off
+for a flagged client each need `admin:security`, a fresh passkey approval bound to that operation, a
+second admin where the realm requires one, and a written reason stored with the row. Each writes an
+admin event with its diff. `admin:write`, and the console's client screen under it, can read these
+fields but not write them. A realm-file import that would change them is refused unless the importer
+meets the same rule, and its dry-run diff lists them apart from other changes. The CHECKs hold on
+every path. For native profiles the seed requires `jwks` or `jwks_uri`, `authorization_code`, a
+`reason`, and at least one browser-leg redirect URI that is `https`, private-use or loopback. The
+seed cannot check that an `https` URI is app-claimed and never served by the backend. That stays a
+profile requirement (Decision 1, requirement 6). Removing a profile revokes every refresh family of
+the client, audited.
 
 PKCE S256 stays mandatory on the redirect flow, always. At this endpoint it is mandatory by default.
-An operator may set `pkce_required: false` for one client in the seed manifest. QAuth then logs a
-warning at boot that names the client. The standards position records the deviation. The maintainer
-decided this on 2026-10-09 (question 11).
+An operator may set `pkce_required: false` for one client in the seed manifest, or through the
+security operation above. QAuth then logs a warning at boot that names the client. The standards
+position records the deviation. The maintainer decided this on 2026-10-09 (question 11).
 
 The runtime gate runs after client authentication on every round (client enabled, profile
 `native_backend` or, from F4, `native_attested`, `authorization_code` granted, flow in `flows`, and
@@ -499,9 +510,10 @@ response.
    step 3 apply (Decision 7).
 6. The identifier: `login_hint`, or a discoverable passkey from F2b.
 7. The first factor: passkey (F2b) before password.
-8. After a first factor only: the downgrade rule, verification of an account that is not yet
-   verified (for a password account, its address is unproved), the per-client post-password email
-   check (FiPA endpoint only), TOTP (F2c), and from F2b an optional passkey enrolment offer.
+8. After a first factor only: the downgrade rule, the realm's and client's MFA policy, verification
+   of an account that is not yet verified (for a password account, its address is unproved), the
+   per-client post-password email check (FiPA endpoint only), TOTP (F2c), and from F2b an optional
+   passkey enrolment offer.
 9. Mint the code.
 
 Any other rule that needs a step the client did not list answers `redirect_to_web`.
@@ -519,10 +531,27 @@ Any other rule that needs a step the client did not list answers `redirect_to_we
   response never says who holds one.
 - Downgrade rule (defined in F1 so the wire does not change; binding from F2b). A login completes
   only if the transaction proved the account's strongest bound authenticator (passkey above
-  password). After a correct password on a passkey-bound account the next step is `webauthn_get`, or
-  `redirect_to_web` if the client did not list it. An email code never replaces an authenticator.
-  Wallet credentials are outside the ranking ([ADR-009 §6](./009-wallet-account-resolution.md)
-  "Wallet presentation is onboarding and assurance-raising, not session authentication").
+  password). On the hosted pages a recovery code may stand in for it (Decision 8); it adds no `amr`
+  value. After a correct password on a passkey-bound account the next step is `webauthn_get`, or
+  `redirect_to_web` if the client did not list it. An email code never replaces an authenticator. A
+  disabled authenticator (Decision 7) still counts as bound, so disabling a factor never lowers what
+  a login must prove. Wallet credentials are outside the ranking
+  ([ADR-009 §6](./009-wallet-account-resolution.md) "Wallet presentation is onboarding and
+  assurance-raising, not session authentication").
+- MFA policy. ADR-020 sets MFA per realm and per client (off, optional, required, required for
+  admins, where an admin is an account with an admin role in the realm). Step 8 enforces it on every
+  transport. The engine reads it from the realm and client rows on every round and never caches it
+  in the `auth_session`, so a change applies to live transactions. When the policy requires a second
+  factor, a transaction completes only if its `amr` would carry `mfa` (Decision 10); the downgrade
+  rule alone never satisfies it. An account with no usable second factor gets the hosted set-up
+  step, never a code: the Interaction API offers it, and this endpoint, which has no TOTP enrolment
+  step, answers `redirect_to_web`. A policy the engine cannot read refuses the round, as a store
+  outage does (Decision 7).
+- Try another way (ADR-020). Before a factor succeeds, the list offers only what the uniform first
+  response offers every account (on the hosted pages that includes a recovery code, for every
+  account), so it reveals no account's methods. After the first factor, it lists that account's
+  remaining methods that can still meet the downgrade rule and the MFA policy, and, on the hosted
+  pages only, a recovery code (Decision 8). Email is never on it as a stand-in for an authenticator.
 - Eager answers. An initial request may carry the answer to the step it expects. The AS verifies it
   only if that step is the one it would ask for next; otherwise it ignores the value, with no
   verification and no failure counted. This keeps the happy path at two calls: one to the
@@ -538,10 +567,11 @@ Any other rule that needs a step the client did not list answers `redirect_to_we
   ([ADR-010 §2](./010-acr-assurance-mapping.md) "`'low'` emits no `acr` claim"), and
   `acr_values_supported` is not published (RFC 9470 §7 "Authorization Server Metadata").
 - Dangerous scopes. `isDangerousScope` (`helpers/step-up.ts`) classifies `write:*`, `agent:admin`
-  and `agent:exec`. A first-party client's administrative consent set is its allowlisted requested
-  scopes minus dangerous ones, passed to `evaluateStepUp` as its prior-consent scopes at both
-  endpoints. A dangerous scope answers `redirect_to_web` in every environment, so the browser's
-  consent screen and fresh login apply.
+  and `agent:exec`, and, once ADR-016's pass-through leg lands, its `<kind>:owner-token` (ADR-016
+  §4). A first-party client's administrative consent set is its allowlisted requested scopes minus
+  dangerous ones, passed to `evaluateStepUp` as its prior-consent scopes at both endpoints. A
+  dangerous scope answers `redirect_to_web` in every environment, so the browser's consent screen
+  and fresh login apply.
 
 `redirect_to_web` answers a step the client did not list (except a bot challenge), a missing
 negotiation, a dangerous scope, `prompt=consent`, a passkey-bound account whose client cannot do
@@ -592,13 +622,39 @@ no `amr` or `auth_time`, and it cannot satisfy `max_age` or `prompt=login`.
   suppresses mail, and a correct code answered outside a wait is accepted. So this counter cannot
   close the reset that Decision 7's disable relies on, and it cannot block a sign-up.
 - Send limits count every request that would send if the account existed, unknown addresses
-  included: 3 per 15 minutes and 10 per 24 hours per address, 10 per hour per end-user IP, and
-  per-client caps. At a cap the response is the same step, and the mail is quietly suppressed. Mail
-  is dispatched after the response is built and every identifier-resolving round meets the timing
-  floor, so "sent", "not sent" and "capped" look alike.
+  included. Only the tiers that a third party cannot spend for the owner are quiet.
+  - Per address and end-user IP (3 per 15 minutes and 10 per 24 hours): at the cap the response is
+    the same step, and the mail is quietly suppressed. Mail is dispatched after the response is
+    built and every identifier-resolving round meets the timing floor, so "sent", "not sent" and
+    "capped" look alike.
+  - Per address and FiPA client (10 per 24 hours): above it every address, existing or not, gets the
+    same 429 `temporarily_unavailable` with `Retry-After`. The hosted pages have no per-client tier.
+  - Per address, a send ceiling of 30 per 24 hours. Above it every address, existing or not, gets
+    the same 429 `temporarily_unavailable` with `Retry-After`, so the answer reveals nothing about
+    the account. The operator gets an alert, aggregated per address HMAC. An existing account, and
+    on a registration start an address with no account, gets at most one notice per 24 hours,
+    outside the caps; registration already mails addresses with no account. The notice says that
+    codes were requested for the address and carries a link with a single-use 256-bit pass, bound to
+    that address and valid 24 hours (opening the link never spends it; only the start it carries
+    does), that takes one reset or registration start on the hosted pages past every per-address
+    tier. The pass proves only that its holder reads the mailbox; the mailed code is still required.
+    The send ceiling is never quiet: a quiet send ceiling would let a third party drop the owner's
+    own reset and verification mail.
+  - Per end-user IP (10 per hour) and per FiPA client: these do not depend on the address, so they
+    also answer 429 with `Retry-After`. The hosted reset and verification pages have no per-client
+    send cap.
+  - A request whose end-user IP is a known IP of a verified account (Decision 7) is exempt from
+    every per-address tier. A code mailed after a correct first factor in the same transaction is
+    exempt from the per-address send ceiling and counts toward its own per-address cap of 30 per 24
+    hours, which answers the same 429. The per-IP and per-FiPA-client caps still apply to both.
+  - Mail that carries no code does not count toward these caps and is never suppressed by them. The
+    disable and send-ceiling notices go out at most once per account per 24 hours, and the disable
+    notice carries the same pass.
 - New templates: the code (verify, confirm, recovery), "an account already exists", "your password
-  was changed" and "your password was disabled after too many attempts". As of 2026-09-26
-  `createEmailService` has one method, `sendVerificationEmail`.
+  was changed", "your password was disabled after too many attempts" and the send-ceiling notice;
+  from F2b and F2c also "a second factor was disabled", "a wrong second factor was entered after a
+  correct password" and "a recovery code was used". As of 2026-09-26 `createEmailService` has one
+  method, `sendVerificationEmail`.
 
 Why. NIST SP 800-63B-4 §3.1.3.1, as in
 [Four readings this record corrects](#four-readings-this-record-corrects); §3.2.5 "Phishing
@@ -666,10 +722,17 @@ DPoP proof public key because they are already sender-constrained".
 
 **QAuth, not the app, enforces every abuse control.** A layered limiter is keyed on TCP peer,
 authenticated client, `auth_session`, end-user IP and account. A NIST SP 800-63B-4 §3.2.2 ladder
-counts failures across every password surface. The end-user IP travels as a claim inside the
-backend's signed, single-use client assertion. The limiter and ladder stores fail closed. Every
-credential round runs a dummy Argon2id verify and meets a timing floor. Input bounds are checked
-before any expensive work.
+counts failures across every password surface, and another counts them per second-factor type across
+every surface of that factor. Every counter that gates verification is reserved before the verifier
+runs. The end-user IP travels as a claim inside the backend's signed, single-use client assertion.
+The limiter and ladder stores fail closed. Every credential round runs a dummy Argon2id verify and
+meets a timing floor. Input bounds are checked before any expensive work.
+
+The controls belong to the engine, not to this endpoint's switch. `FIRST_PARTY_LOGIN_ENABLED` gates
+only the FiPA route, its discovery members and the backend-peer cap below. The ladders and their
+hard actions, the send caps, the timing floor, the fail-closed stores and the unclaimed-account rule
+(Decision 8) apply to every transport that reaches the engine, the Interaction API and the hosted
+pages included, whatever the switch says.
 
 The end-user IP. The `qauth_end_user_ip` claim is required for `native_backend`: an IPv4 or IPv6
 literal of at most 45 characters. The maintainer chose this carrier on 2026-10-09 (question 4). The
@@ -694,16 +757,24 @@ Limits (configurable; `development` may relax them per
 [ADR-008 §5](./008-environment-aware-authorization.md) "The profiles"; `staging` keeps production
 values):
 
-| Dimension             | Key                                                                                                                       | Soft action                                                                                                                                                             | Hard action                                                                                                                                                                           |
-| --------------------- | ------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| TCP peer              | `request.ip`                                                                                                              | —                                                                                                                                                                       | a per-route `@fastify/rate-limit` cap, tiered by `resolveRealmRateLimitMax`; a listed backend address gets `FIRST_PARTY_BACKEND_PEER_RATE_LIMIT` instead (see "Backend volume" below) |
-| Client                | authenticated `client_id`                                                                                                 | failure ratio above 50 % over at least 200 credential rounds in 5 min: delay (bot challenge from F1b) and an alert                                                      | above `FIRST_PARTY_CLIENT_MAX_ROUNDS` (new, 600) rounds per minute: 429                                                                                                               |
-| `auth_session`        | transaction                                                                                                               | —                                                                                                                                                                       | 3 failures per step (5 per email code), 10 rounds: `invalid_session`                                                                                                                  |
-| End-user IP           | the claim; IPv6 keyed on /64                                                                                              | 10 failed credential rounds in 15 min: delay (bot challenge from F1b)                                                                                                   | 30: 429 for 15 min                                                                                                                                                                    |
-| Account (password)    | HMAC(server key, realm, normalised identifier), whether or not the account exists; one counter for every password surface | from 5 consecutive failures, the next attempt waits 2^(n−5) s, capped at 15 min (bot challenge from F1b); an early attempt gets 429 and is neither verified nor counted | 100 consecutive counted failures: the password is disabled until a reset, and the user is notified                                                                                    |
-| Account (email codes) | the same key, a separate counter                                                                                          | the same ladder from 5 wrong codes (bot challenge from F1b)                                                                                                             | none: it never suppresses mail or refuses a correct code outside a wait (Decision 5)                                                                                                  |
-| Registration starts   | end-user IP; client                                                                                                       | —                                                                                                                                                                       | 3 per hour per IP (the `REGISTRATION_RATE_LIMIT` default); a per-client cap                                                                                                           |
+| Dimension               | Key                                                                                                                                                                                          | Soft action                                                                                                                                                                                                                                                                                                                                | Hard action                                                                                                                                                                                                                                                                                                          |
+| ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| TCP peer                | `request.ip`                                                                                                                                                                                 | —                                                                                                                                                                                                                                                                                                                                          | a per-route `@fastify/rate-limit` cap, tiered by `resolveRealmRateLimitMax`; a listed backend address gets `FIRST_PARTY_BACKEND_PEER_RATE_LIMIT` instead (see "Backend volume" below)                                                                                                                                |
+| Client                  | authenticated `client_id`                                                                                                                                                                    | any of: a failure ratio above 50 % over at least 200 credential rounds in 5 min, where a success counts at most once per account; or more failed credential rounds in 5 min than a tenth of what `FIRST_PARTY_CLIENT_MAX_ROUNDS` admits in that time (300 at the default), whatever the ratio: delay (bot challenge from F1b) and an alert | above `FIRST_PARTY_CLIENT_MAX_ROUNDS` (new, 600) rounds per minute: 429                                                                                                                                                                                                                                              |
+| `auth_session`          | transaction                                                                                                                                                                                  | —                                                                                                                                                                                                                                                                                                                                          | 3 failures per step (5 per email code), 10 rounds: `invalid_session`                                                                                                                                                                                                                                                 |
+| End-user IP             | the claim; IPv6 keyed on /64; for the identifier count, its /24 (IPv4) or /48 (IPv6) bucket                                                                                                  | 10 failed credential rounds in 15 min, or failed rounds for more than 20 distinct identifiers in 15 min from the bucket: delay (bot challenge from F1b); the identifier count also alerts                                                                                                                                                  | 30: 429 for 15 min                                                                                                                                                                                                                                                                                                   |
+| Account (password)      | HMAC(server key, realm, normalised identifier), whether or not the account exists; one counter for every password surface                                                                    | from 5 consecutive failures, the next attempt waits 2^(n−5) s, capped at 15 min (bot challenge from F1b); an early attempt gets 429 and is neither verified nor counted                                                                                                                                                                    | 100 consecutive counted failures: the password is disabled until a reset, and the user is notified                                                                                                                                                                                                                   |
+| Account (email codes)   | the same key, a separate counter                                                                                                                                                             | the same ladder from 5 wrong codes (bot challenge from F1b)                                                                                                                                                                                                                                                                                | none: it never suppresses mail or refuses a correct code outside a wait (Decision 5)                                                                                                                                                                                                                                 |
+| Account (second factor) | (realm, user, authenticator type), or the identifier HMAC while no user is resolved: one counter each for TOTP and for recovery codes, shared by every transaction, client, transport and IP | the same ladder from 5 consecutive failures (bot challenge from F1b), with no known-IP exemption; an early attempt gets 429 and is neither verified nor counted; a correct first factor never clears it; a rejected answer after a correct password notifies the user, at most once per 24 hours                                           | TOTP: 100 consecutive counted failures disable it and notify the user, armed only while the hosted pages are on and the account keeps an unused recovery code, or while it keeps another usable second factor. Recovery codes: never disabled (at least 64 bits each); at 100 the user and the operator are notified |
+| Registration starts     | end-user IP; client                                                                                                                                                                          | —                                                                                                                                                                                                                                                                                                                                          | 3 per hour per IP (the `REGISTRATION_RATE_LIMIT` default); a per-client cap                                                                                                                                                                                                                                          |
 
+- Credential rounds. A credential round carries a `password`, an `otp` of any step, a recovery code
+  or a `webauthn_response`. A rejected one is a failed credential round in the client and end-user
+  IP rows, whatever the step, so a wrong TOTP or email code counts there as a wrong password does. A
+  success counts toward the client's ratio at most once per account in each window, so a campaign
+  cannot dilute the ratio with sign-ins to a few accounts it owns. The client's failure budget is
+  derived from `FIRST_PARTY_CLIENT_MAX_ROUNDS`, so an operator who raises the cap for real traffic
+  raises the budget and its alert with it.
 - Backend volume. Every user of a `native_backend` client reaches QAuth from the backend's
   addresses. As of 2026-09-26, `/oauth/token` allows `TOKEN_RATE_LIMIT` (30) requests per
   `TOKEN_RATE_WINDOW` (60 s) per TCP peer in the strict tier. `/oauth/revoke` allows
@@ -717,27 +788,52 @@ values):
   end-user IP and account rows still apply. It takes effect only while `FIRST_PARTY_LOGIN_ENABLED`
   is on.
 - Known-IP exemption: an end-user IP with a successful sign-in to the account in the last 30 days
-  skips the wait but still counts toward the ceiling. A wrongly asserted IP, or one shared through a
-  carrier NAT, that matches a known IP skips the wait too.
-- One counter across surfaces, while the switch is on: the new endpoint, `/ui/login` and
-  `/auth/login` all increment the engine's per-account counter, and a success on any clears it.
-  Every surface consults the ladder before verifying; an attempt inside a wait is refused with that
-  surface's existing lockout answer, unverified and uncounted. The new endpoint writes nothing under
-  the identifiers of `helpers/failed-login.ts`, so an asserted IP never sets or clears a lock on
-  another surface; the legacy routes keep their own lock as well.
+  skips the wait of the password and email-code ladders but still counts toward the disable
+  ceiling. A wrongly asserted IP, or one shared through a carrier NAT, that matches a known IP skips
+  the wait too. It never skips a second-factor wait: only a holder of the first factor reaches that
+  ladder.
+- One counter across surfaces, whatever `FIRST_PARTY_LOGIN_ENABLED` says: from the first release
+  that ships the engine, this endpoint, the Interaction API (and the hosted pages on it),
+  `/ui/login` while it exists and `/auth/login` until F1c all increment the engine's per-account
+  counter, and a success on any clears it. A correct answer clears only the counter of the
+  authenticator it proved, so a correct password never clears a second-factor counter. Every surface
+  reserves before it verifies (next bullet); an attempt inside a wait is refused with that surface's
+  existing lockout answer, unverified and uncounted. The new endpoint writes nothing under the
+  identifiers of `helpers/failed-login.ts`, so an asserted IP never sets or clears a lock on another
+  surface; the legacy routes keep their own lock as well.
+- Reserve before verify. Every counter that gates verification is reserved atomically before the
+  verifier runs. One atomic store operation reads the wait, refuses the attempt if it falls inside
+  the wait, and otherwise counts the attempt as a failure and sets the next wait. A correct answer
+  then settles the reservation: it clears the account counter as above, and counters of failures
+  alone take the attempt back. So parallel attempts against one account, each in its own
+  transaction, meet the same ladder and disable ceiling as attempts sent one at a time. The client,
+  end-user IP and send-cap counters reserve the same way. A hard action fires only when a reserved
+  attempt settles as a failure.
 - The disabled mark is a typed, authenticator-generic column, `user_credentials.disabled_at`. While
   the hard action is armed, the repository's credential lookup returns a disabled credential as
-  unusable, so no verifier can miss it. Every password surface then refuses it with its ordinary
-  invalid-credentials answer.
-- The hard action is armed only while every account it can reach has a self-service rebind path.
-  Web-only users have one only through F2a's hosted reset, so the rule is checked at run time, not
-  per release. While the hosted reset is off, no password is disabled, and the lookup ignores any
-  mark set earlier. Every surface keeps its other throttling. A successful sign-in clears an ignored
-  mark, as a reset does. The maintainer kept this rule on 2026-10-09 (question 7). The hosted reset
-  is on whenever hosted pages are on (question 6), so the hard action is armed by default. F2a ships
-  in the F1 release train.
-- Fail closed: at the new endpoint, an error from any counter, session or bot-challenge store
-  answers 503 `temporarily_unavailable`. That answer comes before any credential is checked.
+  unusable, so no verifier can miss it. Every surface then refuses it with its ordinary
+  invalid-credentials answer. A disabled credential still counts as bound for the downgrade rule and
+  the MFA policy (Decision 4).
+- The hard action is armed only while every account it can reach has a self-service rebind path that
+  a third party cannot exhaust. Web-only users have one only through F2a's hosted reset, so the rule
+  is checked at run time, not per release. While the hosted reset is off, no password is disabled,
+  and the lookup ignores any mark set earlier. Every surface keeps its other throttling. A
+  successful sign-in clears an ignored mark, as a reset does. The maintainer kept this rule on
+  2026-10-09 (question 7). The hosted reset is on whenever hosted pages are on (question 6), so the
+  hard action is armed by default. F2a ships in the F1 release train. The send rules of Decision 5
+  keep that path open: no tier that a third party can spend for the owner is quiet, a known IP of a
+  verified account never meets the per-address tiers, and the disable and send-ceiling notices carry
+  a pass past the per-address tiers. A deployment that cannot send those notices, for example one
+  with no mail sender, has no such path, and the hard action stays unarmed there. A realm cannot
+  turn off the send-ceiling and disable notices, or the notice of a wrong second factor after a
+  correct password (ADR-020 "Emails"). TOTP is disabled only while the hosted pages are on and the
+  account keeps an unused recovery code, or while it keeps another usable second factor. So the
+  disable is not a permanent lockout in the sense of ADR-020: it ends at the owner's next reset or
+  recovery code, which no third party can block.
+- Fail closed: on every transport of the engine, and on every legacy password surface once the
+  engine's counter exists, an error from any counter, session or bot-challenge store refuses the
+  round before any credential is checked: 503 `temporarily_unavailable` at this endpoint, and each
+  surface's own unavailable answer elsewhere.
 - Timing: an unknown identifier runs one Argon2id verify against a fixed dummy hash, and every round
   that resolves an identifier or carries a credential (sign-in, reset start, registration start,
   code rounds) returns no earlier than `MIN_RESPONSE_TIME_MS.LOGIN` (500 ms), through
@@ -761,8 +857,14 @@ measures to reduce this risk in the authorization challenge endpoint." NIST SP 8
 "Rate Limiting (Throttling)": failures are limited "to no more than 100 by disabling that
 authenticator", which "is an upper bound"; disabled authenticators "SHALL be required to rebind to
 the subscriber account"; on success the verifier "SHOULD disregard any previous failed attempts";
-and the claimant's IP address is a listed risk signal. RFC 6749 §4.3.2 "Access Token Request" asks a
-password-grant AS to protect its endpoint against brute force, which applies here by analogy.
+and the claimant's IP address is a listed risk signal. The limit is per authenticator, so each
+second factor has its own counter, and a correct first factor, a different authenticator, never
+clears it. With ADR-020's TOTP parameters, three codes are valid at any instant, so a holder of the
+password gets at most 100 consecutive guesses, about 0.03 %, over at least 21.5 hours of waits,
+however many transactions, clients or IPs they use; each successful sign-in by the owner starts a
+new run. A rejected second factor after a correct password sends the user a notice, at most one per
+24 hours, so the owner learns that the password is known. RFC 6749 §4.3.2 "Access Token Request"
+asks a password-grant AS to protect its endpoint against brute force, which applies here by analogy.
 
 ### 8. Registration, verification and reset in the same flow; one password policy
 
@@ -810,21 +912,30 @@ OpenID Connect 1.0, an OIDF specification. There is no path marker (question 14,
   inside the flow.
 - Unclaimed accounts. An account is unclaimed when it holds a password credential and is not yet
   verified (its address is unproved). An account that a wallet presentation created is never
-  unclaimed. The first successful mailbox proof (registration or reset) on an unclaimed account runs
-  one transaction. It removes every credential of the user: the password, any wallet binding, any
-  passkey (from F2b) and any TOTP secret (from F2c). It revokes every active `oauth_consents` row
-  and every refresh family of the user. It also advances the user's browser-session epoch and ends
-  every live `auth_session` of the user. Then the address is marked verified and `new_password`
-  comes next. No other authenticator is asked for, so step 3 of the reset finds none. From F2b, the
-  hosted enrolment and management page refuses an unclaimed account. The post-password verification
-  step keeps every credential, because there the same person proved both the password and the
-  mailbox.
+  unclaimed. The first successful mailbox proof (registration or reset) on an unclaimed account ends
+  that account and gives the mailbox owner a new one, with a new `sub`. One transaction deletes the
+  unclaimed user with every row keyed to it: credentials of every provider type (the password, any
+  wallet binding or upstream link, any passkey from F2b, any TOTP secret from F2c), recovery codes,
+  `oauth_consents` rows, refresh families, browser sessions, every live `auth_session`, and the API
+  keys and clients it owns as a developer. Audit rows keep the old id: because `audit_logs.user_id`
+  is set null when its user is deleted, F1 keeps the id of an ended unclaimed account outside that
+  foreign key, and the end event records the old and the new id. QAuth sends a back-channel logout
+  for the old `sub` to every app with a session. The transaction then continues as the registration
+  of a new address: `new_password` comes next, and creation follows the rule above. The registration
+  gate does not apply here, because the new account replaces one that existed. So nothing of the
+  unclaimed account carries over, and state that a downstream app keeps under the old `sub` never
+  reaches the mailbox owner. This is a new identity, not a match on the address: the new account is
+  never linked to the old one. No other authenticator is asked for, so step 3 of the reset finds
+  none. From F2b and F2c, the hosted enrolment and management page refuses an unclaimed account, so
+  it cannot bind a passkey or TOTP. The post-password verification step keeps every credential,
+  because there the same person proved both the password and the mailbox.
 - The browser-session epoch is a per-user reset counter. It follows ADR-019's session storage:
   Postgres is the source of truth, and Redis is a cache in front of it. `resolveBrowserSession`
-  (`helpers/browser-session.ts`) treats a session created before it as absent and clears its
-  cookie. A reset and an unclaimed-account verification advance it, at this endpoint or on the
-  hosted pages (F2a). It is not a `users` column, because ADR-002 keeps `users` a pure identity
-  anchor. As of 2026-10-09 browser sessions live only in Redis, and the `sessions` table is unused.
+  (`helpers/browser-session.ts`) treats a session created before it as absent and clears its cookie.
+  A reset advances it, at this endpoint or on the hosted pages (F2a). Ending an unclaimed account
+  revokes that user's sessions outright. It is not a `users` column, because ADR-002 keeps `users` a
+  pure identity anchor. As of 2026-10-09 browser sessions live only in Redis, and the `sessions`
+  table is unused.
 - "Sign out everywhere" ends the user's sessions directly (question 9, decided 2026-10-09). It
   revokes the user's session rows in Postgres and clears their Redis cache. It sends a back-channel
   logout to every app with a session. It also revokes every refresh family of the user, as
@@ -843,16 +954,46 @@ Reset is a QAuth extension. FiPA Appendix A.2 "Redirect to Authorization Server"
 2. QAuth answers 403 `email_code` (`recovery`, 8 digits) for every address. Mail goes only to a
    known address with a password.
 3. If the account has another bound authenticator (a passkey from F2b, TOTP from F2c), that
-   authenticator is required next. If the client cannot render it, the answer is `redirect_to_web`.
+   authenticator is required next, or on the hosted pages a recovery code. A disabled one still
+   counts, and email never stands in for it. If the client cannot render the step, or the user needs
+   a recovery code, the answer is `redirect_to_web`.
 4. The `new_password` answer must pass the policy.
 5. One transaction replaces the hash through a new password-update method on the credential
-   repository. It also marks the address verified and clears the counters and the disabled mark. It
-   revokes every refresh family, ends every live `auth_session`, advances the epoch and sends a
-   notice. QAuth then answers 200 with a code that carries no `amr` or `auth_time` (Decision 10).
+   repository. It also marks the address verified and clears the password's counters and its
+   disabled mark, never a second factor's. It revokes every refresh family, ends every live
+   `auth_session`, advances the epoch and sends a notice. QAuth then answers 200 with a code that
+   carries no `amr` or `auth_time` (Decision 10).
 
 For a password-only account, the reset proves only the mailbox and then signs the user in. That is
 an email-recovery sign-in at mailbox assurance, with no `amr`, `acr` or `auth_time` (Decision 10).
 It is never offered under `max_age` or `prompt=login`, so it never satisfies a step-up.
+
+Second factors and recovery codes (F2b, F2c):
+
+- TOTP uses ADR-020's fixed parameters. Its secret is reversible, so it is stored encrypted under
+  ADR-019's data-at-rest key. Enrolment binds it only after a first valid code, and an unclaimed
+  account cannot enrol. Each TOTP credential stores the last time step it accepted and refuses a
+  code for that step or an earlier one, so an accepted value is never accepted twice (RFC 6238 §5.2
+  "Validation and Time-Step Size").
+- A recovery-code set is 10 codes, each with at least 64 bits from a CSPRNG. Codes are shown once,
+  stored only as salted hashes from the password hasher, compared in constant time and used once. A
+  set is issued at the first enrolment of any second factor (a passkey from F2b, TOTP from F2c) and
+  at the registration of a passkey-only account (question 30). Regenerating a set invalidates the
+  old one and sends a notice.
+- A recovery code is redeemed only on the hosted pages; this endpoint answers `redirect_to_web` for
+  that path (question 25). It stands in for a second factor after the first factor, or for the
+  passkey of a passkey-only account. It adds no `amr` value and never `mfa`, so it never meets an
+  MFA policy or a step-up that needs `mfa`. Where the policy requires a second factor, the user
+  binds a new one before the transaction completes (Decision 4). Each use sends a notice, and
+  Decision 7's second-factor row throttles it.
+- Binding, removing or replacing an authenticator, and regenerating recovery codes, need a fresh
+  authentication at most 5 minutes old that includes the account's strongest bound factor. Only a
+  rebind after a lost factor lets a recovery code stand in for that factor. Binding the first
+  passkey or TOTP of a password-only account also needs a code mailed to its address in the same
+  transaction, unless the transaction already proved that mailbox; the code adds no `amr`. Each
+  change sends the notice ADR-020 requires.
+- A lost second factor is recovered only with a recovery code or through an admin (ADR-020), never
+  by email alone. A reset never removes, skips or replaces a second factor.
 
 On the wire, registration starts on an initial request with `prompt=create`. Reset starts with
 `qauth_interaction_type` set to its path marker. On both paths `login_hint` carries the address
@@ -866,11 +1007,11 @@ the list is frozen at round 0. For a new address, or for a password-only account
 not list answers `redirect_to_web` (Decision 4).
 
 Disabled users. These flows never change a user whose `users.enabled` is false, and never give that
-user a code. Registration and reset send that address no mail, as at a send cap (Decision 5), so the
-step looks the same. Every answer for that user gets the ordinary `invalid_credentials` answer. This
-includes a code mailed before the user was disabled. No hash, mark, counter, refresh family or
-address state changes, and no notice is sent. Each round re-reads the flag before it writes anything
-or mints a code.
+user a code. Registration and reset send that address no mail, as at a quiet send tier (Decision 5),
+so the step looks the same. Every answer for that user gets the ordinary `invalid_credentials`
+answer. This includes a code mailed before the user was disabled. No hash, mark, counter, refresh
+family or address state changes, and no notice is sent. Each round re-reads the flag before it
+writes anything or mints a code.
 
 One password policy, in `libs/shared/validation/src/lib/password.ts`, used by this endpoint and,
 until F1c, by `/auth/register`. Any future admin or SCIM API creates users without a password
@@ -1058,11 +1199,12 @@ succeeds. `ip_address` holds the end-user IP, `metadata.ip_source` says where it
 (`oauth.authorize_challenge.client_rejected`), every step and outcome
 (`oauth.authorize_challenge.*`, with session rejections by reason, including `subject_mismatch`, and
 throttling aggregated per key and window), administrative consent, code replay, profile changes
-(`oauth.client.first_party_changed`), browser sign-out, registration, verification, reset,
-unclaimed-account resets (with the credentials and consents removed), epoch advances, disabled
-authenticators, notifications, passkey binding (F2b) and imports (F1d). A Prometheus counter,
-`qauth_first_party_steps_total`, sits beside them. The rows form the dated authenticator life-cycle
-record NIST SP 800-63B-4 §4.1 "Authenticator Binding" asks for.
+(`oauth.client.first_party_changed`), browser sign-out, registration, verification, reset, ended
+unclaimed accounts (the old and the new user, with what was removed), epoch advances, disabled
+authenticators, send-ceiling alerts, recovery-code use and regeneration (F2b, F2c), notifications,
+passkey binding (F2b) and imports (F1d). A Prometheus counter, `qauth_first_party_steps_total`, sits
+beside them. The rows form the dated authenticator life-cycle record NIST SP 800-63B-4 §4.1
+"Authenticator Binding" asks for.
 
 Why. The house rule that discovery advertises only what an endpoint accepts
 ([ADR-008 §3](./008-environment-aware-authorization.md) "Fail-safe defaults (the safe method)").
@@ -1130,17 +1272,17 @@ const r = await qauth.signInWithPassword({
 // - 'failed': the reason is 'session_expired', 'throttled' (with retryAfter) or 'unavailable'.
 ```
 
-| Password grant                              | QAuth first-party profile                                                                                                                                                                                    |
-| ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `grant_type=password` at the token endpoint | `response_type=code` at the authorization challenge endpoint, then `grant_type=authorization_code` at `/oauth/token`                                                                                         |
-| `username`                                  | `login_hint`, which must be an email address                                                                                                                                                                 |
-| `password`                                  | `password`, eager with `qauth_interaction_type=urn:qauth:ia:password`, or as a step answer                                                                                                                   |
-| `client_secret`                             | `private_key_jwt` (`aud` = issuer as sole value, `typ: client-authentication+jwt`, at most 60 s, `qauth_end_user_ip`)                                                                                        |
-| `scope`                                     | `scope`. A dangerous scope (`write:*`, `agent:admin`, `agent:exec`; Decision 4) is never granted headlessly. A request that includes one answers `redirect_to_web`, and the sign-in continues in the browser |
-| 400 `invalid_grant` for bad credentials     | 403 `insufficient_authorization`, same step, `qauth_interaction_error: "invalid_credentials"`                                                                                                                |
-| —                                           | `code_challenge` (S256) and `interaction_types_supported`, filled by the SDK                                                                                                                                 |
-| Refresh; logout                             | the same refresh with `private_key_jwt`; `/oauth/revoke` with `private_key_jwt` (F0)                                                                                                                         |
-| User creation or reset through an admin API | the `register` and `reset` flows                                                                                                                                                                             |
+| Password grant                              | QAuth first-party profile                                                                                                                                                                                                                                                         |
+| ------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `grant_type=password` at the token endpoint | `response_type=code` at the authorization challenge endpoint, then `grant_type=authorization_code` at `/oauth/token`                                                                                                                                                              |
+| `username`                                  | `login_hint`, which must be an email address                                                                                                                                                                                                                                      |
+| `password`                                  | `password`, eager with `qauth_interaction_type=urn:qauth:ia:password`, or as a step answer                                                                                                                                                                                        |
+| `client_secret`                             | `private_key_jwt` (`aud` = issuer as sole value, `typ: client-authentication+jwt`, at most 60 s, `qauth_end_user_ip`)                                                                                                                                                             |
+| `scope`                                     | `scope`. A dangerous scope (`write:*`, `agent:admin`, `agent:exec` and, once ADR-016's pass-through leg lands, its `<kind>:owner-token`; Decision 4) is never granted headlessly. A request that includes one answers `redirect_to_web`, and the sign-in continues in the browser |
+| 400 `invalid_grant` for bad credentials     | 403 `insufficient_authorization`, same step, `qauth_interaction_error: "invalid_credentials"`                                                                                                                                                                                     |
+| —                                           | `code_challenge` (S256) and `interaction_types_supported`, filled by the SDK                                                                                                                                                                                                      |
+| Refresh; logout                             | the same refresh with `private_key_jwt`; `/oauth/revoke` with `private_key_jwt` (F0)                                                                                                                                                                                              |
+| User creation or reset through an admin API | the `register` and `reset` flows                                                                                                                                                                                                                                                  |
 
 What an app with a backend changes, beyond the wire mapping:
 
@@ -1308,31 +1450,33 @@ verifiers or two providers would have to be kept in step.
 
 ## Alternatives considered
 
-| Alternative                                                                                           | Why not                                                                                                                                                                                                                                                              |
-| ----------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Web front-ends as a per-client operator opt-in with compensating controls                             | A knowing breach of RFC 10017 §7.3 (MUST) and FiPA §9.8 (NOT RECOMMENDED) in the first release; §9.8's user-experience reason does not hold on the web. Declined on 2026-10-08 (question 1 keeps its mitigation list).                                               |
-| Argue that a server-rendered web app is not a browser-based application                               | RFC 10017 §3 turns on "dynamically downloaded and executed in a web browser"; a framework app with server actions, such as QAuth's own portal, is one.                                                                                                               |
-| Only attested native apps, no backends                                                                | Blocks the first release on a draft whose WGLC ended 2026-09-22, and leaves the main case, an app backend, unserved.                                                                                                                                                 |
-| Keep extending the `/auth/*` JSON routes                                                              | A proprietary surface with no client authentication and no step signalling; FiPA Appendix C "Design Goals" puts the answer in an endpoint that returns a code.                                                                                                       |
-| One boolean `first_party`, or two booleans                                                            | Cannot separate the redirect-flow consent waiver from headless access, and cannot state the front-end scope.                                                                                                                                                         |
-| Infer first-partyness from `dynamic_registered_at IS NULL`, or a client-id allowlist in configuration | Self-service `/api/clients` rows are NULL there too; a configuration list has no CHECK tying it to auth method, agent flag or registration type.                                                                                                                     |
-| DCR with a software statement                                                                         | A trust edge created by the party being trusted is not a trust edge (ADR-011 §5).                                                                                                                                                                                    |
-| Public native clients on DPoP alone before attestation                                                | DPoP proves key continuity, not app identity; it cannot meet the FiPA §5 MUST for such a client.                                                                                                                                                                     |
-| QAuth-defined `error` values per step or per rejection                                                | Against the editors' position on [WG issue #133](https://github.com/oauth-wg/oauth-first-party-apps/issues/133); custom values collide ([WG issue #171](https://github.com/oauth-wg/oauth-first-party-apps/issues/171)); a generic client stops on an unknown error. |
-| `interaction_types_supported` required, 400 when absent                                               | Dead-ends a generic FiPA client; `redirect_to_web` is the draft's own escape.                                                                                                                                                                                        |
-| Pick the first step from the account's strongest method after `login_hint`                            | Discloses account existence and passkey holders before any factor.                                                                                                                                                                                                   |
-| Accept and ignore `acr_values`                                                                        | Drops an RFC 9470 §5 SHOULD and invites the loop it warns about.                                                                                                                                                                                                     |
-| Email code after every password sign-in in F1                                                         | Removes the one-call happy path apps rely on; kept as a per-client option.                                                                                                                                                                                           |
-| Passwordless email-code sign-in                                                                       | NIST SP 800-63B-4 §3.1.3.1; contradicts the downgrade rule while every account has a password.                                                                                                                                                                       |
-| A 429 when a per-address send cap is reached                                                          | A different answer at the cap is an enumeration signal; quiet suppression keeps one shape.                                                                                                                                                                           |
-| DPoP for every client in the first release                                                            | Blocks F1 on a verifier QAuth does not have as of 2026-09-26, and adds little for a confidential backend.                                                                                                                                                            |
-| Long-lived post-code sessions for step-up (FiPA §6.1 "Token Endpoint Successful Response") in F1      | The right later design, but long-lived state in a first release; deferred to F5.                                                                                                                                                                                     |
-| A form parameter or `TRUST_PROXY` for the end-user IP                                                 | A form parameter is workable, but the maintainer chose the signed claim on 2026-10-09 (question 4); `TRUST_PROXY` makes every route believe `X-Forwarded-For` from a backend on the public internet.                                                                 |
-| Bot challenge mandatory for registration in the first release                                         | Makes F1 depend on a third-party provider and an unbuilt egress helper; F1b, per client.                                                                                                                                                                             |
-| `amr: ["pwd"]` after a reset                                                                          | The user set a password; they did not prove one.                                                                                                                                                                                                                     |
-| A flag-gated `grant_type=password` for compatibility                                                  | Either not ROPC or not safe (Decision 12); RFC 9700 §2.4.                                                                                                                                                                                                            |
-| A backend callback URL for the browser leg                                                            | A backend that completes from `state` alone cannot tell which browser returned the code.                                                                                                                                                                             |
-| Fold ADR-017 into ADR-014, or wait for it                                                             | Puts human login behind `AUTHORITY_TREE_ENABLED`, or loses the window for apps leaving ROPC.                                                                                                                                                                         |
+| Alternative                                                                                           | Why not                                                                                                                                                                                                                                                                                                          |
+| ----------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Web front-ends as a per-client operator opt-in with compensating controls                             | A knowing breach of RFC 10017 §7.3 (MUST) and FiPA §9.8 (NOT RECOMMENDED) in the first release; §9.8's user-experience reason does not hold on the web. Declined on 2026-10-08 (question 1 keeps its mitigation list).                                                                                           |
+| Argue that a server-rendered web app is not a browser-based application                               | RFC 10017 §3 turns on "dynamically downloaded and executed in a web browser"; a framework app with server actions, such as QAuth's own portal, is one.                                                                                                                                                           |
+| Only attested native apps, no backends                                                                | Blocks the first release on a draft whose WGLC ended 2026-09-22, and leaves the main case, an app backend, unserved.                                                                                                                                                                                             |
+| Keep extending the `/auth/*` JSON routes                                                              | A proprietary surface with no client authentication and no step signalling; FiPA Appendix C "Design Goals" puts the answer in an endpoint that returns a code.                                                                                                                                                   |
+| One boolean `first_party`, or two booleans                                                            | Cannot separate the redirect-flow consent waiver from headless access, and cannot state the front-end scope.                                                                                                                                                                                                     |
+| Infer first-partyness from `dynamic_registered_at IS NULL`, or a client-id allowlist in configuration | Self-service `/api/clients` rows are NULL there too; a configuration list has no CHECK tying it to auth method, agent flag or registration type.                                                                                                                                                                 |
+| DCR with a software statement                                                                         | A trust edge created by the party being trusted is not a trust edge (ADR-011 §5).                                                                                                                                                                                                                                |
+| Public native clients on DPoP alone before attestation                                                | DPoP proves key continuity, not app identity; it cannot meet the FiPA §5 MUST for such a client.                                                                                                                                                                                                                 |
+| QAuth-defined `error` values per step or per rejection                                                | Against the editors' position on [WG issue #133](https://github.com/oauth-wg/oauth-first-party-apps/issues/133); custom values collide ([WG issue #171](https://github.com/oauth-wg/oauth-first-party-apps/issues/171)); a generic client stops on an unknown error.                                             |
+| `interaction_types_supported` required, 400 when absent                                               | Dead-ends a generic FiPA client; `redirect_to_web` is the draft's own escape.                                                                                                                                                                                                                                    |
+| Pick the first step from the account's strongest method after `login_hint`                            | Discloses account existence and passkey holders before any factor.                                                                                                                                                                                                                                               |
+| Accept and ignore `acr_values`                                                                        | Drops an RFC 9470 §5 SHOULD and invites the loop it warns about.                                                                                                                                                                                                                                                 |
+| Email code after every password sign-in in F1                                                         | Removes the one-call happy path apps rely on; kept as a per-client option.                                                                                                                                                                                                                                       |
+| Passwordless email-code sign-in                                                                       | NIST SP 800-63B-4 §3.1.3.1; contradicts the downgrade rule while every account has a password.                                                                                                                                                                                                                   |
+| Quiet suppression at every send cap, the per-address send ceiling included                            | A third party could spend an address's cap and silently drop the owner's reset and verification mail. The send ceiling and the per-address-and-client tier count unknown addresses too, so their 429 is the same for every address and reveals nothing; only the tier keyed on an address and an IP stays quiet. |
+| Keep the unclaimed account's `sub` and remove only its credentials                                    | State that downstream apps keep under that `sub` would reach the mailbox owner (account pre-hijacking).                                                                                                                                                                                                          |
+| Reset a lost second factor by email                                                                   | Turns a mailbox takeover into a second-factor bypass; a recovery code or an admin rebinds it instead.                                                                                                                                                                                                            |
+| DPoP for every client in the first release                                                            | Blocks F1 on a verifier QAuth does not have as of 2026-09-26, and adds little for a confidential backend.                                                                                                                                                                                                        |
+| Long-lived post-code sessions for step-up (FiPA §6.1 "Token Endpoint Successful Response") in F1      | The right later design, but long-lived state in a first release; deferred to F5.                                                                                                                                                                                                                                 |
+| A form parameter or `TRUST_PROXY` for the end-user IP                                                 | A form parameter is workable, but the maintainer chose the signed claim on 2026-10-09 (question 4); `TRUST_PROXY` makes every route believe `X-Forwarded-For` from a backend on the public internet.                                                                                                             |
+| Bot challenge mandatory for registration in the first release                                         | Makes F1 depend on a third-party provider and an unbuilt egress helper; F1b, per client.                                                                                                                                                                                                                         |
+| `amr: ["pwd"]` after a reset                                                                          | The user set a password; they did not prove one.                                                                                                                                                                                                                                                                 |
+| A flag-gated `grant_type=password` for compatibility                                                  | Either not ROPC or not safe (Decision 12); RFC 9700 §2.4.                                                                                                                                                                                                                                                        |
+| A backend callback URL for the browser leg                                                            | A backend that completes from `state` alone cannot tell which browser returned the code.                                                                                                                                                                                                                         |
+| Fold ADR-017 into ADR-014, or wait for it                                                             | Puts human login behind `AUTHORITY_TREE_ENABLED`, or loses the window for apps leaving ROPC.                                                                                                                                                                                                                     |
 
 ## Standards position
 
@@ -1380,7 +1524,7 @@ makes no claim the text governs), Deferred.
 | Password verifiers                                                                | Conformant for new and changed passwords at the default minimum of 15 (whole-password blocklist); an operator-set minimum below 15 is a knowing deviation while a password can be the only factor; Stricter by a zxcvbn score floor, which requires no character mix and so is not read as a composition rule; blocklist partial until a breach corpus (F5)                                                                                                                                                                                  | NIST SP 800-63B-4 §3.1.1.2                                                                                                                                                                                 |
 | Email as an authenticator                                                         | Not claimed: no `amr`, `acr`, `mfa` or AAL                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   | NIST SP 800-63B-4 §3.1.3.1 SHALL NOT                                                                                                                                                                       |
 | Email code parameters                                                             | Conformant as address-verification and issued recovery codes: each code is disabled after 5 wrong answers; across codes, a per-identifier wait ladder, not a stop, so the recovery path stays open. The optional per-client `confirm_sign_in` check is outside the §3.1.3.1 carve-out and claims no authenticator status (no `amr`, `acr`, `mfa` or AAL)                                                                                                                                                                                     | NIST SP 800-63B-4 §4.2.1.2 "Issued Recovery Codes"; §3.2.2; §3.1.3.1                                                                                                                                       |
-| Throttling                                                                        | Conformant while the hard action is armed, which is the default (question 7); partial in a deployment where it is not                                                                                                                                                                                                                                                                                                                                                                                                                        | NIST SP 800-63B-4 §3.2.2                                                                                                                                                                                   |
+| Throttling                                                                        | Conformant for passwords and TOTP while their hard actions are armed: for passwords by default (question 7), for TOTP while the account keeps a recovery code. Every counter is reserved before the verifier runs. Emailed and recovery codes have a ladder and no stop, so the recovery path stays open: an emailed code dies after 5 wrong answers, and a recovery code carries at least 64 bits. Partial in a deployment, or for an account, where a hard action is not armed                                                             | NIST SP 800-63B-4 §3.2.2                                                                                                                                                                                   |
 
 ### Watch list
 
@@ -1416,7 +1560,9 @@ release. The switch is usable only when F1 is complete. F1 lands as several chan
 change that completes F1 (its end-to-end suite), the environment schema refuses
 `FIRST_PARTY_LOGIN_ENABLED=true` with a clear boot error. That change removes the refusal, so the
 route can never be switched on before its abuse controls exist. `WEBAUTHN_ENABLED` follows the same
-pattern in F2b.
+pattern in F2b. The switch gates only the FiPA route: Decision 7's controls and Decision 8's rules
+apply to every transport that reaches the engine, from the first release that ships it, whatever the
+switch says.
 
 The F1 release train is the run of releases in which F1's changes land. It ends with F1's release:
 the release that removes the refusal, so an operator can first switch `FIRST_PARTY_LOGIN_ENABLED`
@@ -1432,7 +1578,8 @@ on. A phase whose target is the train ships no later than F1's release.
     Logout 1.0 §2 "RP-Initiated Logout" and §3.1 "Client Registration Metadata"; OpenID Connect
     Back-Channel Logout 1.0 beside the end-session route (ADR-019): QAuth sends a logout token to
     every app with a session that registered a `backchannel_logout_uri` (§2.2 "Indicating RP Support
-    for Back-Channel Logout"); the portal's move.
+    for Back-Channel Logout"), through the egress client of ADR-019 Decision 8, which checks the URI
+    at registration and again at every delivery; the portal's move.
     The `SYSTEM_CLIENT_ID` row is re-provisioned as a `private_key_jwt` `web_redirect` client with
     the portal's callback. The `migration-runner` job and the seed provisioner do this from operator
     configuration. The portal refuses to start on any other row shape and takes
@@ -1467,7 +1614,9 @@ on. A phase whose target is the train ships no later than F1's release.
     API reference and migration guide; an operate checklist line to pass 400 and 403 bodies through
     unchanged on the endpoint; an example in the repository: a Node backend and a minimal desktop or
     command-line app that renders `StepView`.
-  - Listed delta with the switch off: `/auth/register` applies the new password policy.
+  - Listed deltas with the switch off: (1) `/auth/register` applies the new password policy; (2)
+    `/ui/login` and `/auth/login` reserve and count on the engine's per-account ladder beside their
+    own lock, and refuse a round while its store is unavailable (Decision 7).
   - Exit criteria:
     - The example app signs up, verifies, signs in, resets and signs out with no browser.
     - A listed backend at its expected volume is not throttled at the authorization challenge
@@ -1482,6 +1631,22 @@ on. A phase whose target is the train ships no later than F1's release.
     - `@qauth-labs/node` installs from npm.
     - The disable ceiling is armed only while F2a's hosted reset is on, and a test shows that a mark
       set before hosted pages go off is ignored and no longer blocks sign-in.
+    - 200 parallel wrong passwords for one account, each in its own transaction, are verified no
+      more often than the same attempts sent one at a time. The client, end-user IP and send-cap
+      counters hold the same way.
+    - A third party who spends an address's send tiers from other IPs and clients cannot stop the
+      owner's reset: a known IP still gets the mail, and the pass in the notice takes one reset
+      start past the send ceiling. At the per-address send ceiling every address, existing or not,
+      gets the same 429, and the operator is alerted.
+    - Sign-ins to one account count once toward a client's failure ratio, and the absolute failure
+      budget triggers the bot challenge and the alert at any ratio.
+    - With the switch off, the hosted pages and the legacy password surfaces meet the same ladder,
+      disable ceiling, send caps, timing floor and fail-closed stores as the endpoint.
+    - Where the realm's or client's MFA policy requires a second factor, a password-only account
+      gets no code on either transport, and a policy change reaches a live transaction.
+    - The first mailbox proof on an unclaimed account yields a new `sub`, removes every row of the
+      old user except its audit rows, which keep the old id, and sends a back-channel logout for the
+      old `sub`.
   - Dependencies: F0. None on ADR-014. No third-party provider.
 - F1b — bot challenge (same switch): the provider-neutral verifier, the SSRF-safe POST helper,
   `urn:qauth:ia:captcha`, and a per-client requirement for registration. Depends on F1. F1b is in
@@ -1519,14 +1684,23 @@ on. A phase whose target is the train ships no later than F1's release.
   `webauthn_get` and `webauthn_create`; passkey-first; registration of an account whose primary
   identity is a passkey, with no address (question 30); recovery codes, issued at the first passkey
   enrolment and redeemed on the hosted page, while the FiPA endpoint answers `redirect_to_web` for
-  that recovery (question 25); the downgrade rule binding; UV verified server-side; optional
-  enrolment; the hosted enrolment and management page shared with ADR-014's P5; the RP ID (the
-  realm's exact host by default, a parent domain only by explicit operator opt-in with a warning),
-  per-client origins and the association files, after re-reading the platform rules; passkeys on the
-  hosted `/ui/login` on the same engine. Depends on F1, and on F2a for hosted passkey login.
+  that recovery (question 25), as Decision 8 specifies them and Decision 7 throttles them; the
+  downgrade rule binding; UV verified server-side; optional enrolment; the hosted enrolment and
+  management page shared with ADR-014's P5; the RP ID (the realm's exact host by default, a parent
+  domain only by explicit operator opt-in with a warning), per-client origins and the association
+  files, after re-reading the platform rules; passkeys on the hosted `/ui/login` on the same engine.
+  Depends on F1, and on F2a for hosted passkey login.
 - F2c — TOTP, in the 1.0 train. It moved out of F5 on 2026-10-09, to match the 1.0 scope (ADR-018).
-  It adds the `totp` step and its `amr` (Decisions 3 and 10), and TOTP's place in the step order,
-  the reset and the unclaimed-account rule (Decisions 4 and 8). Depends on F1.
+  It adds the `totp` step and its `amr` (Decisions 3 and 10); TOTP's place in the step order, the
+  reset and the unclaimed-account rule (Decisions 4 and 8); Decision 7's second-factor row for TOTP
+  and recovery codes; and Decision 8's TOTP rules: the secret under the data-at-rest key, enrolment
+  confirmed by a first code, a used time step refused, fresh authentication to bind, remove or
+  replace, and a recovery-code set at the first TOTP enrolment. Exit criteria: wrong TOTP codes
+  after a correct password, across transactions, clients, transports and IPs, are verified no more
+  often than the ladder allows, and disable TOTP at 100 only while the hosted pages are on and a
+  recovery code remains, or another usable second factor does; a correct password never clears that
+  counter; an accepted code is refused on its second use. Depends
+  on F1.
 - F3 — DPoP, behind `DPOP_ENABLED=false`: the shared verifier; FiPA §9.5.1 code binding and §9.6.1
   session binding at the endpoint, which ends its `DPoP` refusal; `cnf.jkt`, `token_type: DPoP` and
   nonces at the token endpoint; the shared `dpop_bound_access_tokens` column; DPoP on by default for
@@ -1591,7 +1765,8 @@ on. A phase whose target is the train ships no later than F1's release.
   §9.5 "Sender-Constrained Tokens". From F3 the deviation remains only where an operator switched
   DPoP off for a client.
 - QAuth cannot verify the asserted end-user IP, only who asserted it.
-- Headless login is unavailable while Redis is unavailable, by design.
+- Headless login is unavailable while Redis is unavailable, by design. So is sign-in on every other
+  surface of the engine, and on the legacy password surfaces, while the counter store is down.
 - `/auth/register` and `/auth/login` stay until F1c. Once `/auth/register` is gone, a default
   deployment has no sign-up page, because hosted sign-up is off by default (question 6). An
   operator who wants sign-up turns it on.
@@ -1605,6 +1780,11 @@ on. A phase whose target is the train ships no later than F1's release.
   the backend until attested apps (F4).
 - The one password policy changes `/auth/register` on every deployment in F1 (15 code points), and
   integrations must show the new rejection reasons.
+- An account that was used without ever being verified ends at the first reset or registration of
+  its address (Decision 8): its `sub`, consents, API keys and owned clients do not carry over, and
+  an imported account's report mapping no longer applies. Signing in with the password verifies it
+  in place and keeps it, so F1's release note asks the owners of such accounts, developers who own
+  clients first, to sign in and verify before they reset.
 - QAuth ships and versions an npm package for the first time, with its release process; the README's
   planned browser-side `signInWithPassword` will not ship.
 
