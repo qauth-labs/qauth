@@ -72,9 +72,41 @@ export interface PasswordValidator {
  * The bound exists because a password is attacker-sized input to CPU-bound
  * work: zxcvbn's matchers grow super-linearly with length, and Argon2id
  * hashes every byte. Request schemas reject anything longer before a handler
- * runs; `validatePasswordStrength` enforces it again for any other caller.
+ * runs (through {@link passwordSchema}); `validatePasswordStrength` enforces it
+ * again for any other caller.
  */
 export const PASSWORD_MAX_LENGTH = 256;
+
+/**
+ * Request-schema field for a password: a string of at most
+ * {@link PASSWORD_MAX_LENGTH} UTF-16 code units. Chain `.min(1)` where an empty
+ * password must be refused at the schema.
+ *
+ * `z.string().max()` alone cannot express this bound. Since Zod 4.5, string
+ * `.max()`, `.min()` and `.length()` count Unicode code points, so a password
+ * of astral characters (emoji, for example) passes `.max(256)` at up to 512
+ * code units, and only `validatePasswordStrength`, which counts `.length`,
+ * would catch it, on the register path alone. The check below counts
+ * `.length` and raises the issue `.max()` raised with Zod 4.4, same code and
+ * same message. It stops the checks after it, so an over-long password yields
+ * one issue. `.max()` stays only so the generated OpenAPI document keeps
+ * `maxLength`; it can never fail for a value the check accepts.
+ */
+export const passwordSchema = z
+  .string()
+  .check((ctx) => {
+    if (ctx.value.length > PASSWORD_MAX_LENGTH) {
+      ctx.issues.push({
+        code: 'too_big',
+        origin: 'string',
+        maximum: PASSWORD_MAX_LENGTH,
+        inclusive: true,
+        input: ctx.value,
+        continue: false,
+      });
+    }
+  })
+  .max(PASSWORD_MAX_LENGTH);
 
 /**
  * How much of a password zxcvbn scores. zxcvbn's cost grows super-linearly

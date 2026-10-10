@@ -42,6 +42,7 @@ import {
 } from '../../helpers/session-cookie';
 import { evaluateStepUp, isDangerousScope, parsePromptMode } from '../../helpers/step-up';
 import { markRelaxedCsp } from '../../plugins/security-headers';
+import { exactUrl } from '../../schemas/common';
 import { authorizeQuerySchema, resourceParamSchema } from '../../schemas/oauth';
 
 /**
@@ -91,7 +92,8 @@ const consentFormSchema = z.object({
   // Mirror of the original authorize params so we don't need to stash them
   // in the session (keeps the session payload small + stateless enough).
   client_id: z.string().min(1),
-  redirect_uri: z.string().url(),
+  // Same exact-string rule as `authorizeQuerySchema.redirect_uri`.
+  redirect_uri: exactUrl(),
   state: z.string().max(OAUTH_OPAQUE_PARAM_MAX_LENGTH).optional(),
   // Mirrors `authorizeQuerySchema`'s bound — the two silently drifted once
   // (#316) and this form POST reaches the same pending-authorization stash.

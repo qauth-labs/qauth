@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
 import { OAUTH_OPAQUE_PARAM_MAX_LENGTH, OAUTH_SCOPE_PARAM_MAX_LENGTH } from '../constants';
+import { exactUrl } from './common';
 
 /**
  * RFC 8707 §2: `resource` is an absolute URI without fragment, identifying
@@ -10,9 +11,12 @@ import { OAUTH_OPAQUE_PARAM_MAX_LENGTH, OAUTH_SCOPE_PARAM_MAX_LENGTH } from '../
  *
  * Coerced to string[] so downstream code (authorize/token routes, DB
  * repositories, `resolveAudience`) can treat all cases uniformly.
+ *
+ * {@link exactUrl}, not `z.url()`: the value is compared with the resource set
+ * bound to an authorization code and becomes the token audience, so it must
+ * reach the handler as sent.
  */
-const resourceEntrySchema = z
-  .url()
+const resourceEntrySchema = exactUrl()
   .max(2048)
   .refine((v) => !v.includes('#'), { message: 'resource must not contain a fragment' });
 
@@ -187,7 +191,9 @@ const clientAuthenticationFields = {
 export const authorizeQuerySchema = z.object({
   response_type: z.literal('code'),
   client_id: z.string().min(1),
-  redirect_uri: z.url(),
+  // exactUrl(), not z.url(): matched as an exact string against the client's
+  // registered redirect URIs, and compared again at /token.
+  redirect_uri: exactUrl(),
   code_challenge: z
     .string()
     .min(43)

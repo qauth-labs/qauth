@@ -1,15 +1,19 @@
 import { describe, expect, it } from 'vitest';
 
+import { redirectUriMatchesRegistered } from '../helpers/oauth-redirect';
 import {
   ASSERTION_MAX_LENGTH,
   ASSERTION_SIGNING_ALG_VALUES_SUPPORTED,
+  authorizeQuerySchema,
   CLIENT_ASSERTION_TYPE_JWT_BEARER,
   idJagTokenResponseSchema,
   JWT_BEARER_GRANT_TYPE,
+  resourceParamSchema,
   TOKEN_EXCHANGE_GRANT_TYPE,
   TOKEN_TYPE_ID_JAG,
   TOKEN_TYPE_ID_TOKEN,
   tokenEndpointResponseSchema,
+  tokenExchangeAuthCodeBodySchema,
   tokenExchangeBodySchema,
 } from './oauth';
 
@@ -305,5 +309,66 @@ describe('tokenEndpointResponseSchema', () => {
         expires_in: 60,
       }).success
     ).toBe(false);
+  });
+});
+
+/**
+ * Since Zod 4.5, `z.url()` returns its input with every tab, LF and CR
+ * deleted. Passed to the redirect_uri matcher, `https://app.exa\nmple.com/cb`
+ * would then equal a registered `https://app.example.com/cb`. These schemas use
+ * `exactUrl()` instead, so the value reaches the exact-string comparison as
+ * sent, or the request is refused.
+ */
+describe('redirect_uri and resource reach the handler as sent (exactUrl)', () => {
+  const authorize = {
+    response_type: 'code',
+    client_id: 'c1',
+    code_challenge: 'A'.repeat(43),
+    code_challenge_method: 'S256',
+  } as const;
+  const registered = ['https://app.example.com/cb'];
+  const withControl = [
+    'https://app.example.com/c\tb',
+    'https://app.exa\nmple.com/cb',
+    'https://app.example.com/c\rb',
+  ];
+
+  it('/authorize refuses a tab or line break inside redirect_uri instead of stripping it into a match', () => {
+    for (const redirect_uri of withControl) {
+      expect(authorizeQuerySchema.safeParse({ ...authorize, redirect_uri }).success).toBe(false);
+      expect(redirectUriMatchesRegistered(redirect_uri, registered)).toBe(false);
+    }
+  });
+
+  it('/authorize passes a valid redirect_uri on unchanged, ends trimmed', () => {
+    const parse = (redirect_uri: string) =>
+      authorizeQuerySchema.parse({ ...authorize, redirect_uri }).redirect_uri;
+    expect(parse('https://app.example.com/cb')).toBe('https://app.example.com/cb');
+    expect(parse('https://app.example.com/cb\r\n')).toBe('https://app.example.com/cb');
+  });
+
+  it('refuses a tab or line break inside an RFC 8707 resource on /authorize and /token', () => {
+    const resource = 'https://api.example.com/mc\tp';
+    expect(resourceParamSchema.safeParse(resource).success).toBe(false);
+    expect(resourceParamSchema.safeParse([resource]).success).toBe(false);
+    expect(
+      authorizeQuerySchema.safeParse({
+        ...authorize,
+        redirect_uri: 'https://app.example.com/cb',
+        resource,
+      }).success
+    ).toBe(false);
+    expect(
+      tokenExchangeAuthCodeBodySchema.safeParse({
+        grant_type: 'authorization_code',
+        code: 'c',
+        redirect_uri: 'https://app.example.com/cb',
+        code_verifier: 'A'.repeat(43),
+        resource,
+      }).success
+    ).toBe(false);
+    expect(resourceParamSchema.parse('https://api.example.com/mcp')).toEqual([
+      'https://api.example.com/mcp',
+    ]);
   });
 });
