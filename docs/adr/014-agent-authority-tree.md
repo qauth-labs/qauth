@@ -1085,11 +1085,12 @@ GitHub, `gh` or PostgreSQL below are examples.
   `permissions` ⊆ its `actions`, both within the type's `registered_rights`
   — until §5 lands, that column alone is the per-type policy,
   octo-sts-shaped — and mints with the upstream app identity's private key
-  (the GitHub App's), which lives QAuth-side (§13) and never on the
-  developer box; Chainguard's octo-sts is the prior art and an interim
-  option. It always sends `repositories` and `permissions`: without
-  `permissions` GitHub grants every permission the installation holds, so
-  an empty `actions` refuses the vend. For an agent's identity it vends only
+  (for the `github` adapter, the GitHub App's), which lives QAuth-side (§13)
+  and never on the developer box; Chainguard's octo-sts is the prior art and
+  an interim option. It always sends an explicit resource list and permission
+  list, because a platform may read an omitted list as everything (for
+  example, GitHub grants every permission the installation holds when
+  `permissions` is omitted), so an empty `actions` refuses the vend. For an agent's identity it vends only
   for an installation on an allowlisted account, and only from the binding
   of the ledger row's own `agent_id` (§13); a tree with no agent named mints
   only from the per-organisation identity of decision 4. Once P1a lands the
