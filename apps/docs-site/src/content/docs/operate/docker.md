@@ -234,7 +234,7 @@ from its server functions — tokens never reach the browser.
 - **Port**: 3001 (mapped to host)
 - **Health Check**: a raw TCP connect check on port 3001
   (`docker-compose.yml`, `developer-portal.healthcheck`) — liveness only, and
-  does **not** depend on the auth-server being reachable. The Nitro build has
+  does **not** depend on the auth-server being reachable. The portal build has
   no dedicated `/healthz` route, so there is nothing to `curl`.
 - **Production**: `Dockerfile` → runs `node server/index.mjs`, the
   self-contained server the build emits (see below).
@@ -242,13 +242,13 @@ from its server functions — tokens never reach the browser.
   server); use with `docker-compose.dev.yml` and `--watch`.
 - **Depends on**: `auth-server` (healthy).
 
-The portal is built with TanStack Start's Nitro v2 Vite plugin, which emits a
+The portal is built by TanStack Start's Vite plugin alone, which emits a
 **self-contained, self-listening** Node server at
-`dist/apps/developer-portal/server/index.mjs` (Nitro bundles its runtime
-dependencies into `server/node_modules`) plus static assets under `public/`.
-The production image's runner stage just copies `server/` and `public/` and
-runs `node server/index.mjs` — no custom adapter and no separate `pnpm deploy`
-step are needed (`apps/developer-portal/Dockerfile`).
+`dist/apps/developer-portal/server/index.mjs` (a small srvx server,
+`apps/developer-portal/src/node-entry.ts`, with every runtime dependency bundled
+in) plus static assets under `public/`. The production image's runner
+stage just copies `server/` and `public/` and runs `node server/index.mjs` — no
+separate `pnpm deploy` step is needed (`apps/developer-portal/Dockerfile`).
 
 > **Build context note:** the portal source is excluded from the auth-server /
 > migration-runner build contexts by the root `.dockerignore` (see the build

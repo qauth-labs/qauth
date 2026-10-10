@@ -378,8 +378,8 @@ services:
       auth-server:
         condition: service_healthy
     healthcheck:
-      # Liveness only: confirm the Nitro server is accepting connections without
-      # depending on SSR or the upstream auth-server. (The Nitro build has no
+      # Liveness only: confirm the Node server is accepting connections without
+      # depending on SSR or the upstream auth-server. (The portal build has no
       # dedicated /healthz route, unlike the old custom Node adapter.)
       test:
         [
