@@ -7,7 +7,7 @@ import { serializerCompiler, validatorCompiler, ZodTypeProvider } from 'fastify-
 
 import { app } from './app/app';
 import { openapiOptions } from './app/openapi-options';
-import { env } from './config/env';
+import { env, envDeprecationWarnings } from './config/env';
 import { buildLoggerOptions } from './config/logger';
 
 // Instantiate Fastify with structured logging + request-id tracking.
@@ -89,6 +89,15 @@ process.on('SIGINT', () => shutdown('SIGINT'));
 // Start server
 async function start() {
   try {
+    // Deprecated configuration names still work, but say so once at boot. The
+    // env is parsed before the logger exists, so the warnings wait until here.
+    for (const deprecation of envDeprecationWarnings) {
+      server.log.warn(
+        { variable: deprecation.variable, replacement: deprecation.replacement },
+        deprecation.message
+      );
+    }
+
     // Swagger UI + OpenAPI spec registration. Gated behind `ENABLE_SWAGGER`
     // (F-07): defaults to `true` in non-production and `false` in production
     // so the API surface is not advertised to unauthenticated callers in a

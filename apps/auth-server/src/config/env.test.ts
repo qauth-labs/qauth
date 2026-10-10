@@ -14,8 +14,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 /**
  * Env-schema parsing tests for config fields added in the env-hardening
- * batch. Covers the REQUIRE_EMAIL_VERIFIED `z.coerce.boolean()` footgun
- * (F-08), the SESSION_COOKIE_SECRET production guard (F-12), and the
+ * batch. Covers the REQUIRE_VERIFIED_ACCOUNT `z.coerce.boolean()` footgun
+ * (F-08) and its deprecated REQUIRE_EMAIL_VERIFIED alias, the
+ * SESSION_COOKIE_SECRET production guard (F-12), and the
  * ENABLE_SWAGGER default (F-07). Without these, a future refactor could
  * silently re-introduce the bug.
  *
@@ -54,31 +55,124 @@ function setEnv(overrides: Record<string, string | undefined>) {
 }
 
 beforeEach(() => {
-  setEnv({ NODE_ENV: 'development' });
+  // Both names of the verified-account gate are cleared here, because a case
+  // that leaves an invalid value behind would fail every later import.
+  setEnv({
+    NODE_ENV: 'development',
+    REQUIRE_VERIFIED_ACCOUNT: undefined,
+    REQUIRE_EMAIL_VERIFIED: undefined,
+  });
 });
 
-describe('REQUIRE_EMAIL_VERIFIED parsing (F-08 footgun guard)', () => {
+/**
+ * `setEnv` only deletes keys it is told about, so both names of the gate are
+ * cleared EXPLICITLY. A value left behind by an earlier case would otherwise
+ * turn a later one into a conflict.
+ */
+function setGateEnv(gate: { REQUIRE_VERIFIED_ACCOUNT?: string; REQUIRE_EMAIL_VERIFIED?: string }) {
+  setEnv({
+    NODE_ENV: 'development',
+    REQUIRE_VERIFIED_ACCOUNT: gate.REQUIRE_VERIFIED_ACCOUNT,
+    REQUIRE_EMAIL_VERIFIED: gate.REQUIRE_EMAIL_VERIFIED,
+  });
+}
+
+describe('REQUIRE_VERIFIED_ACCOUNT parsing (F-08 footgun guard)', () => {
   it('"false" string → false (NOT true — the z.coerce.boolean footgun)', async () => {
-    setEnv({ NODE_ENV: 'development', REQUIRE_EMAIL_VERIFIED: 'false' });
+    setGateEnv({ REQUIRE_VERIFIED_ACCOUNT: 'false' });
     const mod = await import('./env');
-    expect(mod.env.REQUIRE_EMAIL_VERIFIED).toBe(false);
+    expect(mod.env.REQUIRE_VERIFIED_ACCOUNT).toBe(false);
   });
 
   it('rejects a non-true/false value (strict enum, not silent coercion)', async () => {
-    setEnv({ NODE_ENV: 'development', REQUIRE_EMAIL_VERIFIED: '0' });
-    await expect(import('./env')).rejects.toThrow(/REQUIRE_EMAIL_VERIFIED/);
+    setGateEnv({ REQUIRE_VERIFIED_ACCOUNT: '0' });
+    await expect(import('./env')).rejects.toThrow(/REQUIRE_VERIFIED_ACCOUNT/);
   });
 
   it('"true" string → true', async () => {
-    setEnv({ NODE_ENV: 'development', REQUIRE_EMAIL_VERIFIED: 'true' });
+    setGateEnv({ REQUIRE_VERIFIED_ACCOUNT: 'true' });
     const mod = await import('./env');
-    expect(mod.env.REQUIRE_EMAIL_VERIFIED).toBe(true);
+    expect(mod.env.REQUIRE_VERIFIED_ACCOUNT).toBe(true);
   });
 
-  it('unset → false (MVP default preserves behavior)', async () => {
-    setEnv({ NODE_ENV: 'development', REQUIRE_EMAIL_VERIFIED: undefined });
+  it('unset → false (MVP default preserves behavior), with no deprecation warning', async () => {
+    setGateEnv({});
     const mod = await import('./env');
-    expect(mod.env.REQUIRE_EMAIL_VERIFIED).toBe(false);
+    expect(mod.env.REQUIRE_VERIFIED_ACCOUNT).toBe(false);
+    expect(mod.envDeprecationWarnings).toEqual([]);
+  });
+
+  it('blank → false, as `${REQUIRE_VERIFIED_ACCOUNT:-}` in docker-compose.yml expands to', async () => {
+    setGateEnv({ REQUIRE_VERIFIED_ACCOUNT: '', REQUIRE_EMAIL_VERIFIED: '' });
+    const mod = await import('./env');
+    expect(mod.env.REQUIRE_VERIFIED_ACCOUNT).toBe(false);
+    expect(mod.envDeprecationWarnings).toEqual([]);
+  });
+});
+
+/**
+ * REQUIRE_EMAIL_VERIFIED is the deprecated name of the same gate (renamed
+ * 2026-10-09). It keeps working through the 1.x deprecation window. The
+ * behaviour does not change: for a password account, the proof of a verified
+ * account is still the confirmed address.
+ */
+describe('REQUIRE_EMAIL_VERIFIED deprecated alias', () => {
+  it.each([
+    ['true', true],
+    ['false', false],
+  ])('the old name alone still sets the gate (%s)', async (raw, expected) => {
+    setGateEnv({ REQUIRE_EMAIL_VERIFIED: raw });
+    const mod = await import('./env');
+    expect(mod.env.REQUIRE_VERIFIED_ACCOUNT).toBe(expected);
+  });
+
+  it('the old name alone produces one boot deprecation warning', async () => {
+    setGateEnv({ REQUIRE_EMAIL_VERIFIED: 'true' });
+    const mod = await import('./env');
+    expect(mod.envDeprecationWarnings).toEqual([
+      {
+        variable: 'REQUIRE_EMAIL_VERIFIED',
+        replacement: 'REQUIRE_VERIFIED_ACCOUNT',
+        message: expect.stringContaining('Rename it to REQUIRE_VERIFIED_ACCOUNT'),
+      },
+    ]);
+  });
+
+  it('the new name alone produces no deprecation warning', async () => {
+    setGateEnv({ REQUIRE_VERIFIED_ACCOUNT: 'true' });
+    const mod = await import('./env');
+    expect(mod.envDeprecationWarnings).toEqual([]);
+  });
+
+  it('the old name never reaches the app env, so no reader can bypass the resolved gate', async () => {
+    setGateEnv({ REQUIRE_EMAIL_VERIFIED: 'true' });
+    const mod = await import('./env');
+    expect(mod.env).not.toHaveProperty('REQUIRE_EMAIL_VERIFIED');
+  });
+
+  it('both names set to the same value boot, and still warn about the old one', async () => {
+    setGateEnv({ REQUIRE_VERIFIED_ACCOUNT: 'true', REQUIRE_EMAIL_VERIFIED: 'true' });
+    const mod = await import('./env');
+    expect(mod.env.REQUIRE_VERIFIED_ACCOUNT).toBe(true);
+    expect(mod.envDeprecationWarnings).toHaveLength(1);
+  });
+
+  it.each([
+    ['true', 'false'],
+    ['false', 'true'],
+  ])(
+    'fails the boot when REQUIRE_VERIFIED_ACCOUNT=%s and REQUIRE_EMAIL_VERIFIED=%s disagree',
+    async (current, alias) => {
+      setGateEnv({ REQUIRE_VERIFIED_ACCOUNT: current, REQUIRE_EMAIL_VERIFIED: alias });
+      await expect(import('./env')).rejects.toThrow(
+        `REQUIRE_VERIFIED_ACCOUNT=${current} and REQUIRE_EMAIL_VERIFIED=${alias} disagree`
+      );
+    }
+  );
+
+  it('rejects a non-true/false value under the old name too', async () => {
+    setGateEnv({ REQUIRE_EMAIL_VERIFIED: '0' });
+    await expect(import('./env')).rejects.toThrow(/REQUIRE_EMAIL_VERIFIED/);
   });
 });
 

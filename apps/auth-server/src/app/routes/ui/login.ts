@@ -383,11 +383,11 @@ export default async function (fastify: FastifyInstance) {
         return renderRefusal(401, 'Invalid email or password.');
       }
 
-      // Email-verified gate (F-08), identical to POST /auth/login: with
-      // `REQUIRE_EMAIL_VERIFIED=true` an unverified credential gets no session,
+      // Verified-account gate (F-08), identical to POST /auth/login: with
+      // `REQUIRE_VERIFIED_ACCOUNT=true` an unverified credential gets no session,
       // so it cannot complete an OAuth/OIDC flow through the hosted UI either.
       // Counted as a failed attempt, as on the API route.
-      if (!check.emailVerified && env.REQUIRE_EMAIL_VERIFIED) {
+      if (!check.emailVerified && env.REQUIRE_VERIFIED_ACCOUNT) {
         await recordFailedAttempt(fastify.redis, lockoutIdentifiers);
         await ensureMinimumResponseTime(startTime, MIN_RESPONSE_TIME_MS.LOGIN);
         await fastify.repositories.auditLogs.create({

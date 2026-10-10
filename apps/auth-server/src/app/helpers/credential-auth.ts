@@ -38,7 +38,10 @@ export type PasswordCredentialCheck =
   | {
       status: 'ok';
       credential: UserCredential;
-      /** `credential_data.email_verified` — the REQUIRE_EMAIL_VERIFIED gate source. */
+      /**
+       * `credential_data.email_verified`. For a password account this is the
+       * proof of a verified account, so it is the REQUIRE_VERIFIED_ACCOUNT gate source.
+       */
       emailVerified: boolean;
       identity: VerifiedIdentity;
     };

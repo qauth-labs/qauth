@@ -101,8 +101,14 @@ services:
       SESSION_COOKIE_SECRET: ${SESSION_COOKIE_SECRET}
       SESSION_COOKIE_TTL: ${SESSION_COOKIE_TTL:-86400}
       SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-true}
-      # Require a verified email before password login (default: false, MVP).
-      REQUIRE_EMAIL_VERIFIED: ${REQUIRE_EMAIL_VERIFIED:-false}
+      # Require a verified account before password login (default: false, MVP).
+      # For a password account, verified means its address was confirmed.
+      # REQUIRE_EMAIL_VERIFIED is the deprecated name. It still works, with a
+      # boot warning, and the boot fails if the two disagree. Both are forwarded
+      # blank when unset (the schema reads blank as unset), so a deployment
+      # that still sets only the old name keeps its gate.
+      REQUIRE_VERIFIED_ACCOUNT: ${REQUIRE_VERIFIED_ACCOUNT:-}
+      REQUIRE_EMAIL_VERIFIED: ${REQUIRE_EMAIL_VERIFIED:-}
       REGISTRATION_RATE_LIMIT: ${REGISTRATION_RATE_LIMIT:-3}
       REGISTRATION_RATE_WINDOW: ${REGISTRATION_RATE_WINDOW:-3600}
       LOGIN_RATE_LIMIT: ${LOGIN_RATE_LIMIT:-5}

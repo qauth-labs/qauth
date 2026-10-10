@@ -19,7 +19,7 @@ import type { FastifyInstance } from 'fastify';
  * Every user-bound emission site consumes this as a one-line spread:
  * password login, authorization_code (access + ID token from ONE call),
  * refresh rotation, RFC 8693 token exchange, and userinfo (under the `email`
- * scope). The login-time REQUIRE_EMAIL_VERIFIED gate is a separate control
+ * scope). The login-time REQUIRE_VERIFIED_ACCOUNT gate is a separate control
  * and does not read this.
  */
 export type EmailClaims = { email: string; email_verified: true } | Record<string, never>;
