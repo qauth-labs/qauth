@@ -26,6 +26,7 @@ An ADR is a document that captures an important architectural decision made alon
 | [014](./014-agent-authority-tree.md)             | Authority Tree — Session-Rooted, Sender-Constrained Delegation                              | Proposed    | 2026-09-21 |
 | [015](./015-agent-tree-hardening.md)             | Authority Tree Hardening — Where a Tree Ends, Who May Act on It, How an Agent Changes Hands | Proposed    | 2026-09-30 |
 | [016](./016-agent-platform-bindings.md)          | Agent Platform Bindings — Public Identities, Approval-Only Resources and Pass-Through Legs  | Proposed    | 2026-09-30 |
+| [017](./017-first-party-login.md)                | First-Party Login — Headless Sign-In on the Authorization Challenge Endpoint                | Proposed    | 2026-09-26 |
 
 ⚠️ **ADR-009** — findings partially superseded by CIR (EU) 2026/1730 and 2026/1731
 (published 22 July 2026, in force 11 August 2026). No Decision has been changed;
