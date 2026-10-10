@@ -272,3 +272,107 @@ jobs:
       - name: Stop container
         if: always()
         run: docker rm -f "$CONTAINER" || true
+
+  # Developer-portal boot smoke test.
+  #
+  # The portal's production server is a small srvx entry of our own
+  # (apps/developer-portal/src/node-entry.ts) in front of TanStack Start's server
+  # entry, which it reaches through a Start-internal virtual module. A Start or
+  # Vite upgrade can break that wiring while `nx build` stays green, and the
+  # image's HEALTHCHECK only proves that the port accepts connections. So this
+  # job builds the real image and checks real responses: the login page renders,
+  # a hashed asset is served as immutable, and a missing asset is a plain 404
+  # that nothing may cache for a year. Not affected-scoped, for the same reason
+  # as docker-smoke.
+  portal-smoke:
+    runs-on: ubuntu-latest
+    env:
+      IMAGE: qauth/developer-portal:smoke
+      CONTAINER: qauth-developer-portal-smoke
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          filter: tree:0
+
+      # Same context and Dockerfile as the `developer-portal` service in
+      # docker-compose.yml.
+      - name: Build developer-portal image
+        env:
+          DOCKER_BUILDKIT: '1'
+        run: docker build -f apps/developer-portal/Dockerfile -t "$IMAGE" .
+
+      # No auth-server runs here: the login page renders without calling it.
+      # AUTH_SERVER_URL points at a closed port, so a page that did call it
+      # would fail instead of passing by accident.
+      - name: Start developer-portal container
+        run: |
+          set -euo pipefail
+          docker run -d \
+            --name "$CONTAINER" \
+            -p 3001:3001 \
+            -e NODE_ENV=production \
+            -e AUTH_SERVER_URL='http://127.0.0.1:9' \
+            -e PORTAL_SESSION_SECRET="$(openssl rand -base64 48)" \
+            "$IMAGE"
+
+      - name: Check the login page and static assets
+        timeout-minutes: 3
+        run: |
+          set -uo pipefail
+          base=http://localhost:3001
+          page="$RUNNER_TEMP/login.html"
+          status=''
+          for _ in $(seq 1 60); do
+            if [ "$(docker inspect -f '{{.State.Running}}' "$CONTAINER")" != "true" ]; then
+              exit_code="$(docker inspect -f '{{.State.ExitCode}}' "$CONTAINER")"
+              echo "::error::developer-portal container stopped before serving (exit code ${exit_code})."
+              exit 1
+            fi
+            status="$(curl -s -o "$page" -w '%{http_code}' --max-time 5 "$base/login" || true)"
+            [ "$status" = "200" ] && break
+            sleep 2
+          done
+          if [ "$status" != "200" ]; then
+            echo "::error::GET /login returned ${status:-no response}, expected 200."
+            exit 1
+          fi
+          if ! grep -aq 'Log in to your account' "$page"; then
+            echo "::error::GET /login returned 200 but not the login page."
+            exit 1
+          fi
+          asset="$(grep -ao '/assets/[^"]*\.js' "$page" | head -n 1)"
+          if [ -z "$asset" ]; then
+            echo "::error::The login page references no /assets/*.js file."
+            exit 1
+          fi
+          hit="$(curl -s -D - -o /dev/null --max-time 5 "$base$asset")"
+          if ! printf '%s' "$hit" | head -n 1 | grep -q ' 200'; then
+            echo "::error::GET $asset did not return 200."
+            exit 1
+          fi
+          if ! printf '%s' "$hit" | grep -qi '^cache-control:.*immutable'; then
+            echo "::error::GET $asset is not served as immutable."
+            exit 1
+          fi
+          miss="$(curl -s -D - -o /dev/null --max-time 5 "$base/assets/portal-smoke-missing.js")"
+          if ! printf '%s' "$miss" | head -n 1 | grep -q ' 404'; then
+            echo "::error::A missing asset did not return 404."
+            exit 1
+          fi
+          if printf '%s' "$miss" | grep -qi '^cache-control:.*immutable'; then
+            echo "::error::A missing asset's 404 is marked immutable and would be cached for a year."
+            exit 1
+          fi
+          echo "developer-portal serves /login, $asset and a 404 for a missing asset."
+
+      - name: Dump container diagnostics on failure
+        if: failure()
+        run: |
+          echo "--- docker ps -a ---"
+          docker ps -a
+          echo "--- container logs ---"
+          docker logs "$CONTAINER" 2>&1 || true
+
+      - name: Stop container
+        if: always()
+        run: docker rm -f "$CONTAINER" || true
