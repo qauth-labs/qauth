@@ -1,6 +1,6 @@
 # ADR-018: QAuth 1.0 — Scope, Stability Promise and Release Path
 
-**Status:** Proposed — records the maintainer's decisions of 2026-10-08 and 2026-10-09; it becomes Accepted when the maintainer has read this text.
+**Status:** Proposed — records the maintainer's decisions of 2026-10-08, 2026-10-09 and 2026-10-10; it becomes Accepted when the maintainer has read this text.
 **Date:** 2026-10-09
 **Authors:** QAuth Team
 
@@ -10,6 +10,21 @@
 > - §3, human accounts: a bot challenge on sign-up, and passkey-only accounts.
 > - §4: two more experimental items, and the PKCE rule on the FiPA endpoint.
 > - §5: `REQUIRE_EMAIL_VERIFIED` is renamed `REQUIRE_VERIFIED_ACCOUNT`.
+>
+> **Amended 2026-10-10** with the maintainer's answers on the UI scope, given on 2026-10-09 and
+> 2026-10-10. ADR-020 (proposed in a separate PR, stacked on this one) records the UI surfaces,
+> their screens and the UX acceptance criteria. This record names only what changes in scope and in
+> the promise.
+>
+> - §2: each area's screens ship in that area's beta.
+> - §3: the device authorization grant, more human-account items, event delivery, a paired sandbox
+>   realm and a two-admin approval rule. The core keeps only generic OIDC upstream; provider presets
+>   are first-party plugins that ship with 1.0.
+> - §4: the plugin API is public but experimental.
+> - §5: the event schema, the declarative realm file and the realm policies join the contract.
+> - §8: My Number arrives through a plugin.
+> - Answers: question 12 lists what the UI scope leaves for later. The UI screen list is no longer
+>   open.
 
 ## Context
 
@@ -73,6 +88,11 @@ This record settles what 1.0 is for, what it promises, what waits, and which gat
 2. the Authority Tree;
 3. federation.
 
+Each area's screens ship in that area's beta. The core beta brings the ceremony app, the account
+console, the core sections of the admin console and the developer portal. The Authority Tree beta
+brings the agent screens and the remote approval page. The federation beta brings the federation
+section of the admin console and the federation upstream. Decided 2026-10-10 (maintainer).
+
 A public release candidate with external users comes before the freeze.
 
 ### 3. Stable in 1.0
@@ -90,6 +110,9 @@ Everything in this section is inside the stability promise and inside the audit 
 - Enterprise-Managed Authorization with ID-JAG, in both roles: consume and mint. It follows the MCP
   EMA extension, at the commit the [spec pin log](../spec-pin-log.md) records. The log tracks the
   ID-JAG revision in its own row.
+- The OAuth 2.0 device authorization grant (RFC 8628), with a code-entry page in the ceremony app.
+  Against device-code phishing, that page shows the client's verified domain before the user
+  approves. Decided 2026-10-10 (maintainer).
 
 **Agents and delegation**
 
@@ -133,8 +156,42 @@ The PQC library in §7 implements it as experimental.
 - TOTP, passkeys (WebAuthn) and recovery codes. Decided 2026-10-09 (maintainer).
 - Passkey-only accounts, with no email. Recovery codes are mandatory for them. Decided 2026-10-09
   (maintainer).
-- Upstream OIDC login through an AuthMethod contract. The TypeScript plugin API behind it stays
-  internal and is not promised.
+- Decided 2026-10-10 (maintainer):
+  - identifier-first sign-in, with "try another way" between a user's methods;
+  - several accounts signed in on one browser, chosen with `prompt=select_account` (ADR-019
+    Decision 3);
+  - a forced password update, on an admin's request or when the password appears on a breach list.
+    There is no periodic expiry;
+  - a security log the user sees: recent sign-ins, new devices and security changes;
+  - self-service account deletion, which a realm can switch off;
+  - security notification emails. Those for credential changes cannot be switched off.
+- Upstream OIDC login through an AuthMethod contract. The core ships only generic OIDC upstream and
+  names no provider. Decided 2026-10-10 (maintainer).
+- Provider presets are first-party plugins on that contract, and they are ready when 1.0 ships:
+  Google, Microsoft, Apple, GitHub and My Number. GitHub offers no OIDC sign-in, so its plugin uses
+  OAuth 2.0 and GitHub's user API. Decided 2026-10-10 (maintainer).
+- The plugin API is public and documented, and experimental in 1.0 (§4). It becomes stable in 1.x.
+
+**Events**
+
+Every QAuth event can be used by automation outside QAuth. QAuth itself runs no workflow engine.
+Decided 2026-10-10 (maintainer). Events leave QAuth by four routes, all in 1.0:
+
+- signed webhooks, in the Standard Webhooks format;
+- a cursor-based event API, from which a receiver reads on from where it stopped;
+- Shared Signals Framework (SSF) streams, with CAEP events for security changes;
+- OpenTelemetry export.
+
+The event types and their payload schema are inside the promise (§5). ADR-019 Decision 8 says how
+deliveries are made.
+
+**Administration**
+
+- A paired sandbox realm that a live realm can have, with its own host, issuer and keys. ADR-019
+  Decision 11 defines it. Decided 2026-10-10 (maintainer).
+- A two-admin approval rule. The admin console recommends it for every `admin:security` operation,
+  and a realm chooses where it is mandatory. ADR-019 Decision 7 defines it. Decided 2026-10-10
+  (maintainer).
 
 **Logout**
 
@@ -146,7 +203,12 @@ The PQC library in §7 implements it as experimental.
 
 - Administration and account UIs with good UX. Their breadth matches an established open-source
   identity server, for example Keycloak.
-- The exact UI scope is not decided (see [Open questions](#open-questions)).
+- The UIs are the reference ceremony app, the account console, the admin console with its federation
+  section, and the developer portal. ADR-020 (proposed in a separate PR) lists their screens and the
+  UX acceptance criteria every screen meets before 1.0. Decided 2026-10-09 and 2026-10-10
+  (maintainer).
+- 1.0 ships in English only, with translation infrastructure in place. Further languages come from
+  the community. Decided 2026-10-10 (maintainer).
 
 **SDKs and the Rust core** are in §6.
 
@@ -166,6 +228,10 @@ Experimental items ship in 1.0 but stay outside the stability promise.
   Decided 2026-10-09 (maintainer).
 - The pass-through leg of ADR-016 §4. The rest of the Authority Tree is stable (§3). Decided
   2026-10-09 (maintainer).
+- The plugin API: the AuthMethod contract as plugins see it. It is public and documented, so others
+  can write plugins, but it may change in a minor release. It becomes stable in 1.x, after QAuth's
+  own plugins have matured on it. The first-party plugins themselves are part of 1.0 (§3). Decided
+  2026-10-10 (maintainer).
 
 How an item is marked experimental, and how it becomes stable, is set in §5.
 
@@ -190,12 +256,21 @@ The contract covers:
   - `REQUIRE_EMAIL_VERIFIED` is renamed `REQUIRE_VERIFIED_ACCOUNT`. The old name stays an alias
     for the deprecation window. The key exists on `main` today, default `false`. Decided 2026-10-09
     (maintainer).
+- **The event types and their payload schema**, on every delivery route (§3). Decided 2026-10-10
+  (maintainer).
+- **The declarative realm file.** It describes a realm's configuration and leaves out every secret
+  value. The admin API and the CLI export it and import it, and an import first shows a dry-run
+  diff. Today's seed manifest becomes a subset of it. Decided 2026-10-10 (maintainer).
+- **Realm policies in the admin API's realm representation.** Realm policies live on the realm row
+  and change through the admin API and the console, so the representation is the stable surface for
+  them. Environment keys only seed a new realm's defaults. ADR-019 Decision 10 draws the line.
+  Decided 2026-10-10 (maintainer).
 - **Upgrades within 1.x.** Migrations only go forward. Every upgrade completes by running the
   migration runner, with no manual step. No 1.x migration is destructive; changes use
   expand-then-contract. CI tests an upgrade from every earlier 1.x minor release. Downgrades are not
   supported, so the upgrade guide tells operators to back up first.
 
-The contract does not cover the experimental items in §4, the TypeScript plugin API, or internal
+The contract does not cover the experimental items in §4, which include the plugin API, or internal
 code that no stable surface exposes.
 
 **Deprecation and support.** A deprecation is announced in a minor release. Removal comes no sooner
@@ -264,9 +339,10 @@ stability promise.
 
 **Real-wallet testing** before 1.0 uses the EUDI reference wallet.
 
-**Japan's My Number** enters 1.0 through upstream OIDC, not through the wallet path. The upstream
-is the authentication app API of Japan's Digital Agency. That API requires `private_key_jwt`. My
-Number is not an OID4VP wallet today.
+**Japan's My Number** enters 1.0 through the My Number plugin on the upstream OIDC contract, not
+through the wallet path. The upstream is the authentication app API of Japan's Digital Agency. That
+API requires `private_key_jwt`. My Number is not an OID4VP wallet today. The plugin is first-party
+and ships with 1.0, like the other provider plugins in §3. Decided 2026-10-10 (maintainer).
 
 ### 9. The Authority Tree name
 
@@ -335,10 +411,22 @@ decisions; §4 and §5 carry the ones that change the contract.
     [ADR-003](./003-credential-provider-interface.md). `CredentialProvider` stays the verification
     half. AuthMethod adds the Interaction API steps and the routes an upstream needs. ADR-003 carries
     a note saying so. `WalletProvider.verify()` keeps throwing, as a deliberate fail-closed property.
+    Provider plugins implement AuthMethod; its plugin API is experimental in 1.0 (§4). Added
+    2026-10-10 (maintainer).
+12. **What the UI scope leaves out of 1.0.** Answered on 2026-10-09 and 2026-10-10 (maintainer),
+    with the screens themselves in ADR-020.
+    - In 1.x: organizations, with inbound SCIM provisioning alongside them; an authentication flow
+      editor, while 1.0 has a policy screen; general CIBA for any client, while 1.0 uses CIBA only
+      for Authority Tree approval; mTLS client authentication (RFC 8705); sign-in with an x509
+      client certificate; versioned acceptance of terms; a self-service "download my data"; user
+      import in the console, while 1.0 has the CLI tool.
+    - Not planned: a workflow engine, because QAuth exposes every event instead; a client-policy
+      engine; parameterized scopes, because RAR covers them; script mappers; passwords set by an
+      admin; configurable security headers.
 
 ## Open questions
 
-- The UI screen list. It is the subject of the next conversation.
+None. The UI screen list was answered on 2026-10-09 and 2026-10-10; ADR-020 records it.
 
 ## Consequences
 
@@ -365,6 +453,9 @@ decisions; §4 and §5 carry the ones that change the contract.
   step URNs are one example.
 - Some 1.0 work depends on outside parties: the EUDI reference wallet, the upstream My Number API
   and the auditor.
+- The 2026-10-10 answers grow the scope further: the device grant, several accounts on one browser,
+  four event routes, a sandbox realm and five provider plugins. The event schema and the realm file
+  become long-term surfaces.
 
 ### Neutral
 
@@ -373,6 +464,7 @@ decisions; §4 and §5 carry the ones that change the contract.
 - This record fixes scope, not design. OpenID Federation, for example, still needs its own record,
   as ADR-004 noted.
 - The README's planned-work list, including its SDK plan, needs a follow-up edit to match.
+- 1.0 ships in English only. Translations wait for contributors.
 
 ## Related
 
@@ -386,6 +478,7 @@ decisions; §4 and §5 carry the ones that change the contract.
   Authority Tree
 - ADR-017, proposed in PR #417 — first-party login and FiPA
 - [ADR-019](./019-deployment-topology-and-trust-boundaries.md) — topology and trust boundaries
+- ADR-020, proposed in a separate PR — UI surfaces and UX acceptance criteria
 - [`SECURITY.md`](../../SECURITY.md), the [spec pin log](../spec-pin-log.md), the
   [OIDF certification runbook](../oidf-op-certification-runbook.md) and the
   [spec-conformance matrix](../conformance/README.md)
@@ -396,8 +489,11 @@ decisions; §4 and §5 carry the ones that change the contract.
   [HAIP 1.0](https://openid.net/specs/openid4vc-high-assurance-interoperability-profile-1_0.html),
   [OpenID Federation 1.0](https://openid.net/specs/openid-federation-1_0.html) and
   [OIDC Back-Channel Logout 1.0](https://openid.net/specs/openid-connect-backchannel-1_0.html)
+- [Standard Webhooks](https://www.standardwebhooks.com/) and the
+  [OpenID Shared Signals Framework 1.0](https://openid.net/specs/openid-sharedsignals-framework-1_0-final.html)
 - [RFC 9964](https://www.rfc-editor.org/rfc/rfc9964.html),
   [`draft-ietf-jose-pq-composite-sigs`](https://datatracker.ietf.org/doc/draft-ietf-jose-pq-composite-sigs/),
+  [RFC 8628](https://datatracker.ietf.org/doc/html/rfc8628),
   [RFC 9101](https://datatracker.ietf.org/doc/html/rfc9101),
   [RFC 9126](https://datatracker.ietf.org/doc/html/rfc9126) and
   [RFC 9449](https://datatracker.ietf.org/doc/html/rfc9449)
