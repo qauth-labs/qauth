@@ -36,7 +36,7 @@ const fakeRouter = {
   isServer: true,
   options: {},
   stores: {
-    getRouteMatchStore: () => ({
+    getMatchStore: () => ({
       get: () => ({
         id: '/verify',
         routeId: '/verify',

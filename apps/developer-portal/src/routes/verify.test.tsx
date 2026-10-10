@@ -31,7 +31,7 @@ const VALID_TOKEN = 'a'.repeat(64);
 
 // Minimal fake router for SSR-mode rendering.
 // Route.useSearch() → useMatch({ from: '/verify' }) →
-// router.stores.getRouteMatchStore(from).get() when router.isServer === true (1.170+).
+// router.stores.getMatchStore(from).get() when router.isServer === true (as of 1.170.41).
 const verifyMatch = {
   id: '/verify',
   routeId: '/verify',
@@ -42,7 +42,7 @@ const fakeRouter = {
   isServer: true,
   options: {},
   stores: {
-    getRouteMatchStore: () => ({ get: () => verifyMatch }),
+    getMatchStore: () => ({ get: () => verifyMatch }),
     matchStores: new Map(),
   },
 } as unknown as Parameters<typeof RouterContextProvider>[0]['router'];

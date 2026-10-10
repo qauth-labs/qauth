@@ -53,7 +53,7 @@ const testUser = { sub: 'u1', email: 'dev@example.com', email_verified: true };
 
 // Minimal fake router for SSR-mode rendering via RouterContextProvider.
 // Route.useRouteContext() → useMatch({ from: '/_authed' }) →
-// router.stores.getRouteMatchStore(from).get() when router.isServer === true (1.170+).
+// router.stores.getMatchStore(from).get() when router.isServer === true (as of 1.170.41).
 const authedMatch = {
   id: '/_authed',
   routeId: '/_authed',
@@ -64,7 +64,7 @@ const fakeRouter = {
   isServer: true,
   options: {},
   stores: {
-    getRouteMatchStore: () => ({ get: () => authedMatch }),
+    getMatchStore: () => ({ get: () => authedMatch }),
     matchStores: new Map(),
   },
 } as unknown as Parameters<typeof RouterContextProvider>[0]['router'];

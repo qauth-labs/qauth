@@ -54,12 +54,14 @@ const server = Fastify({
 // Removing this line, scoping it to a subset of routes, or adding a route that opts back
 // into ajv validation (e.g. a raw JSON Schema `schema` on an instance without this
 // compiler) silently reactivates host confusion inside an OAuth server. The
-// `fast-uri: '>=3.1.4 <4'` floor in `pnpm-workspace.yaml` exists so this stops being the
+// `fast-uri: '>=3.1.8 <4'` floor in `pnpm-workspace.yaml` exists so this stops being the
 // only mitigation, but do not rely on it alone.
 // The second leg of the same invariant lives in the redirect_uri checks: matching is an
 // exact string comparison (RFC 9700) with no URI parser in the security decision; the
 // only relaxation, the port of a loopback redirect (RFC 8252 §7.3, #414), is lexical
-// too — see `redirectUriMatchesRegistered` in `app/helpers/oauth-redirect.ts`.
+// too — see `redirectUriMatchesRegistered` in `app/helpers/oauth-redirect.ts`. The
+// schemas that feed it use `exactUrl` (`app/schemas/common.ts`), not `z.url()`, which
+// since Zod 4.5 deletes tabs and line breaks from the value it returns.
 //
 // POSITION IS PART OF THE INVARIANT (#365). These two calls MUST run before
 // `server.register(app)` below. A child scope snapshots the parent's validator and
