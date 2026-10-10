@@ -111,7 +111,9 @@ How a request finds its realm:
   addresses the realm by one of them. An internal host name is configured the same way. For
   example, the developer portal's server reaches the auth server at `AUTH_SERVER_URL`
   (`http://auth-server:3000` in the Compose file); the operator configures that name as an endpoint
-  host of the realm, and those calls keep working.
+  host of the realm, and those calls keep working. An endpoint host answers no browser-session
+  endpoint of Decision 8 (authorize, the ceremony UI, end-session and approval); a request for one
+  there gets 421.
 - The internal admin listener is not routed by host: it takes the realm from the request, within
   the caller's grant (Decision 7).
 - A request that matches no realm host or endpoint host is refused with `421 Misdirected Request`.
@@ -388,12 +390,15 @@ their own rules. An admin API operation is a security operation when it:
 - changes which credentials, links or addresses can authenticate or recover an account: a set-up or
   reset link the admin copies; an account's identifier or contact address; removing a passkey, TOTP
   or recovery codes; an upstream provider, trusted issuer or AuthMethod plugin and its mappers;
-  linking or unlinking an upstream or wallet account; the realm's mail transport and sender;
+  unlinking an upstream or wallet account (an admin never links one: an account is linked only when
+  the user signs in to the existing account, ADR-020 §3); the realm's mail transport and sender;
   loosening the allowed sign-in methods or the MFA, password or brute-force policy;
 - changes what a token asserts or who receives it: mappers, the scope catalog, roles and groups and
-  their assignment to accounts, resource-server and audience registration, and a client's redirect
-  URIs, authentication method or first-party trust, including its first-party policy and switching
-  PKCE or DPoP off for it (ADR-017 Decision 2);
+  their assignment to accounts, resource-server and audience registration, an agent type's
+  `is_agent`, `max_agent_mode`, `spawn_allowlist`, `registered_rights` and grants (ADR-014 §1, §5),
+  the verified domain an admin sets on a client (Decision 6), and a client's redirect URIs,
+  authentication method or first-party trust, including its first-party policy and switching PKCE
+  or DPoP off for it (ADR-017 Decision 2);
 - issues a token or session for someone other than the caller, such as an act-chain token (below);
 - changes who administers: granting or removing an admin role, creating an admin or a service
   account, and the two-admin configuration below;
@@ -402,7 +407,8 @@ their own rules. An admin API operation is a security operation when it:
 - acts as a federation operator: entity configuration, subordinates, metadata policy, trust marks,
   explicit registration and federation keys;
 - is named as one elsewhere in this record: the Authority Tree powers above, key operations
-  (Decision 9) and loosening the environment posture (Decision 10).
+  (Decision 9), loosening the environment posture (Decision 10) and revoking sessions or
+  refresh-token families in bulk (ADR-020 §3).
 
 `admin:write` covers the rest: display data, and operational changes with none of these effects. A
 permission that performs a security operation exists only under `admin:security`, so no custom
@@ -412,9 +418,10 @@ self-service reset reaches, and it does no more than ADR-017 Decision 8's reset 
 the copy operation, which returns its link once to the admin who performs it, no event, log,
 webhook payload, admin view or API response carries a set-up or reset link, code or token.
 
-Brand strings and links are not security settings: they are display data under `admin:write`, in
-mail as on the ceremony pages. They never form or replace a mail's link, code or pass, which the
-server builds from the realm row (Decision 1).
+Brand strings and links are not security settings: they are display data under `admin:write` on
+the ceremony pages. Mail takes the brand's logo, colours and strings but no brand link (ADR-020
+fork C). Brand settings never form or replace a mail's link, code or pass, which the server builds
+from the realm row (Decision 1).
 
 A service account has no passkey. It can file a security operation, for example a realm-file import
 from CI, but the operation runs only after a human admin approves it with a fresh passkey. That
@@ -428,18 +435,23 @@ different human admin approves too.
   first example.
 - The second admin approves with their own fresh passkey. Nobody approves their own request.
 - A realm with one admin sees a warning. If a mandatory rule leaves no second admin, the break-glass
-  CLI below is the way out.
+  CLI below is the way out. For anything but an emergency key retirement, it enrols a new admin, who
+  can approve only 7 days later (below); until then the operation fails closed.
 - Both approvals land in the admin events.
 
 How the rule protects itself:
 
 - Once any operation is mandatory, these are themselves mandatory two-admin operations: changing
   the mandatory set, creating an admin, granting or removing `admin:security`, and changing an
-  admin's credentials, identifier or contact address. One admin alone can only tighten the
-  mandatory set, by adding an operation.
+  admin's credentials, identifier or contact address through the admin API. One admin alone can
+  only tighten the mandatory set, by adding an operation. An admin's change to its own credentials,
+  identifier or contact address through the account API needs no second admin: it follows the
+  account API's own rules (ADR-017 Decision 8, ADR-020 §3), and that admin cannot approve for the
+  next 7 days (below).
 - The approver is a different account that held `admin:security` in the target realm before the
   request was made. In the 7 days before the request it was not created or granted a role, and its
-  credentials, identifier and contact address did not change, whoever made the change. It approves
+  credentials, identifier and contact address did not change, whoever made the change. The
+  automatic password disable of ADR-017 Decision 7 is not such a change. It approves
   with a passkey credential that is not registered to the requester's account. The admin event
   records both credential ids.
 - An approval is single use and expires within minutes. Its passkey challenge is bound to the hash
@@ -507,8 +519,10 @@ Where endpoints sit:
 - Browser-session endpoints sit on the realm host. They are authorize, the ceremony UI, end-session
   and approval.
 - API endpoints may sit elsewhere. They are token, introspection, revocation, JWKS and admin. Off
-  the realm host, the first four answer on the realm's endpoint hosts (Decision 1), and the admin
-  API on its internal listener (Decision 7).
+  the realm host, the admin API answers on its internal listener (Decision 7), and every other API
+  endpoint a server-side caller uses answers on the realm's endpoint hosts (Decision 1): the first
+  four, userinfo, the account and developer APIs, and the legacy `/auth/*` routes until ADR-017
+  removes them (Decision 12).
 - RFC 8414 metadata allows endpoints on other hosts.
 
 How revocation reaches resource servers:
@@ -542,15 +556,20 @@ bot-challenge verification, breach-list lookups and logo fetches. Plugins use th
 - resolves the name once per request, checks every address and connects only to a checked address;
 - never connects to a private, loopback, link-local or otherwise non-public address, unless a
   deployment-level allowlist names that host or range and the destination was set by the operator
-  or an admin. Realm admins cannot edit that list, and a destination that a client, an end user or
-  a remote document supplies never uses it;
+  or an admin, for a realm that the allowlist entry names. Realm admins cannot edit that list, and a
+  destination that a client, an end user or a remote document supplies never uses it;
 - re-checks a redirect target by the same rules before it follows it;
 - caps the time and the size of every response.
 
 A destination is checked when it is registered and again at every delivery. That holds for a
 `backchannel_logout_uri`, a webhook or SSF endpoint, and the owner-registered webhook of ADR-014
 decision 16. Every URL an upstream's discovery or federation document names passes the same check,
-and the document's `issuer` must equal the configured one.
+and the document's `issuer` must equal the configured one. Neither those URLs nor a
+`backchannel_logout_uri` that a client registers ever use the allowlist, so neither reaches a
+private or loopback address, even for a development client. An operator whose upstream provider
+sits on a private address sets the provider's endpoints in its configuration instead of taking them
+from discovery. A back-channel logout endpoint on a private address is set on the client by an
+admin, not by the client's own registration.
 
 The delivery role does not share network reach with the signer or the internal admin listener. In
 a distributed deployment it runs with egress rules that block the cloud metadata address, Redis,
@@ -620,16 +639,16 @@ How that separation is enforced:
   the old one only verifies or decrypts until it is retired.
 - Rotating the KEK re-wraps every stored key. It is a security operation.
 
-**Emergency retirement.** A key that may be compromised is retired at once. This is not a rotation,
-and the overlap above does not apply.
+**Emergency retirement.** A key that may be compromised is retired as soon as its retirement is
+approved, as below. This is not a rotation, and the overlap above does not apply.
 
 - It needs `admin:security`, a fresh passkey and the second admin where the realm requires one for
   key operations or bulk revocation; the other admins are notified. When no second admin can
   approve in time, the break-glass CLI does it (Decision 7).
 - The key leaves the JWKS at once, and a new key starts signing.
-- Its `kid` goes on a denylist that every QAuth verifier checks, whatever a JWKS cache holds, among
-  them the token, introspection, userinfo, revocation and end-session endpoints. Introspection
-  answers `active: false` for a token the key signed.
+- Its `kid` goes on a denylist that every verifier inside the auth server checks, whatever a JWKS
+  cache holds, among them the token, introspection, userinfo, revocation and end-session endpoints.
+  Introspection answers `active: false` for a token the key signed.
 - Every session and refresh-token family issued under the key is revoked, with back-channel logout.
 - A critical admin event and a security event naming the `kid` go out on every event route.
   `@qauth-labs/resource-guard` drops the key when that event reaches it, or at its next JWKS fetch.
@@ -725,7 +744,8 @@ Decided 2026-10-10 (maintainer).
 - Admin access is passkey-gated, DPoP-bound and audited. No static admin key exists to leak.
 - Security operations are defined by effect, so `admin:write` alone cannot change who can sign in
   to an account or what its tokens assert.
-- A compromised key can be retired at once, without waiting out the rotation overlap.
+- A compromised key is retired as soon as its retirement is approved, without waiting out the
+  rotation overlap.
 - A key rotation no longer forces users to sign in again.
 - Security-critical state stays in one transactional store when a deployment scales out.
 - The Interaction API is versioned and published, so a custom UI has a stable target.
@@ -746,6 +766,11 @@ Decided 2026-10-10 (maintainer).
   signed-in user.
 - Every security operation costs a passkey approval, and some cost a second admin. Routine changes
   such as group membership become security operations.
+- An admin that changes its own credentials, identifier or contact address, or that the break-glass
+  CLI enrols, cannot approve for 7 days. Where no other admin can approve, a mandatory operation
+  other than an emergency key retirement waits that long.
+- An upstream provider on a private address cannot be set up through discovery. Its endpoints are
+  set one by one in its configuration.
 - In a single deployment every role shares one process, so the key separation of Decision 9 holds
   only once the roles run on separate nodes.
 - Sessions in Postgres add writes on sign-in and throttled writes on activity.

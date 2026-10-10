@@ -409,9 +409,10 @@ is always a human `sub`. An agent type (an agent client whose
 `max_agent_mode` the seed manifest set) holds only the grants a tree uses:
 `authorization_code` and `refresh_token` for a root type, the token-exchange
 grant and, from P5, the CIBA grant (§14). With the switch on, the seed
-manifest refuses `client_credentials` and the JWT-bearer grant for an agent
-type, as it refuses a client secret (§4(e)), and the token endpoint refuses
-both grants to an agent type whatever its stored row says. So an agent
+manifest refuses every other grant for an agent type, `client_credentials`,
+the JWT-bearer grant and the device grant among them, as it refuses a client
+secret (§4(e)), and the token endpoint refuses them to an agent type whatever
+its stored row says. So an agent
 type's key mints no token on its own (T2). An agent client that is not an
 agent type keeps the grants it has today, and its `client_credentials` token
 reaches nothing this record adds (§2).
@@ -451,8 +452,10 @@ second harness process is a second root with its own `sid`. The cadence is a
 per-host setting, default one root per process. A host may choose one root
 per broker start instead, as a daemon host does (decision 8, decided
 2026-10-09). On such a host the shared root's node is the broker's own
-process (ADR-015 question 8), so a process the broker starts is under it,
-and a session registration whose caller resolves to that node joins it; one
+process (ADR-015 question 8), so a process the broker starts is under it
+(the broker is never a child subreaper, and it opens the login browser
+outside its own process tree, so neither an orphan nor the browser is under
+it), and a session registration whose caller resolves to that node joins it; one
 from under a node below it is a child registration there (§12). A
 registration from any other process under no node starts a root of its own,
 through its own consent screen.
@@ -484,8 +487,10 @@ works today; a sid-less agent token is one no tree can revoke.
 
 A `refresh_tokens` row with a NULL `sid` gains none by refresh. Such a row
 predates the migration, or its code grant was issued while its client did
-not declare `is_agent`. A `sid` is minted only by a code grant whose consent
-screen showed the persistence rung (§11). A client that starts declaring
+not declare `is_agent`. No refresh mints a `sid`: one comes only from a code
+grant whose consent screen showed the persistence rung (§11), or from the
+exchange rule above, whose new tree has no refresh family. A client that
+starts declaring
 `is_agent` after consent (for example, a CIMD document that changes) was
 never shown it. So the family keeps today's lifecycle, and it is the one
 agent-client grant whose tokens carry no `sid`: sign-out ends it (decision
@@ -798,10 +803,13 @@ the ID-JAG consume path keeps refusing `authorization_details` outright.
 `authorization_details_types_supported` joins AS and resource metadata.
 
 **Two bounds come from outside the chain.** Each agent type has
-`registered_rights`, operator-set in the seed manifest like `max_agent_mode`
-and never through DCR, CIMD or the developer API: per credential adapter
-(§9), the `actions` the type may ever hold and, optionally, the `locations`
-it may ever name, exact strings compared as above. An adapter the column
+`registered_rights`: per credential adapter (§9), the `actions` the type may
+ever hold and, optionally, the `locations` it may ever name, exact strings
+compared as above. It is operator-set in the seed manifest like
+`max_agent_mode` and never through DCR, CIMD or the developer API; once the
+realm file and the admin API carry it, as they carry `max_agent_mode` and
+`spawn_allowlist`, a write is a security operation (ADR-019 Decision 7). An
+adapter the column
 does not name gives the type no rights there, so a type nobody provisioned
 holds none. Every mint checks it — the root at `/authorize`, a spawn or a
 narrow at GATE 4d (§4), an elevation (§14) — and the STS checks it again at
@@ -1187,12 +1195,14 @@ AGENT:MODEL` convention (`Documentation/process/coding-assistants.rst`,
   PostgreSQL 18 `oauth_validator_libraries` module, checks `iss` and `aud`
   exactly, `exp`, `typ` `at+jwt`, `token_use`, HBA `scope` ⊆ token scope,
   `locations` ∋ this database, `actions` ∋ the requested role, and maps
-  `authn_id` = `sub` with `delegate_ident_mapping=1`; keys come from a cached
-  JWKS, so an outage never blocks a connection whose key is known; it never
+  `authn_id` = `sub` with `delegate_ident_mapping=1`; keys come from a JWKS
+  cached under ADR-019 Decision 9's rule, at most 5 minutes, so a shorter
+  outage never blocks a connection whose key is known; it never
   logs a token and posts its SET from a worker, not inside `validate_cb`. It
   consults no denylist and cannot kill a live backend on revocation: a revoked
   leaf opens new connections and keeps existing ones until `exp`, and a
-  retired signing key validates until the JWKS cache refreshes — the leaf's
+  retired or emergency-retired signing key validates until the JWKS cache
+  refreshes, at most 5 minutes later — the leaf's
   lifetime (§6) and a short cache TTL are the window, as PostgreSQL's own
   validator guidance says for offline validation.
 - **MCP** — a proxy that attaches `Authorization: DPoP` and the per-request
@@ -1277,7 +1287,8 @@ scopes beyond it are `invalid_scope` and rights beyond it
 raises that ceiling in the portal with a passkey, and the next root takes the
 raised ceiling only through this screen (decision 17).
 `spawn_allowlist` follows `max_agent_mode`: seed manifest only, never DCR,
-CIMD or the developer API. Enrichment is conditional on the column:
+CIMD or the developer API; once the realm file and the admin API carry it,
+a write is a security operation (§5). Enrichment is conditional on the column:
 `resolveAudience` adds the client's own `client_id` and its `spawn_allowlist`
 to `aud` only for an agent client whose `spawn_allowlist` is non-empty. A
 client with none — every DCR and CIMD client, every seeded type an operator
@@ -1304,8 +1315,9 @@ leaf. An agent root never takes the skip-consent fast path
 (`canSkipConsent`, `apps/auth-server/src/app/helpers/consent.ts:77`), and
 `prompt=none` for an agent root answers `consent_required` (decided
 2026-10-06; ADR-015 decision 11). A `sid` is minted per
-grant, not per screen, and only by a grant whose screen showed the
-persistence rung (§1). A root grant that names a dangerous scope
+grant, not per screen, and by a code grant only when its screen showed the
+persistence rung; §1's exchange rule is the one other source. A root grant
+that names a dangerous scope
 (`agent:exec`, `agent:admin`, any `write:*`, or a pass-through leg's
 `<kind>:owner-token`, ADR-016 §4) also needs a fresh login in
 `staging` or `production`: step-up rule 3 (`evaluateStepUp`,
@@ -1347,10 +1359,11 @@ kernel tells it:
   and the broker signs its spawn assertion (§4) with that node's key and no
   other. A lead, parent or session id that a request names is checked
   against that node, and a mismatch is refused and logged. A process that a
-  request names must be the caller, an ancestor of it below any bound pid
-  that is an ancestor of no other bound node's process and of no other
-  registered session, or the caller's own child passed as a pidfd (the
-  spawner path).
+  request names must be one of these: the caller; an ancestor of the caller
+  that is in the caller's own POSIX session (`getsid`), sits below the
+  process of any node the caller resolves to, and is an ancestor of no other
+  bound node's process and of no other registered session; or the caller's
+  own child, passed as a pidfd (the spawner path).
 - **Type.** The child's type must be in the parent type's `spawn_allowlist`,
   GATE 3d's rule, which the broker checks before it signs. A proxy's
   `--type`, a header or a hook's agent type picks among those types and adds
@@ -1500,27 +1513,34 @@ records nothing about whether they did.
 
 **Whose upstream identity a binding may name.** An `adapter_ref` belongs to
 exactly one owner, and QAuth refuses, audited, a binding whose `adapter_ref`
-is not assigned to the authenticating owner. It is assigned in one of two
-ways. The operator's configuration entry for it names that owner's `user_id`.
-Or the owner uploads the upstream identity's private key through an owner
-route (ADR-015 §3's guard, a passkey approval per operation); QAuth stores it
-envelope-encrypted under a per-realm key used only for this purpose, as
-ADR-016 §4 keeps the pass-through token, no route returns it, and `proof` is
-the platform's answer under that key (for GitHub, `GET /app`), so holding the
-key is the proof. Either way the key stays QAuth-side, never on the box. The
-per-organisation identity of decision 4 is assigned to no owner, so no binding
-can name it. An uploaded key that opens it, or any other upstream identity
-QAuth's configuration already holds (compared by `upstream_id` and
-`external_id`), is refused and audited, as a binding naming it is.
-`agent_bindings` is unique on (`platform`, `adapter_ref`) and on (`platform`,
-`external_id`), so one upstream identity serves one agent, and the STS refuses
-a vend whose binding's agent is not the ledger row's `agent_id`, or whose
-`adapter_ref` is not assigned, at that vend, to the agent's current owner
-(§9); an uploaded key stays assigned to the owner who uploaded it. So after an
-operator reassigns the `adapter_ref` or the agent is transferred (decision
-10), the binding mints nothing until one assigned to the new owner replaces
-it. Neither `proof` nor the allowlist stands in for this check: the platform's
-answers say which identity the key opens, not which QAuth user may use it.
+is not assigned to the authenticating owner.
+
+- **Assignment.** An `adapter_ref` is assigned in one of two ways. The
+  operator's configuration entry for it names that owner's `user_id`. Or the
+  owner uploads the upstream identity's private key through an owner route
+  (ADR-015 §3's guard, a passkey approval per operation).
+- **Upload.** QAuth stores an uploaded key envelope-encrypted under a
+  per-realm key used only for this purpose, as ADR-016 §4 keeps the
+  pass-through token, and no route returns it. `proof` is the platform's
+  answer under that key (for GitHub, `GET /app`), so holding the key is the
+  proof. Either way the key stays QAuth-side, never on the box.
+- **The per-organisation identity.** The per-organisation identity of
+  decision 4 is assigned to no owner, so no binding can name it.
+- **Refused uploads.** An upload is refused, audited, when its key opens the
+  per-organisation identity or any other upstream identity QAuth's
+  configuration already holds (compared by `upstream_id` and `external_id`),
+  as a binding naming such an identity is.
+- **Uniqueness.** `agent_bindings` is unique on (`platform`, `adapter_ref`)
+  and on (`platform`, `external_id`), so one upstream identity serves one
+  agent.
+- **At every vend.** The STS refuses a vend whose binding's agent is not the
+  ledger row's `agent_id`, or whose `adapter_ref` is not assigned, at that
+  vend, to the agent's current owner (§9); an uploaded key stays assigned to
+  the owner who uploaded it. So after an operator reassigns the `adapter_ref`
+  or the agent is transferred (decision 10), the binding mints nothing until
+  one assigned to the new owner replaces it. Neither `proof` nor the
+  allowlist stands in for this check: the platform's answers say which
+  identity the key opens, not which QAuth user may use it.
 
 **Public profile.** `GET /agents/{handle}` on the realm's public origin
 serves the profile, unauthenticated: `display_name`, `description`, avatar,
@@ -1860,9 +1880,9 @@ gate.
   including one whose CIMD client starts declaring `is_agent` after consent;
   the introspection schema; with the switch on, an agent type's ID-JAG
   request fails `invalid_request` at GATE 2; the seed manifest refuses an
-  agent type registered with any method but `private_key_jwt`, or with the
-  `client_credentials` or JWT-bearer grant, and the token endpoint refuses
-  both grants to one; the STS refuses a resource outside policy, against a
+  agent type registered with any method but `private_key_jwt`, or with any
+  grant a tree does not use (§1), and the token endpoint refuses each to
+  one; the STS refuses a resource outside policy, against a
   mock upstream (for `github`, a repository, against a mock GitHub), a token
   with no ledger row, an empty `actions` set and a vend whose platform read
   fails.
@@ -1900,8 +1920,7 @@ gate.
   broker under an agent root is authored by the binding's login and address;
   a node-supplied `Signed-off-by` is refused; a binding whose `adapter_ref`
   is assigned to another owner, or to none, fails, and so does a second
-  binding with the same `adapter_ref` or `external_id`, and so does an
-  upload of a key that opens a configured identity; the STS refuses a
+  binding with the same `adapter_ref` or `external_id`; the STS refuses a
   vend from the binding of an agent other than the token's, and one from a
   binding whose `adapter_ref` is no longer assigned to the agent's owner
   after a reassignment or a transfer. Honest limits:
@@ -2028,7 +2047,8 @@ gate.
   never outlives the refresh family; a notification body carries only the
   request id, the agent's handle and the URL; raising a root ceiling without
   a passkey assertion is refused, and a live tree keeps its ceiling; an
-  uploaded key whose platform answer names no identity is refused, and the
+  uploaded key whose platform answer names no identity, or that opens an
+  identity QAuth's configuration holds, is refused, and the
   stored key is never returned by any route.
 
 ## OS-level authority manager composition
@@ -2152,7 +2172,8 @@ binds by `SO_PEERCRED` and ancestry (§12), and hooks are UX (§9).
 An adapter must do four things.
 
 1. **Register the session.** When a main agent starts, send the broker the
-   harness session id and the process id over the socket. The broker opens a
+   harness session id and the process id over the socket, from a process in
+   the harness's own POSIX session (§12). The broker opens a
    pidfd on the process (§12) and runs the root grant (§1) only when the
    caller resolves to no bound node; under a bound node the registration is
    a child of that node, or joins a host's one root per broker start when

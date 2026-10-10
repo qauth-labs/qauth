@@ -311,8 +311,9 @@ Cloud is the example throughout.
 - The consent screen describes that scope as acting on the platform with the
   owner's full rights (§11). A child gets it only by narrowing. No approval
   grants it, as with `agent:request`.
-- `<kind>:owner-token` is a dangerous scope. `isDangerousScope` classifies
-  it with `write:*`, `agent:exec` and `agent:admin`, so a root that names it
+- Once this leg lands, `<kind>:owner-token` is a dangerous scope: the leg
+  adds it to `isDangerousScope` beside `write:*`, `agent:exec` and
+  `agent:admin`, so a root that names it
   needs a fresh login in `staging` and `production` (§11, step-up rule 3),
   and ADR-017 never grants it headlessly.
 - The owner stores, replaces and renews the token through an owner route,
@@ -469,7 +470,9 @@ Only threats this record adds or changes. T-numbers are ADR-014's
 ## Phasing
 
 Each piece lands in the ADR-014 phase that builds what it depends on
-([Phasing](./014-agent-authority-tree.md#phasing)).
+([Phasing](./014-agent-authority-tree.md#phasing)). A piece whose owner route
+needs a passkey assertion waits for the WebAuthn provider of ADR-014 P5 or
+ADR-017 F2b, whichever comes first.
 
 - **P0a — the STS.** The explicit resource list (§3) and the vendor
   interface with its `github` kind. Test: against a mock platform, every

@@ -280,13 +280,13 @@ Placement rules that follow from earlier decisions:
 **Emails**
 
 - Security notices go out for a new-device sign-in, a password change, a password or TOTP disabled
-  after too many attempts, a passkey or TOTP added or removed, a recovery code used, codes requested
-  past the per-address send ceiling, a wrong second factor after a correct password, an identifier
-  change and a new agent grant. They are on by default. A realm may turn some off, but never the
-  ones about credential changes or the ones that carry a reset pass: the send-ceiling and
-  password-disable notices always go out (ADR-017 Decision 5), and so does the notice of a wrong
-  second factor after a correct password (ADR-017 Decision 7). An account with no contact address
-  sees them only in its security log.
+  after too many attempts, a passkey or TOTP added or removed, a recovery code used, recovery codes
+  regenerated or failed 100 times, codes requested past the per-address send ceiling, a wrong second
+  factor after a correct password, an identifier change and a new agent grant. They are on by
+  default. A realm may turn some off, but never the ones about credential changes or the ones that
+  carry a reset pass: the send-ceiling and password-disable notices always go out (ADR-017 Decisions
+  5 and 7), and so does the notice of a wrong second factor after a correct password (ADR-017
+  Decision 7). An account with no contact address sees them only in its security log.
 
 ### 4. Cross-cutting decisions
 
@@ -306,9 +306,10 @@ Placement rules that follow from earlier decisions:
 **Two-admin approval.** Every `admin:security` operation recommends a second admin's approval. A
 realm chooses where it is mandatory. A deployment with a single admin sees a warning. Once any
 operation is mandatory, changing the mandatory set, creating an admin, granting or removing
-`admin:security`, and changing an admin's credentials, identifier or contact address take two
-admins too; one admin alone can only add to the mandatory set. ADR-019 Decision 7 says who may
-approve and how an approval is bound to the operation.
+`admin:security`, and changing an admin's credentials, identifier or contact address through the
+admin API take two admins too; one admin alone can only add to the mandatory set. An admin's change
+to its own account through the account API takes one admin, and that admin cannot approve for the
+next 7 days. ADR-019 Decision 7 says who may approve and how an approval is bound to the operation.
 
 **Event delivery.** QAuth runs no automation itself, but every event is usable for automation. 1.0
 delivers events four ways:
@@ -564,7 +565,7 @@ counterpart. Keycloak locations are admin-console paths or login-theme template 
 | Clients                      | Authorization tab (UMA resource server)                                                        | Client · Authorization                                   | —                                                                | No  | Decision   | RAR and AuthZEN instead.                                                                                                                                                     |
 | Clients                      | The client's sessions and refresh families                                                     | Client · Sessions                                        | —                                                                | 1.0 | Row review | List, single and bulk revoke. Bulk revoke needs `admin:security` and a passkey.                                                                                              |
 | Clients                      | DCR policies, CIMD allow and deny lists                                                        | Client registration policies                             | env (`CIMD_*`)                                                   | 1.0 | Row review | On the realm row, changed from the console. MCP 2026-07-28: CIMD is recommended and DCR is deprecated.                                                                       |
-| Clients                      | Agent types: `is_agent`, `max_agent_mode`, `spawn_allowlist`, `registered_rights` (QAuth only) | —                                                        | Seed manifest                                                    | 1.0 | Decision   | ADR-014 §1, §5. Only the grants a tree uses; with `AUTHORITY_TREE_ENABLED` on, no `client_credentials` or JWT-bearer grant.                                                  |
+| Clients                      | Agent types: `is_agent`, `max_agent_mode`, `spawn_allowlist`, `registered_rights` (QAuth only) | —                                                        | Seed manifest                                                    | 1.0 | Decision   | ADR-014 §1, §5. Only the grants a tree uses; with `AUTHORITY_TREE_ENABLED` on, no `client_credentials`, JWT-bearer or device grant.                                          |
 | Scopes and resources         | Scope catalog, per-locale consent text                                                         | Client scopes                                            | Fixed list                                                       | 1.0 | Row review | Per realm. System scopes cannot be deleted and keep their meaning.                                                                                                           |
 | Scopes and resources         | Protocol mappers                                                                               | Client scopes · Mappers                                  | —                                                                | 1.0 | Decision   | A mapper system separate from the profile schema, with Keycloak's breadth of types. No script mappers, because they run arbitrary code in the authorization server (fork E). |
 | Scopes and resources         | Parameterized scopes                                                                           | 26.8 preview                                             | —                                                                | No  | Row review | RAR (`authorization_details`) instead.                                                                                                                                       |

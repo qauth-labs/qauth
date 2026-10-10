@@ -181,7 +181,8 @@ refuses every tree token: root, node or leaf.**
   identifier revocation routes; revoke-all and revoke-by-agent; writes to
   agents, bindings (an upstream identity's key among them, ADR-014 §13) and
   transmitters; transfer offers; ending a window,
-  removing a block, registering a channel or passkey; the SCIM read; and the
+  removing a block, registering a channel, or a passkey under ADR-017
+  Decision 8's binding rule; the SCIM read; and the
   owner settings ADR-016 adds. No tree token ever authenticates the approval
   page.
 - On the identifier routes the scheme picks the leg: `Bearer` is the owner
@@ -195,7 +196,7 @@ tree. The owner reads them from `GET /api/agent-sessions/{sid}`; introspection
 returns them only to a node. Introspection authenticates a client by secret
 (`apps/auth-server/src/app/routes/oauth/introspect.ts:101-102`) and names no
 user. The portal calls `/api/*` with the owner's management token and never
-introspects (`apps/developer-portal/src/server/auth-server-client.ts:445-447`).
+introspects (`apps/developer-portal/src/server/auth-server-client.ts:446-448`).
 This narrows no caller §2 names.
 
 **Why.** A tree token is the agent's, and T6 says a model's restraint is no
@@ -210,7 +211,9 @@ _Proposal (this record)._
 and carries `typ: client-authentication+jwt`.**
 
 - An agent type is an agent client with an operator-set `max_agent_mode`,
-  which only the seed manifest writes. Any other assertion from one is
+  which only the seed manifest writes, or, once the realm file and the admin
+  API carry it, a security operation (ADR-019 Decision 7). Any other
+  assertion from one is
   `invalid_client`, audited.
 - The rule holds at `/oauth/token`, at the node leg of the identifier API
   (§6) and at the CIBA backchannel endpoint (§14), where it binds every
