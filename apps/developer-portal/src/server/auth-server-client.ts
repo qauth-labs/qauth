@@ -1,4 +1,6 @@
-import { getRequestHeader, getRequestIP } from '@tanstack/react-start/server';
+import { isIP } from 'node:net';
+
+import { getRequestIP } from '@tanstack/react-start/server';
 
 import { env } from './config';
 
@@ -236,10 +238,17 @@ async function apiRequestNoContent(
   // not forwarded to `fetch`.
   const { skipContentType, ...fetchInit } = init;
   void skipContentType;
+  const headers: Record<string, string> = {
+    ...(fetchInit.headers as Record<string, string> | undefined),
+  };
+  const xff = forwardedFor();
+  if (xff) {
+    headers['X-Forwarded-For'] = xff;
+  }
   try {
     const res = await fetch(`${env.AUTH_SERVER_URL}${path}`, {
       ...fetchInit,
-      headers: { ...(fetchInit.headers as Record<string, string> | undefined) },
+      headers,
     });
 
     if (res.ok) return { ok: true, data: null };
@@ -280,25 +289,37 @@ async function apiRequestNoContent(
   }
 }
 
+/** An IPv4 address in IPv6 form (`::ffff:a.b.c.d`), as a dual-stack socket reports it. */
+const IPV4_MAPPED = /^::ffff:(\d{1,3}(?:\.\d{1,3}){3})$/i;
+
 /**
- * The `X-Forwarded-For` value to send upstream, or `undefined` outside a
- * request (tests, build).
+ * The `X-Forwarded-For` value to send upstream, or `undefined` when there is
+ * no request being served (tests, build) or its client address is not a
+ * single IP address.
  *
  * The portal calls the auth-server server-to-server, so without this every
  * developer reaches it from the portal's address: one shared bucket for the
  * per-IP login, registration and resend limits and the `ip:` failed-login
- * lockout, which one caller could fill to lock everyone out. The portal acts
- * as a proxy hop: it appends the TCP peer of the request it is serving to any
- * `X-Forwarded-For` it received. The auth-server believes the header only when
- * the portal's address (and any proxy in front of the portal) is in its
- * `TRUST_PROXY` list, so a caller cannot choose its address by sending one.
+ * lockout, which one caller could fill to lock everyone out. The auth-server
+ * reads the header only when its `TRUST_PROXY` lists the portal's address;
+ * otherwise it keys every request on the portal's own address.
+ *
+ * The portal sends exactly one address: the TCP peer of this connection, or,
+ * when that peer is a proxy listed in `PORTAL_TRUST_PROXY`, the client address
+ * that proxy reports. `getRequestIP()` with no options is the srvx request's
+ * `ip`, which srvx resolves from the peer and the listed proxies only (see
+ * `node-entry.ts` and `trust-proxy.ts`); the request's own `X-Forwarded-For`
+ * is never sent on. An IPv4-mapped address is sent in plain IPv4 form, so a
+ * client has the same address whichever way it reaches the auth-server.
+ * Anything that is not an IP address (for example `host:port`) is not sent:
+ * the auth-server then keys the request on the portal's own address.
  */
 function forwardedFor(): string | undefined {
   try {
-    const peer = getRequestIP();
-    if (!peer) return undefined;
-    const incoming = getRequestHeader('x-forwarded-for');
-    return incoming ? `${incoming}, ${peer}` : peer;
+    const client = getRequestIP();
+    if (!client) return undefined;
+    const address = IPV4_MAPPED.exec(client)?.[1] ?? client;
+    return isIP(address) === 0 ? undefined : address;
   } catch {
     return undefined;
   }

@@ -79,14 +79,16 @@ cookie: `beforeLoad` calls `currentUserFn` and redirects to `/login` when it ret
 
 ## Environment variables
 
-Three environment variables are required or configurable server-side
-(`apps/developer-portal/src/server/config.ts`):
+Four environment variables are required or configurable server-side
+(`apps/developer-portal/src/server/config.ts`; `PORTAL_TRUST_PROXY` in
+`apps/developer-portal/src/server/trust-proxy.ts`):
 
-| Variable                | Required | Default | What it does                                                                                                            |
-| ----------------------- | -------- | ------- | ----------------------------------------------------------------------------------------------------------------------- |
-| `AUTH_SERVER_URL`       | Yes      | —       | Base URL of the auth-server the portal's server functions call. Read at `apps/developer-portal/src/server/config.ts:1`. |
-| `PORTAL_SESSION_SECRET` | Yes      | —       | HMAC-SHA256 key used to sign and verify the session cookie. Read at `apps/developer-portal/src/server/config.ts:2`.     |
-| `PORTAL_SESSION_TTL`    | No       | `900`   | Session cookie `Max-Age` in seconds. Parsed at `apps/developer-portal/src/server/config.ts:3`.                          |
+| Variable                | Required | Default | What it does                                                                                                                                                                                                                               |
+| ----------------------- | -------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `AUTH_SERVER_URL`       | Yes      | —       | Base URL of the auth-server the portal's server functions call. Read at `apps/developer-portal/src/server/config.ts:1`.                                                                                                                    |
+| `PORTAL_SESSION_SECRET` | Yes      | —       | HMAC-SHA256 key used to sign and verify the session cookie. Read at `apps/developer-portal/src/server/config.ts:2`.                                                                                                                        |
+| `PORTAL_SESSION_TTL`    | No       | `900`   | Session cookie `Max-Age` in seconds. Parsed at `apps/developer-portal/src/server/config.ts:3`.                                                                                                                                             |
+| `PORTAL_TRUST_PROXY`    | No       | —       | Proxy addresses (single IPs, comma-separated) allowed to report the client address. Parsed at `apps/developer-portal/src/server/trust-proxy.ts`; an invalid value stops the server at startup (`apps/developer-portal/src/node-entry.ts`). |
 
 `AUTH_SERVER_URL` and `PORTAL_SESSION_SECRET` are enforced at startup: `config.ts` throws if
 either is missing, but only when running server-side (`import.meta.env.SSR`,

@@ -365,6 +365,49 @@ jobs:
           fi
           echo "developer-portal serves /login, $asset and a 404 for a missing asset."
 
+      # The portal reads at most 1 MiB of a request body (src/node-entry.ts).
+      # A 2 MiB POST that declares its length must be refused with 413; a 2 MiB
+      # chunked POST to a real server function (the login one, whose id is in
+      # the login page's script) must be cut off at the limit; and the server
+      # must go on serving.
+      - name: Check an oversized request body is refused
+        timeout-minutes: 2
+        run: |
+          set -uo pipefail
+          base=http://localhost:3001
+          body="$RUNNER_TEMP/oversized-body.bin"
+          head -c 2097152 /dev/zero > "$body"
+          status="$(curl -s -o /dev/null -w '%{http_code}' --max-time 30 -X POST \
+            -H 'Content-Type: application/json' --data-binary "@$body" \
+            "$base/_serverFn/portal-smoke-oversized" || true)"
+          if [ "$status" != "413" ]; then
+            echo "::error::A 2 MiB POST returned ${status:-no response}, expected 413."
+            exit 1
+          fi
+          login_js="$(curl -s --max-time 5 "$base/login" | grep -ao '/assets/login-[^"]*\.js' | head -n 1)"
+          fn="$(curl -s --max-time 5 "$base$login_js" | grep -ao '[0-9a-f]\{64\}' | head -n 1)"
+          if [ -z "$login_js" ] || [ -z "$fn" ]; then
+            echo "::error::Could not find the login server function id in the login page's script."
+            exit 1
+          fi
+          out="$(head -c 2097152 /dev/zero | curl -s --max-time 30 -X POST \
+            -H 'Sec-Fetch-Site: same-origin' -H 'Content-Type: application/json' \
+            -H 'Transfer-Encoding: chunked' -T - "$base/_serverFn/$fn" || true)"
+          if ! printf '%s' "$out" | grep -q 'exceeds the maximum allowed size'; then
+            echo "::error::A 2 MiB chunked POST to a server function was not cut off at the body limit."
+            exit 1
+          fi
+          if [ "$(docker inspect -f '{{.State.Running}}' "$CONTAINER")" != "true" ]; then
+            echo "::error::developer-portal container stopped after a 2 MiB POST."
+            exit 1
+          fi
+          status="$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 "$base/login" || true)"
+          if [ "$status" != "200" ]; then
+            echo "::error::GET /login returned ${status:-no response} after a 2 MiB POST, expected 200."
+            exit 1
+          fi
+          echo "developer-portal refused 2 MiB bodies (413; chunked cut off at the limit) and still serves /login."
+
       - name: Dump container diagnostics on failure
         if: failure()
         run: |

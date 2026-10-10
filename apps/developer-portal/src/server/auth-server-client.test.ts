@@ -32,9 +32,11 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-// The portal is a proxy hop in front of the auth-server: without forwarding
-// the caller's address, every developer shares the portal's IP, and one caller
-// can fill the per-IP limits and the ip: lockout for all of them.
+// The portal calls the auth-server server-to-server: without forwarding the
+// caller's address, every developer shares the portal's IP, and one caller can
+// fill the per-IP limits and the ip: lockout for all of them. It forwards
+// exactly one address, the client address srvx resolved for the request (the
+// TCP peer unless PORTAL_TRUST_PROXY lists it; see trust-proxy.test.ts).
 describe('client address forwarding (X-Forwarded-For)', () => {
   function sentHeaders(): Record<string, string> {
     const [, init] = (global.fetch as unknown as ReturnType<typeof vi.fn>).mock.calls[0] as [
@@ -44,28 +46,87 @@ describe('client address forwarding (X-Forwarded-For)', () => {
     return (init.headers ?? {}) as Record<string, string>;
   }
 
+  function receivedForwardedFor(value: string | undefined) {
+    mockGetRequestHeader.mockImplementation((name: string) =>
+      name.toLowerCase() === 'x-forwarded-for' ? value : undefined
+    );
+  }
+
   it('sends the TCP peer of the request being served', async () => {
     mockGetRequestIP.mockReturnValue('203.0.113.9');
-    mockGetRequestHeader.mockReturnValue(undefined);
+    receivedForwardedFor(undefined);
     mockFetch(200, { accessToken: 't', refreshToken: 'r', expiresIn: 900 });
 
     await authServerClient.login('dev@example.com', 'pw');
 
     expect(sentHeaders()['X-Forwarded-For']).toBe('203.0.113.9');
-    // The TCP peer, never an address the caller reported.
+    // No option that would make h3 read the X-Forwarded-For header itself.
     expect(mockGetRequestIP).toHaveBeenCalledWith();
   });
 
-  it('appends the peer to an X-Forwarded-For the portal received, like any proxy hop', async () => {
-    mockGetRequestIP.mockReturnValue('10.0.0.3');
-    mockGetRequestHeader.mockImplementation((name: string) =>
-      name === 'x-forwarded-for' ? '203.0.113.9' : undefined
-    );
+  it('sends only the peer when the request carried its own X-Forwarded-For', async () => {
+    mockGetRequestIP.mockReturnValue('198.51.100.20');
+    receivedForwardedFor('203.0.113.9, 192.0.2.1');
     mockFetch(200, { accessToken: 't', refreshToken: 'r', expiresIn: 900 });
 
     await authServerClient.login('dev@example.com', 'pw');
 
-    expect(sentHeaders()['X-Forwarded-For']).toBe('203.0.113.9, 10.0.0.3');
+    expect(sentHeaders()['X-Forwarded-For']).toBe('198.51.100.20');
+  });
+
+  it('sends an IPv4-mapped peer in plain IPv4 form', async () => {
+    mockGetRequestIP.mockReturnValue('::ffff:203.0.113.9');
+    receivedForwardedFor(undefined);
+    mockFetch(200, { accessToken: 't', refreshToken: 'r', expiresIn: 900 });
+
+    await authServerClient.login('dev@example.com', 'pw');
+
+    expect(sentHeaders()['X-Forwarded-For']).toBe('203.0.113.9');
+  });
+
+  it('sends an IPv6 peer unchanged', async () => {
+    mockGetRequestIP.mockReturnValue('2001:db8::7');
+    receivedForwardedFor(undefined);
+    mockFetch(200, { accessToken: 't', refreshToken: 'r', expiresIn: 900 });
+
+    await authServerClient.login('dev@example.com', 'pw');
+
+    expect(sentHeaders()['X-Forwarded-For']).toBe('2001:db8::7');
+  });
+
+  it('sends no header when the request has no peer address', async () => {
+    mockGetRequestIP.mockReturnValue(undefined);
+    receivedForwardedFor('203.0.113.9');
+    mockFetch(200, { accessToken: 't', refreshToken: 'r', expiresIn: 900 });
+
+    await authServerClient.login('dev@example.com', 'pw');
+
+    expect(sentHeaders()['X-Forwarded-For']).toBeUndefined();
+  });
+
+  it.each(['not-an-ip', '203.0.113.9:5678', '::ffff:not-an-ip'])(
+    'sends no header when the client address is not an IP address (%s)',
+    async (client) => {
+      mockGetRequestIP.mockReturnValue(client);
+      receivedForwardedFor(undefined);
+      mockFetch(200, { accessToken: 't', refreshToken: 'r', expiresIn: 900 });
+
+      await authServerClient.login('dev@example.com', 'pw');
+
+      expect(sentHeaders()['X-Forwarded-For']).toBeUndefined();
+    }
+  );
+
+  it('sends the peer on DELETE calls too', async () => {
+    mockGetRequestIP.mockReturnValue('203.0.113.9');
+    receivedForwardedFor('198.51.100.1');
+    mockFetch(204, null);
+
+    const result = await authServerClient.deleteClient('t', 'id');
+
+    expect(result.ok).toBe(true);
+    expect(sentHeaders()['X-Forwarded-For']).toBe('203.0.113.9');
+    expect(sentHeaders()['Authorization']).toBe('Bearer t');
   });
 
   it('sends no header outside a request context', async () => {
