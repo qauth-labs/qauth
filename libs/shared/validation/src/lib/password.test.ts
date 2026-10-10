@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { z } from 'zod';
 
 // Pass-through spy on zxcvbn, so the tests can assert how much input it sees
 // while the real scorer still runs.
@@ -9,7 +10,12 @@ vi.mock('zxcvbn', async (importOriginal) => {
   return { default: zxcvbnSpy };
 });
 
-import { createPasswordValidator, PASSWORD_MAX_LENGTH, ZXCVBN_MAX_INPUT_LENGTH } from './password';
+import {
+  createPasswordValidator,
+  PASSWORD_MAX_LENGTH,
+  passwordSchema,
+  ZXCVBN_MAX_INPUT_LENGTH,
+} from './password';
 
 /**
  * A password is attacker-sized input to CPU-bound work. zxcvbn's matchers grow
@@ -66,5 +72,60 @@ describe('createPasswordValidator — input bounds', () => {
 
   it('still rejects an empty password', () => {
     expect(validator.validatePasswordStrength('').valid).toBe(false);
+  });
+});
+
+/**
+ * The request-schema bound counts UTF-16 code units, like
+ * `validatePasswordStrength`. Zod 4.5+ `.max()` counts code points, which let a
+ * password of astral characters through at up to twice the bound.
+ */
+describe('passwordSchema', () => {
+  /** U+1F600: one code point, two UTF-16 code units. */
+  const ASTRAL = '\u{1F600}';
+
+  it('accepts a password of exactly PASSWORD_MAX_LENGTH code units', () => {
+    expect(passwordSchema.safeParse('a'.repeat(PASSWORD_MAX_LENGTH)).success).toBe(true);
+    expect(passwordSchema.safeParse(ASTRAL.repeat(PASSWORD_MAX_LENGTH / 2)).success).toBe(true);
+  });
+
+  it('rejects astral characters one code unit pair over the bound, though they are fewer code points', () => {
+    const password = ASTRAL.repeat(PASSWORD_MAX_LENGTH / 2 + 1);
+    expect(password).toHaveLength(PASSWORD_MAX_LENGTH + 2);
+
+    const result = passwordSchema.safeParse(password);
+    expect(result.success).toBe(false);
+    expect(result.error?.issues).toEqual([
+      expect.objectContaining({
+        code: 'too_big',
+        maximum: PASSWORD_MAX_LENGTH,
+        message: `Too big: expected string to have <=${PASSWORD_MAX_LENGTH} characters`,
+      }),
+    ]);
+  });
+
+  it('agrees with validatePasswordStrength on where the bound falls', () => {
+    const validator = createPasswordValidator();
+    for (const password of [
+      ASTRAL.repeat(PASSWORD_MAX_LENGTH / 2 + 1),
+      'a'.repeat(PASSWORD_MAX_LENGTH + 1),
+    ]) {
+      expect(passwordSchema.safeParse(password).success).toBe(false);
+      expect(validator.validatePasswordStrength(password).feedback).toEqual([
+        `Password must be at most ${PASSWORD_MAX_LENGTH} characters`,
+      ]);
+    }
+  });
+
+  it('reports one issue, not two, for an over-long password', () => {
+    expect(passwordSchema.safeParse('a'.repeat(100_000)).error?.issues).toHaveLength(1);
+    expect(passwordSchema.min(1).safeParse('a'.repeat(100_000)).error?.issues).toHaveLength(1);
+  });
+
+  it('keeps maxLength in the JSON Schema it generates', () => {
+    expect(z.toJSONSchema(passwordSchema)).toMatchObject({
+      type: 'string',
+      maxLength: PASSWORD_MAX_LENGTH,
+    });
   });
 });

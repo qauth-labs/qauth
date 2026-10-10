@@ -1271,3 +1271,26 @@ describe('UI /ui/consent — long opaque state/nonce (#316)', () => {
     expect(redirected.searchParams.get('state')).toBe(LONG_STATE);
   });
 });
+
+describe('UI /ui/consent — redirect_uri reaches the handler as sent (exactUrl)', () => {
+  it('the consent form schema refuses a tab or line break inside redirect_uri instead of stripping it', async () => {
+    const { fastify, ctx } = makeFastify();
+    await consentRoute(fastify);
+    const schema = ctx.postOpts.schema.body;
+    const base = {
+      decision: 'allow',
+      csrf_token: 'csrf',
+      client_id: 'app-123',
+      scope: 'email',
+      code_challenge: 'A'.repeat(43),
+      code_challenge_method: 'S256',
+      response_type: 'code',
+    };
+    expect(schema.parse({ ...base, redirect_uri: 'https://example.com/cb' }).redirect_uri).toBe(
+      'https://example.com/cb'
+    );
+    for (const redirect_uri of ['https://example.com/c\tb', 'https://exa\nmple.com/cb']) {
+      expect(schema.safeParse({ ...base, redirect_uri }).success).toBe(false);
+    }
+  });
+});

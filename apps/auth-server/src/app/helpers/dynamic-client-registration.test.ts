@@ -35,6 +35,17 @@ describe('validateRedirectUri', () => {
   it('rejects malformed URIs', () => {
     expect(() => validateRedirectUri('not a url')).toThrow(BadRequestError);
   });
+
+  it('rejects a tab or line break anywhere in the URI, which new URL() would silently delete', () => {
+    for (const uri of [
+      'https://app.example/c\tb',
+      'https://app.exa\nmple/cb',
+      'https://app.example/cb\r\n',
+      '\thttps://app.example/cb',
+    ]) {
+      expect(() => validateRedirectUri(uri)).toThrow(BadRequestError);
+    }
+  });
 });
 
 describe('validateAndNormalize', () => {

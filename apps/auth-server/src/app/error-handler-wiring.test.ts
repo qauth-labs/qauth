@@ -370,6 +370,41 @@ describe('assembled app — global error handler reachability (#365)', () => {
 });
 
 /**
+ * The password bound on the wire, in the UTF-16 code units `PASSWORD_MAX_LENGTH`
+ * is defined in.
+ *
+ * Here rather than beside the schemas because this is the fast suite that runs
+ * real routes through the production validator compiler and error handler; the
+ * schema-level cases are in `schemas/auth.test.ts`. Zod 4.5+ `.max()` counts
+ * code points, so a bare `z.string().max()` let 129 emoji (258 code units)
+ * through: `/auth/register` answered 422 WEAK_PASSWORD from the strength check,
+ * and `/auth/login` and `/auth/verify` went on to the user lookup. Each must
+ * stop at the schema with a 400, as it did on Zod 4.4.
+ */
+describe('assembled app — password bound in UTF-16 code units', () => {
+  /** 129 × U+1F600: 129 code points, 258 UTF-16 code units. */
+  const PASSWORD = '\u{1F600}'.repeat(129);
+
+  it.each([
+    ['/auth/register', { email: 'dev@example.com', password: PASSWORD }],
+    ['/auth/login', { email: 'dev@example.com', password: PASSWORD }],
+    ['/auth/verify', { token: 'a'.repeat(64), password: PASSWORD }],
+  ])('POST %s rejects a 258-unit password at the schema', async (url, payload) => {
+    const res = await server.inject({ method: 'POST', url, payload });
+
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toEqual({
+      error: 'Validation error',
+      code: 'VALIDATION_ERROR',
+      statusCode: 400,
+      details: [
+        { path: '/password', message: 'Too big: expected string to have <=256 characters' },
+      ],
+    });
+  });
+});
+
+/**
  * The registration ORDER in `app.ts`, asserted on the source (#365).
  *
  * ## Why a source assertion, here and nowhere else

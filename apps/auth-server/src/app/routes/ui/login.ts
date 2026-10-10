@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 
-import { normalizeEmail, PASSWORD_MAX_LENGTH } from '@qauth-labs/shared-validation';
+import { normalizeEmail, passwordSchema } from '@qauth-labs/shared-validation';
 import type { FastifyInstance } from 'fastify';
 import { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
@@ -195,7 +195,7 @@ function loginPage(opts: {
 
 const loginFormSchema = z.object({
   email: z.string().min(1),
-  password: z.string().min(1).max(PASSWORD_MAX_LENGTH),
+  password: passwordSchema.min(1),
   return_to: z.string().optional(),
   // Signed double-submit CSRF token (login CSRF defence). Compared against the
   // value carried in the __Host- login-CSRF cookie.
