@@ -254,7 +254,7 @@ describe('rewriteRecordLink — the real docs/adr and docs/security corpus, enum
     return links;
   }
 
-  it('extracts exactly 411 links across the 17 ADRs, the ADR README, the security review and the threat model — the corpus the counts below are checked against', () => {
+  it('extracts exactly 415 links across the 17 ADRs, the ADR README, the security review and the threat model — the corpus the counts below are checked against', () => {
     // A fixed count, not a lower bound: this test's whole point is that the
     // categorisation below is checked against the FULL corpus, not a
     // sample. If a future ADR amendment changes the link count, this
@@ -331,7 +331,12 @@ describe('rewriteRecordLink — the real docs/adr and docs/security corpus, enum
     // (→ ROUTE). ADR-015, ADR-016 and ADR-017 are named without links, as in
     // ADR-018. Counted per file with this test's own extraction regex before
     // the buckets below were touched.
-    expect(extractAllLinks()).toHaveLength(411);
+    //
+    // 411 → 415 with the 2026-10-10 UI-scope amendments to ADR-018 and
+    // ADR-019: five external links (RFC 8628 twice, Standard Webhooks twice,
+    // OpenID Shared Signals Framework 1.0), and ADR-018's one bare anchor to
+    // its open-questions section removed with the question it pointed at.
+    expect(extractAllLinks()).toHaveLength(415);
   });
 
   it('every link falls into exactly one of the four outcomes, with none left unresolved', () => {
@@ -428,7 +433,10 @@ describe('rewriteRecordLink — the real docs/adr and docs/security corpus, enum
     // ADR-020: 199 → 205 external and 31 → 32 bare anchors; 142 → 152 route
     // (its nine record links and the README index row). Blob and unresolved
     // unchanged.
-    expect(untouchedExternalOrAnchor).toBe(205 + 32);
+    //
+    // The ADR-018 and ADR-019 UI-scope amendments: 205 → 210 external and
+    // 32 → 31 bare anchors. Route, blob and unresolved unchanged.
+    expect(untouchedExternalOrAnchor).toBe(210 + 31);
     expect(rewrittenToRoute).toBe(152);
     expect(rewrittenToBlob).toBe(22);
     expect(leftUnresolved).toBe(0);
