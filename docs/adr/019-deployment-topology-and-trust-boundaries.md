@@ -1,6 +1,6 @@
 # ADR-019: Deployment Topology, Trust Boundaries and Key Custody
 
-**Status:** Proposed — records the maintainer's decisions of 2026-10-08 and 2026-10-09; it becomes Accepted when the maintainer has read this text.  
+**Status:** Proposed — records the maintainer's decisions of 2026-10-08, 2026-10-09 and 2026-10-10; it becomes Accepted when the maintainer has read this text.  
 **Date:** 2026-10-09  
 **Authors:** QAuth Team
 
@@ -22,6 +22,16 @@
 > - Decision 3: a realm's `ssoMaxLifespan` also caps refresh families, and "sign out everywhere"
 >   is defined.
 > - Decision 7: the Authority Tree's realm-admin powers map onto the permission catalog.
+>
+> **Amended 2026-10-10** with the maintainer's answers on the UI scope, given on 2026-10-09 and
+> 2026-10-10. ADR-020 (proposed in a separate PR) records the screens.
+>
+> - Decision 3: one browser may hold several accounts' sessions for a realm.
+> - Decision 5: the UI list, the theme tier and the federation section of the admin console.
+> - Decision 7: a two-admin approval rule for security operations.
+> - Decision 8: event delivery through a transactional outbox and a delivery role.
+> - Decision 9: two more key purposes.
+> - New Decisions 10 to 12: where settings live, the paired sandbox realm, and plugins.
 
 ## Context
 
@@ -60,6 +70,9 @@ So two realms on one host would share one session cookie and one RP ID.
 | Management API            | `/api/clients`, with its API-key routes, and `/api/consents` accept only the portal's system-client token (`assertManagementToken`). `roles` and `user_roles` are not enforced. | Three API families, one audience per token. Admin access by scope and role, DPoP-bound, passkey-gated (Decision 7).              |
 | Scale-out                 | Every auth-server instance serves every route and reads every key.                                                                                                              | Roles of one codebase over one transactional store (Decision 8).                                                                 |
 | Keys                      | Read from environment variables or files on every instance. Retired keys are not wired at the app layer.                                                                        | Per realm and per purpose, envelope-encrypted in Postgres, held by a signer role, rotated every 90 days by default (Decision 9). |
+| Settings                  | Most policies are environment keys: `ACCESS_TOKEN_LIFESPAN`, `REFRESH_TOKEN_LIFESPAN`, `REQUIRE_EMAIL_VERIFIED`, `PASSWORD_MIN_SCORE`, `EMAIL_FROM_*`, `SMTP_*` and `CIMD_*`.   | Deployment switches stay in the environment. Realm policies live on the realm row (Decision 10).                                 |
+| Sandbox                   | None.                                                                                                                                                                           | A paired sandbox realm with its own host, issuer and keys (Decision 11).                                                         |
+| Plugins                   | `CredentialProvider` implementations compiled into the auth server.                                                                                                             | Operator-installed, in-process plugins on the AuthMethod contract (Decision 12).                                                 |
 
 Today's key and secret variables include:
 
@@ -123,6 +136,19 @@ Lifetime and sign-out everywhere, decided 2026-10-09 (maintainer):
 - "Sign out everywhere" revokes the user's session rows in Postgres and clears them from the
   cache. It also sends back-channel logout (Decision 4).
 
+Several accounts on one browser, decided 2026-10-10 (maintainer). This widens the 2026-10-08 rule
+of a single browser session on the auth host:
+
+- One browser may hold sessions for several accounts of the same realm.
+- `prompt=select_account` shows a chooser. With `prompt=none`, more than one account session and no
+  hint naming one, the answer is `account_selection_required` (OpenID Connect Core 1.0 §3.1.2.6).
+- Each account session keeps its own `sid`, its own back-channel logout and its own sign-out. A user
+  can sign out of one account or of all accounts on the browser.
+- The ownership rules above still hold: the sessions live only on the realm's auth host, under
+  `__Host-` cookies with no `Domain` attribute. How the cookies are laid out is an implementation
+  detail inside that rule.
+- There is still no SSO across realms.
+
 ### 4. Logout
 
 - 1.0 ships RP-initiated logout, as ADR-017 F0 describes.
@@ -137,10 +163,17 @@ Headless means the core has no UI of its own. Every UI is a separate, replaceabl
 APIs:
 
 - the reference ceremony app;
-- the admin console;
+- the admin console, with its federation section;
 - the developer portal;
-- the account page;
-- the Authority Tree dashboard.
+- the account console, which holds the Authority Tree screens.
+
+The account console is the "portal" that ADR-014 names for agent owners. That follows from the
+API families of Decision 7: an agent belongs to a human account, and its owner acts through the
+account API.
+
+The federation section is part of the admin console, not a separate app. It opens when the console
+connects to a federation-operator deployment's admin API. That deployment's signer role signs; the
+console holds no keys. Decided 2026-10-10 (maintainer).
 
 The reference ceremony app covers these ceremonies:
 
@@ -148,7 +181,9 @@ The reference ceremony app covers these ceremonies:
 - Authority Tree approval;
 - registration and password reset;
 - passkey enrolment;
-- wallet sign-in.
+- wallet sign-in;
+- device-code entry for the RFC 8628 device authorization grant;
+- the account chooser for several accounts on one browser (Decision 3).
 
 How it is deployed:
 
@@ -163,7 +198,9 @@ How it is deployed:
 
 Customisation comes in three tiers:
 
-1. Theme: design tokens, logo, strings and i18n.
+1. Theme: brand settings in the admin console. They cover the logo, colours, a font from a safe
+   list, per-locale strings, links and dark mode. There are no uploaded templates and no custom CSS
+   or JavaScript. Decided 2026-10-10 (maintainer).
 2. Fork the reference app.
 3. Build your own UI on the API.
 
@@ -174,7 +211,8 @@ Every ceremony page meets one baseline:
 - WCAG 2.2 AA.
 - A strict CSP, with no third-party scripts.
 - `frame-ancestors 'none'`.
-- Password and TOTP work without JavaScript. Their forms post directly to the auth server.
+- Password, the email-code step and TOTP work without JavaScript. Their forms post directly to the
+  auth server.
 - Passkeys need JavaScript.
 
 ### 6. The Interaction API
@@ -254,6 +292,16 @@ catalog. This answers ADR-015 parked question 10. Decided 2026-10-09 (maintainer
   mechanism of ADR-014 §14.
 - Security operations include key rotation, realm deletion and ownership transfer.
 
+**Two-admin approval**, decided 2026-10-10 (maintainer).
+
+- The admin console recommends a second admin's approval for every `admin:security` operation.
+- A realm chooses the operations where it is mandatory. Deleting a user's passkey or TOTP is the
+  first example.
+- The second admin approves with their own fresh passkey. Nobody approves their own request.
+- A realm with one admin sees a warning. If a mandatory rule leaves no second admin, the break-glass
+  CLI below is the way out.
+- Both approvals land in the admin events.
+
 **Automation.**
 
 - Service accounts live in the operator realm.
@@ -302,7 +350,21 @@ How revocation reaches resource servers:
 
 - short token lifetimes;
 - introspection for high-risk calls;
-- later, the OpenID Shared Signals Framework (SSF).
+- OpenID Shared Signals Framework (SSF) streams with CAEP events, which 1.0 ships as one of the
+  event routes below.
+
+**Event delivery**, decided 2026-10-10 (maintainer). ADR-018 §3 lists the four routes.
+
+- Each event is written to a transactional outbox in Postgres, in the same transaction as the change
+  it records. No event is lost when a node fails.
+- A delivery role reads the outbox and sends signed webhooks and SSF streams. It runs in-process in
+  a single deployment, like the signer.
+- Delivery is at least once. Every event carries a stable id, so a receiver drops duplicates.
+- The cursor-based event API reads the same store.
+- The delivery role holds no private keys. The signer role signs Security Event Tokens and webhook
+  payloads (Decision 9).
+- OpenTelemetry export is telemetry each role emits. The event API and webhooks are the channels
+  that guarantee delivery.
 
 ### 9. Key custody
 
@@ -325,7 +387,10 @@ How revocation reaches resource servers:
 - OID4VP verifier request signing;
 - OID4VP response encryption;
 - data-at-rest encryption;
-- the cookie HMAC.
+- the cookie HMAC;
+- webhook payload signing, per subscription. Added 2026-10-10;
+- client-assertion keys QAuth uses as a relying party toward an upstream provider, for example the
+  `private_key_jwt` key the My Number plugin needs. Added 2026-10-10.
 
 **Who holds keys.**
 
@@ -348,6 +413,54 @@ How revocation reaches resource servers:
 **Relation to ADR-001.** This record supersedes ADR-001's environment-variable key model for
 production. Today every instance reads its keys from environment variables or files.
 
+### 10. Settings: deployment switches and realm policies
+
+Decided 2026-10-10 (maintainer).
+
+- **Deployment-wide switches stay in the environment.** Examples are `WALLET_FEDERATION_ENABLED`,
+  `AUTHORITY_TREE_ENABLED`, the signing mode and experimental features. The console shows them read
+  only.
+- **Realm policies live in Postgres, on the realm row.** They change through the admin API and the
+  admin console. They include sign-up, the verified-account requirement, password and MFA policy,
+  session and token lifetimes, brand settings, upstream providers and the email sender.
+- **The environment only seeds a new realm's defaults.** Changing an environment key later does not
+  change an existing realm.
+- The admin API's realm representation and the declarative realm file of ADR-018 §5 carry these
+  policies.
+
+ADR-008's posture already lives in the database: `realms.max_environment_laxity` and
+`oauth_clients.environment`. The admin console edits both. Tightening is free. Loosening needs
+`admin:security` with a fresh passkey, and a second admin where the realm requires one (Decision 7).
+
+### 11. Paired sandbox realm
+
+Decided 2026-10-10 (maintainer).
+
+- A live realm can have a paired sandbox realm. It is a realm in its own right.
+- It has its own host, issuer, keys and passkey RP ID, under Decisions 1, 2 and 9.
+- Its ADR-008 ceiling is `staging`, so the developer portal's flow test console works there.
+- It shares no users with the live realm. Its upstream providers use test accounts.
+- Configuration moves from sandbox to live through the realm file's diff (ADR-018 §5). Secret values
+  are never copied, so live secrets are set on the live realm.
+- The admin console and the developer portal switch between sandbox and live with one control.
+
+A production resource server rejects a sandbox token because the issuer differs. No extra check is
+needed in the resource server. That is why a sandbox flag inside the live issuer was rejected:
+every resource server would have to check that claim, and one that forgot would accept sandbox
+tokens.
+
+### 12. Plugins
+
+Decided 2026-10-10 (maintainer).
+
+- Plugins implement the AuthMethod contract. Examples are the Google, Microsoft, Apple, GitHub and
+  My Number provider plugins of ADR-018 §3.
+- A plugin is trusted code. The operator installs it with the deployment, and it runs in-process.
+- The admin console can enable, configure and disable an installed plugin. It never uploads or edits
+  plugin code. For the same reason there are no script mappers.
+- A plugin holds no private keys. It asks the signer role, like every other component (Decision 9).
+- The plugin API is experimental in 1.0 (ADR-018 §4).
+
 ## Consequences
 
 ### Positive
@@ -362,6 +475,8 @@ production. Today every instance reads its keys from environment variables or fi
 - A key rotation no longer forces users to sign in again.
 - Security-critical state stays in one transactional store when a deployment scales out.
 - The Interaction API is versioned and published, so a custom UI has a stable target.
+- A sandbox token can never pass a production resource server, because the issuer differs.
+- Events survive node failures, because the outbox shares the transaction of the change.
 
 ### Negative
 
@@ -376,6 +491,10 @@ production. Today every instance reads its keys from environment variables or fi
 - Envelope encryption, a signer role and automatic rotation are new code inside the audit's scope.
 - Passkeys need JavaScript. Only password and TOTP work without it.
 - Rebuilding today's server-rendered pages as a separate app is a large migration.
+- Several accounts on one browser make session handling, sign-out and `prompt=none` more complex.
+- A sandbox realm doubles the host, DNS and TLS work for every realm that uses one.
+- Moving realm policies from environment keys to the realm row needs a one-time migration of today's
+  values.
 
 ### Neutral
 
@@ -409,8 +528,7 @@ The maintainer answered these on 2026-10-09. Each answer is a decision of this r
 
 ## Open questions
 
-- **UI screen list.** The exact screens of the reference ceremony app, the admin console and the
-  account page are the subject of the next conversation.
+None. The UI screen list was answered on 2026-10-09 and 2026-10-10; ADR-020 records it.
 
 ## Related
 
@@ -433,8 +551,10 @@ The maintainer answered these on 2026-10-09. Each answer is a decision of this r
 - ADR-017: First-Party Login, proposed in PR #417 — F0, F1, Decision 3 and parked question 1.
 - [ADR-018: QAuth 1.0 — Scope, Stability Promise and Release Path](./018-1-0-scope-and-stability.md)
   — the 1.0 scope and the stability promise this topology serves.
+- ADR-020, proposed in a separate PR — UI surfaces and UX acceptance criteria.
 - [Hosted UI guide](https://docs.qauth.dev/integrate/hosted-ui/) — today's server-rendered pages.
 - [RFC 8414: OAuth 2.0 Authorization Server Metadata](https://www.rfc-editor.org/rfc/rfc8414)
+- [RFC 8628: OAuth 2.0 Device Authorization Grant](https://www.rfc-editor.org/rfc/rfc8628)
 - [RFC 8693: OAuth 2.0 Token Exchange](https://www.rfc-editor.org/rfc/rfc8693)
 - [RFC 9449: OAuth 2.0 Demonstrating Proof of Possession (DPoP)](https://www.rfc-editor.org/rfc/rfc9449)
 - [RFC 9635: Grant Negotiation and Authorization Protocol (GNAP)](https://www.rfc-editor.org/rfc/rfc9635)
@@ -443,5 +563,6 @@ The maintainer answered these on 2026-10-09. Each answer is a decision of this r
 - [OpenID Connect Back-Channel Logout 1.0](https://openid.net/specs/openid-connect-backchannel-1_0.html)
 - [OpenID Federation 1.0](https://openid.net/specs/openid-federation-1_0.html)
 - [OpenID Shared Signals Framework 1.0](https://openid.net/specs/openid-sharedsignals-framework-1_0-final.html)
+- [Standard Webhooks](https://www.standardwebhooks.com/)
 - [Web Authentication Level 3](https://www.w3.org/TR/webauthn-3/)
 - [WCAG 2.2](https://www.w3.org/TR/WCAG22/)
