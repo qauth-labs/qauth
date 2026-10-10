@@ -1,6 +1,5 @@
-import { readdirSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 
 import rateLimit from '@fastify/rate-limit';
 import Fastify from 'fastify';
@@ -94,9 +93,30 @@ describe('clientAddressKey as a @fastify/rate-limit keyGenerator', () => {
   });
 });
 
+/**
+ * The auth-server's `src/app` directory. Walks up from the cwd (no `import.meta`:
+ * this project compiles its tests as `module: commonjs`), so the lookup works
+ * from the project directory or the workspace root.
+ */
+function resolveAppDir(): string {
+  let dir = process.cwd();
+  for (let depth = 0; depth < 8; depth += 1) {
+    for (const candidate of [
+      join(dir, 'src', 'app'),
+      join(dir, 'apps', 'auth-server', 'src', 'app'),
+    ]) {
+      if (existsSync(join(candidate, 'helpers', 'client-address.ts'))) return candidate;
+    }
+    const parent = dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  throw new Error('Could not locate apps/auth-server/src/app from cwd ' + process.cwd());
+}
+
 describe('rate-limit key functions in the app', () => {
   it('derive every key from clientAddressKey', () => {
-    const appDir = fileURLToPath(new URL('..', import.meta.url));
+    const appDir = resolveAppDir();
     const files = readdirSync(appDir, { recursive: true, encoding: 'utf8' }).filter(
       (file) => file.endsWith('.ts') && !file.endsWith('.test.ts')
     );
