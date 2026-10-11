@@ -360,7 +360,14 @@ describe('rewriteRecordLink — the real docs/adr and docs/security corpus, enum
     // in-tree record links (ADR-008 once, ADR-014, ADR-015 and ADR-017 twice
     // each → ROUTE) and one is the spec pin log (→ BLOB). Counted with this
     // test's own extraction regex before the buckets below were touched.
-    expect(extractAllLinks()).toHaveLength(569);
+    //
+    // 569 → 570 with the 2026-10-11 decisions on ADR-011 (an operator links the
+    // enterprise subject; every client names the issuer as the sole `aud`): three
+    // new record links (ADR-011 → ADR-019, ADR-019 → ADR-011, ADR-017 → ADR-011)
+    // and two removed (ADR-011's follow-up list no longer links ADR-008 and
+    // ADR-017), all → ROUTE. Counted with this test's own extraction regex before
+    // the buckets below were touched.
+    expect(extractAllLinks()).toHaveLength(570);
   });
 
   it('every link falls into exactly one of the four outcomes, with none left unresolved', () => {
@@ -481,7 +488,10 @@ describe('rewriteRecordLink — the real docs/adr and docs/security corpus, enum
     // anchors 37 → 38; 221 → 228 route; 23 → 24 blob (the spec pin log).
     // Unresolved unchanged.
     expect(untouchedExternalOrAnchor).toBe(279 + 38);
-    expect(rewrittenToRoute).toBe(228);
+    //
+    // The 2026-10-11 decisions on ADR-011: 228 → 229 route (net +1, see the total
+    // above). External, anchors, blob and unresolved unchanged.
+    expect(rewrittenToRoute).toBe(229);
     expect(rewrittenToBlob).toBe(24);
     expect(leftUnresolved).toBe(0);
   });

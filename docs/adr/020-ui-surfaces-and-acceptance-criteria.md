@@ -176,7 +176,8 @@ Placement rules that follow from earlier decisions:
   breach list. The list's source, a local list or a k-anonymity lookup, is a realm setting. A
   lookup goes through the egress client of ADR-019 Decision 8. There is no periodic expiry.
 - First sign-in through an upstream never merges accounts automatically. Email is only an attribute
-  by default. An account is linked only when the user signs in to the existing account.
+  by default. An account is linked only when the user signs in to the existing account. The one exception is an
+  enterprise ID-JAG subject, which an operator links (ADR-011 gate 14, ADR-019 Decision 7).
 - Error, info and expired pages share one design. Each says what happened and what to do, and
   shows a trace id. None reveals detail an attacker could use.
 - Sign-in with an X.509 client certificate and versioned terms acceptance come in 1.x. In 1.0 the

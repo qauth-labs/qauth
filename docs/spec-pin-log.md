@@ -343,8 +343,9 @@ That last one matters to QAuth. `acceptedClientAssertionAudiences` in
 and the token endpoint URL, and ADR-011 records that design. It is compliant
 under errata set 2. It would not be under errata set 3.
 `draft-ietf-oauth-rfc7523bis-11`, now in the RFC Editor queue, says the same:
-the issuer identifier as the sole audience value. This pass changes no code; it
-records the watch item.
+the issuer identifier as the sole audience value. This pass changes no code; it records the watch item. **Resolved on 2026-10-11:** the
+maintainer decided that every client names the issuer as the sole audience (ADR-011 §7),
+and the code does that now.
 
 The conformance files quote these specifications verbatim
 (`docs/conformance/requirements/*.json`). When an errata set is published, the
