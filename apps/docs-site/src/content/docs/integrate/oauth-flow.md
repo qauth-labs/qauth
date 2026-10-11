@@ -416,6 +416,11 @@ Rules that are load-bearing rather than incidental:
 - **The registered method must match exactly.** A client provisioned for
   `client_secret_*` cannot authenticate by assertion, and a `private_key_jwt`
   client cannot fall back to its secret.
+- **`aud` is the issuer, and only the issuer.** Name the `issuer` from the discovery
+  document as the sole audience, as a string or a one-element array. The token
+  endpoint URL is refused with `invalid_client`, and so is an `aud` array that
+  holds anything next to the issuer (`draft-ietf-oauth-rfc7523bis` §4). Many client
+  libraries default to the token endpoint URL, so set the audience explicitly.
 - **One method per request.** Presenting more than one authentication method is
   rejected with `invalid_client` (RFC 6749 §2.3) — never "try each until one
   passes".
