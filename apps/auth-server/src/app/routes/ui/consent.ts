@@ -14,6 +14,7 @@ import {
 } from '../../constants';
 import { toStoredAssuranceLevel } from '../../helpers/acr-claims';
 import { resolveBrowserSession } from '../../helpers/browser-session';
+import { clientAddressKey } from '../../helpers/client-address';
 import { findExceedingAgentScopesForClient } from '../../helpers/client-auth';
 import { isAgentClient, resolveClient } from '../../helpers/client-resolution';
 import {
@@ -42,6 +43,7 @@ import {
 } from '../../helpers/session-cookie';
 import { evaluateStepUp, isDangerousScope, parsePromptMode } from '../../helpers/step-up';
 import { markRelaxedCsp } from '../../plugins/security-headers';
+import { exactUrl } from '../../schemas/common';
 import { authorizeQuerySchema, resourceParamSchema } from '../../schemas/oauth';
 
 /**
@@ -91,7 +93,8 @@ const consentFormSchema = z.object({
   // Mirror of the original authorize params so we don't need to stash them
   // in the session (keeps the session payload small + stateless enough).
   client_id: z.string().min(1),
-  redirect_uri: z.string().url(),
+  // Same exact-string rule as `authorizeQuerySchema.redirect_uri`.
+  redirect_uri: exactUrl(),
   state: z.string().max(OAUTH_OPAQUE_PARAM_MAX_LENGTH).optional(),
   // Mirrors `authorizeQuerySchema`'s bound — the two silently drifted once
   // (#316) and this form POST reaches the same pending-authorization stash.
@@ -526,7 +529,7 @@ export default async function (fastify: FastifyInstance) {
         rateLimit: {
           max: env.AUTHORIZE_RATE_LIMIT,
           timeWindow: env.AUTHORIZE_RATE_WINDOW * 1000,
-          keyGenerator: (req) => req.ip || 'unknown',
+          keyGenerator: clientAddressKey,
         },
       },
     },

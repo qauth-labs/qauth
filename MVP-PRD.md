@@ -45,6 +45,8 @@ The project is built toward a future where digital identity is portable and user
 
 **Note**: Multi-tenancy is included via the Realms table for data isolation. Advanced multi-tenancy features (custom domains, tenant management UI) are Phase 6+.
 
+> **Amendment (2026-10-09):** [ADR-019](./docs/adr/019-deployment-topology-and-trust-boundaries.md) moves realm hosts and custom domains into 1.0. Automatic TLS and DNS verification for custom domains come later, with a hosted service.
+
 ---
 
 ## 📋 Phase Breakdown

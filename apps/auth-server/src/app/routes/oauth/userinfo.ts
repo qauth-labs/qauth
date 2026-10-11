@@ -4,6 +4,7 @@ import { ZodTypeProvider } from 'fastify-type-provider-zod';
 
 import { env } from '../../../config/env';
 import { MIN_RESPONSE_TIME_MS } from '../../constants';
+import { clientAddressKey } from '../../helpers/client-address';
 import { resolveEmailClaims } from '../../helpers/email-claims';
 import { ensureMinimumResponseTime } from '../../helpers/timing';
 import { userinfoResponseSchema } from '../../schemas/oauth';
@@ -177,7 +178,7 @@ export default async function (fastify: FastifyInstance) {
   const rateLimit = {
     max: env.USERINFO_RATE_LIMIT,
     timeWindow: env.USERINFO_RATE_WINDOW * 1000,
-    keyGenerator: (request: FastifyRequest) => request.ip || 'unknown',
+    keyGenerator: clientAddressKey,
   };
 
   const handler = (request: FastifyRequest) => handleUserinfo(fastify, request);

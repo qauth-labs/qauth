@@ -254,7 +254,7 @@ describe('rewriteRecordLink — the real docs/adr and docs/security corpus, enum
     return links;
   }
 
-  it('extracts exactly 323 links across the 14 ADRs, the ADR README, the security review and the threat model — the corpus the counts below are checked against', () => {
+  it('extracts exactly 560 links across the 21 ADRs, the ADR README, the security review and the threat model — the corpus the counts below are checked against', () => {
     // A fixed count, not a lower bound: this test's whole point is that the
     // categorisation below is checked against the FULL corpus, not a
     // sample. If a future ADR amendment changes the link count, this
@@ -313,7 +313,48 @@ describe('rewriteRecordLink — the real docs/adr and docs/security corpus, enum
     // (ADR-006, ADR-012 → ROUTE) and one to the root SECURITY.md, which is not
     // a record (→ BLOB). Predicted from the document's own link list before
     // running, so the buckets below are a check.
-    expect(extractAllLinks()).toHaveLength(323);
+    //
+    // 323 → 394 with ADR-018 (the 1.0 scope) and ADR-019 (the deployment
+    // trust boundaries), 2026-10-09. ADR-018 carries 37 links: 11 external, 1
+    // bare anchor, 17 in-tree record links (→ ROUTE) and 8 to un-rendered
+    // files (SECURITY.md, the spec pin log, the OIDF runbook and the
+    // conformance matrix → BLOB). ADR-019 carries 22: 12 external and 10
+    // record links. The amendments add 12 record links: ADR-001 (1), ADR-004
+    // (2), ADR-005 (2), ADR-007 (5) and the two README index rows. ADR-015,
+    // ADR-016 and ADR-017 are named without links until their files are on
+    // main. Counted per file against origin/main before the buckets below
+    // were touched.
+    //
+    // 394 → 398 with the 2026-10-10 UI-scope amendments to ADR-018 and
+    // ADR-019: five external links added (RFC 8628 and Standard Webhooks in
+    // both records, the Shared Signals Framework in ADR-018) and one bare
+    // anchor removed (ADR-018's link to its closed open question).
+    //
+    // 398 → 415 with ADR-020 (the 1.0 UI surfaces), 2026-10-10: 16 links in
+    // the new record (6 external, 1 bare anchor to its own appendix, 9
+    // in-tree record links → ROUTE) plus the README index row for 020
+    // (→ ROUTE). ADR-015, ADR-016 and ADR-017 are named without links, as in
+    // ADR-018. Counted per file with this test's own extraction regex before
+    // the buckets below were touched.
+    //
+    // 415 → 431 with ADR-021 (flows and UI as semantic graphs), 2026-10-10:
+    // 13 links in the new record (5 external, 7 in-tree record links → ROUTE,
+    // 1 to the conformance matrix → BLOB), plus ADR-020 §6's pointer to
+    // ADR-021 (→ ROUTE) and its srvx link (external), plus the README index
+    // row for 021 (→ ROUTE). ADR-017 is named without a link, as elsewhere.
+    // Counted per file with this test's own extraction regex before the
+    // buckets below were touched.
+    //
+    // 431 → 560 when the records that were proposed in parallel meet on one
+    // branch: ADR-014's restated Related links (+2), ADR-015 (18 links),
+    // ADR-016 (26), ADR-017 (80) and the README rows for 015, 016 and 017 (+3).
+    // Each of those PRs was counted against its own base, so the totals above
+    // belong to the order the records land in, and this one to the union. The
+    // sum was checked per file with this test's extraction regex: 2 + 18 + 26
+    // + 80 + 3 = 129. ADR-018, ADR-019, ADR-020 and ADR-021 still name
+    // ADR-015, ADR-016 and ADR-017 without links; linking them is a separate,
+    // later edit.
+    expect(extractAllLinks()).toHaveLength(560);
   });
 
   it('every link falls into exactly one of the four outcomes, with none left unresolved', () => {
@@ -399,9 +440,39 @@ describe('rewriteRecordLink — the real docs/adr and docs/security corpus, enum
     // The threat model: 169 → 176 external (seven advisory URLs), 101 → 103
     // route (ADR-006, ADR-012) and 13 → 14 blob (SECURITY.md, a root file that
     // is not rendered as a record). Anchors and unresolved unchanged.
-    expect(untouchedExternalOrAnchor).toBe(176 + 30);
-    expect(rewrittenToRoute).toBe(103);
-    expect(rewrittenToBlob).toBe(14);
+    //
+    // ADR-018, ADR-019 and their amendments: 176 → 199 external and 30 → 31
+    // bare anchors; 103 → 142 route (17 from ADR-018, 10 from ADR-019, 12
+    // from the amendments and index rows); 14 → 22 blob (ADR-018's links to
+    // SECURITY.md, the spec pin log, the OIDF runbook and the conformance
+    // matrix). Unresolved unchanged — the check that no new link points at a
+    // record that is not on main yet.
+    //
+    // The 2026-10-10 UI-scope amendments: 199 → 204 external and 31 → 30
+    // bare anchors. Route, blob and unresolved unchanged.
+    //
+    // ADR-020: 204 → 210 external and 30 → 31 bare anchors; 142 → 152 route
+    // (its nine record links and the README index row). Blob and unresolved
+    // unchanged.
+    //
+    // ADR-021: 210 → 216 external (five in the record, srvx in ADR-020 §6);
+    // 152 → 161 route (the record's seven record links, ADR-020's pointer and
+    // the README index row); 22 → 23 blob (the conformance matrix). Anchors
+    // and unresolved unchanged.
+    //
+    // ADR-014..017 meeting the 1.0 records on one branch: 216 → 279 external
+    // and 31 → 37 bare anchors; 161 → 221 route. Blob and unresolved
+    // unchanged.
+    //   ADR-014 (restated)  +2 route (two Related links)
+    //   ADR-015             7 external, 11 route
+    //   ADR-016             11 external, 15 route
+    //   ADR-017             45 external, 6 anchors, 29 route
+    //   README              +3 route (the rows for 015, 016 and 017)
+    // Those sum to 63 external, 6 anchors and 60 route, the 129 of the total
+    // above. No new link leaves the rendered records for a blob URL.
+    expect(untouchedExternalOrAnchor).toBe(279 + 37);
+    expect(rewrittenToRoute).toBe(221);
+    expect(rewrittenToBlob).toBe(23);
     expect(leftUnresolved).toBe(0);
   });
 });

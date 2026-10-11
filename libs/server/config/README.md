@@ -125,11 +125,18 @@ Password hashing and validation configuration.
 
 Authentication-specific configuration.
 
-| Variable                   | Type   | Default  | Description               |
-| -------------------------- | ------ | -------- | ------------------------- |
-| `DEFAULT_REALM_NAME`       | string | `master` | Default realm name        |
-| `REGISTRATION_RATE_LIMIT`  | number | `3`      | Max registrations/window  |
-| `REGISTRATION_RATE_WINDOW` | number | `3600`   | Registration window (sec) |
+| Variable                   | Type    | Default  | Description                                    |
+| -------------------------- | ------- | -------- | ---------------------------------------------- |
+| `DEFAULT_REALM_NAME`       | string  | `master` | Default realm name                             |
+| `REQUIRE_VERIFIED_ACCOUNT` | boolean | `false`  | Refuse password login by an unverified account |
+| `REQUIRE_EMAIL_VERIFIED`   | boolean | —        | Deprecated alias of `REQUIRE_VERIFIED_ACCOUNT` |
+| `REGISTRATION_RATE_LIMIT`  | number  | `3`      | Max registrations/window                       |
+| `REGISTRATION_RATE_WINDOW` | number  | `3600`   | Registration window (sec)                      |
+
+The schema parses both gate names but does not combine them. Read the gate
+through `resolveRequireVerifiedAccount()`. It applies the `false` default and
+the alias. It returns a deprecation warning when the old name is set. It
+refuses the two names set to different values; the app must then fail its boot.
 
 ### rateLimitEnvSchema
 

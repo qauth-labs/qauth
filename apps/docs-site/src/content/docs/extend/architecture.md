@@ -454,7 +454,7 @@ The mitigation is a property of the _protocol this process serves_, not of a ver
 a configuration flag — which is exactly why it is easy to undo. Enabling HTTP/2 on this instance
 reactivates the advisory.
 
-There is a second, independent line of defence: `pnpm-workspace.yaml:56` pins
+There is a second, independent line of defence: `pnpm-workspace.yaml` pins
 `find-my-way: '>=9.7.0'` under `overrides`, and the comment there is explicit that this is "a
 floor against a future http2 switch, not a live fix". So an HTTP/2 switch is safe only as long as
 that floor — or a later fixed version — is what actually resolves. Verify with:
@@ -492,14 +492,14 @@ Three ways to break it, all named in the comment:
 
 Each silently reactivates host confusion inside an OAuth server. Nothing fails; nothing logs.
 
-**The version floors exist so this is not the only mitigation.** `pnpm-workspace.yaml:53` pins
-`fast-uri: '>=3.1.4 <4'`, and its comment says so directly — the advisories are
+**The version floors exist so this is not the only mitigation.** `pnpm-workspace.yaml` pins
+`fast-uri: '>=3.1.8 <4'` under `overrides`, and its comment says so directly — the advisories are
 
 > Inert today — main.ts sets a global Zod validator compiler so ajv never parses a request, and
 > redirect_uri matching is an exact string comparison with no URI parser in the decision — but
 > floored so that stops being load-bearing.
 
-The upper bound is deliberate: a bare `>=3.1.4` resolves to 4.x, turning a security floor into an
+The upper bound is deliberate: a bare `>=3.1.8` resolves to 4.x, turning a security floor into an
 unreviewed major bump. Treat the floor as defence in depth, not as permission to remove the
 compiler.
 

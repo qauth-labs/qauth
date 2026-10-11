@@ -7,7 +7,7 @@ import { serializerCompiler, validatorCompiler, ZodTypeProvider } from 'fastify-
 
 import { app } from './app/app';
 import { openapiOptions } from './app/openapi-options';
-import { env } from './config/env';
+import { env, envDeprecationWarnings } from './config/env';
 import { buildLoggerOptions } from './config/logger';
 
 // Instantiate Fastify with structured logging + request-id tracking.
@@ -36,8 +36,9 @@ const server = Fastify({
   // Which reverse-proxy hops may set `request.ip` (validated TRUST_PROXY: off
   // by default, or the proxies' addresses/CIDRs — never `true` or a hop count).
   // Every per-IP rate limit and the `ip:` failed-login lockout key on
-  // `request.ip`; behind a proxy with this unset, all callers share one
-  // bucket. The public origin still comes only from JWT_ISSUER — nothing reads
+  // `request.ip` (an IPv6 client by its /64; app/helpers/client-address.ts);
+  // behind a proxy with this unset, all callers share one bucket. The public
+  // origin still comes only from JWT_ISSUER — nothing reads
   // `request.hostname`/`request.protocol` (ADR-013).
   trustProxy: env.TRUST_PROXY,
   routerOptions: {
@@ -54,12 +55,14 @@ const server = Fastify({
 // Removing this line, scoping it to a subset of routes, or adding a route that opts back
 // into ajv validation (e.g. a raw JSON Schema `schema` on an instance without this
 // compiler) silently reactivates host confusion inside an OAuth server. The
-// `fast-uri: '>=3.1.4 <4'` floor in `pnpm-workspace.yaml` exists so this stops being the
+// `fast-uri: '>=3.1.8 <4'` floor in `pnpm-workspace.yaml` exists so this stops being the
 // only mitigation, but do not rely on it alone.
 // The second leg of the same invariant lives in the redirect_uri checks: matching is an
 // exact string comparison (RFC 9700) with no URI parser in the security decision; the
 // only relaxation, the port of a loopback redirect (RFC 8252 §7.3, #414), is lexical
-// too — see `redirectUriMatchesRegistered` in `app/helpers/oauth-redirect.ts`.
+// too — see `redirectUriMatchesRegistered` in `app/helpers/oauth-redirect.ts`. The
+// schemas that feed it use `exactUrl` (`app/schemas/common.ts`), not `z.url()`, which
+// since Zod 4.5 deletes tabs and line breaks from the value it returns.
 //
 // POSITION IS PART OF THE INVARIANT (#365). These two calls MUST run before
 // `server.register(app)` below. A child scope snapshots the parent's validator and
@@ -89,6 +92,15 @@ process.on('SIGINT', () => shutdown('SIGINT'));
 // Start server
 async function start() {
   try {
+    // Deprecated configuration names still work, but say so once at boot. The
+    // env is parsed before the logger exists, so the warnings wait until here.
+    for (const deprecation of envDeprecationWarnings) {
+      server.log.warn(
+        { variable: deprecation.variable, replacement: deprecation.replacement },
+        deprecation.message
+      );
+    }
+
     // Swagger UI + OpenAPI spec registration. Gated behind `ENABLE_SWAGGER`
     // (F-07): defaults to `true` in non-production and `false` in production
     // so the API surface is not advertised to unauthenticated callers in a

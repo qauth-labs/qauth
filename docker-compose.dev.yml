@@ -8,6 +8,9 @@ services:
       context: .
       dockerfile: apps/auth-server/Dockerfile.dev
     command: ['pnpm', 'nx', 'serve', 'auth-server', '--watch']
+    # The dev containers also run Nx and the build tooling; the production
+    # memory limit in docker-compose.yml does not apply here.
+    mem_limit: !reset null
     environment:
       # Fix for Prisma/NX finding schema in monorepo structure inside container
       NX_DAEMON: 'false'
@@ -48,6 +51,9 @@ services:
       context: .
       dockerfile: apps/developer-portal/Dockerfile.dev
     command: ['pnpm', 'nx', 'dev', 'developer-portal', '--', '--host', '0.0.0.0', '--port', '3001']
+    # The dev containers also run Nx and the Vite dev server; the production
+    # memory limit in docker-compose.yml does not apply here.
+    mem_limit: !reset null
     environment:
       # Fix for NX finding config in monorepo structure inside container
       NX_DAEMON: 'false'

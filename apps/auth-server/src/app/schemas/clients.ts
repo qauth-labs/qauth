@@ -1,5 +1,7 @@
 import { z } from 'zod';
 
+import { exactUrl } from './common';
+
 /**
  * Client-management API schemas (issue #85, task 2.2.1).
  *
@@ -129,7 +131,7 @@ export const tokenEndpointAuthMethodSchema = z.enum([
 export const createClientRequestSchema = z.object({
   name: z.string().min(1).max(255),
   description: z.string().max(2000).nullish(),
-  redirectUris: z.array(z.url()).default([]),
+  redirectUris: z.array(exactUrl()).default([]),
   scopes: z.array(z.string()).default([]),
   grantTypes: z.array(grantTypeSchema).nonempty().optional(),
   responseTypes: z.array(responseTypeSchema).optional(),
@@ -169,7 +171,7 @@ export const updateClientRequestSchema = z
   .object({
     name: z.string().min(1).max(255),
     description: z.string().max(2000).nullable(),
-    redirectUris: z.array(z.url()),
+    redirectUris: z.array(exactUrl()),
     scopes: z.array(z.string()),
     grantTypes: z.array(grantTypeSchema).nonempty(),
     responseTypes: z.array(responseTypeSchema),

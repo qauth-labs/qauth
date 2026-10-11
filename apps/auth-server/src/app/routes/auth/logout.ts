@@ -4,6 +4,7 @@ import { ZodTypeProvider } from 'fastify-type-provider-zod';
 
 import { env } from '../../../config/env';
 import { logAuthEvent } from '../../helpers/auth-events';
+import { clientAddressKey } from '../../helpers/client-address';
 import { logoutHeadersSchema, logoutResponseSchema } from '../../schemas/auth';
 
 /**
@@ -28,7 +29,7 @@ export default async function (fastify: FastifyInstance) {
         rateLimit: {
           max: env.LOGOUT_RATE_LIMIT,
           timeWindow: env.LOGOUT_RATE_WINDOW * 1000,
-          keyGenerator: (request) => request.ip || 'unknown',
+          keyGenerator: clientAddressKey,
         },
       },
     },

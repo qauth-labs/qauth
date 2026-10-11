@@ -4,6 +4,7 @@ import type { FastifyInstance } from 'fastify';
 import { ZodTypeProvider } from 'fastify-type-provider-zod';
 
 import { env } from '../../../config/env';
+import { clientAddressKey } from '../../helpers/client-address';
 import { validateAndNormalize } from '../../helpers/dynamic-client-registration';
 import { getOrCreateDefaultRealm } from '../../helpers/realm';
 import { resolveRegistrationDeveloperId } from '../../helpers/registration-attribution';
@@ -49,7 +50,7 @@ export default async function (fastify: FastifyInstance) {
         rateLimit: {
           max: env.REGISTER_CLIENT_RATE_LIMIT,
           timeWindow: env.REGISTER_CLIENT_RATE_WINDOW * 1000,
-          keyGenerator: (req) => req.ip || 'unknown',
+          keyGenerator: clientAddressKey,
         },
       },
     },

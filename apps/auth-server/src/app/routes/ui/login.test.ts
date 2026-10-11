@@ -235,7 +235,7 @@ describe('UI /ui/login — CSRF defence', () => {
   describe("POST shares the API login's failed-login lockout and email-verified gate", () => {
     const LOCKOUT_IDS = [`email:${hashEmail('user@example.com')}`, 'ip:127.0.0.1'];
 
-    async function postLogin(options: { verifies: boolean; emailVerified?: boolean }) {
+    async function postLogin(options: { verifies: boolean; emailVerified?: boolean; ip?: string }) {
       const { fastify, ctx } = makeFastify();
       await loginRoute(fastify);
       const getReply = createReply();
@@ -265,7 +265,7 @@ describe('UI /ui/login — CSRF defence', () => {
         {
           body: { email: 'User@Example.com', password: 'pw', csrf_token: rawToken },
           headers: { cookie: `__Host-qauth_login_csrf=${cookieValue}` },
-          ip: '127.0.0.1',
+          ip: options.ip ?? '127.0.0.1',
         },
         reply
       );
@@ -276,7 +276,7 @@ describe('UI /ui/login — CSRF defence', () => {
       vi.mocked(checkLockout).mockClear().mockResolvedValue({ locked: false });
       vi.mocked(recordFailedAttempt).mockClear();
       vi.mocked(resetFailedAttempts).mockClear();
-      (env as { REQUIRE_EMAIL_VERIFIED?: boolean }).REQUIRE_EMAIL_VERIFIED = false;
+      (env as { REQUIRE_VERIFIED_ACCOUNT?: boolean }).REQUIRE_VERIFIED_ACCOUNT = false;
     });
 
     it('refuses a locked-out identifier (429) before any credential check', async () => {
@@ -299,6 +299,15 @@ describe('UI /ui/login — CSRF defence', () => {
       expect(resetFailedAttempts).not.toHaveBeenCalled();
     });
 
+    it('keys the ip: identifier on the /64 of an IPv6 client', async () => {
+      await postLogin({ verifies: false, ip: '2001:db8:1:2:aaaa:bbbb:cccc:7' });
+
+      expect(recordFailedAttempt).toHaveBeenCalledWith(undefined, [
+        LOCKOUT_IDS[0],
+        'ip:2001:db8:1:2::',
+      ]);
+    });
+
     it('clears failed-login state on success', async () => {
       const { state } = await postLogin({ verifies: true });
 
@@ -307,8 +316,8 @@ describe('UI /ui/login — CSRF defence', () => {
       expect(recordFailedAttempt).not.toHaveBeenCalled();
     });
 
-    it('refuses an unverified credential (403, no session) when REQUIRE_EMAIL_VERIFIED is on', async () => {
-      (env as { REQUIRE_EMAIL_VERIFIED?: boolean }).REQUIRE_EMAIL_VERIFIED = true;
+    it('refuses an unverified credential (403, no session) when REQUIRE_VERIFIED_ACCOUNT is on', async () => {
+      (env as { REQUIRE_VERIFIED_ACCOUNT?: boolean }).REQUIRE_VERIFIED_ACCOUNT = true;
 
       const { fastify, state } = await postLogin({ verifies: true, emailVerified: false });
 
@@ -317,7 +326,7 @@ describe('UI /ui/login — CSRF defence', () => {
       expect(recordFailedAttempt).toHaveBeenCalledWith(undefined, LOCKOUT_IDS);
     });
 
-    it('still signs in an unverified credential when REQUIRE_EMAIL_VERIFIED is off (default)', async () => {
+    it('still signs in an unverified credential when REQUIRE_VERIFIED_ACCOUNT is off (default)', async () => {
       const { fastify, state } = await postLogin({ verifies: true, emailVerified: false });
 
       expect(state.statusCode).toBe(302);

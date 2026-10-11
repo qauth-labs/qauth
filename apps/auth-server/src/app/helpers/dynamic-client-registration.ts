@@ -42,6 +42,15 @@ export function rejectRegistration(code: DynamicRegistrationErrorCode, descripti
 const LOOPBACK_HOSTS = new Set(['127.0.0.1', '[::1]', '::1', 'localhost']);
 
 export function validateRedirectUri(uri: string): void {
+  // `new URL()` silently deletes an ASCII tab, LF or CR, so it would accept a
+  // URI carrying one, and the value is stored as sent. The authorization
+  // endpoint trims the requested redirect_uri and refuses one with such a
+  // character inside it (`exactUrl` in schemas/common.ts), so a registered URI
+  // that holds one could never match. Refuse it here instead.
+  if (/[\t\n\r]/.test(uri)) {
+    rejectRegistration('invalid_redirect_uri', 'redirect_uri must not contain a tab or line break');
+  }
+
   let parsed: URL;
   try {
     parsed = new URL(uri);

@@ -13,12 +13,13 @@ The portal owns its own session via an HttpOnly signed cookie `__Host-qauth_port
 
 ## Environment variables
 
-| Variable                | Required | Default | Description                                                                      |
-| ----------------------- | -------- | ------- | -------------------------------------------------------------------------------- |
-| `AUTH_SERVER_URL`       | Yes      | —       | Base URL the **server** uses to reach auth-server (e.g. `http://localhost:3000`) |
-| `VITE_AUTH_SERVER_URL`  | Yes      | —       | Base URL the **browser** uses (e.g. `http://localhost:3000`); build-time inlined |
-| `PORTAL_SESSION_SECRET` | Yes      | —       | 32+ char random secret for signing the session cookie                            |
-| `PORTAL_SESSION_TTL`    | No       | `900`   | Session cookie lifetime in seconds                                               |
+| Variable                | Required | Default | Description                                                                                    |
+| ----------------------- | -------- | ------- | ---------------------------------------------------------------------------------------------- |
+| `AUTH_SERVER_URL`       | Yes      | —       | Base URL the **server** uses to reach auth-server (e.g. `http://localhost:3000`)               |
+| `VITE_AUTH_SERVER_URL`  | Yes      | —       | Base URL the **browser** uses (e.g. `http://localhost:3000`); build-time inlined               |
+| `PORTAL_SESSION_SECRET` | Yes      | —       | 32+ char random secret for signing the session cookie                                          |
+| `PORTAL_SESSION_TTL`    | No       | `900`   | Session cookie lifetime in seconds                                                             |
+| `PORTAL_TRUST_PROXY`    | No       | —       | Proxy in front of the portal allowed to report the client address; single IPs, comma-separated |
 
 The portal itself listens on **3001**; auth-server is on **3000**. Both URL
 variables point at auth-server, never at the portal.
@@ -35,6 +36,7 @@ See `.env.example` at the repo root for sample values.
 All server-only code lives under `src/server/`:
 
 - `config.ts` — env var validation (throws at startup if required vars are missing)
+- `trust-proxy.ts` — parses `PORTAL_TRUST_PROXY` for the srvx server in `src/node-entry.ts` (an invalid value stops it at startup)
 - `session-cookie.ts` — HMAC-SHA256 sign/verify helpers for the portal session cookie
 - `auth-server-client.ts` — typed `fetch` wrappers for each auth-server endpoint, always returning `Result<T>` (never throws)
 - `actions/` — TanStack Start server functions (`createServerFn`) consumed by route files

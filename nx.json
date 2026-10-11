@@ -98,7 +98,31 @@
     "@nx/esbuild:esbuild": {
       "cache": true,
       "dependsOn": ["^build"],
-      "inputs": ["default", "^default"]
+      // Since Nx 23.2 an esbuild build with generatePackageJson also emits the
+      // pruned pnpm deploy output (lockfile plus a settings-only
+      // pnpm-workspace.yaml) carrying the root pnpm install settings, which no
+      // lockfile records. Hash them, and the pnpm major that decides where they
+      // land, so a changed build approval cannot replay a stale output (from
+      // @nx/js's update-23-2-0-add-pnpm-deploy-output-cache-inputs migration).
+      "inputs": [
+        "default",
+        "^default",
+        "{workspaceRoot}/pnpm-workspace.yaml",
+        {
+          "json": "{workspaceRoot}/package.json",
+          "fields": [
+            "packageManager",
+            "pnpm.onlyBuiltDependencies",
+            "pnpm.neverBuiltDependencies",
+            "pnpm.allowBuilds",
+            "pnpm.supportedArchitectures",
+            "pnpm.patchedDependencies"
+          ]
+        },
+        {
+          "runtime": "node -e \"try{console.log('pnpm major '+require('child_process').execSync('pnpm --version',{stdio:['ignore','pipe','ignore']}).toString().trim().split('.')[0])}catch{console.log('pnpm major unavailable')}\""
+        }
+      ]
     }
   },
   "namedInputs": {

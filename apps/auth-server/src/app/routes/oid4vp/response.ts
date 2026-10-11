@@ -24,6 +24,7 @@ import type { JWK } from 'jose';
 
 import { env } from '../../../config/env';
 import { WALLET_RETURN_CODE_TTL_MS } from '../../constants/security';
+import { clientAddressKey } from '../../helpers/client-address';
 import { unprotectOid4vpResponseKey } from '../../helpers/oid4vp-response-key';
 import { provisionedVerifierMaterial } from '../../helpers/verifier-identity';
 import {
@@ -212,7 +213,7 @@ export default async function (fastify: FastifyInstance) {
         rateLimit: {
           max: env.OID4VP_RESPONSE_RATE_LIMIT,
           timeWindow: env.OID4VP_RESPONSE_RATE_WINDOW * 1000,
-          keyGenerator: (request) => request.ip || 'unknown',
+          keyGenerator: clientAddressKey,
         },
       },
     },

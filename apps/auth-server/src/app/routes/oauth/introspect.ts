@@ -4,6 +4,7 @@ import { ZodTypeProvider } from 'fastify-type-provider-zod';
 
 import { env } from '../../../config/env';
 import { MIN_RESPONSE_TIME_MS } from '../../constants';
+import { clientAddressKey } from '../../helpers/client-address';
 import { authenticateClient, extractClientCredentials } from '../../helpers/client-auth';
 import { getPqcSignature } from '../../helpers/hybrid-token';
 import { getOrCreateDefaultRealm } from '../../helpers/realm';
@@ -82,7 +83,7 @@ export default async function (fastify: FastifyInstance) {
         rateLimit: {
           max: env.INTROSPECT_RATE_LIMIT,
           timeWindow: env.INTROSPECT_RATE_WINDOW * 1000,
-          keyGenerator: (request) => request.ip || 'unknown',
+          keyGenerator: clientAddressKey,
         },
       },
     },

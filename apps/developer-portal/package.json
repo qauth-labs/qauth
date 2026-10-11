@@ -5,14 +5,14 @@
   "type": "module",
   "dependencies": {
     "@qauth-labs/ui": "workspace:*",
-    "@tanstack/react-start": "catalog:",
     "@tanstack/react-router": "catalog:",
+    "@tanstack/react-start": "catalog:",
     "react": "catalog:",
-    "react-dom": "catalog:"
+    "react-dom": "catalog:",
+    "srvx": "catalog:"
   },
   "devDependencies": {
     "@tailwindcss/vite": "catalog:",
-    "@tanstack/nitro-v2-vite-plugin": "catalog:",
     "@types/node": "catalog:",
     "@types/react": "catalog:",
     "@types/react-dom": "catalog:",

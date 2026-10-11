@@ -6,6 +6,7 @@ import { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 
 import { env } from '../../../config/env';
+import { clientAddressKey } from '../../helpers/client-address';
 import { validateRedirectUri } from '../../helpers/dynamic-client-registration';
 import { type EnvironmentPolicy, resolveEnvironmentPolicy } from '../../helpers/environment-policy';
 import { createRequireManagementJwt } from '../../helpers/management-token';
@@ -405,7 +406,7 @@ export default async function (fastify: FastifyInstance) {
         rateLimit: {
           max: env.REGISTER_CLIENT_RATE_LIMIT,
           timeWindow: env.REGISTER_CLIENT_RATE_WINDOW * 1000,
-          keyGenerator: (req) => req.ip || 'unknown',
+          keyGenerator: clientAddressKey,
         },
       },
     },
@@ -679,7 +680,7 @@ export default async function (fastify: FastifyInstance) {
         rateLimit: {
           max: env.REGISTER_CLIENT_RATE_LIMIT,
           timeWindow: env.REGISTER_CLIENT_RATE_WINDOW * 1000,
-          keyGenerator: (req) => req.ip || 'unknown',
+          keyGenerator: clientAddressKey,
         },
       },
     },

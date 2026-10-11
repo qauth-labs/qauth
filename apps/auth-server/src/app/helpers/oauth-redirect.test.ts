@@ -239,6 +239,13 @@ describe('oauth-redirect — redirectUriMatchesRegistered (RFC 8252 §7.3, #414)
     expect(match('http://[::1]:8080/cb', 'http://[0:0:0:0:0:0:0:1]/cb')).toBe(false);
   });
 
+  it('compares raw strings: a tab or line break is never stripped into a match', () => {
+    // A URL parser deletes these before it parses; the matcher must not.
+    expect(match('https://app.example.com/c\tb', 'https://app.example.com/cb')).toBe(false);
+    expect(match('https://app.exa\nmple.com/cb', 'https://app.example.com/cb')).toBe(false);
+    expect(match('http://127.0.0.1:8080/c\rb', 'http://127.0.0.1/cb')).toBe(false);
+  });
+
   it('never matches against an empty registered set', () => {
     expect(match('http://127.0.0.1:53817/cb')).toBe(false);
   });

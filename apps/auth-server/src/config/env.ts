@@ -6,6 +6,7 @@ import {
   databaseEnvSchema,
   DEV_SESSION_COOKIE_SECRET_DEFAULT,
   emailEnvSchema,
+  type EnvDeprecationWarning,
   federationEnvSchema,
   issuerKeysEnvSchema,
   jwtEnvSchema,
@@ -15,6 +16,7 @@ import {
   passwordEnvSchema,
   rateLimitEnvSchema,
   redisEnvSchema,
+  resolveRequireVerifiedAccount,
   trustRegistryEnvSchema,
 } from '@qauth-labs/server-config';
 import { z } from 'zod';
@@ -119,16 +121,60 @@ const envSchema = z
           'SESSION_COOKIE_SECRET must be set to a strong secret of at least 32 characters in production (the dev default is not allowed).',
       });
     }
+
+    // REQUIRE_VERIFIED_ACCOUNT and its deprecated alias REQUIRE_EMAIL_VERIFIED
+    // must not disagree. Either value would override one of the operator's two
+    // statements, so the boot fails instead. Reported here, with every other
+    // config issue, rather than thrown after the parse.
+    const verifiedAccountGate = resolveRequireVerifiedAccount(env);
+    if (!verifiedAccountGate.ok) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['REQUIRE_VERIFIED_ACCOUNT'],
+        message: verifiedAccountGate.message,
+      });
+    }
   });
+
+type ParsedEnv = z.infer<typeof envSchema>;
 
 /**
  * Validated environment configuration
  */
-const parsedEnv = parseEnv(envSchema);
-export const env: z.infer<typeof envSchema> &
-  z.infer<typeof jwtEnvSchema> &
+const { REQUIRE_EMAIL_VERIFIED: deprecatedRequireEmailVerified, ...parsedEnv } =
+  parseEnv(envSchema);
+
+/**
+ * The verified-account gate, resolved from REQUIRE_VERIFIED_ACCOUNT and its
+ * deprecated alias. The schema's `superRefine` has already refused a conflict.
+ */
+const verifiedAccountGate = resolveRequireVerifiedAccount({
+  REQUIRE_VERIFIED_ACCOUNT: parsedEnv.REQUIRE_VERIFIED_ACCOUNT,
+  REQUIRE_EMAIL_VERIFIED: deprecatedRequireEmailVerified,
+});
+if (!verifiedAccountGate.ok) {
+  // Unreachable after the `superRefine` above; kept so a refactor fails closed.
+  throw new Error(verifiedAccountGate.message);
+}
+
+/**
+ * Deprecated configuration names this deployment still sets. `main.ts` logs
+ * each one at boot, once the logger exists.
+ */
+export const envDeprecationWarnings: readonly EnvDeprecationWarning[] =
+  verifiedAccountGate.deprecation === undefined ? [] : [verifiedAccountGate.deprecation];
+
+/**
+ * The app's env. The deprecated `REQUIRE_EMAIL_VERIFIED` is not on it, so no
+ * reader can consult the alias instead of the resolved gate.
+ */
+export const env: Omit<ParsedEnv, 'REQUIRE_EMAIL_VERIFIED' | 'REQUIRE_VERIFIED_ACCOUNT'> & {
+  /** Resolved verified-account gate. `false` unless an operator turned it on. */
+  REQUIRE_VERIFIED_ACCOUNT: boolean;
+} & z.infer<typeof jwtEnvSchema> &
   z.infer<typeof cryptoEnvSchema> = {
   ...parsedEnv,
+  REQUIRE_VERIFIED_ACCOUNT: verifiedAccountGate.requireVerifiedAccount,
   ...parseEnv(jwtEnvSchema),
   // Crypto / PQC signing config (ADR-005): SIGNING_ALGORITHM_MODE (#243),
   // HYBRID_SIGNING_ENABLED + ML-DSA key (#245), with fail-fast coupling.

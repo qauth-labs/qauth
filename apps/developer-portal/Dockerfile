@@ -1,11 +1,11 @@
 # Developer Portal Dockerfile — production image.
 #
-# The portal is a TanStack Start app built with the Nitro v2 Vite plugin.
-# `nx build` emits a self-contained, self-listening Node server at
-# `dist/apps/developer-portal/server/index.mjs` (Nitro bundles its runtime
-# deps into `server/node_modules`) plus static assets under `public/`. So the
-# runner just copies that output and runs `node server/index.mjs` — no custom
-# adapter and no separate `pnpm deploy` step are needed.
+# The portal is a TanStack Start app built by Start's Vite plugin alone (no
+# Nitro). `nx build` emits a self-contained, self-listening Node server at
+# `dist/apps/developer-portal/server/index.mjs` (src/node-entry.ts, a small
+# srvx server, with every runtime dep bundled in) plus static assets under
+# `public/`. So the runner just copies that output and runs
+# `node server/index.mjs`; no `pnpm deploy` step is needed.
 #
 # Requires BuildKit (default on Docker 23+) for the `--mount=type=cache`
 # pnpm-store mount. A sibling `Dockerfile.dockerignore` lifts the root
@@ -34,8 +34,8 @@ RUN --mount=type=cache,id=pnpm,target=/pnpm/store \
 ARG VITE_AUTH_SERVER_URL=http://localhost:3000
 ENV VITE_AUTH_SERVER_URL=$VITE_AUTH_SERVER_URL
 
-# Build the TanStack Start + Nitro app. Output (server/ with bundled
-# node_modules, public/) lands in dist/apps/developer-portal.
+# Build the TanStack Start app. Output (server/ with its deps bundled,
+# public/) lands in dist/apps/developer-portal.
 RUN pnpm nx build developer-portal
 
 # Stage 2: Runner.
@@ -47,14 +47,14 @@ ENV NODE_ENV=production
 RUN addgroup -g 1001 -S nodejs && \
     adduser -S nodejs -u 1001
 
-# Self-contained Nitro output: the Node server (with its bundled deps) plus
+# Self-contained build output: the Node server (with its bundled deps) plus
 # the static assets it serves. Nothing else is required at runtime.
 COPY --from=builder --chown=nodejs:nodejs /app/dist/apps/developer-portal/server ./server
 COPY --from=builder --chown=nodejs:nodejs /app/dist/apps/developer-portal/public ./public
 
 USER nodejs
 
-# Nitro's Node server listens on PORT (default 3000); pin it for the image.
+# The Node server listens on PORT (default 3000); pin it for the image.
 ENV PORT=3001
 EXPOSE 3001
 

@@ -27,8 +27,12 @@ The parts that matter:
 ## Deployment assumptions
 
 - TLS is terminated by a reverse proxy in front of the auth-server.
-- `TRUST_PROXY` names that proxy. With it unset, no forwarded header is
-  trusted, and every caller shares the proxy's address.
+- `TRUST_PROXY` names that proxy and the developer portal by address, never
+  a range clients can connect from. With it unset, no forwarded header is
+  trusted, and every caller shares the proxy's address. The portal's own
+  `PORTAL_TRUST_PROXY` names the proxy in front of the portal, by address.
+  Each named proxy appends the address it accepted the connection from to
+  `X-Forwarded-For`.
 - PostgreSQL and Redis are private to the deployment and trusted.
 - The operator's environment and configuration are trusted.
 - One deployment has one issuer (`JWT_ISSUER`) and serves one default realm.

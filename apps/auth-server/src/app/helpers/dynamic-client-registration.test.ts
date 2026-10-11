@@ -35,6 +35,17 @@ describe('validateRedirectUri', () => {
   it('rejects malformed URIs', () => {
     expect(() => validateRedirectUri('not a url')).toThrow(BadRequestError);
   });
+
+  it('rejects a tab or line break anywhere in the URI, which new URL() would silently delete', () => {
+    for (const uri of [
+      'https://app.example/c\tb',
+      'https://app.exa\nmple/cb',
+      'https://app.example/cb\r\n',
+      '\thttps://app.example/cb',
+    ]) {
+      expect(() => validateRedirectUri(uri)).toThrow(BadRequestError);
+    }
+  });
 });
 
 describe('validateAndNormalize', () => {
@@ -74,7 +85,7 @@ describe('validateAndNormalize', () => {
     const n = validateAndNormalize(
       {
         redirect_uris: ['https://app.example/cb'],
-        scope: 'openid memory:admin',
+        scope: 'openid example:admin',
       },
       allowedScopes
     );
@@ -86,7 +97,7 @@ describe('validateAndNormalize', () => {
     const n = validateAndNormalize(
       {
         redirect_uris: ['https://app.example/cb'],
-        scope: 'openid openid email memory:admin',
+        scope: 'openid openid email example:admin',
       },
       allowedScopes
     );

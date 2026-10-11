@@ -50,3 +50,16 @@ describe('main.ts security invariants', () => {
     expect(mainCode).not.toMatch(/\bserverFactory\b/);
   });
 });
+
+/**
+ * A deprecated config name still works, so nothing else tells the operator to
+ * rename it before the deprecation window closes. `config/env.ts` collects the
+ * warnings (tested in `env.test.ts`); this pins that `main.ts` logs them at boot.
+ */
+describe('main.ts boot warnings', () => {
+  it('logs every env deprecation warning through the server logger', () => {
+    expect(mainCode).toMatch(
+      /for \(const \w+ of envDeprecationWarnings\)\s*\{\s*server\.log\.warn\(/
+    );
+  });
+});

@@ -34,7 +34,7 @@ Both `auth-server` and `developer-portal` follow this convention: a multi-stage
 
 - Docker **23.0+** (BuildKit on by default) or earlier Docker with `DOCKER_BUILDKIT=1` set. The auth-server and migration-runner Dockerfiles use `# syntax=docker/dockerfile:1.7` and a `--mount=type=cache` pnpm-store mount, both of which require BuildKit.
 - Docker Compose 2.0+
-- Docker Compose **2.22+** for development watch (`docker-compose.dev.yml` + `--watch`)
+- Docker Compose **2.24.4+** for development (`docker-compose.dev.yml` uses the `!reset` merge tag; `--watch` needs 2.22+)
 - OpenSSL (for generating JWT keys)
 
 ## Quick Start
@@ -95,7 +95,7 @@ docker compose up -d
 docker compose logs -f
 ```
 
-**Development** (dev image, Compose Watch, `nx serve --watch`; requires Docker Compose 2.22+):
+**Development** (dev image, Compose Watch, `nx serve --watch`; requires Docker Compose 2.24.4+):
 
 ```bash
 # In .env: NODE_ENV=development, LOG_LEVEL=debug
@@ -234,21 +234,25 @@ from its server functions — tokens never reach the browser.
 - **Port**: 3001 (mapped to host)
 - **Health Check**: a raw TCP connect check on port 3001
   (`docker-compose.yml`, `developer-portal.healthcheck`) — liveness only, and
-  does **not** depend on the auth-server being reachable. The Nitro build has
+  does **not** depend on the auth-server being reachable. The portal build has
   no dedicated `/healthz` route, so there is nothing to `curl`.
 - **Production**: `Dockerfile` → runs `node server/index.mjs`, the
   self-contained server the build emits (see below).
 - **Development**: `Dockerfile.dev` → `pnpm nx dev developer-portal` (Vite dev
   server); use with `docker-compose.dev.yml` and `--watch`.
 - **Depends on**: `auth-server` (healthy).
+- **Address**: fixed at `172.30.80.10` on the Compose network, so the
+  auth-server's `TRUST_PROXY` can name it (see Production Considerations
+  below). If Compose reports that an existing `qauth-network` must be
+  recreated, run `docker compose down` once (named volumes are kept).
 
-The portal is built with TanStack Start's Nitro v2 Vite plugin, which emits a
+The portal is built by TanStack Start's Vite plugin alone, which emits a
 **self-contained, self-listening** Node server at
-`dist/apps/developer-portal/server/index.mjs` (Nitro bundles its runtime
-dependencies into `server/node_modules`) plus static assets under `public/`.
-The production image's runner stage just copies `server/` and `public/` and
-runs `node server/index.mjs` — no custom adapter and no separate `pnpm deploy`
-step are needed (`apps/developer-portal/Dockerfile`).
+`dist/apps/developer-portal/server/index.mjs` (a small srvx server,
+`apps/developer-portal/src/node-entry.ts`, with every runtime dependency bundled
+in) plus static assets under `public/`. The production image's runner
+stage just copies `server/` and `public/` and runs `node server/index.mjs` — no
+separate `pnpm deploy` step is needed (`apps/developer-portal/Dockerfile`).
 
 > **Build context note:** the portal source is excluded from the auth-server /
 > migration-runner build contexts by the root `.dockerignore` (see the build
@@ -365,11 +369,13 @@ it, but because omitting it fails at boot today — see the
 
 #### Developer Portal
 
-| Variable                 | Required | Default                   | Description                                                 |
-| ------------------------ | -------- | ------------------------- | ----------------------------------------------------------- |
-| `PORTAL_SESSION_SECRET`  | Yes      | —                         | 32+ char secret signing the portal session cookie           |
-| `PORTAL_SESSION_TTL`     | No       | `900`                     | Session cookie lifetime in seconds                          |
-| `PORTAL_AUTH_SERVER_URL` | No       | `http://auth-server:3000` | Base URL the portal uses (server-side) to reach auth-server |
+| Variable                 | Required | Default                   | Description                                                                           |
+| ------------------------ | -------- | ------------------------- | ------------------------------------------------------------------------------------- |
+| `PORTAL_SESSION_SECRET`  | Yes      | —                         | 32+ char secret signing the portal session cookie                                     |
+| `PORTAL_SESSION_TTL`     | No       | `900`                     | Session cookie lifetime in seconds                                                    |
+| `PORTAL_AUTH_SERVER_URL` | No       | `http://auth-server:3000` | Base URL the portal uses (server-side) to reach auth-server                           |
+| `QAUTH_NETWORK_PREFIX`   | No       | `172.30.80`               | Compose network `/24` (first three octets); the portal is `<prefix>.10`               |
+| `PORTAL_TRUST_PROXY`     | No       | _(unset)_                 | Address of a reverse proxy in front of the portal (single addresses, comma-separated) |
 
 Generate a secret with `openssl rand -hex 32`. The portal will not start without
 `PORTAL_SESSION_SECRET`.
@@ -563,15 +569,38 @@ This Docker setup is designed for **local development**. For production:
 2. **Use managed databases** (RDS, Cloud SQL) instead of containerized PostgreSQL
 3. **Use managed Redis** (ElastiCache, Memorystore) for high availability
 4. **Add reverse proxy** (nginx, Traefik) with TLS termination, and set
-   `TRUST_PROXY` to the proxy's address or CIDR (for example `10.0.0.0/8`, or
-   `uniquelocal` for a private network). Every per-IP rate limit and the
-   failed-login lockout key on the client address. Without `TRUST_PROXY`, the
-   auth-server sees every request as coming from the proxy, so all users share
-   one bucket and one caller can lock everyone out. The developer portal counts
-   as a proxy too: it forwards each visitor's address, so include the portal's
-   address as well. `TRUST_PROXY=true` and hop counts are rejected, because
-   they would let any caller choose its own address.
-5. **Configure resource limits** in Docker/Kubernetes
+   `TRUST_PROXY` to the addresses allowed to report the client address. Every
+   per-IP rate limit and the failed-login lockout key on the client address.
+   Without `TRUST_PROXY`, the auth-server sees every request as coming from the
+   proxy, so all users share one bucket and one caller can lock everyone out.
+   The developer portal counts as a proxy too: it forwards one address, the
+   client of the connection it is serving. List only the addresses of the
+   proxies in front of the auth-server and of the developer portal, never a
+   range that clients can connect from. A broad private range such as
+   `uniquelocal`, or the whole Docker network, also covers the bridge gateway,
+   which host-local and published-port clients appear from. In this Compose
+   stack the portal has a fixed address, `172.30.80.10`, so
+   `TRUST_PROXY=172.30.80.10` names the portal alone; add a reverse proxy's own
+   address after a comma. `TRUST_PROXY=true` and hop counts are rejected,
+   because they would let any caller choose its own address.
+   With a TLS proxy in front of the portal, set `PORTAL_TRUST_PROXY` on the
+   portal to that proxy's address, so the portal forwards each visitor's
+   address rather than the proxy's, and set `TRUST_PROXY` on the auth-server to
+   the portal's fixed address, plus the proxy's if the auth-server is behind it
+   too. Every reverse proxy named in `PORTAL_TRUST_PROXY` or `TRUST_PROXY` must
+   append the address it accepted the connection from to `X-Forwarded-For`
+   (for example, nginx:
+   `proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;`), so the
+   last entry is always one it wrote; the portal sets the header itself. Use
+   single addresses in both, never a client range; on the Compose network,
+   give the proxy a fixed address below `<prefix>.128`, such as
+   `172.30.80.20`. If `172.30.80.0/24` overlaps a network on your host, set
+   `QAUTH_NETWORK_PREFIX` to the first three octets of a free `/24`; the
+   portal is then `<prefix>.10`.
+5. **Configure resource limits** in Docker/Kubernetes. `docker-compose.yml`
+   caps the auth-server at 1 GiB and the developer portal at 512 MiB and
+   restarts both after a crash (`restart: unless-stopped`); size the limits to
+   your load. The portal also reads at most 1 MiB of any request body.
 6. **Set up monitoring** (Prometheus, Grafana)
 7. **Enable logging aggregation** (ELK, Loki)
 

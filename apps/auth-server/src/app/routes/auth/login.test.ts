@@ -24,7 +24,7 @@ vi.mock('../../../config/env', () => ({
     FAILED_LOGIN_WINDOW: 900,
     FAILED_LOGIN_LOCKOUT_DURATION: 900,
     // Off by default (MVP posture); the gate test flips it per-case.
-    REQUIRE_EMAIL_VERIFIED: false,
+    REQUIRE_VERIFIED_ACCOUNT: false,
   },
 }));
 
@@ -453,7 +453,7 @@ describe('POST /auth/login', () => {
     );
   });
 
-  it('REQUIRE_EMAIL_VERIFIED gate reads credential_data.email_verified', async () => {
+  it('REQUIRE_VERIFIED_ACCOUNT gate reads credential_data.email_verified', async () => {
     const { fastify, ctx } = createFastifyStub();
     await loginRoute(fastify);
     const handler = ctx.handler;
@@ -471,7 +471,7 @@ describe('POST /auth/login', () => {
     );
     (fastify.passwordHasher.verifyPassword as unknown as Mock).mockResolvedValue(true);
 
-    (env as { REQUIRE_EMAIL_VERIFIED: boolean }).REQUIRE_EMAIL_VERIFIED = true;
+    (env as { REQUIRE_VERIFIED_ACCOUNT: boolean }).REQUIRE_VERIFIED_ACCOUNT = true;
     try {
       const request = {
         body: { email: 'user@example.com', password: 'p' },
@@ -489,7 +489,7 @@ describe('POST /auth/login', () => {
       // The gate fires before the user lookup — its source is the credential.
       expect(fastify.repositories.users.findById).not.toHaveBeenCalled();
     } finally {
-      (env as { REQUIRE_EMAIL_VERIFIED: boolean }).REQUIRE_EMAIL_VERIFIED = false;
+      (env as { REQUIRE_VERIFIED_ACCOUNT: boolean }).REQUIRE_VERIFIED_ACCOUNT = false;
     }
   });
 
@@ -516,5 +516,29 @@ describe('POST /auth/login', () => {
     expect(fastify.jwtUtils.signAccessToken).not.toHaveBeenCalled();
     // Retry-After advertised.
     expect(reply.headers['Retry-After']).toBe('300');
+  });
+
+  it('keys the ip: lockout identifier on the /64 of an IPv6 client', async () => {
+    const { fastify, ctx } = createFastifyStub();
+    await loginRoute(fastify);
+    const handler = ctx.handler;
+    if (!handler) throw new Error('Handler missing');
+
+    // Only the /64 key is locked; every address inside it must hit that key.
+    const ttl = fastify.redis.ttl as unknown as Mock;
+    ttl.mockImplementation(async (key: string) =>
+      key === 'failed-login:lockout:ip:2001:db8:1:2::' ? 300 : -2
+    );
+
+    for (const ip of ['2001:db8:1:2::1', '2001:db8:1:2:ffff:eeee:dddd:cccc']) {
+      const request = {
+        body: { email: 'user@example.com', password: 'p' },
+        ip,
+        headers: { 'user-agent': 'vitest' },
+        log: requestLog(),
+      };
+      await expect(handler(request, createReply())).rejects.toThrow(TooManyRequestsError);
+    }
+    expect(fastify.passwordHasher.verifyPassword).not.toHaveBeenCalled();
   });
 });

@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 
-import { normalizeEmail, PASSWORD_MAX_LENGTH } from '@qauth-labs/shared-validation';
+import { normalizeEmail, passwordSchema } from '@qauth-labs/shared-validation';
 import type { FastifyInstance } from 'fastify';
 import { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
@@ -8,6 +8,7 @@ import { z } from 'zod';
 import { env } from '../../../config/env';
 import { MIN_RESPONSE_TIME_MS } from '../../constants';
 import { hashEmail } from '../../helpers/auth-events';
+import { clientAddressKey } from '../../helpers/client-address';
 import { verifyPasswordCredential } from '../../helpers/credential-auth';
 import { checkLockout, recordFailedAttempt, resetFailedAttempts } from '../../helpers/failed-login';
 import { html, render } from '../../helpers/html';
@@ -195,7 +196,7 @@ function loginPage(opts: {
 
 const loginFormSchema = z.object({
   email: z.string().min(1),
-  password: z.string().min(1).max(PASSWORD_MAX_LENGTH),
+  password: passwordSchema.min(1),
   return_to: z.string().optional(),
   // Signed double-submit CSRF token (login CSRF defence). Compared against the
   // value carried in the __Host- login-CSRF cookie.
@@ -257,7 +258,7 @@ export default async function (fastify: FastifyInstance) {
         rateLimit: {
           max: env.LOGIN_RATE_LIMIT,
           timeWindow: env.LOGIN_RATE_WINDOW * 1000,
-          keyGenerator: (request) => request.ip || 'unknown',
+          keyGenerator: clientAddressKey,
         },
       },
     },
@@ -305,7 +306,10 @@ export default async function (fastify: FastifyInstance) {
       // Failed-login throttling (#115), with the SAME identifiers as
       // POST /auth/login so both front doors share one counter: guesses spread
       // across them add up, and an account locked on one is locked on both.
-      const lockoutIdentifiers = [`email:${hashEmail(normalizedEmail)}`, `ip:${request.ip}`];
+      const lockoutIdentifiers = [
+        `email:${hashEmail(normalizedEmail)}`,
+        `ip:${clientAddressKey(request)}`,
+      ];
 
       const renderRefusal = (statusCode: number, error: string) => {
         reply.header('Content-Type', 'text/html; charset=utf-8');
@@ -383,11 +387,11 @@ export default async function (fastify: FastifyInstance) {
         return renderRefusal(401, 'Invalid email or password.');
       }
 
-      // Email-verified gate (F-08), identical to POST /auth/login: with
-      // `REQUIRE_EMAIL_VERIFIED=true` an unverified credential gets no session,
+      // Verified-account gate (F-08), identical to POST /auth/login: with
+      // `REQUIRE_VERIFIED_ACCOUNT=true` an unverified credential gets no session,
       // so it cannot complete an OAuth/OIDC flow through the hosted UI either.
       // Counted as a failed attempt, as on the API route.
-      if (!check.emailVerified && env.REQUIRE_EMAIL_VERIFIED) {
+      if (!check.emailVerified && env.REQUIRE_VERIFIED_ACCOUNT) {
         await recordFailedAttempt(fastify.redis, lockoutIdentifiers);
         await ensureMinimumResponseTime(startTime, MIN_RESPONSE_TIME_MS.LOGIN);
         await fastify.repositories.auditLogs.create({

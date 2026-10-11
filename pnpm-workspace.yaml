@@ -37,7 +37,16 @@ onlyBuiltDependencies:
 # (mostly dev tooling). Direct runtime deps are bumped in the catalog instead.
 # Each entry maps to a Dependabot/`pnpm audit` finding — prune once it clears.
 overrides:
-  '@tanstack/start-server-core': '>=1.167.30'
+  # GHSA-jqcg-44mw-7w3h (CVE-2026-90711): an IPv4-mapped IPv6 trust subnet
+  # with a short prefix (e.g. `::ffff:10.0.0.0/8`) has zero leading bits and
+  # matches EVERY IPv4 peer, so any client could choose its own `request.ip`
+  # through X-Forwarded-For. The advisory names only `proxy-addr`, so neither
+  # Dependabot nor `pnpm audit` flags Fastify's fork, but the fork carries the
+  # same code and fixed it in 5.1.1. SHIPPED: fastify uses it for `trustProxy`,
+  # and TRUST_PROXY validation accepts such an entry. Floor rather than bump:
+  # fastify, latest 5.12.5 included, already requests '^5.0.0' and the lockfile
+  # simply held 5.1.0. Bounded to the 5.x line fastify requests.
+  '@fastify/proxy-addr': '>=5.1.1 <6'
   # @fastify/static reaches the tree only via @fastify/swagger-ui, which pins
   # '^9.1.2' — including on its own latest (6.1.0), so bumping the parent does
   # NOT clear this. The 9.x line ends at 9.3.0 with no backport, so the caret
@@ -47,64 +56,133 @@ overrides:
   # swagger-ui registers static with only { root, prefix, decorateReply: false }
   # and never passes setHeaders, so the break does not reach us.
   '@fastify/static': '^10.1.2'
-  axios: '>=1.18.0'
-  # Reaches the tree only via @nx/react's express dependency (dev tooling); the
-  # auth server does not use express. Floored to keep `pnpm audit` clean.
-  body-parser: '>=1.20.6 <2'
-  # Deliberately blanket rather than per-major, unlike the other floors here.
-  # CVE-2026-13149 alone would be satisfied by 1.1.16 / 2.1.2 / 5.0.7 on their
-  # respective lines, but GHSA-mh99-v99m-4gvg (OOM via unbounded expansion) has
-  # vulnerable range `<=5.0.7` — which by semver covers the whole 1.x and 2.x
-  # lines too — and is patched ONLY in 5.0.8. So there is no in-major fix for
-  # the 1.x/2.x consumers (minimatch@3, minimatch@5) and everything has to move
-  # to 5.x. Safe here: the module's surface is the single expand() function,
-  # unchanged across these majors, and the full suite passes on it. Raised
-  # 5.0.8 -> 5.0.9 for the unbounded-intermediate-array DoS; see the js-yaml
-  # note below on why a floor at the resolved version achieves nothing.
-  brace-expansion: '>=5.0.9'
+  # Shipped via @fastify/rate-limit, which asks for '^10.2.0'. 10.7.1 fixes
+  # GHSA-22jq-vg5j-6vgg, GHSA-4xrf-jv44-h6hh, GHSA-mwp4-54f8-5fhr,
+  # GHSA-2vr4-cq9g-pvrc, GHSA-rpw4-54j3-4h4q, GHSA-h3mg-xc3c-68pw and
+  # GHSA-j6r3-76f7-8jcv. Bounded to the 10.x line it requests.
+  ip-address: '>=10.7.1 <11'
+  # GHSA-m9gg-hp2v-232j (getAuthContext reports unverified peer certificates as
+  # verified) and GHSA-f596-whhp-79r4 (handler error text sent to clients in
+  # status messages), both server-side. Reaches the tree only via
+  # testcontainers -> dockerode, which loads grpc-js for BuildKit sessions; QAuth
+  # neither builds images through it nor runs a gRPC server, and none of it is in
+  # the auth-server image. A floor, not a bump: dockerode 5.0.1 is the latest
+  # release and still asks for `^1.11.1`. 1.14.6 rather than the advisory's
+  # 1.14.5, whose follow-up release notes address "remaining instances" of
+  # GHSA-f596. Bounded to the 1.x line dockerode requests.
+  '@grpc/grpc-js': '>=1.14.6 <2'
+  # One floor per major, each capped at that major. This replaces a blanket
+  # '>=5.0.9' that was premised on GHSA-mh99-v99m-4gvg having no 1.x/2.x fix;
+  # the advisory has since been amended (1.1.17 / 2.1.3), and every later one
+  # ships per-line fixes too. The blanket was also broken: minimatch@3, @5 and
+  # @9 call `require('brace-expansion')` as a function (or its default), but
+  # 5.x exports a named `expand`, so any `{a,b}` pattern through those copies
+  # threw "TypeError: expand is not a function". The suite stayed green only
+  # because no test globs a brace pattern through them. 1.1.21 / 2.1.7 /
+  # 5.0.12 are the fixes for GHSA-q2hr-2g5m-vwhr, the newest advisory, and
+  # clear every earlier one on their line (incl. GHSA-6j4f-fj2g-mc7p and
+  # GHSA-qhr7-859c-m2p7). Floored to the PATCHED version; see js-yaml below.
+  #   @1  minimatch@3 (eslint plugins, test-exclude, glob@7). Dev only.
+  #   @2  minimatch@5 / @9 (readdir-glob and glob@10, via archiver and jest).
+  #       Dev only.
+  #   @5  minimatch@10 and nx's exact pin. Shipped: @fastify/swagger-ui ->
+  #       @fastify/static -> glob@13 is in the auth-server image, though
+  #       static globs only its constant '**/**', and only with
+  #       `wildcard: false`, which swagger-ui never sets.
+  # pnpm applies a selector when the requested range intersects it, so
+  # '^1.1.7' takes @1 and '^2.0.x' takes @2; nothing requests 3.x or 4.x.
+  # Capped like fast-uri and nanoid: a new major is a review, not a floor.
+  'brace-expansion@1': '>=1.1.21 <2'
+  'brace-expansion@2': '>=2.1.7 <3'
+  'brace-expansion@5': '>=5.0.12 <6'
   # Build-tooling floors, all dev-scope, all reached only through the Astro/Vite
-  # docs-site toolchain — none is imported by shipped code. Floored rather than
-  # bumped because each still resolves to a second, vulnerable copy through a
-  # transitive dependent that pins the old line; a direct update alone left
-  # 4.28.4 / 1.6.1 / 2.10.38 in the tree beside the new ones.
+  # docs-site toolchain (smol-toml also through nx) — none is imported by
+  # shipped code. Floored rather than bumped because each still resolves to a
+  # second, vulnerable copy through a transitive dependent that pins the old
+  # line; a direct update alone left 4.28.4 / 1.6.1 / 2.10.38 in the tree
+  # beside the new ones.
   #   browserslist            GHSA: uncaught crash / prototype write via an
   #                           untrusted browserslist-stats.json custom stats file.
   #                           We ship no such file, so this is a floor, not a fix.
-  #   smol-toml               DoS on malformed TOML. Only the toolchain parses TOML.
+  #   smol-toml               Quadratic-time parse() (GHSA-r4xh-jqrq-34v2),
+  #                           patched in 1.9.0; the old '>=1.7.1' floor sat below
+  #                           it. nx 23.3.0 pins 1.9.0 itself; the floor moves
+  #                           astro and @astrojs/internal-helpers, which still
+  #                           ask for '^1.6.0'. 1.9.0 returns null-prototype
+  #                           objects, and the docs site has no TOML for astro
+  #                           to parse. Bounded to the 1.x line every consumer
+  #                           requests. Only the toolchain parses TOML, and only
+  #                           repository files.
   #   baseline-browser-mapping process termination on invalid input.
   browserslist: '>=4.28.7'
-  smol-toml: '>=1.7.1'
+  smol-toml: '>=1.9.0 <2'
   baseline-browser-mapping: '>=2.11.0'
   # GHSA-9rgm-9g3h-6x36 (CVE-2026-81176): DoS on malformed input to devalue's
   # parse, patched in 5.9.2. Reached only through astro (the docs-site build);
   # nothing QAuth ships imports it. Caret, not '>=': astro depends on the 5.x
   # line, and '>=' resolved straight to 6.x.
   devalue: '^5.9.2'
-  # `qs` is pulled only by express / body-parser / superagent, i.e. the test
-  # tooling. QAuth serves on Fastify and imports `qs` nowhere, so neither the
-  # array-limit bypass nor the isBuffer DoS is reachable from shipped code.
+  # GHSA-wq5f-xc86-pv6w: use-after-free in the bundled librsvg, fixed by the
+  # libvips 1.3.4 binaries (librsvg 2.63.2) that sharp 0.35.5 pins. Reached
+  # only as astro's optional image service in the docs-site build (`output:
+  # 'static'`); the site has no images, so sharp never decodes one, let alone
+  # an untrusted SVG. No astro release asks for more than '^0.35.4', so this is
+  # a floor, not a parent bump. Bounded to 0.35.x: that is astro's range, and
+  # for a 0.x package the minor is the breaking line.
+  sharp: '>=0.35.5 <0.36'
+  # GHSA-ch52-4w7c-c8xp: a client max-stale can serve a shared-cache entry
+  # that maxAge() zeroed (e.g. one carrying Set-Cookie). The advisory range is
+  # '<=4.2.0' with no patched version. 4.3.0 is outside that range, so this
+  # clears both boards, but it is NOT a code fix: its diff only touches Vary
+  # matching, and the max-stale branch of evaluateRequest() is unchanged.
+  # Unreachable here: astro (docs-site build only) uses it to cache remote
+  # images and calls only storable() / timeToLive(), never evaluateRequest(),
+  # on a request it builds itself; the site has no remote images. If the
+  # advisory is widened to cover 4.3.0 the alert comes back with nothing to
+  # floor to. Bounded to the 4.x line astro requests.
+  http-cache-semantics: '>=4.3.0 <5'
+  # `qs` is pulled only by superagent (supertest) and union (http-server, via
+  # @nx/web), i.e. the test and dev tooling. QAuth serves on Fastify and imports
+  # `qs` nowhere, so neither the array-limit bypass nor the isBuffer DoS is
+  # reachable from shipped code.
   # Floored anyway so `pnpm audit` stays clean and a future real dependent
   # cannot land on a vulnerable line unnoticed.
   qs: '>=6.16.0'
   esbuild: '>=0.28.1'
-  # Host-confusion advisories (CVE-2026-13676, CVE-2026-16221, and the backslash
-  # authority bypass patched in 3.1.5). Inert today — main.ts sets a global Zod
-  # validator compiler so ajv never parses a request, and redirect_uri matching
-  # is an exact string comparison with no URI parser in the decision — but
-  # floored so that stops being load-bearing. Upper-bounded because a bare
-  # '>=3.1.5' resolves to 4.x, turning a security floor into an unreviewed
-  # major; same reasoning as h3 below.
-  fast-uri: '>=3.1.5 <4'
+  # GHSA-jggr-w7fw-pc2j: stack exhaustion copying deeply nested values, patched
+  # in 4.1.0 (adds a maxDepth, default 1000). Reaches the tree only via
+  # pino-pretty, a devDependency of auth-server that buildLoggerOptions loads
+  # only when LOG_PRETTY is set outside production and that `pnpm deploy --prod`
+  # leaves out of the image, so this is board hygiene rather than a shipped fix.
+  # Floored rather than bumped: pino-pretty's latest (13.2.0) still asks for
+  # '^4.0.0', which the locked 4.0.3 satisfied. Bounded to that 4.x line.
+  fast-copy: '>=4.1.0 <5'
+  # Host-confusion advisories: CVE-2026-13676, CVE-2026-16221 and the backslash
+  # authority bypass (patched in 3.1.5); the unclosed-bracket host and the
+  # unvalidated serialize() port (GHSA-58mr-gqgx-xq4g, GHSA-qw65-cvwx-89v3,
+  # patched in 3.1.7); and percent-encoded host case (GHSA-hrr3-gc8f-f4qj,
+  # patched in 3.1.8). Inert today — main.ts sets a global Zod validator
+  # compiler so ajv never parses a request, and redirect_uri matching is an
+  # exact string comparison with no URI parser in the decision — but floored so
+  # that stops being load-bearing. Upper-bounded because a bare '>=3.1.8'
+  # resolves to 4.x, turning a security floor into an unreviewed major; same
+  # reasoning as h3 below. The cap also holds fastify's own
+  # fast-json-stringify@7 (which asks for '^4.0.0') on 3.x. That pairing is
+  # never exercised: fastify loads only its `lib/serializer`, which does not
+  # import fast-uri.
+  fast-uri: '>=3.1.8 <4'
   # Fastify's router. CVE-2026-47219 is HTTP/2-only and we serve HTTP/1.1, so
   # this is a floor against a future http2 switch, not a live fix.
   find-my-way: '>=9.7.0'
   form-data: '>=4.0.6'
-  # h3's only consumers are the Nitro v2 subtree (nitropack/listhen/unstorage),
-  # which require h3 1.x (Nitro v2 imports `send`, removed in h3 2.x). Floor at
-  # the patched 1.x line — 1.15.11 clears GHSA-4hxc-9384-m385 (fixed in 1.15.9).
-  # The earlier `>=2.0.1` floor was inert (nothing pulled h3) and would force
-  # the wrong major onto Nitro. Revisit if anything ever needs h3 2.x.
-  h3: '^1.15.11'
+  # GHSA-4hxc-9384-m385, fixed in 1.15.9; 1.15.11 is the floor. SELECTOR: the
+  # 1.x consumer is unstorage 1.x under astro (the docs-site build), which asks
+  # for '^1.15.4'. @tanstack/start-server-core also depends on h3, on the 2.x
+  # line (an exact 2.0.1 rc, aliased as `h3-v2`), so an unscoped 1.x range is
+  # the wrong major for anything that ever asks for h3 2.x by name. Like
+  # undici, pnpm matches the selector against the range the dependent
+  # declares, so `h3@1` floors only the 1.x consumer. Bounded to that line.
+  'h3@1': '>=1.15.11 <2'
   # GHSA: a custom alphabet can make the generator loop indefinitely. Build-time
   # only (postcss/vite), and QAuth passes no custom alphabet, so this is board
   # hygiene rather than a shipped fix. Bounded to the 3.x line the sole consumer
@@ -120,46 +198,94 @@ overrides:
   # version, never to the version you happen to have.
   js-yaml: '>=4.3.1 <5'
   postcss: '>=8.5.18'
-  # Reaches the tree only through dockerode -> testcontainers (devDependency of
-  # @qauth-labs/shared-testing), so this is a floor for board hygiene rather
-  # than a shipped fix.
+  # GHSA-rj75-hqrm-r3gf (CVE-2026-104844): quadratic parse of flat selectors
+  # such as `.a.a.a...`, patched only in 7.1.6 — the 6.x line ends at 6.1.4
+  # with no backport, so this is deliberately blanket across majors. The 6.x
+  # consumer is postcss-nested 6.2.0 under expressive-code (Starlight code
+  # blocks), and @expressive-code/core still asks for postcss-nested ^6.0.1 on
+  # its latest release, so no parent bump clears it. postcss-nested 6.2.0 only
+  # calls processSync, each() + replaceWith() on the node being visited,
+  # prepend() outside iteration, combinator(), clone() and toString(); 7.0.0's
+  # break (index bookkeeping for insertions during iteration) gives the same
+  # result for that pattern. Build-time only, on trusted CSS. Bounded below 8
+  # so a future major is a reviewed change.
+  postcss-selector-parser: '>=7.1.6 <8'
+  # GHSA-68fv-2mgg-jv7q (CVE-2026-93749): event-loop DoS from a huge section
+  # offset in an indexed source map, patched in 1.2.2. Consumers are build and
+  # test tools only: postcss, css-tree (svgo, csso, unifont, jsdom), magicast
+  # (astro) and @tailwindcss/node. The developer-portal path runs through
+  # @tanstack/react-start's Vite plugins, and its image ships only the Nitro
+  # output. Every consumer already accepts 1.2.2 (^1.0.1 / ^1.2.1) but only
+  # postcss 8.5.29 asks for it, so a floor rather than five parent bumps.
+  # Bounded to the 1.x line.
+  source-map-js: '>=1.2.2 <2'
+  # Reaches the tree only through dockerode -> testcontainers, the integration-
+  # test harness (a devDependency of auth-server, and a dependency of
+  # @qauth-labs/shared-testing, which is itself only ever a devDependency), so
+  # this is a floor for board hygiene rather than a shipped fix.
   protobufjs: '>=7.6.5 <8'
-  svgo: '>=3.3.4 <4'
-  # Build-time only: @mapbox/node-pre-gyp -> @vercel/nft -> nitropack, i.e. the
-  # developer-portal build, and excluded from the auth-server image by
-  # `pnpm deploy --prod`. Every advisory here needs a hostile archive to parse
-  # and QAuth parses none, so the floor clears the board without shipping a fix.
-  tar: '>=7.5.21'
+  # astro (the docs-site build) is the only consumer and asks for '^4.0.1'.
+  # The old '>=3.3.4 <4' bound dates from when @svgr/plugin-svgo (^3.0.2, via
+  # @nx/react) was the consumer; with @nx/react >=23.2 that subtree is gone and
+  # the 3.x cap only forced astro below its own range. 4.1.0 is the 4.x fix for
+  # GHSA-w27v-7q3p-w38r and GHSA-4vpr-x523-8j87 (and clears GHSA-2p49-hgcm-8545
+  # and GHSA-xpqw-6gx7-v673). astro loads svgo only for its opt-in SVG
+  # optimizer, which docs-site does not enable. Bounded to the 4.x line astro
+  # requests.
+  svgo: '>=4.1.0 <5'
   tmp: '>=0.2.7'
-  # Five advisories, all request/response correctness bugs — cross-user
-  # information disclosure, CRLF injection via a blob-like body, cookie
-  # attribute injection, response desynchronisation. Reaches the tree only via
-  # vitest -> jsdom (dev tooling; the auth server uses Node's own fetch), so
-  # nothing shipped is affected, but the floor is cheap and stops that being
-  # load-bearing.
+  # Ten advisories on each line, all patched together in 7.29.1 / 8.10.2: TLS
+  # certificate validation dropped by BalancedPool (GHSA-w293-vg96-wgc3) and a
+  # process-killing unrequested WebSocket subprotocol (GHSA-rfgv-xxqx-mfg5) are
+  # the high ones; the rest are cache, retry-interceptor, decompression and
+  # WebSocket DoS bugs. Nothing shipped is affected — the auth server uses
+  # Node's own fetch and `pnpm deploy --prod` carries no undici — so these
+  # floors are board hygiene:
+  #   7.x  jsdom 29.1.1 (`^7.25.0`), the vitest DOM environment, and nx, which
+  #        since 23.3.0 pins undici 7.29.0 exactly in place of axios. 29.1.1 is
+  #        the last jsdom 29.x; only jsdom 30 moves to undici 8.
+  #   8.x  testcontainers (the integration harness; 12.2.0 itself requires
+  #        `^8.10.2`) and astro -> unifont 0.7.5 (`^8.0.0`, the docs-site build).
+  #        astro 7.3.8 still pins unifont ~0.7.5, so that path has no parent fix.
   #
-  # SELECTOR, and upper bound, both load-bearing. An unbounded `undici` floor
-  # pulls jsdom onto the 8.x already in the tree for other consumers, and jsdom
-  # 29.1.1 requires `undici/lib/handler/wrap-handler.js`, which 8.x removed —
-  # every jsdom-environment test file then fails to start its worker with
+  # SELECTORS, and upper bounds, all load-bearing. An unbounded `undici` floor
+  # pulls jsdom onto 8.x, and jsdom 29.1.1 requires
+  # `undici/lib/handler/wrap-handler.js`, which 8.x removed — every
+  # jsdom-environment test file then fails to start its worker with
   # MODULE_NOT_FOUND. Caught by running the suite, not by reading the advisory.
-  # `undici@7` scopes the floor to the line that is actually vulnerable and
-  # leaves the 8.x resolution alone.
-  'undici@7': '>=7.29.0 <8'
+  # pnpm matches a selector against the range the dependent declares, so
+  # `undici@7` floors only the 7.x consumers and `undici@8` only the others.
+  'undici@7': '>=7.29.1 <8'
+  'undici@8': '>=8.10.2 <9'
   # Dedupe commitlint's loose TS resolution onto the workspace TS; cap <6.1 to
   # stay within typescript-eslint@8's `typescript <6.1.0` peer range.
   typescript: '~6.0.3'
-  uuid: '>=11.1.1'
 catalog:
   '@commitlint/cli': '^21.2.1'
   '@commitlint/config-conventional': '^21.2.0'
   '@eslint/js': '^10.0.1'
-  '@nx/esbuild': '23.1.0'
-  '@nx/eslint': '23.1.0'
-  '@nx/eslint-plugin': '23.1.0'
-  '@nx/js': '23.1.0'
-  '@nx/node': '23.1.0'
-  '@nx/vitest': '23.1.0'
+  # Nx core and every @nx/* plugin move in lockstep (nx, @nx/vite, @nx/web and
+  # @nx/react sit further down): the plugins pin nx and each other EXACTLY,
+  # including the ones installed without a catalog entry (@nx/devkit,
+  # @nx/workspace, @nx/jest, @nx/docker), so a partial bump resolves two Nx
+  # lines. 23.3.0 clears GHSA-w2vw-w76x-qr89, GHSA-w3vv-58gj-gw77 and
+  # GHSA-hrvq-x7jp-36xv (nx, patched 23.1.1 / 23.1.2 / 23.2.1) and
+  # GHSA-6vc5-vf29-ffr2 (@nx/docker via @nx/node, patched 23.1.1). 23.3.0 rather
+  # than 23.2.1 because 23.2.1 still pins axios 1.18.1, open to twelve advisories
+  # patched only in 1.20.0, while 23.3.0 drops axios altogether. Since 23.2,
+  # @nx/react declares express, http-proxy-middleware and @nx/module-federation
+  # as optional peers and no longer depends on @nx/rollup or @svgr/webpack.
+  # That removes the express subtree (proxy-addr, body-parser), the
+  # http-proxy-middleware path to braces, and @svgr's svgo 3.x. Bump by
+  # editing this catalog, NOT with `nx migrate`:
+  # 23.3.0's @nx/vitest package updates would move vitest and its plugins to ^5.
+  # Run the applicable migrations from a hand-written migrations.json instead.
+  '@nx/esbuild': '23.3.0'
+  '@nx/eslint': '23.3.0'
+  '@nx/eslint-plugin': '23.3.0'
+  '@nx/js': '23.3.0'
+  '@nx/node': '23.3.0'
+  '@nx/vitest': '23.3.0'
   # Pure-TS FIPS 204 (ML-DSA) signing backend for the PQC roadmap (ADR-005,
   # #243). EXACT pin (pre-1.0 signing-path dependency): security fixes do NOT
   # flow automatically — upgrade only via a deliberate, reviewed bump.
@@ -167,15 +293,38 @@ catalog:
   '@swc-node/register': '~1.12.1'
   '@swc/core': '~1.15.46'
   '@swc/helpers': '~0.5.23'
-  '@tanstack/nitro-v2-vite-plugin': '^1.155.0'
-  # Keep the Start/Router suite in lockstep: react-start 1.168.32 pins exact
-  # tanstack deps including start-server-core 1.169.17 (clears the '>=1.167.30'
-  # security floor in `overrides`) and react-router 1.170.18. Mismatched lines
-  # load two router-cores and crash SSR dehydrate, so bump these together.
-  '@tanstack/react-start': '^1.168.32'
-  '@tanstack/react-router': '^1.170.18'
+  # Keep the Start/Router suite in lockstep: react-start 1.168.60 pins exact
+  # tanstack deps including start-server-core 1.169.39 and react-router
+  # 1.170.41, all on router-core 1.171.34. Mismatched lines load two
+  # router-cores and crash SSR dehydrate, so bump these together.
+  #
+  # 1.168.60 is a security floor, not just the current release. It fixes
+  # GHSA-qx66-fv34-fjm8 (CVE-2026-102989, reflected XSS in server-function
+  # responses; start-server-core < 1.169.39), and its router-core requires
+  # seroval / seroval-plugins ^1.6.7, which clears GHSA-p6vx-979v-rg4c,
+  # GHSA-jp82-f5mq-hwhp and GHSA-9355-h2pj-8fqj (seroval) and
+  # GHSA-4c7f-ggfh-wm45 (seroval-plugins). These ship: the portal's SSR server
+  # runs seroval's fromJSON on every server-function request body.
+  #
+  # No `overrides` entry for start-server-core. An override replaces
+  # react-start's exact pin with a range: the old '>=1.167.30' floor
+  # (GHSA-9m65-766c-r333) let the lockfile keep start-server-core 1.169.15
+  # instead of the pinned 1.169.17, with a second router-core beside
+  # react-router's. The catalog floor above carries the fix instead.
+  '@tanstack/react-start': '^1.168.60'
+  '@tanstack/react-router': '^1.170.41'
+  # The developer-portal's Node server (apps/developer-portal/src/node-entry.ts):
+  # serves the built client assets and hands everything else to TanStack
+  # Start's fetch handler. Replaces Nitro (@tanstack/nitro-v2-vite-plugin),
+  # whose nitropack subtree pulled node-forge (GHSA-86w9-cpqp-85rv, via
+  # listhen) and braces (GHSA-vfj7-8cjw-p6xm, via globby -> fast-glob ->
+  # micromatch), neither with a patched release. srvx has no dependencies, is
+  # the server layer Nitro v3 itself uses, and is the option TanStack's hosting
+  # guide shows for serving a Start build on Node without Nitro. Bundled into
+  # the server output at build time, so the image carries no node_modules for
+  # it.
+  srvx: '^1.0.5'
   '@types/node': '^26.1.1'
-  '@types/nodemailer': '^8.0.1'
   '@types/pg': '^8.20.0'
   '@types/react': '^19.2.17'
   '@types/react-dom': '^19.2.3'
@@ -201,10 +350,15 @@ catalog:
   # here — the same class of phantom dependency this rule exists to catch.
   'jsonc-eslint-parser': '^2.4.2'
   lint-staged: '^17.2.0'
-  nx: '23.1.0'
+  nx: '23.3.0'
   prettier: '^3.9.6'
   prettier-plugin-tailwindcss: '^0.8.1'
   supertest: '^7.2.2'
+  # Docker-backed integration harness (@qauth-labs/shared-testing and the
+  # auth-server E2E suite); never in the auth-server image. 12.2.0 is the first
+  # release whose own range requires patched undici (`^8.10.2`). Declared here
+  # rather than inline so the two consumers cannot drift onto different lines.
+  testcontainers: '^12.2.0'
   tslib: '^2.8.1'
   tsx: '^4.23.1'
   typescript: '~6.0.3'
@@ -214,7 +368,7 @@ catalog:
   '@fastify/cors': '^11.3.0'
   '@fastify/formbody': '^8.0.2'
   '@fastify/helmet': '^13.1.0'
-  '@fastify/rate-limit': '^11.1.0'
+  '@fastify/rate-limit': '^11.2.1'
   '@fastify/swagger': '^9.8.1'
   '@fastify/swagger-ui': '^6.1.0'
   '@node-rs/argon2': '^2.0.2'
@@ -222,29 +376,63 @@ catalog:
   dotenv: '^17.4.2'
   drizzle-orm: '^0.45.2'
   drizzle-seed: '^0.3.1'
-  fastify: '^5.12.3'
+  # GHSA-4mh8-r7rc-xpvc (CVE-2026-92081, patched in 5.12.5): a trailer on an
+  # HTTP/2 response crashes the process. Inert here — main.ts serves HTTP/1.1
+  # (asserted by main.invariants.test.ts) and no route calls reply.trailer() —
+  # but bumped so an HTTP/2 switch does not inherit it.
+  fastify: '^5.12.5'
   fastify-plugin: '^6.0.0'
   fastify-type-provider-zod: '^7.0.0'
   ioredis: '^5.11.1'
   jose: '^6.2.4'
-  nodemailer: '^9.1.1'
+  # Major bump 9 -> 10 for five advisories, all fixed only on the 10.x line (no
+  # 9.x backport): addressparser quadratic DoS (GHSA-prgh-xp8r-p3m5,
+  # GHSA-v53p-9fqp-m79j), a quoted local-part that leaks comment text into the
+  # envelope recipient (GHSA-g57g-f23g-4646, fixed in 10.0.9, the highest floor
+  # of the set), nested recipient arrays exhausting the stack
+  # (GHSA-8vvx-rff5-p5rq), and the process-global DNS cache reusing a TLS
+  # servername across transports (GHSA-6vj9-mwq6-2f5v). Shipped: auth-server ->
+  # fastify-plugin-email -> server-email. 10.0.0's only declared break is
+  # Node.js >=20 (we run 24); the TypeScript rewrite keeps the CommonJS default
+  # export and the createTransport / Transporter surface SmtpEmailProvider uses.
+  # 10.x ships its own declarations, which resolve ahead of @types/nodemailer,
+  # so that package is no longer listed.
+  nodemailer: '^10.0.16'
   pg: '^8.22.0'
   pino-pretty: '^13.1.3'
   prom-client: '^15.1.3'
   react: '^19.2.8'
   react-dom: '^19.2.8'
   resend: '^6.18.0'
-  zod: '^4.4.3'
+  # Raised from '^4.4.3' only so auth-server and the libs it injects share one
+  # zod. The TanStack build plugins pulled in by react-start 1.168.60
+  # (router-generator, router-plugin, start-plugin-core) ask for '^4.5.4'.
+  # With injectWorkspacePackages, the injected copies of the zod-using libs
+  # then resolved that newer zod while auth-server kept the catalog one, and
+  # auth-server's typecheck failed on schemas from two zod copies (TS2883 /
+  # TS2345 in src/config/env.ts); the same split would have shipped in the
+  # `pnpm deploy --prod` bundle. 4.5 and 4.6 declare no breaking change, but
+  # 4.5 changed two behaviours QAuth's request schemas relied on. z.url()
+  # returns its input with every ASCII tab, LF and CR removed, so redirect
+  # URIs and `resource` use exactUrl() (apps/auth-server/src/app/schemas/
+  # common.ts). String .max(), .min() and .length() count Unicode code points
+  # rather than UTF-16 code units, so the password fields use passwordSchema
+  # (libs/shared/validation), which keeps PASSWORD_MAX_LENGTH in code units
+  # as documented; the other string bounds are size limits stated in
+  # characters, and counting code points at most doubles what they admit in
+  # code units. (eslint-plugin-react-hooks keeps its own locked 4.4.3; that
+  # copy never meets QAuth's schemas.)
+  zod: '^4.6.5'
   zxcvbn: '^4.4.2'
   vite: '8.1.5'
   '@vitejs/plugin-react': '6.0.4'
-  '@nx/vite': '23.1.0'
-  '@nx/web': '23.1.0'
+  '@nx/vite': '23.3.0'
+  '@nx/web': '23.3.0'
   jiti: '^2.7.0'
   jsdom: '^29.1.1'
   tailwindcss: '^4.3.3'
   '@tailwindcss/vite': '^4.3.3'
-  '@nx/react': '23.1.0'
+  '@nx/react': '23.3.0'
   tailwind-merge: '^3.6.0'
   clsx: '^2.1.1'
   class-variance-authority: '^0.7.1'
@@ -275,8 +463,6 @@ catalog:
 # script (it no longer infers them from onlyBuiltDependencies). Mirror the
 # approved set; cpu-features is an optional ssh2 native accel we don't build.
 allowBuilds:
-  # Nitro's dev file-watcher; ships prebuilt binaries, so skip the native build.
-  '@parcel/watcher': false
   '@swc/core': true
   cpu-features: false
   esbuild: true

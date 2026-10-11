@@ -143,6 +143,7 @@ each list as **open** — a new call site can add a value without a schema chang
 
 - `result` is `success` or `failure`. `reason` is set on failures only, e.g.
   `invalid_credentials`, `locked_out`, `email_not_verified` (emitted only when
+  `REQUIRE_VERIFIED_ACCOUNT=true`, or its deprecated alias
   `REQUIRE_EMAIL_VERIFIED=true`), `error`.
 - `type` is e.g. `access`, `refresh`, or `id_jag` (the ID-JAG assertion minted by
   the token-exchange grant). `grant_type` is e.g. `password`,

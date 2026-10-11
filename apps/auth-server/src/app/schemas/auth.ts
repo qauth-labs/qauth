@@ -1,4 +1,4 @@
-import { PASSWORD_MAX_LENGTH } from '@qauth-labs/shared-validation';
+import { passwordSchema } from '@qauth-labs/shared-validation';
 import { z } from 'zod';
 
 /**
@@ -6,7 +6,7 @@ import { z } from 'zod';
  */
 export const registerSchema = z.object({
   email: z.email('Invalid email format'),
-  password: z.string().max(PASSWORD_MAX_LENGTH),
+  password: passwordSchema,
   realmId: z.uuid('Invalid realm ID format').optional(),
 });
 
@@ -43,7 +43,7 @@ export const verifyBodySchema = z.object({
     .string()
     .length(64, 'Token must be exactly 64 characters')
     .regex(/^[0-9a-fA-F]{64}$/, 'Token must be a valid hex string'),
-  password: z.string().min(1).max(PASSWORD_MAX_LENGTH),
+  password: passwordSchema.min(1),
 });
 
 /**
@@ -95,7 +95,7 @@ export const loginSchema = z.object({
   email: z.email('Invalid email format'),
   // Bounded like registration: Argon2id verification hashes every byte, so an
   // unbounded field is attacker-sized CPU work on the login path too.
-  password: z.string().max(PASSWORD_MAX_LENGTH),
+  password: passwordSchema,
 });
 
 /**
