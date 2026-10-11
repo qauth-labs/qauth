@@ -142,7 +142,7 @@ async function makeAssertion(options: AssertionOptions = {}): Promise<string> {
     .setProtectedHeader({ alg: options.alg ?? 'ES256', ...(options.extraHeader ?? {}) })
     .setIssuer(options.iss ?? CLIENT_ID)
     .setSubject(options.sub ?? CLIENT_ID)
-    .setAudience(options.aud ?? TOKEN_ENDPOINT)
+    .setAudience(options.aud ?? ISSUER)
     .setExpirationTime(now + (options.expOffset ?? 60));
 
   if (options.jti !== null) jwt.setJti(options.jti ?? `jti-${Math.random()}`);
@@ -161,7 +161,7 @@ function jwkSet(...keys: JWK[]) {
 /* -------------------------------------------------------------------------- */
 
 describe('authenticateClientAssertion — accepted', () => {
-  it('authenticates a private_key_jwt client whose assertion targets the token endpoint', async () => {
+  it('authenticates a private_key_jwt client whose assertion names the issuer', async () => {
     const stub = fastifyStub(clientRow({ jwks: jwkSet(es256Jwk) }));
     const assertion = await makeAssertion();
 
@@ -170,9 +170,9 @@ describe('authenticateClientAssertion — accepted', () => {
     expect(client.clientId).toBe(CLIENT_ID);
   });
 
-  it('accepts the issuer identifier as `aud` (RFC 7523 §3 permits either form)', async () => {
+  it('accepts a one-element `aud` array that holds the issuer', async () => {
     const stub = fastifyStub(clientRow({ jwks: jwkSet(es256Jwk) }));
-    const assertion = await makeAssertion({ aud: ISSUER });
+    const assertion = await makeAssertion({ aud: [ISSUER] });
 
     await expect(
       authenticateClientAssertion(asFastify(stub), 'realm-1', creds(assertion))
@@ -236,6 +236,33 @@ describe('authenticateClientAssertion — accepted', () => {
 /* -------------------------------------------------------------------------- */
 
 describe('authenticateClientAssertion — rejected', () => {
+  it('rejects the token endpoint URL as `aud` (RFC 7523 §3 allows it, rfc7523bis does not)', async () => {
+    const stub = fastifyStub(clientRow({ jwks: jwkSet(es256Jwk) }));
+    const assertion = await makeAssertion({ aud: TOKEN_ENDPOINT });
+
+    await expect(
+      authenticateClientAssertion(asFastify(stub), 'realm-1', creds(assertion))
+    ).rejects.toThrow(InvalidClientError);
+  });
+
+  it('rejects an `aud` array that holds the issuer next to another value', async () => {
+    const stub = fastifyStub(clientRow({ jwks: jwkSet(es256Jwk) }));
+    const assertion = await makeAssertion({ aud: [ISSUER, 'https://other.example.com'] });
+
+    await expect(
+      authenticateClientAssertion(asFastify(stub), 'realm-1', creds(assertion))
+    ).rejects.toThrow(InvalidClientError);
+  });
+
+  it('rejects the token endpoint URL next to the issuer, as the sole-value rule demands', async () => {
+    const stub = fastifyStub(clientRow({ jwks: jwkSet(es256Jwk) }));
+    const assertion = await makeAssertion({ aud: [ISSUER, TOKEN_ENDPOINT] });
+
+    await expect(
+      authenticateClientAssertion(asFastify(stub), 'realm-1', creds(assertion))
+    ).rejects.toThrow(InvalidClientError);
+  });
+
   it('rejects a wrong audience', async () => {
     const stub = fastifyStub(clientRow({ jwks: jwkSet(es256Jwk) }));
     const assertion = await makeAssertion({ aud: 'https://evil.example.com/oauth/token' });
@@ -310,7 +337,7 @@ describe('authenticateClientAssertion — rejected', () => {
     const assertion = await new SignJWT({})
       .setProtectedHeader({ alg: 'ES256' })
       .setIssuer(CLIENT_ID)
-      .setAudience(TOKEN_ENDPOINT)
+      .setAudience(ISSUER)
       .setJti('no-sub')
       .setExpirationTime(now + 60)
       .sign(es256.privateKey);
@@ -367,7 +394,7 @@ describe('authenticateClientAssertion — rejected', () => {
     const unsigned = `${b64({ alg: 'none' })}.${b64({
       iss: CLIENT_ID,
       sub: CLIENT_ID,
-      aud: TOKEN_ENDPOINT,
+      aud: ISSUER,
       jti: 'none-alg',
       exp: now + 60,
       iat: now,
