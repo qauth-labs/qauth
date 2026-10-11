@@ -354,7 +354,13 @@ describe('rewriteRecordLink — the real docs/adr and docs/security corpus, enum
     // + 80 + 3 = 129. ADR-018, ADR-019, ADR-020 and ADR-021 still name
     // ADR-015, ADR-016 and ADR-017 without links; linking them is a separate,
     // later edit.
-    expect(extractAllLinks()).toHaveLength(560);
+    //
+    // 560 → 569 with the 2026-10-11 review of ADR-011: 9 new links in the
+    // record. One is a bare anchor to its own Review findings, seven are
+    // in-tree record links (ADR-008 once, ADR-014, ADR-015 and ADR-017 twice
+    // each → ROUTE) and one is the spec pin log (→ BLOB). Counted with this
+    // test's own extraction regex before the buckets below were touched.
+    expect(extractAllLinks()).toHaveLength(569);
   });
 
   it('every link falls into exactly one of the four outcomes, with none left unresolved', () => {
@@ -470,9 +476,13 @@ describe('rewriteRecordLink — the real docs/adr and docs/security corpus, enum
     //   README              +3 route (the rows for 015, 016 and 017)
     // Those sum to 63 external, 6 anchors and 60 route, the 129 of the total
     // above. No new link leaves the rendered records for a blob URL.
-    expect(untouchedExternalOrAnchor).toBe(279 + 37);
-    expect(rewrittenToRoute).toBe(221);
-    expect(rewrittenToBlob).toBe(23);
+    //
+    // The 2026-10-11 review of ADR-011: external unchanged at 279 and bare
+    // anchors 37 → 38; 221 → 228 route; 23 → 24 blob (the spec pin log).
+    // Unresolved unchanged.
+    expect(untouchedExternalOrAnchor).toBe(279 + 38);
+    expect(rewrittenToRoute).toBe(228);
+    expect(rewrittenToBlob).toBe(24);
     expect(leftUnresolved).toBe(0);
   });
 });

@@ -1,14 +1,20 @@
 # ADR-011: Enterprise-Managed Authorization — Consuming and Minting ID-JAG
 
-**Status:** Proposed
+**Status:** Accepted
 **Date:** 2026-08-06
 **Authors:** QAuth Team
 
-> **Proposed 2026-08-06.** Implementing code lands in the same pass (#383, #384),
-> but the maintainer has **not** accepted this ADR. Every fork below takes the
+> **Proposed 2026-08-06, accepted 2026-10-11.** The code for this record landed on
+> 2026-08-06 (#383, #384). Every fork below takes the
 > **fail-closed** option: the feature is inert until an operator opts in, an empty
 > trust allowlist rejects everything, and no trust edge is ever derived from
 > request content. Nothing here changes the behaviour of a default deployment.
+>
+> **Reviewed against the code on 2026-10-11.** Every claim below was compared with
+> `id-jag.ts`, `id-jag-issuer-keys.ts`, `token.ts`, `discovery.ts` and the config
+> schema. Where the code is stricter or different, the text now says what the code
+> does. Three claims were not true of the code. They were fixed before acceptance, and
+> [Review findings](#review-findings-2026-10-11) lists them.
 
 ## Context
 
@@ -94,7 +100,8 @@ needs. Neither half requires a new subsystem.
 ### Where the code stands today (verified 2026-08-06)
 
 The [ADR-007 delta section](./007-mcp-first-positioning.md#delta-2025-11-25-to-2026-07-28)
-records the gap precisely, and it is still accurate:
+records the gap precisely. The list below was accurate on 2026-08-06, **before**
+#383 and #384 merged. Both gaps are closed in code now:
 
 - `helpers/discovery.ts` advertises `grant_types_supported` of
   `authorization_code`, `client_credentials`, `refresh_token` and
@@ -162,23 +169,32 @@ front of its own MCP servers, or both.
 Gates are evaluated in order and **every one of them is a deny**. Unknown,
 absent, malformed or unparseable input rejects; there is no lenient branch.
 
-| #   | Gate                  | Rule                                                                                                                                                                                                                                                                                                                           | Failure                  |
-| --- | --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------ |
-| 1   | Feature               | `ID_JAG_ENABLED` must be `true`. When false the grant is neither advertised nor accepted.                                                                                                                                                                                                                                      | `unsupported_grant_type` |
-| 2   | Client authentication | Confidential clients only (`client_secret_basic`, `client_secret_post`, `private_key_jwt`). The draft says the profile SHOULD be confidential-only; QAuth makes it MUST, matching the token-exchange floor already in place.                                                                                                   | `invalid_client`         |
-| 3   | JWT type              | Header `typ` must be exactly `oauth-id-jag+jwt` (RFC 8725 §3.11). Nothing else is an ID-JAG.                                                                                                                                                                                                                                   | `invalid_grant`          |
-| 4   | Issuer allowlist      | `iss` must be present and a **byte-exact** member of `ID_JAG_TRUSTED_ISSUERS`. Exact string comparison on the issuer identifier — no normalisation, no trailing-slash tolerance, the same discipline RFC 9207 §2.4 forces on the `iss` authorization-response parameter.                                                       | `invalid_grant`          |
-| 5   | No self-issuance      | `iss` must **not** equal QAuth's own issuer identifier. Checked independently of the allowlist, so a misconfigured allowlist containing QAuth's own issuer still cannot close a self-issuance loop. The draft's security considerations forbid an IdP issuing access tokens for an ID-JAG it issued itself in the same domain. | `invalid_grant`          |
-| 6   | Key resolution        | OIDC discovery against the **allowlisted issuer only**, then that document's `jwks_uri`. The discovery document's own `issuer` member must equal the allowlisted issuer (OIDC Discovery 1.0 §4.3). Never a URL taken from the assertion; never an unlisted issuer.                                                             | `invalid_grant`          |
-| 7   | Signature             | Verified against a key from that JWKS, `kid`-matched, under an **asymmetric-only** algorithm allowlist. `none` and every MAC algorithm are rejected outright.                                                                                                                                                                  | `invalid_grant`          |
-| 8   | Audience              | `aud` must equal QAuth's own issuer identifier (RFC 8414 sense).                                                                                                                                                                                                                                                               | `invalid_grant`          |
-| 9   | Client binding        | The `client_id` claim must identify the **authenticated** client. Compared timing-safely.                                                                                                                                                                                                                                      | `invalid_grant`          |
-| 10  | Freshness             | `exp` and `iat` required; small bounded clock skew; assertion lifetime capped — an assertion whose `exp - iat` exceeds the configured maximum is rejected even if currently unexpired.                                                                                                                                         | `invalid_grant`          |
-| 11  | Replay                | `jti` required and recorded until `exp`. A second presentation of the same `(iss, jti)` is rejected.                                                                                                                                                                                                                           | `invalid_grant`          |
-| 12  | Resource              | `resource` must be present and must be a resource identifier this deployment serves; the issued access token's `aud` is restricted to it (RFC 8707 §2, RFC 9068). **An assertion with no `resource` is denied** — a token that cannot be audience-restricted is exactly the token EMA exists to avoid.                         | `invalid_target`         |
-| 13  | Scope                 | The assertion's `scope` is intersected with the client's server-side allowlist and never widened. Reserved `agent:*` scopes remain subject to the operator-set `max_agent_mode` cap; an over-cap scope rejects the **whole** request rather than being silently reduced.                                                       | `invalid_scope`          |
-| 14  | Subject               | The `(iss, sub)` pair must resolve to an existing, enabled local identity. There is **no** just-in-time provisioning in this pass — an unresolvable subject is a deny, not an enrolment.                                                                                                                                       | `invalid_grant`          |
-| 15  | Unknown constraints   | An assertion carrying `authorization_details` (RFC 9396) is **rejected**, not ignored. Silently dropping an authorization constraint you do not implement is a downgrade.                                                                                                                                                      | `invalid_grant`          |
+| #   | Gate                  | Rule                                                                                                                                                                                                                                                                                                                                                                                                                                                   | Failure                                                      |
+| --- | --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------ |
+| 1   | Feature               | `ID_JAG_ENABLED` must be `true`. When false the grant is neither advertised nor accepted.                                                                                                                                                                                                                                                                                                                                                              | `unsupported_grant_type`                                     |
+| 2   | Client authentication | Confidential clients only (`client_secret_basic`, `client_secret_post`, `private_key_jwt`). The draft says the profile SHOULD be confidential-only; QAuth makes it MUST, matching the token-exchange floor already in place.                                                                                                                                                                                                                           | `invalid_client`                                             |
+| 2a  | Grant registration    | The client must list `urn:ietf:params:oauth:grant-type:jwt-bearer` among its registered grant types. Neither dynamic registration nor the developer API can add it. An operator provisions it through the seed manifest.                                                                                                                                                                                                                               | `unauthorized_client`                                        |
+| 3   | JWT type              | Header `typ` must be exactly `oauth-id-jag+jwt` (RFC 8725 §3.11). Nothing else is an ID-JAG. The check runs on the unverified header first, then again on the verified one.                                                                                                                                                                                                                                                                            | `invalid_grant`                                              |
+| 4   | Issuer allowlist      | `iss` must be present and a member of `ID_JAG_TRUSTED_ISSUERS` after one canonicalisation: a single trailing `/` is removed from both sides. Nothing else is normalised: no case folding, no default-port removal, no percent-decoding. This is the rule QAuth applies to its own issuer (`resolveIssuerIdentifier`). It keeps issuers that end in a slash, such as Auth0's, working.                                                                  | `invalid_grant`                                              |
+| 5   | No self-issuance      | `iss` must **not** equal QAuth's own issuer identifier. Checked independently of the allowlist, so a misconfigured allowlist containing QAuth's own issuer still cannot close a self-issuance loop. The draft's security considerations forbid an IdP issuing access tokens for an ID-JAG it issued itself in the same domain. Implemented in `validateIdJagAssertion`, before the allowlist and before any key lookup, and mirrored on the mint path. | `invalid_grant`                                              |
+| 6   | Key resolution        | OIDC discovery against the **allowlisted issuer only**, then that document's `jwks_uri`, which must be `https`. The discovery document's own `issuer` member must equal the allowlisted issuer (OIDC Discovery 1.0 §4.3). Never a URL taken from the assertion; never an unlisted issuer.                                                                                                                                                              | `invalid_grant`                                              |
+| 7   | Signature             | Verified against a key from that JWKS under an **asymmetric-only** algorithm allowlist. With a `kid`, exactly one key must carry it. Without a `kid`, the set must hold exactly one key. `none` and every MAC algorithm are rejected outright. A published key that carries private members is refused.                                                                                                                                                | `invalid_grant`                                              |
+| 8   | Audience              | `aud` must equal QAuth's own issuer identifier (RFC 8414 sense) and must be the only audience. A multi-valued `aud` is rejected (draft §4.4.1).                                                                                                                                                                                                                                                                                                        | `invalid_grant`                                              |
+| 9   | Client binding        | The `client_id` claim must identify the **authenticated** client. A `client_id` is a public identifier, so a plain comparison is enough. The check runs before the `jti` is burned. Otherwise a client holding another client's assertion could destroy it.                                                                                                                                                                                            | `invalid_grant`                                              |
+| 10  | Freshness             | `exp` and `iat` required; small bounded clock skew; assertion lifetime capped — an assertion whose `exp - iat` exceeds the configured maximum is rejected even if currently unexpired. An `iat` in the future beyond the skew is rejected.                                                                                                                                                                                                             | `invalid_grant`                                              |
+| 11  | Replay                | `jti` required. It is recorded for `ID_JAG_MAX_ASSERTION_LIFETIME` plus the skew leeway. A second presentation of the same `(iss, jti)` is rejected. If the replay store is unavailable, the assertion is rejected.                                                                                                                                                                                                                                    | `invalid_grant`                                              |
+| 12  | Resource              | `resource` must be present and must appear in the client's `audience` allowlist (`oauth_clients.audience`). An empty allowlist denies. The issued access token's `aud` is restricted to it (RFC 8707 §2, RFC 9068). A `resource` request parameter may only agree with the claim. **An assertion with no `resource` is denied** — a token that cannot be audience-restricted is exactly the token EMA exists to avoid.                                 | `invalid_target` (`invalid_grant` when the claim is missing) |
+| 13  | Scope                 | The assertion's `scope` is intersected with the client's server-side allowlist and never widened. A `scope` request parameter may only narrow it. Reserved `agent:*` scopes remain subject to the operator-set `max_agent_mode` cap; an over-cap scope rejects the **whole** request rather than being silently reduced.                                                                                                                               | `invalid_scope`                                              |
+| 14  | Subject               | The `(iss, sub)` pair must match a `user_credentials` row in the realm with provider type `oidc_<issuer>` and `external_sub` equal to `sub`, and that user must be enabled. Email is never used to find or link a user. There is **no** just-in-time provisioning in this pass — an unresolvable subject is a deny, not an enrolment.                                                                                                                  | `invalid_grant`                                              |
+| 15  | Unknown constraints   | An assertion carrying `authorization_details` (RFC 9396) is **rejected**, not ignored. Silently dropping an authorization constraint you do not implement is a downgrade.                                                                                                                                                                                                                                                                              | `invalid_grant`                                              |
+
+**Order matters in one place.** The `jti` is burned only after every check that has no
+side effect: gates 3 to 10 and 15. Gates 12 to 14 run after the burn. A request that
+fails them has spent its assertion, and the client must get a fresh one from the IdP.
+
+**No code creates the link behind gate 14.** The `oidc_<issuer>` credential row must be
+inserted by an operator. No endpoint, command or seed script does it today. Until one
+exists, the consume side cannot succeed in a real deployment.
 
 **No refresh token is issued** on this path. The client re-presents a fresh
 ID-JAG, which keeps the IdP's policy in the loop on every renewal — the point of
@@ -200,6 +216,20 @@ value), `jti`, `iat`, `exp` (short, minutes), and `scope` where present, with
 signed with QAuth's normal signing key, so [ADR-001](./001-jwt-key-management.md)
 key management and [ADR-005](./005-pqc-hybrid-signing.md) crypto-agility apply
 unchanged.
+
+In code `resource` is required, not optional. A request needs exactly one `audience`
+and exactly one `resource`.
+
+**Targets are bounded by an operator allowlist.** Both values must appear in the
+client's `audience` column (`oauth_clients.audience`). An empty column denies. This is
+the administrator-defined policy of EMA §4.1, in the form QAuth already has. The
+`audience` must also differ from QAuth's own issuer. That is gate 5 on the mint side.
+
+**The Authority Tree closes this path for agent types.** [ADR-014](./014-agent-authority-tree.md)
+decides that, with `AUTHORITY_TREE_ENABLED` on, an agent type is refused at the exchange
+GATE 2 when it asks for an ID-JAG ([ADR-015](./015-agent-tree-hardening.md), question 3).
+That flag is not in the code yet. Until it ships, any agent client with the
+token-exchange grant and a target allowlist can mint.
 
 Per RFC 8693 §2.2.1 the response carries the assertion in `access_token`,
 `issued_token_type: urn:ietf:params:oauth:token-type:id-jag`, and
@@ -246,8 +276,11 @@ The rules that make this a trust model rather than a list:
 - **Every outbound fetch uses the CIMD SSRF-guard pattern** —
   `apps/auth-server/src/app/helpers/ssrf-safe-fetch.ts`: https-only, no
   credentials in the URL, DNS-pinned TOCTOU-safe IP validation, **no redirect
-  following**, response size and time bounds, non-200 rejection, and a bounded
-  cache with a TTL ceiling mirroring `CIMD_CACHE_MAX_TTL`.
+  following**, response size and time bounds, non-200 rejection, and a bounded Redis cache (`ID_JAG_JWKS_CACHE_TTL`, default 5 minutes). Unlike
+  `CIMD_CACHE_MAX_TTL`, that TTL has no hard ceiling yet.
+- **One escape hatch exists.** `ID_JAG_ALLOW_PRIVATE_ADDRESSES` (default `false`) turns the
+  address check off so tests can use a localhost IdP. The config schema does not stop it
+  being set in production. The operator guide says to leave it off.
 
 ### 5. Why an allowlist, and not the alternatives
 
@@ -309,9 +342,8 @@ audience may only be narrowed relative to the subject token — **cannot apply**
 minting, because the whole point is to name an authorization server QAuth does
 not serve. The mint branch therefore must not fall through to the delegation
 audience check, and must instead be bounded by its own gates: the feature flag,
-confidential-client authentication, the token-exchange grant on the client, the
-subject token being bound to the requesting client, and a short lifetime with no
-refresh. Sharing an endpoint must not be allowed to become sharing a code path.
+confidential-client authentication, the token-exchange grant on the client, the subject token being bound to the requesting client, the per-client target allowlist,
+and a short lifetime with no refresh. Sharing an endpoint must not be allowed to become sharing a code path.
 
 ### 7. `private_key_jwt` (#384) — additive, no flag
 
@@ -382,9 +414,10 @@ path is audited at least as carefully as the accept path.
   latency and can exhaust connections; JWKS rotation trades cache staleness
   against re-fetch storms; and an IdP domain that is compromised or expires and
   is re-registered becomes a valid identity source until an operator removes it.
-  Mitigations (SSRF-guarded fetch, bounded cache with a TTL ceiling, per-fetch
-  timeout, negative caching, and the allowlist bounding which hosts can ever be
-  dialled) reduce this but do not remove it.
+  Mitigations in the code today: SSRF-guarded fetch, a bounded cache, a per-fetch timeout,
+  and the allowlist that bounds which hosts can ever be dialled. Negative caching, a
+  refresh cooldown and a hard TTL ceiling are not implemented. They reduce the risk but
+  would not remove it.
 - **Minting makes QAuth a credential source for third parties — a genuinely
   larger blast radius than issuing its own tokens.** Every other token QAuth
   signs is only meaningful to resource servers that validate `aud` against
@@ -402,6 +435,17 @@ path is audited at least as carefully as the accept path.
   `https`, a tenant-scoped issuer URL — all fail closed, which is correct but
   opaque, so rejection diagnostics must name the reason precisely enough to be
   actionable without leaking assertion contents.
+- **A `kid` miss costs the issuer two fetches, and nothing limits how often.** A miss
+  forces one cache refresh: discovery and JWKS. The bound is one refresh per request, not
+  per minute. A client that holds the grant can send assertions with a valid `iss` and
+  random `kid` values. Only the endpoint's rate limit slows it. A per-issuer refresh
+  cooldown would close this.
+- **Mint targets and consume resources share a column with `client_credentials`.** All
+  three read `oauth_clients.audience`. An operator who lists a foreign authorization
+  server there also lets the client request QAuth access tokens that name it. The `typ`
+  header keeps those from being accepted as ID-JAGs. The coupling is still unintended. A
+  dedicated column would remove it.
+- **The consume side needs a link that nothing creates.** See gate 14.
 - **Three JWT shapes now circulate** — access token, ID token, ID-JAG — and a
   verifier that accepts the wrong one is a privilege bug. Mitigated by the `typ`
   header check, the existing access-token use marker, and explicit negative tests
@@ -427,8 +471,7 @@ path is audited at least as carefully as the accept path.
   a schedule rather than ad hoc — and the citation must be re-verified against
   the code at the moment of writing, not carried forward. That schedule is now
   kept in [`docs/spec-pin-log.md`](../spec-pin-log.md), whose freshness check
-  fails the build once this row's re-check date passes. This ADR is **Proposed**
-  with merged code, so it re-verifies its own rows before moving to Accepted.
+  fails the build once this row's re-check date passes. This ADR re-verified its own rows on 2026-10-11, before moving to Accepted: `-04` is still the newest revision and the `ext-auth` EMA file is unchanged since `e5eef54`.
 
 ## Explicitly out of scope
 
@@ -451,6 +494,72 @@ Recorded so a future reader does not re-open these as gaps:
   this pass; the short lifetime is the only control.
 - **Trust-on-first-use, or any dynamic issuer discovery.** The allowlist is the
   whole trust model.
+
+## Review findings (2026-10-11)
+
+This review compared each claim with the code on `main` (f126821) and with ADR-014 to
+ADR-020 as accepted on 2026-10-11.
+
+### Closed before acceptance
+
+1. **Gate 5 had no implementation.** `validateIdJagAssertion` never compared `iss` with
+   QAuth's own issuer, and the mint path did not refuse an own-issuer `audience`. Both
+   needed a misconfiguration to matter: the own issuer in `ID_JAG_TRUSTED_ISSUERS` and in a
+   client's `audience`. With both set, a client could mint an assertion for QAuth and redeem
+   it, which skips the narrow-never-widen audience rule of the delegation path. Now the
+   consume side refuses it as `self_issued` before the allowlist and before any fetch. The
+   mint side refuses it as `invalid_target`. Both spellings of the issuer (with and without a
+   trailing slash) are covered, and so is an assertion this server minted for itself.
+2. **Discovery advertised on the flag alone.** §4 asks for the flag **and** a non-empty
+   allowlist. `well-known.ts` now passes both conditions to the metadata builder. Both
+   discovery documents are tested in the enabled-but-empty state.
+3. **No test proved a minted ID-JAG fails as an access token.** §3 said this was "closed by
+   test". Now a test registers the real JWT plugin, mints an ID-JAG, and shows that
+   `verifyAccessToken` refuses it on `typ`. It runs with the `typ` rollout switch on and
+   off, and with the optional issuer and audience checks both used and unused, so none of
+   them can be what saves it.
+
+Each new test was checked to fail when its fix is removed.
+
+### Accepted for now, to be tracked as follow-ups
+
+- A refresh cooldown, a negative cache and a hard TTL ceiling for the issuer key resolver.
+- A dedicated target column instead of reusing `oauth_clients.audience`.
+- An operator way to link `(iss, sub)` to a user. Without it the consume side cannot be
+  used in a real deployment.
+- `ID_JAG_ALLOW_PRIVATE_ADDRESSES` refused when the environment profile is `production`
+  ([ADR-008](./008-environment-aware-authorization.md)).
+- §7 accepts the token endpoint URL or the issuer as `aud` of a client assertion.
+  [ADR-017](./017-first-party-login.md) requires the issuer alone for first-party and agent
+  clients. That is the direction of `rfc7523bis`. Whether every client moves is open.
+
+### The draft dependency
+
+This record rests on `draft-ietf-oauth-identity-assertion-authz-grant-04`. The OAuth
+working group adopted the draft, and it is still an Internet-Draft. On 2026-10-11 the
+newest revision in the IETF archive was `-04`, dated 21 May 2026. No `-05` existed.
+`-04` expires on 2026-11-22.
+
+Acceptance covers the trust model and the gates. The wire constants follow the draft: the
+`typ` value, the claim names, the token-type URN and the profile URN. They are pinned in
+`id-jag.ts` and in [`docs/spec-pin-log.md`](../spec-pin-log.md). If a later revision
+changes one of them, the matching section is amended. The record is not superseded.
+
+### Checked and sound
+
+- The allowlist is consulted before any network call. Keys come only from the allowlisted
+  issuer's own discovery. The discovery `issuer` must match. A published key with private
+  members is refused.
+- `none` and the MAC algorithms never reach key resolution. The verification algorithm is
+  pinned to the one the header names.
+- The `jti` store fails closed, and the burn comes after the client binding.
+- `authorization_details` is rejected on the verified claims, before the schema can strip
+  it.
+- The mint path omits `email` and `act`, signs with the access-token key and never with the
+  hybrid signer, and returns `token_type: N_A` with no refresh token.
+- Failure reasons go to the audit log. The wire answer is one `invalid_grant`.
+- `private_key_jwt` (§7) requires and burns the `jti`, bounds the lifetime, checks `aud`,
+  and refuses a shared secret from a client registered for it.
 
 ## Implementation sequencing (issues derived separately; not part of this ADR)
 
@@ -484,6 +593,11 @@ Recorded so a future reader does not re-open these as gaps:
   a minted ID-JAG is signed with.
 - [`docs/agent-authorization.md`](../agent-authorization.md) — the existing
   agent-native layer, including the token-exchange gate stack.
+- [ADR-014: Agent Authority Tree](./014-agent-authority-tree.md) ·
+  [ADR-015: Agent Tree Hardening](./015-agent-tree-hardening.md) — the decision that an
+  agent type cannot mint an ID-JAG once the tree ships.
+- [ADR-017: First-Party Login](./017-first-party-login.md) — the stricter `aud` rule for
+  client assertions of first-party and agent clients.
 - Issues **#383** (accept ID-JAG assertions at `/oauth/token`) and **#384**
   (`private_key_jwt` token-endpoint authentication).
 - [MCP Enterprise-Managed Authorization (`ext-auth`, STABLE)](https://github.com/modelcontextprotocol/ext-auth/blob/main/specification/stable/enterprise-managed-authorization.mdx) ·

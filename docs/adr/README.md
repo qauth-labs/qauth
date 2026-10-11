@@ -20,7 +20,7 @@ An ADR is a document that captures an important architectural decision made alon
 | [008](./008-environment-aware-authorization.md)          | Environment-Aware Authorization Posture                                                     | Accepted    | 2026-06-25 |
 | [009](./009-wallet-account-resolution.md)                | Wallet Account Resolution — `asserted-lookup` Default and the Subject-Identity Model        | Accepted ⚠️ | 2026-07-20 |
 | [010](./010-acr-assurance-mapping.md)                    | eIDAS Level of Assurance → OIDC `acr` Value Mapping                                         | Accepted    | 2026-07-27 |
-| [011](./011-enterprise-managed-authorization.md)         | Enterprise-Managed Authorization — Consuming and Minting ID-JAG                             | Proposed    | 2026-08-06 |
+| [011](./011-enterprise-managed-authorization.md)         | Enterprise-Managed Authorization — Consuming and Minting ID-JAG                             | Accepted    | 2026-08-06 |
 | [012](./012-dynamic-client-ownership.md)                 | Ownership of Dynamically Registered Clients                                                 | Accepted    | 2026-08-31 |
 | [013](./013-same-device-return-leg.md)                   | Same-Device Return Leg — the OID4VP Response Code on Both Verifier Profiles                 | Accepted    | 2026-09-11 |
 | [014](./014-agent-authority-tree.md)                     | Authority Tree — Session-Rooted, Sender-Constrained Delegation                              | Accepted    | 2026-09-21 |
