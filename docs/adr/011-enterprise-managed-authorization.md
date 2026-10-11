@@ -211,14 +211,12 @@ The minted assertion carries `typ: oauth-id-jag+jwt` and the draft's required
 claims: `iss` (QAuth's issuer identifier), `sub` (the end user), `aud` (the
 target Resource AS's issuer identifier, taken from the request's `audience`
 parameter), `client_id` (the **authenticated** client — never a self-declared
-value), `jti`, `iat`, `exp` (short, minutes), and `scope` where present, with
-`resource` copied from the request's `resource` parameter when supplied. It is
+value), `jti`, `iat`, `exp` (short, minutes), `resource` (the MCP server's identifier, copied from the request's `resource` parameter; the draft marks it optional, QAuth requires it) and `scope` where present. It is
 signed with QAuth's normal signing key, so [ADR-001](./001-jwt-key-management.md)
 key management and [ADR-005](./005-pqc-hybrid-signing.md) crypto-agility apply
 unchanged.
 
-In code `resource` is required, not optional. A request needs exactly one `audience`
-and exactly one `resource`.
+A request needs exactly one `audience` and exactly one `resource`.
 
 **Targets are bounded by an operator allowlist.** Both values must appear in the
 client's `audience` column (`oauth_clients.audience`). An empty column denies. This is
