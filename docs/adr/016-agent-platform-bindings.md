@@ -1,10 +1,10 @@
 # ADR-016: Agent Platform Bindings — Public Identities, Approval-Only Resources and Pass-Through Legs
 
-**Status:** Proposed
+**Status:** Accepted
 **Date:** 2026-09-30
 **Authors:** QAuth Team
 
-> **Proposed 2026-09-30.** Nothing below is implemented. This record builds
+> **Proposed 2026-09-30, accepted 2026-10-11.** Nothing below is implemented. This record builds
 > on [ADR-014](./014-agent-authority-tree.md) as amended 2026-09-30 (PR #419).
 > It records what the maintainer decided that day about how an agent's identity
 > on an external platform is made, limited and approved. Every rule sits behind
@@ -27,8 +27,8 @@
 > No rule changed.
 >
 > **Amended 2026-10-09, decisions** (before any implementation): the
-> maintainer answered parked questions 2 to 5, and ADR-019 (proposed in a
-> separate PR) closes question 1. Each is marked decided below. The account
+> maintainer answered parked questions 2 to 5, and ADR-019 closes
+> question 1. Each is marked decided below. The account
 > allowlist is a per-binding list the owner edits (§2). The pass-through
 > token rests QAuth-side under a per-realm key, the leg has an end date, and
 > it is experimental in 1.0 (§4). The maintainer also chose that an
@@ -270,8 +270,8 @@ Cloud is the example throughout.
 - It has a mandatory end date, no later than the token's own expiry and at
   most 90 days away. The owner renews it with a passkey (question 4, decided
   2026-10-09).
-- It is experimental in 1.0, outside the stability promise (ADR-018,
-  proposed in a separate PR; decided 2026-10-09).
+- It is experimental in 1.0, outside the stability promise (ADR-018;
+  decided 2026-10-09).
 - The credential is the owner's personal API token, used for git over HTTPS.
   Example: an Atlassian API token for Bitbucket Cloud, limited by scopes and
   by an expiry of one day to one year. Its documentation offers no

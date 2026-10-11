@@ -1,6 +1,6 @@
 # ADR-019: Deployment Topology, Trust Boundaries and Key Custody
 
-**Status:** Proposed — records the maintainer's decisions of 2026-10-08, 2026-10-09 and 2026-10-10; it becomes Accepted when the maintainer has read this text.  
+**Status:** Accepted 2026-10-11 — records the maintainer's decisions of 2026-10-08, 2026-10-09 and 2026-10-10.  
 **Date:** 2026-10-09  
 **Authors:** QAuth Team
 
@@ -24,7 +24,7 @@
 > - Decision 7: the Authority Tree's realm-admin powers map onto the permission catalog.
 >
 > **Amended 2026-10-10** with the maintainer's answers on the UI scope, given on 2026-10-09 and
-> 2026-10-10. ADR-020 (proposed in a separate PR) records the screens.
+> 2026-10-10. ADR-020 records the screens.
 >
 > - Decision 3: one browser may hold several accounts' sessions for a realm.
 > - Decision 5: the UI list, the theme tier and the federation section of the admin console.
@@ -838,11 +838,11 @@ None. The UI screen list was answered on 2026-10-09 and 2026-10-10; ADR-020 reco
   and the `__Host-qauth_wallet_flow` binder cookie.
 - [ADR-014: Authority Tree](./014-agent-authority-tree.md) — §14 remote approval; parked decision 1
   on sign-out.
-- ADR-015 and ADR-016, proposed in PR #420 — the rest of the Authority Tree records.
-- ADR-017: First-Party Login, proposed in PR #417 — F0, F1, Decision 3 and parked question 1.
+- ADR-015 and ADR-016 — the rest of the Authority Tree records.
+- ADR-017: First-Party Login — F0, F1, Decision 3 and parked question 1.
 - [ADR-018: QAuth 1.0 — Scope, Stability Promise and Release Path](./018-1-0-scope-and-stability.md)
   — the 1.0 scope and the stability promise this topology serves.
-- ADR-020, proposed in a separate PR — UI surfaces and UX acceptance criteria.
+- ADR-020 — UI surfaces and UX acceptance criteria.
 - [Hosted UI guide](https://docs.qauth.dev/integrate/hosted-ui/) — today's server-rendered pages.
 - [RFC 8414: OAuth 2.0 Authorization Server Metadata](https://www.rfc-editor.org/rfc/rfc8414)
 - [RFC 8628: OAuth 2.0 Device Authorization Grant](https://www.rfc-editor.org/rfc/rfc8628)

@@ -1,10 +1,10 @@
 # ADR-017: First-Party Login — Headless Sign-In on the Authorization Challenge Endpoint
 
-**Status:** Proposed
+**Status:** Accepted
 **Date:** 2026-09-26
 **Authors:** QAuth Team
 
-> **Proposed 2026-09-26.** Nothing below is implemented. Every fork takes the fail-closed option.
+> **Proposed 2026-09-26, accepted 2026-10-11.** Nothing below is implemented. Every fork takes the fail-closed option.
 > The authorization challenge endpoint sits behind `FIRST_PARTY_LOGIN_ENABLED` (default `false`):
 > with the switch off, the route is not registered and discovery does not mention it. F0 makes a few
 > flag-free changes before the endpoint exists; each is a listed delta with its own test
@@ -18,12 +18,12 @@
 >   redirect flow. The FiPA endpoint (the authorization challenge endpoint) serves first-party
 >   native apps only. The question now sits under "Decided by the maintainer".
 > - One engine, two transports. The F1 engine is shared with the Interaction API that ADR-019
->   defines (proposed in a separate PR). One step grammar (Decision 3) has two transports: the
+>   defines. One step grammar (Decision 3) has two transports: the
 >   Interaction API for browser ceremonies and the FiPA endpoint for native apps. F2a's hosted pages
 >   live in the reference ceremony app, a separate app that uses only the Interaction API.
 > - Stability. The FiPA endpoint and the first-party subpath of `@qauth-labs/node` stay experimental
 >   until FiPA is an RFC. The engine is part of the 1.0 promise, because the hosted pages use it
->   (ADR-018, proposed in a separate PR).
+>   (ADR-018).
 > - The portal's tokens. F0 also moves the developer portal's tokens server-side. The portal cookie
 >   then carries only a session id.
 > - Names. ADR-014's tree mechanism is now the Authority Tree. `AGENT_TREE_ENABLED` becomes
@@ -53,7 +53,7 @@
 >   portal then signs up through that page by redirect.
 > - The bot challenge and passkey-only accounts are in 1.0. F4 joins 1.0 only if the attestation
 >   draft becomes an RFC first.
-> - Alignment with the 1.0 decisions (ADR-018 and ADR-019, proposed in a separate PR). TOTP moves
+> - Alignment with the 1.0 decisions (ADR-018 and ADR-019). TOTP moves
 >   from F5 into the 1.0 train, as the new phase F2c. The browser-session reset counter keeps
 >   Postgres as its source of truth, with a Redis cache. Back-channel logout sits beside the
 >   end-session route. The passkey RP ID defaults to the realm's exact host.
@@ -346,7 +346,7 @@ QAuth-defined member is prefixed `qauth_`. No QAuth value ever appears in `error
 the wire. Every response carries `iss`.
 
 The `urn:qauth:ia:` step names become stable through the Interaction API's `/interaction/v1`
-(ADR-018 and ADR-019, each proposed in a separate PR). If a registry of standard step names
+(ADR-018 and ADR-019). If a registry of standard step names
 appears, its names are added as aliases. QAuth never renames a step. The maintainer decided this on
 2026-10-09 (question 18).
 
@@ -491,7 +491,7 @@ same whatever the account's state.** A transaction completes only if it proved t
 strongest bound factor. Step-up is a fresh transaction. `acr_values` is refused with the
 `unmet_authentication_requirements` error that RFC 9470 §5 names.
 
-The engine is shared with the Interaction API that ADR-019 defines (proposed in a separate PR). The
+The engine is shared with the Interaction API that ADR-019 defines. The
 step grammar of Decision 3 has two transports: the Interaction API for browser ceremonies and this
 endpoint for native apps.
 
@@ -603,7 +603,7 @@ exists only at the FiPA endpoint, which stays experimental. The Interaction API 
 The code has a narrow job. A password account's identifier is its address (ADR-002), so for that
 account the mailbox proof is the proof of its primary identity. That makes the code one way to
 verify an account. It is not the definition of a verified account. An account is verified when its
-primary identity is proved securely, of whatever type; ADR-015 decision 8 (PR #420) lists the proof
+primary identity is proved securely, of whatever type; ADR-015 decision 8 lists the proof
 for each type. An email address is an attribute, and an account may have none. An account whose
 primary identity is a passkey or a wallet has no address to prove and never meets this step.
 
@@ -1366,7 +1366,7 @@ clients in F4. There is no browser SDK.
   `signOut()` (revoke, then drop state), and `redirectToWeb.start` and `.complete`, which refuses a
   `state` stored under another `sessionKey` and is called only over the app session that started the
   leg. These functions sit in the package's first-party subpath. Like the endpoint, it stays
-  experimental until FiPA is an RFC (ADR-018, proposed in a separate PR).
+  experimental until FiPA is an RFC (ADR-018).
 - Results are values; only programmer or infrastructure faults throw. `StepView` is a discriminated
   union with one variant per step of the catalogue, carrying only what a screen needs (for example
   `purpose`, `length` and `resendAfter` for a code, or `minLength`, `maxLength` and `reasons` for a
@@ -1932,7 +1932,7 @@ No question is parked. The maintainer decided questions 1–30 on 2026-10-08 and
 - [ADR-013](./013-same-device-return-leg.md) — the burn-then-bind idiom of the `auth_session`.
 - [ADR-014](./014-agent-authority-tree.md) — the DPoP verifier and WebAuthn provider this record
   shares, and the amendment of question 10.
-- ADR-018 and ADR-019, each proposed in a separate PR — the 1.0 promise that covers the engine, and
+- ADR-018 and ADR-019 — the 1.0 promise that covers the engine, and
   the Interaction API that shares it.
 - [ADR-002](./002-identifier-abstraction.md), [ADR-003](./003-credential-provider-interface.md)
   and [ADR-009](./009-wallet-account-resolution.md) — the identity tables, the `CredentialProvider`

@@ -1,6 +1,6 @@
 # ADR-020: 1.0 UI Surfaces and Acceptance Criteria
 
-**Status:** Proposed — records the maintainer's decisions of 2026-10-09 and 2026-10-10; it is approved together with the other 1.0 records.  
+**Status:** Accepted 2026-10-11 — records the maintainer's decisions of 2026-10-09 and 2026-10-10, together with the other 1.0 records.  
 **Date:** 2026-10-10  
 **Authors:** QAuth Team
 

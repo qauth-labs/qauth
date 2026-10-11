@@ -69,7 +69,7 @@ site renders stay in `docs/adr/` and `docs/security/` in this repository.
 - **API First**: Design the API (routes, schemas) before implementation.
 - **Security First**: OAuth 2.1, PKCE mandatory (S256), Argon2id, timing-safe
   comparisons. Never weaken these. One PKCE exception exists, defined by
-  [ADR-017](./docs/adr/017-first-party-login.md) (proposed). On the
+  [ADR-017](./docs/adr/017-first-party-login.md) (accepted, not yet built). On the
   experimental FiPA endpoint, PKCE is on by default, and an operator may switch
   it off per client. The redirect flow always requires PKCE.
 - **Performance**: Consider it, but don't over-optimize prematurely.

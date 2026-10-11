@@ -1,10 +1,10 @@
 # ADR-014: Authority Tree — Session-Rooted, Sender-Constrained Delegation
 
-**Status:** Proposed
+**Status:** Accepted
 **Date:** 2026-09-21
 **Authors:** QAuth Team
 
-> **Proposed 2026-09-21.** Nothing below is implemented. Every fork takes the
+> **Proposed 2026-09-21, accepted 2026-10-11.** Nothing below is implemented. Every fork takes the
 > fail-closed option, every new surface is inert until an operator provisions
 > it, and the whole record sits behind `AUTHORITY_TREE_ENABLED` (default `false`,
 > [Decision](#decision)), so a default deployment's behaviour is byte-for-byte
@@ -84,12 +84,12 @@
 > the agent's root ceiling (§13, §11), no "always allow" (§14) and the portal
 > setting (P5). Two 2026-10-06 answers recorded in ADR-015 are written into
 > §1 and §11. The DPoP verifier, the WebAuthn provider and `private_key_jwt`
-> at revocation and introspection are shared with ADR-017 (proposed in a
-> separate PR), as its question 10 proposed (§2, §3, §14, P1a, P5).
+> at revocation and introspection are shared with ADR-017, as its question
+> 10 proposed (§2, §3, §14, P1a, P5).
 >
 > On 2026-10-09 the maintainer also decided that this record, ADR-015 and
-> ADR-016 will be approved together; until then all three stay Proposed.
-> So their answers that change this record are written in now. From
+> ADR-016 would be approved together, so their answers that change this
+> record were written in at once. From
 > ADR-015: sign-out ends a `sid` family whose CIMD
 > client stopped declaring `is_agent` (decision 1; question 1). Agent types
 > authenticate by client assertion only (§4(e), §9, T2; question 2). An agent
@@ -1674,8 +1674,8 @@ bounded by its own approval, not by a parent.
    by a new CIBA request (step 2) for the same delta, under the same key.
    QAuth matches it to the open window and resolves it silently, with no
    notification and no passkey. The broker's next poll returns the new leaf
-   (step 5). The match may reuse the canonical-request hash of ADR-019
-   (proposed in a separate PR). No token exchange renews an elevation, so
+   (step 5). The match may reuse the canonical-request hash of ADR-019.
+   No token exchange renews an elevation, so
    GATE 4a has no exception (decided 2026-10-09, ADR-015 question 5). The
    renewal is a new `kind: elevation` row under the same approval.
    QAuth accepts a renewal only in the last 60 seconds of the live leaf's
@@ -2455,7 +2455,7 @@ proceeds on that default until the maintainer decides otherwise. As of
     reach only that agent's trees; an admin may disable a transmitter.
     _Decided 2026-10-09 (maintainer):_ the owner's registration is enough. A
     realm admin may disable a transmitter, through the permission catalog of
-    ADR-019 (proposed in a separate PR; ADR-015 question 10).
+    ADR-019 (ADR-015 question 10).
 12. **Commit signing.** Leave agent commits unsigned (pointer only), sign
     with the broker's per-node key (verifiable against the ledger, shown
     Unverified by a git host that does not know the key; for example, GitHub

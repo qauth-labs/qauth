@@ -1,10 +1,10 @@
 # ADR-015: Authority Tree Hardening — Where a Tree Ends, Who May Act on It, How an Agent Changes Hands
 
-**Status:** Proposed
+**Status:** Accepted
 **Date:** 2026-09-30
 **Authors:** QAuth Team
 
-> **Proposed 2026-09-30.** Nothing below is implemented. This record builds
+> **Proposed 2026-09-30, accepted 2026-10-11.** Nothing below is implemented. This record builds
 > on [ADR-014](./014-agent-authority-tree.md) as amended 2026-09-30 (PR #419)
 > and changes none of its rules. Every rule sits behind `AUTHORITY_TREE_ENABLED`;
 > the approval rules also sit behind `REMOTE_APPROVAL_ENABLED`. With the
@@ -331,7 +331,7 @@ proof, as ADR-002 and ADR-003 place it:
 | Primary identity (`provider_type`)    | Proved when                                                                                                       | On main, 2026-10-06                                                   |
 | ------------------------------------- | ----------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------- |
 | Password with an address (`password`) | The mailbox code for that address was entered, and `email_verified` is `true` on the credential                   | Yes. `/auth/verify` sets it                                           |
-| Passkey (`webauthn`)                  | The registration ceremony finished, and QAuth checked the user-verification flag in the signed authenticator data | No. ADR-017 (PR #417) proposes the provider                           |
+| Passkey (`webauthn`)                  | The registration ceremony finished, and QAuth checked the user-verification flag in the signed authenticator data | No. ADR-017 specifies the provider                                    |
 | Wallet presentation (`wallet`)        | QAuth's own verifier accepted the presentation                                                                    | Behind `WALLET_FEDERATION_ENABLED`, on its own seam                   |
 | Upstream OIDC (`oidc_*`)              | An upstream issuer says so; QAuth proves nothing itself                                                           | Not built. It does not count in the first slice (decided, question 7) |
 
@@ -582,8 +582,8 @@ question below.
    (maintainer): the CIBA option._ The node renews an open window's
    elevation leaf by a new CIBA request. QAuth matches it to the open window
    and resolves it silently, with no notification or passkey. GATE 4a has no
-   exception. The match may reuse the canonical-request hash of ADR-019
-   (proposed in a separate PR). Step 6 was updated to match on 2026-10-09.
+   exception. The match may reuse the canonical-request hash of ADR-019.
+   Step 6 was updated to match on 2026-10-09.
    A matched renewal does not count against `REMOTE_APPROVAL_BUDGET`, and
    QAuth accepts one only in the last 60 seconds of the live leaf (decided
    2026-10-09).
@@ -646,7 +646,7 @@ question below.
     exists, so each power is the owner's alone. Why: a power with no holder
     is a check nobody can pass. _Decided 2026-10-09 (maintainer):_ the
     powers go to realm-local admins, through the permission catalog of
-    ADR-019 (proposed in a separate PR). Revoke-by-agent and disabling a
+    ADR-019. Revoke-by-agent and disabling a
     transmitter need `admin:security` and a passkey approval per operation.
     The view the public profile withholds needs `admin:read`.
 11. **Sign-out and an agent client's family with no `sid` yet.** Options:

@@ -23,14 +23,14 @@ An ADR is a document that captures an important architectural decision made alon
 | [011](./011-enterprise-managed-authorization.md)         | Enterprise-Managed Authorization — Consuming and Minting ID-JAG                             | Proposed    | 2026-08-06 |
 | [012](./012-dynamic-client-ownership.md)                 | Ownership of Dynamically Registered Clients                                                 | Accepted    | 2026-08-31 |
 | [013](./013-same-device-return-leg.md)                   | Same-Device Return Leg — the OID4VP Response Code on Both Verifier Profiles                 | Accepted    | 2026-09-11 |
-| [014](./014-agent-authority-tree.md)                     | Authority Tree — Session-Rooted, Sender-Constrained Delegation                              | Proposed    | 2026-09-21 |
-| [015](./015-agent-tree-hardening.md)                     | Authority Tree Hardening — Where a Tree Ends, Who May Act on It, How an Agent Changes Hands | Proposed    | 2026-09-30 |
-| [016](./016-agent-platform-bindings.md)                  | Agent Platform Bindings — Public Identities, Approval-Only Resources and Pass-Through Legs  | Proposed    | 2026-09-30 |
-| [017](./017-first-party-login.md)                        | First-Party Login — Headless Sign-In on the Authorization Challenge Endpoint                | Proposed    | 2026-09-26 |
-| [018](./018-1-0-scope-and-stability.md)                  | QAuth 1.0 — Scope, Stability Promise and Release Path                                       | Proposed    | 2026-10-09 |
-| [019](./019-deployment-topology-and-trust-boundaries.md) | Deployment Topology, Trust Boundaries and Key Custody                                       | Proposed    | 2026-10-09 |
-| [020](./020-ui-surfaces-and-acceptance-criteria.md)      | 1.0 UI Surfaces and Acceptance Criteria                                                     | Proposed    | 2026-10-10 |
-| [021](./021-flows-and-ui-as-semantic-graphs.md)          | Flows and UI as Semantic Graphs                                                             | Proposed    | 2026-10-10 |
+| [014](./014-agent-authority-tree.md)                     | Authority Tree — Session-Rooted, Sender-Constrained Delegation                              | Accepted    | 2026-09-21 |
+| [015](./015-agent-tree-hardening.md)                     | Authority Tree Hardening — Where a Tree Ends, Who May Act on It, How an Agent Changes Hands | Accepted    | 2026-09-30 |
+| [016](./016-agent-platform-bindings.md)                  | Agent Platform Bindings — Public Identities, Approval-Only Resources and Pass-Through Legs  | Accepted    | 2026-09-30 |
+| [017](./017-first-party-login.md)                        | First-Party Login — Headless Sign-In on the Authorization Challenge Endpoint                | Accepted    | 2026-09-26 |
+| [018](./018-1-0-scope-and-stability.md)                  | QAuth 1.0 — Scope, Stability Promise and Release Path                                       | Accepted    | 2026-10-09 |
+| [019](./019-deployment-topology-and-trust-boundaries.md) | Deployment Topology, Trust Boundaries and Key Custody                                       | Accepted    | 2026-10-09 |
+| [020](./020-ui-surfaces-and-acceptance-criteria.md)      | 1.0 UI Surfaces and Acceptance Criteria                                                     | Accepted    | 2026-10-10 |
+| [021](./021-flows-and-ui-as-semantic-graphs.md)          | Flows and UI as Semantic Graphs                                                             | Accepted    | 2026-10-10 |
 
 ⚠️ **ADR-009** — findings partially superseded by CIR (EU) 2026/1730 and 2026/1731
 (published 22 July 2026, in force 11 August 2026). No Decision has been changed;

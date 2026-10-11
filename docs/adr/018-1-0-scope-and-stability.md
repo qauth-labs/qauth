@@ -1,6 +1,6 @@
 # ADR-018: QAuth 1.0 — Scope, Stability Promise and Release Path
 
-**Status:** Proposed — records the maintainer's decisions of 2026-10-08, 2026-10-09 and 2026-10-10; it becomes Accepted when the maintainer has read this text.
+**Status:** Accepted 2026-10-11 — records the maintainer's decisions of 2026-10-08, 2026-10-09 and 2026-10-10.
 **Date:** 2026-10-09
 **Authors:** QAuth Team
 
@@ -12,7 +12,7 @@
 > - §5: `REQUIRE_EMAIL_VERIFIED` is renamed `REQUIRE_VERIFIED_ACCOUNT`.
 >
 > **Amended 2026-10-10** with the maintainer's answers on the UI scope, given on 2026-10-09 and
-> 2026-10-10. ADR-020 (proposed in a separate PR, stacked on this one) records the UI surfaces,
+> 2026-10-10. ADR-020 records the UI surfaces,
 > their screens and the UX acceptance criteria. This record names only what changes in scope and in
 > the promise.
 >
@@ -57,7 +57,7 @@ Shipped:
 
 Not built:
 
-- The Authority Tree and first-party login. ADR-014 to ADR-017 are all Proposed.
+- The Authority Tree and first-party login. ADR-014 to ADR-017 are Accepted, and none is built.
 - DPoP, passkeys, TOTP, password reset and an account page.
 - RP-initiated logout and back-channel logout.
 - Request objects and PAR. Discovery advertises request objects as unsupported and publishes no PAR
@@ -209,7 +209,7 @@ deliveries are made.
 - Administration and account UIs with good UX. Their breadth matches an established open-source
   identity server, for example Keycloak.
 - The UIs are the reference ceremony app, the account console, the admin console with its federation
-  section, and the developer portal. ADR-020 (proposed in a separate PR) lists their screens and the
+  section, and the developer portal. ADR-020 lists their screens and the
   UX acceptance criteria every screen meets before 1.0. Decided 2026-10-09 and 2026-10-10
   (maintainer).
 - 1.0 ships in English only, with translation infrastructure in place. Further languages come from
@@ -456,7 +456,7 @@ None. The UI screen list was answered on 2026-10-09 and 2026-10-10; ADR-020 reco
   the Interaction API.
 - The renames change documentation and package imports: `mcp-guard` and the Authority Tree
   switches.
-- Unversioned QAuth identifiers in proposed records must gain a version before they ship. ADR-017's
+- Unversioned QAuth identifiers in accepted records must gain a version before they ship. ADR-017's
   step URNs are one example.
 - Some 1.0 work depends on outside parties: the EUDI reference wallet, the upstream My Number API
   and the auditor.
@@ -481,11 +481,11 @@ None. The UI screen list was answered on 2026-10-09 and 2026-10-10; ADR-020 reco
 - [ADR-007](./007-mcp-first-positioning.md) — MCP-first positioning and spec tracking
 - [ADR-008](./008-environment-aware-authorization.md) — environment-aware posture
 - [ADR-011](./011-enterprise-managed-authorization.md) — Enterprise-Managed Authorization
-- [ADR-014](./014-agent-authority-tree.md), and ADR-015 and ADR-016, proposed in PR #420 — the
+- [ADR-014](./014-agent-authority-tree.md), ADR-015 and ADR-016 — the
   Authority Tree
-- ADR-017, proposed in PR #417 — first-party login and FiPA
+- ADR-017 — first-party login and FiPA
 - [ADR-019](./019-deployment-topology-and-trust-boundaries.md) — topology and trust boundaries
-- ADR-020, proposed in a separate PR — UI surfaces and UX acceptance criteria
+- ADR-020 — UI surfaces and UX acceptance criteria
 - [`SECURITY.md`](../../SECURITY.md), the [spec pin log](../spec-pin-log.md), the
   [OIDF certification runbook](../oidf-op-certification-runbook.md) and the
   [spec-conformance matrix](../conformance/README.md)
