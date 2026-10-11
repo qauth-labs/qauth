@@ -42,6 +42,15 @@ function resolveWorkspaceRoot(): string {
 
 const PIN_LOG = readFileSync(join(resolveWorkspaceRoot(), 'docs', 'spec-pin-log.md'), 'utf8');
 
+/**
+ * The ID-JAG row of the pin table. Matched by the row's own first cell, not by "the first
+ * line that names ID-JAG": the pass ledger and the prose above the table mention it too,
+ * and a pin test must read the row that carries the pin.
+ */
+function pinTableRow(): string | undefined {
+  return PIN_LOG.split('\n').find((line) => line.startsWith('| ID-JAG ('));
+}
+
 describe('ID_JAG_DRAFT — the in-code pin ADR-011 requires', () => {
   it('names a concrete revision, not a floating draft reference', () => {
     // `draft-ietf-oauth-identity-assertion-authz-grant` without a revision is
@@ -52,7 +61,7 @@ describe('ID_JAG_DRAFT — the in-code pin ADR-011 requires', () => {
 
   it('agrees with the revision docs/spec-pin-log.md tracks', () => {
     const revision = ID_JAG_DRAFT.slice(-3); // `-04`
-    const row = PIN_LOG.split('\n').find((line) => line.includes('ID-JAG') && line.includes('|'));
+    const row = pinTableRow();
 
     expect(row, 'no ID-JAG row in the pin log').toBeDefined();
     expect(row, `pin log does not track ${revision}`).toContain(`\`${revision}\``);
@@ -61,7 +70,7 @@ describe('ID_JAG_DRAFT — the in-code pin ADR-011 requires', () => {
   it('is covered by a pin-log row carrying the draft expiry', () => {
     // The expiry is what turns the pin into something that expires loudly
     // rather than silently. Before #401 it was recorded nowhere.
-    const row = PIN_LOG.split('\n').find((line) => line.includes('ID-JAG') && line.includes('|'));
+    const row = pinTableRow();
     expect(row).toContain('2026-11-22');
   });
 });
