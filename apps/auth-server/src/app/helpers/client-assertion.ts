@@ -87,15 +87,21 @@ const CLIENT_ASSERTION_MAX_ISSUER_LENGTH = 2048;
 /* -------------------------------------------------------------------------- */
 
 /**
- * The `aud` values a client assertion may name, per RFC 7523 §3: "The JWT MUST
- * contain an `aud` claim containing a value that identifies the authorization
- * server as an intended audience." Deployments differ on whether that means
- * the issuer identifier or the concrete token endpoint URL, and the RFC
- * explicitly permits either, so both are accepted and NOTHING else is.
+ * The `aud` a client assertion may name: this server's issuer identifier, and
+ * nothing else.
+ *
+ * RFC 7523 §3 and OIDC Core errata set 2 also allow the concrete token endpoint
+ * URL, and this function used to accept it. The maintainer decided on
+ * 2026-10-11 (ADR-011 §7) to refuse it for every client:
+ * `draft-ietf-oauth-rfc7523bis` §4 and the OIDC Core errata set 3 draft both
+ * make the issuer identifier the only audience. A client that names the token
+ * endpoint URL is refused with `invalid_client`.
+ *
+ * The caller must also check that the issuer is the SOLE value of `aud`: `jose`
+ * accepts an `aud` array that merely contains it.
  */
 export function acceptedClientAssertionAudiences(fastify: FastifyInstance): string[] {
-  const issuer = resolveIssuerIdentifier(fastify.jwtUtils.getIssuer());
-  return [issuer, `${issuer}/oauth/token`];
+  return [resolveIssuerIdentifier(fastify.jwtUtils.getIssuer())];
 }
 
 function isPermittedAlg(alg: string | undefined): boolean {
@@ -285,6 +291,14 @@ export async function authenticateClientAssertion(
     });
   } catch {
     throw new InvalidClientError('client_assertion signature or claims are invalid');
+  }
+
+  // Sole value (rfc7523bis §4). `jose` has checked that the issuer is IN `aud`;
+  // an assertion that also names another audience is one that other party could
+  // redeem here, so it is refused.
+  const { aud } = verified.payload;
+  if (Array.isArray(aud) && aud.length !== 1) {
+    throw new InvalidClientError('client_assertion aud must be the issuer as its sole value');
   }
 
   const { exp, iat, jti } = verified.payload;

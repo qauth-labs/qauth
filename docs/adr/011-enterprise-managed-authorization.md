@@ -185,16 +185,21 @@ absent, malformed or unparseable input rejects; there is no lenient branch.
 | 11  | Replay                | `jti` required. It is recorded for `ID_JAG_MAX_ASSERTION_LIFETIME` plus the skew leeway. A second presentation of the same `(iss, jti)` is rejected. If the replay store is unavailable, the assertion is rejected.                                                                                                                                                                                                                                    | `invalid_grant`                                              |
 | 12  | Resource              | `resource` must be present and must appear in the client's `audience` allowlist (`oauth_clients.audience`). An empty allowlist denies. The issued access token's `aud` is restricted to it (RFC 8707 §2, RFC 9068). A `resource` request parameter may only agree with the claim. **An assertion with no `resource` is denied** — a token that cannot be audience-restricted is exactly the token EMA exists to avoid.                                 | `invalid_target` (`invalid_grant` when the claim is missing) |
 | 13  | Scope                 | The assertion's `scope` is intersected with the client's server-side allowlist and never widened. A `scope` request parameter may only narrow it. Reserved `agent:*` scopes remain subject to the operator-set `max_agent_mode` cap; an over-cap scope rejects the **whole** request rather than being silently reduced.                                                                                                                               | `invalid_scope`                                              |
-| 14  | Subject               | The `(iss, sub)` pair must match a `user_credentials` row in the realm with provider type `oidc_<issuer>` and `external_sub` equal to `sub`, and that user must be enabled. Email is never used to find or link a user. There is **no** just-in-time provisioning in this pass — an unresolvable subject is a deny, not an enrolment.                                                                                                                  | `invalid_grant`                                              |
+| 14  | Subject               | The `(iss, sub)` pair must match a `user_credentials` row in the realm with provider type `oidc_<issuer>` and `external_sub` equal to `sub`, and that user must be enabled. Email is never used to find or link a user. There is **no** just-in-time provisioning in this pass — an unresolvable subject is a deny, not an enrolment. An operator creates the row; see below.                                                                          | `invalid_grant`                                              |
 | 15  | Unknown constraints   | An assertion carrying `authorization_details` (RFC 9396) is **rejected**, not ignored. Silently dropping an authorization constraint you do not implement is a downgrade.                                                                                                                                                                                                                                                                              | `invalid_grant`                                              |
 
 **Order matters in one place.** The `jti` is burned only after every check that has no
 side effect: gates 3 to 10 and 15. Gates 12 to 14 run after the burn. A request that
 fails them has spent its assertion, and the client must get a fresh one from the IdP.
 
-**No code creates the link behind gate 14.** The `oidc_<issuer>` credential row must be
-inserted by an operator. No endpoint, command or seed script does it today. Until one
-exists, the consume side cannot succeed in a real deployment.
+**An operator creates the link behind gate 14.** Decided 2026-10-11 (maintainer). It is a
+security operation by effect ([ADR-019](./019-deployment-topology-and-trust-boundaries.md) Decision 7): `admin:security`, a fresh
+passkey, and the second admin where the realm requires one. It writes the
+`oidc_<issuer>` credential row for a user and an issuer that is on the allowlist, in bulk if
+needed, and is audited with the operator, the user, `iss` and `sub`. Email is never
+consulted. This is the one exception to the rule that an admin never links an upstream
+account. The operator already chose to trust the issuer. The operation is not built yet
+(#432). Until it ships, the consume side cannot succeed in a real deployment.
 
 **No refresh token is issued** on this path. The client re-presents a fresh
 ID-JAG, which keeps the IdP's policy in the loop on every renewal — the point of
@@ -364,10 +369,14 @@ with a shared secret. There is no fallback and no "either will do" — an
 authentication method is a requirement, not a hint.
 
 Assertion validation follows the same shape as the ID-JAG stack: `iss` and `sub`
-both equal to the `client_id`, `aud` the token endpoint URL or QAuth's issuer
-identifier, bounded `exp`, required and replay-tracked `jti`, asymmetric-only
-algorithms, keys taken from the client's registered `jwks` / `jwks_uri` — the
-latter fetched through the same SSRF-guarded path.
+both equal to the `client_id`, `aud` QAuth's issuer identifier as its sole value (a string or a one-element array; the token endpoint URL is refused), bounded `exp`, required and replay-tracked `jti`, asymmetric-only
+algorithms, keys taken from the client's registered `jwks` / `jwks_uri` — the latter fetched through the same SSRF-guarded path.
+
+**The audience rule was tightened on 2026-10-11.** The first version of this section also
+accepted the token endpoint URL, as RFC 7523 §3 allows. The maintainer decided that every
+client names the issuer as the sole audience. `draft-ietf-oauth-rfc7523bis` §4 and the OIDC
+Core errata set 3 draft say the same. A client that names the URL now gets `invalid_client`.
+This is a break, made while the record is days old so that no deprecation window is needed.
 
 ### 8. Audit
 
@@ -519,17 +528,23 @@ ADR-020 as accepted on 2026-10-11.
 
 Each new test was checked to fail when its fix is removed.
 
-### Accepted for now, to be tracked as follow-ups
+### Decided on 2026-10-11
 
-- A refresh cooldown, a negative cache and a hard TTL ceiling for the issuer key resolver.
-- A dedicated target column instead of reusing `oauth_clients.audience`.
-- An operator way to link `(iss, sub)` to a user. Without it the consume side cannot be
-  used in a real deployment.
-- `ID_JAG_ALLOW_PRIVATE_ADDRESSES` refused when the environment profile is `production`
-  ([ADR-008](./008-environment-aware-authorization.md)).
-- §7 accepts the token endpoint URL or the issuer as `aud` of a client assertion.
-  [ADR-017](./017-first-party-login.md) requires the issuer alone for first-party and agent
-  clients. That is the direction of `rfc7523bis`. Whether every client moves is open.
+- **An operator links the enterprise subject to the user.** The other options were a user
+  proving the link by signing in to the issuer, which needs an upstream sign-in flow that does
+  not exist and defeats the point of EMA for a large organisation, and shipping without a link.
+  See gate 14. Tracked as #432.
+- **Every client names the issuer as the sole `aud` of its assertion.** See §7. The code
+  refuses the token endpoint URL, and an `aud` array that holds the issuer next to another
+  value, for every client at `/oauth/token`.
+
+### Accepted for now, tracked as issues
+
+- #433: a refresh cooldown, a negative cache and a hard TTL ceiling for the issuer key
+  resolver.
+- #434: a dedicated target column instead of reusing `oauth_clients.audience`.
+- #435: `ID_JAG_ALLOW_PRIVATE_ADDRESSES`, and its CIMD twin, refused when `NODE_ENV` is
+  `production`.
 
 ### The draft dependency
 

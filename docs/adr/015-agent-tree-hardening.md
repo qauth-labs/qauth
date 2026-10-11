@@ -217,9 +217,7 @@ and carries `typ: client-authentication+jwt`.**
   `invalid_client`, audited.
 - The rule holds at `/oauth/token`, at the node leg of the identifier API
   (§6) and at the CIBA backchannel endpoint (§14), where it binds every
-  client. Other clients keep today's rule at `/oauth/token`
-  (`client-assertion.ts:96`;
-  [ADR-011 §7](./011-enterprise-managed-authorization.md#7-private_key_jwt-384--additive-no-flag)).
+  client. Every other client follows the `aud` part of this rule at `/oauth/token` since 2026-10-11 ([ADR-011 §7](./011-enterprise-managed-authorization.md#7-private_key_jwt-384--additive-no-flag)). The explicit `typ` and the short life stay specific to agent types.
 - An agent type never authenticates by client secret (question 2, decided
   2026-10-09).
 

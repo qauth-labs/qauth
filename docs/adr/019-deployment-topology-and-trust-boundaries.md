@@ -390,8 +390,11 @@ their own rules. An admin API operation is a security operation when it:
 - changes which credentials, links or addresses can authenticate or recover an account: a set-up or
   reset link the admin copies; an account's identifier or contact address; removing a passkey, TOTP
   or recovery codes; an upstream provider, trusted issuer or AuthMethod plugin and its mappers;
-  unlinking an upstream or wallet account (an admin never links one: an account is linked only when
-  the user signs in to the existing account, ADR-020 §3); the realm's mail transport and sender;
+  unlinking an upstream or wallet account, and linking an enterprise ID-JAG subject to a user
+  (an admin never links any other upstream or wallet account: those are linked only when the user
+  signs in to the existing account, ADR-020 §3. The ID-JAG link is the one exception, because the
+  operator already chose to trust that issuer; [ADR-011](./011-enterprise-managed-authorization.md)
+  gate 14); the realm's mail transport and sender;
   loosening the allowed sign-in methods or the MFA, password or brute-force policy;
 - changes what a token asserts or who receives it: mappers, the scope catalog, roles and groups and
   their assignment to accounts, resource-server and audience registration, an agent type's
