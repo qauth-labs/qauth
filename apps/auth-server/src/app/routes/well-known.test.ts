@@ -117,8 +117,30 @@ describe('GET /.well-known/oauth-authorization-server', () => {
     }
   });
 
-  it('advertises the jwt-bearer grant and ID-JAG profile once ID_JAG_ENABLED is set', async () => {
+  it('does not advertise ID-JAG when it is enabled but the issuer allowlist is empty (ADR-011 §4)', async () => {
+    // The token endpoint rejects every assertion in this state, so the metadata
+    // must not promise the grant.
     mockEnv['ID_JAG_ENABLED'] = true;
+    mockEnv['ID_JAG_TRUSTED_ISSUERS'] = [];
+    const app = await buildApp();
+    try {
+      for (const url of [
+        '/.well-known/oauth-authorization-server',
+        '/.well-known/openid-configuration',
+      ]) {
+        const body = (await app.inject({ method: 'GET', url })).json() as Record<string, unknown>;
+
+        expect(body['grant_types_supported']).not.toContain(JWT_BEARER_GRANT_TYPE);
+        expect('authorization_grant_profiles_supported' in body).toBe(false);
+      }
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('advertises the jwt-bearer grant and ID-JAG profile once ID_JAG_ENABLED is set and an issuer is trusted', async () => {
+    mockEnv['ID_JAG_ENABLED'] = true;
+    mockEnv['ID_JAG_TRUSTED_ISSUERS'] = ['https://idp.example.com'];
     const app = await buildApp();
     try {
       const body = (

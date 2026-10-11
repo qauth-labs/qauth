@@ -1,6 +1,8 @@
 import { generateKeyPairSync } from 'node:crypto';
 
 import { importPublicSigningKey } from '@qauth-labs/core-crypto';
+import { jwtPlugin } from '@qauth-labs/fastify-plugin-jwt';
+import Fastify from 'fastify';
 import { type CryptoKey, decodeJwt, decodeProtectedHeader, importPKCS8, SignJWT } from 'jose';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -503,6 +505,55 @@ describe('validateIdJagAssertion — deny paths', () => {
   });
 });
 
+describe('validateIdJagAssertion — no self-issuance (ADR-011 gate 5)', () => {
+  /** A resolver that would trust ANY issuer: gate 5 must not depend on the allowlist. */
+  function trustEverything(key = idpPublicKey): IdJagIssuerKeyResolver {
+    return vi.fn(async (request) => ({
+      key,
+      identifier: request.issuer.replace(/\/$/, ''),
+    }));
+  }
+
+  it.each([AS_ISSUER, `${AS_ISSUER}/`])(
+    'refuses an assertion whose iss is this server (%s), even when the allowlist lists it',
+    async (selfIssuer) => {
+      ENV.ID_JAG_TRUSTED_ISSUERS = [AS_ISSUER];
+      const { fastify } = fastifyStub();
+      const resolver = trustEverything();
+      const assertion = await makeAssertion({ iss: selfIssuer });
+
+      await expectRejection(
+        validateIdJagAssertion(fastify, { assertion, expectedClientId: CLIENT_ID, resolver }),
+        'self_issued'
+      );
+      // Refused before any key lookup, so a self-issued assertion cannot drive a fetch.
+      expect(resolver).not.toHaveBeenCalled();
+    }
+  );
+
+  it('refuses an ID-JAG this server minted for itself, end to end', async () => {
+    ENV.ID_JAG_TRUSTED_ISSUERS = [AS_ISSUER];
+    const { fastify } = fastifyStub();
+    const serverPublicKey = await importPublicSigningKey(SERVER_KEYS.publicKeyPem, 'EdDSA');
+    const resolver = trustEverything(serverPublicKey);
+    const minted = await mintIdJag(fastify, {
+      subject: 'user-1',
+      audience: AS_ISSUER,
+      resource: MCP_SERVER,
+      clientId: CLIENT_ID,
+    });
+
+    await expectRejection(
+      validateIdJagAssertion(fastify, {
+        assertion: minted.assertion,
+        expectedClientId: CLIENT_ID,
+        resolver,
+      }),
+      'self_issued'
+    );
+  });
+});
+
 describe('validateIdJagAssertion — replay protection', () => {
   it('accepts an assertion once and rejects the replay', async () => {
     const { fastify } = fastifyStub();
@@ -704,6 +755,53 @@ describe('mintIdJag', () => {
 
     expect(decodeJwt(minted.assertion).iss).toBe(AS_ISSUER);
   });
+});
+
+describe('a minted ID-JAG is never an access token (ADR-011 §3)', () => {
+  // The REAL JWT plugin, with the very key that signed the assertion. The
+  // signature is genuine, so only the verifier's own `typ` gate stands in the
+  // way. Run with the rollout switch both ways: a WRONG `typ` is refused even
+  // when an absent one would be tolerated.
+  it.each([false, true])(
+    'is refused by verifyAccessToken (requireAccessTokenTyp=%s)',
+    async (requireAccessTokenTyp) => {
+      const app = Fastify({ logger: false });
+      await app.register(jwtPlugin, {
+        privateKey: SERVER_KEYS.privateKeyPem,
+        publicKey: SERVER_KEYS.publicKeyPem,
+        issuer: AS_ISSUER,
+        accessTokenLifespan: 900,
+        refreshTokenLifespan: 3600,
+        requireAccessTokenTyp,
+      });
+      await app.ready();
+      try {
+        const { fastify } = fastifyStub();
+        const minted = await mintIdJag(fastify, {
+          subject: 'user-1',
+          audience: IDP_ISSUER,
+          resource: MCP_SERVER,
+          clientId: CLIENT_ID,
+          scope: 'chat.read',
+        });
+
+        // Plain, with the issuer pinned, and with the audience the assertion names:
+        // none of the optional checks may be what saves us.
+        for (const options of [
+          undefined,
+          { issuer: AS_ISSUER },
+          { audience: IDP_ISSUER },
+          { issuer: AS_ISSUER, audience: IDP_ISSUER },
+        ]) {
+          await expect(app.jwtUtils.verifyAccessToken(minted.assertion, options)).rejects.toThrow(
+            /typ is not at\+jwt/
+          );
+        }
+      } finally {
+        await app.close();
+      }
+    }
+  );
 });
 
 describe('idJagCredentialProviderType', () => {

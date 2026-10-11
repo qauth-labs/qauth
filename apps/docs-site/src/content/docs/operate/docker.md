@@ -403,7 +403,8 @@ CIMD is the recommended MCP client-registration mechanism (see [ADR-007](/refere
 
 **Off by default**, and doubly fail-closed: with `ID_JAG_ENABLED` off the
 `jwt-bearer` grant is neither advertised nor accepted, and even with it on an
-empty `ID_JAG_TRUSTED_ISSUERS` rejects every assertion. See
+empty `ID_JAG_TRUSTED_ISSUERS` rejects every assertion and keeps the grant out
+of the discovery metadata. See
 [ID-JAG](/integrate/oauth-flow/#id-jag--enterprise-managed-authorization-adr-011).
 
 | Variable                         | Required          | Default   | Description                                                                                                                                  |
