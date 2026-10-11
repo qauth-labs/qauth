@@ -29,6 +29,7 @@ import {
   validateScopes,
 } from '../../helpers/client-auth';
 import { isAgentClient } from '../../helpers/client-resolution';
+import { resolveIssuerIdentifier } from '../../helpers/discovery';
 import { resolveEmailClaims } from '../../helpers/email-claims';
 import {
   type EnvironmentPolicy,
@@ -1742,6 +1743,19 @@ async function mintIdJagForExchange(args: {
     );
   }
   const targetResource = requestedResource[0];
+
+  // ADR-011 gate 5, mirrored on the mint side: never mint an assertion for THIS
+  // server, even if an operator listed its issuer among the client's targets.
+  // The consume side refuses a self-issued assertion too; refusing here keeps the
+  // pair from ever forming a loop, and keeps a misconfigured allowlist from
+  // handing a client a way around the delegation path's audience narrowing.
+  if (
+    resolveIssuerIdentifier(targetAuthorizationServer) ===
+    resolveIssuerIdentifier(fastify.jwtUtils.getIssuer())
+  ) {
+    await auditFailure('invalid_target: ID-JAG audience is this authorization server');
+    throw new InvalidTargetError('an ID-JAG cannot be minted for this authorization server');
+  }
 
   const outsidePolicy = [targetAuthorizationServer, targetResource].filter(
     (target) => !allowedTargets.includes(target)

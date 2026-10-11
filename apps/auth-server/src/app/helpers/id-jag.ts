@@ -107,6 +107,7 @@ export type IdJagRejectionReason =
   | 'unresolvable_key'
   | 'signature_invalid'
   | 'issuer_invalid'
+  | 'self_issued'
   | 'claims_invalid'
   | 'unsupported_constraint'
   | 'audience_invalid'
@@ -291,7 +292,8 @@ export interface ValidateIdJagOptions {
  *  1. feature flag;
  *  2. structural decode + `alg` in {@link ID_JAG_SIGNING_ALG_VALUES_SUPPORTED}
  *     (no `none`, no `HS*`);
- *  3. `iss` on the operator allowlist — BEFORE any network call;
+ *  3. `iss` is not this server's own issuer (gate 5), then on the operator
+ *     allowlist — both BEFORE any network call;
  *  4. key resolution against that allowlisted issuer only, with ONE bounded
  *     refresh on a `kid` miss so a rotation is picked up promptly;
  *  5. signature + `iss` + `aud` + `exp`/`nbf` (bounded skew) via the crypto
@@ -348,6 +350,26 @@ export async function validateIdJagAssertion(
     throw new IdJagValidationError('malformed', 'assertion has no iss claim');
   }
 
+  // The expected `aud` is THIS server's published issuer identifier — the exact
+  // string discovery advertises — because that is what an IdP allowlists and
+  // targets. Byte comparison, no normalisation (RFC 8414 §2).
+  const expectedAudience = resolveIssuerIdentifier(fastify.jwtUtils.getIssuer());
+
+  // ADR-011 gate 5 — NO SELF-ISSUANCE. Checked before the allowlist and before
+  // any key lookup, and independently of both: an operator who lists this
+  // server's own issuer in `ID_JAG_TRUSTED_ISSUERS` by mistake must still not let
+  // it redeem an assertion it signed itself. Without this, a client could mint an
+  // ID-JAG for this server through token exchange and present it here, which
+  // skips the delegation path's narrow-never-widen audience rule. Same
+  // trailing-slash canonicalisation as the allowlist lookup, so a slash cannot
+  // dodge it.
+  if (resolveIssuerIdentifier(claimedIssuer) === expectedAudience) {
+    throw new IdJagValidationError(
+      'self_issued',
+      'assertion claims to be issued by this authorization server'
+    );
+  }
+
   const resolver = options.resolver ?? createIdJagIssuerKeyResolver(fastify);
 
   // The resolver itself enforces the allowlist and returns `undefined` for an
@@ -371,11 +393,6 @@ export async function validateIdJagAssertion(
       'no trusted signing key resolves for the assertion issuer'
     );
   }
-
-  // The expected `aud` is THIS server's published issuer identifier — the exact
-  // string discovery advertises — because that is what an IdP allowlists and
-  // targets. Byte comparison, no normalisation (RFC 8414 §2).
-  const expectedAudience = resolveIssuerIdentifier(fastify.jwtUtils.getIssuer());
 
   let verified;
   try {

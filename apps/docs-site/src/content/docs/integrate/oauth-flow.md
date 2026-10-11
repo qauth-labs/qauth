@@ -62,9 +62,10 @@ curl -s http://localhost:3000/.well-known/oauth-authorization-server | jq
 (removed in OAuth 2.1).
 
 The `jwt-bearer` grant is **off by default** (`ID_JAG_ENABLED=false`) and is
-advertised in `grant_types_supported` only while it is on — with the flag off
-the token endpoint answers `unsupported_grant_type`, so advertising it would be
-a false capability claim. See [ID-JAG](#id-jag--enterprise-managed-authorization-adr-011).
+advertised in `grant_types_supported` only while it is on **and**
+`ID_JAG_TRUSTED_ISSUERS` is not empty. With the flag off the token endpoint
+answers `unsupported_grant_type`, and with an empty allowlist it rejects every
+assertion, so advertising the grant would be a false capability claim. See [ID-JAG](#id-jag--enterprise-managed-authorization-adr-011).
 
 ---
 

@@ -3519,6 +3519,22 @@ describe('POST /oauth/token — ID-JAG MINT (token exchange, ADR-011)', () => {
     );
   });
 
+  it.each([AS_ISSUER, `${AS_ISSUER}/`])(
+    'refuses to mint for THIS server (%s), even when the client allowlist lists it (gate 5)',
+    async (selfAudience) => {
+      mockEnv['ID_JAG_ENABLED'] = true;
+      // The misconfiguration the gate exists for: the operator put QAuth's own
+      // issuer among the client's targets. The mint must still refuse it.
+      const { fastify, ctx } = setupMintStub({
+        audience: [AS_ISSUER, `${AS_ISSUER}/`, MCP_SERVER],
+      });
+
+      await expect(
+        invoke(fastify, ctx, mintRequest({ audience: [selfAudience] }))
+      ).rejects.toBeInstanceOf(InvalidTargetError);
+    }
+  );
+
   it('rejects a MULTI-VALUED audience rather than picking the first', async () => {
     mockEnv['ID_JAG_ENABLED'] = true;
     const { fastify, ctx } = setupMintStub();
