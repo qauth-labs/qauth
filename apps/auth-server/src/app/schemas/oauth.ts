@@ -1,7 +1,7 @@
 import { z } from 'zod';
 
 import { OAUTH_OPAQUE_PARAM_MAX_LENGTH, OAUTH_SCOPE_PARAM_MAX_LENGTH } from '../constants';
-import { exactUrl } from './common';
+import { boundedArray, exactUrl } from './common';
 
 /**
  * RFC 8707 §2: `resource` is an absolute URI without fragment, identifying
@@ -21,7 +21,7 @@ const resourceEntrySchema = exactUrl()
   .refine((v) => !v.includes('#'), { message: 'resource must not contain a fragment' });
 
 export const resourceParamSchema = z
-  .union([resourceEntrySchema, z.array(resourceEntrySchema).max(10)])
+  .union([resourceEntrySchema, boundedArray(z.array(resourceEntrySchema), 10)])
   .optional()
   .transform((v) => (v === undefined ? undefined : Array.isArray(v) ? v : [v]));
 
@@ -355,7 +355,7 @@ export const tokenExchangeTokenExchangeBodySchema = z.object({
   // authorization servers at once — so the handler MUST reject a multi-valued
   // `audience` on that path rather than silently picking the first.
   audience: z
-    .union([z.string().min(1).max(2048), z.array(z.string().min(1).max(2048)).max(10)])
+    .union([z.string().min(1).max(2048), boundedArray(z.array(z.string().min(1).max(2048)), 10)])
     .optional()
     .transform((v) => (v === undefined ? undefined : Array.isArray(v) ? v : [v])),
   // RFC 8707 §2: resource indicators; MUST be a subset of the subject token's
@@ -607,22 +607,21 @@ export type IntrospectResponse = z.infer<typeof introspectResponseSchema>;
  */
 export const dynamicClientRegistrationRequestSchema = z.object({
   client_name: z.string().min(1).max(255).optional(),
-  redirect_uris: z.array(z.string().min(1).max(2048)).max(20).optional(),
-  grant_types: z
-    .array(
+  // Every array goes through `boundedArray`: its length is checked before any
+  // element, so the caller cannot choose how many issues the request produces.
+  redirect_uris: boundedArray(z.array(z.string().min(1).max(2048)), 20).optional(),
+  grant_types: boundedArray(
+    z.array(
       z.enum([
         'authorization_code',
         'refresh_token',
         'client_credentials',
         TOKEN_EXCHANGE_GRANT_TYPE,
       ])
-    )
-    .max(8)
-    .optional(),
-  response_types: z
-    .array(z.enum(['code']))
-    .max(4)
-    .optional(),
+    ),
+    8
+  ).optional(),
+  response_types: boundedArray(z.array(z.enum(['code'])), 4).optional(),
   token_endpoint_auth_method: z
     .enum(['none', 'client_secret_basic', 'client_secret_post'])
     .optional(),
@@ -631,7 +630,7 @@ export const dynamicClientRegistrationRequestSchema = z.object({
   logo_uri: z.url().max(2048).optional(),
   tos_uri: z.url().max(2048).optional(),
   policy_uri: z.url().max(2048).optional(),
-  contacts: z.array(z.email().max(255)).max(10).optional(),
+  contacts: boundedArray(z.array(z.email().max(255)), 10).optional(),
   software_id: z.string().max(255).optional(),
   software_version: z.string().max(64).optional(),
   /**

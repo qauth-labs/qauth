@@ -427,6 +427,48 @@ describe('error-handler plugin', () => {
 
       await app.close();
     });
+
+    it('bounds how many issues it returns and logs, however many there are', async () => {
+      // The schemas bound how many issues a request can produce (`boundedArray`
+      // in schemas/common.ts). This is the backstop for a schema that misses it:
+      // one entry per issue is ~190 bytes of answer, and the error object holds
+      // every issue three times over (`validation`, the joined `message`, and
+      // `stack`, which starts with that message), ~750 bytes of log each.
+      const lines: string[] = [];
+      const stream = new Writable({
+        write(chunk, _enc, cb) {
+          lines.push(chunk.toString());
+          cb();
+        },
+      });
+      const app = Fastify({
+        logger: { level: 'warn', stream },
+        logController: new LogController({ disableRequestLogging: true }),
+      });
+      await app.register(errorHandler);
+      app.get('/many', async () => {
+        // Shaped as Fastify builds it from the Zod compiler's output.
+        const validation = Array.from({ length: 5000 }, (_, i) => ({
+          instancePath: `/grant_types/${i}`,
+          message: 'Invalid option',
+        }));
+        const message = validation.map((v) => `body${v.instancePath} ${v.message}`).join(', ');
+        throw Object.assign(new Error(message), { validation, validationContext: 'body' });
+      });
+
+      const response = await app.inject({ method: 'GET', url: '/many' });
+      await app.close();
+
+      expect(response.statusCode).toBe(400);
+      expect(response.json().details).toHaveLength(20);
+      expect(response.body.length).toBeLessThan(4096);
+
+      const logged = lines.join('');
+      expect(logged).toContain('"issues":5000');
+      expect(logged).not.toContain('/grant_types/20 ');
+      expect(logged).not.toContain('"/grant_types/20"');
+      expect(logged.length).toBeLessThan(8192);
+    });
   });
 
   /**

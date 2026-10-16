@@ -1,8 +1,14 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 
 import { createClientRequestSchema, updateClientRequestSchema } from './clients';
-import { exactUrl, hasInteriorTabOrNewline } from './common';
+import { boundedArray, exactUrl, hasInteriorTabOrNewline } from './common';
+import {
+  authorizeQuerySchema,
+  dynamicClientRegistrationRequestSchema,
+  TOKEN_EXCHANGE_GRANT_TYPE,
+  tokenExchangeBodySchema,
+} from './oauth';
 
 /**
  * `exactUrl()` replaces `z.url()` for every URL QAuth compares as a string.
@@ -70,5 +76,84 @@ describe('client-management redirectUris use exactUrl', () => {
 
   it('PATCH /api/clients/:id refuses it too', () => {
     expect(updateClientRequestSchema.safeParse({ redirectUris: [tabbed] }).success).toBe(false);
+  });
+});
+
+/**
+ * `z.array(element).max(n)` does not bound the work: Zod parses every element
+ * first and runs the array's own checks afterwards, and each failing element is
+ * a separate issue. A 1 MB body of two-byte elements made ~490 000 of them,
+ * seconds of event-loop time on an unauthenticated route and a 93 MB answer.
+ */
+describe('boundedArray', () => {
+  const element = vi.fn((value: string) => value.length > 0);
+  const schema = boundedArray(z.array(z.string().refine(element)), 3);
+
+  it('accepts an array up to the bound and still validates its elements', () => {
+    expect(schema.parse(['a', 'b', 'c'])).toEqual(['a', 'b', 'c']);
+    expect(schema.safeParse(['a', '']).error?.issues).toMatchObject([{ path: [1] }]);
+    expect(schema.safeParse('a').error?.issues).toMatchObject([{ code: 'invalid_type' }]);
+  });
+
+  it('refuses an oversized array with ONE too_big issue, before looking at any element', () => {
+    element.mockClear();
+    const result = schema.safeParse(Array(10_000).fill('a'));
+
+    expect(result.error?.issues).toEqual([
+      expect.objectContaining({ code: 'too_big', origin: 'array', maximum: 3, path: [] }),
+    ]);
+    expect(element).not.toHaveBeenCalled();
+  });
+
+  it('publishes the same JSON Schema as the plain array', () => {
+    const plain = z.array(z.string()).max(3);
+    expect(z.toJSONSchema(boundedArray(z.array(z.string()), 3), { io: 'input' })).toEqual(
+      z.toJSONSchema(plain, { io: 'input' })
+    );
+  });
+});
+
+describe('request schemas — the caller does not choose the number of issues', () => {
+  const tokenExchange = {
+    grant_type: TOKEN_EXCHANGE_GRANT_TYPE,
+    subject_token: 't',
+    subject_token_type: 't',
+  };
+  const cases: ReadonlyArray<readonly [string, z.ZodType, string, Record<string, unknown>]> = [
+    ...['redirect_uris', 'grant_types', 'response_types', 'contacts'].map(
+      (field) =>
+        ['POST /oauth/register', dynamicClientRegistrationRequestSchema, field, {}] as const
+    ),
+    ...['redirectUris', 'scopes', 'grantTypes', 'responseTypes'].flatMap(
+      (field) =>
+        [
+          ['POST /api/clients', createClientRequestSchema, field, { name: 'n' }],
+          ['PATCH /api/clients/:id', updateClientRequestSchema, field, {}],
+        ] as const
+    ),
+    ['POST /oauth/token', tokenExchangeBodySchema, 'resource', tokenExchange],
+    ['POST /oauth/token', tokenExchangeBodySchema, 'audience', tokenExchange],
+    ['/oauth/authorize', authorizeQuerySchema, 'resource', {}],
+  ];
+
+  it.each(cases)('%s %#: an oversized array is refused whole', (...args) => {
+    const [, schema, field, rest] = args;
+    const result = schema.safeParse({ ...rest, [field]: Array(10_000).fill(1) });
+
+    expect(result.success).toBe(false);
+    // Serialised, so issues nested inside an `invalid_union` count as well.
+    expect(JSON.stringify(result.error?.issues).length).toBeLessThan(4096);
+  });
+
+  it('parses no URL in an oversized list of redirect URIs', () => {
+    const canParse = vi.spyOn(URL, 'canParse');
+    try {
+      const redirectUris = Array(1000).fill('https://app.example.com/cb');
+      expect(createClientRequestSchema.safeParse({ name: 'n', redirectUris }).success).toBe(false);
+      expect(updateClientRequestSchema.safeParse({ redirectUris }).success).toBe(false);
+      expect(canParse).not.toHaveBeenCalled();
+    } finally {
+      canParse.mockRestore();
+    }
   });
 });

@@ -98,6 +98,17 @@ interface ValidationDetail {
 }
 
 /**
+ * Most validation issues returned or logged for one request.
+ *
+ * The request schemas bound how many issues a body can produce (`boundedArray`
+ * in `schemas/common.ts`); this keeps the handler from depending on every
+ * schema getting that right. An uncapped list multiplies whatever count a
+ * caller reaches: each issue is ~190 bytes of answer and, logged whole, ~750
+ * bytes of log. A caller fixing its request needs the first few.
+ */
+const MAX_VALIDATION_DETAILS = 20;
+
+/**
  * Project the compiler's issues into {@link ValidationDetail}s.
  *
  * Tolerant by construction: the input is typed `unknown` by Fastify and its
@@ -109,7 +120,7 @@ interface ValidationDetail {
 function projectValidationDetails(validation: unknown): ValidationDetail[] {
   if (!Array.isArray(validation)) return [];
 
-  return validation.map((issue: unknown) => {
+  return validation.slice(0, MAX_VALIDATION_DETAILS).map((issue: unknown) => {
     const record = (issue ?? {}) as Record<string, unknown>;
     const path = record['instancePath'];
     const message = record['message'];
@@ -119,6 +130,26 @@ function projectValidationDetails(validation: unknown): ValidationDetail[] {
       message: typeof message === 'string' ? message : 'Invalid value',
     };
   });
+}
+
+/**
+ * What the log line carries as `err`.
+ *
+ * A validation error holds every issue three times: in `validation`, in
+ * `message` (Fastify joins every issue's message into it) and in `stack`, which
+ * starts with that message. pino's `err` serializer writes all three. So a
+ * validation error is logged as its issue count and the same bounded
+ * projection the caller receives; any other error is logged as it is.
+ */
+function loggableError(error: FastifyError | Error): unknown {
+  if (!('validation' in error) || !error.validation) return error;
+
+  return {
+    type: 'ValidationError',
+    validationContext: (error as FastifyError).validationContext,
+    issues: Array.isArray(error.validation) ? error.validation.length : undefined,
+    details: projectValidationDetails(error.validation),
+  };
 }
 
 /** Simple errors that only need message and statusCode */
@@ -181,7 +212,7 @@ export default fp(async function (fastify: FastifyInstance) {
       // request line censors it; the error line beside it must not undo that.
       request.log[statusCode >= 500 ? 'error' : 'warn'](
         {
-          err: error,
+          err: loggableError(error),
           url: redactLoggedUrl(request.url),
           method: request.method,
           statusCode,

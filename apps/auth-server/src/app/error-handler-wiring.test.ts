@@ -404,6 +404,26 @@ describe('assembled app — password bound in UTF-16 code units', () => {
   });
 });
 
+describe('assembled app — an oversized request array is one issue, not one per element', () => {
+  // Zod parses every element of an array before its `.max()`, so a 1 MB body of
+  // invalid elements made one issue each: seconds of event-loop time, a 93 MB
+  // answer and hundreds of MB of log per unauthenticated request. The
+  // management guard is a preHandler, so `/api/clients` validates first too.
+  it.each([
+    ['/oauth/register', { grant_types: Array(50_000).fill(1) }, '/grant_types'],
+    ['/oauth/token', { grant_type: 'client_credentials', resource: Array(50_000).fill('') }, ''],
+    ['/api/clients', { name: 'n', grantTypes: Array(50_000).fill(1) }, '/grantTypes'],
+  ])('POST %s answers with a single small issue', async (url, payload, path) => {
+    const res = await server.inject({ method: 'POST', url, payload });
+
+    expect(res.statusCode).toBe(400);
+    expect(res.body.length).toBeLessThan(1024);
+    const details = (res.json() as { details: Array<{ path: string }> }).details;
+    expect(details).toHaveLength(1);
+    if (path) expect(details[0]?.path).toBe(path);
+  });
+});
+
 /**
  * The registration ORDER in `app.ts`, asserted on the source (#365).
  *

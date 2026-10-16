@@ -48,7 +48,9 @@ Schema-validation failures use:
 `details` carries one entry per rejected field: `path` names it, `message` says
 what is wrong with it. Nothing else — the validator's own issue objects also
 carry the schema path, the rule keyword and a parameter bag, and those describe
-how QAuth is built rather than what it accepts, so they are not returned.
+how QAuth is built rather than what it accepts, so they are not returned. At
+most 20 entries are returned. An array longer than its limit is one entry for
+the array as a whole; its elements are not checked.
 
 OAuth endpoints additionally return the standard OAuth error codes documented in
 [OAuth 2.1 Flow → Errors](/integrate/oauth-flow/#errors) (e.g. `invalid_grant`,
@@ -587,15 +589,15 @@ only** — only its argon2id hash is stored, so it is unrecoverable afterwards.
 
 **Body** (all besides `name` optional):
 
-| Field                     | Type     | Default                                  | Notes                                                                                                                                         |
-| ------------------------- | -------- | ---------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
-| `name`                    | string   | —                                        | Required, 1–255 chars.                                                                                                                        |
-| `description`             | string   | `null`                                   |                                                                                                                                               |
-| `redirectUris`            | string[] | `[]`                                     | Each validated (OAuth 2.1 §10.3 — `https` or loopback). **Required (≥1) for user-involving grants** (`authorization_code` / `refresh_token`). |
-| `scopes`                  | string[] | `[]`                                     | Capped to the realm's allowed-scopes policy (same allowlist as dynamic registration); a scope outside it is rejected.                         |
-| `grantTypes`              | string[] | `["authorization_code","refresh_token"]` | `authorization_code` / `refresh_token` / `client_credentials`.                                                                                |
-| `responseTypes`           | string[] | `["code"]`                               | OAuth 2.1 only supports `code`.                                                                                                               |
-| `tokenEndpointAuthMethod` | string   | `"none"`                                 | `none` (public) / `client_secret_post` / `client_secret_basic` / `private_key_jwt`.                                                           |
+| Field                     | Type     | Default                                  | Notes                                                                                                                                                     |
+| ------------------------- | -------- | ---------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `name`                    | string   | —                                        | Required, 1–255 chars.                                                                                                                                    |
+| `description`             | string   | `null`                                   |                                                                                                                                                           |
+| `redirectUris`            | string[] | `[]`                                     | At most 20. Each validated (OAuth 2.1 §10.3 — `https` or loopback). **Required (≥1) for user-involving grants** (`authorization_code` / `refresh_token`). |
+| `scopes`                  | string[] | `[]`                                     | At most 100. Capped to the realm's allowed-scopes policy (same allowlist as dynamic registration); a scope outside it is rejected.                        |
+| `grantTypes`              | string[] | `["authorization_code","refresh_token"]` | At most 8. `authorization_code` / `refresh_token` / `client_credentials`.                                                                                 |
+| `responseTypes`           | string[] | `["code"]`                               | At most 4. OAuth 2.1 only supports `code`.                                                                                                                |
+| `tokenEndpointAuthMethod` | string   | `"none"`                                 | `none` (public) / `client_secret_post` / `client_secret_basic` / `private_key_jwt`.                                                                       |
 
 **Rate limit**: per-IP, shared budget with `POST /oauth/register`
 (`REGISTER_CLIENT_RATE_LIMIT` / `REGISTER_CLIENT_RATE_WINDOW`) — create runs an
@@ -639,7 +641,7 @@ Errors: `401`; `404` (not found or not owned).
 
 Partially update a client. Any subset of: `name`, `description`,
 `redirectUris`, `scopes`, `grantTypes`, `responseTypes`,
-`tokenEndpointAuthMethod`, `enabled`. `clientId`, the secret, and
+`tokenEndpointAuthMethod`, `enabled`, with the same limits as on create. `clientId`, the secret, and
 `developerId` are **immutable** here (unknown/immutable keys are ignored). The
 _effective_ configuration (request value or persisted value) is re-validated:
 grant/response-type consistency, a redirect URI for user-involving grants, and

@@ -52,3 +52,31 @@ export function exactUrl() {
     .refine((value) => !hasInteriorTabOrNewline(value), { message: 'Invalid URL' })
     .check(z.url());
 }
+
+/**
+ * Bound a request array to `max` elements, checking its length BEFORE any of
+ * its elements.
+ *
+ * `z.array(element).max(max)` alone does not bound the work. Zod parses every
+ * element first and runs the array's own checks afterwards, and each failing
+ * element is an issue of its own, so the caller rather than the schema chooses
+ * how many issues a request produces: a 1 MB body of two-byte elements yields
+ * ~490 000, seconds of event-loop time on an unauthenticated route before the
+ * error handler copies them again. An issue raised in a `preprocess` step stops
+ * the pipe, so an oversized array costs one length comparison and raises the
+ * same single `too_big` issue that `.max()` reports.
+ *
+ * Every array in a request schema goes through this. `.max()` stays on the
+ * inner array so the published JSON Schema keeps its `maxItems`. Give a
+ * default with `.prefault()`, not `.default()`: Zod leaves a `.default()` set
+ * on a preprocessed schema out of the input JSON Schema.
+ */
+export function boundedArray<T extends z.ZodArray>(array: T, max: number) {
+  return z.preprocess((value, ctx) => {
+    if (Array.isArray(value) && value.length > max) {
+      ctx.addIssue({ code: 'too_big', origin: 'array', maximum: max, inclusive: true });
+      return z.NEVER;
+    }
+    return value;
+  }, array.max(max));
+}

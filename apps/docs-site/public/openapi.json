@@ -785,6 +785,7 @@
                   },
                   "redirectUris": {
                     "default": [],
+                    "maxItems": 20,
                     "type": "array",
                     "items": {
                       "type": "string",
@@ -793,6 +794,7 @@
                   },
                   "scopes": {
                     "default": [],
+                    "maxItems": 100,
                     "type": "array",
                     "items": {
                       "type": "string"
@@ -800,6 +802,7 @@
                   },
                   "grantTypes": {
                     "minItems": 1,
+                    "maxItems": 8,
                     "type": "array",
                     "items": {
                       "type": "string",
@@ -812,6 +815,7 @@
                     }
                   },
                   "responseTypes": {
+                    "maxItems": 4,
                     "type": "array",
                     "items": {
                       "type": "string",
@@ -1112,6 +1116,7 @@
                     ]
                   },
                   "redirectUris": {
+                    "maxItems": 20,
                     "type": "array",
                     "items": {
                       "type": "string",
@@ -1119,6 +1124,7 @@
                     }
                   },
                   "scopes": {
+                    "maxItems": 100,
                     "type": "array",
                     "items": {
                       "type": "string"
@@ -1126,6 +1132,7 @@
                   },
                   "grantTypes": {
                     "minItems": 1,
+                    "maxItems": 8,
                     "type": "array",
                     "items": {
                       "type": "string",
@@ -1138,6 +1145,7 @@
                     }
                   },
                   "responseTypes": {
+                    "maxItems": 4,
                     "type": "array",
                     "items": {
                       "type": "string",

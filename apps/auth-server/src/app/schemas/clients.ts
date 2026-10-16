@@ -1,6 +1,15 @@
 import { z } from 'zod';
 
-import { exactUrl } from './common';
+import { boundedArray, exactUrl } from './common';
+
+/** Most redirect URIs a client may register, as in dynamic registration. */
+const CLIENT_REDIRECT_URIS_MAX = 20;
+/** Most scopes a client may hold. */
+const CLIENT_SCOPES_MAX = 100;
+/** Most grant types a client may list, as in dynamic registration. */
+const CLIENT_GRANT_TYPES_MAX = 8;
+/** Most response types a client may list, as in dynamic registration. */
+const CLIENT_RESPONSE_TYPES_MAX = 4;
 
 /**
  * Client-management API schemas (issue #85, task 2.2.1).
@@ -127,14 +136,19 @@ export const tokenEndpointAuthMethodSchema = z.enum([
  * RFC 7591/OAuth 2.1 consistency in the route handler (shared with the update
  * path). Defaults mirror the dynamic-client-registration policy:
  * authorization_code + refresh_token, `code`, public client (PKCE).
+ *
+ * The arrays carry the dynamic-client-registration bounds too (20 redirect
+ * URIs, 8 grant types, 4 response types), plus 100 scopes, and each length is
+ * checked before any element ({@link boundedArray}). The management guard is a
+ * `preHandler`, so this schema runs for callers with no token.
  */
 export const createClientRequestSchema = z.object({
   name: z.string().min(1).max(255),
   description: z.string().max(2000).nullish(),
-  redirectUris: z.array(exactUrl()).default([]),
-  scopes: z.array(z.string()).default([]),
-  grantTypes: z.array(grantTypeSchema).nonempty().optional(),
-  responseTypes: z.array(responseTypeSchema).optional(),
+  redirectUris: boundedArray(z.array(exactUrl()), CLIENT_REDIRECT_URIS_MAX).prefault([]),
+  scopes: boundedArray(z.array(z.string()), CLIENT_SCOPES_MAX).prefault([]),
+  grantTypes: boundedArray(z.array(grantTypeSchema).nonempty(), CLIENT_GRANT_TYPES_MAX).optional(),
+  responseTypes: boundedArray(z.array(responseTypeSchema), CLIENT_RESPONSE_TYPES_MAX).optional(),
   tokenEndpointAuthMethod: tokenEndpointAuthMethodSchema.optional(),
 });
 
@@ -171,10 +185,10 @@ export const updateClientRequestSchema = z
   .object({
     name: z.string().min(1).max(255),
     description: z.string().max(2000).nullable(),
-    redirectUris: z.array(exactUrl()),
-    scopes: z.array(z.string()),
-    grantTypes: z.array(grantTypeSchema).nonempty(),
-    responseTypes: z.array(responseTypeSchema),
+    redirectUris: boundedArray(z.array(exactUrl()), CLIENT_REDIRECT_URIS_MAX),
+    scopes: boundedArray(z.array(z.string()), CLIENT_SCOPES_MAX),
+    grantTypes: boundedArray(z.array(grantTypeSchema).nonempty(), CLIENT_GRANT_TYPES_MAX),
+    responseTypes: boundedArray(z.array(responseTypeSchema), CLIENT_RESPONSE_TYPES_MAX),
     tokenEndpointAuthMethod: tokenEndpointAuthMethodSchema,
     enabled: z.boolean(),
   })
