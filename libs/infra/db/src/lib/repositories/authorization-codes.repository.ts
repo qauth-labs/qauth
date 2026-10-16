@@ -90,8 +90,12 @@ export function createAuthorizationCodesRepository(
     },
 
     /**
-     * Invalidate all active codes for a user
-     * Useful for security events (password change, account compromise)
+     * Invalidate all unredeemed codes for a user
+     * Useful for security events (logout, password change, account compromise)
+     *
+     * Expiry is not part of the predicate: a redemption checks it in
+     * `findByCode` only, so a code that expired right after that read is still
+     * spent by the `markUsed` that follows and must be caught here too.
      *
      * @param userId - User ID whose codes should be invalidated
      * @param tx - Optional transaction client
@@ -99,22 +103,50 @@ export function createAuthorizationCodesRepository(
      */
     async invalidateForUser(userId: string, tx?: DbClient): Promise<number> {
       const invoker = tx ?? defaultDb;
-      const now = Date.now();
 
       const result = await invoker
         .update(authorizationCodes)
         .set({
           used: true,
-          usedAt: now,
+          usedAt: Date.now(),
+        })
+        .where(and(eq(authorizationCodes.userId, userId), eq(authorizationCodes.used, false)))
+        .returning();
+
+      return result.length;
+    },
+
+    /**
+     * Invalidate all unredeemed codes a user holds for one client
+     * (consent revocation). Same predicate as `invalidateForUser`, narrowed
+     * to the client.
+     *
+     * @param userId - User ID whose codes should be invalidated
+     * @param oauthClientId - Client (internal id) the codes were issued to
+     * @param tx - Optional transaction client
+     * @returns Number of invalidated codes
+     */
+    async invalidateForUserAndClient(
+      userId: string,
+      oauthClientId: string,
+      tx?: DbClient
+    ): Promise<number> {
+      const invoker = tx ?? defaultDb;
+
+      const result = await invoker
+        .update(authorizationCodes)
+        .set({
+          used: true,
+          usedAt: Date.now(),
         })
         .where(
           and(
             eq(authorizationCodes.userId, userId),
-            eq(authorizationCodes.used, false),
-            gt(authorizationCodes.expiresAt, now)
+            eq(authorizationCodes.oauthClientId, oauthClientId),
+            eq(authorizationCodes.used, false)
           )
         )
-        .returning();
+        .returning({ id: authorizationCodes.id });
 
       return result.length;
     },

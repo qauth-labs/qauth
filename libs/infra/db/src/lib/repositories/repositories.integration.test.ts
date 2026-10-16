@@ -185,6 +185,115 @@ describe('repository integration (real Postgres)', () => {
 
       expect(await codes.findByCode('expired-code')).toBeUndefined();
     });
+
+    it('invalidateForUser also ends a code that has just expired', async () => {
+      const realm = await seedRealm();
+      const user = await seedUser(realm.id);
+      const client = await seedClient(realm.id);
+      const codes = createAuthorizationCodesRepository(db().database.db);
+
+      // A redemption that read the code while it was live goes on to markUsed,
+      // which does not look at the expiry again — so the invalidation must
+      // not skip the row either.
+      const code = await codes.create({
+        code: 'just-expired-code',
+        oauthClientId: client.id,
+        userId: user.id,
+        redirectUri: 'https://app.example.com/cb',
+        codeChallenge: 'challenge',
+        codeChallengeMethod: 'S256',
+        scopes: ['read:foo'],
+        expiresAt: Date.now() - 1,
+      });
+
+      expect(await codes.invalidateForUser(user.id)).toBe(1);
+      await expect(codes.markUsed(code.id)).rejects.toThrow();
+    });
+
+    it('invalidateForUserAndClient ends only that user-client pair', async () => {
+      const realm = await seedRealm();
+      const user = await seedUser(realm.id);
+      const other = await seedUser(realm.id);
+      const clientA = await seedClient(realm.id, 'client-a');
+      const clientB = await seedClient(realm.id, 'client-b');
+      const codes = createAuthorizationCodesRepository(db().database.db);
+      const seedCode = (code: string, userId: string, oauthClientId: string) =>
+        codes.create({
+          code,
+          oauthClientId,
+          userId,
+          redirectUri: 'https://app.example.com/cb',
+          codeChallenge: 'challenge',
+          codeChallengeMethod: 'S256',
+          scopes: ['read:foo'],
+          expiresAt: Date.now() + 60_000,
+        });
+      await seedCode('pair-code', user.id, clientA.id);
+      await seedCode('other-client-code', user.id, clientB.id);
+      await seedCode('other-user-code', other.id, clientA.id);
+
+      expect(await codes.invalidateForUserAndClient(user.id, clientA.id)).toBe(1);
+
+      expect(await codes.findByCode('pair-code')).toBeUndefined();
+      expect(await codes.findByCode('other-client-code')).toBeDefined();
+      expect(await codes.findByCode('other-user-code')).toBeDefined();
+    });
+
+    it.each(['logout', 'consent revocation'] as const)(
+      '%s started while a redemption is uncommitted still revokes its refresh token (race)',
+      async (kind) => {
+        const realm = await seedRealm();
+        const user = await seedUser(realm.id);
+        const client = await seedClient(realm.id);
+        const codes = createAuthorizationCodesRepository(db().database.db);
+        const tokens = createRefreshTokensRepository(db().database.db);
+        const code = await codes.create({
+          code: 'in-flight-code',
+          oauthClientId: client.id,
+          userId: user.id,
+          redirectUri: 'https://app.example.com/cb',
+          codeChallenge: 'challenge',
+          codeChallengeMethod: 'S256',
+          scopes: ['read:foo'],
+          expiresAt: Date.now() + 60_000,
+        });
+        const revoke = {
+          logout: async () => {
+            await codes.invalidateForUser(user.id);
+            await tokens.revokeAllForUser(user.id, 'logout');
+          },
+          'consent revocation': () =>
+            db().database.db.transaction(async (tx) => {
+              await codes.invalidateForUserAndClient(user.id, client.id, tx);
+              await tokens.revokeAllForUserAndClient(user.id, client.id, 'consent_revoked', tx);
+            }),
+        }[kind];
+
+        // The revocation starts on its own connection after the code is spent
+        // and before the refresh token exists — the window the authorization
+        // code grant used to leave open. Its code invalidation waits on the
+        // row `markUsed` locked, so the sweep runs after the commit.
+        let revocation: Promise<unknown> | undefined;
+        await db().database.db.transaction(async (tx) => {
+          await codes.markUsed(code.id, tx);
+          revocation = revoke();
+          await new Promise((resolve) => setTimeout(resolve, 200));
+          await tokens.create(
+            {
+              tokenHash: 'v'.repeat(64),
+              userId: user.id,
+              oauthClientId: client.id,
+              scopes: ['read:foo'],
+              expiresAt: Date.now() + 600_000,
+            },
+            tx
+          );
+        });
+        await revocation;
+
+        expect(await tokens.findByUserId(user.id)).toHaveLength(0);
+      }
+    );
   });
 
   // --- opaque state/nonce are not length-bounded by the DDL (#316) ----------

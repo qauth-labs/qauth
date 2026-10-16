@@ -83,6 +83,7 @@ function makeFastify() {
         listActiveForUser: vi.fn().mockResolvedValue([CONSENT_ROW]),
         revoke: vi.fn().mockResolvedValue(undefined),
       },
+      authorizationCodes: { invalidateForUserAndClient: vi.fn().mockResolvedValue(0) },
       refreshTokens: { revokeAllForUserAndClient: vi.fn().mockResolvedValue(2) },
       auditLogs: { create: vi.fn().mockResolvedValue(undefined) },
     },
@@ -174,6 +175,30 @@ describe('/api/consents', () => {
       'consent_revoked',
       'tx'
     );
+  });
+
+  it('invalidates the unredeemed codes for the client before the sweep, in the same transaction', async () => {
+    // A code redeemed after the sweep would mint a refresh token the withdrawn
+    // grant no longer covers; one in flight holds its code row locked until
+    // its refresh token is committed, so the sweep must come second.
+    const { fastify, ctx } = makeFastify();
+    await consentsApiRoute(fastify);
+    const { reply } = createReply();
+
+    await ctx.delete!(request({ params: { id: CONSENT_ROW.id } }), reply);
+
+    expect(fastify.repositories.authorizationCodes.invalidateForUserAndClient).toHaveBeenCalledWith(
+      'user-1',
+      CONSENT_ROW.oauthClientId,
+      'tx'
+    );
+    const invalidateOrder = (
+      fastify.repositories.authorizationCodes.invalidateForUserAndClient as unknown as Mock
+    ).mock.invocationCallOrder[0];
+    const sweepOrder = (
+      fastify.repositories.refreshTokens.revokeAllForUserAndClient as unknown as Mock
+    ).mock.invocationCallOrder[0];
+    expect(invalidateOrder).toBeLessThan(sweepOrder);
   });
 
   it('still revokes the refresh tokens when another tab already revoked the consent', async () => {

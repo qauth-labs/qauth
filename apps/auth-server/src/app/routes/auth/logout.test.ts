@@ -68,6 +68,9 @@ function createFastifyStub() {
       users: {
         findById: vi.fn().mockResolvedValue(VALID_USER),
       },
+      authorizationCodes: {
+        invalidateForUser: vi.fn().mockResolvedValue(0),
+      },
       refreshTokens: {
         revokeAllForUser: vi.fn().mockResolvedValue(undefined),
       },
@@ -125,6 +128,33 @@ describe('POST /auth/logout', () => {
       success: true,
       message: 'Successfully logged out',
     });
+  });
+
+  it('invalidates the user’s unredeemed authorization codes BEFORE sweeping refresh tokens', async () => {
+    // A code redeemed after the sweep would mint a refresh token that survives
+    // the logout, and a redemption in flight holds its code row locked until
+    // its refresh token is committed — so the codes go first, and the sweep
+    // that follows sees every refresh token (see the repository integration
+    // test for the race).
+    const { fastify, ctx } = createFastifyStub();
+    (fastify.jwtUtils.extractFromHeader as unknown as Mock).mockReturnValue('valid.access.jwt');
+    (fastify.jwtUtils.verifyAccessToken as unknown as Mock).mockResolvedValue(loginClaims());
+
+    await logoutRoute(fastify);
+    const handler = ctx.handler;
+    if (!handler) throw new Error('Handler missing');
+
+    await handler(logoutRequest(), createReply());
+
+    expect(fastify.repositories.authorizationCodes.invalidateForUser).toHaveBeenCalledWith(
+      VALID_USER.id
+    );
+    const invalidateOrder = (
+      fastify.repositories.authorizationCodes.invalidateForUser as unknown as Mock
+    ).mock.invocationCallOrder[0];
+    const sweepOrder = (fastify.repositories.refreshTokens.revokeAllForUser as unknown as Mock).mock
+      .invocationCallOrder[0];
+    expect(invalidateOrder).toBeLessThan(sweepOrder);
   });
 
   it('still logs out and returns 200 when the access token is EXPIRED (cleanup path, not 401)', async () => {

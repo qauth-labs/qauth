@@ -86,6 +86,12 @@ export default async function (fastify: FastifyInstance) {
           throw new NotFoundError('User', userId);
         }
 
+        // Invalidate unredeemed authorization codes first: one redeemed after
+        // the sweep below would mint a refresh token that survives the logout.
+        // This also waits for a redemption in flight, which keeps its code row
+        // locked until its refresh token is committed for the sweep to see.
+        await fastify.repositories.authorizationCodes.invalidateForUser(userId);
+
         // Revoke all active refresh tokens for user
         // This ensures user is logged out from all devices
         await fastify.repositories.refreshTokens.revokeAllForUser(userId, 'logout');

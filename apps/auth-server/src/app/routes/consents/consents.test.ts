@@ -66,6 +66,7 @@ function makeFastify() {
       oauthClients: {
         findById: vi.fn(),
       },
+      authorizationCodes: { invalidateForUserAndClient: vi.fn().mockResolvedValue(0) },
       refreshTokens: { revokeAllForUserAndClient: vi.fn().mockResolvedValue(0) },
       auditLogs: { create: vi.fn().mockResolvedValue(undefined) },
     },
@@ -242,6 +243,11 @@ describe('/consents JSON API', () => {
     );
     expect(state.statusCode).toBe(204);
     expect(fastify.repositories.oauthConsents.revoke).toHaveBeenCalledWith('c1', 'tx');
+    expect(fastify.repositories.authorizationCodes.invalidateForUserAndClient).toHaveBeenCalledWith(
+      'u1',
+      'cli1',
+      'tx'
+    );
     expect(fastify.repositories.refreshTokens.revokeAllForUserAndClient).toHaveBeenCalledWith(
       'u1',
       'cli1',

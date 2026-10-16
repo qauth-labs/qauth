@@ -550,8 +550,6 @@ async function handleAuthorizationCode(
   }
   const effectiveResource = requestedResource.length > 0 ? requestedResource : codeResource;
 
-  await fastify.repositories.authorizationCodes.markUsed(authCode.id);
-
   const user = await fastify.repositories.users.findById(authCode.userId);
   if (!user) {
     await fastify.repositories.auditLogs.create({
@@ -569,8 +567,9 @@ async function handleAuthorizationCode(
   // A code outlives the session that produced it by up to its TTL, and a user
   // disabled in between must not receive tokens for it — the same gate the
   // refresh, token-exchange and jwt-bearer grants apply (RFC 9700 §4.14). The
-  // code is already burned above, so it cannot be retried.
+  // code is burned all the same, so it cannot be retried.
   if (!user.enabled) {
+    await fastify.repositories.authorizationCodes.markUsed(authCode.id);
     await fastify.repositories.auditLogs.create({
       userId: user.id,
       oauthClientId: client.id,
@@ -583,6 +582,40 @@ async function handleAuthorizationCode(
     });
     throw new InvalidGrantError('Invalid or expired authorization code');
   }
+
+  const { token: refreshToken, tokenHash } = fastify.jwtUtils.generateRefreshToken();
+
+  const refreshTokenExpiresAt = Date.now() + fastify.jwtUtils.getRefreshTokenLifespan() * 1000;
+
+  // Start a fresh refresh-token family. Every rotation (see
+  // `handleRefreshToken`) inherits this `familyId` so replay of a revoked
+  // token can be traced to — and revoke — the entire family.
+  const familyId = randomUUID();
+
+  // Spend the code and store the refresh token it buys in ONE transaction, so
+  // the grant is never observable in between: code already used, refresh
+  // token not yet there. Logout and consent revocation invalidate the user's
+  // unredeemed codes before they sweep the refresh tokens; their UPDATE on
+  // this code row either lands first, and the compare-and-set in `markUsed`
+  // matches nothing, or waits on the row lock taken here until the refresh
+  // token is committed, where the sweep that follows sees it.
+  await fastify.db.transaction(async (tx) => {
+    await fastify.repositories.authorizationCodes.markUsed(authCode.id, tx);
+    await fastify.repositories.refreshTokens.create(
+      {
+        userId: user.id,
+        oauthClientId: client.id,
+        tokenHash,
+        familyId,
+        expiresAt: refreshTokenExpiresAt,
+        scopes: authCode.scopes,
+        // RFC 8707: carry the resource set onto the refresh token so subsequent
+        // refreshes produce access tokens with the same `aud`.
+        resource: effectiveResource,
+      },
+      tx
+    );
+  });
 
   const scopeString = authCode.scopes.length > 0 ? authCode.scopes.join(' ') : undefined;
 
@@ -638,27 +671,6 @@ async function handleAuthorizationCode(
         ...resolveAcrClaims(authCode.assuranceLevel),
       })
     : undefined;
-
-  const { token: refreshToken, tokenHash } = fastify.jwtUtils.generateRefreshToken();
-
-  const refreshTokenExpiresAt = Date.now() + fastify.jwtUtils.getRefreshTokenLifespan() * 1000;
-
-  // Start a fresh refresh-token family. Every rotation (see
-  // `handleRefreshToken`) inherits this `familyId` so replay of a revoked
-  // token can be traced to — and revoke — the entire family.
-  const familyId = randomUUID();
-
-  await fastify.repositories.refreshTokens.create({
-    userId: user.id,
-    oauthClientId: client.id,
-    tokenHash,
-    familyId,
-    expiresAt: refreshTokenExpiresAt,
-    scopes: authCode.scopes,
-    // RFC 8707: carry the resource set onto the refresh token so subsequent
-    // refreshes produce access tokens with the same `aud`.
-    resource: effectiveResource,
-  });
 
   let sessionId: string | undefined;
   try {

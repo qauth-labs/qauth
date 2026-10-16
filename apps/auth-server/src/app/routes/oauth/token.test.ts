@@ -1186,7 +1186,8 @@ describe('POST /oauth/token route — authorization_code grant', () => {
         oauthClientId: client.id,
         tokenHash: 'refresh-token-hash',
         scopes: ['read:foo'],
-      })
+      }),
+      expect.anything()
     );
 
     expect(result).toMatchObject({
@@ -1620,12 +1621,36 @@ describe('POST /oauth/token route — authorization_code grant', () => {
     const reply = createReply();
     await handler(baseRequest(), reply);
 
-    expect(fastify.repositories.authorizationCodes.markUsed).toHaveBeenCalledWith(authCode.id);
+    expect(fastify.repositories.authorizationCodes.markUsed).toHaveBeenCalledWith(
+      authCode.id,
+      expect.anything()
+    );
     const markUsedOrder = (fastify.repositories.authorizationCodes.markUsed as unknown as Mock).mock
       .invocationCallOrder[0];
     const signOrder = (fastify.jwtUtils.signAccessToken as unknown as Mock).mock
       .invocationCallOrder[0];
     expect(markUsedOrder).toBeLessThan(signOrder);
+  });
+
+  it('spends the code and stores the refresh token in one transaction', async () => {
+    // A logout or consent revocation landing between the two would find the
+    // code already used and no refresh token to revoke yet (see the repository
+    // integration test for the race). Both writes must carry the tx handle of
+    // the same fastify.db.transaction call.
+    const { fastify, ctx, authCode } = setupAuthCodeStub();
+    const tx = { tx: true };
+    (fastify.db.transaction as unknown as Mock).mockImplementation(
+      async (cb: (tx: unknown) => Promise<unknown>) => cb(tx)
+    );
+    await tokenRoute(fastify);
+    const handler = ctx.handler;
+    if (!handler) throw new Error('Handler missing');
+
+    await handler(baseRequest(), createReply());
+
+    expect(fastify.db.transaction).toHaveBeenCalledTimes(1);
+    expect(fastify.repositories.authorizationCodes.markUsed).toHaveBeenCalledWith(authCode.id, tx);
+    expect(fastify.repositories.refreshTokens.create).toHaveBeenCalledWith(expect.anything(), tx);
   });
 
   it('rejects replay via the markUsed CAS losing the race (NotFoundError → no token)', async () => {
@@ -1662,7 +1687,7 @@ describe('POST /oauth/token route — authorization_code grant', () => {
   // RFC 9700 §4.14: a user disabled between code issuance and redemption gets
   // no tokens — the same gate the refresh, exchange and jwt-bearer grants apply.
   it('rejects a code whose user has been disabled (invalid_grant, no tokens)', async () => {
-    const { fastify, ctx } = setupAuthCodeStub();
+    const { fastify, ctx, authCode } = setupAuthCodeStub();
     (fastify.repositories.users.findById as unknown as Mock).mockResolvedValue({
       id: 'user-uuid-1',
       email: 'u@example.com',
@@ -1676,6 +1701,8 @@ describe('POST /oauth/token route — authorization_code grant', () => {
     await expect(handler(baseRequest(), createReply())).rejects.toThrow(InvalidGrantError);
     expect(fastify.jwtUtils.signAccessToken).not.toHaveBeenCalled();
     expect(fastify.repositories.refreshTokens.create).not.toHaveBeenCalled();
+    // The code is still burned, so the exchange cannot be retried.
+    expect(fastify.repositories.authorizationCodes.markUsed).toHaveBeenCalledWith(authCode.id);
     expect(fastify.repositories.auditLogs.create).toHaveBeenCalledWith(
       expect.objectContaining({
         metadata: { error: 'invalid_grant: user_disabled' },
