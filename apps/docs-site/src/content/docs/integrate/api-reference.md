@@ -148,9 +148,11 @@ Create a user account. A verification email is sent (the `mock` provider logs it
 ```
 
 Errors: `400` (validation / weak password), `409` (email already registered),
-`429` (rate limited). The `409` is deliberately generic — it carries neither the
-database constraint name nor anything else that would confirm the address is
-already registered.
+`429` (rate limited). The `409` body is generic and carries no database
+constraint name, but the status itself tells the caller that the address already
+has a password account in the realm. This endpoint therefore reveals whether an
+address is registered.
+[ADR-017](/reference/records/adr/017-first-party-login/) removes it before 1.0.
 
 ### `POST /auth/login`
 
