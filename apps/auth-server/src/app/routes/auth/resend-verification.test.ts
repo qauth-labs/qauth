@@ -29,6 +29,7 @@ import resendRoute from './resend-verification';
 
 interface TestContext {
   handler?: (request: any) => Promise<unknown>;
+  onClose?: () => Promise<unknown>;
 }
 
 function credentialFixture(overrides: Record<string, unknown> = {}) {
@@ -52,6 +53,10 @@ function createFastifyStub() {
         return fastify;
       },
     }),
+    addHook: (name: string, hook: () => Promise<unknown>) => {
+      if (name === 'onClose') ctx.onClose = hook;
+      return fastify;
+    },
     repositories: {
       realms: {
         findByName: vi.fn().mockResolvedValue({ id: 'realm-1', name: 'master', enabled: true }),
@@ -206,6 +211,96 @@ describe('POST /auth/resend-verification', () => {
 
     await expect(ctx.handler(request)).rejects.toThrow(TooManyRequestsError);
     expect(fastify.repositories.userCredentials.findByRealmProviderSub).not.toHaveBeenCalled();
+  });
+
+  describe('delivery runs off the request path (KCEQXFCA)', () => {
+    /** A send the test settles by hand, like a slow mail provider. */
+    function deferredSend(fastify: FastifyInstance) {
+      const control: { resolve?: () => void; reject?: (error: Error) => void } = {};
+      (fastify.emailService.sendVerificationEmail as unknown as Mock).mockImplementation(
+        () =>
+          new Promise<void>((resolve, reject) => {
+            control.resolve = resolve;
+            control.reject = reject;
+          })
+      );
+      return control;
+    }
+
+    /** Settles to 'pending' if `promise` has not settled within a few ticks. */
+    async function settledSoon(promise: Promise<unknown>): Promise<string> {
+      return Promise.race([
+        promise.then(
+          () => 'settled',
+          () => 'settled'
+        ),
+        new Promise<string>((resolve) => setTimeout(() => resolve('pending'), 50)),
+      ]);
+    }
+
+    it('answers a registered, unverified address without waiting for the mail provider', async () => {
+      const { fastify, ctx } = createFastifyStub();
+      await resendRoute(fastify);
+      if (!ctx.handler) throw new Error('Handler missing');
+      (
+        fastify.repositories.userCredentials.findByRealmProviderSub as unknown as Mock
+      ).mockResolvedValue(credentialFixture());
+      const send = deferredSend(fastify);
+
+      const answer = ctx.handler(request);
+
+      // A slow delivery must not show in the response time: only this branch
+      // sends, so waiting for it told registered from unknown addresses.
+      expect(await settledSoon(answer)).toBe('settled');
+      await expect(answer).resolves.toEqual({ message: SUCCESS_MESSAGES.RESEND_VERIFICATION });
+      expect(fastify.emailService.sendVerificationEmail).toHaveBeenCalledWith(
+        'user@example.com',
+        'plain'
+      );
+      send.resolve?.();
+    });
+
+    it('waits on server close for a delivery still in flight', async () => {
+      const { fastify, ctx } = createFastifyStub();
+      await resendRoute(fastify);
+      if (!ctx.handler) throw new Error('Handler missing');
+      (
+        fastify.repositories.userCredentials.findByRealmProviderSub as unknown as Mock
+      ).mockResolvedValue(credentialFixture());
+      const send = deferredSend(fastify);
+
+      await ctx.handler(request);
+      if (!ctx.onClose) throw new Error('No onClose hook registered');
+      const closing = ctx.onClose();
+
+      // The mail is not dropped on shutdown: close waits for it.
+      expect(await settledSoon(closing)).toBe('pending');
+      send.resolve?.();
+      await expect(closing).resolves.toBeUndefined();
+    });
+
+    it('still logs a failed delivery, and close does not fail on it', async () => {
+      const { fastify, ctx } = createFastifyStub();
+      await resendRoute(fastify);
+      if (!ctx.handler) throw new Error('Handler missing');
+      (
+        fastify.repositories.userCredentials.findByRealmProviderSub as unknown as Mock
+      ).mockResolvedValue(credentialFixture());
+      const send = deferredSend(fastify);
+
+      await expect(ctx.handler(request)).resolves.toEqual({
+        message: SUCCESS_MESSAGES.RESEND_VERIFICATION,
+      });
+      if (!ctx.onClose) throw new Error('No onClose hook registered');
+      const closing = ctx.onClose();
+      send.reject?.(new Error('smtp down'));
+
+      await expect(closing).resolves.toBeUndefined();
+      expect(fastify.log.error).toHaveBeenCalledWith(
+        expect.any(Error),
+        'Failed to send verification email'
+      );
+    });
   });
 
   it('claims the minimum interval atomically: of requests sent together only one sends (F2FJ182D)', async () => {
