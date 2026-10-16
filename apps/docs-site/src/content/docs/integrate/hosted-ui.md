@@ -32,6 +32,11 @@ token so a legitimate retry can succeed; a `401` (bad credentials,
 cookie's token unchanged, since that cookie is still valid — only the
 credentials were wrong.
 
+The session lasts `SESSION_COOKIE_TTL` from sign-in and is not extended by
+use. [`POST /auth/logout`](/integrate/api-reference/#post-authlogout) ends
+every hosted session of the user, so the next `/oauth/authorize` shows this
+page again.
+
 ## `/ui/consent`
 
 `GET /ui/consent` takes the same query parameters as

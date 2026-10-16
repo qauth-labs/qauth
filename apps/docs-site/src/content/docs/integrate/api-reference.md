@@ -178,9 +178,11 @@ at `POST /oauth/token` — there is no separate refresh endpoint.
 
 ### `POST /auth/logout`
 
-Sign the user out everywhere. Revokes every refresh token the user holds, at
-every client, invalidates the user's unredeemed authorization codes, and
-denylists the access token the request was made with. Access tokens already
+Sign the user out everywhere. Ends the user's hosted browser sessions (from
+`/ui/login` or wallet login, so `/oauth/authorize` shows the login page again),
+revokes every refresh token the user holds, at every client, invalidates the
+user's unredeemed authorization codes, and denylists the access token the
+request was made with. Access tokens already
 issued to other clients are not reached: they stay valid until they expire (see
 [what revocation reaches](/integrate/oauth-flow/#what-revocation-reaches)).
 

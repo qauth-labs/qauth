@@ -551,12 +551,12 @@ descendant cannot be replayed.
 
 Every way of ending a grant stops new tokens being minted from it:
 
-| Revocation                                                    | Ends                                                                                                         |
-| ------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
-| `/oauth/revoke` with a refresh token, or a replayed one       | That token's whole rotation family                                                                           |
-| `/oauth/revoke` with an access token                          | That access token (denylisted by `jti` until it would have expired)                                          |
-| Consent revocation (`DELETE /consents/{id}`, `/api/consents`) | The user's refresh tokens and unredeemed authorization codes for that client                                 |
-| `POST /auth/logout`                                           | The user's refresh tokens and unredeemed authorization codes at every client, and the access token presented |
+| Revocation                                                    | Ends                                                                                                                                  |
+| ------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| `/oauth/revoke` with a refresh token, or a replayed one       | That token's whole rotation family                                                                                                    |
+| `/oauth/revoke` with an access token                          | That access token (denylisted by `jti` until it would have expired)                                                                   |
+| Consent revocation (`DELETE /consents/{id}`, `/api/consents`) | The user's refresh tokens and unredeemed authorization codes for that client                                                          |
+| `POST /auth/logout`                                           | The user's hosted browser sessions, refresh tokens and unredeemed authorization codes at every client, and the access token presented |
 
 **Access tokens already issued under the grant are not reached.** They are
 stateless JWTs and stay valid until `exp` (`ACCESS_TOKEN_LIFESPAN`, 900 s by

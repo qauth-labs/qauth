@@ -9,7 +9,12 @@ vi.mock('../../config/env', () => ({
   },
 }));
 
-import { resolveBrowserSession, saveBrowserSession } from './browser-session';
+import {
+  endBrowserSessions,
+  resolveBrowserSession,
+  saveBrowserSession,
+  trackBrowserSession,
+} from './browser-session';
 import { type BrowserSessionData, SESSION_COOKIE_NAME, signSessionId } from './session-cookie';
 
 const USER_ID = '11111111-1111-4111-8111-111111111111';
@@ -162,5 +167,47 @@ describe('saveBrowserSession', () => {
     await saveBrowserSession(fastify, sessionAged(TTL_MS + 5000));
 
     expect(sessionUtils.setSession.mock.calls[0][2]).toBe(1);
+  });
+});
+
+describe('per-user browser-session index (logout ends every session)', () => {
+  function makeRedis(members: string[] = []) {
+    const chain = {
+      sadd: vi.fn(() => chain),
+      expire: vi.fn(() => chain),
+      exec: vi.fn().mockResolvedValue([]),
+    };
+    return {
+      chain,
+      multi: vi.fn(() => chain),
+      smembers: vi.fn().mockResolvedValue(members),
+      del: vi.fn().mockResolvedValue(1),
+    };
+  }
+
+  it('records a new session under its user, expiring with the longest-lived session', async () => {
+    const redis = makeRedis();
+    const withRedis = { ...fastify, redis } as unknown as FastifyInstance;
+
+    await trackBrowserSession(withRedis, USER_ID, 'sess-new');
+
+    const key = `user-browser-sessions:${USER_ID}`;
+    expect(redis.chain.sadd).toHaveBeenCalledWith(key, 'sess-new');
+    // A session never outlives SESSION_COOKIE_TTL from its creation, so the
+    // index set at the newest creation outlives every session in it.
+    expect(redis.chain.expire).toHaveBeenCalledWith(key, 3600);
+    expect(redis.chain.exec).toHaveBeenCalledOnce();
+  });
+
+  it('ends every recorded session of the user and drops the index', async () => {
+    const redis = makeRedis(['sess-a', 'sess-b']);
+    const withRedis = { ...fastify, redis } as unknown as FastifyInstance;
+
+    await expect(endBrowserSessions(withRedis, USER_ID)).resolves.toEqual(['sess-a', 'sess-b']);
+
+    expect(redis.smembers).toHaveBeenCalledWith(`user-browser-sessions:${USER_ID}`);
+    expect(sessionUtils.deleteSession).toHaveBeenCalledWith('sess-a');
+    expect(sessionUtils.deleteSession).toHaveBeenCalledWith('sess-b');
+    expect(redis.del).toHaveBeenCalledWith(`user-browser-sessions:${USER_ID}`);
   });
 });

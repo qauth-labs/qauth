@@ -42,6 +42,12 @@ export const REDIS_KEYS = {
    */
   REVOKED_ACCESS_TOKEN: (jti: string) => `revoked-access-token:${jti}`,
   /**
+   * Set of the live hosted browser session ids of one user, so `/auth/logout`
+   * can end every session the user holds, not only one whose cookie happens to
+   * accompany the request. Expires with the newest session in it.
+   */
+  USER_BROWSER_SESSIONS: (userId: string) => `user-browser-sessions:${userId}`,
+  /**
    * Detached ML-DSA-65 signature of a hybrid access token, keyed by the
    * token's `jti` (ADR-005 / #275, `PQC_TOKEN_DELIVERY='reference'`). The ~4.4
    * KB PQC component cannot ride in the bearer token, so it is parked here and

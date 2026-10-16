@@ -1,5 +1,7 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 
+import { env } from '../../config/env';
+import { REDIS_KEYS } from '../constants/redis-keys';
 import {
   type BrowserSessionData,
   clearSessionCookie,
@@ -83,4 +85,42 @@ export async function saveBrowserSession(
     // Redis rejects a TTL of 0, which a write on the last tick would compute.
     Math.max(1, remainingSessionTtl(session))
   );
+}
+
+/**
+ * Record a newly minted browser session under its user, so
+ * {@link endBrowserSessions} can end it (`/auth/logout`). Call it wherever a
+ * session is created. The index expires `SESSION_COOKIE_TTL` after the newest
+ * session in it was created: no session outlives that (see
+ * {@link resolveBrowserSession}), and no rewrite extends one
+ * ({@link saveBrowserSession}), so the index outlives every session it names.
+ */
+export async function trackBrowserSession(
+  fastify: FastifyInstance,
+  userId: string,
+  sessionId: string
+): Promise<void> {
+  const key = REDIS_KEYS.USER_BROWSER_SESSIONS(userId);
+  await fastify.redis.multi().sadd(key, sessionId).expire(key, env.SESSION_COOKIE_TTL).exec();
+}
+
+/**
+ * End every browser session of `userId` recorded by
+ * {@link trackBrowserSession}: delete each session record (which is what
+ * {@link resolveBrowserSession} reads, so `/oauth/authorize` shows the login
+ * page again) and drop the index. Returns the ids it ended, so the caller can
+ * clear the cookie of the request it is handling when that is one of them;
+ * other browsers' cookies go stale and are cleared on their next request.
+ */
+export async function endBrowserSessions(
+  fastify: FastifyInstance,
+  userId: string
+): Promise<string[]> {
+  const key = REDIS_KEYS.USER_BROWSER_SESSIONS(userId);
+  const sessionIds = await fastify.redis.smembers(key);
+  for (const sessionId of sessionIds) {
+    await fastify.sessionUtils.deleteSession(sessionId);
+  }
+  await fastify.redis.del(key);
+  return sessionIds;
 }

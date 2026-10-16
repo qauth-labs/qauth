@@ -5,8 +5,15 @@ import { ZodTypeProvider } from 'fastify-type-provider-zod';
 
 import { env } from '../../../config/env';
 import { logAuthEvent } from '../../helpers/auth-events';
+import { endBrowserSessions } from '../../helpers/browser-session';
 import { clientAddressKey } from '../../helpers/client-address';
 import { assertManagementToken } from '../../helpers/management-token';
+import {
+  clearSessionCookie,
+  readCookie,
+  SESSION_COOKIE_NAME,
+  verifySignedSessionId,
+} from '../../helpers/session-cookie';
 import { revokeJti } from '../../helpers/token-revocation';
 import { logoutHeadersSchema, logoutResponseSchema } from '../../schemas/auth';
 
@@ -21,7 +28,7 @@ export default async function (fastify: FastifyInstance) {
     {
       schema: {
         description:
-          'Log out the current user. Revokes all refresh tokens and unredeemed authorization codes for the user, and the access token presented. Accepts expired access tokens.',
+          "Log out the current user. Ends the user's hosted browser sessions, revokes all refresh tokens and unredeemed authorization codes for the user, and the access token presented. Accepts expired access tokens.",
         tags: ['Auth'],
         headers: logoutHeadersSchema,
         response: {
@@ -88,7 +95,18 @@ export default async function (fastify: FastifyInstance) {
           throw new NotFoundError('User', userId);
         }
 
-        // Invalidate unredeemed authorization codes first: one redeemed after
+        // End the user's hosted browser sessions first, so none of them can
+        // obtain a new authorization code once the codes are invalidated
+        // below. The portal calls this route from its server, so they are
+        // found through the per-user index, not a cookie; the request's own
+        // cookie is cleared when it names one of them.
+        const endedSessions = await endBrowserSessions(fastify, userId);
+        const requestSessionId = verifySignedSessionId(readCookie(request, SESSION_COOKIE_NAME));
+        if (requestSessionId && endedSessions.includes(requestSessionId)) {
+          clearSessionCookie(reply);
+        }
+
+        // Invalidate unredeemed authorization codes next: one redeemed after
         // the sweep below would mint a refresh token that survives the logout.
         // This also waits for a redemption in flight, which keeps its code row
         // locked until its refresh token is committed for the sweep to see.

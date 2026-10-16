@@ -7,6 +7,9 @@ vi.mock('../../../config/env', () => ({
     DATABASE_URL: 'postgresql://test:test@localhost:5432/test',
     LOGOUT_RATE_LIMIT: 30,
     LOGOUT_RATE_WINDOW: 60,
+    SESSION_COOKIE_SECRET: 'test-secret-at-least-32-characters-long-padding',
+    SESSION_COOKIE_TTL: 3600,
+    SESSION_COOKIE_SECURE: false,
   },
 }));
 
@@ -17,6 +20,7 @@ vi.mock('../../helpers/oauth-client', () => ({
   getOrCreateSystemClient: vi.fn(async () => ({ clientId: 'system', audience: null })),
 }));
 
+import { signSessionId } from '../../helpers/session-cookie';
 import logoutRoute from './logout';
 
 interface TestContext {
@@ -26,12 +30,19 @@ interface TestContext {
 
 interface ReplyStub {
   send: (body: unknown) => unknown;
+  header: (name: string, value: string) => ReplyStub;
+  headers: Record<string, string>;
 }
 
 function createReply(): ReplyStub {
   const reply: ReplyStub = {
+    headers: {},
     send(body) {
       return body;
+    },
+    header(name, value) {
+      reply.headers[name] = value;
+      return reply;
     },
   };
   return reply;
@@ -86,6 +97,12 @@ function createFastifyStub() {
     },
     redis: {
       setex: vi.fn().mockResolvedValue('OK'),
+      // The per-user index of hosted browser sessions (none by default).
+      smembers: vi.fn().mockResolvedValue([]),
+      del: vi.fn().mockResolvedValue(1),
+    },
+    sessionUtils: {
+      deleteSession: vi.fn().mockResolvedValue(undefined),
     },
     log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
   };
@@ -93,11 +110,15 @@ function createFastifyStub() {
   return { fastify: fastify as FastifyInstance, ctx };
 }
 
-function logoutRequest(authHeader: string | undefined = 'Bearer valid.access.jwt') {
+function logoutRequest(
+  authHeader: string | undefined = 'Bearer valid.access.jwt',
+  cookie?: string
+) {
   return {
     headers: {
       authorization: authHeader,
       'user-agent': 'vitest',
+      ...(cookie ? { cookie } : {}),
     },
     ip: '203.0.113.7',
     // Request-scoped logger used by the structured auth-event helper (#124).
@@ -158,6 +179,53 @@ describe('POST /auth/logout', () => {
     const sweepOrder = (fastify.repositories.refreshTokens.revokeAllForUser as unknown as Mock).mock
       .invocationCallOrder[0];
     expect(invalidateOrder).toBeLessThan(sweepOrder);
+  });
+
+  describe('hosted browser sessions', () => {
+    async function logOut(fastify: FastifyInstance, ctx: TestContext, cookie?: string) {
+      (fastify.jwtUtils.extractFromHeader as unknown as Mock).mockReturnValue('valid.access.jwt');
+      (fastify.jwtUtils.verifyAccessToken as unknown as Mock).mockResolvedValue(loginClaims());
+      await logoutRoute(fastify);
+      const handler = ctx.handler;
+      if (!handler) throw new Error('Handler missing');
+      const reply = createReply();
+      await handler(logoutRequest('Bearer valid.access.jwt', cookie), reply);
+      return reply;
+    }
+
+    it('ends every hosted session of the user, with or without a cookie on the request', async () => {
+      // The portal calls /auth/logout from its server, so no browser cookie
+      // comes along: the sessions are found through the per-user index.
+      const { fastify, ctx } = createFastifyStub();
+      (fastify.redis.smembers as unknown as Mock).mockResolvedValue(['sess-a', 'sess-b']);
+
+      await logOut(fastify, ctx);
+
+      expect(fastify.redis.smembers).toHaveBeenCalledWith(`user-browser-sessions:${VALID_USER.id}`);
+      expect(fastify.sessionUtils.deleteSession).toHaveBeenCalledWith('sess-a');
+      expect(fastify.sessionUtils.deleteSession).toHaveBeenCalledWith('sess-b');
+      expect(fastify.redis.del).toHaveBeenCalledWith(`user-browser-sessions:${VALID_USER.id}`);
+    });
+
+    it('clears the session cookie the request carries when it was one of them', async () => {
+      const { fastify, ctx } = createFastifyStub();
+      (fastify.redis.smembers as unknown as Mock).mockResolvedValue(['sess-a']);
+
+      const reply = await logOut(fastify, ctx, `__Host-qauth_session=${signSessionId('sess-a')}`);
+
+      expect(reply.headers['Set-Cookie']).toContain('__Host-qauth_session=');
+      expect(reply.headers['Set-Cookie']).toContain('Max-Age=0');
+    });
+
+    it("leaves the cookie of a session that is not the user's alone", async () => {
+      const { fastify, ctx } = createFastifyStub();
+      (fastify.redis.smembers as unknown as Mock).mockResolvedValue(['sess-a']);
+
+      const reply = await logOut(fastify, ctx, `__Host-qauth_session=${signSessionId('other')}`);
+
+      expect(reply.headers['Set-Cookie']).toBeUndefined();
+      expect(fastify.sessionUtils.deleteSession).not.toHaveBeenCalledWith('other');
+    });
   });
 
   it('still logs a disabled user out: ending access never needs an active account', async () => {

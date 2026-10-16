@@ -120,6 +120,15 @@ function makeFastify() {
     sessionUtils: {
       setSession: vi.fn().mockResolvedValue(undefined),
     },
+    // The per-user index of browser sessions that `/auth/logout` ends.
+    redis: (() => {
+      const chain = {
+        sadd: vi.fn(() => chain),
+        expire: vi.fn(() => chain),
+        exec: vi.fn().mockResolvedValue([]),
+      };
+      return { chain, multi: vi.fn(() => chain) };
+    })(),
     log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
   };
   return { fastify: fastify as FastifyInstance, ctx };
@@ -253,6 +262,11 @@ describe('UI /ui/login — CSRF defence', () => {
     const sessionPayload = (fastify.sessionUtils.setSession as unknown as Mock).mock
       .calls[0][1] as Record<string, unknown>;
     expect('assuranceLevel' in sessionPayload).toBe(false);
+
+    // The new session is recorded under its user, so `/auth/logout` can end it.
+    const sessionId = (fastify.sessionUtils.setSession as unknown as Mock).mock.calls[0][0];
+    const redis = (fastify as unknown as { redis: { chain: { sadd: Mock } } }).redis;
+    expect(redis.chain.sadd).toHaveBeenCalledWith('user-browser-sessions:user-1', sessionId);
   });
 
   describe("POST shares the API login's failed-login lockout and email-verified gate", () => {
@@ -307,7 +321,7 @@ describe('UI /ui/login — CSRF defence', () => {
 
       const { fastify, state } = await postLogin({ verifies: true });
 
-      expect(registerLoginAttempt).toHaveBeenCalledWith(undefined, LOCKOUT_IDS);
+      expect(registerLoginAttempt).toHaveBeenCalledWith(expect.anything(), LOCKOUT_IDS);
       expect(state.statusCode).toBe(429);
       expect(state.headers['Retry-After']).toBe('120');
       expect(fastify.passwordHasher.verifyPassword).not.toHaveBeenCalled();
@@ -318,7 +332,7 @@ describe('UI /ui/login — CSRF defence', () => {
       const { fastify, state } = await postLogin({ verifies: false });
 
       expect(state.statusCode).toBe(401);
-      expect(registerLoginAttempt).toHaveBeenCalledWith(undefined, LOCKOUT_IDS);
+      expect(registerLoginAttempt).toHaveBeenCalledWith(expect.anything(), LOCKOUT_IDS);
       // Counted on the way in, not after argon2 has returned, so concurrent
       // guesses cannot outrun the counter (ROIQJSAT); a failure leaves it counted.
       expect(vi.mocked(registerLoginAttempt).mock.invocationCallOrder[0]).toBeLessThan(
@@ -331,7 +345,7 @@ describe('UI /ui/login — CSRF defence', () => {
     it('keys the ip: identifier on the /64 of an IPv6 client', async () => {
       await postLogin({ verifies: false, ip: '2001:db8:1:2:aaaa:bbbb:cccc:7' });
 
-      expect(registerLoginAttempt).toHaveBeenCalledWith(undefined, [
+      expect(registerLoginAttempt).toHaveBeenCalledWith(expect.anything(), [
         LOCKOUT_IDS[0],
         'ip:2001:db8:1:2::',
       ]);
@@ -346,7 +360,7 @@ describe('UI /ui/login — CSRF defence', () => {
       expect(state.statusCode).toBe(302);
       // Anyone can register an account: its login must not wipe the failures
       // counted against the address it comes from (GPU4YL6X).
-      expect(recordSuccessfulLogin).toHaveBeenCalledExactlyOnceWith(undefined, attempt, [
+      expect(recordSuccessfulLogin).toHaveBeenCalledExactlyOnceWith(expect.anything(), attempt, [
         LOCKOUT_IDS[0],
       ]);
       expect(resetFailedAttempts).not.toHaveBeenCalled();
@@ -360,7 +374,7 @@ describe('UI /ui/login — CSRF defence', () => {
       expect(state.statusCode).toBe(403);
       expect(fastify.sessionUtils.setSession).not.toHaveBeenCalled();
       // Stays counted as a failed attempt.
-      expect(registerLoginAttempt).toHaveBeenCalledWith(undefined, LOCKOUT_IDS);
+      expect(registerLoginAttempt).toHaveBeenCalledWith(expect.anything(), LOCKOUT_IDS);
       expect(recordSuccessfulLogin).not.toHaveBeenCalled();
       expect(resetFailedAttempts).not.toHaveBeenCalled();
     });

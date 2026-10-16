@@ -177,6 +177,15 @@ function makeFastify() {
     passwordHasher: { verifyPassword: vi.fn() },
     providerRegistry: { resolve: vi.fn(), has: vi.fn().mockReturnValue(true), register: vi.fn() },
     sessionUtils,
+    // The per-user index of browser sessions that `/auth/logout` ends.
+    redis: (() => {
+      const chain = {
+        sadd: vi.fn(() => chain),
+        expire: vi.fn(() => chain),
+        exec: vi.fn().mockResolvedValue([]),
+      };
+      return { chain, multi: vi.fn(() => chain) };
+    })(),
     log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
   };
   return { fastify: fastify as FastifyInstance, routes, sessionUtils, responseCodes };
@@ -661,6 +670,9 @@ describe('wallet login — completion', () => {
     expect(sessionId).not.toBe('attacker-fixed');
     expect(payload.userId).toBe('user-1');
     expect(payload.email).toBe('user@example.com');
+    // Recorded under its user, so `/auth/logout` can end it.
+    const redis = (fastify as unknown as { redis: { chain: { sadd: Mock } } }).redis;
+    expect(redis.chain.sadd).toHaveBeenCalledWith('user-browser-sessions:user-1', sessionId);
   });
 
   it.each([

@@ -8,6 +8,7 @@ import { z } from 'zod';
 import { env } from '../../../config/env';
 import { EMAIL_MAX_LENGTH, MIN_RESPONSE_TIME_MS } from '../../constants';
 import { hashEmail } from '../../helpers/auth-events';
+import { trackBrowserSession } from '../../helpers/browser-session';
 import { clientAddressKey } from '../../helpers/client-address';
 import { verifyPasswordCredential } from '../../helpers/credential-auth';
 import { recordSuccessfulLogin, registerLoginAttempt } from '../../helpers/failed-login';
@@ -425,6 +426,8 @@ export default async function (fastify: FastifyInstance) {
         },
         env.SESSION_COOKIE_TTL
       );
+      // Recorded under the user so `/auth/logout` can end it.
+      await trackBrowserSession(fastify, user.id, sessionId);
 
       await fastify.repositories.users.updateLastLogin(user.id);
       await fastify.repositories.auditLogs.create({
