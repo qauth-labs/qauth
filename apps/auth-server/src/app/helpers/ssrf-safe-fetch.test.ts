@@ -186,6 +186,41 @@ describe('isPublicUnicastAddress — SSRF blocklist (CIMD §6)', () => {
     expect(isPublicUnicastAddress('::a00:1')).toBe(false); // == 10.0.0.1
   });
 
+  // Regression (ANT-2026-K1WCPR4R): the IPv6 check was a blocklist ending in
+  // `return true`, so every range it did not name was dialed — site-local
+  // fec0::/10 and NAT64 among them. Only global unicast (2000::/3) is public.
+  it('blocks IPv6 outside global unicast without the range having to be listed', () => {
+    expect(isPublicUnicastAddress('fec0::10')).toBe(false); // site-local
+    expect(isPublicUnicastAddress('feff::1')).toBe(false); // site-local, top of fec0::/10
+    expect(isPublicUnicastAddress('ff02::1')).toBe(false); // multicast
+    expect(isPublicUnicastAddress('64:ff9b:1::a00:1')).toBe(false); // local-use NAT64
+    expect(isPublicUnicastAddress('::ffff:0:a00:1')).toBe(false); // IPv4-translated
+    expect(isPublicUnicastAddress('100::1')).toBe(false); // discard-only
+    expect(isPublicUnicastAddress('4000::1')).toBe(false); // unallocated
+    // Un-shortened spelling of mapped loopback: no prefix string matches it.
+    expect(isPublicUnicastAddress('0000:0000:0000:0000:0000:ffff:7f00:0001')).toBe(false);
+  });
+
+  it('blocks the special-purpose blocks inside 2000::/3', () => {
+    expect(isPublicUnicastAddress('2001::1')).toBe(false); // Teredo
+    expect(isPublicUnicastAddress('2001:2::1')).toBe(false); // benchmarking
+    expect(isPublicUnicastAddress('2001:db8::1')).toBe(false); // documentation
+    expect(isPublicUnicastAddress('3fff::1')).toBe(false); // documentation
+  });
+
+  // A NAT64 gateway or 6to4 relay forwards to the embedded IPv4 address, so
+  // that address decides — both ways: DNS64 synthesises 64:ff9b::/96 records
+  // for public IPv4-only hosts, which must stay reachable.
+  it('judges NAT64 and 6to4 addresses by the IPv4 address they embed', () => {
+    expect(isPublicUnicastAddress('64:ff9b::a00:1')).toBe(false); // 10.0.0.1
+    expect(isPublicUnicastAddress('64:ff9b::7f00:1')).toBe(false); // 127.0.0.1
+    expect(isPublicUnicastAddress('64:ff9b::a9fe:a9fe')).toBe(false); // 169.254.169.254
+    expect(isPublicUnicastAddress('2002:7f00:1::')).toBe(false); // 127.0.0.1
+    expect(isPublicUnicastAddress('2002:c0a8:101::1')).toBe(false); // 192.168.1.1
+    expect(isPublicUnicastAddress('64:ff9b::808:808')).toBe(true); // 8.8.8.8
+    expect(isPublicUnicastAddress('2002:808:808::1')).toBe(true); // 8.8.8.8
+  });
+
   // Guard against over-blocking: a genuine public IPv6 must NOT be mistaken
   // for an embedded-v4 form (its /96 prefix is neither ::ffff:0:0 nor ::).
   it('still allows genuine public IPv6 that is not an embedded-v4 form', () => {
@@ -217,6 +252,14 @@ describe('ssrfSafeGet — request-level guards', () => {
     await expect(
       ssrfSafeGet('https://user:pass@example.com/doc', { timeoutMs: 1000, maxBytes: 1024 })
     ).rejects.toBeInstanceOf(SsrfBlockedError);
+  });
+
+  it('refuses a NAT64 or site-local IPv6 literal before any connection', async () => {
+    for (const host of ['[64:ff9b::a00:1]', '[fec0::10]', '[2002:a00:1::1]']) {
+      await expect(
+        ssrfSafeGet(`https://${host}/client.json`, { timeoutMs: 1000, maxBytes: 1024 })
+      ).rejects.toBeInstanceOf(SsrfBlockedError);
+    }
   });
 
   it('rejects an unparseable URL', async () => {

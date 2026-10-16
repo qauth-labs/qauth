@@ -150,8 +150,9 @@ function isPublicIpv4(ip: string): boolean {
 
 /**
  * Extract the embedded IPv4 address from a fully-expanded (8-hextet) IPv6
- * literal when it is an IPv4-mapped (`::ffff:a.b.c.d`) or IPv4-compatible
- * (`::a.b.c.d`) address, in EITHER notation:
+ * literal when it is an IPv4-mapped (`::ffff:a.b.c.d`), IPv4-compatible
+ * (`::a.b.c.d`), NAT64 (`64:ff9b::a.b.c.d`, RFC 6052) or 6to4
+ * (`2002:aabb:ccdd::`, RFC 3056) address, in EITHER notation:
  *
  *   ::ffff:127.0.0.1  → expandIpv6 → 0:0:0:0:0:ffff:7f00:1
  *   ::ffff:7f00:1     → expandIpv6 → 0:0:0:0:0:ffff:7f00:1   (same form)
@@ -161,9 +162,13 @@ function isPublicIpv4(ip: string): boolean {
  * the dotted-quad string (e.g. `"127.0.0.1"`) or `null` when the address is
  * not an embedded-v4 form.
  *
- * Only the well-known prefixes `::ffff:0:0/96` (mapped) and `::/96`
- * (compatible) carry an embedded v4 address; any other prefix is a native
- * IPv6 address whose trailing hextets are NOT a v4 address.
+ * Only the well-known prefixes `::ffff:0:0/96` (mapped), `::/96`
+ * (compatible), `64:ff9b::/96` (NAT64) and `2002::/16` (6to4) carry an
+ * embedded v4 address; any other prefix is a native IPv6 address whose
+ * hextets are NOT a v4 address. A NAT64 gateway or a 6to4 relay forwards to
+ * the embedded address, so `64:ff9b::a00:1` IS 10.0.0.1 as far as SSRF goes —
+ * and a DNS64-synthesised `64:ff9b::` record of a public IPv4-only host stays
+ * reachable.
  */
 function extractEmbeddedIpv4(expanded: string): string | null {
   const parts = expanded.split(':');
@@ -172,10 +177,15 @@ function extractEmbeddedIpv4(expanded: string): string | null {
   const prefix = parts.slice(0, 6).join(':');
   const isMapped = prefix === '0:0:0:0:0:ffff';
   const isCompatible = prefix === '0:0:0:0:0:0';
-  if (!isMapped && !isCompatible) return null;
+  const isNat64 = prefix === '64:ff9b:0:0:0:0';
+  const is6to4 = parts[0] === '2002';
+  if (!isMapped && !isCompatible && !isNat64 && !is6to4) return null;
 
-  const high = Number.parseInt(parts[6], 16);
-  const low = Number.parseInt(parts[7], 16);
+  // 6to4 carries the v4 address right after its /16; the others in the last
+  // 32 bits.
+  const offset = is6to4 ? 1 : 6;
+  const high = Number.parseInt(parts[offset], 16);
+  const low = Number.parseInt(parts[offset + 1], 16);
   if (!Number.isFinite(high) || !Number.isFinite(low)) return null;
   if (high < 0 || high > 0xffff || low < 0 || low > 0xffff) return null;
 
@@ -188,27 +198,40 @@ function isPublicIpv6(ip: string): boolean {
   // Unspecified (::) and loopback (::1).
   if (expanded === '0:0:0:0:0:0:0:0' || expanded === '0:0:0:0:0:0:0:1') return false;
 
-  // IPv4-mapped (::ffff:a.b.c.d) and IPv4-compatible (::a.b.c.d) — re-check
-  // the embedded v4 address so `::ffff:169.254.169.254` cannot slip through.
+  // IPv4-mapped (::ffff:a.b.c.d), IPv4-compatible (::a.b.c.d), NAT64 and 6to4
+  // — re-check the embedded v4 address so `::ffff:169.254.169.254` (or
+  // `64:ff9b::a9fe:a9fe`, which a NAT64 gateway forwards there) cannot slip
+  // through.
   //
   // CRITICAL: this must catch BOTH notations of the embedded address:
   //   - dot-decimal  ::ffff:127.0.0.1
   //   - pure hex     ::ffff:7f00:1   (== 127.0.0.1)
   // Matching only the dot-decimal text form lets the hex form bypass every
-  // check below (its `firstHextet` is 0), enabling loopback/RFC1918 SSRF.
+  // IPv4 range check, enabling loopback/RFC1918 SSRF.
   // We therefore work off the fully-expanded 8-hextet form, which normalises
   // both notations identically (expandIpv6 collapses `::ffff:7f00:1` and
   // `::ffff:127.0.0.1` to the same `0:0:0:0:0:ffff:7f00:1`).
   const embeddedIpv4 = extractEmbeddedIpv4(expanded);
   if (embeddedIpv4 !== null) return isPublicIpv4(embeddedIpv4);
 
-  const firstHextet = Number.parseInt(expanded.split(':')[0] || '0', 16);
-  // fe80::/10 — link-local. (fe80–febf)
-  if (firstHextet >= 0xfe80 && firstHextet <= 0xfebf) return false;
-  // fc00::/7 — unique-local (fc00–fdff), incl. AWS fd00:ec2 metadata.
-  if (firstHextet >= 0xfc00 && firstHextet <= 0xfdff) return false;
-  // ff00::/8 — multicast.
-  if (firstHextet >= 0xff00) return false;
+  const hextets = expanded
+    .split(':')
+    .map((h) => (/^[0-9a-f]{1,4}$/.test(h) ? parseInt(h, 16) : NaN));
+  if (hextets.length !== 8 || hextets.some((h) => Number.isNaN(h))) return false;
+  const [first, second] = hextets;
+
+  // An ALLOWLIST, not a blocklist (ANT-2026-K1WCPR4R): 2000::/3 is the only
+  // block IANA has allocated for global unicast, so everything outside it is
+  // refused without having to be named — link-local fe80::/10, site-local
+  // fec0::/10, unique-local fc00::/7 (incl. AWS fd00:ec2 metadata), multicast
+  // ff00::/8, local-use NAT64 64:ff9b:1::/48, discard-only 100::/64 and
+  // whatever is still reserved.
+  if (first < 0x2000 || first > 0x3fff) return false;
+  // 2001::/23 — IETF protocol assignments (Teredo, benchmarking, ORCHID).
+  if (first === 0x2001 && second < 0x0200) return false;
+  // 2001:db8::/32 and 3fff::/20 — documentation.
+  if (first === 0x2001 && second === 0x0db8) return false;
+  if (first === 0x3fff && second < 0x1000) return false;
 
   return true;
 }

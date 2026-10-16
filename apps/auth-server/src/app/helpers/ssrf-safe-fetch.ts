@@ -56,7 +56,10 @@ export { isPublicUnicastAddress } from './ssrf-fetch-worker';
  * The blocklist covers the ranges CIMD §6 and the SSRF literature call out:
  * loopback, link-local (incl. the 169.254.169.254 cloud-metadata address and
  * its IPv6 fd00:ec2 equivalent), private/RFC1918, CGNAT, IPv4-mapped IPv6,
- * unique-local IPv6, and unspecified addresses.
+ * unique-local IPv6, and unspecified addresses. For IPv6 the check is an
+ * allowlist: only global unicast (2000::/3, minus its special-purpose blocks)
+ * is dialed, and an address that embeds an IPv4 address (mapped, compatible,
+ * NAT64, 6to4) is judged by that IPv4 address (`ssrf-fetch-worker.ts`).
  */
 
 export interface SsrfSafeFetchOptions {
