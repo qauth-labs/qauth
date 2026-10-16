@@ -411,6 +411,22 @@ function readPermittedAlgorithm(
   return match;
 }
 
+/**
+ * Render a protected header's `typ` for a refusal's detail.
+ *
+ * Only a string is quoted. The header is UNVERIFIED JSON at both call sites, so
+ * `typ` can be any JSON value, and `String()` of an array joins it recursively:
+ * nested a few thousand levels deep, inside the size cap on a Presentation, the
+ * text is copied once per level and one refusal blocks the event loop for most
+ * of a second — before any signature has been checked (ANT-2026-IOU62CQU). A
+ * string is bounded by that same cap, so quoting it is linear.
+ */
+function describeDeclaredTyp(header: Record<string, unknown>): string {
+  const typ = header['typ'];
+
+  return typeof typ === 'string' ? `typ '${typ}'` : "no string 'typ'";
+}
+
 /** Read the `x5c` chain out of a protected header, if it carries a usable one. */
 function readCertificateChain(header: Record<string, unknown>): readonly string[] | undefined {
   const x5c = header['x5c'];
@@ -797,7 +813,7 @@ async function verifyKeyBinding(
   if (header['typ'] !== KEY_BINDING_JWT_TYP) {
     throw rejectPresentation(
       'holder-binding-invalid',
-      `the Key Binding JWT declares typ '${String(header['typ'])}' rather than '${KEY_BINDING_JWT_TYP}'`
+      `the Key Binding JWT declares ${describeDeclaredTyp(header)} rather than '${KEY_BINDING_JWT_TYP}'`
     );
   }
 
@@ -1142,7 +1158,7 @@ export async function validateSdJwtVcPresentation(
   if (header['typ'] !== SD_JWT_VC_TYP) {
     throw rejectPresentation(
       'malformed-presentation',
-      `the Issuer-signed JWT declares typ '${String(header['typ'])}' rather than '${SD_JWT_VC_TYP}'`
+      `the Issuer-signed JWT declares ${describeDeclaredTyp(header)} rather than '${SD_JWT_VC_TYP}'`
     );
   }
 

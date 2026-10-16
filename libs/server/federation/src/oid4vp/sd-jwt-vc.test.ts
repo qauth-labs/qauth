@@ -455,6 +455,36 @@ describe('validateSdJwtVcPresentation — issuer signature', () => {
     );
   });
 
+  // The header is unverified JSON, so `typ` need not be a string. `String()` of
+  // this one throws a TypeError, and of a deeply nested array it costs seconds
+  // of event-loop time before any signature has been checked (ANT-2026-IOU62CQU).
+  it('refuses an Issuer-signed JWT whose typ is not a string, without rendering it', async () => {
+    const issued = await issueSdJwtVc();
+    const header = Buffer.from(
+      JSON.stringify({ alg: 'ES256', typ: [[{ toString: 0, valueOf: 0 }], 0] })
+    ).toString('base64url');
+
+    const rejection = await expectRejection(
+      validate(`${header}.e30.AA~AA`, fixtureValidationContext(issued, NONCE)),
+      'malformed-presentation'
+    );
+    expect(rejection.detail).toContain("no string 'typ'");
+  });
+
+  it('refuses a deeply nested typ array without joining it into the detail', async () => {
+    const issued = await issueSdJwtVc();
+    const depth = 500;
+    const typ = `${'['.repeat(depth)}"x",{},{}${'],0'.repeat(depth - 1)}]`;
+    const header = Buffer.from(`{"alg":"ES256","typ":${typ}}`).toString('base64url');
+
+    const rejection = await expectRejection(
+      validate(`${header}.e30.AA~AA`, fixtureValidationContext(issued, NONCE)),
+      'malformed-presentation'
+    );
+    expect(rejection.detail).not.toContain('[object Object]');
+    expect(rejection.detail.length).toBeLessThan(200);
+  });
+
   it("refuses a credential carrying no 'iss'", async () => {
     const issued = await issueSdJwtVc({ payloadOverrides: { iss: undefined } });
     const presentation = await presentSdJwtVc(issued, { nonce: NONCE });
@@ -848,6 +878,20 @@ describe('validateSdJwtVcPresentation — holder binding', () => {
       validate(presentation, fixtureValidationContext(issued, NONCE)),
       'holder-binding-invalid'
     );
+  });
+
+  it('rejects a Key Binding JWT whose typ is not a string, without rendering it', async () => {
+    const issued = await issueSdJwtVc();
+    const prefix = `${issued.issuerSignedJwt}~${issued.disclosures.join('~')}~`;
+    const header = Buffer.from(
+      JSON.stringify({ alg: 'ES256', typ: [[{ toString: 0, valueOf: 0 }], 0] })
+    ).toString('base64url');
+
+    const rejection = await expectRejection(
+      validate(`${prefix}${header}.e30.AA`, fixtureValidationContext(issued, NONCE)),
+      'holder-binding-invalid'
+    );
+    expect(rejection.detail).toContain("no string 'typ'");
   });
 
   it('rejects a stale Key Binding JWT', async () => {

@@ -124,6 +124,14 @@ const WALLET_REQUEST_OBJECT_KEY_PREFIX = 'wallet-request-object:';
  */
 const WALLET_DONE_MARKER_KEY_PREFIX = 'wallet-login-done:';
 
+/**
+ * Redis key under which exactly ONE caller claims the parked presentation for
+ * validation (ANT-2026-IOU62CQU). Keyed by `stateHash` like the signal and the
+ * stash, and written with a raw `SET … NX`, because a claim needs the
+ * atomicity `sessionUtils` does not offer.
+ */
+const WALLET_PRESENTATION_CLAIM_KEY_PREFIX = 'wallet-presentation-claim:';
+
 /** CSPRNG bytes per handle and per binder; 32 bytes → 43 base64url characters. */
 const HANDLE_BYTES = 32;
 
@@ -573,6 +581,47 @@ export async function discardWalletPresentation(
 ): Promise<void> {
   await deleteWalletPresentationStash(fastify, stateHash);
   await publishWalletPresentationSignal(fastify, stateHash, 'return_rejected');
+}
+
+/**
+ * Claim the presentation parked for `stateHash` for validation, once.
+ *
+ * The flow machines read the flow and the signal, validate, and only then end
+ * the flow. Without a claim, every poll in flight between the first read and
+ * that ending validated the same attacker-supplied bytes again, so a burst of
+ * pipelined polls multiplied whatever one validation costs
+ * (ANT-2026-IOU62CQU). A single `SET … NX` lets exactly one caller through;
+ * every other caller answers `pending` and finds the flow ended on its next
+ * poll.
+ *
+ * Fails CLOSED: a store error is "not claimed", so the caller stays pending
+ * and the next poll retries. A claim that was written but whose reply was lost
+ * leaves the flow pending until it expires, which is the same outcome as a
+ * wallet that never answered. The key outlives the flow on its own TTL rather
+ * than being deleted, so nothing can validate the same `state` twice.
+ *
+ * @returns `true` for the one caller that may validate, `false` otherwise.
+ */
+export async function claimWalletPresentation(
+  fastify: FastifyInstance,
+  stateHash: string
+): Promise<boolean> {
+  try {
+    const claimed = await fastify.redis.set(
+      `${WALLET_PRESENTATION_CLAIM_KEY_PREFIX}${stateHash}`,
+      '1',
+      'EX',
+      Math.floor(WALLET_LOGIN_FLOW_TTL_MS / 1000),
+      'NX'
+    );
+    return claimed === 'OK';
+  } catch (error) {
+    fastify.log.warn(
+      { err: error },
+      'wallet presentation claim store unavailable; leaving the flow pending'
+    );
+    return false;
+  }
 }
 
 /** Delete a consumed signal so a terminal flow cannot be replayed. */

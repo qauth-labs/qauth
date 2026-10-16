@@ -125,6 +125,22 @@ function createSessionUtils() {
 }
 
 /**
+ * In-memory stand-in for the one raw Redis command the flow machines use: the
+ * `SET … NX` that claims a parked presentation for exactly one validation.
+ */
+function createRedis() {
+  const store = new Map<string, string>();
+  return {
+    store,
+    set: vi.fn(async (key: string, value: string, ...args: unknown[]) => {
+      if (args.includes('NX') && store.has(key)) return null;
+      store.set(key, value);
+      return 'OK';
+    }),
+  };
+}
+
+/**
  * Stand-in for the repository's `redeemResponseCode` (#405): ONE guarded
  * consume, keyed by the code's sha256 digest exactly as the real statement is.
  * Single-use (the entry is deleted on the first hit), deadline-checked, and
@@ -177,14 +193,15 @@ function makeFastify() {
     passwordHasher: { verifyPassword: vi.fn() },
     providerRegistry: { resolve: vi.fn(), has: vi.fn().mockReturnValue(true), register: vi.fn() },
     sessionUtils,
-    // The per-user index of browser sessions that `/auth/logout` ends.
+    // `set` (with NX) claims a parked presentation; the multi chain is the
+    // per-user index of browser sessions that `/auth/logout` ends.
     redis: (() => {
       const chain = {
         sadd: vi.fn(() => chain),
         expire: vi.fn(() => chain),
         exec: vi.fn().mockResolvedValue([]),
       };
-      return { chain, multi: vi.fn(() => chain) };
+      return { ...createRedis(), chain, multi: vi.fn(() => chain) };
     })(),
     log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
   };
@@ -601,6 +618,31 @@ describe('wallet login — the wallet invocation (QR + deep link)', () => {
     expect(body).toContain(`/ui/wallet-login/${handle}/status`);
     expect(body).toContain('<noscript>');
     expect(body).toContain('aria-live="polite"');
+  });
+});
+
+describe('wallet login — concurrent polls validate a presentation once (ANT-2026-IOU62CQU)', () => {
+  it('validates a parked presentation ONCE however many polls are in flight', async () => {
+    const { routes, sessionUtils, handle, flow, binderCookie } = await startFlow();
+    publishSignal(sessionUtils, flow.stateHash, 'received');
+
+    // Hold the validation open so every concurrent poll reaches the seam
+    // before the first one can end the flow — the window a burst of pipelined
+    // polls used to multiply the validation cost through.
+    const held: Array<(value: unknown) => void> = [];
+    (resolveWalletPresentation as unknown as Mock).mockImplementation(
+      () => new Promise((resolve) => held.push(resolve))
+    );
+
+    const cookie = `__Host-qauth_wallet_flow=${binderCookie}`;
+    const polls = Array.from({ length: 5 }, () => pollStatus(routes, handle, cookie));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    for (const release of held) release({ status: 'rejected' });
+    const states = await Promise.all(polls);
+
+    expect(resolveWalletPresentation).toHaveBeenCalledTimes(1);
+    const statuses = states.map((s) => s.body.status).sort();
+    expect(statuses).toEqual(['pending', 'pending', 'pending', 'pending', 'rejected']);
   });
 });
 

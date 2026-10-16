@@ -44,6 +44,7 @@ import {
   WALLET_LINK_REFUSAL,
 } from '../../helpers/wallet-link-flow';
 import {
+  claimWalletPresentation,
   createWalletLoginFlow,
   decideSignalGate,
   deleteWalletFlowDoneMarker,
@@ -610,6 +611,14 @@ async function advanceWalletLoginFlow(
       await terminate(fastify, handle, flow);
     }
     return { status: 'rejected' };
+  }
+
+  // One validation per presentation (ANT-2026-IOU62CQU). The flow ends only
+  // AFTER validating, so every poll in flight before that point would
+  // otherwise validate the same parked bytes again. The caller that loses the
+  // claim answers `pending`; its next poll finds the flow ended.
+  if (!(await claimWalletPresentation(fastify, flow.stateHash))) {
+    return { status: 'pending', flow };
   }
 
   // A presentation arrived. Everything from here is the seam that turns it into
