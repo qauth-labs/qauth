@@ -1,3 +1,4 @@
+import type { JWTPayload } from '@qauth-labs/fastify-plugin-jwt';
 import { JWTExpiredError, JWTInvalidError, NotFoundError } from '@qauth-labs/shared-errors';
 import type { FastifyInstance } from 'fastify';
 import { ZodTypeProvider } from 'fastify-type-provider-zod';
@@ -5,6 +6,7 @@ import { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { env } from '../../../config/env';
 import { logAuthEvent } from '../../helpers/auth-events';
 import { clientAddressKey } from '../../helpers/client-address';
+import { assertManagementToken } from '../../helpers/management-token';
 import { logoutHeadersSchema, logoutResponseSchema } from '../../schemas/auth';
 
 /**
@@ -50,20 +52,29 @@ export default async function (fastify: FastifyInstance) {
 
         // Try to verify JWT token
         // For logout, we allow expired tokens - user is ending their session anyway
+        let claims: JWTPayload;
         try {
-          const { sub } = await fastify.jwtUtils.verifyAccessToken(token);
-          userId = sub;
+          claims = await fastify.jwtUtils.verifyAccessToken(token, {
+            // RFC 9700 mix-up defence: only accept a token this AS issued.
+            issuer: fastify.jwtUtils.getIssuer(),
+          });
         } catch (error) {
           if (error instanceof JWTExpiredError) {
-            // Token expired - decode without verification to get user ID
+            // Token expired - its signature verified, so decode it to read the claims
             isExpired = true;
-            const { sub } = fastify.jwtUtils.decodeTokenUnsafe(token);
-            userId = sub;
+            claims = fastify.jwtUtils.decodeTokenUnsafe(token);
           } else {
             // Token is invalid (bad signature, malformed, etc.)
             throw error;
           }
         }
+
+        // Logout revokes the user's refresh tokens at EVERY client, and every
+        // user access token carries the user's id as `sub`. Accept only the
+        // first-party token `/auth/login` mints, expired or not, so a token
+        // issued to another client or audience cannot end the user's sessions.
+        await assertManagementToken(fastify, claims);
+        userId = claims.sub;
 
         if (!userId) {
           throw new JWTInvalidError('Invalid JWT token');

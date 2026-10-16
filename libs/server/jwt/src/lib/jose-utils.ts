@@ -1,6 +1,7 @@
 import { JWTInvalidError } from '@qauth-labs/shared-errors';
 import { decodeJwt as joseDecodeJwt, exportSPKI as joseExportSPKI } from 'jose';
 
+import type { ActClaim } from '../types/jwt-service';
 import type { KeyLike } from '../types/key-management';
 
 /**
@@ -45,6 +46,10 @@ export function decodeJwtUnsafe(token: string) {
       email_verified:
         typeof decoded['email_verified'] === 'boolean' ? decoded['email_verified'] : undefined,
       clientId: typeof decoded['client_id'] === 'string' ? decoded['client_id'] : 'unknown-client',
+      // `aud` / `act` are surfaced so a caller that tolerates expiry (logout) can
+      // hold the token to the same audience and delegation checks as a live one.
+      aud: decoded.aud,
+      act: decoded['act'] as ActClaim | undefined,
       // `jti` (RFC 7519 §4.1.7) is surfaced because the declared `JWTPayload`
       // return type has always promised it and callers need it to key
       // per-token side stores (revocation denylist; the #275 hybrid PQC

@@ -180,7 +180,9 @@ at `POST /oauth/token` — there is no separate refresh endpoint.
 
 Revoke the caller's session/token.
 
-**Headers**: `Authorization: Bearer <access_token>` (required).
+**Headers**: `Authorization: Bearer <access_token>` (required). Only the access
+token from [`POST /auth/login`](#post-authlogin) is accepted, expired or not. A
+token issued to any other client or audience is refused.
 
 **`200 OK`**: `{ "success": true, "message": "Successfully logged out" }`
 

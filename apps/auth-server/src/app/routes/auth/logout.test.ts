@@ -10,6 +10,13 @@ vi.mock('../../../config/env', () => ({
   },
 }));
 
+vi.mock('../../helpers/realm', () => ({
+  getOrCreateDefaultRealm: vi.fn(async () => ({ id: 'realm-1' })),
+}));
+vi.mock('../../helpers/oauth-client', () => ({
+  getOrCreateSystemClient: vi.fn(async () => ({ clientId: 'system', audience: null })),
+}));
+
 import logoutRoute from './logout';
 
 interface TestContext {
@@ -36,6 +43,11 @@ const VALID_USER = {
   emailVerified: true,
   enabled: true,
 };
+
+/** The claims `/auth/login` puts on the first-party token. */
+function loginClaims(overrides: Record<string, unknown> = {}) {
+  return { sub: VALID_USER.id, clientId: 'system', aud: 'system', ...overrides };
+}
 
 function createFastifyStub() {
   const ctx: TestContext = {};
@@ -67,6 +79,7 @@ function createFastifyStub() {
       extractFromHeader: vi.fn(),
       verifyAccessToken: vi.fn(),
       decodeTokenUnsafe: vi.fn(),
+      getIssuer: vi.fn().mockReturnValue('https://auth.example.com'),
     },
     log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
   };
@@ -90,9 +103,7 @@ describe('POST /auth/logout', () => {
   it('revokes all refresh tokens for the user and returns 200 on a valid token', async () => {
     const { fastify, ctx } = createFastifyStub();
     (fastify.jwtUtils.extractFromHeader as unknown as Mock).mockReturnValue('valid.access.jwt');
-    (fastify.jwtUtils.verifyAccessToken as unknown as Mock).mockResolvedValue({
-      sub: VALID_USER.id,
-    });
+    (fastify.jwtUtils.verifyAccessToken as unknown as Mock).mockResolvedValue(loginClaims());
 
     await logoutRoute(fastify);
     const handler = ctx.handler;
@@ -101,6 +112,9 @@ describe('POST /auth/logout', () => {
     const reply = createReply();
     const result = await handler(logoutRequest(), reply);
 
+    expect(fastify.jwtUtils.verifyAccessToken).toHaveBeenCalledWith('valid.access.jwt', {
+      issuer: 'https://auth.example.com',
+    });
     expect(fastify.repositories.refreshTokens.revokeAllForUser).toHaveBeenCalledWith(
       VALID_USER.id,
       'logout'
@@ -120,7 +134,7 @@ describe('POST /auth/logout', () => {
     (fastify.jwtUtils.verifyAccessToken as unknown as Mock).mockRejectedValue(
       new JWTExpiredError('Access token has expired')
     );
-    (fastify.jwtUtils.decodeTokenUnsafe as unknown as Mock).mockReturnValue({ sub: VALID_USER.id });
+    (fastify.jwtUtils.decodeTokenUnsafe as unknown as Mock).mockReturnValue(loginClaims());
 
     await logoutRoute(fastify);
     const handler = ctx.handler;
@@ -144,7 +158,7 @@ describe('POST /auth/logout', () => {
     (fastify.jwtUtils.verifyAccessToken as unknown as Mock).mockRejectedValue(
       new JWTExpiredError('Access token has expired')
     );
-    (fastify.jwtUtils.decodeTokenUnsafe as unknown as Mock).mockReturnValue({ sub: VALID_USER.id });
+    (fastify.jwtUtils.decodeTokenUnsafe as unknown as Mock).mockReturnValue(loginClaims());
 
     await logoutRoute(fastify);
     const handler = ctx.handler;
@@ -166,9 +180,7 @@ describe('POST /auth/logout', () => {
   it('records tokenExpired: false in the success audit metadata for a valid token', async () => {
     const { fastify, ctx } = createFastifyStub();
     (fastify.jwtUtils.extractFromHeader as unknown as Mock).mockReturnValue('valid.access.jwt');
-    (fastify.jwtUtils.verifyAccessToken as unknown as Mock).mockResolvedValue({
-      sub: VALID_USER.id,
-    });
+    (fastify.jwtUtils.verifyAccessToken as unknown as Mock).mockResolvedValue(loginClaims());
 
     await logoutRoute(fastify);
     const handler = ctx.handler;
@@ -222,12 +234,55 @@ describe('POST /auth/logout', () => {
     expect(fastify.repositories.refreshTokens.revokeAllForUser).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ['issued to another client', { clientId: 'third-party-app', aud: 'third-party-app' }],
+    ['bound to another audience', { aud: 'https://mcp.example.com' }],
+    ['delegated to an agent', { act: { sub: 'agent-1' } }],
+  ])('throws (401) and does NOT revoke for a valid token %s', async (_name, overrides) => {
+    const { fastify, ctx } = createFastifyStub();
+    (fastify.jwtUtils.extractFromHeader as unknown as Mock).mockReturnValue('foreign.access.jwt');
+    (fastify.jwtUtils.verifyAccessToken as unknown as Mock).mockResolvedValue(
+      loginClaims(overrides)
+    );
+
+    await logoutRoute(fastify);
+    const handler = ctx.handler;
+    if (!handler) throw new Error('Handler missing');
+
+    await expect(
+      handler(logoutRequest('Bearer foreign.access.jwt'), createReply())
+    ).rejects.toThrow(JWTInvalidError);
+    expect(fastify.repositories.refreshTokens.revokeAllForUser).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['issued to another client', { clientId: 'third-party-app', aud: 'third-party-app' }],
+    ['bound to another audience', { aud: 'https://mcp.example.com' }],
+    ['delegated to an agent', { act: { sub: 'agent-1' } }],
+  ])('throws (401) and does NOT revoke for an EXPIRED token %s', async (_name, overrides) => {
+    const { fastify, ctx } = createFastifyStub();
+    (fastify.jwtUtils.extractFromHeader as unknown as Mock).mockReturnValue('foreign.access.jwt');
+    (fastify.jwtUtils.verifyAccessToken as unknown as Mock).mockRejectedValue(
+      new JWTExpiredError('Access token has expired')
+    );
+    (fastify.jwtUtils.decodeTokenUnsafe as unknown as Mock).mockReturnValue(loginClaims(overrides));
+
+    await logoutRoute(fastify);
+    const handler = ctx.handler;
+    if (!handler) throw new Error('Handler missing');
+
+    await expect(
+      handler(logoutRequest('Bearer foreign.access.jwt'), createReply())
+    ).rejects.toThrow(JWTInvalidError);
+    expect(fastify.repositories.refreshTokens.revokeAllForUser).not.toHaveBeenCalled();
+  });
+
   it('throws NotFoundError (404) when the user does not exist, without revoking', async () => {
     const { fastify, ctx } = createFastifyStub();
     (fastify.jwtUtils.extractFromHeader as unknown as Mock).mockReturnValue('valid.access.jwt');
-    (fastify.jwtUtils.verifyAccessToken as unknown as Mock).mockResolvedValue({
-      sub: 'ghost-user',
-    });
+    (fastify.jwtUtils.verifyAccessToken as unknown as Mock).mockResolvedValue(
+      loginClaims({ sub: 'ghost-user' })
+    );
     (fastify.repositories.users.findById as unknown as Mock).mockResolvedValue(null);
 
     await logoutRoute(fastify);
