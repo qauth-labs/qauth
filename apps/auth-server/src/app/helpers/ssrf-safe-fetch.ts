@@ -1,7 +1,14 @@
-import type { LookupAddress } from 'node:dns';
-import { lookup as dnsLookup } from 'node:dns';
-import { request as httpsRequest } from 'node:https';
-import { isIP } from 'node:net';
+import { extname, join } from 'node:path';
+import { Worker } from 'node:worker_threads';
+
+import {
+  checkFetchTarget,
+  GUARDED_GET_WORKER_TAG,
+  type GuardedGetJob,
+  type GuardedGetOutcome,
+} from './ssrf-fetch-worker';
+
+export { isPublicUnicastAddress } from './ssrf-fetch-worker';
 
 /**
  * SSRF-safe HTTPS fetcher (CIMD §6 / OWASP API7 / OWASP A?:2025 SSRF).
@@ -30,6 +37,18 @@ import { isIP } from 'node:net';
  *      `http://169.254.169.254` and bypass every check above.
  *   5. **Response size + time bounds.** A slow-loris or multi-GB body can't
  *      exhaust the server.
+ *   6. **Off the main thread.** The network part (resolution, TLS, HTTP, byte
+ *      cap — `ssrf-fetch-worker.ts`) runs on a worker thread per fetch. The
+ *      host is the TLS peer, and OpenSSL works through each handshake message
+ *      synchronously: on the main thread a host could stall every route, and
+ *      every timer, for as long as its certificates take to decode
+ *      (ANT-2026-3OJSXV7G). The deadline below lives on the main thread, where
+ *      it always fires, and it stops the worker.
+ *   7. **A bounded, fair number of fetches.** At most
+ *      {@link MAX_FETCH_THREADS} fetch threads exist at once, at most
+ *      {@link MAX_FETCH_THREADS_PER_HOST} of them for one host, and a bounded
+ *      number of fetches may wait for one; past that a fetch is refused at
+ *      once.
  *
  * The blocklist covers the ranges CIMD §6 and the SSRF literature call out:
  * loopback, link-local (incl. the 169.254.169.254 cloud-metadata address and
@@ -38,7 +57,10 @@ import { isIP } from 'node:net';
  */
 
 export interface SsrfSafeFetchOptions {
-  /** Per-request timeout in milliseconds. */
+  /**
+   * Time bound in milliseconds. The promise settles no later than this after
+   * the call, whatever the host does — waiting for a fetch thread included.
+   */
   timeoutMs: number;
   /** Maximum response body size in bytes. */
   maxBytes: number;
@@ -53,7 +75,10 @@ export interface SsrfSafeFetchOptions {
 export interface SsrfSafeFetchResult {
   status: number;
   body: string;
-  /** Lower-cased header map (single value per header; last wins). */
+  /**
+   * Lower-cased response headers, single value per header — only
+   * `cache-control`, `expires` and `content-type`, the ones callers read.
+   */
   headers: Record<string, string>;
 }
 
@@ -78,285 +103,230 @@ export class SsrfFetchError extends Error {
   }
 }
 
-/**
- * Normalise an IPv6 address to a comparable lower-case form by expanding
- * `::`. We only need enough fidelity to range-check, so a light expansion
- * is sufficient.
- */
-function expandIpv6(addr: string): string {
-  let a = addr.toLowerCase();
-  // Strip zone id (e.g. fe80::1%eth0).
-  const pct = a.indexOf('%');
-  if (pct !== -1) a = a.slice(0, pct);
-  if (!a.includes('::')) return a;
-  const [head, tail] = a.split('::');
-  const headParts = head ? head.split(':') : [];
-  const tailParts = tail ? tail.split(':') : [];
-  const missing = 8 - headParts.length - tailParts.length;
-  const middle = Array.from({ length: Math.max(missing, 0) }, () => '0');
-  return [...headParts, ...middle, ...tailParts].map((p) => p || '0').join(':');
-}
+/* -------------------------------------------------------------------------- */
+/*                                Fetch threads                               */
+/* -------------------------------------------------------------------------- */
 
 /**
- * True when `ip` (an already-resolved literal, family 4 or 6) is a public,
- * routable unicast address safe to connect to. Returns false for loopback,
- * private, link-local, CGNAT, multicast, reserved, and cloud-metadata
- * ranges.
+ * Fetch threads alive at once. A thread is counted until it has EXITED, not
+ * until it was told to stop: `worker.terminate()` takes effect only when the
+ * thread is back from native code, so a thread a host keeps inside OpenSSL
+ * past the deadline still holds its slot. That is what keeps such threads
+ * from piling up.
  */
-export function isPublicUnicastAddress(ip: string): boolean {
-  const family = isIP(ip);
-  if (family === 4) return isPublicIpv4(ip);
-  if (family === 6) return isPublicIpv6(ip);
-  return false;
+const MAX_FETCH_THREADS = 8;
+
+/**
+ * Fetch threads one host — the URL's host name — may hold at once, so that a
+ * slow or hostile host cannot take every thread from the others.
+ */
+const MAX_FETCH_THREADS_PER_HOST = 2;
+
+/** Fetches that may wait for a thread, across all hosts. */
+const MAX_WAITING_FETCHES = 64;
+
+/** Fetches one host may have waiting, so that one host cannot fill the queue. */
+const MAX_WAITING_FETCHES_PER_HOST = 8;
+
+/**
+ * The worker's entry point: `ssrf-fetch-worker` next to this module, in this
+ * module's own form — `.ts` when the server runs from its sources (tsx,
+ * vitest), `.js` in the esbuild output, which compiles every source file one
+ * to one (`bundle: false`).
+ */
+const WORKER_ENTRY = join(__dirname, `ssrf-fetch-worker${extname(__filename)}`);
+
+/**
+ * Node flags of a fetch thread. It inherits none of the server's: the `.ts`
+ * entry is loaded with Node's own type stripping rather than the server's
+ * loader, and it is ESM syntax under a package.json without `"type"`, which
+ * Node detects — and would announce on every start.
+ */
+const WORKER_EXEC_ARGV = ['--disable-warning=MODULE_TYPELESS_PACKAGE_JSON'];
+
+/**
+ * A fetch thread holds one document of at most `maxBytes` (64 KiB by default)
+ * and the TLS state of one connection; these limits leave room for that and
+ * bound what a thread can grow to.
+ */
+const WORKER_RESOURCE_LIMITS = {
+  maxOldGenerationSizeMb: 32,
+  maxYoungGenerationSizeMb: 8,
+  stackSizeMb: 4,
+};
+
+/** A fetch waiting for a thread. */
+interface WaitingFetch {
+  host: string;
+  start: () => void;
 }
 
-function isPublicIpv4(ip: string): boolean {
-  const octets = ip.split('.').map((o) => Number.parseInt(o, 10));
-  if (octets.length !== 4 || octets.some((o) => Number.isNaN(o) || o < 0 || o > 255)) {
-    return false;
+let liveThreads = 0;
+const liveThreadsByHost = new Map<string, number>();
+const waiting: WaitingFetch[] = [];
+const waitingByHost = new Map<string, number>();
+
+function bump(counts: Map<string, number>, host: string, by: 1 | -1): void {
+  const next = (counts.get(host) ?? 0) + by;
+  if (next > 0) counts.set(host, next);
+  else counts.delete(host);
+}
+
+function hasThreadFor(host: string): boolean {
+  return (
+    liveThreads < MAX_FETCH_THREADS &&
+    (liveThreadsByHost.get(host) ?? 0) < MAX_FETCH_THREADS_PER_HOST
+  );
+}
+
+function takeThread(host: string): void {
+  liveThreads += 1;
+  bump(liveThreadsByHost, host, 1);
+}
+
+/** A thread has exited: hand its slot to the first waiting fetch that may have it. */
+function releaseThread(host: string): void {
+  liveThreads -= 1;
+  bump(liveThreadsByHost, host, -1);
+  for (let i = 0; i < waiting.length && liveThreads < MAX_FETCH_THREADS;) {
+    const next = waiting[i];
+    if (hasThreadFor(next.host)) {
+      waiting.splice(i, 1);
+      bump(waitingByHost, next.host, -1);
+      next.start();
+    } else {
+      i += 1;
+    }
   }
-  const [a, b] = octets;
-
-  // 0.0.0.0/8 — "this network" / unspecified.
-  if (a === 0) return false;
-  // 10.0.0.0/8 — private.
-  if (a === 10) return false;
-  // 127.0.0.0/8 — loopback.
-  if (a === 127) return false;
-  // 169.254.0.0/16 — link-local (incl. 169.254.169.254 cloud metadata).
-  if (a === 169 && b === 254) return false;
-  // 172.16.0.0/12 — private.
-  if (a === 172 && b >= 16 && b <= 31) return false;
-  // 192.168.0.0/16 — private.
-  if (a === 192 && b === 168) return false;
-  // 100.64.0.0/10 — CGNAT (RFC 6598).
-  if (a === 100 && b >= 64 && b <= 127) return false;
-  // 192.0.0.0/24 — IETF protocol assignments.
-  if (a === 192 && b === 0 && octets[2] === 0) return false;
-  // 198.18.0.0/15 — benchmarking.
-  if (a === 198 && (b === 18 || b === 19)) return false;
-  // 224.0.0.0/4 — multicast; 240.0.0.0/4 — reserved / broadcast.
-  if (a >= 224) return false;
-
-  return true;
 }
 
-/**
- * Extract the embedded IPv4 address from a fully-expanded (8-hextet) IPv6
- * literal when it is an IPv4-mapped (`::ffff:a.b.c.d`) or IPv4-compatible
- * (`::a.b.c.d`) address, in EITHER notation:
- *
- *   ::ffff:127.0.0.1  → expandIpv6 → 0:0:0:0:0:ffff:7f00:1
- *   ::ffff:7f00:1     → expandIpv6 → 0:0:0:0:0:ffff:7f00:1   (same form)
- *
- * Both collapse to the same hextet sequence, so working off the expanded form
- * normalises the two notations and closes the hex-form SSRF bypass. Returns
- * the dotted-quad string (e.g. `"127.0.0.1"`) or `null` when the address is
- * not an embedded-v4 form.
- *
- * Only the well-known prefixes `::ffff:0:0/96` (mapped) and `::/96`
- * (compatible) carry an embedded v4 address; any other prefix is a native
- * IPv6 address whose trailing hextets are NOT a v4 address.
- */
-function extractEmbeddedIpv4(expanded: string): string | null {
-  const parts = expanded.split(':');
-  if (parts.length !== 8) return null;
-
-  const prefix = parts.slice(0, 6).join(':');
-  const isMapped = prefix === '0:0:0:0:0:ffff';
-  const isCompatible = prefix === '0:0:0:0:0:0';
-  if (!isMapped && !isCompatible) return null;
-
-  const high = Number.parseInt(parts[6], 16);
-  const low = Number.parseInt(parts[7], 16);
-  if (!Number.isFinite(high) || !Number.isFinite(low)) return null;
-  if (high < 0 || high > 0xffff || low < 0 || low > 0xffff) return null;
-
-  return `${high >> 8}.${high & 0xff}.${low >> 8}.${low & 0xff}`;
+/** Remove a fetch from the waiting list, if it is still on it. */
+function stopWaiting(entry: WaitingFetch): void {
+  const index = waiting.indexOf(entry);
+  if (index === -1) return;
+  waiting.splice(index, 1);
+  bump(waitingByHost, entry.host, -1);
 }
 
-function isPublicIpv6(ip: string): boolean {
-  const expanded = expandIpv6(ip);
-
-  // Unspecified (::) and loopback (::1).
-  if (expanded === '0:0:0:0:0:0:0:0' || expanded === '0:0:0:0:0:0:0:1') return false;
-
-  // IPv4-mapped (::ffff:a.b.c.d) and IPv4-compatible (::a.b.c.d) — re-check
-  // the embedded v4 address so `::ffff:169.254.169.254` cannot slip through.
-  //
-  // CRITICAL: this must catch BOTH notations of the embedded address:
-  //   - dot-decimal  ::ffff:127.0.0.1
-  //   - pure hex     ::ffff:7f00:1   (== 127.0.0.1)
-  // Matching only the dot-decimal text form lets the hex form bypass every
-  // check below (its `firstHextet` is 0), enabling loopback/RFC1918 SSRF.
-  // We therefore work off the fully-expanded 8-hextet form, which normalises
-  // both notations identically (expandIpv6 collapses `::ffff:7f00:1` and
-  // `::ffff:127.0.0.1` to the same `0:0:0:0:0:ffff:7f00:1`).
-  const embeddedIpv4 = extractEmbeddedIpv4(expanded);
-  if (embeddedIpv4 !== null) return isPublicIpv4(embeddedIpv4);
-
-  const firstHextet = Number.parseInt(expanded.split(':')[0] || '0', 16);
-  // fe80::/10 — link-local. (fe80–febf)
-  if (firstHextet >= 0xfe80 && firstHextet <= 0xfebf) return false;
-  // fc00::/7 — unique-local (fc00–fdff), incl. AWS fd00:ec2 metadata.
-  if (firstHextet >= 0xfc00 && firstHextet <= 0xfdff) return false;
-  // ff00::/8 — multicast.
-  if (firstHextet >= 0xff00) return false;
-
-  return true;
+/** Map a worker's report to the caller's result, trusting nothing about its shape. */
+function settleFromOutcome(
+  outcome: unknown,
+  resolve: (result: SsrfSafeFetchResult) => void,
+  reject: (err: Error) => void
+): void {
+  const o = outcome as Partial<GuardedGetOutcome> | null;
+  if (
+    o?.kind === 'response' &&
+    typeof o.status === 'number' &&
+    typeof o.body === 'string' &&
+    typeof o.headers === 'object' &&
+    o.headers !== null
+  ) {
+    resolve({ status: o.status, body: o.body, headers: { ...o.headers } });
+    return;
+  }
+  const message =
+    o !== null && 'message' in o && typeof o.message === 'string' ? o.message : 'CIMD fetch failed';
+  reject(o?.kind === 'blocked' ? new SsrfBlockedError(message) : new SsrfFetchError(message));
 }
 
 /**
  * Perform an SSRF-guarded HTTPS GET. Resolves with status/headers/body on a
  * completed (non-redirect) response; rejects with {@link SsrfBlockedError}
- * for a disallowed target or {@link SsrfFetchError} for any other failure.
+ * for a disallowed target or {@link SsrfFetchError} for any other failure —
+ * including the deadline and a fetch refused because too many are in
+ * progress.
  */
 export function ssrfSafeGet(
   targetUrl: string,
   options: SsrfSafeFetchOptions
 ): Promise<SsrfSafeFetchResult> {
   return new Promise((resolve, reject) => {
-    let parsed: URL;
-    try {
-      parsed = new URL(targetUrl);
-    } catch {
-      reject(new SsrfBlockedError('client_id is not a valid URL'));
+    const allowPrivateAddresses = options.allowPrivateAddresses === true;
+    const target = checkFetchTarget(targetUrl, allowPrivateAddresses);
+    if (target.kind === 'blocked') {
+      reject(new SsrfBlockedError(target.message));
       return;
     }
+    const { host } = target;
+    const startedAt = Date.now();
 
-    if (parsed.protocol !== 'https:') {
-      reject(new SsrfBlockedError('CIMD client_id must use the https scheme'));
-      return;
-    }
-    if (parsed.username || parsed.password) {
-      reject(new SsrfBlockedError('CIMD client_id must not embed credentials'));
-      return;
-    }
+    let settled = false;
+    let worker: Worker | undefined;
+    let queued: WaitingFetch | undefined;
 
-    const allowPrivate = options.allowPrivateAddresses === true;
+    const settle = (outcome: () => void): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(deadline);
+      outcome();
+    };
 
-    // When the URL host is itself an IP literal, node's connector dials it
-    // directly and never invokes the `lookup` hook below — so validate it
-    // here. (`URL.hostname` wraps IPv6 in brackets; strip them for isIP.)
-    const literalHost = parsed.hostname.replace(/^\[|\]$/g, '');
-    if (isIP(literalHost) && !allowPrivate && !isPublicUnicastAddress(literalHost)) {
-      reject(new SsrfBlockedError(`CIMD host is a non-public address (${literalHost})`));
-      return;
-    }
+    // The deadline is a main-thread timer: it fires even while the fetch
+    // thread is stuck in native code, which the fetch's own timers cannot.
+    const deadline = setTimeout(() => {
+      settle(() => reject(new SsrfFetchError('CIMD fetch timed out')));
+      if (queued) stopWaiting(queued);
+      // Takes effect once the thread is back from native code; the thread
+      // keeps its slot until it has exited.
+      void worker?.terminate();
+    }, options.timeoutMs);
 
-    // Custom lookup: validate the resolved IP *and* hand the same IP to the
-    // socket. This is the TOCTOU-safe boundary — node never re-resolves.
-    //
-    // We always resolve every A/AAAA record ourselves and validate the whole
-    // set, then answer in the shape node's caller requested (`opts.all`
-    // toggles single-address vs array). The address(es) node ultimately
-    // dials are exactly the ones we validated, so there is no rebinding gap.
-    const guardedLookup = ((
-      hostname: string,
-      opts: { all?: boolean } | undefined,
-      cb: (
-        err: NodeJS.ErrnoException | null,
-        address: string | LookupAddress[],
-        family?: number
-      ) => void
-    ) => {
-      const wantsAll = typeof opts === 'object' && opts?.all === true;
-
-      const handle = (err: NodeJS.ErrnoException | null, addresses: LookupAddress[]) => {
-        if (err) {
-          cb(err, '', 0);
-          return;
-        }
-        if (!addresses || addresses.length === 0) {
-          cb(new Error('no addresses resolved'), '', 0);
-          return;
-        }
-        for (const a of addresses) {
-          if (!allowPrivate && !isPublicUnicastAddress(a.address)) {
-            cb(
-              new SsrfBlockedError(`CIMD host resolves to a non-public address (${a.address})`),
-              '',
-              0
-            );
-            return;
-          }
-        }
-        if (wantsAll) {
-          cb(null, addresses);
-        } else {
-          cb(null, addresses[0].address, addresses[0].family);
-        }
+    const start = (): void => {
+      queued = undefined;
+      takeThread(host);
+      const job: GuardedGetJob = {
+        url: targetUrl,
+        timeoutMs: Math.max(1, options.timeoutMs - (Date.now() - startedAt)),
+        maxBytes: options.maxBytes,
+        allowPrivateAddresses,
       };
-
-      // IP literal: validate directly, no DNS round-trip.
-      const literalFamily = isIP(hostname);
-      if (literalFamily) {
-        handle(null, [{ address: hostname, family: literalFamily }]);
+      try {
+        worker = new Worker(WORKER_ENTRY, {
+          workerData: { tag: GUARDED_GET_WORKER_TAG, job },
+          // Nothing of the server's environment (signing keys, database URL)
+          // is the fetch's business.
+          env: {},
+          execArgv: WORKER_EXEC_ARGV,
+          resourceLimits: WORKER_RESOURCE_LIMITS,
+        });
+      } catch (err) {
+        releaseThread(host);
+        settle(() =>
+          reject(new SsrfFetchError(err instanceof Error ? err.message : 'CIMD fetch failed'))
+        );
         return;
       }
-      dnsLookup(hostname, { all: true }, (err, addresses) =>
-        handle(err, addresses as LookupAddress[])
-      );
-    }) as unknown as typeof dnsLookup;
+      const thread = worker;
+      // A fetch thread never keeps the process alive; the deadline timer
+      // does that for as long as the caller waits.
+      thread.unref();
+      thread.on('message', (outcome: unknown) => {
+        settle(() => settleFromOutcome(outcome, resolve, reject));
+        void thread.terminate();
+      });
+      thread.on('error', (err: Error) => {
+        settle(() => reject(new SsrfFetchError(err.message)));
+      });
+      thread.once('exit', () => {
+        releaseThread(host);
+        settle(() => reject(new SsrfFetchError('CIMD fetch ended without a result')));
+      });
+    };
 
-    const req = httpsRequest(
-      parsed,
-      {
-        method: 'GET',
-        lookup: guardedLookup,
-        headers: {
-          accept: 'application/json',
-          'user-agent': 'qauth-cimd-resolver',
-        },
-        // `all: true` is required so our lookup callback receives every record.
-        // Node passes lookup options through from here.
-      },
-      (res) => {
-        const status = res.statusCode ?? 0;
-
-        // Never follow redirects — a 3xx Location could point at an internal
-        // address and bypass the IP guard.
-        if (status >= 300 && status < 400) {
-          res.destroy();
-          reject(new SsrfBlockedError(`CIMD fetch returned redirect (${status}); not followed`));
-          return;
-        }
-
-        const headers: Record<string, string> = {};
-        for (const [k, v] of Object.entries(res.headers)) {
-          if (v === undefined) continue;
-          headers[k.toLowerCase()] = Array.isArray(v) ? v.join(', ') : v;
-        }
-
-        let received = 0;
-        const chunks: Buffer[] = [];
-        res.on('data', (chunk: Buffer) => {
-          received += chunk.length;
-          if (received > options.maxBytes) {
-            res.destroy();
-            reject(new SsrfFetchError('CIMD document exceeds maximum allowed size'));
-            return;
-          }
-          chunks.push(chunk);
-        });
-        res.on('end', () => {
-          resolve({ status, body: Buffer.concat(chunks).toString('utf8'), headers });
-        });
-        res.on('error', (err) => reject(new SsrfFetchError(err.message)));
-      }
-    );
-
-    req.setTimeout(options.timeoutMs, () => {
-      req.destroy();
-      reject(new SsrfFetchError('CIMD fetch timed out'));
-    });
-    req.on('error', (err) => {
-      if (err instanceof SsrfBlockedError) {
-        reject(err);
-        return;
-      }
-      reject(new SsrfFetchError(err.message));
-    });
-    req.end();
+    if (hasThreadFor(host)) {
+      start();
+      return;
+    }
+    if (
+      waiting.length >= MAX_WAITING_FETCHES ||
+      (waitingByHost.get(host) ?? 0) >= MAX_WAITING_FETCHES_PER_HOST
+    ) {
+      settle(() => reject(new SsrfFetchError('too many CIMD fetches in progress')));
+      return;
+    }
+    queued = { host, start };
+    waiting.push(queued);
+    bump(waitingByHost, host, 1);
   });
 }
