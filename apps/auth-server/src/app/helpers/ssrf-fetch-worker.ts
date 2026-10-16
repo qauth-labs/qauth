@@ -1,5 +1,6 @@
 import type { LookupAddress } from 'node:dns';
 import { lookup as dnsLookup } from 'node:dns';
+import { Resolver } from 'node:dns/promises';
 import { request as httpsRequest } from 'node:https';
 import { isIP } from 'node:net';
 import { platform, setPriority } from 'node:os';
@@ -72,6 +73,14 @@ const FETCH_CIPHERS = `${DEFAULT_CIPHERS}:!kDHE`;
  * `103 Early Hints` or two, not for a stream of them.
  */
 const MAX_INTERIM_RESPONSES = 3;
+
+/**
+ * Per-query bounds of the c-ares resolver: how long one query waits for an
+ * answer, and how often it is sent. The fetch deadline cancels whatever is
+ * left of them.
+ */
+const DNS_QUERY_TIMEOUT_MS = 2000;
+const DNS_QUERY_TRIES = 2;
 
 /** `workerData` tag that marks a thread started for a fetch. */
 export const GUARDED_GET_WORKER_TAG = 'qauth:ssrf-guarded-get';
@@ -242,6 +251,26 @@ export function checkFetchTarget(
   return { kind: 'ok', url: parsed, host: parsed.hostname.toLowerCase().replace(/\.$/, '') };
 }
 
+/**
+ * Every A and AAAA record of `hostname`. One family failing (a v4-only host has
+ * no AAAA) is not an error as long as the other one answered.
+ */
+async function resolveAllAddresses(resolver: Resolver, hostname: string): Promise<LookupAddress[]> {
+  const [a, aaaa] = await Promise.allSettled([
+    resolver.resolve4(hostname),
+    resolver.resolve6(hostname),
+  ]);
+  const addresses: LookupAddress[] = [];
+  if (a.status === 'fulfilled') {
+    addresses.push(...a.value.map((address) => ({ address, family: 4 })));
+  }
+  if (aaaa.status === 'fulfilled') {
+    addresses.push(...aaaa.value.map((address) => ({ address, family: 6 })));
+  }
+  if (addresses.length === 0 && a.status === 'rejected') throw a.reason;
+  return addresses;
+}
+
 /** A target refused by the address checks inside the `lookup` hook. */
 class BlockedTargetError extends Error {}
 
@@ -259,10 +288,13 @@ export function guardedGet(job: GuardedGetJob): Promise<GuardedGetOutcome> {
     const allowPrivate = job.allowPrivateAddresses;
 
     let settled = false;
+    let resolver: Resolver | undefined;
     const settle = (outcome: GuardedGetOutcome): void => {
       if (settled) return;
       settled = true;
       clearTimeout(deadline);
+      // A query still in flight has no reader left.
+      resolver?.cancel();
       resolve(outcome);
     };
 
@@ -316,8 +348,28 @@ export function guardedGet(job: GuardedGetJob): Promise<GuardedGetOutcome> {
         handle(null, [{ address: hostname, family: literalFamily }]);
         return;
       }
-      dnsLookup(hostname, { all: true }, (err, addresses) =>
-        handle(err, addresses as LookupAddress[])
+      // Local fixtures may be named in /etc/hosts, which only getaddrinfo(3)
+      // reads. The escape hatch that allows them is off in production.
+      if (allowPrivate) {
+        dnsLookup(hostname, { all: true }, (err, addresses) =>
+          handle(err, addresses as LookupAddress[])
+        );
+        return;
+      }
+      // A name the caller chose never reaches dns.lookup(): that is a blocking
+      // getaddrinfo(3) on the libuv thread pool, which the whole process
+      // shares and runs only a few of at a time, and nothing can cancel it. A
+      // name server that never answers would hold those threads past every
+      // deadline and queue all other lookups behind it (ANT-2026-MY1V8XOQ).
+      // c-ares queries run on this thread's event loop, each with its own
+      // timeout, and `settle` cancels them.
+      resolver = new Resolver({
+        timeout: Math.min(DNS_QUERY_TIMEOUT_MS, job.timeoutMs),
+        tries: DNS_QUERY_TRIES,
+      });
+      resolveAllAddresses(resolver, hostname).then(
+        (addresses) => handle(null, addresses),
+        (err: NodeJS.ErrnoException) => handle(err, [])
       );
     }) as unknown as typeof dnsLookup;
 

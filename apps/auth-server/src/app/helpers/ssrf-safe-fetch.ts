@@ -31,7 +31,10 @@ export { isPublicUnicastAddress } from './ssrf-fetch-worker';
  *      socket connects to, and we validate it inside the callback — so the
  *      address that is checked and the address that is dialed are guaranteed
  *      identical. Every A/AAAA record is checked; if any is non-public the
- *      whole connection is refused.
+ *      whole connection is refused. The records come from a c-ares
+ *      `Resolver` per fetch, with a timeout per query and cancelled with the
+ *      fetch — never from `dns.lookup()`, whose getaddrinfo(3) calls share
+ *      the process's small libuv thread pool and cannot be cancelled.
  *   4. **No redirect following.** A 3xx is surfaced as an error, never
  *      transparently followed — otherwise the upstream could 302 us to
  *      `http://169.254.169.254` and bypass every check above.
