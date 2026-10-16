@@ -212,7 +212,9 @@ export async function resolveClient(
 
       const insert = toCimdClientInsert(realmId, clientId, doc, sentinelSecretHash);
       // An operator's `enabled = false` survives re-resolution; the document
-      // can never re-enable a client the server disabled.
+      // can never re-enable a client the server disabled. This snapshot
+      // predates the fetch above, so the upsert ANDs it with the live row
+      // rather than writing it back (ANT-2026-SSI34ODQ).
       const data = persisted ? { ...insert, enabled: persisted.enabled } : insert;
       // Unchanged document (the common, cache-served case) → no write.
       if (persisted && cimdRowMatchesInsert(persisted, data)) {

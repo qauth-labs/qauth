@@ -779,6 +779,51 @@ describe('repository integration (real Postgres)', () => {
     });
   });
 
+  // --- CIMD upsert never re-enables a row ----------------------------------
+
+  describe('oauth_clients — upsertCimdClient narrows `enabled` only', () => {
+    const CIMD_ID = 'https://app.example.com/client.json';
+
+    function cimdInsert(realmId: string, name: string, enabled: boolean) {
+      return {
+        realmId,
+        clientId: CIMD_ID,
+        clientSecretHash: 'sentinel-hash',
+        name,
+        redirectUris: ['https://app.example.com/cb'],
+        tokenEndpointAuthMethod: 'none' as const,
+        enabled,
+      };
+    }
+
+    // ANT-2026-SSI34ODQ: the resolver's snapshot still says `true`; the
+    // operator disables the client while the resolver waits on the client's
+    // own host.
+    it('keeps an operator disable that landed after the resolver read the row', async () => {
+      const realm = await seedRealm('cimd-disable-realm');
+      const clients = createOAuthClientsRepository(db().database.db);
+      const created = await clients.upsertCimdClient(cimdInsert(realm.id, 'Before', true));
+      expect(created.enabled).toBe(true);
+
+      await clients.update(created.id, { enabled: false });
+      const refreshed = await clients.upsertCimdClient(cimdInsert(realm.id, 'After', true));
+
+      expect(refreshed.name).toBe('After');
+      expect(refreshed.enabled).toBe(false);
+      expect((await clients.findByClientId(realm.id, CIMD_ID))?.enabled).toBe(false);
+    });
+
+    it('still disables an enabled row when the caller passes false', async () => {
+      const realm = await seedRealm('cimd-narrow-realm');
+      const clients = createOAuthClientsRepository(db().database.db);
+      await clients.upsertCimdClient(cimdInsert(realm.id, 'Before', true));
+
+      const refreshed = await clients.upsertCimdClient(cimdInsert(realm.id, 'After', false));
+
+      expect(refreshed.enabled).toBe(false);
+    });
+  });
+
   // --- per-agent action audit (ADR-007 §2, #186) ---------------------------
 
   describe('audit_logs — per-agent action audit (ADR-007 §2, #186)', () => {
