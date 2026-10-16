@@ -558,6 +558,92 @@ describe('UI /ui/consent POST — allow/deny', () => {
     expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
     expect(fastify.repositories.oauthConsents.upsertGrant).not.toHaveBeenCalled();
   });
+
+  it('refuses a page rendered before the allowlist grew, even after a later render re-bound the session', async () => {
+    const { fastify, ctx } = makeFastify();
+    await consentRoute(fastify);
+    const { signSessionId } = await import('../../helpers/session-cookie');
+    const cookie = `__Host-qauth_session=${signSessionId('sid-stale-page')}`;
+
+    // A session store that keeps what the route writes, so the second GET
+    // below really overwrites the per-client scope binding of the first.
+    let session: Record<string, unknown> = {
+      userId: 'user-1',
+      email: 'a@b.com',
+      sessionId: 'sid-stale-page',
+      createdAt: Date.now(),
+    };
+    (fastify.sessionUtils.getSession as unknown as Mock).mockImplementation(async () => session);
+    (fastify.sessionUtils.setSession as unknown as Mock).mockImplementation(
+      async (_id: string, data: Record<string, unknown>) => {
+        session = data;
+      }
+    );
+
+    const renderPage = async () => {
+      const { reply, state } = createReply();
+      await ctx.get!(
+        {
+          query: { ...BASE_QUERY, scope: 'email read:foo' },
+          url: '/ui/consent?...',
+          headers: { cookie },
+          ip: '127.0.0.1',
+        },
+        reply
+      );
+      return state.body as string;
+    };
+    const hidden = (page: string, name: string) =>
+      new RegExp(`name="${name}" value="([^"]*)"`).exec(page)?.[1];
+
+    // First page: the client may only ask for `email`, so that is all the
+    // user is shown. `read:foo` is requested but NOT listed.
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue({
+      ...CLIENT,
+      scopes: ['email'],
+    });
+    const firstPage = await renderPage();
+    expect(firstPage).toContain('<code>email</code>');
+    expect(firstPage).not.toContain('<code>read:foo</code>');
+    // The form submits what the page LISTS, never the raw request.
+    expect(hidden(firstPage, 'scope')).toBe('email');
+
+    // The client's owner adds `read:foo` to the allowlist (PATCH
+    // /api/clients/:id) and a second render (a cross-site top-level
+    // navigation to /oauth/authorize) re-binds the slot to the wider set. The
+    // CSRF token is reused across renders, so the first page stays submittable.
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(CLIENT);
+    await renderPage();
+
+    // The user presses Allow on the FIRST page, with its hidden fields as
+    // rendered.
+    const { reply, state } = createReply();
+    await ctx.post!(
+      {
+        body: {
+          decision: 'allow',
+          allow_forever: '1',
+          csrf_token: hidden(firstPage, 'csrf_token'),
+          client_id: 'app-123',
+          redirect_uri: 'https://example.com/cb',
+          state: 'xyz',
+          scope: hidden(firstPage, 'scope'),
+          code_challenge: 'A'.repeat(43),
+          code_challenge_method: 'S256',
+          response_type: 'code',
+        },
+        headers: { cookie },
+        ip: '127.0.0.1',
+      },
+      reply
+    );
+
+    // Nothing the approved page did not list may be granted.
+    expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
+    expect(fastify.repositories.oauthConsents.upsertGrant).not.toHaveBeenCalled();
+    expect(state.redirected).toContain('error=invalid_scope');
+    expect(state.redirected).toContain('state=xyz');
+  });
 });
 
 describe('UI /ui/consent — loopback redirect on any port (RFC 8252 §7.3, #414)', () => {

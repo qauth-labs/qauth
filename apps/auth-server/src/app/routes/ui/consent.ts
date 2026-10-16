@@ -472,7 +472,13 @@ export default async function (fastify: FastifyInstance) {
             client_id: query.client_id,
             redirect_uri: query.redirect_uri,
             state: query.state,
-            scope: query.scope,
+            // The form submits the scopes this page LISTS (the
+            // allowlist-filtered set bound to the session above), never the
+            // raw request. The POST re-filters the submitted value against the
+            // allowlist as it is THEN, so a raw value would pick up scopes the
+            // client's owner added after this render, and match a binding a
+            // later render rewrote: a grant of scopes this page never showed.
+            scope: scopes.join(' '),
             nonce: query.nonce,
             code_challenge: query.code_challenge,
             code_challenge_method: query.code_challenge_method,
