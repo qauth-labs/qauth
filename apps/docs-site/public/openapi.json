@@ -2681,7 +2681,8 @@
                         ]
                       },
                       "scope": {
-                        "type": "string"
+                        "type": "string",
+                        "maxLength": 2048
                       },
                       "resource": {
                         "anyOf": [
@@ -2742,7 +2743,8 @@
                         "pattern": "^[0-9a-fA-F]{64}$"
                       },
                       "scope": {
-                        "type": "string"
+                        "type": "string",
+                        "maxLength": 2048
                       },
                       "resource": {
                         "anyOf": [

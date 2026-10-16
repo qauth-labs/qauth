@@ -489,13 +489,16 @@ export function validateScopes(
   if (!requestedScopeString || requestedScopeString.trim().length === 0) {
     return [];
   }
-  const requested = requestedScopeString.split(/\s+/).filter((s) => s.length > 0);
+  // De-duplicated, and checked against a Set: a repeated name is granted once,
+  // and the check stays linear however many scopes the client holds.
+  const requested = [...new Set(requestedScopeString.split(/\s+/).filter((s) => s.length > 0))];
   // Deny-by-default agent-mode cap first: an agent-mode scope that the client
   // may not hold is rejected even if it also appears in the raw allowlist.
   if (agent) {
     enforceAgentScopeCap(requested, agent);
   }
-  const disallowed = requested.filter((s) => !allowedScopes.includes(s));
+  const allowed = new Set(allowedScopes);
+  const disallowed = requested.filter((s) => !allowed.has(s));
   if (disallowed.length > 0) {
     throw new InvalidScopeError(`${disallowed.join(' ')} not permitted for this client`);
   }

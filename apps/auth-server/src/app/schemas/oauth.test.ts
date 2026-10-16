@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
+import { OAUTH_SCOPE_PARAM_MAX_LENGTH } from '../constants';
 import { redirectUriMatchesRegistered } from '../helpers/oauth-redirect';
 import {
   ASSERTION_MAX_LENGTH,
@@ -505,5 +506,31 @@ describe('URIs and client_id are bounded before anything parses them', () => {
       expect(parse(`${cimd}a`)).toBe(false);
       expect(parse(`https://${cjkHost}/client.json`)).toBe(false);
     }
+  });
+});
+
+/**
+ * `scope` is capped on every grant that takes it. The refresh_token and
+ * client_credentials bodies were the two left out, so the only bound was the
+ * 1 MiB body limit: a refresh `scope` of 522,000 names, checked against a
+ * stored list of 174,000, held the event loop for ~78 s.
+ */
+describe('scope is bounded on every token grant', () => {
+  const grants: Array<[string, Record<string, unknown>]> = [
+    ['client_credentials', { grant_type: 'client_credentials' }],
+    ['refresh_token', { grant_type: 'refresh_token', refresh_token: 'a'.repeat(64) }],
+    [
+      'token exchange',
+      { grant_type: TOKEN_EXCHANGE_GRANT_TYPE, subject_token: 't', subject_token_type: 't' },
+    ],
+    ['jwt-bearer', { grant_type: JWT_BEARER_GRANT_TYPE, assertion: 'a.b.c' }],
+  ];
+
+  it.each(grants)('%s accepts a scope at the bound and refuses one past it', (_grant, body) => {
+    const atBound = 'a'.repeat(OAUTH_SCOPE_PARAM_MAX_LENGTH);
+    expect(tokenExchangeBodySchema.safeParse({ ...body, scope: atBound }).success).toBe(true);
+    expect(tokenExchangeBodySchema.safeParse({ ...body, scope: `${atBound}a` }).success).toBe(
+      false
+    );
   });
 });

@@ -284,7 +284,9 @@ export const tokenExchangeAuthCodeBodySchema = z.object({
  */
 export const tokenExchangeClientCredsBodySchema = z.object({
   grant_type: z.literal('client_credentials'),
-  scope: z.string().optional(),
+  // Bounded like `scope` on every other grant: the handler checks each
+  // requested name against the client's allowlist.
+  scope: z.string().max(OAUTH_SCOPE_PARAM_MAX_LENGTH).optional(),
   // RFC 8707 §2: machine clients request a resource at mint time; handler
   // uses it as the token `aud` (overrides client.audience when present).
   resource: resourceParamSchema,
@@ -310,7 +312,10 @@ export const tokenExchangeRefreshBodySchema = z.object({
     .string()
     .length(64, 'refresh_token must be exactly 64 characters')
     .regex(/^[0-9a-fA-F]{64}$/, 'refresh_token must be a valid hex string'),
-  scope: z.string().optional(),
+  // Bounded like `scope` on every other grant. The handler checks each
+  // requested name against the refresh token's scopes and stores the result
+  // on the rotated token.
+  scope: z.string().max(OAUTH_SCOPE_PARAM_MAX_LENGTH).optional(),
   // RFC 8707 §2: on refresh, resource MUST be a subset of the one bound
   // to the original authorization code. Enforced in the handler.
   resource: resourceParamSchema,
