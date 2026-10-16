@@ -7,12 +7,15 @@ import {
   EmailAlreadyVerifiedError,
   InvalidCredentialsError,
   InvalidTokenError,
+  TooManyRequestsError,
 } from '@qauth-labs/shared-errors';
 import type { FastifyInstance } from 'fastify';
 import { ZodTypeProvider } from 'fastify-type-provider-zod';
 
 import { env } from '../../../config/env';
+import { hashEmail } from '../../helpers/auth-events';
 import { clientAddressKey } from '../../helpers/client-address';
+import { recordSuccessfulLogin, registerLoginAttempt } from '../../helpers/failed-login';
 import { type VerifyBody, verifyBodySchema, verifyResponseSchema } from '../../schemas/auth';
 
 /**
@@ -47,6 +50,12 @@ import { type VerifyBody, verifyBodySchema, verifyResponseSchema } from '../../s
  * credential the token targets: only a person who has both the mailbox and the
  * password (the genuine registrant) can verify. A wrong password consumes
  * nothing, so the registrant can retry within the token's lifetime.
+ *
+ * The token must not become a password oracle, though: the per-IP rate limit
+ * above caps guesses per address, not per account. So the password check sits
+ * under the failed-login lockout (#115) with the SAME identifiers as
+ * POST /auth/login and POST /ui/login: wrong passwords here count against the
+ * account, and an account locked on either login route is locked here too.
  */
 export default async function (fastify: FastifyInstance) {
   fastify.withTypeProvider<ZodTypeProvider>().post(
@@ -69,7 +78,7 @@ export default async function (fastify: FastifyInstance) {
         },
       },
     },
-    async (request) => {
+    async (request, reply) => {
       const { token, password } = request.body as VerifyBody;
 
       // Token format already validated by Zod schema (64-char hex string)
@@ -117,6 +126,24 @@ export default async function (fastify: FastifyInstance) {
       // 4b. The registrant, not just the mailbox (see the route comment). Checked
       // BEFORE the completion transaction, so a wrong password leaves the token
       // unconsumed and nothing verified.
+      //
+      // Under the failed-login lockout (#115), keyed as the login routes key
+      // it: external_sub IS the normalized registered address (#230), so the
+      // email hash matches theirs, and the address is the client address key
+      // (an IPv6 client by its /64). The attempt is counted before the
+      // password is compared; a wrong one stays counted.
+      const emailIdentifier = `email:${hashEmail(credential.externalSub)}`;
+      const lockout = await registerLoginAttempt(fastify.redis, [
+        emailIdentifier,
+        `ip:${clientAddressKey(request)}`,
+      ]);
+      if (lockout.locked) {
+        if (lockout.retryAfterSeconds !== undefined) {
+          reply.header('Retry-After', String(lockout.retryAfterSeconds));
+        }
+        throw new TooManyRequestsError('Too many failed attempts. Please try again later.');
+      }
+
       const passwordValid = await fastify.passwordHasher.verifyPassword(
         parsed.data.password_hash,
         password
@@ -124,6 +151,8 @@ export default async function (fastify: FastifyInstance) {
       if (!passwordValid) {
         throw new InvalidCredentialsError('Incorrect password for this account');
       }
+      // The password is proved: settle the attempt as a successful login does.
+      await recordSuccessfulLogin(fastify.redis, lockout, [emailIdentifier]);
 
       // 5.-6. Completion write set (one transaction): consume the token and
       // flip credential_data.email_verified + the attribute's verified flag —

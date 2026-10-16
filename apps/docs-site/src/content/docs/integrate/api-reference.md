@@ -200,7 +200,9 @@ for the password.
 
 Errors: `400` (malformed token), `404`/`400` (unknown or expired token), `401`
 `INVALID_CREDENTIALS` (wrong password; the token is not consumed, so the request
-can be retried).
+can be retried), `429` (rate limited, or the account is locked out: wrong
+passwords here count toward the same failed-login lockout as `POST /auth/login`,
+and the `429` carries `Retry-After`).
 
 ### `POST /auth/resend-verification`
 
