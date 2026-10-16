@@ -1,5 +1,6 @@
 import {
   createSubjectResolutionStrategy,
+  deriveEnrolmentWalletBinding,
   type SubjectResolutionConfig,
   type ValidatedCredential,
   ValidatedIssuer,
@@ -407,6 +408,47 @@ describe('resolveWalletAccount — the refusals that must NEVER become an enrolm
 
     expect(result).toEqual({ status: 'rejected' });
     expect(harness.userAttributes.upsertMany).not.toHaveBeenCalled();
+  });
+
+  it('does not let a stranger’s password registration on the identifier lock the wallet owner out (ANT-2026-B5IYOGYF)', async () => {
+    // `POST /auth/register` is anonymous and the credential unique index is per
+    // provider type, so anyone can add a password row on the identifier a
+    // wallet-only account enrolled under. That unbound row must not veto the
+    // account that holds the proof.
+    const credential = credentialFor({ given_name: 'Alice', family_name: 'Doe' });
+    const enrolled = walletCredentialDataSchema.parse({
+      credential_format: 'dc+sd-jwt',
+      credential_type: VCT,
+      issuer: ISSUER,
+      wallet_binding: deriveEnrolmentWalletBinding(CONFIG, credential),
+      subject_resolution: 'asserted-lookup',
+      enrolled_at: 1,
+    });
+    harness.userCredentials.findAllByRealmAndExternalSub.mockResolvedValue([
+      credentialRow({ userId: 'user-1', credentialData: enrolled }),
+      credentialRow({
+        id: 'cred-stranger',
+        userId: 'user-stranger',
+        providerType: 'password',
+        credentialData: { password_hash: 'x' },
+      }),
+    ]);
+
+    const result = await resolve(harness.fastify, credential);
+
+    expect(result).toEqual({
+      status: 'authenticated',
+      userId: 'user-1',
+      externalSub: 'alice@example.com',
+      enrolled: false,
+    });
+    expect(harness.users.create).not.toHaveBeenCalled();
+
+    // ...and it opens nothing: another holder asserting the same identifier is
+    // still refused.
+    expect(
+      await resolve(harness.fastify, credentialFor({ given_name: 'Mallory', family_name: 'Doe' }))
+    ).toEqual({ status: 'rejected' });
   });
 
   it('refuses an AMBIGUOUS lookup rather than picking an account', async () => {

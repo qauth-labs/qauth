@@ -568,6 +568,14 @@ lets a database failure propagate, because the strategy contains it and turns it
 into the same uniform refusal — swallowing it here would turn a broken database
 into "no such account".
 
+When the identifier resolves to several accounts and at least one carries a
+wallet binding, `asserted-lookup` sets aside the accounts that carry none
+before it looks for the sole account. An anonymous `POST /auth/register` can
+add an unbound password account on a wallet-only user's email. Counting that
+account would lock the wallet owner out. Two bound accounts, or several unbound
+ones, are still `ambiguous`, and the remaining account still has to pass the
+binding comparison.
+
 Note the boot posture, deliberately unchanged: selecting a strategy is **not** a
 startup gate. A deployment that names a strategy and omits its settings fails at
 `resolveSubjectResolution` on the request path — logged as an operator error and

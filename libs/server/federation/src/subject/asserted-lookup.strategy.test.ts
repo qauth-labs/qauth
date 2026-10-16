@@ -167,9 +167,11 @@ describe('createAssertedLookupStrategy (ADR-009 §1)', () => {
       expect(outcome).toEqual({ kind: 'no-match' });
     });
 
-    it('reports ambiguous when two accounts share the asserted identifier — never picks one', async () => {
-      // #300 constraint 5. Two users on one email is possible today: a password
-      // account and an OIDC account both normalize to it.
+    it('reports ambiguous when two BOUND accounts share the asserted identifier — never picks one', async () => {
+      // #300 constraint 5. Two users on one email is possible today, because the
+      // credential unique index is per provider type. Unbound accounts are set
+      // aside once a bound one exists (see the next test), but two accounts that
+      // both carry a binding are never told apart.
       const credential = await validatedFixtureCredential({ claims: ALICE_CLAIMS });
       const binding = deriveWalletBinding(credential, BINDING_CLAIMS) as string;
       const lookup = lookupOf({
@@ -177,6 +179,56 @@ describe('createAssertedLookupStrategy (ADR-009 §1)', () => {
           [VICTIM]: [
             { userId: 'user-a', walletBinding: binding },
             { userId: 'user-b', walletBinding: binding },
+          ],
+        },
+      });
+
+      const outcome = await createAssertedLookupStrategy({
+        bindingClaims: BINDING_CLAIMS,
+      }).resolve(credential, contextOf(lookup));
+
+      expect(outcome).toEqual({ kind: 'ambiguous' });
+    });
+
+    it('does not let an UNBOUND account on the same identifier veto the bound one', async () => {
+      // `POST /auth/register` is unauthenticated and the credential unique index
+      // is per provider type, so anyone can put a password row on the identifier
+      // a wallet account enrolled under. That row must not lock the owner out.
+      const credential = await validatedFixtureCredential({ claims: ALICE_CLAIMS });
+      const lookup = lookupOf({
+        asserted: {
+          [VICTIM]: [
+            {
+              userId: 'user-alice',
+              walletBinding: deriveWalletBinding(credential, BINDING_CLAIMS) as string,
+            },
+            { userId: 'user-stranger', walletBinding: null },
+          ],
+        },
+      });
+      const strategy = createAssertedLookupStrategy({ bindingClaims: BINDING_CLAIMS });
+
+      await expect(strategy.resolve(credential, contextOf(lookup))).resolves.toEqual({
+        kind: 'matched',
+        userId: 'user-alice',
+      });
+
+      // ...and it opens nothing: another holder is refused exactly as before.
+      const other = await validatedFixtureCredential({ claims: MALLORY_CLAIMS });
+      await expect(strategy.resolve(other, contextOf(lookup))).resolves.toEqual({
+        kind: 'rejected',
+      });
+    });
+
+    it('still reports ambiguous when several accounts share the identifier and NONE is bound', async () => {
+      // Never `no-match`: dropping the unbound rows must not leave an empty list
+      // the caller is allowed to enrol over.
+      const credential = await validatedFixtureCredential({ claims: ALICE_CLAIMS });
+      const lookup = lookupOf({
+        asserted: {
+          [VICTIM]: [
+            { userId: 'user-a', walletBinding: null },
+            { userId: 'user-b', walletBinding: null },
           ],
         },
       });

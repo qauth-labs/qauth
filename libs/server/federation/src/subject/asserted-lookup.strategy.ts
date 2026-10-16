@@ -62,6 +62,10 @@ import { type AssertedLookupConfig, normalizeBindingClaims } from './subject-res
  *   turn into an enrolment, letting any holder of any trusted credential claim
  *   an existing account by asserting its email. That path is account linking
  *   (#238) and needs an authenticated session — `session-binding`, ADR-009 §5.
+ *
+ * An unbound account blocks an ENROLMENT; it does not block the owner of a bound
+ * account on the same identifier. Only bound accounts count towards `ambiguous`
+ * once one exists, because an unbound one costs an anonymous caller one request.
  */
 
 /**
@@ -111,10 +115,27 @@ export function createAssertedLookupStrategy(
       );
       if (candidates === undefined) return REJECTED;
 
-      const selection = selectSoleAccount(candidates);
-      if (selection.kind === 'invalid') return REJECTED;
-      if (selection.kind === 'ambiguous') return AMBIGUOUS;
-      if (selection.kind === 'none') return NO_MATCH;
+      const everyAccount = selectSoleAccount(candidates);
+      if (everyAccount.kind === 'invalid') return REJECTED;
+      if (everyAccount.kind === 'none') return NO_MATCH;
+
+      // An account with NO wallet binding can never be this strategy's answer
+      // (it is refused below), so it gets no vote against an account that has
+      // one. Such a row is free to create — `POST /auth/register` is
+      // unauthenticated and the credential unique index is per provider type —
+      // and counting it would let anyone who knows a wallet account's
+      // identifier lock its owner out. Nothing is picked: two BOUND accounts
+      // are still ambiguous, so are several unbound ones (never `no-match`),
+      // and the survivor still has to pass the comparison below.
+      const selection =
+        everyAccount.kind === 'ambiguous'
+          ? selectSoleAccount(
+              candidates.filter(
+                ({ walletBinding }) => walletBinding !== null && walletBinding.length > 0
+              )
+            )
+          : everyAccount;
+      if (selection.kind !== 'sole') return AMBIGUOUS;
 
       // ADR-009's second bootstrap case: an account with no wallet binding is a
       // refusal, never an enrolment (see the module JSDoc).
