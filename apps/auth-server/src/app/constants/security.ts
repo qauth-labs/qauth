@@ -153,6 +153,27 @@ export const PENDING_AUTHORIZATION_TTL_MS = 10 * 60 * 1000;
 export const PENDING_AUTHORIZATION_MAX_URL_BYTES = 16 * 1024;
 
 /**
+ * Longest `return_to` the sign-in surfaces accept (`isSafeReturnTo`).
+ *
+ * The value is written to `audit_logs` on a successful sign-in and into the
+ * wallet-login flow record in Redis. The longest legitimate value is the inline
+ * authorize URL the login bounce falls back to when the pending-authorization
+ * stash is unavailable, and that URL is capped at
+ * {@link PENDING_AUTHORIZATION_MAX_URL_BYTES}.
+ */
+export const RETURN_TO_MAX_LENGTH = PENDING_AUTHORIZATION_MAX_URL_BYTES;
+
+/**
+ * Longest email address accepted in a request: 254 characters.
+ *
+ * RFC 5321 §4.5.3.1.3 caps a path at 256 octets including its angle brackets,
+ * so no deliverable mailbox is longer. The address reaches `audit_logs` when a
+ * sign-in is refused and a Redis key on resend-verification, both before any
+ * account lookup, so it is bounded before either happens.
+ */
+export const EMAIL_MAX_LENGTH = 254;
+
+/**
  * Per-route body limit for `POST /oauth/authorize` (OIDC Core §3.1.2.1).
  *
  * The endpoint is unauthenticated and its body is a handful of short,

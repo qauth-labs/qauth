@@ -1,6 +1,10 @@
 import { z } from 'zod';
 
-import { OAUTH_CLIENT_ID_MAX_LENGTH, OAUTH_URI_PARAM_MAX_LENGTH } from '../constants/security';
+import {
+  EMAIL_MAX_LENGTH,
+  OAUTH_CLIENT_ID_MAX_LENGTH,
+  OAUTH_URI_PARAM_MAX_LENGTH,
+} from '../constants/security';
 
 /**
  * Error response schema (matches error handler output)
@@ -101,6 +105,19 @@ export const clientIdParamSchema = z
   .min(1)
   .max(OAUTH_CLIENT_ID_MAX_LENGTH, { abort: true })
   .regex(CLIENT_ID_CHARACTERS, { message: 'client_id must be printable ASCII' });
+
+/**
+ * An email address in a request body: `z.email()`, at most
+ * {@link EMAIL_MAX_LENGTH} (254) characters, the length checked first.
+ *
+ * `z.email()` alone has no length bound, and its format check runs before any
+ * `.max()` chained onto it. A refused sign-in writes the address to
+ * `audit_logs`, and resend-verification counts it in Redis, both before any
+ * account lookup, so the address was stored at whatever size the caller chose.
+ */
+export function boundedEmail(message?: string) {
+  return z.string().max(EMAIL_MAX_LENGTH, { abort: true }).check(z.email(message));
+}
 
 /**
  * Bound a request array to `max` elements, checking its length BEFORE any of

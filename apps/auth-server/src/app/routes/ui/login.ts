@@ -6,7 +6,7 @@ import { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 
 import { env } from '../../../config/env';
-import { MIN_RESPONSE_TIME_MS } from '../../constants';
+import { EMAIL_MAX_LENGTH, MIN_RESPONSE_TIME_MS } from '../../constants';
 import { hashEmail } from '../../helpers/auth-events';
 import { clientAddressKey } from '../../helpers/client-address';
 import { verifyPasswordCredential } from '../../helpers/credential-auth';
@@ -195,7 +195,8 @@ function loginPage(opts: {
 }
 
 const loginFormSchema = z.object({
-  email: z.string().min(1),
+  // Bounded like the JSON login's: a refused sign-in writes it to `audit_logs`.
+  email: z.string().min(1).max(EMAIL_MAX_LENGTH),
   password: passwordSchema.min(1),
   return_to: z.string().optional(),
   // Signed double-submit CSRF token (login CSRF defence). Compared against the

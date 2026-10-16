@@ -130,7 +130,7 @@ Create a user account. A verification email is sent (the `mock` provider logs it
 
 | Field      | Type           | Required | Notes                                         |
 | ---------- | -------------- | -------- | --------------------------------------------- |
-| `email`    | string (email) | yes      |                                               |
+| `email`    | string (email) | yes      | At most 254 characters (RFC 5321).            |
 | `password` | string         | yes      | Strength enforced server-side (zxcvbn score). |
 | `realmId`  | string (uuid)  | no       | Defaults to the server's default realm.       |
 
@@ -156,7 +156,8 @@ already registered.
 
 Authenticate with email/password and receive tokens directly (first-party).
 
-**Request** (`application/json`): `{ "email": "...", "password": "..." }`
+**Request** (`application/json`): `{ "email": "...", "password": "..." }`. The
+address is at most 254 characters.
 
 **`200 OK`**
 
@@ -209,7 +210,8 @@ per-window caps).
 **Request** (`application/json`): `{ "email": "dev@example.com" }`
 
 **`200 OK`**: `{ "message": "..." }` — returned even for unknown addresses
-(no account enumeration). Errors: `429` (too soon / over limit).
+(no account enumeration). Errors: `400` (not an address, or longer than 254
+characters), `429` (too soon / over limit).
 
 ### `POST /auth/link/wallet`
 

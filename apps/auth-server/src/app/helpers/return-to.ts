@@ -9,6 +9,8 @@
  * flow — and two copies of an allowlist are two chances to relax one of them.
  */
 
+import { RETURN_TO_MAX_LENGTH } from '../constants';
+
 /**
  * Highest code point the URL parser DISCARDS before it parses anything.
  *
@@ -50,6 +52,10 @@ const SAME_ORIGIN_SENTINEL = 'https://return-to.invalid';
 export function isSafeReturnTo(value: unknown): value is string {
   if (typeof value !== 'string') return false;
   if (value.length === 0) return false;
+  // Bounded above as well: an accepted value is written to `audit_logs` on
+  // sign-in and into the wallet-login flow record in Redis. See
+  // RETURN_TO_MAX_LENGTH for why 16 KiB.
+  if (value.length > RETURN_TO_MAX_LENGTH) return false;
   // Before any prefix check, because the prefix a browser sees is not
   // necessarily the one written here. See {@link URL_DISCARDED_CHARACTER_MAX}.
   if (hasUrlDiscardedCharacter(value)) return false;

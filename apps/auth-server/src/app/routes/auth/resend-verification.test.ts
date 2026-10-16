@@ -185,4 +185,27 @@ describe('POST /auth/resend-verification', () => {
     await expect(ctx.handler(request)).rejects.toThrow(TooManyRequestsError);
     expect(fastify.repositories.userCredentials.findByRealmProviderSub).not.toHaveBeenCalled();
   });
+
+  it('keys its Redis counters on a digest of the address, never the address itself', async () => {
+    // These keys are written for EVERY request, account or not, before any
+    // lookup. Holding the address verbatim made each request an hour-long
+    // Redis key as long as the caller's address: ~1.25 MiB per anonymous
+    // request at 100 requests a minute.
+    const { fastify, ctx } = createFastifyStub();
+    await resendRoute(fastify);
+    if (!ctx.handler) throw new Error('Handler missing');
+
+    const address = `${'a'.repeat(200)}@example.com`;
+    await ctx.handler({ ...request, body: { email: address } });
+
+    const counterKey = (fastify.redis.incr as unknown as Mock).mock.calls[0][0] as string;
+    const lastSentKey = (fastify.redis.set as unknown as Mock).mock.calls[0][0] as string;
+    for (const key of [counterKey, lastSentKey]) {
+      expect(key).not.toContain('example.com');
+      expect(key).toMatch(/:[0-9a-f]{64}$/);
+    }
+    // Still one counter per address, and the same one for every request.
+    await ctx.handler({ ...request, body: { email: address.toUpperCase() } });
+    expect((fastify.redis.incr as unknown as Mock).mock.calls[1][0]).toBe(counterKey);
+  });
 });

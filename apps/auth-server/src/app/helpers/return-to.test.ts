@@ -105,3 +105,17 @@ describe('isSafeReturnTo — characters the URL parser discards before parsing',
     expect(isSafeReturnTo('/ui/consent?a=b c')).toBe(false);
   });
 });
+
+describe('isSafeReturnTo — length', () => {
+  // A value this accepts is written to `audit_logs` on sign-in and into the
+  // wallet-login flow record in Redis. The longest legitimate value is the
+  // inline authorize URL the login bounce falls back to, which the
+  // pending-authorization stash caps at 16 KiB.
+  const atBound = `/oauth/authorize?state=${'a'.repeat(16 * 1024 - '/oauth/authorize?state='.length)}`;
+
+  it('accepts a path of 16 KiB and refuses a longer one', () => {
+    expect(isSafeReturnTo(atBound)).toBe(true);
+    expect(isSafeReturnTo(`${atBound}a`)).toBe(false);
+    expect(isSafeReturnTo(`/${'a'.repeat(1_000_000)}`)).toBe(false);
+  });
+});

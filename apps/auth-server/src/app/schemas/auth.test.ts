@@ -1,7 +1,37 @@
 import { PASSWORD_MAX_LENGTH } from '@qauth-labs/shared-validation';
 import { describe, expect, it } from 'vitest';
 
-import { loginSchema, registerSchema, verifyBodySchema } from './auth';
+import { loginSchema, registerSchema, resendVerificationSchema, verifyBodySchema } from './auth';
+
+/**
+ * An email address is at most 254 characters (RFC 5321 §4.5.3.1.3: a path is
+ * at most 256 octets, angle brackets included). It was unbounded on every
+ * route that takes one: a refused sign-in wrote the whole address to
+ * `audit_logs`, and resend-verification used it as a Redis key.
+ */
+describe.each([
+  ['registerSchema', registerSchema, { password: 'correct horse battery staple' }],
+  ['loginSchema', loginSchema, { password: 'correct horse battery staple' }],
+  ['resendVerificationSchema', resendVerificationSchema, {}],
+])('%s email bound', (_name, schema, rest) => {
+  const atBound = `${'a'.repeat(254 - '@example.com'.length)}@example.com`;
+
+  it('accepts a 254-character address', () => {
+    expect(schema.safeParse({ ...rest, email: atBound }).success).toBe(true);
+  });
+
+  it('refuses a longer one with a single too_big issue, before the format check', () => {
+    const result = schema.safeParse({ ...rest, email: `a${atBound}` });
+    expect(result.success).toBe(false);
+    expect(result.error?.issues.map(({ path, code }) => ({ path, code }))).toEqual([
+      { path: ['email'], code: 'too_big' },
+    ]);
+  });
+
+  it('still refuses a malformed address', () => {
+    expect(schema.safeParse({ ...rest, email: 'not-an-address' }).success).toBe(false);
+  });
+});
 
 /**
  * The register and login bodies bound `password` before a handler runs, so

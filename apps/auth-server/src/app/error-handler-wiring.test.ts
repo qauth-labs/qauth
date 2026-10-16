@@ -424,6 +424,26 @@ describe('assembled app — an oversized request array is one issue, not one per
   });
 });
 
+describe('assembled app — an over-long email is refused before any handler stores it', () => {
+  // A refused sign-in wrote the address to `audit_logs`, and resend-verification
+  // made it a Redis key, both at the size the caller chose.
+  const longAddress = `${'a'.repeat(100_000)}@example.com`;
+
+  it.each([
+    ['/auth/resend-verification', { email: longAddress }],
+    ['/auth/login', { email: longAddress, password: 'correct horse battery staple' }],
+    ['/auth/register', { email: longAddress, password: 'correct horse battery staple' }],
+  ])('POST %s answers 400 at the schema', async (url, payload) => {
+    const res = await server.inject({ method: 'POST', url, payload });
+
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toMatchObject({
+      code: 'VALIDATION_ERROR',
+      details: [{ path: '/email', message: 'Too big: expected string to have <=254 characters' }],
+    });
+  });
+});
+
 /**
  * The registration ORDER in `app.ts`, asserted on the source (#365).
  *

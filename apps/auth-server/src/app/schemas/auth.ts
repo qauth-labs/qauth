@@ -1,11 +1,14 @@
 import { passwordSchema } from '@qauth-labs/shared-validation';
 import { z } from 'zod';
 
+import { boundedEmail } from './common';
+
 /**
  * Registration request schema
  */
 export const registerSchema = z.object({
-  email: z.email('Invalid email format'),
+  // Every request `email` is bounded at 254 characters before its format check.
+  email: boundedEmail('Invalid email format'),
   password: passwordSchema,
   realmId: z.uuid('Invalid realm ID format').optional(),
 });
@@ -68,7 +71,8 @@ export type VerifyResponse = z.infer<typeof verifyResponseSchema>;
  * Resend verification request schema
  */
 export const resendVerificationSchema = z.object({
-  email: z.email('Invalid email format'),
+  // Counted in Redis for every request, account or not, so it is bounded.
+  email: boundedEmail('Invalid email format'),
 });
 
 /**
@@ -92,7 +96,8 @@ export type ResendVerificationResponse = z.infer<typeof resendVerificationRespon
  * Login request schema
  */
 export const loginSchema = z.object({
-  email: z.email('Invalid email format'),
+  // A refused sign-in writes the address to `audit_logs`, so it is bounded.
+  email: boundedEmail('Invalid email format'),
   // Bounded like registration: Argon2id verification hashes every byte, so an
   // unbounded field is attacker-sized CPU work on the login path too.
   password: passwordSchema,
