@@ -108,6 +108,13 @@ export const RESUME_PATH_PREFIX = '/ui/resume/';
 /** The only destination a resumed handle is ever allowed to point at. */
 const AUTHORIZE_PATH = '/oauth/authorize';
 
+/**
+ * {@link AUTHORIZE_PATH} followed by any run of trailing slashes. Anchored at
+ * BOTH ends, so a candidate that does not match costs one linear pass however
+ * long it is.
+ */
+const AUTHORIZE_PATH_PATTERN = /^\/oauth\/authorize\/*$/;
+
 /** Shape stored in Redis. Kept minimal — this is auth-flow state, not user state. */
 interface PendingAuthorization {
   /** Server-minted authorize URL: path + query, relative to this origin. */
@@ -146,9 +153,9 @@ export function isPendingAuthorizationHandle(value: unknown): value is string {
  *    parser folds `\` into `/` for special schemes, so
  *    `new URL('/\\evil.example/x', 'http://placeholder')` yields host
  *    `evil.example`. Splitting the string ourselves and requiring the path to
- *    equal {@link AUTHORIZE_PATH} after trailing-slash trimming is strictly
+ *    be {@link AUTHORIZE_PATH} plus optional trailing slashes is strictly
  *    tighter: `//evil.example`, `/\evil.example`, `/oauth/authorize/../x` and
- *    any absolute URL all fail the equality check.
+ *    any absolute URL all fail the fully anchored match.
  */
 export function normalizeInternalAuthorizeUrl(value: unknown): string | null {
   if (typeof value !== 'string') return null;
@@ -161,9 +168,12 @@ export function normalizeInternalAuthorizeUrl(value: unknown): string | null {
   const path = queryStart < 0 ? value : value.slice(0, queryStart);
   const search = queryStart < 0 ? '' : value.slice(queryStart);
   // `ignoreTrailingSlash: true` accepts `/oauth/authorize/`; canonicalise it.
-  const normalizedPath = path.length > 1 ? path.replace(/\/+$/, '') : path;
-  if (normalizedPath !== AUTHORIZE_PATH) return null;
-  return `${normalizedPath}${search}`;
+  // Matched whole, NOT trimmed with an unanchored `/\/+$/`: the router also
+  // ends the path at `#`, so on `GET /oauth/authorize#…` the whole request
+  // target (up to the 16 KiB head limit) is `path` here, and that trim is
+  // quadratic on a run of `/` that stops short of the end of the string.
+  if (!AUTHORIZE_PATH_PATTERN.test(path)) return null;
+  return `${AUTHORIZE_PATH}${search}`;
 }
 
 /**
