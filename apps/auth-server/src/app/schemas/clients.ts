@@ -1,11 +1,18 @@
 import { z } from 'zod';
 
+import { OAUTH_SCOPE_PARAM_MAX_LENGTH } from '../constants/security';
 import { boundedArray, exactUrl } from './common';
 
 /** Most redirect URIs a client may register, as in dynamic registration. */
 const CLIENT_REDIRECT_URIS_MAX = 20;
 /** Most scopes a client may hold. */
 const CLIENT_SCOPES_MAX = 100;
+/**
+ * One scope, no longer than the `scope` parameter it would be requested in.
+ * Bounded so a stored row cannot be inflated through it; the handler then
+ * de-duplicates the list and checks it against the realm's allowlist.
+ */
+const clientScopeSchema = z.string().max(OAUTH_SCOPE_PARAM_MAX_LENGTH);
 /** Most grant types a client may list, as in dynamic registration. */
 const CLIENT_GRANT_TYPES_MAX = 8;
 /** Most response types a client may list, as in dynamic registration. */
@@ -146,7 +153,7 @@ export const createClientRequestSchema = z.object({
   name: z.string().min(1).max(255),
   description: z.string().max(2000).nullish(),
   redirectUris: boundedArray(z.array(exactUrl()), CLIENT_REDIRECT_URIS_MAX).prefault([]),
-  scopes: boundedArray(z.array(z.string()), CLIENT_SCOPES_MAX).prefault([]),
+  scopes: boundedArray(z.array(clientScopeSchema), CLIENT_SCOPES_MAX).prefault([]),
   grantTypes: boundedArray(z.array(grantTypeSchema).nonempty(), CLIENT_GRANT_TYPES_MAX).optional(),
   responseTypes: boundedArray(z.array(responseTypeSchema), CLIENT_RESPONSE_TYPES_MAX).optional(),
   tokenEndpointAuthMethod: tokenEndpointAuthMethodSchema.optional(),
@@ -186,7 +193,7 @@ export const updateClientRequestSchema = z
     name: z.string().min(1).max(255),
     description: z.string().max(2000).nullable(),
     redirectUris: boundedArray(z.array(exactUrl()), CLIENT_REDIRECT_URIS_MAX),
-    scopes: boundedArray(z.array(z.string()), CLIENT_SCOPES_MAX),
+    scopes: boundedArray(z.array(clientScopeSchema), CLIENT_SCOPES_MAX),
     grantTypes: boundedArray(z.array(grantTypeSchema).nonempty(), CLIENT_GRANT_TYPES_MAX),
     responseTypes: boundedArray(z.array(responseTypeSchema), CLIENT_RESPONSE_TYPES_MAX),
     tokenEndpointAuthMethod: tokenEndpointAuthMethodSchema,

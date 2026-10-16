@@ -5,6 +5,7 @@ import { ZodTypeProvider } from 'fastify-type-provider-zod';
 
 import { env } from '../../../config/env';
 import { clientAddressKey } from '../../helpers/client-address';
+import { assertDeveloperClientLimit } from '../../helpers/developer-client-limit';
 import { validateAndNormalize } from '../../helpers/dynamic-client-registration';
 import { getOrCreateDefaultRealm } from '../../helpers/realm';
 import { resolveRegistrationDeveloperId } from '../../helpers/registration-attribution';
@@ -89,6 +90,13 @@ export default async function (fastify: FastifyInstance) {
       // with RFC 7591 error codes embedded in the message on policy
       // violations; the global error handler maps to HTTP 400.
       const normalized = validateAndNormalize(body, allowedScopes);
+
+      // A registration attributed to a developer adds to the same list as
+      // `POST /api/clients`, so it counts against the same ceiling, checked
+      // before the argon2id hash. An anonymous one belongs to no developer.
+      if (developerId) {
+        await assertDeveloperClientLimit(fastify, developerId);
+      }
 
       // Generate client_id (UUIDv4 — opaque, guessable-resistant, URL-safe
       // without encoding). We keep it simple rather than inventing a new

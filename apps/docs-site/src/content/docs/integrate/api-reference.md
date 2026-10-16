@@ -535,7 +535,9 @@ curl -s -X POST https://auth.example.com/oauth/register \
 ```
 
 The client is then owned by that token's subject and behaves like any client
-created through `POST /api/clients/`. A token that does not verify is rejected
+created through `POST /api/clients/`, including the per-developer limit on the
+number of clients (`MAX_CLIENTS_PER_DEVELOPER`, `403` once reached). A token
+that does not verify is rejected
 rather than silently ignored — otherwise you would get an unowned client while
 believing you owned it, which is the failure this note exists to prevent.
 :::
@@ -626,9 +628,13 @@ argon2id hash on every call, so the cap is mandatory (`429` on exceed).
 ```
 
 Public clients (`tokenEndpointAuthMethod: "none"`) get **no** `clientSecret`.
+A repeated scope is stored once. A developer may own at most
+`MAX_CLIENTS_PER_DEVELOPER` clients (default 100), counting the ones registered
+with attribution through `POST /oauth/register`.
 Errors: `400` (invalid `redirectUri`, inconsistent grant/response types, missing
 `redirectUris` for a user-involving grant, or a scope outside the realm policy),
-`401` (missing/invalid bearer, or a non-user token), `429` (rate limited).
+`401` (missing/invalid bearer, or a non-user token), `403` (the developer already
+owns `MAX_CLIENTS_PER_DEVELOPER` clients), `429` (rate limited).
 
 ### `GET /api/clients/{id}`
 

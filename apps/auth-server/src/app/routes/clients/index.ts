@@ -7,6 +7,7 @@ import { z } from 'zod';
 
 import { env } from '../../../config/env';
 import { clientAddressKey } from '../../helpers/client-address';
+import { assertDeveloperClientLimit } from '../../helpers/developer-client-limit';
 import { validateRedirectUri } from '../../helpers/dynamic-client-registration';
 import { type EnvironmentPolicy, resolveEnvironmentPolicy } from '../../helpers/environment-policy';
 import { createRequireManagementJwt } from '../../helpers/management-token';
@@ -427,7 +428,10 @@ export default async function (fastify: FastifyInstance) {
       // Zod applies `.default([])`, but default defensively so the handler is
       // also correct when invoked without the schema layer (unit tests).
       const redirectUris = body.redirectUris ?? [];
-      const scopes = body.scopes ?? [];
+      // De-duplicated, as dynamic registration does: the allowlist check
+      // accepts any number of repeats of an allowed scope, and the row would
+      // store them all.
+      const scopes = [...new Set(body.scopes ?? [])];
 
       for (const uri of redirectUris) {
         validateRedirectUri(uri);
@@ -445,6 +449,10 @@ export default async function (fastify: FastifyInstance) {
       // policy-violating request must not pay the argon2id cost or persist.
       const allowedScopes = await resolveRealmAllowedScopes(fastify, realm);
       assertScopesAllowed(scopes, allowedScopes);
+
+      // The per-developer ceiling, also before hashing. `GET /api/clients`
+      // returns every owned client at once; this is what bounds it.
+      await assertDeveloperClientLimit(fastify, developerId);
 
       const clientId = randomUUID();
 
@@ -558,6 +566,8 @@ export default async function (fastify: FastifyInstance) {
       const developerId = requireDeveloperId(request);
       const { id } = request.params as { id: string };
       const body = request.body as UpdateClientRequest;
+      // De-duplicated before the allowlist check and the write, as on create.
+      const scopes = body.scopes === undefined ? undefined : [...new Set(body.scopes)];
 
       const existing = await resolveOwnedClient(fastify, developerId, id);
 
@@ -587,17 +597,17 @@ export default async function (fastify: FastifyInstance) {
       // Cap newly requested scopes against the client's realm policy, the same
       // allowlist dynamic registration enforces — a developer must not widen
       // scopes via PATCH beyond what the realm permits.
-      if (body.scopes !== undefined) {
+      if (scopes !== undefined) {
         const realm = await fastify.repositories.realms.findById(existing.realmId);
         const allowedScopes = realm ? await resolveRealmAllowedScopes(fastify, realm) : [];
-        assertScopesAllowed(body.scopes, allowedScopes);
+        assertScopesAllowed(scopes, allowedScopes);
       }
 
       const updated = await fastify.repositories.oauthClients.update(id, {
         ...(body.name !== undefined ? { name: body.name } : {}),
         ...(body.description !== undefined ? { description: body.description } : {}),
         ...(body.redirectUris !== undefined ? { redirectUris: body.redirectUris } : {}),
-        ...(body.scopes !== undefined ? { scopes: body.scopes } : {}),
+        ...(scopes !== undefined ? { scopes } : {}),
         ...(body.grantTypes !== undefined ? { grantTypes: body.grantTypes } : {}),
         ...(body.responseTypes !== undefined ? { responseTypes: body.responseTypes } : {}),
         ...(body.tokenEndpointAuthMethod !== undefined

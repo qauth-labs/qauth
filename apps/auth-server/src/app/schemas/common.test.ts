@@ -128,6 +128,20 @@ describe('client-management redirectUris use exactUrl', () => {
   });
 });
 
+describe('client-management scopes are bounded', () => {
+  // A scope can be no longer than the `scope` parameter it is requested in.
+  it('refuses a scope longer than OAUTH_SCOPE_PARAM_MAX_LENGTH on create and PATCH', () => {
+    const atBound = 'a'.repeat(2048);
+    expect(createClientRequestSchema.safeParse({ name: 'x', scopes: [atBound] }).success).toBe(
+      true
+    );
+    expect(
+      createClientRequestSchema.safeParse({ name: 'x', scopes: [`${atBound}a`] }).success
+    ).toBe(false);
+    expect(updateClientRequestSchema.safeParse({ scopes: [`${atBound}a`] }).success).toBe(false);
+  });
+});
+
 /**
  * `z.array(element).max(n)` does not bound the work: Zod parses every element
  * first and runs the array's own checks afterwards, and each failing element is

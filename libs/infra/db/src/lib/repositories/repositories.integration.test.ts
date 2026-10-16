@@ -717,6 +717,38 @@ describe('repository integration (real Postgres)', () => {
     });
   });
 
+  describe('oauth_clients — countByDeveloper (per-developer client ceiling)', () => {
+    it('counts exactly the rows listByDeveloper returns', async () => {
+      const realm = await seedRealm('count-realm');
+      const owner = await seedUser(realm.id);
+      const other = await seedUser(realm.id);
+      const clients = createOAuthClientsRepository(db().database.db);
+
+      const owned = async (clientId: string, developerId: string | null) =>
+        clients.create({
+          realmId: realm.id,
+          clientId,
+          clientSecretHash: 'secret-hash',
+          name: clientId,
+          redirectUris: ['https://app.example.com/cb'],
+          scopes: [],
+          grantTypes: ['authorization_code'],
+          developerId,
+        });
+      await owned('owned-1', owner.id);
+      await owned('owned-2', owner.id);
+      await owned('other-1', other.id);
+      await owned('anonymous-1', null);
+
+      expect(await clients.countByDeveloper(owner.id)).toBe(2);
+      expect(await clients.countByDeveloper(owner.id)).toBe(
+        (await clients.listByDeveloper(owner.id)).length
+      );
+      expect(await clients.countByDeveloper(other.id)).toBe(1);
+      expect(await clients.countByDeveloper('0190a000-0000-7000-8000-0000000000ff')).toBe(0);
+    });
+  });
+
   describe('oauth_clients — max_agent_mode cap (ADR-007 §2, #184)', () => {
     it('defaults max_agent_mode to null (deny-by-default migration)', async () => {
       const realm = await seedRealm('agent-mode-default-realm');

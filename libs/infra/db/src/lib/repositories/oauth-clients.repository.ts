@@ -4,7 +4,7 @@ import {
   NotFoundError,
   UniqueConstraintError,
 } from '@qauth-labs/shared-errors';
-import { and, desc, eq } from 'drizzle-orm';
+import { and, count, desc, eq } from 'drizzle-orm';
 
 import type {
   NewOAuthClient,
@@ -120,6 +120,25 @@ export function createOAuthClientsRepository(defaultDb: DbClient): OAuthClientsR
         .from(oauthClients)
         .where(eq(oauthClients.developerId, developerId))
         .orderBy(desc(oauthClients.createdAt));
+    },
+
+    /**
+     * Count the OAuth clients owned by a developer, without loading them.
+     *
+     * Same filter as {@link listByDeveloper}. The per-developer client ceiling
+     * (`MAX_CLIENTS_PER_DEVELOPER`) is checked against this before a create.
+     *
+     * @param developerId - Owning developer's user id
+     * @param tx - Optional transaction client
+     * @returns Number of OAuth clients the developer owns
+     */
+    async countByDeveloper(developerId: string, tx?: DbClient): Promise<number> {
+      const invoker = tx ?? defaultDb;
+      const [row] = await invoker
+        .select({ value: count() })
+        .from(oauthClients)
+        .where(eq(oauthClients.developerId, developerId));
+      return row?.value ?? 0;
     },
 
     /**

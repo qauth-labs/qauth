@@ -299,6 +299,21 @@ export const authEnvSchema = z.object({
   REGISTER_CLIENT_RATE_WINDOW: z.coerce.number().int().min(1).default(60),
 
   /**
+   * Most OAuth clients one developer account may own: those it created through
+   * `POST /api/clients` and those it registered through `POST /oauth/register`
+   * with its access token. An anonymous dynamic registration belongs to no
+   * developer and is not counted.
+   *
+   * `GET /api/clients` returns every client of the caller in one response, and
+   * registration is open, so without a ceiling one self-registered account
+   * could store enough rows that a few concurrent list requests run the
+   * process out of heap, again after every restart. The rate limit above is
+   * per address and per window, not per account, so it is no substitute.
+   * At least 1; there is no "unlimited" value.
+   */
+  MAX_CLIENTS_PER_DEVELOPER: z.coerce.number().int().min(1).default(100),
+
+  /**
    * Maximum OID4VP `direct_post` response submissions per window per-IP
    * (`POST /oid4vp/response`, OID4VP 1.0 §8.1, issue #233).
    *
