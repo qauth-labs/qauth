@@ -3,8 +3,7 @@ import type { FastifyInstance } from 'fastify';
 import { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 
-import { env } from '../../../config/env';
-import { resolveBrowserSession } from '../../helpers/browser-session';
+import { resolveBrowserSession, saveBrowserSession } from '../../helpers/browser-session';
 import { listConsentsForUser, revokeConsentForUser } from '../../helpers/consent-management';
 import {
   type BrowserSessionData,
@@ -67,11 +66,8 @@ async function ensureApiCsrfToken(
 ): Promise<string> {
   if (session.apiCsrfToken) return session.apiCsrfToken;
   const token = generateCsrfToken();
-  await fastify.sessionUtils.setSession<BrowserSessionData>(
-    session.sessionId,
-    { ...session, apiCsrfToken: token },
-    env.SESSION_COOKIE_TTL
-  );
+  // Stored for what is left of the session's lifetime, never extending it.
+  await saveBrowserSession(fastify, { ...session, apiCsrfToken: token });
   return token;
 }
 

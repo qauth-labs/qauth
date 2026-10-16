@@ -81,6 +81,20 @@ export interface BrowserSessionData {
   [key: string]: unknown;
 }
 
+/**
+ * Whole seconds left of the session's lifetime. Zero or negative once
+ * `SESSION_COOKIE_TTL` has passed since `createdAt` (NaN when the record has
+ * no `createdAt`, which callers must treat as expired).
+ *
+ * The lifetime is absolute, counted from the sign-in: the cookie's `Max-Age`
+ * is set once at login and never renewed, so the server-side record must not
+ * outlive it either, however often it is rewritten.
+ */
+export function remainingSessionTtl(session: BrowserSessionData): number {
+  const expiresAt = session.createdAt + env.SESSION_COOKIE_TTL * 1000;
+  return Math.ceil((expiresAt - Date.now()) / 1000);
+}
+
 const SEPARATOR = '.';
 
 function hmac(value: string): string {

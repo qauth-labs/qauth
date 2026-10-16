@@ -4,6 +4,7 @@ import {
   type BrowserSessionData,
   clearSessionCookie,
   readCookie,
+  remainingSessionTtl,
   SESSION_COOKIE_NAME,
   verifySignedSessionId,
 } from './session-cookie';
@@ -15,6 +16,8 @@ import {
  *   - the signature is invalid
  *   - the referenced session has been evicted from Redis (TTL expired or
  *     logged out)
+ *   - the session is older than `SESSION_COOKIE_TTL`, whatever expiry its
+ *     Redis key carries (an absolute lifetime, counted from `createdAt`)
  *   - the session's user no longer exists or has been disabled
  *
  * The caller is responsible for deciding what to do with a null result —
@@ -41,6 +44,15 @@ export async function resolveBrowserSession(
     return null;
   }
 
+  // Written as "not positive" so a record without `createdAt` (NaN) is refused.
+  if (!(remainingSessionTtl(data) > 0)) {
+    // Past its absolute lifetime: a record rewritten by a replayed cookie must
+    // not outlive the lifetime the browser's own cookie was given at sign-in.
+    await fastify.sessionUtils.deleteSession(sessionId);
+    clearSessionCookie(reply);
+    return null;
+  }
+
   const user = await fastify.repositories.users.findById(data.userId);
   if (!user || !user.enabled) {
     // The account behind the session is gone or disabled — end the session
@@ -50,4 +62,25 @@ export async function resolveBrowserSession(
     return null;
   }
   return data;
+}
+
+/**
+ * Write back a session obtained from {@link resolveBrowserSession}, e.g. to
+ * store a CSRF token on it.
+ *
+ * `setSession` is `SETEX`, which replaces the key's expiry, so the record is
+ * stored for what is LEFT of its lifetime. Passing `SESSION_COOKIE_TTL` again
+ * would restart the clock on every write and let a replayed cookie keep its
+ * session alive indefinitely.
+ */
+export async function saveBrowserSession(
+  fastify: FastifyInstance,
+  session: BrowserSessionData
+): Promise<void> {
+  await fastify.sessionUtils.setSession<BrowserSessionData>(
+    session.sessionId,
+    session,
+    // Redis rejects a TTL of 0, which a write on the last tick would compute.
+    Math.max(1, remainingSessionTtl(session))
+  );
 }

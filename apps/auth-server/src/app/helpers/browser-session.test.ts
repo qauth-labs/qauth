@@ -9,15 +9,25 @@ vi.mock('../../config/env', () => ({
   },
 }));
 
-import { resolveBrowserSession } from './browser-session';
-import { SESSION_COOKIE_NAME, signSessionId } from './session-cookie';
+import { resolveBrowserSession, saveBrowserSession } from './browser-session';
+import { type BrowserSessionData, SESSION_COOKIE_NAME, signSessionId } from './session-cookie';
 
 const USER_ID = '11111111-1111-4111-8111-111111111111';
 const SESSION_ID = 'sess-1';
-const SESSION = { userId: USER_ID, sessionId: SESSION_ID, createdAt: 1 };
+const SESSION = { userId: USER_ID, sessionId: SESSION_ID, createdAt: Date.now() };
+/** `SESSION_COOKIE_TTL` above, in milliseconds. */
+const TTL_MS = 3600 * 1000;
+
+function sessionAged(ageMs: number): BrowserSessionData {
+  return { userId: USER_ID, sessionId: SESSION_ID, createdAt: Date.now() - ageMs };
+}
 
 const users = { findById: vi.fn() };
-const sessionUtils = { getSession: vi.fn(), deleteSession: vi.fn().mockResolvedValue(undefined) };
+const sessionUtils = {
+  getSession: vi.fn(),
+  setSession: vi.fn().mockResolvedValue(undefined),
+  deleteSession: vi.fn().mockResolvedValue(undefined),
+};
 const fastify = { repositories: { users }, sessionUtils } as unknown as FastifyInstance;
 
 function makeRequest(cookie?: string): FastifyRequest {
@@ -95,5 +105,62 @@ describe('resolveBrowserSession', () => {
     ).resolves.toBeNull();
     expect(sessionUtils.deleteSession).toHaveBeenCalledWith(SESSION_ID);
     expect(headers['Set-Cookie']).toContain('Max-Age=0');
+  });
+});
+
+describe('absolute session lifetime (SESSION_COOKIE_TTL from createdAt)', () => {
+  it('returns a session younger than SESSION_COOKIE_TTL', async () => {
+    const stored = sessionAged(TTL_MS - 60_000);
+    sessionUtils.getSession.mockResolvedValue(stored);
+    const { reply, headers } = makeReply();
+
+    await expect(resolveBrowserSession(fastify, makeRequest(liveCookie), reply)).resolves.toEqual(
+      stored
+    );
+    expect(headers['Set-Cookie']).toBeUndefined();
+  });
+
+  it('refuses and ends a session older than SESSION_COOKIE_TTL even though Redis still holds it', async () => {
+    // A replayed cookie whose record kept being rewritten must not outlive the
+    // lifetime the browser's own cookie was given at sign-in.
+    sessionUtils.getSession.mockResolvedValue(sessionAged(TTL_MS + 1000));
+    const { reply, headers } = makeReply();
+
+    await expect(
+      resolveBrowserSession(fastify, makeRequest(liveCookie), reply)
+    ).resolves.toBeNull();
+    expect(headers['Set-Cookie']).toContain('Max-Age=0');
+    expect(sessionUtils.deleteSession).toHaveBeenCalledWith(SESSION_ID);
+    expect(users.findById).not.toHaveBeenCalled();
+  });
+
+  it('refuses a record with no usable createdAt', async () => {
+    sessionUtils.getSession.mockResolvedValue({ userId: USER_ID, sessionId: SESSION_ID });
+    const { reply } = makeReply();
+
+    await expect(
+      resolveBrowserSession(fastify, makeRequest(liveCookie), reply)
+    ).resolves.toBeNull();
+  });
+});
+
+describe('saveBrowserSession', () => {
+  it('stores the record for the remainder of its lifetime, not a fresh SESSION_COOKIE_TTL', async () => {
+    const session = { ...sessionAged(TTL_MS - 900_000), csrfToken: 'token' };
+
+    await saveBrowserSession(fastify, session);
+
+    expect(sessionUtils.setSession).toHaveBeenCalledOnce();
+    const [sessionId, data, ttl] = sessionUtils.setSession.mock.calls[0];
+    expect(sessionId).toBe(SESSION_ID);
+    expect(data).toEqual(session);
+    expect(ttl).toBeGreaterThan(890);
+    expect(ttl).toBeLessThanOrEqual(900);
+  });
+
+  it('never hands Redis a non-positive TTL', async () => {
+    await saveBrowserSession(fastify, sessionAged(TTL_MS + 5000));
+
+    expect(sessionUtils.setSession.mock.calls[0][2]).toBe(1);
   });
 });
