@@ -284,6 +284,10 @@ curl -s -X POST http://localhost:3000/oauth/token \
 - The response contains a **new** `refresh_token` — store it and discard the old.
 - `scope` may be passed to **down-scope** only; requesting a scope not in the
   original set returns `invalid_scope`. Omit it to keep the original scopes.
+- The refreshed scopes must still be allowed for the client. If a scope was
+  removed from the client (or above its `max_agent_mode`) since the grant, the
+  refresh fails with `invalid_scope` and the refresh token is left unspent:
+  send a narrower `scope` to continue.
 - `resource` may **narrow** the audience but never widen it beyond the set bound
   to the refresh token.
 - Confidential clients authenticate as in step 3; public clients send only

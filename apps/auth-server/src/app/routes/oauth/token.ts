@@ -1136,8 +1136,13 @@ async function handleRefreshToken(
   // refreshing must not keep minting the old mode. The client may narrow with
   // `scope` to continue within the new cap. Fail-closed via
   // `toAgentScopeContext`.
+  //
+  // The same holds for the client's CURRENT `scopes` allowlist, the ceiling
+  // `/oauth/authorize`, client_credentials and jwt-bearer apply: a scope taken
+  // off the client after the grant must not keep being minted from the refresh
+  // token. `validateScopes` runs both checks.
   try {
-    enforceAgentScopeCap(grantedScopes, toAgentScopeContext(client));
+    validateScopes(grantedScopes.join(' '), client.scopes, toAgentScopeContext(client));
   } catch (err) {
     await fastify.repositories.auditLogs.create({
       userId: user.id,
@@ -1148,8 +1153,9 @@ async function handleRefreshToken(
       ipAddress: request.ip,
       userAgent: request.headers['user-agent'] || null,
       metadata: {
-        error: 'invalid_scope: refreshed scope exceeds the agent scope mode',
+        error: 'invalid_scope: refreshed scope exceeds what the client may hold',
         grantedScopes,
+        allowedScopes: client.scopes,
         maxAgentMode: client.maxAgentMode ?? null,
       },
     });

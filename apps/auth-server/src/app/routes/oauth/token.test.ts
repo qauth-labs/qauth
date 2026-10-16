@@ -2115,9 +2115,65 @@ describe('POST /oauth/token route — refresh_token grant', () => {
     expect(fastify.repositories.auditLogs.create).toHaveBeenCalledWith(
       expect.objectContaining({
         metadata: expect.objectContaining({
-          error: 'invalid_scope: refreshed scope exceeds the agent scope mode',
+          error: 'invalid_scope: refreshed scope exceeds what the client may hold',
         }),
       })
+    );
+  });
+
+  // The allowlist is a ceiling on every grant, not only on the ones that start
+  // one. A scope taken off `oauth_clients.scopes` after the user approved it
+  // must not keep being refreshed.
+  it("rejects refreshing into a scope that has left the client's allowlist", async () => {
+    const { fastify, ctx, confidentialClient, storedToken } = setupRefreshStub();
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue({
+      ...confidentialClient,
+      scopes: ['read:foo'],
+    });
+    (
+      fastify.repositories.refreshTokens.findByTokenHashIncludingRevoked as unknown as Mock
+    ).mockResolvedValue({ ...storedToken, scopes: ['read:foo', 'write:foo'] });
+
+    await tokenRoute(fastify);
+    const handler = ctx.handler;
+    if (!handler) throw new Error('Handler missing');
+
+    await expect(handler(refreshRequest(), createReply())).rejects.toThrow(InvalidScopeError);
+    // Rejected before rotation: the presented token is neither revoked nor replaced.
+    expect(fastify.repositories.refreshTokens.revokeIfActive).not.toHaveBeenCalled();
+    expect(fastify.repositories.refreshTokens.revoke).not.toHaveBeenCalled();
+    expect(fastify.repositories.refreshTokens.create).not.toHaveBeenCalled();
+    expect(fastify.jwtUtils.signAccessToken).not.toHaveBeenCalled();
+    expect(fastify.repositories.auditLogs.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        metadata: expect.objectContaining({
+          error: 'invalid_scope: refreshed scope exceeds what the client may hold',
+          allowedScopes: ['read:foo'],
+        }),
+      })
+    );
+  });
+
+  it('lets a client keep refreshing within its current allowlist by narrowing scope', async () => {
+    const { fastify, ctx, confidentialClient, storedToken } = setupRefreshStub();
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue({
+      ...confidentialClient,
+      scopes: ['read:foo'],
+    });
+    (
+      fastify.repositories.refreshTokens.findByTokenHashIncludingRevoked as unknown as Mock
+    ).mockResolvedValue({ ...storedToken, scopes: ['read:foo', 'write:foo'] });
+
+    await tokenRoute(fastify);
+    const handler = ctx.handler;
+    if (!handler) throw new Error('Handler missing');
+
+    await expect(
+      handler(refreshRequest({ scope: 'read:foo' }), createReply())
+    ).resolves.toBeDefined();
+    expect(fastify.repositories.refreshTokens.create).toHaveBeenCalledWith(
+      expect.objectContaining({ scopes: ['read:foo'] }),
+      expect.anything()
     );
   });
 
