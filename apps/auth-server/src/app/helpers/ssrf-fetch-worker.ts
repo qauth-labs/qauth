@@ -67,6 +67,12 @@ const RETURNED_HEADERS: readonly string[] = ['cache-control', 'expires', 'conten
  */
 const FETCH_CIPHERS = `${DEFAULT_CIPHERS}:!kDHE`;
 
+/**
+ * 1xx interim responses tolerated ahead of the final response — room for a
+ * `103 Early Hints` or two, not for a stream of them.
+ */
+const MAX_INTERIM_RESPONSES = 3;
+
 /** `workerData` tag that marks a thread started for a fetch. */
 export const GUARDED_GET_WORKER_TAG = 'qauth:ssrf-guarded-get';
 
@@ -252,6 +258,14 @@ export function guardedGet(job: GuardedGetJob): Promise<GuardedGetOutcome> {
     }
     const allowPrivate = job.allowPrivateAddresses;
 
+    let settled = false;
+    const settle = (outcome: GuardedGetOutcome): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(deadline);
+      resolve(outcome);
+    };
+
     // Custom lookup: validate the resolved IP *and* hand the same IP to the
     // socket. This is the TOCTOU-safe boundary — node never re-resolves.
     //
@@ -307,10 +321,22 @@ export function guardedGet(job: GuardedGetJob): Promise<GuardedGetOutcome> {
       );
     }) as unknown as typeof dnsLookup;
 
+    // A deadline for the whole fetch, from name resolution to the last body
+    // byte — not `req.setTimeout()`, which is a socket IDLE timer: every byte
+    // from the host restarts it, so a host dripping a byte or a 1xx response
+    // at a time would never trip it (ANT-2026-UE3G2DW3).
+    const deadline = setTimeout(() => {
+      req.destroy();
+      settle({ kind: 'failed', message: 'CIMD fetch timed out' });
+    }, job.timeoutMs);
+
     const req = httpsRequest(
       target.url,
       {
         method: 'GET',
+        // One connection per fetch, closed with it: nothing pooled for a
+        // later fetch, and the request's 'close' marks the end of this one.
+        agent: false,
         lookup: guardedLookup,
         ciphers: FETCH_CIPHERS,
         headers: {
@@ -325,7 +351,7 @@ export function guardedGet(job: GuardedGetJob): Promise<GuardedGetOutcome> {
         // address and bypass the IP guard.
         if (status >= 300 && status < 400) {
           res.destroy();
-          resolve({
+          settle({
             kind: 'blocked',
             message: `CIMD fetch returned redirect (${status}); not followed`,
           });
@@ -345,32 +371,44 @@ export function guardedGet(job: GuardedGetJob): Promise<GuardedGetOutcome> {
           received += chunk.length;
           if (received > job.maxBytes) {
             res.destroy();
-            resolve({ kind: 'failed', message: 'CIMD document exceeds maximum allowed size' });
+            settle({ kind: 'failed', message: 'CIMD document exceeds maximum allowed size' });
             return;
           }
           chunks.push(chunk);
         });
         res.on('end', () => {
-          resolve({
+          settle({
             kind: 'response',
             status,
             body: Buffer.concat(chunks).toString('utf8'),
             headers,
           });
         });
-        res.on('error', (err) => resolve({ kind: 'failed', message: err.message }));
+        res.on('error', (err) => settle({ kind: 'failed', message: err.message }));
       }
     );
 
-    req.setTimeout(job.timeoutMs, () => {
-      req.destroy();
-      resolve({ kind: 'failed', message: 'CIMD fetch timed out' });
+    // 1xx responses never reach the response callback, so the byte cap does
+    // not see them; a host could stream them until the deadline.
+    let interimResponses = 0;
+    req.on('information', () => {
+      interimResponses += 1;
+      if (interimResponses > MAX_INTERIM_RESPONSES) {
+        req.destroy();
+        settle({ kind: 'failed', message: 'CIMD fetch received too many interim responses' });
+      }
     });
     req.on('error', (err) => {
-      resolve({
+      settle({
         kind: err instanceof BlockedTargetError ? 'blocked' : 'failed',
         message: err.message,
       });
+    });
+    // Whatever else happened, the fetch is over once the request has closed.
+    // Without this an unsolicited `101`, which Node answers by dropping the
+    // socket and reports with nothing but 'close', left the fetch pending.
+    req.on('close', () => {
+      settle({ kind: 'failed', message: 'CIMD fetch closed without a response' });
     });
     req.end();
   });
