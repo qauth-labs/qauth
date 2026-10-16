@@ -124,9 +124,19 @@ AS keys are picked up automatically.
 
 ### `introspection` (RFC 7662)
 
-Calls the QAuth introspection endpoint for every request — use for opaque
-tokens or near-real-time revocation. Requires confidential client credentials
-(RFC 7662 mandates client authentication):
+Verifies the bearer locally exactly as `jwt` mode does, then calls the QAuth
+introspection endpoint for the authoritative verdict — use for near-real-time
+revocation (or to receive the detached PQC signature QAuth delivers over
+introspection). Only a token that passes the local check is introspected: the
+AS never reports a token it did not sign as active, so a made-up bearer is
+refused here without spending one of the RS's rate-limited introspection
+calls. If the JWKS cannot be fetched, the token is introspected anyway rather
+than refused. For an AS that issues opaque tokens, set
+`introspectionLocalCheck: false`; every bearer is then introspected, so rate-limit
+your own callers. QAuth limits introspection per caller address
+(`INTROSPECT_RATE_LIMIT`, 30 per minute by default), so size it for this RS's
+traffic. Requires confidential client credentials (RFC 7662 mandates client
+authentication):
 
 ```ts
 await app.register(mcpGuardPlugin, {
@@ -146,19 +156,20 @@ so the no-passthrough guarantee never depends solely on AS-side configuration.
 
 ## Configuration
 
-| Option                  | Type                         | Default                                        | Notes                                                   |
-| ----------------------- | ---------------------------- | ---------------------------------------------- | ------------------------------------------------------- |
-| `resource`              | `string` (required)          | —                                              | Resource identifier; `aud` tokens must carry (RFC 8707) |
-| `authorizationServer`   | `string` (required)          | —                                              | QAuth issuer identifier                                 |
-| `requiredScopes`        | `string[]`                   | `[]`                                           | Default scopes for any protected route                  |
-| `validationMode`        | `'jwt' \| 'introspection'`   | `'jwt'`                                        | Token-validation strategy                               |
-| `jwksUri`               | `string`                     | `${authorizationServer}/.well-known/jwks.json` | JWT mode                                                |
-| `jwksCacheTtlMs`        | `number`                     | `300000`                                       | JWKS cache/cooldown (JWT mode)                          |
-| `introspectionEndpoint` | `string`                     | `${authorizationServer}/oauth/introspect`      | Introspection mode                                      |
-| `introspectionClient`   | `{ clientId, clientSecret }` | —                                              | **Required** in introspection mode                      |
-| `allowedAlgorithms`     | `string[]`                   | `['EdDSA']`                                    | Pinned to defend against alg-confusion (JWT mode)       |
-| `metadataCacheControl`  | `string`                     | `public, max-age=3600`                         | `Cache-Control` for the PRM document                    |
-| `fetch`                 | `FetchLike`                  | global `fetch`                                 | Injectable (tests / SSRF-guarded client)                |
+| Option                    | Type                         | Default                                        | Notes                                                               |
+| ------------------------- | ---------------------------- | ---------------------------------------------- | ------------------------------------------------------------------- |
+| `resource`                | `string` (required)          | —                                              | Resource identifier; `aud` tokens must carry (RFC 8707)             |
+| `authorizationServer`     | `string` (required)          | —                                              | QAuth issuer identifier                                             |
+| `requiredScopes`          | `string[]`                   | `[]`                                           | Default scopes for any protected route                              |
+| `validationMode`          | `'jwt' \| 'introspection'`   | `'jwt'`                                        | Token-validation strategy                                           |
+| `jwksUri`                 | `string`                     | `${authorizationServer}/.well-known/jwks.json` | Both modes: introspection verifies locally first                    |
+| `jwksCacheTtlMs`          | `number`                     | `300000`                                       | JWKS cache/cooldown                                                 |
+| `introspectionEndpoint`   | `string`                     | `${authorizationServer}/oauth/introspect`      | Introspection mode                                                  |
+| `introspectionClient`     | `{ clientId, clientSecret }` | —                                              | **Required** in introspection mode                                  |
+| `introspectionLocalCheck` | `boolean`                    | `true`                                         | Verify locally before introspecting; `false` only for opaque tokens |
+| `allowedAlgorithms`       | `string[]`                   | `['EdDSA']`                                    | Pinned to defend against alg-confusion                              |
+| `metadataCacheControl`    | `string`                     | `public, max-age=3600`                         | `Cache-Control` for the PRM document                                |
+| `fetch`                   | `FetchLike`                  | global `fetch`                                 | Injectable (tests / SSRF-guarded client)                            |
 
 ## Framework-agnostic core
 

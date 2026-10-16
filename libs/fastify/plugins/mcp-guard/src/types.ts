@@ -18,9 +18,13 @@
  * - `jwt` — verify the bearer locally against the AS JWKS (offline, fast,
  *   the recommended path). Checks signature, `iss`, `exp`, and that `aud`
  *   contains this resource's identifier.
- * - `introspection` — call the AS RFC 7662 endpoint for every request. Use
- *   when tokens are opaque or when the RS must honour near-real-time
- *   revocation. Requires confidential introspection-client credentials.
+ * - `introspection` — verify the bearer locally as in `jwt` mode, then call
+ *   the AS RFC 7662 endpoint for the authoritative verdict. Use when the RS
+ *   must honour near-real-time revocation (or needs the detached PQC
+ *   signature the AS delivers over introspection). Only a token the AS signed
+ *   is ever introspected, so an unauthenticated caller cannot spend the RS's
+ *   introspection rate-limit budget. Requires confidential
+ *   introspection-client credentials.
  */
 export type ValidationMode = 'jwt' | 'introspection';
 
@@ -114,14 +118,14 @@ export interface McpGuardConfig {
 
   /**
    * JWKS URL of the AS. Defaults to `${authorizationServer}/.well-known/jwks.json`,
-   * matching the QAuth AS contract. Only used in `jwt` mode.
+   * matching the QAuth AS contract. Used in both modes: introspection mode
+   * verifies the bearer against the JWKS before introspecting it.
    */
   jwksUri?: string;
 
   /**
    * How long (ms) a fetched JWKS may be reused before the next refresh is
    * allowed. Maps to the jose remote-JWKS cooldown. Defaults to 300_000 (5m).
-   * Only used in `jwt` mode.
    */
   jwksCacheTtlMs?: number;
 
@@ -132,6 +136,15 @@ export interface McpGuardConfig {
   introspectionEndpoint?: string;
 
   /**
+   * In `introspection` mode, verify the bearer locally against the JWKS before
+   * introspecting it, so a bearer the AS never signed is refused without
+   * spending an introspection call (the AS rate-limits introspection per
+   * caller). Defaults to `true`. Set `false` only for an AS that issues opaque
+   * (non-JWT) access tokens.
+   */
+  introspectionLocalCheck?: boolean;
+
+  /**
    * Confidential credentials for the introspection endpoint. REQUIRED in
    * `introspection` mode (RFC 7662 mandates client authentication).
    */
@@ -140,13 +153,13 @@ export interface McpGuardConfig {
   /**
    * Accepted JWT signature algorithms. Defaults to `['EdDSA']` — the only
    * algorithm QAuth signs with (Ed25519). Constrained to defend against
-   * algorithm-confusion attacks. Only used in `jwt` mode.
+   * algorithm-confusion attacks.
    */
   allowedAlgorithms?: string[];
 
   /**
    * Require the RFC 9068 `typ: at+jwt` protected header to be PRESENT on every
-   * bearer token (#283). Defaults to `false`. Only used in `jwt` mode.
+   * bearer token (#283). Defaults to `false`.
    *
    * A token whose `typ` is present but WRONG — an OIDC ID token, `typ: JWT`,
    * signed by the same AS key — is rejected regardless of this flag. The flag

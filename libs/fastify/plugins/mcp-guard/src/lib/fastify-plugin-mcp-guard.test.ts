@@ -364,13 +364,22 @@ describe('mcp-guard Fastify plugin — operational introspection failure', () =>
     const opApp = Fastify();
     // The AS rejects OUR introspection client credentials with 401 — an
     // RS-side misconfiguration, not a bad bearer. The guard must not relabel
-    // this as the client's token being invalid.
-    const introspectFetch = (async () => ({
-      ok: false,
-      status: 401,
-      json: async () => ({}),
-      text: async () => '{}',
-    })) as unknown as never;
+    // this as the client's token being invalid. The JWKS is served normally:
+    // only a bearer that verifies locally reaches the introspection endpoint.
+    const introspectFetch = (async (input: string | URL) =>
+      String(input) === `${ISSUER}/oauth/introspect`
+        ? {
+            ok: false,
+            status: 401,
+            json: async () => ({}),
+            text: async () => '{}',
+          }
+        : {
+            ok: true,
+            status: 200,
+            json: async () => ({ keys: [publicJwk] }),
+            text: async () => '',
+          }) as unknown as never;
     await opApp.register(mcpGuardPlugin, {
       resource: RESOURCE,
       authorizationServer: ISSUER,
@@ -384,7 +393,7 @@ describe('mcp-guard Fastify plugin — operational introspection failure', () =>
       const res = await opApp.inject({
         method: 'GET',
         url: '/data',
-        headers: { authorization: 'Bearer some-opaque-token' },
+        headers: { authorization: `Bearer ${await signToken({ sub: 'u', client_id: 'c' })}` },
       });
       expect(res.statusCode).toBe(500);
       // Not a Bearer challenge — the client's token was never declared invalid.

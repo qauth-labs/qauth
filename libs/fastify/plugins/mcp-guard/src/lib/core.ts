@@ -17,6 +17,7 @@ import type { McpGuardConfig, ValidatedToken, ValidationMode } from '../types';
 import { challengeForError } from './challenge';
 import {
   InsufficientScopeError,
+  InvalidTokenError,
   McpGuardConfigError,
   type McpGuardError,
   MissingTokenError,
@@ -116,15 +117,50 @@ export class McpGuard {
           'introspection mode requires `introspectionClient` credentials (RFC 7662 client auth)'
         );
       }
-      return new IntrospectionValidator({
+      const introspection = new IntrospectionValidator({
         endpoint: config.introspectionEndpoint ?? `${this.authorizationServer}/oauth/introspect`,
         audience: this.resource,
         client: config.introspectionClient,
         fetch: config.fetch,
       });
+      // Verify locally BEFORE introspecting. The AS only ever reports a token
+      // active after verifying it as a JWT it signed, so a bearer the JWKS
+      // cannot verify can never be active and is refused here without an
+      // introspection call. Without this gate every inbound bearer, made-up
+      // ones included, costs one call against the AS's per-caller
+      // introspection rate limit (30/min by default) — anyone able to reach
+      // this RS could empty that budget and have every valid token answered
+      // with an upstream 429 for the rest of the window. The introspection
+      // verdict stays authoritative: it reflects revocation and carries the
+      // detached PQC signature, neither of which the local check can see.
+      //
+      // `introspectionLocalCheck: false` turns the gate off for an AS that
+      // issues opaque tokens. A JWKS outage is not a verdict on the token, so
+      // it falls through to the authoritative introspection call rather than
+      // answering 401 for every caller.
+      if (config.introspectionLocalCheck === false) {
+        return introspection;
+      }
+      const local = this.buildJwtValidator(config);
+      return {
+        validate: async (token) => {
+          try {
+            await local.validate(token);
+          } catch (error) {
+            if (!(error instanceof InvalidTokenError && error.jwksUnavailable)) {
+              throw error;
+            }
+          }
+          return introspection.validate(token);
+        },
+      };
     }
 
     // Default: local JWT verification against the AS JWKS.
+    return this.buildJwtValidator(config);
+  }
+
+  private buildJwtValidator(config: McpGuardConfig): JwtValidator {
     return new JwtValidator({
       jwksUri: config.jwksUri ?? `${this.authorizationServer}/.well-known/jwks.json`,
       issuer: this.authorizationServer,
