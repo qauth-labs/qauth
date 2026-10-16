@@ -76,12 +76,23 @@ export const env = parseEnv(envSchema);
 
 Common server configuration.
 
-| Variable    | Type   | Default       | Description         |
-| ----------- | ------ | ------------- | ------------------- |
-| `NODE_ENV`  | enum   | `development` | Node environment    |
-| `HOST`      | string | `0.0.0.0`     | Server host address |
-| `PORT`      | number | `3000`        | Server port         |
-| `LOG_LEVEL` | enum   | `info`        | Logging level       |
+| Variable             | Type   | Default       | Description                                 |
+| -------------------- | ------ | ------------- | ------------------------------------------- |
+| `NODE_ENV`           | enum   | `development` | Node environment                            |
+| `HOST`               | string | `0.0.0.0`     | Server host address                         |
+| `PORT`               | number | `3000`        | Server port                                 |
+| `LOG_LEVEL`          | enum   | `info`        | Logging level                               |
+| `REQUEST_TIMEOUT_MS` | number | `60000`       | Deadline for receiving a whole request (ms) |
+
+`REQUEST_TIMEOUT_MS` bounds how long a client may take to send one complete
+request, headers and body. A request still incomplete at the deadline is
+answered `408` and its connection closed, which releases whatever of its body
+was buffered. It must be at least 1000; there is no "no deadline" value
+(Fastify's own default of 0 held an unfinished request for ever). Node checks it
+on a 30 s sweep, so a request can outlive it by up to that much. It does not
+limit how long a handler takes to answer. Raise it if legitimate clients upload
+large bodies over slow links. The auth-server also keeps Node's headers deadline
+no longer than this value.
 
 ### databaseEnvSchema
 

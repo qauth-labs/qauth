@@ -44,3 +44,29 @@ describe('baseEnvSchema TRUST_PROXY', () => {
     expect(() => trustProxy('*')).toThrow(/invalid/);
   });
 });
+
+/**
+ * How long a client may take to deliver one complete request. Fastify's own
+ * default is 0, which also switches off Node's 300 s limit: a request that
+ * stops one byte short of its Content-Length was held, with its buffered body,
+ * for ever.
+ */
+describe('baseEnvSchema REQUEST_TIMEOUT_MS', () => {
+  const requestTimeout = (raw?: string) =>
+    baseEnvSchema.parse(raw === undefined ? {} : { REQUEST_TIMEOUT_MS: raw }).REQUEST_TIMEOUT_MS;
+
+  it('defaults to 60 seconds', () => {
+    expect(requestTimeout()).toBe(60_000);
+  });
+
+  it('accepts a longer or shorter deadline', () => {
+    expect(requestTimeout('120000')).toBe(120_000);
+    expect(requestTimeout('5000')).toBe(5_000);
+  });
+
+  it('refuses 0, which would mean "no deadline", and anything under a second', () => {
+    for (const raw of ['0', '999', '-1', '1.5', 'forever']) {
+      expect(() => requestTimeout(raw), raw).toThrow();
+    }
+  });
+});
