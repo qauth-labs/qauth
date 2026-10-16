@@ -575,6 +575,27 @@ describe('authenticateClientAssertion — rejected', () => {
     });
   });
 
+  // Regression (ANT-2026-IY5YYLQR): the key went to WebCrypto's importKey with
+  // every member as the key set had it, and importKey converts a `key_ops`
+  // entry that is not a string with `String()` — which, for a deeply nested
+  // array, copies its text once per level. All of it before the signature of
+  // an assertion anybody can send was checked.
+  it('refuses a key whose key_ops is deeply nested before converting any of it', async () => {
+    let keyOps: unknown = Array.from({ length: 4000 }, () => ({}));
+    for (let level = 0; level < 2500; level++) keyOps = [keyOps, 0];
+    const jwk = { ...es256Jwk, key_ops: ['verify', keyOps] } as unknown as JWK;
+    const stub = fastifyStub(clientRow({ jwks: jwkSet(jwk) }));
+    const assertion = await makeAssertion();
+
+    const started = performance.now();
+    await expect(
+      authenticateClientAssertion(asFastify(stub), 'realm-1', creds(assertion))
+    ).rejects.toMatchObject({
+      errorDescription: expect.stringMatching(/not a valid public JWK Set/),
+    });
+    expect(performance.now() - started).toBeLessThan(250);
+  }, 60_000);
+
   it('rejects the grant-type URN presented as a client_assertion_type', async () => {
     // `...:grant-type:jwt-bearer` and `...:client-assertion-type:jwt-bearer`
     // differ by one path segment and must never be interchangeable.
