@@ -1,0 +1,1 @@
+ALTER TABLE "oauth_consents" ADD COLUMN "resource_scopes" jsonb DEFAULT '{}'::jsonb NOT NULL;

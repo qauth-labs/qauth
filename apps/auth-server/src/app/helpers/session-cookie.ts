@@ -70,6 +70,14 @@ export interface BrowserSessionData {
    * granted set is bound to what the user actually saw, not to what is POSTed.
    */
   consentScopes?: Record<string, string[]>;
+  /**
+   * The RFC 8707 resources named on that same consent screen, keyed by
+   * `client_id`. Bound for the same reason as {@link consentScopes}: a
+   * `resource` becomes the token's `aud`, and the hidden `resource` form
+   * fields are as attacker-controllable as the hidden `scope`. The consent
+   * POST records and binds only these.
+   */
+  consentResources?: Record<string, string[]>;
   [key: string]: unknown;
 }
 

@@ -232,6 +232,77 @@ describe('UI /ui/consent GET — rendering', () => {
     expect(html).toContain('name="resource" value="https://api.example.com/v1"');
     expect(html).not.toContain('value="system"');
   });
+
+  it('names the requested RFC 8707 resource as the audience, over the client default', async () => {
+    // The `resource` overrides `client.audience` in the token's `aud`
+    // (`resolveAudience`), so the screen must name it: the grant the user
+    // approves is for the resource server they were shown.
+    const { fastify, ctx } = makeFastify();
+    await consentRoute(fastify);
+    const { signSessionId } = await import('../../helpers/session-cookie');
+    const signed = signSessionId('sid-g3');
+    (fastify.sessionUtils.getSession as unknown as Mock).mockResolvedValue({
+      userId: 'user-1',
+      email: 'a@b.com',
+      sessionId: 'sid-g3',
+      createdAt: Date.now(),
+    });
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue({
+      ...CLIENT,
+      audience: ['https://default.example.com'],
+    });
+
+    const { reply, state } = createReply();
+    await ctx.get!(
+      {
+        query: { ...BASE_QUERY, resource: ['https://api.example.com/v1'] },
+        url: '/ui/consent?client_id=app-123&scope=email&resource=https%3A%2F%2Fapi.example.com%2Fv1',
+        headers: { cookie: `__Host-qauth_session=${signed}` },
+        ip: '127.0.0.1',
+      },
+      reply
+    );
+
+    const html = state.body as string;
+    expect(html).toContain('Tokens will be valid for:</strong> https://api.example.com/v1');
+    expect(html).not.toContain('https://default.example.com');
+    // The rendered resources are bound to the session, like the scopes, so
+    // the POST records what the user saw rather than what the form carries.
+    const written = (fastify.sessionUtils.setSession as unknown as Mock).mock.calls[0][1];
+    expect(written.consentResources).toEqual({ 'app-123': ['https://api.example.com/v1'] });
+  });
+
+  it('keeps naming the client default audience when the request has no resource', async () => {
+    const { fastify, ctx } = makeFastify();
+    await consentRoute(fastify);
+    const { signSessionId } = await import('../../helpers/session-cookie');
+    const signed = signSessionId('sid-g4');
+    (fastify.sessionUtils.getSession as unknown as Mock).mockResolvedValue({
+      userId: 'user-1',
+      email: 'a@b.com',
+      sessionId: 'sid-g4',
+      createdAt: Date.now(),
+    });
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue({
+      ...CLIENT,
+      audience: ['https://default.example.com'],
+    });
+
+    const { reply, state } = createReply();
+    await ctx.get!(
+      {
+        query: BASE_QUERY,
+        url: '/ui/consent?client_id=app-123&scope=email',
+        headers: { cookie: `__Host-qauth_session=${signed}` },
+        ip: '127.0.0.1',
+      },
+      reply
+    );
+
+    expect(state.body as string).toContain(
+      'Tokens will be valid for:</strong> https://default.example.com'
+    );
+  });
 });
 
 describe('UI /ui/consent POST — allow/deny', () => {
@@ -358,7 +429,8 @@ describe('UI /ui/consent POST — allow/deny', () => {
       'user-1',
       'client-uuid-1',
       'realm-1',
-      ['email']
+      ['email'],
+      []
     );
     expect(fastify.repositories.authorizationCodes.create).toHaveBeenCalledOnce();
     expect(state.redirected).toContain('https://example.com/cb');
@@ -381,6 +453,7 @@ describe('UI /ui/consent POST — allow/deny', () => {
       csrfToken: csrf,
       createdAt: Date.now(),
       consentScopes: { 'app-123': ['email'] },
+      consentResources: { 'app-123': ['https://api.example.com/v1'] },
     });
     (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(CLIENT);
 
@@ -411,6 +484,78 @@ describe('UI /ui/consent POST — allow/deny', () => {
     const createArg = (fastify.repositories.authorizationCodes.create as unknown as Mock).mock
       .calls[0][0];
     expect(createArg.resource).toEqual(['https://api.example.com/v1']);
+    // The remembered grant records the audience the user approved, so
+    // /oauth/authorize can tell it from one they never saw.
+    expect(fastify.repositories.oauthConsents.upsertGrant).toHaveBeenCalledWith(
+      'user-1',
+      'client-uuid-1',
+      'realm-1',
+      ['email'],
+      ['https://api.example.com/v1']
+    );
+  });
+
+  // The hidden `resource` fields are no more trustworthy than the hidden
+  // `scope`: a page rendered for one resource stays submittable after a later
+  // render rebinds the session to another (or a form is tampered with). What
+  // the user is granting must be what the screen named.
+  it.each([
+    [
+      'a resource the rendered page did not name',
+      ['https://api.example.com/v1'],
+      ['https://payroll.example.com/v1'],
+    ],
+    [
+      'an extra resource',
+      ['https://api.example.com/v1'],
+      ['https://api.example.com/v1', 'https://payroll.example.com/v1'],
+    ],
+    ['a resource when the page named none', [], ['https://payroll.example.com/v1']],
+    ['no resource when the page named one', ['https://api.example.com/v1'], undefined],
+  ])('refuses %s with invalid_target', async (_label, bound, posted) => {
+    const { fastify, ctx } = makeFastify();
+    await consentRoute(fastify);
+    const { signSessionId } = await import('../../helpers/session-cookie');
+    const signed = signSessionId('sid-res-bind');
+    const csrf = 'csrf-res-bind';
+    (fastify.sessionUtils.getSession as unknown as Mock).mockResolvedValue({
+      userId: 'user-1',
+      email: 'a@b.com',
+      sessionId: 'sid-res-bind',
+      csrfToken: csrf,
+      createdAt: Date.now(),
+      consentScopes: { 'app-123': ['email'] },
+      consentResources: { 'app-123': bound },
+    });
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(CLIENT);
+
+    const { reply, state } = createReply();
+    await ctx.post!(
+      {
+        body: {
+          decision: 'allow',
+          allow_forever: '1',
+          csrf_token: csrf,
+          client_id: 'app-123',
+          redirect_uri: 'https://example.com/cb',
+          state: 'xyz',
+          scope: 'email',
+          code_challenge: 'A'.repeat(43),
+          code_challenge_method: 'S256',
+          response_type: 'code',
+          resource: posted,
+        },
+        headers: { cookie: `__Host-qauth_session=${signed}` },
+        ip: '127.0.0.1',
+      },
+      reply
+    );
+
+    expect(state.redirected).toContain('error=invalid_target');
+    expect(state.redirected).toContain('state=xyz');
+    expect(issOf(state.redirected)).toBe(DISCOVERY_ISSUER);
+    expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
+    expect(fastify.repositories.oauthConsents.upsertGrant).not.toHaveBeenCalled();
   });
 
   it.each([

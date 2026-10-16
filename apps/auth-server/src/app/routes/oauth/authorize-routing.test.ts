@@ -186,6 +186,11 @@ describe('GET /oauth/authorize resource binding (RFC 8707)', () => {
     // the request (it cannot show the consent screen).
     doubles.repositories.oauthConsents.findActive.mockResolvedValue({
       scopes: ['email'],
+      // RFC 8707: the grant covers the resources these tests bind.
+      resourceScopes: {
+        'https://api.example.com/mcp': ['email'],
+        'https://api2.example.com/mcp': ['email'],
+      },
       revokedAt: null,
     });
     doubles.jwtUtils.extractFromHeader.mockReturnValue('token');

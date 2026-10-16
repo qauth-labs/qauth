@@ -418,6 +418,16 @@ export default async function (fastify: FastifyInstance) {
     // requested scope on the auth-code flow.
     const scopes = filterRequestedScopes(query.scope, client);
 
+    // RFC 8707: the requested resource set becomes the token's `aud`, so it is
+    // part of what a stored consent must cover. Read once, from the VALIDATED
+    // params (`resourceParamSchema` has checked every entry and normalized
+    // them to an array), so the set checked against the consent below is the
+    // set bound to the code. Never re-parse `request.url`: `URLSearchParams`
+    // drops a leading `?`, so `/oauth/authorize??resource=system` is the
+    // unknown key `?resource` to Fastify's parser (stripped, never validated)
+    // but `resource` to that one, which put an arbitrary string into `aud`.
+    const resources = query.resource ?? [];
+
     // ADR-007 §2 (#185): step-up on the legacy Bearer path. The Bearer path
     // authenticates the user from an existing access token and CANNOT run an
     // interactive step-up (no login / consent screen for a machine caller),
@@ -469,11 +479,12 @@ export default async function (fastify: FastifyInstance) {
     // one registered a moment ago through open Dynamic Client Registration, a
     // CIMD client, another developer's public client. The Bearer path cannot
     // show the consent screen, so it issues a code only under a stored,
-    // unrevoked grant that already covers this request (the same
-    // `canSkipConsent` question the browser flow asks below, badge window
-    // included); anything else is refused (ADR-017 Decision 9: every path
-    // other than an operator-flagged first-party client requires consent).
-    if (!browserSession && !canSkipConsent(existingConsent, client, scopes)) {
+    // unrevoked grant that already covers this request, scopes and RFC 8707
+    // resources (the same `canSkipConsent` question the browser flow asks
+    // below, badge window included); anything else is refused (ADR-017
+    // Decision 9: every path other than an operator-flagged first-party
+    // client requires consent).
+    if (!browserSession && !canSkipConsent(existingConsent, client, scopes, resources)) {
       await fastify.repositories.auditLogs.create({
         userId,
         oauthClientId: client.id,
@@ -536,10 +547,12 @@ export default async function (fastify: FastifyInstance) {
       // `canSkipConsent` as well, and `prompt=none` must answer the same
       // question: no stored, unrevoked grant covering this request (or a
       // dynamic client still in its badge window) means `consent_required`.
+      // "Covering" includes the RFC 8707 resources: a grant remembered for
+      // one resource server is no consent to tokens for another.
       if (prompt === 'none') {
         const oidcError =
           stepUpErrorForPromptNone(stepUp) ??
-          (canSkipConsent(existingConsent, client, scopes) ? null : 'consent_required');
+          (canSkipConsent(existingConsent, client, scopes, resources) ? null : 'consent_required');
         if (oidcError) {
           await fastify.repositories.auditLogs.create({
             userId,
@@ -601,10 +614,11 @@ export default async function (fastify: FastifyInstance) {
       // Re-consent when the request elevates scope or explicitly asks for it,
       // even if a prior grant would otherwise let us skip the screen — a
       // wider scope set must be explicitly re-affirmed, never auto-widened.
+      // The same holds for a `resource` the grant does not cover.
       // (`prompt=none` already returned consent_required above if needed.)
       if (
         prompt !== 'none' &&
-        (stepUp.requiresConsent || !canSkipConsent(existingConsent, client, scopes))
+        (stepUp.requiresConsent || !canSkipConsent(existingConsent, client, scopes, resources))
       ) {
         if (stepUp.elevated.length > 0) {
           await fastify.repositories.auditLogs.create({
@@ -660,15 +674,11 @@ export default async function (fastify: FastifyInstance) {
         // RFC 8707: bind the resource indicator(s) to the authorization
         // code so /oauth/token can set the access token's `aud` claim to
         // exactly what the client requested. Reached on the consent-skip
-        // path (returning user, prior consent covers requested scopes);
-        // the consent-screen path creates codes in ui/consent.ts.
-        // Read from the VALIDATED params: `resourceParamSchema` has checked
-        // every entry and normalized them to an array. This used to re-parse
-        // `request.url` with `URLSearchParams`, which drops a leading `?`:
-        // `/oauth/authorize??resource=system` is the unknown key `?resource`
-        // to Fastify's parser (stripped, never validated) but `resource` to
-        // that one, which put an arbitrary string into `aud`.
-        resource: query.resource ?? [],
+        // path (returning user, prior consent covers the requested scopes at
+        // these resources); the consent-screen path creates codes in
+        // ui/consent.ts. The same validated set the consent was checked
+        // against above.
+        resource: resources,
         state: query.state ?? null,
         expiresAt,
       });

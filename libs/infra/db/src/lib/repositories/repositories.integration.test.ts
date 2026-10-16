@@ -518,6 +518,36 @@ describe('repository integration (real Postgres)', () => {
       expect(active).toHaveLength(1);
     });
 
+    it('upsertGrant records the scopes per RFC 8707 resource, never across resources', async () => {
+      const realm = await seedRealm();
+      const user = await seedUser(realm.id);
+      const client = await seedClient(realm.id);
+      const consents = createOAuthConsentsRepository(db().database.db);
+      const [a, b] = ['https://a.example/mcp', 'https://b.example/mcp'];
+
+      const first = await consents.upsertGrant(user.id, client.id, realm.id, ['read:foo'], [a]);
+      expect(first.resourceScopes).toEqual({ [a]: ['read:foo'] });
+
+      await consents.upsertGrant(user.id, client.id, realm.id, ['write:foo'], [a, b]);
+      const merged = await consents.upsertGrant(user.id, client.id, realm.id, ['email']);
+
+      expect(merged.scopes).toEqual(['email', 'read:foo', 'write:foo']);
+      expect(merged.resourceScopes).toEqual({
+        [a]: ['read:foo', 'write:foo'],
+        [b]: ['write:foo'],
+      });
+    });
+
+    it('a grant without a resource records none (column default)', async () => {
+      const realm = await seedRealm();
+      const user = await seedUser(realm.id);
+      const client = await seedClient(realm.id);
+      const consents = createOAuthConsentsRepository(db().database.db);
+
+      const grant = await consents.upsertGrant(user.id, client.id, realm.id, ['read:foo']);
+      expect(grant.resourceScopes).toEqual({});
+    });
+
     it('a fresh grant after revoke inserts a NEW active row (partial unique index allows it)', async () => {
       const realm = await seedRealm();
       const user = await seedUser(realm.id);

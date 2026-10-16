@@ -169,10 +169,11 @@ apps: a **loopback** redirect may carry **any port**.
   same host from redeeming an intercepted code (RFC 8252 §8.1).
 
 QAuth flow: if there's no active session it shows the **login** page; then a
-**consent** screen for the requested scopes (skipped if a prior consent already
-covers them). See [Hosted UI](/integrate/hosted-ui/) for what those screens look
-like and the pending-authorization mechanics behind the login bounce. On
-approval it redirects:
+**consent** screen for the requested scopes, naming each requested `resource`
+as the audience (skipped if a prior consent already covers those scopes for
+every requested `resource`). See [Hosted UI](/integrate/hosted-ui/) for what
+those screens look like and the pending-authorization mechanics behind the
+login bounce. On approval it redirects:
 
 ```
 http://localhost:5173/callback?code=AUTH_CODE&state=RANDOM_OPAQUE_VALUE

@@ -257,6 +257,7 @@ describe('GET /oauth/authorize — session-cookie integration', () => {
     (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(CLIENT);
     (fastify.repositories.oauthConsents.findActive as unknown as Mock).mockResolvedValue({
       scopes: ['email'],
+      resourceScopes: { 'https://api.example.com/v1': ['email'] },
       revokedAt: null,
     });
     const { signSessionId } = await import('../../helpers/session-cookie');
@@ -332,6 +333,10 @@ describe('GET /oauth/authorize — session-cookie integration', () => {
     (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(CLIENT);
     (fastify.repositories.oauthConsents.findActive as unknown as Mock).mockResolvedValue({
       scopes: ['email'],
+      resourceScopes: {
+        'https://api.example.com/v1': ['email'],
+        'https://api2.example.com/v1': ['email'],
+      },
       revokedAt: null,
     });
     const { signSessionId } = await import('../../helpers/session-cookie');
@@ -366,6 +371,55 @@ describe('GET /oauth/authorize — session-cookie integration', () => {
       'https://api.example.com/v1',
       'https://api2.example.com/v1',
     ]);
+  });
+
+  // RFC 8707: a `resource` becomes the token's `aud`. A grant the user
+  // remembered for one resource server must not silently yield a code for
+  // another, on the interactive path or under prompt=none.
+  it.each([
+    ['a resource the stored consent does not list', { 'https://api.example.com/v1': ['email'] }],
+    [
+      'a scope that was approved for another resource only',
+      { 'https://api.example.com/v1': ['email'], 'https://other.example.com/v1': ['read:foo'] },
+    ],
+  ])('does not issue a code silently for %s', async (_label, resourceScopes) => {
+    for (const [prompt, expectedRedirect] of [
+      [undefined, '/ui/consent?'],
+      ['none', 'error=consent_required'],
+    ] as const) {
+      const { fastify, ctx } = makeFastify();
+      await authorizeRoute(fastify);
+      (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(
+        CLIENT
+      );
+      (fastify.repositories.oauthConsents.findActive as unknown as Mock).mockResolvedValue({
+        scopes: ['email', 'read:foo'],
+        resourceScopes,
+        revokedAt: null,
+      });
+      const { signSessionId } = await import('../../helpers/session-cookie');
+      const signed = signSessionId('sid-other-resource');
+      (fastify.sessionUtils.getSession as unknown as Mock).mockResolvedValue({
+        userId: 'user-1',
+        email: 'a@b.com',
+        sessionId: 'sid-other-resource',
+        createdAt: Date.now(),
+      });
+
+      const { reply, state } = createReply();
+      await ctx.handler!(
+        {
+          query: { ...BASE_QUERY, prompt, resource: ['https://other.example.com/v1'] },
+          url: '/oauth/authorize?response_type=code&client_id=app-123&scope=email&resource=https%3A%2F%2Fother.example.com%2Fv1',
+          headers: { cookie: `__Host-qauth_session=${signed}` },
+          ip: '127.0.0.1',
+        },
+        reply
+      );
+
+      expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
+      expect(state.redirected).toContain(expectedRedirect);
+    }
   });
 });
 
@@ -511,6 +565,7 @@ describe('POST /oauth/authorize (OIDC Core §3.1.2.1)', () => {
     (fastify.jwtUtils.extractFromHeader as unknown as Mock).mockReturnValue(null);
     (fastify.repositories.oauthConsents.findActive as unknown as Mock).mockResolvedValue({
       scopes: ['email'],
+      resourceScopes: { 'https://api.example.com/v1': ['email'] },
       revokedAt: null,
     });
     const { signSessionId } = await import('../../helpers/session-cookie');
@@ -1049,6 +1104,8 @@ describe('GET /oauth/authorize — Bearer path step-up (ADR-007 §2, #185)', () 
       client?: Record<string, unknown>;
       /** The stored consent row; a covering, unrevoked grant unless overridden. */
       consent?: Record<string, unknown> | null;
+      /** RFC 8707 resource indicators on the request. */
+      resource?: string[];
     } = {}
   ) {
     const { fastify, ctx } = makeFastify();
@@ -1075,7 +1132,7 @@ describe('GET /oauth/authorize — Bearer path step-up (ADR-007 §2, #185)', () 
     const { reply, state } = createReply();
     await ctx.handler!(
       {
-        query: { ...BASE_QUERY, client_id: 'app-bearer', scope },
+        query: { ...BASE_QUERY, client_id: 'app-bearer', scope, resource: opts.resource },
         url: `/oauth/authorize?response_type=code&client_id=app-bearer&scope=${encodeURIComponent(scope)}`,
         headers: { authorization: 'Bearer bearer.token' },
         ip: '127.0.0.1',
@@ -1138,6 +1195,44 @@ describe('GET /oauth/authorize — Bearer path step-up (ADR-007 §2, #185)', () 
     );
     expect(state.redirected).toContain('error=access_denied');
     expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
+  });
+
+  // RFC 8707: the `resource` is the token's `aud`, so the covering consent
+  // must cover it too, exactly as on the browser path.
+  it('refuses the Bearer path for a resource the stored consent does not cover', async () => {
+    const { fastify, state } = await runBearer(
+      'email',
+      {},
+      {
+        consent: {
+          scopes: ['email'],
+          resourceScopes: { 'https://api.example.com/v1': ['email'] },
+          revokedAt: null,
+        },
+        resource: ['https://payroll.example.com/v1'],
+      }
+    );
+    expect(state.redirected).toContain('error=access_denied');
+    expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
+  });
+
+  it('mints on the Bearer path for a resource the stored consent covers, and binds it', async () => {
+    const { fastify, state } = await runBearer(
+      'email',
+      {},
+      {
+        consent: {
+          scopes: ['email'],
+          resourceScopes: { 'https://api.example.com/v1': ['email'] },
+          revokedAt: null,
+        },
+        resource: ['https://api.example.com/v1'],
+      }
+    );
+    expect(state.redirected).toContain('code=');
+    const createArg = (fastify.repositories.authorizationCodes.create as unknown as Mock).mock
+      .calls[0][0];
+    expect(createArg.resource).toEqual(['https://api.example.com/v1']);
   });
 
   it('refuses a Bearer token issued to another client, even with the system audience', async () => {

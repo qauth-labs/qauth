@@ -118,7 +118,8 @@ A break of any of these is a finding:
   is never accepted for another. See [ADR-006](../adr/006-oauth-grants-and-audience.md).
 - A refresh token is single-use. Reusing one revokes its whole family.
 - An authorization code is issued only with the user's consent, or when an
-  active consent already covers the requested scopes.
+  active consent already covers the requested scopes at every requested
+  RFC 8707 resource.
 - Token exchange preserves or narrows scope and audience. It never widens
   them, and the `act` claim records every delegation step.
 - Revoking a consent, a token, or a user's access stops new tokens being

@@ -364,13 +364,16 @@ export interface OAuthConsentsRepository {
    *
    * If an active row exists, its `scopes` array is replaced with the union
    * of old ∪ new and `grantedAt` is refreshed. Otherwise a new row is
-   * inserted.
+   * inserted. `scopes` are merged the same way into the `resourceScopes`
+   * entry of each of `resources`, the RFC 8707 resources they were approved
+   * for.
    */
   upsertGrant(
     userId: string,
     oauthClientId: string,
     realmId: string,
     scopes: string[],
+    resources?: readonly string[],
     tx?: DbClient
   ): Promise<OAuthConsent>;
   /** Revoke a consent row by id (owner must be checked by caller). */
