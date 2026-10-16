@@ -1,5 +1,8 @@
+// eslint-disable-next-line @typescript-eslint/triple-slash-reference -- `@types/zxcvbn` does not declare zxcvbn's matcher module, and the declaration must reach every program that compiles this file, the auth-server's included, which consumes this library from source.
+/// <reference path="./zxcvbn-matching.d.ts" />
 import { z } from 'zod';
 import zxcvbn from 'zxcvbn';
+import matching from 'zxcvbn/lib/matching';
 
 /**
  * Password strength validation result
@@ -116,6 +119,34 @@ export const passwordSchema = z
  * saturates zxcvbn's score of 4.
  */
 export const ZXCVBN_MAX_INPUT_LENGTH = 100;
+
+/**
+ * How many l33t substitution maps zxcvbn tries for one password.
+ *
+ * Its l33t matcher enumerates every consistent combination of substitutions
+ * for the l33t characters present and runs a full dictionary scan per
+ * combination, so the cost is driven by WHICH characters occur, not by how
+ * many: all 20 substitutes in its table give 736 maps, and scoring a
+ * 100-character password made of them held the event loop for seconds. The
+ * length bound above does not limit that. Passwords people choose need a
+ * handful of maps (`p@ssw0rd` needs one), so their scores do not change; a
+ * password with more is scored with the first 16 enumerated, which can only
+ * raise its score slightly. zxcvbn-ts bounds the same work with its
+ * `l33tMaxSubstitutions` option.
+ *
+ * A stopgap: scoring still runs on the event loop, now bounded to a few
+ * hundred milliseconds in the worst case.
+ */
+export const ZXCVBN_MAX_L33T_SUBSTITUTIONS = 16;
+
+// zxcvbn 4.4.2 has no option for this cap, but `l33t_match` obtains its maps
+// through `this.enumerate_l33t_subs` on the matching module, the same object
+// zxcvbn's entry point requires, so the cap is applied there. The tests pin
+// that it takes effect, so an upgrade that stops honouring it fails them.
+const enumerateL33tSubs = matching.enumerate_l33t_subs;
+matching.enumerate_l33t_subs = function (table) {
+  return enumerateL33tSubs.call(this, table).slice(0, ZXCVBN_MAX_L33T_SUBSTITUTIONS);
+};
 
 export const DEFAULT_PASSWORD_VALIDATION_CONFIG: PasswordValidationConfig = {
   minScore: 2, // Fair

@@ -10,12 +10,62 @@ vi.mock('zxcvbn', async (importOriginal) => {
   return { default: zxcvbnSpy };
 });
 
+import matching from 'zxcvbn/lib/matching';
+
 import {
   createPasswordValidator,
   PASSWORD_MAX_LENGTH,
   passwordSchema,
   ZXCVBN_MAX_INPUT_LENGTH,
+  ZXCVBN_MAX_L33T_SUBSTITUTIONS,
 } from './password';
+
+/**
+ * zxcvbn's l33t matcher runs a full dictionary scan once for every consistent
+ * combination of substitutions for the l33t characters present, whatever the
+ * length: all 20 substitute characters of its table give 736 combinations, and
+ * a 100-character password made of them held the event loop for ~7 s on an
+ * unauthenticated POST /auth/register, inside the 100-character length cap.
+ * The bound is asserted on the work done (substitution maps and dictionary
+ * scans), not on time.
+ */
+describe('createPasswordValidator — l33t substitution bound', () => {
+  const validator = createPasswordValidator();
+  // The 20 distinct substitute characters of zxcvbn's L33T_TABLE, repeated to
+  // ZXCVBN_MAX_INPUT_LENGTH.
+  const everyL33tCharacter = '4@8({[<369!|1+7%2$50'.repeat(5);
+
+  it('gives the l33t matcher at most 16 substitution maps', () => {
+    const enumerate = vi.spyOn(matching, 'enumerate_l33t_subs');
+    try {
+      validator.validatePasswordStrength(everyL33tCharacter);
+      const mapCounts = enumerate.mock.results.map((result) => result.value.length);
+
+      expect(mapCounts.length).toBeGreaterThan(0);
+      expect(Math.max(...mapCounts)).toBeLessThanOrEqual(16);
+      expect(ZXCVBN_MAX_L33T_SUBSTITUTIONS).toBe(16);
+    } finally {
+      enumerate.mockRestore();
+    }
+  });
+
+  it('bounds the dictionary scans one score costs', () => {
+    // Uncapped this is ~1,500 full scans of the password; capped, a few dozen.
+    const dictionaryMatch = vi.spyOn(matching, 'dictionary_match');
+    try {
+      validator.validatePasswordStrength(everyL33tCharacter);
+      expect(dictionaryMatch.mock.calls.length).toBeLessThan(100);
+    } finally {
+      dictionaryMatch.mockRestore();
+    }
+  });
+
+  it('still finds l33t dictionary words', () => {
+    expect(validator.validatePasswordStrength('p@ssw0rd').score).toBe(0);
+    expect(validator.validatePasswordStrength('4dm1n1str4t0r').score).toBe(1);
+    expect(validator.validatePasswordStrength('l3tm31n!').score).toBe(1);
+  });
+});
 
 /**
  * A password is attacker-sized input to CPU-bound work. zxcvbn's matchers grow
