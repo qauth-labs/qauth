@@ -312,6 +312,8 @@ the control holds wherever the code is actually issued:
 | ------------------------- | ------------------------------------------------------------------------------------------------- |
 | `/oauth/authorize`        | `findExceedingAgentScopesForClient` → `invalid_scope` redirect (fast path, prior consent covers). |
 | `/ui/consent`             | The same gate on the POST (code issuance) **and** GET (render) — the common first-time path.      |
+| `authorization_code`      | `enforceAgentScopeCap` on the code's scopes at redemption: a cap lowered after consent applies.   |
+| `refresh_token`           | `validateScopes` on the refreshed scope set (allowlist and cap) before rotation.                  |
 | `client_credentials`      | `validateScopes(scope, client.scopes, toAgentScopeContext(client))` in the token endpoint.        |
 | Token Exchange (RFC 8693) | `enforceAgentScopeCap` against the narrowed scope set before the delegated token is minted.       |
 

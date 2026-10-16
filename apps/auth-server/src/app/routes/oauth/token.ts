@@ -584,6 +584,35 @@ async function handleAuthorizationCode(
     throw new InvalidGrantError('Invalid or expired authorization code');
   }
 
+  // Clamp to the agent's CURRENT server-side `max_agent_mode` (ADR-007 §2,
+  // #184), exactly as the refresh, client_credentials, jwt-bearer and token-
+  // exchange grants do. The code carries the scopes approved under the cap as
+  // it stood at consent time; if the operator has since lowered it (or the
+  // client is no longer an agent), redeeming the code must not mint the old
+  // mode. Fail-closed via `toAgentScopeContext`. The code is burned all the
+  // same: a client cannot narrow a code, so it goes back through
+  // /oauth/authorize.
+  try {
+    enforceAgentScopeCap(authCode.scopes, toAgentScopeContext(client));
+  } catch (err) {
+    await fastify.repositories.authorizationCodes.markUsed(authCode.id);
+    await fastify.repositories.auditLogs.create({
+      userId: user.id,
+      oauthClientId: client.id,
+      event: 'oauth.token.exchange.failure',
+      eventType: 'token',
+      success: false,
+      ipAddress: request.ip,
+      userAgent: request.headers['user-agent'] || null,
+      metadata: {
+        error: 'invalid_scope: code scope exceeds the agent scope mode',
+        scopes: authCode.scopes,
+        maxAgentMode: client.maxAgentMode ?? null,
+      },
+    });
+    throw err;
+  }
+
   // A refresh token is standing access, and the active consent row is the
   // user's only handle on it: `/consents` lists those rows, and consent
   // revocation reaches the refresh tokens through one. So a refresh token is

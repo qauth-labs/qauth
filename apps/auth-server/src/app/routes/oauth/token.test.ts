@@ -1753,6 +1753,39 @@ describe('POST /oauth/token route — authorization_code grant', () => {
     );
   });
 
+  // ADR-007 §2 (#184): the authorization_code grant enforces the agent's
+  // CURRENT cap, like every other grant. A code approved under agent:exec must
+  // not redeem into agent:exec after the operator lowers the cap.
+  it("rejects a code whose agent scope exceeds the client's current max_agent_mode", async () => {
+    const { fastify, ctx, client, authCode } = setupAuthCodeStub();
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue({
+      ...client,
+      isAgent: true,
+      maxAgentMode: 'readonly',
+    });
+    (fastify.repositories.authorizationCodes.findByCode as unknown as Mock).mockResolvedValue({
+      ...authCode,
+      scopes: ['read:foo', 'agent:exec'],
+    });
+    await tokenRoute(fastify);
+    const handler = ctx.handler;
+    if (!handler) throw new Error('Handler missing');
+
+    await expect(handler(baseRequest(), createReply())).rejects.toThrow(InvalidScopeError);
+    expect(fastify.jwtUtils.signAccessToken).not.toHaveBeenCalled();
+    expect(fastify.repositories.refreshTokens.create).not.toHaveBeenCalled();
+    expect(fastify.repositories.auditLogs.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        metadata: expect.objectContaining({
+          error: 'invalid_scope: code scope exceeds the agent scope mode',
+        }),
+      })
+    );
+    // The code is burned all the same: a client cannot narrow a code, so it
+    // goes back through /oauth/authorize.
+    expect(fastify.repositories.authorizationCodes.markUsed).toHaveBeenCalledWith(authCode.id);
+  });
+
   it('rejects when the user bound to the code cannot be found', async () => {
     const { fastify, ctx } = setupAuthCodeStub();
     (fastify.repositories.users.findById as unknown as Mock).mockResolvedValue(null);
