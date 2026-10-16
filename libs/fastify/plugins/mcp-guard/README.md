@@ -80,6 +80,24 @@ Registering the plugin automatically:
 The validated claims are available on `request.tokenClaims`
 (`{ sub, clientId, scopes, audience, issuer, expiresAt, issuedAt, raw }`).
 
+### Several resources in one app
+
+A Fastify scope carries one guard. Register each further guard, together with the
+routes it protects, in an encapsulated child scope; there the decorators refer to
+that scope's guard. A second registration on the same scope fails at boot with
+`McpGuardConfigError`.
+
+```ts
+await app.register(async (admin) => {
+  await admin.register(mcpGuardPlugin, {
+    resource: 'https://mcp.example.com/admin',
+    authorizationServer: 'https://auth.example.com',
+    requiredScopes: ['mcp:admin'],
+  });
+  admin.get('/admin', { preHandler: admin.requireBearer }, async () => ({ ok: true }));
+});
+```
+
 ## The handshake (what an MCP client sees)
 
 ```

@@ -2,6 +2,7 @@ import Fastify, { type FastifyInstance } from 'fastify';
 import { type CryptoKey, exportJWK, generateKeyPair, type JWK, SignJWT } from 'jose';
 import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 
+import { McpGuardConfigError } from './errors';
 import { mcpGuardPlugin } from './fastify-plugin-mcp-guard';
 
 const ISSUER = 'https://auth.example.com';
@@ -231,46 +232,130 @@ describe('mcp-guard Fastify plugin — path-bearing resource', () => {
 });
 
 describe('mcp-guard Fastify plugin — multiple resources on one instance', () => {
-  it('boots without colliding on the decorator or the bare PRM prefix, and serves each resource its own metadata', async () => {
-    const multi = Fastify();
-    // Two path-bearing resources on one origin — the scenario that previously
-    // crashed boot (FST_ERR_DEC_ALREADY_PRESENT, then FST_ERR_DUPLICATED_ROUTE).
-    await multi.register(mcpGuardPlugin, {
-      resource: 'https://host.example.com/mcp/a',
+  const NOTES = 'https://host.example.com/mcp/notes';
+  const ADMIN = 'https://host.example.com/mcp/admin';
+
+  function registerNotes(scope: FastifyInstance) {
+    return scope.register(mcpGuardPlugin, {
+      resource: NOTES,
       authorizationServer: ISSUER,
       fetch: jwksFetch({ keys: [publicJwk] }),
     });
-    await multi.register(mcpGuardPlugin, {
-      resource: 'https://host.example.com/mcp/b',
-      authorizationServer: ISSUER,
-      fetch: jwksFetch({ keys: [publicJwk] }),
+  }
+
+  /** The admin resource: its own guard and route, in an encapsulated child scope. */
+  function registerAdminScope(parent: FastifyInstance) {
+    return parent.register(async (admin) => {
+      await admin.register(mcpGuardPlugin, {
+        resource: ADMIN,
+        authorizationServer: ISSUER,
+        requiredScopes: ['mcp:admin'],
+        fetch: jwksFetch({ keys: [publicJwk] }),
+      });
+      admin.get('/mcp/admin', { preHandler: admin.requireBearer }, async () => ({ ok: true }));
     });
-    // Must not throw on ready().
-    await expect(multi.ready()).resolves.toBeDefined();
-    try {
-      const aRes = await multi.inject({
-        method: 'GET',
-        url: '/.well-known/oauth-protected-resource/mcp/a',
-      });
-      expect(aRes.statusCode).toBe(200);
-      expect(aRes.json().resource).toBe('https://host.example.com/mcp/a');
+  }
 
-      const bRes = await multi.inject({
+  async function expectEachResourceBehindItsOwnGuard(multi: FastifyInstance) {
+    const get = async (url: string, token?: string) =>
+      multi.inject({
         method: 'GET',
-        url: '/.well-known/oauth-protected-resource/mcp/b',
+        url,
+        headers: token ? { authorization: `Bearer ${token}` } : {},
       });
-      expect(bRes.statusCode).toBe(200);
-      expect(bRes.json().resource).toBe('https://host.example.com/mcp/b');
+    const notesToken = await signToken({ sub: 'u', scope: 'mcp:admin' }, NOTES);
+    const adminToken = await signToken({ sub: 'u', scope: 'mcp:admin' }, ADMIN);
 
-      // The bare prefix is claimed once (by the first guard) and still serves.
-      const bareRes = await multi.inject({
-        method: 'GET',
-        url: '/.well-known/oauth-protected-resource',
-      });
-      expect(bareRes.statusCode).toBe(200);
-    } finally {
-      await multi.close();
+    expect((await get('/mcp/notes', notesToken)).statusCode).toBe(200);
+    expect((await get('/mcp/notes', adminToken)).statusCode).toBe(401);
+    expect((await get('/mcp/admin', adminToken)).statusCode).toBe(200);
+    expect((await get('/mcp/admin', notesToken)).statusCode).toBe(401);
+    // The admin guard's own `requiredScopes` and metadata pointer apply.
+    expect(
+      (await get('/mcp/admin', await signToken({ sub: 'u', scope: 'openid' }, ADMIN))).statusCode
+    ).toBe(403);
+    expect((await get('/mcp/admin')).headers['www-authenticate']).toBe(
+      'Bearer scope="mcp:admin", resource_metadata=' +
+        '"https://host.example.com/.well-known/oauth-protected-resource/mcp/admin"'
+    );
+
+    for (const [path, resource] of [
+      ['/mcp/notes', NOTES],
+      ['/mcp/admin', ADMIN],
+    ]) {
+      const res = await get(`/.well-known/oauth-protected-resource${path}`);
+      expect(res.statusCode).toBe(200);
+      expect(res.json().resource).toBe(resource);
     }
+    // The bare prefix is claimed once (by the first guard) and still serves.
+    expect((await get('/.well-known/oauth-protected-resource')).json().resource).toBe(NOTES);
+  }
+
+  it('wires a guard registered in a child scope, shadowing the one inherited from the parent', async () => {
+    app = Fastify();
+    await registerNotes(app);
+    app.get('/mcp/notes', { preHandler: app.requireBearer }, async () => ({ ok: true }));
+    await registerAdminScope(app);
+    await app.ready();
+
+    expect(app.mcpGuard.resource).toBe(NOTES);
+    await expectEachResourceBehindItsOwnGuard(app);
+  });
+
+  it('boots with each guard in a sibling scope, without colliding on the bare PRM prefix', async () => {
+    app = Fastify();
+    await app.register(async (notes) => {
+      await registerNotes(notes);
+      notes.get('/mcp/notes', { preHandler: notes.requireBearer }, async () => ({ ok: true }));
+    });
+    await registerAdminScope(app);
+    await app.ready();
+
+    await expectEachResourceBehindItsOwnGuard(app);
+  });
+
+  it('does not let requireScopes reuse claims another guard validated', async () => {
+    app = Fastify();
+    await registerNotes(app);
+    // The parent scope authenticates every request against the notes resource.
+    app.addHook('preHandler', app.requireBearer);
+    await app.register(async (admin) => {
+      await admin.register(mcpGuardPlugin, {
+        resource: ADMIN,
+        authorizationServer: ISSUER,
+        fetch: jwksFetch({ keys: [publicJwk] }),
+      });
+      admin.get('/mcp/admin', { preHandler: admin.requireScopes('mcp:admin') }, async () => ({
+        ok: true,
+      }));
+    });
+    await app.ready();
+
+    const withToken = async (token: string) =>
+      app!.inject({
+        method: 'GET',
+        url: '/mcp/admin',
+        headers: { authorization: `Bearer ${token}` },
+      });
+    // A notes-audience token that happens to carry `mcp:admin` passes the
+    // parent's hook but must not satisfy the admin guard.
+    const notesToken = await signToken({ sub: 'u', scope: 'mcp:admin' }, NOTES);
+    expect((await withToken(notesToken)).statusCode).toBe(401);
+    // A token for both resources gets through both guards.
+    const bothToken = await signToken({ sub: 'u', scope: 'mcp:admin' }, [NOTES, ADMIN]);
+    expect((await withToken(bothToken)).statusCode).toBe(200);
+  });
+
+  it('refuses a second guard on the same scope, which the decorators could not reach', async () => {
+    app = Fastify();
+    await registerNotes(app);
+    await expect(
+      app.register(mcpGuardPlugin, {
+        resource: ADMIN,
+        authorizationServer: ISSUER,
+        fetch: jwksFetch({ keys: [publicJwk] }),
+      })
+    ).rejects.toThrow(McpGuardConfigError);
   });
 });
 
