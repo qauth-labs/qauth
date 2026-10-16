@@ -74,7 +74,8 @@ export default async function (fastify: FastifyInstance) {
         // user access token carries the user's id as `sub`. Accept only the
         // first-party token `/auth/login` mints, expired or not, so a token
         // issued to another client or audience cannot end the user's sessions.
-        await assertManagementToken(fastify, claims);
+        // A disabled user may still sign out: logout only ends access.
+        await assertManagementToken(fastify, claims, { requireActiveUser: false });
         userId = claims.sub;
 
         if (!userId) {

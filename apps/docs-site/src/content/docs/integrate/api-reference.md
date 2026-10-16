@@ -343,7 +343,8 @@ list.
 }
 ```
 
-An inactive/expired/unknown/wrong-audience token returns `{ "active": false }`.
+An inactive/expired/unknown/wrong-audience token returns `{ "active": false }`,
+and so does a user's token once that user is disabled or deleted.
 
 ### UserInfo response (`GET|POST /oauth/userinfo`, `200 OK`)
 
@@ -356,7 +357,8 @@ scope and only when a **verified** email attribute exists (ADR-002 trust
 order `wallet > oidc_* > self_reported`). Otherwise both keys are **absent**
 (never `null`). When present, `email_verified` is always `true`. The `POST`
 form accepts the access token either as a Bearer header or as a form-encoded
-`access_token` field (RFC 6750 §2.2).
+`access_token` field (RFC 6750 §2.2). A token whose user has been disabled
+since it was issued gets `401`.
 
 ### `POST /oauth/revoke`
 

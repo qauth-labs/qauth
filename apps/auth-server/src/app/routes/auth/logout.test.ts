@@ -160,6 +160,28 @@ describe('POST /auth/logout', () => {
     expect(invalidateOrder).toBeLessThan(sweepOrder);
   });
 
+  it('still logs a disabled user out: ending access never needs an active account', async () => {
+    const { fastify, ctx } = createFastifyStub();
+    (fastify.repositories.users.findById as unknown as Mock).mockResolvedValue({
+      ...VALID_USER,
+      enabled: false,
+    });
+    (fastify.jwtUtils.extractFromHeader as unknown as Mock).mockReturnValue('valid.access.jwt');
+    (fastify.jwtUtils.verifyAccessToken as unknown as Mock).mockResolvedValue(loginClaims());
+
+    await logoutRoute(fastify);
+    const handler = ctx.handler;
+    if (!handler) throw new Error('Handler missing');
+
+    const result = await handler(logoutRequest(), createReply());
+
+    expect(fastify.repositories.refreshTokens.revokeAllForUser).toHaveBeenCalledWith(
+      VALID_USER.id,
+      'logout'
+    );
+    expect(result).toMatchObject({ success: true });
+  });
+
   it('denylists the token it was called with for the rest of its lifetime', async () => {
     // Logout ends the refresh tokens; the access token presented here would
     // otherwise keep working at the management API until it expires.

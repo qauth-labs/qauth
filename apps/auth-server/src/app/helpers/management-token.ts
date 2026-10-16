@@ -1,5 +1,6 @@
 import { JWTInvalidError } from '@qauth-labs/shared-errors';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
+import { z } from 'zod';
 
 import { resolveAudience } from './client-auth';
 import { getOrCreateSystemClient } from './oauth-client';
@@ -7,10 +8,17 @@ import { getOrCreateDefaultRealm } from './realm';
 
 /** The claims of a verified access token that decide whether it is a management token. */
 interface ManagementTokenClaims {
+  sub?: string;
   clientId?: string;
   aud?: string | string[];
   act?: unknown;
 }
+
+/**
+ * `users.id` is a uuid column: a non-UUID subject can never be a developer,
+ * and refusing it here keeps it from reaching Postgres (22P02 → 500).
+ */
+const uuidSubjectSchema = z.uuid();
 
 /**
  * Assert that a verified access token is a developer-management token: the
@@ -27,13 +35,21 @@ interface ManagementTokenClaims {
  * - `aud` carries every audience the system client resolves to — the same
  *   binding the `/oauth/authorize` Bearer path already enforces.
  * - No `act` claim: a delegated token acts for an agent, never the developer.
+ * - `sub` names a user that still exists and is enabled. The token outlives
+ *   the login that minted it by up to its lifetime, and an account disabled
+ *   in between must not keep managing its clients — the same gate every
+ *   token grant applies to the user it would mint for.
+ *
+ * `requireActiveUser: false` skips that last check, for a caller that only
+ * ends access (`/auth/logout`): a disabled user may still sign out.
  *
  * Throws `JWTInvalidError` (401) on any mismatch, as RFC 6750 §3.1 prescribes
  * for a token that is not valid for the resource.
  */
 export async function assertManagementToken(
   fastify: FastifyInstance,
-  claims: ManagementTokenClaims | undefined
+  claims: ManagementTokenClaims | undefined,
+  options: { requireActiveUser?: boolean } = {}
 ): Promise<void> {
   if (!claims) {
     throw new JWTInvalidError('Missing JWT payload');
@@ -54,6 +70,17 @@ export async function assertManagementToken(
   const presented = claims.aud === undefined ? [] : [claims.aud].flat();
   if (!expected.every((audience) => presented.includes(audience))) {
     throw new JWTInvalidError('Access token audience does not match the management API');
+  }
+
+  if (options.requireActiveUser === false) {
+    return;
+  }
+  if (!claims.sub || !uuidSubjectSchema.safeParse(claims.sub).success) {
+    throw new JWTInvalidError('Access token subject is not a user');
+  }
+  const user = await fastify.repositories.users.findById(claims.sub);
+  if (!user || !user.enabled) {
+    throw new JWTInvalidError('Access token subject is not an active user');
   }
 }
 

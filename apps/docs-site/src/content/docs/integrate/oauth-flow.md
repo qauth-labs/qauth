@@ -596,8 +596,8 @@ curl -s -X POST http://localhost:3000/oauth/introspect \
 }
 ```
 
-An inactive, expired, unknown, or wrong-audience token returns
-`{ "active": false }` with no other fields. For most resource servers, **local
+An inactive, expired, unknown, or wrong-audience token, or a user's token once
+that user is disabled, returns `{ "active": false }` with no other fields. For most resource servers, **local
 JWT verification against the JWKS is preferred** (no per-request round-trip);
 use introspection when you need immediate revocation.
 

@@ -92,6 +92,8 @@ async function buildServer(): Promise<FastifyInstance> {
     },
     authorizationCodes: { create: vi.fn() },
     auditLogs: { create: vi.fn().mockResolvedValue(undefined) },
+    // The Bearer path accepts only a user who is still enabled.
+    users: { findById: vi.fn(async (id: string) => ({ id, enabled: true })) },
   } as never);
   fastify.decorate('db', {
     transaction: vi.fn(async (cb: (tx: unknown) => Promise<unknown>) => cb({})),
@@ -235,7 +237,7 @@ describe('GET /oauth/authorize resource binding (RFC 8707)', () => {
     // "system" client whose `client_id` and `aud` the Bearer path pins the
     // token to.
     doubles.jwtUtils.verifyAccessToken.mockResolvedValue({
-      sub: 'user-1',
+      sub: '0190a5c8-0000-7000-8000-000000000001',
       clientId: CLIENT.clientId,
       aud: CLIENT.clientId,
     });
@@ -313,7 +315,7 @@ describe('/oauth/authorize Bearer path without a covering consent', () => {
       doubles.repositories.oauthConsents.findActive.mockResolvedValue(undefined);
       doubles.jwtUtils.extractFromHeader.mockReturnValue('token');
       doubles.jwtUtils.verifyAccessToken.mockResolvedValue({
-        sub: 'user-1',
+        sub: '0190a5c8-0000-7000-8000-000000000001',
         clientId: CLIENT.clientId,
         aud: CLIENT.clientId,
       });

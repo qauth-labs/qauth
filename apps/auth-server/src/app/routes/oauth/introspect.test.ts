@@ -55,6 +55,10 @@ function createFastifyStub() {
       oauthClients: {
         findByClientId: vi.fn(),
       },
+      // A user subject is reported active only while its account is enabled.
+      users: {
+        findById: vi.fn(async (id: string) => ({ id, enabled: true })),
+      },
       auditLogs: {
         create: vi.fn(),
       },
@@ -166,6 +170,81 @@ describe('POST /oauth/introspect route', () => {
     // `tokenSub` is only added when `sub` is not UUID-shaped.
     const auditCall = auditLogMock.mock.calls[0][0];
     expect(auditCall.metadata).not.toHaveProperty('tokenSub');
+  });
+
+  describe('disabled users', () => {
+    const client = {
+      id: 'client-1',
+      clientId: 'client-123',
+      clientSecretHash: 'hashed-secret',
+      enabled: true,
+    };
+    const userUuid = '019dbc24-7a2d-724d-bf26-1923f21f2234';
+
+    async function introspect(fastify: FastifyInstance, ctx: TestContext, sub: string) {
+      await introspectRoute(fastify);
+      (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(
+        client
+      );
+      (fastify.passwordHasher.verifyPassword as unknown as Mock).mockResolvedValue(true);
+      (fastify.jwtUtils.verifyAccessToken as unknown as Mock).mockResolvedValue({
+        sub,
+        clientId: client.clientId,
+        exp: 1234567890,
+        iat: 1234567800,
+        iss: 'https://auth.example.com',
+      });
+      const handler = ctx.handler;
+      if (!handler) throw new Error('Introspect handler was not registered');
+      return handler(
+        {
+          body: { token: 'valid-token', client_id: client.clientId, client_secret: 'secret' },
+          ip: '127.0.0.1',
+          headers: { 'user-agent': 'vitest' },
+        },
+        { send: (body: unknown) => body }
+      );
+    }
+
+    it('reports the token of a user disabled since it was minted as inactive', async () => {
+      const { fastify, ctx } = createFastifyStub();
+      (fastify.repositories.users.findById as unknown as Mock).mockResolvedValue({
+        id: userUuid,
+        enabled: false,
+      });
+
+      await expect(introspect(fastify, ctx, userUuid)).resolves.toEqual({ active: false });
+      expect(fastify.repositories.users.findById).toHaveBeenCalledWith(userUuid);
+      expect(fastify.repositories.auditLogs.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          userId: userUuid,
+          event: 'oauth.introspect.failure',
+          metadata: { error: 'Token subject is disabled' },
+        })
+      );
+    });
+
+    it('reports the token of a user that no longer exists as inactive', async () => {
+      const { fastify, ctx } = createFastifyStub();
+      (fastify.repositories.users.findById as unknown as Mock).mockResolvedValue(undefined);
+
+      await expect(introspect(fastify, ctx, userUuid)).resolves.toEqual({ active: false });
+    });
+
+    it('never looks up a client_credentials subject (sub = client_id) as a user', async () => {
+      // A dynamically registered client's id is a random UUID, so the UUID
+      // shape alone does not mark a user subject.
+      const { fastify, ctx } = createFastifyStub();
+      client.clientId = userUuid;
+      try {
+        await expect(introspect(fastify, ctx, userUuid)).resolves.toMatchObject({
+          active: true,
+        });
+        expect(fastify.repositories.users.findById).not.toHaveBeenCalled();
+      } finally {
+        client.clientId = 'client-123';
+      }
+    });
   });
 
   it('returns active: false for a signature-valid token whose jti is revoked (RFC 7009)', async () => {

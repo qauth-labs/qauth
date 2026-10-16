@@ -181,6 +181,8 @@ function makeFastify() {
       oauthClients: { findByClientId: vi.fn().mockResolvedValue(CLIENT) },
       oauthConsents: { findActive: vi.fn(), upsertGrant: vi.fn().mockResolvedValue({}) },
       authorizationCodes: { create: vi.fn().mockResolvedValue({ id: 'code-1' }) },
+      // `resolveBrowserSession` only accepts a session whose user is still enabled.
+      users: { findById: vi.fn(async (id: string) => ({ id, enabled: true })) },
       auditLogs: { create: vi.fn().mockResolvedValue(undefined) },
     },
     jwtUtils: {

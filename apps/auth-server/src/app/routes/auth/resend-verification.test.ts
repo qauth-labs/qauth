@@ -66,9 +66,12 @@ function createFastifyStub() {
         findByRealmProviderSub: vi.fn(),
       },
       users: {
-        findById: vi
-          .fn()
-          .mockResolvedValue({ id: 'user-1', email: 'User@Example.com', emailVerified: false }),
+        findById: vi.fn().mockResolvedValue({
+          id: 'user-1',
+          email: 'User@Example.com',
+          emailVerified: false,
+          enabled: true,
+        }),
       },
       emailVerificationTokens: {
         invalidateCredentialTokens: vi.fn().mockResolvedValue(1),
@@ -162,6 +165,30 @@ describe('POST /auth/resend-verification', () => {
     const result = await ctx.handler(request);
 
     expect(result).toEqual({ message: SUCCESS_MESSAGES.RESEND_VERIFICATION });
+    expect(fastify.repositories.emailVerificationTokens.create).not.toHaveBeenCalled();
+    expect(fastify.emailService.sendVerificationEmail).not.toHaveBeenCalled();
+  });
+
+  it('returns the same generic success for a disabled account without minting or sending', async () => {
+    const { fastify, ctx } = createFastifyStub();
+    await resendRoute(fastify);
+    if (!ctx.handler) throw new Error('Handler missing');
+
+    (
+      fastify.repositories.userCredentials.findByRealmProviderSub as unknown as Mock
+    ).mockResolvedValue(credentialFixture());
+    (fastify.repositories.users.findById as unknown as Mock).mockResolvedValue({
+      id: 'user-1',
+      enabled: false,
+    });
+
+    const result = await ctx.handler(request);
+
+    expect(result).toEqual({ message: SUCCESS_MESSAGES.RESEND_VERIFICATION });
+    expect(fastify.repositories.users.findById).toHaveBeenCalledWith('user-1');
+    expect(
+      fastify.repositories.emailVerificationTokens.invalidateCredentialTokens
+    ).not.toHaveBeenCalled();
     expect(fastify.repositories.emailVerificationTokens.create).not.toHaveBeenCalled();
     expect(fastify.emailService.sendVerificationEmail).not.toHaveBeenCalled();
   });

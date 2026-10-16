@@ -203,6 +203,39 @@ export default async function (fastify: FastifyInstance) {
         // `user_id` when it parses as a UUID. Non-UUID subs are preserved
         // in `metadata.tokenSub` so audit-trail parity holds.
         const subIsUuid = payload.sub !== undefined && UUID_REGEX.test(payload.sub);
+
+        // A user's token is active only while the user exists and is enabled:
+        // disabling an account must end the access it already holds at every
+        // resource server that asks, as `/oauth/userinfo` and every grant
+        // refuse it. A `client_credentials` token carries `sub = client_id`,
+        // and a dynamically registered client's id is a random UUID, so the
+        // UUID shape alone does not mark a user subject.
+        if (subIsUuid && payload.sub !== payload.clientId) {
+          const user = await fastify.repositories.users.findById(payload.sub as string);
+          if (!user || !user.enabled) {
+            await fastify.repositories.auditLogs.create({
+              // `audit_logs.user_id` references `users`: an unknown subject
+              // goes to metadata instead.
+              userId: user ? user.id : null,
+              oauthClientId: client.id,
+              event: 'oauth.introspect.failure',
+              eventType: 'token',
+              success: false,
+              ipAddress: request.ip,
+              userAgent: request.headers['user-agent'] || null,
+              metadata: user
+                ? { error: 'Token subject is disabled' }
+                : { error: 'Token subject is unknown', tokenSub: payload.sub },
+            });
+
+            await ensureMinimumResponseTime(startTime, MIN_RESPONSE_TIME_MS.INTROSPECT);
+
+            return reply.send({
+              active: false as const,
+            });
+          }
+        }
+
         await fastify.repositories.auditLogs.create({
           userId: subIsUuid ? payload.sub : null,
           oauthClientId: client.id,

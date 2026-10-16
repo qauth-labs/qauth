@@ -36,6 +36,13 @@ async function handleUserinfo(fastify: FastifyInstance, request: FastifyRequest)
       throw new NotFoundError('User', userId);
     }
 
+    // A token outlives the login that minted it; a user disabled since gets
+    // no claims, as introspection reports the token inactive and every grant
+    // refuses to mint for the user (401, RFC 6750 §3.1 `invalid_token`).
+    if (!user.enabled) {
+      throw new JWTInvalidError('Token subject is disabled');
+    }
+
     // OIDC Core §5.4: userinfo claims are gated by the scopes the access
     // token was granted. `sub` is ALWAYS returned; `email`/`email_verified`
     // require the `email` scope; `name` (a profile claim) requires

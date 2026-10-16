@@ -69,6 +69,8 @@ function makeFastify() {
       authorizationCodes: { invalidateForUserAndClient: vi.fn().mockResolvedValue(0) },
       refreshTokens: { revokeAllForUserAndClient: vi.fn().mockResolvedValue(0) },
       auditLogs: { create: vi.fn().mockResolvedValue(undefined) },
+      // `resolveBrowserSession` only accepts a session whose user is still enabled.
+      users: { findById: vi.fn(async (id: string) => ({ id, enabled: true })) },
     },
     db: { transaction: vi.fn(async (cb: (tx: unknown) => Promise<unknown>) => cb('tx')) },
     sessionUtils: { getSession: vi.fn(), setSession: vi.fn().mockResolvedValue(undefined) },
