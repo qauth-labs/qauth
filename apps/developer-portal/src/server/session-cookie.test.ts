@@ -118,4 +118,19 @@ describe('readSessionCookie', () => {
     const cookieHeader = `other=abc; ${SESSION_COOKIE_NAME}=${value}; extra=xyz`;
     expect(readSessionCookie(cookieHeader)).toEqual(samplePayload);
   });
+
+  it('does not read a name that only becomes the __Host- name after trim()', () => {
+    // A browser applies the __Host- rules to names that START with the prefix,
+    // so a sibling host may set this one; a longer Path sorts it first.
+    const planted = signSession({ ...samplePayload, accessToken: 'planted' });
+    const genuine = signSession(samplePayload);
+    expect(
+      readSessionCookie(
+        `\u00a0${SESSION_COOKIE_NAME}=${planted}; ${SESSION_COOKIE_NAME}=${genuine}`
+      )
+    ).toEqual(samplePayload);
+    expect(readSessionCookie(`\u00a0${SESSION_COOKIE_NAME}=${planted}`)).toBeNull();
+    // SP and HTAB are what a browser strips too.
+    expect(readSessionCookie(`a=b;\t ${SESSION_COOKIE_NAME}=${genuine} \t`)).toEqual(samplePayload);
+  });
 });

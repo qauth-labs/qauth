@@ -48,6 +48,28 @@ describe('session cookie helpers', () => {
     expect(readCookie(request, 'missing')).toBeUndefined();
   });
 
+  it('readCookie does not read a name that only becomes a __Host- name after trim()', () => {
+    // A browser applies the __Host- rules to names that START with the prefix,
+    // so a sibling host may set this one; a longer Path sorts it first.
+    const planted = `\u00a0${SESSION_COOKIE_NAME}=planted`;
+    expect(
+      readCookie(
+        { headers: { cookie: `${planted}; ${SESSION_COOKIE_NAME}=genuine` } } as never,
+        SESSION_COOKIE_NAME
+      )
+    ).toBe('genuine');
+    expect(
+      readCookie({ headers: { cookie: planted } } as never, SESSION_COOKIE_NAME)
+    ).toBeUndefined();
+    // SP and HTAB are what a browser strips too.
+    expect(
+      readCookie(
+        { headers: { cookie: `a=b;\t ${SESSION_COOKIE_NAME}=v \t` } } as never,
+        SESSION_COOKIE_NAME
+      )
+    ).toBe('v');
+  });
+
   it('setSessionCookie emits __Host- with required attrs', () => {
     const headers: Record<string, string> = {};
     const reply = {
