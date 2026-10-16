@@ -61,8 +61,9 @@ export const REDIS_KEYS = {
    * Both components are {@link digest}ed, so the key is fixed-length and free
    * of Redis-reserved characters regardless of what the (attacker-controlled)
    * `jti` contains. TTL is bounded by the assertion's own maximum permitted
-   * lifetime plus the clock-skew leeway, so an entry never outlives the window
-   * in which the assertion could be reused.
+   * lifetime plus twice the clock-skew leeway (once for a future `iat`, once
+   * past `exp`), so an entry neither expires before nor outlives the window in
+   * which the assertion could be reused.
    */
   CLIENT_ASSERTION_JTI: (clientId: string, jti: string) =>
     `client-assertion:jti:${digest(clientId)}:${digest(jti)}`,
@@ -84,9 +85,9 @@ export const REDIS_KEYS = {
    *
    * Scoped by issuer so two trusted IdPs can never collide in `jti` space (and
    * so one can never burn the other's). TTL is bounded by
-   * `ID_JAG_MAX_ASSERTION_LIFETIME + ID_JAG_CLOCK_SKEW_LEEWAY` — the longest
-   * window in which a still-valid assertion could be replayed — which is what
-   * keeps the store from growing without limit.
+   * `ID_JAG_MAX_ASSERTION_LIFETIME + 2 * ID_JAG_CLOCK_SKEW_LEEWAY` — the
+   * longest window in which a still-valid assertion could be replayed — which
+   * is what keeps the store from growing without limit.
    */
   ID_JAG_JTI: (issuer: string, jti: string) => `id-jag:jti:${digest(issuer)}:${digest(jti)}`,
   /**

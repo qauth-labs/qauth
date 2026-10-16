@@ -26,6 +26,7 @@ vi.mock('./ssrf-safe-fetch', async () => {
 
 import {
   authenticateClientAssertion,
+  CLIENT_ASSERTION_CLOCK_SKEW_LEEWAY_SECONDS,
   CLIENT_ASSERTION_MAX_LIFETIME_SECONDS,
   type ClientAssertionCredentials,
 } from './client-assertion';
@@ -460,6 +461,30 @@ describe('authenticateClientAssertion — rejected', () => {
     await expect(
       authenticateClientAssertion(asFastify(stub), 'realm-1', creds(assertion))
     ).rejects.toMatchObject({ errorDescription: expect.stringMatching(/already been used/) });
+  });
+
+  // Regression (ANT-2026-D8J0C6IS): the verifier grants the clock-skew leeway
+  // twice — an `iat` up to one leeway ahead, and `exp` accepted one leeway
+  // past — but the replay entry's ceiling counted it once, so it expired while
+  // the assertion of a client whose clock runs ahead was still acceptable.
+  it('keeps the jti entry until the assertion itself stops being acceptable', async () => {
+    // A client whose clock runs ahead, within the leeway, signing for the
+    // maximum lifetime: the longest-lived assertion the verifier accepts.
+    const stub = fastifyStub(clientRow({ jwks: jwkSet(es256Jwk) }));
+    const now = Math.floor(Date.now() / 1000);
+    const skew = CLIENT_ASSERTION_CLOCK_SKEW_LEEWAY_SECONDS - 5;
+    const assertion = await makeAssertion({
+      iat: now + skew,
+      expOffset: skew + CLIENT_ASSERTION_MAX_LIFETIME_SECONDS,
+    });
+
+    await authenticateClientAssertion(asFastify(stub), 'realm-1', creds(assertion));
+
+    const [, , , ttlSeconds] = stub.redis.set.mock.calls[0];
+    const acceptableFor =
+      skew + CLIENT_ASSERTION_MAX_LIFETIME_SECONDS + CLIENT_ASSERTION_CLOCK_SKEW_LEEWAY_SECONDS;
+    // 1 s of slack for a second boundary between `now` here and in the verifier.
+    expect(ttlSeconds).toBeGreaterThanOrEqual(acceptableFor - 1);
   });
 
   it('rejects an assertion with no jti (replay protection needs one)', async () => {

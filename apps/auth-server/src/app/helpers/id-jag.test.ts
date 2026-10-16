@@ -569,6 +569,28 @@ describe('validateIdJagAssertion — replay protection', () => {
     );
   });
 
+  // Regression (ANT-2026-D8J0C6IS): same arithmetic as the client assertion's
+  // replay entry — the leeway was counted once, the verifier grants it twice.
+  it('keeps the replay marker until the assertion itself stops being acceptable', async () => {
+    // An IdP whose clock runs ahead, within the leeway, signing for the maximum
+    // lifetime: the longest-lived assertion the verifier accepts.
+    const { fastify, redis } = fastifyStub();
+    const skew = ENV.ID_JAG_CLOCK_SKEW_LEEWAY - 5;
+    const iat = Math.floor(Date.now() / 1000) + skew;
+    const assertion = await makeAssertion({ iat, exp: iat + ENV.ID_JAG_MAX_ASSERTION_LIFETIME });
+
+    await validateIdJagAssertion(fastify, {
+      assertion,
+      expectedClientId: CLIENT_ID,
+      resolver: trustedResolver(),
+    });
+
+    const [, , , ttl] = redis.set.mock.calls[0];
+    expect(ttl).toBeGreaterThanOrEqual(
+      skew + ENV.ID_JAG_MAX_ASSERTION_LIFETIME + ENV.ID_JAG_CLOCK_SKEW_LEEWAY
+    );
+  });
+
   it('does NOT burn the jti when the assertion names a different client', async () => {
     const { fastify, store } = fastifyStub();
     const assertion = await makeAssertion({ jti: 'not-yours' });

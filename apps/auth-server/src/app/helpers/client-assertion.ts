@@ -182,9 +182,15 @@ async function consumeAssertionJti(
 ): Promise<void> {
   const nowSeconds = Math.floor(Date.now() / 1000);
   const remaining = expSeconds - nowSeconds;
+  // The entry must outlive the assertion. `jwtVerify` accepts it until
+  // `exp + leeway`, and `exp` itself may be `max lifetime + leeway` away because
+  // `iat` is allowed up to one leeway ahead of this clock. The ceiling therefore
+  // counts the leeway TWICE; counting it once freed the `jti` while the
+  // assertion of a client whose clock runs ahead was still acceptable
+  // (ANT-2026-D8J0C6IS).
   const ttlSeconds = Math.min(
     Math.max(remaining, 1) + CLIENT_ASSERTION_CLOCK_SKEW_LEEWAY_SECONDS,
-    CLIENT_ASSERTION_MAX_LIFETIME_SECONDS + CLIENT_ASSERTION_CLOCK_SKEW_LEEWAY_SECONDS
+    CLIENT_ASSERTION_MAX_LIFETIME_SECONDS + 2 * CLIENT_ASSERTION_CLOCK_SKEW_LEEWAY_SECONDS
   );
 
   const key = REDIS_KEYS.CLIENT_ASSERTION_JTI(clientId, jti);
