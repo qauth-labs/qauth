@@ -53,6 +53,12 @@ export interface UpsertUserAttributeInput {
   attrValue: string;
   verified: boolean;
   expiresAt?: number | null;
+  /**
+   * What the attribute rests on (`user_attributes.provenance`). Written as
+   * given on insert AND on conflict, so a re-presented credential replaces the
+   * provenance of the rows it rewrites. Absent means NULL.
+   */
+  provenance?: Record<string, unknown> | null;
 }
 
 /**
@@ -129,6 +135,8 @@ export interface UserAttributesRepository {
     attrKey: string,
     tx?: DbClient
   ): Promise<UserAttributeRow[]>;
+  /** Every row one source holds for a user, verified or not. */
+  findByUserIdAndSource(userId: string, source: string, tx?: DbClient): Promise<UserAttributeRow[]>;
   setVerified(
     userId: string,
     source: string,

@@ -624,6 +624,36 @@ Three properties are worth knowing before extending it:
   a digest, so the account is matchable without a second copy of the person's
   attributes sitting in the column.
 
+### What a wallet attribute rests on, and when it is withdrawn
+
+Each `source='wallet'` row records its **provenance** in
+`user_attributes.provenance` (migration 0022): the validated issuer and the
+issuer-signed `status` reference of the credential that wrote it. Two rules use
+it.
+
+- **At every emission** (token grants, userinfo, password sign-in), a wallet row
+  is asserted only while the account's realm still trusts its issuer. Removing
+  an issuer from `OID4VP_TRUSTED_ISSUERS`, or turning `WALLET_FEDERATION_ENABLED`
+  off, stops its attributes from being emitted at once. The next source in the
+  trust order answers instead, or the claim is omitted. This check is local; it
+  makes no outbound request. Wallet rows written before migration 0022 carry no
+  provenance and are withheld until the account's next wallet sign-in rewrites
+  them.
+- **At the account's next wallet sign-in**, every verified wallet row that the
+  presentation did not rewrite is checked again against the same gates a
+  presentation meets: issuer trust and credential status. A row whose credential
+  no longer reads `VALID` on its status list is set `verified=false`, and so is
+  a row whose issuer is no longer trusted. That covers a revoked credential
+  whose replacement the holder presents without the old claim. A status list
+  that cannot be read counts as a failure (fail-closed).
+
+**Not covered:** credential status is not re-checked on the token or userinfo
+paths, because that would put a status-list fetch on every token grant. After an
+issuer revokes a credential, the attributes it wrote keep being emitted (through
+a password sign-in or a refresh token) until the account's next wallet sign-in,
+the credential's own `exp`, or the operator removing the issuer from trust,
+whichever comes first. Tokens already issued are not affected.
+
 ## End-to-end tests and the mock wallet (#240)
 
 The whole stack is exercised against a real Postgres, a real Redis and a mock

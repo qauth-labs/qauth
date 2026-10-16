@@ -8,6 +8,7 @@ export * from './claims/attribute-trust';
 export * from './claims/credential-claim-adapters';
 export type * from './claims/credential-claims.types';
 export * from './claims/sd-jwt-vc-claims';
+export * from './claims/wallet-attribute-provenance';
 export * from './oid4vp';
 export * from './profiles/resolve-verifier-profile';
 export * from './profiles/verifier-identity';

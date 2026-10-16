@@ -84,7 +84,8 @@ const CREDENTIAL = {
  * Needed wherever the enrolment path runs for real: `deriveEnrolmentWalletBinding`
  * and `buildWalletCredentialData` both re-check `ValidatedIssuer.isValidated` and
  * refuse a hand-built stand-in (ADR-009 §2), which is exactly the property that
- * keeps a credential-asserted `iss` out of an account key.
+ * keeps a credential-asserted `iss` out of an account key. A sign-in that reaches
+ * the attribute write needs it too, for `buildWalletAttributeProvenance`.
  */
 const BRANDED_CREDENTIAL: ValidatedCredential = {
   queryId: 'qauth_wallet_login',
@@ -196,7 +197,11 @@ function makeFastify(store = createCredentialStore()) {
         // enrolment path writes users and attributes. Neither existed when this
         // harness was written for #238 alone.
         realms: { findById: vi.fn(async () => ({ id: 'realm-1', name: 'master' })) },
-        userAttributes: { upsertMany: vi.fn(async () => []) },
+        userAttributes: {
+          upsertMany: vi.fn(async () => []),
+          findByUserIdAndSource: vi.fn(async () => []),
+          setVerified: vi.fn(async () => undefined),
+        },
         users: {
           create: vi.fn(async () => ({ id: `enrolled-${nextUserId++}`, realmId: 'realm-1' })),
         },
@@ -273,6 +278,7 @@ describe('resolveWalletPresentation — the gates run, in order (#234/#236/#300)
       },
     ]);
     const { fastify } = makeFastify(store);
+    (verifyWalletPresentations as unknown as Mock).mockResolvedValue([BRANDED_CREDENTIAL]);
 
     await expect(
       resolveWalletPresentation(fastify, { ...REQUEST, assertedIdentifier: 'alice@example.com' })
@@ -887,6 +893,7 @@ describe('#238 AC3 — after linking, both credentials name the same users.id', 
       },
     ]);
     const { fastify } = makeFastify(store);
+    (verifyWalletPresentations as unknown as Mock).mockResolvedValue([BRANDED_CREDENTIAL]);
 
     (prepareWalletLink as unknown as Mock).mockImplementation(
       async (_credential: unknown, _config: unknown, context: { accountIdentifier: string }) => ({

@@ -415,6 +415,12 @@ export async function resolveWalletPresentation(
       assertedIdentifier: input.assertedIdentifier,
       strategy,
       config: setup.subjectResolution,
+      // The same gates the presentation just met, for the attributes an
+      // EARLIER credential left on a returning account (ANT-2026-ULJIA4P4).
+      attributeGates: {
+        trustRegistry: await resolveRealmTrustRegistry(fastify, input.realmId),
+        credentialStatus: setup.credentialStatus,
+      },
     });
 
     if (resolution.status !== 'authenticated') return { status: 'rejected' };

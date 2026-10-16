@@ -26,6 +26,12 @@ vi.mock('../../helpers/timing', () => ({
   ensureMinimumResponseTime: vi.fn().mockResolvedValue(undefined),
 }));
 
+// Whether a wallet row's issuer is still trusted is `email-claims.test.ts`'s and
+// `wallet-verification.test.ts`'s subject; here every one is.
+vi.mock('../../helpers/wallet-verification', () => ({
+  isWalletAttributeIssuerStillTrusted: vi.fn().mockResolvedValue(true),
+}));
+
 /** A fresh Ed25519 pair in the PKCS#8 / SPKI PEM form the config carries. */
 function generateEd25519Pem(): { privateKeyPem: string; publicKeyPem: string } {
   const { privateKey, publicKey } = generateKeyPairSync('ed25519', {

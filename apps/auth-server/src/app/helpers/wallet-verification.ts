@@ -7,9 +7,11 @@ import {
   type CredentialStatusAuditEvent,
   type CredentialStatusChecker,
   type IssuerKeyResolver,
+  isWalletAttributeIssuerTrusted,
   type KeyStorageAssuranceGate,
   keyStorageAssuranceGateFor,
   type KeyStorageAssuranceResolver,
+  readWalletAttributeProvenance,
   resolveSubjectResolution,
   resolveTrustRegistry,
   type SubjectResolutionConfig,
@@ -374,5 +376,53 @@ export async function resolveRealmTrustRegistry(
   return resolveTrustRegistry(
     { name: realmName },
     { OID4VP_TRUSTED_ISSUERS: env.OID4VP_TRUSTED_ISSUERS }
+  );
+}
+
+/**
+ * Whether the issuer a stored wallet attribute rests on is still trusted by the
+ * account's realm (ANT-2026-ULJIA4P4).
+ *
+ * Asked by claim resolution before a `source='wallet'` row is asserted, on
+ * every token grant, userinfo response and password sign-in. Those paths
+ * involve no presentation, so without this a wallet attribute outlived the
+ * operator removing its issuer from `OID4VP_TRUSTED_ISSUERS`, and outlived
+ * wallet federation being switched off altogether.
+ *
+ * Local only: the user row, the realm row and the configured allowlist. No
+ * status-list fetch happens here. Revocation is re-checked at the account's
+ * next wallet sign-in instead (`helpers/wallet-account.ts`).
+ *
+ * Fail-closed and never throws: wallet federation off, a row with no readable
+ * provenance (written before it was recorded), an unreadable account and an
+ * issuer the realm no longer trusts all answer `false`.
+ *
+ * @param fastify - server instance, for its repositories and logger.
+ * @param userId - the account the attribute belongs to.
+ * @param provenance - the row's raw `provenance` value.
+ */
+export async function isWalletAttributeIssuerStillTrusted(
+  fastify: FastifyInstance,
+  userId: string,
+  provenance: unknown
+): Promise<boolean> {
+  if (!env.WALLET_FEDERATION_ENABLED) return false;
+  if (readWalletAttributeProvenance(provenance) === undefined) return false;
+
+  let realmId: string | undefined;
+  try {
+    realmId = (await fastify.repositories.users.findById(userId))?.realmId;
+  } catch (error) {
+    fastify.log.error(
+      { err: error, userId },
+      'failed to read the account behind a wallet attribute; withholding it'
+    );
+    return false;
+  }
+  if (realmId === undefined) return false;
+
+  return isWalletAttributeIssuerTrusted(
+    provenance,
+    await resolveRealmTrustRegistry(fastify, realmId)
   );
 }

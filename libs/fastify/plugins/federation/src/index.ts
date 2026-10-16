@@ -153,9 +153,13 @@ export type {
   WalletCredentialDataInput,
 } from '@qauth-labs/server-federation';
 export {
+  buildWalletAttributeProvenance,
   buildWalletCredentialData,
   buildWalletVerifiedIdentity,
   extractWalletAttributes,
+  isWalletAttributeIssuerTrusted,
+  isWalletAttributeStatusValid,
+  readWalletAttributeProvenance,
   walletCredentialDataSchema,
 } from '@qauth-labs/server-federation';
 

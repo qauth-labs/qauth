@@ -1,0 +1,2 @@
+ALTER TABLE "user_attributes" ADD COLUMN "provenance" jsonb;--> statement-breakpoint
+ALTER TABLE "user_attributes" ADD CONSTRAINT "user_attributes_provenance_is_object" CHECK ("user_attributes"."provenance" IS NULL OR jsonb_typeof("user_attributes"."provenance") = 'object');
