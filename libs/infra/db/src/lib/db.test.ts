@@ -36,4 +36,22 @@ describe('createDatabase logger injection (F-13)', () => {
       expect.anything()
     );
   });
+
+  it('logs an idle client error on the pool instead of letting it throw', () => {
+    const logger = createSpyLogger();
+    database = createDatabase({
+      connectionString: 'postgresql://user:pass@127.0.0.1:1/db',
+      pool: { min: 0 },
+      logger,
+    });
+
+    // This is what pg-pool does when PostgreSQL closes an idle connection
+    // (restart, failover, pg_terminate_backend). Unhandled, it ends the process.
+    expect(() =>
+      database?.pool.emit('error', new Error('terminating connection due to administrator command'))
+    ).not.toThrow();
+    expect(logger.error).toHaveBeenCalledWith(
+      expect.stringContaining('terminating connection due to administrator command')
+    );
+  });
 });

@@ -71,6 +71,15 @@ export function createDatabase(config: DatabaseConfig): DatabaseInstance {
     connectionTimeoutMillis: poolConfig.connectionTimeoutMillis,
   });
 
+  // pg-pool re-emits the connection error of an idle client here after it has
+  // already dropped that client. Without a listener Node throws the 'error'
+  // event and the process exits; with one, the pool simply opens a fresh
+  // connection on the next query. The message is interpolated because pino
+  // ignores a trailing error argument and `error.client` is the whole Client.
+  pool.on('error', (error) => {
+    logger.error(`PostgreSQL: idle client error: ${error.message}`);
+  });
+
   // Create Drizzle database instance
   const db = drizzle(pool);
 
