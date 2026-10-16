@@ -421,6 +421,7 @@ export async function resolveWalletPresentation(
         trustRegistry: await resolveRealmTrustRegistry(fastify, input.realmId),
         credentialStatus: setup.credentialStatus,
       },
+      emailVerifyingIssuers: env.OID4VP_EMAIL_VERIFYING_ISSUERS ?? [],
     });
 
     if (resolution.status !== 'authenticated') return { status: 'rejected' };

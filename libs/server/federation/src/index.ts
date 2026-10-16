@@ -33,6 +33,7 @@ export * from './status/status-list-token';
 export * from './status/status-list-uri';
 export * from './subject';
 export * from './trust/assert-trusted-issuers';
+export * from './trust/email-verifying-issuers';
 export * from './trust/issuer-identity';
 export * from './trust/issuer-trust-rejection';
 export * from './trust/resolve-trust-registry';

@@ -289,6 +289,9 @@ services:
       OID4VP_SUBJECT_CLAIM:
       OID4VP_SUBJECT_CLAIM_ISSUERS:
       OID4VP_SUBJECT_BINDING_CLAIMS:
+      # Issuers whose wallet email counts as verified without a disclosed
+      # `email_verified: true` (ANT-2026-BGP7XCR2). Unset means none.
+      OID4VP_EMAIL_VERIFYING_ISSUERS:
 
       # The VERIFIER's OWN identity (#377): the ES256 key and X.509 chain a
       # wallet establishes QAuth's identity from, under the `x509_hash` Client

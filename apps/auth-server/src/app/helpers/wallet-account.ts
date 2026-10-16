@@ -5,6 +5,7 @@ import {
   deriveEnrolmentWalletBinding,
   extractWalletAttributes,
   findInexactNumericBindingClaims,
+  issuerVouchesForEmail,
   isWalletAttributeIssuerTrusted,
   isWalletAttributeStatusValid,
   readWalletAttributeProvenance,
@@ -96,6 +97,12 @@ export interface WalletAccountInput {
    * against (ANT-2026-ULJIA4P4). See {@link withdrawUnbackedWalletAttributes}.
    */
   readonly attributeGates: WalletAttributeGates;
+  /**
+   * `OID4VP_EMAIL_VERIFYING_ISSUERS` (ANT-2026-BGP7XCR2): issuers whose email
+   * counts as verified without a disclosed `email_verified: true`. Empty means
+   * none, the default.
+   */
+  readonly emailVerifyingIssuers: readonly string[];
 }
 
 /** The issuer-trust and credential-status gates, as a presentation meets them. */
@@ -139,9 +146,14 @@ async function writeWalletAttributes(
   fastify: FastifyInstance,
   userId: string,
   credential: ValidatedCredential,
+  emailVerifyingIssuers: readonly string[],
   tx?: AttributeWriteTx
 ): Promise<ReadonlySet<string>> {
-  const attributes = extractWalletAttributes(credential);
+  // The email row is verified only on a disclosed `email_verified: true`, or
+  // for an issuer the operator vouches for (ANT-2026-BGP7XCR2).
+  const attributes = extractWalletAttributes(credential, undefined, {
+    issuerVouchesForEmail: issuerVouchesForEmail(credential.issuer, emailVerifyingIssuers),
+  });
   // What every row rests on: the validated issuer and the issuer-signed
   // `status` reference (ANT-2026-ULJIA4P4). Claim resolution stops asserting a
   // row whose issuer is no longer trusted, and a later wallet sign-in
@@ -312,7 +324,12 @@ export async function resolveWalletAccount(
       return { status: 'rejected' };
     }
 
-    const rewritten = await writeWalletAttributes(fastify, outcome.userId, input.credential);
+    const rewritten = await writeWalletAttributes(
+      fastify,
+      outcome.userId,
+      input.credential,
+      input.emailVerifyingIssuers
+    );
     await withdrawUnbackedWalletAttributes(
       fastify,
       outcome.userId,
@@ -374,7 +391,13 @@ export async function resolveWalletAccount(
         tx
       );
 
-      await writeWalletAttributes(fastify, user.id, input.credential, tx);
+      await writeWalletAttributes(
+        fastify,
+        user.id,
+        input.credential,
+        input.emailVerifyingIssuers,
+        tx
+      );
 
       return user.id;
     });

@@ -441,6 +441,31 @@ export function issuerDeniesEmailVerification(source: WalletAttributeSource): bo
 }
 
 /**
+ * Whether the presentation DISCLOSED the issuer's `email_verified: true`: an
+ * own claim whose value is exactly `true`. A missing claim, a string, `null` or
+ * anything else is not an assertion (ANT-2026-BGP7XCR2).
+ */
+export function issuerAssertsEmailVerified(source: WalletAttributeSource): boolean {
+  const claims: unknown = source.claims;
+  if (claims === null || typeof claims !== 'object') return false;
+  return (
+    Object.hasOwn(claims, 'email_verified') &&
+    (claims as Record<string, unknown>)['email_verified'] === true
+  );
+}
+
+/** Options for {@link extractWalletAttributes}. */
+export interface ExtractWalletAttributesOptions {
+  /**
+   * The operator listed this credential's validated issuer in
+   * `OID4VP_EMAIL_VERIFYING_ISSUERS` (`issuerVouchesForEmail`), so its email
+   * counts as verified without a disclosed `email_verified: true`. Defaults to
+   * `false`. A disclosed `email_verified: false` wins either way.
+   */
+  readonly issuerVouchesForEmail?: boolean;
+}
+
+/**
  * Normalize a validated credential's claims into `user_attributes` rows (#235).
  *
  * The workhorse behind {@link CredentialProvider.extractAttributes}, exported
@@ -450,14 +475,18 @@ export function issuerDeniesEmailVerification(source: WalletAttributeSource): bo
  *
  * Every row is `source='wallet'` and `verified=true`, with one exception. #234
  * proved the issuer's signature over these exact claims and #236 accepted that
- * issuer, so what a row asserts is what the issuer said. That is exactly why an
- * issuer's own `email_verified: false` must be honoured: the issuer signed
- * "this is the holder's address, and it is NOT verified", and storing the
- * address as verified would claim more than the issuer did. Such an email row
- * is written `verified=false` ({@link issuerDeniesEmailVerification}), so
- * `resolveEmailClaims` never emits it as `email_verified: true`. The flag can
- * only lower the email row. It never raises anything, and when it is absent
- * the row stays verified as the issuer's signed assertion.
+ * issuer, so what a row asserts is what the issuer said.
+ *
+ * The exception is the EMAIL row, because "verified" is a claim about the
+ * address that the issuer has to make. It is written `verified=true` only when
+ * the presentation discloses `email_verified: true`
+ * ({@link issuerAssertsEmailVerified}), or when the operator vouches for the
+ * issuer ({@link ExtractWalletAttributesOptions.issuerVouchesForEmail}), and
+ * never when the issuer signed `email_verified: false`
+ * ({@link issuerDeniesEmailVerification}). An ABSENT flag is not verified
+ * (ANT-2026-BGP7XCR2): in SD-JWT VC the holder chooses the Disclosures, so a
+ * missing flag may be an `email_verified: false` the holder left out. An
+ * unverified email row is never emitted by `resolveEmailClaims`.
  *
  * Every row's `expiresAt` is the CREDENTIAL's `exp`, or absent when it carries
  * none. ADR-002's rule, and the reason `selectTrustedAttribute` filters on
@@ -473,7 +502,8 @@ export function issuerDeniesEmailVerification(source: WalletAttributeSource): bo
  */
 export function extractWalletAttributes(
   source: WalletAttributeSource,
-  adapters?: CredentialClaimAdapterRegistry
+  adapters?: CredentialClaimAdapterRegistry,
+  options: ExtractWalletAttributesOptions = {}
 ): UserAttribute[] {
   if (source === null || typeof source !== 'object') {
     throw new Error(
@@ -484,13 +514,15 @@ export function extractWalletAttributes(
   const adapter = resolveCredentialClaimAdapter(source.format, adapters);
   const expiresAt = validityExpirySeconds(source.validity);
 
-  const emailUnverified = issuerDeniesEmailVerification(source);
+  const emailVerified =
+    !issuerDeniesEmailVerification(source) &&
+    (issuerAssertsEmailVerified(source) || options.issuerVouchesForEmail === true);
 
   return adapter.normalizeClaims(source).map((claim) => ({
     source: WALLET_SOURCE,
     attrKey: claim.attrKey,
     attrValue: claim.attrValue,
-    verified: !(emailUnverified && claim.attrKey === EMAIL_ATTR_KEY),
+    verified: claim.attrKey !== EMAIL_ATTR_KEY || emailVerified,
     ...(expiresAt === undefined ? {} : { expiresAt: new Date(expiresAt * 1000) }),
   }));
 }

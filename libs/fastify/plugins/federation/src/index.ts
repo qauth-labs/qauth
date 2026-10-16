@@ -125,6 +125,13 @@ export {
 // `assert-trusted-issuers.ts` for why that must fail the boot rather than
 // surface as "every presentation is rejected".
 export { assertTrustedIssuersUsable } from '@qauth-labs/server-federation';
+// `OID4VP_EMAIL_VERIFYING_ISSUERS` (ANT-2026-BGP7XCR2): checked at boot like the
+// allowlist above, and read on the wallet sign-in path to decide whether an
+// email the presentation did not flag as verified counts as verified.
+export {
+  assertEmailVerifyingIssuersUsable,
+  issuerVouchesForEmail,
+} from '@qauth-labs/server-federation';
 export {
   buildPasswordCredentialData,
   createPasswordProvider,

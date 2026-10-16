@@ -165,7 +165,10 @@ Each item is pass/fail. Record the wallet's behaviour even when it matches.
       values in the clear. It carries a binding **digest**.
 - [ ] `user_attributes` has `source='wallet'`, `verified=true` rows for the
       claims the credential disclosed, and `expires_at` matching the credential's
-      `exp` (NULL when it has none).
+      `exp` (NULL when it has none). The `email` row is the exception: it is
+      `verified=true` only when the wallet disclosed `email_verified: true`, or
+      when the issuer is listed in `OID4VP_EMAIL_VERIFYING_ISSUERS`. Record
+      whether the real issuer signs `email_verified` at all.
 
 ### Credential status, as the real issuer publishes it (#297/#378)
 

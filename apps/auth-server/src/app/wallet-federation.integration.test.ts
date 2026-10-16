@@ -104,6 +104,9 @@ const CREDENTIAL_CLAIMS = {
   given_name: 'Alice',
   family_name: 'Doe',
   email: 'alice@example.com',
+  // Disclosed, so the wallet email row is written verified (ANT-2026-BGP7XCR2):
+  // an absent flag no longer counts.
+  email_verified: true,
 } as const;
 
 /** The claim set `asserted-lookup` derives its entitlement binding from. */

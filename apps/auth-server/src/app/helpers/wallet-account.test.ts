@@ -127,7 +127,8 @@ async function resolve(
   fastify: FastifyInstance,
   credential: ValidatedCredential,
   assertedIdentifier = 'alice@example.com',
-  attributeGates = GATES
+  attributeGates = GATES,
+  emailVerifyingIssuers: readonly string[] = []
 ) {
   return resolveWalletAccount(fastify, {
     realmId: REALM_ID,
@@ -136,6 +137,7 @@ async function resolve(
     strategy: createSubjectResolutionStrategy(CONFIG),
     config: CONFIG,
     attributeGates,
+    emailVerifyingIssuers,
   });
 }
 
@@ -256,6 +258,7 @@ describe('resolveWalletAccount — enrolment (ADR-009 §1, first bootstrap case)
       strategy,
       config: CONFIG,
       attributeGates: GATES,
+      emailVerifyingIssuers: [],
     });
 
     const [written] = harness.userCredentials.create.mock.calls[0] as [Record<string, unknown>];
@@ -535,6 +538,59 @@ describe('resolveWalletAccount — what a wallet attribute rests on (ANT-2026-UL
     });
 
     expect(harness.userAttributes.setVerified).not.toHaveBeenCalled();
+  });
+});
+
+describe('resolveWalletAccount — when the wallet email counts as verified (ANT-2026-BGP7XCR2)', () => {
+  let harness: ReturnType<typeof fakeFastify>;
+
+  beforeEach(() => {
+    harness = fakeFastify();
+  });
+
+  function emailRow(): { verified: boolean } | undefined {
+    const [, rows] = harness.userAttributes.upsertMany.mock.calls[0] as [
+      string,
+      { attrKey: string; verified: boolean }[],
+    ];
+    return rows.find((row) => row.attrKey === 'email');
+  }
+
+  it('writes the email UNVERIFIED when the presentation discloses no email_verified', async () => {
+    // The holder chooses the Disclosures, so absence says nothing about what
+    // the issuer signed: it may have been `email_verified: false`, withheld.
+    await resolve(
+      harness.fastify,
+      credentialFor({ given_name: 'Alice', family_name: 'Doe', email: 'alice@example.com' })
+    );
+
+    expect(emailRow()).toMatchObject({ verified: false });
+  });
+
+  it('writes it verified when the issuer signed and the holder disclosed email_verified: true', async () => {
+    await resolve(
+      harness.fastify,
+      credentialFor({
+        given_name: 'Alice',
+        family_name: 'Doe',
+        email: 'alice@example.com',
+        email_verified: true,
+      })
+    );
+
+    expect(emailRow()).toMatchObject({ verified: true });
+  });
+
+  it('writes it verified for an issuer the operator lists in OID4VP_EMAIL_VERIFYING_ISSUERS', async () => {
+    await resolve(
+      harness.fastify,
+      credentialFor({ given_name: 'Alice', family_name: 'Doe', email: 'alice@example.com' }),
+      'alice@example.com',
+      GATES,
+      [ISSUER]
+    );
+
+    expect(emailRow()).toMatchObject({ verified: true });
   });
 });
 

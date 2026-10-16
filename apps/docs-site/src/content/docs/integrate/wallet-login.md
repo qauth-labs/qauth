@@ -197,6 +197,7 @@ button that fails:
 | `OID4VP_SUBJECT_BINDING_CLAIMS`     | _(none)_       | The entitlement check (#300) — **required to BOOT when enabled**  |
 | `OID4VP_ISSUER_ASSURANCE`           | _(empty)_      | Per-realm issuer → eIDAS LoA (#237); drives the `acr` claim       |
 | `OID4VP_ATTESTING_ISSUERS`          | _(empty)_      | Issuance chains that attest key storage (#308/#379)               |
+| `OID4VP_EMAIL_VERIFYING_ISSUERS`    | _(none)_       | Issuers whose email is verified without `email_verified: true`    |
 | `ACR_VALUE_STYLE`                   | `eidas-uri`    | Vocabulary the `acr` value is written in (#237)                   |
 
 ### Subject resolution is required to BOOT when wallet federation is on (#379)
@@ -603,6 +604,21 @@ own `exp` (NULL when it carries none, so an attribute never outlives the
 credential asserting it). `'wallet'` is the top of ADR-002's trust order, so a
 verified wallet email outranks any `self_reported` one in
 `helpers/email-claims.ts`.
+
+The **email row is the exception**. It is written `verified=true` only when the
+presentation discloses `email_verified: true`, or when the credential's issuer
+is listed in `OID4VP_EMAIL_VERIFYING_ISSUERS`. A disclosed
+`email_verified: false` always leaves it unverified. An absent flag does not
+count as verified: in SD-JWT VC the holder chooses the Disclosures, so a missing
+flag may be an `email_verified: false` the holder left out. An unverified email
+row is never emitted as an `email` claim.
+
+> **Behaviour change (ANT-2026-BGP7XCR2).** Earlier releases treated an absent
+> `email_verified` as verified. An issuer that signs no flag at all (typical for
+> a PID) now yields no `email` claim downstream unless the operator lists it in
+> `OID4VP_EMAIL_VERIFYING_ISSUERS`. List only issuers that never issue an
+> unverified address. Rows already stored as verified are rewritten at the
+> user's next wallet sign-in.
 
 Three properties are worth knowing before extending it:
 

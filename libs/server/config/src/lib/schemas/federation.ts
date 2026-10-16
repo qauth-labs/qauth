@@ -698,6 +698,47 @@ export const federationEnvSchema = z.object({
   ),
 
   /**
+   * `OID4VP_EMAIL_VERIFYING_ISSUERS` (ANT-2026-BGP7XCR2) — the trusted issuers
+   * whose `email` claim counts as VERIFIED even when the presentation discloses
+   * no `email_verified: true`, as a comma-separated list of `https://` issuer
+   * identifiers.
+   *
+   * Unset, which is the default, means none. A wallet email is then verified
+   * only when the presentation discloses `email_verified: true`. The holder
+   * picks which Disclosures to present, so an absent flag cannot be read as
+   * "verified": it may be an `email_verified: false` the holder left out.
+   *
+   * List an issuer here only if it never issues an unverified address (a
+   * PID-style issuer that signs no flag at all, say). An issuer's disclosed
+   * `email_verified: false` is honoured either way. Like
+   * `OID4VP_SUBJECT_CLAIM_ISSUERS`, this list never substitutes for
+   * `OID4VP_TRUSTED_ISSUERS`: an issuer here that is not also trusted there is
+   * inert.
+   *
+   * Shape only here. Entries are canonicalized and checked at boot by
+   * `server-federation`'s `assertEmailVerifyingIssuersUsable`.
+   */
+  OID4VP_EMAIL_VERIFYING_ISSUERS: z.preprocess(
+    (value) => (typeof value === 'string' && value.trim() === '' ? undefined : value),
+    z
+      .string()
+      .max(4096)
+      .transform((value) =>
+        Object.freeze(
+          value
+            .split(',')
+            .map((entry) => entry.trim())
+            .filter((entry) => entry.length > 0)
+        )
+      )
+      .refine((values) => values.length > 0, {
+        message:
+          'OID4VP_EMAIL_VERIFYING_ISSUERS must list at least one non-empty issuer identifier',
+      })
+      .optional()
+  ),
+
+  /**
    * `OID4VP_WALLET_INVOCATION_ENDPOINT` (#239) — the wallet Authorization
    * Endpoint the QR code and deep-link button target.
    *

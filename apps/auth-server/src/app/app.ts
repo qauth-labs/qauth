@@ -9,6 +9,7 @@ import { emailPlugin, type EmailProviderConfig } from '@qauth-labs/fastify-plugi
 import {
   assertAttestingIssuersUsable,
   assertCredentialStatusConfigUsable,
+  assertEmailVerifyingIssuersUsable,
   assertTrustedIssuersUsable,
   createConfiguredProviders,
   credentialStatusProvisioningOf,
@@ -138,6 +139,11 @@ export async function app(fastify: FastifyInstance, opts: object) {
   // wallet flows are switched on today, and finding it at boot beats finding it
   // when the first presentation arrives.
   assertTrustedIssuersUsable(env.OID4VP_TRUSTED_ISSUERS);
+
+  // `OID4VP_EMAIL_VERIFYING_ISSUERS` (ANT-2026-BGP7XCR2), the same posture: an
+  // entry the canonicalizer refuses would vouch for nobody, and that issuer's
+  // users would silently lose their `email` claim.
+  assertEmailVerifyingIssuersUsable(env.OID4VP_EMAIL_VERIFYING_ISSUERS);
 
   // Credential revocation (#297/#378), the same posture as the line above and
   // for the same reason. The two OID4VP_STATUS_LIST_* variables are validated by
