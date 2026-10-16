@@ -130,6 +130,45 @@ describe('POST /oauth/revoke route (RFC 7009)', () => {
     );
   });
 
+  it('revokes an owned refresh token even when the hint says access_token (§2.1)', async () => {
+    const { fastify, ctx } = createFastifyStub();
+    await revokeRoute(fastify);
+
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(client);
+    // Not a JWT, so the hinted access-token lookup finds nothing.
+    (fastify.jwtUtils.verifyAccessToken as unknown as Mock).mockRejectedValue(new Error('bad jwt'));
+    (
+      fastify.repositories.refreshTokens.findByTokenHashIncludingRevoked as unknown as Mock
+    ).mockResolvedValue({
+      id: 'rt-1',
+      oauthClientId: client.id,
+      familyId: 'fam-1',
+    });
+
+    const handler = ctx.handler;
+    if (!handler) throw new Error('Handler missing');
+    const { reply } = makeReply();
+    await handler(
+      {
+        body: {
+          token: 'rt-token',
+          token_type_hint: 'access_token',
+          client_id: client.clientId,
+          client_secret: 'secret',
+        },
+        ip: '127.0.0.1',
+        headers: { 'user-agent': 'vitest' },
+      },
+      reply
+    );
+
+    expect(reply.statusCode).toBe(200);
+    expect(fastify.repositories.refreshTokens.revokeFamily).toHaveBeenCalledWith(
+      'fam-1',
+      'client_revocation'
+    );
+  });
+
   it('is a no-op (still 200) when the refresh token belongs to a different client', async () => {
     const { fastify, ctx } = createFastifyStub();
     await revokeRoute(fastify);
