@@ -54,7 +54,7 @@ import {
  * List Token with a real ES256 signature, and publishes a real deflate-packed
  * 2-bit list. QAuth verifies that chain against the anchor the deployment was
  * configured with, exactly as it would in production. `installMockStatusEndpoints`
- * intercepts the transport rather than binding a loopback listener because the
+ * intercepts the dial rather than naming its loopback listener in the URI because the
  * SSRF allowlist refuses `localhost` and IP literals outright — a correctly
  * configured deployment could not reach a loopback endpoint at all, so a suite
  * built on one would be testing a configuration nobody can ship.
@@ -105,7 +105,7 @@ describe('credential revocation E2E (Token Status List, #297/#378)', () => {
 
   /** The status list this suite publishes; re-created per test. */
   let statusList: MockStatusList;
-  let restoreFetch: (() => void) | undefined;
+  let restoreFetch: (() => Promise<void>) | undefined;
 
   beforeAll(async () => {
     dockerUp = await requireDockerOrSkip();
@@ -118,7 +118,7 @@ describe('credential revocation E2E (Token Status List, #297/#378)', () => {
     await infra?.teardown();
   });
 
-  beforeEach((ctx) => {
+  beforeEach(async (ctx) => {
     if (!dockerUp) ctx.skip();
     // A fresh issuer, CA and list per test: nothing leaks between scenarios,
     // and no anchor outlives the deployment it was configured into.
@@ -126,11 +126,11 @@ describe('credential revocation E2E (Token Status List, #297/#378)', () => {
     statusList.setStatus(IDX.revoked, MOCK_STATUS.INVALID);
     statusList.setStatus(IDX.suspended, MOCK_STATUS.SUSPENDED);
     statusList.setStatus(IDX.unspecified, MOCK_STATUS.UNSPECIFIED);
-    restoreFetch = installMockStatusEndpoints([statusList]);
+    restoreFetch = await installMockStatusEndpoints([statusList]);
   });
 
-  afterEach(() => {
-    restoreFetch?.();
+  afterEach(async () => {
+    await restoreFetch?.();
     restoreFetch = undefined;
   });
 
@@ -418,7 +418,7 @@ describe('credential revocation E2E (Token Status List, #297/#378)', () => {
       // host it names.
       const issuer = await createMockIssuer(TRUSTED_ISSUER, 'k1');
       const elsewhere = createMockStatusList({ host: 'status.elsewhere.example' });
-      const restoreElsewhere = installMockStatusEndpoints([statusList, elsewhere]);
+      const restoreElsewhere = await installMockStatusEndpoints([statusList, elsewhere]);
 
       try {
         const credential = await issuer.issue({
@@ -442,7 +442,7 @@ describe('credential revocation E2E (Token Status List, #297/#378)', () => {
           expect(elsewhere.requestCount).toBe(0);
         });
       } finally {
-        restoreElsewhere();
+        await restoreElsewhere();
       }
     }, 180_000);
   });

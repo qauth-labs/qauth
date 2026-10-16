@@ -1,4 +1,8 @@
 import { type KeyObject, sign as signBytes } from 'node:crypto';
+import { createServer, request as httpRequest } from 'node:http';
+import https from 'node:https';
+import { syncBuiltinESMExports } from 'node:module';
+import type { AddressInfo } from 'node:net';
 import { deflateSync } from 'node:zlib';
 
 import { createTestCertificate, type TestCertificate } from './x509-der';
@@ -141,8 +145,8 @@ export interface MockStatusList {
   /**
    * Serve one request, or return `undefined` when `uri` is not this endpoint.
    *
-   * @throws Error when the behaviour is `unreachable` — which is what the
-   * platform `fetch` does for a refused connection or an aborted timeout.
+   * @throws Error when the behaviour is `unreachable`; the listener then drops
+   * the connection without an answer.
    */
   serve(uri: string): Response | undefined;
 }
@@ -246,33 +250,61 @@ export function createMockStatusList(options: CreateMockStatusListOptions = {}):
 }
 
 /**
- * Route the process's `fetch` at a mock status endpoint, passing everything
- * else through.
+ * Route `node:https`'s `request` — what QAuth's status transport dials with —
+ * at a mock status endpoint, passing everything else through.
  *
- * A stub rather than a real listener because the SSRF allowlist refuses
- * `localhost` and IP literals outright (and rightly: they are every classic SSRF
- * target), so a loopback server could not be reached by a correctly-configured
- * deployment at all. Intercepting the transport keeps the URI a plausible public
- * `https://` name while keeping the suite offline.
+ * The dial is intercepted rather than left to reach a listener by itself because
+ * the SSRF allowlist refuses `localhost` and IP literals outright (and rightly:
+ * they are every classic SSRF target), so a loopback server could not be reached
+ * by a correctly-configured deployment at all. Intercepting it keeps the URI a
+ * plausible public `https://` name while keeping the suite offline.
+ *
+ * It lands on a real loopback listener, minus the TLS, rather than on a stubbed
+ * response: QAuth then reads the answer off a socket, through the HTTP client it
+ * ships with.
  *
  * @param lists - endpoints to serve.
  * @returns a restore function; call it in `afterEach`.
  */
-export function installMockStatusEndpoints(lists: readonly MockStatusList[]): () => void {
-  const original = globalThis.fetch;
+export async function installMockStatusEndpoints(
+  lists: readonly MockStatusList[]
+): Promise<() => Promise<void>> {
+  const server = createServer((req, res) => {
+    void (async (): Promise<void> => {
+      for (const list of lists) {
+        const response = list.serve(`https://${req.headers.host}${req.url}`);
+        if (response === undefined) continue;
+        res.writeHead(response.status, Object.fromEntries(response.headers));
+        res.end(Buffer.from(await response.arrayBuffer()));
+        return;
+      }
+    })().catch(() => req.destroy());
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const { port } = server.address() as AddressInfo;
 
-  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
-    const uri = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+  /** Replace the export for `require` and, once synced, for `import` alike. */
+  const setRequest = (request: typeof https.request): void => {
+    Object.assign(https, { request });
+    syncBuiltinESMExports();
+  };
+  const original = https.request;
 
-    for (const list of lists) {
-      const response = list.serve(uri);
-      if (response !== undefined) return response;
+  setRequest(((...args: Parameters<typeof https.request>) => {
+    const [uri, options] = args;
+    if (typeof uri !== 'string' || !lists.some((list) => list.uri === uri)) {
+      return original(...args);
     }
+    const { host, pathname } = new URL(uri);
+    return httpRequest(`http://127.0.0.1:${port}${pathname}`, {
+      ...options,
+      headers: { ...(options.headers as Record<string, string>), host },
+    });
+  }) as typeof https.request);
 
-    return original(input as RequestInfo, init);
-  }) as typeof fetch;
-
-  return (): void => {
-    globalThis.fetch = original;
+  return async (): Promise<void> => {
+    setRequest(original);
+    server.closeAllConnections();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
   };
 }

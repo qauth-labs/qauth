@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 
 import { InvalidCredentialsError } from '@qauth-labs/shared-errors';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   fixtureValidationContext,
@@ -20,8 +20,13 @@ import { CREDENTIAL_STATUS_REJECTION_MESSAGE } from '../status/credential-status
 import { createStatusEndpointBreaker } from '../status/status-endpoint-breaker';
 import { createStatusListTrustAnchors } from '../status/status-list-chain';
 import { createHttpsStatusListFetch, type StatusListFetch } from '../status/status-list-fetch';
-import { STATUS_LIST_TOKEN_MEDIA_TYPE, STATUS_LIST_TOKEN_TYP } from '../status/status-list-spec';
+import { STATUS_LIST_TOKEN_TYP } from '../status/status-list-spec';
 import { createStatusListUriAllowlist } from '../status/status-list-uri';
+import {
+  httpResponseBytes,
+  startTestStatusEndpoint,
+  type TestStatusEndpoint,
+} from '../status/test/status-endpoint-fixtures';
 import { encodeStatusList, signStatusListToken } from '../status/test/status-list-fixtures';
 import { createTestCertificate } from '../status/test/x509-fixtures';
 import { issuerTrustRejection } from '../trust/issuer-trust-rejection';
@@ -171,13 +176,22 @@ function statusHarness(
   };
 }
 
-/** An HTTP response a stub `fetch` hands to the shipping transport. */
-function httpResponse(
-  status: number,
-  body: string,
-  contentType: string = STATUS_LIST_TOKEN_MEDIA_TYPE
-): Response {
-  return new Response(body, { status, headers: { 'content-type': contentType } });
+const endpoints: TestStatusEndpoint[] = [];
+afterEach(async () => {
+  await Promise.all(endpoints.splice(0).map((endpoint) => endpoint.close()));
+});
+
+/** The shipping transport, dialling a loopback endpoint that gives this answer (or none). */
+async function transportAnswered(answer?: {
+  status: number;
+  body: string;
+  contentType?: string;
+}): Promise<StatusListFetch> {
+  const endpoint = await startTestStatusEndpoint((socket) => {
+    if (answer !== undefined) socket.end(httpResponseBytes(answer.body, answer));
+  });
+  endpoints.push(endpoint);
+  return createHttpsStatusListFetch(endpoint.request);
 }
 
 /** Issue a credential carrying (or not carrying) a `status` claim. */
@@ -408,15 +422,10 @@ describe('#297 fail-closed — an endpoint that cannot answer refuses the login'
   }
 
   it('REFUSES when the fetch times out', async () => {
-    // The shipping transport, handed a `fetch` that aborts exactly as
-    // `AbortSignal.timeout` makes it.
-    const error = await expectRefusedWith(
-      createHttpsStatusListFetch((async () => {
-        throw Object.assign(new Error('The operation was aborted due to timeout'), {
-          name: 'TimeoutError',
-        });
-      }) as unknown as typeof fetch)
-    );
+    // The shipping transport, dialling an endpoint that never answers. Only the
+    // budget is shortened, so that the test need not sit out the default one.
+    const fetchToken = await transportAnswered();
+    const error = await expectRefusedWith(({ uri }) => fetchToken({ uri, timeoutMs: 50 }));
 
     expect(error).toBeInstanceOf(InvalidCredentialsError);
     expect((error as Error).message).toBe(CREDENTIAL_STATUS_REJECTION_MESSAGE);
@@ -424,8 +433,7 @@ describe('#297 fail-closed — an endpoint that cannot answer refuses the login'
 
   it('REFUSES when the endpoint 500s', async () => {
     const error = await expectRefusedWith(
-      createHttpsStatusListFetch((async () =>
-        httpResponse(500, 'upstream on fire')) as unknown as typeof fetch)
+      await transportAnswered({ status: 500, body: 'upstream on fire' })
     );
 
     expect(error).toBeInstanceOf(InvalidCredentialsError);
@@ -437,8 +445,7 @@ describe('#297 fail-closed — an endpoint that cannot answer refuses the login'
     // reported as "unverifiable token", hiding a misconfiguration behind a
     // security refusal — but either way it is a refusal, never a pass.
     const error = await expectRefusedWith(
-      createHttpsStatusListFetch((async () =>
-        httpResponse(200, statusListToken(), 'text/html')) as unknown as typeof fetch)
+      await transportAnswered({ status: 200, body: statusListToken(), contentType: 'text/html' })
     );
 
     expect(error).toBeInstanceOf(InvalidCredentialsError);
@@ -495,8 +502,7 @@ describe('#297 fail-closed — an endpoint that cannot answer refuses the login'
 
   it('REFUSES while the circuit is OPEN, and stops dialling the dead endpoint', async () => {
     const { checker, fetches, audit } = statusHarness(
-      createHttpsStatusListFetch((async () =>
-        httpResponse(503, 'unavailable')) as unknown as typeof fetch),
+      await transportAnswered({ status: 503, body: 'unavailable' }),
       { realBreaker: true }
     );
     const issued = await issueWithStatus(statusClaim(IDX.live));
