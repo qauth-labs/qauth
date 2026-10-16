@@ -28,6 +28,7 @@ import { assertManagementToken } from '../../helpers/management-token';
 import { getOrCreateSystemClient } from '../../helpers/oauth-client';
 import {
   buildRedirectUrl,
+  isHttpLocalhostRedirect,
   isRedirectUriAllowedForPolicy,
   redirectUriMatchesRegistered,
 } from '../../helpers/oauth-redirect';
@@ -182,14 +183,14 @@ export default async function (fastify: FastifyInstance) {
     }
 
     // ADR-008 §5/§7 (#197): resolve the effective environment policy now that
-    // both the client and its realm are in scope, and apply the localhost
-    // redirect gate. `http://localhost` (loopback) redirect URIs are a
-    // `development`-only convenience; `staging`/`production` are https-only.
-    // This is a SECOND gate after the exact-match check above — the URI is
-    // registered, but a plain-HTTP loopback target is withheld outside
-    // development. Fail-safe: an unset client/realm resolves to `production`,
-    // which rejects it. We reject BEFORE redirecting (the redirect target is
-    // the very thing under suspicion), matching the unregistered-URI handling.
+    // both the client and its realm are in scope, and apply the plain-HTTP
+    // redirect gate. This is a SECOND gate after the exact-match check above:
+    // an `http://` loopback redirect is allowed only where PKCE is enforced or
+    // the environment is `development`, and a non-loopback `http://` redirect
+    // is refused everywhere (ANT-2026-D0XJAT8S). Fail-safe: an unset
+    // client/realm resolves to `production`. We reject BEFORE redirecting (the
+    // redirect target is the very thing under suspicion), matching the
+    // unregistered-URI handling.
     const policy = resolveEnvironmentPolicy(client, realm);
     if (!isRedirectUriAllowedForPolicy(redirectUri, policy)) {
       await fastify.repositories.auditLogs.create({
@@ -202,7 +203,9 @@ export default async function (fastify: FastifyInstance) {
         userAgent: request.headers['user-agent'] || null,
         metadata: {
           error: 'redirect_uri not permitted for this environment',
-          reason: 'http_localhost_redirect_requires_development',
+          reason: isHttpLocalhostRedirect(redirectUri)
+            ? 'http_localhost_redirect_requires_development'
+            : 'http_redirect_requires_loopback',
           client_id: query.client_id,
           environment: policy.environment,
         },

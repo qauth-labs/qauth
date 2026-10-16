@@ -20,6 +20,21 @@ function isIpv4LoopbackHost(host: string): boolean {
 }
 
 /**
+ * True when `redirectUri` is a plain `http://` (NOT https) URI, whatever its
+ * host. Parsed the way {@link buildRedirectUrl} parses it, so the scheme judged
+ * here is the scheme the authorization response is sent over. Unparseable
+ * input returns false so the caller's existing exact-match / scheme checks
+ * remain authoritative.
+ */
+function isPlainHttpRedirect(redirectUri: string): boolean {
+  try {
+    return new URL(redirectUri).protocol === 'http:';
+  } catch {
+    return false;
+  }
+}
+
+/**
  * True when `redirectUri` is an `http://` (NOT https) loopback/localhost URI —
  * the exact shape ADR-008 §5 permits only for `development`. An https URI (even
  * to localhost) is fine in every environment and returns false; a non-loopback
@@ -134,9 +149,17 @@ export function redirectUriMatchesRegistered(
  * is precisely what backstops loopback authorization-code interception on a
  * shared host. So loopback + PKCE is safe in any environment, and gating it
  * on PKCE (rather than https-only) is what lets native clients complete the
- * auth-code flow against a production AS. Everything else — any https URI, any
- * custom-scheme native redirect — is unaffected and returns true; this gate
- * never widens what is allowed.
+ * auth-code flow against a production AS.
+ *
+ * A NON-loopback `http://` redirect is refused in EVERY environment (OAuth 2.1
+ * §10.3, RFC 8252 §8.3): the code and `state` would cross the network in
+ * cleartext. `validateRedirectUri` refuses to register one through DCR and the
+ * management API, and CIMD materialisation drops one from a document, but an
+ * operator-seeded row (or any future source of registered URIs) never passes
+ * through those, so the rule has to hold here, where every source converges
+ * (ANT-2026-D0XJAT8S). Everything else — any https URI, any custom-scheme
+ * native redirect — is unaffected and returns true; this gate never widens
+ * what is allowed.
  *
  * FAIL-SAFE: a future non-`development` profile that ALSO drops `pkceRequired`
  * would once again reject plain-HTTP loopback (no PKCE → interceptable), the
@@ -153,7 +176,8 @@ export function isRedirectUriAllowedForPolicy(
   redirectUri: string,
   policy: EnvironmentPolicy
 ): boolean {
-  if (!isHttpLocalhostRedirect(redirectUri)) return true;
+  if (!isPlainHttpRedirect(redirectUri)) return true;
+  if (!isHttpLocalhostRedirect(redirectUri)) return false;
   return policy.localhostRedirectAllowed || policy.pkceRequired;
 }
 

@@ -63,6 +63,26 @@ describe('oauth-redirect — isRedirectUriAllowedForPolicy (ADR-008 §5, #197)',
     expect(isRedirectUriAllowedForPolicy('http://localhost:3000/cb', noPkceNonDev)).toBe(false);
   });
 
+  // Regression (ANT-2026-D0XJAT8S): only plain-http LOOPBACK redirects were
+  // gated; every other plain-http one passed. Registration refuses those, but
+  // a CIMD document's `redirect_uris` and an operator-seeded row never go
+  // through registration, so the gate is where the rule has to hold.
+  it('rejects non-loopback http in every environment', () => {
+    for (const env of ['development', 'staging', 'production'] as const) {
+      for (const uri of [
+        'http://example.com/cb',
+        'HTTP://example.com/cb',
+        'http://169.254.169.254/cb',
+        'http://0.0.0.0:8080/cb',
+        'http://localhost.example.com/cb',
+        'http://app.localhost:8080/cb',
+        'http://[::ffff:127.0.0.1]:8080/cb',
+      ]) {
+        expect(isRedirectUriAllowedForPolicy(uri, ENVIRONMENT_PROFILES[env])).toBe(false);
+      }
+    }
+  });
+
   it('https redirects are permitted in every environment (the gate never widens)', () => {
     for (const env of ['development', 'staging', 'production'] as const) {
       expect(

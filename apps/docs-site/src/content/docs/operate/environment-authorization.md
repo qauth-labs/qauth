@@ -91,7 +91,9 @@ Notes:
   handled by redirect validation and is permitted in any PKCE-enforcing
   environment — it is not the same flag as `localhostRedirectAllowed`. Loopback
   redirects may use any port at request time (RFC 8252 §7.3); see
-  [Redirect URI matching](/integrate/oauth-flow/#redirect-uri-matching).
+  [Redirect URI matching](/integrate/oauth-flow/#redirect-uri-matching). An
+  `http://` redirect to any other host is refused in every environment,
+  `development` included.
 - Hard security floors always hold and are **not** environment-tunable: client
   secrets are always hashed (Argon2id), and audience (`aud`) binding always holds.
 

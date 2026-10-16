@@ -45,9 +45,12 @@ Two needs collided while finishing the MVP and planning T3:
 > backstops loopback authorization-code interception on a shared host. Gating
 > loopback on `https` (rather than on PKCE) only blocked the legitimate
 > native-app flow without adding security, since `validateRedirectUri` already
-> rejects all non-loopback plain-HTTP redirects. The fail-safe still holds: a
-> non-`development` profile that drops PKCE would once again reject plain-HTTP
-> loopback. See `isRedirectUriAllowedForPolicy`.
+> rejects all non-loopback plain-HTTP redirects at registration. Not every
+> registered URI passes through it (an operator-seeded row does not), so the
+> gate itself also refuses a non-loopback `http://` redirect in every
+> environment, and CIMD materialisation drops one from a metadata document.
+> The fail-safe still holds: a non-`development` profile that drops PKCE would
+> once again reject plain-HTTP loopback. See `isRedirectUriAllowedForPolicy`.
 
 Today these are scattered, mostly-global knobs. T3 (OIDC conformance &
 hardening — #108 CSRF, #109 secure cookies, #113 helmet, …) is about to add more.
