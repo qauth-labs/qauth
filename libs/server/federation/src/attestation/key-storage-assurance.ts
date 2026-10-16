@@ -46,7 +46,8 @@ import {
  * 2. **An issuer-asserted key-storage claim in the credential** — honoured only
  *    for an issuer the operator recorded as attesting key storage, and CAPPED at
  *    the level the operator recorded. An issuer may say it uses weaker storage
- *    than the operator expected; it may not promote itself.
+ *    than the operator expected; it may not promote itself. A claim this build
+ *    cannot rank establishes no level at all, never the recorded one.
  * 3. **The transitive path** — the credential's validated issuer is a HAIP
  *    issuance chain the operator recorded as validating key attestations per
  *    §4.5.1. QAuth does not re-derive WSCD assurance at the presentation seam;
@@ -639,12 +640,19 @@ export function createKeyStorageAssuranceResolver(
       // and must not be able to report stronger, or every recorded issuer could
       // grant itself any level it liked.
       //
-      // An unreadable or unrecognised claim reduces to `undefined` and falls
-      // back to the recorded level: it is the same situation as no claim at all,
-      // and must not clear anything on its own.
+      // An unreadable or unrecognised claim reduces to `undefined`, and that is
+      // NOT the same situation as no claim at all: the issuer said something
+      // about THIS credential's key, it may be weaker than the record, and this
+      // build cannot tell. The recorded level is the ceiling, so falling back to
+      // it would grant the most on the least understood statement. It grades
+      // nothing instead, exactly as an attestation whose `key_storage` does not
+      // reduce: no floor is cleared, and #237 reads no key storage from it.
       const claimed = reduceAttackPotentialClaim(signal.keyStorage);
-      const effective =
-        claimed !== undefined && meetsAttackPotential(recorded, claimed) ? claimed : recorded;
+      if (claimed === undefined) {
+        return { outcome: 'accepted', evidence: Object.freeze({ assurance: 'issuer-attested' }) };
+      }
+
+      const effective = meetsAttackPotential(recorded, claimed) ? claimed : recorded;
 
       return {
         outcome: 'accepted',

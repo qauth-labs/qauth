@@ -253,6 +253,12 @@ strongest grade recorded. The comparison takes the strongest, not the weakest: a
 registry pairing a strong ecosystem with a weak one is a working deployment with
 one ecosystem that will not reach the floor.
 
+The recorded grade is a **cap**, not a default result. A recorded issuer may
+lower it for one credential with an issuer-signed `key_storage` claim, and may
+never raise it. A `key_storage` claim that cannot be ranked (an unknown value,
+a bare string, an empty list, `null`) establishes no grade at all, so under
+`haip-1.0` that credential is refused for attack potential below the minimum.
+
 Key attestations conveyed **into a presentation** need wallet-provider trust
 anchors, which have no configuration surface yet. Until they do, a conveyed
 attestation is skipped rather than refused and the credential falls through to

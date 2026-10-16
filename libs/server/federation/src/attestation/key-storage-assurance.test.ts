@@ -235,17 +235,40 @@ describe('haip-1.0 — an issuer-asserted key_storage claim', () => {
     expect(decision).toEqual({ outcome: 'rejected', reason: 'assurance-required-but-absent' });
   });
 
-  it('falls back to the recorded level when the claim uses an unknown vocabulary', async () => {
-    const decision = await provisionedResolver().resolveKeyStorageAssurance(
-      input(ATTESTING_ISSUER, { key_storage: ['acme_level_9'] }),
-      HAIP_POLICY
-    );
+  // The recorded level is the CEILING, so a statement this build cannot rank must
+  // not land on it: the claim exists to lower the level, and the second row still
+  // says `basic` in the vocabulary QAuth knows.
+  const UNRANKABLE_CLAIMS: ReadonlyArray<readonly [string, unknown]> = [
+    ['uses an unknown vocabulary', ['acme_level_9']],
+    ['lists a known weak grade beside an unknown one', ['iso_18045_basic', 'acme_level_9']],
+    ['is a bare string rather than a list', 'iso_18045_basic'],
+    ['is an empty list', []],
+    ['is null', null],
+  ];
 
-    expect(decision).toEqual({
-      outcome: 'accepted',
-      evidence: { assurance: 'issuer-attested', keyStorage: 'iso_18045_high' },
-    });
-  });
+  it.each(UNRANKABLE_CLAIMS)(
+    'REJECTS under a graded floor when the claim %s',
+    async (_label, key_storage) => {
+      const decision = await provisionedResolver().resolveKeyStorageAssurance(
+        input(ATTESTING_ISSUER, { key_storage }),
+        HAIP_POLICY
+      );
+
+      expect(decision).toEqual({ outcome: 'rejected', reason: 'attack-potential-below-minimum' });
+    }
+  );
+
+  it.each(UNRANKABLE_CLAIMS)(
+    'grades nothing, never the recorded level, when the claim %s',
+    async (_label, key_storage) => {
+      const decision = await provisionedResolver().resolveKeyStorageAssurance(
+        input(ATTESTING_ISSUER, { key_storage }),
+        { posture: 'permitted' }
+      );
+
+      expect(decision).toEqual({ outcome: 'accepted', evidence: { assurance: 'issuer-attested' } });
+    }
+  );
 });
 
 describe('haip-1.0 — a conveyed key attestation', () => {
