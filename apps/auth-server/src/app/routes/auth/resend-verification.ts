@@ -31,7 +31,7 @@ import { errorResponseSchema } from '../../schemas/common';
  * - Per-IP rate limiting (RESEND_VERIFICATION_RATE_LIMIT) prevents DDoS attacks
  * - Per-email rate limiting (RESEND_VERIFICATION_EMAIL_LIMIT) prevents inbox bombing
  * - Minimum interval (RESEND_VERIFICATION_MIN_INTERVAL) prevents rapid requests
- * - Atomic Redis INCR prevents race conditions in rate limiting
+ * - Atomic Redis INCR / SET NX prevent race conditions in rate limiting
  * - TTL set only on first request to prevent sliding window bypass
  * - Rate limit counters increment for ALL requests (even non-existent users)
  *   to prevent email enumeration via timing/behavior differences
@@ -89,15 +89,22 @@ export default async function (fastify: FastifyInstance) {
         throw new TooManyRequestsError(ERROR_MESSAGES.RATE_LIMIT_EXCEEDED);
       }
 
-      // Minimum interval check between sends to same email
-      const lastSentKey = REDIS_KEYS.LAST_EMAIL_SENT(normalizedEmail);
-      const lastSent = await fastify.redis.get(lastSentKey);
-
-      if (lastSent) {
-        const timeSinceLastSent = Date.now() - parseInt(lastSent, 10);
-        if (timeSinceLastSent < env.RESEND_VERIFICATION_MIN_INTERVAL * 1000) {
-          throw new TooManyRequestsError(ERROR_MESSAGES.RATE_LIMIT_EXCEEDED);
-        }
+      // Minimum interval between sends to the same email, claimed with one
+      // atomic SET NX: of any number of concurrent requests exactly one gets
+      // 'OK'. It is claimed for ALL requests and BEFORE the credential lookup,
+      // so the moment the marker appears does not depend on whether the
+      // address has an account. (A GET here and a SET after the send let a
+      // quick second request read account existence from 200 vs 429.) The
+      // key's TTL is the interval.
+      const intervalClaimed = await fastify.redis.set(
+        REDIS_KEYS.LAST_EMAIL_SENT(normalizedEmail),
+        Date.now().toString(),
+        'EX',
+        env.RESEND_VERIFICATION_MIN_INTERVAL,
+        'NX'
+      );
+      if (intervalClaimed !== 'OK') {
+        throw new TooManyRequestsError(ERROR_MESSAGES.RATE_LIMIT_EXCEEDED);
       }
 
       // Get default realm for credential lookup
@@ -158,14 +165,6 @@ export default async function (fastify: FastifyInstance) {
       }
       // If user doesn't exist or email is already verified, still return success
       // This prevents email enumeration attacks
-
-      // Update last sent timestamp for minimum interval check
-      await fastify.redis.set(
-        lastSentKey,
-        Date.now().toString(),
-        'EX',
-        env.RESEND_VERIFICATION_MIN_INTERVAL
-      );
 
       // Enforce minimum response time to prevent timing-based email enumeration
       // This ensures consistent response time regardless of whether user exists
