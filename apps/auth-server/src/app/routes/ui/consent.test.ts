@@ -1593,3 +1593,32 @@ describe('UI /ui/consent — redirect_uri reaches the handler as sent (exactUrl)
     }
   });
 });
+
+describe('UI /ui/consent — max_age is never converted from a non-scalar', () => {
+  // `POST /ui/consent` validates its body before the session and CSRF checks,
+  // and a JSON body puts any value in `max_age`. `Number()` of a deeply nested
+  // array is seconds of event-loop time, so such a value must be refused by
+  // type, unconverted.
+  it('accepts a digit string and refuses an array without stringifying it', async () => {
+    const { fastify, ctx } = makeFastify();
+    await consentRoute(fastify);
+    const schema = ctx.postOpts.schema.body;
+    const base = {
+      decision: 'allow',
+      csrf_token: 'csrf',
+      client_id: 'app-123',
+      redirect_uri: 'https://example.com/cb',
+      code_challenge: 'A'.repeat(43),
+      code_challenge_method: 'S256',
+      response_type: 'code',
+    };
+    expect(schema.parse({ ...base, max_age: '60' }).max_age).toBe(60);
+
+    const toString = vi.fn(() => '60');
+    let nested: unknown = [{ toString }];
+    for (let i = 0; i < 100; i += 1) nested = [nested, 0];
+    expect(schema.safeParse({ ...base, max_age: nested }).success).toBe(false);
+    expect(schema.safeParse({ ...base, max_age: ['60'] }).success).toBe(false);
+    expect(toString).not.toHaveBeenCalled();
+  });
+});

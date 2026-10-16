@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { redirectUriMatchesRegistered } from '../helpers/oauth-redirect';
 import {
@@ -370,5 +370,53 @@ describe('redirect_uri and resource reach the handler as sent (exactUrl)', () =>
     expect(resourceParamSchema.parse('https://api.example.com/mcp')).toEqual([
       'https://api.example.com/mcp',
     ]);
+  });
+});
+
+/**
+ * OIDC Core §3.1.2.1 `max_age` on `GET`/`POST /oauth/authorize`.
+ *
+ * `POST /oauth/authorize` also accepts a JSON body, so `max_age` can be any
+ * JSON value. `z.coerce.number()` ran `Number()` on it before looking at its
+ * type, and `Number()` of an array joins it recursively: one nested a few
+ * thousand levels deep held the event loop for seconds on an unauthenticated
+ * route. A value that is neither a digit string nor a number must be refused
+ * by type, before anything converts it.
+ */
+describe('authorizeQuerySchema — max_age', () => {
+  const authorize = {
+    response_type: 'code',
+    client_id: 'c1',
+    redirect_uri: 'https://app.example.com/cb',
+    code_challenge: 'A'.repeat(43),
+    code_challenge_method: 'S256',
+  } as const;
+  const maxAgeOf = (max_age: unknown) => authorizeQuerySchema.safeParse({ ...authorize, max_age });
+
+  it('accepts a digit string (query string, form body) and a JSON number', () => {
+    expect(maxAgeOf('300').data?.max_age).toBe(300);
+    expect(maxAgeOf('0').data?.max_age).toBe(0);
+    expect(maxAgeOf(300).data?.max_age).toBe(300);
+    expect(maxAgeOf('315360000').data?.max_age).toBe(315360000);
+    expect(maxAgeOf(undefined).data?.max_age).toBeUndefined();
+  });
+
+  it('refuses anything else', () => {
+    for (const value of ['-1', '1.5', '1e3', ' 300', '315360001', true, null, {}, ['300']]) {
+      expect(maxAgeOf(value).success, JSON.stringify(value)).toBe(false);
+    }
+  });
+
+  it('refuses an array or object WITHOUT converting it', () => {
+    const toString = vi.fn(() => '300');
+    const valueOf = vi.fn(() => 300);
+    // Shaped like the attack: the element sits deep inside nested arrays.
+    let nested: unknown = [{ toString, valueOf }];
+    for (let i = 0; i < 100; i += 1) nested = [nested, 0];
+
+    expect(maxAgeOf(nested).success).toBe(false);
+    expect(maxAgeOf({ toString, valueOf }).success).toBe(false);
+    expect(toString).not.toHaveBeenCalled();
+    expect(valueOf).not.toHaveBeenCalled();
   });
 });

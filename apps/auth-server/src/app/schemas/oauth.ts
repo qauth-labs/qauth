@@ -25,6 +25,28 @@ export const resourceParamSchema = z
   .optional()
   .transform((v) => (v === undefined ? undefined : Array.isArray(v) ? v : [v]));
 
+/**
+ * OIDC Core §3.1.2.1 `max_age`, in seconds. A query string or a form body
+ * carries it as a digit string, a JSON body as a number.
+ *
+ * Only a digit string is converted. Every other value reaches `z.number()` as
+ * it came and is refused by type. This is deliberately NOT
+ * `z.coerce.number()`, which runs `Number()` on the raw value before it checks
+ * the type. Both routes that take the parameter also accept JSON bodies, and
+ * `Number()` of an array joins it recursively, so an array nested a few
+ * thousand levels deep cost seconds of event-loop time on an unauthenticated
+ * route.
+ *
+ * Shared by `authorizeQuerySchema` and the `/ui/consent` form mirror so the two
+ * cannot drift. The published JSON Schema is the inner `z.number()`'s.
+ */
+export const maxAgeParamSchema = z
+  .preprocess(
+    (v) => (typeof v === 'string' && /^\d+$/.test(v) ? Number(v) : v),
+    z.number().int().min(0).max(315360000)
+  )
+  .optional();
+
 /* -------------------------------------------------------------------------- */
 /*        Grant-type, token-type and client-assertion URNs (one place)        */
 /* -------------------------------------------------------------------------- */
@@ -216,7 +238,7 @@ export const authorizeQuerySchema = z.object({
   // re-authentication is required (`0` ⇒ always re-authenticate). Only the
   // values QAuth acts on are accepted; anything else is rejected at the edge.
   prompt: z.enum(['none', 'login', 'consent']).optional(),
-  max_age: z.coerce.number().int().min(0).max(315360000).optional(),
+  max_age: maxAgeParamSchema,
   resource: resourceParamSchema,
 });
 
