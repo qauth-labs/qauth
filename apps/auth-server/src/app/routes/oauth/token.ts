@@ -1574,6 +1574,7 @@ async function handleTokenExchange(
       user,
       grantedScopes,
       subjectAct: subjectPayload.act,
+      subjectExp: subjectPayload.exp,
       auditFailure,
     });
   }
@@ -1750,9 +1751,21 @@ async function mintIdJagForExchange(args: {
   user: { id: string };
   grantedScopes: string[];
   subjectAct: ActClaim | undefined;
+  /** The subject token's `exp` (epoch seconds); the assertion never outlives it. */
+  subjectExp: number | undefined;
   auditFailure: (error: string, extra?: Record<string, unknown>) => Promise<void>;
 }): Promise<IdJagTokenResponse> {
-  const { fastify, request, client, body, user, grantedScopes, subjectAct, auditFailure } = args;
+  const {
+    fastify,
+    request,
+    client,
+    body,
+    user,
+    grantedScopes,
+    subjectAct,
+    subjectExp,
+    auditFailure,
+  } = args;
 
   const allowedTargets = idJagTargetAllowlist(client);
 
@@ -1817,6 +1830,17 @@ async function mintIdJagForExchange(args: {
     throw new InvalidRequestError('delegation chain exceeds the maximum depth');
   }
 
+  // The assertion must not outlive the subject token it was derived from, as
+  // the delegation branch clamps its token: it cannot be withdrawn once it has
+  // crossed into the target's trust domain, so revoking the grant behind the
+  // subject token ends it no later than that token would have ended.
+  const subjectRemaining =
+    subjectExp !== undefined ? subjectExp - Math.floor(Date.now() / 1000) : undefined;
+  if (subjectRemaining !== undefined && subjectRemaining <= 0) {
+    await auditFailure('invalid_request: subject_token has no remaining lifetime');
+    throw new InvalidRequestError('subject_token has expired');
+  }
+
   const scopeString = grantedScopes.length > 0 ? grantedScopes.join(' ') : undefined;
 
   const minted = await mintIdJag(fastify, {
@@ -1825,6 +1849,7 @@ async function mintIdJagForExchange(args: {
     resource: targetResource,
     clientId: client.clientId,
     ...(scopeString !== undefined ? { scope: scopeString } : {}),
+    ...(subjectRemaining !== undefined ? { maxLifetimeSeconds: subjectRemaining } : {}),
   });
 
   await fastify.repositories.auditLogs.create({

@@ -541,6 +541,27 @@ when client authentication fails.
 Revoking a refresh token also revokes its whole rotation family, so a stolen
 descendant cannot be replayed.
 
+### What revocation reaches
+
+Every way of ending a grant stops new tokens being minted from it:
+
+| Revocation                                                    | Ends                                                                                                         |
+| ------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| `/oauth/revoke` with a refresh token, or a replayed one       | That token's whole rotation family                                                                           |
+| `/oauth/revoke` with an access token                          | That access token (denylisted by `jti` until it would have expired)                                          |
+| Consent revocation (`DELETE /consents/{id}`, `/api/consents`) | The user's refresh tokens and unredeemed authorization codes for that client                                 |
+| `POST /auth/logout`                                           | The user's refresh tokens and unredeemed authorization codes at every client, and the access token presented |
+
+**Access tokens already issued under the grant are not reached.** They are
+stateless JWTs and stay valid until `exp` (`ACCESS_TOKEN_LIFESPAN`, 900 s by
+default) wherever they are accepted: at resource servers that verify them
+locally, at introspection, at `/oauth/userinfo`, and as a token-exchange
+`subject_token`. Only an access token revoked by value, at `/oauth/revoke` or
+as the token presented to `/auth/logout`, is refused before then. A short
+access-token lifetime is what bounds this window. A delegated token from token
+exchange, and an ID-JAG minted from one, never outlive the subject token they
+were derived from.
+
 ---
 
 ## Token Introspection (RFC 7662)

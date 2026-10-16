@@ -359,7 +359,7 @@
         "tags": [
           "Auth"
         ],
-        "description": "Log out the current user. Revokes all refresh tokens for the user. Accepts expired access tokens.",
+        "description": "Log out the current user. Revokes all refresh tokens and unredeemed authorization codes for the user, and the access token presented. Accepts expired access tokens.",
         "parameters": [
           {
             "schema": {

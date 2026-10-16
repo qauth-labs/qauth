@@ -7,6 +7,7 @@ import { env } from '../../../config/env';
 import { logAuthEvent } from '../../helpers/auth-events';
 import { clientAddressKey } from '../../helpers/client-address';
 import { assertManagementToken } from '../../helpers/management-token';
+import { revokeJti } from '../../helpers/token-revocation';
 import { logoutHeadersSchema, logoutResponseSchema } from '../../schemas/auth';
 
 /**
@@ -20,7 +21,7 @@ export default async function (fastify: FastifyInstance) {
     {
       schema: {
         description:
-          'Log out the current user. Revokes all refresh tokens for the user. Accepts expired access tokens.',
+          'Log out the current user. Revokes all refresh tokens and unredeemed authorization codes for the user, and the access token presented. Accepts expired access tokens.',
         tags: ['Auth'],
         headers: logoutHeadersSchema,
         response: {
@@ -95,6 +96,13 @@ export default async function (fastify: FastifyInstance) {
         // Revoke all active refresh tokens for user
         // This ensures user is logged out from all devices
         await fastify.repositories.refreshTokens.revokeAllForUser(userId, 'logout');
+
+        // End the token this request was made with as well, as `/oauth/revoke`
+        // ends one presented to it: otherwise it keeps working at the
+        // management API until it expires. An expired token is already inert.
+        if (!isExpired && claims.jti && claims.exp !== undefined) {
+          await revokeJti(fastify, claims.jti, claims.exp - Math.floor(Date.now() / 1000));
+        }
 
         // Log audit event (success)
         await fastify.repositories.auditLogs.create({

@@ -178,7 +178,11 @@ at `POST /oauth/token` — there is no separate refresh endpoint.
 
 ### `POST /auth/logout`
 
-Revoke the caller's session/token.
+Sign the user out everywhere. Revokes every refresh token the user holds, at
+every client, invalidates the user's unredeemed authorization codes, and
+denylists the access token the request was made with. Access tokens already
+issued to other clients are not reached: they stay valid until they expire (see
+[what revocation reaches](/integrate/oauth-flow/#what-revocation-reaches)).
 
 **Headers**: `Authorization: Bearer <access_token>` (required). Only the access
 token from [`POST /auth/login`](#post-authlogin) is accepted, expired or not. A
@@ -458,7 +462,9 @@ Errors: `401` (no/invalid session) — returns `{ "consents": [] }` with no `csr
 
 ### `DELETE /consents/{id}`
 
-Revoke one consent owned by the signed-in user.
+Revoke one consent owned by the signed-in user. The refresh tokens and the
+unredeemed authorization codes the user holds for that client are revoked with
+it. Access tokens already issued stay valid until they expire.
 
 **Headers**: `X-CSRF-Token: <csrfToken from GET /consents/>` (required).
 
@@ -509,7 +515,8 @@ No `csrfToken` field — see above. Errors: `401` (missing/invalid bearer).
 
 ### `DELETE /api/consents/{id}`
 
-Revoke one consent owned by the authenticated user.
+Revoke one consent owned by the authenticated user, with the same effect as
+[`DELETE /consents/{id}`](#delete-consentsid).
 
 **`204 No Content`**. Errors: `401` (missing/invalid bearer), `404` (consent
 does not exist **or** is not owned by the caller — deliberately the same

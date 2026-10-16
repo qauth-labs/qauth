@@ -412,7 +412,7 @@ of the discovery metadata. See
 | `ID_JAG_ENABLED`                 | No                | `false`   | Master switch. Gates both the `jwt-bearer` grant and the discovery members that advertise it.                                                |
 | `ID_JAG_TRUSTED_ISSUERS`         | Yes, when enabled | _(empty)_ | Allowlist of enterprise IdP issuers whose assertions may be redeemed. Empty rejects everything — an assertion never nominates its own trust. |
 | `ID_JAG_MAX_ASSERTION_LIFETIME`  | No                | `300`     | Seconds. Bounds the replay window a `jti` is tracked for.                                                                                    |
-| `ID_JAG_ISSUED_LIFETIME`         | No                | `300`     | Seconds. Lifetime stamped on assertions QAuth **mints**.                                                                                     |
+| `ID_JAG_ISSUED_LIFETIME`         | No                | `300`     | Seconds. Lifetime stamped on assertions QAuth **mints**, capped at the subject token's remaining lifetime.                                   |
 | `ID_JAG_CLOCK_SKEW_LEEWAY`       | No                | `60`      | Seconds of tolerance on `exp` / `nbf` / `iat`.                                                                                               |
 | `ID_JAG_JWKS_CACHE_TTL`          | No                | `300`     | Seconds to cache a trusted issuer's JWKS.                                                                                                    |
 | `ID_JAG_FETCH_TIMEOUT_MS`        | No                | `5000`    | Timeout for issuer discovery / JWKS fetches.                                                                                                 |

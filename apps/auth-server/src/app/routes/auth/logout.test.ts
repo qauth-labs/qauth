@@ -84,6 +84,9 @@ function createFastifyStub() {
       decodeTokenUnsafe: vi.fn(),
       getIssuer: vi.fn().mockReturnValue('https://auth.example.com'),
     },
+    redis: {
+      setex: vi.fn().mockResolvedValue('OK'),
+    },
     log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
   };
 
@@ -155,6 +158,48 @@ describe('POST /auth/logout', () => {
     const sweepOrder = (fastify.repositories.refreshTokens.revokeAllForUser as unknown as Mock).mock
       .invocationCallOrder[0];
     expect(invalidateOrder).toBeLessThan(sweepOrder);
+  });
+
+  it('denylists the token it was called with for the rest of its lifetime', async () => {
+    // Logout ends the refresh tokens; the access token presented here would
+    // otherwise keep working at the management API until it expires.
+    const { fastify, ctx } = createFastifyStub();
+    const exp = Math.floor(Date.now() / 1000) + 600;
+    (fastify.jwtUtils.extractFromHeader as unknown as Mock).mockReturnValue('valid.access.jwt');
+    (fastify.jwtUtils.verifyAccessToken as unknown as Mock).mockResolvedValue(
+      loginClaims({ jti: 'login-jti-1', exp })
+    );
+
+    await logoutRoute(fastify);
+    const handler = ctx.handler;
+    if (!handler) throw new Error('Handler missing');
+
+    await handler(logoutRequest(), createReply());
+
+    expect(fastify.redis.setex).toHaveBeenCalledTimes(1);
+    const [key, ttl] = (fastify.redis.setex as unknown as Mock).mock.calls[0];
+    expect(key).toBe('revoked-access-token:login-jti-1');
+    expect(ttl).toBeGreaterThan(590);
+    expect(ttl).toBeLessThanOrEqual(600);
+  });
+
+  it('writes no denylist entry for an expired token (it is already inert)', async () => {
+    const { fastify, ctx } = createFastifyStub();
+    (fastify.jwtUtils.extractFromHeader as unknown as Mock).mockReturnValue('expired.access.jwt');
+    (fastify.jwtUtils.verifyAccessToken as unknown as Mock).mockRejectedValue(
+      new JWTExpiredError('Access token has expired')
+    );
+    (fastify.jwtUtils.decodeTokenUnsafe as unknown as Mock).mockReturnValue(
+      loginClaims({ jti: 'login-jti-2', exp: Math.floor(Date.now() / 1000) - 5 })
+    );
+
+    await logoutRoute(fastify);
+    const handler = ctx.handler;
+    if (!handler) throw new Error('Handler missing');
+
+    await handler(logoutRequest('Bearer expired.access.jwt'), createReply());
+
+    expect(fastify.redis.setex).not.toHaveBeenCalled();
   });
 
   it('still logs out and returns 200 when the access token is EXPIRED (cleanup path, not 401)', async () => {

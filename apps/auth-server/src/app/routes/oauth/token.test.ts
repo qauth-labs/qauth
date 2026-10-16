@@ -3486,6 +3486,7 @@ describe('POST /oauth/token — ID-JAG MINT (token exchange, ADR-011)', () => {
       grantTypes?: string[];
       subjectScope?: string;
       subjectAct?: unknown;
+      subjectExp?: number;
     } = {}
   ) {
     const { fastify, ctx } = createFastifyStub();
@@ -3512,7 +3513,7 @@ describe('POST /oauth/token — ID-JAG MINT (token exchange, ADR-011)', () => {
       aud: [AGENT_CLIENT_ID],
       iss: AS_ISSUER,
       token_use: 'access',
-      exp: Math.floor(Date.now() / 1000) + 600,
+      exp: opts.subjectExp ?? Math.floor(Date.now() / 1000) + 600,
       ...(opts.subjectAct ? { act: opts.subjectAct } : {}),
     });
     (fastify.repositories.users.findById as unknown as Mock).mockResolvedValue({
@@ -3580,6 +3581,19 @@ describe('POST /oauth/token — ID-JAG MINT (token exchange, ADR-011)', () => {
     expect(claims).not.toHaveProperty('email');
     // An ID-JAG is NOT an access token: no access token was signed on this path.
     expect(fastify.jwtUtils.signAccessToken).not.toHaveBeenCalled();
+  });
+
+  it("caps the assertion at the subject token's remaining lifetime (never outlives its authority)", async () => {
+    mockEnv['ID_JAG_ENABLED'] = true;
+    // The subject token has 60 s left; ID_JAG_ISSUED_LIFETIME is 300 s.
+    const subjectExp = Math.floor(Date.now() / 1000) + 60;
+    const { fastify, ctx } = setupMintStub({ subjectExp });
+
+    const result = (await invoke(fastify, ctx, mintRequest())) as Record<string, unknown>;
+
+    expect(result['expires_in']).toBeLessThanOrEqual(60);
+    const claims = decodeJwt(result['access_token'] as string);
+    expect(claims.exp as number).toBeLessThanOrEqual(subjectExp);
   });
 
   it('rejects the ID-JAG token type when ID_JAG_ENABLED is false', async () => {
