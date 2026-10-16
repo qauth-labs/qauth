@@ -341,6 +341,20 @@ export interface OAuthConsentsRepository {
     oauthClientId: string,
     tx?: DbClient
   ): Promise<OAuthConsent | undefined>;
+  /**
+   * `findActive`, holding a shared lock on the row until `tx` ends.
+   *
+   * `findActive` is a snapshot: a revocation can commit between it and
+   * whatever the caller writes on the strength of the consent. A caller that
+   * issues something under the consent re-reads it with this and writes in
+   * the same `tx`. `revoke` updates the row, so it either waits for `tx` to
+   * end, or has already committed and no row is returned.
+   */
+  findActiveForShare(
+    userId: string,
+    oauthClientId: string,
+    tx: DbClient
+  ): Promise<OAuthConsent | undefined>;
   /** List all active consents for a user, joined to client metadata (revocation UI). */
   listActiveForUser(userId: string, tx?: DbClient): Promise<OAuthConsent[]>;
   /**

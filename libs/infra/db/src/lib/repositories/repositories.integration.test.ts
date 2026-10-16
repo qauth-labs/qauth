@@ -571,6 +571,70 @@ describe('repository integration (real Postgres)', () => {
       expect(allRows).toHaveLength(2);
       expect(await consents.listActiveForUser(user.id)).toHaveLength(1);
     });
+
+    // /oauth/authorize re-reads the consent with `findActiveForShare` in the
+    // transaction that inserts the code, so a revocation and a code issued on
+    // the consent are ordered: never "revoked, then a code minted on it".
+    it('findActiveForShare started while a revocation is uncommitted waits for it and finds no row', async () => {
+      const realm = await seedRealm();
+      const user = await seedUser(realm.id);
+      const client = await seedClient(realm.id);
+      const consents = createOAuthConsentsRepository(db().database.db);
+      const grant = await consents.upsertGrant(user.id, client.id, realm.id, ['read:foo']);
+
+      let locked: Promise<unknown> | undefined;
+      await db().database.db.transaction(async (tx) => {
+        await consents.revoke(grant.id, tx);
+        // The plain read does not wait, and still sees the consent.
+        expect(await consents.findActive(user.id, client.id)).toBeDefined();
+        locked = db().database.db.transaction((readTx) =>
+          consents.findActiveForShare(user.id, client.id, readTx)
+        );
+        await new Promise((resolve) => setTimeout(resolve, 200));
+      });
+
+      expect(await locked).toBeUndefined();
+    });
+
+    it('a revocation started while findActiveForShare holds the row waits until the code is committed', async () => {
+      const realm = await seedRealm();
+      const user = await seedUser(realm.id);
+      const client = await seedClient(realm.id);
+      const consents = createOAuthConsentsRepository(db().database.db);
+      const codes = createAuthorizationCodesRepository(db().database.db);
+      const grant = await consents.upsertGrant(user.id, client.id, realm.id, ['read:foo']);
+
+      let revoked = false;
+      let revocation: Promise<unknown> | undefined;
+      await db().database.db.transaction(async (tx) => {
+        expect(await consents.findActiveForShare(user.id, client.id, tx)).toBeDefined();
+        revocation = consents.revoke(grant.id).then(() => {
+          revoked = true;
+        });
+        await new Promise((resolve) => setTimeout(resolve, 200));
+        // The revocation is blocked on the shared lock.
+        expect(revoked).toBe(false);
+        await codes.create(
+          {
+            code: 'auth-code-under-lock',
+            oauthClientId: client.id,
+            userId: user.id,
+            redirectUri: 'https://app.example.com/cb',
+            codeChallenge: 'challenge',
+            codeChallengeMethod: 'S256',
+            scopes: ['read:foo'],
+            expiresAt: Date.now() + 60_000,
+          },
+          tx
+        );
+      });
+      await revocation;
+
+      // The code committed first; a sweep in the revocation's transaction
+      // (consent revocation invalidating unredeemed codes) would see it.
+      expect(revoked).toBe(true);
+      expect(await consents.findActive(user.id, client.id)).toBeUndefined();
+    });
   });
 
   // --- realm-scoped unique constraints --------------------------------------

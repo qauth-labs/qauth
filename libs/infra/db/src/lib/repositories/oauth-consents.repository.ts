@@ -47,6 +47,29 @@ export function createOAuthConsentsRepository(defaultDb: DbClient): OAuthConsent
       return row;
     },
 
+    async findActiveForShare(
+      userId: string,
+      oauthClientId: string,
+      tx: DbClient
+    ): Promise<OAuthConsent | undefined> {
+      // `FOR SHARE` blocks a concurrent `revoke` (an UPDATE of this row)
+      // until `tx` ends; one that committed first makes PostgreSQL re-check
+      // `revoked_at IS NULL` on the new row version, which drops the row.
+      const [row] = await tx
+        .select()
+        .from(oauthConsents)
+        .where(
+          and(
+            eq(oauthConsents.userId, userId),
+            eq(oauthConsents.oauthClientId, oauthClientId),
+            isNull(oauthConsents.revokedAt)
+          )
+        )
+        .limit(1)
+        .for('share');
+      return row;
+    },
+
     async listActiveForUser(userId: string, tx?: DbClient): Promise<OAuthConsent[]> {
       const invoker = tx ?? defaultDb;
       return invoker

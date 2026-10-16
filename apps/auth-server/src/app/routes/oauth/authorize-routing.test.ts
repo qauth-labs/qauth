@@ -75,15 +75,26 @@ async function buildServer(): Promise<FastifyInstance> {
   fastify.setValidatorCompiler(validatorCompiler);
   fastify.setSerializerCompiler(serializerCompiler);
 
+  const findActive = vi.fn();
   fastify.decorate('repositories', {
     realms: {
       findByName: vi.fn().mockResolvedValue({ id: 'realm-1', name: 'master', enabled: true }),
       create: vi.fn(),
     },
     oauthClients: { findByClientId: vi.fn().mockResolvedValue(CLIENT) },
-    oauthConsents: { findActive: vi.fn(), upsertGrant: vi.fn() },
+    oauthConsents: {
+      findActive,
+      // The locked re-read before the code insert sees what the first read saw.
+      findActiveForShare: vi.fn((userId: string, oauthClientId: string) =>
+        findActive(userId, oauthClientId)
+      ),
+      upsertGrant: vi.fn(),
+    },
     authorizationCodes: { create: vi.fn() },
     auditLogs: { create: vi.fn().mockResolvedValue(undefined) },
+  } as never);
+  fastify.decorate('db', {
+    transaction: vi.fn(async (cb: (tx: unknown) => Promise<unknown>) => cb({})),
   } as never);
   fastify.decorate('jwtUtils', {
     extractFromHeader: vi.fn().mockReturnValue(null),

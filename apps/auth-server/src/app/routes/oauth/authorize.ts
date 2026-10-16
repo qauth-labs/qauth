@@ -649,52 +649,122 @@ export default async function (fastify: FastifyInstance) {
 
     const expiresAt = Date.now() + AUTHORIZATION_CODE_TTL_MS;
 
-    const createCode = async (): Promise<string> => {
+    // Every path that reaches this point skipped the consent screen on the
+    // strength of `existingConsent`. That read is only a snapshot: a
+    // revocation can commit between it and the insert, and the code would be
+    // issued on a consent that no longer exists (DELETE /api/consents/:id
+    // already answered 204). So the decision is taken again on the row,
+    // locked `FOR SHARE` in the transaction that inserts the code: a
+    // revocation either waits for this transaction to commit, or committed
+    // first and the re-read finds no covering consent, in which case no code
+    // is issued (`null`).
+    const createCode = async (): Promise<string | null> => {
       const code = randomBytes(32).toString('base64url');
-      await fastify.repositories.authorizationCodes.create({
-        code,
-        oauthClientId: client.id,
-        userId,
-        redirectUri,
-        codeChallenge: query.code_challenge,
-        codeChallengeMethod: 'S256',
-        nonce: query.nonce ?? null,
-        // OIDC Core §2 `auth_time`: persist the REAL end-user authentication
-        // time (browser-session establishment, epoch MS) — never the code-mint
-        // time — so /oauth/token can assert it in the ID token and a `max_age`
-        // check evaluates the actual session age. Null on the legacy Bearer
-        // path (no interactive session) → the claim is simply omitted there.
-        authTime: browserSession?.createdAt ?? null,
-        // #237 (ADR-004/ADR-010): bind the authentication's eIDAS LoA to the
-        // code so /oauth/token can assert `acr` in the ID token. NULL on the
-        // password path (`'low'`, no claim) and on the legacy Bearer path (no
-        // interactive session), which is the same "omit the claim" outcome.
-        assuranceLevel: toStoredAssuranceLevel(browserSession?.assuranceLevel),
-        scopes,
-        // RFC 8707: bind the resource indicator(s) to the authorization
-        // code so /oauth/token can set the access token's `aud` claim to
-        // exactly what the client requested. Reached on the consent-skip
-        // path (returning user, prior consent covers the requested scopes at
-        // these resources); the consent-screen path creates codes in
-        // ui/consent.ts. The same validated set the consent was checked
-        // against above.
-        resource: resources,
-        state: query.state ?? null,
-        expiresAt,
+      return fastify.db.transaction(async (tx) => {
+        const lockedConsent = await fastify.repositories.oauthConsents.findActiveForShare(
+          userId,
+          client.id,
+          tx
+        );
+        if (!canSkipConsent(lockedConsent, client, scopes, resources)) return null;
+        await fastify.repositories.authorizationCodes.create(
+          {
+            code,
+            oauthClientId: client.id,
+            userId,
+            redirectUri,
+            codeChallenge: query.code_challenge,
+            codeChallengeMethod: 'S256',
+            nonce: query.nonce ?? null,
+            // OIDC Core §2 `auth_time`: persist the REAL end-user authentication
+            // time (browser-session establishment, epoch MS) — never the code-mint
+            // time — so /oauth/token can assert it in the ID token and a `max_age`
+            // check evaluates the actual session age. Null on the legacy Bearer
+            // path (no interactive session) → the claim is simply omitted there.
+            authTime: browserSession?.createdAt ?? null,
+            // #237 (ADR-004/ADR-010): bind the authentication's eIDAS LoA to the
+            // code so /oauth/token can assert `acr` in the ID token. NULL on the
+            // password path (`'low'`, no claim) and on the legacy Bearer path (no
+            // interactive session), which is the same "omit the claim" outcome.
+            assuranceLevel: toStoredAssuranceLevel(browserSession?.assuranceLevel),
+            scopes,
+            // RFC 8707: bind the resource indicator(s) to the authorization
+            // code so /oauth/token can set the access token's `aud` claim to
+            // exactly what the client requested. Reached on the consent-skip
+            // path (returning user, prior consent covers the requested scopes at
+            // these resources); the consent-screen path creates codes in
+            // ui/consent.ts. The same validated set the consent was checked
+            // against above.
+            resource: resources,
+            state: query.state ?? null,
+            expiresAt,
+          },
+          tx
+        );
+        return code;
       });
-      return code;
     };
 
     const MAX_CREATE_ATTEMPTS = 3;
     let code: string | null = null;
+    let consentWithdrawn = false;
     for (let attempt = 0; attempt < MAX_CREATE_ATTEMPTS; attempt++) {
       try {
         code = await createCode();
+        consentWithdrawn = code === null;
         break;
       } catch (err) {
         if (!isUniqueConstraintError(err)) throw err;
         if (attempt === MAX_CREATE_ATTEMPTS - 1) throw err;
       }
+    }
+
+    if (consentWithdrawn) {
+      // The consent went away under this request. Fail closed, once — never
+      // by re-running the handler — with the answer a request arriving after
+      // the revocation gets: `access_denied` on the Bearer path (no screen
+      // to show), `consent_required` under `prompt=none`, else the consent
+      // screen (whose POST runs its own step-up gate).
+      await fastify.repositories.auditLogs.create({
+        userId,
+        oauthClientId: client.id,
+        event: 'oauth.authorize.failure',
+        eventType: 'token',
+        success: false,
+        ipAddress: request.ip,
+        userAgent: request.headers['user-agent'] || null,
+        metadata: {
+          error: 'consent_required',
+          reason: 'consent_withdrawn_during_authorization',
+          client_id: query.client_id,
+        },
+      });
+      if (!browserSession) {
+        return reply.redirect(
+          buildRedirectUrl(redirectUri, {
+            error: 'access_denied',
+            error_description:
+              'no stored consent covers this request; use the browser authorization flow',
+            state: state ?? undefined,
+            iss,
+          }),
+          302
+        );
+      }
+      if (parsePromptMode(query.prompt) === 'none') {
+        return reply.redirect(
+          buildRedirectUrl(redirectUri, {
+            error: 'consent_required',
+            error_description: 'user interaction is required but prompt=none was requested',
+            state: state ?? undefined,
+            iss,
+          }),
+          302
+        );
+      }
+      const qIndex = requestUrlWithParams.indexOf('?');
+      const returnQuery = qIndex >= 0 ? requestUrlWithParams.slice(qIndex) : '';
+      return reply.redirect(`/ui/consent${returnQuery}`, 302);
     }
     if (!code) throw new Error('Unreachable');
 

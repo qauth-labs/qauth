@@ -74,6 +74,7 @@ function createReply() {
 
 function makeFastify() {
   const ctx: TestContext = {};
+  const findActive = vi.fn();
   const fastify: any = {
     withTypeProvider: () => {
       const route = {
@@ -97,7 +98,12 @@ function makeFastify() {
         findByClientId: vi.fn(),
       },
       oauthConsents: {
-        findActive: vi.fn(),
+        findActive,
+        // The locked re-read in the code-insert transaction sees what the
+        // first read saw, unless a test says otherwise.
+        findActiveForShare: vi.fn((userId: string, oauthClientId: string) =>
+          findActive(userId, oauthClientId)
+        ),
       },
       authorizationCodes: {
         create: vi.fn().mockResolvedValue({ id: 'code-1' }),
@@ -106,6 +112,7 @@ function makeFastify() {
         create: vi.fn().mockResolvedValue(undefined),
       },
     },
+    db: { transaction: vi.fn(async (cb: (tx: unknown) => Promise<unknown>) => cb({ tx: true })) },
     jwtUtils: {
       extractFromHeader: vi.fn(),
       verifyAccessToken: vi.fn(),
@@ -244,9 +251,113 @@ describe('GET /oauth/authorize — session-cookie integration', () => {
     );
 
     expect(fastify.repositories.authorizationCodes.create).toHaveBeenCalledOnce();
+    // The consent is re-read under a lock, in the transaction the code is
+    // written in.
+    const [, tx] = (fastify.repositories.authorizationCodes.create as unknown as Mock).mock
+      .calls[0];
+    expect(tx).toEqual({ tx: true });
+    expect(fastify.repositories.oauthConsents.findActiveForShare).toHaveBeenCalledWith(
+      'user-1',
+      CLIENT.id,
+      tx
+    );
     expect(state.redirected).toContain('https://example.com/cb');
     expect(state.redirected).toContain('code=');
     expect(state.redirected).toContain('state=xyz');
+  });
+
+  // The first consent read is a snapshot. A revocation that commits after it
+  // must not leave a code issued on a consent that no longer exists: the
+  // request is answered as one arriving after the revocation would be.
+  it.each([
+    ['shows the consent screen', { prompt: undefined }, '/ui/consent?'],
+    ['answers consent_required to prompt=none', { prompt: 'none' }, 'error=consent_required'],
+  ])(
+    'issues no code and %s when the consent is revoked between the read and the code insert',
+    async (_label, extraQuery, expectedRedirect) => {
+      const { fastify, ctx } = makeFastify();
+      await authorizeRoute(fastify);
+      (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(
+        CLIENT
+      );
+      (fastify.jwtUtils.extractFromHeader as unknown as Mock).mockReturnValue(null);
+      (fastify.repositories.oauthConsents.findActive as unknown as Mock).mockResolvedValue({
+        scopes: ['email', 'read:foo'],
+        revokedAt: null,
+      });
+      // Revoked by the time the row is locked.
+      (fastify.repositories.oauthConsents.findActiveForShare as unknown as Mock).mockResolvedValue(
+        undefined
+      );
+      const { signSessionId } = await import('../../helpers/session-cookie');
+      const signed = signSessionId('sid-race');
+      (fastify.sessionUtils.getSession as unknown as Mock).mockResolvedValue({
+        userId: 'user-1',
+        email: 'a@b.com',
+        sessionId: 'sid-race',
+        createdAt: Date.now(),
+      });
+
+      const { reply, state } = createReply();
+      await ctx.handler!(
+        {
+          query: { ...BASE_QUERY, ...extraQuery },
+          url: '/oauth/authorize?response_type=code&client_id=app-123&scope=email',
+          headers: { cookie: `__Host-qauth_session=${signed}` },
+          ip: '127.0.0.1',
+        },
+        reply
+      );
+
+      expect(fastify.repositories.oauthConsents.findActiveForShare).toHaveBeenCalledOnce();
+      expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
+      expect(state.redirected).toContain(expectedRedirect);
+      expect(state.redirected).not.toContain('code=');
+    }
+  );
+
+  it('fails closed, without re-running the request, when every locked re-read finds no consent', async () => {
+    // A consent that keeps vanishing under the lock must not loop the handler.
+    const { fastify, ctx } = makeFastify();
+    await authorizeRoute(fastify);
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(CLIENT);
+    (fastify.jwtUtils.extractFromHeader as unknown as Mock).mockReturnValue(null);
+    (fastify.repositories.oauthConsents.findActive as unknown as Mock).mockResolvedValue({
+      scopes: ['email'],
+      revokedAt: null,
+    });
+    (fastify.repositories.oauthConsents.findActiveForShare as unknown as Mock).mockResolvedValue(
+      undefined
+    );
+    const { signSessionId } = await import('../../helpers/session-cookie');
+    const signed = signSessionId('sid-race-2');
+    (fastify.sessionUtils.getSession as unknown as Mock).mockResolvedValue({
+      userId: 'user-1',
+      email: 'a@b.com',
+      sessionId: 'sid-race-2',
+      createdAt: Date.now(),
+    });
+
+    const { reply, state } = createReply();
+    await ctx.handler!(
+      {
+        query: { ...BASE_QUERY, prompt: 'none' },
+        url: '/oauth/authorize?response_type=code&client_id=app-123&scope=email&prompt=none',
+        headers: { cookie: `__Host-qauth_session=${signed}` },
+        ip: '127.0.0.1',
+      },
+      reply
+    );
+
+    // One pass through the handler: one client lookup, one first read.
+    expect(fastify.repositories.oauthClients.findByClientId).toHaveBeenCalledOnce();
+    expect(fastify.repositories.oauthConsents.findActive).toHaveBeenCalledOnce();
+    expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
+    expect(state.redirected).toContain('error=consent_required');
+    const failure = (fastify.repositories.auditLogs.create as unknown as Mock).mock.calls
+      .map((c) => c[0] as { event: string; metadata: Record<string, unknown> })
+      .find((e) => e.metadata?.reason === 'consent_withdrawn_during_authorization');
+    expect(failure).toBeDefined();
   });
 
   it('persists RFC 8707 resource indicator(s) onto the authorization code', async () => {
@@ -1197,6 +1308,40 @@ describe('GET /oauth/authorize — Bearer path step-up (ADR-007 §2, #185)', () 
     expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
   });
 
+  it('issues no code on the Bearer path when the consent is revoked before the code insert', async () => {
+    const { fastify, ctx } = makeFastify();
+    await authorizeRoute(fastify);
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(
+      DANGEROUS_CLIENT
+    );
+    (fastify.repositories.oauthConsents.findActive as unknown as Mock).mockResolvedValue({
+      scopes: ['email'],
+      revokedAt: null,
+    });
+    (fastify.repositories.oauthConsents.findActiveForShare as unknown as Mock).mockResolvedValue(
+      undefined
+    );
+    (fastify.sessionUtils.getSession as unknown as Mock).mockResolvedValue(null);
+    (fastify.jwtUtils.extractFromHeader as unknown as Mock).mockReturnValue('bearer.token');
+    (fastify.jwtUtils.verifyAccessToken as unknown as Mock).mockResolvedValue({
+      sub: 'user-1',
+      clientId: DANGEROUS_CLIENT.clientId,
+      aud: DANGEROUS_CLIENT.clientId,
+    });
+    const { reply, state } = createReply();
+    await ctx.handler!(
+      {
+        query: { ...BASE_QUERY, client_id: 'app-bearer', scope: 'email' },
+        url: '/oauth/authorize?response_type=code&client_id=app-bearer&scope=email',
+        headers: { authorization: 'Bearer bearer.token' },
+        ip: '127.0.0.1',
+      },
+      reply
+    );
+    expect(state.redirected).toContain('error=access_denied');
+    expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
+  });
+
   // RFC 8707: the `resource` is the token's `aud`, so the covering consent
   // must cover it too, exactly as on the browser path.
   it('refuses the Bearer path for a resource the stored consent does not cover', async () => {
@@ -1444,7 +1589,9 @@ describe('GET /oauth/authorize — loopback redirect on any port (RFC 8252 §7.3
       await call();
 
       expect(fastify.repositories.authorizationCodes.create).toHaveBeenCalledWith(
-        expect.objectContaining({ redirectUri: requested })
+        expect.objectContaining({ redirectUri: requested }),
+        // The transaction the consent was re-read and locked in.
+        expect.anything()
       );
       expect(state.redirected!.startsWith(`${requested}?`)).toBe(true);
       expect(new URL(state.redirected!).searchParams.get('code')).toBeTruthy();
