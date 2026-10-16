@@ -1042,13 +1042,26 @@ describe('GET /oauth/authorize — Bearer path step-up (ADR-007 §2, #185)', () 
     scopes: ['read:foo', 'write:foo', 'email'],
   };
 
-  async function runBearer(scope: string, payload: Record<string, unknown> = {}) {
+  async function runBearer(
+    scope: string,
+    payload: Record<string, unknown> = {},
+    opts: {
+      client?: Record<string, unknown>;
+      /** The stored consent row; a covering, unrevoked grant unless overridden. */
+      consent?: Record<string, unknown> | null;
+    } = {}
+  ) {
     const { fastify, ctx } = makeFastify();
     await authorizeRoute(fastify);
     // `findByClientId` answers every lookup with this client, so it is also
     // the "system" client the Bearer path pins the token's `client_id` to.
     (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(
-      DANGEROUS_CLIENT
+      opts.client ?? DANGEROUS_CLIENT
+    );
+    (fastify.repositories.oauthConsents.findActive as unknown as Mock).mockResolvedValue(
+      opts.consent === undefined
+        ? { scopes: ['read:foo', 'email'], revokedAt: null }
+        : (opts.consent ?? undefined)
     );
     // No browser session; a valid Bearer token resolves the user.
     (fastify.sessionUtils.getSession as unknown as Mock).mockResolvedValue(null);
@@ -1078,10 +1091,53 @@ describe('GET /oauth/authorize — Bearer path step-up (ADR-007 §2, #185)', () 
     expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
   });
 
-  it('still mints a code for a non-dangerous scope on the Bearer path', async () => {
+  it('still mints a code for a non-dangerous scope on the Bearer path when a stored consent covers it', async () => {
     const { fastify, state } = await runBearer('email');
     expect(state.redirected).toContain('code=');
     expect(fastify.repositories.authorizationCodes.create).toHaveBeenCalledOnce();
+    expect(fastify.repositories.oauthConsents.findActive).toHaveBeenCalledWith(
+      'user-1',
+      DANGEROUS_CLIENT.id
+    );
+  });
+
+  // The Bearer path cannot show a consent screen, so it must never stand in
+  // for one: a code is issued only under a stored, unrevoked grant that
+  // already covers the request — the same `canSkipConsent` question the
+  // browser flow asks. Any client that resolves can be named here, including
+  // one registered a moment ago through open Dynamic Client Registration.
+  it.each([
+    ['no consent exists', 'email', null],
+    [
+      'the stored consent does not cover the requested scopes',
+      'email read:foo',
+      { scopes: ['email'], revokedAt: null },
+    ],
+    ['the stored consent is revoked', 'email', { scopes: ['email'], revokedAt: Date.now() - 1000 }],
+  ])('refuses the Bearer path with access_denied when %s', async (_label, scope, consent) => {
+    const { fastify, state } = await runBearer(scope, {}, { consent });
+    expect(state.redirected).toContain('https://example.com/cb');
+    expect(state.redirected).toContain('error=access_denied');
+    expect(state.redirected).toContain('state=xyz');
+    expect(state.redirected).not.toContain('code=');
+    expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
+    const failure = (fastify.repositories.auditLogs.create as unknown as Mock).mock.calls
+      .map((c) => c[0] as { event: string; metadata: Record<string, unknown> })
+      .find((e) => e.event === 'oauth.authorize.failure');
+    expect(failure?.metadata).toMatchObject({
+      error: 'access_denied',
+      reason: 'bearer_path_no_covering_consent',
+    });
+  });
+
+  it('refuses the Bearer path for a dynamic client still in its badge window, even over a covering consent', async () => {
+    const { fastify, state } = await runBearer(
+      'email',
+      {},
+      { client: { ...DANGEROUS_CLIENT, dynamicRegisteredAt: Date.now() - 60 * 1000 } }
+    );
+    expect(state.redirected).toContain('error=access_denied');
+    expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
   });
 
   it('refuses a Bearer token issued to another client, even with the system audience', async () => {

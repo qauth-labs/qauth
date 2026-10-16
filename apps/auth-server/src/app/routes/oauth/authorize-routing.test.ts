@@ -177,8 +177,17 @@ describe('GET /oauth/authorize resource binding (RFC 8707)', () => {
         extractFromHeader: ReturnType<typeof vi.fn>;
         verifyAccessToken: ReturnType<typeof vi.fn>;
       };
-      repositories: { authorizationCodes: { create: ReturnType<typeof vi.fn> } };
+      repositories: {
+        authorizationCodes: { create: ReturnType<typeof vi.fn> };
+        oauthConsents: { findActive: ReturnType<typeof vi.fn> };
+      };
     };
+    // The Bearer path issues a code only under a stored consent that covers
+    // the request (it cannot show the consent screen).
+    doubles.repositories.oauthConsents.findActive.mockResolvedValue({
+      scopes: ['email'],
+      revokedAt: null,
+    });
     doubles.jwtUtils.extractFromHeader.mockReturnValue('token');
     // `findByClientId` answers every lookup with CLIENT, so it is also the
     // "system" client whose `client_id` and `aud` the Bearer path pins the
@@ -239,6 +248,54 @@ describe('GET /oauth/authorize resource binding (RFC 8707)', () => {
     expect(response.statusCode).toBe(302);
     expect(createCode.mock.calls[0]?.[0]).toMatchObject({ resource: [] });
   });
+});
+
+describe('/oauth/authorize Bearer path without a covering consent', () => {
+  // The first-party login token stands in for a browser session on this
+  // path, never for the user's consent: with no stored grant the browser flow
+  // shows /ui/consent, so a Bearer caller gets `access_denied` and no code.
+  it.each(['GET', 'POST'] as const)(
+    '%s answers access_denied and mints nothing',
+    async (method) => {
+      server = await buildServer();
+      const doubles = server as unknown as {
+        jwtUtils: {
+          extractFromHeader: ReturnType<typeof vi.fn>;
+          verifyAccessToken: ReturnType<typeof vi.fn>;
+        };
+        repositories: {
+          authorizationCodes: { create: ReturnType<typeof vi.fn> };
+          oauthConsents: { findActive: ReturnType<typeof vi.fn> };
+        };
+      };
+      doubles.repositories.oauthConsents.findActive.mockResolvedValue(undefined);
+      doubles.jwtUtils.extractFromHeader.mockReturnValue('token');
+      doubles.jwtUtils.verifyAccessToken.mockResolvedValue({
+        sub: 'user-1',
+        clientId: CLIENT.clientId,
+        aud: CLIENT.clientId,
+      });
+
+      const response =
+        method === 'GET'
+          ? await server.inject({ method, url: `/oauth/authorize?${QUERY}` })
+          : await server.inject({
+              method,
+              url: '/oauth/authorize',
+              // This harness registers no form parser; the handler reads the
+              // validated body the same way whatever its content type.
+              headers: { 'content-type': 'application/json' },
+              payload: Object.fromEntries(new URLSearchParams(QUERY)),
+            });
+
+      expect(response.statusCode).toBe(302);
+      const location = response.headers.location as string;
+      expect(location.startsWith('https://example.com/cb?')).toBe(true);
+      expect(location).toContain('error=access_denied');
+      expect(location).not.toContain('code=');
+      expect(doubles.repositories.authorizationCodes.create).not.toHaveBeenCalled();
+    }
+  );
 });
 
 describe('POST /oauth/authorize routing', () => {

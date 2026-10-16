@@ -87,8 +87,10 @@ function buildAuthorizeUrlWithParams(request: FastifyRequest): string {
  *      consent screen at /ui/consent. Otherwise issue a code directly.
  *   2. Legacy/machine: Authorization: Bearer <access_token>. Retained for
  *      backwards compatibility with first-party callers that have not yet
- *      migrated to the browser flow. MUST NOT be relied on once dynamic
- *      client registration is opened up.
+ *      migrated to the browser flow. It cannot show the consent screen, so
+ *      it issues a code ONLY under a stored consent that already covers the
+ *      request (the same `canSkipConsent` gate as the browser flow); any
+ *      other request is refused with `access_denied`.
  */
 export default async function (fastify: FastifyInstance) {
   // OIDC Core §3.1.2.1: the authorization endpoint MUST support BOTH GET (params
@@ -423,9 +425,7 @@ export default async function (fastify: FastifyInstance) {
     // fresh authentication. Default-deny: a Bearer authorize request carrying
     // any dangerous scope (write:* / agent:admin / agent:exec) is refused
     // with `access_denied` and the client is told to use the interactive
-    // browser flow (which enforces the dangerous-op re-auth gate). Bearer is
-    // legacy first-party and not exposed to dynamically-registered clients,
-    // so this only affects first-party callers requesting dangerous scopes.
+    // browser flow (which enforces the dangerous-op re-auth gate).
     // ADR-008 §5 (#197): the automatic dangerous-scope refusal is gated by the
     // environment policy. Staging/production (and the fail-safe default) keep
     // it; a `development` client relaxes it so local Bearer-path iteration
@@ -462,16 +462,47 @@ export default async function (fastify: FastifyInstance) {
       }
     }
 
-    // Browser-driven flow: show the consent screen unless a previous
-    // grant already covers the requested scopes. Bearer-token callers
-    // skip the consent step entirely — they are first-party and the
-    // Bearer path is not exposed to dynamically-registered clients.
-    if (browserSession) {
-      const existingConsent = await fastify.repositories.oauthConsents.findActive(
-        userId,
-        client.id
-      );
+    const existingConsent = await fastify.repositories.oauthConsents.findActive(userId, client.id);
 
+    // The consent decision does not depend on HOW the user authenticated.
+    // Any client that resolved above can be named on the Bearer path too —
+    // one registered a moment ago through open Dynamic Client Registration, a
+    // CIMD client, another developer's public client. The Bearer path cannot
+    // show the consent screen, so it issues a code only under a stored,
+    // unrevoked grant that already covers this request (the same
+    // `canSkipConsent` question the browser flow asks below, badge window
+    // included); anything else is refused (ADR-017 Decision 9: every path
+    // other than an operator-flagged first-party client requires consent).
+    if (!browserSession && !canSkipConsent(existingConsent, client, scopes)) {
+      await fastify.repositories.auditLogs.create({
+        userId,
+        oauthClientId: client.id,
+        event: 'oauth.authorize.failure',
+        eventType: 'token',
+        success: false,
+        ipAddress: request.ip,
+        userAgent: request.headers['user-agent'] || null,
+        metadata: {
+          error: 'access_denied',
+          reason: 'bearer_path_no_covering_consent',
+          client_id: query.client_id,
+        },
+      });
+      return reply.redirect(
+        buildRedirectUrl(redirectUri, {
+          error: 'access_denied',
+          error_description:
+            'no stored consent covers this request; use the browser authorization flow',
+          state: state ?? undefined,
+          iss,
+        }),
+        302
+      );
+    }
+
+    // Browser-driven flow: show the consent screen unless a previous
+    // grant already covers the requested scopes.
+    if (browserSession) {
       // ADR-007 §2 (#185): step-up authentication before dangerous
       // operations / on elevation. A request that widens the granted scope
       // set (incremental consent, MCP 2025-11-25), or that asks for a
