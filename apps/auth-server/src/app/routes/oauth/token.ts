@@ -29,6 +29,7 @@ import {
   validateScopes,
 } from '../../helpers/client-auth';
 import { isAgentClient } from '../../helpers/client-resolution';
+import { isScopeSubset } from '../../helpers/consent';
 import { resolveIssuerIdentifier } from '../../helpers/discovery';
 import { resolveEmailClaims } from '../../helpers/email-claims';
 import {
@@ -583,14 +584,26 @@ async function handleAuthorizationCode(
     throw new InvalidGrantError('Invalid or expired authorization code');
   }
 
-  const { token: refreshToken, tokenHash } = fastify.jwtUtils.generateRefreshToken();
-
-  const refreshTokenExpiresAt = Date.now() + fastify.jwtUtils.getRefreshTokenLifespan() * 1000;
-
-  // Start a fresh refresh-token family. Every rotation (see
-  // `handleRefreshToken`) inherits this `familyId` so replay of a revoked
-  // token can be traced to — and revoke — the entire family.
-  const familyId = randomUUID();
+  // A refresh token is standing access, and the active consent row is the
+  // user's only handle on it: `/consents` lists those rows, and consent
+  // revocation reaches the refresh tokens through one. So a refresh token is
+  // minted only under a stored consent that covers the code's scopes. An
+  // approval given with "Remember this decision" unticked, a consent revoked
+  // since the code was issued, and the legacy Bearer authorize path (which
+  // stores no consent) yield the access token (and ID token) alone; the client
+  // returns through /oauth/authorize when it expires.
+  const consent = await fastify.repositories.oauthConsents.findActive(user.id, client.id);
+  const refresh =
+    consent && isScopeSubset(authCode.scopes, consent.scopes)
+      ? {
+          ...fastify.jwtUtils.generateRefreshToken(),
+          expiresAt: Date.now() + fastify.jwtUtils.getRefreshTokenLifespan() * 1000,
+          // Start a fresh refresh-token family. Every rotation (see
+          // `handleRefreshToken`) inherits this `familyId` so replay of a
+          // revoked token can be traced to — and revoke — the entire family.
+          familyId: randomUUID(),
+        }
+      : undefined;
 
   // Spend the code and store the refresh token it buys in ONE transaction, so
   // the grant is never observable in between: code already used, refresh
@@ -601,20 +614,22 @@ async function handleAuthorizationCode(
   // token is committed, where the sweep that follows sees it.
   await fastify.db.transaction(async (tx) => {
     await fastify.repositories.authorizationCodes.markUsed(authCode.id, tx);
-    await fastify.repositories.refreshTokens.create(
-      {
-        userId: user.id,
-        oauthClientId: client.id,
-        tokenHash,
-        familyId,
-        expiresAt: refreshTokenExpiresAt,
-        scopes: authCode.scopes,
-        // RFC 8707: carry the resource set onto the refresh token so subsequent
-        // refreshes produce access tokens with the same `aud`.
-        resource: effectiveResource,
-      },
-      tx
-    );
+    if (refresh) {
+      await fastify.repositories.refreshTokens.create(
+        {
+          userId: user.id,
+          oauthClientId: client.id,
+          tokenHash: refresh.tokenHash,
+          familyId: refresh.familyId,
+          expiresAt: refresh.expiresAt,
+          scopes: authCode.scopes,
+          // RFC 8707: carry the resource set onto the refresh token so subsequent
+          // refreshes produce access tokens with the same `aud`.
+          resource: effectiveResource,
+        },
+        tx
+      );
+    }
   });
 
   const scopeString = authCode.scopes.length > 0 ? authCode.scopes.join(' ') : undefined;
@@ -712,11 +727,13 @@ async function handleAuthorizationCode(
 
   // Token issuance metrics (#126).
   fastify.metrics.tokensIssued.inc({ type: 'access', grant_type: 'authorization_code' });
-  fastify.metrics.tokensIssued.inc({ type: 'refresh', grant_type: 'authorization_code' });
+  if (refresh) {
+    fastify.metrics.tokensIssued.inc({ type: 'refresh', grant_type: 'authorization_code' });
+  }
 
   return {
     access_token: accessToken,
-    refresh_token: refreshToken,
+    ...(refresh ? { refresh_token: refresh.token } : {}),
     expires_in: accessTokenExpiresIn,
     token_type: 'Bearer' as const,
     ...(scopeString ? { scope: scopeString } : {}),

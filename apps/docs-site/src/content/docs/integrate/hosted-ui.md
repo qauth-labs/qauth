@@ -41,7 +41,10 @@ it redirects to `/ui/login` (via the pending-authorization mechanism below,
 not a raw inline redirect). `POST /ui/consent` submits the decision
 (`allow` / `deny`, CSRF-protected) and, on `allow`, issues the authorization
 code and redirects to the client's `redirect_uri` exactly as a first visit
-would.
+would. The **Remember this decision** checkbox (ticked by default) stores the
+consent, which lets later requests for the same scopes skip the screen and lists
+the client under `/consents`. Unticked, the approval is one-time: nothing is
+stored, and `/oauth/token` returns no `refresh_token` for that code.
 
 ## `/ui/resume/{handle}`
 

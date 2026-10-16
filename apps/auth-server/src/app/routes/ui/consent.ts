@@ -829,7 +829,9 @@ export default async function (fastify: FastifyInstance) {
       // Allow: persist the grant if the user checked the box, then issue a
       // code. The grant upsert merges with any prior record so subsequent
       // requests with a subset of these scopes, for the resource(s) this
-      // screen named as the audience, skip the screen.
+      // screen named as the audience, skip the screen. An approval that is
+      // not persisted is one-time: /oauth/token mints a refresh token only
+      // under a stored consent, the row the user can list and revoke.
       if (body.allow_forever === '1') {
         await fastify.repositories.oauthConsents.upsertGrant(
           session.userId,

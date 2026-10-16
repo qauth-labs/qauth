@@ -191,6 +191,11 @@ function createFastifyStub() {
         revokeIfActive: vi.fn().mockResolvedValue({ id: 'rotated-row' }),
         revokeFamily: vi.fn().mockResolvedValue(0),
       },
+      oauthConsents: {
+        // Deny-by-default: no stored consent means no refresh token on the
+        // authorization_code grant, so those tests opt IN by overriding this.
+        findActive: vi.fn().mockResolvedValue(undefined),
+      },
       auditLogs: {
         create: vi.fn(),
       },
@@ -1129,6 +1134,13 @@ describe('POST /oauth/token route — authorization_code grant', () => {
       undefined
     );
     (fastify.repositories.users.findById as unknown as Mock).mockResolvedValue(user);
+    (fastify.repositories.oauthConsents.findActive as unknown as Mock).mockResolvedValue({
+      id: 'consent-uuid-1',
+      userId: user.id,
+      oauthClientId: client.id,
+      scopes: ['read:foo'],
+      revokedAt: null,
+    });
     (fastify.repositories.refreshTokens.create as unknown as Mock).mockResolvedValue(undefined);
     (fastify.pkceUtils.verifyCodeChallenge as unknown as Mock).mockReturnValue(true);
     (fastify.jwtUtils.signAccessToken as unknown as Mock).mockResolvedValue('signed.jwt.token');
@@ -1201,6 +1213,37 @@ describe('POST /oauth/token route — authorization_code grant', () => {
     // No `openid` scope was granted → no ID token issued (OIDC Core §3.1.3.3).
     expect(fastify.jwtUtils.signIdToken).not.toHaveBeenCalled();
     expect(result).not.toHaveProperty('id_token');
+  });
+
+  // The consent row is what `/consents` lists and what revocation reaches the
+  // refresh tokens through, so a refresh token without one could be neither
+  // seen nor withdrawn by the user.
+  it.each([
+    ['no consent is stored ("Remember this decision" unticked, or revoked since)', undefined],
+    ['the stored consent does not cover the code scopes', ['write:foo']],
+  ])('issues the access token but NO refresh token when %s', async (_label, consentScopes) => {
+    const { fastify, ctx, client, user, authCode } = setupAuthCodeStub();
+    (fastify.repositories.oauthConsents.findActive as unknown as Mock).mockResolvedValue(
+      consentScopes && { id: 'consent-uuid-1', scopes: consentScopes, revokedAt: null }
+    );
+    await tokenRoute(fastify);
+    const handler = ctx.handler;
+    if (!handler) throw new Error('Handler missing');
+
+    const result = await handler(baseRequest(), createReply());
+
+    expect(fastify.repositories.oauthConsents.findActive).toHaveBeenCalledWith(user.id, client.id);
+    expect(result).toMatchObject({ access_token: 'signed.jwt.token', scope: 'read:foo' });
+    expect(result).not.toHaveProperty('refresh_token');
+    expect(fastify.repositories.refreshTokens.create).not.toHaveBeenCalled();
+    expect(fastify.metrics.tokensIssued.inc).not.toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'refresh' })
+    );
+    // The code is spent all the same: it cannot be redeemed a second time.
+    expect(fastify.repositories.authorizationCodes.markUsed).toHaveBeenCalledWith(
+      authCode.id,
+      expect.anything()
+    );
   });
 
   it('issues an id_token when the granted scope includes openid (OIDC Core §3.1.3.3)', async () => {
@@ -3902,6 +3945,11 @@ describe('POST /oauth/token — response serialization (union schema, ADR-011)',
         enabled: true,
         firstName: 'Ada',
         lastName: 'Lovelace',
+      });
+      (instance.repositories.oauthConsents.findActive as unknown as Mock).mockResolvedValue({
+        id: 'consent-1',
+        scopes: ['email', 'openid'],
+        revokedAt: null,
       });
       (instance.jwtUtils.signAccessToken as unknown as Mock).mockResolvedValue('access.jwt');
       (instance.jwtUtils.signIdToken as unknown as Mock).mockResolvedValue('id.jwt');

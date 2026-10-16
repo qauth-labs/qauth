@@ -52,7 +52,7 @@ curl -s http://localhost:3000/.well-known/oauth-authorization-server | jq
 
 | Grant                                             | Subject (`sub`) | Refresh token?       | Use case                                                |
 | ------------------------------------------------- | --------------- | -------------------- | ------------------------------------------------------- |
-| `authorization_code` (+ PKCE)                     | the end user    | yes                  | Apps acting **on behalf of a user**                     |
+| `authorization_code` (+ PKCE)                     | the end user    | if consent is stored | Apps acting **on behalf of a user**                     |
 | `refresh_token`                                   | the end user    | yes (rotated)        | Renew an access token without re-prompting              |
 | `client_credentials`                              | the `client_id` | no (RFC 6749 §4.4.3) | **Machine-to-machine**, no user                         |
 | `urn:ietf:params:oauth:grant-type:token-exchange` | the end user    | no                   | **Agent delegation** on behalf of a user (RFC 8693)     |
@@ -224,6 +224,12 @@ Notes:
   included) and a PKCE-matching `code_verifier` are mandatory.
 - `resource` here must be a **subset** of the resource set bound at authorize
   time, or you get `invalid_target`. Omit it to inherit the code's binding.
+- **`refresh_token` is present only when the user has a stored consent** for
+  your client that covers the granted scopes — the row they can review and
+  revoke under `/consents`. If they untick **Remember this decision** on the
+  consent screen, the approval is one-time: the member is absent, and you send
+  them through `/oauth/authorize` again once the access token expires.
+  Requesting `offline_access` does not change this either way.
 - **`id_token` is issued only for this grant** (`authorization_code`), and
   only when the granted scope includes `openid`. It is a separate,
   **client-audienced** EdDSA JWT (`aud` = your `client_id`, not the resource

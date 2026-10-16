@@ -115,6 +115,9 @@ function makeAuthCodeStub(opts: {
       refreshTokens: {
         create: vi.fn().mockResolvedValue(undefined),
       },
+      oauthConsents: {
+        findActive: vi.fn().mockResolvedValue({ scopes: ['openid'], revokedAt: null }),
+      },
       // #229: token issuance resolves email claims from verified attributes.
       userAttributes: {
         findVerifiedByUserIdAndKey: vi.fn().mockResolvedValue([
