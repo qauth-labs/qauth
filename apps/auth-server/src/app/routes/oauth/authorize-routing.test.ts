@@ -163,6 +163,32 @@ describe('GET /oauth/authorize routing', () => {
     expect(setSession).not.toHaveBeenCalled();
   });
 
+  it('never redirects a self-registered client automatically from prompt=none (RFC 9700 §4.11.2)', async () => {
+    // One anonymous POST /oauth/register used to turn this link into an open
+    // redirector on the issuer's origin.
+    server = await buildServer();
+    const clients = (
+      server as unknown as {
+        repositories: { oauthClients: { findByClientId: ReturnType<typeof vi.fn> } };
+      }
+    ).repositories.oauthClients;
+    clients.findByClientId.mockResolvedValue({
+      ...CLIENT,
+      dynamicRegisteredAt: Date.now(),
+      metadata: { registrationType: 'dynamic' },
+    });
+
+    const response = await server.inject({
+      method: 'GET',
+      url: `/oauth/authorize?${QUERY}&prompt=none`,
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.headers.location).toBeUndefined();
+    expect(response.headers['content-type']).toContain('text/html');
+    expect(response.body).toContain('<code>login_required</code>');
+  });
+
   it('stashes the CANONICAL authorize path, so the resume redirect is slash-free', async () => {
     server = await buildServer();
     await server.inject({ method: 'GET', url: `/oauth/authorize/?${QUERY}` });

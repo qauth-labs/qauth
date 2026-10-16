@@ -631,15 +631,25 @@ QAuth returns standard OAuth error codes (RFC 6749 §5.2):
 > where there is any to give.
 >
 > `/oauth/authorize` is different by design. Once `client_id` and `redirect_uri`
-> validate it returns `unauthorized_client`, `invalid_scope`, `access_denied` and
-> `login_required` as redirect query parameters built in the route itself
-> (`apps/auth-server/src/app/routes/oauth/authorize.ts:230`, `:393`). The errors
-> RFC 6749 §4.1.2.1 forbids redirecting — an unknown client
-> (`apps/auth-server/src/app/routes/oauth/authorize.ts:167`) and a
-> `redirect_uri` that is not registered or not permitted for the environment
-> (`:185`, `:214`) — are thrown as `BadRequestError` and reach the caller in the
-> JSON body instead. See the
+> validate it returns `invalid_scope`, `access_denied`, `login_required` and
+> `consent_required` as redirect query parameters built in the route itself.
+> The errors RFC 6749 §4.1.2.1 forbids redirecting — an unknown client and a
+> `redirect_uri` that is not registered or not permitted for the environment —
+> are thrown as `BadRequestError` and reach the caller in the JSON body
+> instead. So is `unauthorized_client` (a disabled client, or one not registered
+> for the `authorization_code` grant or the `code` response type): it is
+> checked before any user interaction, and is never redirected. See the
 > [error model](/integrate/api-reference/#error-model).
+>
+> **Self-registered clients.** RFC 9700 §4.11.2 lets an authorization server
+> redirect automatically only to a redirect URI it trusts. A client created
+> through `POST /oauth/register` or resolved from a Client ID Metadata Document
+> registered its own redirect URI, so for such a client an error that would
+> leave the issuer before any QAuth page is shown (for example `login_required`
+> for an unauthenticated `prompt=none`) is rendered on an issuer page, with
+> HTTP 400 and a link that carries the full error response to the redirect URI,
+> instead of a 302. Clients an operator provisioned keep the automatic
+> redirect.
 
 | Code                     | Meaning                                                                    |
 | ------------------------ | -------------------------------------------------------------------------- |

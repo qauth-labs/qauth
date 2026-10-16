@@ -410,6 +410,11 @@ instead of silently elevating (OIDC Core §3.1.2.1):
 A fresh-login requirement takes precedence over a pending consent — the user
 cannot consent before re-authenticating.
 
+For a client registered through `POST /oauth/register` or a Client ID Metadata
+Document, these errors are shown on an issuer page with a link back to the
+client rather than redirected automatically (RFC 9700 §4.11.2; see
+[Errors](/integrate/oauth-flow/#errors)).
+
 ---
 
 ## 5. Per-agent action audit

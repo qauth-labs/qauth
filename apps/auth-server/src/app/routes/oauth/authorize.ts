@@ -4,6 +4,7 @@ import {
   BadRequestError,
   isUniqueConstraintError,
   JWTInvalidError,
+  UnauthorizedClientError,
 } from '@qauth-labs/shared-errors';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { ZodTypeProvider } from 'fastify-type-provider-zod';
@@ -15,6 +16,7 @@ import {
   STEP_UP_FRESH_AUTH_WINDOW_MS,
 } from '../../constants';
 import { toStoredAssuranceLevel } from '../../helpers/acr-claims';
+import { sendAuthorizationError } from '../../helpers/authorization-error';
 import { resolveBrowserSession } from '../../helpers/browser-session';
 import { clientAddressKey } from '../../helpers/client-address';
 import { findExceedingAgentScopesForClient, resolveAudience } from '../../helpers/client-auth';
@@ -208,28 +210,22 @@ export default async function (fastify: FastifyInstance) {
       throw new BadRequestError('redirect_uri not permitted for this environment');
     }
 
+    // A client that may not use this endpoint at all (disabled, or not
+    // registered for the code grant / `code` response type) is answered with
+    // a 400 and never redirected, whoever provisioned it (RFC 9700 §4.11.2).
+    // These checks run before any user interaction, so a redirect here would
+    // send a visitor straight off the issuer; open DCR can register a client
+    // that fails them (`grant_types: ["refresh_token"]`) with any redirect
+    // URI, and no working flow depends on receiving this error by redirect.
+    let unauthorizedReason: string | null = null;
     if (!client.enabled) {
-      await fastify.repositories.auditLogs.create({
-        userId: null,
-        oauthClientId: client.id,
-        event: 'oauth.authorize.failure',
-        eventType: 'token',
-        success: false,
-        ipAddress: request.ip,
-        userAgent: request.headers['user-agent'] || null,
-        metadata: { error: 'unauthorized_client', client_id: query.client_id },
-      });
-      return reply.redirect(
-        buildRedirectUrl(redirectUri, {
-          error: 'unauthorized_client',
-          state: state ?? undefined,
-          iss,
-        }),
-        302
-      );
+      unauthorizedReason = 'client is disabled';
+    } else if (!client.grantTypes.includes('authorization_code')) {
+      unauthorizedReason = 'client is not registered for the authorization_code grant';
+    } else if (!client.responseTypes.includes('code')) {
+      unauthorizedReason = 'client is not registered for the code response type';
     }
-
-    if (!client.grantTypes.includes('authorization_code')) {
+    if (unauthorizedReason) {
       await fastify.repositories.auditLogs.create({
         userId: null,
         oauthClientId: client.id,
@@ -240,35 +236,7 @@ export default async function (fastify: FastifyInstance) {
         userAgent: request.headers['user-agent'] || null,
         metadata: { error: 'unauthorized_client', client_id: query.client_id },
       });
-      return reply.redirect(
-        buildRedirectUrl(redirectUri, {
-          error: 'unauthorized_client',
-          state: state ?? undefined,
-          iss,
-        }),
-        302
-      );
-    }
-
-    if (!client.responseTypes.includes('code')) {
-      await fastify.repositories.auditLogs.create({
-        userId: null,
-        oauthClientId: client.id,
-        event: 'oauth.authorize.failure',
-        eventType: 'token',
-        success: false,
-        ipAddress: request.ip,
-        userAgent: request.headers['user-agent'] || null,
-        metadata: { error: 'unauthorized_client', client_id: query.client_id },
-      });
-      return reply.redirect(
-        buildRedirectUrl(redirectUri, {
-          error: 'unauthorized_client',
-          state: state ?? undefined,
-          iss,
-        }),
-        302
-      );
+      throw new UnauthorizedClientError(unauthorizedReason);
     }
 
     // -----------------------------------------------------------------
@@ -286,12 +254,17 @@ export default async function (fastify: FastifyInstance) {
       // `error=login_required` on the client's redirect_uri rather than as a
       // redirect to the login page — which, in the hidden iframe these requests
       // are made from, renders a login form the user can never see and leaves
-      // the client hanging until its timeout. (`redirect_uri` and the client
-      // are already validated above, so this redirect is safe to emit.) The
-      // same check exists for the authenticated step-up path further down; this
-      // is the branch that runs BEFORE any session is resolved, and it also
-      // keeps a logged-out client's silent-renewal polling from creating a
-      // pending-authorization stash on every poll.
+      // the client hanging until its timeout. The same check exists for the
+      // authenticated step-up path further down; this is the branch that runs
+      // BEFORE any session is resolved, and it also keeps a logged-out
+      // client's silent-renewal polling from creating a pending-authorization
+      // stash on every poll.
+      //
+      // `redirect_uri` matched the client's registration above, but for a
+      // self-registered (DCR / CIMD) client the registering party chose it,
+      // anonymously: this would be a no-UI redirect off the issuer to any URL
+      // of their choosing. `sendAuthorizationError` shows the error on the
+      // issuer for such a client instead (RFC 9700 §4.11.2).
       if (query.prompt === 'none') {
         await fastify.repositories.auditLogs.create({
           userId: null,
@@ -307,15 +280,12 @@ export default async function (fastify: FastifyInstance) {
             error: 'login_required',
           },
         });
-        return reply.redirect(
-          buildRedirectUrl(redirectUri, {
-            error: 'login_required',
-            error_description: 'authentication is required but prompt=none was requested',
-            state: state ?? undefined,
-            iss,
-          }),
-          302
-        );
+        return sendAuthorizationError(reply, client, redirectUri, {
+          error: 'login_required',
+          error_description: 'authentication is required but prompt=none was requested',
+          state: state ?? undefined,
+          iss,
+        });
       }
 
       // No auth at all → browser flow. Redirect to login, then the user
@@ -364,15 +334,12 @@ export default async function (fastify: FastifyInstance) {
           userAgent: request.headers['user-agent'] || null,
           metadata: { error: 'access_denied', client_id: query.client_id },
         });
-        return reply.redirect(
-          buildRedirectUrl(redirectUri, {
-            error: 'access_denied',
-            error_description: 'Invalid or expired token',
-            state: state ?? undefined,
-            iss,
-          }),
-          302
-        );
+        return sendAuthorizationError(reply, client, redirectUri, {
+          error: 'access_denied',
+          error_description: 'Invalid or expired token',
+          state: state ?? undefined,
+          iss,
+        });
       }
     }
 
@@ -401,15 +368,12 @@ export default async function (fastify: FastifyInstance) {
           exceeding: exceedingAgentScopes.join(' '),
         },
       });
-      return reply.redirect(
-        buildRedirectUrl(redirectUri, {
-          error: 'invalid_scope',
-          error_description: 'requested scope exceeds the agent scope mode for this client',
-          state: state ?? undefined,
-          iss,
-        }),
-        302
-      );
+      return sendAuthorizationError(reply, client, redirectUri, {
+        error: 'invalid_scope',
+        error_description: 'requested scope exceeds the agent scope mode for this client',
+        state: state ?? undefined,
+        iss,
+      });
     }
 
     // Deny-by-default: when a client has no scope allowlist configured we
@@ -459,16 +423,13 @@ export default async function (fastify: FastifyInstance) {
             dangerous: bearerDangerous,
           },
         });
-        return reply.redirect(
-          buildRedirectUrl(redirectUri, {
-            error: 'access_denied',
-            error_description:
-              'dangerous scopes require interactive step-up; use the browser authorization flow',
-            state: state ?? undefined,
-            iss,
-          }),
-          302
-        );
+        return sendAuthorizationError(reply, client, redirectUri, {
+          error: 'access_denied',
+          error_description:
+            'dangerous scopes require interactive step-up; use the browser authorization flow',
+          state: state ?? undefined,
+          iss,
+        });
       }
     }
 
@@ -499,16 +460,13 @@ export default async function (fastify: FastifyInstance) {
           client_id: query.client_id,
         },
       });
-      return reply.redirect(
-        buildRedirectUrl(redirectUri, {
-          error: 'access_denied',
-          error_description:
-            'no stored consent covers this request; use the browser authorization flow',
-          state: state ?? undefined,
-          iss,
-        }),
-        302
-      );
+      return sendAuthorizationError(reply, client, redirectUri, {
+        error: 'access_denied',
+        error_description:
+          'no stored consent covers this request; use the browser authorization flow',
+        state: state ?? undefined,
+        iss,
+      });
     }
 
     // Browser-driven flow: show the consent screen unless a previous
@@ -570,15 +528,12 @@ export default async function (fastify: FastifyInstance) {
               dangerous: stepUp.dangerous,
             },
           });
-          return reply.redirect(
-            buildRedirectUrl(redirectUri, {
-              error: oidcError,
-              error_description: 'user interaction is required but prompt=none was requested',
-              state: state ?? undefined,
-              iss,
-            }),
-            302
-          );
+          return sendAuthorizationError(reply, client, redirectUri, {
+            error: oidcError,
+            error_description: 'user interaction is required but prompt=none was requested',
+            state: state ?? undefined,
+            iss,
+          });
         }
         // No interaction required → fall through to ordinary issuance.
       }
@@ -740,27 +695,21 @@ export default async function (fastify: FastifyInstance) {
         },
       });
       if (!browserSession) {
-        return reply.redirect(
-          buildRedirectUrl(redirectUri, {
-            error: 'access_denied',
-            error_description:
-              'no stored consent covers this request; use the browser authorization flow',
-            state: state ?? undefined,
-            iss,
-          }),
-          302
-        );
+        return sendAuthorizationError(reply, client, redirectUri, {
+          error: 'access_denied',
+          error_description:
+            'no stored consent covers this request; use the browser authorization flow',
+          state: state ?? undefined,
+          iss,
+        });
       }
       if (parsePromptMode(query.prompt) === 'none') {
-        return reply.redirect(
-          buildRedirectUrl(redirectUri, {
-            error: 'consent_required',
-            error_description: 'user interaction is required but prompt=none was requested',
-            state: state ?? undefined,
-            iss,
-          }),
-          302
-        );
+        return sendAuthorizationError(reply, client, redirectUri, {
+          error: 'consent_required',
+          error_description: 'user interaction is required but prompt=none was requested',
+          state: state ?? undefined,
+          iss,
+        });
       }
       const qIndex = requestUrlWithParams.indexOf('?');
       const returnQuery = qIndex >= 0 ? requestUrlWithParams.slice(qIndex) : '';

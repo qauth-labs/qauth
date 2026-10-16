@@ -844,6 +844,42 @@ describe('GET /oauth/authorize — CIMD (Client ID Metadata Documents)', () => {
     expect(fastify.repositories.oauthClients.upsertCimdClient).toHaveBeenCalledOnce();
     expect(state.redirected).toContain('/ui/login?return_to=');
   });
+
+  it('prompt=none with no session: shows login_required on the issuer instead of redirecting (RFC 9700 §4.11.2)', async () => {
+    // Anyone who can host a document names a CIMD client's redirect URI; the
+    // AS has no reason to trust it as an automatic redirect target.
+    ssrfSafeGet.mockReset();
+    ssrfSafeGet.mockResolvedValue(cimdDoc(['https://login-qauth.attacker.example/sign-in']));
+
+    const { fastify, ctx } = makeCimdFastify();
+    await authorizeRoute(fastify);
+    (fastify.jwtUtils.extractFromHeader as unknown as Mock).mockReturnValue(null);
+    (fastify.sessionUtils.getSession as unknown as Mock).mockResolvedValue(null);
+
+    const { reply, state } = createReply();
+    await ctx.handler!(
+      {
+        query: {
+          response_type: 'code',
+          client_id: CIMD_ID,
+          redirect_uri: 'https://login-qauth.attacker.example/sign-in',
+          code_challenge: 'A'.repeat(43),
+          code_challenge_method: 'S256',
+          state: 'xyz',
+          prompt: 'none',
+        },
+        url: `/oauth/authorize?response_type=code&client_id=${encodeURIComponent(CIMD_ID)}`,
+        headers: {},
+        ip: '127.0.0.1',
+      },
+      reply
+    );
+
+    expect(state.redirected).toBeUndefined();
+    expect(state.statusCode).toBe(400);
+    expect(state.body as string).toContain('<code>login_required</code>');
+    expect(state.body as string).toContain('login-qauth.attacker.example');
+  });
 });
 
 describe('GET /oauth/authorize — agent scope-mode cap (ADR-007 §2, #184)', () => {
@@ -1181,7 +1217,12 @@ describe('GET /oauth/authorize — step-up authentication (ADR-007 §2, #185)', 
       prompt: 'none',
       sid: 'sid-su-12',
     });
-    expect(state.redirected).toContain('error=consent_required');
+    // A self-registered client's redirect URI is not one the AS trusts
+    // (RFC 9700 §4.11.2): the error is shown, with the way back, rather than
+    // redirected to automatically.
+    expect(state.redirected).toBeUndefined();
+    expect(state.statusCode).toBe(400);
+    expect(state.body as string).toContain('<code>consent_required</code>');
     expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
   });
 
@@ -1304,7 +1345,9 @@ describe('GET /oauth/authorize — Bearer path step-up (ADR-007 §2, #185)', () 
       {},
       { client: { ...DANGEROUS_CLIENT, dynamicRegisteredAt: Date.now() - 60 * 1000 } }
     );
-    expect(state.redirected).toContain('error=access_denied');
+    // Refused; as a self-registered client, shown rather than redirected.
+    expect(state.statusCode).toBe(400);
+    expect(state.body as string).toContain('<code>access_denied</code>');
     expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
   });
 
@@ -1725,22 +1768,24 @@ describe('GET /oauth/authorize — RFC 9207 §2 `iss` on every authorization res
     expect(issOf(state.redirected)).toBe(discoveryIssuer(RAW_ISSUER));
   });
 
-  it('unauthorized_client (client disabled) carries `iss`', async () => {
-    const { state } = await run({ client: { ...CLIENT, enabled: false } });
-    expect(state.redirected).toContain('error=unauthorized_client');
-    expect(issOf(state.redirected)).toBe(discoveryIssuer(RAW_ISSUER));
-  });
-
-  it('unauthorized_client (grant type not allowed) carries `iss`', async () => {
-    const { state } = await run({ client: { ...CLIENT, grantTypes: ['client_credentials'] } });
-    expect(state.redirected).toContain('error=unauthorized_client');
-    expect(issOf(state.redirected)).toBe(discoveryIssuer(RAW_ISSUER));
-  });
-
-  it('unauthorized_client (response type not allowed) carries `iss`', async () => {
-    const { state } = await run({ client: { ...CLIENT, responseTypes: [] } });
-    expect(state.redirected).toContain('error=unauthorized_client');
-    expect(issOf(state.redirected)).toBe(discoveryIssuer(RAW_ISSUER));
+  // RFC 9700 §4.11.2: these three run before any user interaction and no
+  // working flow depends on the redirect, so a client that may not use this
+  // endpoint is answered with a 400 and never redirected — for every client,
+  // since DCR alone can register one that fails them, with any redirect URI.
+  it.each([
+    ['client disabled', { enabled: false }],
+    ['grant type not allowed', { grantTypes: ['client_credentials'] }],
+    ['response type not allowed', { responseTypes: [] }],
+  ])('unauthorized_client (%s) is a 400, never a redirect', async (_label, override) => {
+    for (const client of [
+      { ...CLIENT, ...override },
+      { ...CLIENT, ...override, dynamicRegisteredAt: Date.now() - 400 * 24 * 60 * 60 * 1000 },
+    ]) {
+      await expect(run({ client })).rejects.toMatchObject({
+        message: 'unauthorized_client',
+        statusCode: 400,
+      });
+    }
   });
 
   it('access_denied (invalid/expired Bearer token) carries `iss`', async () => {
@@ -1808,6 +1853,112 @@ describe('GET /oauth/authorize — RFC 9207 §2 `iss` on every authorization res
     const { state } = await run({ session: null });
     expect(state.redirected).toContain('/ui/login?return_to=');
     expect(state.redirected).not.toContain('iss=');
+  });
+});
+
+/**
+ * RFC 9700 §4.11.2 ("Authorization Server as Open Redirector"): the AS may
+ * redirect automatically only to a redirect URI it trusts. A client created
+ * through open Dynamic Client Registration, or materialised from a CIMD
+ * document, registered its redirect URI itself, anonymously; an exact match
+ * against that registration says nothing about where the URI leads. Error
+ * responses that would leave the issuer with no QAuth page shown are
+ * therefore shown on the issuer, with the way back, for such a client — at any
+ * age. Operator-provisioned clients keep the automatic redirect OpenID Connect
+ * requires.
+ */
+describe('GET /oauth/authorize — error responses for self-registered clients (RFC 9700 §4.11.2)', () => {
+  const ATTACKER_CB = 'https://login-qauth.attacker.example/sign-in';
+  const DCR_CLIENT = {
+    ...CLIENT,
+    clientId: 'dcr-client',
+    redirectUris: [ATTACKER_CB],
+    // Long past DYNAMIC_CLIENT_BADGE_DAYS: who registered it has not changed.
+    dynamicRegisteredAt: Date.now() - 400 * 24 * 60 * 60 * 1000,
+    metadata: { registrationType: 'dynamic' },
+  };
+  // A CIMD client is covered in the CIMD suite above, which resolves a real
+  // document through the (mocked) network layer.
+
+  async function run(
+    client: Record<string, unknown>,
+    opts: { prompt?: string; session?: boolean; scope?: string; consent?: unknown } = {}
+  ) {
+    const { fastify, ctx } = makeFastify();
+    await authorizeRoute(fastify);
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(client);
+    (fastify.jwtUtils.extractFromHeader as unknown as Mock).mockReturnValue(null);
+    (fastify.repositories.oauthConsents.findActive as unknown as Mock).mockResolvedValue(
+      opts.consent
+    );
+    const headers: Record<string, string> = {};
+    if (opts.session) {
+      const { signSessionId } = await import('../../helpers/session-cookie');
+      (fastify.sessionUtils.getSession as unknown as Mock).mockResolvedValue({
+        userId: 'user-1',
+        email: 'a@b.com',
+        sessionId: 'sid-untrusted',
+        createdAt: Date.now(),
+      });
+      headers['cookie'] = `__Host-qauth_session=${signSessionId('sid-untrusted')}`;
+    } else {
+      (fastify.sessionUtils.getSession as unknown as Mock).mockResolvedValue(null);
+    }
+    const query = {
+      ...BASE_QUERY,
+      client_id: client.clientId,
+      redirect_uri: (client.redirectUris as string[])[0],
+      scope: opts.scope ?? 'email',
+      ...(opts.prompt ? { prompt: opts.prompt } : {}),
+    };
+    const { reply, state } = createReply();
+    await ctx.handler!(
+      { query, url: '/oauth/authorize?response_type=code', headers, ip: '127.0.0.1' },
+      reply
+    );
+    return { fastify, state };
+  }
+
+  function expectShownNotRedirected(
+    state: { statusCode?: number; redirected?: string; body?: unknown },
+    error: string
+  ) {
+    expect(state.redirected).toBeUndefined();
+    expect(state.statusCode).toBe(400);
+    const body = state.body as string;
+    expect(body).toContain(`<code>${error}</code>`);
+    expect(body).toContain('login-qauth.attacker.example');
+  }
+
+  it('prompt=none with no session: a dynamically registered client gets login_required on the issuer, not a 302', async () => {
+    const { state } = await run(DCR_CLIENT, { prompt: 'none' });
+    expectShownNotRedirected(state, 'login_required');
+  });
+
+  it('prompt=none with no session: an operator-provisioned client keeps the OIDC redirect', async () => {
+    const { state } = await run(CLIENT, { prompt: 'none' });
+    expect(state.statusCode).toBe(302);
+    expect(state.redirected).toContain('https://example.com/cb');
+    expect(state.redirected).toContain('error=login_required');
+  });
+
+  it('prompt=none with a session but no consent: consent_required is shown, not redirected', async () => {
+    const { state } = await run(DCR_CLIENT, { prompt: 'none', session: true });
+    expectShownNotRedirected(state, 'consent_required');
+  });
+
+  it('agent scope-mode refusal with a session: invalid_scope is shown, not redirected', async () => {
+    const { fastify, state } = await run(
+      { ...DCR_CLIENT, scopes: ['agent:exec', 'email'] },
+      { session: true, scope: 'agent:exec' }
+    );
+    expectShownNotRedirected(state, 'invalid_scope');
+    expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
+  });
+
+  it('the interactive path is unchanged: no session goes to the login page', async () => {
+    const { state } = await run(DCR_CLIENT);
+    expect(state.redirected).toContain('/ui/login?return_to=');
   });
 });
 

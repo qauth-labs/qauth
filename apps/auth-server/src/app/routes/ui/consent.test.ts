@@ -1106,6 +1106,43 @@ describe('UI /ui/consent — agent scope-mode cap (ADR-007 §2, #184)', () => {
     // No HTML consent page was rendered.
     expect(state.body).toBeUndefined();
   });
+
+  it('GET shows, rather than redirects, the invalid_scope of a self-registered client (RFC 9700 §4.11.2)', async () => {
+    // This refusal fires before the user sees the consent screen (and the
+    // destination host on it), so for a client that registered its own
+    // redirect URI it must not be an automatic redirect off the issuer.
+    const { fastify, ctx } = makeFastify();
+    await consentRoute(fastify);
+    const { signSessionId } = await import('../../helpers/session-cookie');
+    const signed = signSessionId('sid-cap-5');
+    (fastify.sessionUtils.getSession as unknown as Mock).mockResolvedValue({
+      userId: 'user-1',
+      email: 'a@b.com',
+      sessionId: 'sid-cap-5',
+      createdAt: Date.now(),
+    });
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue({
+      ...READONLY_AGENT,
+      dynamicRegisteredAt: Date.now() - 400 * 24 * 60 * 60 * 1000,
+      metadata: { registrationType: 'dynamic' },
+    });
+
+    const { reply, state } = createReply();
+    await ctx.get!(
+      {
+        query: { ...BASE_QUERY, scope: 'agent:exec' },
+        url: '/ui/consent?scope=agent:exec',
+        headers: { cookie: `__Host-qauth_session=${signed}` },
+        ip: '127.0.0.1',
+      },
+      reply
+    );
+
+    expect(state.redirected).toBeUndefined();
+    expect(state.statusCode).toBe(400);
+    expect(state.body as string).toContain('<code>invalid_scope</code>');
+    expect(state.body as string).not.toContain('wants to access your account');
+  });
 });
 
 describe('UI /ui/consent — step-up authentication (ADR-007 §2, #185)', () => {

@@ -13,6 +13,7 @@ import {
   STEP_UP_FRESH_AUTH_WINDOW_MS,
 } from '../../constants';
 import { toStoredAssuranceLevel } from '../../helpers/acr-claims';
+import { sendAuthorizationError } from '../../helpers/authorization-error';
 import { resolveBrowserSession } from '../../helpers/browser-session';
 import { clientAddressKey } from '../../helpers/client-address';
 import { findExceedingAgentScopesForClient } from '../../helpers/client-auth';
@@ -400,18 +401,17 @@ export default async function (fastify: FastifyInstance) {
       // ADR-007 §2 (#184): fail fast on the render path too — don't show a
       // consent screen for an over-cap agent scope that the POST handler will
       // (correctly) refuse to mint a code for. Same deny-by-default gate;
-      // redirect_uri is already validated above so an `invalid_scope` redirect
-      // is safe (RFC 6749 §4.1.2.1).
+      // redirect_uri is already validated above. This fires before the user
+      // has seen the screen (and the destination host on it), so a
+      // self-registered client's error is shown rather than redirected, as on
+      // /oauth/authorize (RFC 9700 §4.11.2).
       if (findExceedingAgentScopesForClient(query.scope, client).length > 0) {
-        return reply.redirect(
-          buildRedirectUrl(query.redirect_uri, {
-            error: 'invalid_scope',
-            error_description: 'requested scope exceeds the agent scope mode for this client',
-            state: query.state ?? undefined,
-            iss,
-          }),
-          302
-        );
+        return sendAuthorizationError(reply, client, query.redirect_uri, {
+          error: 'invalid_scope',
+          error_description: 'requested scope exceeds the agent scope mode for this client',
+          state: query.state ?? undefined,
+          iss,
+        });
       }
 
       const isCimd =
