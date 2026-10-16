@@ -1,7 +1,7 @@
 import { timingSafeEqual } from 'node:crypto';
 
 import { importPublicSigningKey, verifyWithHeader } from '@qauth-labs/core-crypto';
-import { calculateJwkThumbprint, type JWK } from 'jose';
+import { calculateJwkThumbprint, decodeJwt, type JWK } from 'jose';
 
 import type { X509TrustAnchors } from '../x509/anchored-chain';
 import {
@@ -390,4 +390,48 @@ export async function validateKeyAttestation(
       ...(userAuthentication === undefined ? {} : { userAuthentication }),
     }),
   };
+}
+
+/** What an attestation STATES about key storage, read without verification. */
+export type StatedKeyStorage =
+  /** A readable attestation that states no `key_storage` at all. */
+  | { readonly outcome: 'absent' }
+  /** An unreadable attestation, or a `key_storage` this build cannot rank. */
+  | { readonly outcome: 'unrankable' }
+  /** The grade the attestation states (a list reduces to its weakest member). */
+  | { readonly outcome: 'graded'; readonly grade: AttackPotentialResistance };
+
+/**
+ * Read the `key_storage` grade a key attestation STATES, verifying nothing
+ * (ANT-2026-MX45ZBXI).
+ *
+ * For the one situation where the attestation cannot be evaluated: a
+ * deployment with no wallet-provider anchors skips the direct path and grades
+ * the credential by the operator's record for its issuer. That record is a
+ * CAP. The attestation travels inside the issuer-signed credential, so what it
+ * states is the issuer's statement about this key, and it may be weaker than
+ * the record. The result must therefore only ever LOWER a grade, never raise
+ * one: nothing here was verified.
+ *
+ * Never throws.
+ */
+export function readUnverifiedKeyStorage(attestation: unknown): StatedKeyStorage {
+  if (typeof attestation !== 'string' || attestation.length === 0) {
+    return { outcome: 'unrankable' };
+  }
+  if (Buffer.byteLength(attestation, 'utf8') > MAX_KEY_ATTESTATION_BYTES) {
+    return { outcome: 'unrankable' };
+  }
+
+  let claims: Record<string, unknown>;
+  try {
+    claims = decodeJwt(attestation);
+  } catch {
+    return { outcome: 'unrankable' };
+  }
+
+  if (claims['key_storage'] === undefined) return { outcome: 'absent' };
+
+  const grade = reduceAttackPotentialClaim(claims['key_storage']);
+  return grade === undefined ? { outcome: 'unrankable' } : { outcome: 'graded', grade };
 }

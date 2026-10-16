@@ -265,6 +265,10 @@ attestation is skipped rather than refused and the credential falls through to
 the transitive path above — a wallet doing the more conformant thing must not be
 worse off than one conveying nothing. It grants no more than the operator's
 recorded claim, and the evidence still reports its source as `issuer-attested`.
+The grade the skipped attestation states, and a `key_storage` claim beside it,
+are still read (unverified) and can only lower that record: an attestation
+stating `iso_18045_basic` does not clear the `haip-1.0` floor. One that cannot
+be read, or states a grade that cannot be ranked, establishes no grade.
 
 Note that `oid4vp-1.0-base` declares `keyStorageAssurance: forbidden`, so on the
 base profile this machinery establishes nothing and changes no behaviour. It is
