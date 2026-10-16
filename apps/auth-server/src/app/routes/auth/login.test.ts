@@ -115,7 +115,8 @@ function createFastifyStub() {
     },
     passwordHasher: {
       verifyPassword: vi.fn(),
-      hashPassword: vi.fn(),
+      // Also makes the decoy hash an unknown email is verified against.
+      hashPassword: vi.fn().mockResolvedValue('decoy-hash'),
     },
     // The real provider (pure, framework-free): the registry is load-bearing —
     // the route resolves 'password' through it, and one test pins that.
@@ -412,9 +413,13 @@ describe('POST /auth/login', () => {
     await expect(handler(request, reply)).rejects.toThrow(InvalidCredentialsError);
     expect(fastify.jwtUtils.signAccessToken).not.toHaveBeenCalled();
     expect(fastify.repositories.refreshTokens.create).not.toHaveBeenCalled();
-    // Timing-profile parity with the legacy path: no argon2 burn when the
-    // credential is missing (the fixed response-time floor is the equalizer).
-    expect(fastify.passwordHasher.verifyPassword).not.toHaveBeenCalled();
+    // A missing credential costs the same argon2 verification as a wrong
+    // password, against a decoy hash (CXMKR1RL): the fixed response-time
+    // floor alone hides nothing once argon2 jobs queue up.
+    expect(fastify.passwordHasher.verifyPassword).toHaveBeenCalledExactlyOnceWith(
+      'decoy-hash',
+      'p'
+    );
   });
 
   it('throws InvalidCredentialsError for wrong password', async () => {
@@ -469,7 +474,7 @@ describe('POST /auth/login', () => {
     expect(fastify.repositories.users.updateLastLogin).not.toHaveBeenCalled();
   });
 
-  it('treats malformed credential_data as invalid credentials (401), logs for operators, skips argon2', async () => {
+  it('treats malformed credential_data as invalid credentials (401), logs for operators, burns a decoy argon2', async () => {
     const { fastify, ctx } = createFastifyStub();
     await loginRoute(fastify);
     const handler = ctx.handler;
@@ -489,7 +494,11 @@ describe('POST /auth/login', () => {
 
     // Generic 401 — a distinct status would leak account state (enumeration).
     await expect(handler(request, reply)).rejects.toThrow(InvalidCredentialsError);
-    expect(fastify.passwordHasher.verifyPassword).not.toHaveBeenCalled();
+    // The stored hash is not consulted, but the decoy costs what it would.
+    expect(fastify.passwordHasher.verifyPassword).toHaveBeenCalledExactlyOnceWith(
+      'decoy-hash',
+      'p'
+    );
     // The error-level log line is the operator alerting hook for corruption.
     expect(fastify.log.error).toHaveBeenCalledWith(
       expect.objectContaining({ credentialId: 'cred-1' }),

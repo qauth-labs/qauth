@@ -110,6 +110,7 @@ function makeFastify() {
     },
     passwordHasher: {
       verifyPassword: vi.fn(),
+      hashPassword: vi.fn().mockResolvedValue('decoy-hash'),
     },
     providerRegistry: {
       resolve: vi.fn().mockReturnValue(createPasswordProvider()),
@@ -355,6 +356,40 @@ describe('UI /ui/login — CSRF defence', () => {
       expect(state.statusCode).toBe(302);
       expect(fastify.sessionUtils.setSession).toHaveBeenCalledOnce();
     });
+  });
+
+  it('POST spends one decoy argon2 verification on an unknown email, like a wrong password', async () => {
+    // CXMKR1RL: a miss that skips argon2 answers on time behind a backlog of
+    // argon2 jobs while a hit waits in it, so latency told them apart.
+    const { fastify, ctx } = makeFastify();
+    await loginRoute(fastify);
+    if (!ctx.get || !ctx.post) throw new Error('Handlers missing');
+
+    const getReply = createReply();
+    await ctx.get({ query: {}, headers: {}, ip: '127.0.0.1' }, getReply.reply);
+    const cookieValue = csrfCookieValue(getReply.state.setCookies);
+    const rawToken = cookieValue.split('.')[0];
+
+    (
+      fastify.repositories.userCredentials.findByRealmProviderSub as unknown as Mock
+    ).mockResolvedValue(undefined);
+    (fastify.passwordHasher.verifyPassword as unknown as Mock).mockResolvedValue(false);
+
+    const { reply, state } = createReply();
+    await ctx.post(
+      {
+        body: { email: 'nobody@example.com', password: 'guess', csrf_token: rawToken },
+        headers: { cookie: `__Host-qauth_login_csrf=${cookieValue}` },
+        ip: '127.0.0.1',
+      },
+      reply
+    );
+
+    expect(state.statusCode).toBe(401);
+    expect(fastify.passwordHasher.verifyPassword).toHaveBeenCalledExactlyOnceWith(
+      'decoy-hash',
+      'guess'
+    );
   });
 
   it('POST rejects a disabled user (401 re-render) even with valid credentials', async () => {

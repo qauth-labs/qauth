@@ -6,6 +6,8 @@ import {
 import { normalizeEmail } from '@qauth-labs/shared-validation';
 import type { FastifyInstance } from 'fastify';
 
+import { verifyAgainstDecoyHash } from './decoy-hash';
+
 /**
  * Credential row type, derived from the decorated repository so this app-scope
  * file never imports the infra lib directly (Nx module boundaries).
@@ -22,10 +24,11 @@ type UserCredential = NonNullable<
  * `routes/ui/login.ts`; every surrounding security behavior (lockout, timing
  * floor, audit, metrics, response bodies) stays in the routes, byte-identical.
  *
- * Timing profile parity with the legacy path is deliberate:
- * - credential missing → NO argon2 call (matches the old no-user path; the
- *   routes' fixed `ensureMinimumResponseTime` floor remains the equalizer)
- * - malformed `credential_data` → NO argon2 call, `log.error` for operators,
+ * Every outcome costs exactly one argon2 verification. The routes' fixed
+ * `ensureMinimumResponseTime` floor only pads fast answers, so it hides
+ * nothing once argon2 jobs queue up (see `verifyAgainstDecoyHash`):
+ * - credential missing → argon2 against a decoy hash, not a stored one
+ * - malformed `credential_data` → the same decoy, `log.error` for operators,
  *   and a generic invalid result — the client sees the same 401 as a wrong
  *   password, never a 500 (a distinct status would leak account state)
  */
@@ -58,6 +61,7 @@ export async function verifyPasswordCredential(
     normalizedEmail
   );
   if (!credential) {
+    await verifyAgainstDecoyHash(fastify, params.password);
     return { status: 'not_found' };
   }
 
@@ -69,6 +73,7 @@ export async function verifyPasswordCredential(
       { credentialId: credential.id },
       'malformed credential_data on password credential'
     );
+    await verifyAgainstDecoyHash(fastify, params.password);
     return { status: 'invalid' };
   }
 
