@@ -168,6 +168,79 @@ describe('GET /oauth/authorize routing', () => {
   });
 });
 
+describe('GET /oauth/authorize resource binding (RFC 8707)', () => {
+  /** The legacy Bearer path: the shortest route to a minted code in this harness. */
+  async function injectWithBearer(url: string) {
+    server = await buildServer();
+    const doubles = server as unknown as {
+      jwtUtils: {
+        extractFromHeader: ReturnType<typeof vi.fn>;
+        verifyAccessToken: ReturnType<typeof vi.fn>;
+      };
+      repositories: { authorizationCodes: { create: ReturnType<typeof vi.fn> } };
+    };
+    doubles.jwtUtils.extractFromHeader.mockReturnValue('token');
+    // `findByClientId` answers every lookup with CLIENT, so it is also the
+    // "system" client whose `client_id` and `aud` the Bearer path pins the
+    // token to.
+    doubles.jwtUtils.verifyAccessToken.mockResolvedValue({
+      sub: 'user-1',
+      clientId: CLIENT.clientId,
+      aud: CLIENT.clientId,
+    });
+    const response = await server.inject({ method: 'GET', url });
+    return { response, createCode: doubles.repositories.authorizationCodes.create };
+  }
+
+  it('binds the validated resource: the real validator does populate request.query', async () => {
+    // The handler used to re-parse `request.url` on the belief that
+    // fastify-type-provider-zod drops a union + transform field from
+    // `request.query`. It does not; this pins that down with the real compiler.
+    const { response, createCode } = await injectWithBearer(
+      `/oauth/authorize?${QUERY}&resource=https%3A%2F%2Fapi.example.com%2Fmcp`
+    );
+
+    expect(response.statusCode).toBe(302);
+    expect(createCode.mock.calls[0]?.[0]).toMatchObject({
+      resource: ['https://api.example.com/mcp'],
+    });
+  });
+
+  it('binds every value of a repeated resource', async () => {
+    const { response, createCode } = await injectWithBearer(
+      `/oauth/authorize?${QUERY}` +
+        '&resource=https%3A%2F%2Fapi.example.com%2Fmcp&resource=https%3A%2F%2Fapi2.example.com%2Fmcp'
+    );
+
+    expect(response.statusCode).toBe(302);
+    expect(createCode.mock.calls[0]?.[0]).toMatchObject({
+      resource: ['https://api.example.com/mcp', 'https://api2.example.com/mcp'],
+    });
+  });
+
+  it('rejects a resource that is not an absolute URI', async () => {
+    const { response, createCode } = await injectWithBearer(
+      `/oauth/authorize?resource=system&${QUERY}`
+    );
+
+    expect(response.statusCode).toBe(400);
+    expect(createCode).not.toHaveBeenCalled();
+  });
+
+  it('never binds a resource the querystring schema did not see (`??resource=`)', async () => {
+    // Fastify's parser names this key `?resource`, which the schema strips as
+    // unknown; `URLSearchParams` drops the leading `?` and names it `resource`.
+    // `system` is the audience of the first-party token `/auth/login` mints, so
+    // binding it handed a third-party client a token the Bearer path accepts.
+    const { response, createCode } = await injectWithBearer(
+      `/oauth/authorize??resource=system&${QUERY}`
+    );
+
+    expect(response.statusCode).toBe(302);
+    expect(createCode.mock.calls[0]?.[0]).toMatchObject({ resource: [] });
+  });
+});
+
 describe('POST /oauth/authorize routing', () => {
   it('bounces identically when the path carries a trailing slash', async () => {
     // `buildAuthorizeUrlWithParams` reconstructs the URL from

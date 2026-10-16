@@ -118,6 +118,8 @@ function makeFastify() {
       setSession: vi.fn().mockResolvedValue(undefined),
       deleteSession: vi.fn().mockResolvedValue(undefined),
     },
+    // Per-`jti` access-token denylist (RFC 7009); nothing revoked by default.
+    redis: { exists: vi.fn().mockResolvedValue(0) },
     log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
   };
   return { fastify: fastify as FastifyInstance, ctx };
@@ -283,13 +285,13 @@ describe('GET /oauth/authorize — session-cookie integration', () => {
     expect(createArg.resource).toEqual(['https://api.example.com/v1']);
   });
 
-  it('parses RFC 8707 resource from request.url even when the validator does not populate request.query', async () => {
-    // Regression: fastify-type-provider-zod does NOT put the Zod-parsed
-    // `resource` back onto `request.query` for GET routes, so a real auth
-    // flow had `query.resource === undefined` despite the URL carrying
-    // `?resource=X`. We now parse the URL directly — testing that path.
-    // Still true on v7.0.0: that major rewrote the serializer and the OpenAPI
-    // generation, but `validatorCompiler` still calls `safeParse` unchanged.
+  it('never reads RFC 8707 resource back out of request.url', async () => {
+    // Regression: the handler used to re-parse `request.url` with
+    // `URLSearchParams`, trusting that Zod had validated what it found there.
+    // Zod validates what FASTIFY's parser found, and the two disagree
+    // (`??resource=system`), so an unvalidated string became the token's `aud`.
+    // Only the validated `request.query` may be bound to the code;
+    // authorize-routing.test.ts covers the same thing with the real router.
     const { fastify, ctx } = makeFastify();
     await authorizeRoute(fastify);
     (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(CLIENT);
@@ -309,10 +311,10 @@ describe('GET /oauth/authorize — session-cookie integration', () => {
     const { reply } = createReply();
     await ctx.handler!(
       {
-        // `request.query` intentionally DOES NOT include `resource` — mirrors
-        // what we see in production when the Zod validator strips it.
+        // `request.query` intentionally DOES NOT include `resource` — the
+        // schema saw the unknown key `?resource` and stripped it.
         query: BASE_QUERY,
-        url: '/oauth/authorize?response_type=code&client_id=app-123&scope=email&resource=https%3A%2F%2Fapi.example.com%2Fv1',
+        url: '/oauth/authorize??resource=system&response_type=code&client_id=app-123&scope=email',
         headers: { cookie: `__Host-qauth_session=${signed}` },
         ip: '127.0.0.1',
       },
@@ -321,10 +323,10 @@ describe('GET /oauth/authorize — session-cookie integration', () => {
 
     const createArg = (fastify.repositories.authorizationCodes.create as unknown as Mock).mock
       .calls[0][0];
-    expect(createArg.resource).toEqual(['https://api.example.com/v1']);
+    expect(createArg.resource).toEqual([]);
   });
 
-  it('parses multiple `resource=` params from request.url into an array', async () => {
+  it('persists multiple RFC 8707 resource indicators as an array', async () => {
     const { fastify, ctx } = makeFastify();
     await authorizeRoute(fastify);
     (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(CLIENT);
@@ -344,7 +346,10 @@ describe('GET /oauth/authorize — session-cookie integration', () => {
     const { reply } = createReply();
     await ctx.handler!(
       {
-        query: BASE_QUERY,
+        query: {
+          ...BASE_QUERY,
+          resource: ['https://api.example.com/v1', 'https://api2.example.com/v1'],
+        },
         url:
           '/oauth/authorize?response_type=code&client_id=app-123&scope=email' +
           '&resource=https%3A%2F%2Fapi.example.com%2Fv1' +
@@ -1037,16 +1042,23 @@ describe('GET /oauth/authorize — Bearer path step-up (ADR-007 §2, #185)', () 
     scopes: ['read:foo', 'write:foo', 'email'],
   };
 
-  async function runBearer(scope: string) {
+  async function runBearer(scope: string, payload: Record<string, unknown> = {}) {
     const { fastify, ctx } = makeFastify();
     await authorizeRoute(fastify);
+    // `findByClientId` answers every lookup with this client, so it is also
+    // the "system" client the Bearer path pins the token's `client_id` to.
     (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(
       DANGEROUS_CLIENT
     );
     // No browser session; a valid Bearer token resolves the user.
     (fastify.sessionUtils.getSession as unknown as Mock).mockResolvedValue(null);
     (fastify.jwtUtils.extractFromHeader as unknown as Mock).mockReturnValue('bearer.token');
-    (fastify.jwtUtils.verifyAccessToken as unknown as Mock).mockResolvedValue({ sub: 'user-1' });
+    (fastify.jwtUtils.verifyAccessToken as unknown as Mock).mockResolvedValue({
+      sub: 'user-1',
+      clientId: DANGEROUS_CLIENT.clientId,
+      aud: DANGEROUS_CLIENT.clientId,
+      ...payload,
+    });
     const { reply, state } = createReply();
     await ctx.handler!(
       {
@@ -1070,6 +1082,80 @@ describe('GET /oauth/authorize — Bearer path step-up (ADR-007 §2, #185)', () 
     const { fastify, state } = await runBearer('email');
     expect(state.redirected).toContain('code=');
     expect(fastify.repositories.authorizationCodes.create).toHaveBeenCalledOnce();
+  });
+
+  it('refuses a Bearer token issued to another client, even with the system audience', async () => {
+    // A third-party client's user token whose `aud` was bound to `system`
+    // through RFC 8707 `resource` is not the first-party login token: the
+    // Bearer path must pin `client_id` like the management API does.
+    const { fastify, state } = await runBearer('email', { clientId: 'third-party-app' });
+    expect(state.redirected).toContain('error=access_denied');
+    expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
+  });
+
+  it('refuses a delegated (RFC 8693 `act`) Bearer token', async () => {
+    const { fastify, state } = await runBearer('email', { act: { sub: 'agent-1' } });
+    expect(state.redirected).toContain('error=access_denied');
+    expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
+  });
+
+  it('refuses a revoked Bearer token (per-jti denylist)', async () => {
+    const { fastify, ctx } = makeFastify();
+    (fastify.redis.exists as unknown as Mock).mockResolvedValue(1);
+    await authorizeRoute(fastify);
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(
+      DANGEROUS_CLIENT
+    );
+    (fastify.sessionUtils.getSession as unknown as Mock).mockResolvedValue(null);
+    (fastify.jwtUtils.extractFromHeader as unknown as Mock).mockReturnValue('bearer.token');
+    (fastify.jwtUtils.verifyAccessToken as unknown as Mock).mockResolvedValue({
+      sub: 'user-1',
+      jti: 'revoked-jti',
+      clientId: DANGEROUS_CLIENT.clientId,
+      aud: DANGEROUS_CLIENT.clientId,
+    });
+    const { reply, state } = createReply();
+    await ctx.handler!(
+      {
+        query: { ...BASE_QUERY, client_id: 'app-bearer', scope: 'email' },
+        url: '/oauth/authorize?response_type=code&client_id=app-bearer&scope=email',
+        headers: { authorization: 'Bearer bearer.token' },
+        ip: '127.0.0.1',
+      },
+      reply
+    );
+    expect(fastify.redis.exists).toHaveBeenCalledWith(expect.stringContaining('revoked-jti'));
+    expect(state.redirected).toContain('error=access_denied');
+    expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
+  });
+
+  it('fails closed when the denylist cannot be read', async () => {
+    const { fastify, ctx } = makeFastify();
+    (fastify.redis.exists as unknown as Mock).mockRejectedValue(new Error('redis down'));
+    await authorizeRoute(fastify);
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(
+      DANGEROUS_CLIENT
+    );
+    (fastify.sessionUtils.getSession as unknown as Mock).mockResolvedValue(null);
+    (fastify.jwtUtils.extractFromHeader as unknown as Mock).mockReturnValue('bearer.token');
+    (fastify.jwtUtils.verifyAccessToken as unknown as Mock).mockResolvedValue({
+      sub: 'user-1',
+      jti: 'some-jti',
+      clientId: DANGEROUS_CLIENT.clientId,
+      aud: DANGEROUS_CLIENT.clientId,
+    });
+    const { reply, state } = createReply();
+    await ctx.handler!(
+      {
+        query: { ...BASE_QUERY, client_id: 'app-bearer', scope: 'email' },
+        url: '/oauth/authorize?response_type=code&client_id=app-bearer&scope=email',
+        headers: { authorization: 'Bearer bearer.token' },
+        ip: '127.0.0.1',
+      },
+      reply
+    );
+    expect(state.redirected).toContain('error=access_denied');
+    expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
   });
 });
 
@@ -1293,6 +1379,8 @@ describe('GET /oauth/authorize — RFC 9207 §2 `iss` on every authorization res
       if (opts.bearer === 'valid') {
         (fastify.jwtUtils.verifyAccessToken as unknown as Mock).mockResolvedValue({
           sub: 'user-1',
+          clientId: (opts.client ?? CLIENT).clientId,
+          aud: (opts.client ?? CLIENT).clientId,
         });
       } else {
         (fastify.jwtUtils.verifyAccessToken as unknown as Mock).mockRejectedValue(

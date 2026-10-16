@@ -201,6 +201,37 @@ describe('UI /ui/consent GET — rendering', () => {
     expect(html).toContain('nonce="test-style-nonce"');
     expect(fastify.sessionUtils.setSession).toHaveBeenCalledOnce();
   });
+
+  it('renders RFC 8707 resource fields from the validated query, never from request.url', async () => {
+    const { fastify, ctx } = makeFastify();
+    await consentRoute(fastify);
+    const { signSessionId } = await import('../../helpers/session-cookie');
+    const signed = signSessionId('sid-g2');
+    (fastify.sessionUtils.getSession as unknown as Mock).mockResolvedValue({
+      userId: 'user-1',
+      email: 'a@b.com',
+      sessionId: 'sid-g2',
+      createdAt: Date.now(),
+    });
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(CLIENT);
+
+    const { reply, state } = createReply();
+    await ctx.get!(
+      {
+        query: { ...BASE_QUERY, resource: ['https://api.example.com/v1'] },
+        // `?resource` to Fastify's parser (unknown key, stripped unvalidated),
+        // `resource` to `URLSearchParams`. See oauth/authorize.ts.
+        url: '/ui/consent??resource=system&resource=https%3A%2F%2Fapi.example.com%2Fv1',
+        headers: { cookie: `__Host-qauth_session=${signed}` },
+        ip: '127.0.0.1',
+      },
+      reply
+    );
+
+    const html = state.body as string;
+    expect(html).toContain('name="resource" value="https://api.example.com/v1"');
+    expect(html).not.toContain('value="system"');
+  });
 });
 
 describe('UI /ui/consent POST — allow/deny', () => {

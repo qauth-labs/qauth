@@ -1,6 +1,10 @@
 import { randomBytes } from 'node:crypto';
 
-import { BadRequestError, isUniqueConstraintError } from '@qauth-labs/shared-errors';
+import {
+  BadRequestError,
+  isUniqueConstraintError,
+  JWTInvalidError,
+} from '@qauth-labs/shared-errors';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { ZodTypeProvider } from 'fastify-type-provider-zod';
 
@@ -18,6 +22,7 @@ import { resolveClient } from '../../helpers/client-resolution';
 import { canSkipConsent, filterRequestedScopes } from '../../helpers/consent';
 import { resolveIssuerIdentifier } from '../../helpers/discovery';
 import { resolveEnvironmentPolicy } from '../../helpers/environment-policy';
+import { assertManagementToken } from '../../helpers/management-token';
 import { getOrCreateSystemClient } from '../../helpers/oauth-client';
 import {
   buildRedirectUrl,
@@ -33,43 +38,22 @@ import {
   parsePromptMode,
   stepUpErrorForPromptNone,
 } from '../../helpers/step-up';
+import { isJtiRevoked } from '../../helpers/token-revocation';
 import { type AuthorizeQuery, authorizeQuerySchema } from '../../schemas/oauth';
-
-/**
- * RFC 8707: parse every `resource=` query param directly from the request
- * URL instead of relying on `request.query.resource`.
- *
- * Why: fastify-type-provider-zod drops the `resource` field from the parsed
- * query when its Zod schema is a union + transform (e.g.
- * `z.union([z.url(), z.array(z.url())]).transform(...)`) — the raw-string
- * variant from Fastify's querystring parser does not survive the validator.
- * The field IS validated (invalid URIs fail the whole request), but the
- * validator does not write the parsed array back into request.query.
- *
- * Still true on v7.0.0: the v7 major rewrote the serializer (safeParse ->
- * safeEncode) and OpenAPI generation, but left `validatorCompiler` on
- * `safeParse` untouched, so this workaround is NOT obsolete.
- *
- * Reading from `request.url` sidesteps the validator entirely. Zod has
- * already rejected invalid inputs at schema time, so whatever reaches this
- * code point is already shape-safe.
- */
-function parseResourceFromUrl(url: string): string[] {
-  const q = url.indexOf('?');
-  if (q < 0) return [];
-  const params = new URLSearchParams(url.slice(q + 1));
-  return params.getAll('resource');
-}
 
 /**
  * The authorize request expressed as a URL with its parameters in the query
  * string. On GET this is simply `request.url`. On POST (OIDC Core §3.1.2.1)
  * the parameters arrived form-encoded in the body, so we reconstruct an
- * equivalent authorize URL from the validated body. This keeps two paths
- * byte-identical: the RFC 8707 `resource` parse (which reads from the URL) and
- * the /ui/login + /ui/consent round-trips, which bounce the user back to the
- * authorization endpoint via a GET — so a POST request must round-trip through
- * a query string all the same.
+ * equivalent authorize URL from the validated body: the /ui/login +
+ * /ui/consent round-trips bounce the user back to the authorization endpoint
+ * via a GET — so a POST request must round-trip through a query string all the
+ * same.
+ *
+ * This string is ONLY ever forwarded, for the receiving route to parse and
+ * validate again. Never read a parameter back out of it: a second parser does
+ * not split every string the way Fastify's does, so it can find a value the
+ * schema never saw. Parameters come from the validated `query`.
  */
 function buildAuthorizeUrlWithParams(request: FastifyRequest): string {
   if (request.method !== 'POST') {
@@ -133,10 +117,10 @@ export default async function (fastify: FastifyInstance) {
     // the query on GET. The SAME Zod schema (`authorizeQuerySchema`) validates
     // both, so `query` is identically shaped and every check below is unchanged.
     const query = (request.method === 'POST' ? request.body : request.query) as AuthorizeQuery;
-    // For the RFC 8707 `resource` parse and the /ui/login + /ui/consent
-    // round-trips we need the request as a query string. On GET that is
-    // `request.url`; on POST the params live in the body, so reconstruct an
-    // equivalent authorize URL (see `buildAuthorizeUrlWithParams`).
+    // For the /ui/login + /ui/consent round-trips we need the request as a
+    // query string. On GET that is `request.url`; on POST the params live in
+    // the body, so reconstruct an equivalent authorize URL (see
+    // `buildAuthorizeUrlWithParams`).
     const requestUrlWithParams = buildAuthorizeUrlWithParams(request);
     const redirectUri = query.redirect_uri;
     const state = query.state;
@@ -355,6 +339,17 @@ export default async function (fastify: FastifyInstance) {
           // RFC 9700 mix-up defence: only accept a token this AS issued.
           issuer: fastify.jwtUtils.getIssuer(),
         });
+        // Audience alone does not prove this is the first-party login token:
+        // any code whose bound `resource` resolves to the system audience
+        // mints a user token that passes the check above. Pin `client_id`
+        // (and refuse delegated tokens) exactly as the management API does.
+        await assertManagementToken(fastify, payload);
+        // RFC 7009: `requireJwt` and token exchange consult the per-`jti`
+        // denylist; this path issues codes from the same token, so it must
+        // too. A Redis failure throws into the catch below (fails closed).
+        if (await isJtiRevoked(fastify, payload.jti)) {
+          throw new JWTInvalidError('Access token has been revoked');
+        }
         userId = payload.sub;
       } catch {
         await fastify.repositories.auditLogs.create({
@@ -600,8 +595,7 @@ export default async function (fastify: FastifyInstance) {
         // Carry the authorize params to the consent screen. Guard the `?`
         // index: `buildAuthorizeUrlWithParams` can return a query-less path
         // (empty reconstructed POST body), and `slice(-1)` would yield a
-        // corrupt `/ui/consent<lastchar>` — same defensive check as
-        // `parseResourceFromUrl`.
+        // corrupt `/ui/consent<lastchar>`.
         const qIndex = requestUrlWithParams.indexOf('?');
         const returnQuery = qIndex >= 0 ? requestUrlWithParams.slice(qIndex) : '';
         return reply.redirect(`/ui/consent${returnQuery}`, 302);
@@ -637,7 +631,13 @@ export default async function (fastify: FastifyInstance) {
         // exactly what the client requested. Reached on the consent-skip
         // path (returning user, prior consent covers requested scopes);
         // the consent-screen path creates codes in ui/consent.ts.
-        resource: parseResourceFromUrl(requestUrlWithParams),
+        // Read from the VALIDATED params: `resourceParamSchema` has checked
+        // every entry and normalized them to an array. This used to re-parse
+        // `request.url` with `URLSearchParams`, which drops a leading `?`:
+        // `/oauth/authorize??resource=system` is the unknown key `?resource`
+        // to Fastify's parser (stripped, never validated) but `resource` to
+        // that one, which put an arbitrary string into `aud`.
+        resource: query.resource ?? [],
         state: query.state ?? null,
         expiresAt,
       });

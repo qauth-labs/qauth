@@ -47,19 +47,6 @@ import { exactUrl } from '../../schemas/common';
 import { authorizeQuerySchema, resourceParamSchema } from '../../schemas/oauth';
 
 /**
- * RFC 8707: parse every `resource=` entry from a URL query string.
- * See authorize.ts's parseResourceFromUrl — fastify-type-provider-zod drops
- * the parsed `resource` from request.query for GET routes when the schema is
- * a union + transform. Reading request.url sidesteps that. Still required on
- * v7.0.0, which left `validatorCompiler` unchanged.
- */
-function parseResourceFromUrl(url: string): string[] {
-  const q = url.indexOf('?');
-  if (q < 0) return [];
-  return new URLSearchParams(url.slice(q + 1)).getAll('resource');
-}
-
-/**
  * Order-independent equality of two scope sets. Used by the consent POST to
  * confirm the POSTed (allowlist-filtered) scopes match exactly the set bound to
  * the session on the GET render — defence against a tampered hidden `scope`
@@ -109,9 +96,8 @@ const consentFormSchema = z.object({
   // too, not only pre-consent). Empty string ⇒ treated as absent.
   prompt: z.enum(['none', 'login', 'consent']).optional(),
   max_age: z.coerce.number().int().min(0).max(315360000).optional(),
-  // RFC 8707: carried through as hidden form field(s). POST body transforms
-  // work (unlike GET querystrings), so `resourceParamSchema` populates an
-  // array on `body.resource`.
+  // RFC 8707: carried through as hidden form field(s). `resourceParamSchema`
+  // populates an array on `body.resource`.
   resource: resourceParamSchema,
 });
 
@@ -496,11 +482,12 @@ export default async function (fastify: FastifyInstance) {
             prompt: query.prompt,
             max_age: query.max_age !== undefined ? String(query.max_age) : undefined,
           },
-          // RFC 8707: parsed directly from request.url (see
-          // parseResourceFromUrl). Rendered as one hidden <input
-          // name="resource" value="<uri>" /> per entry so the POST body
-          // carries every requested resource URI back to the handler.
-          resources: parseResourceFromUrl(request.url),
+          // RFC 8707: the validated, array-normalized `resource` (never a
+          // re-parse of request.url — see the note in oauth/authorize.ts).
+          // Rendered as one hidden <input name="resource" value="<uri>" />
+          // per entry so the POST body carries every requested resource URI
+          // back to the handler.
+          resources: query.resource ?? [],
           // #230: session email is optional (future non-email credentials);
           // fall back to the stable subject id for display.
           userEmail: session.email ?? session.userId,
