@@ -186,7 +186,8 @@ export type CreateClientResponse = z.infer<typeof createClientResponseSchema>;
  * Every field is optional (partial update). Identity and secret columns
  * (`clientId`, `clientSecretHash`, `developerId`, `realmId`) are intentionally
  * absent — they can never be mutated through this endpoint. At least one field
- * must be present.
+ * must be present. `enabled` is one-way: the handler refuses `true` on a
+ * disabled client, because only the operator may re-enable one.
  */
 export const updateClientRequestSchema = z
   .object({

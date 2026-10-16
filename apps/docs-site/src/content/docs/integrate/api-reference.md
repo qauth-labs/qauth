@@ -672,9 +672,14 @@ _effective_ configuration (request value or persisted value) is re-validated:
 grant/response-type consistency, a redirect URI for user-involving grants, and
 the realm scope cap when `scopes` is changed.
 
+`enabled` can only be switched **off** here. It is the same switch an operator
+uses to cut a client off, so `"enabled": true` on a disabled client is refused
+with `403`; re-enabling is an operator action.
+
 **`200 OK`** — the updated client (safe fields, no secret).
 Errors: `400` (validation / inconsistent config / disallowed scope / missing
-redirect for a user-involving grant), `401`, `404`.
+redirect for a user-involving grant), `401`, `403` (re-enabling a disabled
+client), `404`.
 
 ### `DELETE /api/clients/{id}`
 

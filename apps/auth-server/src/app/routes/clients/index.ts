@@ -1,6 +1,11 @@
 import { randomBytes, randomUUID } from 'node:crypto';
 
-import { BadRequestError, JWTInvalidError, NotFoundError } from '@qauth-labs/shared-errors';
+import {
+  BadRequestError,
+  ForbiddenError,
+  JWTInvalidError,
+  NotFoundError,
+} from '@qauth-labs/shared-errors';
 import type { FastifyInstance } from 'fastify';
 import { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
@@ -554,7 +559,7 @@ export default async function (fastify: FastifyInstance) {
       preHandler: requireManagementJwt,
       schema: {
         description:
-          "Update mutable fields of one of the developer's OAuth clients (name, description, redirectUris, scopes, grantTypes, responseTypes, tokenEndpointAuthMethod, enabled). client_id and client_secret are immutable here. Returns 404 if the client does not exist or is owned by another developer. (Phase 2.2, issue #88.)",
+          "Update mutable fields of one of the developer's OAuth clients (name, description, redirectUris, scopes, grantTypes, responseTypes, tokenEndpointAuthMethod, enabled). client_id and client_secret are immutable here. enabled can only be switched off: re-enabling a disabled client is an operator action and returns 403. Returns 404 if the client does not exist or is owned by another developer. (Phase 2.2, issue #88.)",
         tags: ['Clients'],
         security: [{ bearerAuth: [] }],
         params: clientIdParamsSchema,
@@ -570,6 +575,16 @@ export default async function (fastify: FastifyInstance) {
       const scopes = body.scopes === undefined ? undefined : [...new Set(body.scopes)];
 
       const existing = await resolveOwnedClient(fastify, developerId, id);
+
+      // `enabled` is the only switch an operator has to cut a client off, and
+      // the row does not record who cleared it. So the developer may clear it
+      // but never set it: re-enabling would hand a client the operator disabled
+      // its refresh tokens, consents and credentials back. Same rule as the
+      // CIMD document in `resolveClient` — a client's own management surface
+      // can never re-enable a client the server disabled.
+      if (body.enabled === true && !existing.enabled) {
+        throw new ForbiddenError('A disabled client can only be re-enabled by the operator');
+      }
 
       // Validate the *effective* configuration: take each field from the
       // request when present, else fall back to the persisted value. This
@@ -613,7 +628,9 @@ export default async function (fastify: FastifyInstance) {
         ...(body.tokenEndpointAuthMethod !== undefined
           ? { tokenEndpointAuthMethod: body.tokenEndpointAuthMethod }
           : {}),
-        ...(body.enabled !== undefined ? { enabled: body.enabled } : {}),
+        // Only ever written as `false`, so a disable that lands after the read
+        // above cannot be overwritten either.
+        ...(body.enabled === false ? { enabled: false } : {}),
       });
 
       await auditBestEffort(fastify, {
