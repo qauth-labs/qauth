@@ -136,12 +136,23 @@ const CIMD_REFRESHED_FIELDS = [
   'enabled',
 ] as const;
 
-/** JSON with object keys sorted at every level, so jsonb key order cannot matter. */
+/**
+ * JSON with object keys sorted at every level, so jsonb key order cannot matter.
+ *
+ * Keys are compared by UTF-16 code unit, never collated. The order only has to
+ * be deterministic, and some keys are a document author's (JWK member names,
+ * and whatever a stored row kept from an earlier document): `localeCompare`
+ * is quadratic in a run of out-of-order combining marks, once per comparison
+ * (ANT-2026-AF8IKIPI), and it calls canonically equivalent names equal, which
+ * leaves their order to the input.
+ */
 function canonicalJson(value: unknown): string {
   return JSON.stringify(value, (_key, v: unknown) =>
     v && typeof v === 'object' && !Array.isArray(v)
       ? Object.fromEntries(
-          Object.entries(v as Record<string, unknown>).sort(([a], [b]) => a.localeCompare(b))
+          Object.entries(v as Record<string, unknown>).sort(([a], [b]) =>
+            a < b ? -1 : a > b ? 1 : 0
+          )
         )
       : v
   );

@@ -75,6 +75,23 @@ describe('parseClientJwkSet', () => {
     const keys = Array.from({ length: 21 }, (_, i) => ({ ...PUBLIC_JWK, kid: `k${i}` }));
     expect(() => parseClientJwkSet({ keys }, 'test')).toThrow(InvalidClientError);
   });
+
+  // ANT-2026-AF8IKIPI: member names are the key set author's, and code that
+  // walks the key set (the CIMD re-resolution comparison among it) pays for
+  // every name. The names RFC 7517/7518 register are short ASCII tokens.
+  it('rejects a key with an overlong member name', () => {
+    const jwk = { ...PUBLIC_JWK, ['n'.repeat(65)]: 0 };
+    expect(() => parseClientJwkSet({ keys: [jwk] }, 'test')).toThrow(InvalidClientError);
+    expect(() =>
+      parseClientJwkSet({ keys: [{ ...PUBLIC_JWK, ['n'.repeat(64)]: 0 }] }, 'test')
+    ).not.toThrow();
+  });
+
+  it('rejects a key with too many members', () => {
+    const jwk: Record<string, unknown> = { ...PUBLIC_JWK };
+    for (let i = 0; Object.keys(jwk).length <= 32; i++) jwk[`m${i}`] = i;
+    expect(() => parseClientJwkSet({ keys: [jwk] }, 'test')).toThrow(InvalidClientError);
+  });
 });
 
 describe('assertJwksMutuallyExclusive (RFC 7591 §2)', () => {

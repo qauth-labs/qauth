@@ -26,6 +26,19 @@ import { SsrfBlockedError, ssrfSafeGet } from './ssrf-safe-fetch';
 /** Maximum number of keys accepted in a client JWK Set. Matches the seed-manifest cap. */
 const CLIENT_JWKS_MAX_KEYS = 20;
 
+/**
+ * Maximum number of members in one client JWK. RFC 7517/7518 register about
+ * twenty; this leaves room for extensions and bounds the object.
+ */
+const CLIENT_JWK_MAX_MEMBERS = 32;
+
+/**
+ * Maximum length of a JWK member name. The names RFC 7517/7518 register are
+ * short ASCII tokens (`key_ops`, `x5t#S256`); a long one is only a cost to
+ * every piece of code that walks the key set (ANT-2026-AF8IKIPI).
+ */
+const CLIENT_JWK_MEMBER_NAME_MAX_LENGTH = 64;
+
 /** Maximum accepted `jwks_uri` length, in characters. */
 export const CLIENT_JWKS_URI_MAX_LENGTH = 2048;
 
@@ -52,10 +65,21 @@ const CLIENT_JWKS_CACHE_TTL_SECONDS = 300;
  *     algorithm, and none of those are in the permitted assertion algorithm
  *     list — rejecting it here states that intent instead of relying on `jose`
  *     to fail later for a reason nobody reads.
+ *   - member names are bounded in number and length.
  */
 const clientJwkSchema = z
   .object({ kty: z.string().min(1).max(16) })
   .catchall(z.unknown())
+  .refine(
+    (jwk) => {
+      const names = Object.keys(jwk);
+      return (
+        names.length <= CLIENT_JWK_MAX_MEMBERS &&
+        names.every((name) => name.length <= CLIENT_JWK_MEMBER_NAME_MAX_LENGTH)
+      );
+    },
+    { message: 'jwks member names are bounded in number and length' }
+  )
   .refine((jwk) => !('d' in jwk) && !('k' in jwk), {
     message: 'jwks must contain PUBLIC keys only (a "d" or "k" member was present)',
   })
