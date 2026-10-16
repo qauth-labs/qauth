@@ -24,6 +24,7 @@ import { requireDockerOrSkip } from '@qauth-labs/shared-testing';
 import { eq } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
+import type { RefreshToken, RefreshTokensRepository } from '../../types';
 import { oauthConsents, refreshTokens } from '../schema';
 import {
   createApiKeysRepository,
@@ -584,6 +585,95 @@ describe('repository integration (real Postgres)', () => {
         .where(eq(refreshTokens.id, alreadyRevoked.id));
       expect(previous.revokedReason).toBe('rotated');
     });
+
+    /**
+     * A rotation as the token endpoint runs it — parent revoked and child
+     * inserted in one transaction — stopped just short of COMMIT. Returns the
+     * child and a `commit` that releases the transaction.
+     */
+    async function startRotation(parent: RefreshToken, childHash: string) {
+      const tokens = createRefreshTokensRepository(db().database.db);
+      let release!: () => void;
+      const held = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      let written!: (child: RefreshToken) => void;
+      const child = new Promise<RefreshToken>((resolve) => {
+        written = resolve;
+      });
+      const transaction = db().database.db.transaction(async (tx) => {
+        await tokens.revokeIfActive(parent.id, 'rotated', tx);
+        written(
+          await tokens.create(
+            {
+              userId: parent.userId,
+              oauthClientId: parent.oauthClientId,
+              tokenHash: childHash,
+              familyId: parent.familyId,
+              previousTokenHash: parent.tokenHash,
+              scopes: parent.scopes,
+              expiresAt: parent.expiresAt,
+            },
+            tx
+          )
+        );
+        await held;
+      });
+      return {
+        child: await child,
+        commit: () => {
+          release();
+          return transaction;
+        },
+      };
+    }
+
+    // The bulk revocations are one UPDATE each. Started while a rotation is
+    // in flight, that UPDATE blocks on the parent, finds it already revoked
+    // once the rotation commits and never sees the child. Each revocation
+    // must instead wait for the rotation and then end the child too.
+    for (const [name, revoke] of [
+      [
+        'revokeFamily',
+        (tokens: RefreshTokensRepository, parent: RefreshToken) =>
+          tokens.revokeFamily(parent.familyId, 'replay_detected'),
+      ],
+      [
+        'revokeAllForUserAndClient',
+        (tokens: RefreshTokensRepository, parent: RefreshToken) =>
+          tokens.revokeAllForUserAndClient(parent.userId, parent.oauthClientId, 'consent_revoked'),
+      ],
+      [
+        'revokeAllForUser',
+        (tokens: RefreshTokensRepository, parent: RefreshToken) =>
+          tokens.revokeAllForUser(parent.userId, 'logout'),
+      ],
+    ] as const) {
+      it(`${name} reaches the child of a rotation that is in flight (race)`, async () => {
+        const realm = await seedRealm();
+        const user = await seedUser(realm.id);
+        const client = await seedClient(realm.id);
+        const tokens = createRefreshTokensRepository(db().database.db);
+        const parent = await seedToken(user.id, client.id, 't'.repeat(64), 'fam-in-flight', {
+          familyId: undefined,
+        });
+
+        const rotation = await startRotation(parent, 'u'.repeat(64));
+        const revocation = revoke(tokens, parent);
+        // Let the revocation reach the database before the rotation commits.
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        await rotation.commit();
+        await revocation;
+
+        expect(await tokens.findByUserId(user.id)).toHaveLength(0);
+        const [child] = await db()
+          .database.db.select()
+          .from(refreshTokens)
+          .where(eq(refreshTokens.id, rotation.child.id));
+        expect(child.revoked).toBe(true);
+        expect(child.revokedReason).not.toBe('rotated');
+      });
+    }
   });
 
   // --- consent soft-delete + scope union ------------------------------------
