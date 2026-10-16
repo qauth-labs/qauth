@@ -179,8 +179,9 @@ export const sdJwtVcClaimAdapter: CredentialClaimAdapter = {
       // `readBindingClaim` is reused rather than re-implemented: it already does
       // the `Object.hasOwn` read that keeps a `__proto__` claim name from
       // reaching the prototype (the defence #234's `defineClaim` sets up and a
-      // careless consumer undoes), refuses non-finite numbers, and applies the
-      // shared value-length bound.
+      // careless consumer undoes), refuses a number `JSON.parse` may have
+      // rounded (the row would state a value the issuer never signed), and
+      // applies the shared value-length bound.
       const value = readBindingClaim(claims as Readonly<Record<string, unknown>>, claimName);
       if (value === undefined) continue;
 

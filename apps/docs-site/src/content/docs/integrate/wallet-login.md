@@ -495,6 +495,14 @@ configured `OID4VP_SUBJECT_BINDING_CLAIMS` values — never the claim values in 
 clear. It is what a later `asserted-lookup` login re-derives and compares in
 constant time.
 
+A binding claim (or the `issuer-scoped-claim` subject claim) that is a JSON
+**number** takes part only when it is an integer within ±(2^53 − 1). Larger
+integers and fractions are rounded when the credential is parsed, so two
+holders' different numbers could become one. Such a claim is treated as withheld.
+An issuer with longer identifiers must sign them as strings. An account enrolled
+on such a value before this rule no longer matches. Each refusal for this reason
+logs a `warn` line that names the claim (never its value).
+
 Re-linking a re-issued credential **updates** the row the account already owns; a
 row belonging to a different account is never overwritten.
 

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { validatedFixtureCredential } from '../../testing/subject-resolution.fixture';
-import { deriveEnrolmentWalletBinding } from './enrolment-binding';
+import { deriveEnrolmentWalletBinding, findInexactNumericBindingClaims } from './enrolment-binding';
 import type { SubjectAccountCandidate, SubjectResolutionContext } from './subject-resolution.types';
 import {
   createSubjectResolutionStrategy,
@@ -152,4 +152,29 @@ describe('deriveEnrolmentWalletBinding', () => {
       ).toBeNull();
     }
   );
+});
+
+describe('findInexactNumericBindingClaims (ANT-2026-FKDN4Q29)', () => {
+  it('names the configured claims that arrived as a number JSON could not hold exactly', async () => {
+    const credential = await validatedFixtureCredential({
+      claims: JSON.parse(
+        '{"given_name":"Alice","family_name":202601150000001234,"personal_administrative_number":1.5}'
+      ),
+    });
+
+    expect(findInexactNumericBindingClaims(ASSERTED_LOOKUP, credential)).toEqual(['family_name']);
+    expect(findInexactNumericBindingClaims(ISSUER_SCOPED, credential)).toEqual([
+      'personal_administrative_number',
+      'family_name',
+    ]);
+  });
+
+  it('names nothing for strings, safe integers and withheld claims', async () => {
+    const credential = await validatedFixtureCredential({
+      claims: { given_name: 'Alice', personal_administrative_number: Number.MAX_SAFE_INTEGER },
+    });
+
+    expect(findInexactNumericBindingClaims(ASSERTED_LOOKUP, credential)).toEqual([]);
+    expect(findInexactNumericBindingClaims(ISSUER_SCOPED, credential)).toEqual([]);
+  });
 });

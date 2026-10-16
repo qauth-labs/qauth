@@ -150,6 +150,8 @@ export const FORBIDDEN_BINDING_CLAIMS: readonly string[] = Object.freeze([
  * semantically identical credentials could derive two different bindings and a
  * returning user would be refused. Refusing is the honest answer; silently
  * picking an ordering is not.
+ *
+ * A `number` is always a safe integer; see {@link readBindingClaim}.
  */
 export type BindingClaimValue = string | number | boolean;
 
@@ -220,8 +222,9 @@ export function normalizeAssertedIdentifier(raw: unknown): string | undefined {
  * @param claims - {@link ValidatedCredential.claims}.
  * @param name - the configured claim name.
  * @returns the primitive value, or `undefined` when the claim is absent, is not
- * a primitive, is an empty string, or is over
- * {@link MAX_BINDING_CLAIM_VALUE_LENGTH}.
+ * a primitive, is an empty string, is over
+ * {@link MAX_BINDING_CLAIM_VALUE_LENGTH}, or is a number other than a safe
+ * integer.
  */
 export function readBindingClaim(
   claims: Readonly<Record<string, unknown>>,
@@ -237,10 +240,15 @@ export function readBindingClaim(
     return value;
   }
 
-  // `Number.isFinite` excludes NaN and both infinities: neither round-trips
-  // through JSON as itself (`JSON.stringify(NaN)` is `null`), so a binding
-  // derived from one would collide with a binding derived from a null claim.
-  if (typeof value === 'number') return Number.isFinite(value) ? value : undefined;
+  // Only a number `JSON.parse` can have delivered EXACTLY. The issuer signed the
+  // Disclosure's text, which holds every digit; what arrives here is the nearest
+  // double. Past ±(2^53 − 1), and for a fraction, that rounding maps different
+  // signed numbers onto one value, so two people's identifiers would derive one
+  // binding. `Number.isSafeInteger` also excludes NaN and both infinities:
+  // neither round-trips through JSON as itself (`JSON.stringify(NaN)` is
+  // `null`), so a binding derived from one would collide with a binding derived
+  // from a null claim.
+  if (typeof value === 'number') return Number.isSafeInteger(value) ? value : undefined;
   if (typeof value === 'boolean') return value;
 
   return undefined;

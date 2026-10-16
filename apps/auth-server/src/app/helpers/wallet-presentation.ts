@@ -17,7 +17,7 @@ import { UniqueConstraintError } from '@qauth-labs/shared-errors';
 import type { FastifyInstance } from 'fastify';
 
 import { env } from '../../config/env';
-import { resolveWalletAccount } from './wallet-account';
+import { resolveWalletAccount, warnOnInexactNumericBindingClaims } from './wallet-account';
 import { createWalletAccountLookup } from './wallet-account-lookup';
 import { readWalletPresentationStash } from './wallet-login-flow';
 import {
@@ -510,7 +510,10 @@ export async function linkWalletPresentation(
   });
 
   if (plan.kind === 'conflict') return { status: 'conflict' };
-  if (plan.kind !== 'linkable') return { status: 'rejected' };
+  if (plan.kind !== 'linkable') {
+    warnOnInexactNumericBindingClaims(fastify, setup.subjectResolution, credential, input.realmId);
+    return { status: 'rejected' };
+  }
 
   try {
     return await fastify.db.transaction(async (tx) => {

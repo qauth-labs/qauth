@@ -158,6 +158,7 @@ describe('sdJwtVcClaimAdapter (VC claims normalization, #235)', () => {
       ['undefined', undefined],
       ['a NaN', Number.NaN],
       ['an Infinity', Number.POSITIVE_INFINITY],
+      ['a number JSON.parse rounded', JSON.parse('202601150000001234')],
       ['an empty string', ''],
       ['a whitespace-only string', '   '],
     ] as ReadonlyArray<readonly [string, unknown]>)(

@@ -215,13 +215,47 @@ describe('subject binding derivation (#300, ADR-009)', () => {
       ['an empty string', { nested: '' }],
       ['NaN', { nested: Number.NaN }],
       ['Infinity', { nested: Number.POSITIVE_INFINITY }],
+      ['an integer a double cannot hold', JSON.parse('{"nested":202601150000001234}')],
+      ['the first integer past the safe range', JSON.parse('{"nested":9007199254740992}')],
+      ['its negative', JSON.parse('{"nested":-9007199254740992}')],
+      ['a fraction', JSON.parse('{"nested":20260115.0000001234}')],
       ['an over-long string', { nested: 'x'.repeat(MAX_BINDING_CLAIM_VALUE_LENGTH + 1) }],
     ])('refuses %s', (_label, claims) => {
       // Objects and arrays have no canonical string form this module can commit
       // to (JSON key order), and the numeric edge cases do not round-trip
       // through JSON as themselves — a binding derived from `NaN` would collide
-      // with one derived from `null`.
+      // with one derived from `null`, and one derived from a rounded number with
+      // every other number that rounds to it.
       expect(readBindingClaim(claims as Record<string, unknown>, 'nested')).toBeUndefined();
+    });
+
+    it('still reads the largest and smallest integers that are exact', () => {
+      const claims = { max: Number.MAX_SAFE_INTEGER, min: Number.MIN_SAFE_INTEGER };
+
+      expect(readBindingClaim(claims, 'max')).toBe(Number.MAX_SAFE_INTEGER);
+      expect(readBindingClaim(claims, 'min')).toBe(Number.MIN_SAFE_INTEGER);
+    });
+
+    it.each([
+      // Neighbouring 18-digit employee numbers, as an issuer with 64-bit
+      // integers writes them.
+      ['integers past 2^53', '202601150000001234', '202601150000001235'],
+      ['fractions past 17 significant digits', '20260115.0000001234', '20260115.00000012341'],
+    ])('derives nothing from %s the issuer told apart', async (_label, one, other) => {
+      // `JSON.parse` rounds both to the same double, so deriving anything from
+      // them would make two people one account.
+      const alice = await validatedFixtureCredential({
+        claims: JSON.parse(`{"employee_number":${one}}`),
+      });
+      const mallory = await validatedFixtureCredential({
+        claims: JSON.parse(`{"employee_number":${other}}`),
+      });
+      expect(alice.claims['employee_number']).toBe(mallory.claims['employee_number']);
+
+      expect(deriveWalletBinding(alice, ['employee_number'])).toBeUndefined();
+      expect(deriveWalletBinding(mallory, ['employee_number'])).toBeUndefined();
+      expect(deriveIssuerScopedSubject(alice, 'employee_number')).toBeUndefined();
+      expect(deriveIssuerScopedSubject(mallory, 'employee_number')).toBeUndefined();
     });
   });
 

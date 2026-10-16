@@ -2,6 +2,7 @@ import {
   buildWalletCredentialData,
   deriveEnrolmentWalletBinding,
   extractWalletAttributes,
+  findInexactNumericBindingClaims,
   type SubjectResolutionConfig,
   type SubjectResolutionStrategy,
   type ValidatedCredential,
@@ -134,6 +135,34 @@ async function writeWalletAttributes(
 }
 
 /**
+ * Say in the log when a refusal is down to a binding claim that arrived as a
+ * JSON number QAuth cannot represent exactly (ANT-2026-FKDN4Q29).
+ *
+ * Such a claim no longer takes part in any binding, because two holders'
+ * different numbers can round to one value. An account enrolled on one before
+ * that rule therefore stops matching, and the uniform refusal on the wire
+ * gives its holder and the operator nothing to go on. Claim names only, never
+ * values.
+ *
+ * @returns whether anything was logged.
+ */
+export function warnOnInexactNumericBindingClaims(
+  fastify: FastifyInstance,
+  config: SubjectResolutionConfig,
+  credential: ValidatedCredential,
+  realmId: string
+): boolean {
+  const claims = findInexactNumericBindingClaims(config, credential);
+  if (claims.length === 0) return false;
+
+  fastify.log.warn(
+    { realmId, claims },
+    'wallet presentation refused: a configured binding claim is a JSON number QAuth cannot represent exactly (outside ±(2^53 − 1), or a fraction), so it no longer binds an account. An account enrolled on such a value can no longer sign in with this credential; the issuer must encode the claim as a string'
+  );
+  return true;
+}
+
+/**
  * Resolve a validated presentation to an account, enrolling on first use.
  *
  * PRECONDITIONS, in this order, both the caller's:
@@ -193,7 +222,10 @@ export async function resolveWalletAccount(
   // `ambiguous` and `rejected` fall through to the uniform refusal below —
   // `rejected` in particular carries the account that exists WITHOUT a wallet
   // binding, which must never become an enrolment (see the module JSDoc).
-  if (outcome.kind !== 'no-match') return { status: 'rejected' };
+  if (outcome.kind !== 'no-match') {
+    warnOnInexactNumericBindingClaims(fastify, input.config, input.credential, input.realmId);
+    return { status: 'rejected' };
+  }
 
   if (externalSub === null) return { status: 'rejected' };
 
@@ -205,10 +237,14 @@ export async function resolveWalletAccount(
   const walletBinding = deriveEnrolmentWalletBinding(input.config, input.credential);
 
   if (walletBinding === null) {
-    fastify.log.warn(
-      { realmId: input.realmId },
-      'wallet presentation withheld a configured binding claim — refusing to enrol an account nothing could later prove entitlement to'
-    );
+    if (
+      !warnOnInexactNumericBindingClaims(fastify, input.config, input.credential, input.realmId)
+    ) {
+      fastify.log.warn(
+        { realmId: input.realmId },
+        'wallet presentation withheld a configured binding claim — refusing to enrol an account nothing could later prove entitlement to'
+      );
+    }
     return { status: 'rejected' };
   }
 

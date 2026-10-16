@@ -439,6 +439,35 @@ describe('resolveWalletAccount — the refusals that must NEVER become an enrolm
     expect(harness.users.create).not.toHaveBeenCalled();
   });
 
+  it('tells the operator when an enrolled account stops matching because a binding claim rounded (ANT-2026-FKDN4Q29)', async () => {
+    // An account enrolled before numeric binding claims had to be exact. Its
+    // binding was derived from a value `JSON.parse` had rounded, so it no
+    // longer identifies one person and is refused from now on. The refusal is
+    // uniform on the wire; the log is the only place the reason can go.
+    const enrolled = walletCredentialDataSchema.parse({
+      credential_format: 'dc+sd-jwt',
+      credential_type: VCT,
+      issuer: ISSUER,
+      wallet_binding: 'wb1:' + 'b'.repeat(64),
+      subject_resolution: 'asserted-lookup',
+      enrolled_at: 1,
+    });
+    harness.userCredentials.findAllByRealmAndExternalSub.mockResolvedValue([
+      credentialRow({ credentialData: enrolled }),
+    ]);
+
+    const result = await resolve(
+      harness.fastify,
+      credentialFor(JSON.parse('{"given_name":"Alice","family_name":202601150000001234}'))
+    );
+
+    expect(result).toEqual({ status: 'rejected' });
+    expect(harness.fastify.log.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ realmId: REALM_ID, claims: ['family_name'] }),
+      expect.stringContaining('cannot represent exactly')
+    );
+  });
+
   it('renders every refusal identically (no enumeration oracle)', async () => {
     const unknownIdentifier = await resolve(
       harness.fastify,

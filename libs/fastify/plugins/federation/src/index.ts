@@ -259,6 +259,7 @@ export {
   createSessionBindingStrategy,
   createSubjectResolutionStrategy,
   deriveEnrolmentWalletBinding,
+  findInexactNumericBindingClaims,
   normalizeAssertedIdentifier,
   resolveSubjectResolution,
   SUBJECT_RESOLUTION_STRATEGY_IDS,
