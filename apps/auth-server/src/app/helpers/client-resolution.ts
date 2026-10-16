@@ -41,6 +41,13 @@ export interface ResolvedClient {
   audience: string[] | null;
   redirectUris: string[];
   tokenEndpointAuthMethod?: string;
+  /**
+   * RFC 7591 §2 key set of a `private_key_jwt` client (#384), inline or by
+   * reference. Surfaced here so the assertion verifier authenticates against
+   * the row this resolver returned rather than a separate, un-resolved read.
+   */
+  jwks?: { keys: Record<string, unknown>[] } | null;
+  jwksUri?: string | null;
   name: string;
   dynamicRegisteredAt: number | null;
   /**

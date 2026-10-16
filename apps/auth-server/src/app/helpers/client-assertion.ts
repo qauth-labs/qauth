@@ -7,7 +7,6 @@ import {
   ASSERTION_SIGNING_ALG_VALUES_SUPPORTED,
   CLIENT_ASSERTION_TYPE_JWT_BEARER,
 } from '../schemas/oauth';
-import { isCimdClientId } from './cimd';
 import type { OAuthClientLike } from './client-auth';
 import { resolveClientKeySet } from './client-jwks';
 import { resolveClient } from './client-resolution';
@@ -138,9 +137,15 @@ function readAssertionSubject(assertion: string): string | null {
 }
 
 /**
- * Look up the client an assertion claims to come from, materialising a CIMD
- * client on the way when the `client_id` is an https URL that has not been
- * resolved before (CIMD §6.2 — the case #384 exists to serve).
+ * Look up the client an assertion claims to come from, through the shared
+ * pre-registered → CIMD chain. A CIMD client (an https-URL `client_id`, CIMD
+ * §6.2 — the case #384 exists to serve) is materialised on first use and
+ * RE-resolved on every later one, as on the authorize, consent and
+ * public-client paths (ADR-012 §3): `CIMD_ENABLED`, the trust policy and the
+ * document's current key set are applied only inside `resolveClient`, so
+ * reading the stored row directly would keep authenticating a client the
+ * operator has switched off, or a key the client has rotated out
+ * (ANT-2026-4V7HWAND).
  *
  * Returns null for an unknown or disabled client. The caller maps that to the
  * same `invalid_client` every other failure produces, so this never becomes a
@@ -151,17 +156,9 @@ async function findAssertionClient(
   realmId: string,
   clientId: string
 ): Promise<OAuthClientLike | null> {
-  let row = await fastify.repositories.oauthClients.findByClientId(realmId, clientId);
-  if (!row && isCimdClientId(clientId)) {
-    // Materialise the CIMD client, then re-read so the persisted row (which
-    // carries the jwks / jwks_uri columns) is what we authenticate against.
-    const { client: resolved } = await resolveClient(fastify, realmId, clientId);
-    if (resolved) {
-      row = await fastify.repositories.oauthClients.findByClientId(realmId, clientId);
-    }
-  }
-  if (!row || !row.enabled) return null;
-  return row;
+  const { client } = await resolveClient(fastify, realmId, clientId);
+  if (!client || !client.enabled) return null;
+  return client;
 }
 
 /**

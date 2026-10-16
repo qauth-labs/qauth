@@ -117,6 +117,9 @@ let otherKeys: { privateKey: CryptoKey; publicKey: CryptoKey };
 
 beforeEach(async () => {
   vi.clearAllMocks();
+  ENV.CIMD_ENABLED = true;
+  ENV.CIMD_TRUST_POLICY = 'accept-any-https';
+  ENV.CIMD_TRUSTED_DOMAINS = [];
   ENV.CIMD_ALLOW_PRIVATE_ADDRESSES = false;
   es256 = await generateKeyPair('ES256', { extractable: true });
   es256Jwk = await exportJWK(es256.publicKey);
@@ -635,5 +638,131 @@ describe('authenticateClientAssertion — rejected', () => {
     await expect(
       authenticateClientAssertion(asFastify(stub), 'realm-1', creds(genuine))
     ).resolves.toBeDefined();
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/*                                CIMD clients                                */
+/* -------------------------------------------------------------------------- */
+
+// Regression (ANT-2026-4V7HWAND): a materialised CIMD row is only a cache of
+// the metadata document (ADR-012 §3). The assertion path read the stored row
+// and went through `resolveClient` only when there was none, so once the row
+// existed, `CIMD_ENABLED=false`, the trust allowlist, a vanished document and
+// key rotation never reached a `private_key_jwt` CIMD client.
+describe('authenticateClientAssertion — re-resolves a materialised CIMD client', () => {
+  const CIMD_ID = 'https://app.example.com/client.json';
+
+  function cimdDocument(...keys: JWK[]) {
+    return {
+      status: 200,
+      body: JSON.stringify({
+        client_id: CIMD_ID,
+        client_name: 'Example',
+        redirect_uris: ['https://app.example.com/cb'],
+        token_endpoint_auth_method: 'private_key_jwt',
+        jwks: { keys },
+      }),
+      headers: {},
+    };
+  }
+
+  function cimdAssertion(key: CryptoKey) {
+    return makeAssertion({ iss: CIMD_ID, sub: CIMD_ID, key });
+  }
+
+  async function materialise() {
+    const stub = fastifyStub(null);
+    let stored: ClientRow | null = null;
+    stub.repositories.oauthClients.findByClientId.mockImplementation(async () => stored);
+    stub.repositories.oauthClients.upsertCimdClient.mockImplementation(async (row: ClientRow) => {
+      stored = { ...row, id: 'row-cimd', audience: null };
+      return stored;
+    });
+    ssrfSafeGet.mockResolvedValue(cimdDocument(es256Jwk));
+
+    await expect(
+      authenticateClientAssertion(
+        asFastify(stub),
+        'realm-1',
+        creds(await cimdAssertion(es256.privateKey))
+      )
+    ).resolves.toMatchObject({ clientId: CIMD_ID });
+    // From here on the row exists, exactly as after a first token request.
+    expect(stored).not.toBeNull();
+    stub.store.clear(); // expire the document cache
+    return stub;
+  }
+
+  it('keeps authenticating while the document is unchanged', async () => {
+    const stub = await materialise();
+
+    await expect(
+      authenticateClientAssertion(
+        asFastify(stub),
+        'realm-1',
+        creds(await cimdAssertion(es256.privateKey))
+      )
+    ).resolves.toMatchObject({ clientId: CIMD_ID });
+  });
+
+  it('follows a key rotation in the document', async () => {
+    const stub = await materialise();
+    ssrfSafeGet.mockResolvedValue(cimdDocument(await exportJWK(otherKeys.publicKey)));
+
+    await expect(
+      authenticateClientAssertion(
+        asFastify(stub),
+        'realm-1',
+        creds(await cimdAssertion(es256.privateKey))
+      )
+    ).rejects.toThrow(InvalidClientError);
+    await expect(
+      authenticateClientAssertion(
+        asFastify(stub),
+        'realm-1',
+        creds(await cimdAssertion(otherKeys.privateKey))
+      )
+    ).resolves.toMatchObject({ clientId: CIMD_ID });
+  });
+
+  it('fails closed once CIMD is switched off, even for a stored client', async () => {
+    const stub = await materialise();
+    ENV.CIMD_ENABLED = false;
+
+    await expect(
+      authenticateClientAssertion(
+        asFastify(stub),
+        'realm-1',
+        creds(await cimdAssertion(es256.privateKey))
+      )
+    ).rejects.toThrow(InvalidClientError);
+  });
+
+  it('fails closed once the host leaves the trust allowlist', async () => {
+    const stub = await materialise();
+    ENV.CIMD_TRUST_POLICY = 'allowlist';
+    ENV.CIMD_TRUSTED_DOMAINS = ['other.example.com'];
+
+    await expect(
+      authenticateClientAssertion(
+        asFastify(stub),
+        'realm-1',
+        creds(await cimdAssertion(es256.privateKey))
+      )
+    ).rejects.toThrow(InvalidClientError);
+  });
+
+  it('fails closed when the document can no longer be fetched', async () => {
+    const stub = await materialise();
+    ssrfSafeGet.mockResolvedValue({ status: 404, body: '', headers: {} });
+
+    await expect(
+      authenticateClientAssertion(
+        asFastify(stub),
+        'realm-1',
+        creds(await cimdAssertion(es256.privateKey))
+      )
+    ).rejects.toThrow(InvalidClientError);
   });
 });
