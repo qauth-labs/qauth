@@ -862,14 +862,15 @@ export default async function (fastify: FastifyInstance) {
         description:
           'Renders the wallet sign-in screen, which collects the account identifier the user asserts (ADR-009). Issue #239.',
         tags: ['UI'],
+        // No `error` parameter: the page never shows caller-supplied text.
+        // The server's own refusals are fixed strings rendered by the POST.
         querystring: z.object({
           return_to: z.string().optional(),
-          error: z.string().optional(),
         }),
       },
     },
     async (request, reply) => {
-      const q = request.query as { return_to?: string; error?: string };
+      const q = request.query as { return_to?: string };
       const returnTo = resolveReturnTo(q.return_to);
 
       if (resolveWalletLoginCapability(fastify) === undefined) {
@@ -899,7 +900,6 @@ export default async function (fastify: FastifyInstance) {
           returnTo,
           cspNonce: reply.cspNonce.style,
           csrfToken,
-          error: q.error,
         })
       );
     }

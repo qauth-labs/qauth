@@ -214,14 +214,15 @@ export default async function (fastify: FastifyInstance) {
         description:
           'Renders the session-cookie login page. `return_to` is a relative path to redirect to after a successful sign-in. Issue #150.',
         tags: ['UI'],
+        // No `error` parameter: the page never shows caller-supplied text.
+        // The server's own refusals are fixed strings rendered by the POST.
         querystring: z.object({
           return_to: z.string().optional(),
-          error: z.string().optional(),
         }),
       },
     },
     async (request, reply) => {
-      const q = request.query as { return_to?: string; error?: string };
+      const q = request.query as { return_to?: string };
       const returnTo = isSafeReturnTo(q.return_to) ? q.return_to : '/';
 
       // Login CSRF defence (signed double-submit). Reuse an already-valid CSRF
@@ -240,7 +241,6 @@ export default async function (fastify: FastifyInstance) {
           returnTo,
           cspNonce: reply.cspNonce.style,
           csrfToken,
-          error: q.error,
           walletLoginOffered: resolveWalletLoginCapability(fastify) !== undefined,
         })
       );

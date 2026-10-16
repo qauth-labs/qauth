@@ -3513,14 +3513,6 @@
             "in": "query",
             "name": "return_to",
             "required": false
-          },
-          {
-            "schema": {
-              "type": "string"
-            },
-            "in": "query",
-            "name": "error",
-            "required": false
           }
         ],
         "responses": {
@@ -3685,14 +3677,6 @@
             },
             "in": "query",
             "name": "return_to",
-            "required": false
-          },
-          {
-            "schema": {
-              "type": "string"
-            },
-            "in": "query",
-            "name": "error",
             "required": false
           }
         ],

@@ -165,6 +165,21 @@ describe('UI /ui/login — CSRF defence', () => {
     expect(state.body as string).toContain(`value="${rawToken}"`);
   });
 
+  it('GET never renders caller-supplied text in the error banner (01VEX7C3)', async () => {
+    const { fastify, ctx } = makeFastify();
+    await loginRoute(fastify);
+    if (!ctx.get) throw new Error('Handler missing');
+
+    const { reply, state } = createReply();
+    await ctx.get(
+      { query: { error: 'Call +1-800-555-0199 to reactivate.' }, headers: {}, ip: '127.0.0.1' },
+      reply
+    );
+
+    expect(state.body as string).not.toContain('class="error"');
+    expect(state.body as string).not.toContain('+1-800-555-0199');
+  });
+
   it('POST rejects (403) when the CSRF token is missing/invalid — no credential check', async () => {
     const { fastify, ctx } = makeFastify();
     await loginRoute(fastify);
