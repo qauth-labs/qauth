@@ -104,6 +104,10 @@ is locked out for `FAILED_LOGIN_LOCKOUT_DURATION` seconds; further login attempt
 return `429 Too Many Requests` with a `Retry-After` header before any credential
 verification.
 
+- An attempt is counted **before** its password is verified, so guesses sent
+  concurrently cannot outrun the counter. A login that ends in a server error
+  therefore stays counted too. While the attempt that reaches the limit is
+  being verified, other attempts for the same identifier are refused.
 - The attempt counter has a TTL equal to the window, so it **decays** naturally.
 - A **successful** login clears both the counter and any lockout.
 - All cache operations are **best-effort / fail-open**: if Redis is unavailable,

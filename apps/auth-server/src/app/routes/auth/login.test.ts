@@ -156,6 +156,49 @@ function requestLog() {
   return { info: vi.fn(), warn: vi.fn() };
 }
 
+/**
+ * In-memory Redis with the commands the failed-login helper uses (ttl, incr,
+ * decr, expire, set with EX and optional NX, del), for the tests that need
+ * the lockout's real state rather than canned answers.
+ */
+function createMemoryRedis() {
+  const store = new Map<string, string>();
+  const ttls = new Map<string, number>();
+  return {
+    ttl: vi.fn(async (key: string) => (store.has(key) ? (ttls.get(key) ?? -1) : -2)),
+    incr: vi.fn(async (key: string) => {
+      const next = Number(store.get(key) ?? '0') + 1;
+      store.set(key, String(next));
+      return next;
+    }),
+    decr: vi.fn(async (key: string) => {
+      const next = Number(store.get(key) ?? '0') - 1;
+      store.set(key, String(next));
+      return next;
+    }),
+    expire: vi.fn(async (key: string, seconds: number) => {
+      if (!store.has(key)) return 0;
+      ttls.set(key, seconds);
+      return 1;
+    }),
+    set: vi.fn(async (key: string, value: string, _ex: 'EX', seconds: number, nx?: 'NX') => {
+      if (nx === 'NX' && store.has(key)) return null;
+      store.set(key, value);
+      ttls.set(key, seconds);
+      return 'OK';
+    }),
+    del: vi.fn(async (...keys: string[]) => {
+      let count = 0;
+      for (const key of keys) {
+        if (store.delete(key)) count++;
+        ttls.delete(key);
+      }
+      return count;
+    }),
+    _store: store,
+  };
+}
+
 /** The #228 credential-row fixture the login lookup returns. */
 function credentialFixture(overrides: Record<string, unknown> = {}) {
   return {
@@ -540,5 +583,83 @@ describe('POST /auth/login', () => {
       await expect(handler(request, createReply())).rejects.toThrow(TooManyRequestsError);
     }
     expect(fastify.passwordHasher.verifyPassword).not.toHaveBeenCalled();
+  });
+
+  it('counts the attempt before the password is verified (#115)', async () => {
+    const { fastify, ctx } = createFastifyStub();
+    await loginRoute(fastify);
+    const handler = ctx.handler;
+    if (!handler) throw new Error('Handler missing');
+
+    (
+      fastify.repositories.userCredentials.findByRealmProviderSub as unknown as Mock
+    ).mockResolvedValue(credentialFixture());
+    (fastify.repositories.users.findById as unknown as Mock).mockResolvedValue(userFixture());
+    (fastify.passwordHasher.verifyPassword as unknown as Mock).mockResolvedValue(false);
+
+    await expect(
+      handler(
+        {
+          body: { email: 'user@example.com', password: 'wrong' },
+          ip: '127.0.0.1',
+          headers: { 'user-agent': 'vitest' },
+          log: requestLog(),
+        },
+        createReply()
+      )
+    ).rejects.toThrow(InvalidCredentialsError);
+
+    // Counted on the way in, not after argon2 has returned, so concurrent
+    // guesses cannot outrun the counter; a failure leaves it counted.
+    expect((fastify.redis.incr as unknown as Mock).mock.invocationCallOrder[0]).toBeLessThan(
+      (fastify.passwordHasher.verifyPassword as unknown as Mock).mock.invocationCallOrder[0]
+    );
+    expect(fastify.redis.del).not.toHaveBeenCalled();
+  });
+
+  it('verifies at most FAILED_LOGIN_MAX_ATTEMPTS passwords for a burst of concurrent guesses (#115)', async () => {
+    // ROIQJSAT: 20 guesses at one account, 5 from each of 4 addresses, all in
+    // flight at once. Each verification takes a few milliseconds, like argon2
+    // does, so every request reaches the lockout check before any has failed.
+    const { fastify, ctx } = createFastifyStub();
+    (fastify as unknown as { redis: unknown }).redis = createMemoryRedis();
+    await loginRoute(fastify);
+    const handler = ctx.handler;
+    if (!handler) throw new Error('Handler missing');
+
+    (
+      fastify.repositories.userCredentials.findByRealmProviderSub as unknown as Mock
+    ).mockResolvedValue(credentialFixture());
+    (fastify.repositories.users.findById as unknown as Mock).mockResolvedValue(userFixture());
+    const verifyPassword = fastify.passwordHasher.verifyPassword as unknown as Mock;
+    verifyPassword.mockImplementation(async (_hash: string, password: string) => {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      return password === 'correct';
+    });
+
+    const guesses = Array.from({ length: 20 }, (_, i) => (i === 19 ? 'correct' : `guess-${i}`));
+    const results = await Promise.allSettled(
+      guesses.map((password, i) =>
+        handler(
+          {
+            body: { email: 'user@example.com', password },
+            ip: `198.51.100.${Math.floor(i / 5) + 1}`,
+            headers: { 'user-agent': 'vitest' },
+            log: requestLog(),
+          },
+          createReply()
+        )
+      )
+    );
+
+    // env.FAILED_LOGIN_MAX_ATTEMPTS is 5 in this file.
+    expect(verifyPassword).toHaveBeenCalledTimes(5);
+    const refused = results.filter(
+      (result) => result.status === 'rejected' && result.reason instanceof TooManyRequestsError
+    );
+    expect(refused).toHaveLength(15);
+    // The right password, sent last, is among the refused guesses.
+    expect(results[19].status).toBe('rejected');
+    expect(fastify.jwtUtils.signAccessToken).not.toHaveBeenCalled();
   });
 });

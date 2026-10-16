@@ -13,9 +13,17 @@ type RedisClient = FastifyInstance['redis'];
 /**
  * Failed-login throttling / lockout (QAuth §3.1.12, #115).
  *
- * Tracks failed login counts per identifier (email and/or IP) in Redis and,
+ * Tracks login attempts per identifier (email and/or IP) in Redis and,
  * after `FAILED_LOGIN_MAX_ATTEMPTS` failures inside `FAILED_LOGIN_WINDOW`,
  * applies a temporary lockout for `FAILED_LOGIN_LOCKOUT_DURATION` seconds.
+ *
+ * An attempt is counted BEFORE its password is verified, and the atomic
+ * `INCR` of that count is the gate. Counting a failure only once Argon2id had
+ * returned was check-then-act: a verification takes ~100 ms and queues, so
+ * every guess sent before the threshold failure was recorded got verified,
+ * however many there were. Now the attempt that reaches the threshold arms the
+ * lockout on its way in (`SET NX`, so exactly one attempt in flight can), and
+ * any attempt behind it is refused without being counted.
  *
  * Decay/reset:
  *  - the attempt counter has a TTL equal to the window, so it naturally decays
@@ -27,23 +35,32 @@ type RedisClient = FastifyInstance['redis'];
  * (login proceeds, logged elsewhere) rather than locking every user out.
  */
 
-/** Result of checking whether an identifier is currently locked out. */
+/** Result of registering a login attempt. */
 export interface LockoutStatus {
-  /** Whether the identifier is currently locked out. */
+  /** Whether the attempt is refused: an identifier is locked out. */
   locked: boolean;
   /** Seconds remaining on the lockout, when locked. */
   retryAfterSeconds?: number;
 }
 
 /**
- * Check whether any of the given identifiers is currently locked out.
+ * Count a login attempt against each identifier, unless one of them is
+ * locked out. Call it BEFORE the credential is verified, and verify only when
+ * it returns `locked: false`. A failed attempt then needs no further
+ * bookkeeping: it stays counted. A successful one is cleared with
+ * `resetFailedAttempts`.
+ *
+ * A refused attempt is not counted: an identifier already locked out refuses
+ * it before anything is incremented, and an attempt that loses the race to arm
+ * a lockout gives back what it had taken.
  *
  * @param redis - The Redis client (`fastify.redis`).
- * @param identifiers - Identifiers to check (e.g. email hash and/or IP).
+ * @param identifiers - Identifiers to check and count (e.g. email hash and/or
+ *                      IP).
  * @returns The lockout status; `locked: false` when tracking is disabled or
  *          Redis is unreachable.
  */
-export async function checkLockout(
+export async function registerLoginAttempt(
   redis: RedisClient,
   identifiers: string[]
 ): Promise<LockoutStatus> {
@@ -51,11 +68,43 @@ export async function checkLockout(
     return { locked: false };
   }
 
+  const counted: string[] = [];
+  const armed: string[] = [];
   try {
     for (const identifier of identifiers) {
       const ttl = await redis.ttl(REDIS_KEYS.FAILED_LOGIN_LOCKOUT(identifier));
       if (ttl > 0) {
         return { locked: true, retryAfterSeconds: ttl };
+      }
+    }
+
+    for (const identifier of identifiers) {
+      const attemptsKey = REDIS_KEYS.FAILED_LOGIN_ATTEMPTS(identifier);
+      const attempts = await redis.incr(attemptsKey);
+      counted.push(identifier);
+
+      // Set the window TTL on the first attempt.
+      if (attempts === 1) {
+        await redis.expire(attemptsKey, env.FAILED_LOGIN_WINDOW);
+      }
+
+      // The attempt that reaches the threshold is the last one let through,
+      // and arms the lockout on its way in. NX lets exactly one attempt arm
+      // it; any other attempt at or past the threshold finds it armed and is
+      // refused, however far ahead of it the lockout check let it get.
+      if (attempts >= env.FAILED_LOGIN_MAX_ATTEMPTS) {
+        const result = await redis.set(
+          REDIS_KEYS.FAILED_LOGIN_LOCKOUT(identifier),
+          '1',
+          'EX',
+          env.FAILED_LOGIN_LOCKOUT_DURATION,
+          'NX'
+        );
+        if (result !== 'OK') {
+          await withdrawAttempt(redis, counted, armed);
+          return { locked: true, retryAfterSeconds: env.FAILED_LOGIN_LOCKOUT_DURATION };
+        }
+        armed.push(identifier);
       }
     }
     return { locked: false };
@@ -65,56 +114,30 @@ export async function checkLockout(
   }
 }
 
-/** Outcome of recording a failed attempt. */
-export interface RecordFailureResult {
-  /** Whether this failure tripped a lockout for at least one identifier. */
-  lockedOut: boolean;
-}
-
 /**
- * Record a failed login attempt for each identifier, incrementing its
- * sliding-window counter and applying a lockout once the threshold is reached.
- *
- * @param redis - The Redis client (`fastify.redis`).
- * @param identifiers - Identifiers to penalise (e.g. email hash and/or IP).
- * @returns Whether a lockout was triggered by this failure.
+ * Give back what a refused attempt took: one count on each identifier it was
+ * counted against, and any lockout it armed. Best-effort.
  */
-export async function recordFailedAttempt(
+async function withdrawAttempt(
   redis: RedisClient,
-  identifiers: string[]
-): Promise<RecordFailureResult> {
-  if (!env.FAILED_LOGIN_TRACKING_ENABLED) {
-    return { lockedOut: false };
-  }
-
-  let lockedOut = false;
-
+  counted: string[],
+  armed: string[]
+): Promise<void> {
   try {
-    for (const identifier of identifiers) {
+    if (armed.length > 0) {
+      await redis.del(...armed.map((identifier) => REDIS_KEYS.FAILED_LOGIN_LOCKOUT(identifier)));
+    }
+    for (const identifier of counted) {
       const attemptsKey = REDIS_KEYS.FAILED_LOGIN_ATTEMPTS(identifier);
-      const attempts = await redis.incr(attemptsKey);
-
-      // Set the window TTL on the first failure (and re-assert if it was lost).
-      if (attempts === 1) {
-        await redis.expire(attemptsKey, env.FAILED_LOGIN_WINDOW);
-      }
-
-      if (attempts >= env.FAILED_LOGIN_MAX_ATTEMPTS) {
-        await redis.set(
-          REDIS_KEYS.FAILED_LOGIN_LOCKOUT(identifier),
-          '1',
-          'EX',
-          env.FAILED_LOGIN_LOCKOUT_DURATION
-        );
-        lockedOut = true;
+      // Below zero, the counter had expired or been cleared meanwhile, and
+      // DECR recreated it without a TTL: drop it rather than keep it forever.
+      if ((await redis.decr(attemptsKey)) < 0) {
+        await redis.del(attemptsKey);
       }
     }
   } catch {
-    // Best-effort: a cache failure must not break the login flow.
-    return { lockedOut: false };
+    // Best-effort: the attempt is refused either way.
   }
-
-  return { lockedOut };
 }
 
 /**

@@ -10,7 +10,7 @@ import { EMAIL_MAX_LENGTH, MIN_RESPONSE_TIME_MS } from '../../constants';
 import { hashEmail } from '../../helpers/auth-events';
 import { clientAddressKey } from '../../helpers/client-address';
 import { verifyPasswordCredential } from '../../helpers/credential-auth';
-import { checkLockout, recordFailedAttempt, resetFailedAttempts } from '../../helpers/failed-login';
+import { registerLoginAttempt, resetFailedAttempts } from '../../helpers/failed-login';
 import { html, render } from '../../helpers/html';
 import { getOrCreateDefaultRealm } from '../../helpers/realm';
 import { isSafeReturnTo } from '../../helpers/return-to';
@@ -330,7 +330,9 @@ export default async function (fastify: FastifyInstance) {
         );
       };
 
-      const lockout = await checkLockout(fastify.redis, lockoutIdentifiers);
+      // Refuse a locked-out identifier, else count the attempt before the
+      // password is looked at (#115), exactly as POST /auth/login does.
+      const lockout = await registerLoginAttempt(fastify.redis, lockoutIdentifiers);
       if (lockout.locked) {
         await ensureMinimumResponseTime(startTime, MIN_RESPONSE_TIME_MS.LOGIN);
         await fastify.repositories.auditLogs.create({
@@ -373,7 +375,6 @@ export default async function (fastify: FastifyInstance) {
       }
 
       if (check.status !== 'ok' || !user || !user.enabled) {
-        await recordFailedAttempt(fastify.redis, lockoutIdentifiers);
         await ensureMinimumResponseTime(startTime, MIN_RESPONSE_TIME_MS.LOGIN);
         await fastify.repositories.auditLogs.create({
           userId: null,
@@ -391,9 +392,8 @@ export default async function (fastify: FastifyInstance) {
       // Verified-account gate (F-08), identical to POST /auth/login: with
       // `REQUIRE_VERIFIED_ACCOUNT=true` an unverified credential gets no session,
       // so it cannot complete an OAuth/OIDC flow through the hosted UI either.
-      // Counted as a failed attempt, as on the API route.
+      // Stays counted as a failed attempt, as on the API route.
       if (!check.emailVerified && env.REQUIRE_VERIFIED_ACCOUNT) {
-        await recordFailedAttempt(fastify.redis, lockoutIdentifiers);
         await ensureMinimumResponseTime(startTime, MIN_RESPONSE_TIME_MS.LOGIN);
         await fastify.repositories.auditLogs.create({
           userId: user.id,

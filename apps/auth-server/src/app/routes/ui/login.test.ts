@@ -20,14 +20,13 @@ vi.mock('../../../config/env', () => ({
 // Failed-login throttling has its own tests (helpers/failed-login.test.ts);
 // here it is a seam, so these tests assert the route wires it in.
 vi.mock('../../helpers/failed-login', () => ({
-  checkLockout: vi.fn().mockResolvedValue({ locked: false }),
-  recordFailedAttempt: vi.fn().mockResolvedValue({ lockedOut: false }),
+  registerLoginAttempt: vi.fn().mockResolvedValue({ locked: false }),
   resetFailedAttempts: vi.fn().mockResolvedValue(undefined),
 }));
 
 import { env } from '../../../config/env';
 import { hashEmail } from '../../helpers/auth-events';
-import { checkLockout, recordFailedAttempt, resetFailedAttempts } from '../../helpers/failed-login';
+import { registerLoginAttempt, resetFailedAttempts } from '../../helpers/failed-login';
 import loginRoute from './login';
 
 interface TestContext {
@@ -276,36 +275,40 @@ describe('UI /ui/login — CSRF defence', () => {
     }
 
     beforeEach(() => {
-      vi.mocked(checkLockout).mockClear().mockResolvedValue({ locked: false });
-      vi.mocked(recordFailedAttempt).mockClear();
+      vi.mocked(registerLoginAttempt).mockClear().mockResolvedValue({ locked: false });
       vi.mocked(resetFailedAttempts).mockClear();
       (env as { REQUIRE_VERIFIED_ACCOUNT?: boolean }).REQUIRE_VERIFIED_ACCOUNT = false;
     });
 
     it('refuses a locked-out identifier (429) before any credential check', async () => {
-      vi.mocked(checkLockout).mockResolvedValue({ locked: true, retryAfterSeconds: 120 });
+      vi.mocked(registerLoginAttempt).mockResolvedValue({ locked: true, retryAfterSeconds: 120 });
 
       const { fastify, state } = await postLogin({ verifies: true });
 
-      expect(checkLockout).toHaveBeenCalledWith(undefined, LOCKOUT_IDS);
+      expect(registerLoginAttempt).toHaveBeenCalledWith(undefined, LOCKOUT_IDS);
       expect(state.statusCode).toBe(429);
       expect(state.headers['Retry-After']).toBe('120');
       expect(fastify.passwordHasher.verifyPassword).not.toHaveBeenCalled();
       expect(fastify.sessionUtils.setSession).not.toHaveBeenCalled();
     });
 
-    it('records a failed attempt on a wrong password, with the API login identifiers', async () => {
-      const { state } = await postLogin({ verifies: false });
+    it('counts the attempt before the password is verified, with the API login identifiers', async () => {
+      const { fastify, state } = await postLogin({ verifies: false });
 
       expect(state.statusCode).toBe(401);
-      expect(recordFailedAttempt).toHaveBeenCalledWith(undefined, LOCKOUT_IDS);
+      expect(registerLoginAttempt).toHaveBeenCalledWith(undefined, LOCKOUT_IDS);
+      // Counted on the way in, not after argon2 has returned, so concurrent
+      // guesses cannot outrun the counter (ROIQJSAT); a failure leaves it counted.
+      expect(vi.mocked(registerLoginAttempt).mock.invocationCallOrder[0]).toBeLessThan(
+        (fastify.passwordHasher.verifyPassword as unknown as Mock).mock.invocationCallOrder[0]
+      );
       expect(resetFailedAttempts).not.toHaveBeenCalled();
     });
 
     it('keys the ip: identifier on the /64 of an IPv6 client', async () => {
       await postLogin({ verifies: false, ip: '2001:db8:1:2:aaaa:bbbb:cccc:7' });
 
-      expect(recordFailedAttempt).toHaveBeenCalledWith(undefined, [
+      expect(registerLoginAttempt).toHaveBeenCalledWith(undefined, [
         LOCKOUT_IDS[0],
         'ip:2001:db8:1:2::',
       ]);
@@ -316,7 +319,6 @@ describe('UI /ui/login — CSRF defence', () => {
 
       expect(state.statusCode).toBe(302);
       expect(resetFailedAttempts).toHaveBeenCalledWith(undefined, LOCKOUT_IDS);
-      expect(recordFailedAttempt).not.toHaveBeenCalled();
     });
 
     it('refuses an unverified credential (403, no session) when REQUIRE_VERIFIED_ACCOUNT is on', async () => {
@@ -326,7 +328,9 @@ describe('UI /ui/login — CSRF defence', () => {
 
       expect(state.statusCode).toBe(403);
       expect(fastify.sessionUtils.setSession).not.toHaveBeenCalled();
-      expect(recordFailedAttempt).toHaveBeenCalledWith(undefined, LOCKOUT_IDS);
+      // Stays counted as a failed attempt.
+      expect(registerLoginAttempt).toHaveBeenCalledWith(undefined, LOCKOUT_IDS);
+      expect(resetFailedAttempts).not.toHaveBeenCalled();
     });
 
     it('still signs in an unverified credential when REQUIRE_VERIFIED_ACCOUNT is off (default)', async () => {

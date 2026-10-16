@@ -15,7 +15,7 @@ import { clientAddressKey } from '../../helpers/client-address';
 import { resolveAudience } from '../../helpers/client-auth';
 import { verifyPasswordCredential } from '../../helpers/credential-auth';
 import { resolveEmailClaims } from '../../helpers/email-claims';
-import { checkLockout, recordFailedAttempt, resetFailedAttempts } from '../../helpers/failed-login';
+import { registerLoginAttempt, resetFailedAttempts } from '../../helpers/failed-login';
 import { issueAccessToken } from '../../helpers/hybrid-token';
 import { getOrCreateSystemClient } from '../../helpers/oauth-client';
 import { getOrCreateDefaultRealm } from '../../helpers/realm';
@@ -62,8 +62,10 @@ export default async function (fastify: FastifyInstance) {
       const lockoutIdentifiers = [`email:${emailHash}`, `ip:${clientAddressKey(request)}`];
 
       try {
-        // Reject early if this identifier is currently locked out (#115).
-        const lockout = await checkLockout(fastify.redis, lockoutIdentifiers);
+        // Reject early if this identifier is currently locked out; otherwise
+        // count the attempt now, before the password is looked at, so that
+        // guesses sent concurrently cannot outrun the counter (#115).
+        const lockout = await registerLoginAttempt(fastify.redis, lockoutIdentifiers);
         if (lockout.locked) {
           fastify.metrics.loginAttempts.inc({ result: 'failure', reason: 'locked_out' });
           logAuthEvent(request, 'user.login.failure', false, {
@@ -98,8 +100,8 @@ export default async function (fastify: FastifyInstance) {
         // account the proof is the confirmed address: since #228 the gate reads
         // credential_data.email_verified, the authoritative source (the legacy
         // users.email_verified column was dropped in #261).
+        // The attempt stays counted as a failed one.
         if (check.status === 'ok' && !check.emailVerified && env.REQUIRE_VERIFIED_ACCOUNT) {
-          await recordFailedAttempt(fastify.redis, lockoutIdentifiers);
           fastify.metrics.loginAttempts.inc({ result: 'failure', reason: 'email_not_verified' });
           logAuthEvent(request, 'user.login.failure', false, {
             emailHash,
@@ -138,10 +140,8 @@ export default async function (fastify: FastifyInstance) {
         // same generic error. A disabled account must not get a token, and
         // must not be distinguishable from a wrong password (same 401, same
         // timing floor, same failed-attempt accounting) — as /ui/login does.
+        // The attempt, counted before verification, stays counted (#115).
         if (check.status !== 'ok' || !user || !user.enabled) {
-          // Record the failed attempt for throttling/lockout (#115).
-          await recordFailedAttempt(fastify.redis, lockoutIdentifiers);
-
           // Structured log of the failed login (#125): IP + email *hash* only,
           // never the password or the raw email.
           fastify.metrics.loginAttempts.inc({ result: 'failure', reason: 'invalid_credentials' });
