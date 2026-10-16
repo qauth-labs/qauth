@@ -84,6 +84,46 @@ describe('PasswordHasher', () => {
   });
 });
 
+describe('libuv thread pool', () => {
+  it('should leave pool threads free for WebCrypto while verifications are queued', async () => {
+    // 5AJ2ARWP. Each job holds a pool thread for milliseconds, far longer than
+    // a digest, and eight of them outnumber the default 4-thread pool. The
+    // pool is FIFO, so the digest below only resolves first when Argon2 may
+    // not occupy every thread. JWT signing and verification (jose, via
+    // crypto.subtle) and pg's SCRAM handshake run on that same pool.
+    const hasher = createPasswordHasher({ memoryCost: 32768, timeCost: 2, parallelism: 1 });
+    const hash = await hasher.hashPassword('TestPassword123!');
+    // Warm WebCrypto up, so its one-time setup is not what the race measures.
+    await crypto.subtle.digest('SHA-256', new Uint8Array(32));
+    const finished: string[] = [];
+
+    const verifications = Array.from({ length: 8 }, () =>
+      hasher.verifyPassword(hash, 'WrongPassword123!').then((valid) => {
+        finished.push('argon2');
+        return valid;
+      })
+    );
+    await crypto.subtle.digest('SHA-256', new Uint8Array(32));
+    finished.push('digest');
+
+    expect(finished[0]).toBe('digest');
+    // Every queued job still runs to completion with the right answer.
+    expect(await Promise.all(verifications)).toEqual(Array(8).fill(false));
+  }, 30_000);
+
+  it('should release a slot when a queued job fails', async () => {
+    const hasher = createPasswordHasher({ memoryCost: 8192, timeCost: 2, parallelism: 2 });
+    const hash = await hasher.hashPassword('TestPassword123!');
+
+    // Invalid hashes reject inside argon2; more of them than there are slots
+    // must not wedge the queue for the valid verification that follows.
+    await Promise.all(
+      Array.from({ length: 8 }, () => hasher.verifyPassword('invalid-hash-format', 'password'))
+    );
+    expect(await hasher.verifyPassword(hash, 'TestPassword123!')).toBe(true);
+  }, 30_000);
+});
+
 describe('DEFAULT_PASSWORD_CONFIG', () => {
   it('should have valid default values', () => {
     expect(DEFAULT_PASSWORD_CONFIG.memoryCost).toBeGreaterThan(0);
