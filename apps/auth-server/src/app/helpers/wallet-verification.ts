@@ -288,6 +288,12 @@ function credentialStatusChecker(): CredentialStatusChecker | undefined {
     cachedCredentialStatusChecker = createConfiguredCredentialStatusChecker({
       trustAnchorPems: resolveStatusListTrustAnchorPems(env),
       uriAllowlist: env.OID4VP_STATUS_LIST_URI_ALLOWLIST,
+      // Which status issuer may sign a list served from another host
+      // (ANT-2026-3988N5GJ). Unset: the signer's certificate must name the
+      // list host.
+      ...(env.OID4VP_STATUS_LIST_SIGNERS === undefined
+        ? {}
+        : { signerDelegations: env.OID4VP_STATUS_LIST_SIGNERS }),
       onAudit: recordCredentialStatusAudit,
     });
     credentialStatusCheckerBuilt = true;

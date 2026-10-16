@@ -14,6 +14,7 @@ import {
   STATUS_LIST_TOKEN_TYP,
   type StatusListBitWidth,
 } from './status-list-spec';
+import type { StatusListSignerDelegations } from './status-list-uri';
 
 /**
  * Verifying a Status List Token (draft-14 §5.1 / §8.3, issue #297).
@@ -39,8 +40,10 @@ import {
  *  4. verify the signature and `exp` with that leaf's key;
  *  5. only now read claims — and re-read `typ` from the AUTHENTICATED header,
  *     not the one decoded in step 1;
- *  6. bind: `sub` must equal the URI we fetched, and the leaf's `dNSName` SAN
- *     must cover `iss`.
+ *  6. bind: `sub` must equal the URI we fetched, the leaf's `dNSName` SAN
+ *     must cover `iss`, and the leaf must speak for the LIST (its SAN covers
+ *     the list URI's host, or the operator delegated that URI to a signer its
+ *     SAN covers).
  *
  * Step 5 is easy to get wrong by treating step 1's header as trustworthy. It is
  * not — an attacker controls it in full — and `typ` is precisely the member
@@ -76,12 +79,25 @@ import {
  * recommends, so the checker's API is deliberately NOT widened to take the
  * credential's issuer.
  *
- * What stops cross-issuer impersonation instead is the pair of bindings that
+ * What stops cross-issuer impersonation instead is the set of bindings that
  * are checked: `sub` must equal the `status_list.uri` written inside the
  * issuer-signed credential, so an attacker cannot redirect a revoked credential
- * at a status list of their choosing; and the leaf certificate's `dNSName` SAN
+ * at a status list of their choosing; the leaf certificate's `dNSName` SAN
  * must cover the `iss` host, so an anchored certificate cannot sign for an
- * issuer it does not speak for.
+ * issuer it does not speak for; and the leaf must speak for the LIST itself.
+ *
+ * The last binding is the one that carries the authorisation
+ * (ANT-2026-3988N5GJ). `sub` and `iss` are both the SIGNER's statements, so on
+ * their own they never tie the certificate to the list: another participant
+ * under the same anchor could sign this issuer's list under its own truthful
+ * `iss` and un-revoke this issuer's credentials. The one name the signer does
+ * not choose is the host of the list URI, which the credential issuer signed
+ * into the credential. So by default the leaf's SAN must cover that host. A
+ * list served from a host the signer's certificate does not name (a CDN, a
+ * separate Status Provider) is refused unless the operator delegates its URI
+ * prefix to the signing issuer (`OID4VP_STATUS_LIST_SIGNERS`,
+ * {@link StatusListSignerDelegations}). The binding is per host, so two signers
+ * certified for one shared host can still sign each other's lists there.
  *
  * `iss` is nonetheless REQUIRED here even though §5.1 does not require it: the
  * SAN binding needs a name to bind against, and a token with no `iss` would
@@ -144,6 +160,27 @@ export interface VerifyStatusListTokenOptions {
    * Omitting it leaves the anchor chain and the SAN binding as the gate.
    */
   readonly issuerTrustRegistry?: TrustRegistry;
+  /**
+   * Operator delegations of list URI prefixes to named signing issuers
+   * (`OID4VP_STATUS_LIST_SIGNERS`). Omitted means none: the leaf's SAN must
+   * then cover the host the list is served from.
+   */
+  readonly signerDelegations?: StatusListSignerDelegations;
+}
+
+/**
+ * Whether the signing certificate speaks for the LIST at `listUri`, not only
+ * for the `iss` it wrote (ANT-2026-3988N5GJ). See the module JSDoc.
+ */
+function certificateSpeaksForList(
+  leaf: Parameters<typeof certificateBindsIssuer>[0],
+  listUri: string,
+  delegations: StatusListSignerDelegations | undefined
+): boolean {
+  if (certificateBindsIssuer(leaf, listUri)) return true;
+  return (delegations?.signersFor(listUri) ?? []).some((signer) =>
+    certificateBindsIssuer(leaf, signer)
+  );
 }
 
 /** Whether `value` is a plain, non-array object. */
@@ -304,6 +341,9 @@ export async function verifyStatusListToken(
     return { outcome: 'rejected', reason: 'issuer-untrusted' };
   }
   if (!certificateBindsIssuer(chain.leaf, issuer)) {
+    return { outcome: 'rejected', reason: 'issuer-untrusted' };
+  }
+  if (!certificateSpeaksForList(chain.leaf, expectedUri, options.signerDelegations)) {
     return { outcome: 'rejected', reason: 'issuer-untrusted' };
   }
   if (!passesIssuerRegistry(issuer, options.issuerTrustRegistry)) {

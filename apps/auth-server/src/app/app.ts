@@ -160,6 +160,9 @@ export async function app(fastify: FastifyInstance, opts: object) {
   assertCredentialStatusConfigUsable({
     trustAnchorPems: statusListTrustAnchorPems,
     uriAllowlist: env.OID4VP_STATUS_LIST_URI_ALLOWLIST,
+    ...(env.OID4VP_STATUS_LIST_SIGNERS === undefined
+      ? {}
+      : { signerDelegations: env.OID4VP_STATUS_LIST_SIGNERS }),
   });
 
   // The VERIFIER identity (#377), and the same posture again for the third

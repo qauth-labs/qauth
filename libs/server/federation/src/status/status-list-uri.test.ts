@@ -2,6 +2,7 @@ import { InvalidConfigurationError } from '@qauth-labs/shared-errors';
 import { describe, expect, it } from 'vitest';
 
 import {
+  createStatusListSignerDelegations,
   createStatusListUriAllowlist,
   DENY_ALL_STATUS_LIST_URI_ALLOWLIST,
 } from './status-list-uri';
@@ -124,6 +125,45 @@ describe('createStatusListUriAllowlist (#297)', () => {
 
   it('rejects a non-array configuration', () => {
     expect(() => createStatusListUriAllowlist('https://issuer.example' as never)).toThrow(
+      InvalidConfigurationError
+    );
+  });
+});
+
+describe('createStatusListSignerDelegations (ANT-2026-3988N5GJ)', () => {
+  const delegations = createStatusListSignerDelegations({
+    'https://cdn.example/issuer-a': 'https://status.issuer-a.example',
+    'https://cdn.example/issuer-b/': 'https://status.issuer-b.example',
+  });
+
+  it('names the signer delegated for a URI under a configured prefix', () => {
+    expect(delegations.signersFor('https://cdn.example/issuer-a/lists/1')).toEqual([
+      'https://status.issuer-a.example',
+    ]);
+    expect(delegations.signersFor('https://cdn.example/issuer-b/lists/1')).toEqual([
+      'https://status.issuer-b.example',
+    ]);
+  });
+
+  it('names nobody past a segment boundary, on another origin, or for a junk URI', () => {
+    expect(delegations.signersFor('https://cdn.example/issuer-ab/lists/1')).toEqual([]);
+    expect(delegations.signersFor('https://cdn.example.attacker.test/issuer-a/1')).toEqual([]);
+    expect(delegations.signersFor('not a uri')).toEqual([]);
+  });
+
+  it('names nobody when nothing is configured', () => {
+    expect(
+      createStatusListSignerDelegations(undefined).signersFor('https://cdn.example/x')
+    ).toEqual([]);
+  });
+
+  it.each([
+    ['a prefix that is not https', { 'http://cdn.example/a': 'https://status.issuer.example' }],
+    ['a prefix with a query', { 'https://cdn.example/a?x=1': 'https://status.issuer.example' }],
+    ['a signer that is not https', { 'https://cdn.example/a': 'http://status.issuer.example' }],
+    ['a signer that is not a string', { 'https://cdn.example/a': 42 }],
+  ])('refuses %s at construction', (_label, entries) => {
+    expect(() => createStatusListSignerDelegations(entries as never)).toThrow(
       InvalidConfigurationError
     );
   });

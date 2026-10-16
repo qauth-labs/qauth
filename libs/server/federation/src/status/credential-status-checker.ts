@@ -24,7 +24,11 @@ import {
 import { parseStatusListReference, type StatusListReference } from './status-list-reference';
 import { CREDENTIAL_STATUS, TOKEN_STATUS_LIST_DRAFT } from './status-list-spec';
 import { type VerifiedStatusList, verifyStatusListToken } from './status-list-token';
-import { DENY_ALL_STATUS_LIST_URI_ALLOWLIST, type StatusListUriAllowlist } from './status-list-uri';
+import {
+  DENY_ALL_STATUS_LIST_URI_ALLOWLIST,
+  type StatusListSignerDelegations,
+  type StatusListUriAllowlist,
+} from './status-list-uri';
 
 /**
  * Credential revocation via Token Status List — the orchestrator (issue #297).
@@ -152,6 +156,13 @@ export interface CredentialStatusCheckerConfig {
   readonly breaker?: StatusEndpointBreaker;
   /** Optional extra identity constraint on the status issuer (#236). */
   readonly issuerTrustRegistry?: TrustRegistry;
+  /**
+   * Operator delegations of list URI prefixes to named signing issuers
+   * (`OID4VP_STATUS_LIST_SIGNERS`, ANT-2026-3988N5GJ). Defaults to none: a
+   * Status List Token's signing certificate must then name the host the list
+   * is served from.
+   */
+  readonly signerDelegations?: StatusListSignerDelegations;
   /** Per-fetch abort budget in milliseconds. */
   readonly requestTimeoutMs?: number;
   /** Ceiling on cache reuse in seconds; see {@link DEFAULT_MAX_CACHE_TTL_SECONDS}. */
@@ -348,6 +359,9 @@ export function createCredentialStatusChecker(
         : {}),
       ...(config.issuerTrustRegistry !== undefined
         ? { issuerTrustRegistry: config.issuerTrustRegistry }
+        : {}),
+      ...(config.signerDelegations !== undefined
+        ? { signerDelegations: config.signerDelegations }
         : {}),
     });
 

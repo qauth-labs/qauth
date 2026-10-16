@@ -447,6 +447,7 @@ for the resolution model.
 | `OID4VP_ISSUER_ASSURANCE`           | No                | _(unset)_      | Per-issuer eIDAS level of assurance, mapped to the OIDC `acr` claim ([ADR-010](/reference/records/adr/010-acr-assurance-mapping/)). Listing an issuer here does **not** make it trusted. |
 | `OID4VP_STATUS_LIST_TRUST_ANCHORS`  | No                | _(empty)_      | Trust anchors for Token Status List revocation checking (or `_PATH` to read them from a file).                                                                                           |
 | `OID4VP_STATUS_LIST_URI_ALLOWLIST`  | No                | _(empty)_      | Permitted status-list URIs.                                                                                                                                                              |
+| `OID4VP_STATUS_LIST_SIGNERS`        | No                | _(unset)_      | Which status issuer may sign the lists under a URI prefix on another host (a CDN), as JSON. Unset: the signer's certificate must name the list host.                                     |
 | `OID4VP_WALLET_INVOCATION_ENDPOINT` | No                | `openid4vp://` | The wallet deep-link / QR target. Script-capable schemes (`javascript:`, `data:`) are refused at boot.                                                                                   |
 
 ### Post-quantum hybrid signing (ADR-005)

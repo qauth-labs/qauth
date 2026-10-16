@@ -218,6 +218,10 @@ services:
       # fetched from. The URI comes out of the CREDENTIAL, so blank means "fetch
       # from nowhere" rather than "fetch from anywhere".
       OID4VP_STATUS_LIST_URI_ALLOWLIST: ${OID4VP_STATUS_LIST_URI_ALLOWLIST:-}
+      # Which status issuer may sign lists served from another host (a CDN), as
+      # JSON {"<list URI prefix>":"<status issuer>"}. Blank means none: the
+      # signer's certificate must then name the list host.
+      OID4VP_STATUS_LIST_SIGNERS: ${OID4VP_STATUS_LIST_SIGNERS:-}
 
       # ── Operator-settable, forwarded by pass-through ──────────────────────
       # Every variable below is documented on /operate/docker/ or
