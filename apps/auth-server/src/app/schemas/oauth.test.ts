@@ -6,9 +6,12 @@ import {
   ASSERTION_SIGNING_ALG_VALUES_SUPPORTED,
   authorizeQuerySchema,
   CLIENT_ASSERTION_TYPE_JWT_BEARER,
+  dynamicClientRegistrationRequestSchema,
   idJagTokenResponseSchema,
+  introspectRequestSchema,
   JWT_BEARER_GRANT_TYPE,
   resourceParamSchema,
+  revokeRequestSchema,
   TOKEN_EXCHANGE_GRANT_TYPE,
   TOKEN_TYPE_ID_JAG,
   TOKEN_TYPE_ID_TOKEN,
@@ -418,5 +421,89 @@ describe('authorizeQuerySchema — max_age', () => {
     expect(maxAgeOf({ toString, valueOf }).success).toBe(false);
     expect(toString).not.toHaveBeenCalled();
     expect(valueOf).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * `new URL()` is quadratic in the number of distinct non-ASCII characters in a
+ * host, and every caller-supplied URI used to reach it before its length cap:
+ * 63 CJK-host `resource` entries in a 1 MiB body held the event loop for ~4 s
+ * on an unauthenticated POST /oauth/token. `client_id` had no cap at all and
+ * is parsed several times on the CIMD path.
+ */
+describe('URIs and client_id are bounded before anything parses them', () => {
+  const cjkHost = Array.from({ length: 1000 }, (_, i) => String.fromCodePoint(0x4e00 + i)).join('');
+  const cjkUrl = `https://${cjkHost}/`;
+  const longUrl = `https://api.example.com/${'a'.repeat(2048)}`;
+  const authorize = {
+    response_type: 'code',
+    redirect_uri: 'https://app.example.com/cb',
+    code_challenge: 'A'.repeat(43),
+    code_challenge_method: 'S256',
+  } as const;
+
+  function urlParses(run: () => void): number {
+    const canParse = vi.spyOn(URL, 'canParse');
+    try {
+      run();
+      return canParse.mock.calls.length;
+    } finally {
+      canParse.mockRestore();
+    }
+  }
+
+  it('refuses a non-ASCII or over-long resource without parsing it', () => {
+    const parses = urlParses(() => {
+      for (const resource of [cjkUrl, longUrl, Array(10).fill(cjkUrl), Array(10).fill(longUrl)]) {
+        expect(resourceParamSchema.safeParse(resource).success).toBe(false);
+      }
+    });
+    expect(parses).toBe(0);
+  });
+
+  it('refuses a non-ASCII or over-long redirect_uri on /authorize without parsing it', () => {
+    const parses = urlParses(() => {
+      for (const redirect_uri of [cjkUrl, longUrl]) {
+        expect(
+          authorizeQuerySchema.safeParse({ ...authorize, client_id: 'c1', redirect_uri }).success
+        ).toBe(false);
+      }
+    });
+    expect(parses).toBe(0);
+  });
+
+  it('refuses a non-ASCII or over-long registration URI field without parsing it', () => {
+    const parses = urlParses(() => {
+      for (const field of ['client_uri', 'logo_uri', 'tos_uri', 'policy_uri']) {
+        for (const value of [cjkUrl, longUrl]) {
+          expect(
+            dynamicClientRegistrationRequestSchema.safeParse({ [field]: value }).success,
+            field
+          ).toBe(false);
+        }
+      }
+    });
+    expect(parses).toBe(0);
+  });
+
+  it('caps client_id at 2048 printable ASCII characters on every request schema', () => {
+    // 2048 leaves room for a Client ID Metadata Document URL, whose own schema
+    // caps `client_id` at 2048 (helpers/cimd.ts). RFC 6749 Appendix A.1:
+    // client-id = *VSCHAR, i.e. %x20-7E.
+    const cimd = `https://app.example.com/${'a'.repeat(2048 - 'https://app.example.com/'.length)}`;
+    const token = { grant_type: 'client_credentials' } as const;
+    const parsers: Array<(clientId: string) => boolean> = [
+      (client_id) => authorizeQuerySchema.safeParse({ ...authorize, client_id }).success,
+      (client_id) => tokenExchangeBodySchema.safeParse({ ...token, client_id }).success,
+      (client_id) => introspectRequestSchema.safeParse({ token: 't', client_id }).success,
+      (client_id) => revokeRequestSchema.safeParse({ token: 't', client_id }).success,
+    ];
+
+    for (const parse of parsers) {
+      expect(parse(cimd)).toBe(true);
+      expect(parse('550e8400-e29b-41d4-a716-446655440000')).toBe(true);
+      expect(parse(`${cimd}a`)).toBe(false);
+      expect(parse(`https://${cjkHost}/client.json`)).toBe(false);
+    }
   });
 });

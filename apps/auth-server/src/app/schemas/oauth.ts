@@ -1,7 +1,11 @@
 import { z } from 'zod';
 
-import { OAUTH_OPAQUE_PARAM_MAX_LENGTH, OAUTH_SCOPE_PARAM_MAX_LENGTH } from '../constants';
-import { boundedArray, exactUrl } from './common';
+import {
+  OAUTH_OPAQUE_PARAM_MAX_LENGTH,
+  OAUTH_SCOPE_PARAM_MAX_LENGTH,
+  OAUTH_URI_PARAM_MAX_LENGTH,
+} from '../constants';
+import { boundedArray, clientIdParamSchema, exactUrl } from './common';
 
 /**
  * RFC 8707 §2: `resource` is an absolute URI without fragment, identifying
@@ -14,11 +18,13 @@ import { boundedArray, exactUrl } from './common';
  *
  * {@link exactUrl}, not `z.url()`: the value is compared with the resource set
  * bound to an authorization code and becomes the token audience, so it must
- * reach the handler as sent.
+ * reach the handler as sent. exactUrl() also checks the 2048-character bound
+ * and the character set BEFORE it parses the value; a `.max()` chained here
+ * would only run after the parse.
  */
-const resourceEntrySchema = exactUrl()
-  .max(2048)
-  .refine((v) => !v.includes('#'), { message: 'resource must not contain a fragment' });
+const resourceEntrySchema = exactUrl(OAUTH_URI_PARAM_MAX_LENGTH).refine((v) => !v.includes('#'), {
+  message: 'resource must not contain a fragment',
+});
 
 export const resourceParamSchema = z
   .union([resourceEntrySchema, boundedArray(z.array(resourceEntrySchema), 10)])
@@ -200,7 +206,7 @@ export type AssertionSigningAlg = (typeof ASSERTION_SIGNING_ALG_VALUES_SUPPORTED
  * authentication easier to satisfy.
  */
 const clientAuthenticationFields = {
-  client_id: z.string().min(1).optional(),
+  client_id: clientIdParamSchema.optional(),
   client_secret: z.string().min(1).optional(),
   client_assertion_type: z.string().min(1).max(ASSERTION_TYPE_MAX_LENGTH).optional(),
   client_assertion: z.string().min(1).max(ASSERTION_MAX_LENGTH).optional(),
@@ -212,9 +218,11 @@ const clientAuthenticationFields = {
  */
 export const authorizeQuerySchema = z.object({
   response_type: z.literal('code'),
-  client_id: z.string().min(1),
+  // Bounded before the CIMD path parses it or a refusal audits it.
+  client_id: clientIdParamSchema,
   // exactUrl(), not z.url(): matched as an exact string against the client's
-  // registered redirect URIs, and compared again at /token.
+  // registered redirect URIs, and compared again at /token. Length and
+  // character set are checked before the parse.
   redirect_uri: exactUrl(),
   code_challenge: z
     .string()
@@ -495,7 +503,7 @@ export type TokenEndpointResponse = z.infer<typeof tokenEndpointResponseSchema>;
 export const introspectRequestSchema = z.object({
   token: z.string().min(1),
   token_type_hint: z.string().max(64).optional(),
-  client_id: z.string().min(1).optional(),
+  client_id: clientIdParamSchema.optional(),
   client_secret: z.string().min(1).optional(),
 });
 
@@ -511,7 +519,7 @@ export type IntrospectRequest = z.infer<typeof introspectRequestSchema>;
 export const revokeRequestSchema = z.object({
   token: z.string().min(1),
   token_type_hint: z.enum(['access_token', 'refresh_token']).optional(),
-  client_id: z.string().min(1).optional(),
+  client_id: clientIdParamSchema.optional(),
   client_secret: z.string().min(1).optional(),
 });
 
@@ -626,10 +634,12 @@ export const dynamicClientRegistrationRequestSchema = z.object({
     .enum(['none', 'client_secret_basic', 'client_secret_post'])
     .optional(),
   scope: z.string().max(2048).optional(),
-  client_uri: z.url().max(2048).optional(),
-  logo_uri: z.url().max(2048).optional(),
-  tos_uri: z.url().max(2048).optional(),
-  policy_uri: z.url().max(2048).optional(),
+  // exactUrl() checks the length and character set before it parses the value;
+  // `z.url().max(2048)` parsed first and measured afterwards.
+  client_uri: exactUrl().optional(),
+  logo_uri: exactUrl().optional(),
+  tos_uri: exactUrl().optional(),
+  policy_uri: exactUrl().optional(),
   contacts: boundedArray(z.array(z.email().max(255)), 10).optional(),
   software_id: z.string().max(255).optional(),
   software_version: z.string().max(64).optional(),

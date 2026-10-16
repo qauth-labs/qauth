@@ -54,6 +54,55 @@ describe('exactUrl', () => {
   });
 });
 
+/**
+ * `new URL()` is quadratic in the number of distinct non-ASCII characters in a
+ * host: one 16 KB CJK host takes ~66 ms, and the length cap used to be checked
+ * only after the parse. exactUrl() now measures the length and the character
+ * set first, and the URL parser never sees a value that fails either.
+ */
+describe('exactUrl — bounded before it is parsed', () => {
+  const cjkHost = Array.from({ length: 1000 }, (_, i) => String.fromCodePoint(0x4e00 + i)).join('');
+  const atBound = `https://app.example.com/${'a'.repeat(2048 - 'https://app.example.com/'.length)}`;
+
+  function urlParses(run: () => void): number {
+    const canParse = vi.spyOn(URL, 'canParse');
+    try {
+      run();
+      return canParse.mock.calls.length;
+    } finally {
+      canParse.mockRestore();
+    }
+  }
+
+  it('refuses a value over 2048 characters without parsing it', () => {
+    expect(urlParses(() => expect(exactUrl().safeParse(`${atBound}a`).success).toBe(false))).toBe(
+      0
+    );
+    expect(exactUrl().parse(atBound)).toBe(atBound);
+  });
+
+  it('refuses a value that is not printable ASCII without parsing it', () => {
+    const parses = urlParses(() => {
+      for (const value of [
+        `https://${cjkHost}/cb`,
+        'https://bücher.example/cb',
+        'https://app.example.com/c b',
+        'https://app.example.com/c\u0000b',
+      ]) {
+        expect(exactUrl().safeParse(value).success, value).toBe(false);
+      }
+    });
+    expect(parses).toBe(0);
+    expect(exactUrl().parse('https://xn--bcher-kva.example/cb')).toBe(
+      'https://xn--bcher-kva.example/cb'
+    );
+  });
+
+  it('publishes the bound', () => {
+    expect(z.toJSONSchema(exactUrl())).toMatchObject({ maxLength: 2048, format: 'uri' });
+  });
+});
+
 describe('hasInteriorTabOrNewline', () => {
   it('ignores the leading and trailing whitespace that z.url() trims', () => {
     expect(hasInteriorTabOrNewline('\thttps://app.example.com/cb\r\n')).toBe(false);

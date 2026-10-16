@@ -789,6 +789,7 @@
                     "type": "array",
                     "items": {
                       "type": "string",
+                      "maxLength": 2048,
                       "format": "uri"
                     }
                   },
@@ -1120,6 +1121,7 @@
                     "type": "array",
                     "items": {
                       "type": "string",
+                      "maxLength": 2048,
                       "format": "uri"
                     }
                   },
@@ -2004,7 +2006,9 @@
           {
             "schema": {
               "type": "string",
-              "minLength": 1
+              "minLength": 1,
+              "maxLength": 2048,
+              "pattern": "^[\\x20-\\x7E]*$"
             },
             "in": "query",
             "name": "client_id",
@@ -2013,6 +2017,7 @@
           {
             "schema": {
               "type": "string",
+              "maxLength": 2048,
               "format": "uri"
             },
             "in": "query",
@@ -2142,10 +2147,13 @@
                   },
                   "client_id": {
                     "type": "string",
-                    "minLength": 1
+                    "minLength": 1,
+                    "maxLength": 2048,
+                    "pattern": "^[\\x20-\\x7E]*$"
                   },
                   "redirect_uri": {
                     "type": "string",
+                    "maxLength": 2048,
                     "format": "uri"
                   },
                   "code_challenge": {
@@ -2246,7 +2254,9 @@
                   },
                   "client_id": {
                     "type": "string",
-                    "minLength": 1
+                    "minLength": 1,
+                    "maxLength": 2048,
+                    "pattern": "^[\\x20-\\x7E]*$"
                   },
                   "client_secret": {
                     "type": "string",
@@ -2556,7 +2566,9 @@
                   },
                   "client_id": {
                     "type": "string",
-                    "minLength": 1
+                    "minLength": 1,
+                    "maxLength": 2048,
+                    "pattern": "^[\\x20-\\x7E]*$"
                   },
                   "client_secret": {
                     "type": "string",
@@ -2633,7 +2645,9 @@
                       },
                       "client_id": {
                         "type": "string",
-                        "minLength": 1
+                        "minLength": 1,
+                        "maxLength": 2048,
+                        "pattern": "^[\\x20-\\x7E]*$"
                       },
                       "client_secret": {
                         "type": "string",
@@ -2689,7 +2703,9 @@
                       },
                       "client_id": {
                         "type": "string",
-                        "minLength": 1
+                        "minLength": 1,
+                        "maxLength": 2048,
+                        "pattern": "^[\\x20-\\x7E]*$"
                       },
                       "client_secret": {
                         "type": "string",
@@ -2748,7 +2764,9 @@
                       },
                       "client_id": {
                         "type": "string",
-                        "minLength": 1
+                        "minLength": 1,
+                        "maxLength": 2048,
+                        "pattern": "^[\\x20-\\x7E]*$"
                       },
                       "client_secret": {
                         "type": "string",
@@ -2846,7 +2864,9 @@
                       },
                       "client_id": {
                         "type": "string",
-                        "minLength": 1
+                        "minLength": 1,
+                        "maxLength": 2048,
+                        "pattern": "^[\\x20-\\x7E]*$"
                       },
                       "client_secret": {
                         "type": "string",
@@ -2907,7 +2927,9 @@
                       },
                       "client_id": {
                         "type": "string",
-                        "minLength": 1
+                        "minLength": 1,
+                        "maxLength": 2048,
+                        "pattern": "^[\\x20-\\x7E]*$"
                       },
                       "client_secret": {
                         "type": "string",
@@ -3232,7 +3254,9 @@
           {
             "schema": {
               "type": "string",
-              "minLength": 1
+              "minLength": 1,
+              "maxLength": 2048,
+              "pattern": "^[\\x20-\\x7E]*$"
             },
             "in": "query",
             "name": "client_id",
@@ -3241,6 +3265,7 @@
           {
             "schema": {
               "type": "string",
+              "maxLength": 2048,
               "format": "uri"
             },
             "in": "query",
@@ -3377,10 +3402,13 @@
                   },
                   "client_id": {
                     "type": "string",
-                    "minLength": 1
+                    "minLength": 1,
+                    "maxLength": 2048,
+                    "pattern": "^[\\x20-\\x7E]*$"
                   },
                   "redirect_uri": {
                     "type": "string",
+                    "maxLength": 2048,
                     "format": "uri"
                   },
                   "state": {

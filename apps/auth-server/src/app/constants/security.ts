@@ -86,6 +86,28 @@ export const OAUTH_OPAQUE_PARAM_MAX_LENGTH = 2048;
 export const OAUTH_SCOPE_PARAM_MAX_LENGTH = 2048;
 
 /**
+ * Maximum length of a URI request parameter: `redirect_uri`, RFC 8707
+ * `resource`, the registered redirect URIs and the RFC 7591 `*_uri` metadata.
+ *
+ * Checked BEFORE the value is parsed (`exactUrl()` in `schemas/common.ts`).
+ * `new URL()` does work quadratic in the number of distinct non-ASCII
+ * characters in a host, so a cap checked after the parse bounds nothing. The
+ * same 2048 that dynamic registration and CIMD documents already apply.
+ */
+export const OAUTH_URI_PARAM_MAX_LENGTH = 2048;
+
+/**
+ * Maximum length of a `client_id` request parameter.
+ *
+ * Server-issued identifiers are UUIDs and `oauth_clients.client_id` holds 255
+ * characters, but a Client ID Metadata Document `client_id` is an https URL,
+ * which the CIMD document schema caps at 2048 (`helpers/cimd.ts`). The value is
+ * written to `audit_logs` when it is refused and parsed as a URL on the CIMD
+ * path, so it is bounded before either happens.
+ */
+export const OAUTH_CLIENT_ID_MAX_LENGTH = 2048;
+
+/**
  * Lifetime of a pending-authorization stash — the server-side record that lets
  * `/ui/login` carry a SHORT opaque handle instead of the whole authorize query
  * string. See `helpers/pending-authorization.ts` and qauth-labs/qauth#316.

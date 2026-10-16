@@ -44,7 +44,7 @@ import {
 } from '../../helpers/session-cookie';
 import { evaluateStepUp, isDangerousScope, parsePromptMode } from '../../helpers/step-up';
 import { markRelaxedCsp } from '../../plugins/security-headers';
-import { exactUrl } from '../../schemas/common';
+import { clientIdParamSchema, exactUrl } from '../../schemas/common';
 import { authorizeQuerySchema, maxAgeParamSchema, resourceParamSchema } from '../../schemas/oauth';
 
 /**
@@ -90,7 +90,9 @@ const consentFormSchema = z.object({
   csrf_token: z.string().min(1),
   // Mirror of the original authorize params so we don't need to stash them
   // in the session (keeps the session payload small + stateless enough).
-  client_id: z.string().min(1),
+  // Same bound as `authorizeQuerySchema.client_id`: the wrong-CSRF refusal
+  // audits it.
+  client_id: clientIdParamSchema,
   // Same exact-string rule as `authorizeQuerySchema.redirect_uri`.
   redirect_uri: exactUrl(),
   state: z.string().max(OAUTH_OPAQUE_PARAM_MAX_LENGTH).optional(),

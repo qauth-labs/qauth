@@ -80,6 +80,38 @@ describe('isCimdClientId', () => {
     expect(isCimdClientId('https://app.example.com/')).toBe(false); // root path only
     expect(isCimdClientId('https://app.example.com/c.json#x')).toBe(false); // fragment
   });
+
+  it('refuses an over-long or non-ASCII client_id BEFORE parsing it as a URL', () => {
+    // `new URL()` is quadratic in the distinct non-ASCII characters of a host,
+    // and this runs for any unknown client_id, including one from an HTTP
+    // Basic header or a client assertion. A CIMD client_id is an ASCII URL of
+    // at most 2048 characters (the document schema's own bound).
+    const cjkHost = Array.from({ length: 1000 }, (_, i) => String.fromCodePoint(0x4e00 + i)).join(
+      ''
+    );
+    const atBound = `https://app.example.com/${'a'.repeat(2048 - 'https://app.example.com/'.length)}`;
+    const URLConstructor = globalThis.URL;
+    const constructed = vi.fn();
+    vi.stubGlobal(
+      'URL',
+      class extends URLConstructor {
+        constructor(...args: ConstructorParameters<typeof URL>) {
+          constructed();
+          super(...args);
+        }
+      }
+    );
+    try {
+      expect(isCimdClientId(`https://${cjkHost}/client.json`)).toBe(false);
+      expect(isCimdClientId('https://bücher.example/client.json')).toBe(false);
+      expect(isCimdClientId(`${atBound}a`)).toBe(false);
+      expect(constructed).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+    expect(isCimdClientId(atBound)).toBe(true);
+    expect(isCimdClientId('https://xn--bcher-kva.example/client.json')).toBe(true);
+  });
 });
 
 describe('resolveCacheTtlSeconds', () => {
