@@ -732,6 +732,26 @@ describe('#297 ordering — nothing is dialled on behalf of an unverified creden
     expect(harness.fetches).not.toHaveBeenCalled();
   });
 
+  it('issues ZERO outbound calls when the realm does not TRUST the issuer (#236)', async () => {
+    // Every cryptographic proof passes: the key is configured, the signature and
+    // the Key Binding JWT verify. But a configured key grants no trust, so the
+    // URI is the choice of a party this realm does not believe — and a failed
+    // fetch would count against a breaker every trusted issuer's users share.
+    const issued = await issueWithStatus(statusClaim(IDX.live));
+
+    const error = await refusalOf(
+      validate(await present(issued), {
+        ...contextFor(issued),
+        assertIssuerTrusted: () => {
+          throw issuerTrustRejection();
+        },
+      })
+    );
+
+    expect(error).toBeInstanceOf(InvalidCredentialsError);
+    expect(harness.fetches).not.toHaveBeenCalled();
+  });
+
   it('issues ZERO outbound calls when the KEY BINDING JWT does not verify', async () => {
     // The gate the issue names alongside the signature: status runs strictly
     // after `verifyKeyBinding`, so a presentation nobody proved possession of

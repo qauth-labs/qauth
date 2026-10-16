@@ -1107,8 +1107,9 @@ async function resolveCredentialStatusEvidence(
  * @throws PresentationValidationRejection on every refusal this module reaches
  * itself, carrying a distinct server-side reason and the single non-enumerating
  * client error via `toClientError()`.
- * @throws InvalidCredentialsError — and ONLY from the credential-status gate,
- * propagated unwrapped from `CredentialStatusChecker.assertCredentialNotRevoked`
+ * @throws InvalidCredentialsError — and ONLY from the two injected gates,
+ * propagated unwrapped from `context.assertIssuerTrusted` (#236) and from
+ * `CredentialStatusChecker.assertCredentialNotRevoked`
  * (#297). It is already the byte-identical refusal `toClientError()` produces,
  * so the wire is uniform either way; a caller that logs `reason`/`detail` should
  * expect this one to carry neither, by design. See
@@ -1298,6 +1299,11 @@ export async function validateSdJwtVcPresentation(
   );
 
   const issuer = assertValidatedIssuer(resolved.identifier, resolved.keyResolution);
+
+  // Trust (#236) before anything the issuer WROTE is acted on: both gates below
+  // read the payload, and the status gate dials a URI out of it. Propagated
+  // unwrapped, like the status gate's refusal — it already is the uniform one.
+  context.assertIssuerTrusted?.(issuer);
 
   // Reads the DISCLOSED payload, which still carries `cnf` and `iss` — the
   // stripped claim set below no longer does, and a conveyed assurance signal may

@@ -436,6 +436,12 @@ Steps 1 and 2 are composed in one function, `verifyWalletPresentations`
 (`@qauth-labs/fastify-plugin-federation`), precisely so a caller cannot wire up
 only the first — the first produces a plausible-looking `ValidatedCredential`
 with claims in it, which is exactly the object someone in a hurry would use.
+The trust question is asked inside validation, as soon as the issuer's
+signature has verified and BEFORE the key-storage and credential-status gates
+act on what the issuer wrote. An issuer whose key is pinned in
+`OID4VP_ISSUER_JWKS` but whom the realm does not trust therefore never gets a
+status-list URI fetched, nor a failed fetch counted against the status endpoint
+breaker that every other issuer's users share.
 
 ### Where the bytes come from, and what they are checked against
 

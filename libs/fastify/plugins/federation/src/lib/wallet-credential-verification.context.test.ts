@@ -1,16 +1,22 @@
 import {
   type CredentialStatusChecker,
   type DcqlQuery,
+  DENY_ALL_TRUST_REGISTRY,
+  ISSUER_TRUST_REJECTION_MESSAGE,
   keyStorageAssuranceGateFor,
   type PresentationValidationContext,
   type PresentedCredential,
   type TrustRegistry,
+  ValidatedIssuer,
   validatePresentations,
   VERIFIER_PROFILES,
 } from '@qauth-labs/server-federation';
 import { describe, expect, it, type Mock, vi } from 'vitest';
 
-import { verifyWalletPresentations } from './wallet-credential-verification';
+import {
+  verifyWalletPresentations,
+  type WalletCredentialRefusal,
+} from './wallet-credential-verification';
 
 /**
  * What actually reaches `PresentationValidationContext` — the seam #308 and
@@ -134,6 +140,33 @@ describe('verifyWalletPresentations — the deployment gates reach the validator
     // Copied off the resolved profile rather than re-decided at the seam — the
     // #299 rule that profiles are data, not branches.
     expect(context.requireCredentialStatus).toBe(PROFILE.requireCredentialStatus);
+  });
+
+  it("hands the validator the REALM's issuer-trust gate, to ask before those two (#236)", async () => {
+    // Trust decided only over what the validator RETURNED is trust decided after
+    // the status gate has already dialled a URI an untrusted issuer chose.
+    const refusals: WalletCredentialRefusal[] = [];
+
+    await verifyWalletPresentations(onePresentation(), {
+      profile: PROFILE,
+      clientId: 'redirect_uri:https://auth.example.com/oid4vp/response',
+      nonce: 'n-0S6_WzA2Mj',
+      dcqlQuery: QUERY,
+      resolveIssuerKey: async () => undefined,
+      trustRegistry: DENY_ALL_TRUST_REGISTRY,
+      credentialStatus: undefined,
+      keyStorageAssurance: keyStorageAssuranceGateFor(PROFILE),
+      onRefusal: (refusal) => refusals.push(refusal),
+    }).catch(() => undefined);
+    refusals.length = 0;
+
+    const issuer = ValidatedIssuer.fromValidatedPresentation({
+      identifier: 'https://issuer.example.com',
+      keyResolution: 'issuer-metadata',
+    });
+
+    expect(() => contextOf().assertIssuerTrusted?.(issuer)).toThrow(ISSUER_TRUST_REJECTION_MESSAGE);
+    expect(refusals.map((refusal) => refusal.gate)).toEqual(['issuer-trust']);
   });
 
   it('states an absent gate EXPLICITLY rather than omitting the member', async () => {
