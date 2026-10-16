@@ -15,7 +15,7 @@ import { clientAddressKey } from '../../helpers/client-address';
 import { resolveAudience } from '../../helpers/client-auth';
 import { verifyPasswordCredential } from '../../helpers/credential-auth';
 import { resolveEmailClaims } from '../../helpers/email-claims';
-import { registerLoginAttempt, resetFailedAttempts } from '../../helpers/failed-login';
+import { recordSuccessfulLogin, registerLoginAttempt } from '../../helpers/failed-login';
 import { issueAccessToken } from '../../helpers/hybrid-token';
 import { getOrCreateSystemClient } from '../../helpers/oauth-client';
 import { getOrCreateDefaultRealm } from '../../helpers/realm';
@@ -59,7 +59,8 @@ export default async function (fastify: FastifyInstance) {
       // hashed so the cache never stores raw addresses, plus the source IP
       // (an IPv6 client by its /64, as in the rate limits).
       const emailHash = hashEmail(normalizedEmail);
-      const lockoutIdentifiers = [`email:${emailHash}`, `ip:${clientAddressKey(request)}`];
+      const emailIdentifier = `email:${emailHash}`;
+      const lockoutIdentifiers = [emailIdentifier, `ip:${clientAddressKey(request)}`];
 
       try {
         // Reject early if this identifier is currently locked out; otherwise
@@ -244,9 +245,13 @@ export default async function (fastify: FastifyInstance) {
         // Update user lastLoginAt timestamp
         await fastify.repositories.users.updateLastLogin(user.id);
 
-        // Successful login: clear failed-attempt counters/lockout (#115) and
-        // emit structured success log + metrics (#123, #124, #126).
-        await resetFailedAttempts(fastify.redis, lockoutIdentifiers);
+        // Successful login: clear the account's failed-attempt counter and
+        // lockout (#115) and emit structured success log + metrics (#123,
+        // #124, #126). The source address only gets back this attempt's own
+        // count: its counter holds the failures of every account guessed at
+        // from it, and registration is open, so logging in to an account of
+        // one's own must not clear them.
+        await recordSuccessfulLogin(fastify.redis, lockout, [emailIdentifier]);
         fastify.metrics.loginAttempts.inc({ result: 'success' });
         fastify.metrics.tokensIssued.inc({ type: 'access', grant_type: 'password' });
         fastify.metrics.tokensIssued.inc({ type: 'refresh', grant_type: 'password' });

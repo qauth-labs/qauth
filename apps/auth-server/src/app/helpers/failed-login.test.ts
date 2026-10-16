@@ -9,7 +9,7 @@ vi.mock('../../config/env', () => ({
   },
 }));
 
-import { registerLoginAttempt, resetFailedAttempts } from './failed-login';
+import { recordSuccessfulLogin, registerLoginAttempt, resetFailedAttempts } from './failed-login';
 
 /**
  * Minimal in-memory Redis stub covering the ioredis surface the helper uses:
@@ -162,6 +162,70 @@ describe('failed-login helper', () => {
     // Counter keys are cleared.
     expect(redis._store.get('failed-login:attempts:email:abc')).toBeUndefined();
     expect((await registerLoginAttempt(asClient(redis), ids)).locked).toBe(false);
+  });
+
+  describe('a successful login (GPU4YL6X)', () => {
+    const ip = 'ip:127.0.0.1';
+
+    it('clears the email it proved, and gives back only its own count on the address', async () => {
+      // Two wrong guesses at other people's accounts from one address (max=3).
+      await registerLoginAttempt(asClient(redis), ['email:victim-1', ip]);
+      await registerLoginAttempt(asClient(redis), ['email:victim-2', ip]);
+
+      // A login to the caller's own account succeeds. Registration is open,
+      // so anyone can produce one: it must not wipe the address's failures.
+      const own = await registerLoginAttempt(asClient(redis), ['email:me', ip]);
+      expect(own.locked).toBe(false);
+      await recordSuccessfulLogin(asClient(redis), own, ['email:me']);
+
+      expect(redis._store.get('failed-login:attempts:email:me')).toBeUndefined();
+      expect(redis._store.get('failed-login:attempts:ip:127.0.0.1')).toBe('2');
+      // The own login reached the threshold and armed the address lockout on
+      // its way in; as it did not fail, that lockout is lifted again.
+      expect(redis._store.has('failed-login:lockout:ip:127.0.0.1')).toBe(false);
+
+      // One more guess is the third failure; the address is then locked.
+      expect((await registerLoginAttempt(asClient(redis), ['email:victim-3', ip])).locked).toBe(
+        false
+      );
+      expect((await registerLoginAttempt(asClient(redis), ['email:victim-4', ip])).locked).toBe(
+        true
+      );
+    });
+
+    it('never counts against a shared address, however many there are', async () => {
+      // An office NAT: many people sign in successfully from one address.
+      for (let i = 0; i < 10; i++) {
+        const attempt = await registerLoginAttempt(asClient(redis), [`email:user-${i}`, ip]);
+        expect(attempt.locked).toBe(false);
+        await recordSuccessfulLogin(asClient(redis), attempt, [`email:user-${i}`]);
+      }
+
+      expect(redis._store.get('failed-login:attempts:ip:127.0.0.1')).toBe('0');
+      expect(redis._store.has('failed-login:lockout:ip:127.0.0.1')).toBe(false);
+    });
+
+    it('keeps an address lockout armed by another attempt', async () => {
+      // Three failures lock the address while this login was in flight.
+      const own = await registerLoginAttempt(asClient(redis), ['email:me', ip]);
+      for (let i = 0; i < 2; i++) {
+        await registerLoginAttempt(asClient(redis), [`email:victim-${i}`, ip]);
+      }
+      expect(redis._store.has('failed-login:lockout:ip:127.0.0.1')).toBe(true);
+
+      await recordSuccessfulLogin(asClient(redis), own, ['email:me']);
+
+      expect(redis._store.has('failed-login:lockout:ip:127.0.0.1')).toBe(true);
+    });
+
+    it('does not leave a counter without a TTL when the window expired meanwhile', async () => {
+      const own = await registerLoginAttempt(asClient(redis), ['email:me', ip]);
+      await redis.del('failed-login:attempts:ip:127.0.0.1');
+
+      await recordSuccessfulLogin(asClient(redis), own, ['email:me']);
+
+      expect(redis._store.has('failed-login:attempts:ip:127.0.0.1')).toBe(false);
+    });
   });
 
   it('fails open when Redis throws', async () => {

@@ -10,7 +10,7 @@ import { EMAIL_MAX_LENGTH, MIN_RESPONSE_TIME_MS } from '../../constants';
 import { hashEmail } from '../../helpers/auth-events';
 import { clientAddressKey } from '../../helpers/client-address';
 import { verifyPasswordCredential } from '../../helpers/credential-auth';
-import { registerLoginAttempt, resetFailedAttempts } from '../../helpers/failed-login';
+import { recordSuccessfulLogin, registerLoginAttempt } from '../../helpers/failed-login';
 import { html, render } from '../../helpers/html';
 import { getOrCreateDefaultRealm } from '../../helpers/realm';
 import { isSafeReturnTo } from '../../helpers/return-to';
@@ -307,10 +307,8 @@ export default async function (fastify: FastifyInstance) {
       // Failed-login throttling (#115), with the SAME identifiers as
       // POST /auth/login so both front doors share one counter: guesses spread
       // across them add up, and an account locked on one is locked on both.
-      const lockoutIdentifiers = [
-        `email:${hashEmail(normalizedEmail)}`,
-        `ip:${clientAddressKey(request)}`,
-      ];
+      const emailIdentifier = `email:${hashEmail(normalizedEmail)}`;
+      const lockoutIdentifiers = [emailIdentifier, `ip:${clientAddressKey(request)}`];
 
       const renderRefusal = (statusCode: number, error: string) => {
         reply.header('Content-Type', 'text/html; charset=utf-8');
@@ -408,7 +406,10 @@ export default async function (fastify: FastifyInstance) {
         return renderRefusal(403, 'Verify your email address before signing in. Check your inbox.');
       }
 
-      await resetFailedAttempts(fastify.redis, lockoutIdentifiers);
+      // As on POST /auth/login: the account's state is cleared; the source
+      // address only gets back this attempt's own count, not the failures
+      // other attempts left on it.
+      await recordSuccessfulLogin(fastify.redis, lockout, [emailIdentifier]);
 
       // Session-fixation defense: always mint a fresh session id on a
       // successful credential check, even if the browser already had one.

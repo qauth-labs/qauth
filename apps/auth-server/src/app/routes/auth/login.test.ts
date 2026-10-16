@@ -29,6 +29,7 @@ vi.mock('../../../config/env', () => ({
 }));
 
 import { env } from '../../../config/env';
+import { hashEmail } from '../../helpers/auth-events';
 import loginRoute from './login';
 
 interface TestContext {
@@ -661,5 +662,67 @@ describe('POST /auth/login', () => {
     // The right password, sent last, is among the refused guesses.
     expect(results[19].status).toBe('rejected');
     expect(fastify.jwtUtils.signAccessToken).not.toHaveBeenCalled();
+  });
+
+  it("does not let a login to one's own account clear the source address's failures (GPU4YL6X)", async () => {
+    // A password spray from one address: one guess at each of many accounts,
+    // so only the ip: counter sees it. Registration is open, so the caller
+    // also has an account of its own and logs in to it after every 4 guesses.
+    const { fastify, ctx } = createFastifyStub();
+    const redis = createMemoryRedis();
+    (fastify as unknown as { redis: unknown }).redis = redis;
+    await loginRoute(fastify);
+    const handler = ctx.handler;
+    if (!handler) throw new Error('Handler missing');
+
+    (
+      fastify.repositories.userCredentials.findByRealmProviderSub as unknown as Mock
+    ).mockImplementation(async (_realm: string, _provider: string, email: string) =>
+      credentialFixture({ externalSub: email })
+    );
+    (fastify.repositories.users.findById as unknown as Mock).mockResolvedValue(userFixture());
+    (fastify.passwordHasher.verifyPassword as unknown as Mock).mockImplementation(
+      async (_hash: string, password: string) => password === 'own-password'
+    );
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue({
+      id: 'sc-uuid',
+      clientId: 'system',
+      audience: null,
+    });
+    (fastify.jwtUtils.signAccessToken as unknown as Mock).mockResolvedValue('jwt');
+
+    const login = (email: string, password: string) =>
+      handler(
+        {
+          body: { email, password },
+          ip: '203.0.113.7',
+          headers: { 'user-agent': 'vitest' },
+          log: requestLog(),
+        },
+        createReply()
+      );
+
+    for (let i = 0; i < 4; i++) {
+      await expect(login(`victim-${i}@example.com`, 'Spring2026!')).rejects.toThrow(
+        InvalidCredentialsError
+      );
+    }
+    await expect(login('attacker@example.com', 'own-password')).resolves.toMatchObject({
+      access_token: 'jwt',
+    });
+
+    // The own login cleared its own email's state, not the address's: the
+    // address still holds its 4 failures, so the 5th guess is the last one
+    // checked and the 6th is refused (env.FAILED_LOGIN_MAX_ATTEMPTS is 5).
+    expect(
+      redis._store.has(`failed-login:attempts:email:${hashEmail('attacker@example.com')}`)
+    ).toBe(false);
+    expect(redis._store.get('failed-login:attempts:ip:203.0.113.7')).toBe('4');
+    await expect(login('victim-4@example.com', 'Spring2026!')).rejects.toThrow(
+      InvalidCredentialsError
+    );
+    await expect(login('victim-5@example.com', 'Spring2026!')).rejects.toThrow(
+      TooManyRequestsError
+    );
   });
 });

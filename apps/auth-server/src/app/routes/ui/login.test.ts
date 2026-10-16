@@ -21,12 +21,17 @@ vi.mock('../../../config/env', () => ({
 // here it is a seam, so these tests assert the route wires it in.
 vi.mock('../../helpers/failed-login', () => ({
   registerLoginAttempt: vi.fn().mockResolvedValue({ locked: false }),
+  recordSuccessfulLogin: vi.fn().mockResolvedValue(undefined),
   resetFailedAttempts: vi.fn().mockResolvedValue(undefined),
 }));
 
 import { env } from '../../../config/env';
 import { hashEmail } from '../../helpers/auth-events';
-import { registerLoginAttempt, resetFailedAttempts } from '../../helpers/failed-login';
+import {
+  recordSuccessfulLogin,
+  registerLoginAttempt,
+  resetFailedAttempts,
+} from '../../helpers/failed-login';
 import loginRoute from './login';
 
 interface TestContext {
@@ -276,6 +281,7 @@ describe('UI /ui/login — CSRF defence', () => {
 
     beforeEach(() => {
       vi.mocked(registerLoginAttempt).mockClear().mockResolvedValue({ locked: false });
+      vi.mocked(recordSuccessfulLogin).mockClear();
       vi.mocked(resetFailedAttempts).mockClear();
       (env as { REQUIRE_VERIFIED_ACCOUNT?: boolean }).REQUIRE_VERIFIED_ACCOUNT = false;
     });
@@ -302,6 +308,7 @@ describe('UI /ui/login — CSRF defence', () => {
       expect(vi.mocked(registerLoginAttempt).mock.invocationCallOrder[0]).toBeLessThan(
         (fastify.passwordHasher.verifyPassword as unknown as Mock).mock.invocationCallOrder[0]
       );
+      expect(recordSuccessfulLogin).not.toHaveBeenCalled();
       expect(resetFailedAttempts).not.toHaveBeenCalled();
     });
 
@@ -314,11 +321,19 @@ describe('UI /ui/login — CSRF defence', () => {
       ]);
     });
 
-    it('clears failed-login state on success', async () => {
+    it('clears the failed-login state of the email on success, not of the source address', async () => {
+      const attempt = { locked: false, counted: LOCKOUT_IDS, armed: [] };
+      vi.mocked(registerLoginAttempt).mockResolvedValue(attempt);
+
       const { state } = await postLogin({ verifies: true });
 
       expect(state.statusCode).toBe(302);
-      expect(resetFailedAttempts).toHaveBeenCalledWith(undefined, LOCKOUT_IDS);
+      // Anyone can register an account: its login must not wipe the failures
+      // counted against the address it comes from (GPU4YL6X).
+      expect(recordSuccessfulLogin).toHaveBeenCalledExactlyOnceWith(undefined, attempt, [
+        LOCKOUT_IDS[0],
+      ]);
+      expect(resetFailedAttempts).not.toHaveBeenCalled();
     });
 
     it('refuses an unverified credential (403, no session) when REQUIRE_VERIFIED_ACCOUNT is on', async () => {
@@ -330,6 +345,7 @@ describe('UI /ui/login — CSRF defence', () => {
       expect(fastify.sessionUtils.setSession).not.toHaveBeenCalled();
       // Stays counted as a failed attempt.
       expect(registerLoginAttempt).toHaveBeenCalledWith(undefined, LOCKOUT_IDS);
+      expect(recordSuccessfulLogin).not.toHaveBeenCalled();
       expect(resetFailedAttempts).not.toHaveBeenCalled();
     });
 
