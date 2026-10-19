@@ -1461,8 +1461,8 @@ client never uses the first-party door.
 - Wallet, agents and MCP. `WalletProvider.verify()` keeps throwing; wallet login is never a
   challenge step, only a `redirect_to_web` target. `first_party_profile` excludes `is_agent` by
   CHECK, so a challenge-issued code never roots an Authority Tree
-  ([ADR-014 §1](./014-agent-authority-tree.md) "Session root — `sid` on agent access tokens"). DCR
-  and CIMD clients cannot be first-party, so MCP clients reach the endpoint only as
+  ([ADR-014 §1](./014-agent-authority-tree.md) "Session root — `tree_id` on agent access tokens").
+  DCR and CIMD clients cannot be first-party, so MCP clients reach the endpoint only as
   `unauthorized_client`. draft-embesozzi-oauth-agent-native-authorization-00 binds MCP Elicitation
   to FiPA; it would have a third-party agent collect a user's credentials, the case FiPA §1.1's MUST
   covers, so it stays a watch item. OpenID Connect Native SSO for Mobile Apps (Second Implementer's
