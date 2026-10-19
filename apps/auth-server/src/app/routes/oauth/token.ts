@@ -29,6 +29,7 @@ import {
   validateScopes,
 } from '../../helpers/client-auth';
 import { isAgentClient } from '../../helpers/client-resolution';
+import { isScopeSubset } from '../../helpers/consent';
 import { resolveIssuerIdentifier } from '../../helpers/discovery';
 import { resolveEmailClaims } from '../../helpers/email-claims';
 import {
@@ -550,8 +551,6 @@ async function handleAuthorizationCode(
   }
   const effectiveResource = requestedResource.length > 0 ? requestedResource : codeResource;
 
-  await fastify.repositories.authorizationCodes.markUsed(authCode.id);
-
   const user = await fastify.repositories.users.findById(authCode.userId);
   if (!user) {
     await fastify.repositories.auditLogs.create({
@@ -569,8 +568,9 @@ async function handleAuthorizationCode(
   // A code outlives the session that produced it by up to its TTL, and a user
   // disabled in between must not receive tokens for it — the same gate the
   // refresh, token-exchange and jwt-bearer grants apply (RFC 9700 §4.14). The
-  // code is already burned above, so it cannot be retried.
+  // code is burned all the same, so it cannot be retried.
   if (!user.enabled) {
+    await fastify.repositories.authorizationCodes.markUsed(authCode.id);
     await fastify.repositories.auditLogs.create({
       userId: user.id,
       oauthClientId: client.id,
@@ -583,6 +583,83 @@ async function handleAuthorizationCode(
     });
     throw new InvalidGrantError('Invalid or expired authorization code');
   }
+
+  // Clamp to the agent's CURRENT server-side `max_agent_mode` (ADR-007 §2,
+  // #184), exactly as the refresh, client_credentials, jwt-bearer and token-
+  // exchange grants do. The code carries the scopes approved under the cap as
+  // it stood at consent time; if the operator has since lowered it (or the
+  // client is no longer an agent), redeeming the code must not mint the old
+  // mode. Fail-closed via `toAgentScopeContext`. The code is burned all the
+  // same: a client cannot narrow a code, so it goes back through
+  // /oauth/authorize.
+  try {
+    enforceAgentScopeCap(authCode.scopes, toAgentScopeContext(client));
+  } catch (err) {
+    await fastify.repositories.authorizationCodes.markUsed(authCode.id);
+    await fastify.repositories.auditLogs.create({
+      userId: user.id,
+      oauthClientId: client.id,
+      event: 'oauth.token.exchange.failure',
+      eventType: 'token',
+      success: false,
+      ipAddress: request.ip,
+      userAgent: request.headers['user-agent'] || null,
+      metadata: {
+        error: 'invalid_scope: code scope exceeds the agent scope mode',
+        scopes: authCode.scopes,
+        maxAgentMode: client.maxAgentMode ?? null,
+      },
+    });
+    throw err;
+  }
+
+  // A refresh token is standing access, and the active consent row is the
+  // user's only handle on it: `/consents` lists those rows, and consent
+  // revocation reaches the refresh tokens through one. So a refresh token is
+  // minted only under a stored consent that covers the code's scopes. An
+  // approval given with "Remember this decision" unticked, a consent revoked
+  // since the code was issued, and the legacy Bearer authorize path (which
+  // stores no consent) yield the access token (and ID token) alone; the client
+  // returns through /oauth/authorize when it expires.
+  const consent = await fastify.repositories.oauthConsents.findActive(user.id, client.id);
+  const refresh =
+    consent && isScopeSubset(authCode.scopes, consent.scopes)
+      ? {
+          ...fastify.jwtUtils.generateRefreshToken(),
+          expiresAt: Date.now() + fastify.jwtUtils.getRefreshTokenLifespan() * 1000,
+          // Start a fresh refresh-token family. Every rotation (see
+          // `handleRefreshToken`) inherits this `familyId` so replay of a
+          // revoked token can be traced to — and revoke — the entire family.
+          familyId: randomUUID(),
+        }
+      : undefined;
+
+  // Spend the code and store the refresh token it buys in ONE transaction, so
+  // the grant is never observable in between: code already used, refresh
+  // token not yet there. Logout and consent revocation invalidate the user's
+  // unredeemed codes before they sweep the refresh tokens; their UPDATE on
+  // this code row either lands first, and the compare-and-set in `markUsed`
+  // matches nothing, or waits on the row lock taken here until the refresh
+  // token is committed, where the sweep that follows sees it.
+  await fastify.db.transaction(async (tx) => {
+    await fastify.repositories.authorizationCodes.markUsed(authCode.id, tx);
+    if (refresh) {
+      await fastify.repositories.refreshTokens.create(
+        {
+          userId: user.id,
+          oauthClientId: client.id,
+          tokenHash: refresh.tokenHash,
+          familyId: refresh.familyId,
+          expiresAt: refresh.expiresAt,
+          scopes: authCode.scopes,
+          // RFC 8707: carry the resource set onto the refresh token so subsequent
+          // refreshes produce access tokens with the same `aud`.
+          resource: effectiveResource,
+        },
+        tx
+      );
+    }
+  });
 
   const scopeString = authCode.scopes.length > 0 ? authCode.scopes.join(' ') : undefined;
 
@@ -639,27 +716,6 @@ async function handleAuthorizationCode(
       })
     : undefined;
 
-  const { token: refreshToken, tokenHash } = fastify.jwtUtils.generateRefreshToken();
-
-  const refreshTokenExpiresAt = Date.now() + fastify.jwtUtils.getRefreshTokenLifespan() * 1000;
-
-  // Start a fresh refresh-token family. Every rotation (see
-  // `handleRefreshToken`) inherits this `familyId` so replay of a revoked
-  // token can be traced to — and revoke — the entire family.
-  const familyId = randomUUID();
-
-  await fastify.repositories.refreshTokens.create({
-    userId: user.id,
-    oauthClientId: client.id,
-    tokenHash,
-    familyId,
-    expiresAt: refreshTokenExpiresAt,
-    scopes: authCode.scopes,
-    // RFC 8707: carry the resource set onto the refresh token so subsequent
-    // refreshes produce access tokens with the same `aud`.
-    resource: effectiveResource,
-  });
-
   let sessionId: string | undefined;
   try {
     sessionId = randomUUID();
@@ -700,11 +756,13 @@ async function handleAuthorizationCode(
 
   // Token issuance metrics (#126).
   fastify.metrics.tokensIssued.inc({ type: 'access', grant_type: 'authorization_code' });
-  fastify.metrics.tokensIssued.inc({ type: 'refresh', grant_type: 'authorization_code' });
+  if (refresh) {
+    fastify.metrics.tokensIssued.inc({ type: 'refresh', grant_type: 'authorization_code' });
+  }
 
   return {
     access_token: accessToken,
-    refresh_token: refreshToken,
+    ...(refresh ? { refresh_token: refresh.token } : {}),
     expires_in: accessTokenExpiresIn,
     token_type: 'Bearer' as const,
     ...(scopeString ? { scope: scopeString } : {}),
@@ -1107,8 +1165,13 @@ async function handleRefreshToken(
   // refreshing must not keep minting the old mode. The client may narrow with
   // `scope` to continue within the new cap. Fail-closed via
   // `toAgentScopeContext`.
+  //
+  // The same holds for the client's CURRENT `scopes` allowlist, the ceiling
+  // `/oauth/authorize`, client_credentials and jwt-bearer apply: a scope taken
+  // off the client after the grant must not keep being minted from the refresh
+  // token. `validateScopes` runs both checks.
   try {
-    enforceAgentScopeCap(grantedScopes, toAgentScopeContext(client));
+    validateScopes(grantedScopes.join(' '), client.scopes, toAgentScopeContext(client));
   } catch (err) {
     await fastify.repositories.auditLogs.create({
       userId: user.id,
@@ -1119,8 +1182,9 @@ async function handleRefreshToken(
       ipAddress: request.ip,
       userAgent: request.headers['user-agent'] || null,
       metadata: {
-        error: 'invalid_scope: refreshed scope exceeds the agent scope mode',
+        error: 'invalid_scope: refreshed scope exceeds what the client may hold',
         grantedScopes,
+        allowedScopes: client.scopes,
         maxAgentMode: client.maxAgentMode ?? null,
       },
     });
@@ -1562,6 +1626,7 @@ async function handleTokenExchange(
       user,
       grantedScopes,
       subjectAct: subjectPayload.act,
+      subjectExp: subjectPayload.exp,
       auditFailure,
     });
   }
@@ -1738,9 +1803,21 @@ async function mintIdJagForExchange(args: {
   user: { id: string };
   grantedScopes: string[];
   subjectAct: ActClaim | undefined;
+  /** The subject token's `exp` (epoch seconds); the assertion never outlives it. */
+  subjectExp: number | undefined;
   auditFailure: (error: string, extra?: Record<string, unknown>) => Promise<void>;
 }): Promise<IdJagTokenResponse> {
-  const { fastify, request, client, body, user, grantedScopes, subjectAct, auditFailure } = args;
+  const {
+    fastify,
+    request,
+    client,
+    body,
+    user,
+    grantedScopes,
+    subjectAct,
+    subjectExp,
+    auditFailure,
+  } = args;
 
   const allowedTargets = idJagTargetAllowlist(client);
 
@@ -1805,6 +1882,17 @@ async function mintIdJagForExchange(args: {
     throw new InvalidRequestError('delegation chain exceeds the maximum depth');
   }
 
+  // The assertion must not outlive the subject token it was derived from, as
+  // the delegation branch clamps its token: it cannot be withdrawn once it has
+  // crossed into the target's trust domain, so revoking the grant behind the
+  // subject token ends it no later than that token would have ended.
+  const subjectRemaining =
+    subjectExp !== undefined ? subjectExp - Math.floor(Date.now() / 1000) : undefined;
+  if (subjectRemaining !== undefined && subjectRemaining <= 0) {
+    await auditFailure('invalid_request: subject_token has no remaining lifetime');
+    throw new InvalidRequestError('subject_token has expired');
+  }
+
   const scopeString = grantedScopes.length > 0 ? grantedScopes.join(' ') : undefined;
 
   const minted = await mintIdJag(fastify, {
@@ -1813,6 +1901,7 @@ async function mintIdJagForExchange(args: {
     resource: targetResource,
     clientId: client.clientId,
     ...(scopeString !== undefined ? { scope: scopeString } : {}),
+    ...(subjectRemaining !== undefined ? { maxLifetimeSeconds: subjectRemaining } : {}),
   });
 
   await fastify.repositories.auditLogs.create({

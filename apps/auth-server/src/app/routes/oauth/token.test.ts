@@ -191,6 +191,11 @@ function createFastifyStub() {
         revokeIfActive: vi.fn().mockResolvedValue({ id: 'rotated-row' }),
         revokeFamily: vi.fn().mockResolvedValue(0),
       },
+      oauthConsents: {
+        // Deny-by-default: no stored consent means no refresh token on the
+        // authorization_code grant, so those tests opt IN by overriding this.
+        findActive: vi.fn().mockResolvedValue(undefined),
+      },
       auditLogs: {
         create: vi.fn(),
       },
@@ -1129,6 +1134,13 @@ describe('POST /oauth/token route — authorization_code grant', () => {
       undefined
     );
     (fastify.repositories.users.findById as unknown as Mock).mockResolvedValue(user);
+    (fastify.repositories.oauthConsents.findActive as unknown as Mock).mockResolvedValue({
+      id: 'consent-uuid-1',
+      userId: user.id,
+      oauthClientId: client.id,
+      scopes: ['read:foo'],
+      revokedAt: null,
+    });
     (fastify.repositories.refreshTokens.create as unknown as Mock).mockResolvedValue(undefined);
     (fastify.pkceUtils.verifyCodeChallenge as unknown as Mock).mockReturnValue(true);
     (fastify.jwtUtils.signAccessToken as unknown as Mock).mockResolvedValue('signed.jwt.token');
@@ -1186,7 +1198,8 @@ describe('POST /oauth/token route — authorization_code grant', () => {
         oauthClientId: client.id,
         tokenHash: 'refresh-token-hash',
         scopes: ['read:foo'],
-      })
+      }),
+      expect.anything()
     );
 
     expect(result).toMatchObject({
@@ -1200,6 +1213,37 @@ describe('POST /oauth/token route — authorization_code grant', () => {
     // No `openid` scope was granted → no ID token issued (OIDC Core §3.1.3.3).
     expect(fastify.jwtUtils.signIdToken).not.toHaveBeenCalled();
     expect(result).not.toHaveProperty('id_token');
+  });
+
+  // The consent row is what `/consents` lists and what revocation reaches the
+  // refresh tokens through, so a refresh token without one could be neither
+  // seen nor withdrawn by the user.
+  it.each([
+    ['no consent is stored ("Remember this decision" unticked, or revoked since)', undefined],
+    ['the stored consent does not cover the code scopes', ['write:foo']],
+  ])('issues the access token but NO refresh token when %s', async (_label, consentScopes) => {
+    const { fastify, ctx, client, user, authCode } = setupAuthCodeStub();
+    (fastify.repositories.oauthConsents.findActive as unknown as Mock).mockResolvedValue(
+      consentScopes && { id: 'consent-uuid-1', scopes: consentScopes, revokedAt: null }
+    );
+    await tokenRoute(fastify);
+    const handler = ctx.handler;
+    if (!handler) throw new Error('Handler missing');
+
+    const result = await handler(baseRequest(), createReply());
+
+    expect(fastify.repositories.oauthConsents.findActive).toHaveBeenCalledWith(user.id, client.id);
+    expect(result).toMatchObject({ access_token: 'signed.jwt.token', scope: 'read:foo' });
+    expect(result).not.toHaveProperty('refresh_token');
+    expect(fastify.repositories.refreshTokens.create).not.toHaveBeenCalled();
+    expect(fastify.metrics.tokensIssued.inc).not.toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'refresh' })
+    );
+    // The code is spent all the same: it cannot be redeemed a second time.
+    expect(fastify.repositories.authorizationCodes.markUsed).toHaveBeenCalledWith(
+      authCode.id,
+      expect.anything()
+    );
   });
 
   it('issues an id_token when the granted scope includes openid (OIDC Core §3.1.3.3)', async () => {
@@ -1620,12 +1664,36 @@ describe('POST /oauth/token route — authorization_code grant', () => {
     const reply = createReply();
     await handler(baseRequest(), reply);
 
-    expect(fastify.repositories.authorizationCodes.markUsed).toHaveBeenCalledWith(authCode.id);
+    expect(fastify.repositories.authorizationCodes.markUsed).toHaveBeenCalledWith(
+      authCode.id,
+      expect.anything()
+    );
     const markUsedOrder = (fastify.repositories.authorizationCodes.markUsed as unknown as Mock).mock
       .invocationCallOrder[0];
     const signOrder = (fastify.jwtUtils.signAccessToken as unknown as Mock).mock
       .invocationCallOrder[0];
     expect(markUsedOrder).toBeLessThan(signOrder);
+  });
+
+  it('spends the code and stores the refresh token in one transaction', async () => {
+    // A logout or consent revocation landing between the two would find the
+    // code already used and no refresh token to revoke yet (see the repository
+    // integration test for the race). Both writes must carry the tx handle of
+    // the same fastify.db.transaction call.
+    const { fastify, ctx, authCode } = setupAuthCodeStub();
+    const tx = { tx: true };
+    (fastify.db.transaction as unknown as Mock).mockImplementation(
+      async (cb: (tx: unknown) => Promise<unknown>) => cb(tx)
+    );
+    await tokenRoute(fastify);
+    const handler = ctx.handler;
+    if (!handler) throw new Error('Handler missing');
+
+    await handler(baseRequest(), createReply());
+
+    expect(fastify.db.transaction).toHaveBeenCalledTimes(1);
+    expect(fastify.repositories.authorizationCodes.markUsed).toHaveBeenCalledWith(authCode.id, tx);
+    expect(fastify.repositories.refreshTokens.create).toHaveBeenCalledWith(expect.anything(), tx);
   });
 
   it('rejects replay via the markUsed CAS losing the race (NotFoundError → no token)', async () => {
@@ -1662,7 +1730,7 @@ describe('POST /oauth/token route — authorization_code grant', () => {
   // RFC 9700 §4.14: a user disabled between code issuance and redemption gets
   // no tokens — the same gate the refresh, exchange and jwt-bearer grants apply.
   it('rejects a code whose user has been disabled (invalid_grant, no tokens)', async () => {
-    const { fastify, ctx } = setupAuthCodeStub();
+    const { fastify, ctx, authCode } = setupAuthCodeStub();
     (fastify.repositories.users.findById as unknown as Mock).mockResolvedValue({
       id: 'user-uuid-1',
       email: 'u@example.com',
@@ -1676,11 +1744,46 @@ describe('POST /oauth/token route — authorization_code grant', () => {
     await expect(handler(baseRequest(), createReply())).rejects.toThrow(InvalidGrantError);
     expect(fastify.jwtUtils.signAccessToken).not.toHaveBeenCalled();
     expect(fastify.repositories.refreshTokens.create).not.toHaveBeenCalled();
+    // The code is still burned, so the exchange cannot be retried.
+    expect(fastify.repositories.authorizationCodes.markUsed).toHaveBeenCalledWith(authCode.id);
     expect(fastify.repositories.auditLogs.create).toHaveBeenCalledWith(
       expect.objectContaining({
         metadata: { error: 'invalid_grant: user_disabled' },
       })
     );
+  });
+
+  // ADR-007 §2 (#184): the authorization_code grant enforces the agent's
+  // CURRENT cap, like every other grant. A code approved under agent:exec must
+  // not redeem into agent:exec after the operator lowers the cap.
+  it("rejects a code whose agent scope exceeds the client's current max_agent_mode", async () => {
+    const { fastify, ctx, client, authCode } = setupAuthCodeStub();
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue({
+      ...client,
+      isAgent: true,
+      maxAgentMode: 'readonly',
+    });
+    (fastify.repositories.authorizationCodes.findByCode as unknown as Mock).mockResolvedValue({
+      ...authCode,
+      scopes: ['read:foo', 'agent:exec'],
+    });
+    await tokenRoute(fastify);
+    const handler = ctx.handler;
+    if (!handler) throw new Error('Handler missing');
+
+    await expect(handler(baseRequest(), createReply())).rejects.toThrow(InvalidScopeError);
+    expect(fastify.jwtUtils.signAccessToken).not.toHaveBeenCalled();
+    expect(fastify.repositories.refreshTokens.create).not.toHaveBeenCalled();
+    expect(fastify.repositories.auditLogs.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        metadata: expect.objectContaining({
+          error: 'invalid_scope: code scope exceeds the agent scope mode',
+        }),
+      })
+    );
+    // The code is burned all the same: a client cannot narrow a code, so it
+    // goes back through /oauth/authorize.
+    expect(fastify.repositories.authorizationCodes.markUsed).toHaveBeenCalledWith(authCode.id);
   });
 
   it('rejects when the user bound to the code cannot be found', async () => {
@@ -2045,9 +2148,65 @@ describe('POST /oauth/token route — refresh_token grant', () => {
     expect(fastify.repositories.auditLogs.create).toHaveBeenCalledWith(
       expect.objectContaining({
         metadata: expect.objectContaining({
-          error: 'invalid_scope: refreshed scope exceeds the agent scope mode',
+          error: 'invalid_scope: refreshed scope exceeds what the client may hold',
         }),
       })
+    );
+  });
+
+  // The allowlist is a ceiling on every grant, not only on the ones that start
+  // one. A scope taken off `oauth_clients.scopes` after the user approved it
+  // must not keep being refreshed.
+  it("rejects refreshing into a scope that has left the client's allowlist", async () => {
+    const { fastify, ctx, confidentialClient, storedToken } = setupRefreshStub();
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue({
+      ...confidentialClient,
+      scopes: ['read:foo'],
+    });
+    (
+      fastify.repositories.refreshTokens.findByTokenHashIncludingRevoked as unknown as Mock
+    ).mockResolvedValue({ ...storedToken, scopes: ['read:foo', 'write:foo'] });
+
+    await tokenRoute(fastify);
+    const handler = ctx.handler;
+    if (!handler) throw new Error('Handler missing');
+
+    await expect(handler(refreshRequest(), createReply())).rejects.toThrow(InvalidScopeError);
+    // Rejected before rotation: the presented token is neither revoked nor replaced.
+    expect(fastify.repositories.refreshTokens.revokeIfActive).not.toHaveBeenCalled();
+    expect(fastify.repositories.refreshTokens.revoke).not.toHaveBeenCalled();
+    expect(fastify.repositories.refreshTokens.create).not.toHaveBeenCalled();
+    expect(fastify.jwtUtils.signAccessToken).not.toHaveBeenCalled();
+    expect(fastify.repositories.auditLogs.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        metadata: expect.objectContaining({
+          error: 'invalid_scope: refreshed scope exceeds what the client may hold',
+          allowedScopes: ['read:foo'],
+        }),
+      })
+    );
+  });
+
+  it('lets a client keep refreshing within its current allowlist by narrowing scope', async () => {
+    const { fastify, ctx, confidentialClient, storedToken } = setupRefreshStub();
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue({
+      ...confidentialClient,
+      scopes: ['read:foo'],
+    });
+    (
+      fastify.repositories.refreshTokens.findByTokenHashIncludingRevoked as unknown as Mock
+    ).mockResolvedValue({ ...storedToken, scopes: ['read:foo', 'write:foo'] });
+
+    await tokenRoute(fastify);
+    const handler = ctx.handler;
+    if (!handler) throw new Error('Handler missing');
+
+    await expect(
+      handler(refreshRequest({ scope: 'read:foo' }), createReply())
+    ).resolves.toBeDefined();
+    expect(fastify.repositories.refreshTokens.create).toHaveBeenCalledWith(
+      expect.objectContaining({ scopes: ['read:foo'] }),
+      expect.anything()
     );
   });
 
@@ -3459,6 +3618,7 @@ describe('POST /oauth/token — ID-JAG MINT (token exchange, ADR-011)', () => {
       grantTypes?: string[];
       subjectScope?: string;
       subjectAct?: unknown;
+      subjectExp?: number;
     } = {}
   ) {
     const { fastify, ctx } = createFastifyStub();
@@ -3485,7 +3645,7 @@ describe('POST /oauth/token — ID-JAG MINT (token exchange, ADR-011)', () => {
       aud: [AGENT_CLIENT_ID],
       iss: AS_ISSUER,
       token_use: 'access',
-      exp: Math.floor(Date.now() / 1000) + 600,
+      exp: opts.subjectExp ?? Math.floor(Date.now() / 1000) + 600,
       ...(opts.subjectAct ? { act: opts.subjectAct } : {}),
     });
     (fastify.repositories.users.findById as unknown as Mock).mockResolvedValue({
@@ -3553,6 +3713,19 @@ describe('POST /oauth/token — ID-JAG MINT (token exchange, ADR-011)', () => {
     expect(claims).not.toHaveProperty('email');
     // An ID-JAG is NOT an access token: no access token was signed on this path.
     expect(fastify.jwtUtils.signAccessToken).not.toHaveBeenCalled();
+  });
+
+  it("caps the assertion at the subject token's remaining lifetime (never outlives its authority)", async () => {
+    mockEnv['ID_JAG_ENABLED'] = true;
+    // The subject token has 60 s left; ID_JAG_ISSUED_LIFETIME is 300 s.
+    const subjectExp = Math.floor(Date.now() / 1000) + 60;
+    const { fastify, ctx } = setupMintStub({ subjectExp });
+
+    const result = (await invoke(fastify, ctx, mintRequest())) as Record<string, unknown>;
+
+    expect(result['expires_in']).toBeLessThanOrEqual(60);
+    const claims = decodeJwt(result['access_token'] as string);
+    expect(claims.exp as number).toBeLessThanOrEqual(subjectExp);
   });
 
   it('rejects the ID-JAG token type when ID_JAG_ENABLED is false', async () => {
@@ -3861,6 +4034,11 @@ describe('POST /oauth/token — response serialization (union schema, ADR-011)',
         enabled: true,
         firstName: 'Ada',
         lastName: 'Lovelace',
+      });
+      (instance.repositories.oauthConsents.findActive as unknown as Mock).mockResolvedValue({
+        id: 'consent-1',
+        scopes: ['email', 'openid'],
+        revokedAt: null,
       });
       (instance.jwtUtils.signAccessToken as unknown as Mock).mockResolvedValue('access.jwt');
       (instance.jwtUtils.signIdToken as unknown as Mock).mockResolvedValue('id.jwt');

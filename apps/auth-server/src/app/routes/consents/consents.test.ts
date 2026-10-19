@@ -66,8 +66,11 @@ function makeFastify() {
       oauthClients: {
         findById: vi.fn(),
       },
+      authorizationCodes: { invalidateForUserAndClient: vi.fn().mockResolvedValue(0) },
       refreshTokens: { revokeAllForUserAndClient: vi.fn().mockResolvedValue(0) },
       auditLogs: { create: vi.fn().mockResolvedValue(undefined) },
+      // `resolveBrowserSession` only accepts a session whose user is still enabled.
+      users: { findById: vi.fn(async (id: string) => ({ id, enabled: true })) },
     },
     db: { transaction: vi.fn(async (cb: (tx: unknown) => Promise<unknown>) => cb('tx')) },
     sessionUtils: { getSession: vi.fn(), setSession: vi.fn().mockResolvedValue(undefined) },
@@ -82,7 +85,7 @@ function sessionWith(userId: string, sessionId: string, apiCsrfToken?: string) {
     userId,
     email: 'a@b.com',
     sessionId,
-    createdAt: 0,
+    createdAt: Date.now(),
     ...(apiCsrfToken ? { apiCsrfToken } : {}),
   };
 }
@@ -147,6 +150,30 @@ describe('/consents JSON API', () => {
     expect((state.body as any).csrfToken.length).toBeGreaterThan(0);
     // The minted token MUST have been persisted to the session.
     expect(fastify.sessionUtils.setSession).toHaveBeenCalled();
+  });
+
+  it('GET /consents mints its CSRF token without extending the session', async () => {
+    // SESSION_COOKIE_TTL is 3600 s here; the session is 50 minutes old.
+    const { fastify, ctx } = makeFastify();
+    await consentsRoute(fastify);
+    const { signSessionId } = await import('../../helpers/session-cookie');
+    const signed = signSessionId('s1');
+    (fastify.sessionUtils.getSession as unknown as Mock).mockResolvedValue({
+      ...sessionWith('u1', 's1'),
+      createdAt: Date.now() - 50 * 60 * 1000,
+    });
+    (
+      fastify.repositories.oauthConsents.listActiveForUserWithClient as unknown as Mock
+    ).mockResolvedValue([]);
+
+    const handler = ctx.get;
+    if (!handler) throw new Error('Handler missing');
+    const { reply } = createReply();
+    await handler({ headers: { cookie: `__Host-qauth_session=${signed}` } }, reply);
+
+    const ttl = (fastify.sessionUtils.setSession as unknown as Mock).mock.calls[0][2];
+    expect(ttl).toBeGreaterThan(0);
+    expect(ttl).toBeLessThanOrEqual(10 * 60);
   });
 
   it('GET /consents reuses the existing apiCsrfToken without re-minting', async () => {
@@ -242,6 +269,11 @@ describe('/consents JSON API', () => {
     );
     expect(state.statusCode).toBe(204);
     expect(fastify.repositories.oauthConsents.revoke).toHaveBeenCalledWith('c1', 'tx');
+    expect(fastify.repositories.authorizationCodes.invalidateForUserAndClient).toHaveBeenCalledWith(
+      'u1',
+      'cli1',
+      'tx'
+    );
     expect(fastify.repositories.refreshTokens.revokeAllForUserAndClient).toHaveBeenCalledWith(
       'u1',
       'cli1',

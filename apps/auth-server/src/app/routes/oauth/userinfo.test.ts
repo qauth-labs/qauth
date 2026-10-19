@@ -156,6 +156,7 @@ describe('GET /userinfo route', () => {
     const findByIdMock = fastify.repositories.users.findById as unknown as Mock;
     findByIdMock.mockResolvedValue({
       id: 'user-1',
+      enabled: true,
       email: 'user@example.com',
       emailVerified: true,
     });
@@ -214,6 +215,7 @@ describe('GET /userinfo route', () => {
     const findByIdMock = fastify.repositories.users.findById as unknown as Mock;
     findByIdMock.mockResolvedValue({
       id: 'user-3',
+      enabled: true,
       email: 'ada@example.com',
       emailVerified: true,
       firstName: 'Ada',
@@ -265,6 +267,7 @@ describe('GET /userinfo route', () => {
     const findByIdMock = fastify.repositories.users.findById as unknown as Mock;
     findByIdMock.mockResolvedValue({
       id: 'user-4',
+      enabled: true,
       email: 'grace@example.com',
       emailVerified: true,
       firstName: 'Grace',
@@ -295,6 +298,7 @@ describe('GET /userinfo route', () => {
     const findByIdMock = fastify.repositories.users.findById as unknown as Mock;
     findByIdMock.mockResolvedValue({
       id: 'user-5',
+      enabled: true,
       email: 'katherine@example.com',
       emailVerified: true,
       firstName: 'Katherine',
@@ -340,6 +344,7 @@ describe('GET /userinfo route', () => {
     const findByIdMock = fastify.repositories.users.findById as unknown as Mock;
     findByIdMock.mockResolvedValue({
       id: 'user-6',
+      enabled: true,
       email: 'dorothy@example.com',
       emailVerified: true,
       firstName: 'Dorothy',
@@ -407,6 +412,38 @@ describe('GET /userinfo route', () => {
     });
   });
 
+  it('refuses the token of a user disabled since it was minted (401, no claims)', async () => {
+    const { fastify, ctx } = createFastifyStub();
+    await userinfoRoute(fastify);
+
+    (fastify.repositories.users.findById as unknown as Mock).mockResolvedValue({
+      id: 'user-7',
+      enabled: false,
+      firstName: 'Ada',
+      lastName: null,
+    });
+
+    const request = {
+      jwtPayload: { sub: 'user-7', scope: 'openid email profile' },
+      ip: '127.0.0.1',
+      headers: { authorization: 'Bearer token', 'user-agent': 'vitest' },
+    } as unknown as FastifyRequest;
+    const reply = {
+      send: () => {
+        throw new Error('send should not be called for a disabled user');
+      },
+    } as unknown as FastifyReply;
+
+    const handler = ctx.handler;
+    if (!handler) throw new Error('Userinfo handler was not registered');
+
+    await expect(handler(request, reply)).rejects.toThrow(JWTInvalidError);
+    expect(fastify.repositories.userAttributes.findVerifiedByUserIdAndKey).not.toHaveBeenCalled();
+    expect(fastify.repositories.auditLogs.create).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: 'user-7', event: 'oauth.userinfo.failure' })
+    );
+  });
+
   it('omits BOTH email claims when no verified email attribute exists (email scope granted) — BREAKING #229 (OIDC Core §5.3.2)', async () => {
     const { fastify, ctx } = createFastifyStub();
     await userinfoRoute(fastify);
@@ -417,6 +454,7 @@ describe('GET /userinfo route', () => {
     const findByIdMock = fastify.repositories.users.findById as unknown as Mock;
     findByIdMock.mockResolvedValue({
       id: 'user-2',
+      enabled: true,
       email: null,
       emailVerified: false,
     });
@@ -624,6 +662,7 @@ describe('POST /userinfo route (OIDC Core §5.3.1)', () => {
   function withUser(fastify: FastifyInstance): void {
     (fastify.repositories.users.findById as unknown as Mock).mockResolvedValue({
       id: 'user-1',
+      enabled: true,
       firstName: null,
       lastName: null,
     });

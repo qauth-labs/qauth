@@ -102,6 +102,7 @@ async function buildApp(): Promise<FastifyInstance> {
         id: USER_ID,
         email: 'user@example.com',
         emailVerified: true,
+        enabled: true,
       }),
     },
     auditLogs: { create: vi.fn().mockResolvedValue(undefined) },

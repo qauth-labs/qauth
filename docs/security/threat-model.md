@@ -123,7 +123,9 @@ A break of any of these is a finding:
 - Token exchange preserves or narrows scope and audience. It never widens
   them, and the `act` claim records every delegation step.
 - Revoking a consent, a token, or a user's access stops new tokens being
-  minted from it.
+  minted from it. Access tokens already issued are not reached: they stay valid
+  until they expire unless revoked by value, at `/oauth/revoke` or as the token
+  presented to `/auth/logout` (current design, recorded in ADR-014).
 - A disabled user gets no tokens.
 - Data in one realm never reaches another.
 - Secrets are hashed with Argon2id and compared in constant time.

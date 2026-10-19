@@ -1,10 +1,20 @@
+import type { JWTPayload } from '@qauth-labs/fastify-plugin-jwt';
 import { JWTExpiredError, JWTInvalidError, NotFoundError } from '@qauth-labs/shared-errors';
 import type { FastifyInstance } from 'fastify';
 import { ZodTypeProvider } from 'fastify-type-provider-zod';
 
 import { env } from '../../../config/env';
 import { logAuthEvent } from '../../helpers/auth-events';
+import { endBrowserSessions } from '../../helpers/browser-session';
 import { clientAddressKey } from '../../helpers/client-address';
+import { assertManagementToken } from '../../helpers/management-token';
+import {
+  clearSessionCookie,
+  readCookie,
+  SESSION_COOKIE_NAME,
+  verifySignedSessionId,
+} from '../../helpers/session-cookie';
+import { revokeJti } from '../../helpers/token-revocation';
 import { logoutHeadersSchema, logoutResponseSchema } from '../../schemas/auth';
 
 /**
@@ -18,7 +28,7 @@ export default async function (fastify: FastifyInstance) {
     {
       schema: {
         description:
-          'Log out the current user. Revokes all refresh tokens for the user. Accepts expired access tokens.',
+          "Log out the current user. Ends the user's hosted browser sessions, revokes all refresh tokens and unredeemed authorization codes for the user, and the access token presented. Accepts expired access tokens.",
         tags: ['Auth'],
         headers: logoutHeadersSchema,
         response: {
@@ -50,20 +60,30 @@ export default async function (fastify: FastifyInstance) {
 
         // Try to verify JWT token
         // For logout, we allow expired tokens - user is ending their session anyway
+        let claims: JWTPayload;
         try {
-          const { sub } = await fastify.jwtUtils.verifyAccessToken(token);
-          userId = sub;
+          claims = await fastify.jwtUtils.verifyAccessToken(token, {
+            // RFC 9700 mix-up defence: only accept a token this AS issued.
+            issuer: fastify.jwtUtils.getIssuer(),
+          });
         } catch (error) {
           if (error instanceof JWTExpiredError) {
-            // Token expired - decode without verification to get user ID
+            // Token expired - its signature verified, so decode it to read the claims
             isExpired = true;
-            const { sub } = fastify.jwtUtils.decodeTokenUnsafe(token);
-            userId = sub;
+            claims = fastify.jwtUtils.decodeTokenUnsafe(token);
           } else {
             // Token is invalid (bad signature, malformed, etc.)
             throw error;
           }
         }
+
+        // Logout revokes the user's refresh tokens at EVERY client, and every
+        // user access token carries the user's id as `sub`. Accept only the
+        // first-party token `/auth/login` mints, expired or not, so a token
+        // issued to another client or audience cannot end the user's sessions.
+        // A disabled user may still sign out: logout only ends access.
+        await assertManagementToken(fastify, claims, { requireActiveUser: false });
+        userId = claims.sub;
 
         if (!userId) {
           throw new JWTInvalidError('Invalid JWT token');
@@ -75,9 +95,33 @@ export default async function (fastify: FastifyInstance) {
           throw new NotFoundError('User', userId);
         }
 
+        // End the user's hosted browser sessions first, so none of them can
+        // obtain a new authorization code once the codes are invalidated
+        // below. The portal calls this route from its server, so they are
+        // found through the per-user index, not a cookie; the request's own
+        // cookie is cleared when it names one of them.
+        const endedSessions = await endBrowserSessions(fastify, userId);
+        const requestSessionId = verifySignedSessionId(readCookie(request, SESSION_COOKIE_NAME));
+        if (requestSessionId && endedSessions.includes(requestSessionId)) {
+          clearSessionCookie(reply);
+        }
+
+        // Invalidate unredeemed authorization codes next: one redeemed after
+        // the sweep below would mint a refresh token that survives the logout.
+        // This also waits for a redemption in flight, which keeps its code row
+        // locked until its refresh token is committed for the sweep to see.
+        await fastify.repositories.authorizationCodes.invalidateForUser(userId);
+
         // Revoke all active refresh tokens for user
         // This ensures user is logged out from all devices
         await fastify.repositories.refreshTokens.revokeAllForUser(userId, 'logout');
+
+        // End the token this request was made with as well, as `/oauth/revoke`
+        // ends one presented to it: otherwise it keeps working at the
+        // management API until it expires. An expired token is already inert.
+        if (!isExpired && claims.jti && claims.exp !== undefined) {
+          await revokeJti(fastify, claims.jti, claims.exp - Math.floor(Date.now() / 1000));
+        }
 
         // Log audit event (success)
         await fastify.repositories.auditLogs.create({

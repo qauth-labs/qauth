@@ -557,6 +557,12 @@ export interface MintIdJagOptions {
   readonly clientId: string;
   /** `scope`, space-delimited. Omitted from the assertion when absent. */
   readonly scope?: string;
+  /**
+   * Upper bound, in seconds, on the assertion's lifetime: the remaining life
+   * of the token it is minted from. `ID_JAG_ISSUED_LIFETIME` applies when it
+   * is shorter. An assertion never outlives the authority it was derived from.
+   */
+  readonly maxLifetimeSeconds?: number;
 }
 
 /** A freshly minted ID-JAG and the lifetime advertised alongside it. */
@@ -623,7 +629,10 @@ export async function mintIdJag(
   options: MintIdJagOptions
 ): Promise<MintedIdJag> {
   const jti = randomUUID();
-  const expiresIn = env.ID_JAG_ISSUED_LIFETIME;
+  const expiresIn = Math.min(
+    env.ID_JAG_ISSUED_LIFETIME,
+    options.maxLifetimeSeconds ?? env.ID_JAG_ISSUED_LIFETIME
+  );
 
   const claims: Record<string, unknown> = {
     jti,

@@ -86,17 +86,19 @@ export default async function (fastify: FastifyInstance) {
         throw err;
       }
 
-      // Try refresh-token revocation first unless the hint says access_token.
-      // RFC 7009 §2.1: the hint is advisory; if it is wrong we still attempt the
-      // other type. Either way the response is an empty 200.
-      let revoked = false;
-
-      if (token_type_hint !== 'access_token') {
-        revoked = await tryRevokeRefreshToken(fastify, client.id, token);
-      }
-
-      if (!revoked) {
-        await tryRevokeAccessToken(fastify, client.clientId, token);
+      // RFC 7009 §2.1: the hint is advisory. It only picks which type is tried
+      // first (refresh token by default); if the token is not found as that type
+      // we still attempt the other. Either way the response is an empty 200.
+      if (token_type_hint === 'access_token') {
+        const revoked = await tryRevokeAccessToken(fastify, client.clientId, token);
+        if (!revoked) {
+          await tryRevokeRefreshToken(fastify, client.id, token);
+        }
+      } else {
+        const revoked = await tryRevokeRefreshToken(fastify, client.id, token);
+        if (!revoked) {
+          await tryRevokeAccessToken(fastify, client.clientId, token);
+        }
       }
 
       await fastify.repositories.auditLogs.create({
@@ -144,14 +146,15 @@ async function tryRevokeRefreshToken(
 
 /**
  * Revoke an access token by denylisting its `jti` IFF it is a valid JWT issued
- * to the authenticated client. A token belonging to another client, an invalid
- * token, or one already expired is a silent no-op (RFC 7009 §2.2).
+ * to the authenticated client. Returns true when such a token was denylisted,
+ * false otherwise. A token belonging to another client, an invalid token, or one
+ * already expired is a silent no-op (RFC 7009 §2.2).
  */
 async function tryRevokeAccessToken(
   fastify: FastifyInstance,
   clientId: string,
   token: string
-): Promise<void> {
+): Promise<boolean> {
   let payload;
   try {
     payload = await fastify.jwtUtils.verifyAccessToken(token, {
@@ -159,11 +162,12 @@ async function tryRevokeAccessToken(
     });
   } catch {
     // Invalid/expired/foreign-issuer token — nothing to revoke.
-    return;
+    return false;
   }
   // Ownership: only the client the token was issued for may revoke it.
-  if (payload.clientId !== clientId) return;
-  if (!payload.jti || payload.exp === undefined) return;
+  if (payload.clientId !== clientId) return false;
+  if (!payload.jti || payload.exp === undefined) return false;
   const remainingSeconds = payload.exp - Math.floor(Date.now() / 1000);
   await revokeJti(fastify, payload.jti, remainingSeconds);
+  return true;
 }

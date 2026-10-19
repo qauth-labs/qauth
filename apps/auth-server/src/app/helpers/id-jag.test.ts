@@ -764,6 +764,36 @@ describe('mintIdJag', () => {
     expect((claims.exp as number) - (claims.iat as number)).toBe(60);
   });
 
+  it('never outlives the authority it was minted from (maxLifetimeSeconds)', async () => {
+    const { fastify } = fastifyStub();
+
+    const minted = await mintIdJag(fastify, {
+      subject: 'user-uuid-1',
+      audience: 'https://auth.chat.example',
+      resource: 'https://mcp.chat.example/',
+      clientId: CLIENT_ID,
+      maxLifetimeSeconds: 42,
+    });
+
+    const claims = decodeJwt(minted.assertion);
+    expect(minted.expiresIn).toBe(42);
+    expect((claims.exp as number) - (claims.iat as number)).toBe(42);
+  });
+
+  it('keeps ID_JAG_ISSUED_LIFETIME when the authority lives longer', async () => {
+    const { fastify } = fastifyStub();
+
+    const minted = await mintIdJag(fastify, {
+      subject: 'user-uuid-1',
+      audience: 'https://auth.chat.example',
+      resource: 'https://mcp.chat.example/',
+      clientId: CLIENT_ID,
+      maxLifetimeSeconds: 3600,
+    });
+
+    expect(minted.expiresIn).toBe(300);
+  });
+
   it('canonicalises the `iss` it stamps (trailing slash stripped)', async () => {
     const { fastify } = fastifyStub();
     fastify.jwtUtils.getIssuer = () => `${AS_ISSUER}/`;

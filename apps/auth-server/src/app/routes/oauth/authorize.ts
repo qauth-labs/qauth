@@ -325,6 +325,13 @@ export default async function (fastify: FastifyInstance) {
         if (await isJtiRevoked(fastify, payload.jti)) {
           throw new JWTInvalidError('Access token has been revoked');
         }
+        // The token outlives the login that minted it; a user disabled in
+        // between must not get a code from it, as the session path (via
+        // `resolveBrowserSession`) and every grant at `/oauth/token` refuse.
+        const user = await fastify.repositories.users.findById(payload.sub);
+        if (!user || !user.enabled) {
+          throw new BadRequestError('Token subject is not an active user');
+        }
         userId = payload.sub;
       } catch {
         await fastify.repositories.auditLogs.create({

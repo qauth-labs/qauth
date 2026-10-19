@@ -570,6 +570,51 @@ describe('PATCH /api/clients/:id (update) — #88', () => {
     expect(JSON.stringify(body)).not.toContain('clientSecretHash');
   });
 
+  it('refuses to re-enable a disabled client', async () => {
+    const { fastify, ctx } = makeFastify();
+    await clientsRoute(fastify);
+
+    // The row does not say who disabled it, so this may be the operator's
+    // `UPDATE oauth_clients SET enabled = false`.
+    (fastify.repositories.oauthClients.findById as unknown as Mock).mockResolvedValue(
+      makeClientRow({ developerId: DEV_A, enabled: false })
+    );
+
+    const request = authedRequest({
+      params: { id: '0190a000-0000-7000-8000-000000000001' },
+      body: { enabled: true },
+    });
+    const { reply } = createReply();
+
+    await expect(route(ctx, 'PATCH /:id').handler(request, reply)).rejects.toThrow(ForbiddenError);
+    expect(fastify.repositories.oauthClients.update).not.toHaveBeenCalled();
+  });
+
+  it('never writes `enabled: true`, so it cannot overwrite a concurrent disable', async () => {
+    const { fastify, ctx } = makeFastify();
+    await clientsRoute(fastify);
+
+    (fastify.repositories.oauthClients.findById as unknown as Mock).mockResolvedValue(
+      makeClientRow({ developerId: DEV_A, enabled: true })
+    );
+    (fastify.repositories.oauthClients.update as unknown as Mock).mockImplementation(
+      async (_id: string, data: Record<string, unknown>) =>
+        makeClientRow({ developerId: DEV_A, ...data })
+    );
+
+    const request = authedRequest({
+      params: { id: '0190a000-0000-7000-8000-000000000001' },
+      body: { name: 'Renamed', enabled: true },
+    });
+    const { reply } = createReply();
+
+    await route(ctx, 'PATCH /:id').handler(request, reply);
+
+    const updateArg = (fastify.repositories.oauthClients.update as unknown as Mock).mock
+      .calls[0][1];
+    expect(updateArg).toEqual({ name: 'Renamed' });
+  });
+
   it('validates the effective grant/response combination against persisted values', async () => {
     const { fastify, ctx } = makeFastify();
     await clientsRoute(fastify);

@@ -115,6 +115,9 @@ function makeAuthCodeStub(opts: {
       refreshTokens: {
         create: vi.fn().mockResolvedValue(undefined),
       },
+      oauthConsents: {
+        findActive: vi.fn().mockResolvedValue({ scopes: ['openid'], revokedAt: null }),
+      },
       // #229: token issuance resolves email claims from verified attributes.
       userAttributes: {
         findVerifiedByUserIdAndKey: vi.fn().mockResolvedValue([
@@ -151,6 +154,7 @@ function makeAuthCodeStub(opts: {
       verifyCodeChallenge: vi.fn().mockReturnValue(true),
     },
     sessionUtils: { setSession: vi.fn().mockResolvedValue(undefined) },
+    db: { transaction: vi.fn(async (cb: (tx: unknown) => Promise<unknown>) => cb({})) },
     log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
     metrics: { tokensIssued: { inc: vi.fn() } },
   };

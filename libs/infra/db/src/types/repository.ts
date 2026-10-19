@@ -420,10 +420,15 @@ export interface AuthorizationCodesRepository {
    */
   markUsed(id: string, tx?: DbClient): Promise<AuthorizationCode>;
   /**
-   * Invalidate all active codes for a user
-   * Useful for security events (password change, account compromise)
+   * Invalidate all unredeemed codes for a user
+   * Useful for security events (logout, password change, account compromise)
    */
   invalidateForUser(userId: string, tx?: DbClient): Promise<number>;
+  /**
+   * Invalidate all unredeemed codes a user holds for one client
+   * (consent revocation). Returns count of invalidated codes.
+   */
+  invalidateForUserAndClient(userId: string, oauthClientId: string, tx?: DbClient): Promise<number>;
   /**
    * Delete expired codes
    * Returns count of deleted codes

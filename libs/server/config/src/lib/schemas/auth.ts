@@ -238,7 +238,10 @@ export const authEnvSchema = z.object({
     .default(DEV_SESSION_COOKIE_SECRET_DEFAULT),
 
   /**
-   * Browser session TTL in seconds (default 86400 = 24 hours, per issue #150).
+   * Browser session lifetime in seconds (default 86400 = 24 hours, per issue
+   * #150). Absolute, counted from sign-in: it is the cookie's `Max-Age` and
+   * the server refuses an older session, so using the hosted pages does not
+   * extend it.
    */
   SESSION_COOKIE_TTL: z.coerce
     .number()

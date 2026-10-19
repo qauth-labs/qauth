@@ -32,6 +32,11 @@ token so a legitimate retry can succeed; a `401` (bad credentials,
 cookie's token unchanged, since that cookie is still valid — only the
 credentials were wrong.
 
+The session lasts `SESSION_COOKIE_TTL` from sign-in and is not extended by
+use. [`POST /auth/logout`](/integrate/api-reference/#post-authlogout) ends
+every hosted session of the user, so the next `/oauth/authorize` shows this
+page again.
+
 ## `/ui/consent`
 
 `GET /ui/consent` takes the same query parameters as
@@ -41,7 +46,10 @@ it redirects to `/ui/login` (via the pending-authorization mechanism below,
 not a raw inline redirect). `POST /ui/consent` submits the decision
 (`allow` / `deny`, CSRF-protected) and, on `allow`, issues the authorization
 code and redirects to the client's `redirect_uri` exactly as a first visit
-would.
+would. The **Remember this decision** checkbox (ticked by default) stores the
+consent, which lets later requests for the same scopes skip the screen and lists
+the client under `/consents`. Unticked, the approval is one-time: nothing is
+stored, and `/oauth/token` returns no `refresh_token` for that code.
 
 ## `/ui/resume/{handle}`
 

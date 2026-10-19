@@ -139,10 +139,22 @@ export default async function (fastify: FastifyInstance) {
           'malformed credential_data on password credential'
         );
       }
-      // If the credential exists and its email is not verified, send the mail.
-      // The credential's external_sub IS the registered normalized address —
-      // no users-row fetch needed since #230.
-      if (credential && parsed?.success && !parsed.data.email_verified) {
+      // The users row is read for `enabled` only (the address comes from the
+      // credential since #230). A disabled account behaves like an unknown
+      // address: generic 200, no token, no mail.
+      const user = credential
+        ? await fastify.repositories.users.findById(credential.userId)
+        : undefined;
+      if (credential && !user) {
+        fastify.log.error(
+          { credentialId: credential.id },
+          'password credential without a users row'
+        );
+      }
+      // If the credential exists, its account is enabled and its email is not
+      // verified, send the mail. The credential's external_sub IS the
+      // registered normalized address.
+      if (credential && parsed?.success && !parsed.data.email_verified && user?.enabled) {
         // Invalidate existing tokens if config is enabled (credential-keyed
         // since #230 — user_id no longer exists on the tokens table).
         if (env.EMAIL_VERIFICATION_INVALIDATE_EXISTING_ON_RESEND) {

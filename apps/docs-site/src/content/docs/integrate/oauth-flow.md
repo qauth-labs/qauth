@@ -52,7 +52,7 @@ curl -s http://localhost:3000/.well-known/oauth-authorization-server | jq
 
 | Grant                                             | Subject (`sub`) | Refresh token?       | Use case                                                |
 | ------------------------------------------------- | --------------- | -------------------- | ------------------------------------------------------- |
-| `authorization_code` (+ PKCE)                     | the end user    | yes                  | Apps acting **on behalf of a user**                     |
+| `authorization_code` (+ PKCE)                     | the end user    | if consent is stored | Apps acting **on behalf of a user**                     |
 | `refresh_token`                                   | the end user    | yes (rotated)        | Renew an access token without re-prompting              |
 | `client_credentials`                              | the `client_id` | no (RFC 6749 §4.4.3) | **Machine-to-machine**, no user                         |
 | `urn:ietf:params:oauth:grant-type:token-exchange` | the end user    | no                   | **Agent delegation** on behalf of a user (RFC 8693)     |
@@ -224,6 +224,12 @@ Notes:
   included) and a PKCE-matching `code_verifier` are mandatory.
 - `resource` here must be a **subset** of the resource set bound at authorize
   time, or you get `invalid_target`. Omit it to inherit the code's binding.
+- **`refresh_token` is present only when the user has a stored consent** for
+  your client that covers the granted scopes — the row they can review and
+  revoke under `/consents`. If they untick **Remember this decision** on the
+  consent screen, the approval is one-time: the member is absent, and you send
+  them through `/oauth/authorize` again once the access token expires.
+  Requesting `offline_access` does not change this either way.
 - **`id_token` is issued only for this grant** (`authorization_code`), and
   only when the granted scope includes `openid`. It is a separate,
   **client-audienced** EdDSA JWT (`aud` = your `client_id`, not the resource
@@ -278,6 +284,10 @@ curl -s -X POST http://localhost:3000/oauth/token \
 - The response contains a **new** `refresh_token` — store it and discard the old.
 - `scope` may be passed to **down-scope** only; requesting a scope not in the
   original set returns `invalid_scope`. Omit it to keep the original scopes.
+- The refreshed scopes must still be allowed for the client. If a scope was
+  removed from the client (or above its `max_agent_mode`) since the grant, the
+  refresh fails with `invalid_scope` and the refresh token is left unspent:
+  send a narrower `scope` to continue.
 - `resource` may **narrow** the audience but never widen it beyond the set bound
   to the refresh token.
 - Confidential clients authenticate as in step 3; public clients send only
@@ -541,6 +551,27 @@ when client authentication fails.
 Revoking a refresh token also revokes its whole rotation family, so a stolen
 descendant cannot be replayed.
 
+### What revocation reaches
+
+Every way of ending a grant stops new tokens being minted from it:
+
+| Revocation                                                    | Ends                                                                                                                                  |
+| ------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| `/oauth/revoke` with a refresh token, or a replayed one       | That token's whole rotation family                                                                                                    |
+| `/oauth/revoke` with an access token                          | That access token (denylisted by `jti` until it would have expired)                                                                   |
+| Consent revocation (`DELETE /consents/{id}`, `/api/consents`) | The user's refresh tokens and unredeemed authorization codes for that client                                                          |
+| `POST /auth/logout`                                           | The user's hosted browser sessions, refresh tokens and unredeemed authorization codes at every client, and the access token presented |
+
+**Access tokens already issued under the grant are not reached.** They are
+stateless JWTs and stay valid until `exp` (`ACCESS_TOKEN_LIFESPAN`, 900 s by
+default) wherever they are accepted: at resource servers that verify them
+locally, at introspection, at `/oauth/userinfo`, and as a token-exchange
+`subject_token`. Only an access token revoked by value, at `/oauth/revoke` or
+as the token presented to `/auth/logout`, is refused before then. A short
+access-token lifetime is what bounds this window. A delegated token from token
+exchange, and an ID-JAG minted from one, never outlive the subject token they
+were derived from.
+
 ---
 
 ## Token Introspection (RFC 7662)
@@ -569,8 +600,8 @@ curl -s -X POST http://localhost:3000/oauth/introspect \
 }
 ```
 
-An inactive, expired, unknown, or wrong-audience token returns
-`{ "active": false }` with no other fields. For most resource servers, **local
+An inactive, expired, unknown, or wrong-audience token, or a user's token once
+that user is disabled, returns `{ "active": false }` with no other fields. For most resource servers, **local
 JWT verification against the JWKS is preferred** (no per-request round-trip);
 use introspection when you need immediate revocation.
 

@@ -22,7 +22,8 @@ vi.mock('./oauth-client', () => ({
 import { assertManagementToken, createRequireManagementJwt } from './management-token';
 
 const USER_ID = '11111111-1111-4111-8111-111111111111';
-const fastify = {} as FastifyInstance;
+const users = { findById: vi.fn() };
+const fastify = { repositories: { users } } as unknown as FastifyInstance;
 
 /** The claims `/auth/login` puts on the developer-portal token. */
 function portalClaims(overrides: Record<string, unknown> = {}) {
@@ -31,6 +32,8 @@ function portalClaims(overrides: Record<string, unknown> = {}) {
 
 beforeEach(() => {
   systemClient.audience = null;
+  users.findById.mockReset();
+  users.findById.mockResolvedValue({ id: USER_ID, enabled: true });
 });
 
 describe('assertManagementToken', () => {
@@ -66,6 +69,38 @@ describe('assertManagementToken', () => {
     await expect(assertManagementToken(fastify, undefined)).rejects.toThrow(JWTInvalidError);
   });
 
+  it('rejects a token whose user has been disabled since it was minted', async () => {
+    users.findById.mockResolvedValue({ id: USER_ID, enabled: false });
+
+    await expect(assertManagementToken(fastify, portalClaims())).rejects.toThrow(JWTInvalidError);
+    expect(users.findById).toHaveBeenCalledWith(USER_ID);
+  });
+
+  it('rejects a token whose user no longer exists', async () => {
+    users.findById.mockResolvedValue(undefined);
+
+    await expect(assertManagementToken(fastify, portalClaims())).rejects.toThrow(JWTInvalidError);
+  });
+
+  it('rejects a subject that is not a user id without touching the database', async () => {
+    await expect(assertManagementToken(fastify, portalClaims({ sub: 'system' }))).rejects.toThrow(
+      JWTInvalidError
+    );
+    await expect(assertManagementToken(fastify, portalClaims({ sub: undefined }))).rejects.toThrow(
+      JWTInvalidError
+    );
+    expect(users.findById).not.toHaveBeenCalled();
+  });
+
+  it('skips the user lookup for a caller that only ends access (logout)', async () => {
+    users.findById.mockResolvedValue({ id: USER_ID, enabled: false });
+
+    await expect(
+      assertManagementToken(fastify, portalClaims(), { requireActiveUser: false })
+    ).resolves.toBeUndefined();
+    expect(users.findById).not.toHaveBeenCalled();
+  });
+
   it('follows a configured system-client audience, requiring every value', async () => {
     systemClient.audience = ['https://portal.example.com', 'https://auth.example.com'];
 
@@ -88,7 +123,10 @@ describe('createRequireManagementJwt', () => {
     const requireJwt = vi.fn(async (request: FastifyRequest) => {
       request.jwtPayload = portalClaims({ clientId: 'third-party-app' }) as never;
     });
-    const guard = createRequireManagementJwt({ requireJwt } as unknown as FastifyInstance);
+    const guard = createRequireManagementJwt({
+      requireJwt,
+      repositories: { users },
+    } as unknown as FastifyInstance);
     const request = { headers: {} } as FastifyRequest;
     const reply = {} as FastifyReply;
 
@@ -111,7 +149,10 @@ describe('createRequireManagementJwt', () => {
     const requireJwt = vi.fn(async (request: FastifyRequest) => {
       request.jwtPayload = portalClaims() as never;
     });
-    const guard = createRequireManagementJwt({ requireJwt } as unknown as FastifyInstance);
+    const guard = createRequireManagementJwt({
+      requireJwt,
+      repositories: { users },
+    } as unknown as FastifyInstance);
 
     await expect(
       guard({ headers: {} } as FastifyRequest, {} as FastifyReply)

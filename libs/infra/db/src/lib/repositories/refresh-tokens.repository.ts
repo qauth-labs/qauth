@@ -1,9 +1,44 @@
 import { NotFoundError } from '@qauth-labs/shared-errors';
-import { and, eq, gt, lt } from 'drizzle-orm';
+import { and, eq, gt, lt, type SQL, sql } from 'drizzle-orm';
 
 import type { NewRefreshToken, RefreshToken, RefreshTokensRepository } from '../../types';
 import { DbClient } from '../db';
 import { refreshTokens } from '../schema/tokens';
+
+/**
+ * Serialise refresh-token rotation against bulk revocation for one user.
+ *
+ * A bulk revocation (`revokeFamily`, `revokeAllForUser`,
+ * `revokeAllForUserAndClient`) is a single `UPDATE ... WHERE revoked = false`.
+ * Under READ COMMITTED it blocks on the parent row of a rotation that is in
+ * flight, re-checks that row once the rotation commits, finds it already
+ * revoked, and never sees the child the rotation inserted — so the child
+ * stays live after replay detection, consent revocation or logout.
+ *
+ * A transaction-scoped advisory lock keyed on the user closes that window:
+ * rotation holds it shared for the length of its transaction, every bulk
+ * revocation holds it exclusive, so the revoking UPDATE takes its snapshot
+ * only after each in-flight rotation has committed, and a rotation that
+ * starts afterwards loses its compare-and-set on the revoked parent. Both
+ * sides take it before any row lock, so they cannot deadlock. A NULL key
+ * (no such token) locks nothing. The id is hashed as a `uuid` rendered to
+ * text, so a caller's id string and the id read from a row always give the
+ * same key whatever their spelling.
+ *
+ * @param userId - Owner of the tokens: a user id, or a subquery resolving one
+ */
+async function lockUserTokens(
+  invoker: DbClient,
+  mode: 'rotate' | 'revoke',
+  userId: string | SQL
+): Promise<void> {
+  const key = sql`hashtextextended((${userId})::uuid::text, 0)`;
+  await invoker.execute(
+    mode === 'rotate'
+      ? sql`select pg_advisory_xact_lock_shared(${key})`
+      : sql`select pg_advisory_xact_lock(${key})`
+  );
+}
 
 /**
  * Factory function that creates a refresh tokens repository
@@ -133,6 +168,10 @@ export function createRefreshTokensRepository(defaultDb: DbClient): RefreshToken
      * Revoke a token only if it is still live (compare-and-set on
      * `revoked = false`), mirroring `authorizationCodes.markUsed`.
      *
+     * This is the rotation step, so it takes the user's rotation lock (see
+     * `lockUserTokens`) — meaningful only inside the caller's transaction,
+     * which must also hold the child's insert.
+     *
      * @returns The revoked row, or `undefined` when nothing was updated
      */
     async revokeIfActive(
@@ -141,6 +180,12 @@ export function createRefreshTokensRepository(defaultDb: DbClient): RefreshToken
       tx?: DbClient
     ): Promise<RefreshToken | undefined> {
       const invoker = tx ?? defaultDb;
+
+      await lockUserTokens(
+        invoker,
+        'rotate',
+        sql`select ${refreshTokens.userId} from ${refreshTokens} where ${refreshTokens.id} = ${id}`
+      );
 
       const [token] = await invoker
         .update(refreshTokens)
@@ -170,20 +215,31 @@ export function createRefreshTokensRepository(defaultDb: DbClient): RefreshToken
      * @returns Count of rows whose state was changed.
      */
     async revokeFamily(familyId: string, reason?: string, tx?: DbClient): Promise<number> {
-      const invoker = tx ?? defaultDb;
       const now = Date.now();
 
-      const updated = await invoker
-        .update(refreshTokens)
-        .set({
-          revoked: true,
-          revokedAt: now,
-          revokedReason: reason ?? null,
-        })
-        .where(and(eq(refreshTokens.familyId, familyId), eq(refreshTokens.revoked, false)))
-        .returning({ id: refreshTokens.id });
+      // The revocation lock must be held across the UPDATE, so a caller
+      // that supplies no `tx` gets a transaction opened here.
+      const run = async (invoker: DbClient): Promise<number> => {
+        await lockUserTokens(
+          invoker,
+          'revoke',
+          sql`select ${refreshTokens.userId} from ${refreshTokens} where ${refreshTokens.familyId} = ${familyId} limit 1`
+        );
 
-      return updated.length;
+        const updated = await invoker
+          .update(refreshTokens)
+          .set({
+            revoked: true,
+            revokedAt: now,
+            revokedReason: reason ?? null,
+          })
+          .where(and(eq(refreshTokens.familyId, familyId), eq(refreshTokens.revoked, false)))
+          .returning({ id: refreshTokens.id });
+
+        return updated.length;
+      };
+
+      return tx ? run(tx) : defaultDb.transaction((innerTx) => run(innerTx));
     },
 
     /**
@@ -195,23 +251,28 @@ export function createRefreshTokensRepository(defaultDb: DbClient): RefreshToken
      * @param tx - Optional transaction client
      */
     async revokeAllForUser(userId: string, reason?: string, tx?: DbClient): Promise<void> {
-      const invoker = tx ?? defaultDb;
       const now = Date.now();
 
-      await invoker
-        .update(refreshTokens)
-        .set({
-          revoked: true,
-          revokedAt: now,
-          revokedReason: reason ?? null,
-        })
-        .where(
-          and(
-            eq(refreshTokens.userId, userId),
-            eq(refreshTokens.revoked, false),
-            gt(refreshTokens.expiresAt, now)
-          )
-        );
+      const run = async (invoker: DbClient): Promise<void> => {
+        await lockUserTokens(invoker, 'revoke', userId);
+
+        await invoker
+          .update(refreshTokens)
+          .set({
+            revoked: true,
+            revokedAt: now,
+            revokedReason: reason ?? null,
+          })
+          .where(
+            and(
+              eq(refreshTokens.userId, userId),
+              eq(refreshTokens.revoked, false),
+              gt(refreshTokens.expiresAt, now)
+            )
+          );
+      };
+
+      return tx ? run(tx) : defaultDb.transaction((innerTx) => run(innerTx));
     },
 
     /**
@@ -226,25 +287,29 @@ export function createRefreshTokensRepository(defaultDb: DbClient): RefreshToken
       reason: string,
       tx?: DbClient
     ): Promise<number> {
-      const invoker = tx ?? defaultDb;
+      const run = async (invoker: DbClient): Promise<number> => {
+        await lockUserTokens(invoker, 'revoke', userId);
 
-      const updated = await invoker
-        .update(refreshTokens)
-        .set({
-          revoked: true,
-          revokedAt: Date.now(),
-          revokedReason: reason,
-        })
-        .where(
-          and(
-            eq(refreshTokens.userId, userId),
-            eq(refreshTokens.oauthClientId, oauthClientId),
-            eq(refreshTokens.revoked, false)
+        const updated = await invoker
+          .update(refreshTokens)
+          .set({
+            revoked: true,
+            revokedAt: Date.now(),
+            revokedReason: reason,
+          })
+          .where(
+            and(
+              eq(refreshTokens.userId, userId),
+              eq(refreshTokens.oauthClientId, oauthClientId),
+              eq(refreshTokens.revoked, false)
+            )
           )
-        )
-        .returning({ id: refreshTokens.id });
+          .returning({ id: refreshTokens.id });
 
-      return updated.length;
+        return updated.length;
+      };
+
+      return tx ? run(tx) : defaultDb.transaction((innerTx) => run(innerTx));
     },
 
     /**

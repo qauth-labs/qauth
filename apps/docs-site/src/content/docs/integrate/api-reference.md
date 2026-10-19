@@ -178,9 +178,17 @@ at `POST /oauth/token` — there is no separate refresh endpoint.
 
 ### `POST /auth/logout`
 
-Revoke the caller's session/token.
+Sign the user out everywhere. Ends the user's hosted browser sessions (from
+`/ui/login` or wallet login, so `/oauth/authorize` shows the login page again),
+revokes every refresh token the user holds, at every client, invalidates the
+user's unredeemed authorization codes, and denylists the access token the
+request was made with. Access tokens already
+issued to other clients are not reached: they stay valid until they expire (see
+[what revocation reaches](/integrate/oauth-flow/#what-revocation-reaches)).
 
-**Headers**: `Authorization: Bearer <access_token>` (required).
+**Headers**: `Authorization: Bearer <access_token>` (required). Only the access
+token from [`POST /auth/login`](#post-authlogin) is accepted, expired or not. A
+token issued to any other client or audience is refused.
 
 **`200 OK`**: `{ "success": true, "message": "Successfully logged out" }`
 
@@ -302,7 +310,7 @@ Key contract facts:
 ```json
 {
   "access_token": "eyJ…",
-  "refresh_token": "a1b2…", // omitted for client_credentials and token-exchange
+  "refresh_token": "a1b2…", // omitted for client_credentials, token-exchange, and a code approved without a stored consent
   "id_token": "eyJ…", // authorization_code grant only, when `openid` was granted
   "expires_in": 900,
   "token_type": "Bearer",
@@ -337,7 +345,8 @@ list.
 }
 ```
 
-An inactive/expired/unknown/wrong-audience token returns `{ "active": false }`.
+An inactive/expired/unknown/wrong-audience token returns `{ "active": false }`,
+and so does a user's token once that user is disabled or deleted.
 
 ### UserInfo response (`GET|POST /oauth/userinfo`, `200 OK`)
 
@@ -350,7 +359,8 @@ scope and only when a **verified** email attribute exists (ADR-002 trust
 order `wallet > oidc_* > self_reported`). Otherwise both keys are **absent**
 (never `null`). When present, `email_verified` is always `true`. The `POST`
 form accepts the access token either as a Bearer header or as a form-encoded
-`access_token` field (RFC 6750 §2.2).
+`access_token` field (RFC 6750 §2.2). A token whose user has been disabled
+since it was issued gets `401`.
 
 ### `POST /oauth/revoke`
 
@@ -456,7 +466,9 @@ Errors: `401` (no/invalid session) — returns `{ "consents": [] }` with no `csr
 
 ### `DELETE /consents/{id}`
 
-Revoke one consent owned by the signed-in user.
+Revoke one consent owned by the signed-in user. The refresh tokens and the
+unredeemed authorization codes the user holds for that client are revoked with
+it. Access tokens already issued stay valid until they expire.
 
 **Headers**: `X-CSRF-Token: <csrfToken from GET /consents/>` (required).
 
@@ -507,7 +519,8 @@ No `csrfToken` field — see above. Errors: `401` (missing/invalid bearer).
 
 ### `DELETE /api/consents/{id}`
 
-Revoke one consent owned by the authenticated user.
+Revoke one consent owned by the authenticated user, with the same effect as
+[`DELETE /consents/{id}`](#delete-consentsid).
 
 **`204 No Content`**. Errors: `401` (missing/invalid bearer), `404` (consent
 does not exist **or** is not owned by the caller — deliberately the same
@@ -659,9 +672,14 @@ _effective_ configuration (request value or persisted value) is re-validated:
 grant/response-type consistency, a redirect URI for user-involving grants, and
 the realm scope cap when `scopes` is changed.
 
+`enabled` can only be switched **off** here. It is the same switch an operator
+uses to cut a client off, so `"enabled": true` on a disabled client is refused
+with `403`; re-enabling is an operator action.
+
 **`200 OK`** — the updated client (safe fields, no secret).
 Errors: `400` (validation / inconsistent config / disallowed scope / missing
-redirect for a user-involving grant), `401`, `404`.
+redirect for a user-involving grant), `401`, `403` (re-enabling a disabled
+client), `404`.
 
 ### `DELETE /api/clients/{id}`
 

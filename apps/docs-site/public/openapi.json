@@ -359,7 +359,7 @@
         "tags": [
           "Auth"
         ],
-        "description": "Log out the current user. Revokes all refresh tokens for the user. Accepts expired access tokens.",
+        "description": "Log out the current user. Ends the user's hosted browser sessions, revokes all refresh tokens and unredeemed authorization codes for the user, and the access token presented. Accepts expired access tokens.",
         "parameters": [
           {
             "schema": {
@@ -1096,7 +1096,7 @@
         "tags": [
           "Clients"
         ],
-        "description": "Update mutable fields of one of the developer's OAuth clients (name, description, redirectUris, scopes, grantTypes, responseTypes, tokenEndpointAuthMethod, enabled). client_id and client_secret are immutable here. Returns 404 if the client does not exist or is owned by another developer. (Phase 2.2, issue #88.)",
+        "description": "Update mutable fields of one of the developer's OAuth clients (name, description, redirectUris, scopes, grantTypes, responseTypes, tokenEndpointAuthMethod, enabled). client_id and client_secret are immutable here. enabled can only be switched off: re-enabling a disabled client is an operator action and returns 403. Returns 404 if the client does not exist or is owned by another developer. (Phase 2.2, issue #88.)",
         "requestBody": {
           "required": true,
           "content": {

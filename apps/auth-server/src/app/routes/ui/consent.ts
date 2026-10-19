@@ -14,7 +14,7 @@ import {
 } from '../../constants';
 import { toStoredAssuranceLevel } from '../../helpers/acr-claims';
 import { sendAuthorizationError } from '../../helpers/authorization-error';
-import { resolveBrowserSession } from '../../helpers/browser-session';
+import { resolveBrowserSession, saveBrowserSession } from '../../helpers/browser-session';
 import { clientAddressKey } from '../../helpers/client-address';
 import { findExceedingAgentScopesForClient } from '../../helpers/client-auth';
 import { isAgentClient, resolveClient } from '../../helpers/client-resolution';
@@ -37,11 +37,7 @@ import {
 import { redirectToLoginWithPendingAuthorization } from '../../helpers/pending-authorization';
 import { getOrCreateDefaultRealm } from '../../helpers/realm';
 import { highestAgentModeInScopes } from '../../helpers/scope-modes';
-import {
-  type BrowserSessionData,
-  csrfTokensEqual,
-  generateCsrfToken,
-} from '../../helpers/session-cookie';
+import { csrfTokensEqual, generateCsrfToken } from '../../helpers/session-cookie';
 import { evaluateStepUp, isDangerousScope, parsePromptMode } from '../../helpers/step-up';
 import { markRelaxedCsp } from '../../plugins/security-headers';
 import { clientIdParamSchema, exactUrl } from '../../schemas/common';
@@ -449,11 +445,9 @@ export default async function (fastify: FastifyInstance) {
         ...(session.consentResources ?? {}),
         [client.clientId]: resources,
       };
-      await fastify.sessionUtils.setSession<BrowserSessionData>(
-        session.sessionId,
-        { ...session, csrfToken, consentScopes, consentResources },
-        env.SESSION_COOKIE_TTL
-      );
+      // Stored for what is left of the session's lifetime: rendering the
+      // screen must not extend the session.
+      await saveBrowserSession(fastify, { ...session, csrfToken, consentScopes, consentResources });
 
       reply.header('Content-Type', 'text/html; charset=utf-8');
       reply.header('Cache-Control', 'no-store');
@@ -600,11 +594,7 @@ export default async function (fastify: FastifyInstance) {
 
       // Burn the CSRF token so the form cannot be replayed. A fresh one is
       // minted on the next GET /ui/consent render.
-      await fastify.sessionUtils.setSession<BrowserSessionData>(
-        session.sessionId,
-        { ...session, csrfToken: undefined },
-        env.SESSION_COOKIE_TTL
-      );
+      await saveBrowserSession(fastify, { ...session, csrfToken: undefined });
 
       const realm = await getOrCreateDefaultRealm(fastify);
       const { client } = await resolveClient(fastify, realm.id, body.client_id);
@@ -829,7 +819,9 @@ export default async function (fastify: FastifyInstance) {
       // Allow: persist the grant if the user checked the box, then issue a
       // code. The grant upsert merges with any prior record so subsequent
       // requests with a subset of these scopes, for the resource(s) this
-      // screen named as the audience, skip the screen.
+      // screen named as the audience, skip the screen. An approval that is
+      // not persisted is one-time: /oauth/token mints a refresh token only
+      // under a stored consent, the row the user can list and revoke.
       if (body.allow_forever === '1') {
         await fastify.repositories.oauthConsents.upsertGrant(
           session.userId,

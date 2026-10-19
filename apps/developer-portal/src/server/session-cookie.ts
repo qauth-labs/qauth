@@ -81,10 +81,25 @@ export function clearSessionCookieHeader(): string {
   ].join('; ');
 }
 
+// Strip what a browser strips around a cookie-pair — SP and HTAB (RFC 6265
+// §5.2) — and nothing else. NOT `String.prototype.trim()`: that also removes
+// U+00A0, which is how Node's latin-1 header decoding delivers the byte 0xA0.
+// A browser keeps that byte as part of the name, so `<A0>__Host-x` does not
+// START with `__Host-` there and a sibling host may set it with `Domain=`;
+// trimming it would read that cookie as the `__Host-` one. A loop rather than
+// a regex: `[ \t]+$` backtracks quadratically on a long run of spaces.
+function stripCookieWhitespace(pair: string): string {
+  let start = 0;
+  let end = pair.length;
+  while (start < end && (pair[start] === ' ' || pair[start] === '\t')) start += 1;
+  while (end > start && (pair[end - 1] === ' ' || pair[end - 1] === '\t')) end -= 1;
+  return pair.slice(start, end);
+}
+
 export function readSessionCookie(cookieHeader: string | undefined): PortalSessionPayload | null {
   if (!cookieHeader) return null;
   for (const part of cookieHeader.split(';')) {
-    const trimmed = part.trim();
+    const trimmed = stripCookieWhitespace(part);
     const eq = trimmed.indexOf('=');
     if (eq === -1) continue;
     const key = trimmed.slice(0, eq);

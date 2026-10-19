@@ -114,6 +114,8 @@ function makeFastify() {
         create: vi.fn(),
       },
       oid4vpRequestStates: { create: vi.fn(async (row: unknown) => row) },
+      // `resolveBrowserSession` only accepts a session whose user is still enabled.
+      users: { findById: vi.fn(async (id: string) => ({ id, enabled: true })) },
       auditLogs: { create: vi.fn().mockResolvedValue(undefined) },
     },
     sessionUtils,

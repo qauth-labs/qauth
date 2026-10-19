@@ -40,6 +40,25 @@ describe('decodeJwtUnsafe', () => {
     expect(decoded.clientId).toBe('service-client');
   });
 
+  it('surfaces the aud and act claims of a delegated token', async () => {
+    const { privateKey } = await generateEdDSAKeyPair();
+    const token = await signAccessToken(
+      {
+        sub: 'user-1',
+        clientId: 'agent-1',
+        aud: 'https://api.example.com',
+        act: { sub: 'agent-1' },
+      },
+      privateKey,
+      'https://auth.example.com',
+      900
+    );
+
+    const decoded = decodeJwtUnsafe(token);
+    expect(decoded.aud).toBe('https://api.example.com');
+    expect(decoded.act).toEqual({ sub: 'agent-1' });
+  });
+
   it('throws JWTInvalidError when the token is structurally malformed', () => {
     expect(() => decodeJwtUnsafe('not.a.jwt')).toThrow(JWTInvalidError);
   });

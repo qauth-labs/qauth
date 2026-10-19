@@ -124,6 +124,10 @@ function createFastifyStub() {
       userAttributes: {
         setVerified: vi.fn().mockResolvedValue({ id: 'attr-1' }),
       },
+      // A disabled account cannot complete verification.
+      users: {
+        findById: vi.fn(async (id: string) => ({ id, enabled: true })),
+      },
     },
     emailVerificationTokenUtils: {
       hashToken: vi.fn().mockReturnValue('hashed'),
@@ -351,6 +355,30 @@ describe('POST /auth/verify', () => {
     expect(body.safeParse({ token: 'a'.repeat(64) }).success).toBe(false);
     expect(body.safeParse({ token: 'a'.repeat(64), password: '' }).success).toBe(false);
     expect(body.safeParse({ token: 'a'.repeat(64), password: 'x' }).success).toBe(true);
+  });
+
+  it('refuses a disabled account before the password check, leaving the token unconsumed', async () => {
+    const { fastify, ctx } = createFastifyStub();
+    await verifyRoute(fastify);
+    if (!ctx.handler) throw new Error('Handler missing');
+
+    (
+      fastify.repositories.emailVerificationTokens.findByTokenHash as unknown as Mock
+    ).mockResolvedValue(tokenFixture());
+    (fastify.repositories.userCredentials.findById as unknown as Mock).mockResolvedValue(
+      credentialFixture()
+    );
+    (fastify.repositories.users.findById as unknown as Mock).mockResolvedValue({
+      id: 'user-1',
+      enabled: false,
+    });
+
+    await expect(ctx.handler(request)).rejects.toBeInstanceOf(InvalidTokenError);
+    expect(fastify.repositories.users.findById).toHaveBeenCalledWith('user-1');
+    expect(fastify.passwordHasher.verifyPassword).not.toHaveBeenCalled();
+    expect(fastify.db.transaction).not.toHaveBeenCalled();
+    expect(fastify.repositories.emailVerificationTokens.markUsed).not.toHaveBeenCalled();
+    expect(fastify.repositories.userCredentials.setEmailVerified).not.toHaveBeenCalled();
   });
 
   it('throws InvalidTokenError for an unknown/expired/used token', async () => {

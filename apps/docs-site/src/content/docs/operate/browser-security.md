@@ -122,12 +122,12 @@ only inline styles are permitted. Every other route, and every client on
 
 ## Related configuration
 
-| Env var                 | Default    | Purpose                              |
-| ----------------------- | ---------- | ------------------------------------ |
-| `SESSION_COOKIE_SECURE` | `true`     | `Secure` flag on the session cookie. |
-| `SESSION_COOKIE_TTL`    | `86400`    | Session lifetime (seconds).          |
-| `SECURITY_HSTS_ENABLED` | `true`     | Emit the HSTS header.                |
-| `SECURITY_HSTS_MAX_AGE` | `31536000` | HSTS `max-age` (seconds).            |
+| Env var                 | Default    | Purpose                                                                                             |
+| ----------------------- | ---------- | --------------------------------------------------------------------------------------------------- |
+| `SESSION_COOKIE_SECURE` | `true`     | `Secure` flag on the session cookie.                                                                |
+| `SESSION_COOKIE_TTL`    | `86400`    | Session lifetime (seconds), absolute from sign-in. Activity on the hosted pages does not extend it. |
+| `SECURITY_HSTS_ENABLED` | `true`     | Emit the HSTS header.                                                                               |
+| `SECURITY_HSTS_MAX_AGE` | `31536000` | HSTS `max-age` (seconds).                                                                           |
 
 ## See also
 

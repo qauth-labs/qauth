@@ -51,8 +51,9 @@ export async function listConsentsForUser(
 
 /**
  * Revoke one consent row on behalf of `userId`, with the ownership check and
- * the audit entry both surfaces owe. Every refresh token the user holds for
- * that client is revoked in the same transaction.
+ * the audit entry both surfaces owe. Every unredeemed authorization code and
+ * every refresh token the user holds for that client is revoked in the same
+ * transaction.
  *
  * Throws `NotFoundError` when the row does not exist OR belongs to another
  * user — deliberately the same outcome, so the API never reveals that someone
@@ -92,6 +93,15 @@ export async function revokeConsentForUser(
         throw err;
       }
     }
+    // Unredeemed codes for this client go first, as in logout: one redeemed
+    // after the sweep would mint a refresh token the withdrawn grant no longer
+    // covers, and a redemption in flight holds its code row locked until its
+    // refresh token is committed, so the sweep below sees it.
+    await fastify.repositories.authorizationCodes.invalidateForUserAndClient(
+      userId,
+      owned.oauthClientId,
+      tx
+    );
     return fastify.repositories.refreshTokens.revokeAllForUserAndClient(
       userId,
       owned.oauthClientId,

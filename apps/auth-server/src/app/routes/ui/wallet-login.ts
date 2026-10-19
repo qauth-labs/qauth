@@ -17,7 +17,7 @@ import {
   WALLET_LOGIN_STATUS_RATE_LIMIT,
   WALLET_LOGIN_STATUS_RATE_WINDOW_S,
 } from '../../constants';
-import { resolveBrowserSession } from '../../helpers/browser-session';
+import { resolveBrowserSession, trackBrowserSession } from '../../helpers/browser-session';
 import { clientAddressKey } from '../../helpers/client-address';
 import { html, render, safe, safeCustomSchemeUrl } from '../../helpers/html';
 import { encodeQrCode, renderQrCodeSvg } from '../../helpers/qr-code';
@@ -697,6 +697,8 @@ async function advanceWalletLoginFlow(
     },
     env.SESSION_COOKIE_TTL
   );
+  // Recorded under the user so `/auth/logout` can end it.
+  await trackBrowserSession(fastify, user.id, sessionId);
 
   await fastify.repositories.users.updateLastLogin(user.id);
   await auditWalletLogin(fastify, request, {

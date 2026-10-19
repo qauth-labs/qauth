@@ -108,6 +108,11 @@ function makeFastify() {
       authorizationCodes: {
         create: vi.fn().mockResolvedValue({ id: 'code-1' }),
       },
+      // Both the session path and the Bearer fallback accept only a user who is
+      // still enabled.
+      users: {
+        findById: vi.fn(async (id: string) => ({ id, enabled: true })),
+      },
       auditLogs: {
         create: vi.fn().mockResolvedValue(undefined),
       },
@@ -131,6 +136,9 @@ function makeFastify() {
   };
   return { fastify: fastify as FastifyInstance, ctx };
 }
+
+/** A Bearer token's `sub` must be a user id (UUID): the first-party pin looks it up. */
+const BEARER_USER = '0190a5c8-0000-7000-8000-000000000001';
 
 const CLIENT = {
   id: 'client-uuid-1',
@@ -1353,7 +1361,7 @@ describe('GET /oauth/authorize — Bearer path step-up (ADR-007 §2, #185)', () 
     (fastify.sessionUtils.getSession as unknown as Mock).mockResolvedValue(null);
     (fastify.jwtUtils.extractFromHeader as unknown as Mock).mockReturnValue('bearer.token');
     (fastify.jwtUtils.verifyAccessToken as unknown as Mock).mockResolvedValue({
-      sub: 'user-1',
+      sub: BEARER_USER,
       clientId: DANGEROUS_CLIENT.clientId,
       aud: DANGEROUS_CLIENT.clientId,
       ...payload,
@@ -1382,7 +1390,7 @@ describe('GET /oauth/authorize — Bearer path step-up (ADR-007 §2, #185)', () 
     expect(state.redirected).toContain('code=');
     expect(fastify.repositories.authorizationCodes.create).toHaveBeenCalledOnce();
     expect(fastify.repositories.oauthConsents.findActive).toHaveBeenCalledWith(
-      'user-1',
+      BEARER_USER,
       DANGEROUS_CLIENT.id
     );
   });
@@ -1444,7 +1452,7 @@ describe('GET /oauth/authorize — Bearer path step-up (ADR-007 §2, #185)', () 
     (fastify.sessionUtils.getSession as unknown as Mock).mockResolvedValue(null);
     (fastify.jwtUtils.extractFromHeader as unknown as Mock).mockReturnValue('bearer.token');
     (fastify.jwtUtils.verifyAccessToken as unknown as Mock).mockResolvedValue({
-      sub: 'user-1',
+      sub: BEARER_USER,
       clientId: DANGEROUS_CLIENT.clientId,
       aud: DANGEROUS_CLIENT.clientId,
     });
@@ -1525,7 +1533,7 @@ describe('GET /oauth/authorize — Bearer path step-up (ADR-007 §2, #185)', () 
     (fastify.sessionUtils.getSession as unknown as Mock).mockResolvedValue(null);
     (fastify.jwtUtils.extractFromHeader as unknown as Mock).mockReturnValue('bearer.token');
     (fastify.jwtUtils.verifyAccessToken as unknown as Mock).mockResolvedValue({
-      sub: 'user-1',
+      sub: BEARER_USER,
       jti: 'revoked-jti',
       clientId: DANGEROUS_CLIENT.clientId,
       aud: DANGEROUS_CLIENT.clientId,
@@ -1555,7 +1563,7 @@ describe('GET /oauth/authorize — Bearer path step-up (ADR-007 §2, #185)', () 
     (fastify.sessionUtils.getSession as unknown as Mock).mockResolvedValue(null);
     (fastify.jwtUtils.extractFromHeader as unknown as Mock).mockReturnValue('bearer.token');
     (fastify.jwtUtils.verifyAccessToken as unknown as Mock).mockResolvedValue({
-      sub: 'user-1',
+      sub: BEARER_USER,
       jti: 'some-jti',
       clientId: DANGEROUS_CLIENT.clientId,
       aud: DANGEROUS_CLIENT.clientId,
@@ -1571,6 +1579,88 @@ describe('GET /oauth/authorize — Bearer path step-up (ADR-007 §2, #185)', () 
       reply
     );
     expect(state.redirected).toContain('error=access_denied');
+    expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
+  });
+});
+
+describe('GET /oauth/authorize — disabled user', () => {
+  // A session or a Bearer token established before the account was disabled
+  // must not yield a code: the session is ended and the login page shown; the
+  // Bearer path answers access_denied like an expired token.
+  it('sends a session whose user has been disabled back to /ui/login', async () => {
+    const { fastify, ctx } = makeFastify();
+    await authorizeRoute(fastify);
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(CLIENT);
+    (fastify.repositories.oauthConsents.findActive as unknown as Mock).mockResolvedValue({
+      id: 'consent-1',
+      scopes: ['email'],
+    });
+    (fastify.jwtUtils.extractFromHeader as unknown as Mock).mockReturnValue(null);
+    (fastify.repositories.users.findById as unknown as Mock).mockResolvedValue({
+      id: 'user-1',
+      enabled: false,
+    });
+    const { signSessionId } = await import('../../helpers/session-cookie');
+    const signed = signSessionId('sid-1');
+    (fastify.sessionUtils.getSession as unknown as Mock).mockResolvedValue({
+      userId: 'user-1',
+      sessionId: 'sid-1',
+      createdAt: Date.now(),
+    });
+
+    const handler = ctx.handler;
+    if (!handler) throw new Error('Handler missing');
+    const { reply, state } = createReply();
+    await handler(
+      {
+        query: BASE_QUERY,
+        url: '/oauth/authorize?response_type=code&client_id=app-123&scope=email',
+        headers: { cookie: `__Host-qauth_session=${signed}` },
+        ip: '127.0.0.1',
+      },
+      reply
+    );
+
+    expect(state.redirected).toContain('/ui/login?return_to=');
+    expect(fastify.sessionUtils.deleteSession).toHaveBeenCalledWith('sid-1');
+    expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
+  });
+
+  it('refuses a Bearer token whose user has been disabled with access_denied', async () => {
+    const { fastify, ctx } = makeFastify();
+    await authorizeRoute(fastify);
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(CLIENT);
+    (fastify.repositories.oauthConsents.findActive as unknown as Mock).mockResolvedValue({
+      id: 'consent-1',
+      scopes: ['email'],
+    });
+    (fastify.sessionUtils.getSession as unknown as Mock).mockResolvedValue(null);
+    (fastify.jwtUtils.extractFromHeader as unknown as Mock).mockReturnValue('bearer.token');
+    (fastify.jwtUtils.verifyAccessToken as unknown as Mock).mockResolvedValue({
+      sub: BEARER_USER,
+      clientId: CLIENT.clientId,
+      aud: CLIENT.clientId,
+    });
+    (fastify.repositories.users.findById as unknown as Mock).mockResolvedValue({
+      id: BEARER_USER,
+      enabled: false,
+    });
+
+    const handler = ctx.handler;
+    if (!handler) throw new Error('Handler missing');
+    const { reply, state } = createReply();
+    await handler(
+      {
+        query: BASE_QUERY,
+        url: '/oauth/authorize?response_type=code&client_id=app-123&scope=email',
+        headers: { authorization: 'Bearer bearer.token' },
+        ip: '127.0.0.1',
+      },
+      reply
+    );
+
+    expect(state.redirected).toContain('error=access_denied');
+    expect(fastify.repositories.users.findById).toHaveBeenCalledWith(BEARER_USER);
     expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
   });
 });
@@ -1796,7 +1886,7 @@ describe('GET /oauth/authorize — RFC 9207 §2 `iss` on every authorization res
       (fastify.jwtUtils.extractFromHeader as unknown as Mock).mockReturnValue('bearer.token');
       if (opts.bearer === 'valid') {
         (fastify.jwtUtils.verifyAccessToken as unknown as Mock).mockResolvedValue({
-          sub: 'user-1',
+          sub: BEARER_USER,
           clientId: (opts.client ?? CLIENT).clientId,
           aud: (opts.client ?? CLIENT).clientId,
         });

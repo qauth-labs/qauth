@@ -107,6 +107,14 @@ export default async function (fastify: FastifyInstance) {
         throw new InvalidTokenError('Invalid or expired token');
       }
 
+      // 3b. A disabled account must not change its verified state or have its
+      // password checked: same generic token error, and the token is left
+      // unconsumed so it still works if the operator enables the account again.
+      const user = await fastify.repositories.users.findById(credential.userId);
+      if (!user || !user.enabled) {
+        throw new InvalidTokenError('Invalid or expired token');
+      }
+
       // 4. Check if email already verified — credential_data is the sole
       // authoritative source (the legacy users.email_verified dual-write
       // ended with #230). Malformed credential_data is operator-alerting

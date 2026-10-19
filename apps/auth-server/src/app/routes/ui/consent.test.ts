@@ -101,6 +101,10 @@ function makeFastify() {
       authorizationCodes: {
         create: vi.fn().mockResolvedValue({ id: 'code-1' }),
       },
+      // `resolveBrowserSession` only accepts a session whose user is still enabled.
+      users: {
+        findById: vi.fn(async (id: string) => ({ id, enabled: true })),
+      },
       auditLogs: {
         create: vi.fn().mockResolvedValue(undefined),
       },
@@ -302,6 +306,37 @@ describe('UI /ui/consent GET — rendering', () => {
     expect(state.body as string).toContain(
       'Tokens will be valid for:</strong> https://default.example.com'
     );
+  });
+  it('rendering does not extend the session: it is stored for what is left of its lifetime', async () => {
+    // SESSION_COOKIE_TTL is 3600 s here; the session is 45 minutes old.
+    const { fastify, ctx } = makeFastify();
+    await consentRoute(fastify);
+    const { signSessionId } = await import('../../helpers/session-cookie');
+    const signed = signSessionId('sid-g2');
+    (fastify.sessionUtils.getSession as unknown as Mock).mockResolvedValue({
+      userId: 'user-1',
+      email: 'a@b.com',
+      sessionId: 'sid-g2',
+      createdAt: Date.now() - 45 * 60 * 1000,
+    });
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(CLIENT);
+
+    const handler = ctx.get;
+    if (!handler) throw new Error('Handler missing');
+    const { reply } = createReply();
+    await handler(
+      {
+        query: BASE_QUERY,
+        url: '/ui/consent?...',
+        headers: { cookie: `__Host-qauth_session=${signed}` },
+        ip: '127.0.0.1',
+      },
+      reply
+    );
+
+    const ttl = (fastify.sessionUtils.setSession as unknown as Mock).mock.calls[0][2];
+    expect(ttl).toBeGreaterThan(0);
+    expect(ttl).toBeLessThanOrEqual(15 * 60);
   });
 });
 
