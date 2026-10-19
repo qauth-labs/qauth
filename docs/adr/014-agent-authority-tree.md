@@ -90,15 +90,15 @@
 > On 2026-10-09 the maintainer also decided that this record, ADR-015 and
 > ADR-016 would be approved together, so their answers that change this
 > record were written in at once. From
-> ADR-015: sign-out ends a `sid` family whose CIMD
+> ADR-015: sign-out ends a `tree_id` family whose CIMD
 > client stopped declaring `is_agent` (decision 1; question 1). Agent types
 > authenticate by client assertion only (§4(e), §9, T2; question 2). An agent
 > type cannot mint an ID-JAG in 1.0; GATE 2 refuses it (Explicitly out of
 > scope; question 3). A GATE 4d refusal is final (§14, step 1; question 4). A
 > window renews by a CIBA request matched to it, with no exception to GATE 4a
-> (§14, step 6; question 5). A sid-less subject token older than the user's
-> last revoke-all is refused (§1, §6; question 12). From ADR-016: the
-> `Agent:` trailer carries the `agent_id` and `handle@issuer-host`, with a
+> (§14, step 6; question 5). A subject token with no `tree_id` that is older
+> than the user's last revoke-all is refused (§1, §6; question 12). From
+> ADR-016: the `Agent:` trailer carries the `agent_id` and `handle@issuer-host`, with a
 > version marker (§9; question 5). The maintainer also decided that a renewal
 > matched to an open window does not count against `REMOTE_APPROVAL_BUDGET`;
 > QAuth accepts one only in the last 60 seconds of the live leaf (§14, step 6).
@@ -111,7 +111,7 @@
 > the grants a tree uses (§1, §5). The root consent shows the root's rights
 > (§11). A binding's upstream identity belongs to one owner (§13). The
 > broker signs an action event with the reporting node's own key (§7). A
-> family with no `sid` gains none by refresh (§1). A resume rebinds its root
+> family with no `tree_id` gains none by refresh (§1). A resume rebinds its root
 > only through the consent screen, and only a process under the broker's own
 > process joins a host's one root per broker start (§1). The broker resolves
 > a caller by a pidfd, on the socket and on the loopback listener alike
@@ -124,6 +124,16 @@
 > **Amended 2026-10-19:** GATE 4d's scope check (§4(d)) already runs, flag or no flag, on
 > the ID-JAG mint branch of token exchange; [ADR-011](./011-enterprise-managed-authorization.md)
 > §3 records that decision. On the delegation branch it still arrives with this switch.
+>
+> **Amended 2026-10-19, tree id** (before any implementation): the
+> maintainer decided on 2026-10-11 that a tree's identifier is `tree_id`.
+> The record had called it `sid`, which OpenID Connect and ADR-019 give to
+> the browser session on ID and logout tokens, and one name cannot carry
+> both. The claim, the introspection member, the ledger and
+> `refresh_tokens` columns, the CAEP subject, the identifier API's path
+> parameter, the commit trailer and the broker's state file are renamed
+> with it (§1). `sid` now appears in this record only for the browser
+> session. No rule changed.
 
 ## Context
 
@@ -150,7 +160,7 @@ values — and nothing else. The deployment needs five more things:
 4. **A durable agent identity with an owner.** Every name this record had for
    an agent is either shared or ephemeral: a `client_id` names a harness
    _type_ (for example `claude-code`) that every user and every box runs, a `cnf.jkt`
-   names a process that dies with it, a `sid` names one grant. Nothing names
+   names a process that dies with it, a `tree_id` names one grant. Nothing names
    "the agent that belongs to this person", so nothing can be attributed to
    it across sessions, bound to a platform identity, or shown to the public
    with its owner's name on it (§13).
@@ -182,14 +192,14 @@ is adopted by a working group. QAuth defines the seams itself and says so
 | Concern           | Today (re-verified 2026-09-30)                                                                                                                                                                                                                                                                                                                                                                            | This record adds                                                                                                                                                                                                                            |
 | ----------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Delegation hop    | `handleTokenExchange`, `apps/auth-server/src/app/routes/oauth/token.ts:1291` — confidential-only, gates 1–4c, `act = { sub: client_id, act? }`, depth ≤ `MAX_DELEGATION_DEPTH` (`apps/auth-server/src/app/helpers/agent-audit.ts:22`), lifetime capped by the subject's remaining life, no refresh token issued                                                                                           | A spawn assertion signed by the parent's key, a DPoP proof from the child, an instance thumbprint, and a ledger row per hop                                                                                                                 |
-| Session root      | None. `jti` is `randomUUID()` with no issued-token row in Postgres and no parent link (`libs/server/jwt/src/lib/jwt-service.ts:80`); Redis holds it only as a TTL'd denylist key (and, with hybrid signing on, the PQC sidecar key); no `sid` in non-test code; `sessions` is the browser login session (`libs/infra/db/src/lib/schema/sessions.ts:7`)                                                    | `sid` on every agent access token, inherited unchanged by every exchange                                                                                                                                                                    |
+| Session root      | None. `jti` is `randomUUID()` with no issued-token row in Postgres and no parent link (`libs/server/jwt/src/lib/jwt-service.ts:80`); Redis holds it only as a TTL'd denylist key (and, with hybrid signing on, the PQC sidecar key); no `tree_id` in code; `sessions` is the browser login session (`libs/infra/db/src/lib/schema/sessions.ts:7`)                                                         | `tree_id` on every agent access token, inherited unchanged by every exchange                                                                                                                                                                |
 | Instance identity | None. No `cnf`, no DPoP, no mTLS; every agent token is a plain bearer                                                                                                                                                                                                                                                                                                                                     | DPoP-bound agent tokens (`cnf.jkt`), key held by a local helper                                                                                                                                                                             |
 | Chain record      | `audit_logs.delegation_chain` (flattened `client_id` list, `libs/infra/db/src/lib/schema/audit.ts:54`); `findByRealmAndActorClientId` has no HTTP caller (`libs/infra/db/src/lib/repositories/audit-logs.repository.ts:218`)                                                                                                                                                                              | An agent-token ledger keyed by `jti` with `parent_jti` and a stable node id, served by introspection and the dashboard                                                                                                                      |
-| Introspection     | `POST /oauth/introspect` returns no `act`, `jti` or `token_use` (response built at `apps/auth-server/src/app/routes/oauth/introspect.ts:229`); secret-based client auth only                                                                                                                                                                                                                              | `act`, `jti`, `sid`, `token_use`, `cnf`, `authorization_details`, `qauth_delegation`; `private_key_jwt` accepted                                                                                                                            |
-| Revocation        | Per-`jti` Redis denylist with TTL (`revokeJti`, `apps/auth-server/src/app/helpers/token-revocation.ts:30`); ownership = `client_id` of the token (`apps/auth-server/src/app/routes/oauth/revoke.ts:164`); `family_id` cascade for refresh tokens only; token exchange refuses a revoked subject or actor token (GATE 3a, `apps/auth-server/src/app/routes/oauth/token.ts:1431-1449`, GHSA-6fcx-34r3-24v4) | Revocation by `sid` (tree) and `jti` (subtree) with cascade; the user and any live ancestor node in the tree (by its key) may revoke; CAEP `session-revoked` emitted                                                                        |
+| Introspection     | `POST /oauth/introspect` returns no `act`, `jti` or `token_use` (response built at `apps/auth-server/src/app/routes/oauth/introspect.ts:229`); secret-based client auth only                                                                                                                                                                                                                              | `act`, `jti`, `tree_id`, `token_use`, `cnf`, `authorization_details`, `qauth_delegation`; `private_key_jwt` accepted                                                                                                                        |
+| Revocation        | Per-`jti` Redis denylist with TTL (`revokeJti`, `apps/auth-server/src/app/helpers/token-revocation.ts:30`); ownership = `client_id` of the token (`apps/auth-server/src/app/routes/oauth/revoke.ts:164`); `family_id` cascade for refresh tokens only; token exchange refuses a revoked subject or actor token (GATE 3a, `apps/auth-server/src/app/routes/oauth/token.ts:1431-1449`, GHSA-6fcx-34r3-24v4) | Revocation by `tree_id` (tree) and `jti` (subtree) with cascade; the user and any live ancestor node in the tree (by its key) may revoke; CAEP `session-revoked` emitted                                                                    |
 | Purpose / rights  | RFC 9396 absent; the only reference rejects inbound `authorization_details` on the ID-JAG path (`apps/auth-server/src/app/helpers/id-jag.ts:433`)                                                                                                                                                                                                                                                         | One RAR type, narrow-only across hops, returned in introspection                                                                                                                                                                            |
 | Consent           | `consentPage` has no agent input; `agent:*` renders raw (`apps/auth-server/src/app/routes/ui/consent.ts:138`, `describeScope` in `apps/auth-server/src/app/helpers/consent.ts:114`)                                                                                                                                                                                                                       | The tree ceiling on the consent screen                                                                                                                                                                                                      |
-| Resource side     | `McpGuard` validates `iss`/`aud`/`exp`/scope exactly, normalises no `act`/`jti`, emits nothing back (`libs/fastify/plugins/mcp-guard/src/lib/core.ts:78`, `ValidatedToken` in `libs/fastify/plugins/mcp-guard/src/types.ts:31`)                                                                                                                                                                           | `act`/`sid`/`jti` normalised, DPoP verified per resource, optional event emission and online decisions                                                                                                                                      |
+| Resource side     | `McpGuard` validates `iss`/`aud`/`exp`/scope exactly, normalises no `act`/`jti`, emits nothing back (`libs/fastify/plugins/mcp-guard/src/lib/core.ts:78`, `ValidatedToken` in `libs/fastify/plugins/mcp-guard/src/types.ts:31`)                                                                                                                                                                           | `act`/`tree_id`/`jti` normalised, DPoP verified per resource, optional event emission and online decisions                                                                                                                                  |
 | Events            | None — no SSF, SET, CAEP or webhooks                                                                                                                                                                                                                                                                                                                                                                      | An SSF transmitter (revocation) and an RFC 8935 push endpoint (resource-side and agent-side actions), with a registered-transmitter roster the owner can extend                                                                             |
 | CLI               | Nothing                                                                                                                                                                                                                                                                                                                                                                                                   | `qauth-broker` (keys, spawn, `git` credentials and, through adapters, platform and database credentials), a QAuth-side STS whose first credential adapter is `github`, and a PostgreSQL 18 validator module as the example database adapter |
 | Agent identity    | None. `oauth_clients.is_agent` is a self-asserted flag on a client registration (`libs/infra/db/src/lib/schema/core.ts:234`); `developer_id` is the only ownership signal and is NULL for every anonymous DCR client ([ADR-012](./012-dynamic-client-ownership.md)); `logo_uri` and `client_uri` land in the `metadata` jsonb at registration (`apps/auth-server/src/app/routes/oauth/register.ts:178`)   | An `agents` table — a principal with an owner, a name, an avatar and per-platform bindings — served as a SCIM `Agent` resource and a public profile (§13)                                                                                   |
@@ -236,7 +246,7 @@ in memory only — a broker restart means a new `login` — and which RFC 9449 �
 leaves bound to client authentication, not to the DPoP key (§3). A same-uid
 process that reads both can authenticate as the type and refresh the root
 from any host, minting DPoP-bound tokens under its own key with the same
-`sid`, until the user revokes the `sid` (§6). The type key alone buys client
+`tree_id`, until the user revokes the `tree_id` (§6). The type key alone buys client
 assertions and nothing they mint on their own: an agent type is registered
 without the `client_credentials` and JWT-bearer grants (§1), so the key
 mints no token by itself; it cannot spawn (GATE 3d needs the parent's DPoP
@@ -346,8 +356,8 @@ in this record presents either as QAuth's word.
 **T8 — Approval fatigue.** An agent under prompt injection asks for more
 rights again and again, until a tired owner taps yes — the push-bombing
 pattern known from MFA. Closed as far as a gate can close it (§14). Asking
-needs a scope of its own, which no approval can grant or extend. A per-`sid`
-budget caps how often a node may ask. A mute turns further asks into silent
+needs a scope of its own, which no approval can grant or extend. A
+per-`tree_id` budget caps how often a node may ask. A mute turns further asks into silent
 denials. The approval page shows the typed request from QAuth's own records;
 the model's words appear only in an attributed box. And an approval covers
 one delta, for one node, for a bounded time, and is never passed down. Not
@@ -359,7 +369,7 @@ The invariant the record exists to make provable: for every child token `c`
 with parent `p`, `scope(c) ⊆ scope(p)`, `scope(c) ⊆ registered(type(c))`,
 `aud(c) ⊆ aud(p)`, `mode(c) ≤ cap(type(c))`, `exp(c) ≤ exp(p)`,
 `rights(c) ⊆ rights(p)`, `rights(c) ⊆ registered_rights(type(c))`,
-`depth(c) ≤ 4`, `sid(c) = sid(p)`, `cnf(c)` = the key that presented the
+`depth(c) ≤ 4`, `tree_id(c) = tree_id(p)`, `cnf(c)` = the key that presented the
 exchange, and the exchange was authorised by the holder of `cnf(p)` — the
 node the broker resolved the caller to, never one a request named (§12).
 Each is one check at mint; by induction every leaf is bounded by the root,
@@ -381,7 +391,7 @@ still bound it (§14, step 1).
 One switch gates all of it: `AUTHORITY_TREE_ENABLED`, a boolean in the auth env
 schema, default **`false`** — the shape `ID_JAG_ENABLED`,
 `WALLET_FEDERATION_ENABLED` and `HYBRID_SIGNING_ENABLED` set. When false,
-nothing in this record runs: no `sid` is minted, no ledger row is written,
+nothing in this record runs: no `tree_id` is minted, no ledger row is written,
 no new gate is evaluated, and the token exchange is byte-for-byte today's,
 whatever the seed manifest or any `AGENT_*` setting says. When true,
 P0's behaviour applies to every agent-client mint, and the new exchange
@@ -389,25 +399,25 @@ gates, as each phase lands them, run as §4 states. Remote approval (§14) has
 a second switch, `REMOTE_APPROVAL_ENABLED`, default `false`, which does
 nothing unless `AUTHORITY_TREE_ENABLED` is on.
 
-### 1. Session root — `sid` on agent access tokens
+### 1. Session root — `tree_id` on agent access tokens
 
 Every access token minted to an agent client (`isAgentClient`,
 `apps/auth-server/src/app/helpers/client-resolution.ts:94`) from a
-human-consented grant carries `sid`: an opaque string, unique within the
+human-consented grant carries `tree_id`: an opaque string, unique within the
 issuer, of at least 128 bits from a CSPRNG (`randomUUID()`, as `jti` is),
 minted once per `authorization_code` grant and bound to that grant's consent
 record. It is a column on the `refresh_tokens` row, copied on rotation as
 `family_id` already is (`libs/infra/db/src/lib/schema/tokens.ts:178`), so a
 refreshed token keeps it; every token derived by exchange inherits it
 unchanged. The agent the grant names (§13), when it names one, travels the
-same way: a nullable `refresh_tokens.agent_id` beside `sid`, copied on
+same way: a nullable `refresh_tokens.agent_id` beside `tree_id`, copied on
 rotation, inherited by every exchange. The ID token issued by the same code
 exchange does **not** carry
-it: the registered ID-token `sid` (Front-Channel Logout 1.0 §3) identifies a
-User-Agent or device session for logout, which QAuth's `sessions` row is and
-this grant identifier is not, and one browser session may root several
-grants. A `client_credentials` token carries none and cannot root a tree:
-exchange already requires an enabled user
+it. The ID token's own `sid` (Front-Channel Logout 1.0 §3) is a different
+identifier: it names a User-Agent or device session for logout, which
+QAuth's `sessions` row is and this grant identifier is not, and one browser
+session may root several grants. A `client_credentials` token carries none
+and cannot root a tree: exchange already requires an enabled user
 (`apps/auth-server/src/app/routes/oauth/token.ts:1474`), so the root of a tree
 is always a human `sub`. An agent type (an agent client whose
 `max_agent_mode` the seed manifest set) holds only the grants a tree uses:
@@ -426,7 +436,7 @@ grant when a main agent's harness adapter registers its harness
 `session_id` and pid over the socket (the registration
 [Harness adapter contract](#harness-adapter-contract) describes for
 teammates; for example, Claude Code's adapter does it from its `SessionStart`
-hook), so one harness session is one `sid`, the ledger's root row records the
+hook), so one harness session is one `tree_id`, the ledger's root row records the
 harness `session_id`, and the root key is the one keyed to that process. The
 broker starts a root only for a registration whose caller resolves to no
 bound node (§12). From under a bound node a session registration is a child
@@ -447,12 +457,12 @@ reach QAuth at the process's exit. Even then, the root lives only while the
 grant's refresh token lives (ADR-015 question 8, decided 2026-10-06), and
 the broker binds the resumed process to that root only after the person
 approves the root's consent screen again (§11). The broker's authorization
-request for it names the live root's `sid`; QAuth shows the screen only to
+request for it names the live root's `tree_id`; QAuth shows the screen only to
 the root's own user for the root's own type, with the root's ceiling
 unchanged and the resumed session's binding code, and the code exchange
-continues that `sid` and refresh family without extending the family's
+continues that `tree_id` and refresh family without extending the family's
 expiry. Until then the resumed process is under no node. A
-second harness process is a second root with its own `sid`. The cadence is a
+second harness process is a second root with its own `tree_id`. The cadence is a
 per-host setting, default one root per process. A host may choose one root
 per broker start instead, as a daemon host does (decision 8, decided
 2026-10-09). On such a host the shared root's node is the broker's own
@@ -482,52 +492,57 @@ every profile —
 require PKCE (`isRedirectUriAllowedForPolicy`,
 `apps/auth-server/src/app/helpers/oauth-redirect.ts:152`).
 
-A subject token with no `sid` — a legacy token, or one issued to a non-agent
-client whose `aud` happens to name the agent — is not left sid-less: the
-exchanged token **starts a new tree** with a fresh `sid`, depth 0, and a
+A subject token with no `tree_id` — a legacy token, or one issued to a non-agent
+client whose `aud` happens to name the agent — is not left without one: the
+exchanged token **starts a new tree** with a fresh `tree_id`, depth 0, and a
 `kind: root` ledger row (§2) whose `origin_jti` and `origin_client_id` record
 the subject's `jti` and `client_id`. Refusing would break an exchange that
-works today; a sid-less agent token is one no tree can revoke.
+works today; an agent token with no `tree_id` is one no tree can revoke.
 
-A `refresh_tokens` row with a NULL `sid` gains none by refresh. Such a row
+A `refresh_tokens` row with a NULL `tree_id` gains none by refresh. Such a row
 predates the migration, or its code grant was issued while its client did
-not declare `is_agent`. No refresh mints a `sid`: one comes only from a code
+not declare `is_agent`. No refresh mints a `tree_id`: one comes only from a code
 grant whose consent screen showed the persistence rung (§11), or from the
 exchange rule above, whose new tree has no refresh family. A client that
 starts declaring
 `is_agent` after consent (for example, a CIMD document that changes) was
 never shown it. So the family keeps today's lifecycle, and it is the one
-agent-client grant whose tokens carry no `sid`: sign-out ends it (decision
+agent-client grant whose tokens carry no `tree_id`: sign-out ends it (decision
 1; ADR-015 question 11), revoke-all reaches it (ADR-015 §1), and its tokens
 reach a tree only by the exchange rule above, which bounds that tree by the
 subject token's remaining life. A longer tree takes a new authorization,
 through its consent screen.
 
-One case is refused (decided 2026-10-09, ADR-015 question 12). A sid-less
-subject token whose `iat` is earlier than the user's last revoke-all (§6) is
-refused. Such a token has no ledger row, so revoke-all cannot reach it. That
-time is a per-user timestamp in Postgres, cached in Redis. The refusal is
+One case is refused (decided 2026-10-09, ADR-015 question 12). A subject
+token with no `tree_id` whose `iat` is earlier than the user's last
+revoke-all (§6) is refused. Such a token has no ledger row, so revoke-all
+cannot reach it. That time is a per-user timestamp in Postgres, cached in
+Redis. The refusal is
 `invalid_request`, as for any refused subject token (RFC 8693 §2.2.2).
 
-`sid` is the IANA-registered "Session ID" claim (OIDC Front-Channel Logout 1.0
-§3; Back-Channel Logout 1.0 §2.4 carries it in the Logout Token; the Standards
-table has the rest of its trail). No specification places it in an access
-token; this record defines that placement: **the session is the human's
-authorization grant to the root agent, not a browser session**. Introspection
-returns it as a service-specific member (RFC 7662 §2.2).
+`tree_id` is a QAuth-defined claim. It is deliberately not `sid`, the
+IANA-registered "Session ID" claim (OIDC Front-Channel Logout 1.0 §3;
+Back-Channel Logout 1.0 §2.4 carries it in the Logout Token), which names
+the browser session on QAuth's ID and logout tokens (ADR-019 Decision 3).
+One name cannot carry both (decided 2026-10-11, maintainer). No
+specification defines a tree identifier in an access token; this record
+defines it, and the Standards table records its position: **a tree roots in
+the human's authorization grant to the root agent, not in a browser
+session**. Introspection returns it as a service-specific member (RFC 7662
+§2.2).
 
 ### 2. Ledger, not wire — the agent-token ledger
 
-Every mint of a `sid`-carrying token for an agent client — the
+Every mint of a `tree_id`-carrying token for an agent client — the
 `authorization_code`, `refresh_token` and exchange grants; a
 `client_credentials` token (§1) writes nothing — writes one row to a new
 table, `agent_token_ledger`: `jti` (key),
-`sid`, `realm_id`, `user_id`, `agent_id` (nullable; the principal the tree
+`tree_id`, `realm_id`, `user_id`, `agent_id` (nullable; the principal the tree
 roots in, §13, copied from the root row to every descendant), `node_id`,
 `parent_node_id` and `parent_jti`
 (null at the root), `kind` (`root` | `refresh` | `spawn` | `narrow` |
 `id-jag` | `elevation`, §14), `origin_jti` and `origin_client_id` (set only on the `kind: root`
-row a sid-less subject started, §1), `client_id`, `instance_jkt`,
+row a subject with no `tree_id` started, §1), `client_id`, `instance_jkt`,
 `scope`, `aud`, `authorization_details`, `depth`, `spawn_receipt` (the
 verified spawn assertion's claims, §4), `approval_receipt` (the owner's
 approval of an elevation, §14), `issued_at`, `expires_at`,
@@ -540,13 +555,13 @@ know is refused everywhere this record adds**: the STS on every adapter's
 route (§9), the CIBA backchannel endpoint (§14), the node leg of the
 identifier API (§6), the push endpoint's subject check (§7), and
 introspection's answer to a node about its ancestors (below). A
-`client_credentials` token, a token of a family with no `sid` (§1) and any
+`client_credentials` token, a token of a family with no `tree_id` (§1) and any
 other token without a row reach none of them; at the token endpoint a
-sid-less subject keeps §1's rules.
+subject with no `tree_id` keeps §1's rules.
 
 A **node** is a process, not a token — or, for the by-type case in
 [Harness adapter contract](#harness-adapter-contract), a key the session
-process holds on a sub-agent type's behalf. `node_id` is minted at the first row for a (`sid`,
+process holds on a sub-agent type's behalf. `node_id` is minted at the first row for a (`tree_id`,
 `instance_jkt`) pair; every later token under that key in that
 session — a renewal, a narrowing — joins it, so a 300 s renewal is a new row
 under the same node, and the dashboard tree and subtree revocation key on
@@ -554,7 +569,7 @@ nodes. Until §3 lands a node is one token.
 
 Introspection serves the row: `POST /oauth/introspect` adds `act`, `jti`,
 `cnf` and `authorization_details` (registered members), the QAuth markers
-`sid` and `token_use`, and one service-specific member, **`qauth_delegation`**
+`tree_id` and `token_use`, and one service-specific member, **`qauth_delegation`**
 — `node_id`, `parent_jti`, `depth`, `revoked`, `agent` (the row's
 `agent_id` handle, absent when NULL, §13) and `chain`, a root-first array
 of `{ jti, client_id, issued_at }` for a resource caller; ancestors' `jkt` and
@@ -682,7 +697,7 @@ the subject token's `client_id`, operator-set like `max_agent_mode`) — so the
 root's `aud` bounds which types the tree may contain and each type's own
 allowlist bounds what it may spawn, including itself; a same-key narrow
 presents no assertion and never reaches this check; `cnf.jkt` equals the DPoP
-proof's key; and when (`sid`, `cnf.jkt`) already names a node, that node has
+proof's key; and when (`tree_id`, `cnf.jkt`) already names a node, that node has
 `revoked_at IS NULL`, the same `client_id` as the assertion's `sub` and the
 same parent node as the subject token's — a spawn onto a revoked or foreign
 key is `invalid_request`, so a revoked node cannot be renewed by the next
@@ -735,7 +750,7 @@ stays confidential-only. An agent type never authenticates by client secret
 `private_key_jwt`, and the code already refuses a secret from such a client
 (`apps/auth-server/src/app/helpers/client-auth.ts:183`). The client
 credential names the type, not the instance (§9); the instance is the DPoP key (§3). The minted token: `sub` = user,
-`client_id` = child type, `cnf.jkt` = child key, `act` extended (§3), `sid`
+`client_id` = child type, `cnf.jkt` = child key, `act` extended (§3), `tree_id`
 inherited, new `jti`, **no refresh token** — the code's invariant stands, so
 `exp(c) ≤ exp(p)` holds on the token itself. A node renews by re-spawn under
 its parent's current token with a fresh assertion for the same key, root-down
@@ -824,7 +839,7 @@ its type's `registered_rights` or, when it names an agent, that agent's
 `invalid_authorization_details` and never reaches the screen. What passes is
 rendered there in full (§11).
 
-### 6. Revocation — by `sid` and by `jti`, cascading, with a written window
+### 6. Revocation — by `tree_id` and by `jti`, cascading, with a written window
 
 Revocation walks the ledger: revoking a `jti` marks its node and every
 descendant node `revoked_at` and writes each live `jti` into the existing Redis
@@ -847,9 +862,9 @@ If any `revokeJti` write fails, the request answers 503 with `Retry-After`
 retry"), and a repair job replays the denylist from rows whose `revoked_at`
 is set and `expires_at` is in the future; the ledger, not Redis, is the
 source of truth. Introspection reports `active: false` when the row carries
-`revoked_at`, whether or not the denylist has caught up. Revoking a `sid`
+`revoked_at`, whether or not the denylist has caught up. Revoking a `tree_id`
 revokes the root, its whole tree and the refresh-token family the grant
-issued. Revoking the root node's `jti` is revocation of its `sid`: the refresh
+issued. Revoking the root node's `jti` is revocation of its `tree_id`: the refresh
 family goes with it, so the root cannot refresh into the same node. RFC 7009
 §2.1 explicitly permits a policy-defined cascade to "related tokens and the
 underlying authorization grant"; this is that cascade.
@@ -857,27 +872,28 @@ underlying authorization grant"; this is that cascade.
 Who may revoke, and how: the token's own client over `POST /oauth/revoke`
 (RFC 7009, unchanged, now cascading); the **session owner** (the ledger row's
 `user_id`, from the portal) and a **live node of the same tree** over a
-QAuth-defined identifier API, `POST /api/agent-sessions/{sid}/revoke` and
+QAuth-defined identifier API, `POST /api/agent-sessions/{tree_id}/revoke` and
 `POST /api/agent-tokens/{jti}/revoke` — RFC 7009 takes the token string, not
 an identifier, and a parent never holds its child's token, so no RFC 7009
 request can cut a subtree. Over the identifier API a node proves its place
 by authenticating as its agent type _and_ presenting one of its own
-unrevoked DPoP-bound node tokens for the same `sid` with a DPoP proof; the
-target must be that node or a descendant of it (`sid` revocation requires the
+unrevoked DPoP-bound node tokens for the same `tree_id` with a DPoP proof; the
+target must be that node or a descendant of it (`tree_id` revocation requires the
 root node, the row whose `instance_jkt` is the root's). Client authentication
 alone never suffices: a `client_id` names a type (for example `claude-code`) shared by
 every user and every box of that type, so the rule at
 `apps/auth-server/src/app/routes/oauth/revoke.ts:164` — today only the agent
 named on the token can revoke it, by `client_id` — cannot be carried over to
 identifier-keyed revocation without letting any instance of the type kill
-any user's tree. `sid` and `jti` are public (§2) and confer nothing. Foreign
+any user's tree. `tree_id` and `jti` are public (§2) and confer nothing. Foreign
 identifiers, identifiers outside the caller's subtree and a same-type tree
 whose keys the caller does not hold answer 200 and revoke nothing. The
 session owner also has a kill switch, `POST /api/agent-sessions/revoke-all`:
 it revokes every live tree the user rooted, each by the walk above. Only the
 owner may call it, never a node, and it asks for no step-up, because an
 emergency stop must not wait (decision 1). Each call records its time as the
-user's last revoke-all, which §1 checks for a sid-less subject token.
+user's last revoke-all, which §1 checks for a subject token with no
+`tree_id`.
 
 The revocation window equals the access-token lifetime, so that lifetime is a
 policy parameter: a profile row consulted through `resolveEnvironmentPolicy`
@@ -901,7 +917,7 @@ push delivery (RFC 8935) for receivers that serve an endpoint and poll
 delivery (RFC 8936) for those that cannot, the broker among them — with
 `event_timestamp`, `initiating_entity` (`user`
 | `admin` | `system`) and `reason_admin`. For a tree the subject is an SSF §3.3
-`complex` subject whose `session` member is `{ "format": "opaque", "id": "<sid>" }`
+`complex` subject whose `session` member is `{ "format": "opaque", "id": "<tree_id>" }`
 and whose `user` member is `iss_sub` — RFC 9493 §5 forbids a format from saying
 what kind of thing it names; the `session` member is the registered way. For a
 subtree the subject is `jwt_id` `{ iss, jti }` naming the token at the
@@ -930,10 +946,10 @@ wire. Honest limit: when
 the broker itself dies — crash, `kill -9`, reboot — nothing is revoked and
 nothing is deleted until expiry: QAuth leaves 300 s, a vended platform
 credential the rest of its upstream lifetime (an installation token's hour,
-for `github`). The broker keeps its live `sid`s (identifiers, not
-secrets) in `$XDG_STATE_HOME/qauth-broker/sids` and names them on its next
+for `github`). The broker keeps its live `tree_id`s (identifiers, not
+secrets) in `$XDG_STATE_HOME/qauth-broker/tree-ids` and names them on its next
 start; with its keys gone it cannot cut them itself (type authentication
-alone revokes nothing, above), so the session owner's revoke-by-`sid` from
+alone revokes nothing, above), so the session owner's revoke-by-`tree_id` from
 the portal is the remedy.
 
 ### 7. Telemetry — action events into QAuth, from resources and from the agent's own side
@@ -970,7 +986,7 @@ indexed by the subject `jti`; a SET whose `iat` is older than
 `AGENT_EVENT_WINDOW` (default 300 s) is refused. Emission is asynchronous
 and best-effort. The dashboard's tree is the ledger joined with
 these rows, streamed live from the portal (`GET /api/agent-sessions`,
-`GET /api/agent-sessions/{sid}` and `/{sid}/events` over server-sent events).
+`GET /api/agent-sessions/{tree_id}` and `/{tree_id}/events` over server-sent events).
 
 **Agent-side transmitters.** The roster above is the operator's. An agent's
 owner (§13) runs things beside the harness that see what the resource never
@@ -1030,7 +1046,7 @@ QAuth clients (§11.2). Requests follow the COAZ-MCP binding's default
 `tools/call` mapping (§7.1): `subject` is `type: identity` with `id` the
 token's `sub`, `context.agent` the token's `client_id` — the binding's §11.2
 puts the agent in context so user and agent trust are evaluated independently
-— and a QAuth property `context.qauth` carries `sid`, `jti`, `jkt`, `act` and
+— and a QAuth property `context.qauth` carries `tree_id`, `jti`, `jkt`, `act` and
 `depth`, filled from the ledger when only `jti` is supplied.
 
 The fast path stays offline: mcp-guard, the validator and the broker decide on
@@ -1155,7 +1171,7 @@ GitHub, `gh` or PostgreSQL below are examples.
   own login has no first gate on the CLI leg.
 - **Provenance** — a `prepare-commit-msg` hook and, for a platform CLI the
   broker shims, a pull-request-creation passthrough (example: `gh pr create`)
-  append `QAuth-Session: <sid>/<jti>` to commits and PR bodies: a
+  append `QAuth-Session: <tree_id>/<jti>` to commits and PR bodies: a
   pointer to the ledger row, not a proof — both identifiers are public and
   confer nothing (§6). A platform may attribute a vended credential's
   activity to the platform identity and record no token identifier (GitHub
@@ -1231,7 +1247,7 @@ AGENT:MODEL` convention (`Documentation/process/coding-assistants.rst`,
 **The credential is the gate; hooks are UX** (the Alternatives table;
 [Harness adapter contract](#harness-adapter-contract)). The broker **must
 log**, per vend:
-`sid`, `jti`, `client_id`, `cnf.jkt`, pid,
+`tree_id`, `jti`, `client_id`, `cnf.jkt`, pid,
 uid, ancestry to the bound node (and the bound node's pidfd/start time), the
 executable and subcommand (never arguments), the resource and permissions
 requested, what was vended (an opaque credential id and the upstream grant's
@@ -1279,7 +1295,7 @@ count; the client-attributed `purpose` from
 and those rights; the persistence rung, "may keep working until you revoke
 it" — a code grant always issues a refresh token
 (`apps/auth-server/src/app/routes/oauth/token.ts:625`), so every root can renew
-until `sid` revocation or the refresh family expires — with the date that
+until `tree_id` revocation or the refresh family expires — with the date that
 family expires; the depth cap, `MAX_DELEGATION_DEPTH`; and, from the broker,
 the `qauth_binding_code` its session shows (§1). One sentence says the
 agent may delegate downwards within this ceiling and never beyond it. A root
@@ -1319,7 +1335,7 @@ and never presented at a resource — every resource sees a single-audience
 leaf. An agent root never takes the skip-consent fast path
 (`canSkipConsent`, `apps/auth-server/src/app/helpers/consent.ts:77`), and
 `prompt=none` for an agent root answers `consent_required` (decided
-2026-10-06; ADR-015 decision 11). A `sid` is minted per
+2026-10-06; ADR-015 decision 11). A `tree_id` is minted per
 grant, not per screen, and by a code grant only when its screen showed the
 persistence rung; §1's exchange rule is the one other source. A root grant
 that names a dangerous scope
@@ -1456,7 +1472,7 @@ request roots the tree in that agent, and QAuth refuses the request
 (`invalid_request`, audited) unless the row is active and its
 `owner_user_id` is the authenticating `sub` — the consent screen then names
 the agent (§11). The ledger's `kind: root` row records `agent_id`; every
-descendant row inherits it unchanged as `sid` is inherited (§2); introspection
+descendant row inherits it unchanged as `tree_id` is inherited (§2); introspection
 returns it in `qauth_delegation` as `agent`; revocation gains one more
 identifier, `POST /api/agents/{id}/revoke`, which cuts every live tree of
 that agent by the §6 walk and may be called by the agent's current
@@ -1553,7 +1569,7 @@ the owner's display name, the bindings' `external_login`s, `active`, and a
 fixed statement of what the page attests — that this agent is a principal of
 this issuer owned by this person, and nothing about any commit, message or
 action that names it elsewhere (T7). The same at `Accept: application/json`.
-No `sid`, `jti`, node, scope, model or event ever appears on it; those are
+No `tree_id`, `jti`, node, scope, model or event ever appears on it; those are
 the owner's and the realm admin's (§2, §6). An agent whose
 `profile_visibility` is `private` answers 404, indistinguishable from a
 handle that does not exist.
@@ -1610,7 +1626,7 @@ bounded by its own approval, not by a parent.
    - `login_hint_token` = the node's own DPoP-bound token. CIBA requires
      exactly one of its three hints and leaves this one's format to the
      deployment; QAuth defines it as the requesting node's token, which
-     names the user, the `sid` and the node;
+     names the user, the `tree_id` and the node;
    - the delta asked for: `scope` (with the `openid` value CIBA requires)
      and one `agent-task` entry in `authorization_details` (§5) naming one
      resource — RFC 9396 §3 lists CIBA requests among the places
@@ -1645,7 +1661,7 @@ bounded by its own approval, not by a parent.
      root's refresh family and never reaches a durable rung.
    - **Deny.**
    - **Deny and mute** — for this session, or for a chosen time. Further
-     requests from that `sid` are refused with `access_denied` and notify no
+     requests from that `tree_id` are refused with `access_denied` and notify no
      one.
    - **Always block** — a standing deny the owner sets for the same delta
      from this agent. It lasts across sessions, refuses like a mute, and is
@@ -1661,7 +1677,7 @@ bounded by its own approval, not by a parent.
    returns the elevation leaf; until then it gets `authorization_pending`,
    and on a denial `access_denied` (§11):
    - `sub` = the user, `client_id` = the node's type, `cnf.jkt` = the
-     node's key, `sid` and `act` = the node's;
+     node's key, `tree_id` and `act` = the node's;
    - scope and `authorization_details` = exactly the approved delta — not
      the node's scope plus the delta;
    - one audience, the resource; no refresh token.
@@ -1689,14 +1705,14 @@ bounded by its own approval, not by a parent.
    questions that reach the owner. It still needs `agent:request`, and a
    mute or an always-block refuses it like any request (decided 2026-10-09).
    The window ends at its time, when the node's process dies (the dead-man
-   switch, §6), when the `sid` is revoked, or when the owner ends it from
+   switch, §6), when the `tree_id` is revoked, or when the owner ends it from
    the portal. The §6 walk treats elevation rows like any other row.
 
 **Asking is a scope of its own.** `agent:request` is the right to file an
 approval request at all. It sits in the root grant like any other scope,
 and the consent screen shows it (§11). An approval can never grant or
 extend it, an elevation never carries it, and a child gets it only by
-narrowing from a parent that holds it. A per-`sid` budget caps asking —
+narrowing from a parent that holds it. A per-`tree_id` budget caps asking —
 `REMOTE_APPROVAL_BUDGET`, operator-set, default three pending and ten an
 hour — and no approval raises it. A renewal matched to an open window
 asks no one and does not count (step 6). A node without the scope, over its
@@ -1735,7 +1751,7 @@ this record and ADR-017.
 | ---------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Adopt draft-liu's `delegation_chain` in the token now                                          | Individual `-00`, June 2026; records of 500–1000 bytes per hop; `wit://` identifiers defined only in its own terminology; signed-field set still moving. Ledger plus `qauth_delegation` carries the same facts; revisit on the §2 trigger.                                                                                   |
 | draft-niyikiza offline attenuation (holder-derived child tokens, no AS)                        | No `sub`, so no on-behalf-of; no ledger, so no dashboard or cascade; not an access token at any RS. Its `par_hash` binding is borrowed as `ath` in the spawn assertion.                                                                                                                                                      |
-| Transaction Tokens as the session identifier                                                   | Per-invocation, minutes-scale, single trust domain, "MUST NOT be used as an access token" (-11 §13.13). Not a durable root.                                                                                                                                                                                                  |
+| Transaction Tokens as the tree identifier                                                      | Per-invocation, minutes-scale, single trust domain, "MUST NOT be used as an access token" (-11 §13.13). Not a durable root.                                                                                                                                                                                                  |
 | One DCR client per agent instance                                                              | Anonymous DCR clients are unowned ([ADR-012](./012-dynamic-client-ownership.md)), get `NULL` `max_agent_mode` and a secret to keep; a `client_id` names a registration, not an instance. The instance is the key.                                                                                                            |
 | `may_act` as the allowed-children carrier                                                      | RFC 8693 §4.4 `may_act` is one party, a JSON object; a set of agent types is not expressible. `aud` ∋ client identifier is an example value §2.1 allows, read as "who may present this at the STS" per the splicing thread, and it is what GATE 3c already checks.                                                           |
 | A ledger `aud_ceiling` in place of GATE 4b's subject-`aud` bound                               | Moves the on-token invariant `aud(c) ⊆ aud(p)` into a table; a resource server could no longer verify audience monotonicity from the tokens alone, and the consent screen would lose the resource ceiling it shows today. Enrichment keeps 4b byte-identical.                                                                |
@@ -1750,7 +1766,7 @@ this record and ADR-017.
 | The agent as a `users` row (a service account)                                                 | A user is the on-behalf-of `sub`; making the agent one would let a tree root in it with no human, which the exchange gate refuses on purpose (§1). A user also holds credentials of its own; an agent holds none (§13).                                                                                                      |
 | The agent as an `oauth_clients` row                                                            | A `client_id` names a harness type shared across users and boxes (§6, §9); one client per agent recreates the per-instance registration ADR-012 rejected, and `developer_id` is NULL for every anonymous client. A client is not owned by a user the way an agent is.                                                        |
 | Agent identity in `act` (`act.sub` = agent)                                                    | draft-mcguinness §3.2 makes `act.sub` a client identifier and §14.12 wants it durable and never key-derived; the agent is not a client, and the harness type still has to be named. The agent is a ledger column and an introspection member, not an `act` member (§13).                                                     |
-| A public per-`jti` or per-commit resolver on QAuth                                             | Puts ledger rows behind a URL anyone can enumerate from public commits; `sid` and `jti` confer nothing, but the rows are the owner's (§2, §6). The profile shows the principal and nothing below it; resolving a commit is the owner's own systems' job (§9, §13).                                                           |
+| A public per-`jti` or per-commit resolver on QAuth                                             | Puts ledger rows behind a URL anyone can enumerate from public commits; `tree_id` and `jti` confer nothing, but the rows are the owner's (§2, §6). The profile shows the principal and nothing below it; resolving a commit is the owner's own systems' job (§9, §13).                                                       |
 | Model name as a ledger fact                                                                    | QAuth never sees the model: the harness hooks report it at session start and on a switch, a loopback proxy sees it on the wire, and neither is QAuth's own observation. A report stays a report (§7, T7).                                                                                                                    |
 | SSF stream management for agent-side transmitters                                              | Receiver-initiated by design (SSF 1.0 §7, §8): the receiver reads the transmitter's well-known configuration and creates the stream there, which a local daemon behind NAT cannot serve. RFC 8935 with an out-of-band `agent_transmitters` row now; a transmitter-initiated registration goes to the WG (§7).                |
 | Commit signing by the broker or by QAuth                                                       | A broker-held per-node key verifies against the ledger but a git host that does not know the key shows each agent commit Unverified (for example, GitHub reports `unknown_key`); a QAuth-side signer with a registered key shows Verified but puts the AS on each commit, against the hot-path rule. Unsigned (decision 12). |
@@ -1779,9 +1795,9 @@ RFC 9396 §6.1's "fewer permissions" — composition by analogy, not text.
 | Spawn assertion                                         | QAuth-defined                                                         | Nearest: RFC 6749 §8.2 extension parameter, RFC 7521 assertion framework, rfc7523bis `aud` rule, RFC 8725 §3.11 explicit `typ`, draft-liu §5.2 `delegatee_id`, RFC 9449 §4.2 `ath` computation                                                                                                                                                                                                                                                                                      |
 | Per-hop lineage                                         | Proposed by draft (not adopted); QAuth ledger                         | draft-liu-oauth-chain-delegation-00 §4, §10.6 chain by reference                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | Child bound to the exact parent token                   | Proposed by draft (idea reused)                                       | draft-niyikiza-oauth-attenuating-agent-tokens-01 §4.6 `par_hash`                                                                                                                                                                                                                                                                                                                                                                                                                    |
-| Session identifier in access tokens                     | Registered claim; placement QAuth-defined                             | IANA JWT Claims `sid` (Front-Channel Logout 1.0 §3; Back-Channel Logout 1.0 §2.1); RFC 8417 §2.1.2 precedent; not in RFC 9068, not in the introspection registry                                                                                                                                                                                                                                                                                                                    |
-| Introspection members                                   | Covered / QAuth-defined                                               | RFC 7662 §2.2; registered `act`, `cnf`, `authorization_details`, `jti`; extension `sid`, `token_use`, `qauth_delegation` (cross-domain use would need Specification Required registration; `delegation` is OpenID Federation 1.0 §13.6)                                                                                                                                                                                                                                             |
-| Revocation cascade                                      | Covered (policy); QAuth-defined (API)                                 | RFC 7009 §2.1 "related tokens and the underlying authorization grant"; revoke-by-`sid`/`jti` endpoints are QAuth's                                                                                                                                                                                                                                                                                                                                                                  |
+| Tree identifier in access tokens                        | QAuth-defined claim; not the registered `sid`                         | `tree_id`, a private claim name (RFC 7519 §4.3); not in RFC 9068, not in the introspection registry; the IANA-registered `sid` (Front-Channel Logout 1.0 §3; Back-Channel Logout 1.0 §2.1) keeps its session meaning on ID and logout tokens (ADR-019 Decision 3), and one name cannot carry both                                                                                                                                                                                   |
+| Introspection members                                   | Covered / QAuth-defined                                               | RFC 7662 §2.2; registered `act`, `cnf`, `authorization_details`, `jti`; extension `tree_id`, `token_use`, `qauth_delegation` (cross-domain use would need Specification Required registration; `delegation` is OpenID Federation 1.0 §13.6)                                                                                                                                                                                                                                         |
+| Revocation cascade                                      | Covered (policy); QAuth-defined (API)                                 | RFC 7009 §2.1 "related tokens and the underlying authorization grant"; revoke-by-`tree_id`/`jti` endpoints are QAuth's                                                                                                                                                                                                                                                                                                                                                              |
 | Session-revoked signal                                  | Covered                                                               | SSF 1.0 §3.3 `complex`, §3.5 `jwt_id`, §7, §8.1.1; RFC 8935 push, RFC 8936 poll; CAEP 1.0 §3.1 (Final, 29 August 2025; approval announced 2 September 2025); RFC 9493 `opaque`, `iss_sub`                                                                                                                                                                                                                                                                                           |
 | Resource-side action events                             | Covered (envelope); QAuth-defined (event type)                        | RFC 8417 §2.2 (`events`, `txn`, `toe`), RFC 8935 push; the `agent-action` URI is QAuth's                                                                                                                                                                                                                                                                                                                                                                                            |
 | Agent-side transmitters and their registration          | Covered (envelope); gap (registration); QAuth-defined (members)       | RFC 8935 push with out-of-band keys; SSF 1.0 §7–§8 stream management is receiver-initiated and does not fit a NAT'd transmitter; no CAEP or SSF event type describes an agent's action (CAEP 1.0 §3 defines session, token-claims, credential, assurance-level, device-compliance and risk-level changes — states, never acts); the `model` and `reason` members and the server-written `agent_id` column are QAuth's; both gaps are what QAuth takes to the Shared Signals WG (§7) |
@@ -1806,7 +1822,7 @@ build on a past date. A draft in the RFC Editor queue does not expire.
 | draft-niyikiza-oauth-attenuating-agent-tokens (individual)                  | `-01` · 15 Jun 2026                                          | 17 Dec 2026                       | attenuation invariants                                                                                                                                       |
 | draft-asor-wimse-agent-delegation-chain (individual)                        | `-01` · 3 Sep 2026                                           | 7 Mar 2027                        | header only; open before citing                                                                                                                              |
 | draft-ietf-wimse-aims (WG, Informational; replaces draft-klrc-aiagent-auth) | `-00` · 15 Sep 2026                                          | 19 Mar 2027                       | audit minimums; "LLM MUST NOT hold credentials"                                                                                                              |
-| draft-ietf-oauth-transaction-tokens (WG)                                    | `-11` · 30 Jul 2026                                          | 31 Jan 2027                       | rejected as session id; `txn` reused                                                                                                                         |
+| draft-ietf-oauth-transaction-tokens (WG)                                    | `-11` · 30 Jul 2026                                          | 31 Jan 2027                       | rejected as tree id; `txn` reused                                                                                                                            |
 | draft-ietf-oauth-identity-assertion-authz-grant (WG)                        | `-04` · 21 May 2026                                          | 22 Nov 2026                       | ADR-011 pin; actor profile layers on it                                                                                                                      |
 | draft-ietf-oauth-client-id-metadata-document (WG)                           | `-02` · 6 Jul 2026                                           | 7 Jan 2027                        | agent client naming                                                                                                                                          |
 | draft-ietf-oauth-rfc7523bis (WG)                                            | `-11` · 28 Apr 2026                                          | none: in the RFC Editor queue     | `aud` = issuer only                                                                                                                                          |
@@ -1829,7 +1845,7 @@ ID-JAG: GATE 2 refuses the request
 (decided 2026-10-09, ADR-015 question 3). Any other ID-JAG or
 identity-chaining hop ends the tree at the domain boundary, and
 the ID-JAG mint path of ADR-011 stays outside it — an assertion minted from a
-tree token carries no `act` and no `sid`, the ledger records the mint as a
+tree token carries no `act` and no `tree_id`, the ledger records the mint as a
 `kind: id-jag` row that can have no children, and the foreign AS's tokens are
 outside the tree. A restore-token
 analogue or any durable rung at an OS-level authority manager: a later ADR
@@ -1861,13 +1877,14 @@ gate.
 
 - **P0 — the root is observable, and answers "which agent, in which session,
   with which scopes, opened this PR".** **0a, server:** the
-  `AUTHORITY_TREE_ENABLED` switch as the Decision defines it; `sid` on agent
-  tokens (code, refresh, exchange) and the `refresh_tokens.sid` column;
+  `AUTHORITY_TREE_ENABLED` switch as the Decision defines it; `tree_id` on agent
+  tokens (code, refresh, exchange) and the `refresh_tokens.tree_id` column;
   `agent_token_ledger` and
-  its repository; ledger writes at the three mint sites; the sid-less-subject
-  rule and the NULL-`sid` refresh rule; introspection members `jti`, `sid`,
+  its repository; ledger writes at the three mint sites; the rule for a
+  subject with no `tree_id` and the NULL-`tree_id` refresh rule;
+  introspection members `jti`, `tree_id`,
   `token_use`, `act`, `qauth_delegation`; `GET /api/agent-sessions` and
-  `/{sid}`; the
+  `/{tree_id}`; the
   STS with its first adapter, `github`, on an operator-set per-type policy,
   the type's `registered_rights` (§5); the agent type's grant rule (§1);
   spec-pin rows with their
@@ -1879,9 +1896,10 @@ gate.
   until P3. Tests: with the flag off, every token and the exchange are
   byte-identical to today's and no ledger row exists; claim presence and
   inheritance across code → refresh → exchange; one ledger row per
-  `sid`-carrying mint and none for `client_credentials`, and a failed write
-  fails the mint; a sid-less subject starts a new tree with a `kind: root`
-  row; a refresh family with a NULL `sid` gets none at its next refresh,
+  `tree_id`-carrying mint and none for `client_credentials`, and a failed write
+  fails the mint; a subject with no `tree_id` starts a new tree with a
+  `kind: root` row; a refresh family with a NULL `tree_id` gets none at its
+  next refresh,
   including one whose CIMD client starts declaring `is_agent` after consent;
   the introspection schema; with the switch on, an agent type's ID-JAG
   request fails `invalid_request` at GATE 2; the seed manifest refuses an
@@ -1921,7 +1939,7 @@ gate.
   naming an inactive agent fails the same way; a grant naming none is
   byte-identical to today's; every descendant row carries the root's
   `agent_id`; the profile of a private agent is 404 and the profile of a
-  public one carries no `sid`, `jti` or scope; a commit made through the
+  public one carries no `tree_id`, `jti` or scope; a commit made through the
   broker under an agent root is authored by the binding's login and address;
   a node-supplied `Signed-off-by` is refused; a binding whose `adapter_ref`
   is assigned to another owner, or to none, fails, and so does a second
@@ -1959,12 +1977,12 @@ gate.
   key nests `act` once; a leaf cannot spawn.
 - **P2 — purpose, ceiling, revocation.** The `agent-task` RAR type end to end
   with server-written `caused_by` and the introspection member
-  `authorization_details`; the consent ceiling; revocation by `sid`
+  `authorization_details`; the consent ceiling; revocation by `tree_id`
   and `jti`, the identifier API, the cascade and ancestry ownership; the
   `agentAccessTokenLifespan` row; the CAEP transmitter; the STS narrowed by
   `authorization_details`; `POST /api/agents/{id}/revoke` with its
   owner-or-admin rule (§13); `POST /api/agent-sessions/revoke-all`, with
-  sign-out leaving refresh families that carry a `sid`, except a CIMD
+  sign-out leaving refresh families that carry a `tree_id`, except a CIMD
   client's that no longer declares `is_agent` (decision 1); GATE 4d's rights
   half and the root's rights bound at `/authorize` (§5). Tests:
   widened `locations` fails
@@ -1975,7 +1993,7 @@ gate.
   a client-supplied `caused_by` is rejected;
   revoke-by-agent makes every tree rooted in the agent inactive and leaves
   the owner's other agents' trees alone, and a node calling it is refused;
-  revoke-by-`sid` makes every descendant inactive at introspection and in the
+  revoke-by-`tree_id` makes every descendant inactive at introspection and in the
   denylist; a spawn or renewal whose parent row is revoked fails
   `invalid_request`; a denylist write failure mid-cascade answers 503 and leaves
   every marked row inactive at introspection; revoke-by-`jti` leaves siblings
@@ -1983,23 +2001,23 @@ gate.
   its key fails `invalid_request`); a denylisted or `revoked_at` subject token
   cannot spawn; revoking the root's `jti` refuses the next refresh; sign-out
   ends the refresh family of a CIMD client that no longer declares
-  `is_agent` and leaves a `sid`-carrying agent family; after revoke-all, a
-  sid-less subject token issued before it fails `invalid_request`; the
+  `is_agent` and leaves a `tree_id`-carrying agent family; after revoke-all, a
+  subject token with no `tree_id` issued before it fails `invalid_request`; the
   consent screen shows the union of modes, the allowlist, every `locations`
   and `actions` entry escaped, the `aud` resources, the refresh family's
   expiry, the depth cap and the binding code.
 - **P3 — observation.** The RFC 8935 push endpoint and event type, the
   `agent_actions` table, the operator-set `event_audiences` column on
   `oauth_clients` and `AGENT_EVENT_WINDOW`; mcp-guard normalises
-  `act`/`sid`/`jti`, verifies DPoP per resource, emits events; the
+  `act`/`tree_id`/`jti`, verifies DPoP per resource, emits events; the
   broker's proxy and header-hook leaves (Claude Code's `headersHelper`, in
   the example adapter) so the MCP leg joins the broker's
-  root and gains its `sid`; the portal's live tree; the `agent_transmitters`
+  root and gains its `tree_id`; the portal's live tree; the `agent_transmitters`
   row and the one-hop subject rule for agent-side SETs, the `model` and
   `reason` members and the server-written `agent_id` column, the `source`
   column with its three values shown apart, the broker's `pre-push` SET (§7,
   §9), and the SCIM `GET /scim/v2/Agents` projection (§13). Tests: an event by `jti`
-  lands on the right node; a revoked `sid` reaches the broker by poll, and a
+  lands on the right node; a revoked `tree_id` reaches the broker by poll, and a
   refused re-spawn reaches it with polling off; either deletes its
   vended credentials; a foreign local process — another uid, or a container
   on host networking — cannot obtain a signed request or a DPoP proof from the
@@ -2036,7 +2054,7 @@ gate.
   owner-registered webhook; mutes. Tests: an elevation carries exactly the
   approved delta and one audience; a `kind: elevation` subject cannot spawn
   or narrow; a request without `agent:request`, or over budget, is refused
-  and notifies no one; a muted `sid` is refused and notifies no one; a
+  and notifies no one; a muted `tree_id` is refused and notifies no one; a
   request for a scope outside the type's registered scopes, or for rights
   outside its `registered_rights`, is refused and notifies no one (GATE 4d
   is final); a request whose `login_hint_token` has no ledger row is
@@ -2044,11 +2062,11 @@ gate.
   resolves with no notification and no passkey, writes a new
   `kind: elevation` row under the same approval and leaves the budget
   untouched; a renewal before the live leaf's last 60 seconds fails
-  `invalid_request` and notifies no one; a muted `sid`'s renewal is
+  `invalid_request` and notifies no one; a muted `tree_id`'s renewal is
   refused; an
   approval without a fresh passkey assertion bound to the request is
   refused; the page's headline is the typed delta and `purpose` renders
-  only in the attributed box; revoke-by-`sid` ends an open window; a window
+  only in the attributed box; revoke-by-`tree_id` ends an open window; a window
   never outlives the refresh family; a notification body carries only the
   request id, the agent's handle and the URL; raising a root ceiling without
   a passkey assertion is refused, and a live tree keeps its ceiling; an
@@ -2246,7 +2264,7 @@ on 401; the Agent SDK passes `mcpServers` and headers per `query()`.
 | Sub-agent with its own inline `mcpServers`    | by type                    | The inline server is a `stdio` entry running the broker's proxy with the agent type as an argument; the broker attributes the child by `SO_PEERCRED` and ancestry, and `SubagentStart` says which instance of that type is live. The node is a spawn by the session node, so its type must be in the session type's `spawn_allowlist`; the argument picks among those types and adds none (§12). Two concurrent sub-agents of one type share a node. Its key is created on the first `SubagentStart` of that type in the session — or, when no hook has announced the type (hooks disabled), on the proxy's first call under it — and retired on the last `SubagentStop` of that type or at session end; the start and stop events reach the broker by hooks (advice, not authority), so with hooks off the key lives until session end, and the node's dead-man switch is the session process's pidfd either way. MCP only.                                                                                                                            |
 | Sub-agent sharing the session's connections   | no                         | Same connection, same token: the session node.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
 | Any in-process sub-agent's CLI call           | no                         | The Bash tool runs in the session process; `SO_PEERCRED` sees the session; the credential vended is the session node's. `PreToolUse` can refuse as advice; it cannot make it a different principal.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
-| Claude Code's own per-server OAuth (DCR/CIMD) | outside the tree           | A non-agent client under §1: no `sid`, no ledger row, no node. It joins the broker's root only when the server is reached through the proxy or `headersHelper` → broker (P3). An operator who seeds it as an agent client and points Claude Code at those pre-configured credentials gets a `sid` and ledger rows — but a root of its own.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| Claude Code's own per-server OAuth (DCR/CIMD) | outside the tree           | A non-agent client under §1: no `tree_id`, no ledger row, no node. It joins the broker's root only when the server is reached through the proxy or `headersHelper` → broker (P3). An operator who seeds it as an agent client and points Claude Code at those pre-configured credentials gets a `tree_id` and ledger rows — but a root of its own.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 
 ## Consequences
 
@@ -2346,7 +2364,7 @@ proceeds on that default until the maintainer decides otherwise. As of
 2026-10-09 the maintainer has decided every question below.
 
 1. **Browser logout and authority trees.** _Decided 2026-09-30 (maintainer)._
-   Should a QAuth logout revoke the user's authority trees (`sid`)? RFC 9700
+   Should a QAuth logout revoke the user's authority trees (`tree_id`)? RFC 9700
    §4.14.2 leaves automatic refresh-token revocation on logout a MAY, and
    says nothing about the access tokens below it. The maintainer's words:
    there will be a separate method that revokes all agents; agents survive
@@ -2354,8 +2372,8 @@ proceeds on that default until the maintainer decides otherwise. As of
    `POST /auth/logout` revokes every refresh token of the user
    (`revokeAllForUser`, `apps/auth-server/src/app/routes/auth/logout.ts:79`).
    With `AUTHORITY_TREE_ENABLED` on, sign-out no longer ends a refresh family that
-   carries a `sid`; with the flag off nothing changes. One exception was
-   decided on 2026-10-09 (ADR-015 question 1). Sign-out ends a `sid` family
+   carries a `tree_id`; with the flag off nothing changes. One exception was
+   decided on 2026-10-09 (ADR-015 question 1). Sign-out ends a `tree_id` family
    whose CIMD client has stopped declaring `is_agent`, and so its tree. A
    CIMD client's `is_agent` follows its document at every re-resolution
    (`apps/auth-server/src/app/helpers/client-resolution.ts:134`). The
@@ -2418,13 +2436,13 @@ proceeds on that default until the maintainer decides otherwise. As of
    the decision is unchanged.
 8. **Root-grant cadence.** One root per main-agent process (a login per
    session, per-session attribution) or one root per broker start (one login,
-   concurrent sessions share a `sid` and a node)? Default: per process.
+   concurrent sessions share a `tree_id` and a node)? Default: per process.
    _Note 2026-09-22:_ an unattended runtime — a daemon with no
    session-registration hook (§1; for example, Claude Code's is
    `SessionStart`), restarted
    independently of the broker, started
    through the spawner path — cannot carry a per-process root, since its
-   every restart would cut the `sid` (§6); it needs the per-broker-start
+   every restart would cut the `tree_id` (§6); it needs the per-broker-start
    shape. A per-host setting choosing between the two, rather than one
    answer for every host, is the likely resolution. _Decided 2026-10-09
    (maintainer):_ a per-host setting, default one root per process. A daemon

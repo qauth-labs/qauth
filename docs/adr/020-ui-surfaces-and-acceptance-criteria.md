@@ -13,6 +13,10 @@
 > Some decisions here change ADR-018's scope or ADR-019's topology: the device authorization
 > grant, account selection, event delivery, the plugin API and the paired sandbox realm. Those
 > records carry the changes. This one names them so the UI scope reads whole.
+>
+> **Amended 2026-10-19:** an Authority Tree's identifier is `tree_id`, not `sid` (ADR-014's
+> amendment of that date). The claims a mapper never writes and the search box of UX criterion 3
+> name `tree_id` beside the browser session's `sid`.
 
 ## Context
 
@@ -124,9 +128,9 @@ Placement rules that follow from earlier decisions:
   tokens. Custom logic is written as a plugin (§4).
 - No mapper output is ever used to match accounts.
 - A mapper never writes a claim the server sets itself, among them `iss`, `sub`, `exp`, `iat`,
-  `nbf`, `jti`, `sid`, `act`, `cnf`, `client_id`, `scope`, `amr`, `acr`, `auth_time`, `nonce`,
-  `azp`, `at_hash`, `c_hash`, `email` and `email_verified`. An audience mapper only adds a resource
-  registered in the realm to `aud`.
+  `nbf`, `jti`, `sid`, `tree_id`, `act`, `cnf`, `client_id`, `scope`, `amr`, `acr`, `auth_time`,
+  `nonce`, `azp`, `at_hash`, `c_hash`, `email` and `email_verified`. An audience mapper only adds a
+  resource registered in the realm to `aud`.
 - Creating or changing a mapper changes what tokens assert, so it is a security operation (ADR-019
   Decision 7).
 
@@ -346,8 +350,8 @@ a regression fails the build.
 2. **A reason on every setting.** Each setting has a one-sentence explanation and a link to
    docs.qauth.dev. A value that differs from the default is marked.
 3. **Command palette and token inspector.** One search box finds users, clients, sessions, `jti`,
-   `sid` and agents. A pasted token shows its realm, its signing key, its revocation state and its
-   place in the Authority Tree.
+   `sid`, `tree_id` and agents. A pasted token shows its realm, its signing key, its revocation
+   state and its place in the Authority Tree.
 4. **Empty states that work.** The first client, provider or agent screen shows the next step and
    a copyable SDK snippet.
 5. **Sign-in without JavaScript (CI).** The password, TOTP and email-code steps work with
