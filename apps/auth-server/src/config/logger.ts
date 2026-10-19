@@ -204,19 +204,170 @@ export function serializeRequestForLog(req: FastifyRequest): {
   };
 }
 
+/** What pino's own `err` serializer is willing to treat as an error. */
+interface ErrorLike {
+  message: string;
+  name?: string;
+  stack?: string;
+  cause?: unknown;
+}
+
+function isErrorLike(value: unknown): value is ErrorLike {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    typeof (value as Partial<ErrorLike>).message === 'string'
+  );
+}
+
+/**
+ * drizzle-orm's `DrizzleQueryError`: the SQL that failed and the values bound
+ * to its placeholders, which it ALSO spells out in its `message` — `Failed
+ * query: <sql>\nparams: <values>` — and, through it, in its `stack`.
+ */
+interface FailedQueryErrorLike extends ErrorLike {
+  query: string;
+  params: unknown;
+}
+
+function isFailedQueryError(error: ErrorLike): error is FailedQueryErrorLike {
+  return 'query' in error && typeof error.query === 'string' && 'params' in error;
+}
+
+/**
+ * The `message` and `stack` of one link in a cause chain as they may be
+ * logged: a failed query keeps its SQL and loses its bound parameters,
+ * everything else is returned untouched.
+ */
+function loggableMessageAndStack(error: ErrorLike): { message: string; stack: string } {
+  const stack = error.stack ?? '';
+  if (!isFailedQueryError(error)) {
+    return { message: error.message, stack };
+  }
+  const message = `Failed query: ${error.query}`;
+  // The stack opens with the message, so the parameters sit there too. A
+  // function replacement, because the SQL may contain `$1`-style sequences
+  // that `String#replace` would otherwise interpret.
+  return { message, stack: stack.replace(error.message, () => message) };
+}
+
+/** The shape Fastify declares for what an `err` serializer returns. */
+interface SerializedErrorForLog {
+  type: string;
+  message: string;
+  stack: string;
+  [key: string]: unknown;
+}
+
+/**
+ * The pino `err` serializer: what pino's own produces — `type`, `message` and
+ * `stack` with the cause chain appended, the error's own enumerable fields —
+ * minus the bound parameters of a failed database query.
+ *
+ * Every repository INSERT puts the row into the query parameters, and the
+ * row is where the secrets live: `user_credentials.credential_data` carries
+ * the Argon2id hash of the password just typed, `oauth_clients` the
+ * `client_secret_hash`, `api_keys` the `key_hash`, beside the e-mail address
+ * or client id the row is keyed by. drizzle-orm builds `DrizzleQueryError`'s
+ * message from those parameters, the repositories keep it as the `cause` of
+ * the `UniqueConstraintError` they throw (409), and an insert that fails for
+ * any other reason reaches the error handler as the `DrizzleQueryError`
+ * itself (500). Either way the global error handler logs `{ err }`, and
+ * pino's default serializer flattens every message in the cause chain into
+ * `err.message` and every stack into `err.stack`. `LOG_REDACT_PATHS` names
+ * object keys and cannot reach inside those strings, for the same reason the
+ * request `url` has {@link redactLoggedUrl}; `err.params` is dropped as well,
+ * since on an unwrapped query error it is an own field and would be copied
+ * verbatim.
+ *
+ * A duplicate registration is the everyday case: the route has no existence
+ * check of its own, so every second `POST /auth/register` for an address
+ * fails inside the credential insert, AFTER the password was hashed — and
+ * when it is the account holder retrying, the hash in the log verifies
+ * against their real password. The SQL text (with its `$n` placeholders) and
+ * the PostgreSQL message stay in the line; an operator loses nothing they
+ * could not read from the schema.
+ *
+ * @param err - the value logged under `err`. Typed as Fastify types it, and
+ * anything that is not error-like is passed through as pino's own serializer
+ * does, so a stray `log.warn({ err: 'text' })` cannot throw inside the logger.
+ */
+export function serializeErrorForLog(err: Error): SerializedErrorForLog {
+  if (!isErrorLike(err)) {
+    return err as unknown as SerializedErrorForLog;
+  }
+  return serializeErrorLike(err, new Set<object>());
+}
+
+/**
+ * {@link serializeErrorForLog} for one error. Mirrors pino-std-serializers'
+ * `err`: it serializes `AggregateError#errors` into `aggregateErrors` and
+ * error-valued fields recursively, so a failed query nested in either place
+ * loses its parameters too, instead of being copied out raw. `visited`
+ * (errors already serialized on this call) ends cycles, as pino's `seen` tag
+ * does.
+ */
+function serializeErrorLike(err: ErrorLike, visited: Set<object>): SerializedErrorForLog {
+  visited.add(err);
+
+  const messages: string[] = [];
+  const stacks: string[] = [];
+  const chain = new Set<ErrorLike>();
+  for (let link: unknown = err; isErrorLike(link) && !chain.has(link); link = link.cause) {
+    chain.add(link);
+    const { message, stack } = loggableMessageAndStack(link);
+    messages.push(message);
+    stacks.push(stack);
+  }
+
+  const errors = (err as { errors?: unknown }).errors;
+  const fields: Record<string, unknown> = {};
+  if (Array.isArray(errors)) {
+    fields['aggregateErrors'] = errors.map((entry) =>
+      isErrorLike(entry) && !visited.has(entry) ? serializeErrorLike(entry, visited) : entry
+    );
+  }
+  for (const [key, value] of Object.entries(err)) {
+    // `cause` is already folded into `message` and `stack`; `errors` into
+    // `aggregateErrors`; a failed query's `params` are the secret.
+    if (
+      key === 'cause' ||
+      (key === 'errors' && Array.isArray(errors)) ||
+      (key === 'params' && isFailedQueryError(err))
+    ) {
+      continue;
+    }
+    if (isErrorLike(value)) {
+      if (!visited.has(value)) {
+        fields[key] = serializeErrorLike(value, visited);
+      }
+      continue;
+    }
+    fields[key] = value;
+  }
+
+  return {
+    ...fields,
+    type: typeof err.constructor === 'function' ? err.constructor.name : (err.name ?? 'Error'),
+    message: messages.join(': '),
+    stack: stacks.join('\ncaused by: '),
+  };
+}
+
 type ObservabilityEnvSubset = Pick<typeof Env, 'LOG_LEVEL' | 'LOG_PRETTY' | 'NODE_ENV'>;
 
 /**
  * Build the pino logger options for the Fastify server.
  *
  * Honours `LOG_LEVEL`, always redacts secrets — by path through pino's
- * `redact`, and inside the request `url` through the `req` serializer — and,
- * only when `LOG_PRETTY` is enabled and not running in production, routes
- * output through `pino-pretty` for human-readable local development. Production
- * emits structured JSON for log shippers.
+ * `redact`, inside the request `url` through the `req` serializer, and inside
+ * a failed query's message through the `err` serializer — and, only when
+ * `LOG_PRETTY` is enabled and not running in production, routes output through
+ * `pino-pretty` for human-readable local development. Production emits
+ * structured JSON for log shippers.
  *
- * Only `req` is overridden: Fastify merges these serializers OVER its defaults,
- * so `res` and `err` keep theirs.
+ * Only `req` and `err` are overridden: Fastify merges these serializers OVER
+ * its defaults, so `res` keeps theirs.
  *
  * @param env - Validated environment configuration.
  * @returns A pino logger options object for `Fastify({ logger })`.
@@ -232,6 +383,7 @@ export function buildLoggerOptions(env: ObservabilityEnvSubset): FastifyServerOp
     },
     serializers: {
       req: serializeRequestForLog,
+      err: serializeErrorForLog,
     },
     ...(usePretty
       ? {

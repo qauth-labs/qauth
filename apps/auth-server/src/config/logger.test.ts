@@ -1,5 +1,6 @@
 import { Writable } from 'node:stream';
 
+import { UniqueConstraintError } from '@qauth-labs/shared-errors';
 import Fastify from 'fastify';
 import { describe, expect, it } from 'vitest';
 
@@ -10,6 +11,7 @@ import {
   LOG_REDACTED_QUERY_PARAMETERS,
   percentEncodingTolerantPattern,
   redactLoggedUrl,
+  serializeErrorForLog,
   serializeRequestForLog,
 } from './logger';
 
@@ -336,5 +338,138 @@ describe('serializeRequestForLog', () => {
       remoteAddress: undefined,
       remotePort: undefined,
     });
+  });
+});
+
+describe('serializeErrorForLog', () => {
+  // drizzle-orm's `DrizzleQueryError`, as the repositories receive it: the
+  // bound parameters of the failed INSERT are the row, and the row holds the
+  // address and the hash of the password that was just typed.
+  const passwordHash =
+    '$argon2id$v=19$m=65536,t=3,p=4$Tlcen8p7z7XTlWlnICq83g$Ec9GOVoMVkM4mcHmuvAwOP4Zmkble2Y4LXaCEg1wjyM';
+  const email = 'forgetful@example.test';
+  const query =
+    'insert into "user_credentials" ("id", "user_id") values (default, $1) returning "id"';
+  const params = [
+    '01a1204c-0000-7000-8000-000000000000',
+    email,
+    JSON.stringify({ password_hash: passwordHash }),
+  ];
+
+  function failedQuery(): Error & { query: string; params: unknown[] } {
+    const pgError = Object.assign(
+      new Error(
+        'duplicate key value violates unique constraint "idx_user_credentials_realm_provider_sub_unique"'
+      ),
+      { code: '23505', constraint: 'idx_user_credentials_realm_provider_sub_unique' }
+    );
+    return Object.assign(new Error(`Failed query: ${query}\nparams: ${params}`), {
+      query,
+      params,
+      cause: pgError,
+    });
+  }
+
+  async function logThroughFastify(err: unknown): Promise<string> {
+    const captured: string[] = [];
+    const stream = new Writable({
+      write(chunk, _enc, cb) {
+        captured.push(chunk.toString());
+        cb();
+      },
+    });
+    const loggerOptions = buildLoggerOptions(baseEnv) as LoggerOptions;
+    const app = Fastify({ logger: { ...loggerOptions, stream } });
+    app.log.warn({ err }, 'Error occurred');
+    await app.close();
+    return captured.join('');
+  }
+
+  it('keeps the bound parameters of a failed query out of the line when it is the cause of a 409', async () => {
+    const serialized = await logThroughFastify(
+      new UniqueConstraintError('idx_user_credentials_realm_provider_sub_unique', failedQuery())
+    );
+
+    expect(serialized).not.toContain('$argon2id$');
+    expect(serialized).not.toContain(email);
+    expect(serialized).not.toContain('params:');
+
+    // What pino's own serializer carries is still there: the type, the cause
+    // chain in `message` and `stack`, and the error's own fields.
+    const parsed = JSON.parse(serialized) as { err: Record<string, unknown> };
+    expect(parsed.err).toMatchObject({
+      type: 'UniqueConstraintError',
+      message: `Unique constraint violated: idx_user_credentials_realm_provider_sub_unique: Failed query: ${query}: duplicate key value violates unique constraint "idx_user_credentials_realm_provider_sub_unique"`,
+      constraint: 'idx_user_credentials_realm_provider_sub_unique',
+      code: 'UNIQUE_CONSTRAINT_VIOLATION',
+      statusCode: 409,
+    });
+    expect(parsed.err.stack).toContain('UniqueConstraintError: Unique constraint violated');
+    expect(parsed.err.stack).toContain(`caused by: Error: Failed query: ${query}\n    at `);
+    expect(parsed.err.stack).toContain('caused by: Error: duplicate key value');
+    expect(parsed.err).not.toHaveProperty('cause');
+  });
+
+  it('keeps them out when the failed query itself reaches the log (a 500)', async () => {
+    const serialized = await logThroughFastify(failedQuery());
+
+    expect(serialized).not.toContain('$argon2id$');
+    expect(serialized).not.toContain(email);
+
+    const parsed = JSON.parse(serialized) as { err: Record<string, unknown> };
+    expect(parsed.err).toMatchObject({
+      type: 'Error',
+      message: `Failed query: ${query}: duplicate key value violates unique constraint "idx_user_credentials_realm_provider_sub_unique"`,
+      query,
+    });
+    expect(parsed.err).not.toHaveProperty('params');
+  });
+
+  it('serializes an ordinary error as pino does', () => {
+    const cause = new Error('inner');
+    const error = Object.assign(new Error('outer', { cause }), { code: 'E_OUTER' });
+
+    expect(serializeErrorForLog(error)).toEqual({
+      type: 'Error',
+      message: 'outer: inner',
+      stack: `${error.stack}\ncaused by: ${cause.stack}`,
+      code: 'E_OUTER',
+    });
+  });
+
+  it('strips a failed query nested in an AggregateError or an error-valued field', async () => {
+    const aggregate = new AggregateError([failedQuery()], 'several inserts failed');
+    const wrapped = Object.assign(new Error('wrapper'), { original: failedQuery() });
+
+    for (const err of [aggregate, wrapped]) {
+      const serialized = await logThroughFastify(err);
+      expect(serialized).not.toContain('$argon2id$');
+      expect(serialized).not.toContain(email);
+    }
+
+    const serializedAggregate = serializeErrorForLog(aggregate);
+    expect(serializedAggregate).not.toHaveProperty('errors');
+    expect(serializedAggregate['aggregateErrors']).toEqual([
+      expect.objectContaining({ query, message: expect.stringContaining('Failed query') }),
+    ]);
+    expect(serializeErrorForLog(wrapped)['original']).toMatchObject({ query });
+  });
+
+  it('ends a cycle through error-valued fields', () => {
+    const a = Object.assign(new Error('a'), { peer: undefined as unknown });
+    const b = Object.assign(new Error('b'), { peer: a });
+    a.peer = b;
+
+    expect(serializeErrorForLog(a)).toMatchObject({ message: 'a', peer: { message: 'b' } });
+  });
+
+  it('ends a cyclic cause chain and passes a non-error through', () => {
+    const a = new Error('a');
+    const b = new Error('b', { cause: a });
+    a.cause = b;
+
+    expect(serializeErrorForLog(a)).toMatchObject({ message: 'a: b' });
+    expect(serializeErrorForLog('not an error' as unknown as Error)).toBe('not an error');
+    expect(serializeErrorForLog(undefined as unknown as Error)).toBeUndefined();
   });
 });
