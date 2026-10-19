@@ -367,7 +367,10 @@ describe('rewriteRecordLink — the real docs/adr and docs/security corpus, enum
     // and two removed (ADR-011's follow-up list no longer links ADR-008 and
     // ADR-017), all → ROUTE. Counted with this test's own extraction regex before
     // the buckets below were touched.
-    expect(extractAllLinks()).toHaveLength(570);
+    //
+    // 570 → 572 with the 2026-10-19 GATE 4d amendment: ADR-011 §3 links
+    // ADR-014, and ADR-014's header pointer links ADR-011, both → ROUTE.
+    expect(extractAllLinks()).toHaveLength(572);
   });
 
   it('every link falls into exactly one of the four outcomes, with none left unresolved', () => {
@@ -491,7 +494,10 @@ describe('rewriteRecordLink — the real docs/adr and docs/security corpus, enum
     //
     // The 2026-10-11 decisions on ADR-011: 228 → 229 route (net +1, see the total
     // above). External, anchors, blob and unresolved unchanged.
-    expect(rewrittenToRoute).toBe(229);
+    //
+    // The 2026-10-19 GATE 4d amendment: 229 → 231 route (ADR-011 → ADR-014,
+    // ADR-014 → ADR-011). External, anchors, blob and unresolved unchanged.
+    expect(rewrittenToRoute).toBe(231);
     expect(rewrittenToBlob).toBe(24);
     expect(leftUnresolved).toBe(0);
   });

@@ -3625,6 +3625,12 @@ describe('POST /oauth/token — ID-JAG MINT (token exchange, ADR-011)', () => {
       subjectScope?: string;
       subjectAct?: unknown;
       subjectExp?: number;
+      /**
+       * The agent's registered `scopes`. Defaults to the default subject
+       * token's scope, so the cases that test something else mint; GATE 4d
+       * (ADR-011 §3, amended 2026-10-19) has its own cases below.
+       */
+      scopes?: string[];
     } = {}
   ) {
     const { fastify, ctx } = createFastifyStub();
@@ -3635,7 +3641,7 @@ describe('POST /oauth/token — ID-JAG MINT (token exchange, ADR-011)', () => {
       clientSecretHash: 'hash',
       enabled: true,
       grantTypes: opts.grantTypes ?? [TOKEN_EXCHANGE_GRANT],
-      scopes: [] as string[],
+      scopes: opts.scopes ?? ['chat.read', 'chat.history'],
       audience: opts.audience === undefined ? [TARGET_AS, MCP_SERVER] : opts.audience,
       isAgent: opts.isAgent ?? true,
       maxAgentMode: null,
@@ -3692,7 +3698,12 @@ describe('POST /oauth/token — ID-JAG MINT (token exchange, ADR-011)', () => {
 
   it('mints an ID-JAG with the exact spec claim set and `token_type: "N_A"`', async () => {
     mockEnv['ID_JAG_ENABLED'] = true;
-    const { fastify, ctx } = setupMintStub();
+    // The subject token's scope is inside the agent's registered scopes, so
+    // the assertion carries all of it (GATE 4a and GATE 4d both hold).
+    const { fastify, ctx } = setupMintStub({
+      subjectScope: 'chat.read chat.history',
+      scopes: ['chat.read', 'chat.history'],
+    });
 
     const result = (await invoke(fastify, ctx, mintRequest())) as Record<string, unknown>;
 
@@ -3850,6 +3861,107 @@ describe('POST /oauth/token — ID-JAG MINT (token exchange, ADR-011)', () => {
     ).rejects.toBeInstanceOf(InvalidScopeError);
   });
 
+  // GATE 4d (ADR-011 §3, amended 2026-10-19). The assertion's target comes from
+  // the agent's registration (`audience`), so its scope is bounded by the
+  // agent's registration (`scopes`) as well — the same pair of columns
+  // `client_credentials` applies. Before the amendment the mint copied the
+  // subject token's scope unchecked, so an agent registered for `chat.read`
+  // got a QAuth-signed `chat.read chat.history` at a foreign server.
+  describe('GATE 4d — the agent registered scopes bound the assertion', () => {
+    function expectRefusedWithAudit(fastify: FastifyInstance, grantedScopes: string[]) {
+      expect(fastify.repositories.auditLogs.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          event: 'oauth.token.exchange.failure',
+          success: false,
+          metadata: expect.objectContaining({
+            error: 'invalid_scope: ID-JAG scope outside the client scope allowlist',
+            grantedScopes,
+            allowedScopes: ['chat.read'],
+          }),
+        })
+      );
+      expect(fastify.repositories.auditLogs.create).not.toHaveBeenCalledWith(
+        expect.objectContaining({ event: 'oauth.token.exchange.success' })
+      );
+    }
+
+    it('refuses a scope inherited from the subject token that the agent is not registered for', async () => {
+      mockEnv['ID_JAG_ENABLED'] = true;
+      const { fastify, ctx } = setupMintStub({
+        scopes: ['chat.read'],
+        subjectScope: 'chat.read chat.history',
+      });
+
+      await expect(invoke(fastify, ctx, mintRequest())).rejects.toMatchObject({
+        message: 'invalid_scope',
+        errorDescription: 'chat.history not permitted for this client',
+      });
+      expectRefusedWithAudit(fastify, ['chat.read', 'chat.history']);
+    });
+
+    it('refuses an explicitly requested scope outside the registered scopes', async () => {
+      mockEnv['ID_JAG_ENABLED'] = true;
+      const { fastify, ctx } = setupMintStub({
+        scopes: ['chat.read'],
+        subjectScope: 'chat.read chat.history',
+      });
+
+      await expect(
+        invoke(fastify, ctx, mintRequest({ scope: 'chat.history' }))
+      ).rejects.toBeInstanceOf(InvalidScopeError);
+      expectRefusedWithAudit(fastify, ['chat.history']);
+    });
+
+    it('denies a scoped assertion to an agent registered with no scopes', async () => {
+      mockEnv['ID_JAG_ENABLED'] = true;
+      // This is the case the pre-amendment suite minted: an agent stub with
+      // `scopes: []` received the subject token's `chat.read chat.history`.
+      const { fastify, ctx } = setupMintStub({ scopes: [] });
+
+      await expect(invoke(fastify, ctx, mintRequest())).rejects.toBeInstanceOf(InvalidScopeError);
+    });
+
+    it('mints when the request narrows the scope into the registered scopes', async () => {
+      mockEnv['ID_JAG_ENABLED'] = true;
+      const { fastify, ctx } = setupMintStub({
+        scopes: ['chat.read'],
+        subjectScope: 'chat.read chat.history',
+      });
+
+      const result = (await invoke(fastify, ctx, mintRequest({ scope: 'chat.read' }))) as Record<
+        string,
+        unknown
+      >;
+
+      expect(result['issued_token_type']).toBe(ID_JAG_TOKEN_TYPE);
+      expect(result['scope']).toBe('chat.read');
+      expect(decodeJwt(result['access_token'] as string)['scope']).toBe('chat.read');
+    });
+
+    it('leaves the delegation branch as it was (GATE 4d there waits for ADR-014)', async () => {
+      mockEnv['ID_JAG_ENABLED'] = true;
+      // The same agent with no registered scopes still receives a delegated
+      // access token inside QAuth's trust domain: there the target stays
+      // inside the subject token's audience (GATE 4b), and adding GATE 4d on
+      // this branch is ADR-014's decision, behind AUTHORITY_TREE_ENABLED.
+      const { fastify, ctx } = setupMintStub({ scopes: [] });
+      (fastify.jwtUtils.signAccessToken as unknown as Mock).mockResolvedValue('delegated.jwt');
+
+      const result = (await invoke(
+        fastify,
+        ctx,
+        mintRequest({
+          requested_token_type: ACCESS_TOKEN_URN,
+          audience: undefined,
+          resource: undefined,
+        })
+      )) as Record<string, unknown>;
+
+      expect(result['issued_token_type']).toBe(ACCESS_TOKEN_URN);
+      expect(result['scope']).toBe('chat.read chat.history');
+    });
+  });
+
   it('keeps the delegation-depth bound in force', async () => {
     mockEnv['ID_JAG_ENABLED'] = true;
     // A chain already at the maximum depth; adding this agent exceeds it.
@@ -3945,7 +4057,8 @@ describe('POST /oauth/token — response serialization (union schema, ADR-011)',
         clientSecretHash: 'hash',
         enabled: true,
         grantTypes: [TOKEN_EXCHANGE_GRANT],
-        scopes: [] as string[],
+        // Covers the subject token's scope, or GATE 4d refuses the mint.
+        scopes: ['chat.read'],
         audience: [TARGET_AS, MCP_SERVER],
         isAgent: true,
         maxAgentMode: null,

@@ -120,6 +120,10 @@
 > upstream read fails (§9), and mints only while the binding's upstream
 > identity is assigned to the agent's current owner (§13). A pass-through
 > leg's scope is a dangerous scope (§11). No maintainer decision changed.
+>
+> **Amended 2026-10-19:** GATE 4d's scope check (§4(d)) already runs, flag or no flag, on
+> the ID-JAG mint branch of token exchange; [ADR-011](./011-enterprise-managed-authorization.md)
+> §3 records that decision. On the delegation branch it still arrives with this switch.
 
 ## Context
 

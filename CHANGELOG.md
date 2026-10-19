@@ -90,6 +90,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **BREAKING (ID-JAG mint; only with `ID_JAG_ENABLED`, which is off by
+  default)**: an ID-JAG minted through RFC 8693 token exchange now carries only
+  scopes that are in the agent client's registered `scopes`. This is the ceiling
+  `client_credentials` and the `jwt-bearer` consume side already apply
+  ([ADR-011](./docs/adr/011-enterprise-managed-authorization.md) §3, amended
+  2026-10-19). Before, the mint copied the subject token's scope unchecked, so
+  an agent could carry a scope it is not registered for to a partner's server
+  (ANT-2026-L66R3GFR). A scope outside the list is refused with
+  `invalid_scope`, not dropped; the agent sends `scope` to ask for less.
+
+  **Action for operators**: an agent provisioned with an empty `scopes` list
+  can no longer mint a scoped assertion. List in its `scopes` every scope it
+  should be able to carry to a partner. The delegation branch of token exchange
+  (`requested_token_type` access token) is unchanged.
+
 - **BREAKING**: ID tokens now release `email`/`email_verified` only when the
   granted scope includes `email`, matching the userinfo endpoint's gating
   (OIDC Core §5.4 data minimization). Clients requesting only `openid` no

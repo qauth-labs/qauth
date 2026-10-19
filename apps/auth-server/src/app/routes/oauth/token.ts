@@ -1375,6 +1375,13 @@ function actDepth(act: ActClaim | undefined): number {
  * additionally clamped to the requesting agent's server-side `max_agent_mode`.
  * Fail-closed via `toAgentScopeContext`: a capped agent cannot launder a
  * higher-mode scope through delegation even when the subject token carried it.
+ *
+ * GATE 4d — the agent's registered `scopes` (ADR-011 §3, amended 2026-10-19):
+ * applied on the ID-JAG mint branch only, in {@link mintIdJagForExchange}. An
+ * assertion leaves QAuth's trust domain and cannot be revoked, so its scope
+ * must also be one the operator registered for this agent, as on every other
+ * grant the agent can use. The delegation branch does not apply it yet; ADR-014
+ * adds it there behind `AUTHORITY_TREE_ENABLED`.
  */
 async function handleTokenExchange(
   ctx: HandlerContext<TokenExchangeTokenExchangeBody>
@@ -1608,7 +1615,7 @@ async function handleTokenExchange(
   // client-binding check, the enabled-user check, scope narrowing and the agent
   // scope-mode cap — applies IDENTICALLY to both outcomes and has already run.
   //
-  // What diverges below is only the TARGET model, and it diverges because it
+  // What diverges below is the TARGET model, and it diverges because it
   // must: GATE 4b narrows the issued token's `aud` against the SUBJECT TOKEN's
   // audience, which is correct for a delegated access token minted inside
   // QAuth's own trust domain and meaningless for an assertion whose `aud` is a
@@ -1617,6 +1624,13 @@ async function handleTokenExchange(
   // `mintIdJagForExchange`) is a narrowing, not a widening: it is the same
   // allowlist `client_credentials` already treats as the client's reachable
   // resource set, and an empty one denies.
+  //
+  // Because the target now comes from the agent's registration and not from
+  // the subject token, the scope must be bounded by the agent's registration
+  // too, or the assertion would pair a target the operator granted with a
+  // scope it did not. The mint branch therefore adds GATE 4d, the client's
+  // registered `scopes`, exactly as `client_credentials` applies both columns
+  // together (ADR-011 §3, amended 2026-10-19).
   if (mintingIdJag) {
     return mintIdJagForExchange({
       fastify,
@@ -1779,7 +1793,16 @@ function idJagTargetAllowlist(client: OAuthClientLike): string[] {
  *
  * Reached only from {@link handleTokenExchange}, after every control that
  * governs a delegated access token has already passed. What remains is the
- * target model:
+ * scope ceiling and the target model:
+ *
+ *  - GATE 4d — every scope the assertion would carry (the subject token's
+ *    scope, or the narrower `scope` the request named) must be in the client's
+ *    registered `scopes` (`validateScopes`, the check `client_credentials` and
+ *    the jwt-bearer consume side run). An empty list denies any scoped
+ *    assertion. The request is refused (`invalid_scope`), never trimmed: the
+ *    agent narrows with `scope` when it wants less. ADR-011 §3, amended
+ *    2026-10-19: the assertion leaves QAuth's trust domain and cannot be
+ *    revoked, so this cannot wait for ADR-014.
  *
  *  - `audience` (EMA §4, MUST) — the issuer identifier of the resource
  *    authorization server, and becomes the assertion's `aud`. Exactly one value:
@@ -1818,6 +1841,21 @@ async function mintIdJagForExchange(args: {
     subjectExp,
     auditFailure,
   } = args;
+
+  // GATE 4d — the client's registered `scopes` are a ceiling on the assertion,
+  // beside the subject token's scope (GATE 4a). The subject token says what the
+  // USER granted to the app that holds it; the registration says what the
+  // OPERATOR lets THIS agent hold. The assertion is QAuth's word to a foreign
+  // authorization server that its policy was evaluated, so it must satisfy both.
+  try {
+    validateScopes(grantedScopes.join(' '), client.scopes, toAgentScopeContext(client));
+  } catch (err) {
+    await auditFailure('invalid_scope: ID-JAG scope outside the client scope allowlist', {
+      grantedScopes,
+      allowedScopes: client.scopes,
+    });
+    throw err;
+  }
 
   const allowedTargets = idJagTargetAllowlist(client);
 

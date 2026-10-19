@@ -511,6 +511,20 @@ An RFC 8693 token exchange requesting
 `requested_token_type=urn:ietf:params:oauth:token-type:id-jag` returns an
 assertion targeted at a **third-party** resource authorization server.
 
+The agent client is provisioned by the operator, and its registration bounds
+what it can mint:
+
+- `audience` (exactly one value, the target authorization server's issuer) and
+  `resource` (exactly one value, the MCP server) must both appear in the
+  client's `audience` list. An empty list denies.
+- The assertion's `scope` is the subject token's scope, or the narrower `scope`
+  the request names, and every value must also appear in the client's
+  registered `scopes`. A value outside that list is refused with
+  `invalid_scope`, not dropped: send `scope` to ask for less. A client
+  registered with no `scopes` cannot mint a scoped assertion. This is the same
+  check `client_credentials` applies ([ADR-011](/reference/records/adr/011-enterprise-managed-authorization/) §3, amended
+  2026-10-19).
+
 Minted assertions are signed with EdDSA — the same key that signs access tokens —
 so a foreign authorization server verifies them from the JWKS it already fetches
 from `GET /.well-known/jwks.json`. This is deliberately **not** the hybrid
