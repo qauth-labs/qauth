@@ -309,3 +309,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `suspended` field. **Upgrade note**: migration 0023 suspends every client that
   is disabled when it runs; one its owner had disabled stays off until an
   operator lifts the suspension, after which the owner re-enables it.
+- **BREAKING**: a Client ID Metadata Document is refused whole when any of its
+  `redirect_uris` fails the check Dynamic Client Registration applies
+  (ANT-2026-D0XJAT8S follow-up). Such URIs were dropped and the rest accepted;
+  now the client does not resolve (`invalid_client` at `/oauth/authorize` and
+  `/oauth/token`), including a client already in use whose document lists one.

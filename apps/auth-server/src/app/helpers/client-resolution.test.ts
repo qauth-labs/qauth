@@ -206,6 +206,27 @@ describe('resolveClient — pre-registered → CIMD priority (MCP 2025-11-25)', 
       }
     });
 
+    // ANT-2026-D0XJAT8S follow-up: a document that adds a redirect URI
+    // registration would refuse is refused whole, and the client already
+    // materialised from its earlier version stops resolving (fail closed).
+    it('fails closed once the document lists a redirect_uri registration would refuse', async () => {
+      const { fastify } = await materialise();
+      ssrfSafeGet.mockResolvedValue(
+        ok(
+          { ...DOC, redirect_uris: [...DOC.redirect_uris, 'http://app.example.com/plain'] },
+          { 'cache-control': 'no-store' }
+        )
+      );
+      // The earlier document is still cached; drop it as its TTL would.
+      fastify.redis.get.mockResolvedValue(null);
+
+      const { client, reason } = await resolveClient(fastify, 'realm-1', CIMD_ID);
+
+      expect(client).toBeNull();
+      expect(reason).toMatch(/^CIMD document refused: invalid_redirect_uri: /);
+      expect(fastify.repositories.oauthClients.upsertCimdClient).not.toHaveBeenCalled();
+    });
+
     it('fails closed when the document can no longer be fetched', async () => {
       const { fastify } = await materialise();
       ssrfSafeGet.mockResolvedValue({ status: 404, body: '', headers: {} });

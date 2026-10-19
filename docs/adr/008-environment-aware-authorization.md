@@ -23,6 +23,16 @@
 > unconditional. Both statements are left as recorded; the **As implemented
 > (#197)** callout after the §5 table has what actually shipped.
 
+> **Amendment (2026-10-19): a CIMD document with one unacceptable redirect URI
+> is refused whole.** The loopback carve-out below says CIMD materialisation
+> _drops_ a non-loopback `http://` redirect URI from a metadata document. The
+> maintainer decided on 2026-10-19 (ANT-2026-D0XJAT8S follow-up) to refuse the
+> whole document instead, exactly as Dynamic Client Registration refuses a
+> whole registration: every `redirect_uris` entry must pass
+> `validateRedirectUri`, and one that does not makes the document fail like any
+> other invalid document (`invalid_client`; a client already materialised from
+> an earlier version stops resolving). The environment gate is unchanged.
+
 ## Context
 
 Two needs collided while finishing the MVP and planning T3:

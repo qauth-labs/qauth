@@ -826,40 +826,54 @@ describe('GET /oauth/authorize — CIMD (Client ID Metadata Documents)', () => {
   // Regression (ANT-2026-D0XJAT8S): a CIMD document's `redirect_uris` never
   // went through the check registration applies, so a plain-http callback on
   // any host was stored and served — the code then crossed the network in
-  // cleartext.
-  it('does not register a non-loopback http redirect_uri a CIMD document declares', async () => {
-    ssrfSafeGet.mockReset();
-    ssrfSafeGet.mockResolvedValue(
-      cimdDoc(['https://app.example.com/callback', 'http://app.example.com/callback'])
-    );
+  // cleartext. Follow-up (2026-10-19): the whole document is refused, as DCR
+  // refuses the whole request, so even its valid https URI is not served.
+  it.each([
+    ['the plain-http one', 'http://app.example.com/callback'],
+    ['its valid https one', 'https://app.example.com/callback'],
+  ])(
+    'refuses a CIMD document that lists a non-loopback http redirect_uri, even for %s',
+    async (_label, requested) => {
+      ssrfSafeGet.mockReset();
+      ssrfSafeGet.mockResolvedValue(
+        cimdDoc(['https://app.example.com/callback', 'http://app.example.com/callback'])
+      );
 
-    const { fastify, ctx } = makeCimdFastify();
-    await authorizeRoute(fastify);
+      const { fastify, ctx } = makeCimdFastify();
+      await authorizeRoute(fastify);
 
-    const { reply, state } = createReply();
-    await expect(
-      ctx.handler!(
-        {
-          query: {
-            response_type: 'code',
-            client_id: CIMD_ID,
-            redirect_uri: 'http://app.example.com/callback', // in the doc, but plain http
-            code_challenge: 'A'.repeat(43),
-            code_challenge_method: 'S256',
-            state: 'xyz',
+      const { reply, state } = createReply();
+      await expect(
+        ctx.handler!(
+          {
+            query: {
+              response_type: 'code',
+              client_id: CIMD_ID,
+              redirect_uri: requested,
+              code_challenge: 'A'.repeat(43),
+              code_challenge_method: 'S256',
+              state: 'xyz',
+            },
+            url: `/oauth/authorize?response_type=code&client_id=${encodeURIComponent(CIMD_ID)}`,
+            headers: {},
+            ip: '127.0.0.1',
           },
-          url: `/oauth/authorize?response_type=code&client_id=${encodeURIComponent(CIMD_ID)}`,
-          headers: {},
-          ip: '127.0.0.1',
-        },
-        reply
-      )
-    ).rejects.toThrow(/redirect_uri/);
-    expect(state.redirected).toBeUndefined();
-    expect(fastify.repositories.oauthClients.upsertCimdClient).toHaveBeenCalledWith(
-      expect.objectContaining({ redirectUris: ['https://app.example.com/callback'] })
-    );
-  });
+          reply
+        )
+      ).rejects.toThrow('invalid_client');
+      expect(state.redirected).toBeUndefined();
+      // Fail closed: nothing is materialised from the refused document.
+      expect(fastify.repositories.oauthClients.upsertCimdClient).not.toHaveBeenCalled();
+      expect(fastify.repositories.auditLogs.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          event: 'oauth.authorize.failure',
+          metadata: expect.objectContaining({
+            error: expect.stringMatching(/^CIMD document refused: invalid_redirect_uri: /),
+          }),
+        })
+      );
+    }
+  );
 
   it('happy path: resolves CIMD client, materialises it, and proceeds to login/consent', async () => {
     ssrfSafeGet.mockReset();

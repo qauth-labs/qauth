@@ -304,34 +304,39 @@ describe('toCimdClientInsert — grant/response type tolerance (RFC 7591 §2)', 
     expect(insert.redirectUris).toEqual(redirectUris);
   });
 
-  // Regression (ANT-2026-D0XJAT8S): the document's `redirect_uris` were stored
-  // as they came, without the check DCR and the management API apply.
-  it('keeps only the redirect_uris registration would accept', () => {
-    const doc = cimdDocumentSchema.parse(
-      validDoc({
-        redirect_uris: [
-          'https://app.example.com/callback',
-          'http://app.example.com/callback', // plain http, not loopback
-          'https://app.example.com/cb#fragment',
-          'http://localhost/callback',
-          'com.example.app:/oauth2redirect',
-          'not a uri',
-        ],
-      })
-    );
-    const insert = toCimdClientInsert(REALM, CLIENT_ID, doc, SENTINEL);
-    expect(insert.redirectUris).toEqual([
+  // Regression (ANT-2026-D0XJAT8S follow-up): one redirect URI registration
+  // would refuse makes the whole document unusable, exactly as DCR refuses the
+  // whole request — it is no longer dropped while the rest is accepted.
+  it('keeps every redirect_uri when registration would accept them all', () => {
+    const uris = [
       'https://app.example.com/callback',
       'http://localhost/callback',
-      'com.example.app:/oauth2redirect',
-    ]);
+      'http://127.0.0.1:8765/callback',
+    ];
+    const doc = cimdDocumentSchema.parse(validDoc({ redirect_uris: uris }));
+    expect(toCimdClientInsert(REALM, CLIENT_ID, doc, SENTINEL).redirectUris).toEqual(uris);
   });
 
-  it('rejects a document none of whose redirect_uris registration would accept', () => {
+  it.each([
+    ['plain http to a non-loopback host', 'http://app.example.com/callback'],
+    ['a fragment', 'https://app.example.com/cb#fragment'],
+    ['a loopback literal registration does not accept', 'http://127.0.0.2/callback'],
+    ['something that is not a URI', 'not a uri'],
+  ])('refuses the whole document when one redirect_uri has %s', (_label, bad) => {
     const doc = cimdDocumentSchema.parse(
-      validDoc({ redirect_uris: ['http://app.example.com/callback'] })
+      validDoc({ redirect_uris: ['https://app.example.com/callback', bad] })
     );
-    expect(() => toCimdClientInsert(REALM, CLIENT_ID, doc, SENTINEL)).toThrow(InvalidClientError);
+    let thrown: unknown;
+    try {
+      toCimdClientInsert(REALM, CLIENT_ID, doc, SENTINEL);
+    } catch (err) {
+      thrown = err;
+    }
+    expect(thrown).toBeInstanceOf(InvalidClientError);
+    // The audit reason carries DCR's own RFC 7591 error code.
+    expect((thrown as InvalidClientError).errorDescription).toMatch(
+      /^CIMD document refused: invalid_redirect_uri: /
+    );
   });
 
   it('accepts unknown grant_types and keeps only the supported ones (claude.ai shape)', () => {

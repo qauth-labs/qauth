@@ -154,9 +154,9 @@ export function redirectUriMatchesRegistered(
  * A NON-loopback `http://` redirect is refused in EVERY environment (OAuth 2.1
  * §10.3, RFC 8252 §8.3): the code and `state` would cross the network in
  * cleartext. `validateRedirectUri` refuses to register one through DCR and the
- * management API, and CIMD materialisation drops one from a document, but an
- * operator-seeded row (or any future source of registered URIs) never passes
- * through those, so the rule has to hold here, where every source converges
+ * management API, and CIMD materialisation refuses a document that lists one,
+ * but an operator-seeded row (or any future source of registered URIs) never
+ * passes through those, so the rule has to hold here, where every source converges
  * (ANT-2026-D0XJAT8S). Everything else — any https URI, any custom-scheme
  * native redirect — is unaffected and returns true; this gate never widens
  * what is allowed.
