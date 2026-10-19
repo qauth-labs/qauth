@@ -466,9 +466,10 @@ export const authEnvSchema = z.object({
 
   /**
    * Allow CIMD fetches to non-public IP ranges (loopback, private,
-   * link-local). MUST stay false in production — it disables the core
-   * SSRF guard. Exists only so an integration/dev harness can point a
-   * CIMD client_id at a localhost fixture server.
+   * link-local). It disables the core SSRF guard. Exists only so an
+   * integration/dev harness can point a CIMD client_id at a localhost
+   * fixture server. The auth-server's env schema refuses `true` when
+   * `NODE_ENV='production'` (#435).
    */
   CIMD_ALLOW_PRIVATE_ADDRESSES: z
     .enum(['true', 'false'])
@@ -561,9 +562,10 @@ export const authEnvSchema = z.object({
 
   /**
    * Allow ID-JAG discovery / JWKS fetches to non-public IP ranges (loopback,
-   * private, link-local). MUST stay false in production — it disables the core
-   * SSRF guard. Exists only so an integration/dev harness can point a trusted
-   * issuer at a localhost fixture server.
+   * private, link-local). It disables the core SSRF guard. Exists only so an
+   * integration/dev harness can point a trusted issuer at a localhost fixture
+   * server. The auth-server's env schema refuses `true` when
+   * `NODE_ENV='production'` (#435).
    */
   ID_JAG_ALLOW_PRIVATE_ADDRESSES: z
     .enum(['true', 'false'])
