@@ -20,6 +20,36 @@ function isIpv4LoopbackHost(host: string): boolean {
 }
 
 /**
+ * An RFC 8252 §7.1 private-use URI scheme: "a URI scheme based on a domain
+ * name under [the app's] control, expressed in reverse order", e.g.
+ * `com.example.app`. So at least two dot-separated labels, each non-empty;
+ * a scheme without a period is not one. Matched against `URL.protocol`, which
+ * is lower-cased and carries the trailing colon.
+ */
+const PRIVATE_USE_SCHEME = /^[a-z][a-z0-9-]*(?:\.[a-z0-9-]+)+:$/;
+
+/**
+ * Whether a redirect URI's scheme may receive an authorization response at
+ * all (found while fixing scan qauth-20261015-005): `https:`, `http:` (whose
+ * host is judged separately: loopback only), or an RFC 8252 §7.1 private-use
+ * scheme. Everything else is refused: `javascript:`, `data:`, `vbscript:`,
+ * `file:`, `blob:`, `about:`, and any scheme without a period, which is not a
+ * reverse-domain name. Registration ({@link validateRedirectUri} in
+ * `dynamic-client-registration.ts`) and the authorization-time gate
+ * ({@link isRedirectUriAllowedForPolicy}) share this one rule. Unparseable
+ * input is not allowed.
+ */
+export function isAllowedRedirectUriScheme(redirectUri: string): boolean {
+  let protocol: string;
+  try {
+    protocol = new URL(redirectUri).protocol;
+  } catch {
+    return false;
+  }
+  return protocol === 'https:' || protocol === 'http:' || PRIVATE_USE_SCHEME.test(protocol);
+}
+
+/**
  * True when `redirectUri` is a plain `http://` (NOT https) URI, whatever its
  * host. Parsed the way {@link buildRedirectUrl} parses it, so the scheme judged
  * here is the scheme the authorization response is sent over. Unparseable
@@ -161,6 +191,11 @@ export function redirectUriMatchesRegistered(
  * native redirect — is unaffected and returns true; this gate never widens
  * what is allowed.
  *
+ * Before any of that, the scheme must be one {@link isAllowedRedirectUriScheme}
+ * accepts. Registration refuses the others, but a row stored before it did, or
+ * one an operator seeded, could still hold `javascript:` or `data:`, so the
+ * gate refuses them too, in every environment.
+ *
  * FAIL-SAFE: a future non-`development` profile that ALSO drops `pkceRequired`
  * would once again reject plain-HTTP loopback (no PKCE → interceptable), the
  * hardened direction. An unset client/realm still resolves to `production`,
@@ -176,6 +211,7 @@ export function isRedirectUriAllowedForPolicy(
   redirectUri: string,
   policy: EnvironmentPolicy
 ): boolean {
+  if (!isAllowedRedirectUriScheme(redirectUri)) return false;
   if (!isPlainHttpRedirect(redirectUri)) return true;
   if (!isHttpLocalhostRedirect(redirectUri)) return false;
   return policy.localhostRedirectAllowed || policy.pkceRequired;

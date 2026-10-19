@@ -165,7 +165,7 @@ apps: a **loopback** redirect may carry **any port**.
 - `localhost` is accepted because real clients (Claude Code among them) use
   it, but RFC 8252 §8.3 recommends the IP literal: prefer `127.0.0.1` or
   `[::1]` for clients you write.
-- `https` and custom-scheme redirects always need an exact match, port
+- `https` and private-use-scheme redirects always need an exact match, port
   included.
 - QAuth redirects to the port you **requested** and binds the code to that
   exact URI, so the token request must repeat it verbatim — port included
@@ -679,10 +679,19 @@ See the example in [step 0](#0-prerequisites--a-client). Key fields:
 
 | Field                        | Notes                                                                  |
 | ---------------------------- | ---------------------------------------------------------------------- |
-| `redirect_uris`              | Required for `authorization_code`.                                     |
+| `redirect_uris`              | Required for `authorization_code`. Schemes: see below.                 |
 | `grant_types`                | Subset of `authorization_code`, `refresh_token`, `client_credentials`. |
 | `token_endpoint_auth_method` | `none` (public/PKCE), `client_secret_basic`, or `client_secret_post`.  |
 | `scope`                      | Space-separated; **capped to the realm allowlist**.                    |
+
+Each redirect URI must be `https`, `http` to a loopback host (`127.0.0.1`,
+`[::1]` or `localhost`), or an RFC 8252 §7.1 private-use scheme for a native
+app: a reverse domain name you control, such as `com.example.app:/callback`. Any
+other scheme, `javascript:`, `data:`, `file:` and schemes without a period
+(`myapp:`) included, is refused with `invalid_redirect_uri`, and a URI with a
+fragment is refused too. The same rule applies to `POST /api/clients` and to a
+CIMD document, and `/oauth/authorize` refuses any other scheme still stored on a
+client.
 
 Those two lists are exhaustive for self-registration, and the omissions are
 deliberate rather than incomplete. `private_key_jwt`, the `jwks` / `jwks_uri`

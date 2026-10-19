@@ -314,3 +314,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (ANT-2026-D0XJAT8S follow-up). Such URIs were dropped and the rest accepted;
   now the client does not resolve (`invalid_client` at `/oauth/authorize` and
   `/oauth/token`), including a client already in use whose document lists one.
+- **BREAKING**: redirect URIs are limited to `https`, `http` to a loopback host,
+  and RFC 8252 §7.1 private-use schemes (a reverse domain name such as
+  `com.example.app:/callback`). Dynamic Client Registration,
+  `POST /api/clients` (create and update) and CIMD documents refuse any other
+  scheme, including `javascript:`, `data:`, `file:` and schemes without a period
+  such as `myapp:`, with `invalid_redirect_uri`. `/oauth/authorize` and the
+  consent screen refuse such a URI on a client stored earlier
+  (`redirect_uri not permitted for this environment`). Re-register a native
+  app that used a scheme without a period under a reverse-domain scheme.

@@ -114,6 +114,9 @@ A break of any of these is a finding:
 - PKCE with `S256` is required on every authorization code flow.
 - A redirect URI must match a registered one exactly. The one exception is
   the port of a loopback redirect URI (RFC 8252).
+- A redirect URI is `https`, `http` to a loopback host, or an RFC 8252 §7.1
+  private-use scheme. Registration refuses any other scheme, and
+  `/oauth/authorize` never redirects to one a stored client still holds.
 - An authorization error is redirected automatically only to a redirect URI
   of a client an operator provisioned. Any other client's error is shown on
   an issuer page first (RFC 9700 §4.11.2).

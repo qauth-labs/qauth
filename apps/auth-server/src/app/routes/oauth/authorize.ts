@@ -29,6 +29,7 @@ import { assertManagementToken } from '../../helpers/management-token';
 import { getOrCreateSystemClient } from '../../helpers/oauth-client';
 import {
   buildRedirectUrl,
+  isAllowedRedirectUriScheme,
   isHttpLocalhostRedirect,
   isRedirectUriAllowedForPolicy,
   redirectUriMatchesRegistered,
@@ -187,8 +188,10 @@ export default async function (fastify: FastifyInstance) {
     // both the client and its realm are in scope, and apply the plain-HTTP
     // redirect gate. This is a SECOND gate after the exact-match check above:
     // an `http://` loopback redirect is allowed only where PKCE is enforced or
-    // the environment is `development`, and a non-loopback `http://` redirect
-    // is refused everywhere (ANT-2026-D0XJAT8S). Fail-safe: an unset
+    // the environment is `development`, a non-loopback `http://` redirect
+    // is refused everywhere (ANT-2026-D0XJAT8S), and so is any scheme other
+    // than https, http and an RFC 8252 private-use one, which a row registered
+    // before registration refused them could still hold. Fail-safe: an unset
     // client/realm resolves to `production`. We reject BEFORE redirecting (the
     // redirect target is the very thing under suspicion), matching the
     // unregistered-URI handling.
@@ -204,9 +207,11 @@ export default async function (fastify: FastifyInstance) {
         userAgent: request.headers['user-agent'] || null,
         metadata: {
           error: 'redirect_uri not permitted for this environment',
-          reason: isHttpLocalhostRedirect(redirectUri)
-            ? 'http_localhost_redirect_requires_development'
-            : 'http_redirect_requires_loopback',
+          reason: !isAllowedRedirectUriScheme(redirectUri)
+            ? 'redirect_uri_scheme_not_allowed'
+            : isHttpLocalhostRedirect(redirectUri)
+              ? 'http_localhost_redirect_requires_development'
+              : 'http_redirect_requires_loopback',
           client_id: query.client_id,
           environment: policy.environment,
         },

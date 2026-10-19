@@ -322,6 +322,9 @@ describe('toCimdClientInsert — grant/response type tolerance (RFC 7591 §2)', 
     ['a fragment', 'https://app.example.com/cb#fragment'],
     ['a loopback literal registration does not accept', 'http://127.0.0.2/callback'],
     ['something that is not a URI', 'not a uri'],
+    // Found while fixing the findings of scan qauth-20261015-005.
+    ['a javascript: scheme', 'javascript:alert(document.domain)'],
+    ['a scheme that is not a reverse domain name', 'myapp:/callback'],
   ])('refuses the whole document when one redirect_uri has %s', (_label, bad) => {
     const doc = cimdDocumentSchema.parse(
       validDoc({ redirect_uris: ['https://app.example.com/callback', bad] })

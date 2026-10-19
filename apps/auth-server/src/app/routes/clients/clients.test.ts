@@ -454,6 +454,38 @@ describe('POST /api/clients (create) — #86', () => {
     expect(fastify.repositories.oauthClients.create).not.toHaveBeenCalled();
   });
 
+  // Found while fixing the findings of scan qauth-20261015-005: any
+  // syntactically valid scheme used to be stored.
+  it.each(['javascript:alert(document.domain)', 'data:text/html,hi', 'myapp:/callback'])(
+    'rejects the redirect_uri %s on create and on update',
+    async (uri) => {
+      const { fastify, ctx } = makeFastify();
+      await clientsRoute(fastify);
+
+      await expect(
+        route(ctx, 'POST /').handler(
+          authedRequest({ body: { name: 'Bad', redirectUris: [uri] } }),
+          createReply().reply
+        )
+      ).rejects.toThrow(/^invalid_redirect_uri: unsupported scheme: /);
+      expect(fastify.repositories.oauthClients.create).not.toHaveBeenCalled();
+
+      (fastify.repositories.oauthClients.findById as unknown as Mock).mockResolvedValue(
+        makeClientRow({ developerId: DEV_A })
+      );
+      await expect(
+        route(ctx, 'PATCH /:id').handler(
+          authedRequest({
+            params: { id: '0190a000-0000-7000-8000-000000000001' },
+            body: { redirectUris: ['https://app.example.com/cb', uri] },
+          }),
+          createReply().reply
+        )
+      ).rejects.toThrow(/^invalid_redirect_uri: unsupported scheme: /);
+      expect(fastify.repositories.oauthClients.update).not.toHaveBeenCalled();
+    }
+  );
+
   it('rejects an inconsistent grant/response-type combination', async () => {
     const { fastify, ctx } = makeFastify();
     await clientsRoute(fastify);

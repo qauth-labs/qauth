@@ -33,6 +33,19 @@
 > other invalid document (`invalid_client`; a client already materialised from
 > an earlier version stops resolving). The environment gate is unchanged.
 
+> **Amendment (2026-10-19): only three kinds of redirect-URI scheme.** The
+> maintainer decided on 2026-10-19 (found while fixing scan qauth-20261015-005)
+> that `validateRedirectUri` accepts only `https:`, `http:` to a loopback host,
+> and an RFC 8252 §7.1 private-use scheme (a reverse domain name, so it
+> contains a period, e.g. `com.example.app:/callback`). Before, any
+> syntactically valid scheme passed, `javascript:` and `data:` included. The
+> rule applies at Dynamic Client Registration, `POST /api/clients` (create and
+> update) and CIMD documents. Because rows stored before the change, and
+> operator-seeded rows, never pass through it, `isRedirectUriAllowedForPolicy`
+> applies the same scheme rule first, in every environment, so the
+> authorization endpoint and the consent screen never redirect to another
+> scheme (audit reason `redirect_uri_scheme_not_allowed`).
+
 ## Context
 
 Two needs collided while finishing the MVP and planning T3:

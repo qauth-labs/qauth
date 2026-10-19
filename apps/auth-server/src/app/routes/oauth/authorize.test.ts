@@ -950,6 +950,73 @@ describe('GET /oauth/authorize — CIMD (Client ID Metadata Documents)', () => {
 // callback on another host (a CIMD document's, an operator-seeded row's)
 // received the code in cleartext. Registration refuses such a URI; the gate
 // now does too, whatever put it in the row.
+// Found while fixing the findings of scan qauth-20261015-005: registration
+// accepted any syntactically valid scheme, so a stored row (or an
+// operator-seeded one) can hold `javascript:` or `data:`. Authorize must not
+// follow it, whatever the request does next (here: prompt=none, no session,
+// an operator-provisioned client that would otherwise get the 302).
+describe('GET /oauth/authorize — redirect URI scheme gate', () => {
+  it.each(['javascript:alert(document.domain)//', 'data:text/html,hi', 'myapp:/callback'])(
+    'refuses a registered %s before any redirect, in every environment',
+    async (uri) => {
+      for (const environment of ['development', 'staging', 'production']) {
+        const { fastify, ctx } = makeFastify();
+        await authorizeRoute(fastify);
+        (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue({
+          ...CLIENT,
+          environment,
+          redirectUris: [uri],
+        });
+        (fastify.jwtUtils.extractFromHeader as unknown as Mock).mockReturnValue(null);
+        (fastify.sessionUtils.getSession as unknown as Mock).mockResolvedValue(null);
+
+        const { reply, state } = createReply();
+        await expect(
+          ctx.handler!(
+            {
+              query: { ...BASE_QUERY, redirect_uri: uri, prompt: 'none' },
+              url: '/oauth/authorize?response_type=code&client_id=app-123',
+              headers: {},
+              ip: '127.0.0.1',
+            },
+            reply
+          )
+        ).rejects.toThrow('redirect_uri not permitted for this environment');
+        expect(state.redirected).toBeUndefined();
+        expect(fastify.repositories.auditLogs.create).toHaveBeenCalledWith(
+          expect.objectContaining({
+            event: 'oauth.authorize.failure',
+            metadata: expect.objectContaining({ reason: 'redirect_uri_scheme_not_allowed' }),
+          })
+        );
+      }
+    }
+  );
+
+  it('still serves a private-use native redirect (RFC 8252 §7.1)', async () => {
+    const { fastify, ctx } = makeFastify();
+    await authorizeRoute(fastify);
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue({
+      ...CLIENT,
+      redirectUris: ['com.example.app:/oauth2redirect'],
+    });
+    (fastify.jwtUtils.extractFromHeader as unknown as Mock).mockReturnValue(null);
+    (fastify.sessionUtils.getSession as unknown as Mock).mockResolvedValue(null);
+
+    const { reply, state } = createReply();
+    await ctx.handler!(
+      {
+        query: { ...BASE_QUERY, redirect_uri: 'com.example.app:/oauth2redirect' },
+        url: '/oauth/authorize?response_type=code&client_id=app-123',
+        headers: {},
+        ip: '127.0.0.1',
+      },
+      reply
+    );
+    expect(state.redirected).toContain('/ui/login?return_to=');
+  });
+});
+
 describe('GET /oauth/authorize — plain-http redirect gate', () => {
   it('refuses a registered non-loopback http redirect_uri in every environment', async () => {
     for (const environment of ['development', 'staging', 'production']) {

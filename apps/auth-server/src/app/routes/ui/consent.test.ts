@@ -831,6 +831,46 @@ describe('UI /ui/consent POST — allow/deny', () => {
 
 // ANT-2026-DR5XI3LV: an operator's suspension refuses the client on both
 // halves of the consent screen, exactly as a disable does.
+// Found while fixing the findings of scan qauth-20261015-005: a stored row may
+// hold a scheme registration now refuses; the consent screen must not render
+// for it, nor send a code there.
+describe('UI /ui/consent — redirect URI scheme gate', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('GET refuses a registered javascript: redirect URI before rendering', async () => {
+    const { fastify, ctx } = makeFastify();
+    await consentRoute(fastify);
+    const { signSessionId } = await import('../../helpers/session-cookie');
+    (fastify.sessionUtils.getSession as unknown as Mock).mockResolvedValue({
+      userId: 'user-1',
+      email: 'a@b.com',
+      sessionId: 'sid-js',
+      createdAt: Date.now(),
+    });
+    const uri = 'javascript:alert(document.domain)//';
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue({
+      ...CLIENT,
+      redirectUris: [uri],
+    });
+
+    const { reply, state } = createReply();
+    await expect(
+      ctx.get!(
+        {
+          query: { ...BASE_QUERY, redirect_uri: uri },
+          url: '/ui/consent?...',
+          headers: { cookie: `__Host-qauth_session=${signSessionId('sid-js')}` },
+          ip: '127.0.0.1',
+        },
+        reply
+      )
+    ).rejects.toThrow('redirect_uri not permitted for this environment');
+    expect(state.body).toBeUndefined();
+  });
+});
+
 describe('UI /ui/consent — operator-suspended client', () => {
   beforeEach(() => {
     vi.clearAllMocks();

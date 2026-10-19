@@ -261,6 +261,27 @@ describe('POST /oauth/register — Dynamic Client Registration (RFC 7591)', () =
     ).rejects.toThrow(/invalid_redirect_uri/);
   });
 
+  // Found while fixing the findings of scan qauth-20261015-005.
+  it.each(['javascript:alert(document.domain)', 'data:text/html,hi', 'myapp:/callback'])(
+    'rejects the redirect_uri %s: only https, loopback http and private-use schemes',
+    async (uri) => {
+      const { fastify, ctx, state } = createFastifyStub();
+      await registerRoute(fastify);
+
+      await expect(
+        ctx.handler!(
+          {
+            body: { redirect_uris: ['https://app.example/cb', uri] },
+            ip: '127.0.0.1',
+            headers: {},
+          },
+          createReply().reply
+        )
+      ).rejects.toThrow(/^invalid_redirect_uri: unsupported scheme: /);
+      expect(state.createdClients).toHaveLength(0);
+    }
+  );
+
   it('rejects client_credentials with token_endpoint_auth_method=none', async () => {
     const { fastify, ctx } = createFastifyStub();
     await registerRoute(fastify);

@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { ENVIRONMENT_PROFILES } from './environment-policy';
 import {
   buildRedirectUrl,
+  isAllowedRedirectUriScheme,
   isHttpLocalhostRedirect,
   isRedirectUriAllowedForPolicy,
   redirectUriMatchesRegistered,
@@ -94,13 +95,72 @@ describe('oauth-redirect — isRedirectUriAllowedForPolicy (ADR-008 §5, #197)',
     }
   });
 
-  it('a custom-scheme native redirect is unaffected by the gate', () => {
+  it('a private-use native redirect (RFC 8252 §7.1) is unaffected by the gate', () => {
     expect(
       isRedirectUriAllowedForPolicy(
         'com.example.app:/oauth2redirect',
         ENVIRONMENT_PROFILES.production
       )
     ).toBe(true);
+  });
+
+  // Found while fixing the findings of scan qauth-20261015-005: a row stored
+  // before registration refused these (or one an operator seeded) must not be
+  // followed at authorization time.
+  it.each([
+    'javascript:alert(document.domain)',
+    'JAVASCRIPT:alert(1)//',
+    'data:text/html,<script>alert(1)</script>',
+    'vbscript:msgbox(1)',
+    'file:///etc/passwd',
+    'blob:https://app.example/0b3f5a2e-6c1d-4d7e-9a8b-1f2e3d4c5b6a',
+    'about:blank',
+    'myapp:/callback',
+    'myapp://callback',
+    'ftp://files.example/cb',
+    'wss://app.example/cb',
+    'com..example:/cb',
+  ])('refuses a registered %s in every environment', (uri) => {
+    for (const env of ['development', 'staging', 'production'] as const) {
+      expect(isRedirectUriAllowedForPolicy(uri, ENVIRONMENT_PROFILES[env])).toBe(false);
+    }
+  });
+
+  it('refuses what it cannot parse', () => {
+    expect(isRedirectUriAllowedForPolicy('not a url', ENVIRONMENT_PROFILES.development)).toBe(
+      false
+    );
+  });
+});
+
+describe('oauth-redirect — isAllowedRedirectUriScheme', () => {
+  it.each([
+    'https://app.example/cb',
+    'http://127.0.0.1:8765/cb',
+    // Scheme only: the http host is judged by the environment gate.
+    'http://app.example/cb',
+    'com.example.app:/cb',
+    'COM.Example.App:/cb',
+    'net.example-1.tool://cb',
+  ])('allows %s', (uri) => {
+    expect(isAllowedRedirectUriScheme(uri)).toBe(true);
+  });
+
+  it.each([
+    'javascript:alert(document.domain)',
+    'JAVASCRIPT:alert(1)//',
+    'data:text/html,<script>alert(1)</script>',
+    'vbscript:msgbox(1)',
+    'file:///etc/passwd',
+    'blob:https://app.example/0b3f5a2e-6c1d-4d7e-9a8b-1f2e3d4c5b6a',
+    'about:blank',
+    'myapp:/callback',
+    'myapp://callback',
+    'ftp://files.example/cb',
+    'wss://app.example/cb',
+    'com..example:/cb',
+  ])('refuses %s', (uri) => {
+    expect(isAllowedRedirectUriScheme(uri)).toBe(false);
   });
 });
 
