@@ -194,6 +194,13 @@ export interface OAuthClientsRepository extends BaseRepository<
   listByDeveloper(developerId: string, tx?: DbClient): Promise<OAuthClient[]>;
 
   /**
+   * Count the OAuth clients owned by a developer: the rows
+   * {@link listByDeveloper} would return, without loading them. Used to
+   * enforce the per-developer client ceiling before a create.
+   */
+  countByDeveloper(developerId: string, tx?: DbClient): Promise<number>;
+
+  /**
    * Idempotently materialise a Client ID Metadata Document (CIMD) client.
    *
    * CIMD clients are keyed by their (realm_id, client_id) URL. On conflict

@@ -172,6 +172,33 @@ describe('pending-authorization stash', () => {
     );
   });
 
+  it('refuses a long run of slashes that stops short of the end of the path in linear time', async () => {
+    // The router ends the path at `#` as well as `?`, so on
+    // `GET /oauth/authorize#…&x=////…y` the whole request target (up to the
+    // 16 KiB head limit) reached this check with no `?` to split on. The old
+    // unanchored `/\/+$/` trim is quadratic on a run of `/` that does not reach
+    // the end of the string: ~180 ms per request inside the rate limit. Ten
+    // times that run here, so a regression costs seconds (quadratic: ~18 s,
+    // past the test timeout) where the anchored match takes about a
+    // millisecond; the 2 s bound leaves a thousandfold margin.
+    const { fastify } = makeFastify();
+    for (const prefix of ['/oauth/authorize#x=', '/oauth/authorize']) {
+      const started = performance.now();
+      await expect(
+        stashPendingAuthorization(fastify, `${prefix}${'/'.repeat(160_000)}y`)
+      ).rejects.toThrow(/relative \/oauth\/authorize URL/);
+      expect(performance.now() - started).toBeLessThan(2000);
+    }
+    // Still canonicalises a run of trailing slashes before the query.
+    const handle = await stashPendingAuthorization(
+      fastify,
+      '/oauth/authorize///?client_id=app-123'
+    );
+    expect(await consumePendingAuthorization(fastify, handle)).toBe(
+      '/oauth/authorize?client_id=app-123'
+    );
+  });
+
   it('rejects an oversized authorize URL with a 400 instead of writing it to Redis', async () => {
     // The stash is written BEFORE the user authenticates, into the Redis that
     // also holds live browser sessions, and lives for the full TTL. It must

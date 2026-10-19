@@ -6,6 +6,7 @@ import Fastify, { LogController } from 'fastify';
 import { serializerCompiler, validatorCompiler, ZodTypeProvider } from 'fastify-type-provider-zod';
 
 import { app } from './app/app';
+import { answerUnknownRouteBeforeBody, requestDeadlineOptions } from './app/helpers/request-bounds';
 import { openapiOptions } from './app/openapi-options';
 import { env, envDeprecationWarnings } from './config/env';
 import { buildLoggerOptions } from './config/logger';
@@ -44,7 +45,17 @@ const server = Fastify({
   routerOptions: {
     ignoreTrailingSlash: true,
   },
+  // A request body is buffered until it is complete. Bound how long it may stay
+  // incomplete (REQUEST_TIMEOUT_MS, 60 s by default): Fastify's default is for
+  // ever, which let a caller park unfinished requests until the heap ran out.
+  ...requestDeadlineOptions(env.REQUEST_TIMEOUT_MS),
 }).withTypeProvider<ZodTypeProvider>();
+
+// Answer a request for an unknown route BEFORE its body is read. The default 404
+// belongs to this root instance, outside the scope `app.ts` registers the rate
+// limiter in, yet Fastify still parses its body, so it buffered bodies for anyone
+// at any rate. Same answer and log line as Fastify's own handler.
+server.addHook('onRequest', answerUnknownRouteBeforeBody);
 
 // Set up Zod validator and serializer.
 //

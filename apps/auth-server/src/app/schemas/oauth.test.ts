@@ -1,14 +1,18 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
+import { OAUTH_SCOPE_PARAM_MAX_LENGTH } from '../constants';
 import { redirectUriMatchesRegistered } from '../helpers/oauth-redirect';
 import {
   ASSERTION_MAX_LENGTH,
   ASSERTION_SIGNING_ALG_VALUES_SUPPORTED,
   authorizeQuerySchema,
   CLIENT_ASSERTION_TYPE_JWT_BEARER,
+  dynamicClientRegistrationRequestSchema,
   idJagTokenResponseSchema,
+  introspectRequestSchema,
   JWT_BEARER_GRANT_TYPE,
   resourceParamSchema,
+  revokeRequestSchema,
   TOKEN_EXCHANGE_GRANT_TYPE,
   TOKEN_TYPE_ID_JAG,
   TOKEN_TYPE_ID_TOKEN,
@@ -370,5 +374,163 @@ describe('redirect_uri and resource reach the handler as sent (exactUrl)', () =>
     expect(resourceParamSchema.parse('https://api.example.com/mcp')).toEqual([
       'https://api.example.com/mcp',
     ]);
+  });
+});
+
+/**
+ * OIDC Core §3.1.2.1 `max_age` on `GET`/`POST /oauth/authorize`.
+ *
+ * `POST /oauth/authorize` also accepts a JSON body, so `max_age` can be any
+ * JSON value. `z.coerce.number()` ran `Number()` on it before looking at its
+ * type, and `Number()` of an array joins it recursively: one nested a few
+ * thousand levels deep held the event loop for seconds on an unauthenticated
+ * route. A value that is neither a digit string nor a number must be refused
+ * by type, before anything converts it.
+ */
+describe('authorizeQuerySchema — max_age', () => {
+  const authorize = {
+    response_type: 'code',
+    client_id: 'c1',
+    redirect_uri: 'https://app.example.com/cb',
+    code_challenge: 'A'.repeat(43),
+    code_challenge_method: 'S256',
+  } as const;
+  const maxAgeOf = (max_age: unknown) => authorizeQuerySchema.safeParse({ ...authorize, max_age });
+
+  it('accepts a digit string (query string, form body) and a JSON number', () => {
+    expect(maxAgeOf('300').data?.max_age).toBe(300);
+    expect(maxAgeOf('0').data?.max_age).toBe(0);
+    expect(maxAgeOf(300).data?.max_age).toBe(300);
+    expect(maxAgeOf('315360000').data?.max_age).toBe(315360000);
+    expect(maxAgeOf(undefined).data?.max_age).toBeUndefined();
+  });
+
+  it('refuses anything else', () => {
+    for (const value of ['-1', '1.5', '1e3', ' 300', '315360001', true, null, {}, ['300']]) {
+      expect(maxAgeOf(value).success, JSON.stringify(value)).toBe(false);
+    }
+  });
+
+  it('refuses an array or object WITHOUT converting it', () => {
+    const toString = vi.fn(() => '300');
+    const valueOf = vi.fn(() => 300);
+    // Shaped like the attack: the element sits deep inside nested arrays.
+    let nested: unknown = [{ toString, valueOf }];
+    for (let i = 0; i < 100; i += 1) nested = [nested, 0];
+
+    expect(maxAgeOf(nested).success).toBe(false);
+    expect(maxAgeOf({ toString, valueOf }).success).toBe(false);
+    expect(toString).not.toHaveBeenCalled();
+    expect(valueOf).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * `new URL()` is quadratic in the number of distinct non-ASCII characters in a
+ * host, and every caller-supplied URI used to reach it before its length cap:
+ * 63 CJK-host `resource` entries in a 1 MiB body held the event loop for ~4 s
+ * on an unauthenticated POST /oauth/token. `client_id` had no cap at all and
+ * is parsed several times on the CIMD path.
+ */
+describe('URIs and client_id are bounded before anything parses them', () => {
+  const cjkHost = Array.from({ length: 1000 }, (_, i) => String.fromCodePoint(0x4e00 + i)).join('');
+  const cjkUrl = `https://${cjkHost}/`;
+  const longUrl = `https://api.example.com/${'a'.repeat(2048)}`;
+  const authorize = {
+    response_type: 'code',
+    redirect_uri: 'https://app.example.com/cb',
+    code_challenge: 'A'.repeat(43),
+    code_challenge_method: 'S256',
+  } as const;
+
+  function urlParses(run: () => void): number {
+    const canParse = vi.spyOn(URL, 'canParse');
+    try {
+      run();
+      return canParse.mock.calls.length;
+    } finally {
+      canParse.mockRestore();
+    }
+  }
+
+  it('refuses a non-ASCII or over-long resource without parsing it', () => {
+    const parses = urlParses(() => {
+      for (const resource of [cjkUrl, longUrl, Array(10).fill(cjkUrl), Array(10).fill(longUrl)]) {
+        expect(resourceParamSchema.safeParse(resource).success).toBe(false);
+      }
+    });
+    expect(parses).toBe(0);
+  });
+
+  it('refuses a non-ASCII or over-long redirect_uri on /authorize without parsing it', () => {
+    const parses = urlParses(() => {
+      for (const redirect_uri of [cjkUrl, longUrl]) {
+        expect(
+          authorizeQuerySchema.safeParse({ ...authorize, client_id: 'c1', redirect_uri }).success
+        ).toBe(false);
+      }
+    });
+    expect(parses).toBe(0);
+  });
+
+  it('refuses a non-ASCII or over-long registration URI field without parsing it', () => {
+    const parses = urlParses(() => {
+      for (const field of ['client_uri', 'logo_uri', 'tos_uri', 'policy_uri']) {
+        for (const value of [cjkUrl, longUrl]) {
+          expect(
+            dynamicClientRegistrationRequestSchema.safeParse({ [field]: value }).success,
+            field
+          ).toBe(false);
+        }
+      }
+    });
+    expect(parses).toBe(0);
+  });
+
+  it('caps client_id at 2048 printable ASCII characters on every request schema', () => {
+    // 2048 leaves room for a Client ID Metadata Document URL, whose own schema
+    // caps `client_id` at 2048 (helpers/cimd.ts). RFC 6749 Appendix A.1:
+    // client-id = *VSCHAR, i.e. %x20-7E.
+    const cimd = `https://app.example.com/${'a'.repeat(2048 - 'https://app.example.com/'.length)}`;
+    const token = { grant_type: 'client_credentials' } as const;
+    const parsers: Array<(clientId: string) => boolean> = [
+      (client_id) => authorizeQuerySchema.safeParse({ ...authorize, client_id }).success,
+      (client_id) => tokenExchangeBodySchema.safeParse({ ...token, client_id }).success,
+      (client_id) => introspectRequestSchema.safeParse({ token: 't', client_id }).success,
+      (client_id) => revokeRequestSchema.safeParse({ token: 't', client_id }).success,
+    ];
+
+    for (const parse of parsers) {
+      expect(parse(cimd)).toBe(true);
+      expect(parse('550e8400-e29b-41d4-a716-446655440000')).toBe(true);
+      expect(parse(`${cimd}a`)).toBe(false);
+      expect(parse(`https://${cjkHost}/client.json`)).toBe(false);
+    }
+  });
+});
+
+/**
+ * `scope` is capped on every grant that takes it. The refresh_token and
+ * client_credentials bodies were the two left out, so the only bound was the
+ * 1 MiB body limit: a refresh `scope` of 522,000 names, checked against a
+ * stored list of 174,000, held the event loop for ~78 s.
+ */
+describe('scope is bounded on every token grant', () => {
+  const grants: Array<[string, Record<string, unknown>]> = [
+    ['client_credentials', { grant_type: 'client_credentials' }],
+    ['refresh_token', { grant_type: 'refresh_token', refresh_token: 'a'.repeat(64) }],
+    [
+      'token exchange',
+      { grant_type: TOKEN_EXCHANGE_GRANT_TYPE, subject_token: 't', subject_token_type: 't' },
+    ],
+    ['jwt-bearer', { grant_type: JWT_BEARER_GRANT_TYPE, assertion: 'a.b.c' }],
+  ];
+
+  it.each(grants)('%s accepts a scope at the bound and refuses one past it', (_grant, body) => {
+    const atBound = 'a'.repeat(OAUTH_SCOPE_PARAM_MAX_LENGTH);
+    expect(tokenExchangeBodySchema.safeParse({ ...body, scope: atBound }).success).toBe(true);
+    expect(tokenExchangeBodySchema.safeParse({ ...body, scope: `${atBound}a` }).success).toBe(
+      false
+    );
   });
 });

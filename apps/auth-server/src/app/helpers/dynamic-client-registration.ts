@@ -1,5 +1,6 @@
 import { BadRequestError } from '@qauth-labs/shared-errors';
 
+import { hasOnlyUriCharacters } from '../schemas/common';
 import type { DynamicClientRegistrationRequest } from '../schemas/oauth';
 import { TOKEN_EXCHANGE_GRANT_TYPE } from '../schemas/oauth';
 
@@ -49,6 +50,12 @@ export function validateRedirectUri(uri: string): void {
   // that holds one could never match. Refuse it here instead.
   if (/[\t\n\r]/.test(uri)) {
     rejectRegistration('invalid_redirect_uri', 'redirect_uri must not contain a tab or line break');
+  }
+  // Checked before the parse: `new URL()` is quadratic in the distinct
+  // non-ASCII characters of a host, and a registration may carry twenty URIs.
+  // An RFC 3986 URI is ASCII; an IDN host is written in its `xn--` form.
+  if (!hasOnlyUriCharacters(uri)) {
+    rejectRegistration('invalid_redirect_uri', 'redirect_uri must be printable ASCII');
   }
 
   let parsed: URL;

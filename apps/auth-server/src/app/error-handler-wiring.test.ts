@@ -404,6 +404,46 @@ describe('assembled app — password bound in UTF-16 code units', () => {
   });
 });
 
+describe('assembled app — an oversized request array is one issue, not one per element', () => {
+  // Zod parses every element of an array before its `.max()`, so a 1 MB body of
+  // invalid elements made one issue each: seconds of event-loop time, a 93 MB
+  // answer and hundreds of MB of log per unauthenticated request. The
+  // management guard is a preHandler, so `/api/clients` validates first too.
+  it.each([
+    ['/oauth/register', { grant_types: Array(50_000).fill(1) }, '/grant_types'],
+    ['/oauth/token', { grant_type: 'client_credentials', resource: Array(50_000).fill('') }, ''],
+    ['/api/clients', { name: 'n', grantTypes: Array(50_000).fill(1) }, '/grantTypes'],
+  ])('POST %s answers with a single small issue', async (url, payload, path) => {
+    const res = await server.inject({ method: 'POST', url, payload });
+
+    expect(res.statusCode).toBe(400);
+    expect(res.body.length).toBeLessThan(1024);
+    const details = (res.json() as { details: Array<{ path: string }> }).details;
+    expect(details).toHaveLength(1);
+    if (path) expect(details[0]?.path).toBe(path);
+  });
+});
+
+describe('assembled app — an over-long email is refused before any handler stores it', () => {
+  // A refused sign-in wrote the address to `audit_logs`, and resend-verification
+  // made it a Redis key, both at the size the caller chose.
+  const longAddress = `${'a'.repeat(100_000)}@example.com`;
+
+  it.each([
+    ['/auth/resend-verification', { email: longAddress }],
+    ['/auth/login', { email: longAddress, password: 'correct horse battery staple' }],
+    ['/auth/register', { email: longAddress, password: 'correct horse battery staple' }],
+  ])('POST %s answers 400 at the schema', async (url, payload) => {
+    const res = await server.inject({ method: 'POST', url, payload });
+
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toMatchObject({
+      code: 'VALIDATION_ERROR',
+      details: [{ path: '/email', message: 'Too big: expected string to have <=254 characters' }],
+    });
+  });
+});
+
 /**
  * The registration ORDER in `app.ts`, asserted on the source (#365).
  *

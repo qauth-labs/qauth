@@ -86,6 +86,28 @@ export const OAUTH_OPAQUE_PARAM_MAX_LENGTH = 2048;
 export const OAUTH_SCOPE_PARAM_MAX_LENGTH = 2048;
 
 /**
+ * Maximum length of a URI request parameter: `redirect_uri`, RFC 8707
+ * `resource`, the registered redirect URIs and the RFC 7591 `*_uri` metadata.
+ *
+ * Checked BEFORE the value is parsed (`exactUrl()` in `schemas/common.ts`).
+ * `new URL()` does work quadratic in the number of distinct non-ASCII
+ * characters in a host, so a cap checked after the parse bounds nothing. The
+ * same 2048 that dynamic registration and CIMD documents already apply.
+ */
+export const OAUTH_URI_PARAM_MAX_LENGTH = 2048;
+
+/**
+ * Maximum length of a `client_id` request parameter.
+ *
+ * Server-issued identifiers are UUIDs and `oauth_clients.client_id` holds 255
+ * characters, but a Client ID Metadata Document `client_id` is an https URL,
+ * which the CIMD document schema caps at 2048 (`helpers/cimd.ts`). The value is
+ * written to `audit_logs` when it is refused and parsed as a URL on the CIMD
+ * path, so it is bounded before either happens.
+ */
+export const OAUTH_CLIENT_ID_MAX_LENGTH = 2048;
+
+/**
  * Lifetime of a pending-authorization stash — the server-side record that lets
  * `/ui/login` carry a SHORT opaque handle instead of the whole authorize query
  * string. See `helpers/pending-authorization.ts` and qauth-labs/qauth#316.
@@ -129,6 +151,27 @@ export const PENDING_AUTHORIZATION_TTL_MS = 10 * 60 * 1000;
  * being true.
  */
 export const PENDING_AUTHORIZATION_MAX_URL_BYTES = 16 * 1024;
+
+/**
+ * Longest `return_to` the sign-in surfaces accept (`isSafeReturnTo`).
+ *
+ * The value is written to `audit_logs` on a successful sign-in and into the
+ * wallet-login flow record in Redis. The longest legitimate value is the inline
+ * authorize URL the login bounce falls back to when the pending-authorization
+ * stash is unavailable, and that URL is capped at
+ * {@link PENDING_AUTHORIZATION_MAX_URL_BYTES}.
+ */
+export const RETURN_TO_MAX_LENGTH = PENDING_AUTHORIZATION_MAX_URL_BYTES;
+
+/**
+ * Longest email address accepted in a request: 254 characters.
+ *
+ * RFC 5321 §4.5.3.1.3 caps a path at 256 octets including its angle brackets,
+ * so no deliverable mailbox is longer. The address reaches `audit_logs` when a
+ * sign-in is refused and a Redis key on resend-verification, both before any
+ * account lookup, so it is bounded before either happens.
+ */
+export const EMAIL_MAX_LENGTH = 254;
 
 /**
  * Per-route body limit for `POST /oauth/authorize` (OIDC Core §3.1.2.1).

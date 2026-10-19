@@ -1,7 +1,11 @@
 import { z } from 'zod';
 
-import { OAUTH_OPAQUE_PARAM_MAX_LENGTH, OAUTH_SCOPE_PARAM_MAX_LENGTH } from '../constants';
-import { exactUrl } from './common';
+import {
+  OAUTH_OPAQUE_PARAM_MAX_LENGTH,
+  OAUTH_SCOPE_PARAM_MAX_LENGTH,
+  OAUTH_URI_PARAM_MAX_LENGTH,
+} from '../constants';
+import { boundedArray, clientIdParamSchema, exactUrl } from './common';
 
 /**
  * RFC 8707 §2: `resource` is an absolute URI without fragment, identifying
@@ -14,16 +18,40 @@ import { exactUrl } from './common';
  *
  * {@link exactUrl}, not `z.url()`: the value is compared with the resource set
  * bound to an authorization code and becomes the token audience, so it must
- * reach the handler as sent.
+ * reach the handler as sent. exactUrl() also checks the 2048-character bound
+ * and the character set BEFORE it parses the value; a `.max()` chained here
+ * would only run after the parse.
  */
-const resourceEntrySchema = exactUrl()
-  .max(2048)
-  .refine((v) => !v.includes('#'), { message: 'resource must not contain a fragment' });
+const resourceEntrySchema = exactUrl(OAUTH_URI_PARAM_MAX_LENGTH).refine((v) => !v.includes('#'), {
+  message: 'resource must not contain a fragment',
+});
 
 export const resourceParamSchema = z
-  .union([resourceEntrySchema, z.array(resourceEntrySchema).max(10)])
+  .union([resourceEntrySchema, boundedArray(z.array(resourceEntrySchema), 10)])
   .optional()
   .transform((v) => (v === undefined ? undefined : Array.isArray(v) ? v : [v]));
+
+/**
+ * OIDC Core §3.1.2.1 `max_age`, in seconds. A query string or a form body
+ * carries it as a digit string, a JSON body as a number.
+ *
+ * Only a digit string is converted. Every other value reaches `z.number()` as
+ * it came and is refused by type. This is deliberately NOT
+ * `z.coerce.number()`, which runs `Number()` on the raw value before it checks
+ * the type. Both routes that take the parameter also accept JSON bodies, and
+ * `Number()` of an array joins it recursively, so an array nested a few
+ * thousand levels deep cost seconds of event-loop time on an unauthenticated
+ * route.
+ *
+ * Shared by `authorizeQuerySchema` and the `/ui/consent` form mirror so the two
+ * cannot drift. The published JSON Schema is the inner `z.number()`'s.
+ */
+export const maxAgeParamSchema = z
+  .preprocess(
+    (v) => (typeof v === 'string' && /^\d+$/.test(v) ? Number(v) : v),
+    z.number().int().min(0).max(315360000)
+  )
+  .optional();
 
 /* -------------------------------------------------------------------------- */
 /*        Grant-type, token-type and client-assertion URNs (one place)        */
@@ -178,7 +206,7 @@ export type AssertionSigningAlg = (typeof ASSERTION_SIGNING_ALG_VALUES_SUPPORTED
  * authentication easier to satisfy.
  */
 const clientAuthenticationFields = {
-  client_id: z.string().min(1).optional(),
+  client_id: clientIdParamSchema.optional(),
   client_secret: z.string().min(1).optional(),
   client_assertion_type: z.string().min(1).max(ASSERTION_TYPE_MAX_LENGTH).optional(),
   client_assertion: z.string().min(1).max(ASSERTION_MAX_LENGTH).optional(),
@@ -190,9 +218,11 @@ const clientAuthenticationFields = {
  */
 export const authorizeQuerySchema = z.object({
   response_type: z.literal('code'),
-  client_id: z.string().min(1),
+  // Bounded before the CIMD path parses it or a refusal audits it.
+  client_id: clientIdParamSchema,
   // exactUrl(), not z.url(): matched as an exact string against the client's
-  // registered redirect URIs, and compared again at /token.
+  // registered redirect URIs, and compared again at /token. Length and
+  // character set are checked before the parse.
   redirect_uri: exactUrl(),
   code_challenge: z
     .string()
@@ -216,7 +246,7 @@ export const authorizeQuerySchema = z.object({
   // re-authentication is required (`0` ⇒ always re-authenticate). Only the
   // values QAuth acts on are accepted; anything else is rejected at the edge.
   prompt: z.enum(['none', 'login', 'consent']).optional(),
-  max_age: z.coerce.number().int().min(0).max(315360000).optional(),
+  max_age: maxAgeParamSchema,
   resource: resourceParamSchema,
 });
 
@@ -254,7 +284,9 @@ export const tokenExchangeAuthCodeBodySchema = z.object({
  */
 export const tokenExchangeClientCredsBodySchema = z.object({
   grant_type: z.literal('client_credentials'),
-  scope: z.string().optional(),
+  // Bounded like `scope` on every other grant: the handler checks each
+  // requested name against the client's allowlist.
+  scope: z.string().max(OAUTH_SCOPE_PARAM_MAX_LENGTH).optional(),
   // RFC 8707 §2: machine clients request a resource at mint time; handler
   // uses it as the token `aud` (overrides client.audience when present).
   resource: resourceParamSchema,
@@ -280,7 +312,10 @@ export const tokenExchangeRefreshBodySchema = z.object({
     .string()
     .length(64, 'refresh_token must be exactly 64 characters')
     .regex(/^[0-9a-fA-F]{64}$/, 'refresh_token must be a valid hex string'),
-  scope: z.string().optional(),
+  // Bounded like `scope` on every other grant. The handler checks each
+  // requested name against the refresh token's scopes and stores the result
+  // on the rotated token.
+  scope: z.string().max(OAUTH_SCOPE_PARAM_MAX_LENGTH).optional(),
   // RFC 8707 §2: on refresh, resource MUST be a subset of the one bound
   // to the original authorization code. Enforced in the handler.
   resource: resourceParamSchema,
@@ -333,7 +368,7 @@ export const tokenExchangeTokenExchangeBodySchema = z.object({
   // authorization servers at once — so the handler MUST reject a multi-valued
   // `audience` on that path rather than silently picking the first.
   audience: z
-    .union([z.string().min(1).max(2048), z.array(z.string().min(1).max(2048)).max(10)])
+    .union([z.string().min(1).max(2048), boundedArray(z.array(z.string().min(1).max(2048)), 10)])
     .optional()
     .transform((v) => (v === undefined ? undefined : Array.isArray(v) ? v : [v])),
   // RFC 8707 §2: resource indicators; MUST be a subset of the subject token's
@@ -473,7 +508,7 @@ export type TokenEndpointResponse = z.infer<typeof tokenEndpointResponseSchema>;
 export const introspectRequestSchema = z.object({
   token: z.string().min(1),
   token_type_hint: z.string().max(64).optional(),
-  client_id: z.string().min(1).optional(),
+  client_id: clientIdParamSchema.optional(),
   client_secret: z.string().min(1).optional(),
 });
 
@@ -489,7 +524,7 @@ export type IntrospectRequest = z.infer<typeof introspectRequestSchema>;
 export const revokeRequestSchema = z.object({
   token: z.string().min(1),
   token_type_hint: z.enum(['access_token', 'refresh_token']).optional(),
-  client_id: z.string().min(1).optional(),
+  client_id: clientIdParamSchema.optional(),
   client_secret: z.string().min(1).optional(),
 });
 
@@ -585,31 +620,32 @@ export type IntrospectResponse = z.infer<typeof introspectResponseSchema>;
  */
 export const dynamicClientRegistrationRequestSchema = z.object({
   client_name: z.string().min(1).max(255).optional(),
-  redirect_uris: z.array(z.string().min(1).max(2048)).max(20).optional(),
-  grant_types: z
-    .array(
+  // Every array goes through `boundedArray`: its length is checked before any
+  // element, so the caller cannot choose how many issues the request produces.
+  redirect_uris: boundedArray(z.array(z.string().min(1).max(2048)), 20).optional(),
+  grant_types: boundedArray(
+    z.array(
       z.enum([
         'authorization_code',
         'refresh_token',
         'client_credentials',
         TOKEN_EXCHANGE_GRANT_TYPE,
       ])
-    )
-    .max(8)
-    .optional(),
-  response_types: z
-    .array(z.enum(['code']))
-    .max(4)
-    .optional(),
+    ),
+    8
+  ).optional(),
+  response_types: boundedArray(z.array(z.enum(['code'])), 4).optional(),
   token_endpoint_auth_method: z
     .enum(['none', 'client_secret_basic', 'client_secret_post'])
     .optional(),
   scope: z.string().max(2048).optional(),
-  client_uri: z.url().max(2048).optional(),
-  logo_uri: z.url().max(2048).optional(),
-  tos_uri: z.url().max(2048).optional(),
-  policy_uri: z.url().max(2048).optional(),
-  contacts: z.array(z.email().max(255)).max(10).optional(),
+  // exactUrl() checks the length and character set before it parses the value;
+  // `z.url().max(2048)` parsed first and measured afterwards.
+  client_uri: exactUrl().optional(),
+  logo_uri: exactUrl().optional(),
+  tos_uri: exactUrl().optional(),
+  policy_uri: exactUrl().optional(),
+  contacts: boundedArray(z.array(z.email().max(255)), 10).optional(),
   software_id: z.string().max(255).optional(),
   software_version: z.string().max(64).optional(),
   /**

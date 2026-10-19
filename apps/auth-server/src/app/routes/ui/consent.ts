@@ -44,8 +44,8 @@ import {
 } from '../../helpers/session-cookie';
 import { evaluateStepUp, isDangerousScope, parsePromptMode } from '../../helpers/step-up';
 import { markRelaxedCsp } from '../../plugins/security-headers';
-import { exactUrl } from '../../schemas/common';
-import { authorizeQuerySchema, resourceParamSchema } from '../../schemas/oauth';
+import { clientIdParamSchema, exactUrl } from '../../schemas/common';
+import { authorizeQuerySchema, maxAgeParamSchema, resourceParamSchema } from '../../schemas/oauth';
 
 /**
  * Order-independent equality of two scope sets. Used by the consent POST to
@@ -90,7 +90,9 @@ const consentFormSchema = z.object({
   csrf_token: z.string().min(1),
   // Mirror of the original authorize params so we don't need to stash them
   // in the session (keeps the session payload small + stateless enough).
-  client_id: z.string().min(1),
+  // Same bound as `authorizeQuerySchema.client_id`: the wrong-CSRF refusal
+  // audits it.
+  client_id: clientIdParamSchema,
   // Same exact-string rule as `authorizeQuerySchema.redirect_uri`.
   redirect_uri: exactUrl(),
   state: z.string().max(OAUTH_OPAQUE_PARAM_MAX_LENGTH).optional(),
@@ -106,7 +108,7 @@ const consentFormSchema = z.object({
   // attacker-controlled, so the dangerous-elevation re-auth gate must run HERE
   // too, not only pre-consent). Empty string ⇒ treated as absent.
   prompt: z.enum(['none', 'login', 'consent']).optional(),
-  max_age: z.coerce.number().int().min(0).max(315360000).optional(),
+  max_age: maxAgeParamSchema,
   // RFC 8707: carried through as hidden form field(s). `resourceParamSchema`
   // populates an array on `body.resource`.
   resource: resourceParamSchema,

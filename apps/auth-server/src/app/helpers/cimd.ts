@@ -5,6 +5,8 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 
 import { env } from '../../config/env';
+import { OAUTH_CLIENT_ID_MAX_LENGTH } from '../constants';
+import { hasOnlyUriCharacters } from '../schemas/common';
 import { TOKEN_EXCHANGE_GRANT_TYPE } from '../schemas/oauth';
 import {
   assertJwksMutuallyExclusive,
@@ -212,8 +214,18 @@ export interface CimdClientInsert {
  * `https://example.com` is not mistaken for a metadata URL). Anything that
  * is not a parseable https URL with a path is treated as an opaque,
  * pre-registered client_id.
+ *
+ * The length and the character set are checked BEFORE the parse. This runs
+ * for every unknown `client_id`, including one from an HTTP Basic header or a
+ * client assertion that no request schema bounded, and `new URL()` is
+ * quadratic in the distinct non-ASCII characters of a host. A CIMD `client_id`
+ * is an ASCII URL no longer than {@link OAUTH_CLIENT_ID_MAX_LENGTH}, which is
+ * also the document schema's own bound on it.
  */
 export function isCimdClientId(clientId: string): boolean {
+  if (clientId.length > OAUTH_CLIENT_ID_MAX_LENGTH || !hasOnlyUriCharacters(clientId)) {
+    return false;
+  }
   let parsed: URL;
   try {
     parsed = new URL(clientId);

@@ -433,6 +433,19 @@ describe('validateScopes', () => {
     expect(validateScopes('read    write', ['read', 'write'])).toEqual(['read', 'write']);
   });
 
+  it('grants a repeated scope once', () => {
+    // A repeated scope used to be granted as many times as it was sent and
+    // checked against the allowlist once per repeat (an n × m scan).
+    expect(validateScopes('read read write read', ['read', 'write'])).toEqual(['read', 'write']);
+    expect(validateScopes('read read', ['read', 'read'])).toEqual(['read']);
+  });
+
+  it('names each scope it refuses once', () => {
+    expect(() => validateScopes('read admin admin', ['read'])).toThrow(
+      expect.objectContaining({ errorDescription: 'admin not permitted for this client' })
+    );
+  });
+
   // ADR-007 §2 (#184): the optional agent context enforces the scope-mode cap
   // through the SAME validateScopes path the token endpoint already uses.
   describe('agent scope-mode cap (ADR-007 §2)', () => {

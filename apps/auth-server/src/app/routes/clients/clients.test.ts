@@ -1,4 +1,9 @@
-import { BadRequestError, JWTInvalidError, NotFoundError } from '@qauth-labs/shared-errors';
+import {
+  BadRequestError,
+  ForbiddenError,
+  JWTInvalidError,
+  NotFoundError,
+} from '@qauth-labs/shared-errors';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { describe, expect, it, type Mock, vi } from 'vitest';
 
@@ -14,6 +19,7 @@ vi.mock('../../../config/env', () => ({
     REGISTER_CLIENT_RATE_LIMIT: 30,
     REGISTER_CLIENT_RATE_WINDOW: 60,
     DEFAULT_DYNAMIC_REGISTRATION_SCOPES: ['openid', 'profile', 'email', 'offline_access'],
+    MAX_CLIENTS_PER_DEVELOPER: 3,
   },
 }));
 
@@ -103,6 +109,7 @@ function makeFastify() {
     repositories: {
       oauthClients: {
         listByDeveloper: vi.fn(),
+        countByDeveloper: vi.fn(async () => 0),
         findById: vi.fn(),
         create: vi.fn(),
         update: vi.fn(),
@@ -806,6 +813,84 @@ describe('scope allowlist enforcement (#86/#88)', () => {
 
     await expect(route(ctx, 'PATCH /:id').handler(request, reply)).rejects.toThrow(BadRequestError);
     expect(fastify.repositories.oauthClients.update).not.toHaveBeenCalled();
+  });
+
+  it('stores a repeated scope once, on create and on PATCH', async () => {
+    // The allowlist check accepted any number of repeats of an allowed scope,
+    // so one row could hold `openid` 116,000 times (~1 MiB), and every list
+    // request loaded it again. Dynamic registration already de-duplicates.
+    const { fastify, ctx } = makeFastify();
+    await clientsRoute(fastify);
+    (fastify.repositories.oauthClients.create as unknown as Mock).mockImplementation(
+      async (data: Record<string, unknown>) => makeClientRow({ ...data })
+    );
+    (fastify.repositories.oauthClients.findById as unknown as Mock).mockResolvedValue(
+      makeClientRow({ developerId: DEV_A })
+    );
+    (fastify.repositories.oauthClients.update as unknown as Mock).mockImplementation(
+      async (_id: string, data: Record<string, unknown>) => makeClientRow({ ...data })
+    );
+
+    await route(ctx, 'POST /').handler(
+      authedRequest({
+        body: {
+          name: 'Repeats',
+          redirectUris: ['https://app.example.com/cb'],
+          scopes: ['openid', 'openid', 'email', 'openid'],
+        },
+      }),
+      createReply().reply
+    );
+    await route(ctx, 'PATCH /:id').handler(
+      authedRequest({
+        params: { id: '0190a000-0000-7000-8000-000000000001' },
+        body: { scopes: ['email', 'email', 'openid'] },
+      }),
+      createReply().reply
+    );
+
+    const created = (fastify.repositories.oauthClients.create as unknown as Mock).mock.calls[0][0];
+    expect(created.scopes).toEqual(['openid', 'email']);
+    const updated = (fastify.repositories.oauthClients.update as unknown as Mock).mock.calls[0][1];
+    expect(updated.scopes).toEqual(['email', 'openid']);
+  });
+});
+
+describe('clients per developer (MAX_CLIENTS_PER_DEVELOPER)', () => {
+  // Nothing limited how many clients one account owns, and `GET /api/clients`
+  // returns all of them in one response: a self-registered account could
+  // store enough rows that a handful of concurrent list requests ran the
+  // process out of heap, again after every restart.
+  function createRequest() {
+    return authedRequest({
+      body: { name: 'One more', redirectUris: ['https://app.example.com/cb'] },
+    });
+  }
+
+  it('refuses a create once the developer owns the maximum, before hashing or persisting', async () => {
+    const { fastify, ctx } = makeFastify();
+    await clientsRoute(fastify);
+    (fastify.repositories.oauthClients.countByDeveloper as unknown as Mock).mockResolvedValue(3);
+
+    await expect(
+      route(ctx, 'POST /').handler(createRequest(), createReply().reply)
+    ).rejects.toThrow(ForbiddenError);
+    expect(fastify.repositories.oauthClients.countByDeveloper).toHaveBeenCalledWith(DEV_A);
+    expect(fastify.passwordHasher.hashPassword).not.toHaveBeenCalled();
+    expect(fastify.repositories.oauthClients.create).not.toHaveBeenCalled();
+  });
+
+  it('allows a create below the maximum', async () => {
+    const { fastify, ctx } = makeFastify();
+    await clientsRoute(fastify);
+    (fastify.repositories.oauthClients.countByDeveloper as unknown as Mock).mockResolvedValue(2);
+    (fastify.repositories.oauthClients.create as unknown as Mock).mockImplementation(
+      async (data: Record<string, unknown>) => makeClientRow({ ...data })
+    );
+
+    const { reply, state } = createReply();
+    await route(ctx, 'POST /').handler(createRequest(), reply);
+    expect(state.statusCode).toBe(201);
   });
 });
 

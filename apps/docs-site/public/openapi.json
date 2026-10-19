@@ -299,6 +299,7 @@
                 "properties": {
                   "email": {
                     "type": "string",
+                    "maxLength": 254,
                     "format": "email",
                     "pattern": "^(?:[A-Za-z0-9_'+\\-]+\\.)*[A-Za-z0-9_'+\\-]*[A-Za-z0-9_+-]@(?:[A-Za-z0-9][A-Za-z0-9\\-]*\\.)+[A-Za-z]{2,}$"
                   },
@@ -418,6 +419,7 @@
                 "properties": {
                   "email": {
                     "type": "string",
+                    "maxLength": 254,
                     "format": "email",
                     "pattern": "^(?:[A-Za-z0-9_'+\\-]+\\.)*[A-Za-z0-9_'+\\-]*[A-Za-z0-9_+-]@(?:[A-Za-z0-9][A-Za-z0-9\\-]*\\.)+[A-Za-z]{2,}$"
                   },
@@ -506,6 +508,7 @@
                 "properties": {
                   "email": {
                     "type": "string",
+                    "maxLength": 254,
                     "format": "email",
                     "pattern": "^(?:[A-Za-z0-9_'+\\-]+\\.)*[A-Za-z0-9_'+\\-]*[A-Za-z0-9_+-]@(?:[A-Za-z0-9][A-Za-z0-9\\-]*\\.)+[A-Za-z]{2,}$"
                   }
@@ -785,21 +788,26 @@
                   },
                   "redirectUris": {
                     "default": [],
+                    "maxItems": 20,
                     "type": "array",
                     "items": {
                       "type": "string",
+                      "maxLength": 2048,
                       "format": "uri"
                     }
                   },
                   "scopes": {
                     "default": [],
+                    "maxItems": 100,
                     "type": "array",
                     "items": {
-                      "type": "string"
+                      "type": "string",
+                      "maxLength": 2048
                     }
                   },
                   "grantTypes": {
                     "minItems": 1,
+                    "maxItems": 8,
                     "type": "array",
                     "items": {
                       "type": "string",
@@ -812,6 +820,7 @@
                     }
                   },
                   "responseTypes": {
+                    "maxItems": 4,
                     "type": "array",
                     "items": {
                       "type": "string",
@@ -1112,20 +1121,25 @@
                     ]
                   },
                   "redirectUris": {
+                    "maxItems": 20,
                     "type": "array",
                     "items": {
                       "type": "string",
+                      "maxLength": 2048,
                       "format": "uri"
                     }
                   },
                   "scopes": {
+                    "maxItems": 100,
                     "type": "array",
                     "items": {
-                      "type": "string"
+                      "type": "string",
+                      "maxLength": 2048
                     }
                   },
                   "grantTypes": {
                     "minItems": 1,
+                    "maxItems": 8,
                     "type": "array",
                     "items": {
                       "type": "string",
@@ -1138,6 +1152,7 @@
                     }
                   },
                   "responseTypes": {
+                    "maxItems": 4,
                     "type": "array",
                     "items": {
                       "type": "string",
@@ -1996,7 +2011,9 @@
           {
             "schema": {
               "type": "string",
-              "minLength": 1
+              "minLength": 1,
+              "maxLength": 2048,
+              "pattern": "^[\\x20-\\x7E]*$"
             },
             "in": "query",
             "name": "client_id",
@@ -2005,6 +2022,7 @@
           {
             "schema": {
               "type": "string",
+              "maxLength": 2048,
               "format": "uri"
             },
             "in": "query",
@@ -2134,10 +2152,13 @@
                   },
                   "client_id": {
                     "type": "string",
-                    "minLength": 1
+                    "minLength": 1,
+                    "maxLength": 2048,
+                    "pattern": "^[\\x20-\\x7E]*$"
                   },
                   "redirect_uri": {
                     "type": "string",
+                    "maxLength": 2048,
                     "format": "uri"
                   },
                   "code_challenge": {
@@ -2238,7 +2259,9 @@
                   },
                   "client_id": {
                     "type": "string",
-                    "minLength": 1
+                    "minLength": 1,
+                    "maxLength": 2048,
+                    "pattern": "^[\\x20-\\x7E]*$"
                   },
                   "client_secret": {
                     "type": "string",
@@ -2548,7 +2571,9 @@
                   },
                   "client_id": {
                     "type": "string",
-                    "minLength": 1
+                    "minLength": 1,
+                    "maxLength": 2048,
+                    "pattern": "^[\\x20-\\x7E]*$"
                   },
                   "client_secret": {
                     "type": "string",
@@ -2625,7 +2650,9 @@
                       },
                       "client_id": {
                         "type": "string",
-                        "minLength": 1
+                        "minLength": 1,
+                        "maxLength": 2048,
+                        "pattern": "^[\\x20-\\x7E]*$"
                       },
                       "client_secret": {
                         "type": "string",
@@ -2659,7 +2686,8 @@
                         ]
                       },
                       "scope": {
-                        "type": "string"
+                        "type": "string",
+                        "maxLength": 2048
                       },
                       "resource": {
                         "anyOf": [
@@ -2681,7 +2709,9 @@
                       },
                       "client_id": {
                         "type": "string",
-                        "minLength": 1
+                        "minLength": 1,
+                        "maxLength": 2048,
+                        "pattern": "^[\\x20-\\x7E]*$"
                       },
                       "client_secret": {
                         "type": "string",
@@ -2718,7 +2748,8 @@
                         "pattern": "^[0-9a-fA-F]{64}$"
                       },
                       "scope": {
-                        "type": "string"
+                        "type": "string",
+                        "maxLength": 2048
                       },
                       "resource": {
                         "anyOf": [
@@ -2740,7 +2771,9 @@
                       },
                       "client_id": {
                         "type": "string",
-                        "minLength": 1
+                        "minLength": 1,
+                        "maxLength": 2048,
+                        "pattern": "^[\\x20-\\x7E]*$"
                       },
                       "client_secret": {
                         "type": "string",
@@ -2838,7 +2871,9 @@
                       },
                       "client_id": {
                         "type": "string",
-                        "minLength": 1
+                        "minLength": 1,
+                        "maxLength": 2048,
+                        "pattern": "^[\\x20-\\x7E]*$"
                       },
                       "client_secret": {
                         "type": "string",
@@ -2899,7 +2934,9 @@
                       },
                       "client_id": {
                         "type": "string",
-                        "minLength": 1
+                        "minLength": 1,
+                        "maxLength": 2048,
+                        "pattern": "^[\\x20-\\x7E]*$"
                       },
                       "client_secret": {
                         "type": "string",
@@ -3224,7 +3261,9 @@
           {
             "schema": {
               "type": "string",
-              "minLength": 1
+              "minLength": 1,
+              "maxLength": 2048,
+              "pattern": "^[\\x20-\\x7E]*$"
             },
             "in": "query",
             "name": "client_id",
@@ -3233,6 +3272,7 @@
           {
             "schema": {
               "type": "string",
+              "maxLength": 2048,
               "format": "uri"
             },
             "in": "query",
@@ -3369,10 +3409,13 @@
                   },
                   "client_id": {
                     "type": "string",
-                    "minLength": 1
+                    "minLength": 1,
+                    "maxLength": 2048,
+                    "pattern": "^[\\x20-\\x7E]*$"
                   },
                   "redirect_uri": {
                     "type": "string",
+                    "maxLength": 2048,
                     "format": "uri"
                   },
                   "state": {
@@ -3500,7 +3543,8 @@
                 "properties": {
                   "email": {
                     "type": "string",
-                    "minLength": 1
+                    "minLength": 1,
+                    "maxLength": 254
                   },
                   "password": {
                     "type": "string",

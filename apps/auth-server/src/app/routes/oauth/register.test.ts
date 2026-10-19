@@ -1,4 +1,4 @@
-import { BadRequestError } from '@qauth-labs/shared-errors';
+import { BadRequestError, ForbiddenError } from '@qauth-labs/shared-errors';
 import type { FastifyInstance } from 'fastify';
 import { describe, expect, it, type Mock, vi } from 'vitest';
 
@@ -11,7 +11,17 @@ vi.mock('../../../config/env', () => ({
     REGISTER_CLIENT_RATE_LIMIT: 30,
     REGISTER_CLIENT_RATE_WINDOW: 60,
     DEFAULT_DYNAMIC_REGISTRATION_SCOPES: ['openid', 'profile', 'email', 'offline_access'],
+    MAX_CLIENTS_PER_DEVELOPER: 3,
   },
+}));
+
+// Attribution has its own tests (helpers/registration-attribution.test.ts).
+// Here it is a seam: anonymous by default, a developer when a test says so.
+const { resolveDeveloperId } = vi.hoisted(() => ({
+  resolveDeveloperId: vi.fn(async (): Promise<string | null> => null),
+}));
+vi.mock('../../helpers/registration-attribution', () => ({
+  resolveRegistrationDeveloperId: resolveDeveloperId,
 }));
 
 import { dynamicClientRegistrationRequestSchema } from '../../schemas/oauth';
@@ -84,6 +94,7 @@ function createFastifyStub(
         create: vi.fn(),
       },
       oauthClients: {
+        countByDeveloper: vi.fn(async () => 0),
         create: vi.fn(async (row: any) => {
           const persisted = {
             ...row,
@@ -455,6 +466,44 @@ describe('POST /oauth/register — Dynamic Client Registration (RFC 7591)', () =
       expect(persisted.jwks).toBeNull();
       expect(persisted.jwksUri).toBeNull();
       expect(persisted.tokenEndpointAuthMethod).toBe('none');
+    });
+  });
+
+  describe('clients per developer (MAX_CLIENTS_PER_DEVELOPER)', () => {
+    // A registration that carries the developer's token adds a row to the same
+    // list `POST /api/clients` does, so it counts against the same maximum.
+    const DEVELOPER = '0190a000-0000-7000-8000-00000000000a';
+    const registration = {
+      body: { client_name: 'One more', redirect_uris: ['https://client.example/cb'] },
+      ip: '127.0.0.1',
+      headers: {},
+    };
+
+    async function register(fastify: FastifyInstance, ctx: TestContext) {
+      await registerRoute(fastify);
+      const handler = ctx.handler;
+      if (!handler) throw new Error('Handler missing');
+      return handler(registration, createReply().reply);
+    }
+
+    it('refuses an attributed registration once the developer owns the maximum', async () => {
+      const { fastify, ctx, state } = createFastifyStub();
+      (fastify.repositories.oauthClients.countByDeveloper as unknown as Mock).mockResolvedValue(3);
+      resolveDeveloperId.mockResolvedValueOnce(DEVELOPER);
+
+      await expect(register(fastify, ctx)).rejects.toThrow(ForbiddenError);
+      expect(fastify.repositories.oauthClients.countByDeveloper).toHaveBeenCalledWith(DEVELOPER);
+      expect(fastify.passwordHasher.hashPassword).not.toHaveBeenCalled();
+      expect(state.createdClients).toHaveLength(0);
+    });
+
+    it('does not count an anonymous registration, which belongs to no developer', async () => {
+      const { fastify, ctx, state } = createFastifyStub();
+      (fastify.repositories.oauthClients.countByDeveloper as unknown as Mock).mockResolvedValue(3);
+
+      await register(fastify, ctx);
+      expect(fastify.repositories.oauthClients.countByDeveloper).not.toHaveBeenCalled();
+      expect(state.createdClients).toHaveLength(1);
     });
   });
 });

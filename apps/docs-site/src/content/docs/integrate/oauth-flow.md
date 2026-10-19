@@ -130,17 +130,22 @@ http://localhost:3000/oauth/authorize
   &resource=http://localhost:8088
 ```
 
-| Parameter               | Required    | Notes                                                           |
-| ----------------------- | ----------- | --------------------------------------------------------------- |
-| `response_type`         | yes         | Must be `code`.                                                 |
-| `client_id`             | yes         | Your client.                                                    |
-| `redirect_uri`          | yes         | Must match a registered URI — see below.                        |
-| `code_challenge`        | yes         | From step 1.                                                    |
-| `code_challenge_method` | yes         | Must be `S256`.                                                 |
-| `scope`                 | no          | Space-separated; filtered to the client's allowlist.            |
-| `state`                 | recommended | Opaque CSRF value; echoed back verbatim.                        |
-| `nonce`                 | OIDC        | Bound into the ID token when issued.                            |
-| `resource`              | no          | RFC 8707 target(s); binds the token `aud`. Repeat for multiple. |
+| Parameter               | Required    | Notes                                                                     |
+| ----------------------- | ----------- | ------------------------------------------------------------------------- |
+| `response_type`         | yes         | Must be `code`.                                                           |
+| `client_id`             | yes         | Your client. At most 2048 printable ASCII characters.                     |
+| `redirect_uri`          | yes         | Must match a registered URI — see below.                                  |
+| `code_challenge`        | yes         | From step 1.                                                              |
+| `code_challenge_method` | yes         | Must be `S256`.                                                           |
+| `scope`                 | no          | Space-separated; filtered to the client's allowlist.                      |
+| `state`                 | recommended | Opaque CSRF value; echoed back verbatim.                                  |
+| `nonce`                 | OIDC        | Bound into the ID token when issued.                                      |
+| `resource`              | no          | RFC 8707 target(s); binds the token `aud`. Repeat for multiple, up to 10. |
+
+`redirect_uri` and each `resource` are absolute URIs of at most 2048
+characters, written in ASCII as RFC 3986 requires: an internationalised host in
+its `xn--` form, any other non-ASCII character percent-encoded. A raw Unicode
+character or a space is refused with `400`.
 
 #### Redirect URI matching
 

@@ -96,6 +96,19 @@ export const baseEnvSchema = z.object({
   TRUST_PROXY: z.string().optional().transform(parseTrustProxy),
 
   /**
+   * How long, in milliseconds, a client may take to deliver one complete
+   * request, headers and body. A request still incomplete at the deadline is
+   * answered `408` and its connection closed.
+   *
+   * Fastify's own default is 0, which also switches off Node's 300 s limit, so
+   * a request that stopped one byte short of its `Content-Length` was held, with
+   * everything buffered so far, for ever. At least 1000; there is no "no
+   * deadline" value. Node checks it on a 30 s sweep, so a request can outlive
+   * it by up to that much. It does not limit how long a handler takes to answer.
+   */
+  REQUEST_TIMEOUT_MS: z.coerce.number().int().min(1000).default(60_000),
+
+  /**
    * Logging level
    */
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace']).default('info'),

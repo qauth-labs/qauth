@@ -48,7 +48,9 @@ Schema-validation failures use:
 `details` carries one entry per rejected field: `path` names it, `message` says
 what is wrong with it. Nothing else — the validator's own issue objects also
 carry the schema path, the rule keyword and a parameter bag, and those describe
-how QAuth is built rather than what it accepts, so they are not returned.
+how QAuth is built rather than what it accepts, so they are not returned. At
+most 20 entries are returned. An array longer than its limit is one entry for
+the array as a whole; its elements are not checked.
 
 OAuth endpoints additionally return the standard OAuth error codes documented in
 [OAuth 2.1 Flow → Errors](/integrate/oauth-flow/#errors) (e.g. `invalid_grant`,
@@ -128,7 +130,7 @@ Create a user account. A verification email is sent (the `mock` provider logs it
 
 | Field      | Type           | Required | Notes                                         |
 | ---------- | -------------- | -------- | --------------------------------------------- |
-| `email`    | string (email) | yes      |                                               |
+| `email`    | string (email) | yes      | At most 254 characters (RFC 5321).            |
 | `password` | string         | yes      | Strength enforced server-side (zxcvbn score). |
 | `realmId`  | string (uuid)  | no       | Defaults to the server's default realm.       |
 
@@ -154,7 +156,8 @@ already registered.
 
 Authenticate with email/password and receive tokens directly (first-party).
 
-**Request** (`application/json`): `{ "email": "...", "password": "..." }`
+**Request** (`application/json`): `{ "email": "...", "password": "..." }`. The
+address is at most 254 characters.
 
 **`200 OK`**
 
@@ -207,7 +210,8 @@ per-window caps).
 **Request** (`application/json`): `{ "email": "dev@example.com" }`
 
 **`200 OK`**: `{ "message": "..." }` — returned even for unknown addresses
-(no account enumeration). Errors: `429` (too soon / over limit).
+(no account enumeration). Errors: `400` (not an address, or longer than 254
+characters), `429` (too soon / over limit).
 
 ### `POST /auth/link/wallet`
 
@@ -533,7 +537,9 @@ curl -s -X POST https://auth.example.com/oauth/register \
 ```
 
 The client is then owned by that token's subject and behaves like any client
-created through `POST /api/clients/`. A token that does not verify is rejected
+created through `POST /api/clients/`, including the per-developer limit on the
+number of clients (`MAX_CLIENTS_PER_DEVELOPER`, `403` once reached). A token
+that does not verify is rejected
 rather than silently ignored — otherwise you would get an unowned client while
 believing you owned it, which is the failure this note exists to prevent.
 :::
@@ -587,15 +593,15 @@ only** — only its argon2id hash is stored, so it is unrecoverable afterwards.
 
 **Body** (all besides `name` optional):
 
-| Field                     | Type     | Default                                  | Notes                                                                                                                                         |
-| ------------------------- | -------- | ---------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
-| `name`                    | string   | —                                        | Required, 1–255 chars.                                                                                                                        |
-| `description`             | string   | `null`                                   |                                                                                                                                               |
-| `redirectUris`            | string[] | `[]`                                     | Each validated (OAuth 2.1 §10.3 — `https` or loopback). **Required (≥1) for user-involving grants** (`authorization_code` / `refresh_token`). |
-| `scopes`                  | string[] | `[]`                                     | Capped to the realm's allowed-scopes policy (same allowlist as dynamic registration); a scope outside it is rejected.                         |
-| `grantTypes`              | string[] | `["authorization_code","refresh_token"]` | `authorization_code` / `refresh_token` / `client_credentials`.                                                                                |
-| `responseTypes`           | string[] | `["code"]`                               | OAuth 2.1 only supports `code`.                                                                                                               |
-| `tokenEndpointAuthMethod` | string   | `"none"`                                 | `none` (public) / `client_secret_post` / `client_secret_basic` / `private_key_jwt`.                                                           |
+| Field                     | Type     | Default                                  | Notes                                                                                                                                                     |
+| ------------------------- | -------- | ---------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `name`                    | string   | —                                        | Required, 1–255 chars.                                                                                                                                    |
+| `description`             | string   | `null`                                   |                                                                                                                                                           |
+| `redirectUris`            | string[] | `[]`                                     | At most 20. Each validated (OAuth 2.1 §10.3 — `https` or loopback). **Required (≥1) for user-involving grants** (`authorization_code` / `refresh_token`). |
+| `scopes`                  | string[] | `[]`                                     | At most 100. Capped to the realm's allowed-scopes policy (same allowlist as dynamic registration); a scope outside it is rejected.                        |
+| `grantTypes`              | string[] | `["authorization_code","refresh_token"]` | At most 8. `authorization_code` / `refresh_token` / `client_credentials`.                                                                                 |
+| `responseTypes`           | string[] | `["code"]`                               | At most 4. OAuth 2.1 only supports `code`.                                                                                                                |
+| `tokenEndpointAuthMethod` | string   | `"none"`                                 | `none` (public) / `client_secret_post` / `client_secret_basic` / `private_key_jwt`.                                                                       |
 
 **Rate limit**: per-IP, shared budget with `POST /oauth/register`
 (`REGISTER_CLIENT_RATE_LIMIT` / `REGISTER_CLIENT_RATE_WINDOW`) — create runs an
@@ -624,9 +630,13 @@ argon2id hash on every call, so the cap is mandatory (`429` on exceed).
 ```
 
 Public clients (`tokenEndpointAuthMethod: "none"`) get **no** `clientSecret`.
+A repeated scope is stored once. A developer may own at most
+`MAX_CLIENTS_PER_DEVELOPER` clients (default 100), counting the ones registered
+with attribution through `POST /oauth/register`.
 Errors: `400` (invalid `redirectUri`, inconsistent grant/response types, missing
 `redirectUris` for a user-involving grant, or a scope outside the realm policy),
-`401` (missing/invalid bearer, or a non-user token), `429` (rate limited).
+`401` (missing/invalid bearer, or a non-user token), `403` (the developer already
+owns `MAX_CLIENTS_PER_DEVELOPER` clients), `429` (rate limited).
 
 ### `GET /api/clients/{id}`
 
@@ -639,7 +649,7 @@ Errors: `401`; `404` (not found or not owned).
 
 Partially update a client. Any subset of: `name`, `description`,
 `redirectUris`, `scopes`, `grantTypes`, `responseTypes`,
-`tokenEndpointAuthMethod`, `enabled`. `clientId`, the secret, and
+`tokenEndpointAuthMethod`, `enabled`, with the same limits as on create. `clientId`, the secret, and
 `developerId` are **immutable** here (unknown/immutable keys are ignored). The
 _effective_ configuration (request value or persisted value) is re-validated:
 grant/response-type consistency, a redirect URI for user-involving grants, and

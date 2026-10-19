@@ -2167,6 +2167,57 @@ describe('POST /oauth/token route — refresh_token grant', () => {
     expect(result).toMatchObject({ scope: 'read:foo' });
   });
 
+  it('stores a repeated scope ONCE on the rotated token', async () => {
+    // A refresh with `scope` = 174,000 × `email` used to be stored as sent on
+    // the rotated token, and the next refresh's up-scoping check scanned that
+    // list once per requested scope: one 1 MiB request then held the event
+    // loop for ~78 s. Token exchange already de-duplicates at the same point.
+    const { fastify, ctx, confidentialClient, storedToken } = setupRefreshStub();
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(
+      confidentialClient
+    );
+    (
+      fastify.repositories.refreshTokens.findByTokenHashIncludingRevoked as unknown as Mock
+    ).mockResolvedValue(storedToken);
+
+    await tokenRoute(fastify);
+    const handler = ctx.handler;
+    if (!handler) throw new Error('Handler missing');
+
+    const reply = createReply();
+    const result = await handler(
+      refreshRequest({ scope: 'read:foo read:foo  read:foo\tread:foo' }),
+      reply
+    );
+
+    expect(fastify.repositories.refreshTokens.create).toHaveBeenCalledWith(
+      expect.objectContaining({ scopes: ['read:foo'] }),
+      expect.anything()
+    );
+    expect(result).toMatchObject({ scope: 'read:foo' });
+  });
+
+  it('de-duplicates a stored scope list that already holds repeats when carrying it forward', async () => {
+    const { fastify, ctx, confidentialClient, storedToken } = setupRefreshStub();
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(
+      confidentialClient
+    );
+    (
+      fastify.repositories.refreshTokens.findByTokenHashIncludingRevoked as unknown as Mock
+    ).mockResolvedValue({ ...storedToken, scopes: ['read:foo', 'read:foo', 'read:foo'] });
+
+    await tokenRoute(fastify);
+    const handler = ctx.handler;
+    if (!handler) throw new Error('Handler missing');
+
+    await handler(refreshRequest(), createReply());
+
+    expect(fastify.repositories.refreshTokens.create).toHaveBeenCalledWith(
+      expect.objectContaining({ scopes: ['read:foo'] }),
+      expect.anything()
+    );
+  });
+
   it('rejects upscoping with invalid_scope', async () => {
     const { fastify, ctx, confidentialClient, storedToken } = setupRefreshStub();
     (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(

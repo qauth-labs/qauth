@@ -4,10 +4,11 @@ import { createHash } from 'node:crypto';
  * Hash a variable-length, externally-influenced key component into a fixed-size
  * hex digest.
  *
- * Used for the ID-JAG namespaces below, whose components are URLs and JWT `jti`
- * values: both can be long and can carry Redis-reserved characters, and an
- * unbounded key is a memory-amplification lever on a path an attacker can reach
- * with a forged assertion. Same technique `cimd.ts` applies to a CIMD
+ * Used for the resend-verification and ID-JAG namespaces below, whose
+ * components are email addresses, URLs and JWT `jti` values: all can be long
+ * and can carry Redis-reserved characters, and an unbounded key is a
+ * memory-amplification lever on a path an attacker can reach without an
+ * account or with a forged assertion. Same technique `cimd.ts` applies to a CIMD
  * `client_id`. Not a security control — the digest is not a secret — purely a
  * key-shape bound.
  */
@@ -19,10 +20,17 @@ function digest(value: string): string {
  * Redis key generators for rate limiting and caching
  */
 export const REDIS_KEYS = {
-  /** Rate limit counter for resend verification requests per email */
-  RESEND_RATE_LIMIT: (email: string) => `rate-limit:resend:${email}`,
-  /** Last email sent timestamp for minimum interval check */
-  LAST_EMAIL_SENT: (email: string) => `last-email-sent:${email}`,
+  /**
+   * Rate limit counter for resend verification requests per email.
+   *
+   * Both resend keys are written for EVERY request, account or not, before any
+   * lookup, so the address is {@link digest}ed: a key holding it verbatim was
+   * an hour-long Redis entry as long as the caller's address. Counters written
+   * under the old names expire within the hour.
+   */
+  RESEND_RATE_LIMIT: (email: string) => `rate-limit:resend:${digest(email)}`,
+  /** Last email sent timestamp for minimum interval check (address digested, as above) */
+  LAST_EMAIL_SENT: (email: string) => `last-email-sent:${digest(email)}`,
   /** Sliding-window failed-login attempt counter, keyed per identifier (#115) */
   FAILED_LOGIN_ATTEMPTS: (identifier: string) => `failed-login:attempts:${identifier}`,
   /** Active failed-login lockout marker, keyed per identifier (#115) */

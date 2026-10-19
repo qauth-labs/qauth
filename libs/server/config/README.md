@@ -76,12 +76,23 @@ export const env = parseEnv(envSchema);
 
 Common server configuration.
 
-| Variable    | Type   | Default       | Description         |
-| ----------- | ------ | ------------- | ------------------- |
-| `NODE_ENV`  | enum   | `development` | Node environment    |
-| `HOST`      | string | `0.0.0.0`     | Server host address |
-| `PORT`      | number | `3000`        | Server port         |
-| `LOG_LEVEL` | enum   | `info`        | Logging level       |
+| Variable             | Type   | Default       | Description                                 |
+| -------------------- | ------ | ------------- | ------------------------------------------- |
+| `NODE_ENV`           | enum   | `development` | Node environment                            |
+| `HOST`               | string | `0.0.0.0`     | Server host address                         |
+| `PORT`               | number | `3000`        | Server port                                 |
+| `LOG_LEVEL`          | enum   | `info`        | Logging level                               |
+| `REQUEST_TIMEOUT_MS` | number | `60000`       | Deadline for receiving a whole request (ms) |
+
+`REQUEST_TIMEOUT_MS` bounds how long a client may take to send one complete
+request, headers and body. A request still incomplete at the deadline is
+answered `408` and its connection closed, which releases whatever of its body
+was buffered. It must be at least 1000; there is no "no deadline" value
+(Fastify's own default of 0 held an unfinished request for ever). Node checks it
+on a 30 s sweep, so a request can outlive it by up to that much. It does not
+limit how long a handler takes to answer. Raise it if legitimate clients upload
+large bodies over slow links. The auth-server also keeps Node's headers deadline
+no longer than this value.
 
 ### databaseEnvSchema
 
@@ -125,13 +136,22 @@ Password hashing and validation configuration.
 
 Authentication-specific configuration.
 
-| Variable                   | Type    | Default  | Description                                    |
-| -------------------------- | ------- | -------- | ---------------------------------------------- |
-| `DEFAULT_REALM_NAME`       | string  | `master` | Default realm name                             |
-| `REQUIRE_VERIFIED_ACCOUNT` | boolean | `false`  | Refuse password login by an unverified account |
-| `REQUIRE_EMAIL_VERIFIED`   | boolean | —        | Deprecated alias of `REQUIRE_VERIFIED_ACCOUNT` |
-| `REGISTRATION_RATE_LIMIT`  | number  | `3`      | Max registrations/window                       |
-| `REGISTRATION_RATE_WINDOW` | number  | `3600`   | Registration window (sec)                      |
+| Variable                    | Type    | Default  | Description                                    |
+| --------------------------- | ------- | -------- | ---------------------------------------------- |
+| `DEFAULT_REALM_NAME`        | string  | `master` | Default realm name                             |
+| `REQUIRE_VERIFIED_ACCOUNT`  | boolean | `false`  | Refuse password login by an unverified account |
+| `REQUIRE_EMAIL_VERIFIED`    | boolean | —        | Deprecated alias of `REQUIRE_VERIFIED_ACCOUNT` |
+| `REGISTRATION_RATE_LIMIT`   | number  | `3`      | Max registrations/window                       |
+| `REGISTRATION_RATE_WINDOW`  | number  | `3600`   | Registration window (sec)                      |
+| `MAX_CLIENTS_PER_DEVELOPER` | number  | `100`    | Most OAuth clients one developer may own       |
+
+`MAX_CLIENTS_PER_DEVELOPER` counts the clients a developer created through
+`POST /api/clients` and the ones it registered through `POST /oauth/register`
+with its access token; an anonymous dynamic registration is not counted. At the
+limit both routes answer `403`. `GET /api/clients` returns every client of the
+caller in one response, so this is what bounds that response. It must be at
+least 1. An account already above a lowered limit keeps its clients but cannot
+create more.
 
 The schema parses both gate names but does not combine them. Read the gate
 through `resolveRequireVerifiedAccount()`. It applies the `false` default and

@@ -33,6 +33,8 @@ import loginRoute from './login';
 interface TestContext {
   get?: (request: any, reply: any) => Promise<unknown>;
   post?: (request: any, reply: any) => Promise<unknown>;
+  /** The POST route's options, so a test can reach the form schema Fastify applies. */
+  postOpts?: { schema: { body: { safeParse: (value: unknown) => { success: boolean } } } };
 }
 
 function createReply() {
@@ -79,8 +81,9 @@ function makeFastify() {
         ctx.get = handler;
         return fastify;
       },
-      post: (_url: string, _opts: unknown, handler: any) => {
+      post: (_url: string, opts: TestContext['postOpts'], handler: any) => {
         ctx.post = handler;
+        ctx.postOpts = opts;
         return fastify;
       },
     }),
@@ -486,5 +489,21 @@ describe('UI /ui/login — return_to open-redirect guard', () => {
     await ctx.get!({ query: { return_to: returnTo }, headers: {}, ip: '127.0.0.1' }, reply);
 
     expect(state.body as string).toContain(`name="return_to" value="${returnTo}"`);
+  });
+});
+
+describe('UI /ui/login — the email field is bounded', () => {
+  // A refused sign-in writes the address to `audit_logs`; with no bound, one
+  // anonymous request stored a 1 MiB row. RFC 5321 caps an address at 254.
+  it('the form schema refuses an address longer than 254 characters', async () => {
+    const { fastify, ctx } = makeFastify();
+    await loginRoute(fastify);
+    const schema = ctx.postOpts?.schema.body;
+    if (!schema) throw new Error('POST schema missing');
+
+    const atBound = `${'a'.repeat(254 - '@example.com'.length)}@example.com`;
+    const form = { password: 'pw', csrf_token: 'csrf' };
+    expect(schema.safeParse({ ...form, email: atBound }).success).toBe(true);
+    expect(schema.safeParse({ ...form, email: `a${atBound}` }).success).toBe(false);
   });
 });

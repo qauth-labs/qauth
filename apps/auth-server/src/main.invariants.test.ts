@@ -49,6 +49,22 @@ describe('main.ts security invariants', () => {
     expect(mainCode).not.toMatch(/\bhttp2\b/);
     expect(mainCode).not.toMatch(/\bserverFactory\b/);
   });
+
+  // Behaviour is tested in `app/helpers/request-bounds.test.ts`; these pin that
+  // the server is actually built with it.
+  it('bounds how long an unfinished request is held (REQUEST_TIMEOUT_MS)', () => {
+    // Fastify's default of 0 holds a request whose body never finishes, with
+    // everything buffered so far, for ever.
+    expect(mainCode).toMatch(/\.\.\.requestDeadlineOptions\(\s*env\.REQUEST_TIMEOUT_MS\s*\)/);
+  });
+
+  it('answers an unknown route on the ROOT instance before its body is read', () => {
+    // The default 404 belongs to the root, outside the scope the rate limiter
+    // is registered in, and Fastify still parses its body.
+    expect(mainCode).toMatch(
+      /server\.addHook\(\s*'onRequest'\s*,\s*answerUnknownRouteBeforeBody\s*\)/
+    );
+  });
 });
 
 /**

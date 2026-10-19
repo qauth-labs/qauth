@@ -1054,8 +1054,13 @@ async function handleRefreshToken(
   // Upscoping (any scope not in the original set) → invalid_scope.
   let grantedScopes: string[];
   if (body.scope !== undefined) {
-    const requested = body.scope.split(/\s+/).filter((s) => s.length > 0);
-    const extraneous = requested.filter((s) => !storedToken.scopes.includes(s));
+    // De-duplicated, as token exchange does: the result is stored on the
+    // rotated token, so a repeated name would grow the stored list on every
+    // refresh. Membership goes through a Set, so the check is linear however
+    // long the stored list already is.
+    const requested = [...new Set(body.scope.split(/\s+/).filter((s) => s.length > 0))];
+    const original = new Set(storedToken.scopes);
+    const extraneous = requested.filter((s) => !original.has(s));
     if (extraneous.length > 0) {
       await fastify.repositories.auditLogs.create({
         userId: user.id,
@@ -1075,7 +1080,9 @@ async function handleRefreshToken(
     }
     grantedScopes = requested;
   } else {
-    grantedScopes = storedToken.scopes;
+    // De-duplicated too, so a list stored with repeats before the refresh
+    // `scope` was de-duplicated shrinks on its next rotation.
+    grantedScopes = [...new Set(storedToken.scopes)];
   }
 
   // Clamp to the agent's CURRENT server-side `max_agent_mode` (ADR-007 §2,

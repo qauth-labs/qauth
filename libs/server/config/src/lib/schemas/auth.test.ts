@@ -128,3 +128,29 @@ describe('resolveRequireVerifiedAccount', () => {
     });
   });
 });
+
+/**
+ * How many OAuth clients one developer account may own. `GET /api/clients`
+ * returns all of them in one response, so with no ceiling a self-registered
+ * account could store enough rows to run the process out of heap.
+ */
+describe('authEnvSchema MAX_CLIENTS_PER_DEVELOPER', () => {
+  const parse = (raw?: string) =>
+    authEnvSchema.parse(raw === undefined ? {} : { MAX_CLIENTS_PER_DEVELOPER: raw })
+      .MAX_CLIENTS_PER_DEVELOPER;
+
+  it('defaults to 100', () => {
+    expect(parse()).toBe(100);
+  });
+
+  it('accepts a positive integer', () => {
+    expect(parse('1')).toBe(1);
+    expect(parse('5000')).toBe(5000);
+  });
+
+  it('refuses zero, a negative, a fraction or a non-number, so it can never mean "no limit"', () => {
+    for (const raw of ['0', '-1', '1.5', 'unlimited']) {
+      expect(() => parse(raw), raw).toThrow();
+    }
+  });
+});

@@ -1,5 +1,5 @@
 import { BadRequestError } from '@qauth-labs/shared-errors';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { validateAndNormalize, validateRedirectUri } from './dynamic-client-registration';
 
@@ -45,6 +45,40 @@ describe('validateRedirectUri', () => {
     ]) {
       expect(() => validateRedirectUri(uri)).toThrow(BadRequestError);
     }
+  });
+
+  it('refuses a URI that is not printable ASCII BEFORE parsing it', () => {
+    // `new URL()` is quadratic in the distinct non-ASCII characters of a host:
+    // twenty 2048-character CJK hosts held the event loop for ~0.36 s per
+    // anonymous registration. RFC 3986 URIs are ASCII; an IDN host is written
+    // in its `xn--` form.
+    const cjkHost = Array.from({ length: 1000 }, (_, i) => String.fromCodePoint(0x4e00 + i)).join(
+      ''
+    );
+    const URLConstructor = globalThis.URL;
+    const constructed = vi.fn();
+    vi.stubGlobal(
+      'URL',
+      class extends URLConstructor {
+        constructor(...args: ConstructorParameters<typeof URL>) {
+          constructed();
+          super(...args);
+        }
+      }
+    );
+    try {
+      for (const uri of [
+        `https://${cjkHost}/cb`,
+        'https://bücher.example/cb',
+        'https://a.example/c b',
+      ]) {
+        expect(() => validateRedirectUri(uri)).toThrow(BadRequestError);
+      }
+      expect(constructed).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+    expect(() => validateRedirectUri('https://xn--bcher-kva.example/cb')).not.toThrow();
   });
 });
 
