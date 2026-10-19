@@ -237,3 +237,97 @@ export function createStatusListUriAllowlist(prefixes: readonly string[]): Statu
     },
   });
 }
+
+/**
+ * Operator delegations that let a NAMED status issuer sign the lists served
+ * under a URI prefix on another host (`OID4VP_STATUS_LIST_SIGNERS`,
+ * ANT-2026-3988N5GJ).
+ *
+ * By default a Status List Token is accepted only when its signing
+ * certificate's `dNSName` SAN covers the host the list is served from: that
+ * host is the one name on this path the signer does not choose, because the
+ * credential issuer signed the list URI into the credential. A list served
+ * from a CDN or a separate Status Provider host that the signer's certificate
+ * does not name is therefore refused. A delegation is how an operator says
+ * "lists under this prefix are signed by THAT issuer", and nothing else widens
+ * the default.
+ *
+ * Opaque, like {@link StatusListUriAllowlist}: a caller asks which signers a
+ * URI is delegated to and cannot read the configuration back.
+ */
+export interface StatusListSignerDelegations {
+  /**
+   * @param uri - the credential's `status_list.uri`.
+   * @returns the `https://` issuer identifiers whose certificate may sign the
+   * list at that URI; empty when none is delegated.
+   */
+  signersFor(uri: string): readonly string[];
+}
+
+/** One compiled delegation: the prefix it covers and the signer it names. */
+interface CompiledDelegation extends CompiledPrefix {
+  readonly signer: string;
+}
+
+/**
+ * Compile `OID4VP_STATUS_LIST_SIGNERS` (a map of list URI prefix → signing
+ * issuer identifier) into a matcher.
+ *
+ * Prefixes match exactly as {@link createStatusListUriAllowlist} matches them:
+ * same origin, and a path that equals the prefix or continues it at a segment
+ * boundary. Signers must be `https://` URLs with a host, because what is
+ * compared is the host the signing certificate's SAN must cover.
+ *
+ * @param entries - the parsed map, or `undefined` when unset.
+ * @returns a frozen matcher; one that names nobody when nothing is configured.
+ * @throws InvalidConfigurationError when a prefix or a signer is unusable. The
+ * value is on `details`, never in the message.
+ */
+export function createStatusListSignerDelegations(
+  entries: Readonly<Record<string, string>> | undefined
+): StatusListSignerDelegations {
+  const compiled: CompiledDelegation[] = [];
+
+  for (const [index, [prefix, signer]] of Object.entries(entries ?? {}).entries()) {
+    const parsedPrefix =
+      prefix.trim().length > 0 && prefix.trim().length <= MAX_PREFIX_LENGTH
+        ? parseFetchableHttpsUrl(prefix.trim())
+        : undefined;
+    const parsedSigner =
+      typeof signer === 'string' && signer.trim().length <= MAX_PREFIX_LENGTH
+        ? parseFetchableHttpsUrl(signer.trim())
+        : undefined;
+
+    if (parsedPrefix === undefined || parsedPrefix.search !== '' || parsedSigner === undefined) {
+      throw new InvalidConfigurationError(
+        'An OID4VP_STATUS_LIST_SIGNERS entry is not usable. Keys must be https:// status list URI prefixes with a named host, no userinfo, no query string and no fragment; values must be the https:// identifier of the status issuer whose certificate signs the lists under that prefix. See this error\'s "details" for the position and the value.',
+        { index, entry: summarizeConfiguredValue(prefix), signer: summarizeConfiguredValue(signer) }
+      );
+    }
+
+    compiled.push({
+      origin: parsedPrefix.origin,
+      path: parsedPrefix.pathname.replace(/\/+$/, ''),
+      signer: parsedSigner.origin,
+    });
+  }
+
+  return Object.freeze({
+    signersFor(uri: string): readonly string[] {
+      if (compiled.length === 0 || typeof uri !== 'string') return [];
+      const candidate = parseFetchableHttpsUrl(uri);
+      if (candidate === undefined) return [];
+
+      const candidatePath = candidate.pathname.replace(/\/+$/, '');
+      return compiled
+        .filter(
+          (entry) =>
+            entry.origin === candidate.origin &&
+            (entry.path === '' ||
+              candidatePath === entry.path ||
+              candidatePath.startsWith(`${entry.path}/`))
+        )
+        .map((entry) => entry.signer);
+    },
+  });
+}

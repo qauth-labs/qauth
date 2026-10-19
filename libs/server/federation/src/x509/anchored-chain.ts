@@ -37,7 +37,8 @@ import { summarizeConfiguredValue } from '../trust/configured-value';
  *
  * ## What is checked, and what is deliberately not
  *
- * Checked: chain bounds, strict base64, self-signed leaf refused, validity
+ * Checked: chain bounds, strict base64, no key that spells out its own
+ * parameters (see `hasPlainKeyParameters`), self-signed leaf refused, validity
  * window on every certificate INCLUDING the anchor, `cA` on every issuing
  * certificate, a real signature verification at every link, a path that
  * terminates at a configured anchor, the anchor absent from the chain, an
@@ -234,6 +235,7 @@ function parseChain(x5c: unknown): X509Certificate[] | undefined {
   for (const entry of x5c) {
     const der = decodeCertificateEntry(entry);
     if (der === undefined) return undefined;
+    if (!hasPlainKeyParameters(der)) return undefined;
     try {
       chain.push(new X509Certificate(der));
     } catch {
@@ -287,13 +289,16 @@ function hasEs256LeafKey(leaf: X509Certificate): boolean {
   return key.asymmetricKeyDetails?.namedCurve === REQUIRED_LEAF_CURVE;
 }
 
-/** DER tags touched by the `keyUsage` walk. */
+/** DER tags touched by the key-parameter and `keyUsage` walks. */
 const DER_TAG = {
   BOOLEAN: 0x01,
   BIT_STRING: 0x03,
   OCTET_STRING: 0x04,
+  NULL: 0x05,
   OID: 0x06,
   SEQUENCE: 0x30,
+  /** `[0] EXPLICIT` — `tbsCertificate.version` (RFC 5280 §4.1). */
+  VERSION: 0xa0,
   /** `[3] EXPLICIT` — `tbsCertificate.extensions` (RFC 5280 §4.1). */
   EXTENSIONS: 0xa3,
 } as const;
@@ -348,6 +353,73 @@ function readDerElement(buffer: Buffer, offset: number): DerElement | undefined 
   const contentEnd = contentStart + length;
   if (contentEnd > buffer.length) return undefined;
   return { tag, contentStart, contentEnd };
+}
+
+/** What OpenSSL's PEM reader scans its input for. */
+const PEM_ARMOUR = '-----BEGIN ';
+
+/** `id-RSASSA-PSS` (1.2.840.113549.1.1.10) as a complete DER OID element. */
+const RSASSA_PSS_OID_DER = Buffer.from([
+  0x06, 0x09, 0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x0a,
+]);
+
+/**
+ * Whether a certificate's public key is of a kind that is cheap to decode.
+ *
+ * Asked of the raw bytes, BEFORE OpenSSL sees them. `new X509Certificate()`
+ * decodes the public key synchronously, and nothing has been authenticated at
+ * that point. For an EC key with `specifiedCurve` parameters, decoding means
+ * building whatever curve the certificate describes: with compressed points over
+ * a prime chosen for it, the modular square roots cost ~0.3 s of the calling
+ * thread per 460-byte certificate, signed by nobody.
+ *
+ * So the key's `AlgorithmIdentifier.parameters` must be absent, NULL or an OID
+ * (a NAMED curve). RFC 5480 §2.1.1 forbids the spelled-out form in PKIX
+ * (*"implicitCurve and specifiedCurve MUST NOT be used"*), so no conforming EC
+ * chain is refused. The rule is on the parameters rather than on
+ * `id-ecPublicKey` because OpenSSL runs the same decoder under other algorithm
+ * OIDs (SM2). RSASSA-PSS is exempt: it is the one current algorithm with
+ * structured parameters, and they name hashes rather than describe a group. DSA
+ * and DH keys, which do describe one, are refused with the rest.
+ *
+ * Fails CLOSED: bytes this walk cannot follow down to the key are refused
+ * rather than handed on.
+ */
+function hasPlainKeyParameters(der: Buffer): boolean {
+  // `new X509Certificate()` tries PEM before DER, and the PEM reader skips
+  // whatever precedes the armour. Armour anywhere in these bytes would have
+  // OpenSSL decode a different certificate from the one walked below.
+  if (der.includes(PEM_ARMOUR)) return false;
+
+  const certificate = readDerElement(der, 0);
+  if (certificate === undefined || certificate.tag !== DER_TAG.SEQUENCE) return false;
+
+  const tbs = readDerElement(der, certificate.contentStart);
+  if (tbs === undefined || tbs.tag !== DER_TAG.SEQUENCE) return false;
+
+  // `version` is optional; serialNumber, signature, issuer, validity and
+  // subject then precede subjectPublicKeyInfo (RFC 5280 §4.1).
+  let member = readDerElement(der, tbs.contentStart);
+  if (member !== undefined && member.tag === DER_TAG.VERSION) {
+    member = readDerElement(der, member.contentEnd);
+  }
+  for (let skipped = 0; skipped < 5 && member !== undefined; skipped += 1) {
+    member = readDerElement(der, member.contentEnd);
+  }
+  if (member === undefined || member.tag !== DER_TAG.SEQUENCE) return false;
+  if (member.contentEnd > tbs.contentEnd) return false;
+
+  const algorithm = readDerElement(der, member.contentStart);
+  if (algorithm === undefined || algorithm.tag !== DER_TAG.SEQUENCE) return false;
+
+  const oid = readDerElement(der, algorithm.contentStart);
+  if (oid === undefined || oid.tag !== DER_TAG.OID) return false;
+  if (oid.contentEnd === algorithm.contentEnd) return true;
+
+  const parameters = readDerElement(der, oid.contentEnd);
+  if (parameters === undefined || parameters.contentEnd !== algorithm.contentEnd) return false;
+  if (parameters.tag === DER_TAG.NULL || parameters.tag === DER_TAG.OID) return true;
+  return der.subarray(algorithm.contentStart, oid.contentEnd).equals(RSASSA_PSS_OID_DER);
 }
 
 /** The outcome of looking for a certificate's `keyUsage` bits. */

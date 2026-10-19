@@ -1,3 +1,5 @@
+import { generateKeyPairSync } from 'node:crypto';
+
 import { InvalidConfigurationError } from '@qauth-labs/shared-errors';
 import { describe, expect, it } from 'vitest';
 
@@ -338,6 +340,72 @@ describe('resolveStatusListSigningCertificate (#297, HAIP §6.1.1)', () => {
     expect(resolveStatusListSigningCertificate(x5c, anchors, now)).toEqual({
       outcome: 'rejected',
       reason: 'malformed-x5c',
+    });
+  });
+
+  describe('key parameters, read before OpenSSL decodes the key', () => {
+    const issuedFor = (keys: ReturnType<typeof generateEd25519TestKeyPair>) =>
+      createTestCertificate({
+        subject: 'status.issuer.example',
+        issuer: intermediate,
+        keys,
+        ...valid,
+      });
+    const spelledOut = issuedFor(
+      generateKeyPairSync('ec', { namedCurve: 'prime256v1', paramEncoding: 'explicit' })
+    );
+
+    it('refuses a key that spells out its own curve, without decoding it', () => {
+      // Signed by nobody. Its EC key describes a curve over p = 15 * 2^654 + 1
+      // and gives both points in compressed form: decoding it costs OpenSSL
+      // ~0.3 s, eight times over. Once decoded, the refusal is `broken-link`.
+      const costly =
+        'MIIByDCCAXqgAwIBAgIBATAFBgMrZXAwDDEKMAgGA1UEAwwBeDAeFw0yNjAxMDEwMDAwMDBaFw0z' +
+        'NjAxMDEwMDAwMDBaMAwxCjAIBgNVBAMMAXkwggErMIHRBgcqhkjOPQIBMIHFAgEBMF4GByqGSM49' +
+        `AQECUwP${'A'.repeat(108)}BMAcEAQAEAgB5BFQD${'A'.repeat(111)}CAQcDVQAD` +
+        `${'A'.repeat(111)}wBQYDK2VwA0E${'A'.repeat(87)}==`;
+
+      expect(resolveStatusListSigningCertificate(Array(8).fill(costly), anchors, now)).toEqual({
+        outcome: 'rejected',
+        reason: 'malformed-x5c',
+      });
+    });
+
+    it('refuses a spelled-out curve even when it is P-256 on an anchored leaf', () => {
+      // RFC 5480 §2.1.1: specifiedCurve MUST NOT be used.
+      expect(
+        resolveStatusListSigningCertificate([spelledOut.x5c, intermediate.x5c], anchors, now)
+      ).toEqual({ outcome: 'rejected', reason: 'malformed-x5c' });
+    });
+
+    it('refuses PEM armour behind DER, which Node would decode instead of the DER', () => {
+      const polyglot = Buffer.concat([leaf.der, Buffer.from(`\n${spelledOut.pem}`)]);
+
+      expect(
+        resolveStatusListSigningCertificate(
+          [polyglot.toString('base64'), intermediate.x5c],
+          anchors,
+          now
+        )
+      ).toEqual({ outcome: 'rejected', reason: 'malformed-x5c' });
+    });
+
+    it.each([
+      ['RSA (NULL)', generateKeyPairSync('rsa', { modulusLength: 2048 })],
+      [
+        'RSASSA-PSS (hash names)',
+        generateKeyPairSync('rsa-pss', {
+          modulusLength: 2048,
+          hashAlgorithm: 'sha256',
+          mgf1HashAlgorithm: 'sha256',
+        }),
+      ],
+      ['P-384 (a named curve)', generateKeyPairSync('ec', { namedCurve: 'secp384r1' })],
+    ])('still decodes a key with %s parameters', (_label, keys) => {
+      // Refused further down, as a leaf key `ES256` cannot be verified with.
+      expect(
+        resolveStatusListSigningCertificate([issuedFor(keys).x5c, intermediate.x5c], anchors, now)
+      ).toEqual({ outcome: 'rejected', reason: 'unsupported-leaf-key' });
     });
   });
 

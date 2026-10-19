@@ -1,5 +1,8 @@
 import {
   createSubjectResolutionStrategy,
+  type CredentialStatusChecker,
+  deriveEnrolmentWalletBinding,
+  resolveTrustRegistry,
   type SubjectResolutionConfig,
   type ValidatedCredential,
   ValidatedIssuer,
@@ -35,6 +38,18 @@ const VCT = 'https://credentials.example.com/pid';
 const CONFIG: SubjectResolutionConfig = {
   strategy: 'asserted-lookup',
   bindingClaims: ['family_name', 'given_name'],
+};
+
+/** What every wallet row a credential from {@link ISSUER} writes records (ANT-2026-ULJIA4P4). */
+const PROVENANCE = { issuer: ISSUER, issuer_key_resolution: 'issuer-metadata' };
+
+/** The gates a sign-in re-asks about the rows an earlier presentation left. */
+const GATES = {
+  trustRegistry: resolveTrustRegistry(
+    { name: 'master' },
+    { OID4VP_TRUSTED_ISSUERS: { master: [ISSUER] } }
+  ),
+  credentialStatus: undefined as CredentialStatusChecker | undefined,
 };
 
 /** A validated credential, with a genuine branded issuer. */
@@ -89,7 +104,11 @@ function fakeFastify() {
       .fn()
       .mockImplementation(async (data: unknown) => ({ id: 'cred-new', ...(data as object) })),
   };
-  const userAttributes = { upsertMany: vi.fn().mockResolvedValue([]) };
+  const userAttributes = {
+    upsertMany: vi.fn().mockResolvedValue([]),
+    findByUserIdAndSource: vi.fn().mockResolvedValue([]),
+    setVerified: vi.fn().mockResolvedValue(undefined),
+  };
   const users = { create: vi.fn().mockResolvedValue({ id: 'user-new', realmId: REALM_ID }) };
 
   const fastify = {
@@ -107,7 +126,9 @@ function fakeFastify() {
 async function resolve(
   fastify: FastifyInstance,
   credential: ValidatedCredential,
-  assertedIdentifier = 'alice@example.com'
+  assertedIdentifier = 'alice@example.com',
+  attributeGates = GATES,
+  emailVerifyingIssuers: readonly string[] = []
 ) {
   return resolveWalletAccount(fastify, {
     realmId: REALM_ID,
@@ -115,6 +136,8 @@ async function resolve(
     assertedIdentifier,
     strategy: createSubjectResolutionStrategy(CONFIG),
     config: CONFIG,
+    attributeGates,
+    emailVerifyingIssuers,
   });
 }
 
@@ -234,6 +257,8 @@ describe('resolveWalletAccount — enrolment (ADR-009 §1, first bootstrap case)
       assertedIdentifier: '  Alice@Example.COM ',
       strategy,
       config: CONFIG,
+      attributeGates: GATES,
+      emailVerifyingIssuers: [],
     });
 
     const [written] = harness.userCredentials.create.mock.calls[0] as [Record<string, unknown>];
@@ -302,6 +327,7 @@ describe('resolveWalletAccount — enrolment (ADR-009 §1, first bootstrap case)
           attrValue: 'Alice',
           verified: true,
           expiresAt: 4_102_444_800_000,
+          provenance: PROVENANCE,
         },
         {
           source: 'wallet',
@@ -309,6 +335,7 @@ describe('resolveWalletAccount — enrolment (ADR-009 §1, first bootstrap case)
           attrValue: 'Doe',
           verified: true,
           expiresAt: 4_102_444_800_000,
+          provenance: PROVENANCE,
         },
         {
           source: 'wallet',
@@ -316,6 +343,7 @@ describe('resolveWalletAccount — enrolment (ADR-009 §1, first bootstrap case)
           attrValue: '1990-01-01',
           verified: true,
           expiresAt: 4_102_444_800_000,
+          provenance: PROVENANCE,
         },
       ],
       'tx'
@@ -353,6 +381,216 @@ describe('resolveWalletAccount — enrolment (ADR-009 §1, first bootstrap case)
     expect(
       await resolve(harness.fastify, credentialFor({ given_name: 'Alice', family_name: 'Doe' }))
     ).toEqual({ status: 'rejected' });
+  });
+});
+
+describe('resolveWalletAccount — what a wallet attribute rests on (ANT-2026-ULJIA4P4)', () => {
+  const STATUS = { status_list: { idx: 7, uri: 'https://status.example.com/lists/1' } };
+  const REPLACEMENT_STATUS = { status_list: { idx: 8, uri: 'https://status.example.com/lists/1' } };
+
+  let harness: ReturnType<typeof fakeFastify>;
+
+  /** A returning account whose stored binding the presented credential matches. */
+  function returningAccount(credential: ValidatedCredential): void {
+    harness.userCredentials.findAllByRealmAndExternalSub.mockResolvedValue([
+      credentialRow({
+        credentialData: walletCredentialDataSchema.parse({
+          credential_format: 'dc+sd-jwt',
+          credential_type: VCT,
+          issuer: ISSUER,
+          wallet_binding: deriveEnrolmentWalletBinding(CONFIG, credential),
+          subject_resolution: 'asserted-lookup',
+          enrolled_at: 1,
+        }),
+      }),
+    ]);
+  }
+
+  /** The email row an EARLIER credential left, which this presentation does not rewrite. */
+  function staleEmailRow(provenance: unknown) {
+    return {
+      id: 'attr-email',
+      userId: 'user-1',
+      source: 'wallet',
+      attrKey: 'email',
+      attrValue: 'staff@corp.example',
+      verified: true,
+      expiresAt: null,
+      provenance,
+      createdAt: 1,
+      updatedAt: 1,
+    };
+  }
+
+  function checkerRevoking(revoked: unknown): CredentialStatusChecker {
+    return {
+      resolveCredentialStatus: vi.fn(async (status: unknown) =>
+        JSON.stringify(status) === JSON.stringify(revoked)
+          ? ({ decision: 'rejected', reason: 'revoked' } as const)
+          : ({ decision: 'valid' } as const)
+      ),
+      assertCredentialNotRevoked: vi.fn(),
+    } as unknown as CredentialStatusChecker;
+  }
+
+  beforeEach(() => {
+    harness = fakeFastify();
+  });
+
+  it('records the issuer and the issuer-signed status reference on every row it writes', async () => {
+    await resolve(
+      harness.fastify,
+      credentialFor({ given_name: 'Alice', family_name: 'Doe', status: STATUS })
+    );
+
+    const [, rows] = harness.userAttributes.upsertMany.mock.calls[0] as [
+      string,
+      { provenance: unknown }[],
+    ];
+    expect(rows.length).toBeGreaterThan(0);
+    expect(
+      rows.every(
+        (row) =>
+          JSON.stringify(row.provenance) === JSON.stringify({ ...PROVENANCE, status: STATUS })
+      )
+    ).toBe(true);
+  });
+
+  it('withdraws, at the next wallet sign-in, a row whose credential has since been revoked', async () => {
+    // The staff credential that wrote `email` was revoked; its replacement is
+    // presented without an `email` Disclosure, so nothing rewrites that row.
+    const replacement = credentialFor({
+      given_name: 'Alice',
+      family_name: 'Doe',
+      status: REPLACEMENT_STATUS,
+    });
+    returningAccount(replacement);
+    harness.userAttributes.findByUserIdAndSource.mockResolvedValue([
+      staleEmailRow({ ...PROVENANCE, status: STATUS }),
+    ]);
+
+    const result = await resolve(harness.fastify, replacement, 'alice@example.com', {
+      ...GATES,
+      credentialStatus: checkerRevoking(STATUS),
+    });
+
+    expect(result).toMatchObject({ status: 'authenticated', userId: 'user-1' });
+    expect(harness.userAttributes.findByUserIdAndSource).toHaveBeenCalledWith('user-1', 'wallet');
+    expect(harness.userAttributes.setVerified).toHaveBeenCalledWith(
+      'user-1',
+      'wallet',
+      'email',
+      false
+    );
+  });
+
+  it('withdraws a row whose issuer the realm no longer trusts', async () => {
+    const credential = credentialFor({ given_name: 'Alice', family_name: 'Doe' });
+    returningAccount(credential);
+    harness.userAttributes.findByUserIdAndSource.mockResolvedValue([
+      staleEmailRow({ issuer: 'https://former-issuer.example.com', issuer_key_resolution: 'x5c' }),
+    ]);
+
+    await resolve(harness.fastify, credential);
+
+    expect(harness.userAttributes.setVerified).toHaveBeenCalledWith(
+      'user-1',
+      'wallet',
+      'email',
+      false
+    );
+  });
+
+  it('keeps a row whose credential is still valid from an issuer still trusted', async () => {
+    const credential = credentialFor({
+      given_name: 'Alice',
+      family_name: 'Doe',
+      status: REPLACEMENT_STATUS,
+    });
+    returningAccount(credential);
+    harness.userAttributes.findByUserIdAndSource.mockResolvedValue([
+      staleEmailRow({ ...PROVENANCE, status: STATUS }),
+    ]);
+
+    await resolve(harness.fastify, credential, 'alice@example.com', {
+      ...GATES,
+      credentialStatus: checkerRevoking({ status_list: { idx: 99, uri: 'x' } }),
+    });
+
+    expect(harness.userAttributes.setVerified).not.toHaveBeenCalled();
+  });
+
+  it('does not re-ask about the rows this presentation just wrote', async () => {
+    const credential = credentialFor({
+      given_name: 'Alice',
+      family_name: 'Doe',
+      email: 'alice@example.com',
+      status: REPLACEMENT_STATUS,
+    });
+    returningAccount(credential);
+    harness.userAttributes.findByUserIdAndSource.mockResolvedValue([
+      staleEmailRow({ ...PROVENANCE, status: STATUS }),
+    ]);
+
+    await resolve(harness.fastify, credential, 'alice@example.com', {
+      ...GATES,
+      credentialStatus: checkerRevoking(STATUS),
+    });
+
+    expect(harness.userAttributes.setVerified).not.toHaveBeenCalled();
+  });
+});
+
+describe('resolveWalletAccount — when the wallet email counts as verified (ANT-2026-BGP7XCR2)', () => {
+  let harness: ReturnType<typeof fakeFastify>;
+
+  beforeEach(() => {
+    harness = fakeFastify();
+  });
+
+  function emailRow(): { verified: boolean } | undefined {
+    const [, rows] = harness.userAttributes.upsertMany.mock.calls[0] as [
+      string,
+      { attrKey: string; verified: boolean }[],
+    ];
+    return rows.find((row) => row.attrKey === 'email');
+  }
+
+  it('writes the email UNVERIFIED when the presentation discloses no email_verified', async () => {
+    // The holder chooses the Disclosures, so absence says nothing about what
+    // the issuer signed: it may have been `email_verified: false`, withheld.
+    await resolve(
+      harness.fastify,
+      credentialFor({ given_name: 'Alice', family_name: 'Doe', email: 'alice@example.com' })
+    );
+
+    expect(emailRow()).toMatchObject({ verified: false });
+  });
+
+  it('writes it verified when the issuer signed and the holder disclosed email_verified: true', async () => {
+    await resolve(
+      harness.fastify,
+      credentialFor({
+        given_name: 'Alice',
+        family_name: 'Doe',
+        email: 'alice@example.com',
+        email_verified: true,
+      })
+    );
+
+    expect(emailRow()).toMatchObject({ verified: true });
+  });
+
+  it('writes it verified for an issuer the operator lists in OID4VP_EMAIL_VERIFYING_ISSUERS', async () => {
+    await resolve(
+      harness.fastify,
+      credentialFor({ given_name: 'Alice', family_name: 'Doe', email: 'alice@example.com' }),
+      'alice@example.com',
+      GATES,
+      [ISSUER]
+    );
+
+    expect(emailRow()).toMatchObject({ verified: true });
   });
 });
 
@@ -409,6 +647,47 @@ describe('resolveWalletAccount — the refusals that must NEVER become an enrolm
     expect(harness.userAttributes.upsertMany).not.toHaveBeenCalled();
   });
 
+  it('does not let a stranger’s password registration on the identifier lock the wallet owner out (ANT-2026-B5IYOGYF)', async () => {
+    // `POST /auth/register` is anonymous and the credential unique index is per
+    // provider type, so anyone can add a password row on the identifier a
+    // wallet-only account enrolled under. That unbound row must not veto the
+    // account that holds the proof.
+    const credential = credentialFor({ given_name: 'Alice', family_name: 'Doe' });
+    const enrolled = walletCredentialDataSchema.parse({
+      credential_format: 'dc+sd-jwt',
+      credential_type: VCT,
+      issuer: ISSUER,
+      wallet_binding: deriveEnrolmentWalletBinding(CONFIG, credential),
+      subject_resolution: 'asserted-lookup',
+      enrolled_at: 1,
+    });
+    harness.userCredentials.findAllByRealmAndExternalSub.mockResolvedValue([
+      credentialRow({ userId: 'user-1', credentialData: enrolled }),
+      credentialRow({
+        id: 'cred-stranger',
+        userId: 'user-stranger',
+        providerType: 'password',
+        credentialData: { password_hash: 'x' },
+      }),
+    ]);
+
+    const result = await resolve(harness.fastify, credential);
+
+    expect(result).toEqual({
+      status: 'authenticated',
+      userId: 'user-1',
+      externalSub: 'alice@example.com',
+      enrolled: false,
+    });
+    expect(harness.users.create).not.toHaveBeenCalled();
+
+    // ...and it opens nothing: another holder asserting the same identifier is
+    // still refused.
+    expect(
+      await resolve(harness.fastify, credentialFor({ given_name: 'Mallory', family_name: 'Doe' }))
+    ).toEqual({ status: 'rejected' });
+  });
+
   it('refuses an AMBIGUOUS lookup rather than picking an account', async () => {
     harness.userCredentials.findAllByRealmAndExternalSub.mockResolvedValue([
       credentialRow({ userId: 'user-1', providerType: 'password', credentialData: {} }),
@@ -437,6 +716,35 @@ describe('resolveWalletAccount — the refusals that must NEVER become an enrolm
       await resolve(harness.fastify, credentialFor({ given_name: 'Alice', family_name: 'Doe' }), '')
     ).toEqual({ status: 'rejected' });
     expect(harness.users.create).not.toHaveBeenCalled();
+  });
+
+  it('tells the operator when an enrolled account stops matching because a binding claim rounded (ANT-2026-FKDN4Q29)', async () => {
+    // An account enrolled before numeric binding claims had to be exact. Its
+    // binding was derived from a value `JSON.parse` had rounded, so it no
+    // longer identifies one person and is refused from now on. The refusal is
+    // uniform on the wire; the log is the only place the reason can go.
+    const enrolled = walletCredentialDataSchema.parse({
+      credential_format: 'dc+sd-jwt',
+      credential_type: VCT,
+      issuer: ISSUER,
+      wallet_binding: 'wb1:' + 'b'.repeat(64),
+      subject_resolution: 'asserted-lookup',
+      enrolled_at: 1,
+    });
+    harness.userCredentials.findAllByRealmAndExternalSub.mockResolvedValue([
+      credentialRow({ credentialData: enrolled }),
+    ]);
+
+    const result = await resolve(
+      harness.fastify,
+      credentialFor(JSON.parse('{"given_name":"Alice","family_name":202601150000001234}'))
+    );
+
+    expect(result).toEqual({ status: 'rejected' });
+    expect(harness.fastify.log.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ realmId: REALM_ID, claims: ['family_name'] }),
+      expect.stringContaining('cannot represent exactly')
+    );
   });
 
   it('renders every refusal identically (no enumeration oracle)', async () => {

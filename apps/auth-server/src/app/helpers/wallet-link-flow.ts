@@ -11,6 +11,7 @@ import {
   WALLET_FLOW_COOKIE_NAME,
 } from './session-cookie';
 import {
+  claimWalletPresentation,
   createWalletLoginFlow,
   decideSignalGate,
   deleteWalletFlowDoneMarker,
@@ -421,6 +422,12 @@ export async function advanceWalletLinkFlow(
       await terminate(fastify, handle, flow);
     }
     return { status: 'rejected' };
+  }
+
+  // One validation per presentation (ANT-2026-IOU62CQU): see the login
+  // machine. The caller that loses the claim answers `pending`.
+  if (!(await claimWalletPresentation(fastify, flow.stateHash))) {
+    return { status: 'pending', flow };
   }
 
   const resolution = await linkWalletPresentation(fastify, {

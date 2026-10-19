@@ -49,10 +49,12 @@ describe('federationEnvSchema (WALLET_FEDERATION_ENABLED — #232)', () => {
       'OID4VP_SUBJECT_BINDING_CLAIMS',
       'OID4VP_SUBJECT_CLAIM',
       'OID4VP_SUBJECT_CLAIM_ISSUERS',
+      'OID4VP_EMAIL_VERIFYING_ISSUERS',
       'OID4VP_WALLET_INVOCATION_ENDPOINT',
       'OID4VP_STATUS_LIST_TRUST_ANCHORS',
       'OID4VP_STATUS_LIST_TRUST_ANCHORS_PATH',
       'OID4VP_STATUS_LIST_URI_ALLOWLIST',
+      'OID4VP_STATUS_LIST_SIGNERS',
       'OID4VP_VERIFIER_SIGNING_KEY',
       'OID4VP_VERIFIER_SIGNING_KEY_PATH',
       'OID4VP_VERIFIER_CERTIFICATE_CHAIN',
@@ -61,6 +63,55 @@ describe('federationEnvSchema (WALLET_FEDERATION_ENABLED — #232)', () => {
       'OID4VP_VERIFIER_TRUST_ANCHORS_PATH',
       'OID4VP_RESPONSE_KEY_SECRET',
     ]);
+  });
+});
+
+describe('federationEnvSchema (OID4VP_EMAIL_VERIFYING_ISSUERS — ANT-2026-BGP7XCR2)', () => {
+  it('is undefined when unset: no issuer is trusted to vouch for an email it did not flag', () => {
+    expect(federationEnvSchema.parse({}).OID4VP_EMAIL_VERIFYING_ISSUERS).toBeUndefined();
+    expect(
+      federationEnvSchema.parse({ OID4VP_EMAIL_VERIFYING_ISSUERS: '  ' })
+        .OID4VP_EMAIL_VERIFYING_ISSUERS
+    ).toBeUndefined();
+  });
+
+  it('parses a comma-separated list of issuer identifiers', () => {
+    expect(
+      federationEnvSchema.parse({
+        OID4VP_EMAIL_VERIFYING_ISSUERS: 'https://pid.example , https://eaa.example,',
+      }).OID4VP_EMAIL_VERIFYING_ISSUERS
+    ).toEqual(['https://pid.example', 'https://eaa.example']);
+  });
+
+  it('rejects a value that lists nothing', () => {
+    expect(() => federationEnvSchema.parse({ OID4VP_EMAIL_VERIFYING_ISSUERS: ',,' })).toThrow();
+  });
+});
+
+describe('federationEnvSchema (OID4VP_STATUS_LIST_SIGNERS — ANT-2026-3988N5GJ)', () => {
+  it('is undefined when unset: a list must be signed by a certificate naming its host', () => {
+    expect(federationEnvSchema.parse({}).OID4VP_STATUS_LIST_SIGNERS).toBeUndefined();
+    expect(
+      federationEnvSchema.parse({ OID4VP_STATUS_LIST_SIGNERS: ' ' }).OID4VP_STATUS_LIST_SIGNERS
+    ).toBeUndefined();
+  });
+
+  it('parses a JSON object of list URI prefix to signing issuer', () => {
+    expect(
+      federationEnvSchema.parse({
+        OID4VP_STATUS_LIST_SIGNERS:
+          '{"https://cdn.example/issuer-a":"https://status.issuer-a.example"}',
+      }).OID4VP_STATUS_LIST_SIGNERS
+    ).toEqual({ 'https://cdn.example/issuer-a': 'https://status.issuer-a.example' });
+  });
+
+  it.each([
+    ['not JSON', 'https://cdn.example=https://status.example'],
+    ['an array', '["https://status.example"]'],
+    ['a non-string signer', '{"https://cdn.example":42}'],
+    ['a prototype key', '{"__proto__":"https://status.example"}'],
+  ])('rejects %s', (_label, raw) => {
+    expect(() => federationEnvSchema.parse({ OID4VP_STATUS_LIST_SIGNERS: raw })).toThrow();
   });
 });
 

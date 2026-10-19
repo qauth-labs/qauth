@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest';
 
+import {
+  fixtureValidationContext,
+  issueSdJwtVc,
+  presentSdJwtVc,
+  TEST_CREDENTIAL_QUERY,
+} from '../../testing/sd-jwt-vc.fixture';
 import { validatedFixtureCredential } from '../../testing/subject-resolution.fixture';
+import { validateSdJwtVcPresentation } from '../oid4vp/sd-jwt-vc';
 import { deriveWalletBinding } from '../subject/subject-binding';
 import { EMAIL_ATTR_KEY } from './password.provider';
 import {
@@ -56,7 +63,7 @@ describe('extractWalletAttributes (#235)', () => {
 
   it('marks rows verified because the ISSUER signed them and #236 accepted the issuer', async () => {
     const credential = await validatedFixtureCredential({
-      claims: { email: 'alice@example.com', given_name: 'Alice' },
+      claims: { email: 'alice@example.com', email_verified: true, given_name: 'Alice' },
     });
 
     expect(extractWalletAttributes(credential)).toEqual([
@@ -86,11 +93,11 @@ describe('extractWalletAttributes (#235)', () => {
   });
 
   it.each([
-    ['true', true],
+    ['the string "true"', 'true'],
     ['the string "false"', 'false'],
     ['null', null],
   ])(
-    'treats email_verified=%s as no denial (only a signed boolean false lowers the row)',
+    'treats email_verified=%s as no assertion (only a signed boolean true verifies the row)',
     async (_label, value) => {
       const credential = await validatedFixtureCredential({
         claims: { email: 'alice@example.com', email_verified: value },
@@ -101,11 +108,81 @@ describe('extractWalletAttributes (#235)', () => {
           source: 'wallet',
           attrKey: EMAIL_ATTR_KEY,
           attrValue: 'alice@example.com',
-          verified: true,
+          verified: false,
         },
       ]);
     }
   );
+
+  // The holder chooses the Disclosures. A credential whose issuer signed
+  // `email_verified: false` as its own Disclosure can be presented with that
+  // Disclosure left out, and the validator rightly accepts the subset. The
+  // claim set then says nothing about verification, and nothing is what QAuth
+  // must assert: absence must read exactly like the denial the holder withheld.
+  it('keeps the email row UNVERIFIED when the holder withholds the email_verified Disclosure', async () => {
+    const issued = await issueSdJwtVc({
+      selectiveClaims: { email: 'alice@example.com', email_verified: false },
+    });
+    const [emailDisclosure] = issued.disclosures;
+    const nonce = 'nonce-withheld-email-verified';
+    const presentation = await presentSdJwtVc(issued, { nonce, disclosures: [emailDisclosure] });
+
+    const credential = await validateSdJwtVcPresentation(
+      presentation,
+      TEST_CREDENTIAL_QUERY.id,
+      TEST_CREDENTIAL_QUERY,
+      fixtureValidationContext(issued, nonce)
+    );
+
+    expect(credential.claims).not.toHaveProperty('email_verified');
+    expect(extractWalletAttributes(credential)).toEqual([
+      {
+        source: 'wallet',
+        attrKey: EMAIL_ATTR_KEY,
+        attrValue: 'alice@example.com',
+        verified: false,
+      },
+    ]);
+  });
+
+  describe('an issuer the operator lists in OID4VP_EMAIL_VERIFYING_ISSUERS (ANT-2026-BGP7XCR2)', () => {
+    // A PID-style issuer that only ever issues verified addresses and signs no
+    // `email_verified` flag. The operator, not the holder, decides that its
+    // email counts as verified.
+    it('verifies an email that arrives with no email_verified claim', async () => {
+      const credential = await validatedFixtureCredential({
+        claims: { email: 'alice@example.com' },
+      });
+
+      expect(
+        extractWalletAttributes(credential, undefined, { issuerVouchesForEmail: true })
+      ).toEqual([
+        {
+          source: 'wallet',
+          attrKey: EMAIL_ATTR_KEY,
+          attrValue: 'alice@example.com',
+          verified: true,
+        },
+      ]);
+    });
+
+    it('still honours a disclosed email_verified: false from that issuer', async () => {
+      const credential = await validatedFixtureCredential({
+        claims: { email: 'alice@example.com', email_verified: false },
+      });
+
+      expect(
+        extractWalletAttributes(credential, undefined, { issuerVouchesForEmail: true })
+      ).toEqual([
+        {
+          source: 'wallet',
+          attrKey: EMAIL_ATTR_KEY,
+          attrValue: 'alice@example.com',
+          verified: false,
+        },
+      ]);
+    });
+  });
 
   describe('expiry (ADR-002: an attribute must not outlive the credential asserting it)', () => {
     it("carries the credential's exp onto every row", async () => {
@@ -139,13 +216,15 @@ describe('extractWalletAttributes (#235)', () => {
         claims: { email: 'Alice@Example.COM', given_name: 'Alice' },
       });
 
+      // Present, normalized, and UNVERIFIED: no `email_verified: true` was
+      // disclosed alongside it, so the row must not reach `resolveEmailClaims`.
       expect(
         extractWalletAttributes(credential).find((attr) => attr.attrKey === EMAIL_ATTR_KEY)
       ).toEqual({
         source: 'wallet',
         attrKey: 'email',
         attrValue: 'alice@example.com',
-        verified: true,
+        verified: false,
       });
     });
 

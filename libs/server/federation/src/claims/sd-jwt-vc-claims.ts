@@ -117,7 +117,7 @@ export const SD_JWT_VC_UNMAPPED_CLAIMS: Readonly<Record<string, string>> = Objec
     'a biometric, and a large binary; recording it as an attribute serves no claim QAuth emits',
   picture: 'as `portrait`',
   email_verified:
-    'a verification FLAG, not an attribute. It is not a row of its own: `extractWalletAttributes` reads it to write the EMAIL row `verified=false` when the issuer signed `email_verified: false`. It can only lower the email row, never raise anything',
+    'a verification FLAG, not an attribute. It is not a row of its own: `extractWalletAttributes` reads it to decide whether the EMAIL row is verified. Only a disclosed `email_verified: true` (or an issuer listed in OID4VP_EMAIL_VERIFYING_ISSUERS) verifies it, and a disclosed `false` always leaves it unverified',
   issuing_authority:
     'metadata about the ATTESTATION rather than an assertion about the person; it belongs in `user_credentials.credential_data`, which is where `buildWalletCredentialData` records it',
   issuing_country: 'as `issuing_authority`',
@@ -179,8 +179,9 @@ export const sdJwtVcClaimAdapter: CredentialClaimAdapter = {
       // `readBindingClaim` is reused rather than re-implemented: it already does
       // the `Object.hasOwn` read that keeps a `__proto__` claim name from
       // reaching the prototype (the defence #234's `defineClaim` sets up and a
-      // careless consumer undoes), refuses non-finite numbers, and applies the
-      // shared value-length bound.
+      // careless consumer undoes), refuses a number `JSON.parse` may have
+      // rounded (the row would state a value the issuer never signed), and
+      // applies the shared value-length bound.
       const value = readBindingClaim(claims as Readonly<Record<string, unknown>>, claimName);
       if (value === undefined) continue;
 

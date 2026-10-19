@@ -121,6 +121,9 @@ export interface CredentialFormatAdapter {
    * selective-disclosure or claim-encoding machinery the format defines, holder
    * binding, and the credential's validity window. What it may NOT do is decide
    * trust (#236) or resolve a subject (#300) — see {@link ValidatedCredential}.
+   * It MUST, however, ASK the caller's `context.assertIssuerTrusted` once the
+   * issuer identity is validated and before acting on anything the issuer wrote
+   * (the key-storage and status gates).
    *
    * @param entry - the parsed entry, still UNVERIFIED.
    * @param query - the Credential Query it answers; the adapter reads its own
@@ -129,7 +132,8 @@ export interface CredentialFormatAdapter {
    * @param context - bindings and policy — see {@link PresentationValidationContext}.
    * @throws PresentationValidationRejection on every refusal the adapter reaches
    * itself.
-   * @throws InvalidCredentialsError when the context carries a
+   * @throws InvalidCredentialsError when `context.assertIssuerTrusted` refuses
+   * (#236), or when the context carries a
    * `CredentialStatusChecker` and it refuses (#297). Propagated unwrapped and
    * deliberately: that error is already the byte-identical refusal
    * `PresentationValidationRejection.toClientError()` produces, and its precise

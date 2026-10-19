@@ -282,6 +282,65 @@ function parseStatusListUriAllowlist(
   return Object.freeze(entries);
 }
 
+/** Most delegations `OID4VP_STATUS_LIST_SIGNERS` may record. */
+const MAX_STATUS_LIST_SIGNERS = 64;
+
+/** Keys that address `Object.prototype` rather than a URI prefix. */
+const PROTOTYPE_KEYS: ReadonlySet<string> = new Set(['__proto__', 'constructor', 'prototype']);
+
+/**
+ * Parse `OID4VP_STATUS_LIST_SIGNERS`: a JSON object mapping a status list URI
+ * prefix to the `https://` identifier of the status issuer whose certificate
+ * signs the lists served under it (ANT-2026-3988N5GJ).
+ *
+ * Shape only, for the same reason {@link parseStatusListUriAllowlist} checks
+ * shape only: `server-federation`'s `createStatusListSignerDelegations`
+ * applies the runtime's own URL rules at boot and throws on an entry it
+ * refuses.
+ */
+function parseStatusListSigners(
+  raw: string | undefined,
+  ctx: z.RefinementCtx
+): Readonly<Record<string, string>> | undefined {
+  if (raw === undefined || raw.trim() === '') return undefined;
+
+  const shape =
+    'OID4VP_STATUS_LIST_SIGNERS must be a JSON object mapping a status list URI prefix to the https:// identifier of the status issuer that signs the lists under it, e.g. {"https://cdn.example/issuer-a":"https://status.issuer-a.example"}';
+
+  let decoded: unknown;
+  try {
+    decoded = JSON.parse(raw) as unknown;
+  } catch {
+    ctx.addIssue({ code: 'custom', message: shape });
+    return z.NEVER;
+  }
+
+  if (decoded === null || typeof decoded !== 'object' || Array.isArray(decoded)) {
+    ctx.addIssue({ code: 'custom', message: shape });
+    return z.NEVER;
+  }
+
+  const entries = Object.entries(decoded as Record<string, unknown>);
+  if (entries.length > MAX_STATUS_LIST_SIGNERS) {
+    ctx.addIssue({
+      code: 'custom',
+      message: `OID4VP_STATUS_LIST_SIGNERS records ${entries.length} delegations, more than the ${MAX_STATUS_LIST_SIGNERS} supported`,
+    });
+    return z.NEVER;
+  }
+
+  const signers: Record<string, string> = Object.create(null) as Record<string, string>;
+  for (const [prefix, signer] of entries) {
+    if (PROTOTYPE_KEYS.has(prefix) || typeof signer !== 'string' || signer.trim() === '') {
+      ctx.addIssue({ code: 'custom', message: shape });
+      return z.NEVER;
+    }
+    signers[prefix] = signer.trim();
+  }
+
+  return Object.freeze({ ...signers });
+}
+
 /** The two places status-list anchors may be authored. */
 export interface StatusListTrustAnchorEnvLike {
   /** Anchors written inline, as a PEM bundle. */
@@ -698,6 +757,47 @@ export const federationEnvSchema = z.object({
   ),
 
   /**
+   * `OID4VP_EMAIL_VERIFYING_ISSUERS` (ANT-2026-BGP7XCR2) — the trusted issuers
+   * whose `email` claim counts as VERIFIED even when the presentation discloses
+   * no `email_verified: true`, as a comma-separated list of `https://` issuer
+   * identifiers.
+   *
+   * Unset, which is the default, means none. A wallet email is then verified
+   * only when the presentation discloses `email_verified: true`. The holder
+   * picks which Disclosures to present, so an absent flag cannot be read as
+   * "verified": it may be an `email_verified: false` the holder left out.
+   *
+   * List an issuer here only if it never issues an unverified address (a
+   * PID-style issuer that signs no flag at all, say). An issuer's disclosed
+   * `email_verified: false` is honoured either way. Like
+   * `OID4VP_SUBJECT_CLAIM_ISSUERS`, this list never substitutes for
+   * `OID4VP_TRUSTED_ISSUERS`: an issuer here that is not also trusted there is
+   * inert.
+   *
+   * Shape only here. Entries are canonicalized and checked at boot by
+   * `server-federation`'s `assertEmailVerifyingIssuersUsable`.
+   */
+  OID4VP_EMAIL_VERIFYING_ISSUERS: z.preprocess(
+    (value) => (typeof value === 'string' && value.trim() === '' ? undefined : value),
+    z
+      .string()
+      .max(4096)
+      .transform((value) =>
+        Object.freeze(
+          value
+            .split(',')
+            .map((entry) => entry.trim())
+            .filter((entry) => entry.length > 0)
+        )
+      )
+      .refine((values) => values.length > 0, {
+        message:
+          'OID4VP_EMAIL_VERIFYING_ISSUERS must list at least one non-empty issuer identifier',
+      })
+      .optional()
+  ),
+
+  /**
    * `OID4VP_WALLET_INVOCATION_ENDPOINT` (#239) — the wallet Authorization
    * Endpoint the QR code and deep-link button target.
    *
@@ -863,6 +963,37 @@ export const federationEnvSchema = z.object({
     )
     .optional()
     .transform(parseStatusListUriAllowlist),
+
+  /**
+   * `OID4VP_STATUS_LIST_SIGNERS` (ANT-2026-3988N5GJ) — which status issuer
+   * may sign the lists served under a URI prefix on ANOTHER host, as a JSON
+   * object of `https://` list URI prefix → `https://` status issuer identifier.
+   *
+   * By default a Status List Token is accepted only when its signing
+   * certificate's `dNSName` SAN covers the host the list is served from. That
+   * host is named in the issuer-signed credential, so it is the one name on the
+   * path the token's signer does not choose. Without the rule, any other
+   * participant under the same trust anchor could sign this issuer's list under
+   * its own name and un-revoke this issuer's credentials.
+   *
+   * A list served from a CDN or a separate Status Provider host that the
+   * signer's certificate does not name is therefore refused, unless its prefix
+   * is delegated here. A delegation authorises exactly one signer for exactly
+   * the lists under that prefix (segment-anchored, as in
+   * `OID4VP_STATUS_LIST_URI_ALLOWLIST`). Unset means no delegations.
+   *
+   * ```
+   * OID4VP_STATUS_LIST_SIGNERS={"https://cdn.example/issuer-a":"https://status.issuer-a.example"}
+   * ```
+   */
+  OID4VP_STATUS_LIST_SIGNERS: z
+    .string()
+    .max(
+      MAX_STATUS_LIST_ALLOWLIST_LENGTH,
+      `OID4VP_STATUS_LIST_SIGNERS must be at most ${MAX_STATUS_LIST_ALLOWLIST_LENGTH} characters — a record that large is a configuration mistake`
+    )
+    .optional()
+    .transform(parseStatusListSigners),
 
   /**
    * `OID4VP_VERIFIER_SIGNING_KEY` (#377) — the ES256 private key QAuth signs an

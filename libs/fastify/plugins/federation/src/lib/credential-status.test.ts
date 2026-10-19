@@ -162,6 +162,26 @@ describe('assertCredentialStatusConfigUsable — half-configured is a BOOT failu
     expect(error?.message).not.toContain('internal.corp.example');
     expect(error?.message).not.toContain('secret-path');
   });
+
+  it('accepts usable OID4VP_STATUS_LIST_SIGNERS delegations (ANT-2026-3988N5GJ)', () => {
+    expect(() =>
+      assertCredentialStatusConfigUsable({
+        trustAnchorPems: [ANCHOR_PEM],
+        uriAllowlist: ALLOWLIST,
+        signerDelegations: { 'https://cdn.example/issuer-a': 'https://status.issuer.example' },
+      })
+    ).not.toThrow();
+  });
+
+  it('REFUSES an OID4VP_STATUS_LIST_SIGNERS entry it could never apply', () => {
+    expect(() =>
+      assertCredentialStatusConfigUsable({
+        trustAnchorPems: [ANCHOR_PEM],
+        uriAllowlist: ALLOWLIST,
+        signerDelegations: { 'https://cdn.example/issuer-a': 'status.issuer.example' },
+      })
+    ).toThrow(/OID4VP_STATUS_LIST_SIGNERS entry is not usable/);
+  });
 });
 
 describe('createConfiguredCredentialStatusChecker (#297, #378)', () => {

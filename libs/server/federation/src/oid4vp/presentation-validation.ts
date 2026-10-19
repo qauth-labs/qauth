@@ -31,8 +31,9 @@
  * ## It still authenticates nobody
  *
  * A {@link ValidatedCredential} is a cryptographic finding. Issuer trust (#236)
- * and subject resolution (#300) both run AFTER this and both can refuse. See
- * `validated-credential.ts`.
+ * is the CALLER's decision — asked mid-validation, through
+ * `context.assertIssuerTrusted` — and subject resolution (#300) runs AFTER this;
+ * both can refuse. See `validated-credential.ts`.
  */
 
 import type { CredentialFormatAdapterRegistry, PresentedCredential } from './credential-format';
@@ -57,7 +58,8 @@ import type { PresentationValidationContext, ValidatedCredential } from './valid
  * @returns one {@link ValidatedCredential} per Presentation, in input order.
  * @throws PresentationValidationRejection on the first refusal — carrying a
  * distinct server-side reason, and the single non-enumerating client error.
- * @throws InvalidCredentialsError from the credential-status gate (#297), when
+ * @throws InvalidCredentialsError from the issuer-trust gate (#236) or the
+ * credential-status gate (#297), when `context.assertIssuerTrusted` or
  * `context.credentialStatus` is set and refuses. It carries no reason and no
  * detail by design; see {@link import('./credential-format').CredentialFormatAdapter.validatePresentation}.
  */

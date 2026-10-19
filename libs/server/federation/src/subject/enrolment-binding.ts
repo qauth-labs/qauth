@@ -64,3 +64,36 @@ export function deriveEnrolmentWalletBinding(
 
   return deriveWalletBinding(credential, bindingClaims) ?? null;
 }
+
+/**
+ * The configured binding (and issuer-scoped subject) claims this credential
+ * carries as a JSON number that `JSON.parse` cannot have delivered exactly —
+ * outside ±(2^53 − 1), or a fraction (ANT-2026-FKDN4Q29).
+ *
+ * `readBindingClaim` treats such a claim as withheld, because two holders'
+ * different signed numbers can round to one double and so to one account. The
+ * refusal that follows is uniform on the wire, so this exists for the
+ * OPERATOR's log only: an account enrolled on such a value before the rule
+ * stops matching, and without a reason in the log that lockout would look
+ * like a broken wallet. Names only, never values.
+ *
+ * @param config - the resolved strategy configuration.
+ * @param credential - the validated presentation.
+ * @returns the claim names, in configuration order (the subject claim first).
+ */
+export function findInexactNumericBindingClaims(
+  config: SubjectResolutionConfig,
+  credential: ValidatedCredential
+): readonly string[] {
+  const names =
+    config?.strategy === 'issuer-scoped-claim'
+      ? [config.subjectClaim, ...(config.fallback?.bindingClaims ?? [])]
+      : (config?.bindingClaims ?? []);
+  const claims: Readonly<Record<string, unknown>> = credential?.claims ?? {};
+
+  return names.filter((name) => {
+    if (typeof name !== 'string' || !Object.hasOwn(claims, name)) return false;
+    const value = claims[name];
+    return typeof value === 'number' && Number.isFinite(value) && !Number.isSafeInteger(value);
+  });
+}

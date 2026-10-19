@@ -49,6 +49,7 @@ export function createUserAttributesRepository(defaultDb: DbClient): UserAttribu
         attrValue: attr.attrValue,
         verified: attr.verified,
         expiresAt: attr.expiresAt ?? null,
+        provenance: attr.provenance ?? null,
         createdAt: now,
         updatedAt: now,
       }));
@@ -62,6 +63,7 @@ export function createUserAttributesRepository(defaultDb: DbClient): UserAttribu
             attrValue: sql`excluded.attr_value`,
             verified: sql`excluded.verified`,
             expiresAt: sql`excluded.expires_at`,
+            provenance: sql`excluded.provenance`,
             updatedAt: now,
           },
         })
@@ -91,6 +93,23 @@ export function createUserAttributesRepository(defaultDb: DbClient): UserAttribu
             eq(userAttributes.verified, true)
           )
         );
+    },
+
+    /**
+     * Every row one `source` holds for a user, verified or not. The wallet
+     * sign-in path reads its own rows with this to re-check the ones the
+     * presentation in front of it did not rewrite (ANT-2026-ULJIA4P4).
+     */
+    async findByUserIdAndSource(
+      userId: string,
+      source: string,
+      tx?: DbClient
+    ): Promise<UserAttributeRow[]> {
+      const invoker = tx ?? defaultDb;
+      return invoker
+        .select()
+        .from(userAttributes)
+        .where(and(eq(userAttributes.userId, userId), eq(userAttributes.source, source)));
     },
 
     /**

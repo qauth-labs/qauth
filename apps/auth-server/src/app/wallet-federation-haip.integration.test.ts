@@ -245,7 +245,7 @@ describe('wallet federation E2E — haip-1.0 with direct_post.jwt (real containe
   const pki = createMockVerifierPki();
 
   let statusList = createMockStatusList();
-  let restoreFetch: (() => void) | undefined;
+  let restoreFetch: (() => Promise<void>) | undefined;
 
   beforeAll(async () => {
     dockerUp = await requireDockerOrSkip();
@@ -258,16 +258,16 @@ describe('wallet federation E2E — haip-1.0 with direct_post.jwt (real containe
     await infra?.teardown();
   });
 
-  beforeEach((ctx) => {
+  beforeEach(async (ctx) => {
     if (!dockerUp) ctx.skip();
     // A fresh status list per test: `haip-1.0` requires credential status, and
     // the checker caches a verified list per process.
     statusList = createMockStatusList();
-    restoreFetch = installMockStatusEndpoints([statusList]);
+    restoreFetch = await installMockStatusEndpoints([statusList]);
   });
 
-  afterEach(() => {
-    restoreFetch?.();
+  afterEach(async () => {
+    await restoreFetch?.();
     restoreFetch = undefined;
   });
 

@@ -12,6 +12,7 @@ import { type KeyStorageAttestingIssuers, NO_ATTESTING_ISSUERS } from './attesti
 import {
   type KeyAttestationTrustAnchors,
   NO_KEY_ATTESTATION_TRUST_ANCHORS,
+  readUnverifiedKeyStorage,
   validateKeyAttestation,
 } from './key-attestation';
 import {
@@ -46,7 +47,8 @@ import {
  * 2. **An issuer-asserted key-storage claim in the credential** — honoured only
  *    for an issuer the operator recorded as attesting key storage, and CAPPED at
  *    the level the operator recorded. An issuer may say it uses weaker storage
- *    than the operator expected; it may not promote itself.
+ *    than the operator expected; it may not promote itself. A claim this build
+ *    cannot rank establishes no level at all, never the recorded one.
  * 3. **The transitive path** — the credential's validated issuer is a HAIP
  *    issuance chain the operator recorded as validating key attestations per
  *    §4.5.1. QAuth does not re-derive WSCD assurance at the presentation seam;
@@ -212,8 +214,17 @@ export function keyStorageAssurancePolicyOf(
  * completely differently. Neither is trusted at the point it is extracted.
  */
 export type ConveyedKeyStorageSignal =
-  /** A compact-JWS OID4VCI Appendix D key attestation, entirely unverified. */
-  | { readonly kind: 'key-attestation'; readonly attestation: unknown }
+  /**
+   * A compact-JWS OID4VCI Appendix D key attestation, entirely unverified.
+   * `keyStorage` is an issuer-asserted `key_storage` claim conveyed BESIDE it,
+   * which the attestation outranks but which still holds a skipped
+   * attestation to its grade (ANT-2026-MX45ZBXI).
+   */
+  | {
+      readonly kind: 'key-attestation';
+      readonly attestation: unknown;
+      readonly keyStorage?: unknown;
+    }
   /** An issuer-asserted key-storage level carried as a credential claim. */
   | { readonly kind: 'credential-claim'; readonly keyStorage: unknown };
 
@@ -286,12 +297,16 @@ export function defaultConveyedSignalExtractor(
   source: ConveyedSignalSource
 ): ConveyedKeyStorageSignal | undefined {
   const confirmation = source.claims['cnf'];
+  const claimed = source.claims[CONVEYED_KEY_STORAGE_CLAIM];
 
   if (isRecord(confirmation) && confirmation[CONVEYED_KEY_ATTESTATION_MEMBER] !== undefined) {
-    return { kind: 'key-attestation', attestation: confirmation[CONVEYED_KEY_ATTESTATION_MEMBER] };
+    return {
+      kind: 'key-attestation',
+      attestation: confirmation[CONVEYED_KEY_ATTESTATION_MEMBER],
+      ...(claimed === undefined ? {} : { keyStorage: claimed }),
+    };
   }
 
-  const claimed = source.claims[CONVEYED_KEY_STORAGE_CLAIM];
   if (claimed !== undefined) return { kind: 'credential-claim', keyStorage: claimed };
 
   return undefined;
@@ -588,10 +603,11 @@ export function createKeyStorageAssuranceResolver(
     // yet (#379), that is EVERY deployment: recording an attesting issuer and
     // then meeting a wallet that attests would have failed 100% of its logins.
     //
-    // Skipping is not a weakening. It grants exactly what the credential would
+    // Skipping is not a weakening. It grants at most what the credential would
     // have been worth with no attestation conveyed at all — the operator's
-    // recorded transitive claim, capped at what they recorded — and a forged
-    // attestation buys its bearer nothing it did not already have. The moment
+    // recorded transitive claim, lowered by any weaker grade the attestation or
+    // a claim beside it states (the skipped-attestation branch below) — and a
+    // forged attestation buys its bearer nothing it did not already have. The moment
     // anchors ARE configured the branch is taken again and a failure to anchor
     // becomes what the vocabulary says it is: a forgery signal, refused.
     if (signal?.kind === 'key-attestation' && anchors.size > 0) {
@@ -631,6 +647,40 @@ export function createKeyStorageAssuranceResolver(
       return { outcome: 'rejected', reason: 'issuer-does-not-attest-key-storage' };
     }
 
+    if (signal?.kind === 'key-attestation') {
+      // A conveyed attestation this deployment SKIPPED (no anchors, see above).
+      // The record is a CAP, not the answer (ANT-2026-MX45ZBXI): the
+      // attestation travels inside the issuer-signed credential, so the grade
+      // it states is the issuer's statement about this key, and so is a
+      // `key_storage` claim conveyed beside it. Each is read without
+      // verification and may only LOWER the record. A statement that is
+      // present but cannot be read or ranked grades nothing, exactly as an
+      // unrankable `key_storage` claim does below; an attestation that states
+      // no grade lowers nothing.
+      const statements = [readUnverifiedKeyStorage(signal.attestation)];
+      if (signal.keyStorage !== undefined) {
+        const claimed = reduceAttackPotentialClaim(signal.keyStorage);
+        statements.push(
+          claimed === undefined ? { outcome: 'unrankable' } : { outcome: 'graded', grade: claimed }
+        );
+      }
+
+      let effective = recorded;
+      for (const stated of statements) {
+        if (stated.outcome === 'unrankable') {
+          return { outcome: 'accepted', evidence: Object.freeze({ assurance: 'issuer-attested' }) };
+        }
+        if (stated.outcome === 'graded' && meetsAttackPotential(effective, stated.grade)) {
+          effective = stated.grade;
+        }
+      }
+
+      return {
+        outcome: 'accepted',
+        evidence: Object.freeze({ assurance: 'issuer-attested', keyStorage: effective }),
+      };
+    }
+
     if (signal?.kind === 'credential-claim') {
       // Read through the same list reduction an attestation's claim goes
       // through — a list resists its WEAKEST member — and then CAPPED at what
@@ -639,12 +689,19 @@ export function createKeyStorageAssuranceResolver(
       // and must not be able to report stronger, or every recorded issuer could
       // grant itself any level it liked.
       //
-      // An unreadable or unrecognised claim reduces to `undefined` and falls
-      // back to the recorded level: it is the same situation as no claim at all,
-      // and must not clear anything on its own.
+      // An unreadable or unrecognised claim reduces to `undefined`, and that is
+      // NOT the same situation as no claim at all: the issuer said something
+      // about THIS credential's key, it may be weaker than the record, and this
+      // build cannot tell. The recorded level is the ceiling, so falling back to
+      // it would grant the most on the least understood statement. It grades
+      // nothing instead, exactly as an attestation whose `key_storage` does not
+      // reduce: no floor is cleared, and #237 reads no key storage from it.
       const claimed = reduceAttackPotentialClaim(signal.keyStorage);
-      const effective =
-        claimed !== undefined && meetsAttackPotential(recorded, claimed) ? claimed : recorded;
+      if (claimed === undefined) {
+        return { outcome: 'accepted', evidence: Object.freeze({ assurance: 'issuer-attested' }) };
+      }
+
+      const effective = meetsAttackPotential(recorded, claimed) ? claimed : recorded;
 
       return {
         outcome: 'accepted',
@@ -652,11 +709,9 @@ export function createKeyStorageAssuranceResolver(
       };
     }
 
-    // Reached by a credential conveying no signal at all, and by one whose
-    // key attestation was skipped above. Both get the recorded transitive claim
-    // and nothing more: an attestation nobody could evaluate adds no grade, so
-    // it cannot raise the level, and `assurance: 'issuer-attested'` says
-    // truthfully which source the answer came from.
+    // Reached by a credential conveying no signal at all. It gets the recorded
+    // transitive claim and nothing more, and `assurance: 'issuer-attested'`
+    // says truthfully which source the answer came from.
     return {
       outcome: 'accepted',
       evidence: Object.freeze({ assurance: 'issuer-attested', keyStorage: recorded }),

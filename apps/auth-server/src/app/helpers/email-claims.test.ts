@@ -1,7 +1,14 @@
 import type { FastifyInstance } from 'fastify';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, type Mock, vi } from 'vitest';
+
+// Whether a wallet row's issuer is still trusted is `wallet-verification.test.ts`'s
+// subject; here it is a lever.
+vi.mock('./wallet-verification', () => ({ isWalletAttributeIssuerStillTrusted: vi.fn() }));
 
 import { resolveEmailClaims } from './email-claims';
+import { isWalletAttributeIssuerStillTrusted } from './wallet-verification';
+
+const PROVENANCE = { issuer: 'https://issuer.example.com', issuer_key_resolution: 'x5c' };
 
 function fastifyStub(rows: unknown[]) {
   return {
@@ -22,12 +29,17 @@ function attrRow(source: string, attrValue: string, expiresAt: number | null = n
     attrValue,
     verified: true,
     expiresAt,
+    provenance: source === 'wallet' ? PROVENANCE : null,
     createdAt: 1,
     updatedAt: 1,
   };
 }
 
 describe('resolveEmailClaims', () => {
+  beforeEach(() => {
+    (isWalletAttributeIssuerStillTrusted as unknown as Mock).mockReset().mockResolvedValue(true);
+  });
+
   afterEach(() => {
     vi.useRealTimers();
   });
@@ -67,5 +79,53 @@ describe('resolveEmailClaims', () => {
     const claims = await resolveEmailClaims(fastify, 'user-1');
 
     expect(claims).toEqual({ email: 'live@example.com', email_verified: true });
+    // Already out on expiry, so nothing is asked about it.
+    expect(isWalletAttributeIssuerStillTrusted).not.toHaveBeenCalled();
+  });
+
+  describe('a wallet row is asserted only while its issuer is still trusted (ANT-2026-ULJIA4P4)', () => {
+    it('asks about the provenance the winning wallet row recorded', async () => {
+      const fastify = fastifyStub([attrRow('wallet', 'wallet@example.com')]);
+
+      await resolveEmailClaims(fastify, 'user-1');
+
+      expect(isWalletAttributeIssuerStillTrusted).toHaveBeenCalledWith(
+        fastify,
+        'user-1',
+        PROVENANCE
+      );
+    });
+
+    it('falls to the next source when the issuer is no longer trusted', async () => {
+      (isWalletAttributeIssuerStillTrusted as unknown as Mock).mockResolvedValue(false);
+      const fastify = fastifyStub([
+        attrRow('self_reported', 'self@example.com'),
+        attrRow('wallet', 'withdrawn@example.com'),
+      ]);
+
+      const claims = await resolveEmailClaims(fastify, 'user-1');
+
+      expect(claims).toEqual({ email: 'self@example.com', email_verified: true });
+    });
+
+    it('omits both claims when that wallet row was the only verified one', async () => {
+      (isWalletAttributeIssuerStillTrusted as unknown as Mock).mockResolvedValue(false);
+
+      const claims = await resolveEmailClaims(
+        fastifyStub([attrRow('wallet', 'withdrawn@example.com')]),
+        'user-1'
+      );
+
+      expect(claims).toEqual({});
+    });
+
+    it('asks nothing when no wallet row wins', async () => {
+      await resolveEmailClaims(
+        fastifyStub([attrRow('self_reported', 'self@example.com')]),
+        'user-1'
+      );
+
+      expect(isWalletAttributeIssuerStillTrusted).not.toHaveBeenCalled();
+    });
   });
 });

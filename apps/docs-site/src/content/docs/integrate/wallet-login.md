@@ -197,6 +197,7 @@ button that fails:
 | `OID4VP_SUBJECT_BINDING_CLAIMS`     | _(none)_       | The entitlement check (#300) — **required to BOOT when enabled**  |
 | `OID4VP_ISSUER_ASSURANCE`           | _(empty)_      | Per-realm issuer → eIDAS LoA (#237); drives the `acr` claim       |
 | `OID4VP_ATTESTING_ISSUERS`          | _(empty)_      | Issuance chains that attest key storage (#308/#379)               |
+| `OID4VP_EMAIL_VERIFYING_ISSUERS`    | _(none)_       | Issuers whose email is verified without `email_verified: true`    |
 | `ACR_VALUE_STYLE`                   | `eidas-uri`    | Vocabulary the `acr` value is written in (#237)                   |
 
 ### Subject resolution is required to BOOT when wallet federation is on (#379)
@@ -252,12 +253,22 @@ strongest grade recorded. The comparison takes the strongest, not the weakest: a
 registry pairing a strong ecosystem with a weak one is a working deployment with
 one ecosystem that will not reach the floor.
 
+The recorded grade is a **cap**, not a default result. A recorded issuer may
+lower it for one credential with an issuer-signed `key_storage` claim, and may
+never raise it. A `key_storage` claim that cannot be ranked (an unknown value,
+a bare string, an empty list, `null`) establishes no grade at all, so under
+`haip-1.0` that credential is refused for attack potential below the minimum.
+
 Key attestations conveyed **into a presentation** need wallet-provider trust
 anchors, which have no configuration surface yet. Until they do, a conveyed
 attestation is skipped rather than refused and the credential falls through to
 the transitive path above — a wallet doing the more conformant thing must not be
 worse off than one conveying nothing. It grants no more than the operator's
 recorded claim, and the evidence still reports its source as `issuer-attested`.
+The grade the skipped attestation states, and a `key_storage` claim beside it,
+are still read (unverified) and can only lower that record: an attestation
+stating `iso_18045_basic` does not clear the `haip-1.0` floor. One that cannot
+be read, or states a grade that cannot be ranked, establishes no grade.
 
 Note that `oid4vp-1.0-base` declares `keyStorageAssurance: forbidden`, so on the
 base profile this machinery establishes nothing and changes no behaviour. It is
@@ -435,6 +446,12 @@ Steps 1 and 2 are composed in one function, `verifyWalletPresentations`
 (`@qauth-labs/fastify-plugin-federation`), precisely so a caller cannot wire up
 only the first — the first produces a plausible-looking `ValidatedCredential`
 with claims in it, which is exactly the object someone in a hurry would use.
+The trust question is asked inside validation, as soon as the issuer's
+signature has verified and BEFORE the key-storage and credential-status gates
+act on what the issuer wrote. An issuer whose key is pinned in
+`OID4VP_ISSUER_JWKS` but whom the realm does not trust therefore never gets a
+status-list URI fetched, nor a failed fetch counted against the status endpoint
+breaker that every other issuer's users share.
 
 ### Where the bytes come from, and what they are checked against
 
@@ -494,6 +511,14 @@ identical `sub`. Under `issuer-scoped-claim` it is instead the digest of
 configured `OID4VP_SUBJECT_BINDING_CLAIMS` values — never the claim values in the
 clear. It is what a later `asserted-lookup` login re-derives and compares in
 constant time.
+
+A binding claim (or the `issuer-scoped-claim` subject claim) that is a JSON
+**number** takes part only when it is an integer within ±(2^53 − 1). Larger
+integers and fractions are rounded when the credential is parsed, so two
+holders' different numbers could become one. Such a claim is treated as withheld.
+An issuer with longer identifiers must sign them as strings. An account enrolled
+on such a value before this rule no longer matches. Each refusal for this reason
+logs a `warn` line that names the claim (never its value).
 
 Re-linking a re-issued credential **updates** the row the account already owns; a
 row belonging to a different account is never overwritten.
@@ -560,6 +585,14 @@ lets a database failure propagate, because the strategy contains it and turns it
 into the same uniform refusal — swallowing it here would turn a broken database
 into "no such account".
 
+When the identifier resolves to several accounts and at least one carries a
+wallet binding, `asserted-lookup` sets aside the accounts that carry none
+before it looks for the sole account. An anonymous `POST /auth/register` can
+add an unbound password account on a wallet-only user's email. Counting that
+account would lock the wallet owner out. Two bound accounts, or several unbound
+ones, are still `ambiguous`, and the remaining account still has to pass the
+binding comparison.
+
 Note the boot posture, deliberately unchanged: selecting a strategy is **not** a
 startup gate. A deployment that names a strategy and omits its settings fails at
 `resolveSubjectResolution` on the request path — logged as an operator error and
@@ -588,6 +621,21 @@ credential asserting it). `'wallet'` is the top of ADR-002's trust order, so a
 verified wallet email outranks any `self_reported` one in
 `helpers/email-claims.ts`.
 
+The **email row is the exception**. It is written `verified=true` only when the
+presentation discloses `email_verified: true`, or when the credential's issuer
+is listed in `OID4VP_EMAIL_VERIFYING_ISSUERS`. A disclosed
+`email_verified: false` always leaves it unverified. An absent flag does not
+count as verified: in SD-JWT VC the holder chooses the Disclosures, so a missing
+flag may be an `email_verified: false` the holder left out. An unverified email
+row is never emitted as an `email` claim.
+
+> **Behaviour change (ANT-2026-BGP7XCR2).** Earlier releases treated an absent
+> `email_verified` as verified. An issuer that signs no flag at all (typical for
+> a PID) now yields no `email` claim downstream unless the operator lists it in
+> `OID4VP_EMAIL_VERIFYING_ISSUERS`. List only issuers that never issue an
+> unverified address. Rows already stored as verified are rewritten at the
+> user's next wallet sign-in.
+
 Three properties are worth knowing before extending it:
 
 - **The mapping is per credential format.** SD-JWT VC and ISO mdoc use different
@@ -607,6 +655,36 @@ Three properties are worth knowing before extending it:
   the format, the validated issuer, the credential type and the wallet binding —
   a digest, so the account is matchable without a second copy of the person's
   attributes sitting in the column.
+
+### What a wallet attribute rests on, and when it is withdrawn
+
+Each `source='wallet'` row records its **provenance** in
+`user_attributes.provenance` (migration 0022): the validated issuer and the
+issuer-signed `status` reference of the credential that wrote it. Two rules use
+it.
+
+- **At every emission** (token grants, userinfo, password sign-in), a wallet row
+  is asserted only while the account's realm still trusts its issuer. Removing
+  an issuer from `OID4VP_TRUSTED_ISSUERS`, or turning `WALLET_FEDERATION_ENABLED`
+  off, stops its attributes from being emitted at once. The next source in the
+  trust order answers instead, or the claim is omitted. This check is local; it
+  makes no outbound request. Wallet rows written before migration 0022 carry no
+  provenance and are withheld until the account's next wallet sign-in rewrites
+  them.
+- **At the account's next wallet sign-in**, every verified wallet row that the
+  presentation did not rewrite is checked again against the same gates a
+  presentation meets: issuer trust and credential status. A row whose credential
+  no longer reads `VALID` on its status list is set `verified=false`, and so is
+  a row whose issuer is no longer trusted. That covers a revoked credential
+  whose replacement the holder presents without the old claim. A status list
+  that cannot be read counts as a failure (fail-closed).
+
+**Not covered:** credential status is not re-checked on the token or userinfo
+paths, because that would put a status-list fetch on every token grant. After an
+issuer revokes a credential, the attributes it wrote keep being emitted (through
+a password sign-in or a refresh token) until the account's next wallet sign-in,
+the credential's own `exp`, or the operator removing the issuer from trust,
+whichever comes first. Tokens already issued are not affected.
 
 ## End-to-end tests and the mock wallet (#240)
 

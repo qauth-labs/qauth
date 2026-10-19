@@ -281,8 +281,11 @@ export const WALLET_LOGIN_POLL_INTERVAL_MS = 3000;
  * user would watch their own sign-in fail. This is the correction, not a
  * relaxation — it is still a hard cap, sized at roughly two concurrent flows
  * from one IP (each ~100 polls at {@link WALLET_LOGIN_POLL_INTERVAL_MS}), and
- * the endpoint it protects performs no credential work and reveals nothing
- * without an unguessable handle AND the matching browser-binder cookie.
+ * the endpoint it protects reveals nothing without an unguessable handle AND
+ * the matching browser-binder cookie. For a cross-device flow the poll is
+ * where the parked presentation is validated, but only once per presentation:
+ * the poll that claims it validates, and every concurrent poll answers
+ * `pending` (`claimWalletPresentation`, ANT-2026-IOU62CQU).
  */
 export const WALLET_LOGIN_STATUS_RATE_LIMIT = 200;
 

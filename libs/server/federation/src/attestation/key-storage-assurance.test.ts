@@ -235,17 +235,40 @@ describe('haip-1.0 — an issuer-asserted key_storage claim', () => {
     expect(decision).toEqual({ outcome: 'rejected', reason: 'assurance-required-but-absent' });
   });
 
-  it('falls back to the recorded level when the claim uses an unknown vocabulary', async () => {
-    const decision = await provisionedResolver().resolveKeyStorageAssurance(
-      input(ATTESTING_ISSUER, { key_storage: ['acme_level_9'] }),
-      HAIP_POLICY
-    );
+  // The recorded level is the CEILING, so a statement this build cannot rank must
+  // not land on it: the claim exists to lower the level, and the second row still
+  // says `basic` in the vocabulary QAuth knows.
+  const UNRANKABLE_CLAIMS: ReadonlyArray<readonly [string, unknown]> = [
+    ['uses an unknown vocabulary', ['acme_level_9']],
+    ['lists a known weak grade beside an unknown one', ['iso_18045_basic', 'acme_level_9']],
+    ['is a bare string rather than a list', 'iso_18045_basic'],
+    ['is an empty list', []],
+    ['is null', null],
+  ];
 
-    expect(decision).toEqual({
-      outcome: 'accepted',
-      evidence: { assurance: 'issuer-attested', keyStorage: 'iso_18045_high' },
-    });
-  });
+  it.each(UNRANKABLE_CLAIMS)(
+    'REJECTS under a graded floor when the claim %s',
+    async (_label, key_storage) => {
+      const decision = await provisionedResolver().resolveKeyStorageAssurance(
+        input(ATTESTING_ISSUER, { key_storage }),
+        HAIP_POLICY
+      );
+
+      expect(decision).toEqual({ outcome: 'rejected', reason: 'attack-potential-below-minimum' });
+    }
+  );
+
+  it.each(UNRANKABLE_CLAIMS)(
+    'grades nothing, never the recorded level, when the claim %s',
+    async (_label, key_storage) => {
+      const decision = await provisionedResolver().resolveKeyStorageAssurance(
+        input(ATTESTING_ISSUER, { key_storage }),
+        { posture: 'permitted' }
+      );
+
+      expect(decision).toEqual({ outcome: 'accepted', evidence: { assurance: 'issuer-attested' } });
+    }
+  );
 });
 
 describe('haip-1.0 — a conveyed key attestation', () => {
@@ -489,6 +512,94 @@ describe('a conveyed key attestation with NO anchors provisioned', () => {
     ).toMatchObject({ evidence: { assurance: 'issuer-attested' } });
   });
 
+  // The record is a CAP the issuer-signed statements may only lower
+  // (ANT-2026-MX45ZBXI). The attestation is skipped, not ignored: the grade it
+  // states, and a `key_storage` claim beside it, are read without verification
+  // and can only ever make the answer weaker.
+  it('is held to a WEAKER grade the skipped attestation states', async () => {
+    const attestation = await issueKeyAttestation(pki, {
+      attestedKeys: [holderJwk],
+      keyStorage: ['iso_18045_basic'],
+    });
+
+    expect(
+      await transitiveOnlyResolver().resolveKeyStorageAssurance(
+        input(ATTESTING_ISSUER, { cnf: { jwk: holderJwk, key_attestation: attestation } }),
+        HAIP_POLICY
+      )
+    ).toEqual({ outcome: 'rejected', reason: 'attack-potential-below-minimum' });
+  });
+
+  it('reads a weaker grade the skipped attestation states as that grade', async () => {
+    const attestation = await issueKeyAttestation(pki, {
+      attestedKeys: [holderJwk],
+      keyStorage: ['iso_18045_moderate', 'iso_18045_high'],
+    });
+
+    expect(
+      await transitiveOnlyResolver().resolveKeyStorageAssurance(
+        input(ATTESTING_ISSUER, { cnf: { jwk: holderJwk, key_attestation: attestation } }),
+        { posture: 'permitted' }
+      )
+    ).toEqual({
+      outcome: 'accepted',
+      evidence: { assurance: 'issuer-attested', keyStorage: 'iso_18045_moderate' },
+    });
+  });
+
+  it('is held to a weaker key_storage claim conveyed BESIDE the attestation', async () => {
+    const attestation = await issueKeyAttestation(pki, {
+      attestedKeys: [holderJwk],
+      keyStorage: ['iso_18045_high'],
+    });
+
+    expect(
+      await transitiveOnlyResolver().resolveKeyStorageAssurance(
+        input(ATTESTING_ISSUER, {
+          cnf: { jwk: holderJwk, key_attestation: attestation },
+          key_storage: ['iso_18045_basic'],
+        }),
+        HAIP_POLICY
+      )
+    ).toEqual({ outcome: 'rejected', reason: 'attack-potential-below-minimum' });
+  });
+
+  it.each<readonly [string, () => Promise<unknown>]>([
+    [
+      'states a grade it cannot rank',
+      async (): Promise<unknown> =>
+        issueKeyAttestation(pki, { attestedKeys: [holderJwk], keyStorage: ['acme_level_9'] }),
+    ],
+    ['cannot be decoded at all', async (): Promise<unknown> => 'not-a-jwt'],
+    ['is not a string', async (): Promise<unknown> => ({ key_storage: ['iso_18045_high'] })],
+  ])('grades nothing when the skipped attestation %s', async (_label, make) => {
+    const attestation = await make();
+    const conveyed = input(ATTESTING_ISSUER, {
+      cnf: { jwk: holderJwk, key_attestation: attestation },
+    });
+
+    expect(
+      await transitiveOnlyResolver().resolveKeyStorageAssurance(conveyed, HAIP_POLICY)
+    ).toEqual({ outcome: 'rejected', reason: 'attack-potential-below-minimum' });
+    expect(
+      await transitiveOnlyResolver().resolveKeyStorageAssurance(conveyed, { posture: 'permitted' })
+    ).toEqual({ outcome: 'accepted', evidence: { assurance: 'issuer-attested' } });
+  });
+
+  it('keeps the record for an attestation that states no grade at all', async () => {
+    const attestation = await issueKeyAttestation(pki, { attestedKeys: [holderJwk] });
+
+    expect(
+      await transitiveOnlyResolver().resolveKeyStorageAssurance(
+        input(ATTESTING_ISSUER, { cnf: { jwk: holderJwk, key_attestation: attestation } }),
+        HAIP_POLICY
+      )
+    ).toEqual({
+      outcome: 'accepted',
+      evidence: { assurance: 'issuer-attested', keyStorage: 'iso_18045_high' },
+    });
+  });
+
   it('resumes REFUSING an unanchored attestation the moment anchors exist', async () => {
     // The skip is scoped to "this deployment cannot evaluate the direct path at
     // all". With anchors configured, a chain that does not reach one is a
@@ -562,7 +673,13 @@ describe('defaultConveyedSignalExtractor', () => {
       },
     });
 
-    expect(signal).toEqual({ kind: 'key-attestation', attestation: 'the-attestation' });
+    // The outranked claim still travels with it: a skipped attestation is
+    // held to it (ANT-2026-MX45ZBXI).
+    expect(signal).toEqual({
+      kind: 'key-attestation',
+      attestation: 'the-attestation',
+      keyStorage: ['iso_18045_high'],
+    });
   });
 
   it('reads an issuer claim when no attestation is conveyed', () => {

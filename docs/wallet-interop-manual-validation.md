@@ -76,7 +76,15 @@ OID4VP_ISSUER_ASSURANCE={"master":{"<issuer>":{"level":"substantial"}}}
 # neither — setting exactly one fails the boot:
 OID4VP_STATUS_LIST_TRUST_ANCHORS_PATH=/etc/qauth/status-list-anchors.pem
 OID4VP_STATUS_LIST_URI_ALLOWLIST=https://<issuer host>/statuslists
+# Only when the list is served from a host the status signer's certificate
+# does not name (a CDN): which status issuer signs the lists under that prefix.
+# OID4VP_STATUS_LIST_SIGNERS={"https://<cdn host>/<path>":"https://<status issuer>"}
 ```
+
+A Status List Token is accepted only when its signing certificate's `dNSName`
+SAN covers the host the list is served from, or that list's URI prefix is
+delegated to the signer in `OID4VP_STATUS_LIST_SIGNERS`. Record which hosts the
+real status issuer's certificate names and where its lists are served from.
 
 Four variables answer four different questions and configuring one does not
 imply another: `OID4VP_VERIFIER_PROFILE` is _who are we, to a wallet?_,
@@ -165,7 +173,10 @@ Each item is pass/fail. Record the wallet's behaviour even when it matches.
       values in the clear. It carries a binding **digest**.
 - [ ] `user_attributes` has `source='wallet'`, `verified=true` rows for the
       claims the credential disclosed, and `expires_at` matching the credential's
-      `exp` (NULL when it has none).
+      `exp` (NULL when it has none). The `email` row is the exception: it is
+      `verified=true` only when the wallet disclosed `email_verified: true`, or
+      when the issuer is listed in `OID4VP_EMAIL_VERIFYING_ISSUERS`. Record
+      whether the real issuer signs `email_verified` at all.
 
 ### Credential status, as the real issuer publishes it (#297/#378)
 

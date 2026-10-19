@@ -11,8 +11,14 @@ import type {
  * property and three near-copies of a security property is two too many:
  *
  * 1. **Ambiguity fails closed.** A lookup that resolves to more than one account
- *    is refused, never disambiguated. #300's constraint 5 is absolute — *"If a
- *    strategy resolves more than one candidate, reject. Never pick one."*
+ *    is refused; nothing ever picks one. #300's constraint 5 is absolute — *"If
+ *    a strategy resolves more than one candidate, reject. Never pick one."* A
+ *    strategy may narrow the candidates BEFORE asking for the sole one, by a
+ *    rule that is not a choice between accounts: `asserted-lookup` sets aside
+ *    accounts that carry no wallet binding once one that does exists, because
+ *    such an account can never be its answer and an anonymous registration can
+ *    create one (ANT-2026-B5IYOGYF). Two accounts that survive that narrowing
+ *    are still refused.
  * 2. **A lookup backend that throws is CONTAINED.** Same containment
  *    `assertIssuerTrusted` applies to a `TrustRegistry` backend, for the same
  *    reason: an uncontained throw becomes a 500 where every other outcome is a

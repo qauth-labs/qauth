@@ -90,8 +90,9 @@ export const DEFAULT_KEY_BINDING_MAX_AGE_SECONDS = 300;
  * skipped the audience check when no audience was supplied would be the single
  * most dangerous line in this library.
  *
- * The three GATE members — {@link keyStorageAssurance} (#308/#379),
- * {@link credentialStatus} and {@link requireCredentialStatus} (#297/#378) — are
+ * The four GATE members — {@link assertIssuerTrusted} (#236),
+ * {@link keyStorageAssurance} (#308/#379), {@link credentialStatus} and
+ * {@link requireCredentialStatus} (#297/#378) — are
  * required-but-nullable for the same reason one step further on. Each of them
  * has a legitimate `undefined`/`false` answer for some deployments, so none can
  * be non-nullable; but an OPTIONAL member is one a new caller reaches by typing
@@ -137,6 +138,25 @@ export interface PresentationValidationContext {
    * assert about itself.
    */
   readonly permittedFormats: readonly CredentialFormat[];
+  /**
+   * The presenting realm's issuer-trust gate (#236), as a function that THROWS
+   * its refusal — `assertIssuerTrusted` bound to the realm's `TrustRegistry`.
+   *
+   * An adapter calls it as soon as it holds a `ValidatedIssuer` and BEFORE the
+   * two gates below, because those act on what the issuer WROTE: the status gate
+   * dials a URI out of the credential and counts the outcome against an endpoint
+   * breaker every other login shares. The Issuer signature makes that URI the
+   * issuer's choice rather than the wallet's, which is worth something only for
+   * an issuer this realm trusts — a configured key grants no trust.
+   *
+   * The DECISION stays with the caller; validation only fixes WHEN it is asked.
+   *
+   * REQUIRED, and explicitly `undefined` for a caller with no realm in scope —
+   * never optional, for the same reason as {@link credentialStatus} below.
+   * `undefined` leaves {@link ValidatedCredential.issuer} exactly as untrusted as
+   * the module header says it is.
+   */
+  readonly assertIssuerTrusted: ((issuer: ValidatedIssuer) => void) | undefined;
   /**
    * The active profile's key-storage-assurance posture and this deployment's
    * resolver for it (#308) — see

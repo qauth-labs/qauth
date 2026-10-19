@@ -327,6 +327,7 @@ export function fixtureValidationContext(
     credentialStatus: undefined,
     requireCredentialStatus: false,
     keyStorageAssurance: undefined,
+    assertIssuerTrusted: undefined,
     ...overrides,
   };
 }

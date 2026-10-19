@@ -1,11 +1,20 @@
 import {
+  buildWalletAttributeProvenance,
   buildWalletCredentialData,
+  type CredentialStatusChecker,
   deriveEnrolmentWalletBinding,
   extractWalletAttributes,
+  findInexactNumericBindingClaims,
+  issuerVouchesForEmail,
+  isWalletAttributeIssuerTrusted,
+  isWalletAttributeStatusValid,
+  readWalletAttributeProvenance,
   type SubjectResolutionConfig,
   type SubjectResolutionStrategy,
+  type TrustRegistry,
   type ValidatedCredential,
   WALLET_PROVIDER_TYPE,
+  WALLET_SOURCE,
 } from '@qauth-labs/fastify-plugin-federation';
 import { UniqueConstraintError } from '@qauth-labs/shared-errors';
 import type { FastifyInstance } from 'fastify';
@@ -83,6 +92,29 @@ export interface WalletAccountInput {
   readonly strategy: SubjectResolutionStrategy;
   /** The resolved configuration — the enrolment binding is derived from it. */
   readonly config: SubjectResolutionConfig;
+  /**
+   * The gates a returning account's existing wallet attributes are re-checked
+   * against (ANT-2026-ULJIA4P4). See {@link withdrawUnbackedWalletAttributes}.
+   */
+  readonly attributeGates: WalletAttributeGates;
+  /**
+   * `OID4VP_EMAIL_VERIFYING_ISSUERS` (ANT-2026-BGP7XCR2): issuers whose email
+   * counts as verified without a disclosed `email_verified: true`. Empty means
+   * none, the default.
+   */
+  readonly emailVerifyingIssuers: readonly string[];
+}
+
+/** The issuer-trust and credential-status gates, as a presentation meets them. */
+export interface WalletAttributeGates {
+  /** The issuer allowlist in force for the realm (#236). */
+  readonly trustRegistry: TrustRegistry;
+  /**
+   * The deployment's status checker (#297), or `undefined` when it configured
+   * none. That is the posture under which a presentation is not
+   * status-checked either.
+   */
+  readonly credentialStatus: CredentialStatusChecker | undefined;
 }
 
 /**
@@ -114,9 +146,19 @@ async function writeWalletAttributes(
   fastify: FastifyInstance,
   userId: string,
   credential: ValidatedCredential,
+  emailVerifyingIssuers: readonly string[],
   tx?: AttributeWriteTx
-): Promise<void> {
-  const attributes = extractWalletAttributes(credential);
+): Promise<ReadonlySet<string>> {
+  // The email row is verified only on a disclosed `email_verified: true`, or
+  // for an issuer the operator vouches for (ANT-2026-BGP7XCR2).
+  const attributes = extractWalletAttributes(credential, undefined, {
+    issuerVouchesForEmail: issuerVouchesForEmail(credential.issuer, emailVerifyingIssuers),
+  });
+  // What every row rests on: the validated issuer and the issuer-signed
+  // `status` reference (ANT-2026-ULJIA4P4). Claim resolution stops asserting a
+  // row whose issuer is no longer trusted, and a later wallet sign-in
+  // re-checks the status of a row it does not rewrite.
+  const provenance = buildWalletAttributeProvenance(credential);
 
   await fastify.repositories.userAttributes.upsertMany(
     userId,
@@ -128,9 +170,107 @@ async function writeWalletAttributes(
       // The federation contract speaks `Date`; the schema speaks epoch-ms.
       // Identical conversion to `routes/auth/register.ts`, deliberately.
       expiresAt: attr.expiresAt ? attr.expiresAt.getTime() : null,
+      provenance,
     })),
     tx
   );
+
+  return new Set(attributes.map((attr) => attr.attrKey));
+}
+
+/**
+ * Withdraw the wallet attributes an EARLIER credential left that no longer
+ * stand (ANT-2026-ULJIA4P4).
+ *
+ * A presentation rewrites only the claims it discloses. A row written by an
+ * earlier credential, which the holder has since replaced (or which the issuer
+ * has revoked), would otherwise keep being emitted as verified. So at every
+ * wallet sign-in of a returning account, each verified wallet row this
+ * presentation did NOT rewrite is asked again, through the same gates a
+ * presentation meets: is its issuer still trusted, and does its credential
+ * still read `VALID` on its status list? A row that fails either is set
+ * `verified=false`, which takes it out of claim resolution until a valid
+ * credential discloses that claim again.
+ *
+ * This is the one place revocation is re-checked after the fact. The sign-in
+ * path already talks to the status host, and the checker caches verified lists.
+ * The token and userinfo paths deliberately do not re-check it.
+ *
+ * A row with no readable provenance (written before it was recorded) is left
+ * alone here: claim resolution already withholds it. Never throws: a failure
+ * here is logged and must not fail a sign-in that has already succeeded.
+ */
+async function withdrawUnbackedWalletAttributes(
+  fastify: FastifyInstance,
+  userId: string,
+  rewritten: ReadonlySet<string>,
+  gates: WalletAttributeGates
+): Promise<void> {
+  try {
+    const rows = await fastify.repositories.userAttributes.findByUserIdAndSource(
+      userId,
+      WALLET_SOURCE
+    );
+    const withdrawn: string[] = [];
+
+    for (const row of rows) {
+      if (!row.verified || rewritten.has(row.attrKey)) continue;
+      if (readWalletAttributeProvenance(row.provenance) === undefined) continue;
+
+      const stands =
+        isWalletAttributeIssuerTrusted(row.provenance, gates.trustRegistry) &&
+        (await isWalletAttributeStatusValid(row.provenance, gates.credentialStatus));
+      if (stands) continue;
+
+      await fastify.repositories.userAttributes.setVerified(
+        userId,
+        WALLET_SOURCE,
+        row.attrKey,
+        false
+      );
+      withdrawn.push(row.attrKey);
+    }
+
+    if (withdrawn.length > 0) {
+      fastify.log.info(
+        { userId, attributes: withdrawn },
+        'withdrew wallet attributes whose credential is no longer valid or whose issuer is no longer trusted'
+      );
+    }
+  } catch (error) {
+    fastify.log.error(
+      { err: error, userId },
+      'failed to re-check the wallet attributes an earlier credential left'
+    );
+  }
+}
+
+/**
+ * Say in the log when a refusal is down to a binding claim that arrived as a
+ * JSON number QAuth cannot represent exactly (ANT-2026-FKDN4Q29).
+ *
+ * Such a claim no longer takes part in any binding, because two holders'
+ * different numbers can round to one value. An account enrolled on one before
+ * that rule therefore stops matching, and the uniform refusal on the wire
+ * gives its holder and the operator nothing to go on. Claim names only, never
+ * values.
+ *
+ * @returns whether anything was logged.
+ */
+export function warnOnInexactNumericBindingClaims(
+  fastify: FastifyInstance,
+  config: SubjectResolutionConfig,
+  credential: ValidatedCredential,
+  realmId: string
+): boolean {
+  const claims = findInexactNumericBindingClaims(config, credential);
+  if (claims.length === 0) return false;
+
+  fastify.log.warn(
+    { realmId, claims },
+    'wallet presentation refused: a configured binding claim is a JSON number QAuth cannot represent exactly (outside ±(2^53 − 1), or a fraction), so it no longer binds an account. An account enrolled on such a value can no longer sign in with this credential; the issuer must encode the claim as a string'
+  );
+  return true;
 }
 
 /**
@@ -184,7 +324,18 @@ export async function resolveWalletAccount(
       return { status: 'rejected' };
     }
 
-    await writeWalletAttributes(fastify, outcome.userId, input.credential);
+    const rewritten = await writeWalletAttributes(
+      fastify,
+      outcome.userId,
+      input.credential,
+      input.emailVerifyingIssuers
+    );
+    await withdrawUnbackedWalletAttributes(
+      fastify,
+      outcome.userId,
+      rewritten,
+      input.attributeGates
+    );
 
     return { status: 'authenticated', userId: outcome.userId, externalSub, enrolled: false };
   }
@@ -193,7 +344,10 @@ export async function resolveWalletAccount(
   // `ambiguous` and `rejected` fall through to the uniform refusal below —
   // `rejected` in particular carries the account that exists WITHOUT a wallet
   // binding, which must never become an enrolment (see the module JSDoc).
-  if (outcome.kind !== 'no-match') return { status: 'rejected' };
+  if (outcome.kind !== 'no-match') {
+    warnOnInexactNumericBindingClaims(fastify, input.config, input.credential, input.realmId);
+    return { status: 'rejected' };
+  }
 
   if (externalSub === null) return { status: 'rejected' };
 
@@ -205,10 +359,14 @@ export async function resolveWalletAccount(
   const walletBinding = deriveEnrolmentWalletBinding(input.config, input.credential);
 
   if (walletBinding === null) {
-    fastify.log.warn(
-      { realmId: input.realmId },
-      'wallet presentation withheld a configured binding claim — refusing to enrol an account nothing could later prove entitlement to'
-    );
+    if (
+      !warnOnInexactNumericBindingClaims(fastify, input.config, input.credential, input.realmId)
+    ) {
+      fastify.log.warn(
+        { realmId: input.realmId },
+        'wallet presentation withheld a configured binding claim — refusing to enrol an account nothing could later prove entitlement to'
+      );
+    }
     return { status: 'rejected' };
   }
 
@@ -233,7 +391,13 @@ export async function resolveWalletAccount(
         tx
       );
 
-      await writeWalletAttributes(fastify, user.id, input.credential, tx);
+      await writeWalletAttributes(
+        fastify,
+        user.id,
+        input.credential,
+        input.emailVerifyingIssuers,
+        tx
+      );
 
       return user.id;
     });

@@ -142,12 +142,27 @@ export const userAttributes = pgTable(
     verified: boolean('verified').notNull().default(false),
     /** Optional expiry for VC-derived attributes; null for self-reported ones. */
     expiresAt: bigint('expires_at', { mode: 'number' }),
+    /**
+     * What a VC-derived attribute rests on: for `source='wallet'`, the
+     * validated issuer and the issuer-signed `status` reference
+     * (`walletAttributeProvenanceSchema` in `@qauth-labs/server-federation`
+     * owns the shape). Lets claim resolution stop asserting a value whose
+     * issuer is no longer trusted, and the next wallet sign-in re-check its
+     * revocation status (ANT-2026-ULJIA4P4). NULL for self-reported rows and
+     * for wallet rows written before this column existed; claim resolution
+     * treats the latter as unbacked.
+     */
+    provenance: jsonb('provenance'),
     createdAt: bigint('created_at', { mode: 'number' }).notNull().default(EPOCH_MS_NOW),
     updatedAt: bigint('updated_at', { mode: 'number' }).notNull().default(EPOCH_MS_NOW),
   },
   (t) => [
     uniqueIndex('idx_user_attributes_user_source_key_unique').on(t.userId, t.source, t.attrKey),
     index('idx_user_attributes_user_id').on(t.userId),
+    check(
+      'user_attributes_provenance_is_object',
+      sql`${t.provenance} IS NULL OR jsonb_typeof(${t.provenance}) = 'object'`
+    ),
   ]
 );
 

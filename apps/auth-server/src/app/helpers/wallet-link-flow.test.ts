@@ -63,6 +63,22 @@ function createSessionUtils() {
   };
 }
 
+/**
+ * In-memory stand-in for the one raw Redis command the flow machines use: the
+ * `SET … NX` that claims a parked presentation for exactly one validation.
+ */
+function createRedis() {
+  const store = new Map<string, string>();
+  return {
+    store,
+    set: vi.fn(async (key: string, value: string, ...args: unknown[]) => {
+      if (args.includes('NX') && store.has(key)) return null;
+      store.set(key, value);
+      return 'OK';
+    }),
+  };
+}
+
 function makeFastify() {
   const sessionUtils = createSessionUtils();
   const fastify: any = {
@@ -75,6 +91,7 @@ function makeFastify() {
       auditLogs: { create: vi.fn().mockResolvedValue(undefined) },
     },
     sessionUtils,
+    redis: createRedis(),
     log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
   };
   return { fastify: fastify as FastifyInstance, sessionUtils };
@@ -331,6 +348,28 @@ describe('advanceWalletLinkFlow — same-device links never complete by polling 
     expect(fastify.repositories.auditLogs.create).toHaveBeenCalledWith(
       expect.objectContaining({ event: 'auth.wallet_link.success', userId })
     );
+  });
+});
+
+describe('advanceWalletLinkFlow — concurrent polls validate a presentation once (ANT-2026-IOU62CQU)', () => {
+  it('links a parked presentation ONCE however many polls are in flight', async () => {
+    const { fastify, sessionUtils, handle, flow, userId, binderCookie } = await startLink();
+    publishSignal(sessionUtils, flow['stateHash'], 'received');
+
+    const held: Array<(value: unknown) => void> = [];
+    (linkWalletPresentation as unknown as Mock).mockImplementation(
+      () => new Promise((resolve) => held.push(resolve))
+    );
+
+    const cookie = `__Host-qauth_wallet_flow=${binderCookie}`;
+    const polls = Array.from({ length: 3 }, () => advance(fastify, handle, userId, { cookie }));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    for (const release of held) release(LINKED);
+    const results = await Promise.all(polls);
+
+    expect(linkWalletPresentation).toHaveBeenCalledTimes(1);
+    const statuses = results.map((r) => r.outcome.status).sort();
+    expect(statuses).toEqual(['linked', 'pending', 'pending']);
   });
 });
 

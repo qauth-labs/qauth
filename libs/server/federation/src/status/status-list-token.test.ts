@@ -4,6 +4,7 @@ import { createStaticIssuerAllowlist, DENY_ALL_TRUST_REGISTRY } from '../trust/t
 import { createStatusListTrustAnchors } from './status-list-chain';
 import { STATUS_LIST_TOKEN_TYP } from './status-list-spec';
 import { verifyStatusListToken } from './status-list-token';
+import { createStatusListSignerDelegations } from './status-list-uri';
 import { encodeStatusList, signStatusListToken } from './test/status-list-fixtures';
 import { createTestCertificate } from './test/x509-fixtures';
 
@@ -256,6 +257,95 @@ describe('verifyStatusListToken (#297, draft-14 §5/§6)', () => {
       expect(await verify(token(), { issuerTrustRegistry: DENY_ALL_TRUST_REGISTRY })).toEqual({
         outcome: 'rejected',
         reason: 'issuer-untrusted',
+      });
+    });
+  });
+
+  describe('the certificate must speak for the LIST (ANT-2026-3988N5GJ)', () => {
+    // Another participant under the same anchor, with its own host as SAN.
+    const participant = createTestCertificate({
+      subject: 'status.participant-b.example',
+      issuer: intermediate,
+      dnsNames: ['status.participant-b.example'],
+      ...valid,
+    });
+    const PARTICIPANT = 'https://status.participant-b.example';
+
+    function signedBy(cert: typeof participant, iss: string, sub = URI): string {
+      return signStatusListToken({
+        signer: cert,
+        header: { typ: STATUS_LIST_TOKEN_TYP, x5c: [cert.x5c, intermediate.x5c] },
+        claims: claims({ iss, sub }),
+      });
+    }
+
+    it("refuses another anchored participant signing this issuer's list under its own TRUE name", async () => {
+      // `iss` is the participant's own host, which its SAN covers, so the iss
+      // binding passes. Nothing tied the certificate to the list it signs.
+      expect(await verify(signedBy(participant, PARTICIPANT))).toEqual({
+        outcome: 'rejected',
+        reason: 'issuer-untrusted',
+      });
+    });
+
+    it('accepts a certificate whose SAN names both its own host and the list host', async () => {
+      const both = createTestCertificate({
+        subject: 'status.participant-b.example',
+        issuer: intermediate,
+        dnsNames: ['status.participant-b.example', 'status.issuer.example'],
+        ...valid,
+      });
+
+      expect(await verify(signedBy(both, PARTICIPANT))).toMatchObject({ outcome: 'verified' });
+    });
+
+    describe('a list the operator delegated to a named signer (OID4VP_STATUS_LIST_SIGNERS)', () => {
+      const CDN_URI = 'https://cdn.example/issuer-a/lists/1';
+
+      it('is refused by default when served from a host the signer certificate does not name', async () => {
+        expect(await verify(signedBy(signer, ISSUER, CDN_URI), { expectedUri: CDN_URI })).toEqual({
+          outcome: 'rejected',
+          reason: 'issuer-untrusted',
+        });
+      });
+
+      it('is accepted when the operator delegated that prefix to the signing issuer', async () => {
+        const signerDelegations = createStatusListSignerDelegations({
+          'https://cdn.example/issuer-a': ISSUER,
+        });
+
+        expect(
+          await verify(signedBy(signer, ISSUER, CDN_URI), {
+            expectedUri: CDN_URI,
+            signerDelegations,
+          })
+        ).toMatchObject({ outcome: 'verified' });
+      });
+
+      it('still refuses a different participant under a delegated prefix', async () => {
+        const signerDelegations = createStatusListSignerDelegations({
+          'https://cdn.example/issuer-a': ISSUER,
+        });
+
+        expect(
+          await verify(signedBy(participant, PARTICIPANT, CDN_URI), {
+            expectedUri: CDN_URI,
+            signerDelegations,
+          })
+        ).toEqual({ outcome: 'rejected', reason: 'issuer-untrusted' });
+      });
+
+      it('does not extend a delegation past a path-segment boundary', async () => {
+        const signerDelegations = createStatusListSignerDelegations({
+          'https://cdn.example/issuer': ISSUER,
+        });
+
+        expect(
+          await verify(signedBy(signer, ISSUER, CDN_URI), {
+            expectedUri: CDN_URI,
+            signerDelegations,
+          })
+        ).toEqual({ outcome: 'rejected', reason: 'issuer-untrusted' });
       });
     });
   });

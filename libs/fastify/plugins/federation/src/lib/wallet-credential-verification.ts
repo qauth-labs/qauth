@@ -12,6 +12,7 @@ import {
   type StaticIssuerKeyEntry,
   type TrustRegistry,
   type ValidatedCredential,
+  type ValidatedIssuer,
   validatePresentations,
   type VerifierProfile,
 } from '@qauth-labs/server-federation';
@@ -34,7 +35,13 @@ import {
  * 1. **#234 validates.** Issuer signature, every Disclosure digest, the validity
  *    window, and the Key Binding JWT's `aud`/`nonce`/`sd_hash` — the proof that
  *    the bytes are a credential presented to THIS Verifier for THIS request.
- * 2. **#308 resolves key-storage assurance.** Inside the same call, layered on
+ * 2. **#236 decides trust.** A validated credential from an issuer this realm
+ *    does not trust is, in `wallet.provider.ts`'s words, *"a forgery with extra
+ *    steps"*. Threaded in as `assertIssuerTrusted` and asked inside the same
+ *    call, BEFORE the two gates below, because those act on what the issuer
+ *    wrote. Asked again over the result, so a format adapter that never called
+ *    it cannot return an untrusted credential.
+ * 3. **#308 resolves key-storage assurance.** Inside the same call, layered on
  *    top of holder binding and never in place of it: holder binding proves the
  *    presenter controls the credential's key now, this asks where that key
  *    LIVES. Threaded in as a
@@ -45,19 +52,19 @@ import {
  *    the issue recording that a gate which existed, was tested and was never
  *    threaded left that field reading `'none'` for every credential the
  *    auth-server has ever produced.
- * 3. **#297 checks status.** Inside the same call, and deliberately LAST within
+ * 4. **#297 checks status.** Inside the same call, and deliberately LAST within
  *    it: the Token Status List bit for this credential must positively read
  *    `VALID`, or the presentation is refused. It runs after the Issuer signature
  *    and after the Key Binding JWT because the status list URI is bytes the
  *    WALLET chose until the issuer's signature covers them, and dialling a URI
- *    out of an unverified payload is an SSRF primitive. Threaded in as a
+ *    out of an unverified payload is an SSRF primitive. It runs after trust
+ *    because the signature only makes the URI the ISSUER's choice, and every
+ *    failed fetch counts against an endpoint breaker that the users of every
+ *    other issuer share. Threaded in as a
  *    {@link WalletCredentialVerificationOptions.credentialStatus} checker rather
  *    than run as a third gate out here, so that
  *    `ValidatedCredential.assurance.statusChecked` can state what actually
  *    happened instead of being a field that permanently lies (#378).
- * 4. **#236 decides trust.** A validated credential from an issuer this realm
- *    does not trust is, in `wallet.provider.ts`'s words, *"a forgery with extra
- *    steps"*.
  *
  * None is sufficient and none can be skipped, so exposing them as one function
  * is how a caller is prevented from wiring up only the first. That is not
@@ -235,6 +242,27 @@ export async function verifyWalletPresentations(
     return refuse('validation', 'the response carried no presentations');
   }
 
+  const assertTrusted = (issuer: ValidatedIssuer): void => {
+    try {
+      // Contained by `assertIssuerTrusted`, which throws the same refusal for a
+      // registry backend that failed as for one that said no.
+      assertIssuerTrusted(options.trustRegistry, issuer, {
+        onBackendError: (error) => {
+          options.onRefusal?.({
+            gate: 'issuer-trust',
+            detail: `trust registry backend threw: ${String(error)}`,
+          });
+        },
+      });
+    } catch {
+      // Re-thrown through `refuse` rather than propagated verbatim, so the
+      // caller's logger sees WHICH gate refused. The error a caller receives is
+      // byte-identical either way — that is the non-enumeration property, and
+      // the reason the identifier is not on it.
+      refuse('issuer-trust', 'the credential issuer is not trusted by this realm');
+    }
+  };
+
   let validated: readonly ValidatedCredential[];
   try {
     validated = await validatePresentations(presentations, options.dcqlQuery, {
@@ -249,6 +277,11 @@ export async function verifyWalletPresentations(
         .signingAlgs as PresentationValidationContext['signatureAlgorithms'],
       resolveIssuerKey: options.resolveIssuerKey,
       permittedFormats: options.profile.credentialFormats,
+      // Issuer trust (#236), asked INSIDE validation ahead of the two gates
+      // below: an issuer this realm does not trust must not get a URI dialled,
+      // nor a failure counted against a status endpoint other issuers' users
+      // depend on.
+      assertIssuerTrusted: assertTrusted,
       // Credential revocation (#297/#378). Both members come from this
       // deployment's own configuration, never from the presentation: the checker
       // is the process-wide singleton, and the posture is copied verbatim off
@@ -275,7 +308,9 @@ export async function verifyWalletPresentations(
     // failure, so a broken deployment does not look like a wallet that presented
     // a bad credential.
     //
-    // ONE thing reaching here is a refusal rather than a fault, and is left
+    // `assertTrusted`'s refusal passes through here too, already reported.
+    //
+    // ONE other thing reaching here is a refusal rather than a fault, and is left
     // unwrapped on purpose: the `InvalidCredentialsError` the status checker
     // throws (#297). Its message already IS the single non-enumerating refusal
     // `refuse()` would produce, so the wire is byte-identical either way, and
@@ -292,26 +327,9 @@ export async function verifyWalletPresentations(
     return refuse('validation', 'validation produced no credentials');
   }
 
-  for (const credential of validated) {
-    try {
-      // Contained by `assertIssuerTrusted`, which throws the same refusal for a
-      // registry backend that failed as for one that said no.
-      assertIssuerTrusted(options.trustRegistry, credential.issuer, {
-        onBackendError: (error) => {
-          options.onRefusal?.({
-            gate: 'issuer-trust',
-            detail: `trust registry backend threw: ${String(error)}`,
-          });
-        },
-      });
-    } catch {
-      // Re-thrown through `refuse` rather than propagated verbatim, so the
-      // caller's logger sees WHICH gate refused. The error a caller receives is
-      // byte-identical either way — that is the non-enumeration property, and
-      // the reason the identifier is not on it.
-      return refuse('issuer-trust', 'the credential issuer is not trusted by this realm');
-    }
-  }
+  // Asked again over what came back, so a format adapter that never called the
+  // gate cannot return an untrusted credential.
+  for (const credential of validated) assertTrusted(credential.issuer);
 
   return validated;
 }

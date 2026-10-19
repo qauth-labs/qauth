@@ -1,6 +1,7 @@
 import {
   createCredentialStatusChecker,
   createStatusEndpointBreaker,
+  createStatusListSignerDelegations,
   createStatusListTrustAnchors,
   createStatusListUriAllowlist,
   type CredentialStatusAuditEvent,
@@ -63,6 +64,14 @@ export interface ConfiguredCredentialStatusOptions {
   readonly trustAnchorPems: readonly string[];
   /** `https://` URI prefixes status lists may be fetched from (the SSRF boundary). */
   readonly uriAllowlist: readonly string[];
+  /**
+   * `OID4VP_STATUS_LIST_SIGNERS` (ANT-2026-3988N5GJ): list URI prefix → the
+   * `https://` identifier of the status issuer whose certificate signs the
+   * lists served under it. Absent or empty means none, and a Status List
+   * Token's signing certificate must then name the host the list is served
+   * from.
+   */
+  readonly signerDelegations?: Readonly<Record<string, string>>;
   /**
    * Audit sink. Wire it to the SERVER logger.
    *
@@ -136,6 +145,7 @@ export function assertCredentialStatusConfigUsable(
   // itself is built once, later, by the wallet verification setup.
   createStatusListTrustAnchors(options.trustAnchorPems);
   createStatusListUriAllowlist(options.uriAllowlist);
+  createStatusListSignerDelegations(options.signerDelegations);
 }
 
 /**
@@ -171,6 +181,7 @@ export function createConfiguredCredentialStatusChecker(
   return createCredentialStatusChecker({
     trustAnchors: createStatusListTrustAnchors(options.trustAnchorPems),
     uriAllowlist: createStatusListUriAllowlist(options.uriAllowlist),
+    signerDelegations: createStatusListSignerDelegations(options.signerDelegations),
     breaker: createStatusEndpointBreaker(),
     ...(options.onAudit !== undefined ? { onAudit: options.onAudit } : {}),
   });

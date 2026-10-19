@@ -99,6 +99,22 @@ function createSessionUtils() {
   };
 }
 
+/**
+ * In-memory stand-in for the one raw Redis command the flow machines use: the
+ * `SET … NX` that claims a parked presentation for exactly one validation.
+ */
+function createRedis() {
+  const store = new Map<string, string>();
+  return {
+    store,
+    set: vi.fn(async (key: string, value: string, ...args: unknown[]) => {
+      if (args.includes('NX') && store.has(key)) return null;
+      store.set(key, value);
+      return 'OK';
+    }),
+  };
+}
+
 function makeFastify() {
   const routes = new Map<string, Handler>();
   const sessionUtils = createSessionUtils();
@@ -119,6 +135,7 @@ function makeFastify() {
       auditLogs: { create: vi.fn().mockResolvedValue(undefined) },
     },
     sessionUtils,
+    redis: createRedis(),
     log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
   };
   return { fastify: fastify as FastifyInstance, routes, sessionUtils };
