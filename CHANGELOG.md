@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **BREAKING (security)**: the auth-server refuses to start when `NODE_ENV` is
+  `production` and `CIMD_ALLOW_PRIVATE_ADDRESSES` or
+  `ID_JAG_ALLOW_PRIVATE_ADDRESSES` is `true` ([#435]). Both switches turn the
+  SSRF guard off on outbound fetches so tests can use a localhost server. The
+  error names the variable. `development` and `test` accept both as before.
+
+  **Action for operators**: unset both switches in production. Docker Compose
+  defaults `NODE_ENV` to `production`, so a local stack that needs one sets
+  `NODE_ENV=development` in `.env`.
+
+[#435]: https://github.com/qauth-labs/qauth/issues/435
+
 ## [0.1.0] - 2026-10-19
 
 ### Added
