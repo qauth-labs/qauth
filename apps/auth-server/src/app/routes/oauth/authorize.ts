@@ -263,11 +263,12 @@ export default async function (fastify: FastifyInstance) {
       // client's silent-renewal polling from creating a pending-authorization
       // stash on every poll.
       //
-      // `redirect_uri` matched the client's registration above, but for a
-      // self-registered (DCR / CIMD) client the registering party chose it,
-      // anonymously: this would be a no-UI redirect off the issuer to any URL
-      // of their choosing. `sendAuthorizationError` shows the error on the
-      // issuer for such a client instead (RFC 9700 §4.11.2).
+      // `redirect_uri` matched the client's registration above, but unless an
+      // operator provisioned the client, whoever registered it (open DCR, a
+      // CIMD document, a self-registered developer account) chose that URI:
+      // this would be a no-UI redirect off the issuer to any URL of their
+      // choosing. `sendAuthorizationError` shows the error on the issuer for
+      // such a client instead (RFC 9700 §4.11.2, ANT-2026-O8U3P920).
       if (query.prompt === 'none') {
         await fastify.repositories.auditLogs.create({
           userId: null,

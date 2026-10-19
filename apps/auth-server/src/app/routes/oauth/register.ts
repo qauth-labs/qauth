@@ -175,6 +175,12 @@ export default async function (fastify: FastifyInstance) {
         // established by the CIMD url==client_id binding, never self-asserted.
         jwks: null,
         jwksUri: null,
+        // ANT-2026-O8U3P920: never operator-provisioned. The anonymous (or
+        // self-registered) caller chose these redirect URIs, so authorization
+        // errors are shown on the issuer rather than redirected to them. Pinned
+        // explicitly, like `environment`, so no change to the request schema
+        // can ever make a self-registration trusted.
+        provisionedByOperator: false,
         // Stamp the dyn-reg timestamp so the consent screen (issue #150)
         // can surface the "Newly registered" phishing-defense badge
         // within DYNAMIC_CLIENT_BADGE_DAYS of registration.

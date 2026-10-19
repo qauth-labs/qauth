@@ -243,7 +243,7 @@ Each factory takes a `defaultDb: DbClient`. Methods below take an optional
 - **`createOAuthClientsRepository(db)`**: OAuth client CRUD
   - `create()`, `findById()`, `findByIdOrThrow()`, `findByClientId()`, `listByDeveloper()`, `upsertCimdClient()`, `update()`, `delete()`
   - `listByDeveloper(developerId, tx?)`: lists a developer's own clients, scoped strictly by `developer_id` and ordered newest-first. Dynamically registered (RFC 7591 / DCR) clients carry a null `developer_id` and are excluded.
-  - `upsertCimdClient(data, tx?)`: idempotent `INSERT ... ON CONFLICT` for Client ID Metadata Document (CIMD) clients keyed by `(realm_id, client_id)`. On conflict it refreshes only the document-derived fields (name, description, redirect URIs, grant/response types, auth method, metadata, enabled) and bumps `updatedAt`; identity columns and the secret sentinel are left untouched, so concurrent authorize requests for the same metadata-document `client_id` collapse onto a single row instead of racing a find-then-create.
+  - `upsertCimdClient(data, tx?)`: idempotent `INSERT ... ON CONFLICT` for Client ID Metadata Document (CIMD) clients keyed by `(realm_id, client_id)`. On conflict it refreshes only the document-derived fields (name, description, redirect URIs, grant/response types, auth method, key set, metadata), can only narrow `enabled`, writes `provisioned_by_operator = false` (a CIMD client is never operator-provisioned) and bumps `updatedAt`; identity columns and the secret sentinel are left untouched, so concurrent authorize requests for the same metadata-document `client_id` collapse onto a single row instead of racing a find-then-create.
 - **`createApiKeysRepository(db)`**: Static developer API-key CRUD (ADR-008 §6)
 - **`createAuditLogsRepository(db)`**: Audit-log operations
   - `create()`, `findByUserId()`, `findByRealmId()`, `findByRealmAndUserId()`, plus realm-isolated filters
@@ -424,6 +424,8 @@ Manifest shape for `db:seed-oauth-clients`:
 ```
 
 The target realm must already exist. See `src/scripts/seed-oauth-clients.ts` for the authoritative Zod schema and the full set of optional fields (`description`, `response_types`, `redirect_uris`, `require_pkce`, `token_endpoint_auth_method`).
+
+Both seeders mark their clients `provisioned_by_operator = true`, and so does the system client the auth-server creates for its own login. Only such a client receives authorization error responses by automatic redirect (RFC 9700 §4.11.2); every client created through `POST /oauth/register`, a CIMD document or `POST /api/clients` gets them on an issuer page. A `--rotate` run sets the marker on the clients it rewrites, which is how an operator marks a client that migration 0023's backfill left unmarked.
 
 ## Project Structure
 

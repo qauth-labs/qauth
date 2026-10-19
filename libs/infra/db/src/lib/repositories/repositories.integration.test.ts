@@ -1021,6 +1021,30 @@ describe('repository integration (real Postgres)', () => {
 
       expect(refreshed.enabled).toBe(false);
     });
+    // ANT-2026-O8U3P920: the document's host chooses the redirect URIs, so a
+    // CIMD row never carries the operator's trust marker — not on insert, and
+    // a re-resolution clears one set by hand.
+    it('never stores provisioned_by_operator = true for a CIMD row', async () => {
+      const realm = await seedRealm('cimd-provisioned-realm');
+      const clients = createOAuthClientsRepository(db().database.db);
+      const created = await clients.upsertCimdClient({
+        ...cimdInsert(realm.id, 'Before', true),
+        provisionedByOperator: true,
+      });
+      expect(created.provisionedByOperator).toBe(false);
+
+      await clients.update(created.id, { provisionedByOperator: true });
+      const refreshed = await clients.upsertCimdClient(cimdInsert(realm.id, 'After', true));
+      expect(refreshed.provisionedByOperator).toBe(false);
+    });
+  });
+
+  describe('oauth_clients — provisioned_by_operator default', () => {
+    it('defaults to false for a row that does not set it', async () => {
+      const realm = await seedRealm('provisioned-default-realm');
+      const client = await seedClient(realm.id);
+      expect(client.provisionedByOperator).toBe(false);
+    });
   });
 
   // --- per-agent action audit (ADR-007 §2, #186) ---------------------------

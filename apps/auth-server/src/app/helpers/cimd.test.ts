@@ -278,6 +278,18 @@ describe('toCimdClientInsert — agent classification (ADR-007 §2)', () => {
   });
 });
 
+describe('toCimdClientInsert — never operator-provisioned (ANT-2026-O8U3P920)', () => {
+  it('pins provisionedByOperator to false, whatever the document says', () => {
+    // The document's host chose the redirect URIs, so a CIMD client never
+    // receives authorization errors by automatic redirect.
+    const doc = cimdDocumentSchema.parse(
+      validDoc({ provisioned_by_operator: true, provisionedByOperator: true })
+    );
+    const insert = toCimdClientInsert('realm-1', CLIENT_ID, doc, 'sentinel');
+    expect(insert.provisionedByOperator).toBe(false);
+  });
+});
+
 describe('toCimdClientInsert — grant/response type tolerance (RFC 7591 §2)', () => {
   const REALM = 'realm-1';
   const SENTINEL = '$argon2id$v=19$m=65536,t=3,p=4$c2FsdA$ZGlnZXN0';

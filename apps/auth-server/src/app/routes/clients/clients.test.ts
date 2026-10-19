@@ -389,6 +389,30 @@ describe('POST /api/clients (create) — #86', () => {
     expect(JSON.stringify(body)).not.toContain('clientSecretHash');
   });
 
+  it("never marks a developer's client operator-provisioned, whatever the body says (ANT-2026-O8U3P920)", async () => {
+    // A developer account is self-service, so its client's redirect URI must
+    // not receive authorization errors by automatic redirect.
+    const { fastify, ctx } = makeFastify();
+    await clientsRoute(fastify);
+
+    (fastify.repositories.oauthClients.create as unknown as Mock).mockImplementation(
+      async (data: Record<string, unknown>) => makeClientRow({ ...data })
+    );
+
+    const request = authedRequest({
+      body: {
+        name: 'Phish',
+        redirectUris: ['https://login-qauth.attacker.example/sign-in'],
+        tokenEndpointAuthMethod: 'none',
+        provisionedByOperator: true,
+      },
+    });
+    await route(ctx, 'POST /').handler(request, createReply().reply);
+
+    const created = (fastify.repositories.oauthClients.create as unknown as Mock).mock.calls[0][0];
+    expect(created.provisionedByOperator).toBe(false);
+  });
+
   it('omits client_secret for a public client (token_endpoint_auth_method=none)', async () => {
     const { fastify, ctx } = makeFastify();
     await clientsRoute(fastify);
@@ -1061,6 +1085,49 @@ describe('audit logging is best-effort (one-time secret must survive #86/#90)', 
     expect(typeof body.clientSecret).toBe('string');
     expect((body.clientSecret as string).length).toBe(64);
     expect(fastify.log.warn).toHaveBeenCalled();
+  });
+});
+
+describe('PATCH and the operator-provisioned marker (ANT-2026-O8U3P920)', () => {
+  async function patch(existing: Record<string, unknown>, body: Record<string, unknown>) {
+    const { fastify, ctx } = makeFastify();
+    await clientsRoute(fastify);
+    (fastify.repositories.oauthClients.findById as unknown as Mock).mockResolvedValue(
+      makeClientRow({ developerId: DEV_A, ...existing })
+    );
+    (fastify.repositories.oauthClients.update as unknown as Mock).mockImplementation(
+      async (_id: string, data: Record<string, unknown>) =>
+        makeClientRow({ developerId: DEV_A, ...existing, ...data })
+    );
+    await route(ctx, 'PATCH /:id').handler(
+      authedRequest({ params: { id: '0190a000-0000-7000-8000-000000000001' }, body }),
+      createReply().reply
+    );
+    return (fastify.repositories.oauthClients.update as unknown as Mock).mock.calls[0][1];
+  }
+
+  it('clears the marker when the owner changes the redirect URIs the operator vouched for', async () => {
+    const updateArg = await patch(
+      { provisionedByOperator: true, redirectUris: ['https://app.example.com/cb'] },
+      { redirectUris: ['https://login-qauth.attacker.example/sign-in'] }
+    );
+    expect(updateArg.provisionedByOperator).toBe(false);
+  });
+
+  it('keeps the marker when the redirect URIs are unchanged', async () => {
+    const updateArg = await patch(
+      { provisionedByOperator: true, redirectUris: ['https://app.example.com/cb'] },
+      { name: 'Renamed', redirectUris: ['https://app.example.com/cb'] }
+    );
+    expect(updateArg).not.toHaveProperty('provisionedByOperator');
+  });
+
+  it('never lets the owner set the marker', async () => {
+    const updateArg = await patch(
+      { provisionedByOperator: false },
+      { name: 'Renamed', provisionedByOperator: true }
+    );
+    expect(updateArg).toEqual({ name: 'Renamed' });
   });
 });
 

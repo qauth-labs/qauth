@@ -205,6 +205,13 @@ export interface CimdClientInsert {
   requirePkce: true;
   enabled: true;
   developerId: null;
+  /**
+   * Never operator-provisioned (ANT-2026-O8U3P920): the client's own host
+   * wrote the redirect URIs, so authorization errors are shown on the issuer
+   * rather than redirected. Pinned here for a new row; `upsertCimdClient`
+   * leaves the column out of its conflict set.
+   */
+  provisionedByOperator: false;
   scopes: string[];
   /** ADR-007 §2 agent classification, mirrored from the metadata document. */
   isAgent: boolean;
@@ -433,6 +440,7 @@ export function toCimdClientInsert(
     // developer's edits and silently revert them on the next resolution of the
     // `client_id` URL. The metadata document IS the management surface.
     developerId: null,
+    provisionedByOperator: false,
     scopes: [],
     // ADR-007 §2: carry the agent classification from the metadata document.
     isAgent: doc.is_agent ?? false,

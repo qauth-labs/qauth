@@ -114,6 +114,9 @@ A break of any of these is a finding:
 - PKCE with `S256` is required on every authorization code flow.
 - A redirect URI must match a registered one exactly. The one exception is
   the port of a loopback redirect URI (RFC 8252).
+- An authorization error is redirected automatically only to a redirect URI
+  of a client an operator provisioned. Any other client's error is shown on
+  an issuer page first (RFC 9700 §4.11.2).
 - A token is bound to its audience (RFC 8707). A token issued for one audience
   is never accepted for another. See [ADR-006](../adr/006-oauth-grants-and-audience.md).
   QAuth's own `/oauth/userinfo` accepts an access token only when its `aud`

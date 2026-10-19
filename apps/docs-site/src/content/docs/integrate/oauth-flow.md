@@ -718,15 +718,19 @@ QAuth returns standard OAuth error codes (RFC 6749 §5.2):
 > checked before any user interaction, and is never redirected. See the
 > [error model](/integrate/api-reference/#error-model).
 >
-> **Self-registered clients.** RFC 9700 §4.11.2 lets an authorization server
-> redirect automatically only to a redirect URI it trusts. A client created
-> through `POST /oauth/register` or resolved from a Client ID Metadata Document
-> registered its own redirect URI, so for such a client an error that would
-> leave the issuer before any QAuth page is shown (for example `login_required`
-> for an unauthenticated `prompt=none`) is rendered on an issuer page, with
-> HTTP 400 and a link that carries the full error response to the redirect URI,
-> instead of a 302. Clients an operator provisioned keep the automatic
-> redirect.
+> **Clients no operator provisioned.** RFC 9700 §4.11.2 lets an
+> authorization server redirect automatically only to a redirect URI it trusts.
+> QAuth trusts the redirect URIs of a client an operator provisioned: the
+> system client and the clients of the `db:seed-oauth-clients` manifest
+> (`oauth_clients.provisioned_by_operator`). Every other client registered its
+> own redirect URI: one created through `POST /oauth/register`, one resolved
+> from a Client ID Metadata Document, and one a developer account created
+> through `POST /api/clients`. For such a client an error that would leave the
+> issuer before any QAuth page is shown (for example `login_required` for an
+> unauthenticated `prompt=none`) is rendered on an issuer page, with HTTP 400
+> and a link that carries the full error response to the redirect URI, instead
+> of a 302. An owner who changes the redirect URIs of an operator-provisioned
+> client through `PATCH /api/clients/{id}` removes that trust.
 
 | Code                     | Meaning                                                                    |
 | ------------------------ | -------------------------------------------------------------------------- |

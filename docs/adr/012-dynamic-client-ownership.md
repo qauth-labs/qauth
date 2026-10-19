@@ -4,6 +4,24 @@
 **Date:** 2026-08-31
 **Authors:** QAuth Team
 
+> **Amendment (2026-10-19): an operator trust marker, `provisioned_by_operator`.**
+> The maintainer decided on 2026-10-19 (ANT-2026-O8U3P920) that ownership is not
+> trust. An owner, an anonymous DCR caller and a CIMD document's host all choose
+> their own redirect URIs, so none of them makes a URI safe to redirect to
+> without showing the user a QAuth page first (RFC 9700 §4.11.2). The
+> `oauth_clients.provisioned_by_operator` column records the one case that
+> does: a client an operator wrote (the system client, the
+> `db:seed-oauth-clients` manifest, the `db:seed` fixture). It is a positive
+> marker, `false` by default; DCR, `POST /api/clients` and CIMD materialisation
+> write `false`, no request body reaches it, and a change of the redirect URIs
+> by an owner (`PATCH /api/clients/{id}`) or a CIMD document clears it. Only a
+> client with the marker receives authorization errors by automatic redirect.
+> Migration 0023 backfills it from the columns the self-service paths always
+> set (decision 5's "no backfill" is about owners, which stays true: the marker
+> attributes no owner). This is not the operator role decision 4 defers; it is
+> a fact about a row, written by operator tooling, not an authorization
+> surface.
+
 ## Context
 
 `oauth_clients.developer_id` is the only ownership signal the schema has, and

@@ -162,6 +162,13 @@
       "when": 1792187083595,
       "tag": "0022_wallet_attribute_provenance",
       "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1792387155010,
+      "tag": "0023_client_operator_provisioning",
+      "breakpoints": true
     }
   ]
 }

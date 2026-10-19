@@ -400,9 +400,9 @@ export default async function (fastify: FastifyInstance) {
       // consent screen for an over-cap agent scope that the POST handler will
       // (correctly) refuse to mint a code for. Same deny-by-default gate;
       // redirect_uri is already validated above. This fires before the user
-      // has seen the screen (and the destination host on it), so a
-      // self-registered client's error is shown rather than redirected, as on
-      // /oauth/authorize (RFC 9700 §4.11.2).
+      // has seen the screen (and the destination host on it), so the error of
+      // a client no operator provisioned is shown rather than redirected, as
+      // on /oauth/authorize (RFC 9700 §4.11.2).
       if (findExceedingAgentScopesForClient(query.scope, client).length > 0) {
         return sendAuthorizationError(reply, client, query.redirect_uri, {
           error: 'invalid_scope',

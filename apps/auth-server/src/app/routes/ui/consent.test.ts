@@ -133,6 +133,9 @@ const CLIENT = {
   redirectUris: ['https://example.com/cb'],
   audience: null,
   dynamicRegisteredAt: null,
+  // An operator-provisioned client: the only kind whose redirect URI receives
+  // authorization errors by automatic redirect (ANT-2026-O8U3P920).
+  provisionedByOperator: true,
   metadata: null,
 };
 
@@ -1158,6 +1161,7 @@ describe('UI /ui/consent — agent scope-mode cap (ADR-007 §2, #184)', () => {
     });
     (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue({
       ...READONLY_AGENT,
+      provisionedByOperator: false,
       dynamicRegisteredAt: Date.now() - 400 * 24 * 60 * 60 * 1000,
       metadata: { registrationType: 'dynamic' },
     });

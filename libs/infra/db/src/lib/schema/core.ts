@@ -283,6 +283,26 @@ export const oauthClients = pgTable(
      * MUST treat null as "not dynamic" and therefore not new.
      */
     dynamicRegisteredAt: bigint('dynamic_registered_at', { mode: 'number' }),
+    /**
+     * True only for a client an OPERATOR provisioned: the system client and
+     * the clients of the `db:seed-oauth-clients` manifest / `db:seed` fixture.
+     * RFC 9700 §4.11.2 lets the AS redirect automatically only to a redirect
+     * URI it trusts, and this is that trust: only such a client receives
+     * authorization error responses (`login_required` for `prompt=none`, …) by
+     * an automatic 302 before the user has seen a QAuth page. Every other
+     * client gets the error on an issuer page instead
+     * (`helpers/authorization-error.ts`, ANT-2026-O8U3P920).
+     *
+     * A POSITIVE marker, so the safe answer is the default: `false` for every
+     * row no operator path wrote. Dynamic registration, `POST /api/clients`
+     * and CIMD materialisation always write `false` and no request body can
+     * reach it. The marker vouches for the redirect URIs as the operator
+     * wrote them, so a change by anyone else clears it: an owner's
+     * `PATCH /api/clients/:id` that changes `redirectUris`, and every
+     * `upsertCimdClient` conflict update. Mirror that at every future write
+     * path that persists a client.
+     */
+    provisionedByOperator: boolean('provisioned_by_operator').notNull().default(false),
     metadata: jsonb('metadata').$type<Record<string, unknown> | null>(),
     createdAt: bigint('created_at', { mode: 'number' }).notNull().default(EPOCH_MS_NOW),
     updatedAt: bigint('updated_at', { mode: 'number' }).notNull().default(EPOCH_MS_NOW),

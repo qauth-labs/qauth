@@ -393,6 +393,30 @@ describe('POST /oauth/register — Dynamic Client Registration (RFC 7591)', () =
     expect(state.createdClients[0].environment).toBe('production');
   });
 
+  it('never marks a registration operator-provisioned, whatever the body says (ANT-2026-O8U3P920)', async () => {
+    // Only an operator-provisioned client receives authorization errors by
+    // automatic redirect; a DCR client registered its redirect URI itself.
+    const { fastify, ctx, state } = createFastifyStub();
+    await registerRoute(fastify);
+
+    const { reply } = createReply();
+    await ctx.handler!(
+      {
+        body: {
+          client_name: 'Sneaky Client',
+          redirect_uris: ['https://login-qauth.attacker.example/sign-in'],
+          provisioned_by_operator: true,
+          provisionedByOperator: true,
+        },
+        ip: '127.0.0.1',
+        headers: {},
+      },
+      reply
+    );
+
+    expect(state.createdClients[0].provisionedByOperator).toBe(false);
+  });
+
   it('seeds the realm default allowlist on first use when empty', async () => {
     const { fastify, ctx, state } = createFastifyStub({
       dynamicRegistrationAllowedScopes: [],

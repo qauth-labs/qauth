@@ -494,6 +494,11 @@ export default async function (fastify: FastifyInstance) {
         requirePkce: true,
         enabled: true,
         developerId,
+        // ANT-2026-O8U3P920: a developer account is self-service (anyone can
+        // open one), so its clients are never operator-provisioned and their
+        // authorization errors are shown on the issuer, not redirected. Pinned
+        // here, never read from the body; no update writes it either.
+        provisionedByOperator: false,
       });
 
       // Best-effort: the client (and its secret hash) is already committed, so
@@ -618,10 +623,18 @@ export default async function (fastify: FastifyInstance) {
         assertScopesAllowed(scopes, allowedScopes);
       }
 
+      // An operator's `provisioned_by_operator` vouches for the redirect URIs
+      // as the operator wrote them (ANT-2026-O8U3P920). An owner who changes
+      // them voids that, so the client loses the automatic error redirects.
+      const redirectUrisChanged =
+        body.redirectUris !== undefined &&
+        JSON.stringify(body.redirectUris) !== JSON.stringify(existing.redirectUris);
+
       const updated = await fastify.repositories.oauthClients.update(id, {
         ...(body.name !== undefined ? { name: body.name } : {}),
         ...(body.description !== undefined ? { description: body.description } : {}),
         ...(body.redirectUris !== undefined ? { redirectUris: body.redirectUris } : {}),
+        ...(redirectUrisChanged ? { provisionedByOperator: false } : {}),
         ...(scopes !== undefined ? { scopes } : {}),
         ...(body.grantTypes !== undefined ? { grantTypes: body.grantTypes } : {}),
         ...(body.responseTypes !== undefined ? { responseTypes: body.responseTypes } : {}),

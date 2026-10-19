@@ -151,6 +151,9 @@ const CLIENT = {
   audience: null,
   redirectUris: ['https://example.com/cb'],
   dynamicRegisteredAt: null,
+  // An operator-provisioned client: the only kind whose redirect URI receives
+  // authorization errors by automatic redirect (ANT-2026-O8U3P920).
+  provisionedByOperator: true,
 };
 
 const BASE_QUERY = {
@@ -1292,6 +1295,7 @@ describe('GET /oauth/authorize — step-up authentication (ADR-007 §2, #185)', 
     const freshDynamicClient = {
       ...CLIENT,
       clientId: 'app-fresh-dcr',
+      provisionedByOperator: false,
       dynamicRegisteredAt: Date.now() - 60 * 1000,
     } as unknown as typeof CLIENT;
     const { fastify, state } = await run({
@@ -1428,7 +1432,13 @@ describe('GET /oauth/authorize — Bearer path step-up (ADR-007 §2, #185)', () 
     const { fastify, state } = await runBearer(
       'email',
       {},
-      { client: { ...DANGEROUS_CLIENT, dynamicRegisteredAt: Date.now() - 60 * 1000 } }
+      {
+        client: {
+          ...DANGEROUS_CLIENT,
+          provisionedByOperator: false,
+          dynamicRegisteredAt: Date.now() - 60 * 1000,
+        },
+      }
     );
     // Refused; as a self-registered client, shown rather than redirected.
     expect(state.statusCode).toBe(400);
@@ -1946,7 +1956,12 @@ describe('GET /oauth/authorize — RFC 9207 §2 `iss` on every authorization res
   ])('unauthorized_client (%s) is a 400, never a redirect', async (_label, override) => {
     for (const client of [
       { ...CLIENT, ...override },
-      { ...CLIENT, ...override, dynamicRegisteredAt: Date.now() - 400 * 24 * 60 * 60 * 1000 },
+      {
+        ...CLIENT,
+        ...override,
+        provisionedByOperator: false,
+        dynamicRegisteredAt: Date.now() - 400 * 24 * 60 * 60 * 1000,
+      },
     ]) {
       await expect(run({ client })).rejects.toMatchObject({
         message: 'unauthorized_client',
@@ -2025,24 +2040,38 @@ describe('GET /oauth/authorize — RFC 9207 §2 `iss` on every authorization res
 
 /**
  * RFC 9700 §4.11.2 ("Authorization Server as Open Redirector"): the AS may
- * redirect automatically only to a redirect URI it trusts. A client created
- * through open Dynamic Client Registration, or materialised from a CIMD
- * document, registered its redirect URI itself, anonymously; an exact match
- * against that registration says nothing about where the URI leads. Error
- * responses that would leave the issuer with no QAuth page shown are
- * therefore shown on the issuer, with the way back, for such a client — at any
- * age. Operator-provisioned clients keep the automatic redirect OpenID Connect
- * requires.
+ * redirect automatically only to a redirect URI it trusts. Only a client an
+ * operator provisioned carries that trust (`provisioned_by_operator`,
+ * ANT-2026-O8U3P920). A client created through open Dynamic Client
+ * Registration, materialised from a CIMD document, or created by a
+ * self-registered developer through `POST /api/clients` registered its
+ * redirect URI itself; an exact match against that registration says nothing
+ * about where the URI leads. Error responses that would leave the issuer with
+ * no QAuth page shown are therefore shown on the issuer, with the way back,
+ * for such a client — at any age. Operator-provisioned clients keep the
+ * automatic redirect OpenID Connect requires.
  */
-describe('GET /oauth/authorize — error responses for self-registered clients (RFC 9700 §4.11.2)', () => {
+describe('GET /oauth/authorize — error responses for clients no operator provisioned (RFC 9700 §4.11.2)', () => {
   const ATTACKER_CB = 'https://login-qauth.attacker.example/sign-in';
   const DCR_CLIENT = {
     ...CLIENT,
     clientId: 'dcr-client',
     redirectUris: [ATTACKER_CB],
+    provisionedByOperator: false,
     // Long past DYNAMIC_CLIENT_BADGE_DAYS: who registered it has not changed.
     dynamicRegisteredAt: Date.now() - 400 * 24 * 60 * 60 * 1000,
     metadata: { registrationType: 'dynamic' },
+  };
+  // What `POST /api/clients` writes for an account anyone can open: no DCR or
+  // CIMD marker at all, which the earlier rule read as trusted.
+  const DEVELOPER_CLIENT = {
+    ...CLIENT,
+    clientId: '0190a000-0000-7000-8000-0000000000d1',
+    redirectUris: [ATTACKER_CB],
+    provisionedByOperator: false,
+    developerId: '0190a000-0000-7000-8000-00000000000a',
+    dynamicRegisteredAt: null,
+    metadata: null,
   };
   // A CIMD client is covered in the CIMD suite above, which resolves a real
   // document through the (mocked) network layer.
@@ -2099,6 +2128,25 @@ describe('GET /oauth/authorize — error responses for self-registered clients (
 
   it('prompt=none with no session: a dynamically registered client gets login_required on the issuer, not a 302', async () => {
     const { state } = await run(DCR_CLIENT, { prompt: 'none' });
+    expectShownNotRedirected(state, 'login_required');
+  });
+
+  it('prompt=none with no session: a client a developer created through POST /api/clients gets login_required on the issuer, not a 302', async () => {
+    const { state } = await run(DEVELOPER_CLIENT, { prompt: 'none' });
+    expectShownNotRedirected(state, 'login_required');
+  });
+
+  it('prompt=none with a session but no consent: a developer-created client gets consent_required on the issuer', async () => {
+    const { state } = await run(DEVELOPER_CLIENT, { prompt: 'none', session: true });
+    expectShownNotRedirected(state, 'consent_required');
+  });
+
+  it('a client with no provisioning marker at all is not trusted (fail closed)', async () => {
+    const { provisionedByOperator: _omitted, ...unmarked } = CLIENT;
+    const { state } = await run(
+      { ...unmarked, redirectUris: [ATTACKER_CB] } as Record<string, unknown>,
+      { prompt: 'none' }
+    );
     expectShownNotRedirected(state, 'login_required');
   });
 

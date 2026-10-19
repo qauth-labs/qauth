@@ -283,3 +283,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     boot. This lets compose forward both names when they are unset.
 
   **Action for operators**: rename the variable to `REQUIRE_VERIFIED_ACCOUNT`.
+
+### Security
+
+- **BREAKING**: `/oauth/authorize` and `GET /ui/consent` redirect an
+  authorization error automatically only to a client an operator provisioned
+  (RFC 9700 §4.11.2, ANT-2026-O8U3P920). Every other client, including one a
+  developer account creates through `POST /api/clients`, gets the error on an
+  issuer page (HTTP 400) with a link to its redirect URI. Migration 0023 adds
+  `oauth_clients.provisioned_by_operator` (default `false`) and sets it for the
+  system client and the clients the seed scripts created; the
+  `db:seed-oauth-clients` manifest sets it on create and on `--rotate`. An
+  owner who changes the redirect URIs of a marked client loses the marker.
+  OIDF conformance `prompt=none` modules need an operator-provisioned client
+  (see `docs/oidf-op-certification-runbook.md`).

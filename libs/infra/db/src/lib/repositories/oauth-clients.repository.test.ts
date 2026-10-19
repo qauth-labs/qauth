@@ -56,4 +56,41 @@ describe('createOAuthClientsRepository.upsertCimdClient', () => {
     const conflictSet = sql.slice(sql.indexOf('on conflict'), sql.indexOf('returning'));
     expect(conflictSet).toContain('"enabled" = "oauth_clients"."enabled" and excluded.enabled');
   });
+
+  // Regression (ANT-2026-O8U3P920): only an operator-provisioned client gets
+  // automatic error redirects. A CIMD document's host chooses its redirect
+  // URIs, so neither a new row nor a refreshed one may carry the marker.
+  it('never writes `provisioned_by_operator = true`, on insert or on conflict', async () => {
+    const { db, queries } = createRecordingDb();
+
+    await createOAuthClientsRepository(db).upsertCimdClient({
+      ...CIMD_ROW,
+      provisionedByOperator: true,
+    });
+
+    expect(queries).toHaveLength(1);
+    const { text, values } = queries[0];
+    const sql = text.toLowerCase();
+    const conflictAt = sql.indexOf('on conflict');
+    const conflictSet = sql.slice(conflictAt, sql.indexOf('returning'));
+    const inConflict = /"provisioned_by_operator" = \$(\d+)/.exec(conflictSet);
+    expect(inConflict).not.toBeNull();
+    expect(values[Number(inConflict?.[1]) - 1]).toBe(false);
+
+    // The INSERT column list and its VALUES tuple, in order.
+    const columns = sql
+      .slice(sql.indexOf('(') + 1, sql.indexOf(')'))
+      .split(',')
+      .map((c) => c.trim());
+    const tuple = sql.slice(sql.indexOf('values (') + 'values ('.length, conflictAt);
+    const placeholders = tuple
+      .slice(0, tuple.indexOf(')'))
+      .split(',')
+      .map((p) => p.trim());
+    const at = columns.indexOf('"provisioned_by_operator"');
+    expect(at).toBeGreaterThanOrEqual(0);
+    const placeholder = /^\$(\d+)$/.exec(placeholders[at]);
+    expect(placeholder).not.toBeNull();
+    expect(values[Number(placeholder?.[1]) - 1]).toBe(false);
+  });
 });

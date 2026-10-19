@@ -76,6 +76,13 @@ export interface ResolvedClient {
    * both carry the NOT NULL `production`-default column.
    */
   environment: string;
+  /**
+   * `oauth_clients.provisioned_by_operator` (ANT-2026-O8U3P920): true only for
+   * a client an operator provisioned, the one kind whose redirect URI receives
+   * authorization error responses by automatic redirect
+   * (`helpers/authorization-error.ts`). Always false for a CIMD row.
+   */
+  provisionedByOperator: boolean;
   metadata: Record<string, unknown> | null;
 }
 

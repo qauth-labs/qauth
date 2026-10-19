@@ -650,7 +650,11 @@ argon2id hash on every call, so the cap is mandatory (`429` on exceed).
 ```
 
 Public clients (`tokenEndpointAuthMethod: "none"`) get **no** `clientSecret`.
-A repeated scope is stored once. A developer may own at most
+A repeated scope is stored once. A client created here is not
+operator-provisioned: an authorization error that `/oauth/authorize` would send
+before the user sees any QAuth page (for example `login_required` for
+`prompt=none`) is shown on an issuer page with a link to the redirect URI, not
+redirected automatically (see [Errors](/integrate/oauth-flow/#errors)). A developer may own at most
 `MAX_CLIENTS_PER_DEVELOPER` clients (default 100), counting the ones registered
 with attribution through `POST /oauth/register`.
 Errors: `400` (invalid `redirectUri`, inconsistent grant/response types, missing
