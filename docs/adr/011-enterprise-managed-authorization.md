@@ -301,8 +301,11 @@ The rules that make this a trust model rather than a list:
   following**, response size and time bounds, non-200 rejection, and a bounded Redis cache (`ID_JAG_JWKS_CACHE_TTL`, default 5 minutes). Unlike
   `CIMD_CACHE_MAX_TTL`, that TTL has no hard ceiling yet.
 - **One escape hatch exists.** `ID_JAG_ALLOW_PRIVATE_ADDRESSES` (default `false`) turns the
-  address check off so tests can use a localhost IdP. The config schema does not stop it
-  being set in production. The operator guide says to leave it off.
+  address check off so tests can use a localhost IdP. The auth-server refuses to start with
+  it set to `true` when `NODE_ENV` is `production`, and refuses its CIMD twin,
+  `CIMD_ALLOW_PRIVATE_ADDRESSES`, the same way (#435). The error names the variable. The
+  rule keys on `NODE_ENV`, not on ADR-008's per-realm environment profile, because the
+  switch applies to the whole process.
 
 ### 5. Why an allowlist, and not the alternatives
 
@@ -562,8 +565,8 @@ Each new test was checked to fail when its fix is removed.
 - #433: a refresh cooldown, a negative cache and a hard TTL ceiling for the issuer key
   resolver.
 - #434: a dedicated target column instead of reusing `oauth_clients.audience`.
-- #435: `ID_JAG_ALLOW_PRIVATE_ADDRESSES`, and its CIMD twin, refused when `NODE_ENV` is
-  `production`.
+- #435, since fixed: the auth-server refuses `ID_JAG_ALLOW_PRIVATE_ADDRESSES`, and its CIMD
+  twin, when `NODE_ENV` is `production`. See §4.
 
 ### The draft dependency
 

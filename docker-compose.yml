@@ -246,6 +246,8 @@ services:
       CIMD_ENABLED:
       CIMD_TRUST_POLICY:
       CIMD_TRUSTED_DOMAINS:
+      # Test-only. Under NODE_ENV=production, the default above, `true`
+      # fails the boot; set NODE_ENV=development in .env to use it.
       CIMD_ALLOW_PRIVATE_ADDRESSES:
       CIMD_FETCH_TIMEOUT_MS:
       CIMD_MAX_DOCUMENT_BYTES:
@@ -255,6 +257,8 @@ services:
       # ID-JAG cross-domain assertions (ADR-011)
       ID_JAG_ENABLED:
       ID_JAG_TRUSTED_ISSUERS:
+      # Test-only. Under NODE_ENV=production, the default above, `true`
+      # fails the boot; set NODE_ENV=development in .env to use it.
       ID_JAG_ALLOW_PRIVATE_ADDRESSES:
       ID_JAG_CLOCK_SKEW_LEEWAY:
       ID_JAG_FETCH_TIMEOUT_MS:
