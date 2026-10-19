@@ -32,7 +32,7 @@
 > ADR-014 §1 and §11 also carry the 2026-10-06 answers.
 >
 > **Amended 2026-10-10** (before any implementation): §1, §3 and §7 follow
-> ADR-014's amendment of that date. A family with no `sid` gains none by
+> ADR-014's amendment of that date. A family with no `tree_id` gains none by
 > refresh, an owner may upload a binding's upstream key, and a type's
 > registered rights bound an approval as its registered scopes do. §9 now
 > says what a transfer does to a binding, and question 8 notes that a resume
@@ -44,6 +44,12 @@
 > ADR-017's amendment of the same date). Where this record says the flag
 > defaults to `false`, read `true`. Decision 8 is unchanged: it holds whatever
 > the flag says.
+>
+> **Amended 2026-10-19, tree id** (before any implementation): a tree's
+> identifier is `tree_id`, as ADR-014's amendment of that date records
+> (decided 2026-10-11, maintainer). This record had called it `sid`, the
+> name OpenID Connect gives the browser session. Every place below that
+> meant the tree now says `tree_id`. No rule changed.
 
 ## Context
 
@@ -59,7 +65,7 @@ on main. Where it is decision-level and ADR-014 is silent, it is a decision
 here. Where it would change a rule ADR-014 states, it is parked, with
 ADR-014's rule as the default. Where PR #419 already says it, it is only
 referred to: revoke-all and the lock between a mint and the walk are in
-[ADR-014 §6](./014-agent-authority-tree.md#6-revocation--by-sid-and-by-jti-cascading-with-a-written-window).
+[ADR-014 §6](./014-agent-authority-tree.md#6-revocation--by-tree_id-and-by-jti-cascading-with-a-written-window).
 The platform side — an agent's public identity on an external platform, its
 installations and resources, the pass-through leg, `handle@issuer` and
 authorship — is [ADR-016](./016-agent-platform-bindings.md)'s.
@@ -72,7 +78,7 @@ Verified 2026-09-30 against the working tree at `2c901d4`.
 | ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------- |
 | End of a refresh family | Revocation by its client, consent withdrawal, reuse detection, a refresh after the user was disabled; client deletion removes the rows by cascade. None touches a tree                                                 | The tree ends with the family (decision 1)                  |
 | Refresh audience        | Recomputed from the client's current `audience` column when no `resource` is bound (`apps/auth-server/src/app/routes/oauth/token.ts:1193`, `resolveAudience` at `apps/auth-server/src/app/helpers/client-auth.ts:521`) | Never wider than the code grant issued (decision 2)         |
-| Owner routes            | The management guard admits only the system client's token, with its full `aud` and no `act` (`apps/auth-server/src/app/helpers/management-token.ts:34`)                                                               | Every owner route runs it; it also refuses `sid` (dec. 3)   |
+| Owner routes            | The management guard admits only the system client's token, with its full `aud` and no `act` (`apps/auth-server/src/app/helpers/management-token.ts:34`)                                                               | Every owner route runs it; it also refuses `tree_id` (d.3)  |
 | Client assertions       | `aud` may be the issuer or the token endpoint URL; no `typ` check (`apps/auth-server/src/app/helpers/client-assertion.ts:96`)                                                                                          | Issuer as sole `aud`, explicit `typ`, for agent types (d.4) |
 | Rate limits             | A global 100 per 3600 s per address; `/oauth/token` 30 per 60 s per address in a production realm                                                                                                                      | Each added route names its own limit (decision 6)           |
 | Owner's proof           | `email_verified` lives on the `password` credential; `REQUIRE_VERIFIED_ACCOUNT` defaults to `false`. `users` has no verified flag and no marker for a primary credential (checked 2026-10-06)                          | An agent owner needs a verified account (decision 8)        |
@@ -113,12 +119,12 @@ deleted, the tree ends with it.**
   `is_agent` (`apps/auth-server/src/app/routes/oauth/register.ts:143-146`).
 
 **At the edge of a tree.** ADR-014 decision 1 spares at sign-out only a
-family that carries a `sid`, so sign-out still ends an agent client's family
-whose `sid` is NULL (question 11, decided). Sign-out also ends a `sid` family
+family that carries a `tree_id`, so sign-out still ends an agent client's family
+whose `tree_id` is NULL (question 11, decided). Sign-out also ends a `tree_id` family
 whose CIMD client has stopped declaring `is_agent` (question 1, decided).
 Revoke-all also reaches what would become a tree next:
 
-- every live refresh family of an agent client with no `sid`, which gains
+- every live refresh family of an agent client with no `tree_id`, which gains
   none by refresh (ADR-014 §1) but whose tokens can still start a tree by
   exchange;
 - a code issued before the revoke-all: its redemption is refused
@@ -159,7 +165,7 @@ renewal ends a node instead of narrowing it.**
   (decision 6); the node runs to `exp` while the broker retries.
 - A refused re-spawn ends the node: the broker revokes its subtree and stops
   signing for its key. A refused root refresh ends the tree: the broker
-  revokes the `sid`.
+  revokes the `tree_id`.
 - The broker never retries narrower, though the refresh grant allows it
   (`token.ts:1083`). A refused renewal is never a §14 request. The next login
   roots a new tree under the current ceiling, through a consent.
@@ -180,7 +186,7 @@ refuses every tree token: root, node or leaf.**
   never `requireJwt` alone, which admits any live token with the owner as
   `sub`. Since GHSA-c863-7xrr-ww9v the guard admits only the system client's
   token, with that client's full audience and no `act`
-  (`management-token.ts:34`). With the switch on, it also refuses `sid`.
+  (`management-token.ts:34`). With the switch on, it also refuses `tree_id`.
 - Each route touches only rows whose `user_id` or `owner_user_id` is the
   token's `sub`. Accepting a transfer is the one exception (decision 9).
 - The routes: the session reads and events stream; the owner leg of the two
@@ -198,7 +204,7 @@ refuses every tree token: root, node or leaf.**
 
 **Ancestors' `jkt` and `scope` reach the owner through the portal route.**
 ADR-014 §2 returns them only to the owner's portal and to a node of the same
-tree. The owner reads them from `GET /api/agent-sessions/{sid}`; introspection
+tree. The owner reads them from `GET /api/agent-sessions/{tree_id}`; introspection
 returns them only to a node. Introspection authenticates a client by secret
 (`apps/auth-server/src/app/routes/oauth/introspect.ts:101-102`) and names no
 user. The portal calls `/api/*` with the owner's management token and never
@@ -262,7 +268,7 @@ _Proposal (this record)._
 it. A 429 mints, grants and revokes nothing.**
 
 - The limit is per address before authentication, plus a per-client,
-  per-`sid` or per-transmitter limit where the handler knows its caller. No
+  per-`tree_id` or per-transmitter limit where the handler knows its caller. No
   added route falls back to the global 100 per 3600 s per address
   (`libs/server/config/src/lib/schemas/rate-limit.ts:20-25`).
 - `/oauth/token` keeps its 30 per 60 s per address in a production realm
@@ -448,7 +454,7 @@ Only threats this record adds or changes. T-numbers are ADR-014's.
 | -------------------------------------------------------------------------- | --------------------------------------------------------- | ------------------------------------------------------------------------ |
 | A tree outlives its root's grant: consent withdrawn, reuse, client deleted | Decision 1: the walk runs with the write that ends it     | A resource that verifies offline accepts a token to `exp`, §6's window   |
 | A tree grows after consent through an operator change                      | Decision 2: stored `aud`, cap walk, no narrower retry     | A cap changed outside the seed tool waits for the next mint              |
-| A tree token acts as its owner                                             | Decision 3: the guard on every owner route; `sid` refused | A stolen portal session is the owner, as today                           |
+| A tree token acts as its owner                                             | Decision 3: guard on every owner route; `tree_id` refused | A stolen portal session is the owner, as today                           |
 | An agent type's assertion accepted at an audience it was not minted for    | Decision 4: issuer as sole `aud`, explicit `typ`          | The type's assertion key on the box stays T2's residual, one key per box |
 | A captured bound token spliced between P1a and P1b (T1)                    | Decision 5                                                | No spawn to a new key until P1b                                          |
 | A 429 read as a grant, or a revocation dropped on a 429                    | Decision 6                                                | Every broker behind one address shares the token limit                   |
@@ -482,7 +488,7 @@ test that proves it.
   inactive before their next renewal. **P1b** (renewal): a re-spawn answered
   `invalid_scope` revokes its subtree.
 - **3 — P0a**, then each phase that adds an owner route: a root, a node and a
-  leaf token each get 401 on `GET /api/agent-sessions/{sid}`.
+  leaf token each get 401 on `GET /api/agent-sessions/{tree_id}`.
 - **4 — P0a** at `/oauth/token`, P2 at the node leg, P5 at CIBA: an agent
   type's assertion naming the token endpoint URL, a second audience or no
   `typ` is `invalid_client`.
@@ -509,7 +515,7 @@ test that proves it.
 - A tree follows its grant, and the ledger stops showing dead trees as live.
 - Nothing an operator does after consent widens a live tree, and no tree
   token acts as its owner on any route this family adds.
-- The kill switch reaches agent families with no `sid`, whose tokens can
+- The kill switch reaches agent families with no `tree_id`, whose tokens can
   still start a tree by exchange, and a neighbour cannot rate-limit it away.
 - Every agent owner has a proved primary identity and agreed to the role.
 
@@ -537,14 +543,14 @@ Each question carries the default this record proceeds on until the
 maintainer decides. As of 2026-10-09 the maintainer has decided every
 question below.
 
-1. **Sign-out and a `sid` family whose client is no longer an agent.** A
+1. **Sign-out and a `tree_id` family whose client is no longer an agent.** A
    CIMD client's `is_agent` follows its document at every re-resolution
    (`apps/auth-server/src/app/helpers/client-resolution.ts:134`). Options:
-   spare every `sid` family; end such a family, and so its tree.
+   spare every `tree_id` family; end such a family, and so its tree.
    **Default:** spare it, as ADR-014 decision 1 said; the option would change
    that decision's text. Why ask: the maintainer's words spare agents, and
    this client is no longer one. _Decided 2026-10-09 (maintainer): end it._
-   Sign-out ends a `sid` family whose CIMD client has stopped declaring
+   Sign-out ends a `tree_id` family whose CIMD client has stopped declaring
    `is_agent`, and so its tree. ADR-014 decision 1 was updated to match on
    2026-10-09.
 2. **Client assertion only for agent types.** Options: an assertion or a
@@ -558,7 +564,7 @@ question below.
    §4(e), §9 and T2 were updated to match on 2026-10-09.
 3. **An ID-JAG minted by an agent type.** Its targets are the client's
    `audience` column (`token.ts:1682`), which also sets a root's `aud`
-   without `resource`; it carries no `cnf` or `sid`. Options: allow; refuse
+   without `resource`; it carries no `cnf` or `tree_id`. Options: allow; refuse
    at GATE 2 for an agent type. **Default:** allow, as ADR-014's
    [Explicitly out of scope](./014-agent-authority-tree.md#explicitly-out-of-scope)
    said: a `kind: id-jag` row, and the tree ends at the domain boundary. The
@@ -614,7 +620,7 @@ question below.
 8. **When a root ends.** ADR-014 §1 lets a resume (same `session_id`; for
    example, Claude Code's `--resume` and `--continue`) reuse its root while
    the refresh token lives. §6's
-   dead-man switch revokes the root, its `sid` and its refresh family when
+   dead-man switch revokes the root, its `tree_id` and its refresh family when
    the process exits, whenever the walk reaches QAuth. So a resume reuses a
    root only when that walk failed. Options: keep both, read together;
    stricter — never reuse an exited root, end a root on a new `session_id`,
@@ -629,7 +635,7 @@ question below.
    root, so a runtime restart keeps it, which asks for a per-host cadence.
    _Amended 2026-10-10:_ a resumed process binds to the reused root only
    after the person approves that root's consent screen again (ADR-014 §1);
-   the root, its `sid` and its refresh family are still reused. The decision
+   the root, its `tree_id` and its refresh family are still reused. The decision
    is unchanged.
 9. **Freezing an agent during a transfer.** Options: no freeze; freeze the
    agent after the acceptance until its cut trees' last token expires,
@@ -653,21 +659,21 @@ question below.
     ADR-019. Revoke-by-agent and disabling a
     transmitter need `admin:security` and a passkey approval per operation.
     The view the public profile withholds needs `admin:read`.
-11. **Sign-out and an agent client's family with no `sid` yet.** Options:
+11. **Sign-out and an agent client's family with no `tree_id` yet.** Options:
     end it, as ADR-014 decision 1's text does; spare it, as "agents survive
     the browser logout" reads. **Default:** end it; the option would change
     that text. Why ask: decision 1 here treats that family as an agent's.
     _Decided 2026-10-09 (maintainer): end it, the default._ Sign-out ends an
-    agent client's refresh family that has no `sid`, as ADR-014 decision 1's
+    agent client's refresh family that has no `tree_id`, as ADR-014 decision 1's
     text already says.
-12. **Revoke-all and a sid-less subject issued before it.** Options: keep
+12. **Revoke-all and a subject with no `tree_id` issued before it.** Options: keep
     ADR-014 §1, where the exchange starts a new tree; refuse the exchange.
     **Default:** §1 as written; the option would change it. Why ask:
     revoke-all cannot reach such a token, which has no ledger row.
-    _Decided 2026-10-09 (maintainer): refuse._ A sid-less subject token whose
-    `iat` is earlier than the user's last revoke-all is refused. That time is
-    a per-user timestamp in Postgres, cached in Redis. ADR-014 §1 was
-    updated to match on 2026-10-09.
+    _Decided 2026-10-09 (maintainer): refuse._ A subject token with no
+    `tree_id` whose `iat` is earlier than the user's last revoke-all is
+    refused. That time is a per-user timestamp in Postgres, cached in
+    Redis. ADR-014 §1 was updated to match on 2026-10-09.
 13. **Which credential is the primary identity.** Decision 8 took the
     credential that created the account, the user's oldest
     `user_credentials` row, and added no column. Options: that; an explicit
