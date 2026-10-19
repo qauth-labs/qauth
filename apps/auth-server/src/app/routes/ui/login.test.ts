@@ -32,6 +32,7 @@ import {
   registerLoginAttempt,
   resetFailedAttempts,
 } from '../../helpers/failed-login';
+import { ensureMinimumResponseTime } from '../../helpers/timing';
 import loginRoute from './login';
 
 interface TestContext {
@@ -366,20 +367,52 @@ describe('UI /ui/login — CSRF defence', () => {
       expect(resetFailedAttempts).not.toHaveBeenCalled();
     });
 
-    it('refuses an unverified credential (403, no session) when REQUIRE_VERIFIED_ACCOUNT is on', async () => {
+    it('refuses an unverified credential exactly as a wrong password when REQUIRE_VERIFIED_ACCOUNT is on (ANT-2026-SPEMY9GU)', async () => {
       (env as { REQUIRE_VERIFIED_ACCOUNT?: boolean }).REQUIRE_VERIFIED_ACCOUNT = true;
 
-      const { fastify, state } = await postLogin({ verifies: true, emailVerified: false });
+      /** What the browser sees, with the per-run CSRF token masked. */
+      const seen = (state: Awaited<ReturnType<typeof postLogin>>['state']) => ({
+        statusCode: state.statusCode,
+        headers: state.headers,
+        setCookies: state.setCookies,
+        redirected: state.redirected,
+        body: String(state.body).replace(/name="csrf_token" value="[^"]*"/, 'CSRF'),
+      });
+      /** Whether the timing floor ran before the audit write, as on every refusal. */
+      const floorFirst = (fastify: FastifyInstance) =>
+        vi.mocked(ensureMinimumResponseTime).mock.invocationCallOrder.at(-1)! <
+        (fastify.repositories.auditLogs.create as unknown as Mock).mock.invocationCallOrder.at(-1)!;
 
-      expect(state.statusCode).toBe(403);
-      expect(fastify.sessionUtils.setSession).not.toHaveBeenCalled();
+      // A just-registered FREE address, signed in with the password its
+      // registrant chose: right password, unverified account.
+      const fresh = await postLogin({ verifies: true, emailVerified: false });
+      const freshFloorFirst = floorFirst(fresh.fastify);
+      // The same attempt on an address that was already registered: wrong
+      // password for the owner's verified account.
+      const taken = await postLogin({ verifies: false, emailVerified: true });
+
+      expect(seen(fresh.state)).toEqual(seen(taken.state));
+      expect(fresh.state.statusCode).toBe(401);
+      expect(String(fresh.state.body)).toContain(
+        'If you have just registered, confirm your email address first'
+      );
+      expect(freshFloorFirst).toBe(true);
+      expect(floorFirst(taken.fastify)).toBe(true);
+      expect(fresh.fastify.sessionUtils.setSession).not.toHaveBeenCalled();
       // Stays counted as a failed attempt.
       expect(registerLoginAttempt).toHaveBeenCalledWith(expect.anything(), LOCKOUT_IDS);
       expect(recordSuccessfulLogin).not.toHaveBeenCalled();
       expect(resetFailedAttempts).not.toHaveBeenCalled();
+      // The reason is kept where only operators read it.
+      expect(fresh.fastify.repositories.auditLogs.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          userId: 'user-1',
+          metadata: { email: 'user@example.com', reason: 'email_not_verified' },
+        })
+      );
     });
 
-    it('still signs in an unverified credential when REQUIRE_VERIFIED_ACCOUNT is off (default)', async () => {
+    it('still signs in an unverified credential when an operator turns REQUIRE_VERIFIED_ACCOUNT off', async () => {
       const { fastify, state } = await postLogin({ verifies: true, emailVerified: false });
 
       expect(state.statusCode).toBe(302);

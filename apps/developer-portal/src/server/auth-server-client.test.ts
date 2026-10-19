@@ -142,19 +142,14 @@ describe('client address forwarding (X-Forwarded-For)', () => {
 });
 
 describe('authServerClient.register', () => {
-  it('returns ok result on 201', async () => {
+  it('returns ok result on 202 with the generic message', async () => {
     const data = {
-      id: 'user-id',
-      email: 'test@example.com',
-      emailVerified: false,
-      realmId: 'realm-id',
-      createdAt: Date.now(),
-      updatedAt: null,
+      message: 'Registration received. Check your inbox for an email with the next step.',
     };
-    mockFetch(201, data);
+    mockFetch(202, data);
     const result = await authServerClient.register('test@example.com', 'Password1!');
     expect(result.ok).toBe(true);
-    if (result.ok) expect(result.data.email).toBe('test@example.com');
+    if (result.ok) expect(result.data).toEqual(data);
   });
 
   it('returns WEAK_PASSWORD error', async () => {
@@ -171,20 +166,17 @@ describe('authServerClient.register', () => {
     }
   });
 
-  it('returns EMAIL_TAKEN error when unique constraint is violated', async () => {
+  it('maps a unique-constraint conflict to a generic CONFLICT, never EMAIL_TAKEN', async () => {
+    // Registration no longer answers 409 (ANT-2026-SPEMY9GU); a conflict from
+    // another route must not be read as "this address is registered".
     mockFetch(
       409,
-      {
-        error: 'Duplicate',
-        statusCode: 409,
-        code: 'UNIQUE_CONSTRAINT_VIOLATION',
-        constraint: 'users_email_unique',
-      },
+      { error: 'Resource already exists', statusCode: 409, code: 'UNIQUE_CONSTRAINT_VIOLATION' },
       false
     );
     const result = await authServerClient.register('test@example.com', 'Password1!');
     expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.error.code).toBe('EMAIL_TAKEN');
+    if (!result.ok) expect(result.error.code).toBe('CONFLICT');
   });
 
   it('returns RATE_LIMITED on 429', async () => {

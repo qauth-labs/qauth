@@ -61,7 +61,9 @@ One transaction (users insert first — `user_credentials.user_id` FKs it):
 2. `INSERT INTO user_credentials (provider_type='password',
 external_sub=normalized_email, credential_data={password_hash,
 email_verified: false})` — a duplicate registration surfaces HERE via the
-   credentials unique index (409, genericized).
+   credentials unique index. The route catches it and answers the same `202`
+   as for a free address (ANT-2026-SPEMY9GU); the existing owner gets a mail
+   instead. Never let it reach the error handler's `409`.
 3. `user_attributes` upsert from `PasswordProvider.extractAttributes()`.
 4. `INSERT INTO email_verification_tokens (credential_id, token_hash,
 expires_at)` — the token's ONLY identity link is the credential.
@@ -80,20 +82,21 @@ On email verification (one transaction): mark the token used, set
   `selectTrustedAttribute` in `libs/server/federation`; ties within a rank
   break lexicographically by `source`). **Omitted entirely when no verified
   email attribute exists** — never `null`. Applies to ID tokens, userinfo,
-  AND the non-standard access-token convenience claims (all six user-bound
-  emission sites go through `resolveEmailClaims` in
-  `apps/auth-server/src/app/helpers/email-claims.ts`). Additionally (#259,
-  BREAKING): ID tokens and userinfo release the pair only when the `email`
-  SCOPE was granted; the access-token convenience claims are not scope-gated.
+  AND access tokens (every emission site goes through
+  `resolveEmailClaimsForScopes` in
+  `apps/auth-server/src/app/helpers/email-claims.ts`). Additionally (BREAKING):
+  the pair is released only when the `email` SCOPE was granted — ID tokens
+  since #259, access tokens on every grant since 2026-10-19
+  (ANT-2026-2O0T72HY). The scope-less `/auth/login` token carries none.
 - `email_verified` — always `true` when `email` is present (presence IS the
   verification signal); omitted together with `email` otherwise. The
   email-present-plus-verified-false shape no longer exists.
 - `name` — derived from `users.first_name` + `users.last_name` (omitted when
   both are empty, never an empty string).
 
-> The login-time `REQUIRE_VERIFIED_ACCOUNT` gate (F-08) is a SEPARATE control:
-> it blocks logins by an unverified account pre-token and does not affect claim
-> resolution. For a password account it reads `credential_data.email_verified`.
+> The login-time `REQUIRE_VERIFIED_ACCOUNT` gate (F-08, default `true`) is a
+> SEPARATE control: it blocks logins by an unverified account pre-token, with
+> the same `401` as a wrong password, and does not affect claim resolution. For a password account it reads `credential_data.email_verified`.
 > `REQUIRE_EMAIL_VERIFIED` is its deprecated alias (renamed 2026-10-09).
 
 ## Core Tables (shipped)

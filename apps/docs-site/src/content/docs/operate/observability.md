@@ -73,8 +73,12 @@ Every request gets a request id, surfaced as `reqId` on all of its log lines:
 ## Auth-Event Logging
 
 Login, logout and registration emit structured log lines via `logAuthEvent`
-(`apps/auth-server/src/app/helpers/auth-events.ts`) — login and logout on both
-success and failure, registration on success.
+(`apps/auth-server/src/app/helpers/auth-events.ts`) on both success and
+failure. A registration of an address that already has an account logs
+`user.register.failure` with `reason` `address_in_use`, or
+`address_in_use_mail_capped` when the per-address mail caps held back the
+notice. The caller got the same `202` either way; only this line tells them
+apart.
 
 > ⚠️ **Token-exchange events are not log lines.** `logAuthEvent` is called only
 > from `routes/auth/login.ts`, `routes/auth/logout.ts` and
@@ -151,9 +155,11 @@ Label values, as emitted today. The plugin
 each list as **open** — a new call site can add a value without a schema change.
 
 - `result` is `success` or `failure`. `reason` is set on failures only, e.g.
-  `invalid_credentials`, `locked_out`, `email_not_verified` (emitted only when
-  `REQUIRE_VERIFIED_ACCOUNT=true`, or its deprecated alias
-  `REQUIRE_EMAIL_VERIFIED=true`), `error`.
+  `invalid_credentials`, `locked_out`, `error`. A login refused because the
+  account is not verified yet counts as `invalid_credentials`: this endpoint is
+  unauthenticated, and a label of its own would tell a caller who just
+  registered an address whether it was free. The `user.login.failure` log line
+  and the audit row keep the reason `email_not_verified`.
 - `type` is e.g. `access`, `refresh`, or `id_jag` (the ID-JAG assertion minted by
   the token-exchange grant). `grant_type` is e.g. `password`,
   `authorization_code`, `refresh_token`, `client_credentials`, `token-exchange`,

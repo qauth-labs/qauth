@@ -79,12 +79,12 @@ function ClientListPage() {
                     <div className="text-right text-xs text-gray-500">
                       <span
                         className={
-                          c.enabled
+                          c.enabled && !c.suspended
                             ? 'rounded-full bg-green-100 px-2 py-0.5 text-green-700'
                             : 'rounded-full bg-gray-100 px-2 py-0.5 text-gray-600'
                         }
                       >
-                        {c.enabled ? 'Enabled' : 'Disabled'}
+                        {c.suspended ? 'Suspended' : c.enabled ? 'Enabled' : 'Disabled'}
                       </span>
                       <div className="mt-1">{c.redirectUris.length} redirect URI(s)</div>
                     </div>

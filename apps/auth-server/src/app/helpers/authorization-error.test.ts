@@ -7,7 +7,7 @@ vi.mock('../../config/env', () => ({
   },
 }));
 
-import { isSelfRegisteredClient, sendAuthorizationError } from './authorization-error';
+import { isOperatorProvisionedClient, sendAuthorizationError } from './authorization-error';
 
 const DAY = 24 * 60 * 60 * 1000;
 
@@ -40,9 +40,33 @@ function createReply() {
   return { reply: reply as unknown as FastifyReply, state };
 }
 
-const OPERATOR_CLIENT = { dynamicRegisteredAt: null, metadata: null };
-const DCR_CLIENT = { dynamicRegisteredAt: Date.now() - 400 * DAY, metadata: null };
-const CIMD_CLIENT = { dynamicRegisteredAt: null, metadata: { registrationType: 'cimd' } };
+const OPERATOR_CLIENT = {
+  provisionedByOperator: true,
+  dynamicRegisteredAt: null,
+  metadata: null,
+  developerId: null,
+};
+const DCR_CLIENT = {
+  provisionedByOperator: false,
+  dynamicRegisteredAt: Date.now() - 400 * DAY,
+  metadata: { registrationType: 'dynamic' },
+  developerId: null,
+};
+const CIMD_CLIENT = {
+  provisionedByOperator: false,
+  dynamicRegisteredAt: null,
+  metadata: { registrationType: 'cimd' },
+  developerId: null,
+};
+// ANT-2026-O8U3P920: what `POST /api/clients` writes for a self-registered
+// developer account. It carries neither DCR nor CIMD marker, which is what the
+// earlier negative rule missed.
+const DEVELOPER_CLIENT = {
+  provisionedByOperator: false,
+  dynamicRegisteredAt: null,
+  metadata: null,
+  developerId: '0190a000-0000-7000-8000-00000000000a',
+};
 
 const ERROR = {
   error: 'login_required',
@@ -51,26 +75,26 @@ const ERROR = {
   iss: 'https://auth.example.com',
 };
 
-describe('isSelfRegisteredClient', () => {
-  it('an operator-provisioned or developer-portal client is not self-registered', () => {
-    expect(isSelfRegisteredClient(OPERATOR_CLIENT)).toBe(false);
-    expect(isSelfRegisteredClient({ dynamicRegisteredAt: null })).toBe(false);
+describe('isOperatorProvisionedClient', () => {
+  it('is true only for a client an operator provisioned', () => {
+    expect(isOperatorProvisionedClient(OPERATOR_CLIENT)).toBe(true);
   });
 
-  it('a dynamically registered client is self-registered at any age', () => {
-    expect(isSelfRegisteredClient({ ...DCR_CLIENT, dynamicRegisteredAt: Date.now() })).toBe(true);
-    // Long past DYNAMIC_CLIENT_BADGE_DAYS: who registered it has not changed.
-    expect(isSelfRegisteredClient(DCR_CLIENT)).toBe(true);
+  it.each([
+    ['an open-DCR client', DCR_CLIENT],
+    ['a CIMD client', CIMD_CLIENT],
+    ['a client a developer created through POST /api/clients', DEVELOPER_CLIENT],
+  ])('is false for %s', (_label, client) => {
+    expect(isOperatorProvisionedClient(client)).toBe(false);
+  });
+
+  it('fails closed when the marker is missing or not a strict true', () => {
+    // A row with no marker (no DCR/CIMD field either) used to read as trusted.
+    expect(isOperatorProvisionedClient({})).toBe(false);
+    expect(isOperatorProvisionedClient({ provisionedByOperator: null })).toBe(false);
     expect(
-      isSelfRegisteredClient({
-        dynamicRegisteredAt: null,
-        metadata: { registrationType: 'dynamic' },
-      })
-    ).toBe(true);
-  });
-
-  it('a CIMD client is self-registered (its document is the registration)', () => {
-    expect(isSelfRegisteredClient(CIMD_CLIENT)).toBe(true);
+      isOperatorProvisionedClient({ provisionedByOperator: 'true' as unknown as boolean })
+    ).toBe(false);
   });
 });
 
@@ -88,6 +112,8 @@ describe('sendAuthorizationError', () => {
   it.each([
     ['a dynamically registered client', DCR_CLIENT],
     ['a CIMD client', CIMD_CLIENT],
+    ['a client a developer created through POST /api/clients', DEVELOPER_CLIENT],
+    ['a client with no provisioning marker at all', {}],
   ])('never redirects %s automatically: the user is told where they would go', (_l, client) => {
     // RFC 9700 §4.11.2: redirect automatically only to a URI the AS trusts.
     const { reply, state } = createReply();

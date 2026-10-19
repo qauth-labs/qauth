@@ -5,9 +5,48 @@ import { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { env } from '../../../config/env';
 import { MIN_RESPONSE_TIME_MS } from '../../constants';
 import { clientAddressKey } from '../../helpers/client-address';
-import { resolveEmailClaims } from '../../helpers/email-claims';
+import { resolveUserinfoEndpoint } from '../../helpers/discovery';
+import { resolveEmailClaimsForScopes } from '../../helpers/email-claims';
 import { ensureMinimumResponseTime } from '../../helpers/timing';
 import { userinfoResponseSchema } from '../../schemas/oauth';
+
+/**
+ * Whether a verified access token is addressed to this userinfo endpoint.
+ *
+ * A token is accepted only by an audience it names (RFC 8707, RFC 9068 §4;
+ * `docs/security/threat-model.md`). The `aud` of a QAuth access token is one of:
+ *
+ *  - the token's own `client_id`. `resolveAudience` falls back to it when the
+ *    grant named no RFC 8707 `resource` and the operator configured no
+ *    `audience` for the client. That is the token an OIDC client gets from its
+ *    own code flow (OIDC Core §5.3), and the `/auth/login` token the developer
+ *    portal sends here (`client_id` and `aud` are both the system client). A
+ *    delegated token keeps the subject token's audience, which GATE 3c makes
+ *    contain the agent's `client_id`, so it qualifies unless it was narrowed to
+ *    another server.
+ *  - the `resource` values the grant named, or the client's configured
+ *    `audience`: a token for those resource servers.
+ *
+ * Userinfo accepts the first kind, and a token whose `aud` contains this
+ * endpoint's URL as discovery publishes it, which a client that binds its
+ * grant to resource servers can request beside them. A token whose `aud` names
+ * only other resource servers is refused: a resource server that received one
+ * must not be able to read the user's claims with it.
+ */
+function isAddressedToUserinfo(
+  payload: { aud?: string | string[]; clientId?: string },
+  userinfoEndpoint: string
+): boolean {
+  const audiences = payload.aud === undefined ? [] : [payload.aud].flat();
+  if (audiences.includes(userinfoEndpoint)) {
+    return true;
+  }
+  return (
+    typeof payload.clientId === 'string' &&
+    payload.clientId.length > 0 &&
+    audiences.includes(payload.clientId)
+  );
+}
 
 /**
  * Shared userinfo handler for GET and POST (OIDC Core §5.3.1: the userinfo
@@ -15,7 +54,9 @@ import { userinfoResponseSchema } from '../../schemas/oauth';
  * already been verified by a preHandler and its claims are on
  * `request.jwtPayload` — GET via `fastify.requireJwt` (header), POST via
  * {@link resolveUserinfoTokenPreHandler} (header OR form body). The claim set
- * returned is identical regardless of method.
+ * returned is identical regardless of method. `requireJwt` checks signature,
+ * issuer, expiry and revocation but no audience; this handler applies the
+ * audience rule ({@link isAddressedToUserinfo}) for both methods.
  */
 async function handleUserinfo(fastify: FastifyInstance, request: FastifyRequest) {
   const startTime = Date.now();
@@ -26,6 +67,13 @@ async function handleUserinfo(fastify: FastifyInstance, request: FastifyRequest)
 
     if (!payload || !payload.sub) {
       throw new JWTInvalidError('Missing JWT payload');
+    }
+
+    // Audience before anything else: a token for another resource server is
+    // refused (401, RFC 6750 §3.1 `invalid_token`) without a user lookup, so
+    // its holder learns nothing about the subject.
+    if (!isAddressedToUserinfo(payload, resolveUserinfoEndpoint(fastify.jwtUtils.getIssuer()))) {
+      throw new JWTInvalidError('Access token audience does not include the userinfo endpoint');
     }
 
     userId = payload.sub;
@@ -63,10 +111,9 @@ async function handleUserinfo(fastify: FastifyInstance, request: FastifyRequest)
     // resolve from verified user_attributes via the trust order; both are
     // OMITTED (never null) when no verified email exists — OIDC Core
     // §5.3.2 permits omission of unavailable claims. The resolver query
-    // is skipped entirely when the scope was not granted.
-    if (grantedScopes.has('email')) {
-      Object.assign(responseBody, await resolveEmailClaims(fastify, user.id));
-    }
+    // is skipped entirely when the scope was not granted; the same helper
+    // applies the same rule at every token mint site.
+    Object.assign(responseBody, await resolveEmailClaimsForScopes(fastify, user.id, grantedScopes));
 
     // OIDC Core §5.1 `name` — the end-user display name, derived from the
     // stored first/last name parts. Released only under the `profile` scope;
@@ -198,7 +245,7 @@ export default async function (fastify: FastifyInstance) {
       preHandler: fastify.requireJwt,
       schema: {
         description:
-          'OIDC userinfo endpoint (GET). Returns claims for the authenticated user. Requires a Bearer access token.',
+          "OIDC userinfo endpoint (GET). Returns claims for the authenticated user. Requires a Bearer access token whose `aud` contains its own `client_id` or this endpoint's URL; a token for another resource server gets 401.",
         tags: ['OAuth', 'Userinfo'],
         security: [{ bearerAuth: [] }],
         response: {
@@ -223,7 +270,7 @@ export default async function (fastify: FastifyInstance) {
         resolveUserinfoTokenPreHandler(fastify, request, reply),
       schema: {
         description:
-          'OIDC userinfo endpoint (POST). Returns claims for the authenticated user. Accepts a Bearer access token in the Authorization header or a form-encoded access_token body parameter (RFC 6750 §2.2).',
+          "OIDC userinfo endpoint (POST). Returns claims for the authenticated user. Accepts a Bearer access token in the Authorization header or a form-encoded access_token body parameter (RFC 6750 §2.2). The token's `aud` must contain its own `client_id` or this endpoint's URL; a token for another resource server gets 401.",
         tags: ['OAuth', 'Userinfo'],
         security: [{ bearerAuth: [] }],
         response: {

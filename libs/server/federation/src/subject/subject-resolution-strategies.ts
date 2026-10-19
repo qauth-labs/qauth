@@ -239,9 +239,10 @@ export function createSubjectResolutionStrategy(
  * established for this path, so an attacker probing identifiers learns nothing
  * from the difference between responses.
  *
- * Callers that implement enrolment must branch on `no-match` BEFORE reaching
- * here (ADR-009 §1's first bootstrap case). This function is for the
- * login-only path, where every non-match is a refusal.
+ * A sign-up flow that may turn `no-match` into an account must branch on it
+ * BEFORE reaching here. This function is for the login path, where every
+ * non-match is a refusal — which, since ADR-009 §1's 2026-10-19 amendment,
+ * includes `no-match` on wallet sign-in.
  *
  * @param outcome - what the strategy concluded.
  * @returns the resolved `users.id`.

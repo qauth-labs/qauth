@@ -16,7 +16,8 @@ await fastify.register(jwtPlugin, {
 });
 
 // Sign an access token. `sub` and `clientId` are required; `email` /
-// `email_verified` are optional and omitted for client_credentials grants.
+// `email_verified` are optional. Pass them only when the grant includes the
+// `email` scope, and never for client_credentials grants.
 //
 // Since ADR-002 (#230) the `users` row carries no email — resolve it from
 // `user_attributes` in the trust order (wallet > oidc_* > self_reported) and
@@ -24,7 +25,7 @@ await fastify.register(jwtPlugin, {
 const token = await fastify.jwtUtils.signAccessToken({
   sub: user.id,
   clientId: client.clientId,
-  ...(verifiedEmail ? { email: verifiedEmail, email_verified: true } : {}),
+  ...(emailScopeGranted && verifiedEmail ? { email: verifiedEmail, email_verified: true } : {}),
 });
 
 // Protect a route with requireJwt preHandler

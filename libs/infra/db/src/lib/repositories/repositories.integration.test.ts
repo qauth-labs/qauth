@@ -25,7 +25,7 @@ import { eq } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import type { RefreshToken, RefreshTokensRepository } from '../../types';
-import { oauthConsents, refreshTokens } from '../schema';
+import { oauthClients, oauthConsents, refreshTokens } from '../schema';
 import {
   createApiKeysRepository,
   createAuditLogsRepository,
@@ -1020,6 +1020,60 @@ describe('repository integration (real Postgres)', () => {
       const refreshed = await clients.upsertCimdClient(cimdInsert(realm.id, 'After', false));
 
       expect(refreshed.enabled).toBe(false);
+    });
+    // ANT-2026-O8U3P920: the document's host chooses the redirect URIs, so a
+    // CIMD row never carries the operator's trust marker — not on insert, and
+    // a re-resolution clears one set by hand.
+    it('never stores provisioned_by_operator = true for a CIMD row', async () => {
+      const realm = await seedRealm('cimd-provisioned-realm');
+      const clients = createOAuthClientsRepository(db().database.db);
+      const created = await clients.upsertCimdClient({
+        ...cimdInsert(realm.id, 'Before', true),
+        provisionedByOperator: true,
+      });
+      expect(created.provisionedByOperator).toBe(false);
+
+      await clients.update(created.id, { provisionedByOperator: true });
+      const refreshed = await clients.upsertCimdClient(cimdInsert(realm.id, 'After', true));
+      expect(refreshed.provisionedByOperator).toBe(false);
+    });
+  });
+
+  // ANT-2026-DR5XI3LV: the suspension column is operator state. The CIMD
+  // upsert never names it, so a re-resolution cannot clear it.
+  describe('oauth_clients — suspended survives upsertCimdClient', () => {
+    it('keeps a suspension set while the row is refreshed from its document', async () => {
+      const realm = await seedRealm('cimd-suspended-realm');
+      const clients = createOAuthClientsRepository(db().database.db);
+      const insert = {
+        realmId: realm.id,
+        clientId: 'https://app.example.com/suspended.json',
+        clientSecretHash: 'sentinel-hash',
+        name: 'Before',
+        redirectUris: ['https://app.example.com/cb'],
+        tokenEndpointAuthMethod: 'none' as const,
+        enabled: true,
+      };
+      const created = await clients.upsertCimdClient(insert);
+      expect(created.suspended).toBe(false);
+      await db()
+        .database.db.update(oauthClients)
+        .set({ suspended: true, suspendedAt: Date.now() })
+        .where(eq(oauthClients.id, created.id));
+
+      const refreshed = await clients.upsertCimdClient({ ...insert, name: 'After' });
+
+      expect(refreshed.name).toBe('After');
+      expect(refreshed.suspended).toBe(true);
+      expect(refreshed.suspendedAt).not.toBeNull();
+    });
+  });
+
+  describe('oauth_clients — provisioned_by_operator default', () => {
+    it('defaults to false for a row that does not set it', async () => {
+      const realm = await seedRealm('provisioned-default-realm');
+      const client = await seedClient(realm.id);
+      expect(client.provisionedByOperator).toBe(false);
     });
   });
 

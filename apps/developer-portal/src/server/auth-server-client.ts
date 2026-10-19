@@ -19,13 +19,16 @@ interface AuthServerErrorBody {
   constraint?: string;
 }
 
+/**
+ * The body of `POST /auth/register`'s `202 Accepted`.
+ *
+ * The auth-server answers every address with this same message, whether it
+ * created an account or the address already had one, so it carries no user id
+ * and nothing else that could tell the two apart. The next step (a
+ * verification link, or a notice for an existing account) arrives by email.
+ */
 export interface RegisterData {
-  id: string;
-  email: string;
-  emailVerified: boolean;
-  realmId: string;
-  createdAt: number;
-  updatedAt: number | null;
+  message: string;
 }
 
 export interface LoginData {
@@ -89,7 +92,13 @@ export interface OAuthClient {
   grantTypes: GrantType[];
   responseTypes: string[];
   tokenEndpointAuthMethod: TokenEndpointAuthMethod;
+  /** The owner's switch. */
   enabled: boolean;
+  /**
+   * Set by the operator, never by the owner: a suspended client is refused
+   * whatever `enabled` says. Optional for an auth-server that predates it.
+   */
+  suspended?: boolean;
   requirePkce: boolean;
   /** Effective environment (ADR-008); read-only, resolved by the auth-server. */
   environment: ClientEnvironment;
@@ -204,7 +213,9 @@ function mapErrorCode(body: AuthServerErrorBody, httpStatus: number): string {
     case 'WEAK_PASSWORD':
       return 'WEAK_PASSWORD';
     case 'UNIQUE_CONSTRAINT_VIOLATION':
-      return 'EMAIL_TAKEN';
+      // A generic conflict. Registration never answers with it: an address
+      // that already has an account gets the same 202 as a free one.
+      return 'CONFLICT';
     case 'INVALID_TOKEN':
       return 'INVALID_TOKEN';
     case 'EMAIL_ALREADY_VERIFIED':
@@ -393,6 +404,12 @@ async function apiRequest<T>(
 }
 
 export const authServerClient = {
+  /**
+   * Register a password account. Success means only that the request was
+   * accepted: the same `202` comes back for an address that already has an
+   * account, so the caller must show a "check your inbox" state, never
+   * "account created" or "address taken".
+   */
   register(email: string, password: string, realmId?: string): Promise<Result<RegisterData>> {
     return apiRequest<RegisterData>('/auth/register', {
       method: 'POST',

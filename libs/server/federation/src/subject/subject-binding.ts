@@ -187,7 +187,7 @@ export function constantTimeEquals(left: string, right: string): boolean {
  * ADR-009 §1 puts the asserted identifier in `user_credentials.external_sub` —
  * *"the same column `PasswordProvider` fills"* — so it MUST be normalized the
  * same way, or the two providers disagree about what "the same account" means
- * and a wallet login silently enrols a duplicate. Hence `normalizeEmail`,
+ * and a wallet linked to an account cannot sign in to it. Hence `normalizeEmail`,
  * exactly as `password.provider.ts` and the #239 login form use it.
  *
  * @param raw - the identifier as typed; `unknown` because it arrives as form

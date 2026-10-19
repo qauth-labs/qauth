@@ -59,6 +59,25 @@
 >   end-session route. The passkey RP ID defaults to the realm's exact host.
 > - Gates now speak of a verified account, not a verified address. `REQUIRE_EMAIL_VERIFIED` becomes
 >   `REQUIRE_VERIFIED_ACCOUNT`, and the old name stays as a deprecated alias.
+>
+> **Amended 2026-10-19** with the maintainer's decision of that day on ANT-2026-SPEMY9GU, a report
+> that `/auth/register` told any caller whether an address has an account. The maintainer chose to
+> keep the threat model's promise rather than narrow it until F1c removes the route. The original
+> text below is unchanged; where it says the gate defaults to `false`, read `true`.
+>
+> - `REQUIRE_VERIFIED_ACCOUNT` defaults to `true`. The alias keeps working, and a blank value still
+>   reads as unset.
+> - `/auth/register` answers every address the same way: `202`, one fixed message, the same
+>   headers, no user id, the same work on the request path under a minimum response time. An address
+>   that already has an account gets no new one; its owner gets a notice by mail, or, while the
+>   account is unverified, its verification link again (verification already needs the account's
+>   password as well as the token). That mail respects the resend-verification caps and is never
+>   awaited by the request.
+> - `/auth/login` and `/ui/login` refuse an unverified account exactly as a wrong password, so
+>   registering an address and then logging in with the chosen password no longer tells a free
+>   address from a registered one. This changes no decision of this record: the FiPA endpoint still
+>   verifies an unverified account after a correct password (Decision 8), and `/auth/register` is
+>   still removed in F1c.
 
 ## Context
 

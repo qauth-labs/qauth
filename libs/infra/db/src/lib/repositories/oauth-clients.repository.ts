@@ -151,13 +151,16 @@ export function createOAuthClientsRepository(defaultDb: DbClient): OAuthClientsR
      * auth method + key set) and bump `updatedAt`; identity columns and the
      * secret sentinel are left as-is. `enabled` can only be narrowed: a row
      * that is disabled when the statement runs stays disabled, whatever
-     * `data.enabled` says.
+     * `data.enabled` says. `provisioned_by_operator` is always written
+     * `false`: the document, not an operator, decides the redirect URIs.
      */
     async upsertCimdClient(data: NewOAuthClient, tx?: DbClient): Promise<OAuthClient> {
       const invoker = tx ?? defaultDb;
       const [client] = await invoker
         .insert(oauthClients)
-        .values(data)
+        // A CIMD client is never operator-provisioned (ANT-2026-O8U3P920),
+        // whatever the caller passed.
+        .values({ ...data, provisionedByOperator: false })
         .onConflictDoUpdate({
           target: [oauthClients.realmId, oauthClients.clientId],
           set: {
@@ -181,6 +184,12 @@ export function createOAuthClientsRepository(defaultDb: DbClient): OAuthClientsR
             // re-resolution, matching the other document-derived fields above.
             isAgent: data.isAgent,
             metadata: data.metadata,
+            // ANT-2026-O8U3P920: the document's host controls the redirect
+            // URIs this statement just refreshed, so no operator's
+            // `provisioned_by_operator` can vouch for them any more. Written
+            // `false` (never `true`, whatever `data` says) so a CIMD client
+            // never receives automatic error redirects.
+            provisionedByOperator: false,
             // Narrow-only, evaluated against the row as it is under this
             // statement's lock (ANT-2026-SSI34ODQ). The caller read
             // `data.enabled` BEFORE fetching the metadata document, and the

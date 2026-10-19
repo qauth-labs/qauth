@@ -182,6 +182,8 @@ function makeClientRow(overrides: Record<string, unknown> = {}) {
     grantTypes: ['authorization_code', 'refresh_token'],
     responseTypes: ['code'],
     developerId: 'dev-A',
+    suspended: false,
+    suspendedAt: null,
     dynamicRegisteredAt: null,
     metadata: null,
     createdAt: 1700,
@@ -244,6 +246,7 @@ describe('GET /api/clients route', () => {
           responseTypes: ['code'],
           tokenEndpointAuthMethod: 'client_secret_post',
           enabled: true,
+          suspended: false,
           requirePkce: true,
           environment: 'development',
           staticApiKeysAllowed: true,
@@ -389,6 +392,30 @@ describe('POST /api/clients (create) — #86', () => {
     expect(JSON.stringify(body)).not.toContain('clientSecretHash');
   });
 
+  it("never marks a developer's client operator-provisioned, whatever the body says (ANT-2026-O8U3P920)", async () => {
+    // A developer account is self-service, so its client's redirect URI must
+    // not receive authorization errors by automatic redirect.
+    const { fastify, ctx } = makeFastify();
+    await clientsRoute(fastify);
+
+    (fastify.repositories.oauthClients.create as unknown as Mock).mockImplementation(
+      async (data: Record<string, unknown>) => makeClientRow({ ...data })
+    );
+
+    const request = authedRequest({
+      body: {
+        name: 'Phish',
+        redirectUris: ['https://login-qauth.attacker.example/sign-in'],
+        tokenEndpointAuthMethod: 'none',
+        provisionedByOperator: true,
+      },
+    });
+    await route(ctx, 'POST /').handler(request, createReply().reply);
+
+    const created = (fastify.repositories.oauthClients.create as unknown as Mock).mock.calls[0][0];
+    expect(created.provisionedByOperator).toBe(false);
+  });
+
   it('omits client_secret for a public client (token_endpoint_auth_method=none)', async () => {
     const { fastify, ctx } = makeFastify();
     await clientsRoute(fastify);
@@ -426,6 +453,38 @@ describe('POST /api/clients (create) — #86', () => {
     await expect(route(ctx, 'POST /').handler(request, reply)).rejects.toThrow(BadRequestError);
     expect(fastify.repositories.oauthClients.create).not.toHaveBeenCalled();
   });
+
+  // Found while fixing the findings of scan qauth-20261015-005: any
+  // syntactically valid scheme used to be stored.
+  it.each(['javascript:alert(document.domain)', 'data:text/html,hi', 'myapp:/callback'])(
+    'rejects the redirect_uri %s on create and on update',
+    async (uri) => {
+      const { fastify, ctx } = makeFastify();
+      await clientsRoute(fastify);
+
+      await expect(
+        route(ctx, 'POST /').handler(
+          authedRequest({ body: { name: 'Bad', redirectUris: [uri] } }),
+          createReply().reply
+        )
+      ).rejects.toThrow(/^invalid_redirect_uri: unsupported scheme: /);
+      expect(fastify.repositories.oauthClients.create).not.toHaveBeenCalled();
+
+      (fastify.repositories.oauthClients.findById as unknown as Mock).mockResolvedValue(
+        makeClientRow({ developerId: DEV_A })
+      );
+      await expect(
+        route(ctx, 'PATCH /:id').handler(
+          authedRequest({
+            params: { id: '0190a000-0000-7000-8000-000000000001' },
+            body: { redirectUris: ['https://app.example.com/cb', uri] },
+          }),
+          createReply().reply
+        )
+      ).rejects.toThrow(/^invalid_redirect_uri: unsupported scheme: /);
+      expect(fastify.repositories.oauthClients.update).not.toHaveBeenCalled();
+    }
+  );
 
   it('rejects an inconsistent grant/response-type combination', async () => {
     const { fastify, ctx } = makeFastify();
@@ -570,32 +629,12 @@ describe('PATCH /api/clients/:id (update) — #88', () => {
     expect(JSON.stringify(body)).not.toContain('clientSecretHash');
   });
 
-  it('refuses to re-enable a disabled client', async () => {
+  it("lets the owner re-enable a client it disabled (enabled is the owner's switch)", async () => {
     const { fastify, ctx } = makeFastify();
     await clientsRoute(fastify);
 
-    // The row does not say who disabled it, so this may be the operator's
-    // `UPDATE oauth_clients SET enabled = false`.
     (fastify.repositories.oauthClients.findById as unknown as Mock).mockResolvedValue(
       makeClientRow({ developerId: DEV_A, enabled: false })
-    );
-
-    const request = authedRequest({
-      params: { id: '0190a000-0000-7000-8000-000000000001' },
-      body: { enabled: true },
-    });
-    const { reply } = createReply();
-
-    await expect(route(ctx, 'PATCH /:id').handler(request, reply)).rejects.toThrow(ForbiddenError);
-    expect(fastify.repositories.oauthClients.update).not.toHaveBeenCalled();
-  });
-
-  it('never writes `enabled: true`, so it cannot overwrite a concurrent disable', async () => {
-    const { fastify, ctx } = makeFastify();
-    await clientsRoute(fastify);
-
-    (fastify.repositories.oauthClients.findById as unknown as Mock).mockResolvedValue(
-      makeClientRow({ developerId: DEV_A, enabled: true })
     );
     (fastify.repositories.oauthClients.update as unknown as Mock).mockImplementation(
       async (_id: string, data: Record<string, unknown>) =>
@@ -604,15 +643,48 @@ describe('PATCH /api/clients/:id (update) — #88', () => {
 
     const request = authedRequest({
       params: { id: '0190a000-0000-7000-8000-000000000001' },
-      body: { name: 'Renamed', enabled: true },
+      body: { enabled: true },
     });
-    const { reply } = createReply();
-
-    await route(ctx, 'PATCH /:id').handler(request, reply);
+    const body = (await route(ctx, 'PATCH /:id').handler(request, createReply().reply)) as Record<
+      string,
+      unknown
+    >;
 
     const updateArg = (fastify.repositories.oauthClients.update as unknown as Mock).mock
       .calls[0][1];
-    expect(updateArg).toEqual({ name: 'Renamed' });
+    expect(updateArg).toEqual({ enabled: true });
+    expect(body.enabled).toBe(true);
+  });
+
+  // ANT-2026-DR5XI3LV: an operator's cut-off is `suspended`, which the owner
+  // can neither write nor clear here, so re-enabling does not bring a
+  // suspended client back.
+  it('never writes `suspended`: re-enabling leaves an operator suspension in place', async () => {
+    const { fastify, ctx } = makeFastify();
+    await clientsRoute(fastify);
+
+    const suspendedRow = makeClientRow({ developerId: DEV_A, enabled: false, suspended: true });
+    (fastify.repositories.oauthClients.findById as unknown as Mock).mockResolvedValue(suspendedRow);
+    (fastify.repositories.oauthClients.update as unknown as Mock).mockImplementation(
+      async (_id: string, data: Record<string, unknown>) => ({ ...suspendedRow, ...data })
+    );
+
+    const request = authedRequest({
+      params: { id: '0190a000-0000-7000-8000-000000000001' },
+      body: { enabled: true, suspended: false, suspendedAt: null },
+    });
+    const body = (await route(ctx, 'PATCH /:id').handler(request, createReply().reply)) as Record<
+      string,
+      unknown
+    >;
+
+    const updateArg = (fastify.repositories.oauthClients.update as unknown as Mock).mock
+      .calls[0][1];
+    expect(updateArg).toEqual({ enabled: true });
+    expect(updateArg).not.toHaveProperty('suspended');
+    expect(updateArg).not.toHaveProperty('suspendedAt');
+    // The owner can see why the client is still refused.
+    expect(body.suspended).toBe(true);
   });
 
   it('validates the effective grant/response combination against persisted values', async () => {
@@ -1061,6 +1133,49 @@ describe('audit logging is best-effort (one-time secret must survive #86/#90)', 
     expect(typeof body.clientSecret).toBe('string');
     expect((body.clientSecret as string).length).toBe(64);
     expect(fastify.log.warn).toHaveBeenCalled();
+  });
+});
+
+describe('PATCH and the operator-provisioned marker (ANT-2026-O8U3P920)', () => {
+  async function patch(existing: Record<string, unknown>, body: Record<string, unknown>) {
+    const { fastify, ctx } = makeFastify();
+    await clientsRoute(fastify);
+    (fastify.repositories.oauthClients.findById as unknown as Mock).mockResolvedValue(
+      makeClientRow({ developerId: DEV_A, ...existing })
+    );
+    (fastify.repositories.oauthClients.update as unknown as Mock).mockImplementation(
+      async (_id: string, data: Record<string, unknown>) =>
+        makeClientRow({ developerId: DEV_A, ...existing, ...data })
+    );
+    await route(ctx, 'PATCH /:id').handler(
+      authedRequest({ params: { id: '0190a000-0000-7000-8000-000000000001' }, body }),
+      createReply().reply
+    );
+    return (fastify.repositories.oauthClients.update as unknown as Mock).mock.calls[0][1];
+  }
+
+  it('clears the marker when the owner changes the redirect URIs the operator vouched for', async () => {
+    const updateArg = await patch(
+      { provisionedByOperator: true, redirectUris: ['https://app.example.com/cb'] },
+      { redirectUris: ['https://login-qauth.attacker.example/sign-in'] }
+    );
+    expect(updateArg.provisionedByOperator).toBe(false);
+  });
+
+  it('keeps the marker when the redirect URIs are unchanged', async () => {
+    const updateArg = await patch(
+      { provisionedByOperator: true, redirectUris: ['https://app.example.com/cb'] },
+      { name: 'Renamed', redirectUris: ['https://app.example.com/cb'] }
+    );
+    expect(updateArg).not.toHaveProperty('provisionedByOperator');
+  });
+
+  it('never lets the owner set the marker', async () => {
+    const updateArg = await patch(
+      { provisionedByOperator: false },
+      { name: 'Renamed', provisionedByOperator: true }
+    );
+    expect(updateArg).toEqual({ name: 'Renamed' });
   });
 });
 

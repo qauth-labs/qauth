@@ -162,17 +162,22 @@ function isSupportedCimdGrantType(value: string): value is CimdGrantType {
 }
 
 /**
- * Whether registration would accept `uri` as a redirect URI — the same
- * {@link validateRedirectUri} Dynamic Client Registration and the management
- * API apply: https, plain http to a loopback host only, a custom scheme, and
- * never a fragment.
+ * Refuse the whole document unless registration would accept every one of its
+ * `redirect_uris` — the same {@link validateRedirectUri} Dynamic Client
+ * Registration and the management API apply, which refuse the whole request
+ * for one bad URI (ANT-2026-D0XJAT8S follow-up). The rejection becomes an
+ * {@link InvalidClientError}, like every other document failure, so the client
+ * does not resolve (fail closed); its description keeps DCR's own
+ * `invalid_redirect_uri: …` text for the audit log.
  */
-function isRegistrableRedirectUri(uri: string): boolean {
-  try {
-    validateRedirectUri(uri);
-    return true;
-  } catch {
-    return false;
+function assertRegistrableRedirectUris(uris: readonly string[]): void {
+  for (const uri of uris) {
+    try {
+      validateRedirectUri(uri);
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : 'invalid_redirect_uri';
+      throw new InvalidClientError(`CIMD document refused: ${detail}`);
+    }
   }
 }
 
@@ -205,6 +210,13 @@ export interface CimdClientInsert {
   requirePkce: true;
   enabled: true;
   developerId: null;
+  /**
+   * Never operator-provisioned (ANT-2026-O8U3P920): the client's own host
+   * wrote the redirect URIs, so authorization errors are shown on the issuer
+   * rather than redirected. Pinned here for a new row; `upsertCimdClient`
+   * leaves the column out of its conflict set.
+   */
+  provisionedByOperator: false;
   scopes: string[];
   /** ADR-007 §2 agent classification, mirrored from the metadata document. */
   isAgent: boolean;
@@ -364,14 +376,15 @@ export function toCimdClientInsert(
 
   // The document's `redirect_uris` clear the bar every other source of
   // registered URIs clears (ANT-2026-D0XJAT8S): a plain-http callback on a
-  // non-loopback host would receive the code in cleartext. A URI registration
-  // would refuse is DROPPED, the way an unsupported grant type is — the
-  // document describes the client across every AS it talks to — and a document
-  // with nothing usable left is unusable.
-  const redirectUris = doc.redirect_uris.filter(isRegistrableRedirectUri);
-  if (redirectUris.length === 0) {
-    throw new InvalidClientError('CIMD document declares no acceptable redirect_uris');
-  }
+  // non-loopback host would receive the code in cleartext. Unlike an
+  // unsupported grant type, which describes what the client can do elsewhere,
+  // a redirect URI is where QAuth would send a code, so the maintainer decided
+  // (2026-10-19) that one URI registration would refuse makes the whole
+  // document unusable, exactly as Dynamic Client Registration refuses the whole
+  // request. Runs on every resolution, cached documents and rows already
+  // materialised from them included.
+  assertRegistrableRedirectUris(doc.redirect_uris);
+  const redirectUris = [...doc.redirect_uris];
 
   // CIMD §6.2 / RFC 7591 §2 (#384). A document may register PUBLIC keys so the
   // client can authenticate with `private_key_jwt` instead of being restricted
@@ -433,6 +446,7 @@ export function toCimdClientInsert(
     // developer's edits and silently revert them on the next resolution of the
     // `client_id` URL. The metadata document IS the management surface.
     developerId: null,
+    provisionedByOperator: false,
     scopes: [],
     // ADR-007 §2: carry the agent classification from the metadata document.
     isAgent: doc.is_agent ?? false,

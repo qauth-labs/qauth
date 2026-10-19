@@ -139,7 +139,7 @@ Authentication-specific configuration.
 | Variable                    | Type    | Default  | Description                                    |
 | --------------------------- | ------- | -------- | ---------------------------------------------- |
 | `DEFAULT_REALM_NAME`        | string  | `master` | Default realm name                             |
-| `REQUIRE_VERIFIED_ACCOUNT`  | boolean | `false`  | Refuse password login by an unverified account |
+| `REQUIRE_VERIFIED_ACCOUNT`  | boolean | `true`   | Refuse password login by an unverified account |
 | `REQUIRE_EMAIL_VERIFIED`    | boolean | —        | Deprecated alias of `REQUIRE_VERIFIED_ACCOUNT` |
 | `REGISTRATION_RATE_LIMIT`   | number  | `3`      | Max registrations/window                       |
 | `REGISTRATION_RATE_WINDOW`  | number  | `3600`   | Registration window (sec)                      |
@@ -154,9 +154,19 @@ least 1. An account already above a lowered limit keeps its clients but cannot
 create more.
 
 The schema parses both gate names but does not combine them. Read the gate
-through `resolveRequireVerifiedAccount()`. It applies the `false` default and
-the alias. It returns a deprecation warning when the old name is set. It
-refuses the two names set to different values; the app must then fail its boot.
+through `resolveRequireVerifiedAccount()`. It applies the `true` default and
+the alias; a blank value of either name reads as unset. It returns a
+deprecation warning when the old name is set. It refuses the two names set to
+different values; the app must then fail its boot.
+
+The gate defaults to `true` since 2026-10-19 (ANT-2026-SPEMY9GU). The
+auth-server refuses an unverified account with the same answer as a wrong
+password. That is what keeps `POST /auth/register` from revealing whether an
+address has an account: anyone may register any address with a password of
+their choice, and with the gate off a login with that password would succeed
+only for an address that was free. Turning it off gives that answer back, so
+do it only knowingly, for example on a local stack whose mail provider
+delivers nothing.
 
 ### rateLimitEnvSchema
 

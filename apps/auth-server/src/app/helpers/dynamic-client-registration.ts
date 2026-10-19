@@ -3,6 +3,7 @@ import { BadRequestError } from '@qauth-labs/shared-errors';
 import { hasOnlyUriCharacters } from '../schemas/common';
 import type { DynamicClientRegistrationRequest } from '../schemas/oauth';
 import { TOKEN_EXCHANGE_GRANT_TYPE } from '../schemas/oauth';
+import { isAllowedRedirectUriScheme } from './oauth-redirect';
 
 /**
  * The grant types a dynamic registration may carry — the DCR subset of the
@@ -32,9 +33,12 @@ export function rejectRegistration(code: DynamicRegistrationErrorCode, descripti
 
 /**
  * OAuth 2.1 §10.3 / RFC 8252: `http://` redirect URIs are permitted only for
- * loopback (native app) flows. Anything else MUST be `https://` (or a
- * non-HTTP custom scheme for native clients — those we allow without
- * further restriction since we can't meaningfully validate them here).
+ * loopback (native app) flows. Anything else MUST be `https://`, or an
+ * RFC 8252 §7.1 private-use scheme for a native app (a reverse domain name,
+ * e.g. `com.example.app:/callback`). No other scheme is accepted: `javascript:`,
+ * `data:`, `vbscript:`, `file:`, `blob:`, `about:` and every scheme without a
+ * period are refused (`isAllowedRedirectUriScheme`, shared with the
+ * authorization-time gate).
  *
  * The `localhost` hostname SHOULD be avoided in native apps (RFC 8252 §7.3
  * recommends `127.0.0.1` / `[::1]`), but we accept it because many desktop
@@ -85,13 +89,17 @@ export function validateRedirectUri(uri: string): void {
     return;
   }
 
-  // Non-http custom scheme (e.g. `com.example.app:/cb`) — allowed for native
-  // clients per RFC 8252. We don't attempt structural validation here.
-  if (/^[a-z][a-z0-9+\-.]*:$/i.test(parsed.protocol)) {
+  // A private-use scheme for a native app (RFC 8252 §7.1): a reverse domain
+  // name such as `com.example.app:/cb`. Any other scheme is refused, whatever
+  // it would do in a browser (found while fixing scan qauth-20261015-005).
+  if (isAllowedRedirectUriScheme(uri)) {
     return;
   }
 
-  rejectRegistration('invalid_redirect_uri', `unsupported scheme: ${parsed.protocol}`);
+  rejectRegistration(
+    'invalid_redirect_uri',
+    `unsupported scheme: ${parsed.protocol} (use https, http to a loopback host, or a private-use scheme such as com.example.app: per RFC 8252 §7.1)`
+  );
 }
 
 /**

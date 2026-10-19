@@ -38,6 +38,12 @@
 > says what a transfer does to a binding, and question 8 notes that a resume
 > rebinds its root only through the consent screen. No maintainer decision
 > changed.
+>
+> **Amended 2026-10-19**: the maintainer decided that day that
+> `REQUIRE_VERIFIED_ACCOUNT` defaults to `true` (ANT-2026-SPEMY9GU; see
+> ADR-017's amendment of the same date). Where this record says the flag
+> defaults to `false`, read `true`. Decision 8 is unchanged: it holds whatever
+> the flag says.
 
 ## Context
 

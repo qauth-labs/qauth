@@ -1,11 +1,6 @@
 import { randomBytes, randomUUID } from 'node:crypto';
 
-import {
-  BadRequestError,
-  ForbiddenError,
-  JWTInvalidError,
-  NotFoundError,
-} from '@qauth-labs/shared-errors';
+import { BadRequestError, JWTInvalidError, NotFoundError } from '@qauth-labs/shared-errors';
 import type { FastifyInstance } from 'fastify';
 import { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
@@ -114,6 +109,7 @@ function toClientResponse(client: OAuthClientRow, policy: EnvironmentPolicy) {
     responseTypes: client.responseTypes,
     tokenEndpointAuthMethod: client.tokenEndpointAuthMethod,
     enabled: client.enabled,
+    suspended: client.suspended,
     requirePkce: client.requirePkce,
     environment: policy.environment,
     staticApiKeysAllowed: policy.staticApiKeysAllowed,
@@ -494,6 +490,11 @@ export default async function (fastify: FastifyInstance) {
         requirePkce: true,
         enabled: true,
         developerId,
+        // ANT-2026-O8U3P920: a developer account is self-service (anyone can
+        // open one), so its clients are never operator-provisioned and their
+        // authorization errors are shown on the issuer, not redirected. Pinned
+        // here, never read from the body; no update writes it either.
+        provisionedByOperator: false,
       });
 
       // Best-effort: the client (and its secret hash) is already committed, so
@@ -559,7 +560,7 @@ export default async function (fastify: FastifyInstance) {
       preHandler: requireManagementJwt,
       schema: {
         description:
-          "Update mutable fields of one of the developer's OAuth clients (name, description, redirectUris, scopes, grantTypes, responseTypes, tokenEndpointAuthMethod, enabled). client_id and client_secret are immutable here. enabled can only be switched off: re-enabling a disabled client is an operator action and returns 403. Returns 404 if the client does not exist or is owned by another developer. (Phase 2.2, issue #88.)",
+          "Update mutable fields of one of the developer's OAuth clients (name, description, redirectUris, scopes, grantTypes, responseTypes, tokenEndpointAuthMethod, enabled). client_id and client_secret are immutable here. enabled is the owner's switch and may be set either way; it does not lift an operator's suspension (the read-only suspended field), which only the operator can. Returns 404 if the client does not exist or is owned by another developer. (Phase 2.2, issue #88.)",
         tags: ['Clients'],
         security: [{ bearerAuth: [] }],
         params: clientIdParamsSchema,
@@ -575,16 +576,6 @@ export default async function (fastify: FastifyInstance) {
       const scopes = body.scopes === undefined ? undefined : [...new Set(body.scopes)];
 
       const existing = await resolveOwnedClient(fastify, developerId, id);
-
-      // `enabled` is the only switch an operator has to cut a client off, and
-      // the row does not record who cleared it. So the developer may clear it
-      // but never set it: re-enabling would hand a client the operator disabled
-      // its refresh tokens, consents and credentials back. Same rule as the
-      // CIMD document in `resolveClient` — a client's own management surface
-      // can never re-enable a client the server disabled.
-      if (body.enabled === true && !existing.enabled) {
-        throw new ForbiddenError('A disabled client can only be re-enabled by the operator');
-      }
 
       // Validate the *effective* configuration: take each field from the
       // request when present, else fall back to the persisted value. This
@@ -618,19 +609,28 @@ export default async function (fastify: FastifyInstance) {
         assertScopesAllowed(scopes, allowedScopes);
       }
 
+      // An operator's `provisioned_by_operator` vouches for the redirect URIs
+      // as the operator wrote them (ANT-2026-O8U3P920). An owner who changes
+      // them voids that, so the client loses the automatic error redirects.
+      const redirectUrisChanged =
+        body.redirectUris !== undefined &&
+        JSON.stringify(body.redirectUris) !== JSON.stringify(existing.redirectUris);
+
       const updated = await fastify.repositories.oauthClients.update(id, {
         ...(body.name !== undefined ? { name: body.name } : {}),
         ...(body.description !== undefined ? { description: body.description } : {}),
         ...(body.redirectUris !== undefined ? { redirectUris: body.redirectUris } : {}),
+        ...(redirectUrisChanged ? { provisionedByOperator: false } : {}),
         ...(scopes !== undefined ? { scopes } : {}),
         ...(body.grantTypes !== undefined ? { grantTypes: body.grantTypes } : {}),
         ...(body.responseTypes !== undefined ? { responseTypes: body.responseTypes } : {}),
         ...(body.tokenEndpointAuthMethod !== undefined
           ? { tokenEndpointAuthMethod: body.tokenEndpointAuthMethod }
           : {}),
-        // Only ever written as `false`, so a disable that lands after the read
-        // above cannot be overwritten either.
-        ...(body.enabled === false ? { enabled: false } : {}),
+        // `enabled` is the owner's switch, both ways. An operator who must keep
+        // a client off suspends it (`oauth_clients.suspended`), which no route
+        // writes and this one never reads from the body (ANT-2026-DR5XI3LV).
+        ...(body.enabled !== undefined ? { enabled: body.enabled } : {}),
       });
 
       await auditBestEffort(fastify, {

@@ -207,6 +207,19 @@ const loginFormSchema = z.object({
 
 type LoginForm = z.infer<typeof loginFormSchema>;
 
+/**
+ * The one refusal text for a sign-in that did not succeed: unknown address,
+ * wrong password, disabled account and, under the verified-account gate, an
+ * unverified one. The text cannot say which. While the gate is on it names the
+ * unverified case among the possibilities, so a person who has just registered
+ * knows to open the verification mail first.
+ */
+function signInRefusal(): string {
+  return env.REQUIRE_VERIFIED_ACCOUNT
+    ? 'Invalid email or password. If you have just registered, confirm your email address first with the link we sent you.'
+    : 'Invalid email or password.';
+}
+
 export default async function (fastify: FastifyInstance) {
   fastify.withTypeProvider<ZodTypeProvider>().get(
     '/login',
@@ -360,11 +373,22 @@ export default async function (fastify: FastifyInstance) {
         email: normalizedEmail,
         password: body.password,
       });
+
+      // Verified-account gate (F-08), identical to POST /auth/login: with
+      // `REQUIRE_VERIFIED_ACCOUNT` on (the default) an unverified credential
+      // gets no session, so it cannot complete an OAuth/OIDC flow through the
+      // hosted UI either. It is refused EXACTLY like a wrong password (same
+      // 401 page, same floor, same order of work, still counted): a page of
+      // its own told a just-registered free address from a registered one
+      // (ANT-2026-SPEMY9GU). Only the audit row keeps the reason.
+      const unverified =
+        check.status === 'ok' && !check.emailVerified && env.REQUIRE_VERIFIED_ACCOUNT;
+
       const user =
-        check.status === 'ok'
+        check.status === 'ok' && !unverified
           ? await fastify.repositories.users.findById(check.credential.userId)
           : undefined;
-      if (check.status === 'ok' && !user) {
+      if (check.status === 'ok' && !unverified && !user) {
         // FK-impossible in normal operation — same operator-alerting log line
         // as the API login; the wire stays the generic 401 render below.
         fastify.log.error(
@@ -373,38 +397,21 @@ export default async function (fastify: FastifyInstance) {
         );
       }
 
-      if (check.status !== 'ok' || !user || !user.enabled) {
+      if (check.status !== 'ok' || unverified || !user || !user.enabled) {
         await ensureMinimumResponseTime(startTime, MIN_RESPONSE_TIME_MS.LOGIN);
         await fastify.repositories.auditLogs.create({
-          userId: null,
+          userId: unverified ? check.credential.userId : null,
           oauthClientId: null,
           event: 'ui.login.failure',
           eventType: 'auth',
           success: false,
           ipAddress: request.ip,
           userAgent: request.headers['user-agent'] || null,
-          metadata: { email: normalizedEmail },
+          metadata: unverified
+            ? { email: normalizedEmail, reason: 'email_not_verified' }
+            : { email: normalizedEmail },
         });
-        return renderRefusal(401, 'Invalid email or password.');
-      }
-
-      // Verified-account gate (F-08), identical to POST /auth/login: with
-      // `REQUIRE_VERIFIED_ACCOUNT=true` an unverified credential gets no session,
-      // so it cannot complete an OAuth/OIDC flow through the hosted UI either.
-      // Stays counted as a failed attempt, as on the API route.
-      if (!check.emailVerified && env.REQUIRE_VERIFIED_ACCOUNT) {
-        await ensureMinimumResponseTime(startTime, MIN_RESPONSE_TIME_MS.LOGIN);
-        await fastify.repositories.auditLogs.create({
-          userId: user.id,
-          oauthClientId: null,
-          event: 'ui.login.failure',
-          eventType: 'auth',
-          success: false,
-          ipAddress: request.ip,
-          userAgent: request.headers['user-agent'] || null,
-          metadata: { email: normalizedEmail, reason: 'email_not_verified' },
-        });
-        return renderRefusal(403, 'Verify your email address before signing in. Check your inbox.');
+        return renderRefusal(401, signInRefusal());
       }
 
       // As on POST /auth/login: the account's state is cleared; the source

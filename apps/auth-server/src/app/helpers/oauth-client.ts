@@ -30,6 +30,11 @@ export async function getOrCreateSystemClient(realmId: string, fastify: FastifyI
       grantTypes: ['refresh_token'],
       requirePkce: false,
       developerId: null,
+      // The server provisions this client itself, for its own first-party
+      // login (ANT-2026-O8U3P920). It registers no redirect URI, so the marker
+      // never sends an error response anywhere; it is set so that every
+      // server-written client carries it consistently.
+      provisionedByOperator: true,
     });
   }
 

@@ -1,6 +1,6 @@
 import { requireDockerOrSkip } from '@qauth-labs/shared-testing';
 import type { FastifyInstance } from 'fastify';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   backdateWalletPresentationSignal,
@@ -12,18 +12,19 @@ import {
   decodeJwtClaims,
   type E2eInfrastructure,
   extractCsrfToken,
-  extractFlowHandle,
   followRedirect,
   generateJwtPem,
+  linkWalletToNewAccount,
   type PemKeyPair,
   pkcePair,
-  readInvocationUriFromPendingPage,
+  registerPasswordAccount,
   REQUIRED_TEST_ENVIRONMENT,
   resetE2eState,
+  signInWithPassword,
   startE2eInfrastructure,
   type StartedWalletFlow,
+  startWalletLink,
   startWalletLogin,
-  type WalletDeviceChoice,
   withoutNonces,
 } from '../testing/e2e-harness';
 import {
@@ -54,9 +55,13 @@ import { WALLET_RETURN_CODE_TTL_MS } from './constants';
  * those suites necessarily stubs its neighbours. The properties that matter to a
  * deployment are the ones that only exist ACROSS the seams:
  *
- * - a first-time wallet login creates a user, its `user_credentials` row and its
- *   `user_attributes` rows — and keys the credential on the ASSERTED identifier,
- *   never on a wallet key (ADR-009 Finding 1);
+ * - wallet sign-in never creates an account: a valid credential on an
+ *   identifier nobody has is refused exactly as on a taken one, and writes
+ *   nothing (ADR-009 §1, amended 2026-10-19; ANT-2026-NCX3VXDP). A wallet
+ *   reaches an account by being linked from a signed-in session (#238); the
+ *   linked credential keys on the account's identifier, never on a wallet key
+ *   (ADR-009 Finding 1), and its claims land as `user_attributes` at its first
+ *   sign-in;
  * - a linked wallet credential and the account's password credential mint tokens
  *   with the IDENTICAL `sub` (#238);
  * - an untrusted issuer is refused before any account is touched, with a refusal
@@ -171,24 +176,48 @@ describe('wallet federation E2E (oid4vp-1.0-base, real containers)', () => {
     return { realmId: realm.id, clientId: client.id };
   }
 
-  /** Register a password account through the real registration route. */
-  async function registerPasswordUser(
+  /**
+   * Give `wallet`'s credential an account the only way QAuth allows since
+   * ADR-009 §1's 2026-10-19 amendment: register `email` with a password, sign
+   * in, and link the wallet from that session (#238).
+   *
+   * @returns the account's `users.id`.
+   */
+  async function linkedAccount(
     app: FastifyInstance,
-    email: string,
-    password = 'Correct-Horse-Battery-Staple-42!'
+    wallet: MockWallet,
+    email: string
   ): Promise<string> {
-    const response = await app.inject({
-      method: 'POST',
-      url: '/auth/register',
-      payload: { email, password },
-    });
-    expect(response.statusCode).toBe(201);
-    const body = response.json() as { user?: { id?: string }; id?: string };
-    const userId = body.user?.id ?? body.id;
-    if (typeof userId !== 'string') {
-      throw new Error(`registration returned no user id: ${response.body}`);
-    }
+    const { userId } = await linkWalletToNewAccount(
+      app,
+      email,
+      async (invocationUri) => (await wallet.buildResponse(invocationUri)).formBody
+    );
     return userId;
+  }
+
+  /** The `provider_type` of every credential row on `email`, sorted. */
+  async function providerTypesOn(
+    app: FastifyInstance,
+    realmId: string,
+    email: string
+  ): Promise<string[]> {
+    const rows = await app.repositories.userCredentials.findAllByRealmAndExternalSub(
+      realmId,
+      email
+    );
+    return rows.map((row) => row.providerType).sort();
+  }
+
+  /** The cookie NAMES a reply set, sorted — values differ per flow, names must not. */
+  function setCookieNames(headers: Record<string, unknown>): string[] {
+    const setCookie = headers['set-cookie'];
+    const all = Array.isArray(setCookie)
+      ? (setCookie as string[])
+      : typeof setCookie === 'string'
+        ? [setCookie]
+        : [];
+    return all.map((header) => header.slice(0, header.indexOf('='))).sort();
   }
 
   /** A started wallet sign-in — the harness's shape, named for the reader. */
@@ -320,19 +349,6 @@ describe('wallet federation E2E (oid4vp-1.0-base, real containers)', () => {
     return { flow, redirectUri: ack.redirectUri, responseCode: ack.responseCode };
   }
 
-  /** The `users.id` behind the wallet credential enrolled for `asserted`, if any. */
-  async function enrolledUserId(
-    app: FastifyInstance,
-    realmId: string,
-    asserted: string
-  ): Promise<string | undefined> {
-    const rows = await app.repositories.userCredentials.findAllByRealmAndExternalSub(
-      realmId,
-      asserted
-    );
-    return rows[0]?.userId;
-  }
-
   /**
    * Exchange a browser session for an ID token, through the REAL
    * `/oauth/authorize` → `/oauth/token` path.
@@ -424,8 +440,80 @@ describe('wallet federation E2E (oid4vp-1.0-base, real containers)', () => {
 
   // ------------------------------------------------------- the scenarios
 
-  describe('first-time wallet login (asserted-lookup, new user)', () => {
-    it('creates the account, its wallet credential and its verified attributes', async () => {
+  describe('wallet sign-in creates no account; a linked wallet signs in (ADR-009 §1, amended 2026-10-19)', () => {
+    it('refuses a valid credential on an unused identifier exactly as on a taken one, and creates nothing (ANT-2026-NCX3VXDP)', async () => {
+      // The scanner's reproducer, end to end. Mallory holds her OWN valid
+      // credential from the trusted issuer and types identifiers that are not
+      // hers: Alice's, which has an account, and one nobody has. Before the
+      // amendment the first was refused and the second signed her in to a new
+      // account bound to her credential.
+      const issuer = await createMockIssuer(TRUSTED_ISSUER, 'k1');
+      const { wallet: alice } = await walletHolding(issuer);
+      const { wallet: mallory } = await walletHolding(issuer, {
+        claims: { given_name: 'Mallory', family_name: 'Vane', email: 'mallory@example.com' },
+      });
+
+      await withDeployment(
+        walletEnabledEnv({
+          OID4VP_ISSUER_JWKS: issuerJwksConfig([issuer]),
+          OID4VP_TRUSTED_ISSUERS: JSON.stringify({ [REALM]: [TRUSTED_ISSUER] }),
+        }),
+        async ({ app, ids }) => {
+          const taken = 'alice@example.com';
+          const unused = 'nobody@example.com';
+          await linkedAccount(app, alice, taken);
+
+          // Cross-device: the poll answers the two identically, no session.
+          const onTaken = await signInWithWallet(app, mallory, taken);
+          const onUnused = await signInWithWallet(app, mallory, unused);
+          expect(onTaken.status).toBe('rejected');
+          expect(onUnused.status).toBe(onTaken.status);
+          expect(onTaken.jar.get(SESSION_COOKIE)).toBeUndefined();
+          expect(onUnused.jar.get(SESSION_COOKIE)).toBeUndefined();
+
+          // Same-device: the return leg renders the same page with the same
+          // status and sets the same cookies (by name) — no session for either.
+          const takenLeg = await presentOnThisDevice(app, mallory, taken);
+          const takenLanding = await followRedirect(app, takenLeg.flow.jar, takenLeg.redirectUri);
+          const unusedLeg = await presentOnThisDevice(app, mallory, unused);
+          const unusedLanding = await followRedirect(
+            app,
+            unusedLeg.flow.jar,
+            unusedLeg.redirectUri
+          );
+          expect(takenLanding.statusCode).toBe(401);
+          expect(unusedLanding.statusCode).toBe(takenLanding.statusCode);
+          expect(decodeHtmlEntities(unusedLanding.body)).toContain('Sign-in was not completed');
+          expect(withoutNonces(unusedLanding.body)).toBe(withoutNonces(takenLanding.body));
+          expect(setCookieNames(unusedLanding.headers)).toEqual(
+            setCookieNames(takenLanding.headers)
+          );
+          expect(setCookieNames(unusedLanding.headers)).not.toContain(SESSION_COOKIE);
+          expect(unusedLeg.flow.jar.get(SESSION_COOKIE)).toBeUndefined();
+
+          // Nothing exists on the unused identifier, and Alice's account is as
+          // linking left it.
+          expect(
+            await app.repositories.userCredentials.findAllByRealmAndExternalSub(ids.realmId, unused)
+          ).toEqual([]);
+          expect(await providerTypesOn(app, ids.realmId, taken)).toEqual(['password', 'wallet']);
+
+          // The owner's own credential on an identifier with no account is no
+          // different: a wallet reaches an account only by being linked.
+          expect((await signInWithWallet(app, alice, 'alice.second@example.com')).status).toBe(
+            'rejected'
+          );
+          expect(
+            await app.repositories.userCredentials.findAllByRealmAndExternalSub(
+              ids.realmId,
+              'alice.second@example.com'
+            )
+          ).toEqual([]);
+        }
+      );
+    }, 180_000);
+
+    it('keys a linked wallet credential on the account identifier, and writes its claims at the first wallet sign-in', async () => {
       const issuer = await createMockIssuer(TRUSTED_ISSUER, 'k1');
       const { wallet } = await walletHolding(issuer);
 
@@ -435,41 +523,38 @@ describe('wallet federation E2E (oid4vp-1.0-base, real containers)', () => {
           OID4VP_TRUSTED_ISSUERS: JSON.stringify({ [REALM]: [TRUSTED_ISSUER] }),
         }),
         async ({ app, ids }) => {
-          const asserted = 'newcomer@example.com';
+          const email = 'newcomer@example.com';
+          const userId = await linkedAccount(app, wallet, email);
 
-          const outcome = await signInWithWallet(app, wallet, asserted);
-          expect(outcome.status).toBe('complete');
-
-          // ADR-009 §1: `external_sub` is the ASSERTED, normalized identifier —
+          // ADR-009 §1: `external_sub` is the account's normalized identifier —
           // the same column `PasswordProvider` fills. Never a wallet key, a JWK
           // thumbprint or a DID.
           const rows = await app.repositories.userCredentials.findAllByRealmAndExternalSub(
             ids.realmId,
-            asserted
+            email
           );
-          expect(rows).toHaveLength(1);
-          expect(rows[0]?.providerType).toBe('wallet');
-          expect(rows[0]?.externalSub).toBe(asserted);
+          const walletRow = rows.find((row) => row.providerType === 'wallet');
+          expect(walletRow?.userId).toBe(userId);
+          expect(walletRow?.externalSub).toBe(email);
 
-          const stored = JSON.stringify(rows[0]?.credentialData ?? {});
+          const stored = JSON.stringify(walletRow?.credentialData ?? {});
           expect(stored).not.toContain('cnf');
           expect(stored).not.toContain('"kty"');
           expect(stored).not.toContain('did:');
 
-          // #235: the credential's claims land as `source='wallet'` attributes.
-          const userId = rows[0]?.userId;
-          if (userId === undefined) throw new Error('no user id on the wallet credential row');
-          const email = await app.repositories.userAttributes.findVerifiedByUserIdAndKey(
+          // #235: the credential's claims land as `source='wallet'` attributes
+          // when the wallet signs in.
+          expect((await signInWithWallet(app, wallet, email)).status).toBe('complete');
+          const emailRows = await app.repositories.userAttributes.findVerifiedByUserIdAndKey(
             userId,
             'email'
           );
-          expect(email.map((row) => row.source)).toContain('wallet');
-          expect(email.find((row) => row.source === 'wallet')?.attrValue).toBe(
+          expect(emailRows.find((row) => row.source === 'wallet')?.attrValue).toBe(
             CREDENTIAL_CLAIMS.email
           );
         }
       );
-    }, 120_000);
+    }, 180_000);
 
     it('signs the same wallet in again without creating a second account', async () => {
       const issuer = await createMockIssuer(TRUSTED_ISSUER, 'k1');
@@ -482,21 +567,17 @@ describe('wallet federation E2E (oid4vp-1.0-base, real containers)', () => {
         }),
         async ({ app, ids }) => {
           const asserted = 'returning@example.com';
+          await linkedAccount(app, wallet, asserted);
 
           expect((await signInWithWallet(app, wallet, asserted)).status).toBe('complete');
           expect((await signInWithWallet(app, wallet, asserted)).status).toBe('complete');
 
-          // The entitlement check (ADR-009 §1) matched the stored binding rather
-          // than enrolling a duplicate — the property that makes the second
-          // login a LOGIN.
-          const rows = await app.repositories.userCredentials.findAllByRealmAndExternalSub(
-            ids.realmId,
-            asserted
-          );
-          expect(rows).toHaveLength(1);
+          // The entitlement check (ADR-009 §1) matched the stored binding; the
+          // sign-ins added nothing to what linking wrote.
+          expect(await providerTypesOn(app, ids.realmId, asserted)).toEqual(['password', 'wallet']);
         }
       );
-    }, 120_000);
+    }, 180_000);
 
     it('refuses a different person holding a credential from the same trusted issuer', async () => {
       // The attack ADR-009 §1 names: a genuine, valid, trusted credential
@@ -515,55 +596,91 @@ describe('wallet federation E2E (oid4vp-1.0-base, real containers)', () => {
         }),
         async ({ app, ids }) => {
           const victim = 'victim@example.com';
+          await linkedAccount(app, alice, victim);
           expect((await signInWithWallet(app, alice, victim)).status).toBe('complete');
-
-          const attempt = await signInWithWallet(app, mallory, victim);
-          expect(attempt.status).toBe('rejected');
-
-          // No second row, and nothing rebound: the refusal wrote nothing.
-          const rows = await app.repositories.userCredentials.findAllByRealmAndExternalSub(
+          const before = await app.repositories.userCredentials.findAllByRealmAndExternalSub(
             ids.realmId,
             victim
           );
-          expect(rows).toHaveLength(1);
+
+          const attempt = await signInWithWallet(app, mallory, victim);
+          expect(attempt.status).toBe('rejected');
+          expect(attempt.jar.get(SESSION_COOKIE)).toBeUndefined();
+
+          // No row added, and nothing rebound: the refusal wrote nothing.
+          expect(
+            await app.repositories.userCredentials.findAllByRealmAndExternalSub(ids.realmId, victim)
+          ).toEqual(before);
         }
       );
-    }, 120_000);
+    }, 180_000);
   });
 
   describe('untrusted issuer (#236)', () => {
-    it('refuses a validly signed credential from an unlisted issuer, creating nothing', async () => {
+    it('refuses a credential from an issuer the realm no longer trusts, on the account it is linked to', async () => {
+      // A credential from an untrusted issuer on an identifier with no account
+      // is refused whatever the trust gate does, since sign-in creates no
+      // accounts. So the credential is linked while the realm trusts its
+      // issuer, and presented again after the operator removes it: the account
+      // is the credential's own, and only the trust gate can refuse it.
       const trusted = await createMockIssuer(TRUSTED_ISSUER, 'k1');
       const rogue = await createMockIssuer(UNTRUSTED_ISSUER, 'r1');
       const { wallet } = await walletHolding(rogue);
+      const email = 'formerly-trusted@example.com';
+
+      // The rogue issuer's KEY stays configured throughout — so the signature
+      // verifies and the refusal can only come from the trust gate, not from
+      // an unresolvable key. That separation is the whole point of #236
+      // keeping `OID4VP_ISSUER_JWKS` and `OID4VP_TRUSTED_ISSUERS` apart.
+      const issuerJwks = issuerJwksConfig([trusted, rogue]);
 
       await withDeployment(
         walletEnabledEnv({
-          // The rogue issuer's KEY is configured — so the signature verifies and
-          // the refusal can only come from the trust gate, not from an
-          // unresolvable key. That separation is the whole point of #236 keeping
-          // `OID4VP_ISSUER_JWKS` and `OID4VP_TRUSTED_ISSUERS` apart.
-          OID4VP_ISSUER_JWKS: issuerJwksConfig([trusted, rogue]),
-          OID4VP_TRUSTED_ISSUERS: JSON.stringify({ [REALM]: [TRUSTED_ISSUER] }),
+          OID4VP_ISSUER_JWKS: issuerJwks,
+          OID4VP_TRUSTED_ISSUERS: JSON.stringify({ [REALM]: [TRUSTED_ISSUER, UNTRUSTED_ISSUER] }),
         }),
-        async ({ app, ids }) => {
-          const asserted = 'nobody@example.com';
-          const outcome = await signInWithWallet(app, wallet, asserted);
-
-          expect(outcome.status).toBe('rejected');
-          expect(
-            await app.repositories.userCredentials.findAllByRealmAndExternalSub(
-              ids.realmId,
-              asserted
-            )
-          ).toEqual([]);
+        async ({ app }) => {
+          await linkedAccount(app, wallet, email);
+          // The control: while trusted, the credential signs in.
+          expect((await signInWithWallet(app, wallet, email)).status).toBe('complete');
         }
       );
-    }, 120_000);
+
+      // The issuer removed from trust. The SAME database and Redis: this
+      // deployment is deliberately not reset.
+      const booted = await bootAuthServer(
+        walletEnabledEnv({
+          OID4VP_ISSUER_JWKS: issuerJwks,
+          OID4VP_TRUSTED_ISSUERS: JSON.stringify({ [REALM]: [TRUSTED_ISSUER] }),
+        })
+      );
+      try {
+        const { app } = booted;
+        const realm = await app.repositories.realms.findByName(REALM);
+        if (realm === undefined) throw new Error('the first deployment created no realm');
+        const before = await app.repositories.userCredentials.findAllByRealmAndExternalSub(
+          realm.id,
+          email
+        );
+        expect(before.map((row) => row.providerType).sort()).toEqual(['password', 'wallet']);
+
+        const outcome = await signInWithWallet(app, wallet, email);
+
+        expect(outcome.status).toBe('rejected');
+        expect(outcome.jar.get(SESSION_COOKIE)).toBeUndefined();
+        expect(
+          await app.repositories.userCredentials.findAllByRealmAndExternalSub(realm.id, email)
+        ).toEqual(before);
+      } finally {
+        await booted.close();
+      }
+    }, 240_000);
 
     it('refuses identically whether the issuer is untrusted or the account unknown', async () => {
       // #236's rule: an untrusted issuer must be indistinguishable from every
-      // other refusal. Asserted on the wire, where an anonymous caller sees it.
+      // other refusal. And ADR-009 §1 as amended: an identifier with no account
+      // is one of those refusals, not a sign-up. Asserted on the wire, where an
+      // anonymous caller sees it.
       const trusted = await createMockIssuer(TRUSTED_ISSUER, 'k1');
       const rogue = await createMockIssuer(UNTRUSTED_ISSUER, 'r1');
       const { wallet: rogueWallet } = await walletHolding(rogue);
@@ -574,89 +691,30 @@ describe('wallet federation E2E (oid4vp-1.0-base, real containers)', () => {
           OID4VP_ISSUER_JWKS: issuerJwksConfig([trusted, rogue]),
           OID4VP_TRUSTED_ISSUERS: JSON.stringify({ [REALM]: [TRUSTED_ISSUER] }),
         }),
-        async ({ app }) => {
-          // Untrusted issuer, and a trusted issuer asserting an account that
-          // exists only as a password account (ADR-009 bootstrap case 2).
-          await registerPasswordUser(app, 'existing@example.com');
+        async ({ app, ids }) => {
+          // An account that exists only as a password account (ADR-009
+          // bootstrap case 2).
+          await registerPasswordAccount(app, 'existing@example.com');
 
           const untrusted = await signInWithWallet(app, rogueWallet, 'nobody@example.com');
+          const unknown = await signInWithWallet(app, trustedWallet, 'nobody@example.com');
           const unbound = await signInWithWallet(app, trustedWallet, 'existing@example.com');
 
           expect(untrusted.status).toBe('rejected');
+          expect(unknown.status).toBe(untrusted.status);
           expect(unbound.status).toBe(untrusted.status);
+          expect(
+            await app.repositories.userCredentials.findAllByRealmAndExternalSub(
+              ids.realmId,
+              'nobody@example.com'
+            )
+          ).toEqual([]);
         }
       );
     }, 120_000);
   });
 
   describe('account linking (#238)', () => {
-    /** Sign a password account in through the real login form; returns its jar. */
-    async function passwordSession(
-      app: FastifyInstance,
-      email: string,
-      password: string
-    ): Promise<CookieJar> {
-      const jar = new CookieJar();
-      const loginPage = await app.inject({ method: 'GET', url: '/ui/login' });
-      jar.absorb(loginPage.headers['set-cookie']);
-      const login = await app.inject({
-        method: 'POST',
-        url: '/ui/login',
-        headers: {
-          'content-type': 'application/x-www-form-urlencoded',
-          ...(jar.header() === undefined ? {} : { cookie: jar.header() as string }),
-        },
-        payload: new URLSearchParams({
-          email,
-          password,
-          csrf_token: extractCsrfToken(loginPage.body),
-        }).toString(),
-      });
-      expect(login.statusCode).toBe(302);
-      jar.absorb(login.headers['set-cookie']);
-      return jar;
-    }
-
-    /**
-     * Start a linking flow through the server-rendered screen, as the signed-in
-     * browser holding `jar`, choosing where the wallet is (#405) — or not
-     * choosing, which is the cross-device default every pre-#405 client gets.
-     */
-    async function startWalletLink(
-      app: FastifyInstance,
-      jar: CookieJar,
-      device?: WalletDeviceChoice
-    ): Promise<{ handle: string; invocationUri: string; page: string }> {
-      const confirm = await app.inject({
-        method: 'GET',
-        url: '/ui/wallet-link',
-        headers: { cookie: jar.header() as string },
-      });
-      expect(confirm.statusCode).toBe(200);
-      jar.absorb(confirm.headers['set-cookie']);
-
-      const started = await app.inject({
-        method: 'POST',
-        url: '/ui/wallet-link',
-        headers: {
-          'content-type': 'application/x-www-form-urlencoded',
-          cookie: jar.header() as string,
-        },
-        payload: new URLSearchParams({
-          csrf_token: extractCsrfToken(confirm.body),
-          ...(device === undefined ? {} : { device }),
-        }).toString(),
-      });
-      expect(started.statusCode).toBe(200);
-      jar.absorb(started.headers['set-cookie']);
-
-      return {
-        handle: extractFlowHandle(started.body),
-        invocationUri: await readInvocationUriFromPendingPage(app, started.body, device === 'this'),
-        page: started.body,
-      };
-    }
-
     /** Poll the JSON linking status once, as the signed-in browser. */
     async function pollLink(
       app: FastifyInstance,
@@ -685,10 +743,10 @@ describe('wallet federation E2E (oid4vp-1.0-base, real containers)', () => {
         async ({ app, ids }) => {
           const email = 'linked@example.com';
           const password = 'Correct-Horse-Battery-Staple-42!';
-          const userId = await registerPasswordUser(app, email, password);
+          const userId = await registerPasswordAccount(app, email, password);
 
           // (1) Sign in with the password so the linking flow has a session.
-          const jar = await passwordSession(app, email, password);
+          const jar = await signInWithPassword(app, email, password);
 
           // (2) Link the wallet through the server-rendered linking screen —
           // CROSS-device, the path that existed before #405: no device field,
@@ -741,8 +799,8 @@ describe('wallet federation E2E (oid4vp-1.0-base, real containers)', () => {
         async ({ app, ids }) => {
           const email = 'linked-same-device@example.com';
           const password = 'Correct-Horse-Battery-Staple-42!';
-          const userId = await registerPasswordUser(app, email, password);
-          const jar = await passwordSession(app, email, password);
+          const userId = await registerPasswordAccount(app, email, password);
+          const jar = await signInWithPassword(app, email, password);
 
           // `device=this`: the pending page offers the deep link and no QR.
           const link = await startWalletLink(app, jar, 'this');
@@ -818,15 +876,9 @@ describe('wallet federation E2E (oid4vp-1.0-base, real containers)', () => {
         }),
         async ({ app, ids }) => {
           const asserted = 'assured@example.com';
+          const userId = await linkedAccount(app, wallet, asserted);
           const outcome = await signInWithWallet(app, wallet, asserted);
           expect(outcome.status).toBe('complete');
-
-          const rows = await app.repositories.userCredentials.findAllByRealmAndExternalSub(
-            ids.realmId,
-            asserted
-          );
-          const userId = rows[0]?.userId;
-          if (userId === undefined) throw new Error('wallet login created no credential row');
 
           const claims = await idTokenFor(app, outcome.jar, ids, userId);
           expect(claims['acr']).toBe('http://eidas.europa.eu/LoA/high');
@@ -848,15 +900,9 @@ describe('wallet federation E2E (oid4vp-1.0-base, real containers)', () => {
         }),
         async ({ app, ids }) => {
           const asserted = 'unassured@example.com';
+          const userId = await linkedAccount(app, wallet, asserted);
           const outcome = await signInWithWallet(app, wallet, asserted);
           expect(outcome.status).toBe('complete');
-
-          const rows = await app.repositories.userCredentials.findAllByRealmAndExternalSub(
-            ids.realmId,
-            asserted
-          );
-          const userId = rows[0]?.userId;
-          if (userId === undefined) throw new Error('wallet login created no credential row');
 
           const claims = await idTokenFor(app, outcome.jar, ids, userId);
           expect('acr' in claims).toBe(false);
@@ -883,7 +929,7 @@ describe('wallet federation E2E (oid4vp-1.0-base, real containers)', () => {
         async ({ app, ids }) => {
           const email = 'password-only@example.com';
           const password = 'Correct-Horse-Battery-Staple-42!';
-          const userId = await registerPasswordUser(app, email, password);
+          const userId = await registerPasswordAccount(app, email, password);
 
           const jar = new CookieJar();
           const page = await app.inject({ method: 'GET', url: '/ui/login' });
@@ -936,7 +982,7 @@ describe('wallet federation E2E (oid4vp-1.0-base, real containers)', () => {
 
           const email = 'no-wallet@example.com';
           const password = 'Correct-Horse-Battery-Staple-42!';
-          const userId = await registerPasswordUser(app, email, password);
+          const userId = await registerPasswordAccount(app, email, password);
 
           const jar = new CookieJar();
           const page = await app.inject({ method: 'GET', url: '/ui/login' });
@@ -1022,6 +1068,9 @@ describe('wallet federation E2E (oid4vp-1.0-base, real containers)', () => {
           OID4VP_TRUSTED_ISSUERS: JSON.stringify({ [REALM]: [TRUSTED_ISSUER] }),
         }),
         async ({ app }) => {
+          // The account the DCQL-keyed presentation signs in to at the end.
+          await linkedAccount(app, wallet, 'dcql@example.com');
+
           const flow = await startWalletLogin(app, 'dcql@example.com');
           const request = parseOid4vpRequest(flow.invocationUri);
 
@@ -1062,8 +1111,8 @@ describe('wallet federation E2E (oid4vp-1.0-base, real containers)', () => {
 
   describe('same-device return leg (#405 — OID4VP 1.0 §8.2 / §14.2, HAIP 1.0 §5.1)', () => {
     /**
-     * Every scenario here runs the SAME deployment shape as the first-time
-     * login above; what varies is only the `device` the user chose at the
+     * Every scenario here runs the SAME deployment shape as the sign-ins
+     * above, against an account the wallet was linked to first; what varies is only the `device` the user chose at the
      * sign-in form, and therefore how the flow is allowed to end.
      */
     function sameDeviceEnv(issuer: MockCredentialIssuer): Record<string, string> {
@@ -1079,6 +1128,7 @@ describe('wallet federation E2E (oid4vp-1.0-base, real containers)', () => {
 
       await withDeployment(sameDeviceEnv(issuer), async ({ app, ids }) => {
         const asserted = 'same-device@example.com';
+        const userId = await linkedAccount(app, wallet, asserted);
         const flow = await startWalletLogin(app, asserted, { device: 'this' });
 
         // Exactly one affordance: the deep link, and no QR.
@@ -1129,10 +1179,8 @@ describe('wallet federation E2E (oid4vp-1.0-base, real containers)', () => {
         expect(await pollStatus(app, flow)).toEqual({ status: 'complete', redirect_to: '/' });
         expect((await pollStatus(app, flow)).status).toBe('expired');
 
-        // The session is real, in that jar, for the enrolled account — proven
+        // The session is real, in that jar, for the linked account — proven
         // through the real authorize → token path like every login above.
-        const userId = await enrolledUserId(app, ids.realmId, asserted);
-        if (userId === undefined) throw new Error('the same-device login enrolled no account');
         const claims = await idTokenFor(app, flow.jar, ids, userId);
         expect(claims['sub']).toBe(userId);
       });
@@ -1144,6 +1192,7 @@ describe('wallet federation E2E (oid4vp-1.0-base, real containers)', () => {
 
       await withDeployment(sameDeviceEnv(issuer), async ({ app, ids }) => {
         const asserted = 'same-device-codes@example.com';
+        await linkedAccount(app, wallet, asserted);
         const { flow, redirectUri, responseCode } = await presentOnThisDevice(
           app,
           wallet,
@@ -1190,10 +1239,8 @@ describe('wallet federation E2E (oid4vp-1.0-base, real containers)', () => {
         const replayedAtHome = await followRedirect(app, flow.jar, redirectUri);
         expect(withoutNonces(replayedAtHome.body)).toBe(withoutNonces(tampered.body));
 
-        // One account, from the one genuine landing.
-        expect(
-          await app.repositories.userCredentials.findAllByRealmAndExternalSub(ids.realmId, asserted)
-        ).toHaveLength(1);
+        // Still the one account linking created, and nothing more.
+        expect(await providerTypesOn(app, ids.realmId, asserted)).toEqual(['password', 'wallet']);
       });
     }, 120_000);
 
@@ -1203,6 +1250,10 @@ describe('wallet federation E2E (oid4vp-1.0-base, real containers)', () => {
 
       await withDeployment(sameDeviceEnv(issuer), async ({ app, ids }) => {
         const asserted = 'same-device-foreign@example.com';
+        // An account this presentation WOULD sign in to, with consent granted,
+        // so "nobody can mint a code" below is about the return leg alone.
+        const userId = await linkedAccount(app, wallet, asserted);
+        await app.repositories.oauthConsents.upsertGrant(userId, ids.clientId, ids.realmId, SCOPES);
         const { flow, redirectUri } = await presentOnThisDevice(app, wallet, asserted);
 
         // The wallet opens a DIFFERENT browser: an in-app webview, a private
@@ -1220,11 +1271,10 @@ describe('wallet federation E2E (oid4vp-1.0-base, real containers)', () => {
         // The tab that started the flow is told promptly, not at the deadline.
         expect((await pollStatus(app, flow)).status).toBe('rejected');
 
-        // Neither browser can obtain a code, and nobody was enrolled: the
-        // presentation was DISCARDED, not parked for a later landing.
+        // Neither browser can obtain a code: the presentation was DISCARDED,
+        // not parked for a later landing.
         expect(await canMintAuthorizationCode(app, elsewhere)).toBe(false);
         expect(await canMintAuthorizationCode(app, flow.jar)).toBe(false);
-        expect(await enrolledUserId(app, ids.realmId, asserted)).toBeUndefined();
 
         // Even the right browser, arriving afterwards with the same code,
         // finds it spent — the burn is the hard guarantee, the discard only
@@ -1242,6 +1292,10 @@ describe('wallet federation E2E (oid4vp-1.0-base, real containers)', () => {
 
       await withDeployment(sameDeviceEnv(issuer), async ({ app, ids }) => {
         const asserted = 'same-device-unfollowed@example.com';
+        // An account this presentation WOULD sign in to, with consent granted,
+        // so "no code" below is about the deadline alone.
+        const userId = await linkedAccount(app, wallet, asserted);
+        await app.repositories.oauthConsents.upsertGrant(userId, ids.clientId, ids.realmId, SCOPES);
         const { flow, redirectUri } = await presentOnThisDevice(app, wallet, asserted);
 
         // The wallet posted and stopped. However often the original tab asks,
@@ -1259,7 +1313,6 @@ describe('wallet federation E2E (oid4vp-1.0-base, real containers)', () => {
         expect((await pollStatus(app, flow)).status).toBe('rejected');
         expect((await pollStatus(app, flow)).status).toBe('expired');
         expect(await canMintAuthorizationCode(app, flow.jar)).toBe(false);
-        expect(await enrolledUserId(app, ids.realmId, asserted)).toBeUndefined();
 
         // A late return cannot revive it: the flow is gone, so the landing is
         // a landing nobody holds — refused, and still no session.
@@ -1267,7 +1320,7 @@ describe('wallet federation E2E (oid4vp-1.0-base, real containers)', () => {
         expect(late.statusCode).toBe(200);
         expect(late.body).toContain(RETURN_REFUSAL_TITLE);
         expect(flow.jar.get(SESSION_COOKIE)).toBeUndefined();
-        expect(await enrolledUserId(app, ids.realmId, asserted)).toBeUndefined();
+        expect(await canMintAuthorizationCode(app, flow.jar)).toBe(false);
       });
     }, 120_000);
 
@@ -1277,6 +1330,7 @@ describe('wallet federation E2E (oid4vp-1.0-base, real containers)', () => {
 
       await withDeployment(sameDeviceEnv(issuer), async ({ app, ids }) => {
         const asserted = 'cross-device@example.com';
+        const userId = await linkedAccount(app, wallet, asserted);
 
         // No device field at all — every client built before #405.
         const flow = await startWalletLogin(app, asserted);
@@ -1304,8 +1358,6 @@ describe('wallet federation E2E (oid4vp-1.0-base, real containers)', () => {
         expect(again.body).toEqual({});
         expect((await pollStatus(app, explicit)).status).toBe('complete');
 
-        const userId = await enrolledUserId(app, ids.realmId, asserted);
-        if (userId === undefined) throw new Error('the cross-device login enrolled no account');
         expect((await idTokenFor(app, flow.jar, ids, userId))['sub']).toBe(userId);
       });
     }, 120_000);

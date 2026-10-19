@@ -133,6 +133,9 @@ const CLIENT = {
   redirectUris: ['https://example.com/cb'],
   audience: null,
   dynamicRegisteredAt: null,
+  // An operator-provisioned client: the only kind whose redirect URI receives
+  // authorization errors by automatic redirect (ANT-2026-O8U3P920).
+  provisionedByOperator: true,
   metadata: null,
 };
 
@@ -826,6 +829,122 @@ describe('UI /ui/consent POST — allow/deny', () => {
   });
 });
 
+// ANT-2026-DR5XI3LV: an operator's suspension refuses the client on both
+// halves of the consent screen, exactly as a disable does.
+// Found while fixing the findings of scan qauth-20261015-005: a stored row may
+// hold a scheme registration now refuses; the consent screen must not render
+// for it, nor send a code there.
+describe('UI /ui/consent — redirect URI scheme gate', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('GET refuses a registered javascript: redirect URI before rendering', async () => {
+    const { fastify, ctx } = makeFastify();
+    await consentRoute(fastify);
+    const { signSessionId } = await import('../../helpers/session-cookie');
+    (fastify.sessionUtils.getSession as unknown as Mock).mockResolvedValue({
+      userId: 'user-1',
+      email: 'a@b.com',
+      sessionId: 'sid-js',
+      createdAt: Date.now(),
+    });
+    const uri = 'javascript:alert(document.domain)//';
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue({
+      ...CLIENT,
+      redirectUris: [uri],
+    });
+
+    const { reply, state } = createReply();
+    await expect(
+      ctx.get!(
+        {
+          query: { ...BASE_QUERY, redirect_uri: uri },
+          url: '/ui/consent?...',
+          headers: { cookie: `__Host-qauth_session=${signSessionId('sid-js')}` },
+          ip: '127.0.0.1',
+        },
+        reply
+      )
+    ).rejects.toThrow('redirect_uri not permitted for this environment');
+    expect(state.body).toBeUndefined();
+  });
+});
+
+describe('UI /ui/consent — operator-suspended client', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  const SUSPENDED = { ...CLIENT, enabled: true, suspended: true };
+
+  async function sessionCookie(sid: string, csrfToken?: string) {
+    const { signSessionId } = await import('../../helpers/session-cookie');
+    return {
+      cookie: `__Host-qauth_session=${signSessionId(sid)}`,
+      session: {
+        userId: 'user-1',
+        email: 'a@b.com',
+        sessionId: sid,
+        csrfToken,
+        createdAt: Date.now(),
+      },
+    };
+  }
+
+  it('GET refuses with invalid_client and renders nothing', async () => {
+    const { fastify, ctx } = makeFastify();
+    await consentRoute(fastify);
+    const { cookie, session } = await sessionCookie('sid-susp-g');
+    (fastify.sessionUtils.getSession as unknown as Mock).mockResolvedValue(session);
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(
+      SUSPENDED
+    );
+
+    const { reply, state } = createReply();
+    await expect(
+      ctx.get!(
+        { query: BASE_QUERY, url: '/ui/consent?...', headers: { cookie }, ip: '127.0.0.1' },
+        reply
+      )
+    ).rejects.toMatchObject({ message: 'invalid_client' });
+    expect(state.body).toBeUndefined();
+  });
+
+  it('POST allow refuses with invalid_client and mints no code', async () => {
+    const { fastify, ctx } = makeFastify();
+    await consentRoute(fastify);
+    const csrf = 'csrf-token-suspended';
+    const { cookie, session } = await sessionCookie('sid-susp-p', csrf);
+    (fastify.sessionUtils.getSession as unknown as Mock).mockResolvedValue(session);
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(
+      SUSPENDED
+    );
+
+    const { reply } = createReply();
+    await expect(
+      ctx.post!(
+        {
+          body: {
+            decision: 'allow',
+            csrf_token: csrf,
+            client_id: 'app-123',
+            redirect_uri: 'https://example.com/cb',
+            scope: 'email',
+            code_challenge: 'A'.repeat(43),
+            code_challenge_method: 'S256',
+            response_type: 'code',
+          },
+          headers: { cookie },
+          ip: '127.0.0.1',
+        },
+        reply
+      )
+    ).rejects.toMatchObject({ message: 'invalid_client' });
+    expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
+  });
+});
+
 describe('UI /ui/consent — loopback redirect on any port (RFC 8252 §7.3, #414)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -1158,6 +1277,7 @@ describe('UI /ui/consent — agent scope-mode cap (ADR-007 §2, #184)', () => {
     });
     (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue({
       ...READONLY_AGENT,
+      provisionedByOperator: false,
       dynamicRegisteredAt: Date.now() - 400 * 24 * 60 * 60 * 1000,
       metadata: { registrationType: 'dynamic' },
     });

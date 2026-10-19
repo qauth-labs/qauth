@@ -101,7 +101,7 @@ export function buildAuthorizationServerMetadata(
     token_endpoint: `${base}/oauth/token`,
     introspection_endpoint: `${base}/oauth/introspect`,
     revocation_endpoint: `${base}/oauth/revoke`,
-    userinfo_endpoint: `${base}/oauth/userinfo`,
+    userinfo_endpoint: resolveUserinfoEndpoint(input.issuer),
     // DCR (#149) lives on a sibling branch; advertise the URL so discovery
     // stays stable and clients can retry once the endpoint ships.
     registration_endpoint: `${base}/oauth/register`,
@@ -257,4 +257,16 @@ export function buildOpenIdConfiguration(input: DiscoveryMetadataInput): Record<
  */
 export function resolveIssuerIdentifier(url: string): string {
   return url.endsWith('/') ? url.slice(0, -1) : url;
+}
+
+/**
+ * The userinfo endpoint URL, exactly as discovery publishes it as
+ * `userinfo_endpoint`.
+ *
+ * `/oauth/userinfo` also accepts an access token whose `aud` names this URL,
+ * so the advertised value and the accepted audience come from this one
+ * function and cannot drift apart.
+ */
+export function resolveUserinfoEndpoint(issuer: string): string {
+  return `${resolveIssuerIdentifier(issuer)}/oauth/userinfo`;
 }

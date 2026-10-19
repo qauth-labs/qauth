@@ -81,11 +81,13 @@ const CREDENTIAL = {
 /**
  * The same credential carrying a GENUINE branded issuer.
  *
- * Needed wherever the enrolment path runs for real: `deriveEnrolmentWalletBinding`
- * and `buildWalletCredentialData` both re-check `ValidatedIssuer.isValidated` and
+ * Needed wherever a credential must be good enough to be WRITTEN: the binding
+ * and `credential_data` writers re-check `ValidatedIssuer.isValidated` and
  * refuse a hand-built stand-in (ADR-009 §2), which is exactly the property that
  * keeps a credential-asserted `iss` out of an account key. A sign-in that reaches
- * the attribute write needs it too, for `buildWalletAttributeProvenance`.
+ * the attribute write needs it too, for `buildWalletAttributeProvenance`. The
+ * refusal cases use it as well, so that a refusal can only come from the code
+ * under test and not from an unbranded fixture.
  */
 const BRANDED_CREDENTIAL: ValidatedCredential = {
   queryId: 'qauth_wallet_login',
@@ -193,9 +195,10 @@ function makeFastify(store = createCredentialStore()) {
     fastify: {
       repositories: {
         userCredentials: store.repository,
-        // #237 reads the realm's NAME to find its assurance policy; #235's
-        // enrolment path writes users and attributes. Neither existed when this
-        // harness was written for #238 alone.
+        // #237 reads the realm's NAME to find its assurance policy; #235 writes
+        // attributes. `users.create` is here so a test can prove sign-in never
+        // calls it (ADR-009 §1, amended 2026-10-19). None of this existed when
+        // this harness was written for #238 alone.
         realms: { findById: vi.fn(async () => ({ id: 'realm-1', name: 'master' })) },
         userAttributes: {
           upsertMany: vi.fn(async () => []),
@@ -222,7 +225,16 @@ function makeFastify(store = createCredentialStore()) {
   };
 }
 
-/** A strategy stub standing in for `asserted-lookup`, using the REAL adapter. */
+/**
+ * A strategy stub standing in for `asserted-lookup`, using the REAL adapter.
+ *
+ * It answers the three outcomes the real strategy gives a holder who disclosed
+ * every binding claim: `no-match` when the identifier has no account at all,
+ * `matched` when an account carries `binding`, `rejected` otherwise. Until
+ * ANT-2026-NCX3VXDP it never answered `no-match`, which is how "refuses
+ * identically for a known and an unknown identifier" passed without ever
+ * reaching the branch that enrolled.
+ */
 function assertedLookupStub(binding: string) {
   return {
     id: 'asserted-lookup' as const,
@@ -241,6 +253,7 @@ function assertedLookupStub(binding: string) {
           context.realmId,
           context.assertedIdentifier ?? ''
         );
+        if (candidates.length === 0) return { kind: 'no-match' as const };
         const entitled = candidates.find((candidate) => candidate.walletBinding === binding);
         return entitled === undefined
           ? { kind: 'rejected' as const }
@@ -589,19 +602,22 @@ describe('resolveWalletPresentation — the gates run, in order (#234/#236/#300)
     ).resolves.toEqual({ status: 'rejected' });
   });
 
-  it.each([['ambiguous'], ['rejected']] as const)(
+  it.each([['no-match'], ['ambiguous'], ['rejected']] as const)(
     'renders a %s outcome as a refusal that writes NOTHING',
     async (kind) => {
-      // ADR-009 §1's second bootstrap case arrives as `rejected` — an account
-      // that exists for the asserted identifier with no matching wallet binding.
-      // Enrolling there would let any holder of any trusted credential claim an
-      // existing account by asserting its email. `ambiguous` fails closed for the
-      // same reason. Neither may create anything.
+      // ADR-009 §1, as amended on 2026-10-19: a wallet sign-in signs in an
+      // account the credential is already bound to, and nothing else. `no-match`
+      // (no account for the identifier) used to enrol one, bound to whoever
+      // presented — an account oracle and a way to claim someone else's
+      // identifier (ANT-2026-NCX3VXDP). `rejected` carries an account that
+      // exists without a matching binding; `ambiguous` fails closed. A branded,
+      // fully disclosed credential, so nothing but the rule can refuse it.
       (createSubjectResolutionStrategy as unknown as Mock).mockReturnValue({
         id: 'asserted-lookup',
         deriveExternalSub: () => 'alice@example.com',
         resolve: async () => ({ kind }),
       });
+      (verifyWalletPresentations as unknown as Mock).mockResolvedValue([BRANDED_CREDENTIAL]);
       const { fastify, store } = makeFastify();
 
       await expect(
@@ -611,63 +627,16 @@ describe('resolveWalletPresentation — the gates run, in order (#234/#236/#300)
       expect(fastify.repositories.users.create).not.toHaveBeenCalled();
       expect(store.repository.create).not.toHaveBeenCalled();
       expect(fastify.repositories.userAttributes.upsertMany).not.toHaveBeenCalled();
+      expect(fastify.db.transaction).not.toHaveBeenCalled();
     }
   );
 
-  it('enrols on `no-match` — ADR-009 §1 bootstrap case 1 (#235)', async () => {
-    // The other half of the rule above, and the reason `no-match` and `rejected`
-    // may never be folded into one outcome: no account exists for the asserted
-    // identifier, so the presentation establishes the account and its wallet
-    // binding TOGETHER. Nothing is claimed from anyone.
-    (createSubjectResolutionStrategy as unknown as Mock).mockReturnValue({
-      id: 'asserted-lookup',
-      deriveExternalSub: () => 'newcomer@example.com',
-      resolve: async () => ({ kind: 'no-match' }),
-    });
-    (verifyWalletPresentations as unknown as Mock).mockResolvedValue([BRANDED_CREDENTIAL]);
-    const { fastify, store } = makeFastify();
-
-    await expect(
-      resolveWalletPresentation(fastify, { ...REQUEST, assertedIdentifier: 'newcomer@example.com' })
-    ).resolves.toEqual({
-      status: 'authenticated',
-      userId: 'enrolled-1',
-      externalSub: 'newcomer@example.com',
-    });
-
-    // The credential row keys on the ASSERTED identifier — never on a wallet key
-    // or a thumbprint (ADR-009 Finding 1) — and carries the binding a later
-    // login re-derives.
-    const written = store.rows.find((row) => row.providerType === 'wallet');
-    expect(written?.externalSub).toBe('newcomer@example.com');
-    expect(written?.credentialData['wallet_binding']).toEqual(
-      expect.stringMatching(/^wb1:[0-9a-f]{64}$/)
-    );
-    expect(fastify.repositories.userAttributes.upsertMany).toHaveBeenCalled();
-  });
-
-  it('refuses to enrol an account nothing could later prove entitlement to', async () => {
-    // A credential that withholds every configured binding claim would create an
-    // account `asserted-lookup` can never match — the user locked out of the
-    // account their own first presentation created. Refuse instead of enrolling.
-    (createSubjectResolutionStrategy as unknown as Mock).mockReturnValue({
-      id: 'asserted-lookup',
-      deriveExternalSub: () => 'newcomer@example.com',
-      resolve: async () => ({ kind: 'no-match' }),
-    });
-    (verifyWalletPresentations as unknown as Mock).mockResolvedValue([
-      { ...BRANDED_CREDENTIAL, claims: {} },
-    ]);
-    const { fastify, store } = makeFastify();
-
-    await expect(
-      resolveWalletPresentation(fastify, { ...REQUEST, assertedIdentifier: 'newcomer@example.com' })
-    ).resolves.toEqual({ status: 'rejected' });
-
-    expect(store.repository.create).not.toHaveBeenCalled();
-  });
-
   it('refuses identically for a known and an unknown identifier', async () => {
+    // The same branded, fully disclosed credential on an identifier whose
+    // wallet account is bound to someone else, and on one with no account at
+    // all. The stub answers `rejected` for the first and `no-match` for the
+    // second, as the real strategy does.
+    (verifyWalletPresentations as unknown as Mock).mockResolvedValue([BRANDED_CREDENTIAL]);
     const store = createCredentialStore([
       {
         id: 'cred-w',
@@ -689,7 +658,13 @@ describe('resolveWalletPresentation — the gates run, in order (#234/#236/#300)
       assertedIdentifier: 'nobody@example.com',
     });
 
+    expect(unknown).toEqual({ status: 'rejected' });
     expect(known).toEqual(unknown);
+    expect(Object.keys(known)).toEqual(Object.keys(unknown));
+    // Nothing was created for the unknown identifier.
+    expect(store.rows).toHaveLength(1);
+    expect(fastify.repositories.users.create).not.toHaveBeenCalled();
+    expect(fastify.repositories.userAttributes.upsertMany).not.toHaveBeenCalled();
   });
 
   it('refuses an account that exists with only a password credential (ADR-009 bootstrap 2)', async () => {
@@ -759,7 +734,7 @@ describe('linkWalletPresentation — bound to the session, never to the presenta
   it('takes external_sub from the ACCOUNT’s existing credential row', async () => {
     // ADR-009 §1: the same column `PasswordProvider` fills. Reading it from the
     // account rather than from user input is what makes a later wallet login
-    // resolve back to this account instead of enrolling a duplicate.
+    // resolve back to this account rather than miss it.
     const store = createCredentialStore([PASSWORD_ROW]);
     const { fastify } = makeFastify(store);
 

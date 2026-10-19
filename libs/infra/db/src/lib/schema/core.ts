@@ -161,7 +161,25 @@ export const oauthClients = pgTable(
     redirectUris: jsonb('redirect_uris').notNull().$type<string[]>(),
     scopes: jsonb('scopes').notNull().default(JSONB_EMPTY_ARRAY).$type<string[]>(),
     audience: jsonb('audience').$type<string[] | null>(),
+    /**
+     * The OWNER's on/off switch: `PATCH /api/clients/:id` may set it either
+     * way. An operator's cut-off is {@link oauthClients.suspended}, a separate
+     * column, so the owner can never undo it (ANT-2026-DR5XI3LV).
+     */
     enabled: boolean('enabled').notNull().default(true),
+    /**
+     * OPERATOR-ONLY suspension (ANT-2026-DR5XI3LV). A suspended client is
+     * refused everywhere a disabled one is (authorize, consent, every client
+     * authentication path and therefore token, introspection, revocation and
+     * token exchange, API keys), with the same error. Only an operator path
+     * sets or clears it: the `db:suspend-oauth-client` script (or the same
+     * `UPDATE` by hand). No route writes it, `UpdateOAuthClient` excludes it so
+     * application code cannot, and `upsertCimdClient` never names it, so a
+     * CIMD re-resolution cannot clear it.
+     */
+    suspended: boolean('suspended').notNull().default(false),
+    /** When the current suspension began (epoch ms); NULL when not suspended. */
+    suspendedAt: bigint('suspended_at', { mode: 'number' }),
     requirePkce: boolean('require_pkce').notNull().default(true),
     tokenEndpointAuthMethod: tokenEndpointAuthMethodEnum('token_endpoint_auth_method')
       .notNull()
@@ -283,6 +301,26 @@ export const oauthClients = pgTable(
      * MUST treat null as "not dynamic" and therefore not new.
      */
     dynamicRegisteredAt: bigint('dynamic_registered_at', { mode: 'number' }),
+    /**
+     * True only for a client an OPERATOR provisioned: the system client and
+     * the clients of the `db:seed-oauth-clients` manifest / `db:seed` fixture.
+     * RFC 9700 §4.11.2 lets the AS redirect automatically only to a redirect
+     * URI it trusts, and this is that trust: only such a client receives
+     * authorization error responses (`login_required` for `prompt=none`, …) by
+     * an automatic 302 before the user has seen a QAuth page. Every other
+     * client gets the error on an issuer page instead
+     * (`helpers/authorization-error.ts`, ANT-2026-O8U3P920).
+     *
+     * A POSITIVE marker, so the safe answer is the default: `false` for every
+     * row no operator path wrote. Dynamic registration, `POST /api/clients`
+     * and CIMD materialisation always write `false` and no request body can
+     * reach it. The marker vouches for the redirect URIs as the operator
+     * wrote them, so a change by anyone else clears it: an owner's
+     * `PATCH /api/clients/:id` that changes `redirectUris`, and every
+     * `upsertCimdClient` conflict update. Mirror that at every future write
+     * path that persists a client.
+     */
+    provisionedByOperator: boolean('provisioned_by_operator').notNull().default(false),
     metadata: jsonb('metadata').$type<Record<string, unknown> | null>(),
     createdAt: bigint('created_at', { mode: 'number' }).notNull().default(EPOCH_MS_NOW),
     updatedAt: bigint('updated_at', { mode: 'number' }).notNull().default(EPOCH_MS_NOW),

@@ -1,8 +1,4 @@
-import {
-  EmailNotVerifiedError,
-  InvalidCredentialsError,
-  TooManyRequestsError,
-} from '@qauth-labs/shared-errors';
+import { InvalidCredentialsError, TooManyRequestsError } from '@qauth-labs/shared-errors';
 import { normalizeEmail } from '@qauth-labs/shared-validation';
 import { randomUUID } from 'crypto';
 import type { FastifyInstance } from 'fastify';
@@ -14,7 +10,6 @@ import { hashEmail, logAuthEvent } from '../../helpers/auth-events';
 import { clientAddressKey } from '../../helpers/client-address';
 import { resolveAudience } from '../../helpers/client-auth';
 import { verifyPasswordCredential } from '../../helpers/credential-auth';
-import { resolveEmailClaims } from '../../helpers/email-claims';
 import { recordSuccessfulLogin, registerLoginAttempt } from '../../helpers/failed-login';
 import { issueAccessToken } from '../../helpers/hybrid-token';
 import { getOrCreateSystemClient } from '../../helpers/oauth-client';
@@ -92,63 +87,52 @@ export default async function (fastify: FastifyInstance) {
           password,
         });
 
-        // Verified-account gate (F-08): config-driven, MVP default is `false`
-        // (an unverified account may sign in, per PRD "optional for MVP"). An
-        // operator who needs a verified account sets
-        // `REQUIRE_VERIFIED_ACCOUNT=true` (deprecated alias:
-        // `REQUIRE_EMAIL_VERIFIED`). The login then fails closed with
-        // `EmailNotVerifiedError` BEFORE tokens are issued. For a password
-        // account the proof is the confirmed address: since #228 the gate reads
+        // Verified-account gate (F-08), on by default (`REQUIRE_VERIFIED_ACCOUNT`,
+        // deprecated alias `REQUIRE_EMAIL_VERIFIED`). For a password account
+        // the proof is the confirmed address: since #228 the gate reads
         // credential_data.email_verified, the authoritative source (the legacy
         // users.email_verified column was dropped in #261).
-        // The attempt stays counted as a failed one.
-        if (check.status === 'ok' && !check.emailVerified && env.REQUIRE_VERIFIED_ACCOUNT) {
-          fastify.metrics.loginAttempts.inc({ result: 'failure', reason: 'email_not_verified' });
-          logAuthEvent(request, 'user.login.failure', false, {
-            emailHash,
-            reason: 'email_not_verified',
-          });
-          await fastify.repositories.auditLogs.create({
-            userId: check.credential.userId,
-            oauthClientId: null,
-            event: 'user.login.failure',
-            eventType: 'auth',
-            success: false,
-            ipAddress: request.ip,
-            userAgent: request.headers['user-agent'] || null,
-            metadata: { email: normalizedEmail, error: 'Email address not verified' },
-          });
-          await ensureMinimumResponseTime(startTime, MIN_RESPONSE_TIME_MS.LOGIN);
-          throw new EmailNotVerifiedError('Email address not verified. Check your inbox.');
-        }
+        //
+        // An unverified account is refused EXACTLY like a wrong password: the
+        // same 401 and message, the same floor, the same order of work, the
+        // attempt left counted. A distinct answer (it used to be 403
+        // EMAIL_NOT_VERIFIED) is an enumeration oracle: anyone may register
+        // any address with a password of their choice, and logging in with it
+        // then told a free address (the new, unverified account: 403) from a
+        // registered one (the owner's password: 401). ANT-2026-SPEMY9GU.
+        // Only the server-side log line and audit row keep the reason.
+        const unverified =
+          check.status === 'ok' && !check.emailVerified && env.REQUIRE_VERIFIED_ACCOUNT;
 
         // The users row supplies the stable subject id plus session/audit/log
-        // fields; email claims are resolved separately from verified
-        // user_attributes (#229). The row must exist for any live credential
-        // (FK), so a miss is treated as invalid below.
+        // fields. The row must exist for any live credential (FK), so a miss
+        // is treated as invalid below.
         const user =
-          check.status === 'ok'
+          check.status === 'ok' && !unverified
             ? await fastify.repositories.users.findById(check.credential.userId)
             : undefined;
-        if (check.status === 'ok' && !user) {
+        if (check.status === 'ok' && !unverified && !user) {
           fastify.log.error(
             { credentialId: check.credential.id },
             'password credential without a users row'
           );
         }
 
-        // If credentials are invalid, or the account is disabled, throw the
-        // same generic error. A disabled account must not get a token, and
-        // must not be distinguishable from a wrong password (same 401, same
-        // timing floor, same failed-attempt accounting) — as /ui/login does.
-        // The attempt, counted before verification, stays counted (#115).
-        if (check.status !== 'ok' || !user || !user.enabled) {
+        // If credentials are invalid, the account is unverified under the
+        // gate, or the account is disabled, throw the same generic error. None
+        // of them may get a token, and none may be distinguishable from a
+        // wrong password (same 401, same timing floor, same failed-attempt
+        // accounting) — as /ui/login does. The attempt, counted before
+        // verification, stays counted (#115).
+        if (check.status !== 'ok' || unverified || !user || !user.enabled) {
           // Structured log of the failed login (#125): IP + email *hash* only,
-          // never the password or the raw email.
+          // never the password or the raw email. The metric label stays
+          // `invalid_credentials` for an unverified account too: `/metrics` is
+          // unauthenticated, so a label of its own would be the oracle again.
           fastify.metrics.loginAttempts.inc({ result: 'failure', reason: 'invalid_credentials' });
           logAuthEvent(request, 'user.login.failure', false, {
             emailHash,
-            reason: 'invalid_credentials',
+            reason: unverified ? 'email_not_verified' : 'invalid_credentials',
           });
 
           // Ensure minimum response time to prevent timing attacks
@@ -156,7 +140,7 @@ export default async function (fastify: FastifyInstance) {
 
           // Log failed login attempt (DB audit trail)
           await fastify.repositories.auditLogs.create({
-            userId: null,
+            userId: unverified ? check.credential.userId : null,
             oauthClientId: null,
             event: 'user.login.failure',
             eventType: 'auth',
@@ -165,7 +149,7 @@ export default async function (fastify: FastifyInstance) {
             userAgent: request.headers['user-agent'] || null,
             metadata: {
               email: normalizedEmail,
-              error: 'Invalid credentials',
+              error: unverified ? 'Email address not verified' : 'Invalid credentials',
             },
           });
 
@@ -175,15 +159,13 @@ export default async function (fastify: FastifyInstance) {
         // Get or create system OAuth client
         const systemClient = await getOrCreateSystemClient(realm.id, fastify);
 
-        // BREAKING (#229, ADR-002): email/email_verified resolve from verified
-        // user_attributes via the trust order; both OMITTED when no verified
-        // email exists. Post-gate placement keeps failure-path timing intact.
-        const emailClaims = await resolveEmailClaims(fastify, user.id);
-
-        // Generate access token (JWT) using JWT plugin
+        // Generate access token (JWT) using JWT plugin. No `email` /
+        // `email_verified`: an access token carries them only under the
+        // `email` scope, and this first-party token is granted no scope
+        // (ANT-2026-2O0T72HY). Nothing that accepts it reads them; the
+        // session below keeps the sign-in address for display.
         const accessToken = await issueAccessToken(fastify, {
           sub: user.id,
-          ...emailClaims,
           clientId: systemClient.clientId,
           aud: resolveAudience(systemClient),
         });

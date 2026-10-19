@@ -114,8 +114,20 @@ A break of any of these is a finding:
 - PKCE with `S256` is required on every authorization code flow.
 - A redirect URI must match a registered one exactly. The one exception is
   the port of a loopback redirect URI (RFC 8252).
+- A redirect URI is `https`, `http` to a loopback host, or an RFC 8252 §7.1
+  private-use scheme. Registration refuses any other scheme, and
+  `/oauth/authorize` never redirects to one a stored client still holds.
+- An authorization error is redirected automatically only to a redirect URI
+  of a client an operator provisioned. Any other client's error is shown on
+  an issuer page first (RFC 9700 §4.11.2).
 - A token is bound to its audience (RFC 8707). A token issued for one audience
   is never accepted for another. See [ADR-006](../adr/006-oauth-grants-and-audience.md).
+  QAuth's own `/oauth/userinfo` accepts an access token only when its `aud`
+  contains the token's own `client_id` or the `userinfo_endpoint` URL that
+  discovery publishes. The first
+  is the default audience of a grant that named no `resource` for a client with
+  no configured `audience`. A token whose `aud` names only other resource
+  servers is refused.
 - A refresh token is single-use. Reusing one revokes its whole family.
 - An authorization code is issued only with the user's consent, or when an
   active consent already covers the requested scopes at every requested
@@ -127,9 +139,19 @@ A break of any of these is a finding:
   until they expire unless revoked by value, at `/oauth/revoke` or as the token
   presented to `/auth/logout` (current design, recorded in ADR-014).
 - A disabled user gets no tokens.
+- A client an operator suspended gets no authorization codes and cannot
+  authenticate, whatever its owner's `enabled` says. Only an operator lifts a
+  suspension.
 - Data in one realm never reaches another.
 - Secrets are hashed with Argon2id and compared in constant time.
 - Login and registration do not reveal whether an account exists.
+  `POST /auth/register` answers every address with the same `202`; the owner
+  of an address that already has an account hears of the attempt by mail,
+  within the per-address mail caps. The login routes refuse an unverified
+  account exactly as they refuse a wrong password. This holds with `REQUIRE_VERIFIED_ACCOUNT` on, the default:
+  an operator who turns it off lets an unverified account sign in, and then
+  registering an address and logging in with the chosen password tells a free
+  address from a registered one.
 - Every cookie-authenticated state change is CSRF-protected.
 - Authorization responses carry `iss` (RFC 9207).
 - A URL a client or credential names never makes QAuth reach a private or

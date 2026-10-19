@@ -280,13 +280,14 @@ interface SerializedErrorForLog {
  * since on an unwrapped query error it is an own field and would be copied
  * verbatim.
  *
- * A duplicate registration is the everyday case: the route has no existence
- * check of its own, so every second `POST /auth/register` for an address
- * fails inside the credential insert, AFTER the password was hashed — and
- * when it is the account holder retrying, the hash in the log verifies
- * against their real password. The SQL text (with its `$n` placeholders) and
- * the PostgreSQL message stay in the line; an operator loses nothing they
- * could not read from the schema.
+ * A duplicate registration was the everyday case: every second
+ * `POST /auth/register` for an address fails inside the credential insert,
+ * AFTER the password was hashed — and when it is the account holder retrying,
+ * the hash in the log verifies against their real password. That route now
+ * answers the duplicate itself (ANT-2026-SPEMY9GU) and logs neither the error
+ * nor its cause, but any other insert that fails still reaches the handler.
+ * The SQL text (with its `$n` placeholders) and the PostgreSQL message stay in
+ * the line; an operator loses nothing they could not read from the schema.
  *
  * @param err - the value logged under `err`. Typed as Fastify types it, and
  * anything that is not error-like is passed through as pino's own serializer

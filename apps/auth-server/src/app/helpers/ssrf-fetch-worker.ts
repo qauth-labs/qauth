@@ -223,7 +223,8 @@ function isPublicIpv6(ip: string): boolean {
   // An ALLOWLIST, not a blocklist (ANT-2026-K1WCPR4R): 2000::/3 is the only
   // block IANA has allocated for global unicast, so everything outside it is
   // refused without having to be named — link-local fe80::/10, site-local
-  // fec0::/10, unique-local fc00::/7 (incl. AWS fd00:ec2 metadata), multicast
+  // fec0::/10, unique-local fc00::/7 (incl. cloud instance-metadata addresses
+  // such as fd00:ec2::254), multicast
   // ff00::/8, local-use NAT64 64:ff9b:1::/48, discard-only 100::/64 and
   // whatever is still reserved.
   if (first < 0x2000 || first > 0x3fff) return false;

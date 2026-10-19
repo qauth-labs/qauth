@@ -18,6 +18,7 @@ import { resolveBrowserSession, saveBrowserSession } from '../../helpers/browser
 import { clientAddressKey } from '../../helpers/client-address';
 import { findExceedingAgentScopesForClient } from '../../helpers/client-auth';
 import { isAgentClient, resolveClient } from '../../helpers/client-resolution';
+import { isClientUsable } from '../../helpers/client-status';
 import {
   canSkipConsent,
   describeScope,
@@ -378,7 +379,8 @@ export default async function (fastify: FastifyInstance) {
       // resolveClient hits it; if its document cache expired it is re-fetched
       // and re-validated here).
       const { client } = await resolveClient(fastify, realm.id, query.client_id);
-      if (!client || !client.enabled) {
+      // A disabled or operator-suspended client (ANT-2026-DR5XI3LV).
+      if (!client || !isClientUsable(client)) {
         throw new BadRequestError('invalid_client');
       }
       if (!redirectUriMatchesRegistered(query.redirect_uri, client.redirectUris)) {
@@ -400,9 +402,9 @@ export default async function (fastify: FastifyInstance) {
       // consent screen for an over-cap agent scope that the POST handler will
       // (correctly) refuse to mint a code for. Same deny-by-default gate;
       // redirect_uri is already validated above. This fires before the user
-      // has seen the screen (and the destination host on it), so a
-      // self-registered client's error is shown rather than redirected, as on
-      // /oauth/authorize (RFC 9700 §4.11.2).
+      // has seen the screen (and the destination host on it), so the error of
+      // a client no operator provisioned is shown rather than redirected, as
+      // on /oauth/authorize (RFC 9700 §4.11.2).
       if (findExceedingAgentScopesForClient(query.scope, client).length > 0) {
         return sendAuthorizationError(reply, client, query.redirect_uri, {
           error: 'invalid_scope',
@@ -598,7 +600,8 @@ export default async function (fastify: FastifyInstance) {
 
       const realm = await getOrCreateDefaultRealm(fastify);
       const { client } = await resolveClient(fastify, realm.id, body.client_id);
-      if (!client || !client.enabled) {
+      // A disabled or operator-suspended client (ANT-2026-DR5XI3LV).
+      if (!client || !isClientUsable(client)) {
         throw new BadRequestError('invalid_client');
       }
       if (!redirectUriMatchesRegistered(body.redirect_uri, client.redirectUris)) {

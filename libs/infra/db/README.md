@@ -243,7 +243,7 @@ Each factory takes a `defaultDb: DbClient`. Methods below take an optional
 - **`createOAuthClientsRepository(db)`**: OAuth client CRUD
   - `create()`, `findById()`, `findByIdOrThrow()`, `findByClientId()`, `listByDeveloper()`, `upsertCimdClient()`, `update()`, `delete()`
   - `listByDeveloper(developerId, tx?)`: lists a developer's own clients, scoped strictly by `developer_id` and ordered newest-first. Dynamically registered (RFC 7591 / DCR) clients carry a null `developer_id` and are excluded.
-  - `upsertCimdClient(data, tx?)`: idempotent `INSERT ... ON CONFLICT` for Client ID Metadata Document (CIMD) clients keyed by `(realm_id, client_id)`. On conflict it refreshes only the document-derived fields (name, description, redirect URIs, grant/response types, auth method, metadata, enabled) and bumps `updatedAt`; identity columns and the secret sentinel are left untouched, so concurrent authorize requests for the same metadata-document `client_id` collapse onto a single row instead of racing a find-then-create.
+  - `upsertCimdClient(data, tx?)`: idempotent `INSERT ... ON CONFLICT` for Client ID Metadata Document (CIMD) clients keyed by `(realm_id, client_id)`. On conflict it refreshes only the document-derived fields (name, description, redirect URIs, grant/response types, auth method, key set, metadata), can only narrow `enabled`, never names `suspended`, writes `provisioned_by_operator = false` (a CIMD client is never operator-provisioned) and bumps `updatedAt`; identity columns and the secret sentinel are left untouched, so concurrent authorize requests for the same metadata-document `client_id` collapse onto a single row instead of racing a find-then-create.
 - **`createApiKeysRepository(db)`**: Static developer API-key CRUD (ADR-008 §6)
 - **`createAuditLogsRepository(db)`**: Audit-log operations
   - `create()`, `findByUserId()`, `findByRealmId()`, `findByRealmAndUserId()`, plus realm-isolated filters
@@ -404,6 +404,9 @@ nx run db:db:seed
 # them; prints plaintext secrets once to STDOUT (the DB only keeps hashes).
 # Existing client_ids are skipped unless `--rotate` is passed.
 nx run db:db:seed-oauth-clients -- --manifest=/path/to/manifest.json [--rotate]
+
+# Operator-only suspension of one client (or --lift to end it)
+nx run db:db:suspend-oauth-client -- --realm=<realm name> --client-id=<client_id> [--lift]
 ```
 
 Manifest shape for `db:seed-oauth-clients`:
@@ -424,6 +427,10 @@ Manifest shape for `db:seed-oauth-clients`:
 ```
 
 The target realm must already exist. See `src/scripts/seed-oauth-clients.ts` for the authoritative Zod schema and the full set of optional fields (`description`, `response_types`, `redirect_uris`, `require_pkce`, `token_endpoint_auth_method`).
+
+Both seeders mark their clients `provisioned_by_operator = true`, and so does the system client the auth-server creates for its own login. Only such a client receives authorization error responses by automatic redirect (RFC 9700 §4.11.2); every client created through `POST /oauth/register`, a CIMD document or `POST /api/clients` gets them on an issuer page. A `--rotate` run sets the marker on the clients it rewrites, which is how an operator marks a client that migration 0023's backfill left unmarked.
+
+`oauth_clients.enabled` is the client owner's switch: `PATCH /api/clients/:id` may set it either way. An operator who must keep a client off **suspends** it instead (`oauth_clients.suspended`, `suspended_at`). A suspended client is refused wherever a disabled one is, no route writes the column, and a CIMD re-resolution never touches it. `db:suspend-oauth-client` sets or lifts it in one transaction with an `oauth.client.suspended` / `oauth.client.suspension_lifted` audit row; the equivalent by hand is `UPDATE oauth_clients SET suspended = true, suspended_at = <epoch ms> WHERE client_id = '<client_id>'`. Lifting a suspension leaves `enabled` as it is. Migration 0023 suspends every client that was disabled when it ran, since the row does not record whether the operator or the owner disabled it.
 
 ## Project Structure
 
@@ -458,7 +465,9 @@ libs/infra/db/
 │   │   └── types/              # Repository/database type definitions
 │   ├── scripts/
 │   │   ├── seed.ts                    # Dev-fixture seeder (drizzle-seed)
-│   │   └── seed-oauth-clients.ts      # Idempotent client provisioner
+│   │   ├── seed-oauth-clients.ts      # Idempotent client provisioner
+│   │   ├── client-suspension.ts       # Operator suspension logic
+│   │   └── suspend-oauth-client.ts    # Operator suspension CLI
 │   ├── index.ts               # Public API: createDatabase, schema, factories, types
 │   └── qauth-schema.dbml      # Database schema visualization (DBML format)
 ├── drizzle/                   # Migration files (0000_young_vermin.sql … 00NN)

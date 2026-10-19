@@ -101,7 +101,10 @@ import { runWithCredentialStatusAuditContext } from '../../helpers/wallet-verifi
  *
  * Note what the field does NOT do: it is never looked up before the presentation
  * arrives. Submitting it always renders a QR code, whether or not an account
- * exists, so the screen is not an account oracle.
+ * exists, so the screen is not an account oracle. Nor does it ever NAME a new
+ * account: a presentation on an identifier with no account is refused like
+ * every other non-match (ADR-009 §1, amended 2026-10-19). A wallet reaches an
+ * account by being linked from a signed-in session (`/ui/wallet-link`).
  *
  * ## Targeting surface — QR / deep link only (SCOPE DECISION, #239)
  *
@@ -622,10 +625,11 @@ async function advanceWalletLoginFlow(
   }
 
   // A presentation arrived. Everything from here is the seam that turns it into
-  // a session: validate (#234), trust the issuer (#236), resolve the subject
-  // (#300), enrol on a first presentation (#235). Note where each input comes
-  // from — the presented bytes are the wallet's, everything they are checked
-  // against is this flow record's.
+  // a session: validate (#234), trust the issuer (#236), resolve the subject to
+  // an EXISTING account (#300, #235). Sign-in never creates one (ADR-009 §1,
+  // amended 2026-10-19), so an unknown identifier is refused below exactly as a
+  // taken one is. Note where each input comes from — the presented bytes are
+  // the wallet's, everything they are checked against is this flow record's.
   // Correlate credential-status audit events with THIS request (#378). Status
   // refusals bypass `onRefusal` by design — the checker's fine-grained reason
   // must not reach the wire — so `onAudit` is the only server-side channel that

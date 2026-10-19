@@ -1,8 +1,6 @@
 import {
   buildWalletAttributeProvenance,
-  buildWalletCredentialData,
   type CredentialStatusChecker,
-  deriveEnrolmentWalletBinding,
   extractWalletAttributes,
   findInexactNumericBindingClaims,
   issuerVouchesForEmail,
@@ -13,16 +11,14 @@ import {
   type SubjectResolutionStrategy,
   type TrustRegistry,
   type ValidatedCredential,
-  WALLET_PROVIDER_TYPE,
   WALLET_SOURCE,
 } from '@qauth-labs/fastify-plugin-federation';
-import { UniqueConstraintError } from '@qauth-labs/shared-errors';
 import type { FastifyInstance } from 'fastify';
 
 import { createWalletAccountLookup } from './wallet-account-lookup';
 
 /**
- * Wallet account resolution and enrolment (issue #235, ADR-009).
+ * Wallet account resolution (issue #235, ADR-009).
  *
  * Where the three layers below finally meet a database:
  *
@@ -33,50 +29,53 @@ import { createWalletAccountLookup } from './wallet-account-lookup';
  *
  * `server-federation` is `scope:server` and may not import `infra-db`, which is
  * why the port has no implementation there. `helpers/wallet-account-lookup.ts`
- * (#238) is that implementation; this module is the write half #300 deliberately
- * does not have (*"strategies never create accounts"*).
+ * (#238) is that implementation; this module turns the strategy's answer into
+ * an account, or into the one refusal.
+ *
+ * ## Wallet sign-in never creates an account (ADR-009 §1, amended 2026-10-19)
+ *
+ * Only `matched` signs anyone in. `no-match`, `ambiguous` and `rejected` all
+ * end in the SAME refusal, with nothing written:
+ *
+ * - **an account exists with no matching wallet binding** (typically a password
+ *   account on the same email, or a wallet account bound to someone else's
+ *   credential) → refused. Signing in here would let any holder of any trusted
+ *   credential claim an existing account by asserting its identifier.
+ * - **no account exists for the asserted identifier** → refused as well.
+ *   Until 2026-10-19 this case enrolled a new account bound to the presenter.
+ *   That made the login screen an account oracle (a taken identifier was
+ *   refused, a free one signed in) and let anyone with a trusted credential
+ *   claim an identifier that belongs to someone else (ANT-2026-NCX3VXDP). A
+ *   typed identifier is an attribute the user asserts, not a proof that it is
+ *   theirs.
+ *
+ * A wallet gets onto an account in one way today: its owner signs in to the
+ * account and links the wallet from that session (account linking, #238,
+ * `session-binding`; see `linkWalletPresentation`). Wallet-first sign-up
+ * arrives with the hosted sign-up pages (ADR-017). Accounts that wallet sign-in
+ * enrolled before the amendment keep signing in: they are `matched`.
  *
  * ## What is written, and what is NOT
  *
- * On a first presentation for an unknown identifier: one `users` row, one
- * `user_credentials` row with `provider_type='wallet'`, and the credential's
- * claims as `user_attributes` rows with `source='wallet'`, `verified=true` — all
- * in ONE transaction, because a `users` row without its credential row is
- * unloginable AND blocks re-enrolment (the same reasoning `routes/auth/register.ts`
- * records for password registration).
+ * On a `matched` sign-in: the credential's claims, as `user_attributes` rows
+ * with `source='wallet'`, refreshed on every sign-in; and the verified wallet
+ * rows an earlier credential left are re-checked (ANT-2026-ULJIA4P4). No
+ * `users` row and no `user_credentials` row is ever written here.
  *
  * `external_sub` is whatever the strategy resolved. It is never derived here,
  * and there is deliberately no code path in this module that could derive one:
  * no `cnf`, no holder key, no `x5c`, no thumbprint, no DID. ADR-009 Finding 1 is
  * that no such stable value exists, and #235's job is to CONSUME #300's answer.
- *
- * ## The bootstrap rule, which is the security property
- *
- * ADR-009 §1 keeps two cases apart and this module must not conflate them:
- *
- * - **no account for the asserted identifier** → enrol. The presentation
- *   establishes the account and its wallet binding together.
- * - **an account exists with no matching wallet binding** (typically a password
- *   account on the same email) → REFUSE. Enrolling here would let any holder of
- *   any trusted credential claim an existing account by asserting its email.
- *   That path is account linking (#238) and requires an authenticated session.
- *
- * The distinction is already made for us: `asserted-lookup` returns `no-match`
- * for the first and `rejected` for the second, and this module only enrols on
- * `no-match`. It is restated here because a future edit that treats "not
- * matched" as one case would reintroduce the takeover without touching #300.
  */
 
 /** The outcome of resolving a presentation to an account. */
 export type WalletAccountResolution =
   | {
       readonly status: 'authenticated';
-      /** `users.id` the presentation resolved to, or the account just enrolled. */
+      /** `users.id` the presentation resolved to. */
       readonly userId: string;
-      /** The value written to (or already in) `user_credentials.external_sub`. */
+      /** The account's `user_credentials.external_sub` for this credential. */
       readonly externalSub: string;
-      /** Whether this presentation created the account. */
-      readonly enrolled: boolean;
     }
   | { readonly status: 'rejected' };
 
@@ -90,7 +89,10 @@ export interface WalletAccountInput {
   readonly assertedIdentifier: string;
   /** The realm's strategy, built from {@link config}. */
   readonly strategy: SubjectResolutionStrategy;
-  /** The resolved configuration — the enrolment binding is derived from it. */
+  /**
+   * The resolved configuration. Read only to name, in the operator's log, a
+   * binding claim that QAuth cannot represent exactly (ANT-2026-FKDN4Q29).
+   */
   readonly config: SubjectResolutionConfig;
   /**
    * The gates a returning account's existing wallet attributes are re-checked
@@ -118,25 +120,13 @@ export interface WalletAttributeGates {
 }
 
 /**
- * The transaction handle the attribute writer accepts.
- *
- * Derived from the decorator rather than imported: `apps/auth-server` is
- * `scope:app` and may not depend on `@qauth-labs/infra-db`, so `DbClient` is
- * reached through the repository signature it already sees. Same decoupling
- * `helpers/realm.ts` and `helpers/consent.ts` document.
- */
-type AttributeWriteTx = Parameters<
-  FastifyInstance['repositories']['userAttributes']['upsertMany']
->[2];
-
-/**
  * Write the attribute rows a credential asserts.
  *
- * Called on BOTH paths — enrolment and a returning user — because a credential
- * re-presented next month may disclose different claims, carry a later `exp`, or
- * have been re-issued with a corrected value. Refreshing on every login is what
- * keeps `user_attributes` a view of the credential rather than a snapshot of the
- * day the account was created.
+ * Called on every wallet sign-in, because a credential re-presented next month
+ * may disclose different claims, carry a later `exp`, or have been re-issued
+ * with a corrected value. Refreshing on every sign-in is what keeps
+ * `user_attributes` a view of the credential rather than a snapshot of the day
+ * it was first presented.
  *
  * An empty list is a no-op rather than an error: `upsertMany` short-circuits on
  * it, and a credential that asserts nothing QAuth maps (an age attestation) is a
@@ -146,8 +136,7 @@ async function writeWalletAttributes(
   fastify: FastifyInstance,
   userId: string,
   credential: ValidatedCredential,
-  emailVerifyingIssuers: readonly string[],
-  tx?: AttributeWriteTx
+  emailVerifyingIssuers: readonly string[]
 ): Promise<ReadonlySet<string>> {
   // The email row is verified only on a disclosed `email_verified: true`, or
   // for an issuer the operator vouches for (ANT-2026-BGP7XCR2).
@@ -171,8 +160,7 @@ async function writeWalletAttributes(
       // Identical conversion to `routes/auth/register.ts`, deliberately.
       expiresAt: attr.expiresAt ? attr.expiresAt.getTime() : null,
       provenance,
-    })),
-    tx
+    }))
   );
 
   return new Set(attributes.map((attr) => attr.attrKey));
@@ -274,7 +262,12 @@ export function warnOnInexactNumericBindingClaims(
 }
 
 /**
- * Resolve a validated presentation to an account, enrolling on first use.
+ * Resolve a validated presentation to an EXISTING account, or refuse.
+ *
+ * Never creates an account (ADR-009 §1, amended 2026-10-19; see the module
+ * JSDoc). An unknown identifier, a taken one and every other non-match return
+ * the same `{ status: 'rejected' }` after the same single lookup, so the caller
+ * cannot render them differently.
  *
  * PRECONDITIONS, in this order, both the caller's:
  *
@@ -306,116 +299,40 @@ export async function resolveWalletAccount(
     },
   };
 
-  // The strategy's answer, and the value it would key an enrolment on. Derived
-  // BEFORE anything is written and independently of the outcome, so the two can
-  // never disagree about which account this is.
   const outcome = await input.strategy.resolve(input.credential, context);
+
+  if (outcome.kind !== 'matched') {
+    // ONE refusal for every non-match, `no-match` included. The reason goes to
+    // the operator's log only; the wire never learns which it was.
+    if (outcome.kind === 'no-match') {
+      fastify.log.info(
+        { realmId: input.realmId },
+        'wallet presentation named an identifier with no account — wallet sign-in creates no accounts (ADR-009 §1, amended 2026-10-19); refusing'
+      );
+    } else {
+      warnOnInexactNumericBindingClaims(fastify, input.config, input.credential, input.realmId);
+    }
+    return { status: 'rejected' };
+  }
+
   const externalSub = input.strategy.deriveExternalSub(input.credential, context);
-
-  if (outcome.kind === 'matched') {
-    if (externalSub === null) {
-      // A matched account whose subject cannot be re-derived would be an
-      // account nothing could re-enrol or re-key. Refuse rather than sign in
-      // on a value we cannot name.
-      fastify.log.error(
-        { realmId: input.realmId, userId: outcome.userId },
-        'wallet presentation matched an account but yielded no external_sub — refusing'
-      );
-      return { status: 'rejected' };
-    }
-
-    const rewritten = await writeWalletAttributes(
-      fastify,
-      outcome.userId,
-      input.credential,
-      input.emailVerifyingIssuers
+  if (externalSub === null) {
+    // A matched account whose subject cannot be re-derived would be signed in
+    // on a value nothing can name. Refuse rather than mint a session for it.
+    fastify.log.error(
+      { realmId: input.realmId, userId: outcome.userId },
+      'wallet presentation matched an account but yielded no external_sub — refusing'
     );
-    await withdrawUnbackedWalletAttributes(
-      fastify,
-      outcome.userId,
-      rewritten,
-      input.attributeGates
-    );
-
-    return { status: 'authenticated', userId: outcome.userId, externalSub, enrolled: false };
-  }
-
-  // ADR-009 §1's first bootstrap case, and the ONLY outcome that may enrol.
-  // `ambiguous` and `rejected` fall through to the uniform refusal below —
-  // `rejected` in particular carries the account that exists WITHOUT a wallet
-  // binding, which must never become an enrolment (see the module JSDoc).
-  if (outcome.kind !== 'no-match') {
-    warnOnInexactNumericBindingClaims(fastify, input.config, input.credential, input.realmId);
     return { status: 'rejected' };
   }
 
-  if (externalSub === null) return { status: 'rejected' };
+  const rewritten = await writeWalletAttributes(
+    fastify,
+    outcome.userId,
+    input.credential,
+    input.emailVerifyingIssuers
+  );
+  await withdrawUnbackedWalletAttributes(fastify, outcome.userId, rewritten, input.attributeGates);
 
-  // The proof half of every LATER presentation. Derived from the same claim set
-  // `asserted-lookup` will re-derive from, and refused when it cannot be
-  // derived: an account enrolled with no binding is one `asserted-lookup` can
-  // never match, so the user would be silently locked out of the account their
-  // first presentation created.
-  const walletBinding = deriveEnrolmentWalletBinding(input.config, input.credential);
-
-  if (walletBinding === null) {
-    if (
-      !warnOnInexactNumericBindingClaims(fastify, input.config, input.credential, input.realmId)
-    ) {
-      fastify.log.warn(
-        { realmId: input.realmId },
-        'wallet presentation withheld a configured binding claim — refusing to enrol an account nothing could later prove entitlement to'
-      );
-    }
-    return { status: 'rejected' };
-  }
-
-  const credentialData = buildWalletCredentialData({
-    credential: input.credential,
-    walletBinding,
-    subjectResolution: input.strategy.id,
-  });
-
-  try {
-    const userId = await fastify.db.transaction(async (tx) => {
-      const user = await fastify.repositories.users.create({ realmId: input.realmId }, tx);
-
-      await fastify.repositories.userCredentials.create(
-        {
-          userId: user.id,
-          realmId: input.realmId,
-          providerType: WALLET_PROVIDER_TYPE,
-          externalSub,
-          credentialData,
-        },
-        tx
-      );
-
-      await writeWalletAttributes(
-        fastify,
-        user.id,
-        input.credential,
-        input.emailVerifyingIssuers,
-        tx
-      );
-
-      return user.id;
-    });
-
-    return { status: 'authenticated', userId, externalSub, enrolled: true };
-  } catch (error) {
-    // A concurrent enrolment for the same `(realm_id, 'wallet', external_sub)`
-    // loses the unique index. Rendered as the SAME refusal every other failure
-    // renders: a distinguishable "already exists" here would tell an anonymous
-    // caller which identifiers have wallet credentials.
-    if (error instanceof UniqueConstraintError) {
-      fastify.log.warn(
-        { realmId: input.realmId },
-        'wallet enrolment lost a race on the credential unique index — refusing'
-      );
-      return { status: 'rejected' };
-    }
-
-    throw error;
-  }
+  return { status: 'authenticated', userId: outcome.userId, externalSub };
 }

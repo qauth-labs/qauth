@@ -103,8 +103,11 @@ always empty, so the check is scoped to avoid a false failure in the browser.
 - **Register** (`/register`, `apps/developer-portal/src/routes/register.tsx`) submits email and
   password through `registerFn` → `registerHandler`
   (`apps/developer-portal/src/server/actions/register.ts:5`), which calls the auth-server's
-  `/auth/register`. On success the page shows a "check your inbox" screen with a resend option;
-  it does not log the developer in.
+  `/auth/register`. The auth-server answers every address with the same `202`, whether it was free
+  or already had an account, so the page shows the same "check your inbox" screen for both, with
+  the address as typed and a resend option, and never says "address already registered". The
+  mail says what comes next: a verification link, or a notice that the address already has an
+  account. The page does not log the developer in.
 - **Verify** (`/verify?token=...`, `apps/developer-portal/src/routes/verify.tsx`) validates the
   token shape client-side (64 hex characters) and opens on a confirmation step that asks for the
   account's password. Submitting calls `verifyFn`
@@ -116,8 +119,11 @@ always empty, so the check is scoped to avoid a false failure in the browser.
 - **Login** (`/login`, `apps/developer-portal/src/routes/login.tsx`) — see the session model
   above. On failure the page always shows the same generic "Invalid email or password" message
   regardless of the underlying error code, an explicit anti-enumeration choice
-  (`apps/developer-portal/src/routes/login.tsx:39`). The page also has a "Forgot password?
-  Coming soon." line (`apps/developer-portal/src/routes/login.tsx:72`) — there is no
+  (`apps/developer-portal/src/routes/login.tsx:43`). The message also asks a developer who has
+  just signed up to confirm the address first: with `REQUIRE_VERIFIED_ACCOUNT` on (the default)
+  the auth-server refuses an unverified account with the same `401` as a wrong password. The page
+  also has a "Forgot password? Coming soon." line
+  (`apps/developer-portal/src/routes/login.tsx:79`) — there is no
   password-reset endpoint anywhere in `apps/auth-server`, so that line is accurate as written,
   not a stale claim.
 - **Logout** is a button in the authed layout's header
@@ -267,7 +273,7 @@ none: a Bearer token has to be put on the request by code that already holds it.
 > straight from the browser with `credentials: 'include'`, expecting the auth-server's
 > `__Host-qauth_session` cookie. Three independent blockers made that impossible for a
 > portal-authenticated developer: that cookie is set only by the auth-server's own `POST /ui/login`
-> (`apps/auth-server/src/app/routes/ui/login.ts:383`), which the portal's login flow never visits;
+> (`apps/auth-server/src/app/routes/ui/login.ts:451`), which the portal's login flow never visits;
 > it is `SameSite=Lax` (`apps/auth-server/src/app/helpers/session-cookie.ts:153`), so it is
 > withheld from cross-site `fetch()` subresource requests whatever `credentials: 'include'` says;
 > and CORS `origin` resolves to `false` in production unless an operator sets `CORS_ORIGIN`

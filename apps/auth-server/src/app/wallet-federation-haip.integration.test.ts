@@ -12,8 +12,10 @@ import {
   type E2eInfrastructure,
   followRedirect,
   generateJwtPem,
+  linkWalletToNewAccount,
   type PemKeyPair,
   pkcePair,
+  readWalletFlowRecord,
   REQUIRED_TEST_ENVIRONMENT,
   resetE2eState,
   startE2eInfrastructure,
@@ -396,8 +398,16 @@ describe('wallet federation E2E — haip-1.0 with direct_post.jwt (real containe
     return { statusCode: response.statusCode, body: JSON.parse(response.body) as unknown };
   }
 
-  /** The one request-state row's encryption columns, as the TABLE holds them. */
-  async function storedEncryptionColumns(app: FastifyInstance): Promise<{
+  /**
+   * One request-state row's encryption columns, as the TABLE holds them —
+   * the row of the flow whose `state` digest is `stateHash`. Addressed by
+   * digest because a scenario that links a wallet first has a second row, the
+   * link flow's.
+   */
+  async function storedEncryptionColumns(
+    app: FastifyInstance,
+    stateHash: string
+  ): Promise<{
     redeemed: boolean;
     response_encryption_kid: string | null;
     response_encryption_private_jwk: string | null;
@@ -409,7 +419,8 @@ describe('wallet federation E2E — haip-1.0 with direct_post.jwt (real containe
       response_encryption_private_jwk: string | null;
       response_encryption_key_protection: string | null;
     }>(
-      'select redeemed_at, response_encryption_kid, response_encryption_private_jwk, response_encryption_key_protection from oid4vp_request_states'
+      'select redeemed_at, response_encryption_kid, response_encryption_private_jwk, response_encryption_key_protection from oid4vp_request_states where state_hash = $1',
+      [stateHash]
     );
     expect(rows).toHaveLength(1);
     const { redeemed_at, ...columns } = rows[0] as NonNullable<(typeof rows)[0]>;
@@ -463,7 +474,8 @@ describe('wallet federation E2E — haip-1.0 with direct_post.jwt (real containe
    * Start a flow, let the wallet read the JAR and build its (encrypted) answer.
    *
    * `options.device` is the sign-in form's choice (#405); omitted, the flow is
-   * cross-device, as every scenario written before #405 expects.
+   * cross-device, as every scenario written before #405 expects. `stateHash`
+   * addresses the flow's request-state row (see {@link storedEncryptionColumns}).
    */
   async function walletAnswers(
     app: FastifyInstance,
@@ -474,11 +486,46 @@ describe('wallet federation E2E — haip-1.0 with direct_post.jwt (real containe
     flow: StartedFlow;
     request: Oid4vpRequestView;
     answer: WalletAuthorizationResponse;
+    stateHash: string;
   }> {
     const flow = await startWalletLogin(app, identifier, options);
+    const { stateHash } = await readWalletFlowRecord(app, flow.handle);
     const request = await fetchAndVerifyRequest(app, flow.invocationUri);
     const answer = await wallet.buildResponseForRequest(request);
-    return { flow, request, answer };
+    return { flow, request, answer, stateHash };
+  }
+
+  /**
+   * Give `wallet`'s credential an account the only way QAuth allows since
+   * ADR-009 §1's 2026-10-19 amendment: register `email` with a password, sign
+   * in, and link the wallet from that session (#238) — under THIS profile, so
+   * the link too is a signed JAR answered with an encrypted response.
+   *
+   * @returns the account's `users.id`.
+   */
+  async function linkedAccount(
+    app: FastifyInstance,
+    wallet: MockWallet,
+    email: string
+  ): Promise<string> {
+    const { userId } = await linkWalletToNewAccount(app, email, async (invocationUri) => {
+      const request = await fetchAndVerifyRequest(app, invocationUri);
+      return (await wallet.buildResponseForRequest(request)).formBody;
+    });
+    return userId;
+  }
+
+  /** The `provider_type` of every credential row on `email`, sorted. */
+  async function providerTypesOn(
+    app: FastifyInstance,
+    realmId: string,
+    email: string
+  ): Promise<string[]> {
+    const rows = await app.repositories.userCredentials.findAllByRealmAndExternalSub(
+      realmId,
+      email
+    );
+    return rows.map((row) => row.providerType).sort();
   }
 
   /**
@@ -502,7 +549,8 @@ describe('wallet federation E2E — haip-1.0 with direct_post.jwt (real containe
 
     await withDeployment(haipEnv([issuer]), async ({ app, ids }) => {
       const asserted = 'haip-newcomer@example.com';
-      const { flow, request, answer } = await walletAnswers(app, wallet, asserted);
+      await linkedAccount(app, wallet, asserted);
+      const { flow, request, answer, stateHash } = await walletAnswers(app, wallet, asserted);
 
       // What the JAR asked for: the whole HAIP shape at once.
       expect(request.clientId.startsWith('x509_hash:')).toBe(true);
@@ -533,21 +581,16 @@ describe('wallet federation E2E — haip-1.0 with direct_post.jwt (real containe
       // only job ended with the response it opened; a key that outlived it
       // would decrypt this login again from a later dump of the table plus a
       // retained copy of the POST body.
-      expect(await storedEncryptionColumns(app)).toEqual({
+      expect(await storedEncryptionColumns(app, stateHash)).toEqual({
         redeemed: true,
         response_encryption_kid: null,
         response_encryption_private_jwk: null,
         response_encryption_key_protection: null,
       });
 
-      // The login is real: an account, keyed on the ASSERTED identifier
-      // (ADR-009 §1), with its wallet credential and verified attributes.
-      const rows = await app.repositories.userCredentials.findAllByRealmAndExternalSub(
-        ids.realmId,
-        asserted
-      );
-      expect(rows).toHaveLength(1);
-      expect(rows[0]?.providerType).toBe('wallet');
+      // The login is real, and created nothing: the account is the one the
+      // wallet was linked to, keyed on its identifier (ADR-009 §1).
+      expect(await providerTypesOn(app, ids.realmId, asserted)).toEqual(['password', 'wallet']);
     });
   }, 180_000);
 
@@ -556,6 +599,7 @@ describe('wallet federation E2E — haip-1.0 with direct_post.jwt (real containe
     const wallet = await walletHolding(issuer);
 
     await withDeployment(haipEnv([issuer]), async ({ app }) => {
+      await linkedAccount(app, wallet, 'haip-replay@example.com');
       const { flow, answer } = await walletAnswers(app, wallet, 'haip-replay@example.com');
 
       expect((await postWalletResponse(app, answer.formBody)).statusCode).toBe(200);
@@ -582,6 +626,9 @@ describe('wallet federation E2E — haip-1.0 with direct_post.jwt (real containe
     const wallet = await walletHolding(issuer);
 
     await withDeployment(haipEnv([issuer]), async ({ app }) => {
+      // An account the genuine response WOULD sign in to, so "not complete"
+      // below is about the spent row alone.
+      await linkedAccount(app, wallet, 'haip-wrongkey@example.com');
       const { flow, request, answer } = await walletAnswers(
         app,
         wallet,
@@ -614,6 +661,9 @@ describe('wallet federation E2E — haip-1.0 with direct_post.jwt (real containe
     const wallet = await walletHolding(issuer);
 
     await withDeployment(haipEnv([issuer]), async ({ app }) => {
+      // An account the encrypted response WOULD sign in to, so "not complete"
+      // below is about the downgrade alone.
+      await linkedAccount(app, wallet, 'haip-downgrade@example.com');
       const { flow, request, answer } = await walletAnswers(
         app,
         wallet,
@@ -640,6 +690,7 @@ describe('wallet federation E2E — haip-1.0 with direct_post.jwt (real containe
 
     await withDeployment(haipEnv([issuer]), async ({ app, ids }) => {
       const asserted = 'haip-stray-state@example.com';
+      await linkedAccount(app, wallet, asserted);
       const { flow, request, answer } = await walletAnswers(app, wallet, asserted);
 
       expect(
@@ -647,11 +698,7 @@ describe('wallet federation E2E — haip-1.0 with direct_post.jwt (real containe
       ).toBe(200);
       expect((await pollStatus(app, flow)).status).toBe('complete');
 
-      const rows = await app.repositories.userCredentials.findAllByRealmAndExternalSub(
-        ids.realmId,
-        asserted
-      );
-      expect(rows).toHaveLength(1);
+      expect(await providerTypesOn(app, ids.realmId, asserted)).toEqual(['password', 'wallet']);
     });
   }, 180_000);
 
@@ -664,7 +711,7 @@ describe('wallet federation E2E — haip-1.0 with direct_post.jwt (real containe
 
     await withDeployment(haipEnv([issuer]), async ({ app, ids }) => {
       const asserted = 'haip-declined-clear@example.com';
-      const { flow, request } = await walletAnswers(app, wallet, asserted);
+      const { flow, request, stateHash } = await walletAnswers(app, wallet, asserted);
 
       const declined = await postWalletResponse(app, {
         state: request.state,
@@ -676,7 +723,9 @@ describe('wallet federation E2E — haip-1.0 with direct_post.jwt (real containe
       expect((await pollStatus(app, flow)).status).toBe('rejected');
 
       // Consumed, key erased, and nobody was created.
-      expect((await storedEncryptionColumns(app)).response_encryption_private_jwk).toBeNull();
+      expect(
+        (await storedEncryptionColumns(app, stateHash)).response_encryption_private_jwk
+      ).toBeNull();
       expect(
         await app.repositories.userCredentials.findAllByRealmAndExternalSub(ids.realmId, asserted)
       ).toHaveLength(0);
@@ -691,6 +740,9 @@ describe('wallet federation E2E — haip-1.0 with direct_post.jwt (real containe
   it('still refuses an untrusted issuer under the encrypted mode, creating nothing', async () => {
     // Decryption establishes nothing about the credential: the trust gate
     // (#236) runs on the decrypted presentation exactly as on a cleartext one.
+    // (Sign-in creates no accounts, so the identifier's being unknown would
+    // refuse this too. The base suite isolates the trust gate itself, on an
+    // account the credential was linked to before its issuer lost trust.)
     const trusted = await createMockIssuer(TRUSTED_ISSUER, 'k1');
     const rogue = await createMockIssuer('https://rogue-issuer.example.net', 'r1');
     const wallet = await walletHolding(rogue);
@@ -728,6 +780,7 @@ describe('wallet federation E2E — haip-1.0 with direct_post.jwt (real containe
     await withDeployment(
       haipEnv([issuer], { OID4VP_RESPONSE_KEY_SECRET: secret }),
       async ({ app }) => {
+        await linkedAccount(app, wallet, 'haip-wrapped@example.com');
         const { flow, answer } = await walletAnswers(app, wallet, 'haip-wrapped@example.com');
 
         // The row holds an ENVELOPE, not a JWK: the private scalar is not in the
@@ -737,7 +790,7 @@ describe('wallet federation E2E — haip-1.0 with direct_post.jwt (real containe
             response_encryption_key_protection: string;
             response_encryption_private_jwk: string;
           }>(
-            'select response_encryption_key_protection, response_encryption_private_jwk from oid4vp_request_states'
+            'select response_encryption_key_protection, response_encryption_private_jwk from oid4vp_request_states where redeemed_at is null'
           )
           .then((result) => result.rows[0]);
         expect(stored?.response_encryption_key_protection).toBe('aes-256-gcm');
@@ -766,10 +819,18 @@ describe('wallet federation E2E — haip-1.0 with direct_post.jwt (real containe
     const first = await bootAuthServer(haipEnv([issuer], { OID4VP_RESPONSE_KEY_SECRET: written }));
     let flow: StartedFlow;
     let answer: WalletAuthorizationResponse;
+    let stateHash: string;
     try {
       await resetE2eState(first.app);
       await seedClient(first.app);
-      ({ flow, answer } = await walletAnswers(first.app, wallet, 'haip-rotated@example.com'));
+      // An account the response WOULD sign in to, so "not complete" below is
+      // about the secret alone.
+      await linkedAccount(first.app, wallet, 'haip-rotated@example.com');
+      ({ flow, answer, stateHash } = await walletAnswers(
+        first.app,
+        wallet,
+        'haip-rotated@example.com'
+      ));
     } finally {
       await first.close();
     }
@@ -791,7 +852,7 @@ describe('wallet federation E2E — haip-1.0 with direct_post.jwt (real containe
       // Consumed — and the envelope the rotated secret could not open is gone
       // with it: erased by the redemption itself, whether or not the decrypt
       // that followed succeeded.
-      expect(await storedEncryptionColumns(second.app)).toEqual({
+      expect(await storedEncryptionColumns(second.app, stateHash)).toEqual({
         redeemed: true,
         response_encryption_kid: null,
         response_encryption_private_jwk: null,
@@ -811,7 +872,8 @@ describe('wallet federation E2E — haip-1.0 with direct_post.jwt (real containe
 
     await withDeployment(haipEnv([issuer]), async ({ app, ids }) => {
       const asserted = 'haip-same-device@example.com';
-      const { flow, request, answer } = await walletAnswers(app, wallet, asserted, {
+      const userId = await linkedAccount(app, wallet, asserted);
+      const { flow, request, answer, stateHash } = await walletAnswers(app, wallet, asserted, {
         device: 'this',
       });
 
@@ -834,7 +896,7 @@ describe('wallet federation E2E — haip-1.0 with direct_post.jwt (real containe
 
       // The row was consumed by the kid path — the key erased — and the
       // digest of the code is what remains to be spent by the return route.
-      expect(await storedEncryptionColumns(app)).toEqual({
+      expect(await storedEncryptionColumns(app, stateHash)).toEqual({
         redeemed: true,
         response_encryption_kid: null,
         response_encryption_private_jwk: null,
@@ -858,17 +920,11 @@ describe('wallet federation E2E — haip-1.0 with direct_post.jwt (real containe
       expect(await pollStatus(app, flow)).toEqual({ status: 'complete', redirect_to: '/' });
       expect((await pollStatus(app, flow)).status).toBe('expired');
 
-      // A real login, keyed on the asserted identifier, with a session that
-      // the authorization endpoint honours. Consent is pre-granted so this
-      // drives the code-mint path rather than the consent screen.
-      const rows = await app.repositories.userCredentials.findAllByRealmAndExternalSub(
-        ids.realmId,
-        asserted
-      );
-      expect(rows).toHaveLength(1);
-      expect(rows[0]?.providerType).toBe('wallet');
-      const userId = rows[0]?.userId;
-      if (userId === undefined) throw new Error('the same-device login enrolled no account');
+      // A real login to the linked account, which it left as it was, with a
+      // session that the authorization endpoint honours. Consent is
+      // pre-granted so this drives the code-mint path rather than the consent
+      // screen.
+      expect(await providerTypesOn(app, ids.realmId, asserted)).toEqual(['password', 'wallet']);
       await app.repositories.oauthConsents.upsertGrant(userId, ids.clientId, ids.realmId, SCOPES);
       expect(await canMintAuthorizationCode(app, flow.jar)).toBe(true);
     });
@@ -880,6 +936,10 @@ describe('wallet federation E2E — haip-1.0 with direct_post.jwt (real containe
 
     await withDeployment(haipEnv([issuer]), async ({ app, ids }) => {
       const asserted = 'haip-foreign@example.com';
+      // An account this presentation WOULD sign in to, with consent granted,
+      // so "neither browser can mint" below is about the return leg alone.
+      const userId = await linkedAccount(app, wallet, asserted);
+      await app.repositories.oauthConsents.upsertGrant(userId, ids.clientId, ids.realmId, SCOPES);
       const { flow, answer } = await walletAnswers(app, wallet, asserted, { device: 'this' });
       const ack = await acknowledged(app, answer.formBody);
       if (ack.redirectUri === undefined) throw new Error('no redirect_uri in the ack');
@@ -892,14 +952,12 @@ describe('wallet federation E2E — haip-1.0 with direct_post.jwt (real containe
       expect(landed.body).toContain(RETURN_REFUSAL_TITLE);
       expect(elsewhere.get(SESSION_COOKIE)).toBeUndefined();
 
-      // The initiating tab is told; the presentation was discarded, so no
-      // account exists for it and neither browser can mint a code.
+      // The initiating tab is told; the presentation was discarded, so
+      // neither browser can mint a code and the account is as linking left it.
       expect((await pollStatus(app, flow)).status).toBe('rejected');
       expect(await canMintAuthorizationCode(app, elsewhere)).toBe(false);
       expect(await canMintAuthorizationCode(app, flow.jar)).toBe(false);
-      expect(
-        await app.repositories.userCredentials.findAllByRealmAndExternalSub(ids.realmId, asserted)
-      ).toEqual([]);
+      expect(await providerTypesOn(app, ids.realmId, asserted)).toEqual(['password', 'wallet']);
 
       // The right browser, too late: the same page, byte for byte.
       const late = await followRedirect(app, flow.jar, ack.redirectUri);

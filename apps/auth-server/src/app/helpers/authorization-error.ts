@@ -4,41 +4,44 @@ import { redirectHost } from './consent';
 import { html, render, safe, safeUrl } from './html';
 import { type AuthorizationResponseParams, buildRedirectUrl } from './oauth-redirect';
 
-/** The registration-origin fields of an `oauth_clients` row. */
+/** The provisioning-origin field of an `oauth_clients` row. */
 export interface ClientOriginLike {
-  dynamicRegisteredAt: number | null;
-  metadata?: Record<string, unknown> | null;
+  /**
+   * `oauth_clients.provisioned_by_operator`. Optional so a partially shaped
+   * object type-checks; anything but a strict `true` reads as NOT
+   * operator-provisioned.
+   */
+  provisionedByOperator?: boolean | null;
 }
 
 /** An RFC 6749 §4.1.2.1 error response, with the RFC 9207 `iss`. */
 export type AuthorizationErrorParams = Extract<AuthorizationResponseParams, { error: string }>;
 
 /**
- * True for a client whose redirect URIs nobody vetted: one created through
- * open Dynamic Client Registration (RFC 7591, `POST /oauth/register`, no
- * credential required) or materialised from a Client ID Metadata Document
- * (any host that can serve one). The registering party chose the redirect
- * URIs, so matching a request against them exactly says nothing about where
- * they lead.
+ * True only for a client an operator provisioned (the system client, the
+ * `db:seed-oauth-clients` manifest, the `db:seed` fixture), whose redirect
+ * URIs the operator therefore vouches for.
  *
- * Unlike `isDynamicClientWithinBadgeWindow` this does not age out: who
- * registered the redirect URI does not change after 30 days.
+ * A POSITIVE marker (ANT-2026-O8U3P920). The earlier rule keyed on the markers
+ * of the self-service paths that were known to be anonymous (open DCR and
+ * CIMD) and trusted everything else, which left out the clients a
+ * self-registered developer creates through `POST /api/clients`: an account
+ * anyone can open, a redirect URI of their choosing, and no marker. Trusting
+ * only what an operator wrote covers every self-service path, including ones
+ * added later, and it never ages out.
  *
- * `dynamicRegisteredAt` is written only by `POST /oauth/register` and
- * `registrationType` only by that route and by CIMD materialisation; neither
- * is editable through the developer API. An operator-provisioned client (seed
- * manifest, the system client) has neither.
+ * Fail-closed: `undefined`, `null` and `false` all read as untrusted. The
+ * column is written `true` only by the operator paths; developer, DCR and
+ * CIMD writes pin it to `false`, and no request body can reach it.
  */
-export function isSelfRegisteredClient(client: ClientOriginLike): boolean {
-  if (client.dynamicRegisteredAt !== null && client.dynamicRegisteredAt !== undefined) return true;
-  const registrationType = client.metadata?.registrationType;
-  return registrationType === 'dynamic' || registrationType === 'cimd';
+export function isOperatorProvisionedClient(client: ClientOriginLike): boolean {
+  return client.provisionedByOperator === true;
 }
 
 function untrustedRedirectPage(location: string, params: AuthorizationErrorParams): string {
   const host = redirectHost(location);
-  // Only an http(s) target becomes a link: the URI is client-supplied, and DCR
-  // also accepts custom schemes (RFC 8252 native apps).
+  // Only an http(s) target becomes a link: the URI is client-supplied, and
+  // registration also accepts RFC 8252 private-use schemes for native apps.
   const href = safeUrl(location);
   const description = params.error_description ? html`: ${params.error_description}` : safe('');
   const continueLink = href
@@ -61,9 +64,9 @@ function untrustedRedirectPage(location: string, params: AuthorizationErrorParam
               <code>${params.error}</code>${description}.
             </p>
             <p>
-              This application registered itself with this server, so you are not sent back to it
-              automatically. Continue only if you started this sign-in and expected to return to
-              <code>${host}</code>.
+              This application was not set up by the operator of this server, so you are not sent
+              back to it automatically. Continue only if you started this sign-in and expected to
+              return to <code>${host}</code>.
             </p>
             ${continueLink}
           </main>
@@ -78,13 +81,14 @@ function untrustedRedirectPage(location: string, params: AuthorizationErrorParam
  *
  * RFC 9700 §4.11.2 ("Authorization Server as Open Redirector"): the AS
  * redirects automatically only to a redirect URI it trusts. For an
- * operator-provisioned client that is the registered URI, and the 302 is
- * unchanged (OpenID Connect requires it, e.g. `login_required` for
- * `prompt=none`). For a self-registered client ({@link isSelfRegisteredClient})
- * anyone could have registered the URI to bounce visitors off the issuer's
- * origin, so the error is shown on the issuer instead, with the destination
- * host and a link carrying the full error response: the user decides, and a
- * legitimate client still receives the error one click later.
+ * operator-provisioned client ({@link isOperatorProvisionedClient}) that is
+ * the registered URI, and the 302 is unchanged (OpenID Connect requires it,
+ * e.g. `login_required` for `prompt=none`). For every other client (open DCR,
+ * CIMD, `POST /api/clients`) whoever registered the URI may have done so to
+ * bounce visitors off the issuer's origin, so the error is shown on the issuer
+ * instead, with the destination host and a link carrying the full error
+ * response: the user decides, and a legitimate client still receives the
+ * error one click later.
  */
 export function sendAuthorizationError(
   reply: FastifyReply,
@@ -93,7 +97,7 @@ export function sendAuthorizationError(
   params: AuthorizationErrorParams
 ): FastifyReply {
   const location = buildRedirectUrl(redirectUri, params);
-  if (!isSelfRegisteredClient(client)) {
+  if (isOperatorProvisionedClient(client)) {
     return reply.redirect(location, 302);
   }
   reply.code(400);

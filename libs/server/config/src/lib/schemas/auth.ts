@@ -58,14 +58,19 @@ export const authEnvSchema = z.object({
    * account. For a password account, the proof is still a confirmed address:
    * the password credential's `credential_data.email_verified`.
    *
-   * MVP posture is `false`: an unverified account may sign in. This matches the
-   * PRD's "optional for MVP" stance. Operators who need a verified account
-   * flip this to `true`. Login then fails closed before any token or session
-   * is issued.
+   * Defaults to `true` (maintainer decision of 2026-10-19). A password login
+   * by an unverified account then fails before any token or session is issued,
+   * with the same answer as a wrong password.
    *
-   * This is a DECISION flag, not an auto-fix. Do not default it to `true`
-   * without acknowledging the MVP tradeoff: existing unverified users would be
-   * locked out.
+   * The default is what keeps registration from revealing whether an address
+   * has an account. Anyone may register any address with a password of their
+   * choice. With the gate off, logging in with that password afterwards
+   * succeeds for an address that was free and fails for one that was taken.
+   * With the gate on, both fail the same way until the mailbox owner verifies.
+   *
+   * Setting `false` lets an unverified account sign in and gives that
+   * register-then-login answer back. Do it only knowingly, for example on a
+   * local development stack whose mail provider delivers nothing.
    *
    * Parsed by {@link optionalStrictBoolean}, never `z.coerce.boolean()`. Unset
    * here is NOT the final answer. Read the resolved value through
@@ -630,7 +635,7 @@ export type RequireVerifiedAccountInput = Pick<
 export type RequireVerifiedAccountResolution =
   | {
       readonly ok: true;
-      /** The resolved gate. `false` when neither name is set. */
+      /** The resolved gate. `true` when neither name is set. */
       readonly requireVerifiedAccount: boolean;
       /** Set when the deprecated `REQUIRE_EMAIL_VERIFIED` is still in use. */
       readonly deprecation: EnvDeprecationWarning | undefined;
@@ -648,13 +653,13 @@ export type RequireVerifiedAccountResolution =
  * - Only `REQUIRE_EMAIL_VERIFIED` is set: use it, and return a deprecation warning.
  * - Both are set to the same value: use it, and return a deprecation warning.
  * - Both are set to different values: refuse. The caller must fail the boot.
- * - Neither is set: `false`, the MVP default.
+ * - Neither is set: `true`, the default since 2026-10-19.
  *
  * Refusing a disagreement is deliberate. Picking either value would silently
  * turn the gate on or off against one of the operator's two statements.
  *
- * The rename changes no behaviour. For a password account, the proof of a
- * verified account is still the confirmed address.
+ * For a password account, the proof of a verified account is the confirmed
+ * address.
  */
 export function resolveRequireVerifiedAccount(
   input: RequireVerifiedAccountInput
@@ -663,7 +668,7 @@ export function resolveRequireVerifiedAccount(
   const alias = input.REQUIRE_EMAIL_VERIFIED;
 
   if (alias === undefined) {
-    return { ok: true, requireVerifiedAccount: current ?? false, deprecation: undefined };
+    return { ok: true, requireVerifiedAccount: current ?? true, deprecation: undefined };
   }
 
   if (current !== undefined && current !== alias) {

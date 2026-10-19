@@ -8,6 +8,7 @@ import type {
   EmailServiceConfig,
 } from '../types';
 import { formatDuration } from './format-duration';
+import { AccountExistsEmail } from './templates/account-exists-email';
 import { renderEmail, renderEmailText } from './templates/render';
 import { VerifyEmail } from './templates/verification-email';
 
@@ -74,6 +75,30 @@ export function createEmailService(
           expiresIn,
         });
 
+        html = await renderEmail(template);
+        text = await renderEmailText(template);
+      }
+
+      return provider.sendEmail({
+        to,
+        subject,
+        text,
+        html,
+        from: options?.from || defaultFrom,
+      });
+    },
+
+    async sendAccountExistsEmail(
+      to: string,
+      options?: Partial<EmailOptions>
+    ): Promise<EmailResult> {
+      const subject = options?.subject || 'Someone tried to register with your email address';
+
+      let text = options?.text;
+      let html = options?.html;
+
+      if (!text && !html) {
+        const template = React.createElement(AccountExistsEmail);
         html = await renderEmail(template);
         text = await renderEmailText(template);
       }

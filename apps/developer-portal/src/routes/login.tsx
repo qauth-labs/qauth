@@ -17,6 +17,10 @@ export const Route = createFileRoute('/login')({
 
 type FormState = { stage: 'idle' } | { stage: 'submitting' } | { stage: 'error'; message: string };
 
+/** The one message for every failed login, whatever the auth-server's reason. */
+const LOGIN_FAILED_MESSAGE =
+  'Invalid email or password. If you have just signed up, confirm your email address first with the link we sent you.';
+
 function LoginPage() {
   const router = useRouter();
   const [formState, setFormState] = useState<FormState>({ stage: 'idle' });
@@ -36,8 +40,11 @@ function LoginPage() {
       return;
     }
 
-    // Generic message regardless of error code — anti-enumeration.
-    setFormState({ stage: 'error', message: 'Invalid email or password.' });
+    // Generic message regardless of error code — anti-enumeration. The
+    // auth-server refuses an account whose address is not verified yet with
+    // the same 401 as a wrong password, so the one message names that case
+    // too, for a developer who has just signed up.
+    setFormState({ stage: 'error', message: LOGIN_FAILED_MESSAGE });
   }
 
   const errorMessage = formState.stage === 'error' ? formState.message : undefined;

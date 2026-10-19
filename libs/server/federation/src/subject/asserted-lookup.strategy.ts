@@ -54,8 +54,10 @@ import { type AssertedLookupConfig, normalizeBindingClaims } from './subject-res
  * At first presentation there is no stored binding to compare, so the rule needs
  * a starting point, and the two cases must not be conflated:
  *
- * - **No account exists for the asserted identifier** → `no-match`. The caller
- *   may establish the account and the binding together.
+ * - **No account exists for the asserted identifier** → `no-match`. QAuth's
+ *   wallet sign-in refuses it like any other non-match (ADR-009 §1, amended
+ *   2026-10-19): a typed identifier is not proof that it is the presenter's,
+ *   and answering "free" differently from "taken" is an account oracle.
  * - **An account exists but carries no wallet binding** (typically a password
  *   account on the same email) → `rejected`, NOT `no-match`. Returning
  *   `no-match` here would hand the caller a value it is explicitly allowed to

@@ -206,6 +206,27 @@ describe('resolveClient — pre-registered → CIMD priority (MCP 2025-11-25)', 
       }
     });
 
+    // ANT-2026-D0XJAT8S follow-up: a document that adds a redirect URI
+    // registration would refuse is refused whole, and the client already
+    // materialised from its earlier version stops resolving (fail closed).
+    it('fails closed once the document lists a redirect_uri registration would refuse', async () => {
+      const { fastify } = await materialise();
+      ssrfSafeGet.mockResolvedValue(
+        ok(
+          { ...DOC, redirect_uris: [...DOC.redirect_uris, 'http://app.example.com/plain'] },
+          { 'cache-control': 'no-store' }
+        )
+      );
+      // The earlier document is still cached; drop it as its TTL would.
+      fastify.redis.get.mockResolvedValue(null);
+
+      const { client, reason } = await resolveClient(fastify, 'realm-1', CIMD_ID);
+
+      expect(client).toBeNull();
+      expect(reason).toMatch(/^CIMD document refused: invalid_redirect_uri: /);
+      expect(fastify.repositories.oauthClients.upsertCimdClient).not.toHaveBeenCalled();
+    });
+
     it('fails closed when the document can no longer be fetched', async () => {
       const { fastify } = await materialise();
       ssrfSafeGet.mockResolvedValue({ status: 404, body: '', headers: {} });
@@ -230,6 +251,39 @@ describe('resolveClient — pre-registered → CIMD priority (MCP 2025-11-25)', 
       expect(fastify.repositories.oauthClients.upsertCimdClient).toHaveBeenCalledWith(
         expect.objectContaining({ enabled: false })
       );
+    });
+
+    // ANT-2026-DR5XI3LV: `suspended` is operator state. A re-resolution never
+    // writes it, so the document can neither clear a suspension nor race one.
+    it('never writes `suspended`, so the document cannot lift an operator suspension', async () => {
+      const { fastify, upserted } = await materialise();
+      const suspendedRow = { ...upserted[0], suspended: true, suspendedAt: 1_700 };
+      fastify.repositories.oauthClients.findByClientId.mockResolvedValue(suspendedRow);
+      ssrfSafeGet.mockResolvedValue(
+        ok({
+          ...DOC,
+          client_name: 'Renamed by its host',
+          redirect_uris: ['https://app.example.com/cb'],
+        })
+      );
+
+      await resolveClient(fastify, 'realm-1', CIMD_ID);
+
+      const write = fastify.repositories.oauthClients.upsertCimdClient.mock.calls[0][0];
+      expect(write).not.toHaveProperty('suspended');
+      expect(write).not.toHaveProperty('suspendedAt');
+    });
+
+    it('hands back the suspended row when the document is unchanged', async () => {
+      const { fastify, upserted } = await materialise();
+      const suspendedRow = { ...upserted[0], suspended: true, suspendedAt: 1_700 };
+      fastify.repositories.oauthClients.findByClientId.mockResolvedValue(suspendedRow);
+      ssrfSafeGet.mockResolvedValue(ok(DOC));
+
+      const { client } = await resolveClient(fastify, 'realm-1', CIMD_ID);
+
+      expect(client?.suspended).toBe(true);
+      expect(fastify.repositories.oauthClients.upsertCimdClient).not.toHaveBeenCalled();
     });
   });
 

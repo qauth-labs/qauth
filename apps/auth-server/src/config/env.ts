@@ -169,7 +169,7 @@ export const envDeprecationWarnings: readonly EnvDeprecationWarning[] =
  * reader can consult the alias instead of the resolved gate.
  */
 export const env: Omit<ParsedEnv, 'REQUIRE_EMAIL_VERIFIED' | 'REQUIRE_VERIFIED_ACCOUNT'> & {
-  /** Resolved verified-account gate. `false` unless an operator turned it on. */
+  /** Resolved verified-account gate. `true` unless an operator turned it off. */
   REQUIRE_VERIFIED_ACCOUNT: boolean;
 } & z.infer<typeof jwtEnvSchema> &
   z.infer<typeof cryptoEnvSchema> = {

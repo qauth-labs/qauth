@@ -45,7 +45,15 @@ export const clientSchema = z.object({
   grantTypes: z.array(z.string()),
   responseTypes: z.array(z.string()),
   tokenEndpointAuthMethod: z.string(),
+  /** The owner's on/off switch; `PATCH` may set it either way. */
   enabled: z.boolean(),
+  /**
+   * Whether an operator has suspended the client (ANT-2026-DR5XI3LV). A
+   * suspended client is refused wherever a disabled one is, whatever
+   * `enabled` says. Read-only: only the operator sets or lifts it, never this
+   * API.
+   */
+  suspended: z.boolean(),
   requirePkce: z.boolean(),
   /**
    * The client's EFFECTIVE deployment environment (ADR-008 §7) — the stricter
@@ -186,8 +194,8 @@ export type CreateClientResponse = z.infer<typeof createClientResponseSchema>;
  * Every field is optional (partial update). Identity and secret columns
  * (`clientId`, `clientSecretHash`, `developerId`, `realmId`) are intentionally
  * absent — they can never be mutated through this endpoint. At least one field
- * must be present. `enabled` is one-way: the handler refuses `true` on a
- * disabled client, because only the operator may re-enable one.
+ * must be present. `enabled` may be set either way; an operator's suspension
+ * is a separate, read-only field this schema does not accept.
  */
 export const updateClientRequestSchema = z
   .object({

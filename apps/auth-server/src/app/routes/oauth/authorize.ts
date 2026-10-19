@@ -21,6 +21,7 @@ import { resolveBrowserSession } from '../../helpers/browser-session';
 import { clientAddressKey } from '../../helpers/client-address';
 import { findExceedingAgentScopesForClient, resolveAudience } from '../../helpers/client-auth';
 import { resolveClient } from '../../helpers/client-resolution';
+import { isClientUsable } from '../../helpers/client-status';
 import { canSkipConsent, filterRequestedScopes } from '../../helpers/consent';
 import { resolveIssuerIdentifier } from '../../helpers/discovery';
 import { resolveEnvironmentPolicy } from '../../helpers/environment-policy';
@@ -28,6 +29,7 @@ import { assertManagementToken } from '../../helpers/management-token';
 import { getOrCreateSystemClient } from '../../helpers/oauth-client';
 import {
   buildRedirectUrl,
+  isAllowedRedirectUriScheme,
   isHttpLocalhostRedirect,
   isRedirectUriAllowedForPolicy,
   redirectUriMatchesRegistered,
@@ -186,8 +188,10 @@ export default async function (fastify: FastifyInstance) {
     // both the client and its realm are in scope, and apply the plain-HTTP
     // redirect gate. This is a SECOND gate after the exact-match check above:
     // an `http://` loopback redirect is allowed only where PKCE is enforced or
-    // the environment is `development`, and a non-loopback `http://` redirect
-    // is refused everywhere (ANT-2026-D0XJAT8S). Fail-safe: an unset
+    // the environment is `development`, a non-loopback `http://` redirect
+    // is refused everywhere (ANT-2026-D0XJAT8S), and so is any scheme other
+    // than https, http and an RFC 8252 private-use one, which a row registered
+    // before registration refused them could still hold. Fail-safe: an unset
     // client/realm resolves to `production`. We reject BEFORE redirecting (the
     // redirect target is the very thing under suspicion), matching the
     // unregistered-URI handling.
@@ -203,9 +207,11 @@ export default async function (fastify: FastifyInstance) {
         userAgent: request.headers['user-agent'] || null,
         metadata: {
           error: 'redirect_uri not permitted for this environment',
-          reason: isHttpLocalhostRedirect(redirectUri)
-            ? 'http_localhost_redirect_requires_development'
-            : 'http_redirect_requires_loopback',
+          reason: !isAllowedRedirectUriScheme(redirectUri)
+            ? 'redirect_uri_scheme_not_allowed'
+            : isHttpLocalhostRedirect(redirectUri)
+              ? 'http_localhost_redirect_requires_development'
+              : 'http_redirect_requires_loopback',
           client_id: query.client_id,
           environment: policy.environment,
         },
@@ -221,7 +227,9 @@ export default async function (fastify: FastifyInstance) {
     // that fails them (`grant_types: ["refresh_token"]`) with any redirect
     // URI, and no working flow depends on receiving this error by redirect.
     let unauthorizedReason: string | null = null;
-    if (!client.enabled) {
+    if (!isClientUsable(client)) {
+      // A client its owner disabled and one an operator suspended
+      // (ANT-2026-DR5XI3LV) get the same answer.
       unauthorizedReason = 'client is disabled';
     } else if (!client.grantTypes.includes('authorization_code')) {
       unauthorizedReason = 'client is not registered for the authorization_code grant';
@@ -263,11 +271,12 @@ export default async function (fastify: FastifyInstance) {
       // client's silent-renewal polling from creating a pending-authorization
       // stash on every poll.
       //
-      // `redirect_uri` matched the client's registration above, but for a
-      // self-registered (DCR / CIMD) client the registering party chose it,
-      // anonymously: this would be a no-UI redirect off the issuer to any URL
-      // of their choosing. `sendAuthorizationError` shows the error on the
-      // issuer for such a client instead (RFC 9700 §4.11.2).
+      // `redirect_uri` matched the client's registration above, but unless an
+      // operator provisioned the client, whoever registered it (open DCR, a
+      // CIMD document, a self-registered developer account) chose that URI:
+      // this would be a no-UI redirect off the issuer to any URL of their
+      // choosing. `sendAuthorizationError` shows the error on the issuer for
+      // such a client instead (RFC 9700 §4.11.2, ANT-2026-O8U3P920).
       if (query.prompt === 'none') {
         await fastify.repositories.auditLogs.create({
           userId: null,

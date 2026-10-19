@@ -31,7 +31,7 @@ import {
 import { isAgentClient } from '../../helpers/client-resolution';
 import { isScopeSubset } from '../../helpers/consent';
 import { resolveIssuerIdentifier } from '../../helpers/discovery';
-import { resolveEmailClaims } from '../../helpers/email-claims';
+import { resolveEmailClaimsForScopes } from '../../helpers/email-claims';
 import {
   type EnvironmentPolicy,
   resolveAccessTokenLifespanSeconds,
@@ -673,7 +673,11 @@ async function handleAuthorizationCode(
   // access token AND the ID token, so the two can never disagree about the
   // email within a single issuance. Both claims are omitted entirely when no
   // verified email attribute exists.
-  const emailClaims = await resolveEmailClaims(fastify, user.id);
+  //
+  // BREAKING (#259, then ANT-2026-2O0T72HY): released only under the `email`
+  // scope, in BOTH tokens. The access token is a JWT the client reads in the
+  // same response as the ID token, so gating only the ID token gated nothing.
+  const emailClaims = await resolveEmailClaimsForScopes(fastify, user.id, authCode.scopes);
 
   const accessToken = await issueAccessToken(fastify, {
     sub: user.id,
@@ -694,11 +698,11 @@ async function handleAuthorizationCode(
     ? await fastify.jwtUtils.signIdToken({
         sub: user.id,
         audience: client.clientId,
-        // BREAKING (#259, data minimization): email claims are released in
-        // the ID token only under the `email` scope, matching userinfo's
-        // gating (OIDC Core §5.4). The shared resolution keeps the access
-        // token and ID token consistent when both carry the claims.
-        ...(authCode.scopes.includes('email') ? emailClaims : {}),
+        // BREAKING (#259, data minimization): email claims are released only
+        // under the `email` scope, matching userinfo's gating (OIDC Core
+        // §5.4). `emailClaims` is already empty without it, and the shared
+        // resolution keeps the access token and ID token consistent.
+        ...emailClaims,
         name: resolveDisplayName(user),
         nonce: authCode.nonce ?? undefined,
         // OIDC Core §2 `auth_time`: the real end-user authentication time
@@ -1270,8 +1274,9 @@ async function handleRefreshToken(
   // Access-token lifespan under the environment policy (ADR-008 §5, #197).
   const accessTokenExpiresIn = accessTokenLifespanForPolicy(fastify, policy);
 
-  // BREAKING (#229): trust-ordered resolution; omitted when unverified.
-  const emailClaims = await resolveEmailClaims(fastify, user.id);
+  // BREAKING (#229): trust-ordered resolution; omitted when unverified. Only
+  // under the refreshed grant's `email` scope (ANT-2026-2O0T72HY).
+  const emailClaims = await resolveEmailClaimsForScopes(fastify, user.id, grantedScopes);
 
   const accessToken = await issueAccessToken(fastify, {
     sub: user.id,
@@ -1375,6 +1380,13 @@ function actDepth(act: ActClaim | undefined): number {
  * additionally clamped to the requesting agent's server-side `max_agent_mode`.
  * Fail-closed via `toAgentScopeContext`: a capped agent cannot launder a
  * higher-mode scope through delegation even when the subject token carried it.
+ *
+ * GATE 4d — the agent's registered `scopes` (ADR-011 §3, amended 2026-10-19):
+ * applied on the ID-JAG mint branch only, in {@link mintIdJagForExchange}. An
+ * assertion leaves QAuth's trust domain and cannot be revoked, so its scope
+ * must also be one the operator registered for this agent, as on every other
+ * grant the agent can use. The delegation branch does not apply it yet; ADR-014
+ * adds it there behind `AUTHORITY_TREE_ENABLED`.
  */
 async function handleTokenExchange(
   ctx: HandlerContext<TokenExchangeTokenExchangeBody>
@@ -1608,7 +1620,7 @@ async function handleTokenExchange(
   // client-binding check, the enabled-user check, scope narrowing and the agent
   // scope-mode cap — applies IDENTICALLY to both outcomes and has already run.
   //
-  // What diverges below is only the TARGET model, and it diverges because it
+  // What diverges below is the TARGET model, and it diverges because it
   // must: GATE 4b narrows the issued token's `aud` against the SUBJECT TOKEN's
   // audience, which is correct for a delegated access token minted inside
   // QAuth's own trust domain and meaningless for an assertion whose `aud` is a
@@ -1617,6 +1629,13 @@ async function handleTokenExchange(
   // `mintIdJagForExchange`) is a narrowing, not a widening: it is the same
   // allowlist `client_credentials` already treats as the client's reachable
   // resource set, and an empty one denies.
+  //
+  // Because the target now comes from the agent's registration and not from
+  // the subject token, the scope must be bounded by the agent's registration
+  // too, or the assertion would pair a target the operator granted with a
+  // scope it did not. The mint branch therefore adds GATE 4d, the client's
+  // registered `scopes`, exactly as `client_credentials` applies both columns
+  // together (ADR-011 §3, amended 2026-10-19).
   if (mintingIdJag) {
     return mintIdJagForExchange({
       fastify,
@@ -1697,8 +1716,10 @@ async function handleTokenExchange(
     throw new InvalidRequestError('subject_token has expired');
   }
 
-  // BREAKING (#229): trust-ordered resolution; omitted when unverified.
-  const emailClaims = await resolveEmailClaims(fastify, user.id);
+  // BREAKING (#229): trust-ordered resolution; omitted when unverified. Only
+  // under the delegated (narrowed) scope's `email` (ANT-2026-2O0T72HY): an
+  // agent learns the address only when the user's grant included it.
+  const emailClaims = await resolveEmailClaimsForScopes(fastify, user.id, grantedScopes);
 
   const accessToken = await issueAccessToken(fastify, {
     sub: user.id,
@@ -1779,7 +1800,16 @@ function idJagTargetAllowlist(client: OAuthClientLike): string[] {
  *
  * Reached only from {@link handleTokenExchange}, after every control that
  * governs a delegated access token has already passed. What remains is the
- * target model:
+ * scope ceiling and the target model:
+ *
+ *  - GATE 4d — every scope the assertion would carry (the subject token's
+ *    scope, or the narrower `scope` the request named) must be in the client's
+ *    registered `scopes` (`validateScopes`, the check `client_credentials` and
+ *    the jwt-bearer consume side run). An empty list denies any scoped
+ *    assertion. The request is refused (`invalid_scope`), never trimmed: the
+ *    agent narrows with `scope` when it wants less. ADR-011 §3, amended
+ *    2026-10-19: the assertion leaves QAuth's trust domain and cannot be
+ *    revoked, so this cannot wait for ADR-014.
  *
  *  - `audience` (EMA §4, MUST) — the issuer identifier of the resource
  *    authorization server, and becomes the assertion's `aud`. Exactly one value:
@@ -1818,6 +1848,21 @@ async function mintIdJagForExchange(args: {
     subjectExp,
     auditFailure,
   } = args;
+
+  // GATE 4d — the client's registered `scopes` are a ceiling on the assertion,
+  // beside the subject token's scope (GATE 4a). The subject token says what the
+  // USER granted to the app that holds it; the registration says what the
+  // OPERATOR lets THIS agent hold. The assertion is QAuth's word to a foreign
+  // authorization server that its policy was evaluated, so it must satisfy both.
+  try {
+    validateScopes(grantedScopes.join(' '), client.scopes, toAgentScopeContext(client));
+  } catch (err) {
+    await auditFailure('invalid_scope: ID-JAG scope outside the client scope allowlist', {
+      grantedScopes,
+      allowedScopes: client.scopes,
+    });
+    throw err;
+  }
 
   const allowedTargets = idJagTargetAllowlist(client);
 
@@ -2161,7 +2206,9 @@ async function handleJwtBearer(
   // shows exactly this (a 300s assertion yielding an 86400s access token).
   const accessTokenExpiresIn = accessTokenLifespanForPolicy(fastify, policy);
 
-  const emailClaims = await resolveEmailClaims(fastify, user.id);
+  // Only under the granted `email` scope (ANT-2026-2O0T72HY), like every other
+  // grant: the assertion's scope, narrowed and capped by GATE 5, decides.
+  const emailClaims = await resolveEmailClaimsForScopes(fastify, user.id, grantedScopes);
 
   // EMA §5.1, the profile's central MUST: the issued access token is
   // audience-restricted to the MCP server the assertion's `resource` claim

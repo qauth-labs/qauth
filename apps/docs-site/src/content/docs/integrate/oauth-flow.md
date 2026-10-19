@@ -165,7 +165,7 @@ apps: a **loopback** redirect may carry **any port**.
 - `localhost` is accepted because real clients (Claude Code among them) use
   it, but RFC 8252 §8.3 recommends the IP literal: prefer `127.0.0.1` or
   `[::1]` for clients you write.
-- `https` and custom-scheme redirects always need an exact match, port
+- `https` and private-use-scheme redirects always need an exact match, port
   included.
 - QAuth redirects to the port you **requested** and binds the code to that
   exact URI, so the token request must repeat it verbatim — port included
@@ -254,6 +254,14 @@ Beyond the standard `iss` / `sub` / `aud` / `exp` / `iat`, `id_token` carries
 `email`/`email_verified` share the same trust-ordered resolution the access
 token and [UserInfo](#userinfo-oidc) use, so all three never disagree within
 one issuance.
+
+The **access token** follows the same `email` rule on every grant
+(`authorization_code`, `refresh_token`, token exchange, `jwt-bearer`): it
+carries `email`/`email_verified` only when its own `scope` includes `email`
+and a verified address exists. A resource server that needs the address has
+the client request `email`, which puts it on the consent screen. A refresh or
+an exchange that narrows `email` out of the scope drops the claims, and
+`client_credentials` and the first-party `/auth/login` token never carry them.
 
 ### 4. Call a protected resource
 
@@ -511,6 +519,20 @@ An RFC 8693 token exchange requesting
 `requested_token_type=urn:ietf:params:oauth:token-type:id-jag` returns an
 assertion targeted at a **third-party** resource authorization server.
 
+The agent client is provisioned by the operator, and its registration bounds
+what it can mint:
+
+- `audience` (exactly one value, the target authorization server's issuer) and
+  `resource` (exactly one value, the MCP server) must both appear in the
+  client's `audience` list. An empty list denies.
+- The assertion's `scope` is the subject token's scope, or the narrower `scope`
+  the request names, and every value must also appear in the client's
+  registered `scopes`. A value outside that list is refused with
+  `invalid_scope`, not dropped: send `scope` to ask for less. A client
+  registered with no `scopes` cannot mint a scoped assertion. This is the same
+  check `client_credentials` applies ([ADR-011](/reference/records/adr/011-enterprise-managed-authorization/) §3, amended
+  2026-10-19).
+
 Minted assertions are signed with EdDSA — the same key that signs access tokens —
 so a foreign authorization server verifies them from the JWKS it already fetches
 from `GET /.well-known/jwks.json`. This is deliberately **not** the hybrid
@@ -629,6 +651,25 @@ curl -s http://localhost:3000/oauth/userinfo \
 > claims are omitted entirely** — treat `email` as optional. When present,
 > `email_verified` is always `true`.
 
+UserInfo accepts an access token only when it is addressed to UserInfo. Its
+`aud` must contain either:
+
+- the token's own `client_id`. A grant that named no `resource`, for a client
+  without an operator-configured `audience`, gets exactly that, so the token
+  from an ordinary OIDC code flow works; or
+- the UserInfo URL that discovery publishes as `userinfo_endpoint`
+  (`http://localhost:3000/oauth/userinfo` here).
+
+A token whose `aud` names only other resource servers is refused with `401`
+and `WWW-Authenticate: Bearer error="invalid_token"`. The token from the code
+flow above, bound by `resource=http://localhost:8088`, is such a token: it is
+for that MCP server, and that server must not be able to read the user's
+claims with it. A client that binds its grant to a resource server can read
+the user's identity from the [ID token](#id-token-claims-oidc) instead, or list
+the UserInfo URL as another `resource` at `/oauth/authorize`. The second gives
+a token both audiences accept, so the resource server can then call UserInfo
+with it too.
+
 ---
 
 ## Dynamic Client Registration (RFC 7591)
@@ -638,10 +679,19 @@ See the example in [step 0](#0-prerequisites--a-client). Key fields:
 
 | Field                        | Notes                                                                  |
 | ---------------------------- | ---------------------------------------------------------------------- |
-| `redirect_uris`              | Required for `authorization_code`.                                     |
+| `redirect_uris`              | Required for `authorization_code`. Schemes: see below.                 |
 | `grant_types`                | Subset of `authorization_code`, `refresh_token`, `client_credentials`. |
 | `token_endpoint_auth_method` | `none` (public/PKCE), `client_secret_basic`, or `client_secret_post`.  |
 | `scope`                      | Space-separated; **capped to the realm allowlist**.                    |
+
+Each redirect URI must be `https`, `http` to a loopback host (`127.0.0.1`,
+`[::1]` or `localhost`), or an RFC 8252 §7.1 private-use scheme for a native
+app: a reverse domain name you control, such as `com.example.app:/callback`. Any
+other scheme, `javascript:`, `data:`, `file:` and schemes without a period
+(`myapp:`) included, is refused with `invalid_redirect_uri`, and a URI with a
+fragment is refused too. The same rule applies to `POST /api/clients` and to a
+CIMD document, and `/oauth/authorize` refuses any other scheme still stored on a
+client.
 
 Those two lists are exhaustive for self-registration, and the omissions are
 deliberate rather than incomplete. `private_key_jwt`, the `jwks` / `jwks_uri`
@@ -677,15 +727,19 @@ QAuth returns standard OAuth error codes (RFC 6749 §5.2):
 > checked before any user interaction, and is never redirected. See the
 > [error model](/integrate/api-reference/#error-model).
 >
-> **Self-registered clients.** RFC 9700 §4.11.2 lets an authorization server
-> redirect automatically only to a redirect URI it trusts. A client created
-> through `POST /oauth/register` or resolved from a Client ID Metadata Document
-> registered its own redirect URI, so for such a client an error that would
-> leave the issuer before any QAuth page is shown (for example `login_required`
-> for an unauthenticated `prompt=none`) is rendered on an issuer page, with
-> HTTP 400 and a link that carries the full error response to the redirect URI,
-> instead of a 302. Clients an operator provisioned keep the automatic
-> redirect.
+> **Clients no operator provisioned.** RFC 9700 §4.11.2 lets an
+> authorization server redirect automatically only to a redirect URI it trusts.
+> QAuth trusts the redirect URIs of a client an operator provisioned: the
+> system client and the clients of the `db:seed-oauth-clients` manifest
+> (`oauth_clients.provisioned_by_operator`). Every other client registered its
+> own redirect URI: one created through `POST /oauth/register`, one resolved
+> from a Client ID Metadata Document, and one a developer account created
+> through `POST /api/clients`. For such a client an error that would leave the
+> issuer before any QAuth page is shown (for example `login_required` for an
+> unauthenticated `prompt=none`) is rendered on an issuer page, with HTTP 400
+> and a link that carries the full error response to the redirect URI, instead
+> of a 302. An owner who changes the redirect URIs of an operator-provisioned
+> client through `PATCH /api/clients/{id}` removes that trust.
 
 | Code                     | Meaning                                                                    |
 | ------------------------ | -------------------------------------------------------------------------- |

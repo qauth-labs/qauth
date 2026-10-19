@@ -14,10 +14,17 @@ import type { SubjectResolutionConfig } from './subject-resolution-strategies';
  * `SubjectResolutionStrategy.resolve` returns `no-match` and stops, deliberately
  * (*"strategies never create accounts"*).
  *
- * #235 is the first caller that enrols, so it needs the value to store. It must
- * be derived from the SAME claim set the later comparison will use, or every
- * enrolled user is locked out on their second login — a failure that would
- * surface days later, on a path with a deliberately uninformative error.
+ * #235 was the first caller that enrolled, so it needed the value to store. It
+ * must be derived from the SAME claim set the later comparison will use, or
+ * every enrolled user is locked out on their second login — a failure that
+ * would surface days later, on a path with a deliberately uninformative error.
+ *
+ * Since ADR-009 §1's 2026-10-19 amendment wallet SIGN-IN no longer enrols
+ * (ANT-2026-NCX3VXDP), so nothing in the server calls this today. Account
+ * linking derives the same value from the same claim set inside
+ * `prepareWalletLink`. The function stays exported for the wallet-first
+ * sign-up that arrives with ADR-017's hosted sign-up pages, and for tests that
+ * need the binding an account was enrolled or linked with.
  *
  * That claim set lives in the strategy's CONFIGURATION, in a different place per
  * strategy, so this function reads it and the caller does not. The alternative —
@@ -47,8 +54,8 @@ import type { SubjectResolutionConfig } from './subject-resolution-strategies';
  * @param credential - the validated presentation being enrolled.
  * @returns the binding, or `null` when it cannot be derived — the holder
  * withheld one of the configured claims, or the credential carries no validated
- * issuer. `null` is NOT an error here; the caller decides, and #235's enrolment
- * path refuses rather than storing an account nothing can later prove
+ * issuer. `null` is NOT an error here; the caller decides, and an enrolling
+ * caller must refuse rather than store an account nothing can later prove
  * entitlement to.
  */
 export function deriveEnrolmentWalletBinding(

@@ -30,13 +30,42 @@ import { isWalletAttributeIssuerStillTrusted } from './wallet-verification';
  * verified-false is unrepresentable at compile time. Presence IS the
  * verification signal (OIDC Core 1.0 §5.1).
  *
- * Every user-bound emission site consumes this as a one-line spread:
- * password login, authorization_code (access + ID token from ONE call),
- * refresh rotation, RFC 8693 token exchange, and userinfo (under the `email`
- * scope). The login-time REQUIRE_VERIFIED_ACCOUNT gate is a separate control
- * and does not read this.
+ * Release is a separate question, decided by the granted scopes: the pair
+ * reaches a token or a response only under the `email` scope (OIDC Core §5.4).
+ * Every emission site therefore calls {@link resolveEmailClaimsForScopes}:
+ * authorization_code (access + ID token from ONE call), refresh rotation,
+ * RFC 8693 token exchange, the RFC 7523 jwt-bearer grant, and userinfo. The
+ * `/auth/login` token is granted no scope and carries neither claim. The
+ * login-time REQUIRE_VERIFIED_ACCOUNT gate is a separate control and does not
+ * read this.
  */
 export type EmailClaims = { email: string; email_verified: true } | Record<string, never>;
+
+/** The OIDC scope that releases `email` / `email_verified` (OIDC Core §5.4). */
+export const EMAIL_SCOPE = 'email';
+
+/**
+ * The email claims a token or response with `grantedScopes` may carry: the
+ * trust-ordered pair of {@link resolveEmailClaims} when `email` was granted,
+ * nothing otherwise. The attribute lookup is skipped when the scope is absent.
+ *
+ * This is the one rule for every emission site, access tokens included
+ * (ANT-2026-2O0T72HY, decided 2026-10-19). An access token is a JWT the client
+ * can read, so a claim gated in the ID token and at userinfo but not in the
+ * access token would be gated nowhere.
+ */
+export async function resolveEmailClaimsForScopes(
+  fastify: FastifyInstance,
+  userId: string,
+  grantedScopes: Iterable<string>
+): Promise<EmailClaims> {
+  for (const scope of grantedScopes) {
+    if (scope === EMAIL_SCOPE) {
+      return resolveEmailClaims(fastify, userId);
+    }
+  }
+  return {};
+}
 
 export async function resolveEmailClaims(
   fastify: FastifyInstance,

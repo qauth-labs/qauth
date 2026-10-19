@@ -308,4 +308,54 @@ describe('real EdDSA signature verification — token-consuming endpoints', () =
       await app.close();
     }
   });
+
+  // NOIEWQ7H: a genuine, live token minted for ANOTHER resource server passes
+  // `requireJwt` (signature, issuer, expiry, revocation) — the audience rule in
+  // the route is what refuses it.
+  it('userinfo refuses a genuinely signed token whose audience is another resource server (401)', async () => {
+    const app = await buildApp();
+    try {
+      const token = await app.jwtUtils.signAccessToken({
+        sub: USER_ID,
+        clientId: CLIENT_ID,
+        scope: 'openid email',
+        aud: 'http://localhost:8088',
+      });
+
+      const res = await app.inject({
+        method: 'GET',
+        url: '/userinfo',
+        headers: { authorization: `Bearer ${token}` },
+      });
+
+      expect(res.statusCode).toBe(401);
+      expect(res.headers['www-authenticate']).toContain('error="invalid_token"');
+      expect(res.json()).not.toHaveProperty('email');
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('userinfo accepts a genuinely signed token whose audience lists the userinfo endpoint', async () => {
+    const app = await buildApp();
+    try {
+      const token = await app.jwtUtils.signAccessToken({
+        sub: USER_ID,
+        clientId: CLIENT_ID,
+        scope: 'openid email',
+        aud: ['http://localhost:8088', `${ISSUER}/oauth/userinfo`],
+      });
+
+      const res = await app.inject({
+        method: 'GET',
+        url: '/userinfo',
+        headers: { authorization: `Bearer ${token}` },
+      });
+
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toMatchObject({ sub: USER_ID, email: 'user@example.com' });
+    } finally {
+      await app.close();
+    }
+  });
 });

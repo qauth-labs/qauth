@@ -17,18 +17,18 @@ You are working in the QAuth OAuth/OIDC implementation.
 
 ## Endpoints
 
-| Endpoint                                | Description                                                                                                                         |
-| --------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
-| `POST /auth/register`                   | Registration — creates user, credential, attribute, verification token                                                              |
-| `POST /auth/login`                      | Password login — looks up `user_credentials` by `(realm_id, 'password', external_sub)` where `external_sub` is the normalised email |
-| `GET /auth/verify`                      | Email verification — marks `credential_data.email_verified=true` and `user_attributes.verified=true`                                |
-| `POST /auth/resend-verification`        | Resend verification email                                                                                                           |
-| `GET /oauth/authorize`                  | Authorization Code Flow initiation                                                                                                  |
-| `POST /oauth/token`                     | Token endpoint (authorization_code, refresh_token grants)                                                                           |
-| `POST /oauth/introspect`                | RFC 7662 introspection (client auth required)                                                                                       |
-| `GET /oauth/userinfo`                   | OIDC userinfo — reads `sub` from JWT, returns verified email from `user_attributes`                                                 |
-| `GET /.well-known/jwks.json`            | JWKS endpoint                                                                                                                       |
-| `GET /.well-known/openid-configuration` | OIDC discovery                                                                                                                      |
+| Endpoint                                | Description                                                                                                                                             |
+| --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `POST /auth/register`                   | Registration — creates user, credential, attribute, verification token; same `202` for an already registered address                                    |
+| `POST /auth/login`                      | Password login — looks up `user_credentials` by `(realm_id, 'password', external_sub)` where `external_sub` is the normalised email                     |
+| `GET /auth/verify`                      | Email verification — marks `credential_data.email_verified=true` and `user_attributes.verified=true`                                                    |
+| `POST /auth/resend-verification`        | Resend verification email                                                                                                                               |
+| `GET /oauth/authorize`                  | Authorization Code Flow initiation                                                                                                                      |
+| `POST /oauth/token`                     | Token endpoint (authorization_code, refresh_token grants)                                                                                               |
+| `POST /oauth/introspect`                | RFC 7662 introspection (client auth required)                                                                                                           |
+| `GET /oauth/userinfo`                   | OIDC userinfo — reads `sub` from JWT, returns verified email from `user_attributes`; the token's `aud` must contain its `client_id` or the userinfo URL |
+| `GET /.well-known/jwks.json`            | JWKS endpoint                                                                                                                                           |
+| `GET /.well-known/openid-configuration` | OIDC discovery                                                                                                                                          |
 
 ## Introspection
 
@@ -73,11 +73,14 @@ against this list.
 
 ## Email Claim Behaviour
 
-The `email` claim in ID tokens and userinfo responses:
+The `email` claim in ID tokens, access tokens and userinfo responses:
 
 - Released only when the `email` scope was granted — userinfo since #229,
-  ID tokens since #259; without the scope the claims are omitted even for a
-  verified email (access-token convenience claims are not scope-gated)
+  ID tokens since #259, access tokens on every grant since 2026-10-19
+  (ANT-2026-2O0T72HY); without the scope the claims are omitted even for a
+  verified email. Every site calls `resolveEmailClaimsForScopes`
+  (`apps/auth-server/src/app/helpers/email-claims.ts`); the scope-less
+  `/auth/login` token carries none
 - Present only when `user_attributes` has a verified email (`verified=true`)
 - Absent (not null) when no verified email exists
 - Sourced from the highest-trust attribute source (`wallet > oidc_* > self_reported`);

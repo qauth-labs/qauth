@@ -76,7 +76,7 @@ enumeration oracle — client authentication failures answer with the bare token
 | `401`  | Missing, malformed, or invalid bearer token / session     |
 | `403`  | Authenticated but not permitted (e.g. insufficient scope) |
 | `404`  | Resource not found                                        |
-| `409`  | Conflict (e.g. email already registered)                  |
+| `409`  | Conflict (e.g. a resource that must be unique)            |
 | `429`  | Rate limited                                              |
 
 ---
@@ -124,7 +124,22 @@ Email/password endpoints for **end users of your own application**. Third-party
 
 ### `POST /auth/register`
 
-Create a user account. A verification email is sent (the `mock` provider logs it).
+Register a password account. The answer is the same for every address, whether
+it was free or already has an account, so it reveals neither. What happens next
+arrives by email (the `mock` provider delivers nothing):
+
+- A free address gets an unverified account and a verification link.
+- An address that already has a verified account gets no new account. Its owner
+  gets a notice that someone tried to register it, with no link in it.
+- An address whose account is still unverified gets its verification link
+  again. The link verifies only with the password chosen when the account was
+  first registered (see [`POST /auth/verify`](#post-authverify)).
+
+A mail to an existing account counts toward the same per-address caps as
+[`POST /auth/resend-verification`](#post-authresend-verification), and every
+registration claims the minimum interval there, so a resend right after a
+registration answers `429` for any address. A new account's verification mail is
+always sent.
 
 **Request** (`application/json`)
 
@@ -134,25 +149,24 @@ Create a user account. A verification email is sent (the `mock` provider logs it
 | `password` | string         | yes      | Strength enforced server-side (zxcvbn score). |
 | `realmId`  | string (uuid)  | no       | Defaults to the server's default realm.       |
 
-**`201 Created`**
+**`202 Accepted`** (`Cache-Control: no-store`)
 
 ```json
-{
-  "id": "0190f7c2-...",
-  "email": "dev@example.com",
-  "emailVerified": false,
-  "realmId": "0190f7c0-...",
-  "createdAt": 1750000000000,
-  "updatedAt": null
-}
+{ "message": "Registration received. Check your inbox for an email with the next step." }
 ```
 
-Errors: `400` (validation / weak password), `409` (email already registered),
-`429` (rate limited). The `409` body is generic and carries no database
-constraint name, but the status itself tells the caller that the address already
-has a password account in the realm. This endpoint therefore reveals whether an
-address is registered.
-[ADR-017](/reference/records/adr/017-first-party-login/) removes it before 1.0.
+The body carries no user id: anything that differed between a new account and an
+existing one would answer the question this endpoint must not. Show a "check your
+inbox" screen, never "account created" or "address taken". With
+`REQUIRE_VERIFIED_ACCOUNT` on (the default), the account can sign in only after
+its owner has verified it; until then [`POST /auth/login`](#post-authlogin)
+answers it with the same `401` as a wrong password.
+
+Errors: `400` (validation, or an unknown or disabled `realmId`), `422`
+(`WEAK_PASSWORD`, with `feedback`), `429` (rate limited). None of them depends on
+whether the address is registered. Before 2026-10-19 this endpoint answered `201`
+with the new user and `409` for a registered address (breaking change, listed in
+`CHANGELOG.md`).
 
 ### `POST /auth/login`
 
@@ -173,6 +187,10 @@ address is at most 254 characters.
 ```
 
 Errors: `400` (validation), `401` (invalid credentials), `429` (rate limited).
+The `401` is the same for an unknown address, a wrong password, a disabled
+account and, with `REQUIRE_VERIFIED_ACCOUNT` on (the default), an account whose
+address is not verified yet: registering an address and then logging in must not
+tell a free address from a registered one.
 Renew the access token with the [`refresh_token` grant](/integrate/oauth-flow/#refresh-token-rotation)
 at `POST /oauth/token` — there is no separate refresh endpoint.
 
@@ -217,7 +235,8 @@ and the `429` carries `Retry-After`).
 ### `POST /auth/resend-verification`
 
 Re-send the verification email. Rate-limited per address (min-interval +
-per-window caps).
+per-window caps). [`POST /auth/register`](#post-authregister) counts toward the
+same caps.
 
 **Request** (`application/json`): `{ "email": "dev@example.com" }`
 
@@ -360,7 +379,10 @@ order `wallet > oidc_* > self_reported`). Otherwise both keys are **absent**
 (never `null`). When present, `email_verified` is always `true`. The `POST`
 form accepts the access token either as a Bearer header or as a form-encoded
 `access_token` field (RFC 6750 §2.2). A token whose user has been disabled
-since it was issued gets `401`.
+since it was issued gets `401`. So does a token that is not addressed to
+UserInfo: its `aud` must contain the token's own `client_id` (the default when
+the grant named no `resource`) or the `userinfo_endpoint` URL from discovery.
+See [UserInfo](/integrate/oauth-flow/#userinfo-oidc).
 
 ### `POST /oauth/revoke`
 
@@ -583,6 +605,7 @@ List the authenticated developer's OAuth clients.
       "responseTypes": ["code"],
       "tokenEndpointAuthMethod": "none",
       "enabled": true,
+      "suspended": false,
       "requirePkce": true,
       "createdAt": 1750000000000,
       "updatedAt": 1750000000000,
@@ -593,6 +616,12 @@ List the authenticated developer's OAuth clients.
 ```
 
 A developer with no clients gets `{ "clients": [] }`. Errors: `401` (missing/invalid bearer).
+
+`enabled` is the owner's switch. `suspended` is read-only: `true` when the
+operator has suspended the client, which is then refused wherever a disabled
+client is (`unauthorized_client` at `/oauth/authorize`, `invalid_client` at the
+token, introspection and revocation endpoints), whatever `enabled` says. Only
+the operator lifts a suspension.
 
 > **Ownership & 404 semantics.** Every per-client route is scoped to the token
 > subject's `developer_id`. A client that exists but is owned by another
@@ -610,15 +639,15 @@ only** — only its argon2id hash is stored, so it is unrecoverable afterwards.
 
 **Body** (all besides `name` optional):
 
-| Field                     | Type     | Default                                  | Notes                                                                                                                                                     |
-| ------------------------- | -------- | ---------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `name`                    | string   | —                                        | Required, 1–255 chars.                                                                                                                                    |
-| `description`             | string   | `null`                                   |                                                                                                                                                           |
-| `redirectUris`            | string[] | `[]`                                     | At most 20. Each validated (OAuth 2.1 §10.3 — `https` or loopback). **Required (≥1) for user-involving grants** (`authorization_code` / `refresh_token`). |
-| `scopes`                  | string[] | `[]`                                     | At most 100. Capped to the realm's allowed-scopes policy (same allowlist as dynamic registration); a scope outside it is rejected.                        |
-| `grantTypes`              | string[] | `["authorization_code","refresh_token"]` | At most 8. `authorization_code` / `refresh_token` / `client_credentials`.                                                                                 |
-| `responseTypes`           | string[] | `["code"]`                               | At most 4. OAuth 2.1 only supports `code`.                                                                                                                |
-| `tokenEndpointAuthMethod` | string   | `"none"`                                 | `none` (public) / `client_secret_post` / `client_secret_basic` / `private_key_jwt`.                                                                       |
+| Field                     | Type     | Default                                  | Notes                                                                                                                                                                                                                                                     |
+| ------------------------- | -------- | ---------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `name`                    | string   | —                                        | Required, 1–255 chars.                                                                                                                                                                                                                                    |
+| `description`             | string   | `null`                                   |                                                                                                                                                                                                                                                           |
+| `redirectUris`            | string[] | `[]`                                     | At most 20. Each validated (OAuth 2.1 §10.3 — `https`, loopback `http`, or an RFC 8252 private-use scheme such as `com.example.app:`; any other scheme is refused). **Required (≥1) for user-involving grants** (`authorization_code` / `refresh_token`). |
+| `scopes`                  | string[] | `[]`                                     | At most 100. Capped to the realm's allowed-scopes policy (same allowlist as dynamic registration); a scope outside it is rejected.                                                                                                                        |
+| `grantTypes`              | string[] | `["authorization_code","refresh_token"]` | At most 8. `authorization_code` / `refresh_token` / `client_credentials`.                                                                                                                                                                                 |
+| `responseTypes`           | string[] | `["code"]`                               | At most 4. OAuth 2.1 only supports `code`.                                                                                                                                                                                                                |
+| `tokenEndpointAuthMethod` | string   | `"none"`                                 | `none` (public) / `client_secret_post` / `client_secret_basic` / `private_key_jwt`.                                                                                                                                                                       |
 
 **Rate limit**: per-IP, shared budget with `POST /oauth/register`
 (`REGISTER_CLIENT_RATE_LIMIT` / `REGISTER_CLIENT_RATE_WINDOW`) — create runs an
@@ -638,6 +667,7 @@ argon2id hash on every call, so the cap is mandatory (`429` on exceed).
   "responseTypes": ["code"],
   "tokenEndpointAuthMethod": "client_secret_post",
   "enabled": true,
+  "suspended": false,
   "requirePkce": true,
   "createdAt": 1750000000000,
   "updatedAt": 1750000000000,
@@ -647,7 +677,11 @@ argon2id hash on every call, so the cap is mandatory (`429` on exceed).
 ```
 
 Public clients (`tokenEndpointAuthMethod: "none"`) get **no** `clientSecret`.
-A repeated scope is stored once. A developer may own at most
+A repeated scope is stored once. A client created here is not
+operator-provisioned: an authorization error that `/oauth/authorize` would send
+before the user sees any QAuth page (for example `login_required` for
+`prompt=none`) is shown on an issuer page with a link to the redirect URI, not
+redirected automatically (see [Errors](/integrate/oauth-flow/#errors)). A developer may own at most
 `MAX_CLIENTS_PER_DEVELOPER` clients (default 100), counting the ones registered
 with attribution through `POST /oauth/register`.
 Errors: `400` (invalid `redirectUri`, inconsistent grant/response types, missing
@@ -672,14 +706,13 @@ _effective_ configuration (request value or persisted value) is re-validated:
 grant/response-type consistency, a redirect URI for user-involving grants, and
 the realm scope cap when `scopes` is changed.
 
-`enabled` can only be switched **off** here. It is the same switch an operator
-uses to cut a client off, so `"enabled": true` on a disabled client is refused
-with `403`; re-enabling is an operator action.
+`enabled` is the owner's switch and may be set either way. It does not lift an
+operator's suspension: `suspended` cannot be written here, and a suspended
+client stays refused after `"enabled": true` until the operator lifts it.
 
 **`200 OK`** — the updated client (safe fields, no secret).
 Errors: `400` (validation / inconsistent config / disallowed scope / missing
-redirect for a user-involving grant), `401`, `403` (re-enabling a disabled
-client), `404`.
+redirect for a user-involving grant), `401`, `404`.
 
 ### `DELETE /api/clients/{id}`
 

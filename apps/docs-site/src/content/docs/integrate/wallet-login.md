@@ -24,9 +24,19 @@ step, and what is deliberately not built yet. Implements
 > previously started and then refused every presentation.
 >
 > Claims normalization into `user_attributes` (#235) landed too: a validated
-> credential's claims become `source='wallet'` attribute rows, and a first
-> presentation for an unknown identifier enrols the account (ADR-009 §1's first
-> bootstrap case).
+> credential's claims become `source='wallet'` attribute rows at every wallet
+> sign-in.
+>
+> **Behaviour change (ANT-2026-NCX3VXDP, breaking).** `v0.1.0-rc.1` and
+> `v0.1.0-rc.2` created an account when a wallet was presented on an identifier
+> that had none. Wallet sign-in no longer creates accounts
+> ([ADR-009](/reference/records/adr/009-wallet-account-resolution/) §1, amended
+> 2026-10-19): that presentation is refused exactly like one on a taken
+> identifier. Accounts created that way keep signing in. To give someone wallet
+> sign-in, they sign in to their account and link the wallet
+> ([Account linking](#account-linking-238)). Wallet-first sign-up arrives with
+> the hosted sign-up pages
+> ([ADR-017](/reference/records/adr/017-first-party-login/)).
 >
 > The whole flow is covered end to end against real containers and a mock wallet
 > (#240) — see [End-to-end tests](#end-to-end-tests-and-the-mock-wallet-240).
@@ -77,6 +87,11 @@ involved here.
    It is never looked up at this step. Every submission renders the pending page
    — a QR code or a deep link — whether or not the account exists, so the screen
    is not an account oracle.
+
+   The identifier must belong to an account the wallet was linked to. A
+   presentation on an identifier with no account is refused exactly like one on
+   an account the wallet is not bound to, and creates nothing, so the field can
+   neither reveal which accounts exist nor claim one.
 
 2. **The user says where the wallet is.** The identifier form has two submit
    buttons on the one form — **Use a wallet on this device** (`device=this`) and
@@ -403,7 +418,8 @@ never registered and no wallet login exists to produce a level.
   [ADR-013](/reference/records/adr/013-same-device-return-leg/).
 - **One refusal.** Expired request, wallet-reported error, unvalidatable
   presentation, untrusted issuer, unknown account and disabled account all render
-  the same sentence. #236 requires that an untrusted issuer be indistinguishable
+  the same sentence. "Unknown account" includes an identifier with no account at
+  all, which is never enrolled. #236 requires that an untrusted issuer be indistinguishable
   from a malformed presentation; on a login screen, distinguishing "no such
   account" from "credential rejected" would hand any anonymous visitor an account
   oracle. The specific reason is logged server-side only.
@@ -439,8 +455,9 @@ in this order, and none of them is optional:
 4. **#300 — subject resolution.** ADR-009 §1 requires verifying that the presented
    credential matches the binding stored for the **asserted** account; without
    that check anyone holding any valid credential could sign in as anyone.
-5. **#235 — enrolment and claims.** `helpers/wallet-account.ts` turns the
-   resolution into an account and writes the credential's claims as attributes.
+5. **#235 — the account and its claims.** `helpers/wallet-account.ts` signs in
+   the account the strategy matched — never a new one — and writes the
+   credential's claims as attributes.
 
 Steps 1 and 2 are composed in one function, `verifyWalletPresentations`
 (`@qauth-labs/fastify-plugin-federation`), precisely so a caller cannot wire up
@@ -485,6 +502,11 @@ case forbids the alternative:
 
 So `asserted-lookup` **refuses** such an account at login, and linking is how its
 owner — proven by their session, not by the presentation — opts in.
+
+Linking is also the only way a wallet gets an account today. Wallet sign-in
+never creates one (ADR-009 §1, amended 2026-10-19), so a person who has only a
+wallet first creates an account, signs in, and links the wallet here. Wallet-first
+sign-up arrives with the hosted sign-up pages (ADR-017).
 
 Two entry points, both requiring a session: the server-rendered screens at
 `/ui/wallet-link` (confirmation → QR → outcome, the same chrome as the sign-in
@@ -580,7 +602,7 @@ each carry". The adapter over `user_credentials` is
 
 Two properties of that adapter are load-bearing. It returns rows across **every**
 provider type, so a password account with no wallet binding stays visible and is
-refused rather than looking like "no account" a caller might enrol over. And it
+refused as an account that exists, rather than looking like "no account". And it
 lets a database failure propagate, because the strategy contains it and turns it
 into the same uniform refusal — swallowing it here would turn a broken database
 into "no such account".
@@ -599,13 +621,17 @@ startup gate. A deployment that names a strategy and omits its settings fails at
 rendered as a refusal, never as a distinct status an anonymous caller could
 drive.
 
-The login path **does** enrol, but only on `no-match`. That is ADR-009 §1's first
-bootstrap case: no account exists for the asserted identifier, so the
-presentation establishes the account and its wallet binding together
-(`helpers/wallet-account.ts`, #235). `ambiguous` and `rejected` never enrol —
-`rejected` in particular carries ADR-009's second bootstrap case, an account that
-exists for the identifier with no matching wallet binding, and enrolling there
-would be the account takeover the ADR names.
+The login path **never** enrols (ADR-009 §1, amended 2026-10-19). `no-match` —
+no account for the asserted identifier — is refused exactly like `ambiguous` and
+`rejected`, after the same single lookup, and writes nothing
+(`helpers/wallet-account.ts`). Until that amendment it enrolled: the presentation
+established a new account, bound to whoever presented, on the identifier they
+typed. That answered "free" differently from "taken", which revealed wallet-only
+accounts to any holder of a trusted credential, and it let that holder claim
+someone else's identifier (ANT-2026-NCX3VXDP). `rejected` still carries ADR-009's
+second bootstrap case, an account that exists for the identifier with no
+matching wallet binding; signing in there would be the account takeover the ADR
+names.
 
 The same seam also resolves the assurance level (#237) — it returns an optional
 `assuranceLevel` alongside the user, and everything downstream of it (the browser
@@ -691,10 +717,14 @@ whichever comes first. Tokens already issued are not affected.
 The whole stack is exercised against a real Postgres, a real Redis and a mock
 wallet in `apps/auth-server/src/app/wallet-federation.integration.test.ts`, run
 by `pnpm nx test-integration auth-server` (Docker required) and by CI's
-`integration` job. It covers first-time login, a returning user, the ADR-009 §1
-takeover attempt, untrusted-issuer rejection, account linking, `acr` presence and
-absence, the password-login regression, the fail-closed posture with no
-`VerifierProfile`, and the `vp_token`-keyed-by-DCQL-id contract.
+`integration` job. It covers the refusal of a presentation on an identifier with
+no account (identical to one on a taken identifier, and creating nothing), a
+linked wallet's first and returning sign-ins, the ADR-009 §1 takeover attempt,
+untrusted-issuer rejection (including an issuer removed from trust), account
+linking, `acr` presence and absence, the password-login regression, the
+fail-closed posture with no `VerifierProfile`, and the `vp_token`-keyed-by-DCQL-id
+contract. Every scenario that signs a wallet in links it to a password account
+first, through `linkWalletToNewAccount` in `src/testing/e2e-harness.ts`.
 
 The wallet is `apps/auth-server/src/testing/mock-wallet.ts`. It is built on
 `@qauth-labs/core-crypto` and `jose` and imports nothing from the verifier, so

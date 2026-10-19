@@ -60,6 +60,11 @@ The control shipped, was reviewed, was merged, and did nothing.
 comment keeps `code` and `statusCode` "so legitimate clients can still branch on the conflict".
 The defect is narrower than "enumeration is wide open": what leaks is the internal index name.
 
+> **Update 2026-10-19:** the status turned out to be an oracle on its own: the address is the only
+> field of a registration that can collide, so `409` meant "registered" (ANT-2026-SPEMY9GU).
+> `POST /auth/register` now answers every address with the same `202`, and the login routes refuse
+> an unverified account like a wrong password, with `REQUIRE_VERIFIED_ACCOUNT` on by default.
+
 **Why nothing caught it.** Every existing test either stubs Fastify or exercises the handler in
 isolation. `error-handler.test.ts` passes today and would have passed throughout the entire
 period the bug was live. 768 tests, a code-traced security review, and a merge — none of them

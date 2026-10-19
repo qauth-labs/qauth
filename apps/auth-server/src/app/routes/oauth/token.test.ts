@@ -1190,13 +1190,19 @@ describe('POST /oauth/token route — authorization_code grant', () => {
     expect(fastify.jwtUtils.signAccessToken).toHaveBeenCalledWith(
       expect.objectContaining({
         sub: user.id,
-        email: user.email,
-        email_verified: user.emailVerified,
         clientId: client.clientId,
         scope: 'read:foo',
         aud: 'https://api.example.com',
       })
     );
+    // ANT-2026-2O0T72HY: the grant has no `email` scope, so the access token
+    // carries no email claim although the user has a verified address, and
+    // the attribute is not even looked up.
+    const accessClaims = (fastify.jwtUtils.signAccessToken as unknown as Mock).mock
+      .calls[0][0] as Record<string, unknown>;
+    expect('email' in accessClaims).toBe(false);
+    expect('email_verified' in accessClaims).toBe(false);
+    expect(fastify.repositories.userAttributes.findVerifiedByUserIdAndKey).not.toHaveBeenCalled();
 
     expect(fastify.repositories.refreshTokens.create).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -1393,7 +1399,7 @@ describe('POST /oauth/token route — authorization_code grant', () => {
     expect('acr' in idClaims).toBe(false);
   });
 
-  it('gates ID-token email claims on the email scope: openid-only omits them even for a verified user — BREAKING #259', async () => {
+  it('gates ID-token AND access-token email claims on the email scope: openid-only omits them even for a verified user — BREAKING #259, ANT-2026-2O0T72HY', async () => {
     const { fastify, ctx, authCode } = setupAuthCodeStub();
     (fastify.repositories.authorizationCodes.findByCode as unknown as Mock).mockResolvedValue({
       ...authCode,
@@ -1413,10 +1419,33 @@ describe('POST /oauth/token route — authorization_code grant', () => {
     >;
     expect('email' in idClaims).toBe(false);
     expect('email_verified' in idClaims).toBe(false);
-    // The access-token convenience claims are NOT scope-gated (unchanged).
+    // The access token follows the same rule (ANT-2026-2O0T72HY). Before, it
+    // carried the address anyway, in the same response as the ID token that
+    // withheld it.
     const accessClaims = (fastify.jwtUtils.signAccessToken as unknown as Mock).mock
       .calls[0][0] as Record<string, unknown>;
-    expect(accessClaims['email']).toBe('user@example.com');
+    expect('email' in accessClaims).toBe(false);
+    expect('email_verified' in accessClaims).toBe(false);
+  });
+
+  it('releases the email claims in BOTH tokens under the email scope (ANT-2026-2O0T72HY)', async () => {
+    const { fastify, ctx, authCode } = setupAuthCodeStub();
+    (fastify.repositories.authorizationCodes.findByCode as unknown as Mock).mockResolvedValue({
+      ...authCode,
+      scopes: ['openid', 'email'],
+    });
+    await tokenRoute(fastify);
+    const handler = ctx.handler;
+    if (!handler) throw new Error('Handler missing');
+
+    await handler(baseRequest(), createReply());
+
+    expect(fastify.jwtUtils.signAccessToken).toHaveBeenCalledWith(
+      expect.objectContaining({ email: 'user@example.com', email_verified: true })
+    );
+    expect(fastify.jwtUtils.signIdToken).toHaveBeenCalledWith(
+      expect.objectContaining({ email: 'user@example.com', email_verified: true })
+    );
   });
 
   it('omits BOTH email claims from access AND id token when no verified attribute exists — BREAKING #229', async () => {
@@ -1448,7 +1477,12 @@ describe('POST /oauth/token route — authorization_code grant', () => {
   });
 
   it('omits the email claims when the only verified attribute has expired (#229)', async () => {
-    const { fastify, ctx } = setupAuthCodeStub();
+    const { fastify, ctx, authCode } = setupAuthCodeStub();
+    // The `email` scope is granted, so only the expiry can explain the omission.
+    (fastify.repositories.authorizationCodes.findByCode as unknown as Mock).mockResolvedValue({
+      ...authCode,
+      scopes: ['email'],
+    });
     (
       fastify.repositories.userAttributes.findVerifiedByUserIdAndKey as unknown as Mock
     ).mockResolvedValue([
@@ -2014,26 +2048,80 @@ describe('POST /oauth/token route — refresh_token grant', () => {
       }),
       expect.anything()
     );
-    // #229: the emitted email is the ATTRIBUTE value, not the users row's.
     expect(fastify.jwtUtils.signAccessToken).toHaveBeenCalledWith(
       expect.objectContaining({
         sub: user.id,
-        email: 'rt-attr@example.com',
-        email_verified: true,
         scope: 'read:foo write:foo',
         aud: 'https://api.example.com',
       })
     );
-    expect(fastify.repositories.userAttributes.findVerifiedByUserIdAndKey).toHaveBeenCalledWith(
-      user.id,
-      'email'
-    );
+    // ANT-2026-2O0T72HY: no `email` scope in the refreshed grant, so no email
+    // claim, although the user has a verified address.
+    const accessClaims = (fastify.jwtUtils.signAccessToken as unknown as Mock).mock
+      .calls[0][0] as Record<string, unknown>;
+    expect('email' in accessClaims).toBe(false);
+    expect('email_verified' in accessClaims).toBe(false);
+    expect(fastify.repositories.userAttributes.findVerifiedByUserIdAndKey).not.toHaveBeenCalled();
     expect(result).toMatchObject({
       access_token: 'new.access.jwt',
       refresh_token: 'new-refresh-token',
       token_type: 'Bearer',
       scope: 'read:foo write:foo',
     });
+  });
+
+  it('carries the email claims on rotation only under the email scope (ANT-2026-2O0T72HY)', async () => {
+    const { fastify, ctx, confidentialClient, storedToken, user } = setupRefreshStub();
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue({
+      ...confidentialClient,
+      scopes: [...confidentialClient.scopes, 'email'],
+    });
+    (
+      fastify.repositories.refreshTokens.findByTokenHashIncludingRevoked as unknown as Mock
+    ).mockResolvedValue({ ...storedToken, scopes: ['read:foo', 'email'] });
+
+    await tokenRoute(fastify);
+    const handler = ctx.handler;
+    if (!handler) throw new Error('Handler missing');
+
+    await handler(refreshRequest(), createReply());
+
+    // #229: the emitted email is the ATTRIBUTE value, not the users row's.
+    expect(fastify.jwtUtils.signAccessToken).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sub: user.id,
+        email: 'rt-attr@example.com',
+        email_verified: true,
+        scope: 'read:foo email',
+      })
+    );
+    expect(fastify.repositories.userAttributes.findVerifiedByUserIdAndKey).toHaveBeenCalledWith(
+      user.id,
+      'email'
+    );
+  });
+
+  it('drops the email claims when the refresh narrows `email` out of the scope (ANT-2026-2O0T72HY)', async () => {
+    const { fastify, ctx, confidentialClient, storedToken } = setupRefreshStub();
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue({
+      ...confidentialClient,
+      scopes: [...confidentialClient.scopes, 'email'],
+    });
+    (
+      fastify.repositories.refreshTokens.findByTokenHashIncludingRevoked as unknown as Mock
+    ).mockResolvedValue({ ...storedToken, scopes: ['read:foo', 'email'] });
+
+    await tokenRoute(fastify);
+    const handler = ctx.handler;
+    if (!handler) throw new Error('Handler missing');
+
+    await handler(refreshRequest({ scope: 'read:foo' }), createReply());
+
+    const accessClaims = (fastify.jwtUtils.signAccessToken as unknown as Mock).mock
+      .calls[0][0] as Record<string, unknown>;
+    expect(accessClaims['scope']).toBe('read:foo');
+    expect('email' in accessClaims).toBe(false);
+    expect('email_verified' in accessClaims).toBe(false);
   });
 
   it('returns expires_in from the configured access-token lifespan on rotation', async () => {
@@ -2715,20 +2803,23 @@ describe('POST /oauth/token route — token-exchange grant (RFC 8693, ADR-007 §
     const result = await invoke(fastify, ctx, exchangeRequest());
 
     // sub is the end-user; act identifies the acting agent (RFC 8693 §4.1).
-    // #229 sourcing-decisive email check: the default attribute fixture
-    // resolves user@example.com while the subject users row carries
-    // subject@example.com — a users-row revert emits the wrong value.
     expect(fastify.jwtUtils.signAccessToken).toHaveBeenCalledWith(
       expect.objectContaining({
         sub: user.id,
         clientId: client.clientId,
-        email: 'user@example.com',
-        email_verified: true,
         scope: 'read:docs write:docs',
         aud: ['https://api.example.com', AGENT_CLIENT_ID],
         act: { sub: AGENT_CLIENT_ID },
       })
     );
+    // ANT-2026-2O0T72HY: the delegated scope has no `email`, so the agent gets
+    // no email claim although the user has a verified address.
+    const claims = (fastify.jwtUtils.signAccessToken as unknown as Mock).mock.calls[0][0] as Record<
+      string,
+      unknown
+    >;
+    expect('email' in claims).toBe(false);
+    expect('email_verified' in claims).toBe(false);
     expect(result).toMatchObject({
       access_token: 'delegated.jwt',
       issued_token_type: ACCESS_TOKEN_TYPE,
@@ -2739,9 +2830,42 @@ describe('POST /oauth/token route — token-exchange grant (RFC 8693, ADR-007 §
     expect(result).not.toHaveProperty('refresh_token');
   });
 
+  it('carries the email claims on the delegated token only under the email scope (ANT-2026-2O0T72HY)', async () => {
+    const { fastify, ctx } = setupExchangeStub({
+      subjectAud: ['https://api.example.com', AGENT_CLIENT_ID],
+      subjectScope: 'read:docs email',
+    });
+
+    await invoke(fastify, ctx, exchangeRequest());
+
+    // #229 sourcing-decisive: the default attribute fixture resolves
+    // user@example.com while the subject users row carries
+    // subject@example.com — a users-row revert emits the wrong value.
+    expect(fastify.jwtUtils.signAccessToken).toHaveBeenCalledWith(
+      expect.objectContaining({
+        email: 'user@example.com',
+        email_verified: true,
+        scope: 'read:docs email',
+      })
+    );
+
+    // Narrowing `email` out of the delegated scope drops the claims again.
+    const narrowed = setupExchangeStub({
+      subjectAud: ['https://api.example.com', AGENT_CLIENT_ID],
+      subjectScope: 'read:docs email',
+    });
+    await invoke(narrowed.fastify, narrowed.ctx, exchangeRequest({ scope: 'read:docs' }));
+    const claims = (narrowed.fastify.jwtUtils.signAccessToken as unknown as Mock).mock
+      .calls[0][0] as Record<string, unknown>;
+    expect('email' in claims).toBe(false);
+    expect('email_verified' in claims).toBe(false);
+  });
+
   it('omits BOTH email claims from the delegated token when no verified attribute exists — BREAKING #229', async () => {
     const { fastify, ctx } = setupExchangeStub({
       subjectAud: ['https://api.example.com', AGENT_CLIENT_ID],
+      // The `email` scope is granted, so only the missing attribute explains it.
+      subjectScope: 'read:docs email',
     });
     (
       fastify.repositories.userAttributes.findVerifiedByUserIdAndKey as unknown as Mock
@@ -3285,6 +3409,58 @@ describe('POST /oauth/token — ID-JAG CONSUME (jwt-bearer grant, ADR-011)', () 
     expect(result).not.toHaveProperty('issued_token_type');
   });
 
+  it('carries the email claims only under the email scope (ANT-2026-2O0T72HY)', async () => {
+    enableIdJag();
+    const idpKey = await wireTrustedIdp();
+    const verifiedEmail = [
+      {
+        id: 'attr-ema',
+        userId: 'user-uuid-enterprise',
+        source: 'self_reported',
+        attrKey: 'email',
+        attrValue: 'enterprise@example.com',
+        verified: true,
+        expiresAt: null,
+        createdAt: 1,
+        updatedAt: 1,
+      },
+    ];
+
+    // The assertion grants no `email`: the user has a verified address, and
+    // the access token carries none of it.
+    const without = setupConsumeStub();
+    (
+      without.fastify.repositories.userAttributes.findVerifiedByUserIdAndKey as unknown as Mock
+    ).mockResolvedValue(verifiedEmail);
+    await invoke(
+      without.fastify,
+      without.ctx,
+      bearerRequest(await signIdJag(idpKey, { scope: 'chat.read' }))
+    );
+    const claims = (without.fastify.jwtUtils.signAccessToken as unknown as Mock).mock
+      .calls[0][0] as Record<string, unknown>;
+    expect('email' in claims).toBe(false);
+    expect('email_verified' in claims).toBe(false);
+
+    // Granted by the assertion and allowed by the client: released.
+    const withEmail = setupConsumeStub({ scopes: ['chat.read', 'email'] });
+    (
+      withEmail.fastify.repositories.userAttributes.findVerifiedByUserIdAndKey as unknown as Mock
+    ).mockResolvedValue(verifiedEmail);
+    await invoke(
+      withEmail.fastify,
+      withEmail.ctx,
+      bearerRequest(await signIdJag(idpKey, { scope: 'chat.read email' }))
+    );
+    expect(withEmail.fastify.jwtUtils.signAccessToken).toHaveBeenCalledWith(
+      expect.objectContaining({
+        email: 'enterprise@example.com',
+        email_verified: true,
+        scope: 'chat.read email',
+      })
+    );
+  });
+
   it('resolves the subject through (realm, oidc_<issuer>, sub)', async () => {
     enableIdJag();
     const idpKey = await wireTrustedIdp();
@@ -3625,6 +3801,12 @@ describe('POST /oauth/token — ID-JAG MINT (token exchange, ADR-011)', () => {
       subjectScope?: string;
       subjectAct?: unknown;
       subjectExp?: number;
+      /**
+       * The agent's registered `scopes`. Defaults to the default subject
+       * token's scope, so the cases that test something else mint; GATE 4d
+       * (ADR-011 §3, amended 2026-10-19) has its own cases below.
+       */
+      scopes?: string[];
     } = {}
   ) {
     const { fastify, ctx } = createFastifyStub();
@@ -3635,7 +3817,7 @@ describe('POST /oauth/token — ID-JAG MINT (token exchange, ADR-011)', () => {
       clientSecretHash: 'hash',
       enabled: true,
       grantTypes: opts.grantTypes ?? [TOKEN_EXCHANGE_GRANT],
-      scopes: [] as string[],
+      scopes: opts.scopes ?? ['chat.read', 'chat.history'],
       audience: opts.audience === undefined ? [TARGET_AS, MCP_SERVER] : opts.audience,
       isAgent: opts.isAgent ?? true,
       maxAgentMode: null,
@@ -3692,7 +3874,12 @@ describe('POST /oauth/token — ID-JAG MINT (token exchange, ADR-011)', () => {
 
   it('mints an ID-JAG with the exact spec claim set and `token_type: "N_A"`', async () => {
     mockEnv['ID_JAG_ENABLED'] = true;
-    const { fastify, ctx } = setupMintStub();
+    // The subject token's scope is inside the agent's registered scopes, so
+    // the assertion carries all of it (GATE 4a and GATE 4d both hold).
+    const { fastify, ctx } = setupMintStub({
+      subjectScope: 'chat.read chat.history',
+      scopes: ['chat.read', 'chat.history'],
+    });
 
     const result = (await invoke(fastify, ctx, mintRequest())) as Record<string, unknown>;
 
@@ -3850,6 +4037,107 @@ describe('POST /oauth/token — ID-JAG MINT (token exchange, ADR-011)', () => {
     ).rejects.toBeInstanceOf(InvalidScopeError);
   });
 
+  // GATE 4d (ADR-011 §3, amended 2026-10-19). The assertion's target comes from
+  // the agent's registration (`audience`), so its scope is bounded by the
+  // agent's registration (`scopes`) as well — the same pair of columns
+  // `client_credentials` applies. Before the amendment the mint copied the
+  // subject token's scope unchecked, so an agent registered for `chat.read`
+  // got a QAuth-signed `chat.read chat.history` at a foreign server.
+  describe('GATE 4d — the agent registered scopes bound the assertion', () => {
+    function expectRefusedWithAudit(fastify: FastifyInstance, grantedScopes: string[]) {
+      expect(fastify.repositories.auditLogs.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          event: 'oauth.token.exchange.failure',
+          success: false,
+          metadata: expect.objectContaining({
+            error: 'invalid_scope: ID-JAG scope outside the client scope allowlist',
+            grantedScopes,
+            allowedScopes: ['chat.read'],
+          }),
+        })
+      );
+      expect(fastify.repositories.auditLogs.create).not.toHaveBeenCalledWith(
+        expect.objectContaining({ event: 'oauth.token.exchange.success' })
+      );
+    }
+
+    it('refuses a scope inherited from the subject token that the agent is not registered for', async () => {
+      mockEnv['ID_JAG_ENABLED'] = true;
+      const { fastify, ctx } = setupMintStub({
+        scopes: ['chat.read'],
+        subjectScope: 'chat.read chat.history',
+      });
+
+      await expect(invoke(fastify, ctx, mintRequest())).rejects.toMatchObject({
+        message: 'invalid_scope',
+        errorDescription: 'chat.history not permitted for this client',
+      });
+      expectRefusedWithAudit(fastify, ['chat.read', 'chat.history']);
+    });
+
+    it('refuses an explicitly requested scope outside the registered scopes', async () => {
+      mockEnv['ID_JAG_ENABLED'] = true;
+      const { fastify, ctx } = setupMintStub({
+        scopes: ['chat.read'],
+        subjectScope: 'chat.read chat.history',
+      });
+
+      await expect(
+        invoke(fastify, ctx, mintRequest({ scope: 'chat.history' }))
+      ).rejects.toBeInstanceOf(InvalidScopeError);
+      expectRefusedWithAudit(fastify, ['chat.history']);
+    });
+
+    it('denies a scoped assertion to an agent registered with no scopes', async () => {
+      mockEnv['ID_JAG_ENABLED'] = true;
+      // This is the case the pre-amendment suite minted: an agent stub with
+      // `scopes: []` received the subject token's `chat.read chat.history`.
+      const { fastify, ctx } = setupMintStub({ scopes: [] });
+
+      await expect(invoke(fastify, ctx, mintRequest())).rejects.toBeInstanceOf(InvalidScopeError);
+    });
+
+    it('mints when the request narrows the scope into the registered scopes', async () => {
+      mockEnv['ID_JAG_ENABLED'] = true;
+      const { fastify, ctx } = setupMintStub({
+        scopes: ['chat.read'],
+        subjectScope: 'chat.read chat.history',
+      });
+
+      const result = (await invoke(fastify, ctx, mintRequest({ scope: 'chat.read' }))) as Record<
+        string,
+        unknown
+      >;
+
+      expect(result['issued_token_type']).toBe(ID_JAG_TOKEN_TYPE);
+      expect(result['scope']).toBe('chat.read');
+      expect(decodeJwt(result['access_token'] as string)['scope']).toBe('chat.read');
+    });
+
+    it('leaves the delegation branch as it was (GATE 4d there waits for ADR-014)', async () => {
+      mockEnv['ID_JAG_ENABLED'] = true;
+      // The same agent with no registered scopes still receives a delegated
+      // access token inside QAuth's trust domain: there the target stays
+      // inside the subject token's audience (GATE 4b), and adding GATE 4d on
+      // this branch is ADR-014's decision, behind AUTHORITY_TREE_ENABLED.
+      const { fastify, ctx } = setupMintStub({ scopes: [] });
+      (fastify.jwtUtils.signAccessToken as unknown as Mock).mockResolvedValue('delegated.jwt');
+
+      const result = (await invoke(
+        fastify,
+        ctx,
+        mintRequest({
+          requested_token_type: ACCESS_TOKEN_URN,
+          audience: undefined,
+          resource: undefined,
+        })
+      )) as Record<string, unknown>;
+
+      expect(result['issued_token_type']).toBe(ACCESS_TOKEN_URN);
+      expect(result['scope']).toBe('chat.read chat.history');
+    });
+  });
+
   it('keeps the delegation-depth bound in force', async () => {
     mockEnv['ID_JAG_ENABLED'] = true;
     // A chain already at the maximum depth; adding this agent exceeds it.
@@ -3945,7 +4233,8 @@ describe('POST /oauth/token — response serialization (union schema, ADR-011)',
         clientSecretHash: 'hash',
         enabled: true,
         grantTypes: [TOKEN_EXCHANGE_GRANT],
-        scopes: [] as string[],
+        // Covers the subject token's scope, or GATE 4d refuses the mint.
+        scopes: ['chat.read'],
         audience: [TARGET_AS, MCP_SERVER],
         isAgent: true,
         maxAgentMode: null,

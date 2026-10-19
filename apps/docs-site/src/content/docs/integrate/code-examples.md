@@ -28,6 +28,11 @@ Mirrors the [first-party auth endpoints](/integrate/api-reference/#first-party-a
 create a user, log in for tokens, then call a Bearer-protected endpoint
 (`GET /api/clients`).
 
+Registration answers every address with the same `202`, and a new account can
+log in only once its address is verified (`REQUIRE_VERIFIED_ACCOUNT`, on by
+default). So run the script once with `QAUTH_REGISTER=1`, open the link in the
+email and confirm with the password, then run it again without the variable.
+
 ```ts
 // first-party.ts
 const QAUTH = process.env.QAUTH_URL ?? 'http://localhost:3000';
@@ -49,16 +54,17 @@ async function post(path: string, body: unknown, token?: string) {
 }
 
 async function main() {
-  // 1. Register (idempotent-ish: ignore 409 if the user already exists).
-  try {
-    const user = await post('/auth/register', { email, password });
-    console.log('registered:', user.id, user.email);
-  } catch (err) {
-    if (!String(err).includes('409')) throw err;
-    console.log('user already exists, continuing');
+  // 1. Register, once. The answer is the same 202 whether or not the address
+  //    already has an account; the next step arrives by email.
+  if (process.env.QAUTH_REGISTER === '1') {
+    const { message } = await post('/auth/register', { email, password });
+    console.log(message);
+    console.log('Open the link in the email, confirm, then run again without QAUTH_REGISTER.');
+    return;
   }
 
-  // 2. Log in → tokens.
+  // 2. Log in → tokens. Until the address is verified this is the same 401 as a
+  //    wrong password.
   const { access_token, refresh_token, expires_in } = await post('/auth/login', {
     email,
     password,
@@ -152,7 +158,10 @@ const QAUTH = 'http://localhost:3000';
 const CLIENT_ID = 'YOUR_PUBLIC_CLIENT_ID';
 const REDIRECT_URI = window.location.origin + '/callback';
 const SCOPE = 'openid profile email';
-const RESOURCE = 'http://localhost:8088'; // optional RFC 8707 audience binding
+// No RFC 8707 `resource` here: this app calls QAuth's own UserInfo, which
+// accepts a token whose `aud` is the app's client_id — the default when no
+// `resource` is named. A token bound to another resource server is refused
+// there (401). See /integrate/oauth-flow/#userinfo-oidc.
 
 // --- PKCE helpers (RFC 7636) ---
 function base64url(bytes) {
@@ -184,7 +193,6 @@ async function login() {
     code_challenge_method: 'S256',
     scope: SCOPE,
     state,
-    resource: RESOURCE,
   });
   window.location.assign(`${QAUTH}/oauth/authorize?${params}`);
 }
@@ -210,7 +218,6 @@ async function handleCallback() {
       redirect_uri: REDIRECT_URI,
       client_id: CLIENT_ID, // public client: no secret
       code_verifier: verifier,
-      resource: RESOURCE,
     }),
   });
   const tokens = await res.json();
@@ -223,7 +230,7 @@ async function handleCallback() {
   // https://docs.qauth.dev/integrate/oauth-flow/#id-token-claims-oidc
 }
 
-// --- 3. Call a protected API with the access token ---
+// --- 3. Read the user's claims at UserInfo with the access token ---
 async function callApi(accessToken) {
   const res = await fetch(`${QAUTH}/oauth/userinfo`, {
     headers: { Authorization: `Bearer ${accessToken}` },

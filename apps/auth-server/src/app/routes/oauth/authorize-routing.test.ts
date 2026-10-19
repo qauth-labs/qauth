@@ -54,6 +54,9 @@ const CLIENT = {
   audience: null,
   redirectUris: ['https://example.com/cb'],
   dynamicRegisteredAt: null,
+  // An operator-provisioned client: the only kind whose redirect URI receives
+  // authorization errors by automatic redirect (ANT-2026-O8U3P920).
+  provisionedByOperator: true,
   metadata: null,
 };
 
@@ -176,6 +179,7 @@ describe('GET /oauth/authorize routing', () => {
     ).repositories.oauthClients;
     clients.findByClientId.mockResolvedValue({
       ...CLIENT,
+      provisionedByOperator: false,
       dynamicRegisteredAt: Date.now(),
       metadata: { registrationType: 'dynamic' },
     });

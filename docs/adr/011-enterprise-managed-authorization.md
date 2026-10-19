@@ -234,6 +234,25 @@ GATE 2 when it asks for an ID-JAG ([ADR-015](./015-agent-tree-hardening.md), que
 That flag is not in the code yet. Until it ships, any agent client with the
 token-exchange grant and a target allowlist can mint.
 
+> **Amended 2026-10-19: GATE 4d applies at the mint.** The maintainer decided that the
+> scopes an ID-JAG carries must pass the same allowlist check the agent's other grants
+> pass: `validateScopes` against the client's registered `scopes`, with the agent
+> scope-mode cap, as `client_credentials` applies it and as gate 13 applies it on the
+> consume side. The check runs after scope narrowing and before the target checks.
+> A scope outside the list is refused with `invalid_scope`, never trimmed. An agent that
+> wants less sends `scope`, and a client with an empty `scopes` list cannot mint a scoped
+> assertion.
+>
+> Before this amendment the mint copied the subject token's scope into the assertion
+> unchecked. The target comes from the agent's own `audience` column, so an agent
+> registered only for `mcp:read` could carry `mcp:write` to a partner's server: a scope
+> its registration does not grant, at a target outside the subject token's audience
+> (ANT-2026-L66R3GFR). [ADR-014](./014-agent-authority-tree.md) adds GATE 4d behind
+> `AUTHORITY_TREE_ENABLED`. The mint does not wait for it, because an ID-JAG leaves
+> QAuth's trust domain and cannot be revoked: a limit that arrives later never reaches
+> an assertion already minted. The delegation branch is unchanged. Its tokens stay
+> inside the subject token's audience, and GATE 4d reaches that branch with ADR-014.
+
 Per RFC 8693 §2.2.1 the response carries the assertion in `access_token`,
 `issued_token_type: urn:ietf:params:oauth:token-type:id-jag`, and
 `token_type: N_A` — an ID-JAG is not usable as an access token and must not be

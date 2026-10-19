@@ -134,7 +134,7 @@ describe('isPublicUnicastAddress — SSRF blocklist (CIMD §6)', () => {
   });
 
   it('blocks the cloud-metadata link-local address and the whole 169.254/16', () => {
-    expect(isPublicUnicastAddress('169.254.169.254')).toBe(false); // AWS/GCP/Azure metadata
+    expect(isPublicUnicastAddress('169.254.169.254')).toBe(false); // cloud instance-metadata address
     expect(isPublicUnicastAddress('169.254.0.1')).toBe(false);
   });
 
@@ -157,7 +157,7 @@ describe('isPublicUnicastAddress — SSRF blocklist (CIMD §6)', () => {
     expect(isPublicUnicastAddress('::')).toBe(false);
     expect(isPublicUnicastAddress('fe80::1')).toBe(false); // link-local
     expect(isPublicUnicastAddress('fd00::1')).toBe(false); // unique-local
-    expect(isPublicUnicastAddress('fd00:ec2::254')).toBe(false); // AWS IPv6 metadata
+    expect(isPublicUnicastAddress('fd00:ec2::254')).toBe(false); // cloud IPv6 instance-metadata address
     expect(isPublicUnicastAddress('::ffff:169.254.169.254')).toBe(false); // mapped metadata
     expect(isPublicUnicastAddress('::ffff:10.0.0.1')).toBe(false); // mapped private
   });

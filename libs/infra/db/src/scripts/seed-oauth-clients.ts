@@ -288,6 +288,10 @@ function buildInsert(realmId: string, spec: ClientSpec, clientSecretHash: string
     jwks: spec.jwks ?? null,
     jwksUri: spec.jwks_uri ?? null,
     enabled: true,
+    // The operator wrote this client, redirect URIs included, so it is the one
+    // kind that receives authorization errors by automatic redirect
+    // (RFC 9700 §4.11.2, ANT-2026-O8U3P920).
+    provisionedByOperator: true,
   } as const;
 }
 
@@ -315,6 +319,11 @@ function buildUpdate(spec: ClientSpec, clientSecretHash: string) {
     // + re-run, exactly like the other document-derived fields above.
     jwks: spec.jwks ?? null,
     jwksUri: spec.jwks_uri ?? null,
+    // A rotation rewrites every field from the manifest, redirect URIs
+    // included, so the operator now vouches for the row as it stands
+    // (ANT-2026-O8U3P920). This is also how an operator marks a client the
+    // migration 0023 backfill could not attribute.
+    provisionedByOperator: true,
     updatedAt: sql`(EXTRACT(EPOCH FROM now()) * 1000)::bigint`,
   } as const;
 }

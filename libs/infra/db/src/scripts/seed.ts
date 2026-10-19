@@ -47,6 +47,12 @@ async function main() {
           responseTypes: f.default({ defaultValue: ['code'] }),
           tokenEndpointAuthMethod: f.default({ defaultValue: 'client_secret_post' }),
           requirePkce: f.default({ defaultValue: true }),
+          // A dev fixture the operator seeds: it keeps the automatic error
+          // redirects (ANT-2026-O8U3P920).
+          provisionedByOperator: f.default({ defaultValue: true }),
+          // Never suspended (ANT-2026-DR5XI3LV): only an operator suspends.
+          suspended: f.default({ defaultValue: false }),
+          suspendedAt: f.default({ defaultValue: null }),
         },
       },
     }));

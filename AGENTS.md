@@ -47,8 +47,9 @@ ID tokens.
 - Wallet federation **works end-to-end behind `WALLET_FEDERATION_ENABLED`**
   (default off): the OID4VP verifier, SD-JWT VC validation, key attestations,
   status-list revocation, the claims pipeline and the browser sign-in flow are
-  merged, with an E2E suite covering first-time enrolment, returning login,
-  account linking and `acr`. Validated only on the `oid4vp-1.0-base` profile
+  merged, with an E2E suite covering account linking, returning login, the
+  refusal to create an account at wallet sign-in (ADR-009 §1, amended
+  2026-10-19) and `acr`. Validated only on the `oid4vp-1.0-base` profile
   against a mock wallet so far.
 - **`WalletProvider.verify()` throws unconditionally and must keep throwing** —
   a deliberate fail-closed property, not a stub. Never "fix" it. Wallet login

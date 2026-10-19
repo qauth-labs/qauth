@@ -409,7 +409,7 @@
         "tags": [
           "Auth"
         ],
-        "description": "Register a new user account. Creates user, sends verification email, and returns user data. Password must meet strength requirements.",
+        "description": "Register a password account. Answers every address with the same 202 and message, whether it was free or already registered; the next step arrives by email (a verification link for a new account, a notice for an existing one). Password must meet strength requirements.",
         "requestBody": {
           "required": true,
           "content": {
@@ -442,48 +442,19 @@
           }
         },
         "responses": {
-          "201": {
+          "202": {
             "description": "Default Response",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
                   "properties": {
-                    "id": {
-                      "type": "string",
-                      "format": "uuid",
-                      "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
-                    },
-                    "email": {
-                      "type": "string",
-                      "format": "email",
-                      "pattern": "^(?:[A-Za-z0-9_'+\\-]+\\.)*[A-Za-z0-9_'+\\-]*[A-Za-z0-9_+-]@(?:[A-Za-z0-9][A-Za-z0-9\\-]*\\.)+[A-Za-z]{2,}$"
-                    },
-                    "emailVerified": {
-                      "type": "boolean"
-                    },
-                    "realmId": {
-                      "type": "string",
-                      "format": "uuid",
-                      "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
-                    },
-                    "createdAt": {
-                      "type": "number"
-                    },
-                    "updatedAt": {
-                      "type": [
-                        "number",
-                        "null"
-                      ]
+                    "message": {
+                      "type": "string"
                     }
                   },
                   "required": [
-                    "id",
-                    "email",
-                    "emailVerified",
-                    "realmId",
-                    "createdAt",
-                    "updatedAt"
+                    "message"
                   ],
                   "additionalProperties": false
                 }
@@ -699,6 +670,9 @@
                           "enabled": {
                             "type": "boolean"
                           },
+                          "suspended": {
+                            "type": "boolean"
+                          },
                           "requirePkce": {
                             "type": "boolean"
                           },
@@ -737,6 +711,7 @@
                           "responseTypes",
                           "tokenEndpointAuthMethod",
                           "enabled",
+                          "suspended",
                           "requirePkce",
                           "environment",
                           "staticApiKeysAllowed",
@@ -906,6 +881,9 @@
                     "enabled": {
                       "type": "boolean"
                     },
+                    "suspended": {
+                      "type": "boolean"
+                    },
                     "requirePkce": {
                       "type": "boolean"
                     },
@@ -947,6 +925,7 @@
                     "responseTypes",
                     "tokenEndpointAuthMethod",
                     "enabled",
+                    "suspended",
                     "requirePkce",
                     "environment",
                     "staticApiKeysAllowed",
@@ -1040,6 +1019,9 @@
                     "enabled": {
                       "type": "boolean"
                     },
+                    "suspended": {
+                      "type": "boolean"
+                    },
                     "requirePkce": {
                       "type": "boolean"
                     },
@@ -1078,6 +1060,7 @@
                     "responseTypes",
                     "tokenEndpointAuthMethod",
                     "enabled",
+                    "suspended",
                     "requirePkce",
                     "environment",
                     "staticApiKeysAllowed",
@@ -1096,7 +1079,7 @@
         "tags": [
           "Clients"
         ],
-        "description": "Update mutable fields of one of the developer's OAuth clients (name, description, redirectUris, scopes, grantTypes, responseTypes, tokenEndpointAuthMethod, enabled). client_id and client_secret are immutable here. enabled can only be switched off: re-enabling a disabled client is an operator action and returns 403. Returns 404 if the client does not exist or is owned by another developer. (Phase 2.2, issue #88.)",
+        "description": "Update mutable fields of one of the developer's OAuth clients (name, description, redirectUris, scopes, grantTypes, responseTypes, tokenEndpointAuthMethod, enabled). client_id and client_secret are immutable here. enabled is the owner's switch and may be set either way; it does not lift an operator's suspension (the read-only suspended field), which only the operator can. Returns 404 if the client does not exist or is owned by another developer. (Phase 2.2, issue #88.)",
         "requestBody": {
           "required": true,
           "content": {
@@ -1250,6 +1233,9 @@
                     "enabled": {
                       "type": "boolean"
                     },
+                    "suspended": {
+                      "type": "boolean"
+                    },
                     "requirePkce": {
                       "type": "boolean"
                     },
@@ -1288,6 +1274,7 @@
                     "responseTypes",
                     "tokenEndpointAuthMethod",
                     "enabled",
+                    "suspended",
                     "requirePkce",
                     "environment",
                     "staticApiKeysAllowed",
@@ -1409,6 +1396,9 @@
                     "enabled": {
                       "type": "boolean"
                     },
+                    "suspended": {
+                      "type": "boolean"
+                    },
                     "requirePkce": {
                       "type": "boolean"
                     },
@@ -1450,6 +1440,7 @@
                     "responseTypes",
                     "tokenEndpointAuthMethod",
                     "enabled",
+                    "suspended",
                     "requirePkce",
                     "environment",
                     "staticApiKeysAllowed",
@@ -3052,7 +3043,7 @@
           "OAuth",
           "Userinfo"
         ],
-        "description": "OIDC userinfo endpoint (GET). Returns claims for the authenticated user. Requires a Bearer access token.",
+        "description": "OIDC userinfo endpoint (GET). Returns claims for the authenticated user. Requires a Bearer access token whose `aud` contains its own `client_id` or this endpoint's URL; a token for another resource server gets 401.",
         "security": [
           {
             "bearerAuth": []
@@ -3097,7 +3088,7 @@
           "OAuth",
           "Userinfo"
         ],
-        "description": "OIDC userinfo endpoint (POST). Returns claims for the authenticated user. Accepts a Bearer access token in the Authorization header or a form-encoded access_token body parameter (RFC 6750 §2.2).",
+        "description": "OIDC userinfo endpoint (POST). Returns claims for the authenticated user. Accepts a Bearer access token in the Authorization header or a form-encoded access_token body parameter (RFC 6750 §2.2). The token's `aud` must contain its own `client_id` or this endpoint's URL; a token for another resource server gets 401.",
         "security": [
           {
             "bearerAuth": []

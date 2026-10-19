@@ -262,7 +262,10 @@ separate `pnpm deploy` step is needed (`apps/developer-portal/Dockerfile`).
 > up already.
 
 Open the portal at `http://localhost:3001` once the stack is up. Set a
-`PORTAL_SESSION_SECRET` in `.env` first (see Environment Variables).
+`PORTAL_SESSION_SECRET` in `.env` first (see Environment Variables). A
+developer who signs up there can log in only after confirming the address from
+the emailed link, so the stack needs a mail provider that delivers (see the
+note under Environment Variables).
 
 ## Common Operations
 
@@ -353,15 +356,25 @@ docker exec -it qauth-redis sh
 
 See `.env.docker.example` for all available variables. Key variables:
 
-| Variable          | Required | Description                                        |
-| ----------------- | -------- | -------------------------------------------------- |
-| `DB_PASSWORD`     | Yes      | PostgreSQL password                                |
-| `JWT_PRIVATE_KEY` | Yes      | EdDSA private key (PEM format)                     |
-| `JWT_PUBLIC_KEY`  | Yes      | EdDSA public key (PEM format)                      |
-| `JWT_ISSUER`      | No       | JWT issuer URL (default: http://localhost:3000)    |
-| `EMAIL_PROVIDER`  | No       | Email provider: mock, resend, smtp (default: mock) |
-| `NODE_ENV`        | No       | `production` (default) or `development` for dev    |
-| `LOG_LEVEL`       | No       | `info` (default); use `debug` for development      |
+| Variable                   | Required | Description                                                  |
+| -------------------------- | -------- | ------------------------------------------------------------ |
+| `DB_PASSWORD`              | Yes      | PostgreSQL password                                          |
+| `JWT_PRIVATE_KEY`          | Yes      | EdDSA private key (PEM format)                               |
+| `JWT_PUBLIC_KEY`           | Yes      | EdDSA public key (PEM format)                                |
+| `JWT_ISSUER`               | No       | JWT issuer URL (default: http://localhost:3000)              |
+| `EMAIL_PROVIDER`           | No       | Email provider: mock, resend, smtp (default: mock)           |
+| `REQUIRE_VERIFIED_ACCOUNT` | No       | Refuse password login until the address is verified (`true`) |
+| `NODE_ENV`                 | No       | `production` (default) or `development` for dev              |
+| `LOG_LEVEL`                | No       | `info` (default); use `debug` for development                |
+
+> **The `mock` email provider delivers nothing, and a new account cannot sign in
+> until its address is verified.** `REQUIRE_VERIFIED_ACCOUNT` defaults to `true`
+> since 2026-10-19: with it off, registering an address and then logging in
+> with the chosen password would tell a free address from a registered one. A
+> stack on `EMAIL_PROVIDER=mock` therefore cannot complete a sign-up. Point
+> `smtp` at a real server or a local mail catcher. For a throwaway local trial
+> only, `REQUIRE_VERIFIED_ACCOUNT=false` in `.env` lets unverified accounts sign
+> in, and gives that answer back.
 
 `JWT_PUBLIC_KEY` is listed as **Yes** here, not because the schema requires
 it, but because omitting it fails at boot today — see the

@@ -148,10 +148,11 @@ export interface JwtUtils {
   /**
    * Sign an access token.
    *
-   * For user-context grants (authorization_code, refresh_token, password
-   * login) pass `email` / `email_verified`. For client_credentials grants
-   * omit them and set `sub` to the `clientId`. `scope` is space-separated
-   * per RFC 6749. `aud` falls back to `clientId` when undefined.
+   * Pass `email` / `email_verified` only when the grant includes the `email`
+   * scope (the auth-server resolves them with `resolveEmailClaimsForScopes`);
+   * omit them otherwise. For client_credentials grants omit them and set
+   * `sub` to the `clientId`. `scope` is space-separated per RFC 6749. `aud`
+   * falls back to `clientId` when undefined.
    *
    * For the RFC 8693 token-exchange grant, pass `act` to stamp the acting
    * agent into the delegated token (`sub` stays the end-user). `act` is

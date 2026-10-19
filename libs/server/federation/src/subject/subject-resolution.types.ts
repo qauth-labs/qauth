@@ -214,8 +214,10 @@ export interface SubjectResolutionContext {
  *
  * (Whether a caller's *registration policy* re-opens an oracle — "asserting an
  * unknown identifier signed me up, asserting a known one did not" — is a
- * property of that policy, not of this layer. It is the same oracle
- * self-service password registration has, and it is the auth engine's to close.)
+ * property of that policy, not of this layer. QAuth's wallet sign-in closes it
+ * by never registering: since ADR-009 §1's 2026-10-19 amendment it refuses
+ * `no-match` exactly as it refuses the other two (ANT-2026-NCX3VXDP). A wallet
+ * reaches an account through linking, from a signed-in session.)
  */
 export type SubjectResolutionOutcome =
   | {
@@ -223,7 +225,12 @@ export type SubjectResolutionOutcome =
       /** `users.id` this presentation resolved to. */
       readonly userId: string;
     }
-  /** No account resolved. The caller decides: enrol, or refuse. */
+  /**
+   * No account resolved. The caller decides what that means; QAuth's wallet
+   * sign-in refuses it like every other non-match (ADR-009 §1, amended
+   * 2026-10-19). Only a flow that does not answer "does this account exist?"
+   * — a sign-up — may turn it into an account.
+   */
   | { readonly kind: 'no-match' }
   /** More than one account resolved. ALWAYS a refusal — never pick one. */
   | { readonly kind: 'ambiguous' }
@@ -246,9 +253,10 @@ export interface SubjectResolutionStrategy {
   /** Which strategy this is. */
   readonly id: SubjectResolutionStrategyId;
   /**
-   * The value to write into `user_credentials.external_sub` when the caller
-   * turns a `no-match` into an enrolment, or `null` when this strategy produces
-   * none.
+   * The `user_credentials.external_sub` value this strategy keys the
+   * presentation on — what a sign-up flow would write on `no-match`, and what
+   * a `matched` sign-in reports as the account's identifier — or `null` when
+   * this strategy produces none.
    *
    * Takes the context as well as the credential — issue #300's sketch had
    * `deriveExternalSub(presentation)` alone, which cannot express the DEFAULT

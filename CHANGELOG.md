@@ -12,10 +12,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Wallet federation (T4, [ADR-004](./docs/adr/004-wallet-agnostic-federation.md)) —
   browser wallet sign-in.** QAuth can now generate an OID4VP 1.0 authorization
   request, take back a `direct_post` response, validate an SD-JWT VC presentation,
-  resolve or enrol the account, and mint a session — a complete browser sign-in.
-  Covered end-to-end against a mock wallet: first-time enrolment, returning login,
-  the ADR-009 §1 takeover attempt, untrusted-issuer refusal, account linking, and
-  `acr` presence/absence.
+  resolve the account, and mint a session — a complete browser sign-in. Wallet
+  sign-in never creates an account; a wallet is linked from a signed-in account
+  (see **Changed**). Covered end-to-end against a mock wallet: the refusal of an
+  identifier with no account, sign-in with a linked wallet, the ADR-009 §1
+  takeover attempt, untrusted-issuer refusal, account linking, and `acr`
+  presence/absence.
 
   **Off by default.** Nothing below changes how an existing email/password or
   OAuth client behaves — the routes are not even registered unless
@@ -90,12 +92,129 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **BREAKING**: access tokens now carry `email`/`email_verified` only when the
+  granted scope includes `email`, the rule ID tokens (#259) and userinfo
+  (#229) already follow. This holds on every grant that mints a user access
+  token: `authorization_code`, `refresh_token`, RFC 8693 token exchange and
+  the RFC 7523 `jwt-bearer` grant. A refresh or an exchange that narrows
+  `email` out of the scope drops the claims. The first-party `/auth/login`
+  token is granted no scope and no longer carries them. `client_credentials`
+  never did. Before, every user access token carried the user's verified
+  address whatever was granted. The client could read it from the JWT in the
+  same response whose ID token withheld it, so the `email` scope and the
+  consent screen line for it controlled nothing (ANT-2026-2O0T72HY).
+
+  **Who is affected**: a resource server that reads `email` from access tokens
+  issued without the `email` scope. **Action**: have the client request the
+  `email` scope, which shows on the consent screen. ID tokens and userinfo
+  behave as before.
+
+- **BREAKING**: `/oauth/userinfo` (GET and POST) now checks the access token's
+  audience, as [`docs/security/threat-model.md`](./docs/security/threat-model.md)
+  promises for every token. A token is accepted only when its `aud` contains
+  the token's own `client_id` or the `userinfo_endpoint` URL that discovery
+  publishes. Every other token gets `401` with
+  `WWW-Authenticate: Bearer error="invalid_token"`. Before, any live token this
+  server issued was accepted, so a resource server could read the claims of
+  the user whose token it had been handed.
+
+  **Who is affected**: an OIDC client that runs the code flow without
+  `resource` gets `aud` = its `client_id` and keeps working, and so does the
+  developer portal's `/auth/login` token. A client that binds its grant to a
+  resource server with RFC 8707 `resource`, or whose operator configured an
+  `audience` for it, and then calls UserInfo with that token is refused.
+  **Action**: read identity from the ID token, or add the UserInfo URL as
+  another `resource` at `/oauth/authorize` (an operator can add it to the
+  client's `audience` instead).
+
+- **BREAKING (ID-JAG mint; only with `ID_JAG_ENABLED`, which is off by
+  default)**: an ID-JAG minted through RFC 8693 token exchange now carries only
+  scopes that are in the agent client's registered `scopes`. This is the ceiling
+  `client_credentials` and the `jwt-bearer` consume side already apply
+  ([ADR-011](./docs/adr/011-enterprise-managed-authorization.md) §3, amended
+  2026-10-19). Before, the mint copied the subject token's scope unchecked, so
+  an agent could carry a scope it is not registered for to a partner's server
+  (ANT-2026-L66R3GFR). A scope outside the list is refused with
+  `invalid_scope`, not dropped; the agent sends `scope` to ask for less.
+
+  **Action for operators**: an agent provisioned with an empty `scopes` list
+  can no longer mint a scoped assertion. List in its `scopes` every scope it
+  should be able to carry to a partner. The delegation branch of token exchange
+  (`requested_token_type` access token) is unchanged.
+
+- **BREAKING (security)**: `POST /auth/register` no longer reveals whether an
+  address already has an account (ANT-2026-SPEMY9GU). It answered `409` for a
+  registered address and `201` with the new user for a free one, so any caller
+  could test any address.
+  - Every address now gets `202 Accepted` with the same body,
+    `{ "message": "Registration received. Check your inbox for an email with the next step." }`,
+    the same headers (`Cache-Control: no-store`) and the same work on the
+    request path (the password is hashed and the insert attempted either way,
+    under a 500 ms floor). The body has **no `id`, `email`, `emailVerified`,
+    `realmId`, `createdAt` or `updatedAt`** any more, and the route never
+    answers `409`.
+  - What happened goes to the mailbox. A free address gets its account and a
+    verification link. The owner of a verified account gets a new "someone
+    tried to register with your address" notice, with no link. An account that
+    is still unverified gets its verification link again, which verifies only
+    with the password chosen at the first registration. Mail to an existing
+    account counts toward the `RESEND_VERIFICATION_*` per-address caps, and
+    every registration claims the minimum interval there, so a resend straight
+    after a registration answers `429`. No mail is awaited by the request.
+  - `POST /auth/login` and `POST /ui/login` refuse an account whose address is
+    not verified exactly as they refuse a wrong password: `401 INVALID_CREDENTIALS`
+    (it was `403 EMAIL_NOT_VERIFIED`) and the same login page. The
+    `qauth_login_attempts_total` metric counts it as `invalid_credentials`; the
+    log line and audit row keep `email_not_verified`.
+  - The developer portal shows the same "check your inbox" screen for both
+    cases and no longer has an "Email already registered" error.
+
+  **Action for clients**: treat any `2xx` from `/auth/register` as "check your
+  inbox" and stop reading a user id from it. Do not branch on `409` or on
+  `EMAIL_NOT_VERIFIED`.
+
+- **BREAKING (security)**: `REQUIRE_VERIFIED_ACCOUNT` now defaults to **`true`**
+  (maintainer decision, 2026-10-19). Without it, registering an address with a
+  password of one's choice and then logging in with it told a free address
+  (`200`) from a registered one (`401`). An unset or blank value of the
+  variable, or of its deprecated alias `REQUIRE_EMAIL_VERIFIED`, now means
+  `true`.
+
+  **Action for operators**: existing accounts whose address was never verified
+  can no longer sign in with a password until they verify (they can request a
+  new link through `POST /auth/resend-verification` or the portal). A stack on
+  `EMAIL_PROVIDER=mock` delivers no mail, so its sign-ups cannot be verified:
+  configure `smtp` or `resend`. Set `REQUIRE_VERIFIED_ACCOUNT=false` only
+  knowingly; it gives the register-then-login answer back.
+
+- **BREAKING (wallet federation, `WALLET_FEDERATION_ENABLED=true` only)**: a
+  first wallet presentation no longer creates an account. In `v0.1.0-rc.1` and
+  `v0.1.0-rc.2`, presenting a valid credential on `/ui/wallet-login` with an
+  identifier that had no account enrolled a new account on that identifier,
+  bound to the presenter's credential, while an identifier with an account was
+  refused. Anyone holding a credential from a trusted issuer could therefore
+  learn which identifiers have accounts (including wallet-only accounts) and
+  claim identifiers that belong to other people. Wallet sign-in now signs in
+  only an account the credential is already bound to; an identifier with no
+  account gets the same refusal as a taken one (same status, body, headers and
+  cookies) and nothing is written.
+  ([ADR-009](./docs/adr/009-wallet-account-resolution.md) §1, amended
+  2026-10-19; ANT-2026-NCX3VXDP)
+
+  **Action for operators**: accounts that wallet sign-in created before this
+  release keep signing in. A new person gets wallet sign-in by creating an
+  account, signing in to it, and linking the wallet at `/ui/wallet-link` (or
+  `POST /auth/link/wallet`). Wallet-first sign-up arrives with the hosted
+  sign-up pages ([ADR-017](./docs/adr/017-first-party-login.md)). No
+  configuration or migration is involved.
+
 - **BREAKING**: ID tokens now release `email`/`email_verified` only when the
   granted scope includes `email`, matching the userinfo endpoint's gating
   (OIDC Core §5.4 data minimization). Clients requesting only `openid` no
   longer receive the user's email in the ID token — request the `email`
   scope. Access-token convenience claims and userinfo behavior are
-  unchanged. ([#259])
+  unchanged. ([#259]) _Superseded in part on 2026-10-19: access tokens now
+  follow the same `email` scope rule (see the access-token entry above)._
 
 [#259]: https://github.com/qauth-labs/qauth/issues/259
 
@@ -218,8 +337,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **`REQUIRE_EMAIL_VERIFIED` is renamed `REQUIRE_VERIFIED_ACCOUNT`.** Email is a
   user attribute, not the trust gate. The gate is a verified account.
-  **The gate behaves the same**: for a password account, the proof is still
-  the confirmed address, and the default is still `false`.
+  **The rename alone changes no behaviour**: for a password account, the proof
+  is still the confirmed address. (The default changed separately, to `true`;
+  see Changed above.)
   - The old name keeps working as an alias through the 1.x deprecation window
     of at least 12 months.
   - A deployment that sets only the old name logs a deprecation warning at
@@ -232,3 +352,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     boot. This lets compose forward both names when they are unset.
 
   **Action for operators**: rename the variable to `REQUIRE_VERIFIED_ACCOUNT`.
+
+### Security
+
+- **BREAKING**: `/oauth/authorize` and `GET /ui/consent` redirect an
+  authorization error automatically only to a client an operator provisioned
+  (RFC 9700 §4.11.2, ANT-2026-O8U3P920). Every other client, including one a
+  developer account creates through `POST /api/clients`, gets the error on an
+  issuer page (HTTP 400) with a link to its redirect URI. Migration 0023 adds
+  `oauth_clients.provisioned_by_operator` (default `false`) and sets it for the
+  system client and the clients the seed scripts created; the
+  `db:seed-oauth-clients` manifest sets it on create and on `--rotate`. An
+  owner who changes the redirect URIs of a marked client loses the marker.
+  OIDF conformance `prompt=none` modules need an operator-provisioned client
+  (see `docs/oidf-op-certification-runbook.md`).
+- **Operator suspension separate from `enabled`** (ANT-2026-DR5XI3LV).
+  `oauth_clients.enabled` is the client owner's switch again:
+  `PATCH /api/clients/{id}` may set it either way (it no longer answers `403`
+  to `"enabled": true`). An operator keeps a client off with the new
+  `oauth_clients.suspended` / `suspended_at` (migration 0023), which no route
+  writes and a CIMD re-resolution never touches; a suspended client is refused
+  wherever a disabled one is, with the same error. New operator tooling:
+  `pnpm nx run infra-db:db:suspend-oauth-client -- --realm=<name>
+--client-id=<client_id> [--lift]`. The management API returns a read-only
+  `suspended` field. **Upgrade note**: migration 0023 suspends every client that
+  is disabled when it runs; one its owner had disabled stays off until an
+  operator lifts the suspension, after which the owner re-enables it.
+- **BREAKING**: a Client ID Metadata Document is refused whole when any of its
+  `redirect_uris` fails the check Dynamic Client Registration applies
+  (ANT-2026-D0XJAT8S follow-up). Such URIs were dropped and the rest accepted;
+  now the client does not resolve (`invalid_client` at `/oauth/authorize` and
+  `/oauth/token`), including a client already in use whose document lists one.
+- **BREAKING**: redirect URIs are limited to `https`, `http` to a loopback host,
+  and RFC 8252 §7.1 private-use schemes (a reverse domain name such as
+  `com.example.app:/callback`). Dynamic Client Registration,
+  `POST /api/clients` (create and update) and CIMD documents refuse any other
+  scheme, including `javascript:`, `data:`, `file:` and schemes without a period
+  such as `myapp:`, with `invalid_redirect_uri`. `/oauth/authorize` and the
+  consent screen refuse such a URI on a client stored earlier
+  (`redirect_uri not permitted for this environment`). Re-register a native
+  app that used a scheme without a period under a reverse-domain scheme.

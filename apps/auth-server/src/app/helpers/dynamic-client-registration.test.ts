@@ -24,8 +24,31 @@ describe('validateRedirectUri', () => {
     expect(() => validateRedirectUri('http://app.example/cb')).toThrow(BadRequestError);
   });
 
-  it('accepts custom schemes for native apps', () => {
+  it('accepts private-use schemes for native apps (RFC 8252 §7.1)', () => {
     expect(() => validateRedirectUri('com.example.app:/oauth/callback')).not.toThrow();
+    expect(() => validateRedirectUri('com.example.app://oauth/callback')).not.toThrow();
+    expect(() =>
+      validateRedirectUri('com.googleusercontent.apps.123-abc:/oauth2redirect')
+    ).not.toThrow();
+  });
+
+  // Found while fixing the findings of scan qauth-20261015-005: any
+  // syntactically valid scheme used to pass.
+  it.each([
+    'javascript:alert(document.domain)',
+    'JAVASCRIPT:alert(1)//',
+    'data:text/html,<script>alert(1)</script>',
+    'vbscript:msgbox(1)',
+    'file:///etc/passwd',
+    'blob:https://app.example/0b3f5a2e-6c1d-4d7e-9a8b-1f2e3d4c5b6a',
+    'about:blank',
+    'myapp:/callback',
+    'myapp://callback',
+    'ftp://files.example/cb',
+    'wss://app.example/cb',
+    'com..example:/cb',
+  ])('refuses the redirect URI %s (scheme not allowed)', (uri) => {
+    expect(() => validateRedirectUri(uri)).toThrow(/^invalid_redirect_uri: unsupported scheme: /);
   });
 
   it('rejects redirect URIs containing a fragment', () => {

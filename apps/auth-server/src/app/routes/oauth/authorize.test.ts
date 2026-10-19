@@ -151,6 +151,9 @@ const CLIENT = {
   audience: null,
   redirectUris: ['https://example.com/cb'],
   dynamicRegisteredAt: null,
+  // An operator-provisioned client: the only kind whose redirect URI receives
+  // authorization errors by automatic redirect (ANT-2026-O8U3P920).
+  provisionedByOperator: true,
 };
 
 const BASE_QUERY = {
@@ -823,40 +826,54 @@ describe('GET /oauth/authorize — CIMD (Client ID Metadata Documents)', () => {
   // Regression (ANT-2026-D0XJAT8S): a CIMD document's `redirect_uris` never
   // went through the check registration applies, so a plain-http callback on
   // any host was stored and served — the code then crossed the network in
-  // cleartext.
-  it('does not register a non-loopback http redirect_uri a CIMD document declares', async () => {
-    ssrfSafeGet.mockReset();
-    ssrfSafeGet.mockResolvedValue(
-      cimdDoc(['https://app.example.com/callback', 'http://app.example.com/callback'])
-    );
+  // cleartext. Follow-up (2026-10-19): the whole document is refused, as DCR
+  // refuses the whole request, so even its valid https URI is not served.
+  it.each([
+    ['the plain-http one', 'http://app.example.com/callback'],
+    ['its valid https one', 'https://app.example.com/callback'],
+  ])(
+    'refuses a CIMD document that lists a non-loopback http redirect_uri, even for %s',
+    async (_label, requested) => {
+      ssrfSafeGet.mockReset();
+      ssrfSafeGet.mockResolvedValue(
+        cimdDoc(['https://app.example.com/callback', 'http://app.example.com/callback'])
+      );
 
-    const { fastify, ctx } = makeCimdFastify();
-    await authorizeRoute(fastify);
+      const { fastify, ctx } = makeCimdFastify();
+      await authorizeRoute(fastify);
 
-    const { reply, state } = createReply();
-    await expect(
-      ctx.handler!(
-        {
-          query: {
-            response_type: 'code',
-            client_id: CIMD_ID,
-            redirect_uri: 'http://app.example.com/callback', // in the doc, but plain http
-            code_challenge: 'A'.repeat(43),
-            code_challenge_method: 'S256',
-            state: 'xyz',
+      const { reply, state } = createReply();
+      await expect(
+        ctx.handler!(
+          {
+            query: {
+              response_type: 'code',
+              client_id: CIMD_ID,
+              redirect_uri: requested,
+              code_challenge: 'A'.repeat(43),
+              code_challenge_method: 'S256',
+              state: 'xyz',
+            },
+            url: `/oauth/authorize?response_type=code&client_id=${encodeURIComponent(CIMD_ID)}`,
+            headers: {},
+            ip: '127.0.0.1',
           },
-          url: `/oauth/authorize?response_type=code&client_id=${encodeURIComponent(CIMD_ID)}`,
-          headers: {},
-          ip: '127.0.0.1',
-        },
-        reply
-      )
-    ).rejects.toThrow(/redirect_uri/);
-    expect(state.redirected).toBeUndefined();
-    expect(fastify.repositories.oauthClients.upsertCimdClient).toHaveBeenCalledWith(
-      expect.objectContaining({ redirectUris: ['https://app.example.com/callback'] })
-    );
-  });
+          reply
+        )
+      ).rejects.toThrow('invalid_client');
+      expect(state.redirected).toBeUndefined();
+      // Fail closed: nothing is materialised from the refused document.
+      expect(fastify.repositories.oauthClients.upsertCimdClient).not.toHaveBeenCalled();
+      expect(fastify.repositories.auditLogs.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          event: 'oauth.authorize.failure',
+          metadata: expect.objectContaining({
+            error: expect.stringMatching(/^CIMD document refused: invalid_redirect_uri: /),
+          }),
+        })
+      );
+    }
+  );
 
   it('happy path: resolves CIMD client, materialises it, and proceeds to login/consent', async () => {
     ssrfSafeGet.mockReset();
@@ -933,6 +950,73 @@ describe('GET /oauth/authorize — CIMD (Client ID Metadata Documents)', () => {
 // callback on another host (a CIMD document's, an operator-seeded row's)
 // received the code in cleartext. Registration refuses such a URI; the gate
 // now does too, whatever put it in the row.
+// Found while fixing the findings of scan qauth-20261015-005: registration
+// accepted any syntactically valid scheme, so a stored row (or an
+// operator-seeded one) can hold `javascript:` or `data:`. Authorize must not
+// follow it, whatever the request does next (here: prompt=none, no session,
+// an operator-provisioned client that would otherwise get the 302).
+describe('GET /oauth/authorize — redirect URI scheme gate', () => {
+  it.each(['javascript:alert(document.domain)//', 'data:text/html,hi', 'myapp:/callback'])(
+    'refuses a registered %s before any redirect, in every environment',
+    async (uri) => {
+      for (const environment of ['development', 'staging', 'production']) {
+        const { fastify, ctx } = makeFastify();
+        await authorizeRoute(fastify);
+        (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue({
+          ...CLIENT,
+          environment,
+          redirectUris: [uri],
+        });
+        (fastify.jwtUtils.extractFromHeader as unknown as Mock).mockReturnValue(null);
+        (fastify.sessionUtils.getSession as unknown as Mock).mockResolvedValue(null);
+
+        const { reply, state } = createReply();
+        await expect(
+          ctx.handler!(
+            {
+              query: { ...BASE_QUERY, redirect_uri: uri, prompt: 'none' },
+              url: '/oauth/authorize?response_type=code&client_id=app-123',
+              headers: {},
+              ip: '127.0.0.1',
+            },
+            reply
+          )
+        ).rejects.toThrow('redirect_uri not permitted for this environment');
+        expect(state.redirected).toBeUndefined();
+        expect(fastify.repositories.auditLogs.create).toHaveBeenCalledWith(
+          expect.objectContaining({
+            event: 'oauth.authorize.failure',
+            metadata: expect.objectContaining({ reason: 'redirect_uri_scheme_not_allowed' }),
+          })
+        );
+      }
+    }
+  );
+
+  it('still serves a private-use native redirect (RFC 8252 §7.1)', async () => {
+    const { fastify, ctx } = makeFastify();
+    await authorizeRoute(fastify);
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue({
+      ...CLIENT,
+      redirectUris: ['com.example.app:/oauth2redirect'],
+    });
+    (fastify.jwtUtils.extractFromHeader as unknown as Mock).mockReturnValue(null);
+    (fastify.sessionUtils.getSession as unknown as Mock).mockResolvedValue(null);
+
+    const { reply, state } = createReply();
+    await ctx.handler!(
+      {
+        query: { ...BASE_QUERY, redirect_uri: 'com.example.app:/oauth2redirect' },
+        url: '/oauth/authorize?response_type=code&client_id=app-123',
+        headers: {},
+        ip: '127.0.0.1',
+      },
+      reply
+    );
+    expect(state.redirected).toContain('/ui/login?return_to=');
+  });
+});
+
 describe('GET /oauth/authorize — plain-http redirect gate', () => {
   it('refuses a registered non-loopback http redirect_uri in every environment', async () => {
     for (const environment of ['development', 'staging', 'production']) {
@@ -1292,6 +1376,7 @@ describe('GET /oauth/authorize — step-up authentication (ADR-007 §2, #185)', 
     const freshDynamicClient = {
       ...CLIENT,
       clientId: 'app-fresh-dcr',
+      provisionedByOperator: false,
       dynamicRegisteredAt: Date.now() - 60 * 1000,
     } as unknown as typeof CLIENT;
     const { fastify, state } = await run({
@@ -1428,7 +1513,13 @@ describe('GET /oauth/authorize — Bearer path step-up (ADR-007 §2, #185)', () 
     const { fastify, state } = await runBearer(
       'email',
       {},
-      { client: { ...DANGEROUS_CLIENT, dynamicRegisteredAt: Date.now() - 60 * 1000 } }
+      {
+        client: {
+          ...DANGEROUS_CLIENT,
+          provisionedByOperator: false,
+          dynamicRegisteredAt: Date.now() - 60 * 1000,
+        },
+      }
     );
     // Refused; as a self-registered client, shown rather than redirected.
     expect(state.statusCode).toBe(400);
@@ -1941,12 +2032,19 @@ describe('GET /oauth/authorize — RFC 9207 §2 `iss` on every authorization res
   // since DCR alone can register one that fails them, with any redirect URI.
   it.each([
     ['client disabled', { enabled: false }],
+    // ANT-2026-DR5XI3LV: an operator's suspension, whatever `enabled` says.
+    ['client suspended by the operator', { enabled: true, suspended: true }],
     ['grant type not allowed', { grantTypes: ['client_credentials'] }],
     ['response type not allowed', { responseTypes: [] }],
   ])('unauthorized_client (%s) is a 400, never a redirect', async (_label, override) => {
     for (const client of [
       { ...CLIENT, ...override },
-      { ...CLIENT, ...override, dynamicRegisteredAt: Date.now() - 400 * 24 * 60 * 60 * 1000 },
+      {
+        ...CLIENT,
+        ...override,
+        provisionedByOperator: false,
+        dynamicRegisteredAt: Date.now() - 400 * 24 * 60 * 60 * 1000,
+      },
     ]) {
       await expect(run({ client })).rejects.toMatchObject({
         message: 'unauthorized_client',
@@ -2025,24 +2123,38 @@ describe('GET /oauth/authorize — RFC 9207 §2 `iss` on every authorization res
 
 /**
  * RFC 9700 §4.11.2 ("Authorization Server as Open Redirector"): the AS may
- * redirect automatically only to a redirect URI it trusts. A client created
- * through open Dynamic Client Registration, or materialised from a CIMD
- * document, registered its redirect URI itself, anonymously; an exact match
- * against that registration says nothing about where the URI leads. Error
- * responses that would leave the issuer with no QAuth page shown are
- * therefore shown on the issuer, with the way back, for such a client — at any
- * age. Operator-provisioned clients keep the automatic redirect OpenID Connect
- * requires.
+ * redirect automatically only to a redirect URI it trusts. Only a client an
+ * operator provisioned carries that trust (`provisioned_by_operator`,
+ * ANT-2026-O8U3P920). A client created through open Dynamic Client
+ * Registration, materialised from a CIMD document, or created by a
+ * self-registered developer through `POST /api/clients` registered its
+ * redirect URI itself; an exact match against that registration says nothing
+ * about where the URI leads. Error responses that would leave the issuer with
+ * no QAuth page shown are therefore shown on the issuer, with the way back,
+ * for such a client — at any age. Operator-provisioned clients keep the
+ * automatic redirect OpenID Connect requires.
  */
-describe('GET /oauth/authorize — error responses for self-registered clients (RFC 9700 §4.11.2)', () => {
+describe('GET /oauth/authorize — error responses for clients no operator provisioned (RFC 9700 §4.11.2)', () => {
   const ATTACKER_CB = 'https://login-qauth.attacker.example/sign-in';
   const DCR_CLIENT = {
     ...CLIENT,
     clientId: 'dcr-client',
     redirectUris: [ATTACKER_CB],
+    provisionedByOperator: false,
     // Long past DYNAMIC_CLIENT_BADGE_DAYS: who registered it has not changed.
     dynamicRegisteredAt: Date.now() - 400 * 24 * 60 * 60 * 1000,
     metadata: { registrationType: 'dynamic' },
+  };
+  // What `POST /api/clients` writes for an account anyone can open: no DCR or
+  // CIMD marker at all, which the earlier rule read as trusted.
+  const DEVELOPER_CLIENT = {
+    ...CLIENT,
+    clientId: '0190a000-0000-7000-8000-0000000000d1',
+    redirectUris: [ATTACKER_CB],
+    provisionedByOperator: false,
+    developerId: '0190a000-0000-7000-8000-00000000000a',
+    dynamicRegisteredAt: null,
+    metadata: null,
   };
   // A CIMD client is covered in the CIMD suite above, which resolves a real
   // document through the (mocked) network layer.
@@ -2099,6 +2211,25 @@ describe('GET /oauth/authorize — error responses for self-registered clients (
 
   it('prompt=none with no session: a dynamically registered client gets login_required on the issuer, not a 302', async () => {
     const { state } = await run(DCR_CLIENT, { prompt: 'none' });
+    expectShownNotRedirected(state, 'login_required');
+  });
+
+  it('prompt=none with no session: a client a developer created through POST /api/clients gets login_required on the issuer, not a 302', async () => {
+    const { state } = await run(DEVELOPER_CLIENT, { prompt: 'none' });
+    expectShownNotRedirected(state, 'login_required');
+  });
+
+  it('prompt=none with a session but no consent: a developer-created client gets consent_required on the issuer', async () => {
+    const { state } = await run(DEVELOPER_CLIENT, { prompt: 'none', session: true });
+    expectShownNotRedirected(state, 'consent_required');
+  });
+
+  it('a client with no provisioning marker at all is not trusted (fail closed)', async () => {
+    const { provisionedByOperator: _omitted, ...unmarked } = CLIENT;
+    const { state } = await run(
+      { ...unmarked, redirectUris: [ATTACKER_CB] } as Record<string, unknown>,
+      { prompt: 'none' }
+    );
     expectShownNotRedirected(state, 'login_required');
   });
 
