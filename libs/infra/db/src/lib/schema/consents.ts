@@ -2,7 +2,7 @@ import { relations, sql } from 'drizzle-orm';
 import { bigint, index, jsonb, pgTable, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
 
 import { oauthClients, realms, users } from './core';
-import { EPOCH_MS_NOW, JSONB_EMPTY_ARRAY } from './sql-helpers';
+import { EPOCH_MS_NOW, JSONB_EMPTY_ARRAY, JSONB_EMPTY_OBJECT } from './sql-helpers';
 
 /**
  * OAuth user consent records.
@@ -13,7 +13,9 @@ import { EPOCH_MS_NOW, JSONB_EMPTY_ARRAY } from './sql-helpers';
  *
  * Scope-subset check: a new authorization request can skip the consent screen
  * iff every requested scope is present in an active (not revoked) consent
- * record's `scopes` array. See `apps/auth-server/.../helpers/consent.ts`.
+ * record's `scopes` array and, for every RFC 8707 `resource` the request
+ * names, in that resource's `resourceScopes` entry. See
+ * `apps/auth-server/.../helpers/consent.ts`.
  */
 export const oauthConsents = pgTable(
   'oauth_consents',
@@ -31,6 +33,17 @@ export const oauthConsents = pgTable(
       .notNull()
       .references(() => realms.id, { onDelete: 'cascade' }),
     scopes: jsonb('scopes').notNull().default(JSONB_EMPTY_ARRAY).$type<string[]>(),
+    /**
+     * RFC 8707 resource indicator → the scopes the user approved for it. A
+     * `resource` becomes the token's `aud` and overrides the client's
+     * configured audience, so it is part of what was consented to, like the
+     * scopes. Kept per resource, not as a second flat union: approving scope A
+     * at X and scope B at Y does not cover A at Y.
+     */
+    resourceScopes: jsonb('resource_scopes')
+      .notNull()
+      .default(JSONB_EMPTY_OBJECT)
+      .$type<Record<string, string[]>>(),
     grantedAt: bigint('granted_at', { mode: 'number' }).notNull().default(EPOCH_MS_NOW),
     revokedAt: bigint('revoked_at', { mode: 'number' }),
   },

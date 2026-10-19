@@ -47,6 +47,29 @@ export function createOAuthConsentsRepository(defaultDb: DbClient): OAuthConsent
       return row;
     },
 
+    async findActiveForShare(
+      userId: string,
+      oauthClientId: string,
+      tx: DbClient
+    ): Promise<OAuthConsent | undefined> {
+      // `FOR SHARE` blocks a concurrent `revoke` (an UPDATE of this row)
+      // until `tx` ends; one that committed first makes PostgreSQL re-check
+      // `revoked_at IS NULL` on the new row version, which drops the row.
+      const [row] = await tx
+        .select()
+        .from(oauthConsents)
+        .where(
+          and(
+            eq(oauthConsents.userId, userId),
+            eq(oauthConsents.oauthClientId, oauthClientId),
+            isNull(oauthConsents.revokedAt)
+          )
+        )
+        .limit(1)
+        .for('share');
+      return row;
+    },
+
     async listActiveForUser(userId: string, tx?: DbClient): Promise<OAuthConsent[]> {
       const invoker = tx ?? defaultDb;
       return invoker
@@ -81,6 +104,7 @@ export function createOAuthConsentsRepository(defaultDb: DbClient): OAuthConsent
       oauthClientId: string,
       realmId: string,
       scopes: string[],
+      resources: readonly string[] = [],
       tx?: DbClient
     ): Promise<OAuthConsent> {
       // Read-then-update/insert MUST be atomic — two concurrent "allow
@@ -108,9 +132,17 @@ export function createOAuthConsentsRepository(defaultDb: DbClient): OAuthConsent
           // remove previously-granted scopes. Callers rely on this to detect
           // "already consented" for scope-subset checks.
           const union = Array.from(new Set([...existing.scopes, ...scopes])).sort();
+          // RFC 8707: the same union, per resource and never across them —
+          // scopes approved for one resource server say nothing about another.
+          const merged = new Map(Object.entries(existing.resourceScopes));
+          for (const resource of resources) {
+            const prior = merged.get(resource) ?? [];
+            merged.set(resource, Array.from(new Set([...prior, ...scopes])).sort());
+          }
+          const resourceScopes = Object.fromEntries(merged);
           const [updated] = await invoker
             .update(oauthConsents)
-            .set({ scopes: union, grantedAt: now })
+            .set({ scopes: union, resourceScopes, grantedAt: now })
             .where(eq(oauthConsents.id, existing.id))
             .returning();
           return updated;
@@ -123,6 +155,7 @@ export function createOAuthConsentsRepository(defaultDb: DbClient): OAuthConsent
             oauthClientId,
             realmId,
             scopes: [...scopes].sort(),
+            resourceScopes: Object.fromEntries(resources.map((r) => [r, [...scopes].sort()])),
             grantedAt: now,
           })
           .returning();

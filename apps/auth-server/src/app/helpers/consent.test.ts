@@ -28,6 +28,7 @@ function client(overrides: Partial<OAuthClientLike> = {}): OAuthClientLike {
 function consent(overrides: Partial<OAuthConsentLike> = {}): OAuthConsentLike {
   return {
     scopes: ['read:foo'],
+    resourceScopes: {},
     revokedAt: null,
     ...overrides,
   };
@@ -94,28 +95,63 @@ describe('isDynamicClientWithinBadgeWindow', () => {
 
 describe('canSkipConsent', () => {
   it('missing consent always requires prompt', () => {
-    expect(canSkipConsent(undefined, client(), ['read:foo'])).toBe(false);
+    expect(canSkipConsent(undefined, client(), ['read:foo'], [])).toBe(false);
   });
 
   it('revoked consent requires prompt', () => {
-    expect(canSkipConsent(consent({ revokedAt: Date.now() - 1000 }), client(), ['read:foo'])).toBe(
+    expect(
+      canSkipConsent(consent({ revokedAt: Date.now() - 1000 }), client(), ['read:foo'], [])
+    ).toBe(false);
+  });
+
+  it('exceeded scopes require prompt', () => {
+    expect(canSkipConsent(consent({ scopes: ['read:foo'] }), client(), ['write:foo'], [])).toBe(
       false
     );
   });
 
-  it('exceeded scopes require prompt', () => {
-    expect(canSkipConsent(consent({ scopes: ['read:foo'] }), client(), ['write:foo'])).toBe(false);
-  });
-
   it('subset scopes skip prompt', () => {
-    expect(canSkipConsent(consent({ scopes: ['read:foo', 'email'] }), client(), ['email'])).toBe(
-      true
-    );
+    expect(
+      canSkipConsent(consent({ scopes: ['read:foo', 'email'] }), client(), ['email'], [])
+    ).toBe(true);
   });
 
   it('dynamic client inside badge window forces re-consent', () => {
     const c = client({ dynamicRegisteredAt: Date.now() - 1 * 24 * 60 * 60 * 1000 });
-    expect(canSkipConsent(consent({ scopes: ['email'] }), c, ['email'])).toBe(false);
+    expect(canSkipConsent(consent({ scopes: ['email'] }), c, ['email'], [])).toBe(false);
+  });
+
+  // RFC 8707: a `resource` becomes the token's `aud`. A remembered grant
+  // covers the resource servers the user approved, not any the client names.
+  const A = 'https://a.example/mcp';
+  const B = 'https://b.example/mcp';
+
+  it('scopes approved for every requested resource skip prompt', () => {
+    const stored = consent({ resourceScopes: { [A]: ['read:foo'], [B]: ['read:foo'] } });
+    expect(canSkipConsent(stored, client(), ['read:foo'], [B])).toBe(true);
+    expect(canSkipConsent(stored, client(), ['read:foo'], [A, B])).toBe(true);
+  });
+
+  it('a resource the user never approved requires prompt, even with covered scopes', () => {
+    const stored = consent({ resourceScopes: { [A]: ['read:foo'] } });
+    expect(canSkipConsent(stored, client(), ['read:foo'], [B])).toBe(false);
+    expect(canSkipConsent(stored, client(), ['read:foo'], [A, B])).toBe(false);
+    // An empty scope set is a subset of anything; it still names the `aud`.
+    expect(canSkipConsent(stored, client(), [], [B])).toBe(false);
+    // A grant that recorded no resource covers none.
+    expect(canSkipConsent(consent(), client(), ['read:foo'], [A])).toBe(false);
+  });
+
+  it('a scope approved for another resource only requires prompt', () => {
+    const stored = consent({
+      scopes: ['email', 'read:foo'],
+      resourceScopes: { [A]: ['read:foo'], [B]: ['email'] },
+    });
+    expect(canSkipConsent(stored, client(), ['read:foo'], [B])).toBe(false);
+  });
+
+  it('matches a resource exactly, never through the prototype', () => {
+    expect(canSkipConsent(consent(), client(), [], ['constructor'])).toBe(false);
   });
 });
 

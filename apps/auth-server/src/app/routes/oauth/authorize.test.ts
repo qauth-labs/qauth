@@ -74,6 +74,7 @@ function createReply() {
 
 function makeFastify() {
   const ctx: TestContext = {};
+  const findActive = vi.fn();
   const fastify: any = {
     withTypeProvider: () => {
       const route = {
@@ -97,7 +98,12 @@ function makeFastify() {
         findByClientId: vi.fn(),
       },
       oauthConsents: {
-        findActive: vi.fn(),
+        findActive,
+        // The locked re-read in the code-insert transaction sees what the
+        // first read saw, unless a test says otherwise.
+        findActiveForShare: vi.fn((userId: string, oauthClientId: string) =>
+          findActive(userId, oauthClientId)
+        ),
       },
       authorizationCodes: {
         create: vi.fn().mockResolvedValue({ id: 'code-1' }),
@@ -106,6 +112,7 @@ function makeFastify() {
         create: vi.fn().mockResolvedValue(undefined),
       },
     },
+    db: { transaction: vi.fn(async (cb: (tx: unknown) => Promise<unknown>) => cb({ tx: true })) },
     jwtUtils: {
       extractFromHeader: vi.fn(),
       verifyAccessToken: vi.fn(),
@@ -118,6 +125,8 @@ function makeFastify() {
       setSession: vi.fn().mockResolvedValue(undefined),
       deleteSession: vi.fn().mockResolvedValue(undefined),
     },
+    // Per-`jti` access-token denylist (RFC 7009); nothing revoked by default.
+    redis: { exists: vi.fn().mockResolvedValue(0) },
     log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
   };
   return { fastify: fastify as FastifyInstance, ctx };
@@ -242,9 +251,113 @@ describe('GET /oauth/authorize — session-cookie integration', () => {
     );
 
     expect(fastify.repositories.authorizationCodes.create).toHaveBeenCalledOnce();
+    // The consent is re-read under a lock, in the transaction the code is
+    // written in.
+    const [, tx] = (fastify.repositories.authorizationCodes.create as unknown as Mock).mock
+      .calls[0];
+    expect(tx).toEqual({ tx: true });
+    expect(fastify.repositories.oauthConsents.findActiveForShare).toHaveBeenCalledWith(
+      'user-1',
+      CLIENT.id,
+      tx
+    );
     expect(state.redirected).toContain('https://example.com/cb');
     expect(state.redirected).toContain('code=');
     expect(state.redirected).toContain('state=xyz');
+  });
+
+  // The first consent read is a snapshot. A revocation that commits after it
+  // must not leave a code issued on a consent that no longer exists: the
+  // request is answered as one arriving after the revocation would be.
+  it.each([
+    ['shows the consent screen', { prompt: undefined }, '/ui/consent?'],
+    ['answers consent_required to prompt=none', { prompt: 'none' }, 'error=consent_required'],
+  ])(
+    'issues no code and %s when the consent is revoked between the read and the code insert',
+    async (_label, extraQuery, expectedRedirect) => {
+      const { fastify, ctx } = makeFastify();
+      await authorizeRoute(fastify);
+      (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(
+        CLIENT
+      );
+      (fastify.jwtUtils.extractFromHeader as unknown as Mock).mockReturnValue(null);
+      (fastify.repositories.oauthConsents.findActive as unknown as Mock).mockResolvedValue({
+        scopes: ['email', 'read:foo'],
+        revokedAt: null,
+      });
+      // Revoked by the time the row is locked.
+      (fastify.repositories.oauthConsents.findActiveForShare as unknown as Mock).mockResolvedValue(
+        undefined
+      );
+      const { signSessionId } = await import('../../helpers/session-cookie');
+      const signed = signSessionId('sid-race');
+      (fastify.sessionUtils.getSession as unknown as Mock).mockResolvedValue({
+        userId: 'user-1',
+        email: 'a@b.com',
+        sessionId: 'sid-race',
+        createdAt: Date.now(),
+      });
+
+      const { reply, state } = createReply();
+      await ctx.handler!(
+        {
+          query: { ...BASE_QUERY, ...extraQuery },
+          url: '/oauth/authorize?response_type=code&client_id=app-123&scope=email',
+          headers: { cookie: `__Host-qauth_session=${signed}` },
+          ip: '127.0.0.1',
+        },
+        reply
+      );
+
+      expect(fastify.repositories.oauthConsents.findActiveForShare).toHaveBeenCalledOnce();
+      expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
+      expect(state.redirected).toContain(expectedRedirect);
+      expect(state.redirected).not.toContain('code=');
+    }
+  );
+
+  it('fails closed, without re-running the request, when every locked re-read finds no consent', async () => {
+    // A consent that keeps vanishing under the lock must not loop the handler.
+    const { fastify, ctx } = makeFastify();
+    await authorizeRoute(fastify);
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(CLIENT);
+    (fastify.jwtUtils.extractFromHeader as unknown as Mock).mockReturnValue(null);
+    (fastify.repositories.oauthConsents.findActive as unknown as Mock).mockResolvedValue({
+      scopes: ['email'],
+      revokedAt: null,
+    });
+    (fastify.repositories.oauthConsents.findActiveForShare as unknown as Mock).mockResolvedValue(
+      undefined
+    );
+    const { signSessionId } = await import('../../helpers/session-cookie');
+    const signed = signSessionId('sid-race-2');
+    (fastify.sessionUtils.getSession as unknown as Mock).mockResolvedValue({
+      userId: 'user-1',
+      email: 'a@b.com',
+      sessionId: 'sid-race-2',
+      createdAt: Date.now(),
+    });
+
+    const { reply, state } = createReply();
+    await ctx.handler!(
+      {
+        query: { ...BASE_QUERY, prompt: 'none' },
+        url: '/oauth/authorize?response_type=code&client_id=app-123&scope=email&prompt=none',
+        headers: { cookie: `__Host-qauth_session=${signed}` },
+        ip: '127.0.0.1',
+      },
+      reply
+    );
+
+    // One pass through the handler: one client lookup, one first read.
+    expect(fastify.repositories.oauthClients.findByClientId).toHaveBeenCalledOnce();
+    expect(fastify.repositories.oauthConsents.findActive).toHaveBeenCalledOnce();
+    expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
+    expect(state.redirected).toContain('error=consent_required');
+    const failure = (fastify.repositories.auditLogs.create as unknown as Mock).mock.calls
+      .map((c) => c[0] as { event: string; metadata: Record<string, unknown> })
+      .find((e) => e.metadata?.reason === 'consent_withdrawn_during_authorization');
+    expect(failure).toBeDefined();
   });
 
   it('persists RFC 8707 resource indicator(s) onto the authorization code', async () => {
@@ -255,6 +368,7 @@ describe('GET /oauth/authorize — session-cookie integration', () => {
     (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(CLIENT);
     (fastify.repositories.oauthConsents.findActive as unknown as Mock).mockResolvedValue({
       scopes: ['email'],
+      resourceScopes: { 'https://api.example.com/v1': ['email'] },
       revokedAt: null,
     });
     const { signSessionId } = await import('../../helpers/session-cookie');
@@ -283,13 +397,13 @@ describe('GET /oauth/authorize — session-cookie integration', () => {
     expect(createArg.resource).toEqual(['https://api.example.com/v1']);
   });
 
-  it('parses RFC 8707 resource from request.url even when the validator does not populate request.query', async () => {
-    // Regression: fastify-type-provider-zod does NOT put the Zod-parsed
-    // `resource` back onto `request.query` for GET routes, so a real auth
-    // flow had `query.resource === undefined` despite the URL carrying
-    // `?resource=X`. We now parse the URL directly — testing that path.
-    // Still true on v7.0.0: that major rewrote the serializer and the OpenAPI
-    // generation, but `validatorCompiler` still calls `safeParse` unchanged.
+  it('never reads RFC 8707 resource back out of request.url', async () => {
+    // Regression: the handler used to re-parse `request.url` with
+    // `URLSearchParams`, trusting that Zod had validated what it found there.
+    // Zod validates what FASTIFY's parser found, and the two disagree
+    // (`??resource=system`), so an unvalidated string became the token's `aud`.
+    // Only the validated `request.query` may be bound to the code;
+    // authorize-routing.test.ts covers the same thing with the real router.
     const { fastify, ctx } = makeFastify();
     await authorizeRoute(fastify);
     (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(CLIENT);
@@ -309,10 +423,10 @@ describe('GET /oauth/authorize — session-cookie integration', () => {
     const { reply } = createReply();
     await ctx.handler!(
       {
-        // `request.query` intentionally DOES NOT include `resource` — mirrors
-        // what we see in production when the Zod validator strips it.
+        // `request.query` intentionally DOES NOT include `resource` — the
+        // schema saw the unknown key `?resource` and stripped it.
         query: BASE_QUERY,
-        url: '/oauth/authorize?response_type=code&client_id=app-123&scope=email&resource=https%3A%2F%2Fapi.example.com%2Fv1',
+        url: '/oauth/authorize??resource=system&response_type=code&client_id=app-123&scope=email',
         headers: { cookie: `__Host-qauth_session=${signed}` },
         ip: '127.0.0.1',
       },
@@ -321,15 +435,19 @@ describe('GET /oauth/authorize — session-cookie integration', () => {
 
     const createArg = (fastify.repositories.authorizationCodes.create as unknown as Mock).mock
       .calls[0][0];
-    expect(createArg.resource).toEqual(['https://api.example.com/v1']);
+    expect(createArg.resource).toEqual([]);
   });
 
-  it('parses multiple `resource=` params from request.url into an array', async () => {
+  it('persists multiple RFC 8707 resource indicators as an array', async () => {
     const { fastify, ctx } = makeFastify();
     await authorizeRoute(fastify);
     (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(CLIENT);
     (fastify.repositories.oauthConsents.findActive as unknown as Mock).mockResolvedValue({
       scopes: ['email'],
+      resourceScopes: {
+        'https://api.example.com/v1': ['email'],
+        'https://api2.example.com/v1': ['email'],
+      },
       revokedAt: null,
     });
     const { signSessionId } = await import('../../helpers/session-cookie');
@@ -344,7 +462,10 @@ describe('GET /oauth/authorize — session-cookie integration', () => {
     const { reply } = createReply();
     await ctx.handler!(
       {
-        query: BASE_QUERY,
+        query: {
+          ...BASE_QUERY,
+          resource: ['https://api.example.com/v1', 'https://api2.example.com/v1'],
+        },
         url:
           '/oauth/authorize?response_type=code&client_id=app-123&scope=email' +
           '&resource=https%3A%2F%2Fapi.example.com%2Fv1' +
@@ -361,6 +482,55 @@ describe('GET /oauth/authorize — session-cookie integration', () => {
       'https://api.example.com/v1',
       'https://api2.example.com/v1',
     ]);
+  });
+
+  // RFC 8707: a `resource` becomes the token's `aud`. A grant the user
+  // remembered for one resource server must not silently yield a code for
+  // another, on the interactive path or under prompt=none.
+  it.each([
+    ['a resource the stored consent does not list', { 'https://api.example.com/v1': ['email'] }],
+    [
+      'a scope that was approved for another resource only',
+      { 'https://api.example.com/v1': ['email'], 'https://other.example.com/v1': ['read:foo'] },
+    ],
+  ])('does not issue a code silently for %s', async (_label, resourceScopes) => {
+    for (const [prompt, expectedRedirect] of [
+      [undefined, '/ui/consent?'],
+      ['none', 'error=consent_required'],
+    ] as const) {
+      const { fastify, ctx } = makeFastify();
+      await authorizeRoute(fastify);
+      (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(
+        CLIENT
+      );
+      (fastify.repositories.oauthConsents.findActive as unknown as Mock).mockResolvedValue({
+        scopes: ['email', 'read:foo'],
+        resourceScopes,
+        revokedAt: null,
+      });
+      const { signSessionId } = await import('../../helpers/session-cookie');
+      const signed = signSessionId('sid-other-resource');
+      (fastify.sessionUtils.getSession as unknown as Mock).mockResolvedValue({
+        userId: 'user-1',
+        email: 'a@b.com',
+        sessionId: 'sid-other-resource',
+        createdAt: Date.now(),
+      });
+
+      const { reply, state } = createReply();
+      await ctx.handler!(
+        {
+          query: { ...BASE_QUERY, prompt, resource: ['https://other.example.com/v1'] },
+          url: '/oauth/authorize?response_type=code&client_id=app-123&scope=email&resource=https%3A%2F%2Fother.example.com%2Fv1',
+          headers: { cookie: `__Host-qauth_session=${signed}` },
+          ip: '127.0.0.1',
+        },
+        reply
+      );
+
+      expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
+      expect(state.redirected).toContain(expectedRedirect);
+    }
   });
 });
 
@@ -506,6 +676,7 @@ describe('POST /oauth/authorize (OIDC Core §3.1.2.1)', () => {
     (fastify.jwtUtils.extractFromHeader as unknown as Mock).mockReturnValue(null);
     (fastify.repositories.oauthConsents.findActive as unknown as Mock).mockResolvedValue({
       scopes: ['email'],
+      resourceScopes: { 'https://api.example.com/v1': ['email'] },
       revokedAt: null,
     });
     const { signSessionId } = await import('../../helpers/session-cookie');
@@ -672,6 +843,42 @@ describe('GET /oauth/authorize — CIMD (Client ID Metadata Documents)', () => {
     // succeeded, and with no session the flow proceeds to login.
     expect(fastify.repositories.oauthClients.upsertCimdClient).toHaveBeenCalledOnce();
     expect(state.redirected).toContain('/ui/login?return_to=');
+  });
+
+  it('prompt=none with no session: shows login_required on the issuer instead of redirecting (RFC 9700 §4.11.2)', async () => {
+    // Anyone who can host a document names a CIMD client's redirect URI; the
+    // AS has no reason to trust it as an automatic redirect target.
+    ssrfSafeGet.mockReset();
+    ssrfSafeGet.mockResolvedValue(cimdDoc(['https://login-qauth.attacker.example/sign-in']));
+
+    const { fastify, ctx } = makeCimdFastify();
+    await authorizeRoute(fastify);
+    (fastify.jwtUtils.extractFromHeader as unknown as Mock).mockReturnValue(null);
+    (fastify.sessionUtils.getSession as unknown as Mock).mockResolvedValue(null);
+
+    const { reply, state } = createReply();
+    await ctx.handler!(
+      {
+        query: {
+          response_type: 'code',
+          client_id: CIMD_ID,
+          redirect_uri: 'https://login-qauth.attacker.example/sign-in',
+          code_challenge: 'A'.repeat(43),
+          code_challenge_method: 'S256',
+          state: 'xyz',
+          prompt: 'none',
+        },
+        url: `/oauth/authorize?response_type=code&client_id=${encodeURIComponent(CIMD_ID)}`,
+        headers: {},
+        ip: '127.0.0.1',
+      },
+      reply
+    );
+
+    expect(state.redirected).toBeUndefined();
+    expect(state.statusCode).toBe(400);
+    expect(state.body as string).toContain('<code>login_required</code>');
+    expect(state.body as string).toContain('login-qauth.attacker.example');
   });
 });
 
@@ -1010,7 +1217,12 @@ describe('GET /oauth/authorize — step-up authentication (ADR-007 §2, #185)', 
       prompt: 'none',
       sid: 'sid-su-12',
     });
-    expect(state.redirected).toContain('error=consent_required');
+    // A self-registered client's redirect URI is not one the AS trusts
+    // (RFC 9700 §4.11.2): the error is shown, with the way back, rather than
+    // redirected to automatically.
+    expect(state.redirected).toBeUndefined();
+    expect(state.statusCode).toBe(400);
+    expect(state.body as string).toContain('<code>consent_required</code>');
     expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
   });
 
@@ -1037,20 +1249,42 @@ describe('GET /oauth/authorize — Bearer path step-up (ADR-007 §2, #185)', () 
     scopes: ['read:foo', 'write:foo', 'email'],
   };
 
-  async function runBearer(scope: string) {
+  async function runBearer(
+    scope: string,
+    payload: Record<string, unknown> = {},
+    opts: {
+      client?: Record<string, unknown>;
+      /** The stored consent row; a covering, unrevoked grant unless overridden. */
+      consent?: Record<string, unknown> | null;
+      /** RFC 8707 resource indicators on the request. */
+      resource?: string[];
+    } = {}
+  ) {
     const { fastify, ctx } = makeFastify();
     await authorizeRoute(fastify);
+    // `findByClientId` answers every lookup with this client, so it is also
+    // the "system" client the Bearer path pins the token's `client_id` to.
     (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(
-      DANGEROUS_CLIENT
+      opts.client ?? DANGEROUS_CLIENT
+    );
+    (fastify.repositories.oauthConsents.findActive as unknown as Mock).mockResolvedValue(
+      opts.consent === undefined
+        ? { scopes: ['read:foo', 'email'], revokedAt: null }
+        : (opts.consent ?? undefined)
     );
     // No browser session; a valid Bearer token resolves the user.
     (fastify.sessionUtils.getSession as unknown as Mock).mockResolvedValue(null);
     (fastify.jwtUtils.extractFromHeader as unknown as Mock).mockReturnValue('bearer.token');
-    (fastify.jwtUtils.verifyAccessToken as unknown as Mock).mockResolvedValue({ sub: 'user-1' });
+    (fastify.jwtUtils.verifyAccessToken as unknown as Mock).mockResolvedValue({
+      sub: 'user-1',
+      clientId: DANGEROUS_CLIENT.clientId,
+      aud: DANGEROUS_CLIENT.clientId,
+      ...payload,
+    });
     const { reply, state } = createReply();
     await ctx.handler!(
       {
-        query: { ...BASE_QUERY, client_id: 'app-bearer', scope },
+        query: { ...BASE_QUERY, client_id: 'app-bearer', scope, resource: opts.resource },
         url: `/oauth/authorize?response_type=code&client_id=app-bearer&scope=${encodeURIComponent(scope)}`,
         headers: { authorization: 'Bearer bearer.token' },
         ip: '127.0.0.1',
@@ -1066,10 +1300,201 @@ describe('GET /oauth/authorize — Bearer path step-up (ADR-007 §2, #185)', () 
     expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
   });
 
-  it('still mints a code for a non-dangerous scope on the Bearer path', async () => {
+  it('still mints a code for a non-dangerous scope on the Bearer path when a stored consent covers it', async () => {
     const { fastify, state } = await runBearer('email');
     expect(state.redirected).toContain('code=');
     expect(fastify.repositories.authorizationCodes.create).toHaveBeenCalledOnce();
+    expect(fastify.repositories.oauthConsents.findActive).toHaveBeenCalledWith(
+      'user-1',
+      DANGEROUS_CLIENT.id
+    );
+  });
+
+  // The Bearer path cannot show a consent screen, so it must never stand in
+  // for one: a code is issued only under a stored, unrevoked grant that
+  // already covers the request — the same `canSkipConsent` question the
+  // browser flow asks. Any client that resolves can be named here, including
+  // one registered a moment ago through open Dynamic Client Registration.
+  it.each([
+    ['no consent exists', 'email', null],
+    [
+      'the stored consent does not cover the requested scopes',
+      'email read:foo',
+      { scopes: ['email'], revokedAt: null },
+    ],
+    ['the stored consent is revoked', 'email', { scopes: ['email'], revokedAt: Date.now() - 1000 }],
+  ])('refuses the Bearer path with access_denied when %s', async (_label, scope, consent) => {
+    const { fastify, state } = await runBearer(scope, {}, { consent });
+    expect(state.redirected).toContain('https://example.com/cb');
+    expect(state.redirected).toContain('error=access_denied');
+    expect(state.redirected).toContain('state=xyz');
+    expect(state.redirected).not.toContain('code=');
+    expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
+    const failure = (fastify.repositories.auditLogs.create as unknown as Mock).mock.calls
+      .map((c) => c[0] as { event: string; metadata: Record<string, unknown> })
+      .find((e) => e.event === 'oauth.authorize.failure');
+    expect(failure?.metadata).toMatchObject({
+      error: 'access_denied',
+      reason: 'bearer_path_no_covering_consent',
+    });
+  });
+
+  it('refuses the Bearer path for a dynamic client still in its badge window, even over a covering consent', async () => {
+    const { fastify, state } = await runBearer(
+      'email',
+      {},
+      { client: { ...DANGEROUS_CLIENT, dynamicRegisteredAt: Date.now() - 60 * 1000 } }
+    );
+    // Refused; as a self-registered client, shown rather than redirected.
+    expect(state.statusCode).toBe(400);
+    expect(state.body as string).toContain('<code>access_denied</code>');
+    expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
+  });
+
+  it('issues no code on the Bearer path when the consent is revoked before the code insert', async () => {
+    const { fastify, ctx } = makeFastify();
+    await authorizeRoute(fastify);
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(
+      DANGEROUS_CLIENT
+    );
+    (fastify.repositories.oauthConsents.findActive as unknown as Mock).mockResolvedValue({
+      scopes: ['email'],
+      revokedAt: null,
+    });
+    (fastify.repositories.oauthConsents.findActiveForShare as unknown as Mock).mockResolvedValue(
+      undefined
+    );
+    (fastify.sessionUtils.getSession as unknown as Mock).mockResolvedValue(null);
+    (fastify.jwtUtils.extractFromHeader as unknown as Mock).mockReturnValue('bearer.token');
+    (fastify.jwtUtils.verifyAccessToken as unknown as Mock).mockResolvedValue({
+      sub: 'user-1',
+      clientId: DANGEROUS_CLIENT.clientId,
+      aud: DANGEROUS_CLIENT.clientId,
+    });
+    const { reply, state } = createReply();
+    await ctx.handler!(
+      {
+        query: { ...BASE_QUERY, client_id: 'app-bearer', scope: 'email' },
+        url: '/oauth/authorize?response_type=code&client_id=app-bearer&scope=email',
+        headers: { authorization: 'Bearer bearer.token' },
+        ip: '127.0.0.1',
+      },
+      reply
+    );
+    expect(state.redirected).toContain('error=access_denied');
+    expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
+  });
+
+  // RFC 8707: the `resource` is the token's `aud`, so the covering consent
+  // must cover it too, exactly as on the browser path.
+  it('refuses the Bearer path for a resource the stored consent does not cover', async () => {
+    const { fastify, state } = await runBearer(
+      'email',
+      {},
+      {
+        consent: {
+          scopes: ['email'],
+          resourceScopes: { 'https://api.example.com/v1': ['email'] },
+          revokedAt: null,
+        },
+        resource: ['https://payroll.example.com/v1'],
+      }
+    );
+    expect(state.redirected).toContain('error=access_denied');
+    expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
+  });
+
+  it('mints on the Bearer path for a resource the stored consent covers, and binds it', async () => {
+    const { fastify, state } = await runBearer(
+      'email',
+      {},
+      {
+        consent: {
+          scopes: ['email'],
+          resourceScopes: { 'https://api.example.com/v1': ['email'] },
+          revokedAt: null,
+        },
+        resource: ['https://api.example.com/v1'],
+      }
+    );
+    expect(state.redirected).toContain('code=');
+    const createArg = (fastify.repositories.authorizationCodes.create as unknown as Mock).mock
+      .calls[0][0];
+    expect(createArg.resource).toEqual(['https://api.example.com/v1']);
+  });
+
+  it('refuses a Bearer token issued to another client, even with the system audience', async () => {
+    // A third-party client's user token whose `aud` was bound to `system`
+    // through RFC 8707 `resource` is not the first-party login token: the
+    // Bearer path must pin `client_id` like the management API does.
+    const { fastify, state } = await runBearer('email', { clientId: 'third-party-app' });
+    expect(state.redirected).toContain('error=access_denied');
+    expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
+  });
+
+  it('refuses a delegated (RFC 8693 `act`) Bearer token', async () => {
+    const { fastify, state } = await runBearer('email', { act: { sub: 'agent-1' } });
+    expect(state.redirected).toContain('error=access_denied');
+    expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
+  });
+
+  it('refuses a revoked Bearer token (per-jti denylist)', async () => {
+    const { fastify, ctx } = makeFastify();
+    (fastify.redis.exists as unknown as Mock).mockResolvedValue(1);
+    await authorizeRoute(fastify);
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(
+      DANGEROUS_CLIENT
+    );
+    (fastify.sessionUtils.getSession as unknown as Mock).mockResolvedValue(null);
+    (fastify.jwtUtils.extractFromHeader as unknown as Mock).mockReturnValue('bearer.token');
+    (fastify.jwtUtils.verifyAccessToken as unknown as Mock).mockResolvedValue({
+      sub: 'user-1',
+      jti: 'revoked-jti',
+      clientId: DANGEROUS_CLIENT.clientId,
+      aud: DANGEROUS_CLIENT.clientId,
+    });
+    const { reply, state } = createReply();
+    await ctx.handler!(
+      {
+        query: { ...BASE_QUERY, client_id: 'app-bearer', scope: 'email' },
+        url: '/oauth/authorize?response_type=code&client_id=app-bearer&scope=email',
+        headers: { authorization: 'Bearer bearer.token' },
+        ip: '127.0.0.1',
+      },
+      reply
+    );
+    expect(fastify.redis.exists).toHaveBeenCalledWith(expect.stringContaining('revoked-jti'));
+    expect(state.redirected).toContain('error=access_denied');
+    expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
+  });
+
+  it('fails closed when the denylist cannot be read', async () => {
+    const { fastify, ctx } = makeFastify();
+    (fastify.redis.exists as unknown as Mock).mockRejectedValue(new Error('redis down'));
+    await authorizeRoute(fastify);
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(
+      DANGEROUS_CLIENT
+    );
+    (fastify.sessionUtils.getSession as unknown as Mock).mockResolvedValue(null);
+    (fastify.jwtUtils.extractFromHeader as unknown as Mock).mockReturnValue('bearer.token');
+    (fastify.jwtUtils.verifyAccessToken as unknown as Mock).mockResolvedValue({
+      sub: 'user-1',
+      jti: 'some-jti',
+      clientId: DANGEROUS_CLIENT.clientId,
+      aud: DANGEROUS_CLIENT.clientId,
+    });
+    const { reply, state } = createReply();
+    await ctx.handler!(
+      {
+        query: { ...BASE_QUERY, client_id: 'app-bearer', scope: 'email' },
+        url: '/oauth/authorize?response_type=code&client_id=app-bearer&scope=email',
+        headers: { authorization: 'Bearer bearer.token' },
+        ip: '127.0.0.1',
+      },
+      reply
+    );
+    expect(state.redirected).toContain('error=access_denied');
+    expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
   });
 });
 
@@ -1207,7 +1632,9 @@ describe('GET /oauth/authorize — loopback redirect on any port (RFC 8252 §7.3
       await call();
 
       expect(fastify.repositories.authorizationCodes.create).toHaveBeenCalledWith(
-        expect.objectContaining({ redirectUri: requested })
+        expect.objectContaining({ redirectUri: requested }),
+        // The transaction the consent was re-read and locked in.
+        expect.anything()
       );
       expect(state.redirected!.startsWith(`${requested}?`)).toBe(true);
       expect(new URL(state.redirected!).searchParams.get('code')).toBeTruthy();
@@ -1293,6 +1720,8 @@ describe('GET /oauth/authorize — RFC 9207 §2 `iss` on every authorization res
       if (opts.bearer === 'valid') {
         (fastify.jwtUtils.verifyAccessToken as unknown as Mock).mockResolvedValue({
           sub: 'user-1',
+          clientId: (opts.client ?? CLIENT).clientId,
+          aud: (opts.client ?? CLIENT).clientId,
         });
       } else {
         (fastify.jwtUtils.verifyAccessToken as unknown as Mock).mockRejectedValue(
@@ -1339,22 +1768,24 @@ describe('GET /oauth/authorize — RFC 9207 §2 `iss` on every authorization res
     expect(issOf(state.redirected)).toBe(discoveryIssuer(RAW_ISSUER));
   });
 
-  it('unauthorized_client (client disabled) carries `iss`', async () => {
-    const { state } = await run({ client: { ...CLIENT, enabled: false } });
-    expect(state.redirected).toContain('error=unauthorized_client');
-    expect(issOf(state.redirected)).toBe(discoveryIssuer(RAW_ISSUER));
-  });
-
-  it('unauthorized_client (grant type not allowed) carries `iss`', async () => {
-    const { state } = await run({ client: { ...CLIENT, grantTypes: ['client_credentials'] } });
-    expect(state.redirected).toContain('error=unauthorized_client');
-    expect(issOf(state.redirected)).toBe(discoveryIssuer(RAW_ISSUER));
-  });
-
-  it('unauthorized_client (response type not allowed) carries `iss`', async () => {
-    const { state } = await run({ client: { ...CLIENT, responseTypes: [] } });
-    expect(state.redirected).toContain('error=unauthorized_client');
-    expect(issOf(state.redirected)).toBe(discoveryIssuer(RAW_ISSUER));
+  // RFC 9700 §4.11.2: these three run before any user interaction and no
+  // working flow depends on the redirect, so a client that may not use this
+  // endpoint is answered with a 400 and never redirected — for every client,
+  // since DCR alone can register one that fails them, with any redirect URI.
+  it.each([
+    ['client disabled', { enabled: false }],
+    ['grant type not allowed', { grantTypes: ['client_credentials'] }],
+    ['response type not allowed', { responseTypes: [] }],
+  ])('unauthorized_client (%s) is a 400, never a redirect', async (_label, override) => {
+    for (const client of [
+      { ...CLIENT, ...override },
+      { ...CLIENT, ...override, dynamicRegisteredAt: Date.now() - 400 * 24 * 60 * 60 * 1000 },
+    ]) {
+      await expect(run({ client })).rejects.toMatchObject({
+        message: 'unauthorized_client',
+        statusCode: 400,
+      });
+    }
   });
 
   it('access_denied (invalid/expired Bearer token) carries `iss`', async () => {
@@ -1422,6 +1853,112 @@ describe('GET /oauth/authorize — RFC 9207 §2 `iss` on every authorization res
     const { state } = await run({ session: null });
     expect(state.redirected).toContain('/ui/login?return_to=');
     expect(state.redirected).not.toContain('iss=');
+  });
+});
+
+/**
+ * RFC 9700 §4.11.2 ("Authorization Server as Open Redirector"): the AS may
+ * redirect automatically only to a redirect URI it trusts. A client created
+ * through open Dynamic Client Registration, or materialised from a CIMD
+ * document, registered its redirect URI itself, anonymously; an exact match
+ * against that registration says nothing about where the URI leads. Error
+ * responses that would leave the issuer with no QAuth page shown are
+ * therefore shown on the issuer, with the way back, for such a client — at any
+ * age. Operator-provisioned clients keep the automatic redirect OpenID Connect
+ * requires.
+ */
+describe('GET /oauth/authorize — error responses for self-registered clients (RFC 9700 §4.11.2)', () => {
+  const ATTACKER_CB = 'https://login-qauth.attacker.example/sign-in';
+  const DCR_CLIENT = {
+    ...CLIENT,
+    clientId: 'dcr-client',
+    redirectUris: [ATTACKER_CB],
+    // Long past DYNAMIC_CLIENT_BADGE_DAYS: who registered it has not changed.
+    dynamicRegisteredAt: Date.now() - 400 * 24 * 60 * 60 * 1000,
+    metadata: { registrationType: 'dynamic' },
+  };
+  // A CIMD client is covered in the CIMD suite above, which resolves a real
+  // document through the (mocked) network layer.
+
+  async function run(
+    client: Record<string, unknown>,
+    opts: { prompt?: string; session?: boolean; scope?: string; consent?: unknown } = {}
+  ) {
+    const { fastify, ctx } = makeFastify();
+    await authorizeRoute(fastify);
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(client);
+    (fastify.jwtUtils.extractFromHeader as unknown as Mock).mockReturnValue(null);
+    (fastify.repositories.oauthConsents.findActive as unknown as Mock).mockResolvedValue(
+      opts.consent
+    );
+    const headers: Record<string, string> = {};
+    if (opts.session) {
+      const { signSessionId } = await import('../../helpers/session-cookie');
+      (fastify.sessionUtils.getSession as unknown as Mock).mockResolvedValue({
+        userId: 'user-1',
+        email: 'a@b.com',
+        sessionId: 'sid-untrusted',
+        createdAt: Date.now(),
+      });
+      headers['cookie'] = `__Host-qauth_session=${signSessionId('sid-untrusted')}`;
+    } else {
+      (fastify.sessionUtils.getSession as unknown as Mock).mockResolvedValue(null);
+    }
+    const query = {
+      ...BASE_QUERY,
+      client_id: client.clientId,
+      redirect_uri: (client.redirectUris as string[])[0],
+      scope: opts.scope ?? 'email',
+      ...(opts.prompt ? { prompt: opts.prompt } : {}),
+    };
+    const { reply, state } = createReply();
+    await ctx.handler!(
+      { query, url: '/oauth/authorize?response_type=code', headers, ip: '127.0.0.1' },
+      reply
+    );
+    return { fastify, state };
+  }
+
+  function expectShownNotRedirected(
+    state: { statusCode?: number; redirected?: string; body?: unknown },
+    error: string
+  ) {
+    expect(state.redirected).toBeUndefined();
+    expect(state.statusCode).toBe(400);
+    const body = state.body as string;
+    expect(body).toContain(`<code>${error}</code>`);
+    expect(body).toContain('login-qauth.attacker.example');
+  }
+
+  it('prompt=none with no session: a dynamically registered client gets login_required on the issuer, not a 302', async () => {
+    const { state } = await run(DCR_CLIENT, { prompt: 'none' });
+    expectShownNotRedirected(state, 'login_required');
+  });
+
+  it('prompt=none with no session: an operator-provisioned client keeps the OIDC redirect', async () => {
+    const { state } = await run(CLIENT, { prompt: 'none' });
+    expect(state.statusCode).toBe(302);
+    expect(state.redirected).toContain('https://example.com/cb');
+    expect(state.redirected).toContain('error=login_required');
+  });
+
+  it('prompt=none with a session but no consent: consent_required is shown, not redirected', async () => {
+    const { state } = await run(DCR_CLIENT, { prompt: 'none', session: true });
+    expectShownNotRedirected(state, 'consent_required');
+  });
+
+  it('agent scope-mode refusal with a session: invalid_scope is shown, not redirected', async () => {
+    const { fastify, state } = await run(
+      { ...DCR_CLIENT, scopes: ['agent:exec', 'email'] },
+      { session: true, scope: 'agent:exec' }
+    );
+    expectShownNotRedirected(state, 'invalid_scope');
+    expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
+  });
+
+  it('the interactive path is unchanged: no session goes to the login page', async () => {
+    const { state } = await run(DCR_CLIENT);
+    expect(state.redirected).toContain('/ui/login?return_to=');
   });
 });
 

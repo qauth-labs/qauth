@@ -13,6 +13,7 @@ import {
   STEP_UP_FRESH_AUTH_WINDOW_MS,
 } from '../../constants';
 import { toStoredAssuranceLevel } from '../../helpers/acr-claims';
+import { sendAuthorizationError } from '../../helpers/authorization-error';
 import { resolveBrowserSession } from '../../helpers/browser-session';
 import { clientAddressKey } from '../../helpers/client-address';
 import { findExceedingAgentScopesForClient } from '../../helpers/client-auth';
@@ -47,19 +48,6 @@ import { exactUrl } from '../../schemas/common';
 import { authorizeQuerySchema, resourceParamSchema } from '../../schemas/oauth';
 
 /**
- * RFC 8707: parse every `resource=` entry from a URL query string.
- * See authorize.ts's parseResourceFromUrl — fastify-type-provider-zod drops
- * the parsed `resource` from request.query for GET routes when the schema is
- * a union + transform. Reading request.url sidesteps that. Still required on
- * v7.0.0, which left `validatorCompiler` unchanged.
- */
-function parseResourceFromUrl(url: string): string[] {
-  const q = url.indexOf('?');
-  if (q < 0) return [];
-  return new URLSearchParams(url.slice(q + 1)).getAll('resource');
-}
-
-/**
  * Order-independent equality of two scope sets. Used by the consent POST to
  * confirm the POSTed (allowlist-filtered) scopes match exactly the set bound to
  * the session on the GET render — defence against a tampered hidden `scope`
@@ -69,6 +57,16 @@ function scopeSetsEqual(a: readonly string[], b: readonly string[]): boolean {
   if (a.length !== b.length) return false;
   const set = new Set(a);
   return b.every((s) => set.has(s));
+}
+
+/**
+ * Order- and duplicate-independent equality of two RFC 8707 resource lists.
+ * Unlike scopes, `resource` values are not de-duplicated by the schema.
+ */
+function resourceSetsEqual(a: readonly string[], b: readonly string[]): boolean {
+  const left = new Set(a);
+  const right = new Set(b);
+  return left.size === right.size && [...right].every((r) => left.has(r));
 }
 
 /**
@@ -109,9 +107,8 @@ const consentFormSchema = z.object({
   // too, not only pre-consent). Empty string ⇒ treated as absent.
   prompt: z.enum(['none', 'login', 'consent']).optional(),
   max_age: z.coerce.number().int().min(0).max(315360000).optional(),
-  // RFC 8707: carried through as hidden form field(s). POST body transforms
-  // work (unlike GET querystrings), so `resourceParamSchema` populates an
-  // array on `body.resource`.
+  // RFC 8707: carried through as hidden form field(s). `resourceParamSchema`
+  // populates an array on `body.resource`.
   resource: resourceParamSchema,
 });
 
@@ -404,24 +401,29 @@ export default async function (fastify: FastifyInstance) {
       // ADR-007 §2 (#184): fail fast on the render path too — don't show a
       // consent screen for an over-cap agent scope that the POST handler will
       // (correctly) refuse to mint a code for. Same deny-by-default gate;
-      // redirect_uri is already validated above so an `invalid_scope` redirect
-      // is safe (RFC 6749 §4.1.2.1).
+      // redirect_uri is already validated above. This fires before the user
+      // has seen the screen (and the destination host on it), so a
+      // self-registered client's error is shown rather than redirected, as on
+      // /oauth/authorize (RFC 9700 §4.11.2).
       if (findExceedingAgentScopesForClient(query.scope, client).length > 0) {
-        return reply.redirect(
-          buildRedirectUrl(query.redirect_uri, {
-            error: 'invalid_scope',
-            error_description: 'requested scope exceeds the agent scope mode for this client',
-            state: query.state ?? undefined,
-            iss,
-          }),
-          302
-        );
+        return sendAuthorizationError(reply, client, query.redirect_uri, {
+          error: 'invalid_scope',
+          error_description: 'requested scope exceeds the agent scope mode for this client',
+          state: query.state ?? undefined,
+          iss,
+        });
       }
 
       const isCimd =
         (client.metadata as Record<string, unknown> | null)?.registrationType === 'cimd';
 
       const scopes = filterRequestedScopes(query.scope, client);
+
+      // RFC 8707: the validated, array-normalized `resource` (never a
+      // re-parse of request.url — see the note in oauth/authorize.ts). Shown
+      // as the audience, bound to the session below and recorded on the
+      // grant, so what the user approves is what the token is issued for.
+      const resources = query.resource ?? [];
 
       // Reuse the session's existing CSRF token if present; only mint a
       // fresh one when none exists yet. Rotating on every GET would break
@@ -438,11 +440,16 @@ export default async function (fastify: FastifyInstance) {
       // attacker-controllable, so the persisted grant must match what was
       // rendered, not what is submitted. Always persisted (the scope set can
       // change between GETs for the same client), so this write also covers the
-      // first-time CSRF-token mint above.
+      // first-time CSRF-token mint above. The RFC 8707 resources shown as the
+      // audience are bound the same way: they become the token's `aud`.
       const consentScopes = { ...(session.consentScopes ?? {}), [client.clientId]: scopes };
+      const consentResources = {
+        ...(session.consentResources ?? {}),
+        [client.clientId]: resources,
+      };
       await fastify.sessionUtils.setSession<BrowserSessionData>(
         session.sessionId,
-        { ...session, csrfToken, consentScopes },
+        { ...session, csrfToken, consentScopes, consentResources },
         env.SESSION_COOKIE_TTL
       );
 
@@ -477,7 +484,10 @@ export default async function (fastify: FastifyInstance) {
           clientName: client.name,
           clientHomepage: (client.metadata as Record<string, unknown> | null)?.homepage_uri as
             string | undefined,
-          audience: client.audience ?? [],
+          // The precedence `resolveAudience` applies to the token's `aud`: the
+          // requested `resource` overrides the client's configured audience,
+          // so the screen names the resource server the token will be for.
+          audience: resources.length > 0 ? resources : (client.audience ?? []),
           scopes,
           badgeDynamic: isDynamicClientWithinBadgeWindow(client),
           csrfToken,
@@ -486,7 +496,13 @@ export default async function (fastify: FastifyInstance) {
             client_id: query.client_id,
             redirect_uri: query.redirect_uri,
             state: query.state,
-            scope: query.scope,
+            // The form submits the scopes this page LISTS (the
+            // allowlist-filtered set bound to the session above), never the
+            // raw request. The POST re-filters the submitted value against the
+            // allowlist as it is THEN, so a raw value would pick up scopes the
+            // client's owner added after this render, and match a binding a
+            // later render rewrote: a grant of scopes this page never showed.
+            scope: scopes.join(' '),
             nonce: query.nonce,
             code_challenge: query.code_challenge,
             code_challenge_method: query.code_challenge_method,
@@ -496,11 +512,10 @@ export default async function (fastify: FastifyInstance) {
             prompt: query.prompt,
             max_age: query.max_age !== undefined ? String(query.max_age) : undefined,
           },
-          // RFC 8707: parsed directly from request.url (see
-          // parseResourceFromUrl). Rendered as one hidden <input
-          // name="resource" value="<uri>" /> per entry so the POST body
-          // carries every requested resource URI back to the handler.
-          resources: parseResourceFromUrl(request.url),
+          // Rendered as one hidden <input name="resource" value="<uri>" />
+          // per entry so the POST body carries every requested resource URI
+          // back to the handler, which compares them with the binding above.
+          resources,
           // #230: session email is optional (future non-email credentials);
           // fall back to the stable subject id for display.
           userEmail: session.email ?? session.userId,
@@ -708,6 +723,44 @@ export default async function (fastify: FastifyInstance) {
       // Grant the bound (user-visible) scopes — never the raw POST body.
       const scopes = boundScopes;
 
+      // RFC 8707: the same integrity rule for the resources, which become the
+      // token's `aud`. The GET bound the resources it named as the audience;
+      // the hidden `resource` fields must name exactly those, or this is a
+      // page the session no longer describes (a later render rebound it) or
+      // a tampered form. A session rendered before resources were bound
+      // carries no entry, which reads as "named none".
+      const boundResources = session.consentResources?.[client.clientId] ?? [];
+      const postedResources = body.resource ?? [];
+      if (!resourceSetsEqual(boundResources, postedResources)) {
+        await fastify.repositories.auditLogs.create({
+          userId: session.userId,
+          oauthClientId: client.id,
+          event: 'oauth.consent.denied',
+          eventType: 'auth',
+          success: false,
+          ipAddress: request.ip,
+          userAgent: request.headers['user-agent'] || null,
+          metadata: {
+            error: 'invalid_target',
+            reason: 'consent_resource_mismatch',
+            client_id: body.client_id,
+            bound: boundResources,
+            posted: postedResources,
+          },
+        });
+        return reply.redirect(
+          buildRedirectUrl(body.redirect_uri, {
+            error: 'invalid_target',
+            error_description: 'consent resource does not match the rendered authorization request',
+            state: body.state ?? undefined,
+            iss,
+          }),
+          302
+        );
+      }
+      // Record and bind the resources the screen named — never the raw POST.
+      const resources = boundResources;
+
       // ADR-007 §2 (#185): step-up gate on the mint path. Re-authentication is
       // enforced HERE, not only pre-consent, because the hidden `scope`/`prompt`/
       // `max_age` fields are attacker-controllable and the CSRF token binds the
@@ -765,7 +818,7 @@ export default async function (fastify: FastifyInstance) {
           response_type: body.response_type,
           prompt: body.prompt,
           max_age: body.max_age !== undefined ? String(body.max_age) : undefined,
-          resource: body.resource,
+          resource: resources,
         });
         // #316 follow-up: short handle in the URL, full authorize URL in Redis.
         return redirectToLoginWithPendingAuthorization(fastify, reply, returnTo);
@@ -773,13 +826,15 @@ export default async function (fastify: FastifyInstance) {
 
       // Allow: persist the grant if the user checked the box, then issue a
       // code. The grant upsert merges with any prior record so subsequent
-      // requests with a subset of these scopes skip the screen.
+      // requests with a subset of these scopes, for the resource(s) this
+      // screen named as the audience, skip the screen.
       if (body.allow_forever === '1') {
         await fastify.repositories.oauthConsents.upsertGrant(
           session.userId,
           client.id,
           realm.id,
-          scopes
+          scopes,
+          resources
         );
       }
 
@@ -807,9 +862,9 @@ export default async function (fastify: FastifyInstance) {
             // login (`'low'`), which is the "omit the claim" outcome.
             assuranceLevel: toStoredAssuranceLevel(session.assuranceLevel),
             scopes,
-            // RFC 8707: bind the requested resource(s) to this code so
+            // RFC 8707: bind the resource(s) the screen named to this code so
             // /oauth/token can set the issued access token's `aud` claim.
-            resource: body.resource ?? [],
+            resource: resources,
             state: body.state ?? null,
             expiresAt,
           });

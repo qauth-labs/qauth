@@ -148,6 +148,13 @@
       "when": 1789122885470,
       "tag": "0020_lean_ultimo",
       "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1792115239412,
+      "tag": "0021_consent_resource_scopes",
+      "breakpoints": true
     }
   ]
 }

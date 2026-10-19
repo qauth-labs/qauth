@@ -341,6 +341,20 @@ export interface OAuthConsentsRepository {
     oauthClientId: string,
     tx?: DbClient
   ): Promise<OAuthConsent | undefined>;
+  /**
+   * `findActive`, holding a shared lock on the row until `tx` ends.
+   *
+   * `findActive` is a snapshot: a revocation can commit between it and
+   * whatever the caller writes on the strength of the consent. A caller that
+   * issues something under the consent re-reads it with this and writes in
+   * the same `tx`. `revoke` updates the row, so it either waits for `tx` to
+   * end, or has already committed and no row is returned.
+   */
+  findActiveForShare(
+    userId: string,
+    oauthClientId: string,
+    tx: DbClient
+  ): Promise<OAuthConsent | undefined>;
   /** List all active consents for a user, joined to client metadata (revocation UI). */
   listActiveForUser(userId: string, tx?: DbClient): Promise<OAuthConsent[]>;
   /**
@@ -364,13 +378,16 @@ export interface OAuthConsentsRepository {
    *
    * If an active row exists, its `scopes` array is replaced with the union
    * of old ∪ new and `grantedAt` is refreshed. Otherwise a new row is
-   * inserted.
+   * inserted. `scopes` are merged the same way into the `resourceScopes`
+   * entry of each of `resources`, the RFC 8707 resources they were approved
+   * for.
    */
   upsertGrant(
     userId: string,
     oauthClientId: string,
     realmId: string,
     scopes: string[],
+    resources?: readonly string[],
     tx?: DbClient
   ): Promise<OAuthConsent>;
   /** Revoke a consent row by id (owner must be checked by caller). */

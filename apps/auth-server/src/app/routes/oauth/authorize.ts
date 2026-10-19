@@ -1,6 +1,11 @@
 import { randomBytes } from 'node:crypto';
 
-import { BadRequestError, isUniqueConstraintError } from '@qauth-labs/shared-errors';
+import {
+  BadRequestError,
+  isUniqueConstraintError,
+  JWTInvalidError,
+  UnauthorizedClientError,
+} from '@qauth-labs/shared-errors';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { ZodTypeProvider } from 'fastify-type-provider-zod';
 
@@ -11,6 +16,7 @@ import {
   STEP_UP_FRESH_AUTH_WINDOW_MS,
 } from '../../constants';
 import { toStoredAssuranceLevel } from '../../helpers/acr-claims';
+import { sendAuthorizationError } from '../../helpers/authorization-error';
 import { resolveBrowserSession } from '../../helpers/browser-session';
 import { clientAddressKey } from '../../helpers/client-address';
 import { findExceedingAgentScopesForClient, resolveAudience } from '../../helpers/client-auth';
@@ -18,6 +24,7 @@ import { resolveClient } from '../../helpers/client-resolution';
 import { canSkipConsent, filterRequestedScopes } from '../../helpers/consent';
 import { resolveIssuerIdentifier } from '../../helpers/discovery';
 import { resolveEnvironmentPolicy } from '../../helpers/environment-policy';
+import { assertManagementToken } from '../../helpers/management-token';
 import { getOrCreateSystemClient } from '../../helpers/oauth-client';
 import {
   buildRedirectUrl,
@@ -33,43 +40,22 @@ import {
   parsePromptMode,
   stepUpErrorForPromptNone,
 } from '../../helpers/step-up';
+import { isJtiRevoked } from '../../helpers/token-revocation';
 import { type AuthorizeQuery, authorizeQuerySchema } from '../../schemas/oauth';
-
-/**
- * RFC 8707: parse every `resource=` query param directly from the request
- * URL instead of relying on `request.query.resource`.
- *
- * Why: fastify-type-provider-zod drops the `resource` field from the parsed
- * query when its Zod schema is a union + transform (e.g.
- * `z.union([z.url(), z.array(z.url())]).transform(...)`) — the raw-string
- * variant from Fastify's querystring parser does not survive the validator.
- * The field IS validated (invalid URIs fail the whole request), but the
- * validator does not write the parsed array back into request.query.
- *
- * Still true on v7.0.0: the v7 major rewrote the serializer (safeParse ->
- * safeEncode) and OpenAPI generation, but left `validatorCompiler` on
- * `safeParse` untouched, so this workaround is NOT obsolete.
- *
- * Reading from `request.url` sidesteps the validator entirely. Zod has
- * already rejected invalid inputs at schema time, so whatever reaches this
- * code point is already shape-safe.
- */
-function parseResourceFromUrl(url: string): string[] {
-  const q = url.indexOf('?');
-  if (q < 0) return [];
-  const params = new URLSearchParams(url.slice(q + 1));
-  return params.getAll('resource');
-}
 
 /**
  * The authorize request expressed as a URL with its parameters in the query
  * string. On GET this is simply `request.url`. On POST (OIDC Core §3.1.2.1)
  * the parameters arrived form-encoded in the body, so we reconstruct an
- * equivalent authorize URL from the validated body. This keeps two paths
- * byte-identical: the RFC 8707 `resource` parse (which reads from the URL) and
- * the /ui/login + /ui/consent round-trips, which bounce the user back to the
- * authorization endpoint via a GET — so a POST request must round-trip through
- * a query string all the same.
+ * equivalent authorize URL from the validated body: the /ui/login +
+ * /ui/consent round-trips bounce the user back to the authorization endpoint
+ * via a GET — so a POST request must round-trip through a query string all the
+ * same.
+ *
+ * This string is ONLY ever forwarded, for the receiving route to parse and
+ * validate again. Never read a parameter back out of it: a second parser does
+ * not split every string the way Fastify's does, so it can find a value the
+ * schema never saw. Parameters come from the validated `query`.
  */
 function buildAuthorizeUrlWithParams(request: FastifyRequest): string {
   if (request.method !== 'POST') {
@@ -103,8 +89,10 @@ function buildAuthorizeUrlWithParams(request: FastifyRequest): string {
  *      consent screen at /ui/consent. Otherwise issue a code directly.
  *   2. Legacy/machine: Authorization: Bearer <access_token>. Retained for
  *      backwards compatibility with first-party callers that have not yet
- *      migrated to the browser flow. MUST NOT be relied on once dynamic
- *      client registration is opened up.
+ *      migrated to the browser flow. It cannot show the consent screen, so
+ *      it issues a code ONLY under a stored consent that already covers the
+ *      request (the same `canSkipConsent` gate as the browser flow); any
+ *      other request is refused with `access_denied`.
  */
 export default async function (fastify: FastifyInstance) {
   // OIDC Core §3.1.2.1: the authorization endpoint MUST support BOTH GET (params
@@ -133,10 +121,10 @@ export default async function (fastify: FastifyInstance) {
     // the query on GET. The SAME Zod schema (`authorizeQuerySchema`) validates
     // both, so `query` is identically shaped and every check below is unchanged.
     const query = (request.method === 'POST' ? request.body : request.query) as AuthorizeQuery;
-    // For the RFC 8707 `resource` parse and the /ui/login + /ui/consent
-    // round-trips we need the request as a query string. On GET that is
-    // `request.url`; on POST the params live in the body, so reconstruct an
-    // equivalent authorize URL (see `buildAuthorizeUrlWithParams`).
+    // For the /ui/login + /ui/consent round-trips we need the request as a
+    // query string. On GET that is `request.url`; on POST the params live in
+    // the body, so reconstruct an equivalent authorize URL (see
+    // `buildAuthorizeUrlWithParams`).
     const requestUrlWithParams = buildAuthorizeUrlWithParams(request);
     const redirectUri = query.redirect_uri;
     const state = query.state;
@@ -222,28 +210,22 @@ export default async function (fastify: FastifyInstance) {
       throw new BadRequestError('redirect_uri not permitted for this environment');
     }
 
+    // A client that may not use this endpoint at all (disabled, or not
+    // registered for the code grant / `code` response type) is answered with
+    // a 400 and never redirected, whoever provisioned it (RFC 9700 §4.11.2).
+    // These checks run before any user interaction, so a redirect here would
+    // send a visitor straight off the issuer; open DCR can register a client
+    // that fails them (`grant_types: ["refresh_token"]`) with any redirect
+    // URI, and no working flow depends on receiving this error by redirect.
+    let unauthorizedReason: string | null = null;
     if (!client.enabled) {
-      await fastify.repositories.auditLogs.create({
-        userId: null,
-        oauthClientId: client.id,
-        event: 'oauth.authorize.failure',
-        eventType: 'token',
-        success: false,
-        ipAddress: request.ip,
-        userAgent: request.headers['user-agent'] || null,
-        metadata: { error: 'unauthorized_client', client_id: query.client_id },
-      });
-      return reply.redirect(
-        buildRedirectUrl(redirectUri, {
-          error: 'unauthorized_client',
-          state: state ?? undefined,
-          iss,
-        }),
-        302
-      );
+      unauthorizedReason = 'client is disabled';
+    } else if (!client.grantTypes.includes('authorization_code')) {
+      unauthorizedReason = 'client is not registered for the authorization_code grant';
+    } else if (!client.responseTypes.includes('code')) {
+      unauthorizedReason = 'client is not registered for the code response type';
     }
-
-    if (!client.grantTypes.includes('authorization_code')) {
+    if (unauthorizedReason) {
       await fastify.repositories.auditLogs.create({
         userId: null,
         oauthClientId: client.id,
@@ -254,35 +236,7 @@ export default async function (fastify: FastifyInstance) {
         userAgent: request.headers['user-agent'] || null,
         metadata: { error: 'unauthorized_client', client_id: query.client_id },
       });
-      return reply.redirect(
-        buildRedirectUrl(redirectUri, {
-          error: 'unauthorized_client',
-          state: state ?? undefined,
-          iss,
-        }),
-        302
-      );
-    }
-
-    if (!client.responseTypes.includes('code')) {
-      await fastify.repositories.auditLogs.create({
-        userId: null,
-        oauthClientId: client.id,
-        event: 'oauth.authorize.failure',
-        eventType: 'token',
-        success: false,
-        ipAddress: request.ip,
-        userAgent: request.headers['user-agent'] || null,
-        metadata: { error: 'unauthorized_client', client_id: query.client_id },
-      });
-      return reply.redirect(
-        buildRedirectUrl(redirectUri, {
-          error: 'unauthorized_client',
-          state: state ?? undefined,
-          iss,
-        }),
-        302
-      );
+      throw new UnauthorizedClientError(unauthorizedReason);
     }
 
     // -----------------------------------------------------------------
@@ -300,12 +254,17 @@ export default async function (fastify: FastifyInstance) {
       // `error=login_required` on the client's redirect_uri rather than as a
       // redirect to the login page — which, in the hidden iframe these requests
       // are made from, renders a login form the user can never see and leaves
-      // the client hanging until its timeout. (`redirect_uri` and the client
-      // are already validated above, so this redirect is safe to emit.) The
-      // same check exists for the authenticated step-up path further down; this
-      // is the branch that runs BEFORE any session is resolved, and it also
-      // keeps a logged-out client's silent-renewal polling from creating a
-      // pending-authorization stash on every poll.
+      // the client hanging until its timeout. The same check exists for the
+      // authenticated step-up path further down; this is the branch that runs
+      // BEFORE any session is resolved, and it also keeps a logged-out
+      // client's silent-renewal polling from creating a pending-authorization
+      // stash on every poll.
+      //
+      // `redirect_uri` matched the client's registration above, but for a
+      // self-registered (DCR / CIMD) client the registering party chose it,
+      // anonymously: this would be a no-UI redirect off the issuer to any URL
+      // of their choosing. `sendAuthorizationError` shows the error on the
+      // issuer for such a client instead (RFC 9700 §4.11.2).
       if (query.prompt === 'none') {
         await fastify.repositories.auditLogs.create({
           userId: null,
@@ -321,15 +280,12 @@ export default async function (fastify: FastifyInstance) {
             error: 'login_required',
           },
         });
-        return reply.redirect(
-          buildRedirectUrl(redirectUri, {
-            error: 'login_required',
-            error_description: 'authentication is required but prompt=none was requested',
-            state: state ?? undefined,
-            iss,
-          }),
-          302
-        );
+        return sendAuthorizationError(reply, client, redirectUri, {
+          error: 'login_required',
+          error_description: 'authentication is required but prompt=none was requested',
+          state: state ?? undefined,
+          iss,
+        });
       }
 
       // No auth at all → browser flow. Redirect to login, then the user
@@ -355,6 +311,17 @@ export default async function (fastify: FastifyInstance) {
           // RFC 9700 mix-up defence: only accept a token this AS issued.
           issuer: fastify.jwtUtils.getIssuer(),
         });
+        // Audience alone does not prove this is the first-party login token:
+        // any code whose bound `resource` resolves to the system audience
+        // mints a user token that passes the check above. Pin `client_id`
+        // (and refuse delegated tokens) exactly as the management API does.
+        await assertManagementToken(fastify, payload);
+        // RFC 7009: `requireJwt` and token exchange consult the per-`jti`
+        // denylist; this path issues codes from the same token, so it must
+        // too. A Redis failure throws into the catch below (fails closed).
+        if (await isJtiRevoked(fastify, payload.jti)) {
+          throw new JWTInvalidError('Access token has been revoked');
+        }
         userId = payload.sub;
       } catch {
         await fastify.repositories.auditLogs.create({
@@ -367,15 +334,12 @@ export default async function (fastify: FastifyInstance) {
           userAgent: request.headers['user-agent'] || null,
           metadata: { error: 'access_denied', client_id: query.client_id },
         });
-        return reply.redirect(
-          buildRedirectUrl(redirectUri, {
-            error: 'access_denied',
-            error_description: 'Invalid or expired token',
-            state: state ?? undefined,
-            iss,
-          }),
-          302
-        );
+        return sendAuthorizationError(reply, client, redirectUri, {
+          error: 'access_denied',
+          error_description: 'Invalid or expired token',
+          state: state ?? undefined,
+          iss,
+        });
       }
     }
 
@@ -404,15 +368,12 @@ export default async function (fastify: FastifyInstance) {
           exceeding: exceedingAgentScopes.join(' '),
         },
       });
-      return reply.redirect(
-        buildRedirectUrl(redirectUri, {
-          error: 'invalid_scope',
-          error_description: 'requested scope exceeds the agent scope mode for this client',
-          state: state ?? undefined,
-          iss,
-        }),
-        302
-      );
+      return sendAuthorizationError(reply, client, redirectUri, {
+        error: 'invalid_scope',
+        error_description: 'requested scope exceeds the agent scope mode for this client',
+        state: state ?? undefined,
+        iss,
+      });
     }
 
     // Deny-by-default: when a client has no scope allowlist configured we
@@ -421,6 +382,16 @@ export default async function (fastify: FastifyInstance) {
     // requested scope on the auth-code flow.
     const scopes = filterRequestedScopes(query.scope, client);
 
+    // RFC 8707: the requested resource set becomes the token's `aud`, so it is
+    // part of what a stored consent must cover. Read once, from the VALIDATED
+    // params (`resourceParamSchema` has checked every entry and normalized
+    // them to an array), so the set checked against the consent below is the
+    // set bound to the code. Never re-parse `request.url`: `URLSearchParams`
+    // drops a leading `?`, so `/oauth/authorize??resource=system` is the
+    // unknown key `?resource` to Fastify's parser (stripped, never validated)
+    // but `resource` to that one, which put an arbitrary string into `aud`.
+    const resources = query.resource ?? [];
+
     // ADR-007 §2 (#185): step-up on the legacy Bearer path. The Bearer path
     // authenticates the user from an existing access token and CANNOT run an
     // interactive step-up (no login / consent screen for a machine caller),
@@ -428,9 +399,7 @@ export default async function (fastify: FastifyInstance) {
     // fresh authentication. Default-deny: a Bearer authorize request carrying
     // any dangerous scope (write:* / agent:admin / agent:exec) is refused
     // with `access_denied` and the client is told to use the interactive
-    // browser flow (which enforces the dangerous-op re-auth gate). Bearer is
-    // legacy first-party and not exposed to dynamically-registered clients,
-    // so this only affects first-party callers requesting dangerous scopes.
+    // browser flow (which enforces the dangerous-op re-auth gate).
     // ADR-008 §5 (#197): the automatic dangerous-scope refusal is gated by the
     // environment policy. Staging/production (and the fail-safe default) keep
     // it; a `development` client relaxes it so local Bearer-path iteration
@@ -454,29 +423,55 @@ export default async function (fastify: FastifyInstance) {
             dangerous: bearerDangerous,
           },
         });
-        return reply.redirect(
-          buildRedirectUrl(redirectUri, {
-            error: 'access_denied',
-            error_description:
-              'dangerous scopes require interactive step-up; use the browser authorization flow',
-            state: state ?? undefined,
-            iss,
-          }),
-          302
-        );
+        return sendAuthorizationError(reply, client, redirectUri, {
+          error: 'access_denied',
+          error_description:
+            'dangerous scopes require interactive step-up; use the browser authorization flow',
+          state: state ?? undefined,
+          iss,
+        });
       }
     }
 
-    // Browser-driven flow: show the consent screen unless a previous
-    // grant already covers the requested scopes. Bearer-token callers
-    // skip the consent step entirely — they are first-party and the
-    // Bearer path is not exposed to dynamically-registered clients.
-    if (browserSession) {
-      const existingConsent = await fastify.repositories.oauthConsents.findActive(
-        userId,
-        client.id
-      );
+    const existingConsent = await fastify.repositories.oauthConsents.findActive(userId, client.id);
 
+    // The consent decision does not depend on HOW the user authenticated.
+    // Any client that resolved above can be named on the Bearer path too —
+    // one registered a moment ago through open Dynamic Client Registration, a
+    // CIMD client, another developer's public client. The Bearer path cannot
+    // show the consent screen, so it issues a code only under a stored,
+    // unrevoked grant that already covers this request, scopes and RFC 8707
+    // resources (the same `canSkipConsent` question the browser flow asks
+    // below, badge window included); anything else is refused (ADR-017
+    // Decision 9: every path other than an operator-flagged first-party
+    // client requires consent).
+    if (!browserSession && !canSkipConsent(existingConsent, client, scopes, resources)) {
+      await fastify.repositories.auditLogs.create({
+        userId,
+        oauthClientId: client.id,
+        event: 'oauth.authorize.failure',
+        eventType: 'token',
+        success: false,
+        ipAddress: request.ip,
+        userAgent: request.headers['user-agent'] || null,
+        metadata: {
+          error: 'access_denied',
+          reason: 'bearer_path_no_covering_consent',
+          client_id: query.client_id,
+        },
+      });
+      return sendAuthorizationError(reply, client, redirectUri, {
+        error: 'access_denied',
+        error_description:
+          'no stored consent covers this request; use the browser authorization flow',
+        state: state ?? undefined,
+        iss,
+      });
+    }
+
+    // Browser-driven flow: show the consent screen unless a previous
+    // grant already covers the requested scopes.
+    if (browserSession) {
       // ADR-007 §2 (#185): step-up authentication before dangerous
       // operations / on elevation. A request that widens the granted scope
       // set (incremental consent, MCP 2025-11-25), or that asks for a
@@ -510,10 +505,12 @@ export default async function (fastify: FastifyInstance) {
       // `canSkipConsent` as well, and `prompt=none` must answer the same
       // question: no stored, unrevoked grant covering this request (or a
       // dynamic client still in its badge window) means `consent_required`.
+      // "Covering" includes the RFC 8707 resources: a grant remembered for
+      // one resource server is no consent to tokens for another.
       if (prompt === 'none') {
         const oidcError =
           stepUpErrorForPromptNone(stepUp) ??
-          (canSkipConsent(existingConsent, client, scopes) ? null : 'consent_required');
+          (canSkipConsent(existingConsent, client, scopes, resources) ? null : 'consent_required');
         if (oidcError) {
           await fastify.repositories.auditLogs.create({
             userId,
@@ -531,15 +528,12 @@ export default async function (fastify: FastifyInstance) {
               dangerous: stepUp.dangerous,
             },
           });
-          return reply.redirect(
-            buildRedirectUrl(redirectUri, {
-              error: oidcError,
-              error_description: 'user interaction is required but prompt=none was requested',
-              state: state ?? undefined,
-              iss,
-            }),
-            302
-          );
+          return sendAuthorizationError(reply, client, redirectUri, {
+            error: oidcError,
+            error_description: 'user interaction is required but prompt=none was requested',
+            state: state ?? undefined,
+            iss,
+          });
         }
         // No interaction required → fall through to ordinary issuance.
       }
@@ -575,10 +569,11 @@ export default async function (fastify: FastifyInstance) {
       // Re-consent when the request elevates scope or explicitly asks for it,
       // even if a prior grant would otherwise let us skip the screen — a
       // wider scope set must be explicitly re-affirmed, never auto-widened.
+      // The same holds for a `resource` the grant does not cover.
       // (`prompt=none` already returned consent_required above if needed.)
       if (
         prompt !== 'none' &&
-        (stepUp.requiresConsent || !canSkipConsent(existingConsent, client, scopes))
+        (stepUp.requiresConsent || !canSkipConsent(existingConsent, client, scopes, resources))
       ) {
         if (stepUp.elevated.length > 0) {
           await fastify.repositories.auditLogs.create({
@@ -600,8 +595,7 @@ export default async function (fastify: FastifyInstance) {
         // Carry the authorize params to the consent screen. Guard the `?`
         // index: `buildAuthorizeUrlWithParams` can return a query-less path
         // (empty reconstructed POST body), and `slice(-1)` would yield a
-        // corrupt `/ui/consent<lastchar>` — same defensive check as
-        // `parseResourceFromUrl`.
+        // corrupt `/ui/consent<lastchar>`.
         const qIndex = requestUrlWithParams.indexOf('?');
         const returnQuery = qIndex >= 0 ? requestUrlWithParams.slice(qIndex) : '';
         return reply.redirect(`/ui/consent${returnQuery}`, 302);
@@ -610,50 +604,116 @@ export default async function (fastify: FastifyInstance) {
 
     const expiresAt = Date.now() + AUTHORIZATION_CODE_TTL_MS;
 
-    const createCode = async (): Promise<string> => {
+    // Every path that reaches this point skipped the consent screen on the
+    // strength of `existingConsent`. That read is only a snapshot: a
+    // revocation can commit between it and the insert, and the code would be
+    // issued on a consent that no longer exists (DELETE /api/consents/:id
+    // already answered 204). So the decision is taken again on the row,
+    // locked `FOR SHARE` in the transaction that inserts the code: a
+    // revocation either waits for this transaction to commit, or committed
+    // first and the re-read finds no covering consent, in which case no code
+    // is issued (`null`).
+    const createCode = async (): Promise<string | null> => {
       const code = randomBytes(32).toString('base64url');
-      await fastify.repositories.authorizationCodes.create({
-        code,
-        oauthClientId: client.id,
-        userId,
-        redirectUri,
-        codeChallenge: query.code_challenge,
-        codeChallengeMethod: 'S256',
-        nonce: query.nonce ?? null,
-        // OIDC Core §2 `auth_time`: persist the REAL end-user authentication
-        // time (browser-session establishment, epoch MS) — never the code-mint
-        // time — so /oauth/token can assert it in the ID token and a `max_age`
-        // check evaluates the actual session age. Null on the legacy Bearer
-        // path (no interactive session) → the claim is simply omitted there.
-        authTime: browserSession?.createdAt ?? null,
-        // #237 (ADR-004/ADR-010): bind the authentication's eIDAS LoA to the
-        // code so /oauth/token can assert `acr` in the ID token. NULL on the
-        // password path (`'low'`, no claim) and on the legacy Bearer path (no
-        // interactive session), which is the same "omit the claim" outcome.
-        assuranceLevel: toStoredAssuranceLevel(browserSession?.assuranceLevel),
-        scopes,
-        // RFC 8707: bind the resource indicator(s) to the authorization
-        // code so /oauth/token can set the access token's `aud` claim to
-        // exactly what the client requested. Reached on the consent-skip
-        // path (returning user, prior consent covers requested scopes);
-        // the consent-screen path creates codes in ui/consent.ts.
-        resource: parseResourceFromUrl(requestUrlWithParams),
-        state: query.state ?? null,
-        expiresAt,
+      return fastify.db.transaction(async (tx) => {
+        const lockedConsent = await fastify.repositories.oauthConsents.findActiveForShare(
+          userId,
+          client.id,
+          tx
+        );
+        if (!canSkipConsent(lockedConsent, client, scopes, resources)) return null;
+        await fastify.repositories.authorizationCodes.create(
+          {
+            code,
+            oauthClientId: client.id,
+            userId,
+            redirectUri,
+            codeChallenge: query.code_challenge,
+            codeChallengeMethod: 'S256',
+            nonce: query.nonce ?? null,
+            // OIDC Core §2 `auth_time`: persist the REAL end-user authentication
+            // time (browser-session establishment, epoch MS) — never the code-mint
+            // time — so /oauth/token can assert it in the ID token and a `max_age`
+            // check evaluates the actual session age. Null on the legacy Bearer
+            // path (no interactive session) → the claim is simply omitted there.
+            authTime: browserSession?.createdAt ?? null,
+            // #237 (ADR-004/ADR-010): bind the authentication's eIDAS LoA to the
+            // code so /oauth/token can assert `acr` in the ID token. NULL on the
+            // password path (`'low'`, no claim) and on the legacy Bearer path (no
+            // interactive session), which is the same "omit the claim" outcome.
+            assuranceLevel: toStoredAssuranceLevel(browserSession?.assuranceLevel),
+            scopes,
+            // RFC 8707: bind the resource indicator(s) to the authorization
+            // code so /oauth/token can set the access token's `aud` claim to
+            // exactly what the client requested. Reached on the consent-skip
+            // path (returning user, prior consent covers the requested scopes at
+            // these resources); the consent-screen path creates codes in
+            // ui/consent.ts. The same validated set the consent was checked
+            // against above.
+            resource: resources,
+            state: query.state ?? null,
+            expiresAt,
+          },
+          tx
+        );
+        return code;
       });
-      return code;
     };
 
     const MAX_CREATE_ATTEMPTS = 3;
     let code: string | null = null;
+    let consentWithdrawn = false;
     for (let attempt = 0; attempt < MAX_CREATE_ATTEMPTS; attempt++) {
       try {
         code = await createCode();
+        consentWithdrawn = code === null;
         break;
       } catch (err) {
         if (!isUniqueConstraintError(err)) throw err;
         if (attempt === MAX_CREATE_ATTEMPTS - 1) throw err;
       }
+    }
+
+    if (consentWithdrawn) {
+      // The consent went away under this request. Fail closed, once — never
+      // by re-running the handler — with the answer a request arriving after
+      // the revocation gets: `access_denied` on the Bearer path (no screen
+      // to show), `consent_required` under `prompt=none`, else the consent
+      // screen (whose POST runs its own step-up gate).
+      await fastify.repositories.auditLogs.create({
+        userId,
+        oauthClientId: client.id,
+        event: 'oauth.authorize.failure',
+        eventType: 'token',
+        success: false,
+        ipAddress: request.ip,
+        userAgent: request.headers['user-agent'] || null,
+        metadata: {
+          error: 'consent_required',
+          reason: 'consent_withdrawn_during_authorization',
+          client_id: query.client_id,
+        },
+      });
+      if (!browserSession) {
+        return sendAuthorizationError(reply, client, redirectUri, {
+          error: 'access_denied',
+          error_description:
+            'no stored consent covers this request; use the browser authorization flow',
+          state: state ?? undefined,
+          iss,
+        });
+      }
+      if (parsePromptMode(query.prompt) === 'none') {
+        return sendAuthorizationError(reply, client, redirectUri, {
+          error: 'consent_required',
+          error_description: 'user interaction is required but prompt=none was requested',
+          state: state ?? undefined,
+          iss,
+        });
+      }
+      const qIndex = requestUrlWithParams.indexOf('?');
+      const returnQuery = qIndex >= 0 ? requestUrlWithParams.slice(qIndex) : '';
+      return reply.redirect(`/ui/consent${returnQuery}`, 302);
     }
     if (!code) throw new Error('Unreachable');
 

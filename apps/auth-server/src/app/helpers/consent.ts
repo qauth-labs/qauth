@@ -17,6 +17,8 @@ export interface OAuthClientLike {
  */
 export interface OAuthConsentLike {
   scopes: string[];
+  /** RFC 8707 resource → the scopes approved for it (`oauth_consents.resource_scopes`). */
+  resourceScopes: Record<string, string[]>;
   revokedAt: number | null;
 }
 
@@ -35,6 +37,32 @@ export function isScopeSubset(requested: string[], granted: string[]): boolean {
     if (!set.has(s)) return false;
   }
   return true;
+}
+
+/**
+ * True iff the stored grant covers `scopes` at every one of `resources` (RFC
+ * 8707). A `resource` becomes the token's `aud`, any absolute URI is accepted,
+ * and nothing else on the authorization-code flow limits it, so the consent
+ * screen is where it is decided: the grant records the approved scopes per
+ * resource, and an approval for one resource server says nothing about
+ * another.
+ *
+ * Without a `resource` the `aud` is not the client's to choose (the operator-
+ * configured audience, else the client_id) and the scopes alone decide.
+ */
+export function consentCovers(
+  consent: OAuthConsentLike,
+  scopes: string[],
+  resources: readonly string[]
+): boolean {
+  if (!isScopeSubset(scopes, consent.scopes)) return false;
+  // `hasOwn` first: an empty scope set is a subset of anything, and must
+  // still not be served for a resource the user never saw.
+  return resources.every(
+    (resource) =>
+      Object.hasOwn(consent.resourceScopes, resource) &&
+      isScopeSubset(scopes, consent.resourceScopes[resource])
+  );
 }
 
 /**
@@ -64,11 +92,14 @@ export function filterRequestedScopes(
 
 /**
  * Whether the consent screen can be skipped for this (user, client) given
- * the existing consent row and the scopes being requested now.
+ * the existing consent row and the scopes and RFC 8707 resources being
+ * requested now.
  *
  * Returns false when:
  *   - no active consent row exists
  *   - the requested scopes are not a subset of the granted ones
+ *   - the scopes were not granted for every requested resource
+ *     (see {@link consentCovers})
  *   - the client is a dynamic-registered client and still inside the
  *     `DYNAMIC_CLIENT_BADGE_DAYS` window (we force re-consent to give the
  *     user another chance to notice the "Newly registered" warning per
@@ -77,12 +108,13 @@ export function filterRequestedScopes(
 export function canSkipConsent(
   consent: OAuthConsentLike | undefined,
   client: OAuthClientLike,
-  requestedScopes: string[]
+  requestedScopes: string[],
+  requestedResources: readonly string[]
 ): boolean {
   if (!consent) return false;
   if (consent.revokedAt !== null) return false;
   if (isDynamicClientWithinBadgeWindow(client)) return false;
-  return isScopeSubset(requestedScopes, consent.scopes);
+  return consentCovers(consent, requestedScopes, requestedResources);
 }
 
 /**
