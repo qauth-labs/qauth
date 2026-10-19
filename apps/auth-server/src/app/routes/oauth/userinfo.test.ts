@@ -26,6 +26,15 @@ vi.mock('../../../config/env', () => ({
   },
 }));
 
+const ISSUER = 'http://localhost:3000';
+const USERINFO_URL = `${ISSUER}/oauth/userinfo`;
+/**
+ * The audience of a token from a client's own code flow with no `resource`:
+ * `resolveAudience` falls back to the client_id. Every fixture that is not
+ * about the audience rule carries it, so it reaches the claim logic.
+ */
+const OWN_AUDIENCE = { clientId: 'client-1', aud: 'client-1' };
+
 interface TestContext {
   handler?: (request: FastifyRequest, reply: FastifyReply) => Promise<unknown>;
   options?: {
@@ -92,6 +101,9 @@ function createFastifyStub() {
       return route;
     },
     requireJwt: vi.fn(),
+    jwtUtils: {
+      getIssuer: vi.fn().mockReturnValue(ISSUER),
+    },
     repositories: {
       users: {
         findById: vi.fn() as unknown as Mock,
@@ -163,6 +175,7 @@ describe('GET /userinfo route', () => {
 
     const request = {
       jwtPayload: {
+        ...OWN_AUDIENCE,
         sub: 'user-1',
         email: 'user@example.com',
         email_verified: true,
@@ -238,7 +251,7 @@ describe('GET /userinfo route', () => {
 
     const request = {
       // `profile` releases the name claim; `email` releases the email claims.
-      jwtPayload: { sub: 'user-3', scope: 'openid profile email' },
+      jwtPayload: { sub: 'user-3', scope: 'openid profile email', ...OWN_AUDIENCE },
       ip: '127.0.0.1',
       headers: { authorization: 'Bearer token', 'user-agent': 'vitest' },
     } as unknown as FastifyRequest;
@@ -275,7 +288,7 @@ describe('GET /userinfo route', () => {
     });
 
     const request = {
-      jwtPayload: { sub: 'user-4', scope: 'openid' },
+      jwtPayload: { sub: 'user-4', scope: 'openid', ...OWN_AUDIENCE },
       ip: '127.0.0.1',
       headers: { authorization: 'Bearer token', 'user-agent': 'vitest' },
     } as unknown as FastifyRequest;
@@ -319,7 +332,7 @@ describe('GET /userinfo route', () => {
     ]);
 
     const request = {
-      jwtPayload: { sub: 'user-5', scope: 'openid email' },
+      jwtPayload: { sub: 'user-5', scope: 'openid email', ...OWN_AUDIENCE },
       ip: '127.0.0.1',
       headers: { authorization: 'Bearer token', 'user-agent': 'vitest' },
     } as unknown as FastifyRequest;
@@ -352,7 +365,7 @@ describe('GET /userinfo route', () => {
     });
 
     const request = {
-      jwtPayload: { sub: 'user-6', scope: 'openid profile' },
+      jwtPayload: { sub: 'user-6', scope: 'openid profile', ...OWN_AUDIENCE },
       ip: '127.0.0.1',
       headers: { authorization: 'Bearer token', 'user-agent': 'vitest' },
     } as unknown as FastifyRequest;
@@ -376,6 +389,7 @@ describe('GET /userinfo route', () => {
 
     const request = {
       jwtPayload: {
+        ...OWN_AUDIENCE,
         sub: 'missing-user',
       },
       ip: '127.0.0.1',
@@ -424,7 +438,7 @@ describe('GET /userinfo route', () => {
     });
 
     const request = {
-      jwtPayload: { sub: 'user-7', scope: 'openid email profile' },
+      jwtPayload: { sub: 'user-7', scope: 'openid email profile', ...OWN_AUDIENCE },
       ip: '127.0.0.1',
       headers: { authorization: 'Bearer token', 'user-agent': 'vitest' },
     } as unknown as FastifyRequest;
@@ -465,6 +479,7 @@ describe('GET /userinfo route', () => {
 
     const request = {
       jwtPayload: {
+        ...OWN_AUDIENCE,
         sub: 'user-2',
         // The `email` scope IS granted, but with no verified attribute BOTH
         // claims are omitted entirely (never null) — OIDC Core §5.3.2.
@@ -684,11 +699,12 @@ describe('POST /userinfo route (OIDC Core §5.3.1)', () => {
   it('accepts the Bearer header and returns the same claims as GET', async () => {
     const { fastify, ctx } = createFastifyStub();
     (fastify as unknown as { jwtUtils: unknown }).jwtUtils = {
+      getIssuer: vi.fn().mockReturnValue(ISSUER),
       extractFromHeader: vi.fn().mockReturnValue('header.token'),
     };
     (fastify.requireJwt as unknown as Mock).mockImplementation(
       async (req: { jwtPayload?: unknown }) => {
-        req.jwtPayload = { sub: 'user-1', scope: 'openid email' };
+        req.jwtPayload = { sub: 'user-1', scope: 'openid email', ...OWN_AUDIENCE };
       }
     );
     withUser(fastify);
@@ -713,6 +729,7 @@ describe('POST /userinfo route (OIDC Core §5.3.1)', () => {
   it('accepts a form-encoded access_token body and returns the same claims (RFC 6750 §2.2)', async () => {
     const { fastify, ctx } = createFastifyStub();
     (fastify as unknown as { jwtUtils: unknown }).jwtUtils = {
+      getIssuer: vi.fn().mockReturnValue(ISSUER),
       // No Authorization header on the body-token path.
       extractFromHeader: vi.fn().mockReturnValue(null),
     };
@@ -721,7 +738,7 @@ describe('POST /userinfo route (OIDC Core §5.3.1)', () => {
         // The body token MUST be normalised to a Bearer credential so the
         // shared verification path handles it identically to the header method.
         expect(req.headers.authorization).toBe('Bearer body.token');
-        req.jwtPayload = { sub: 'user-1', scope: 'openid email' };
+        req.jwtPayload = { sub: 'user-1', scope: 'openid email', ...OWN_AUDIENCE };
       }
     );
     withUser(fastify);
@@ -745,6 +762,7 @@ describe('POST /userinfo route (OIDC Core §5.3.1)', () => {
   it('rejects when neither a header nor a body token is present (missing token → 401)', async () => {
     const { fastify, ctx } = createFastifyStub();
     (fastify as unknown as { jwtUtils: unknown }).jwtUtils = {
+      getIssuer: vi.fn().mockReturnValue(ISSUER),
       extractFromHeader: vi.fn().mockReturnValue(null),
     };
     (fastify.requireJwt as unknown as Mock).mockRejectedValue(
@@ -767,6 +785,7 @@ describe('POST /userinfo route (OIDC Core §5.3.1)', () => {
   it('rejects the token being supplied by more than one method (RFC 6750 §2.2)', async () => {
     const { fastify, ctx } = createFastifyStub();
     (fastify as unknown as { jwtUtils: unknown }).jwtUtils = {
+      getIssuer: vi.fn().mockReturnValue(ISSUER),
       extractFromHeader: vi.fn().mockReturnValue('header.token'),
     };
     await userinfoRoute(fastify);
@@ -787,6 +806,7 @@ describe('POST /userinfo route (OIDC Core §5.3.1)', () => {
   it('does not accept a token from the query string (RFC 6750 §2.3)', async () => {
     const { fastify, ctx } = createFastifyStub();
     (fastify as unknown as { jwtUtils: unknown }).jwtUtils = {
+      getIssuer: vi.fn().mockReturnValue(ISSUER),
       extractFromHeader: vi.fn().mockReturnValue(null),
     };
     await userinfoRoute(fastify);
@@ -807,6 +827,7 @@ describe('POST /userinfo route (OIDC Core §5.3.1)', () => {
   it('ignores a body access_token when the content-type is not form-encoded', async () => {
     const { fastify, ctx } = createFastifyStub();
     (fastify as unknown as { jwtUtils: unknown }).jwtUtils = {
+      getIssuer: vi.fn().mockReturnValue(ISSUER),
       extractFromHeader: vi.fn().mockReturnValue(null),
     };
     // With no valid token source, requireJwt throws the missing-token error.
@@ -830,5 +851,158 @@ describe('POST /userinfo route (OIDC Core §5.3.1)', () => {
     const reply = {} as unknown as FastifyReply;
 
     await expect(ctx.postOptions!.preHandler!(request, reply)).rejects.toThrow(JWTInvalidError);
+  });
+});
+
+/**
+ * The audience rule (NOIEWQ7H): `requireJwt` proves only that this server issued
+ * the token and that it is live. Userinfo must also refuse a token minted for
+ * another resource server, or that server could read the user's claims with
+ * the token it was handed (`docs/security/threat-model.md`, RFC 8707).
+ */
+describe('/userinfo — the token must be addressed to userinfo (RFC 8707)', () => {
+  async function callWith(jwtPayload: Record<string, unknown>) {
+    const { fastify, ctx } = createFastifyStub();
+    (fastify.repositories.users.findById as unknown as Mock).mockResolvedValue({
+      id: 'user-1',
+      enabled: true,
+      firstName: null,
+      lastName: null,
+    });
+    await userinfoRoute(fastify);
+    const handler = ctx.handler;
+    if (!handler) throw new Error('Userinfo handler was not registered');
+    const request = {
+      jwtPayload: { sub: 'user-1', scope: 'openid email', ...jwtPayload },
+      ip: '127.0.0.1',
+      headers: { authorization: 'Bearer token', 'user-agent': 'vitest' },
+    } as unknown as FastifyRequest;
+    const reply = { send: (body: unknown) => body } as unknown as FastifyReply;
+    return { fastify, run: () => handler(request, reply) };
+  }
+
+  function expectRefusedBeforeAnyLookup(fastify: FastifyInstance) {
+    expect(fastify.repositories.users.findById).not.toHaveBeenCalled();
+    expect(fastify.repositories.userAttributes.findVerifiedByUserIdAndKey).not.toHaveBeenCalled();
+    expect(fastify.repositories.auditLogs.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: null,
+        event: 'oauth.userinfo.failure',
+        success: false,
+        metadata: { error: 'Access token audience does not include the userinfo endpoint' },
+      })
+    );
+  }
+
+  it('refuses a token bound by `resource` to another resource server', async () => {
+    const { fastify, run } = await callWith({
+      clientId: 'client-1',
+      aud: 'https://mcp.example.com/',
+    });
+
+    await expect(run()).rejects.toThrow(JWTInvalidError);
+    expectRefusedBeforeAnyLookup(fastify);
+  });
+
+  it('refuses a token minted for another client and held by it (the agent case)', async () => {
+    // A front end's token, minted with `aud` = the agent it hands it to. The
+    // agent is the audience, not userinfo, and the token's client is not the
+    // agent; it must exchange the token instead (RFC 8693).
+    const { fastify, run } = await callWith({
+      clientId: 'workspace-app',
+      aud: ['research-agent'],
+    });
+
+    await expect(run()).rejects.toThrow(JWTInvalidError);
+    expectRefusedBeforeAnyLookup(fastify);
+  });
+
+  it('refuses a token with no audience or no client_id (fail closed)', async () => {
+    const noAud = await callWith({ clientId: 'client-1', aud: undefined });
+    await expect(noAud.run()).rejects.toThrow(JWTInvalidError);
+    expectRefusedBeforeAnyLookup(noAud.fastify);
+
+    const noClient = await callWith({ clientId: undefined, aud: 'client-1' });
+    await expect(noClient.run()).rejects.toThrow(JWTInvalidError);
+    expectRefusedBeforeAnyLookup(noClient.fastify);
+  });
+
+  it("accepts the token from a client's own code flow (`aud` = its client_id, OIDC Core §5.3)", async () => {
+    const { run } = await callWith({ clientId: 'client-1', aud: 'client-1' });
+
+    await expect(run()).resolves.toEqual({
+      sub: 'user-1',
+      email: 'user@example.com',
+      email_verified: true,
+    });
+  });
+
+  it('accepts the developer portal token from /auth/login (`aud` = `client_id` = system)', async () => {
+    const { run } = await callWith({ clientId: 'system', aud: 'system', scope: undefined });
+
+    await expect(run()).resolves.toEqual({ sub: 'user-1' });
+  });
+
+  it('accepts a token whose audience lists the userinfo endpoint beside a resource server', async () => {
+    const { run } = await callWith({
+      clientId: 'client-1',
+      aud: ['https://mcp.example.com/', USERINFO_URL],
+    });
+
+    await expect(run()).resolves.toMatchObject({ sub: 'user-1', email: 'user@example.com' });
+  });
+
+  it('accepts a multi-audience token that includes the client itself', async () => {
+    const { run } = await callWith({
+      clientId: 'client-1',
+      aud: ['client-1', 'https://mcp.example.com/'],
+    });
+
+    await expect(run()).resolves.toMatchObject({ sub: 'user-1' });
+  });
+
+  it('refuses the userinfo URL of another issuer', async () => {
+    const { fastify, run } = await callWith({
+      clientId: 'client-1',
+      aud: 'https://other-issuer.example.com/oauth/userinfo',
+    });
+
+    await expect(run()).rejects.toThrow(JWTInvalidError);
+    expectRefusedBeforeAnyLookup(fastify);
+  });
+
+  it('applies the same rule to POST (shared handler)', async () => {
+    const { fastify, ctx } = createFastifyStub();
+    (fastify as unknown as { jwtUtils: unknown }).jwtUtils = {
+      getIssuer: vi.fn().mockReturnValue(ISSUER),
+      extractFromHeader: vi.fn().mockReturnValue(null),
+    };
+    (fastify.requireJwt as unknown as Mock).mockImplementation(
+      async (req: { jwtPayload?: unknown }) => {
+        req.jwtPayload = {
+          sub: 'user-1',
+          scope: 'openid email',
+          clientId: 'client-1',
+          aud: 'https://mcp.example.com/',
+        };
+      }
+    );
+    await userinfoRoute(fastify);
+
+    const request = {
+      method: 'POST',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: { access_token: 'body.token' },
+      query: {},
+      ip: '127.0.0.1',
+    } as unknown as FastifyRequest;
+    const reply = { send: (body: unknown) => body } as unknown as FastifyReply;
+
+    const preHandler = ctx.postOptions?.preHandler;
+    const postHandler = ctx.postHandler;
+    if (!preHandler || !postHandler) throw new Error('POST /userinfo was not registered');
+    await preHandler(request, reply);
+    await expect(postHandler(request, reply)).rejects.toThrow(JWTInvalidError);
+    expectRefusedBeforeAnyLookup(fastify);
   });
 });

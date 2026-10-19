@@ -116,6 +116,12 @@ A break of any of these is a finding:
   the port of a loopback redirect URI (RFC 8252).
 - A token is bound to its audience (RFC 8707). A token issued for one audience
   is never accepted for another. See [ADR-006](../adr/006-oauth-grants-and-audience.md).
+  QAuth's own `/oauth/userinfo` accepts an access token only when its `aud`
+  contains the token's own `client_id` or the `userinfo_endpoint` URL that
+  discovery publishes. The first
+  is the default audience of a grant that named no `resource` for a client with
+  no configured `audience`. A token whose `aud` names only other resource
+  servers is refused.
 - A refresh token is single-use. Reusing one revokes its whole family.
 - An authorization code is issued only with the user's consent, or when an
   active consent already covers the requested scopes at every requested

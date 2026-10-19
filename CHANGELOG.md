@@ -90,6 +90,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **BREAKING**: `/oauth/userinfo` (GET and POST) now checks the access token's
+  audience, as [`docs/security/threat-model.md`](./docs/security/threat-model.md)
+  promises for every token. A token is accepted only when its `aud` contains
+  the token's own `client_id` or the `userinfo_endpoint` URL that discovery
+  publishes. Every other token gets `401` with
+  `WWW-Authenticate: Bearer error="invalid_token"`. Before, any live token this
+  server issued was accepted, so a resource server could read the claims of
+  the user whose token it had been handed.
+
+  **Who is affected**: an OIDC client that runs the code flow without
+  `resource` gets `aud` = its `client_id` and keeps working, and so does the
+  developer portal's `/auth/login` token. A client that binds its grant to a
+  resource server with RFC 8707 `resource`, or whose operator configured an
+  `audience` for it, and then calls UserInfo with that token is refused.
+  **Action**: read identity from the ID token, or add the UserInfo URL as
+  another `resource` at `/oauth/authorize` (an operator can add it to the
+  client's `audience` instead).
+
 - **BREAKING (ID-JAG mint; only with `ID_JAG_ENABLED`, which is off by
   default)**: an ID-JAG minted through RFC 8693 token exchange now carries only
   scopes that are in the agent client's registered `scopes`. This is the ceiling

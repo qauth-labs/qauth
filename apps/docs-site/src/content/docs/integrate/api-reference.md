@@ -360,7 +360,10 @@ order `wallet > oidc_* > self_reported`). Otherwise both keys are **absent**
 (never `null`). When present, `email_verified` is always `true`. The `POST`
 form accepts the access token either as a Bearer header or as a form-encoded
 `access_token` field (RFC 6750 §2.2). A token whose user has been disabled
-since it was issued gets `401`.
+since it was issued gets `401`. So does a token that is not addressed to
+UserInfo: its `aud` must contain the token's own `client_id` (the default when
+the grant named no `resource`) or the `userinfo_endpoint` URL from discovery.
+See [UserInfo](/integrate/oauth-flow/#userinfo-oidc).
 
 ### `POST /oauth/revoke`
 

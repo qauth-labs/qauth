@@ -643,6 +643,25 @@ curl -s http://localhost:3000/oauth/userinfo \
 > claims are omitted entirely** — treat `email` as optional. When present,
 > `email_verified` is always `true`.
 
+UserInfo accepts an access token only when it is addressed to UserInfo. Its
+`aud` must contain either:
+
+- the token's own `client_id`. A grant that named no `resource`, for a client
+  without an operator-configured `audience`, gets exactly that, so the token
+  from an ordinary OIDC code flow works; or
+- the UserInfo URL that discovery publishes as `userinfo_endpoint`
+  (`http://localhost:3000/oauth/userinfo` here).
+
+A token whose `aud` names only other resource servers is refused with `401`
+and `WWW-Authenticate: Bearer error="invalid_token"`. The token from the code
+flow above, bound by `resource=http://localhost:8088`, is such a token: it is
+for that MCP server, and that server must not be able to read the user's
+claims with it. A client that binds its grant to a resource server can read
+the user's identity from the [ID token](#id-token-claims-oidc) instead, or list
+the UserInfo URL as another `resource` at `/oauth/authorize`. The second gives
+a token both audiences accept, so the resource server can then call UserInfo
+with it too.
+
 ---
 
 ## Dynamic Client Registration (RFC 7591)

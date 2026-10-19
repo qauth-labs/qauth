@@ -152,7 +152,10 @@ const QAUTH = 'http://localhost:3000';
 const CLIENT_ID = 'YOUR_PUBLIC_CLIENT_ID';
 const REDIRECT_URI = window.location.origin + '/callback';
 const SCOPE = 'openid profile email';
-const RESOURCE = 'http://localhost:8088'; // optional RFC 8707 audience binding
+// No RFC 8707 `resource` here: this app calls QAuth's own UserInfo, which
+// accepts a token whose `aud` is the app's client_id — the default when no
+// `resource` is named. A token bound to another resource server is refused
+// there (401). See /integrate/oauth-flow/#userinfo-oidc.
 
 // --- PKCE helpers (RFC 7636) ---
 function base64url(bytes) {
@@ -184,7 +187,6 @@ async function login() {
     code_challenge_method: 'S256',
     scope: SCOPE,
     state,
-    resource: RESOURCE,
   });
   window.location.assign(`${QAUTH}/oauth/authorize?${params}`);
 }
@@ -210,7 +212,6 @@ async function handleCallback() {
       redirect_uri: REDIRECT_URI,
       client_id: CLIENT_ID, // public client: no secret
       code_verifier: verifier,
-      resource: RESOURCE,
     }),
   });
   const tokens = await res.json();
@@ -223,7 +224,7 @@ async function handleCallback() {
   // https://docs.qauth.dev/integrate/oauth-flow/#id-token-claims-oidc
 }
 
-// --- 3. Call a protected API with the access token ---
+// --- 3. Read the user's claims at UserInfo with the access token ---
 async function callApi(accessToken) {
   const res = await fetch(`${QAUTH}/oauth/userinfo`, {
     headers: { Authorization: `Bearer ${accessToken}` },
