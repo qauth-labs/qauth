@@ -20,14 +20,18 @@ vi.mock('../../../config/env', () => ({
 // Failed-login throttling has its own tests (helpers/failed-login.test.ts);
 // here it is a seam, so these tests assert the route wires it in.
 vi.mock('../../helpers/failed-login', () => ({
-  checkLockout: vi.fn().mockResolvedValue({ locked: false }),
-  recordFailedAttempt: vi.fn().mockResolvedValue({ lockedOut: false }),
+  registerLoginAttempt: vi.fn().mockResolvedValue({ locked: false }),
+  recordSuccessfulLogin: vi.fn().mockResolvedValue(undefined),
   resetFailedAttempts: vi.fn().mockResolvedValue(undefined),
 }));
 
 import { env } from '../../../config/env';
 import { hashEmail } from '../../helpers/auth-events';
-import { checkLockout, recordFailedAttempt, resetFailedAttempts } from '../../helpers/failed-login';
+import {
+  recordSuccessfulLogin,
+  registerLoginAttempt,
+  resetFailedAttempts,
+} from '../../helpers/failed-login';
 import loginRoute from './login';
 
 interface TestContext {
@@ -106,6 +110,7 @@ function makeFastify() {
     },
     passwordHasher: {
       verifyPassword: vi.fn(),
+      hashPassword: vi.fn().mockResolvedValue('decoy-hash'),
     },
     providerRegistry: {
       resolve: vi.fn().mockReturnValue(createPasswordProvider()),
@@ -158,6 +163,21 @@ describe('UI /ui/login — CSRF defence', () => {
     expect(rawToken.length).toBeGreaterThan(0);
     expect(state.body as string).toContain('name="csrf_token"');
     expect(state.body as string).toContain(`value="${rawToken}"`);
+  });
+
+  it('GET never renders caller-supplied text in the error banner (01VEX7C3)', async () => {
+    const { fastify, ctx } = makeFastify();
+    await loginRoute(fastify);
+    if (!ctx.get) throw new Error('Handler missing');
+
+    const { reply, state } = createReply();
+    await ctx.get(
+      { query: { error: 'Call +1-800-555-0199 to reactivate.' }, headers: {}, ip: '127.0.0.1' },
+      reply
+    );
+
+    expect(state.body as string).not.toContain('class="error"');
+    expect(state.body as string).not.toContain('+1-800-555-0199');
   });
 
   it('POST rejects (403) when the CSRF token is missing/invalid — no credential check', async () => {
@@ -276,47 +296,60 @@ describe('UI /ui/login — CSRF defence', () => {
     }
 
     beforeEach(() => {
-      vi.mocked(checkLockout).mockClear().mockResolvedValue({ locked: false });
-      vi.mocked(recordFailedAttempt).mockClear();
+      vi.mocked(registerLoginAttempt).mockClear().mockResolvedValue({ locked: false });
+      vi.mocked(recordSuccessfulLogin).mockClear();
       vi.mocked(resetFailedAttempts).mockClear();
       (env as { REQUIRE_VERIFIED_ACCOUNT?: boolean }).REQUIRE_VERIFIED_ACCOUNT = false;
     });
 
     it('refuses a locked-out identifier (429) before any credential check', async () => {
-      vi.mocked(checkLockout).mockResolvedValue({ locked: true, retryAfterSeconds: 120 });
+      vi.mocked(registerLoginAttempt).mockResolvedValue({ locked: true, retryAfterSeconds: 120 });
 
       const { fastify, state } = await postLogin({ verifies: true });
 
-      expect(checkLockout).toHaveBeenCalledWith(undefined, LOCKOUT_IDS);
+      expect(registerLoginAttempt).toHaveBeenCalledWith(undefined, LOCKOUT_IDS);
       expect(state.statusCode).toBe(429);
       expect(state.headers['Retry-After']).toBe('120');
       expect(fastify.passwordHasher.verifyPassword).not.toHaveBeenCalled();
       expect(fastify.sessionUtils.setSession).not.toHaveBeenCalled();
     });
 
-    it('records a failed attempt on a wrong password, with the API login identifiers', async () => {
-      const { state } = await postLogin({ verifies: false });
+    it('counts the attempt before the password is verified, with the API login identifiers', async () => {
+      const { fastify, state } = await postLogin({ verifies: false });
 
       expect(state.statusCode).toBe(401);
-      expect(recordFailedAttempt).toHaveBeenCalledWith(undefined, LOCKOUT_IDS);
+      expect(registerLoginAttempt).toHaveBeenCalledWith(undefined, LOCKOUT_IDS);
+      // Counted on the way in, not after argon2 has returned, so concurrent
+      // guesses cannot outrun the counter (ROIQJSAT); a failure leaves it counted.
+      expect(vi.mocked(registerLoginAttempt).mock.invocationCallOrder[0]).toBeLessThan(
+        (fastify.passwordHasher.verifyPassword as unknown as Mock).mock.invocationCallOrder[0]
+      );
+      expect(recordSuccessfulLogin).not.toHaveBeenCalled();
       expect(resetFailedAttempts).not.toHaveBeenCalled();
     });
 
     it('keys the ip: identifier on the /64 of an IPv6 client', async () => {
       await postLogin({ verifies: false, ip: '2001:db8:1:2:aaaa:bbbb:cccc:7' });
 
-      expect(recordFailedAttempt).toHaveBeenCalledWith(undefined, [
+      expect(registerLoginAttempt).toHaveBeenCalledWith(undefined, [
         LOCKOUT_IDS[0],
         'ip:2001:db8:1:2::',
       ]);
     });
 
-    it('clears failed-login state on success', async () => {
+    it('clears the failed-login state of the email on success, not of the source address', async () => {
+      const attempt = { locked: false, counted: LOCKOUT_IDS, armed: [] };
+      vi.mocked(registerLoginAttempt).mockResolvedValue(attempt);
+
       const { state } = await postLogin({ verifies: true });
 
       expect(state.statusCode).toBe(302);
-      expect(resetFailedAttempts).toHaveBeenCalledWith(undefined, LOCKOUT_IDS);
-      expect(recordFailedAttempt).not.toHaveBeenCalled();
+      // Anyone can register an account: its login must not wipe the failures
+      // counted against the address it comes from (GPU4YL6X).
+      expect(recordSuccessfulLogin).toHaveBeenCalledExactlyOnceWith(undefined, attempt, [
+        LOCKOUT_IDS[0],
+      ]);
+      expect(resetFailedAttempts).not.toHaveBeenCalled();
     });
 
     it('refuses an unverified credential (403, no session) when REQUIRE_VERIFIED_ACCOUNT is on', async () => {
@@ -326,7 +359,10 @@ describe('UI /ui/login — CSRF defence', () => {
 
       expect(state.statusCode).toBe(403);
       expect(fastify.sessionUtils.setSession).not.toHaveBeenCalled();
-      expect(recordFailedAttempt).toHaveBeenCalledWith(undefined, LOCKOUT_IDS);
+      // Stays counted as a failed attempt.
+      expect(registerLoginAttempt).toHaveBeenCalledWith(undefined, LOCKOUT_IDS);
+      expect(recordSuccessfulLogin).not.toHaveBeenCalled();
+      expect(resetFailedAttempts).not.toHaveBeenCalled();
     });
 
     it('still signs in an unverified credential when REQUIRE_VERIFIED_ACCOUNT is off (default)', async () => {
@@ -335,6 +371,40 @@ describe('UI /ui/login — CSRF defence', () => {
       expect(state.statusCode).toBe(302);
       expect(fastify.sessionUtils.setSession).toHaveBeenCalledOnce();
     });
+  });
+
+  it('POST spends one decoy argon2 verification on an unknown email, like a wrong password', async () => {
+    // CXMKR1RL: a miss that skips argon2 answers on time behind a backlog of
+    // argon2 jobs while a hit waits in it, so latency told them apart.
+    const { fastify, ctx } = makeFastify();
+    await loginRoute(fastify);
+    if (!ctx.get || !ctx.post) throw new Error('Handlers missing');
+
+    const getReply = createReply();
+    await ctx.get({ query: {}, headers: {}, ip: '127.0.0.1' }, getReply.reply);
+    const cookieValue = csrfCookieValue(getReply.state.setCookies);
+    const rawToken = cookieValue.split('.')[0];
+
+    (
+      fastify.repositories.userCredentials.findByRealmProviderSub as unknown as Mock
+    ).mockResolvedValue(undefined);
+    (fastify.passwordHasher.verifyPassword as unknown as Mock).mockResolvedValue(false);
+
+    const { reply, state } = createReply();
+    await ctx.post(
+      {
+        body: { email: 'nobody@example.com', password: 'guess', csrf_token: rawToken },
+        headers: { cookie: `__Host-qauth_login_csrf=${cookieValue}` },
+        ip: '127.0.0.1',
+      },
+      reply
+    );
+
+    expect(state.statusCode).toBe(401);
+    expect(fastify.passwordHasher.verifyPassword).toHaveBeenCalledExactlyOnceWith(
+      'decoy-hash',
+      'guess'
+    );
   });
 
   it('POST rejects a disabled user (401 re-render) even with valid credentials', async () => {

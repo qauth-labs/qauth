@@ -104,8 +104,17 @@ is locked out for `FAILED_LOGIN_LOCKOUT_DURATION` seconds; further login attempt
 return `429 Too Many Requests` with a `Retry-After` header before any credential
 verification.
 
+- An attempt is counted **before** its password is verified, so guesses sent
+  concurrently cannot outrun the counter. A login that ends in a server error
+  therefore stays counted too. While the attempt that reaches the limit is
+  being verified, other attempts for the same identifier are refused.
 - The attempt counter has a TTL equal to the window, so it **decays** naturally.
-- A **successful** login clears both the counter and any lockout.
+- A **successful** login clears both the counter and any lockout of its email.
+  The source address's counter keeps the failures other attempts left on it
+  until they decay; the success gives back only its own count. Users behind
+  one shared address (an office NAT, or one IPv6 `/64`) therefore share its
+  `FAILED_LOGIN_MAX_ATTEMPTS` failures per window, and signing in does not
+  clear them.
 - All cache operations are **best-effort / fail-open**: if Redis is unavailable,
   logins are never blocked by the tracker — though an instance-wide Redis outage
   still fails the request earlier, at the app-wide rate-limiter's `onRequest`

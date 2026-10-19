@@ -10,7 +10,7 @@ import { EMAIL_MAX_LENGTH, MIN_RESPONSE_TIME_MS } from '../../constants';
 import { hashEmail } from '../../helpers/auth-events';
 import { clientAddressKey } from '../../helpers/client-address';
 import { verifyPasswordCredential } from '../../helpers/credential-auth';
-import { checkLockout, recordFailedAttempt, resetFailedAttempts } from '../../helpers/failed-login';
+import { recordSuccessfulLogin, registerLoginAttempt } from '../../helpers/failed-login';
 import { html, render } from '../../helpers/html';
 import { getOrCreateDefaultRealm } from '../../helpers/realm';
 import { isSafeReturnTo } from '../../helpers/return-to';
@@ -214,14 +214,15 @@ export default async function (fastify: FastifyInstance) {
         description:
           'Renders the session-cookie login page. `return_to` is a relative path to redirect to after a successful sign-in. Issue #150.',
         tags: ['UI'],
+        // No `error` parameter: the page never shows caller-supplied text.
+        // The server's own refusals are fixed strings rendered by the POST.
         querystring: z.object({
           return_to: z.string().optional(),
-          error: z.string().optional(),
         }),
       },
     },
     async (request, reply) => {
-      const q = request.query as { return_to?: string; error?: string };
+      const q = request.query as { return_to?: string };
       const returnTo = isSafeReturnTo(q.return_to) ? q.return_to : '/';
 
       // Login CSRF defence (signed double-submit). Reuse an already-valid CSRF
@@ -240,7 +241,6 @@ export default async function (fastify: FastifyInstance) {
           returnTo,
           cspNonce: reply.cspNonce.style,
           csrfToken,
-          error: q.error,
           walletLoginOffered: resolveWalletLoginCapability(fastify) !== undefined,
         })
       );
@@ -307,10 +307,8 @@ export default async function (fastify: FastifyInstance) {
       // Failed-login throttling (#115), with the SAME identifiers as
       // POST /auth/login so both front doors share one counter: guesses spread
       // across them add up, and an account locked on one is locked on both.
-      const lockoutIdentifiers = [
-        `email:${hashEmail(normalizedEmail)}`,
-        `ip:${clientAddressKey(request)}`,
-      ];
+      const emailIdentifier = `email:${hashEmail(normalizedEmail)}`;
+      const lockoutIdentifiers = [emailIdentifier, `ip:${clientAddressKey(request)}`];
 
       const renderRefusal = (statusCode: number, error: string) => {
         reply.header('Content-Type', 'text/html; charset=utf-8');
@@ -330,7 +328,9 @@ export default async function (fastify: FastifyInstance) {
         );
       };
 
-      const lockout = await checkLockout(fastify.redis, lockoutIdentifiers);
+      // Refuse a locked-out identifier, else count the attempt before the
+      // password is looked at (#115), exactly as POST /auth/login does.
+      const lockout = await registerLoginAttempt(fastify.redis, lockoutIdentifiers);
       if (lockout.locked) {
         await ensureMinimumResponseTime(startTime, MIN_RESPONSE_TIME_MS.LOGIN);
         await fastify.repositories.auditLogs.create({
@@ -373,7 +373,6 @@ export default async function (fastify: FastifyInstance) {
       }
 
       if (check.status !== 'ok' || !user || !user.enabled) {
-        await recordFailedAttempt(fastify.redis, lockoutIdentifiers);
         await ensureMinimumResponseTime(startTime, MIN_RESPONSE_TIME_MS.LOGIN);
         await fastify.repositories.auditLogs.create({
           userId: null,
@@ -391,9 +390,8 @@ export default async function (fastify: FastifyInstance) {
       // Verified-account gate (F-08), identical to POST /auth/login: with
       // `REQUIRE_VERIFIED_ACCOUNT=true` an unverified credential gets no session,
       // so it cannot complete an OAuth/OIDC flow through the hosted UI either.
-      // Counted as a failed attempt, as on the API route.
+      // Stays counted as a failed attempt, as on the API route.
       if (!check.emailVerified && env.REQUIRE_VERIFIED_ACCOUNT) {
-        await recordFailedAttempt(fastify.redis, lockoutIdentifiers);
         await ensureMinimumResponseTime(startTime, MIN_RESPONSE_TIME_MS.LOGIN);
         await fastify.repositories.auditLogs.create({
           userId: user.id,
@@ -408,7 +406,10 @@ export default async function (fastify: FastifyInstance) {
         return renderRefusal(403, 'Verify your email address before signing in. Check your inbox.');
       }
 
-      await resetFailedAttempts(fastify.redis, lockoutIdentifiers);
+      // As on POST /auth/login: the account's state is cleared; the source
+      // address only gets back this attempt's own count, not the failures
+      // other attempts left on it.
+      await recordSuccessfulLogin(fastify.redis, lockout, [emailIdentifier]);
 
       // Session-fixation defense: always mint a fresh session id on a
       // successful credential check, even if the browser already had one.

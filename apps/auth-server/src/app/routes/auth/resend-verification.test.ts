@@ -24,11 +24,12 @@ vi.mock('../../constants', async (importOriginal) => {
   };
 });
 
-import { SUCCESS_MESSAGES } from '../../constants';
+import { REDIS_KEYS, SUCCESS_MESSAGES } from '../../constants';
 import resendRoute from './resend-verification';
 
 interface TestContext {
   handler?: (request: any) => Promise<unknown>;
+  onClose?: () => Promise<unknown>;
 }
 
 function credentialFixture(overrides: Record<string, unknown> = {}) {
@@ -52,6 +53,10 @@ function createFastifyStub() {
         return fastify;
       },
     }),
+    addHook: (name: string, hook: () => Promise<unknown>) => {
+      if (name === 'onClose') ctx.onClose = hook;
+      return fastify;
+    },
     repositories: {
       realms: {
         findByName: vi.fn().mockResolvedValue({ id: 'realm-1', name: 'master', enabled: true }),
@@ -88,6 +93,28 @@ function createFastifyStub() {
 }
 
 const request = { body: { email: 'user@example.com' }, ip: '127.0.0.1', headers: {} };
+
+/**
+ * In-memory Redis with the commands the route uses (incr, expire, get, set
+ * with EX and optional NX), for the tests that need real interleaving.
+ */
+function createMemoryRedis() {
+  const store = new Map<string, string>();
+  return {
+    incr: vi.fn(async (key: string) => {
+      const next = Number(store.get(key) ?? '0') + 1;
+      store.set(key, String(next));
+      return next;
+    }),
+    expire: vi.fn(async () => 1),
+    get: vi.fn(async (key: string) => store.get(key) ?? null),
+    set: vi.fn(async (key: string, value: string, _ex: 'EX', _seconds: number, nx?: 'NX') => {
+      if (nx === 'NX' && store.has(key)) return null;
+      store.set(key, value);
+      return 'OK';
+    }),
+  };
+}
 
 describe('POST /auth/resend-verification', () => {
   it('re-sends for an unverified credential: user_id-keyed invalidation + dual-id token', async () => {
@@ -184,6 +211,151 @@ describe('POST /auth/resend-verification', () => {
 
     await expect(ctx.handler(request)).rejects.toThrow(TooManyRequestsError);
     expect(fastify.repositories.userCredentials.findByRealmProviderSub).not.toHaveBeenCalled();
+  });
+
+  describe('delivery runs off the request path (KCEQXFCA)', () => {
+    /** A send the test settles by hand, like a slow mail provider. */
+    function deferredSend(fastify: FastifyInstance) {
+      const control: { resolve?: () => void; reject?: (error: Error) => void } = {};
+      (fastify.emailService.sendVerificationEmail as unknown as Mock).mockImplementation(
+        () =>
+          new Promise<void>((resolve, reject) => {
+            control.resolve = resolve;
+            control.reject = reject;
+          })
+      );
+      return control;
+    }
+
+    /** Settles to 'pending' if `promise` has not settled within a few ticks. */
+    async function settledSoon(promise: Promise<unknown>): Promise<string> {
+      return Promise.race([
+        promise.then(
+          () => 'settled',
+          () => 'settled'
+        ),
+        new Promise<string>((resolve) => setTimeout(() => resolve('pending'), 50)),
+      ]);
+    }
+
+    it('answers a registered, unverified address without waiting for the mail provider', async () => {
+      const { fastify, ctx } = createFastifyStub();
+      await resendRoute(fastify);
+      if (!ctx.handler) throw new Error('Handler missing');
+      (
+        fastify.repositories.userCredentials.findByRealmProviderSub as unknown as Mock
+      ).mockResolvedValue(credentialFixture());
+      const send = deferredSend(fastify);
+
+      const answer = ctx.handler(request);
+
+      // A slow delivery must not show in the response time: only this branch
+      // sends, so waiting for it told registered from unknown addresses.
+      expect(await settledSoon(answer)).toBe('settled');
+      await expect(answer).resolves.toEqual({ message: SUCCESS_MESSAGES.RESEND_VERIFICATION });
+      expect(fastify.emailService.sendVerificationEmail).toHaveBeenCalledWith(
+        'user@example.com',
+        'plain'
+      );
+      send.resolve?.();
+    });
+
+    it('waits on server close for a delivery still in flight', async () => {
+      const { fastify, ctx } = createFastifyStub();
+      await resendRoute(fastify);
+      if (!ctx.handler) throw new Error('Handler missing');
+      (
+        fastify.repositories.userCredentials.findByRealmProviderSub as unknown as Mock
+      ).mockResolvedValue(credentialFixture());
+      const send = deferredSend(fastify);
+
+      await ctx.handler(request);
+      if (!ctx.onClose) throw new Error('No onClose hook registered');
+      const closing = ctx.onClose();
+
+      // The mail is not dropped on shutdown: close waits for it.
+      expect(await settledSoon(closing)).toBe('pending');
+      send.resolve?.();
+      await expect(closing).resolves.toBeUndefined();
+    });
+
+    it('still logs a failed delivery, and close does not fail on it', async () => {
+      const { fastify, ctx } = createFastifyStub();
+      await resendRoute(fastify);
+      if (!ctx.handler) throw new Error('Handler missing');
+      (
+        fastify.repositories.userCredentials.findByRealmProviderSub as unknown as Mock
+      ).mockResolvedValue(credentialFixture());
+      const send = deferredSend(fastify);
+
+      await expect(ctx.handler(request)).resolves.toEqual({
+        message: SUCCESS_MESSAGES.RESEND_VERIFICATION,
+      });
+      if (!ctx.onClose) throw new Error('No onClose hook registered');
+      const closing = ctx.onClose();
+      send.reject?.(new Error('smtp down'));
+
+      await expect(closing).resolves.toBeUndefined();
+      expect(fastify.log.error).toHaveBeenCalledWith(
+        expect.any(Error),
+        'Failed to send verification email'
+      );
+    });
+  });
+
+  it('claims the minimum interval atomically: of requests sent together only one sends (F2FJ182D)', async () => {
+    const { fastify, ctx } = createFastifyStub();
+    (fastify as unknown as { redis: unknown }).redis = createMemoryRedis();
+    await resendRoute(fastify);
+    if (!ctx.handler) throw new Error('Handler missing');
+
+    (
+      fastify.repositories.userCredentials.findByRealmProviderSub as unknown as Mock
+    ).mockResolvedValue(credentialFixture());
+    // A real provider takes a while to deliver.
+    (fastify.emailService.sendVerificationEmail as unknown as Mock).mockImplementation(
+      () => new Promise((resolve) => setTimeout(resolve, 5))
+    );
+
+    const results = await Promise.allSettled([
+      ctx.handler(request),
+      ctx.handler(request),
+      ctx.handler(request),
+    ]);
+
+    expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
+    for (const result of results.filter((r) => r.status === 'rejected')) {
+      expect((result as PromiseRejectedResult).reason).toBeInstanceOf(TooManyRequestsError);
+    }
+    expect(fastify.emailService.sendVerificationEmail).toHaveBeenCalledTimes(1);
+  });
+
+  it('claims the minimum interval before the credential lookup, for every address alike (F2FJ182D)', async () => {
+    const { fastify, ctx } = createFastifyStub();
+    await resendRoute(fastify);
+    if (!ctx.handler) throw new Error('Handler missing');
+
+    const lookup = fastify.repositories.userCredentials.findByRealmProviderSub as unknown as Mock;
+    const set = fastify.redis.set as unknown as Mock;
+
+    // Registered, unverified address ...
+    lookup.mockResolvedValue(credentialFixture());
+    await ctx.handler(request);
+    // ... and an unknown one: the marker is written once, before the lookup,
+    // in both cases, so a second request cannot tell them apart by status.
+    lookup.mockResolvedValue(undefined);
+    await ctx.handler(request);
+
+    expect(set).toHaveBeenCalledTimes(2);
+    expect(set).toHaveBeenCalledWith(
+      REDIS_KEYS.LAST_EMAIL_SENT('user@example.com'),
+      expect.any(String),
+      'EX',
+      60,
+      'NX'
+    );
+    expect(set.mock.invocationCallOrder[0]).toBeLessThan(lookup.mock.invocationCallOrder[0]);
+    expect(set.mock.invocationCallOrder[1]).toBeLessThan(lookup.mock.invocationCallOrder[1]);
   });
 
   it('keys its Redis counters on a digest of the address, never the address itself', async () => {

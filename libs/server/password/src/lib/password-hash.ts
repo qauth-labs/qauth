@@ -69,6 +69,49 @@ export const DEFAULT_PASSWORD_CONFIG: PasswordHashConfig = {
 };
 
 /**
+ * Upper bound on Argon2 jobs handed to `@node-rs/argon2` at once.
+ *
+ * Every job occupies one libuv thread-pool thread for the whole derivation
+ * (~100 ms at the default cost). That pool, 4 threads unless
+ * `UV_THREADPOOL_SIZE` says otherwise, is shared with WebCrypto, so with every
+ * JWT signature and verification, and with pg's SCRAM handshake. Left
+ * unbounded, a burst of client secrets or passwords that stays inside the
+ * per-route rate limits fills the pool and stalls every token check on the
+ * server for seconds. Half the pool is kept free for everything else; the
+ * surplus waits in a FIFO queue here instead of in libuv's.
+ *
+ * The limit is process-wide, not per hasher, because the pool is. It reads
+ * `UV_THREADPOOL_SIZE` directly because that is Node's own setting, which
+ * libuv reads at startup, not application configuration.
+ */
+const LIBUV_THREADPOOL_SIZE = Number(process.env['UV_THREADPOOL_SIZE']) || 4;
+const MAX_CONCURRENT_ARGON2_JOBS = Math.max(1, Math.floor(LIBUV_THREADPOOL_SIZE / 2));
+let runningArgon2Jobs = 0;
+const waitingArgon2Jobs: Array<() => void> = [];
+
+/**
+ * Run `job` once an Argon2 slot is free. Slots are handed over in FIFO order.
+ */
+async function withArgon2Slot<T>(job: () => Promise<T>): Promise<T> {
+  if (runningArgon2Jobs < MAX_CONCURRENT_ARGON2_JOBS) {
+    runningArgon2Jobs++;
+  } else {
+    // The finishing job hands its slot straight over, so the count stays put.
+    await new Promise<void>((resolve) => waitingArgon2Jobs.push(resolve));
+  }
+  try {
+    return await job();
+  } finally {
+    const next = waitingArgon2Jobs.shift();
+    if (next) {
+      next();
+    } else {
+      runningArgon2Jobs--;
+    }
+  }
+}
+
+/**
  * Create a password hasher with the given configuration
  *
  * @param config - Optional partial password hashing configuration. Missing values will use defaults.
@@ -103,11 +146,13 @@ export function createPasswordHasher(config?: Partial<PasswordHashConfig>): Pass
   return {
     async hashPassword(password: string): Promise<string> {
       try {
-        return await hash(password, {
-          memoryCost: validatedConfig.memoryCost,
-          timeCost: validatedConfig.timeCost,
-          parallelism: validatedConfig.parallelism,
-        });
+        return await withArgon2Slot(() =>
+          hash(password, {
+            memoryCost: validatedConfig.memoryCost,
+            timeCost: validatedConfig.timeCost,
+            parallelism: validatedConfig.parallelism,
+          })
+        );
       } catch (error) {
         throw new Error(
           `Failed to hash password: ${error instanceof Error ? error.message : 'Unknown error'}`,
@@ -118,7 +163,7 @@ export function createPasswordHasher(config?: Partial<PasswordHashConfig>): Pass
 
     async verifyPassword(hashedPassword: string, plainPassword: string): Promise<boolean> {
       try {
-        return await verify(hashedPassword, plainPassword);
+        return await withArgon2Slot(() => verify(hashedPassword, plainPassword));
       } catch {
         // Return false for all errors (incorrect password, invalid hash format, etc.)
         return false;

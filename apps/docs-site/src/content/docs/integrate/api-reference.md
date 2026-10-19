@@ -148,9 +148,11 @@ Create a user account. A verification email is sent (the `mock` provider logs it
 ```
 
 Errors: `400` (validation / weak password), `409` (email already registered),
-`429` (rate limited). The `409` is deliberately generic — it carries neither the
-database constraint name nor anything else that would confirm the address is
-already registered.
+`429` (rate limited). The `409` body is generic and carries no database
+constraint name, but the status itself tells the caller that the address already
+has a password account in the realm. This endpoint therefore reveals whether an
+address is registered.
+[ADR-017](/reference/records/adr/017-first-party-login/) removes it before 1.0.
 
 ### `POST /auth/login`
 
@@ -200,7 +202,9 @@ for the password.
 
 Errors: `400` (malformed token), `404`/`400` (unknown or expired token), `401`
 `INVALID_CREDENTIALS` (wrong password; the token is not consumed, so the request
-can be retried).
+can be retried), `429` (rate limited, or the account is locked out: wrong
+passwords here count toward the same failed-login lockout as `POST /auth/login`,
+and the `429` carries `Retry-After`).
 
 ### `POST /auth/resend-verification`
 

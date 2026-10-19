@@ -13,7 +13,7 @@ every integrator meets all three, even one that never renders its own login UI.
 
 ## `/ui/login`
 
-`GET /ui/login?return_to=<path>&error=<message>` renders an email/password
+`GET /ui/login?return_to=<path>` renders an email/password
 form. `return_to` must be a relative, same-origin path — `isSafeReturnTo`
 (`apps/auth-server/src/app/helpers/return-to.ts:50`) rejects absolute URLs,
 `//host` protocol-relative values, and the `/\host` backslash variant a
