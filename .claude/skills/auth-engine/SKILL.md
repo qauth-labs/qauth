@@ -92,8 +92,9 @@ loads this skill (ADR-007:319-327).
 - T4 (OID4VP 1.0 wallet federation): the sign-in flow is **merged and flag-gated** behind
   `WALLET_FEDERATION_ENABLED` (default off), covering the OID4VP verifier, SD-JWT VC
   validation, key attestations, status-list revocation, the claims pipeline and the browser
-  flow, with an E2E suite over first-time enrolment, returning login, account linking and
-  `acr`. Validated only on the `oid4vp-1.0-base` profile against a mock wallet; the
+  flow, with an E2E suite over account linking, returning login, the refusal to create an
+  account at wallet sign-in (ADR-009 §1, amended 2026-10-19) and `acr`. Validated only on
+  the `oid4vp-1.0-base` profile against a mock wallet; the
   `haip-1.0` profile and real-wallet interop are still open (#377, #376). The mechanism is
   **OID4VP 1.0**, not SIOPv2 — HAIP 1.0 §5 mandates `response_type=vp_token`,
   which excludes the Self-Issued ID Token. Do not implement SIOPv2. See
