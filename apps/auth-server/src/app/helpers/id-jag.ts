@@ -610,9 +610,9 @@ function idJagSigningKey(): Promise<SigningKey> {
  *    RECOMMENDS one for subject resolution and JIT provisioning at the target.
  *    `iss` + `sub` is already a complete, unambiguous subject identifier, and
  *    emitting an address would release PII into a foreign trust domain on the
- *    strength of no scope decision at all. QAuth's own ID token releases email
- *    only under the `email` scope (#259); an assertion crossing a trust boundary
- *    should not be laxer than that.
+ *    strength of no scope decision at all. QAuth's own ID and access tokens
+ *    release email only under the `email` scope (#259, ANT-2026-2O0T72HY); an
+ *    assertion crossing a trust boundary should not be laxer than that.
  *  - **no `act`** delegation chain. It is not part of the ID-JAG claim set, and
  *    a foreign AS that does not understand it would either ignore it (making it
  *    pointless) or reject the assertion (making it harmful). The delegation

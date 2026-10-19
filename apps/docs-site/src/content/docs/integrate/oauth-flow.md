@@ -255,6 +255,14 @@ Beyond the standard `iss` / `sub` / `aud` / `exp` / `iat`, `id_token` carries
 token and [UserInfo](#userinfo-oidc) use, so all three never disagree within
 one issuance.
 
+The **access token** follows the same `email` rule on every grant
+(`authorization_code`, `refresh_token`, token exchange, `jwt-bearer`): it
+carries `email`/`email_verified` only when its own `scope` includes `email`
+and a verified address exists. A resource server that needs the address has
+the client request `email`, which puts it on the consent screen. A refresh or
+an exchange that narrows `email` out of the scope drops the claims, and
+`client_credentials` and the first-party `/auth/login` token never carry them.
+
 ### 4. Call a protected resource
 
 ```bash

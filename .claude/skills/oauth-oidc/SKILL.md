@@ -73,11 +73,14 @@ against this list.
 
 ## Email Claim Behaviour
 
-The `email` claim in ID tokens and userinfo responses:
+The `email` claim in ID tokens, access tokens and userinfo responses:
 
 - Released only when the `email` scope was granted — userinfo since #229,
-  ID tokens since #259; without the scope the claims are omitted even for a
-  verified email (access-token convenience claims are not scope-gated)
+  ID tokens since #259, access tokens on every grant since 2026-10-19
+  (ANT-2026-2O0T72HY); without the scope the claims are omitted even for a
+  verified email. Every site calls `resolveEmailClaimsForScopes`
+  (`apps/auth-server/src/app/helpers/email-claims.ts`); the scope-less
+  `/auth/login` token carries none
 - Present only when `user_attributes` has a verified email (`verified=true`)
 - Absent (not null) when no verified email exists
 - Sourced from the highest-trust attribute source (`wallet > oidc_* > self_reported`);

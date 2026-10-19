@@ -56,7 +56,8 @@ belongs only in the provider registry, not in service routes.
 
 - `sub`: always `users.id` (UUID) — never email, never `external_sub`
 - `email`: from `user_attributes WHERE attr_key='email' AND verified=true`, highest-trust source
-  OMIT entirely if no verified email — do not set null
+  OMIT entirely if no verified email — do not set null. Released in ID tokens, access tokens
+  and userinfo only under the `email` scope (`resolveEmailClaimsForScopes`)
 - `acr`: eIDAS assurance level from `VerifiedIdentity.assuranceLevel`
   Omit for password credentials (`assuranceLevel: 'low'` → no `acr` claim)
 - All other claims: from `user_attributes`, same trust-ordered resolution

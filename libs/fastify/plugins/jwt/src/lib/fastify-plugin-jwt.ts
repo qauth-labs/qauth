@@ -63,11 +63,12 @@ declare module 'fastify' {
  * });
  *
  * // Use in routes. email/email_verified MUST come from the trust-ordered
- * // resolver (resolveEmailClaims, ADR-002/#229) — never from the users row;
- * // both are omitted entirely when the user has no verified email.
+ * // resolver (ADR-002/#229) — never from the users row — and only under the
+ * // `email` scope; both are omitted entirely without it, or when the user has
+ * // no verified email.
  * const token = await fastify.jwtUtils.signAccessToken({
  *   sub: user.id,
- *   ...(await resolveEmailClaims(fastify, user.id)),
+ *   ...(await resolveEmailClaimsForScopes(fastify, user.id, grantedScopes)),
  * });
  * ```
  */

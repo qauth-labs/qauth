@@ -90,6 +90,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **BREAKING**: access tokens now carry `email`/`email_verified` only when the
+  granted scope includes `email`, the rule ID tokens (#259) and userinfo
+  (#229) already follow. This holds on every grant that mints a user access
+  token: `authorization_code`, `refresh_token`, RFC 8693 token exchange and
+  the RFC 7523 `jwt-bearer` grant. A refresh or an exchange that narrows
+  `email` out of the scope drops the claims. The first-party `/auth/login`
+  token is granted no scope and no longer carries them. `client_credentials`
+  never did. Before, every user access token carried the user's verified
+  address whatever was granted. The client could read it from the JWT in the
+  same response whose ID token withheld it, so the `email` scope and the
+  consent screen line for it controlled nothing (ANT-2026-2O0T72HY).
+
+  **Who is affected**: a resource server that reads `email` from access tokens
+  issued without the `email` scope. **Action**: have the client request the
+  `email` scope, which shows on the consent screen. ID tokens and userinfo
+  behave as before.
+
 - **BREAKING**: `/oauth/userinfo` (GET and POST) now checks the access token's
   audience, as [`docs/security/threat-model.md`](./docs/security/threat-model.md)
   promises for every token. A token is accepted only when its `aud` contains
@@ -128,7 +145,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (OIDC Core §5.4 data minimization). Clients requesting only `openid` no
   longer receive the user's email in the ID token — request the `email`
   scope. Access-token convenience claims and userinfo behavior are
-  unchanged. ([#259])
+  unchanged. ([#259]) _Superseded in part on 2026-10-19: access tokens now
+  follow the same `email` scope rule (see the access-token entry above)._
 
 [#259]: https://github.com/qauth-labs/qauth/issues/259
 

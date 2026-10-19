@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, type Mock, vi } from 'vite
 // subject; here it is a lever.
 vi.mock('./wallet-verification', () => ({ isWalletAttributeIssuerStillTrusted: vi.fn() }));
 
-import { resolveEmailClaims } from './email-claims';
+import { resolveEmailClaims, resolveEmailClaimsForScopes } from './email-claims';
 import { isWalletAttributeIssuerStillTrusted } from './wallet-verification';
 
 const PROVENANCE = { issuer: 'https://issuer.example.com', issuer_key_resolution: 'x5c' };
@@ -126,6 +126,34 @@ describe('resolveEmailClaims', () => {
       );
 
       expect(isWalletAttributeIssuerStillTrusted).not.toHaveBeenCalled();
+    });
+  });
+});
+
+describe('resolveEmailClaimsForScopes — release only under the email scope (ANT-2026-2O0T72HY)', () => {
+  beforeEach(() => {
+    (isWalletAttributeIssuerStillTrusted as unknown as Mock).mockReset().mockResolvedValue(true);
+  });
+
+  it('releases nothing, and looks nothing up, without the email scope', async () => {
+    const fastify = fastifyStub([attrRow('self_reported', 'self@example.com')]);
+
+    for (const scopes of [[], ['openid'], ['openid', 'profile', 'offline_access'], ['emails']]) {
+      expect(await resolveEmailClaimsForScopes(fastify, 'user-1', scopes)).toEqual({});
+    }
+    expect(fastify.repositories.userAttributes.findVerifiedByUserIdAndKey).not.toHaveBeenCalled();
+  });
+
+  it('resolves the trust-ordered pair under the email scope, from an array or a set', async () => {
+    const fastify = fastifyStub([attrRow('self_reported', 'self@example.com')]);
+
+    expect(await resolveEmailClaimsForScopes(fastify, 'user-1', ['openid', 'email'])).toEqual({
+      email: 'self@example.com',
+      email_verified: true,
+    });
+    expect(await resolveEmailClaimsForScopes(fastify, 'user-1', new Set(['email']))).toEqual({
+      email: 'self@example.com',
+      email_verified: true,
     });
   });
 });

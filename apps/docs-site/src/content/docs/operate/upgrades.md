@@ -260,10 +260,12 @@ of that release's migrations — nothing to sequence around.
 
 - `pnpm nx run infra-db:db:migrate` exits 0 and the migration log shows 0011
   (and 0012, if applicable) applied.
-- Log in as an existing user with a previously-verified email and confirm
-  `email`/`email_verified` are present in the ID token, userinfo response, and
-  access-token convenience claims — this is the concrete symptom of a skipped
-  backfill, so check it explicitly rather than assuming Step 3 worked.
+- Log in as an existing user with a previously-verified email, through a
+  client granted the `email` scope, and confirm `email`/`email_verified` are
+  present in the ID token, the userinfo response and the access token — this is
+  the concrete symptom of a skipped backfill, so check it explicitly rather than
+  assuming Step 3 worked. Without the `email` scope all three omit the claims
+  by design.
 - Spot-check a user created before #228 for the normalized-email cosmetic
   change (Step 7) so it doesn't get reported as a bug later.
 

@@ -14,7 +14,6 @@ import { hashEmail, logAuthEvent } from '../../helpers/auth-events';
 import { clientAddressKey } from '../../helpers/client-address';
 import { resolveAudience } from '../../helpers/client-auth';
 import { verifyPasswordCredential } from '../../helpers/credential-auth';
-import { resolveEmailClaims } from '../../helpers/email-claims';
 import { recordSuccessfulLogin, registerLoginAttempt } from '../../helpers/failed-login';
 import { issueAccessToken } from '../../helpers/hybrid-token';
 import { getOrCreateSystemClient } from '../../helpers/oauth-client';
@@ -123,9 +122,8 @@ export default async function (fastify: FastifyInstance) {
         }
 
         // The users row supplies the stable subject id plus session/audit/log
-        // fields; email claims are resolved separately from verified
-        // user_attributes (#229). The row must exist for any live credential
-        // (FK), so a miss is treated as invalid below.
+        // fields. The row must exist for any live credential (FK), so a miss
+        // is treated as invalid below.
         const user =
           check.status === 'ok'
             ? await fastify.repositories.users.findById(check.credential.userId)
@@ -175,15 +173,13 @@ export default async function (fastify: FastifyInstance) {
         // Get or create system OAuth client
         const systemClient = await getOrCreateSystemClient(realm.id, fastify);
 
-        // BREAKING (#229, ADR-002): email/email_verified resolve from verified
-        // user_attributes via the trust order; both OMITTED when no verified
-        // email exists. Post-gate placement keeps failure-path timing intact.
-        const emailClaims = await resolveEmailClaims(fastify, user.id);
-
-        // Generate access token (JWT) using JWT plugin
+        // Generate access token (JWT) using JWT plugin. No `email` /
+        // `email_verified`: an access token carries them only under the
+        // `email` scope, and this first-party token is granted no scope
+        // (ANT-2026-2O0T72HY). Nothing that accepts it reads them; the
+        // session below keeps the sign-in address for display.
         const accessToken = await issueAccessToken(fastify, {
           sub: user.id,
-          ...emailClaims,
           clientId: systemClient.clientId,
           aud: resolveAudience(systemClient),
         });

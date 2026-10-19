@@ -69,8 +69,8 @@ export function buildAccessTokenClaims(payload: SignAccessTokenPayload): {
   claims: Record<string, unknown>;
   audience: string | string[];
 } {
-  // Omit email/email_verified for client_credentials tokens where there is no
-  // end-user. Include scope only when granted.
+  // email/email_verified only when the caller passes them (the auth-server
+  // does so under the `email` scope only). Include scope only when granted.
   const claims: Record<string, unknown> = {
     sub: payload.sub,
     client_id: payload.clientId,

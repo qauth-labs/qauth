@@ -31,7 +31,7 @@ import {
 import { isAgentClient } from '../../helpers/client-resolution';
 import { isScopeSubset } from '../../helpers/consent';
 import { resolveIssuerIdentifier } from '../../helpers/discovery';
-import { resolveEmailClaims } from '../../helpers/email-claims';
+import { resolveEmailClaimsForScopes } from '../../helpers/email-claims';
 import {
   type EnvironmentPolicy,
   resolveAccessTokenLifespanSeconds,
@@ -673,7 +673,11 @@ async function handleAuthorizationCode(
   // access token AND the ID token, so the two can never disagree about the
   // email within a single issuance. Both claims are omitted entirely when no
   // verified email attribute exists.
-  const emailClaims = await resolveEmailClaims(fastify, user.id);
+  //
+  // BREAKING (#259, then ANT-2026-2O0T72HY): released only under the `email`
+  // scope, in BOTH tokens. The access token is a JWT the client reads in the
+  // same response as the ID token, so gating only the ID token gated nothing.
+  const emailClaims = await resolveEmailClaimsForScopes(fastify, user.id, authCode.scopes);
 
   const accessToken = await issueAccessToken(fastify, {
     sub: user.id,
@@ -694,11 +698,11 @@ async function handleAuthorizationCode(
     ? await fastify.jwtUtils.signIdToken({
         sub: user.id,
         audience: client.clientId,
-        // BREAKING (#259, data minimization): email claims are released in
-        // the ID token only under the `email` scope, matching userinfo's
-        // gating (OIDC Core §5.4). The shared resolution keeps the access
-        // token and ID token consistent when both carry the claims.
-        ...(authCode.scopes.includes('email') ? emailClaims : {}),
+        // BREAKING (#259, data minimization): email claims are released only
+        // under the `email` scope, matching userinfo's gating (OIDC Core
+        // §5.4). `emailClaims` is already empty without it, and the shared
+        // resolution keeps the access token and ID token consistent.
+        ...emailClaims,
         name: resolveDisplayName(user),
         nonce: authCode.nonce ?? undefined,
         // OIDC Core §2 `auth_time`: the real end-user authentication time
@@ -1270,8 +1274,9 @@ async function handleRefreshToken(
   // Access-token lifespan under the environment policy (ADR-008 §5, #197).
   const accessTokenExpiresIn = accessTokenLifespanForPolicy(fastify, policy);
 
-  // BREAKING (#229): trust-ordered resolution; omitted when unverified.
-  const emailClaims = await resolveEmailClaims(fastify, user.id);
+  // BREAKING (#229): trust-ordered resolution; omitted when unverified. Only
+  // under the refreshed grant's `email` scope (ANT-2026-2O0T72HY).
+  const emailClaims = await resolveEmailClaimsForScopes(fastify, user.id, grantedScopes);
 
   const accessToken = await issueAccessToken(fastify, {
     sub: user.id,
@@ -1711,8 +1716,10 @@ async function handleTokenExchange(
     throw new InvalidRequestError('subject_token has expired');
   }
 
-  // BREAKING (#229): trust-ordered resolution; omitted when unverified.
-  const emailClaims = await resolveEmailClaims(fastify, user.id);
+  // BREAKING (#229): trust-ordered resolution; omitted when unverified. Only
+  // under the delegated (narrowed) scope's `email` (ANT-2026-2O0T72HY): an
+  // agent learns the address only when the user's grant included it.
+  const emailClaims = await resolveEmailClaimsForScopes(fastify, user.id, grantedScopes);
 
   const accessToken = await issueAccessToken(fastify, {
     sub: user.id,
@@ -2199,7 +2206,9 @@ async function handleJwtBearer(
   // shows exactly this (a 300s assertion yielding an 86400s access token).
   const accessTokenExpiresIn = accessTokenLifespanForPolicy(fastify, policy);
 
-  const emailClaims = await resolveEmailClaims(fastify, user.id);
+  // Only under the granted `email` scope (ANT-2026-2O0T72HY), like every other
+  // grant: the assertion's scope, narrowed and capped by GATE 5, decides.
+  const emailClaims = await resolveEmailClaimsForScopes(fastify, user.id, grantedScopes);
 
   // EMA §5.1, the profile's central MUST: the issued access token is
   // audience-restricted to the MCP server the assertion's `resource` claim

@@ -22,15 +22,17 @@ export interface ActClaim {
 /**
  * Payload for signing access tokens
  *
- * When `email` / `email_verified` are omitted, the token is a client-only
- * credential (OAuth 2.1 client_credentials grant) and `sub` equals `clientId`.
+ * `email` / `email_verified` are optional. QAuth's auth-server passes them
+ * only when the grant includes the `email` scope and the user has a verified
+ * address, so their absence says nothing about whether `sub` is a user. A
+ * client_credentials token has no end user and `sub` equals `clientId`.
  */
 export interface SignAccessTokenPayload {
   /** Subject (user ID, or client_id for client_credentials grants) */
   sub: string;
-  /** User email (omitted for client_credentials grants) */
+  /** User email (only under the `email` scope; never on client_credentials) */
   email?: string;
-  /** Email verification status (omitted for client_credentials grants) */
+  /** Email verification status (present exactly when `email` is) */
   email_verified?: boolean;
   /** OAuth client identifier */
   clientId: string;

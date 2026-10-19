@@ -6,7 +6,7 @@ import { env } from '../../../config/env';
 import { MIN_RESPONSE_TIME_MS } from '../../constants';
 import { clientAddressKey } from '../../helpers/client-address';
 import { resolveUserinfoEndpoint } from '../../helpers/discovery';
-import { resolveEmailClaims } from '../../helpers/email-claims';
+import { resolveEmailClaimsForScopes } from '../../helpers/email-claims';
 import { ensureMinimumResponseTime } from '../../helpers/timing';
 import { userinfoResponseSchema } from '../../schemas/oauth';
 
@@ -111,10 +111,9 @@ async function handleUserinfo(fastify: FastifyInstance, request: FastifyRequest)
     // resolve from verified user_attributes via the trust order; both are
     // OMITTED (never null) when no verified email exists — OIDC Core
     // §5.3.2 permits omission of unavailable claims. The resolver query
-    // is skipped entirely when the scope was not granted.
-    if (grantedScopes.has('email')) {
-      Object.assign(responseBody, await resolveEmailClaims(fastify, user.id));
-    }
+    // is skipped entirely when the scope was not granted; the same helper
+    // applies the same rule at every token mint site.
+    Object.assign(responseBody, await resolveEmailClaimsForScopes(fastify, user.id, grantedScopes));
 
     // OIDC Core §5.1 `name` — the end-user display name, derived from the
     // stored first/last name parts. Released only under the `profile` scope;

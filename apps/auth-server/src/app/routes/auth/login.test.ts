@@ -282,15 +282,15 @@ describe('POST /auth/login', () => {
     });
   });
 
-  it('emits trust-resolved email claims sourced from user_attributes — BREAKING #229', async () => {
+  it('mints the first-party token with no email claims, even for a verified address — ANT-2026-2O0T72HY', async () => {
     const { fastify, ctx } = createFastifyStub();
     await loginRoute(fastify);
 
-    // All THREE candidate sources diverge on purpose: users row says
+    // Every candidate source has an address on purpose: users row says
     // canonical@example.com, credential external_sub says user@example.com,
-    // and the verified attribute says attr@example.com. Only attribute
-    // sourcing (the #229 resolver) produces the asserted claims — a
-    // regression to either legacy source fails here.
+    // and the verified attribute says attr@example.com. An access token
+    // carries email only under the `email` scope, and this token is granted
+    // no scope, so none of them may appear.
     (
       fastify.repositories.userCredentials.findByRealmProviderSub as unknown as Mock
     ).mockResolvedValue(
@@ -335,16 +335,10 @@ describe('POST /auth/login', () => {
       createReply()
     );
 
-    // Full-payload strictness kept from the #228 before-fixture: exact object,
-    // with email from the verified attribute and email_verified literally true.
-    expect(fastify.repositories.userAttributes.findVerifiedByUserIdAndKey).toHaveBeenCalledWith(
-      'user-1',
-      'email'
-    );
+    // Full-payload strictness kept from the #228 before-fixture: exact object.
+    expect(fastify.repositories.userAttributes.findVerifiedByUserIdAndKey).not.toHaveBeenCalled();
     expect(fastify.jwtUtils.signAccessToken).toHaveBeenCalledWith({
       sub: 'user-1',
-      email: 'attr@example.com',
-      email_verified: true,
       clientId: 'system',
       aud: 'https://auth.example.com',
     });
