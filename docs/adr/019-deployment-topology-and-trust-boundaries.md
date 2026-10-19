@@ -32,6 +32,13 @@
 > - Decision 8: event delivery through a transactional outbox and a delivery role.
 > - Decision 9: two more key purposes.
 > - New Decisions 10 to 12: where settings live, the paired sandbox realm, and plugins.
+>
+> **Amended 2026-10-19** with the maintainer's decision of 2026-10-11 on simple mode. Decision 1
+> gave simple mode one realm and one host, and Decisions 3 and 5 made the admin console a client of
+> a separate operator realm.
+>
+> - Decisions 1, 3 and 5: in simple mode the default realm is also the operator realm. Adding a
+>   second realm splits the two; Decision 1 names that step, and the upgrade guide documents it.
 
 ## Context
 
@@ -93,6 +100,14 @@ them, so a rotation still forces users to sign in again. ADR-001's status note r
   twins included, and a wildcard host is refused.
 - A single-realm simple mode uses the deployment's configured host as the default realm's issuer.
   That is the host of the configured issuer, never the host a request names.
+- In simple mode the default realm is also the operator realm. Decided 2026-10-11 (maintainer). Its
+  admins are operator-realm admins, its service accounts live in it (Decision 7), and the admin
+  console is a client of it (Decisions 3 and 5). Simple mode needs no second realm or host for
+  administration.
+- Adding a second realm splits the operator realm from the default realm. This step is the
+  operator-realm split. The default realm keeps its host and its issuer, which are permanent
+  (below). The operator realm becomes a realm of its own, on a host of its own. The upgrade guide
+  documents the split.
 - QAuth needs a dedicated host. It never runs under a path of a shared host.
   - `__Host-` cookies need `Path=/`.
   - WebAuthn RP IDs are host-scoped.
@@ -144,7 +159,8 @@ Ownership:
 - There is no SSO across realms. A realm trusts another only through upstream OIDC or OpenID
   Federation.
 - Every other UI keeps its own BFF session, with its tokens stored server-side.
-- The admin console is a client of a separate operator realm.
+- The admin console is a client of the operator realm. In simple mode that is the default realm.
+  After the operator-realm split it is a separate realm, on its own host (Decision 1).
 - The developer portal follows the same rule. Its tokens move server-side, and its cookie carries
   only a session id. This lands with ADR-017 F0.
 
@@ -198,6 +214,10 @@ APIs:
 The account console is the "portal" that ADR-014 names for agent owners. That follows from the
 API families of Decision 7: an agent belongs to a human account, and its owner acts through the
 account API.
+
+The admin console is a client of the operator realm (Decision 3). In simple mode that is the
+default realm, so a one-host deployment runs the console without a second realm, host or issuer.
+After the operator-realm split (Decision 1), the console signs in on the operator realm's own host.
 
 The federation section is part of the admin console, not a separate app. It opens when the console
 connects to a federation-operator deployment's admin API. That deployment's signer role signs; the
