@@ -79,8 +79,9 @@ must:
    gives you one rather than a tag that would be wrong.
 
    :::danger[`v0.1.0-rc.0` is not a safe starting point]
-   The repository's only tag, `v0.1.0-rc.0` (2026-07-25), **postdates**
-   migration 0011 and already contains the destructive drop. Deploying it as
+   The repository's first tag, `v0.1.0-rc.0` (2026-07-25), **postdates**
+   migration 0011 and already contains the destructive drop, as every later
+   release does. Deploying it as
    the "previous release" of a two-hop upgrade applies 0011 to a database that
    was never backfilled — which is the failure this whole page exists to
    prevent. Confirm for yourself with

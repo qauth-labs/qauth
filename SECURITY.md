@@ -2,8 +2,8 @@
 
 ## Status first
 
-QAuth is pre-1.0. The latest tag is a release candidate, and no release has
-had an external security audit yet.
+QAuth is pre-1.0. Its releases are 0.x, and none has had an external
+security audit yet.
 
 The project is developed with extensive AI assistance. Every change is
 reviewed by a human before it merges. Even so, we cannot yet promise a high
@@ -25,7 +25,7 @@ have a report and asks for a channel.
 
 A report is easiest to act on when it names:
 
-- the commit on `main`, or the release candidate, you tested;
+- the commit on `main`, or the release, you tested;
 - the configuration in play, in particular any default-off switch you turned
   on: `WALLET_FEDERATION_ENABLED`, `HYBRID_SIGNING_ENABLED`, `ID_JAG_ENABLED`,
   or the `CIMD_*` settings;
@@ -67,7 +67,7 @@ is a dropped ball, not a policy.
 
 ## Supported versions
 
-Only `main` and the latest pre-release receive fixes. There are no maintenance
+Only `main` and the latest release receive fixes. There are no maintenance
 branches and no backports. The 1.0 release will ship its own support policy.
 
 ## Coordinated disclosure
