@@ -128,7 +128,9 @@ export class JwtValidator {
         audience: this.audience,
       }));
     } catch (error) {
-      throw new InvalidTokenError(describeJoseError(error));
+      throw new InvalidTokenError(describeJoseError(error), {
+        jwksUnavailable: isJwksUnavailable(error),
+      });
     }
     // #283 RFC 9068 §2.1. `protectedHeader` is the header the verified
     // SIGNATURE covers — never `decodeProtectedHeader`, whose output an
@@ -164,6 +166,22 @@ export class JwtValidator {
       throw new InvalidTokenError('token is not an access token (typ is not at+jwt)');
     }
   }
+}
+
+/**
+ * Whether a verification error means the key set could not be obtained, as
+ * opposed to a verdict on the token: a JWKS fetch timeout, a malformed key set,
+ * jose's generic error for a non-2xx JWKS response, or a transport error that
+ * is not a jose error at all.
+ */
+function isJwksUnavailable(error: unknown): boolean {
+  if (error instanceof joseErrors.JWKSTimeout || error instanceof joseErrors.JWKSInvalid) {
+    return true;
+  }
+  if (error instanceof joseErrors.JOSEError) {
+    return error.code === 'ERR_JOSE_GENERIC';
+  }
+  return true;
 }
 
 /**

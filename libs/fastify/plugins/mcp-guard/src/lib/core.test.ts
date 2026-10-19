@@ -181,6 +181,76 @@ describe('McpGuard.authenticate (JWT mode)', () => {
   });
 });
 
+describe('McpGuard.authenticate (introspection mode)', () => {
+  const INTROSPECTION_ENDPOINT = `${ISSUER}/oauth/introspect`;
+
+  // One fetch for both upstreams: the JWKS, and an introspection endpoint that
+  // records every token it is asked about and answers "active".
+  function introspectionGuard(
+    options: { jwksDown?: boolean; introspectionLocalCheck?: boolean } = {}
+  ) {
+    const introspected: string[] = [];
+    const active = { active: true, sub: 'u', client_id: 'c', scope: 'mcp:read', aud: RESOURCE };
+    const fetch = (async (input: string | URL, init?: { body?: string }) => {
+      const isIntrospection = String(input) === INTROSPECTION_ENDPOINT;
+      if (isIntrospection) {
+        introspected.push(new URLSearchParams(init?.body).get('token') ?? '');
+      } else if (options.jwksDown) {
+        return { ok: false, status: 503, json: async () => ({}), text: async () => '' };
+      }
+      const body = isIntrospection ? active : { keys: [publicJwk] };
+      return { ok: true, status: 200, json: async () => body, text: async () => '' };
+    }) as never;
+    const guard = new McpGuard({
+      resource: RESOURCE,
+      authorizationServer: ISSUER,
+      validationMode: 'introspection',
+      introspectionClient: { clientId: 'rs', clientSecret: 's' },
+      introspectionLocalCheck: options.introspectionLocalCheck,
+      fetch,
+    });
+    return { guard, introspected };
+  }
+
+  // The AS rate-limits introspection per caller, and the caller is this RS.
+  // A bearer the JWKS cannot verify can never be active, so it must be
+  // refused locally rather than spend one of those calls: otherwise anyone
+  // able to reach the RS could empty the budget with made-up bearers.
+  it('refuses a bearer that fails local verification without introspecting it', async () => {
+    const { guard, introspected } = introspectionGuard();
+    await expect(guard.authenticate('Bearer junk-0')).rejects.toBeInstanceOf(InvalidTokenError);
+    const other = await signToken({ sub: 'u', client_id: 'c' }, 'https://other.example.com');
+    await expect(guard.authenticate(`Bearer ${other}`)).rejects.toBeInstanceOf(InvalidTokenError);
+    expect(introspected).toEqual([]);
+  });
+
+  it('introspects a locally valid token and returns the introspection claims', async () => {
+    const { guard, introspected } = introspectionGuard();
+    const token = await signToken({ sub: 'u', client_id: 'c', scope: 'mcp:read' }, RESOURCE);
+    const claims = await guard.authenticate(`Bearer ${token}`, ['mcp:read']);
+    expect(introspected).toEqual([token]);
+    expect(claims.sub).toBe('u');
+    expect(claims.raw['active']).toBe(true);
+  });
+
+  // A JWKS outage is no verdict on the token: fall through to the
+  // authoritative introspection call instead of answering 401 to everyone.
+  it('falls through to introspection when the JWKS cannot be fetched', async () => {
+    const { guard, introspected } = introspectionGuard({ jwksDown: true });
+    const token = await signToken({ sub: 'u', client_id: 'c', scope: 'mcp:read' }, RESOURCE);
+    const claims = await guard.authenticate(`Bearer ${token}`, ['mcp:read']);
+    expect(introspected).toEqual([token]);
+    expect(claims.sub).toBe('u');
+  });
+
+  it('introspects opaque tokens when the local check is turned off', async () => {
+    const { guard, introspected } = introspectionGuard({ introspectionLocalCheck: false });
+    const claims = await guard.authenticate('Bearer opaque-token-value', ['mcp:read']);
+    expect(introspected).toEqual(['opaque-token-value']);
+    expect(claims.sub).toBe('u');
+  });
+});
+
 describe('McpGuard — requireAccessTokenTyp reaches the validator (#283)', () => {
   // Exercised through `McpGuardConfig`, NOT by constructing `JwtValidator`
   // directly as the validator's own suite does. The flag is inert unless the

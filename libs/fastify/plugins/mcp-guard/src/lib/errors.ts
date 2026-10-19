@@ -79,10 +79,17 @@ export class InvalidTokenError extends McpGuardError {
   readonly bearerError = 'invalid_token' as const;
   /** Short reason for `error_description` / structured logs. */
   readonly reason: string;
+  /**
+   * True when local verification failed because the AS key set could not be
+   * fetched or parsed (timeout, network error, non-2xx, malformed JWKS), i.e.
+   * no verdict on the token itself was reached.
+   */
+  readonly jwksUnavailable: boolean;
 
-  constructor(reason: string) {
+  constructor(reason: string, options: { jwksUnavailable?: boolean } = {}) {
     super(`Invalid bearer token: ${reason}`);
     this.reason = reason;
+    this.jwksUnavailable = options.jwksUnavailable === true;
   }
 }
 
