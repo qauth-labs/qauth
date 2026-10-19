@@ -19,7 +19,7 @@ You are working in the QAuth OAuth/OIDC implementation.
 
 | Endpoint                                | Description                                                                                                                                             |
 | --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `POST /auth/register`                   | Registration — creates user, credential, attribute, verification token                                                                                  |
+| `POST /auth/register`                   | Registration — creates user, credential, attribute, verification token; same `202` for an already registered address                                    |
 | `POST /auth/login`                      | Password login — looks up `user_credentials` by `(realm_id, 'password', external_sub)` where `external_sub` is the normalised email                     |
 | `GET /auth/verify`                      | Email verification — marks `credential_data.email_verified=true` and `user_attributes.verified=true`                                                    |
 | `POST /auth/resend-verification`        | Resend verification email                                                                                                                               |

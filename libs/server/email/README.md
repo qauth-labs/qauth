@@ -118,6 +118,17 @@ await emailService.sendVerificationEmail('user@example.com', 'token123', {
 });
 ```
 
+### sendAccountExistsEmail()
+
+Tells the owner of an address that someone tried to register it again. A
+registration route that answers every address the same way (so it does not
+reveal which addresses have accounts) sends this to the existing owner instead
+of creating a second account. The mail has no link and no token.
+
+```typescript
+await emailService.sendAccountExistsEmail('owner@example.com');
+```
+
 ### Email Provider Interface
 
 The email service is built on a provider abstraction, making it verification-agnostic and reusable for other email types (password reset, notifications, etc.):
@@ -328,6 +339,18 @@ Sends a verification email.
 
 - `to`: Recipient email address
 - `token`: Verification token
+- `options`: Optional email options
+
+**Returns**: Promise resolving to email result
+
+#### `emailService.sendAccountExistsEmail(to: string, options?: Partial<EmailOptions>): Promise<EmailResult>`
+
+Sends the "someone tried to register with your address" notice
+(`AccountExistsEmail` template). It carries no link and no token.
+
+**Parameters**:
+
+- `to`: Recipient email address (the existing account's address)
 - `options`: Optional email options
 
 **Returns**: Promise resolving to email result

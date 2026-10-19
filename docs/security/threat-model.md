@@ -145,6 +145,13 @@ A break of any of these is a finding:
 - Data in one realm never reaches another.
 - Secrets are hashed with Argon2id and compared in constant time.
 - Login and registration do not reveal whether an account exists.
+  `POST /auth/register` answers every address with the same `202`; the owner
+  of an address that already has an account hears of the attempt by mail,
+  within the per-address mail caps. The login routes refuse an unverified
+  account exactly as they refuse a wrong password. This holds with `REQUIRE_VERIFIED_ACCOUNT` on, the default:
+  an operator who turns it off lets an unverified account sign in, and then
+  registering an address and logging in with the chosen password tells a free
+  address from a registered one.
 - Every cookie-authenticated state change is CSRF-protected.
 - Authorization responses carry `iss` (RFC 9207).
 - A URL a client or credential names never makes QAuth reach a private or

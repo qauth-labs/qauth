@@ -50,10 +50,21 @@ describe('authEnvSchema verified-account flags', () => {
 });
 
 describe('resolveRequireVerifiedAccount', () => {
-  it('defaults to false with no warning when neither name is set', () => {
+  // Default true since 2026-10-19 (ANT-2026-SPEMY9GU): with the gate off,
+  // registering an address and then logging in with the chosen password told
+  // a free address (200) from a registered one (401).
+  it('defaults to true with no warning when neither name is set', () => {
     expect(resolve({})).toEqual({
       ok: true,
-      requireVerifiedAccount: false,
+      requireVerifiedAccount: true,
+      deprecation: undefined,
+    });
+  });
+
+  it('defaults to true when both names are forwarded blank, as docker-compose.yml does', () => {
+    expect(resolve({ REQUIRE_VERIFIED_ACCOUNT: '', REQUIRE_EMAIL_VERIFIED: '' })).toEqual({
+      ok: true,
+      requireVerifiedAccount: true,
       deprecation: undefined,
     });
   });

@@ -38,20 +38,17 @@ function RegisterPage() {
 
     const result = await registerFn({ data: { email, password } });
 
+    // The auth-server answers a free address and one that already has an
+    // account the same way, so success shows the same "check your inbox"
+    // screen for both, with the address as typed. Which mail went out (a
+    // verification link, or a notice for an existing account) is for the
+    // mailbox owner alone to see.
     if (result.ok) {
-      setFormState({ stage: 'success', email: result.data.email });
+      setFormState({ stage: 'success', email });
       return;
     }
 
     const { code, message, details } = result.error;
-
-    if (code === 'EMAIL_TAKEN') {
-      setFormState({
-        stage: 'error',
-        fieldErrors: { email: 'Email already registered.' },
-      });
-      return;
-    }
 
     if (code === 'WEAK_PASSWORD') {
       const feedback = Array.isArray(details) ? (details as string[]).join(' ') : message;
@@ -81,8 +78,10 @@ function RegisterPage() {
         <div className="w-full max-w-md space-y-4 rounded-lg border border-gray-200 bg-white p-8 shadow-sm">
           <h1 className="text-xl font-semibold">Check your inbox</h1>
           <p className="text-sm text-gray-600">
-            We sent a verification link to <span className="font-medium">{formState.email}</span>.
-            Open it to activate your account.
+            We sent an email to <span className="font-medium">{formState.email}</span> with the next
+            step. If it holds a verification link, open it and confirm with your password to
+            activate your account. If you already had an account with this address, the email says
+            so: log in with your existing password instead.
           </p>
 
           {resendState === 'sent' ? (

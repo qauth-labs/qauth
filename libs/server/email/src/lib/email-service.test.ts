@@ -181,4 +181,42 @@ describe('EmailService', () => {
       });
     });
   });
+
+  describe('sendAccountExistsEmail', () => {
+    it('sends the notice to the address with its own subject', async () => {
+      const result = await service.sendAccountExistsEmail('owner@example.com');
+
+      expect(result.success).toBe(true);
+      const sent = mockProvider.getSentEmails();
+      expect(sent).toHaveLength(1);
+      expect(sent[0]?.to).toBe('owner@example.com');
+      expect(sent[0]?.subject).toBe('Someone tried to register with your email address');
+      expect(sent[0]?.text).toContain('You already have an account');
+      expect(sent[0]?.html).toContain('You already have an account');
+    });
+
+    it('carries no link, so nothing in it can act on the account', async () => {
+      const customProvider = new MockEmailProvider();
+      const customService = createEmailService(customProvider, {
+        baseUrl: 'https://example.com',
+      });
+      await customService.sendAccountExistsEmail('owner@example.com');
+
+      const sent = customProvider.getSentEmails();
+      expect(sent[0]?.html).not.toContain('href=');
+      expect(sent[0]?.text).not.toContain('https://');
+    });
+
+    it('uses the default sender and honours overrides', async () => {
+      const customProvider = new MockEmailProvider();
+      const customService = createEmailService(customProvider, {
+        defaultFrom: 'noreply@example.com',
+      });
+      await customService.sendAccountExistsEmail('owner@example.com', { subject: 'Custom' });
+
+      const sent = customProvider.getSentEmails();
+      expect(sent[0]?.from).toBe('noreply@example.com');
+      expect(sent[0]?.subject).toBe('Custom');
+    });
+  });
 });

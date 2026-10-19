@@ -1,6 +1,6 @@
 import { requireDockerOrSkip } from '@qauth-labs/shared-testing';
 import type { FastifyInstance } from 'fastify';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   backdateWalletPresentationSignal,
@@ -171,24 +171,51 @@ describe('wallet federation E2E (oid4vp-1.0-base, real containers)', () => {
     return { realmId: realm.id, clientId: client.id };
   }
 
-  /** Register a password account through the real registration route. */
+  /**
+   * Register a password account through the real registration route, then
+   * verify it through the real `/auth/verify`, as its owner would from the
+   * mailed link.
+   *
+   * Since ANT-2026-SPEMY9GU `REQUIRE_VERIFIED_ACCOUNT` is on by default, so an
+   * unverified account cannot sign in, and the registration answer is the
+   * same `202` message for every address, with no user id. The token is read
+   * from the mail the server hands its provider, and the id from the
+   * credential row.
+   */
   async function registerPasswordUser(
     app: FastifyInstance,
     email: string,
     password = 'Correct-Horse-Battery-Staple-42!'
   ): Promise<string> {
-    const response = await app.inject({
-      method: 'POST',
-      url: '/auth/register',
-      payload: { email, password },
-    });
-    expect(response.statusCode).toBe(201);
-    const body = response.json() as { user?: { id?: string }; id?: string };
-    const userId = body.user?.id ?? body.id;
-    if (typeof userId !== 'string') {
-      throw new Error(`registration returned no user id: ${response.body}`);
+    const sent = vi.spyOn(app.emailService, 'sendVerificationEmail');
+    try {
+      const response = await app.inject({
+        method: 'POST',
+        url: '/auth/register',
+        payload: { email, password },
+      });
+      expect(response.statusCode).toBe(202);
+      // The mail goes out off the request path; wait for it to be handed over.
+      await vi.waitFor(() => expect(sent).toHaveBeenCalledWith(email, expect.any(String)));
+      const token = sent.mock.calls.at(-1)?.[1];
+      const verified = await app.inject({
+        method: 'POST',
+        url: '/auth/verify',
+        payload: { token, password },
+      });
+      expect(verified.statusCode).toBe(200);
+    } finally {
+      sent.mockRestore();
     }
-    return userId;
+
+    const realm = await app.repositories.realms.findByName(REALM);
+    const credential =
+      realm &&
+      (await app.repositories.userCredentials.findByRealmProviderSub(realm.id, 'password', email));
+    if (!credential) {
+      throw new Error(`registration of ${email} left no password credential`);
+    }
+    return credential.userId;
   }
 
   /** A started wallet sign-in — the harness's shape, named for the reader. */

@@ -61,7 +61,9 @@ One transaction (users insert first — `user_credentials.user_id` FKs it):
 2. `INSERT INTO user_credentials (provider_type='password',
 external_sub=normalized_email, credential_data={password_hash,
 email_verified: false})` — a duplicate registration surfaces HERE via the
-   credentials unique index (409, genericized).
+   credentials unique index. The route catches it and answers the same `202`
+   as for a free address (ANT-2026-SPEMY9GU); the existing owner gets a mail
+   instead. Never let it reach the error handler's `409`.
 3. `user_attributes` upsert from `PasswordProvider.extractAttributes()`.
 4. `INSERT INTO email_verification_tokens (credential_id, token_hash,
 expires_at)` — the token's ONLY identity link is the credential.
@@ -92,9 +94,9 @@ On email verification (one transaction): mark the token used, set
 - `name` — derived from `users.first_name` + `users.last_name` (omitted when
   both are empty, never an empty string).
 
-> The login-time `REQUIRE_VERIFIED_ACCOUNT` gate (F-08) is a SEPARATE control:
-> it blocks logins by an unverified account pre-token and does not affect claim
-> resolution. For a password account it reads `credential_data.email_verified`.
+> The login-time `REQUIRE_VERIFIED_ACCOUNT` gate (F-08, default `true`) is a
+> SEPARATE control: it blocks logins by an unverified account pre-token, with
+> the same `401` as a wrong password, and does not affect claim resolution. For a password account it reads `credential_data.email_verified`.
 > `REQUIRE_EMAIL_VERIFIED` is its deprecated alias (renamed 2026-10-09).
 
 ## Core Tables (shipped)

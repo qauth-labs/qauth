@@ -1,7 +1,11 @@
 import { createPasswordProvider } from '@qauth-labs/fastify-plugin-federation';
 import { UniqueConstraintError, WeakPasswordError } from '@qauth-labs/shared-errors';
 import type { FastifyInstance } from 'fastify';
-import { describe, expect, it, type Mock, vi } from 'vitest';
+import { beforeEach, describe, expect, it, type Mock, vi } from 'vitest';
+
+vi.mock('../../helpers/timing', () => ({
+  ensureMinimumResponseTime: vi.fn().mockResolvedValue(undefined),
+}));
 
 vi.mock('../../../config/env', () => ({
   env: {
@@ -9,24 +13,41 @@ vi.mock('../../../config/env', () => ({
     REGISTRATION_RATE_LIMIT: 10,
     REGISTRATION_RATE_WINDOW: 900,
     EMAIL_VERIFICATION_TOKEN_EXPIRY: 3600,
+    EMAIL_VERIFICATION_INVALIDATE_EXISTING_ON_RESEND: true,
+    RESEND_VERIFICATION_EMAIL_LIMIT: 3,
+    RESEND_VERIFICATION_EMAIL_WINDOW: 3600,
+    RESEND_VERIFICATION_MIN_INTERVAL: 60,
   },
 }));
 
+import { REDIS_KEYS, SUCCESS_MESSAGES } from '../../constants';
+import { hashEmail } from '../../helpers/auth-events';
+import { ensureMinimumResponseTime } from '../../helpers/timing';
 import registerRoute from './register';
 
 interface TestContext {
   handler?: (request: any, reply: any) => Promise<unknown>;
+  onClose?: () => Promise<unknown>;
 }
 
 /** Sentinel transaction client — asserting writes carry it proves they share the tx. */
 const TX = { __tx: 'register-tx' };
 
+/** The address every request below registers, as the route normalizes it. */
+const ADDRESS = 'user@example.com';
+
 function createReply() {
-  const state: { statusCode?: number; body?: unknown } = {};
+  const state: { statusCode?: number; body?: unknown; headers: Record<string, string> } = {
+    headers: {},
+  };
   const reply: any = {
     state,
     code(n: number) {
       state.statusCode = n;
+      return reply;
+    },
+    header(k: string, v: string) {
+      state.headers[k] = v;
       return reply;
     },
     send(body: unknown) {
@@ -37,12 +58,44 @@ function createReply() {
   return reply;
 }
 
+/** In-memory Redis with the commands the per-address mail caps use. */
+function createMemoryRedis() {
+  const store = new Map<string, string>();
+  return {
+    incr: vi.fn(async (key: string) => {
+      const next = Number(store.get(key) ?? '0') + 1;
+      store.set(key, String(next));
+      return next;
+    }),
+    expire: vi.fn(async () => 1),
+    set: vi.fn(async (key: string, value: string, _ex: 'EX', _seconds: number, nx?: 'NX') => {
+      if (nx === 'NX' && store.has(key)) return null;
+      store.set(key, value);
+      return 'OK';
+    }),
+    store,
+  };
+}
+
+/** The password credential of an address that is already registered. */
+function existingCredential(overrides: { emailVerified?: boolean } = {}) {
+  return {
+    id: 'cred-existing',
+    userId: 'user-existing',
+    realmId: 'realm-1',
+    providerType: 'password',
+    externalSub: ADDRESS,
+    credentialData: {
+      password_hash: '$argon2id$owner',
+      email_verified: overrides.emailVerified ?? true,
+    },
+  };
+}
+
 function createFastifyStub() {
   const ctx: TestContext = {};
   const createdUser = {
     id: 'user-1',
-    email: 'user@example.com',
-    emailVerified: false,
     realmId: 'realm-1',
     createdAt: 1_600_000_000_000,
     updatedAt: 1_600_000_000_000,
@@ -55,9 +108,14 @@ function createFastifyStub() {
         return fastify;
       },
     }),
+    addHook: (name: string, hook: () => Promise<unknown>) => {
+      if (name === 'onClose') ctx.onClose = hook;
+      return fastify;
+    },
     db: {
       transaction: vi.fn(async (fn: (tx: unknown) => Promise<unknown>) => fn(TX)),
     },
+    redis: createMemoryRedis(),
     repositories: {
       realms: {
         findByName: vi.fn().mockResolvedValue({ id: 'realm-1', name: 'master', enabled: true }),
@@ -66,15 +124,18 @@ function createFastifyStub() {
       },
       users: {
         create: vi.fn().mockResolvedValue(createdUser),
+        findById: vi.fn().mockResolvedValue({ id: 'user-existing', enabled: true }),
       },
       userCredentials: {
         create: vi.fn().mockResolvedValue({ id: 'cred-1', userId: 'user-1' }),
+        findByRealmProviderSub: vi.fn().mockResolvedValue(existingCredential()),
       },
       userAttributes: {
         upsertMany: vi.fn().mockResolvedValue([]),
       },
       emailVerificationTokens: {
         create: vi.fn().mockResolvedValue({ id: 'token-1' }),
+        invalidateCredentialTokens: vi.fn().mockResolvedValue(undefined),
       },
     },
     passwordValidator: {
@@ -93,10 +154,22 @@ function createFastifyStub() {
     },
     emailService: {
       sendVerificationEmail: vi.fn().mockResolvedValue(undefined),
+      sendAccountExistsEmail: vi.fn().mockResolvedValue(undefined),
     },
     log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
   };
   return { fastify: fastify as FastifyInstance, ctx };
+}
+
+/** Make the credential insert find the address taken, as the unique index does. */
+function addressTaken(fastify: FastifyInstance) {
+  (fastify.repositories.userCredentials.create as unknown as Mock).mockRejectedValue(
+    new UniqueConstraintError(
+      'idx_user_credentials_realm_provider_sub_unique',
+      // The real cause chain carries the insert's parameters, hash included.
+      new Error('insert into user_credentials ... params: $argon2id$hashed')
+    )
+  );
 }
 
 function requestFixture() {
@@ -108,14 +181,31 @@ function requestFixture() {
   };
 }
 
+/** Let the background mail tasks the handler started run to completion. */
+async function drainBackground(ctx: TestContext) {
+  if (!ctx.onClose) throw new Error('No onClose hook registered');
+  await ctx.onClose();
+}
+
+async function register(setup?: (fastify: FastifyInstance) => void) {
+  const { fastify, ctx } = createFastifyStub();
+  await registerRoute(fastify);
+  if (!ctx.handler) throw new Error('Handler missing');
+  setup?.(fastify);
+  vi.mocked(ensureMinimumResponseTime).mockClear();
+  const request = requestFixture();
+  const reply = createReply();
+  await ctx.handler(request, reply);
+  return { fastify, ctx, request, reply };
+}
+
+beforeEach(() => {
+  vi.mocked(ensureMinimumResponseTime).mockClear();
+});
+
 describe('POST /auth/register', () => {
   it('writes users → credential → attributes → token in ONE transaction with exact shapes', async () => {
-    const { fastify, ctx } = createFastifyStub();
-    await registerRoute(fastify);
-    if (!ctx.handler) throw new Error('Handler missing');
-
-    const reply = createReply();
-    await ctx.handler(requestFixture(), reply);
+    const { fastify, ctx, reply } = await register();
 
     // Single transaction wraps the whole identity write set.
     expect(fastify.db.transaction).toHaveBeenCalledOnce();
@@ -129,7 +219,7 @@ describe('POST /auth/register', () => {
         userId: 'user-1',
         realmId: 'realm-1',
         providerType: 'password',
-        externalSub: 'user@example.com',
+        externalSub: ADDRESS,
         credentialData: { password_hash: '$argon2id$hashed', email_verified: false },
       },
       TX
@@ -142,7 +232,7 @@ describe('POST /auth/register', () => {
         {
           source: 'self_reported',
           attrKey: 'email',
-          attrValue: 'user@example.com',
+          attrValue: ADDRESS,
           verified: false,
           expiresAt: null,
         },
@@ -160,61 +250,250 @@ describe('POST /auth/register', () => {
       TX
     );
 
-    // ORDER GUARD: users insert precedes the credentials insert so a duplicate
-    // registration surfaces the users-index UniqueConstraintError (parity).
+    // ORDER GUARD: the users insert precedes the credentials insert
+    // (user_credentials.user_id FKs users.id).
     const usersOrder = (fastify.repositories.users.create as unknown as Mock).mock
       .invocationCallOrder[0];
     const credsOrder = (fastify.repositories.userCredentials.create as unknown as Mock).mock
       .invocationCallOrder[0];
     expect(usersOrder).toBeLessThan(credsOrder);
 
-    // Exact pre-refactor 201 body.
-    expect(reply.state.statusCode).toBe(201);
-    expect(reply.state.body).toEqual({
-      id: 'user-1',
-      email: 'user@example.com',
-      emailVerified: false,
-      realmId: 'realm-1',
-      createdAt: 1_600_000_000_000,
-      updatedAt: 1_600_000_000_000,
-    });
-    expect(fastify.emailService.sendVerificationEmail).toHaveBeenCalledWith(
-      'user@example.com',
-      'plain'
-    );
+    // The one answer every address gets: no id, no timestamps, no flag.
+    expect(reply.state.statusCode).toBe(202);
+    expect(reply.state.body).toEqual({ message: SUCCESS_MESSAGES.REGISTRATION });
+    expect(reply.state.headers).toEqual({ 'Cache-Control': 'no-store' });
+
+    await drainBackground(ctx);
+    expect(fastify.emailService.sendVerificationEmail).toHaveBeenCalledWith(ADDRESS, 'plain');
+    expect(fastify.emailService.sendAccountExistsEmail).not.toHaveBeenCalled();
   });
 
-  it('duplicate email surfaces the credentials-index UniqueConstraintError (#230: the sole guard)', async () => {
+  describe('an address that is already registered (ANT-2026-SPEMY9GU)', () => {
+    /** Everything a caller can observe about one registration, and the work done for it. */
+    function observed(run: Awaited<ReturnType<typeof register>>) {
+      return {
+        statusCode: run.reply.state.statusCode,
+        body: run.reply.state.body,
+        headers: run.reply.state.headers,
+        floor: vi.mocked(ensureMinimumResponseTime).mock.calls.map(([, floorMs]) => floorMs),
+        hashed: (run.fastify.passwordHasher.hashPassword as unknown as Mock).mock.calls.length,
+        transactions: (run.fastify.db.transaction as unknown as Mock).mock.calls.length,
+      };
+    }
+
+    it('gets the same status, body, headers, floor and work as a free address', async () => {
+      const free = await register();
+      const freeSeen = observed(free);
+      const taken = await register(addressTaken);
+      const takenSeen = observed(taken);
+
+      // It used to be 409 UNIQUE_CONSTRAINT_VIOLATION for this address and
+      // 201 with the new user's id for a free one.
+      expect(takenSeen).toEqual(freeSeen);
+      expect(takenSeen).toEqual({
+        statusCode: 202,
+        body: { message: SUCCESS_MESSAGES.REGISTRATION },
+        headers: { 'Cache-Control': 'no-store' },
+        floor: [500],
+        hashed: 1,
+        transactions: 1,
+      });
+    });
+
+    it('creates nothing: the anchor row rolls back with the refused credential insert', async () => {
+      const { fastify } = await register(addressTaken);
+
+      expect(fastify.repositories.users.create).toHaveBeenCalledOnce();
+      expect(fastify.repositories.userAttributes.upsertMany).not.toHaveBeenCalled();
+      expect(fastify.repositories.emailVerificationTokens.create).not.toHaveBeenCalled();
+    });
+
+    it('mails the owner of a verified account a notice, not a link', async () => {
+      const { fastify, ctx } = await register(addressTaken);
+      await drainBackground(ctx);
+
+      expect(fastify.repositories.userCredentials.findByRealmProviderSub).toHaveBeenCalledWith(
+        'realm-1',
+        'password',
+        ADDRESS
+      );
+      expect(fastify.emailService.sendAccountExistsEmail).toHaveBeenCalledExactlyOnceWith(ADDRESS);
+      expect(fastify.emailService.sendVerificationEmail).not.toHaveBeenCalled();
+      expect(fastify.repositories.emailVerificationTokens.create).not.toHaveBeenCalled();
+    });
+
+    it('sends an unverified account its verification link again, with a fresh token', async () => {
+      const { fastify, ctx } = await register((stub) => {
+        addressTaken(stub);
+        (
+          stub.repositories.userCredentials.findByRealmProviderSub as unknown as Mock
+        ).mockResolvedValue(existingCredential({ emailVerified: false }));
+      });
+      await drainBackground(ctx);
+
+      expect(
+        fastify.repositories.emailVerificationTokens.invalidateCredentialTokens
+      ).toHaveBeenCalledWith('cred-existing');
+      expect(fastify.repositories.emailVerificationTokens.create).toHaveBeenCalledWith(
+        expect.objectContaining({ credentialId: 'cred-existing', tokenHash: 'hashed', used: false })
+      );
+      expect(fastify.emailService.sendVerificationEmail).toHaveBeenCalledExactlyOnceWith(
+        ADDRESS,
+        'plain'
+      );
+      expect(fastify.emailService.sendAccountExistsEmail).not.toHaveBeenCalled();
+    });
+
+    it('mails nobody for a disabled account', async () => {
+      const { fastify, ctx } = await register((stub) => {
+        addressTaken(stub);
+        (stub.repositories.users.findById as unknown as Mock).mockResolvedValue({
+          id: 'user-existing',
+          enabled: false,
+        });
+      });
+      await drainBackground(ctx);
+
+      expect(fastify.emailService.sendAccountExistsEmail).not.toHaveBeenCalled();
+      expect(fastify.emailService.sendVerificationEmail).not.toHaveBeenCalled();
+    });
+
+    it('logs the attempt with the address hashed, and never the error that carries the hash', async () => {
+      const { fastify, request } = await register(addressTaken);
+
+      expect(request.log.warn).toHaveBeenCalledWith(
+        expect.objectContaining({
+          authEvent: 'user.register.failure',
+          emailHash: hashEmail(ADDRESS),
+          reason: 'address_in_use',
+        }),
+        expect.any(String)
+      );
+      const everyLogArgument = [
+        ...request.log.warn.mock.calls,
+        ...request.log.info.mock.calls,
+        ...Object.values(fastify.log).flatMap((fn) => (fn as Mock).mock.calls),
+      ].flat();
+      expect(JSON.stringify(everyLogArgument)).not.toContain('$argon2id$hashed');
+      expect(everyLogArgument.some((arg) => arg instanceof UniqueConstraintError)).toBe(false);
+    });
+  });
+
+  describe('mail stays off the request path', () => {
+    /** A send that never settles, like a provider that hangs. */
+    const hangs = () => new Promise<void>(() => undefined);
+
+    it.each([
+      ['a free address', (_stub: FastifyInstance) => undefined],
+      ['a registered address', addressTaken],
+    ])('answers %s without waiting for the mail provider', async (_label, setup) => {
+      const { fastify, ctx } = createFastifyStub();
+      await registerRoute(fastify);
+      if (!ctx.handler) throw new Error('Handler missing');
+      setup(fastify);
+      (fastify.emailService.sendVerificationEmail as unknown as Mock).mockImplementation(hangs);
+      (fastify.emailService.sendAccountExistsEmail as unknown as Mock).mockImplementation(hangs);
+
+      const reply = createReply();
+      const answered = ctx.handler(requestFixture(), reply);
+      const outcome = await Promise.race([
+        answered.then(() => 'answered'),
+        new Promise<string>((resolve) => setTimeout(() => resolve('waiting'), 50)),
+      ]);
+
+      expect(outcome).toBe('answered');
+      expect(reply.state.statusCode).toBe(202);
+    });
+
+    it('still answers 202 when the verification mail fails, and logs the failure', async () => {
+      const { fastify, ctx, reply } = await register((stub) => {
+        (stub.emailService.sendVerificationEmail as unknown as Mock).mockRejectedValue(
+          new Error('smtp down')
+        );
+      });
+      await drainBackground(ctx);
+
+      expect(reply.state.statusCode).toBe(202);
+      expect(fastify.log.error).toHaveBeenCalledWith(
+        expect.any(Error),
+        'Failed to send verification email during registration'
+      );
+    });
+  });
+
+  describe('per-address mail caps (shared with resend-verification)', () => {
+    it('claims the caps for every registration, before the outcome is known', async () => {
+      for (const setup of [undefined, addressTaken]) {
+        const { fastify } = await register(setup);
+        const redis = fastify.redis as unknown as ReturnType<typeof createMemoryRedis>;
+
+        expect(redis.incr).toHaveBeenCalledWith(REDIS_KEYS.RESEND_RATE_LIMIT(ADDRESS));
+        expect(redis.set).toHaveBeenCalledWith(
+          REDIS_KEYS.LAST_EMAIL_SENT(ADDRESS),
+          expect.any(String),
+          'EX',
+          60,
+          'NX'
+        );
+        // Before the transaction: a resend right after either registration
+        // then finds the same interval claimed.
+        expect(redis.set.mock.invocationCallOrder[0]).toBeLessThan(
+          (fastify.db.transaction as unknown as Mock).mock.invocationCallOrder[0]
+        );
+      }
+    });
+
+    it('sends the owner of a registered address nothing within the minimum interval', async () => {
+      const { fastify, ctx } = await register((stub) => {
+        addressTaken(stub);
+        (stub.redis as unknown as ReturnType<typeof createMemoryRedis>).store.set(
+          REDIS_KEYS.LAST_EMAIL_SENT(ADDRESS),
+          '1'
+        );
+      });
+      await drainBackground(ctx);
+
+      expect(fastify.repositories.userCredentials.findByRealmProviderSub).not.toHaveBeenCalled();
+      expect(fastify.emailService.sendAccountExistsEmail).not.toHaveBeenCalled();
+    });
+
+    it('sends the owner of a registered address nothing once the window allowance is spent', async () => {
+      const { fastify, ctx } = await register((stub) => {
+        addressTaken(stub);
+        (stub.redis as unknown as ReturnType<typeof createMemoryRedis>).store.set(
+          REDIS_KEYS.RESEND_RATE_LIMIT(ADDRESS),
+          '3'
+        );
+      });
+      await drainBackground(ctx);
+
+      expect(fastify.emailService.sendAccountExistsEmail).not.toHaveBeenCalled();
+    });
+
+    it('still sends a new account its verification mail when the caps are spent', async () => {
+      const { fastify, ctx } = await register((stub) => {
+        (stub.redis as unknown as ReturnType<typeof createMemoryRedis>).store.set(
+          REDIS_KEYS.LAST_EMAIL_SENT(ADDRESS),
+          '1'
+        );
+      });
+      await drainBackground(ctx);
+
+      expect(fastify.emailService.sendVerificationEmail).toHaveBeenCalledWith(ADDRESS, 'plain');
+    });
+  });
+
+  it('lets any other failure of the transaction through', async () => {
     const { fastify, ctx } = createFastifyStub();
     await registerRoute(fastify);
     if (!ctx.handler) throw new Error('Handler missing');
-
-    // Since #230 the users table has no email unique index — the duplicate
-    // surfaces from the CREDENTIAL insert and the transaction rolls the
-    // anchor row back. Same wire 409 (genericized by the error handler).
     (fastify.repositories.userCredentials.create as unknown as Mock).mockRejectedValue(
-      new UniqueConstraintError('idx_user_credentials_realm_provider_sub_unique')
+      new Error('connection terminated')
     );
 
     await expect(ctx.handler(requestFixture(), createReply())).rejects.toThrow(
-      UniqueConstraintError
+      'connection terminated'
     );
-    expect(fastify.repositories.emailVerificationTokens.create).not.toHaveBeenCalled();
-    expect(fastify.emailService.sendVerificationEmail).not.toHaveBeenCalled();
-  });
-
-  it('still returns 201 when the verification email fails to send', async () => {
-    const { fastify, ctx } = createFastifyStub();
-    await registerRoute(fastify);
-    if (!ctx.handler) throw new Error('Handler missing');
-
-    (fastify.emailService.sendVerificationEmail as unknown as Mock).mockRejectedValue(
-      new Error('smtp down')
-    );
-
-    const reply = createReply();
-    await ctx.handler(requestFixture(), reply);
-    expect(reply.state.statusCode).toBe(201);
   });
 
   it('rejects weak passwords before touching the database', async () => {

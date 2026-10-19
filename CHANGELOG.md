@@ -140,6 +140,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   should be able to carry to a partner. The delegation branch of token exchange
   (`requested_token_type` access token) is unchanged.
 
+- **BREAKING (security)**: `POST /auth/register` no longer reveals whether an
+  address already has an account (ANT-2026-SPEMY9GU). It answered `409` for a
+  registered address and `201` with the new user for a free one, so any caller
+  could test any address.
+  - Every address now gets `202 Accepted` with the same body,
+    `{ "message": "Registration received. Check your inbox for an email with the next step." }`,
+    the same headers (`Cache-Control: no-store`) and the same work on the
+    request path (the password is hashed and the insert attempted either way,
+    under a 500 ms floor). The body has **no `id`, `email`, `emailVerified`,
+    `realmId`, `createdAt` or `updatedAt`** any more, and the route never
+    answers `409`.
+  - What happened goes to the mailbox. A free address gets its account and a
+    verification link. The owner of a verified account gets a new "someone
+    tried to register with your address" notice, with no link. An account that
+    is still unverified gets its verification link again, which verifies only
+    with the password chosen at the first registration. Mail to an existing
+    account counts toward the `RESEND_VERIFICATION_*` per-address caps, and
+    every registration claims the minimum interval there, so a resend straight
+    after a registration answers `429`. No mail is awaited by the request.
+  - `POST /auth/login` and `POST /ui/login` refuse an account whose address is
+    not verified exactly as they refuse a wrong password: `401 INVALID_CREDENTIALS`
+    (it was `403 EMAIL_NOT_VERIFIED`) and the same login page. The
+    `qauth_login_attempts_total` metric counts it as `invalid_credentials`; the
+    log line and audit row keep `email_not_verified`.
+  - The developer portal shows the same "check your inbox" screen for both
+    cases and no longer has an "Email already registered" error.
+
+  **Action for clients**: treat any `2xx` from `/auth/register` as "check your
+  inbox" and stop reading a user id from it. Do not branch on `409` or on
+  `EMAIL_NOT_VERIFIED`.
+
+- **BREAKING (security)**: `REQUIRE_VERIFIED_ACCOUNT` now defaults to **`true`**
+  (maintainer decision, 2026-10-19). Without it, registering an address with a
+  password of one's choice and then logging in with it told a free address
+  (`200`) from a registered one (`401`). An unset or blank value of the
+  variable, or of its deprecated alias `REQUIRE_EMAIL_VERIFIED`, now means
+  `true`.
+
+  **Action for operators**: existing accounts whose address was never verified
+  can no longer sign in with a password until they verify (they can request a
+  new link through `POST /auth/resend-verification` or the portal). A stack on
+  `EMAIL_PROVIDER=mock` delivers no mail, so its sign-ups cannot be verified:
+  configure `smtp` or `resend`. Set `REQUIRE_VERIFIED_ACCOUNT=false` only
+  knowingly; it gives the register-then-login answer back.
+
 - **BREAKING**: ID tokens now release `email`/`email_verified` only when the
   granted scope includes `email`, matching the userinfo endpoint's gating
   (OIDC Core §5.4 data minimization). Clients requesting only `openid` no
@@ -269,8 +314,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **`REQUIRE_EMAIL_VERIFIED` is renamed `REQUIRE_VERIFIED_ACCOUNT`.** Email is a
   user attribute, not the trust gate. The gate is a verified account.
-  **The gate behaves the same**: for a password account, the proof is still
-  the confirmed address, and the default is still `false`.
+  **The rename alone changes no behaviour**: for a password account, the proof
+  is still the confirmed address. (The default changed separately, to `true`;
+  see Changed above.)
   - The old name keeps working as an alias through the 1.x deprecation window
     of at least 12 months.
   - A deployment that sets only the old name logs a deprecation warning at

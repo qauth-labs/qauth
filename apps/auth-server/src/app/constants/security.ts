@@ -34,6 +34,13 @@ export const MIN_RESPONSE_TIME_MS = {
   LOGIN: 500,
   /** Resend verification endpoint minimum response time (200ms) */
   RESEND_VERIFICATION: 200,
+  /**
+   * Registration endpoint minimum response time (500ms). Both outcomes, a new
+   * account and an address that already has one, hash the password and run
+   * the same insert transaction (the second rolls back), so this pads the
+   * remaining difference: the extra inserts and the commit of a new account.
+   */
+  REGISTRATION: 500,
   /** Refresh endpoint minimum response time (300ms) */
   REFRESH: 300,
   /** Token endpoint minimum response time (300ms) */

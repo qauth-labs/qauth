@@ -298,10 +298,13 @@ export default fp(async function (fastify: FastifyInstance) {
         return reply.code(error.statusCode).send(response);
       }
 
-      // Handle UniqueConstraintError. The offending constraint name is an
-      // account-enumeration oracle (a duplicate-email registration would
-      // otherwise reveal that the email is already registered), so it is logged
-      // for operators but NEVER returned to the caller. The wire `error`
+      // Handle UniqueConstraintError. The offending constraint name can be an
+      // enumeration oracle (a duplicate-email registration once reached this
+      // branch with the credentials index in it), so it is logged for
+      // operators but NEVER returned to the caller. `POST /auth/register` no
+      // longer gets here at all: there the status alone told a registered
+      // address from a free one, so the route answers a duplicate with the
+      // same 202 as any address (ANT-2026-SPEMY9GU). The wire `error`
       // message is genericised for the same reason — `error.message` embeds the
       // constraint name. `code` + `statusCode` are preserved so legitimate
       // clients can still branch on the conflict. The `url` is censored for the

@@ -28,6 +28,11 @@ Mirrors the [first-party auth endpoints](/integrate/api-reference/#first-party-a
 create a user, log in for tokens, then call a Bearer-protected endpoint
 (`GET /api/clients`).
 
+Registration answers every address with the same `202`, and a new account can
+log in only once its address is verified (`REQUIRE_VERIFIED_ACCOUNT`, on by
+default). So run the script once with `QAUTH_REGISTER=1`, open the link in the
+email and confirm with the password, then run it again without the variable.
+
 ```ts
 // first-party.ts
 const QAUTH = process.env.QAUTH_URL ?? 'http://localhost:3000';
@@ -49,16 +54,17 @@ async function post(path: string, body: unknown, token?: string) {
 }
 
 async function main() {
-  // 1. Register (idempotent-ish: ignore 409 if the user already exists).
-  try {
-    const user = await post('/auth/register', { email, password });
-    console.log('registered:', user.id, user.email);
-  } catch (err) {
-    if (!String(err).includes('409')) throw err;
-    console.log('user already exists, continuing');
+  // 1. Register, once. The answer is the same 202 whether or not the address
+  //    already has an account; the next step arrives by email.
+  if (process.env.QAUTH_REGISTER === '1') {
+    const { message } = await post('/auth/register', { email, password });
+    console.log(message);
+    console.log('Open the link in the email, confirm, then run again without QAUTH_REGISTER.');
+    return;
   }
 
-  // 2. Log in → tokens.
+  // 2. Log in → tokens. Until the address is verified this is the same 401 as a
+  //    wrong password.
   const { access_token, refresh_token, expires_in } = await post('/auth/login', {
     email,
     password,

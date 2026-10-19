@@ -101,8 +101,10 @@ services:
       SESSION_COOKIE_SECRET: ${SESSION_COOKIE_SECRET}
       SESSION_COOKIE_TTL: ${SESSION_COOKIE_TTL:-86400}
       SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-true}
-      # Require a verified account before password login (default: false, MVP).
-      # For a password account, verified means its address was confirmed.
+      # Require a verified account before password login (default: true). For a
+      # password account, verified means its address was confirmed. Keep it on:
+      # off, register-then-login tells a free address from a registered one.
+      # EMAIL_PROVIDER=mock delivers no mail, so a sign-up cannot be verified.
       # REQUIRE_EMAIL_VERIFIED is the deprecated name. It still works, with a
       # boot warning, and the boot fails if the two disagree. Both are forwarded
       # blank when unset (the schema reads blank as unset), so a deployment

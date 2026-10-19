@@ -95,17 +95,19 @@ describe('REQUIRE_VERIFIED_ACCOUNT parsing (F-08 footgun guard)', () => {
     expect(mod.env.REQUIRE_VERIFIED_ACCOUNT).toBe(true);
   });
 
-  it('unset → false (MVP default preserves behavior), with no deprecation warning', async () => {
+  // Default true since 2026-10-19 (ANT-2026-SPEMY9GU): an unverified account
+  // must not sign in, or register-then-login tells free addresses from taken.
+  it('unset → true (the default), with no deprecation warning', async () => {
     setGateEnv({});
     const mod = await import('./env');
-    expect(mod.env.REQUIRE_VERIFIED_ACCOUNT).toBe(false);
+    expect(mod.env.REQUIRE_VERIFIED_ACCOUNT).toBe(true);
     expect(mod.envDeprecationWarnings).toEqual([]);
   });
 
-  it('blank → false, as `${REQUIRE_VERIFIED_ACCOUNT:-}` in docker-compose.yml expands to', async () => {
+  it('blank → true, as `${REQUIRE_VERIFIED_ACCOUNT:-}` in docker-compose.yml expands to', async () => {
     setGateEnv({ REQUIRE_VERIFIED_ACCOUNT: '', REQUIRE_EMAIL_VERIFIED: '' });
     const mod = await import('./env');
-    expect(mod.env.REQUIRE_VERIFIED_ACCOUNT).toBe(false);
+    expect(mod.env.REQUIRE_VERIFIED_ACCOUNT).toBe(true);
     expect(mod.envDeprecationWarnings).toEqual([]);
   });
 });

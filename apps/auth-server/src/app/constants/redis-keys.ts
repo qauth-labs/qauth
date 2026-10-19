@@ -21,12 +21,13 @@ function digest(value: string): string {
  */
 export const REDIS_KEYS = {
   /**
-   * Rate limit counter for resend verification requests per email.
+   * Per-address counter of verification-related mails, shared by
+   * `POST /auth/resend-verification` and `POST /auth/register`.
    *
-   * Both resend keys are written for EVERY request, account or not, before any
-   * lookup, so the address is {@link digest}ed: a key holding it verbatim was
-   * an hour-long Redis entry as long as the caller's address. Counters written
-   * under the old names expire within the hour.
+   * Both keys are written for EVERY request of either route, account or not,
+   * before any lookup, so the address is {@link digest}ed: a key holding it
+   * verbatim was an hour-long Redis entry as long as the caller's address.
+   * Counters written under the old names expire within the hour.
    */
   RESEND_RATE_LIMIT: (email: string) => `rate-limit:resend:${digest(email)}`,
   /** Last email sent timestamp for minimum interval check (address digested, as above) */

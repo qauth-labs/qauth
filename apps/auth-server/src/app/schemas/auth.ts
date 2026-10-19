@@ -19,19 +19,19 @@ export const registerSchema = z.object({
 export type RegisterRequest = z.infer<typeof registerSchema>;
 
 /**
- * Registration response schema (user data without password_hash)
+ * Registration response schema (`202 Accepted`).
+ *
+ * Every address gets this same body, whether a new account was created or the
+ * address already had one (ANT-2026-SPEMY9GU). It therefore carries nothing
+ * that could differ between the two: no user id, no timestamps, no "created"
+ * flag. What happens next arrives by email.
  */
 export const registerResponseSchema = z.object({
-  id: z.uuid(),
-  email: z.email(),
-  emailVerified: z.boolean(),
-  realmId: z.uuid(),
-  createdAt: z.number(),
-  updatedAt: z.number().nullable(),
+  message: z.string(),
 });
 
 /**
- * Registration response type (user data without password_hash)
+ * Registration response type
  */
 export type RegisterResponse = z.infer<typeof registerResponseSchema>;
 

@@ -1,7 +1,7 @@
 import { createPasswordProvider } from '@qauth-labs/fastify-plugin-federation';
 import { InvalidCredentialsError, TooManyRequestsError } from '@qauth-labs/shared-errors';
 import type { FastifyInstance } from 'fastify';
-import { describe, expect, it, type Mock, vi } from 'vitest';
+import { afterEach, describe, expect, it, type Mock, vi } from 'vitest';
 
 vi.mock('../../helpers/timing', () => ({
   ensureMinimumResponseTime: vi.fn().mockResolvedValue(undefined),
@@ -23,13 +23,15 @@ vi.mock('../../../config/env', () => ({
     FAILED_LOGIN_MAX_ATTEMPTS: 5,
     FAILED_LOGIN_WINDOW: 900,
     FAILED_LOGIN_LOCKOUT_DURATION: 900,
-    // Off by default (MVP posture); the gate test flips it per-case.
+    // On by default since ANT-2026-SPEMY9GU. Off here so the credential-flow
+    // tests can sign in an unverified fixture; the gate tests turn it on.
     REQUIRE_VERIFIED_ACCOUNT: false,
   },
 }));
 
 import { env } from '../../../config/env';
 import { hashEmail } from '../../helpers/auth-events';
+import { ensureMinimumResponseTime } from '../../helpers/timing';
 import loginRoute from './login';
 
 interface TestContext {
@@ -500,44 +502,155 @@ describe('POST /auth/login', () => {
     );
   });
 
-  it('REQUIRE_VERIFIED_ACCOUNT gate reads credential_data.email_verified', async () => {
-    const { fastify, ctx } = createFastifyStub();
-    await loginRoute(fastify);
-    const handler = ctx.handler;
+  describe('verified-account gate (ANT-2026-SPEMY9GU)', () => {
+    /**
+     * Everything a caller of POST /auth/login can observe about one refused
+     * attempt: the error the error handler turns into the response, the
+     * response headers, the `/metrics` label, and the timing floor applied
+     * before the audit write.
+     */
+    async function refusal(setup: (fastify: FastifyInstance) => void) {
+      const { fastify, ctx } = createFastifyStub();
+      await loginRoute(fastify);
+      if (!ctx.handler) throw new Error('Handler missing');
+      setup(fastify);
+      vi.mocked(ensureMinimumResponseTime).mockClear();
 
-    (
-      fastify.repositories.userCredentials.findByRealmProviderSub as unknown as Mock
-    ).mockResolvedValue(
-      credentialFixture({ credentialData: { password_hash: 'hash', email_verified: false } })
-    );
-    // users row says VERIFIED — the gate must read credential_data (false),
-    // not user.emailVerified; a regression to the users-row source lets this
-    // login through and fails the test.
-    (fastify.repositories.users.findById as unknown as Mock).mockResolvedValue(
-      userFixture({ emailVerified: true })
-    );
-    (fastify.passwordHasher.verifyPassword as unknown as Mock).mockResolvedValue(true);
-
-    (env as { REQUIRE_VERIFIED_ACCOUNT: boolean }).REQUIRE_VERIFIED_ACCOUNT = true;
-    try {
-      const request = {
-        body: { email: 'user@example.com', password: 'p' },
-        ip: '127.0.0.1',
-        headers: { 'user-agent': 'vitest' },
-        log: requestLog(),
-      };
       const reply = createReply();
-      if (!handler) throw new Error('Handler missing');
+      const error = await ctx
+        .handler(
+          {
+            body: { email: 'user@example.com', password: 'p' },
+            ip: '127.0.0.1',
+            headers: { 'user-agent': 'vitest' },
+            log: requestLog(),
+          },
+          reply
+        )
+        .then(
+          () => undefined,
+          (thrown: unknown) => thrown as Error & { statusCode?: number; code?: string }
+        );
 
-      await expect(handler(request, reply)).rejects.toThrow(
-        'Email address not verified. Check your inbox.'
-      );
-      expect(fastify.jwtUtils.signAccessToken).not.toHaveBeenCalled();
-      // The gate fires before the user lookup — its source is the credential.
-      expect(fastify.repositories.users.findById).not.toHaveBeenCalled();
-    } finally {
-      (env as { REQUIRE_VERIFIED_ACCOUNT: boolean }).REQUIRE_VERIFIED_ACCOUNT = false;
+      const floorOrder = vi.mocked(ensureMinimumResponseTime).mock.invocationCallOrder[0];
+      const auditOrder = (fastify.repositories.auditLogs.create as unknown as Mock).mock
+        .invocationCallOrder[0];
+      return {
+        fastify,
+        observed: {
+          error: error && {
+            name: error.name,
+            message: error.message,
+            statusCode: error.statusCode,
+            code: error.code,
+          },
+          headers: reply.headers,
+          metric: (fastify.metrics.loginAttempts.inc as unknown as Mock).mock.calls,
+          // The floor each refusal is padded to (the start time differs per run).
+          floor: vi.mocked(ensureMinimumResponseTime).mock.calls.map(([, floorMs]) => floorMs),
+          floorBeforeAudit: floorOrder !== undefined && floorOrder < auditOrder,
+        },
+      };
     }
+
+    afterEach(() => {
+      (env as { REQUIRE_VERIFIED_ACCOUNT: boolean }).REQUIRE_VERIFIED_ACCOUNT = false;
+    });
+
+    it('answers an unverified account exactly as a wrong password', async () => {
+      (env as { REQUIRE_VERIFIED_ACCOUNT: boolean }).REQUIRE_VERIFIED_ACCOUNT = true;
+
+      // Someone registered a FREE address with a password of their choice and
+      // logs in with it: right password, unverified account.
+      const fresh = await refusal((fastify) => {
+        (
+          fastify.repositories.userCredentials.findByRealmProviderSub as unknown as Mock
+        ).mockResolvedValue(
+          credentialFixture({ credentialData: { password_hash: 'hash', email_verified: false } })
+        );
+        (fastify.passwordHasher.verifyPassword as unknown as Mock).mockResolvedValue(true);
+      });
+      // The same attempt against an address that was already registered: the
+      // owner's account, and the caller's password is wrong for it.
+      const taken = await refusal((fastify) => {
+        (
+          fastify.repositories.userCredentials.findByRealmProviderSub as unknown as Mock
+        ).mockResolvedValue(credentialFixture());
+        (fastify.repositories.users.findById as unknown as Mock).mockResolvedValue(userFixture());
+        (fastify.passwordHasher.verifyPassword as unknown as Mock).mockResolvedValue(false);
+      });
+
+      expect(fresh.observed.error).toMatchObject({
+        name: 'InvalidCredentialsError',
+        message: 'Invalid email or password',
+        statusCode: 401,
+      });
+      expect(fresh.observed).toEqual(taken.observed);
+      expect(fresh.observed.floorBeforeAudit).toBe(true);
+      expect(fresh.fastify.jwtUtils.signAccessToken).not.toHaveBeenCalled();
+      expect(fresh.fastify.sessionUtils.setSession).not.toHaveBeenCalled();
+    });
+
+    it('reads credential_data.email_verified, before the users row is looked up', async () => {
+      (env as { REQUIRE_VERIFIED_ACCOUNT: boolean }).REQUIRE_VERIFIED_ACCOUNT = true;
+
+      const { fastify, observed } = await refusal((stub) => {
+        (
+          stub.repositories.userCredentials.findByRealmProviderSub as unknown as Mock
+        ).mockResolvedValue(
+          credentialFixture({ credentialData: { password_hash: 'hash', email_verified: false } })
+        );
+        // users row says VERIFIED — the gate must read credential_data (false),
+        // not user.emailVerified; a regression to the users-row source lets
+        // this login through and fails the test.
+        (stub.repositories.users.findById as unknown as Mock).mockResolvedValue(
+          userFixture({ emailVerified: true })
+        );
+        (stub.passwordHasher.verifyPassword as unknown as Mock).mockResolvedValue(true);
+      });
+
+      expect(observed.error?.name).toBe('InvalidCredentialsError');
+      expect(fastify.jwtUtils.signAccessToken).not.toHaveBeenCalled();
+      expect(fastify.repositories.users.findById).not.toHaveBeenCalled();
+      // The reason survives where only operators read it.
+      expect(fastify.repositories.auditLogs.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          userId: 'user-1',
+          metadata: expect.objectContaining({ error: 'Email address not verified' }),
+        })
+      );
+    });
+
+    it('still signs in an unverified account when an operator turns the gate off', async () => {
+      const { fastify, ctx } = createFastifyStub();
+      await loginRoute(fastify);
+      if (!ctx.handler) throw new Error('Handler missing');
+      (
+        fastify.repositories.userCredentials.findByRealmProviderSub as unknown as Mock
+      ).mockResolvedValue(
+        credentialFixture({ credentialData: { password_hash: 'hash', email_verified: false } })
+      );
+      (fastify.repositories.users.findById as unknown as Mock).mockResolvedValue(userFixture());
+      (fastify.passwordHasher.verifyPassword as unknown as Mock).mockResolvedValue(true);
+      (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue({
+        id: 'sc-uuid',
+        clientId: 'system',
+        audience: ['https://auth.example.com'],
+      });
+      (fastify.jwtUtils.signAccessToken as unknown as Mock).mockResolvedValue('jwt');
+
+      await expect(
+        ctx.handler(
+          {
+            body: { email: 'user@example.com', password: 'p' },
+            ip: '127.0.0.1',
+            headers: { 'user-agent': 'vitest' },
+            log: requestLog(),
+          },
+          createReply()
+        )
+      ).resolves.toMatchObject({ access_token: 'jwt' });
+    });
   });
 
   it('rejects with TooManyRequestsError when the identifier is locked out (#115)', async () => {

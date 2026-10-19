@@ -76,7 +76,7 @@ enumeration oracle — client authentication failures answer with the bare token
 | `401`  | Missing, malformed, or invalid bearer token / session     |
 | `403`  | Authenticated but not permitted (e.g. insufficient scope) |
 | `404`  | Resource not found                                        |
-| `409`  | Conflict (e.g. email already registered)                  |
+| `409`  | Conflict (e.g. a resource that must be unique)            |
 | `429`  | Rate limited                                              |
 
 ---
@@ -124,7 +124,22 @@ Email/password endpoints for **end users of your own application**. Third-party
 
 ### `POST /auth/register`
 
-Create a user account. A verification email is sent (the `mock` provider logs it).
+Register a password account. The answer is the same for every address, whether
+it was free or already has an account, so it reveals neither. What happens next
+arrives by email (the `mock` provider delivers nothing):
+
+- A free address gets an unverified account and a verification link.
+- An address that already has a verified account gets no new account. Its owner
+  gets a notice that someone tried to register it, with no link in it.
+- An address whose account is still unverified gets its verification link
+  again. The link verifies only with the password chosen when the account was
+  first registered (see [`POST /auth/verify`](#post-authverify)).
+
+A mail to an existing account counts toward the same per-address caps as
+[`POST /auth/resend-verification`](#post-authresend-verification), and every
+registration claims the minimum interval there, so a resend right after a
+registration answers `429` for any address. A new account's verification mail is
+always sent.
 
 **Request** (`application/json`)
 
@@ -134,25 +149,24 @@ Create a user account. A verification email is sent (the `mock` provider logs it
 | `password` | string         | yes      | Strength enforced server-side (zxcvbn score). |
 | `realmId`  | string (uuid)  | no       | Defaults to the server's default realm.       |
 
-**`201 Created`**
+**`202 Accepted`** (`Cache-Control: no-store`)
 
 ```json
-{
-  "id": "0190f7c2-...",
-  "email": "dev@example.com",
-  "emailVerified": false,
-  "realmId": "0190f7c0-...",
-  "createdAt": 1750000000000,
-  "updatedAt": null
-}
+{ "message": "Registration received. Check your inbox for an email with the next step." }
 ```
 
-Errors: `400` (validation / weak password), `409` (email already registered),
-`429` (rate limited). The `409` body is generic and carries no database
-constraint name, but the status itself tells the caller that the address already
-has a password account in the realm. This endpoint therefore reveals whether an
-address is registered.
-[ADR-017](/reference/records/adr/017-first-party-login/) removes it before 1.0.
+The body carries no user id: anything that differed between a new account and an
+existing one would answer the question this endpoint must not. Show a "check your
+inbox" screen, never "account created" or "address taken". With
+`REQUIRE_VERIFIED_ACCOUNT` on (the default), the account can sign in only after
+its owner has verified it; until then [`POST /auth/login`](#post-authlogin)
+answers it with the same `401` as a wrong password.
+
+Errors: `400` (validation, or an unknown or disabled `realmId`), `422`
+(`WEAK_PASSWORD`, with `feedback`), `429` (rate limited). None of them depends on
+whether the address is registered. Before 2026-10-19 this endpoint answered `201`
+with the new user and `409` for a registered address (breaking change, listed in
+`CHANGELOG.md`).
 
 ### `POST /auth/login`
 
@@ -173,6 +187,10 @@ address is at most 254 characters.
 ```
 
 Errors: `400` (validation), `401` (invalid credentials), `429` (rate limited).
+The `401` is the same for an unknown address, a wrong password, a disabled
+account and, with `REQUIRE_VERIFIED_ACCOUNT` on (the default), an account whose
+address is not verified yet: registering an address and then logging in must not
+tell a free address from a registered one.
 Renew the access token with the [`refresh_token` grant](/integrate/oauth-flow/#refresh-token-rotation)
 at `POST /oauth/token` — there is no separate refresh endpoint.
 
@@ -217,7 +235,8 @@ and the `429` carries `Retry-After`).
 ### `POST /auth/resend-verification`
 
 Re-send the verification email. Rate-limited per address (min-interval +
-per-window caps).
+per-window caps). [`POST /auth/register`](#post-authregister) counts toward the
+same caps.
 
 **Request** (`application/json`): `{ "email": "dev@example.com" }`
 

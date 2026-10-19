@@ -38,4 +38,17 @@ export interface EmailService {
     token: string,
     options?: Partial<EmailOptions>
   ): Promise<EmailResult>;
+
+  /**
+   * Tell the owner of an address that someone tried to register it again.
+   *
+   * Registration answers every address the same way, so this notice is how
+   * the person who already has an account hears about the attempt. It carries
+   * no link and no token.
+   *
+   * @param to - Recipient email address (the existing account's address)
+   * @param options - Optional additional email options
+   * @returns Promise resolving to email result
+   */
+  sendAccountExistsEmail(to: string, options?: Partial<EmailOptions>): Promise<EmailResult>;
 }
