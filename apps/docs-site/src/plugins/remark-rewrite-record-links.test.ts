@@ -372,7 +372,11 @@ describe('rewriteRecordLink — the real docs/adr and docs/security corpus, enum
     // ADR-014's header pointer links ADR-011 (GATE 4d); ADR-009 §1's amendment
     // links ADR-017 and ADR-004's links ADR-009 (wallet sign-in creates no
     // accounts). All four → ROUTE.
-    expect(extractAllLinks()).toHaveLength(574);
+    //
+    // 574 → 575 with the 2026-10-20 error-format amendment to ADR-019: one
+    // external link in Related, RFC 9457. The rule's body names ADR-018 and
+    // the other RFCs without links.
+    expect(extractAllLinks()).toHaveLength(575);
   });
 
   it('every link falls into exactly one of the four outcomes, with none left unresolved', () => {
@@ -492,7 +496,10 @@ describe('rewriteRecordLink — the real docs/adr and docs/security corpus, enum
     // The 2026-10-11 review of ADR-011: external unchanged at 279 and bare
     // anchors 37 → 38; 221 → 228 route; 23 → 24 blob (the spec pin log).
     // Unresolved unchanged.
-    expect(untouchedExternalOrAnchor).toBe(279 + 38);
+    //
+    // The 2026-10-20 error-format amendment to ADR-019: 279 → 280 external
+    // (RFC 9457). Anchors, route, blob and unresolved unchanged.
+    expect(untouchedExternalOrAnchor).toBe(280 + 38);
     //
     // The 2026-10-11 decisions on ADR-011: 228 → 229 route (net +1, see the total
     // above). External, anchors, blob and unresolved unchanged.
