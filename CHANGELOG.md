@@ -190,8 +190,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   knowingly; it gives the register-then-login answer back.
 
 - **BREAKING (wallet federation, `WALLET_FEDERATION_ENABLED=true` only)**: a
-  first wallet presentation no longer creates an account. In `v0.1.0-rc.1` and
-  `v0.1.0-rc.2`, presenting a valid credential on `/ui/wallet-login` with an
+  first wallet presentation no longer creates an account. From `v0.1.0-rc.1` to
+  `v0.1.0-rc.3`, presenting a valid credential on `/ui/wallet-login` with an
   identifier that had no account enrolled a new account on that identifier,
   bound to the presenter's credential, while an identifier with an account was
   refused. Anyone holding a credential from a trusted issuer could therefore
@@ -428,6 +428,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Low: [GHSA-w26w-8h69-7h5w](https://github.com/qauth-labs/qauth/security/advisories/GHSA-w26w-8h69-7h5w) — Wallet login DoS: pinned but untrusted issuer trips status-list breaker
   - Low: [GHSA-wx9c-x6qf-24jr](https://github.com/qauth-labs/qauth/security/advisories/GHSA-wx9c-x6qf-24jr) — Timing-based email enumeration in resend-verification via slow mail send
   - Low: [GHSA-xh4j-6p3v-qqw4](https://github.com/qauth-labs/qauth/security/advisories/GHSA-xh4j-6p3v-qqw4) — Skipped key attestation stating basic storage still clears haip-1.0 floor
+- **BREAKING, from the other advisory fixes** (each advisory has the detail):
+  - Consent now covers RFC 8707 resources: an existing consent asks once more
+    for a request that names a `resource`. Migration 0021 adds
+    `oauth_consents.resource_scopes`.
+  - The `/oauth/authorize` Bearer path needs a consent that covers the
+    request, and `unauthorized_client` is answered with HTTP 400.
+  - A one-time approval no longer gets a refresh token, and a refresh into a
+    scope the client no longer has is refused.
+  - `SESSION_COOKIE_TTL` is an absolute lifetime, and logout ends the
+    user's hosted browser sessions.
+  - `http://` redirect URIs to a host that is not a loopback address are
+    refused in every environment.
+  - `private_key_jwt` failures carry no `error_description`.
+  - Requests are refused that carry URIs with raw Unicode or spaces, URIs or
+    `client_id`s over 2048 characters, email addresses over 254 characters,
+    or a `max_age` that is not all digits.
+  - A wallet email counts as verified only with a disclosed
+    `email_verified: true`, or when its issuer is in
+    `OID4VP_EMAIL_VERIFYING_ISSUERS`. Migration 0022 adds
+    `user_attributes.provenance`.
+  - A status list served from another host needs a matching SAN or an entry
+    in `OID4VP_STATUS_LIST_SIGNERS`.
+  - `haip-1.0` grades key storage more strictly, and DSA and DH keys in
+    `x5c` are refused.
+  - Two `mcp-guard` instances registered on one plugin scope no longer boot.
+- **New configuration from the advisory fixes**: `MAX_CLIENTS_PER_DEVELOPER`
+  (default 100), `REQUEST_TIMEOUT_MS` (default 60000),
+  `OID4VP_EMAIL_VERIFYING_ISSUERS` and `OID4VP_STATUS_LIST_SIGNERS` (both
+  unset), and `mcp-guard`'s `introspectionLocalCheck` option (default `true`).
 - **BREAKING**: `/oauth/authorize` and `GET /ui/consent` redirect an
   authorization error automatically only to a client an operator provisioned
   (RFC 9700 §4.11.2, ANT-2026-O8U3P920). Every other client, including one a
