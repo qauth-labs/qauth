@@ -9,6 +9,7 @@ import {
   CookieJar,
   type E2eInfrastructure,
   generateJwtPem,
+  linkWalletToNewAccount,
   type PemKeyPair,
   pkcePair,
   resetE2eState,
@@ -75,6 +76,17 @@ import {
  * behaviour inside a running deployment would be answered from that cache, so
  * each scenario boots its own — which is also the honest shape, since a
  * revocation state is a property of the world the deployment runs in.
+ *
+ * ## Every refusal is on an account the credential would otherwise sign in to
+ *
+ * Wallet sign-in creates no accounts (ADR-009 §1, amended 2026-10-19), so a
+ * credential presented on an identifier with no account is refused whatever
+ * its status bit says — a test built that way would pass with the status gate
+ * removed. So each scenario first links a credential WITHOUT a `status` claim
+ * to the account (#238; linking it dials nothing), and then presents one that
+ * differs from it only in its `status` claim. The binding covers the issuer,
+ * the type and the binding claims, not the status, so the status gate is the
+ * only thing left that can refuse it.
  */
 
 /** The realm every deployment in this suite uses. `OID4VP_*` maps key on it. */
@@ -282,6 +294,40 @@ describe('credential revocation E2E (Token Status List, #297/#378)', () => {
     }
   }
 
+  /**
+   * Link `wallet`'s credential to a new password account on `email` (#238):
+   * since ADR-009 §1's 2026-10-19 amendment the only way a wallet gets an
+   * account. See the module JSDoc for why the linked credential carries no
+   * `status` claim in the refusal scenarios.
+   *
+   * @returns the account's `users.id`.
+   */
+  async function linkedAccount(
+    app: FastifyInstance,
+    wallet: MockWallet,
+    email: string
+  ): Promise<string> {
+    const { userId } = await linkWalletToNewAccount(
+      app,
+      email,
+      async (invocationUri) => (await wallet.buildResponse(invocationUri)).formBody
+    );
+    return userId;
+  }
+
+  /** The `provider_type` of every credential row on `email`, sorted. */
+  async function providerTypesOn(
+    app: FastifyInstance,
+    realmId: string,
+    email: string
+  ): Promise<string[]> {
+    const rows = await app.repositories.userCredentials.findAllByRealmAndExternalSub(
+      realmId,
+      email
+    );
+    return rows.map((row) => row.providerType).sort();
+  }
+
   /** A wallet holding one credential from `issuer`, at a given list index. */
   async function walletHolding(issuer: MockCredentialIssuer, idx?: number): Promise<MockWallet> {
     const credential = await issuer.issue({
@@ -305,15 +351,23 @@ describe('credential revocation E2E (Token Status List, #297/#378)', () => {
       const live = await walletHolding(trusted, IDX.live);
       const revoked = await walletHolding(trusted, IDX.revoked);
       const untrusted = await walletHolding(rogue, IDX.live);
+      const unchecked = await walletHolding(trusted);
 
       await withDeployment(statusCheckingEnv([trusted, rogue]), async ({ app, ids }) => {
+        // The account both trusted credentials would sign in to, with consent
+        // granted so the code-mint checks below drive the real path.
+        const holder = 'holder@example.com';
+        const userId = await linkedAccount(app, unchecked, holder);
+        await app.repositories.oauthConsents.upsertGrant(userId, ids.clientId, ids.realmId, SCOPES);
+
         // (1) The control: a live bit authenticates.
-        const good = await signInWithWallet(app, live, 'live@example.com');
+        const good = await signInWithWallet(app, live, holder);
         expect(statusOf(good)).toBe('complete');
 
-        // (2) The revoked credential, and (3) a credential from an issuer this
-        // realm does not trust — the refusal #236 already produced.
-        const refusedForStatus = await signInWithWallet(app, revoked, 'revoked@example.com');
+        // (2) The revoked credential on the SAME account — it differs from the
+        // live one only in its status index — and (3) a credential from an
+        // issuer this realm does not trust: the refusal #236 already produced.
+        const refusedForStatus = await signInWithWallet(app, revoked, holder);
         const refusedForTrust = await signInWithWallet(app, untrusted, 'rogue@example.com');
 
         expect(statusOf(refusedForStatus)).toBe('rejected');
@@ -325,33 +379,18 @@ describe('credential revocation E2E (Token Status List, #297/#378)', () => {
         expect(refusedForStatus.pollStatus).toBe(refusedForTrust.pollStatus);
         expect(refusedForStatus.directPostStatus).toBe(refusedForTrust.directPostStatus);
 
-        // NO account was enrolled and NO credential row written.
-        for (const asserted of ['revoked@example.com', 'rogue@example.com']) {
-          expect(
-            await app.repositories.userCredentials.findAllByRealmAndExternalSub(
-              ids.realmId,
-              asserted
-            )
-          ).toEqual([]);
-        }
+        // Neither refusal wrote a credential row.
+        expect(await providerTypesOn(app, ids.realmId, holder)).toEqual(['password', 'wallet']);
+        expect(
+          await app.repositories.userCredentials.findAllByRealmAndExternalSub(
+            ids.realmId,
+            'rogue@example.com'
+          )
+        ).toEqual([]);
 
         // NO session: the browser that presented the revoked credential cannot
         // obtain an authorization code, while the one that presented the live
-        // credential can. Consent is pre-granted for the live account so the
-        // control drives the code-mint path rather than the consent screen.
-        const liveRows = await app.repositories.userCredentials.findAllByRealmAndExternalSub(
-          ids.realmId,
-          'live@example.com'
-        );
-        const liveUserId = liveRows[0]?.userId;
-        if (liveUserId === undefined) throw new Error('the live login enrolled no account');
-        await app.repositories.oauthConsents.upsertGrant(
-          liveUserId,
-          ids.clientId,
-          ids.realmId,
-          SCOPES
-        );
-
+        // credential can.
         expect(await canMintAuthorizationCode(app, refusedForStatus.jar)).toBe(false);
         expect(await canMintAuthorizationCode(app, good.jar)).toBe(true);
 
@@ -369,17 +408,17 @@ describe('credential revocation E2E (Token Status List, #297/#378)', () => {
       async (_label, idx) => {
         const issuer = await createMockIssuer(TRUSTED_ISSUER, 'k1');
         const wallet = await walletHolding(issuer, idx);
+        const unchecked = await walletHolding(issuer);
 
         await withDeployment(statusCheckingEnv([issuer]), async ({ app, ids }) => {
+          await linkedAccount(app, unchecked, 'suspended@example.com');
           const outcome = await signInWithWallet(app, wallet, 'suspended@example.com');
 
           expect(statusOf(outcome)).toBe('rejected');
-          expect(
-            await app.repositories.userCredentials.findAllByRealmAndExternalSub(
-              ids.realmId,
-              'suspended@example.com'
-            )
-          ).toEqual([]);
+          expect(await providerTypesOn(app, ids.realmId, 'suspended@example.com')).toEqual([
+            'password',
+            'wallet',
+          ]);
           expect(statusList.requestCount).toBeGreaterThan(0);
         });
       },
@@ -396,17 +435,17 @@ describe('credential revocation E2E (Token Status List, #297/#378)', () => {
         status: { some_other_mechanism: { list: 'https://elsewhere.example/crl', index: 4 } },
       });
       const wallet = createMockWallet([credential]);
+      const unchecked = await walletHolding(issuer);
 
       await withDeployment(statusCheckingEnv([issuer]), async ({ app, ids }) => {
+        await linkedAccount(app, unchecked, 'unusable@example.com');
         const outcome = await signInWithWallet(app, wallet, 'unusable@example.com');
 
         expect(statusOf(outcome)).toBe('rejected');
-        expect(
-          await app.repositories.userCredentials.findAllByRealmAndExternalSub(
-            ids.realmId,
-            'unusable@example.com'
-          )
-        ).toEqual([]);
+        expect(await providerTypesOn(app, ids.realmId, 'unusable@example.com')).toEqual([
+          'password',
+          'wallet',
+        ]);
         // Nothing was dialled: the claim is unusable before any URI exists.
         expect(statusList.requestCount).toBe(0);
       });
@@ -426,17 +465,17 @@ describe('credential revocation E2E (Token Status List, #297/#378)', () => {
           status: elsewhere.statusClaimFor(IDX.live),
         });
         const wallet = createMockWallet([credential]);
+        const unchecked = await walletHolding(issuer);
 
         await withDeployment(statusCheckingEnv([issuer]), async ({ app, ids }) => {
+          await linkedAccount(app, unchecked, 'ssrf@example.com');
           const outcome = await signInWithWallet(app, wallet, 'ssrf@example.com');
 
           expect(statusOf(outcome)).toBe('rejected');
-          expect(
-            await app.repositories.userCredentials.findAllByRealmAndExternalSub(
-              ids.realmId,
-              'ssrf@example.com'
-            )
-          ).toEqual([]);
+          expect(await providerTypesOn(app, ids.realmId, 'ssrf@example.com')).toEqual([
+            'password',
+            'wallet',
+          ]);
           // The point: refused BEFORE a socket was opened to the host the
           // credential named.
           expect(elsewhere.requestCount).toBe(0);
@@ -467,18 +506,24 @@ describe('credential revocation E2E (Token Status List, #297/#378)', () => {
       async (_label, behaviour) => {
         const issuer = await createMockIssuer(TRUSTED_ISSUER, 'k1');
         const wallet = await walletHolding(issuer, IDX.live);
+        const unchecked = await walletHolding(issuer);
         statusList.setBehaviour(behaviour);
 
         await withDeployment(statusCheckingEnv([issuer]), async ({ app, ids }) => {
+          const userId = await linkedAccount(app, unchecked, 'outage@example.com');
+          await app.repositories.oauthConsents.upsertGrant(
+            userId,
+            ids.clientId,
+            ids.realmId,
+            SCOPES
+          );
           const outcome = await signInWithWallet(app, wallet, 'outage@example.com');
 
           expect(statusOf(outcome)).toBe('rejected');
-          expect(
-            await app.repositories.userCredentials.findAllByRealmAndExternalSub(
-              ids.realmId,
-              'outage@example.com'
-            )
-          ).toEqual([]);
+          expect(await providerTypesOn(app, ids.realmId, 'outage@example.com')).toEqual([
+            'password',
+            'wallet',
+          ]);
           expect(await canMintAuthorizationCode(app, outcome.jar)).toBe(false);
           // It was attempted — the refusal is the endpoint's answer, not a
           // configuration mistake that skipped the fetch.
@@ -494,20 +539,20 @@ describe('credential revocation E2E (Token Status List, #297/#378)', () => {
       // point — anchoring is what makes that insufficient.
       const issuer = await createMockIssuer(TRUSTED_ISSUER, 'k1');
       const wallet = await walletHolding(issuer, IDX.live);
+      const unchecked = await walletHolding(issuer);
       const strangerAnchor = createMockStatusList({ host: 'unrelated.example' }).anchorPem;
 
       await withDeployment(
         statusCheckingEnv([issuer], { OID4VP_STATUS_LIST_TRUST_ANCHORS: strangerAnchor }),
         async ({ app, ids }) => {
+          await linkedAccount(app, unchecked, 'unanchored@example.com');
           const outcome = await signInWithWallet(app, wallet, 'unanchored@example.com');
 
           expect(statusOf(outcome)).toBe('rejected');
-          expect(
-            await app.repositories.userCredentials.findAllByRealmAndExternalSub(
-              ids.realmId,
-              'unanchored@example.com'
-            )
-          ).toEqual([]);
+          expect(await providerTypesOn(app, ids.realmId, 'unanchored@example.com')).toEqual([
+            'password',
+            'wallet',
+          ]);
         }
       );
     }, 180_000);
@@ -525,25 +570,27 @@ describe('credential revocation E2E (Token Status List, #297/#378)', () => {
       const wallet = await walletHolding(issuer);
 
       await withDeployment(statusCheckingEnv([issuer]), async ({ app, ids }) => {
+        await linkedAccount(app, wallet, 'no-status@example.com');
         const outcome = await signInWithWallet(app, wallet, 'no-status@example.com');
 
         expect(statusOf(outcome)).toBe('complete');
-        expect(
-          await app.repositories.userCredentials.findAllByRealmAndExternalSub(
-            ids.realmId,
-            'no-status@example.com'
-          )
-        ).toHaveLength(1);
+        expect(await providerTypesOn(app, ids.realmId, 'no-status@example.com')).toEqual([
+          'password',
+          'wallet',
+        ]);
         // Nothing to consult, so nothing was dialled.
         expect(statusList.requestCount).toBe(0);
       });
     }, 180_000);
 
-    it('signs in with a live bit and enrols the account exactly once', async () => {
+    it('signs in twice with a live bit, adding no account and fetching the list once', async () => {
       const issuer = await createMockIssuer(TRUSTED_ISSUER, 'k1');
       const wallet = await walletHolding(issuer, IDX.live);
+      // Linked without a status claim, so the count below is the sign-ins' own.
+      const unchecked = await walletHolding(issuer);
 
       await withDeployment(statusCheckingEnv([issuer]), async ({ app, ids }) => {
+        await linkedAccount(app, unchecked, 'live-twice@example.com');
         expect(statusOf(await signInWithWallet(app, wallet, 'live-twice@example.com'))).toBe(
           'complete'
         );
@@ -551,12 +598,10 @@ describe('credential revocation E2E (Token Status List, #297/#378)', () => {
           'complete'
         );
 
-        expect(
-          await app.repositories.userCredentials.findAllByRealmAndExternalSub(
-            ids.realmId,
-            'live-twice@example.com'
-          )
-        ).toHaveLength(1);
+        expect(await providerTypesOn(app, ids.realmId, 'live-twice@example.com')).toEqual([
+          'password',
+          'wallet',
+        ]);
         // The verified list is cached on the checker INSTANCE, which is a
         // per-process singleton — so two logins cost one outbound request. This
         // is why it is built at bootstrap and never per request.

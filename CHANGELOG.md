@@ -12,10 +12,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Wallet federation (T4, [ADR-004](./docs/adr/004-wallet-agnostic-federation.md)) —
   browser wallet sign-in.** QAuth can now generate an OID4VP 1.0 authorization
   request, take back a `direct_post` response, validate an SD-JWT VC presentation,
-  resolve or enrol the account, and mint a session — a complete browser sign-in.
-  Covered end-to-end against a mock wallet: first-time enrolment, returning login,
-  the ADR-009 §1 takeover attempt, untrusted-issuer refusal, account linking, and
-  `acr` presence/absence.
+  resolve the account, and mint a session — a complete browser sign-in. Wallet
+  sign-in never creates an account; a wallet is linked from a signed-in account
+  (see **Changed**). Covered end-to-end against a mock wallet: the refusal of an
+  identifier with no account, sign-in with a linked wallet, the ADR-009 §1
+  takeover attempt, untrusted-issuer refusal, account linking, and `acr`
+  presence/absence.
 
   **Off by default.** Nothing below changes how an existing email/password or
   OAuth client behaves — the routes are not even registered unless
@@ -184,6 +186,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `EMAIL_PROVIDER=mock` delivers no mail, so its sign-ups cannot be verified:
   configure `smtp` or `resend`. Set `REQUIRE_VERIFIED_ACCOUNT=false` only
   knowingly; it gives the register-then-login answer back.
+
+- **BREAKING (wallet federation, `WALLET_FEDERATION_ENABLED=true` only)**: a
+  first wallet presentation no longer creates an account. In `v0.1.0-rc.1` and
+  `v0.1.0-rc.2`, presenting a valid credential on `/ui/wallet-login` with an
+  identifier that had no account enrolled a new account on that identifier,
+  bound to the presenter's credential, while an identifier with an account was
+  refused. Anyone holding a credential from a trusted issuer could therefore
+  learn which identifiers have accounts (including wallet-only accounts) and
+  claim identifiers that belong to other people. Wallet sign-in now signs in
+  only an account the credential is already bound to; an identifier with no
+  account gets the same refusal as a taken one (same status, body, headers and
+  cookies) and nothing is written.
+  ([ADR-009](./docs/adr/009-wallet-account-resolution.md) §1, amended
+  2026-10-19; ANT-2026-NCX3VXDP)
+
+  **Action for operators**: accounts that wallet sign-in created before this
+  release keep signing in. A new person gets wallet sign-in by creating an
+  account, signing in to it, and linking the wallet at `/ui/wallet-link` (or
+  `POST /auth/link/wallet`). Wallet-first sign-up arrives with the hosted
+  sign-up pages ([ADR-017](./docs/adr/017-first-party-login.md)). No
+  configuration or migration is involved.
 
 - **BREAKING**: ID tokens now release `email`/`email_verified` only when the
   granted scope includes `email`, matching the userinfo endpoint's gating

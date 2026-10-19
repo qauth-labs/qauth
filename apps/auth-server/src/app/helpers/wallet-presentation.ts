@@ -70,9 +70,10 @@ function withStatusAuditCorrelation<T>(fastify: FastifyInstance, realmId: string
  *    that the presented credential matches the binding stored for the asserted
  *    account. For a LINK, `session-binding`: the account comes from the session,
  *    and the presentation is never allowed to name one.
- * 5. **Enrol and normalize claims (#235).** `helpers/wallet-account.ts` turns
- *    the resolution into an account and writes the credential's claims as
- *    `user_attributes` rows.
+ * 5. **Write (#235, #238).** For a LOGIN, `helpers/wallet-account.ts` signs in
+ *    the account the strategy matched and refreshes the credential's claims as
+ *    `user_attributes` rows; it never creates an account. For a LINK, the
+ *    wallet `user_credentials` row is written to the session's account.
  *
  * Steps 1 and 2 are composed in `verifyWalletPresentations`
  * (`@qauth-labs/fastify-plugin-federation`) precisely so a caller cannot wire up
@@ -81,14 +82,16 @@ function withStatusAuditCorrelation<T>(fastify: FastifyInstance, realmId: string
  * credential proves its holder has *a* credential, not that they own *this
  * account*.
  *
- * ## Enrolment happens on `no-match`, and ONLY there
+ * ## Sign-in never creates an account; linking is how a wallet gets one
  *
- * ADR-009 §1 keeps two bootstrap cases apart and this module must not conflate
- * them. No account for the asserted identifier is `no-match` and enrols — the
- * presentation establishes the account and its binding together. An account that
- * EXISTS for the identifier without a matching wallet binding (typically a
- * password account on the same email) is `rejected` and must never become an
- * enrolment: that path is account linking, and it requires a session.
+ * ADR-009 §1, as amended on 2026-10-19: a wallet LOGIN signs in an account the
+ * presented credential is already bound to, and nothing else. No account for
+ * the asserted identifier (`no-match`) and an account that exists without a
+ * matching wallet binding (`rejected`) end in the same refusal, with nothing
+ * written. Enrolling on `no-match`, as wallet sign-in did before the amendment,
+ * told an anonymous caller which identifiers were free and let them claim
+ * someone else's (ANT-2026-NCX3VXDP). A wallet is attached to an account only
+ * by its owner, from a signed-in session: {@link linkWalletPresentation}.
  *
  * ## Where the inputs come from, and why that matters
  *
@@ -406,9 +409,9 @@ export async function resolveWalletPresentation(
 
     const strategy = createSubjectResolutionStrategy(setup.subjectResolution);
 
-    // Resolve, and enrol on a first presentation (#235). `resolveWalletAccount`
-    // owns the ADR-009 bootstrap distinction: it enrols on `no-match` and on
-    // nothing else.
+    // Resolve to an EXISTING account (#235, #300). `resolveWalletAccount` signs
+    // in only on `matched`; every other outcome, `no-match` included, is the
+    // one refusal (ADR-009 §1, amended 2026-10-19).
     const resolution = await resolveWalletAccount(fastify, {
       realmId: input.realmId,
       credential,
@@ -430,7 +433,6 @@ export async function resolveWalletPresentation(
       {
         realmId: input.realmId,
         userId: resolution.userId,
-        enrolled: resolution.enrolled,
         strategy: strategy.id,
         assuranceLevel,
       },

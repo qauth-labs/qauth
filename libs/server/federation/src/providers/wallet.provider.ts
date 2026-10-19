@@ -267,7 +267,8 @@ export const walletRawClaimsSchema = z
  * `wallet_binding` is the load-bearing field. It is the value `asserted-lookup`
  * re-derives and compares on every later presentation (ADR-009 §1), so it is
  * nullable in the SCHEMA — a row from a future strategy that stores none must
- * still parse — while #235's enrolment path refuses to write a row without one.
+ * still parse — while every writer (account linking, #238) refuses to write a
+ * row without one.
  * A stored `null` therefore reads as "this account has no wallet binding", which
  * `selectSoleAccount` treats as ADR-009's second bootstrap case and refuses. Its
  * length bound is shared with `readWalletBinding` (#238), which is the ONLY
@@ -416,7 +417,7 @@ export function buildWalletVerifiedIdentity(
  * What {@link extractWalletAttributes} reads.
  *
  * A structural SUBSET of `ValidatedCredential`, which satisfies it without a
- * cast — so the enrolment path passes the credential itself, and the ADR-003
+ * cast — so wallet sign-in passes the credential itself, and the ADR-003
  * method passes a view rebuilt from its envelope, and neither needs to fabricate
  * the fields it does not have. Nothing that could carry a trust or assurance
  * decision is in it; see `claims/credential-claims.types.ts`.
@@ -469,7 +470,7 @@ export interface ExtractWalletAttributesOptions {
  * Normalize a validated credential's claims into `user_attributes` rows (#235).
  *
  * The workhorse behind {@link CredentialProvider.extractAttributes}, exported
- * because the enrolment path in `apps/auth-server` needs the rows for a
+ * because wallet sign-in in `apps/auth-server` needs the rows for a
  * credential it holds directly, without round-tripping through an envelope it
  * would have to build only to have this function take it apart again.
  *

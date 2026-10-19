@@ -498,6 +498,220 @@ export async function readInvocationUriFromPendingPage(
   return extractInvocationUriFromQr(page, app);
 }
 
+/** The password every E2E password account is registered with. */
+export const E2E_PASSWORD = 'Correct-Horse-Battery-Staple-42!';
+
+/**
+ * Register a password account through the real `POST /auth/register` route and
+ * verify it through the real `POST /auth/verify`, as its owner would from the
+ * mailed link.
+ *
+ * Since ANT-2026-SPEMY9GU registration answers every address with the same
+ * `202` and no user id, and `REQUIRE_VERIFIED_ACCOUNT` is on by default, so an
+ * unverified account cannot sign in. The verification token is read from the
+ * mail the server hands its provider (the mail goes out off the request path),
+ * and the id from the account's password credential.
+ *
+ * @returns the new account's `users.id`.
+ * @throws Error when registration, the mail or the verification fails.
+ */
+export async function registerPasswordAccount(
+  app: FastifyInstance,
+  email: string,
+  password = E2E_PASSWORD
+): Promise<string> {
+  const emailService = app.emailService;
+  const original = emailService.sendVerificationEmail;
+  const tokens: string[] = [];
+  emailService.sendVerificationEmail = async (to, token, options) => {
+    if (to === email) tokens.push(token);
+    return original.call(emailService, to, token, options);
+  };
+  try {
+    const response = await app.inject({
+      method: 'POST',
+      url: '/auth/register',
+      payload: { email, password },
+    });
+    if (response.statusCode !== 202) {
+      throw new Error(`POST /auth/register answered ${response.statusCode}: ${response.body}`);
+    }
+    const deadline = Date.now() + 5_000;
+    while (tokens.length === 0 && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+  } finally {
+    emailService.sendVerificationEmail = original;
+  }
+  const token = tokens.at(-1);
+  if (token === undefined) {
+    throw new Error(`registration of ${email} sent no verification mail`);
+  }
+
+  const verified = await app.inject({
+    method: 'POST',
+    url: '/auth/verify',
+    payload: { token, password },
+  });
+  if (verified.statusCode !== 200) {
+    throw new Error(`POST /auth/verify answered ${verified.statusCode}: ${verified.body}`);
+  }
+
+  const realm = await app.repositories.realms.findByName(
+    REQUIRED_TEST_ENVIRONMENT['DEFAULT_REALM_NAME']
+  );
+  const credential =
+    realm &&
+    (await app.repositories.userCredentials.findByRealmProviderSub(realm.id, 'password', email));
+  if (!credential) {
+    throw new Error(`registration of ${email} left no password credential`);
+  }
+  return credential.userId;
+}
+
+/**
+ * Sign a password account in through the real `/ui/login` form, CSRF included.
+ *
+ * @returns the browser's cookie jar, holding the session cookie.
+ * @throws Error when the form does not redirect (a refused sign-in re-renders).
+ */
+export async function signInWithPassword(
+  app: FastifyInstance,
+  email: string,
+  password = E2E_PASSWORD
+): Promise<CookieJar> {
+  const jar = new CookieJar();
+  const loginPage = await app.inject({ method: 'GET', url: '/ui/login' });
+  jar.absorb(loginPage.headers['set-cookie']);
+
+  const login = await app.inject({
+    method: 'POST',
+    url: '/ui/login',
+    headers: {
+      'content-type': 'application/x-www-form-urlencoded',
+      ...(jar.header() === undefined ? {} : { cookie: jar.header() as string }),
+    },
+    payload: new URLSearchParams({
+      email,
+      password,
+      csrf_token: extractCsrfToken(loginPage.body),
+    }).toString(),
+  });
+  if (login.statusCode !== 302) {
+    throw new Error(`POST /ui/login answered ${login.statusCode}, not a redirect`);
+  }
+  jar.absorb(login.headers['set-cookie']);
+  return jar;
+}
+
+/** What a started wallet LINK flow gives the signed-in browser. */
+export interface StartedWalletLink {
+  readonly handle: string;
+  /** The wallet invocation URI, read through the page's one affordance. */
+  readonly invocationUri: string;
+  /** The rendered pending page. */
+  readonly page: string;
+}
+
+/**
+ * Start a linking flow through the server-rendered screens (#238), as the
+ * signed-in browser holding `jar`, choosing where the wallet is (#405) — or
+ * not choosing, which is the cross-device default.
+ *
+ * @throws Error when either screen does not answer 200.
+ */
+export async function startWalletLink(
+  app: FastifyInstance,
+  jar: CookieJar,
+  device?: WalletDeviceChoice
+): Promise<StartedWalletLink> {
+  const confirm = await app.inject({
+    method: 'GET',
+    url: '/ui/wallet-link',
+    headers: { cookie: jar.header() as string },
+  });
+  if (confirm.statusCode !== 200) {
+    throw new Error(`GET /ui/wallet-link answered ${confirm.statusCode}`);
+  }
+  jar.absorb(confirm.headers['set-cookie']);
+
+  const started = await app.inject({
+    method: 'POST',
+    url: '/ui/wallet-link',
+    headers: {
+      'content-type': 'application/x-www-form-urlencoded',
+      cookie: jar.header() as string,
+    },
+    payload: new URLSearchParams({
+      csrf_token: extractCsrfToken(confirm.body),
+      ...(device === undefined ? {} : { device }),
+    }).toString(),
+  });
+  if (started.statusCode !== 200) {
+    throw new Error(`POST /ui/wallet-link answered ${started.statusCode}: ${started.body}`);
+  }
+  jar.absorb(started.headers['set-cookie']);
+
+  return {
+    handle: extractFlowHandle(started.body),
+    invocationUri: await readInvocationUriFromPendingPage(app, started.body, device === 'this'),
+    page: started.body,
+  };
+}
+
+/** The heading `walletLinkedPage` renders (`WALLET_LINKED_TITLE` in `helpers/wallet-ui.ts`). */
+const WALLET_LINKED_TITLE = 'Wallet credential linked';
+
+/**
+ * Give a wallet credential an account the one way QAuth allows since ADR-009
+ * §1's 2026-10-19 amendment: wallet SIGN-IN never creates an account, so the
+ * account is registered with a password, signed in, and the wallet is linked
+ * from that session (#238) — cross-device, completed by the link page's
+ * no-JavaScript refresh.
+ *
+ * `answer` IS the wallet: it receives the invocation URI and returns the form
+ * body to post to `/oid4vp/response`. Each suite passes its own, so the link
+ * runs under the suite's profile (an inline request, or a signed JAR and an
+ * encrypted response).
+ *
+ * @returns the account's `users.id` and the password-signed-in browser's jar.
+ * @throws Error when any step of the registration, sign-in or link fails.
+ */
+export async function linkWalletToNewAccount(
+  app: FastifyInstance,
+  email: string,
+  answer: (invocationUri: string) => Promise<Record<string, string>>
+): Promise<{ readonly userId: string; readonly jar: CookieJar }> {
+  const userId = await registerPasswordAccount(app, email);
+  const jar = await signInWithPassword(app, email);
+  const link = await startWalletLink(app, jar);
+
+  const posted = await app.inject({
+    method: 'POST',
+    url: '/oid4vp/response',
+    headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    payload: new URLSearchParams(await answer(link.invocationUri)).toString(),
+  });
+  if (posted.statusCode !== 200) {
+    throw new Error(
+      `the wallet's link response was refused (${posted.statusCode}): ${posted.body}`
+    );
+  }
+
+  const completed = await app.inject({
+    method: 'GET',
+    url: `/ui/wallet-link/${link.handle}`,
+    headers: { cookie: jar.header() as string },
+  });
+  jar.absorb(completed.headers['set-cookie']);
+  // The pending page also answers 200, so the heading is what says "linked".
+  if (completed.statusCode !== 200 || !completed.body.includes(WALLET_LINKED_TITLE)) {
+    throw new Error(`the wallet link did not complete (${completed.statusCode})`);
+  }
+
+  return { userId, jar };
+}
+
 /** What a followed `redirect_uri` answered. */
 export interface FollowedRedirect {
   readonly statusCode: number;

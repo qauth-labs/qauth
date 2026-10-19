@@ -8,7 +8,6 @@ import {
   ValidatedIssuer,
   walletCredentialDataSchema,
 } from '@qauth-labs/fastify-plugin-federation';
-import { UniqueConstraintError } from '@qauth-labs/shared-errors';
 import type { FastifyInstance } from 'fastify';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -16,14 +15,14 @@ import { resolveWalletAccount } from './wallet-account';
 import { createWalletAccountLookup } from './wallet-account-lookup';
 
 /**
- * Wallet account resolution and enrolment (#235, ADR-009).
+ * Wallet account resolution (#235, ADR-009).
  *
  * These tests drive the REAL `asserted-lookup` strategy rather than a stubbed
- * one. The strategy is what decides whether a presentation may create an account
- * or must be refused, and ADR-009 §1 names that decision as the likeliest thing
- * to get wrong — so stubbing it would leave the acceptance criterion
- * ("a presentation matching a pre-existing account with no wallet binding does
- * NOT silently create a wallet credential") asserted about a test double.
+ * one. The strategy decides which account a presentation names, and whether the
+ * presentation entitles its holder to it; ADR-009 §1 names that decision as the
+ * likeliest thing to get wrong. A stub that never answered `no-match` is how the
+ * "unknown and taken identifiers refuse identically" property went untested
+ * while the code enrolled on `no-match` (ANT-2026-NCX3VXDP).
  *
  * The credentials are hand-built `ValidatedCredential` values carrying a genuine
  * `ValidatedIssuer`. The cryptography they would have passed is exercised
@@ -72,10 +71,10 @@ function credentialFor(claims: Record<string, unknown>, expiresAt?: number): Val
       disclosedClaimCount: Object.keys(claims).length,
       // #297's evidence, widened off the literal `false` by #378.
       // `'not-required'` is the honest value: nothing here read a status list
-      // bit, and enrolment must not read the signal either way.
+      // bit, and account resolution must not read the signal either way.
       statusChecked: 'not-required',
       // #308's evidence. `'none'` is the honest value: nothing here validated a
-      // key attestation, and enrolment must not read it either way.
+      // key attestation, and account resolution must not read it either way.
       keyStorageAssurance: { assurance: 'none' },
     },
   };
@@ -141,6 +140,40 @@ async function resolve(
   });
 }
 
+/**
+ * A returning account whose stored binding `credential` re-derives: the row
+ * account linking (#238) writes, or that wallet sign-in wrote while it still
+ * enrolled.
+ */
+function seedReturningAccount(
+  harness: ReturnType<typeof fakeFastify>,
+  credential: ValidatedCredential,
+  userId = 'user-1'
+): void {
+  harness.userCredentials.findAllByRealmAndExternalSub.mockResolvedValue([
+    credentialRow({
+      userId,
+      credentialData: walletCredentialDataSchema.parse({
+        credential_format: 'dc+sd-jwt',
+        credential_type: VCT,
+        issuer: ISSUER,
+        wallet_binding: deriveEnrolmentWalletBinding(CONFIG, credential),
+        subject_resolution: 'asserted-lookup',
+        enrolled_at: 1,
+      }),
+    }),
+  ]);
+}
+
+/** Nothing about any account was written: no user, no credential, no attribute. */
+function expectNothingWritten(harness: ReturnType<typeof fakeFastify>): void {
+  expect(harness.users.create).not.toHaveBeenCalled();
+  expect(harness.userCredentials.create).not.toHaveBeenCalled();
+  expect(harness.userAttributes.upsertMany).not.toHaveBeenCalled();
+  expect(harness.userAttributes.setVerified).not.toHaveBeenCalled();
+  expect(harness.fastify.db.transaction).not.toHaveBeenCalled();
+}
+
 describe('createWalletAccountLookup (the SubjectAccountLookup port over user_credentials)', () => {
   it('returns every account the asserted identifier resolves to, across provider types', async () => {
     const { fastify, userCredentials } = fakeFastify();
@@ -158,8 +191,8 @@ describe('createWalletAccountLookup (the SubjectAccountLookup port over user_cre
     );
 
     // The password row MUST be visible. A lookup scoped to wallet rows would
-    // report "no account" for an email that already has one, and the caller is
-    // allowed to turn "no account" into an enrolment — ADR-009's takeover.
+    // report "no account" for an email that already has one, and "no account"
+    // is what a sign-up flow may turn into an account — ADR-009's takeover.
     expect(candidates).toEqual([{ userId: 'user-1', walletBinding: null }]);
     expect(userCredentials.findAllByRealmAndExternalSub).toHaveBeenCalledWith(
       REALM_ID,
@@ -212,37 +245,81 @@ describe('createWalletAccountLookup (the SubjectAccountLookup port over user_cre
   });
 });
 
-describe('resolveWalletAccount — enrolment (ADR-009 §1, first bootstrap case)', () => {
+describe('resolveWalletAccount — sign-in never creates an account (ADR-009 §1, amended 2026-10-19)', () => {
   let harness: ReturnType<typeof fakeFastify>;
 
   beforeEach(() => {
     harness = fakeFastify();
   });
 
-  it('creates the user, the wallet credential and the attribute rows together', async () => {
-    const credential = credentialFor(
-      { given_name: 'Alice', family_name: 'Doe', email: 'Alice@Example.COM' },
-      4_102_444_800
+  it('refuses a valid, fully disclosed credential on an identifier with no account, writing nothing (ANT-2026-NCX3VXDP)', async () => {
+    // Every configured binding claim disclosed, issuer validated and trusted.
+    // Before the amendment this enrolled a new account on the identifier the
+    // presenter TYPED, bound to their own credential: a free identifier signed
+    // in, a taken one was refused, and anyone could claim someone else's.
+    const result = await resolve(
+      harness.fastify,
+      credentialFor(
+        { given_name: 'Mallory', family_name: 'Vane', email: 'mallory@example.com' },
+        4_102_444_800
+      ),
+      'nobody@example.com'
     );
 
-    const result = await resolve(harness.fastify, credential);
-
-    expect(result).toEqual({
-      status: 'authenticated',
-      userId: 'user-new',
-      externalSub: 'alice@example.com',
-      enrolled: true,
-    });
-
-    // One transaction: a users row without its credential row would be
-    // unloginable AND block re-enrolment.
-    expect(harness.fastify.db.transaction).toHaveBeenCalledTimes(1);
-    expect(harness.users.create).toHaveBeenCalledWith({ realmId: REALM_ID }, 'tx');
+    expect(result).toEqual({ status: 'rejected' });
+    expectNothingWritten(harness);
+    // One lookup, as for a taken identifier, and the reason for the operator.
+    expect(harness.userCredentials.findAllByRealmAndExternalSub).toHaveBeenCalledTimes(1);
+    expect(harness.fastify.log.info).toHaveBeenCalledWith(
+      expect.objectContaining({ realmId: REALM_ID }),
+      expect.stringContaining('wallet sign-in creates no accounts')
+    );
   });
 
-  it("writes external_sub EXACTLY as #300's strategy resolved it", async () => {
+  it('answers an unused identifier exactly as a taken one (no enumeration oracle)', async () => {
+    // The scanner's reproducer, at the layer that decides it: the SAME valid
+    // credential on Alice's wallet account, on a password-only account, and on
+    // an identifier nobody has. Only the account store differs.
+    const mallory = credentialFor({ given_name: 'Mallory', family_name: 'Vane' });
+
+    seedReturningAccount(harness, credentialFor({ given_name: 'Alice', family_name: 'Doe' }));
+    const walletAccount = await resolve(harness.fastify, mallory, 'alice@example.com');
+
+    harness.userCredentials.findAllByRealmAndExternalSub.mockResolvedValue([
+      credentialRow({ providerType: 'password', credentialData: { password_hash: 'x' } }),
+    ]);
+    const passwordAccount = await resolve(harness.fastify, mallory, 'bob@example.com');
+
+    harness.userCredentials.findAllByRealmAndExternalSub.mockResolvedValue([]);
+    const unused = await resolve(harness.fastify, mallory, 'nobody@example.com');
+
+    expect(unused).toEqual({ status: 'rejected' });
+    expect(walletAccount).toEqual(unused);
+    expect(passwordAccount).toEqual(unused);
+    expect(Object.keys(walletAccount)).toEqual(Object.keys(unused));
+    // One lookup each, and nothing else touched the store on any of them.
+    expect(harness.userCredentials.findAllByRealmAndExternalSub).toHaveBeenCalledTimes(3);
+    expectNothingWritten(harness);
+  });
+
+  it('signs in a returning account whose stored binding the credential re-derives, writing no account rows', async () => {
+    const credential = credentialFor({ given_name: 'Alice', family_name: 'Doe' });
+    seedReturningAccount(harness, credential);
+
+    expect(await resolve(harness.fastify, credential)).toEqual({
+      status: 'authenticated',
+      userId: 'user-1',
+      externalSub: 'alice@example.com',
+    });
+    expect(harness.users.create).not.toHaveBeenCalled();
+    expect(harness.userCredentials.create).not.toHaveBeenCalled();
+    expect(harness.fastify.db.transaction).not.toHaveBeenCalled();
+  });
+
+  it("reports external_sub EXACTLY as #300's strategy resolved it", async () => {
     const strategy = createSubjectResolutionStrategy(CONFIG);
     const credential = credentialFor({ given_name: 'Alice', family_name: 'Doe' });
+    seedReturningAccount(harness, credential);
     const context = {
       realmId: REALM_ID,
       assertedIdentifier: '  Alice@Example.COM ',
@@ -251,7 +328,7 @@ describe('resolveWalletAccount — enrolment (ADR-009 §1, first bootstrap case)
 
     const expected = strategy.deriveExternalSub(credential, context);
 
-    await resolveWalletAccount(harness.fastify, {
+    const result = await resolveWalletAccount(harness.fastify, {
       realmId: REALM_ID,
       credential,
       assertedIdentifier: '  Alice@Example.COM ',
@@ -261,53 +338,10 @@ describe('resolveWalletAccount — enrolment (ADR-009 §1, first bootstrap case)
       emailVerifyingIssuers: [],
     });
 
-    const [written] = harness.userCredentials.create.mock.calls[0] as [Record<string, unknown>];
-
-    expect(written['externalSub']).toBe(expected);
-    expect(written['providerType']).toBe('wallet');
-    expect(written['realmId']).toBe(REALM_ID);
-  });
-
-  it('derives no external_sub from wallet cryptography', async () => {
-    const credential = credentialFor({ given_name: 'Alice', family_name: 'Doe' });
-
-    await resolve(harness.fastify, credential);
-
-    const surface = JSON.stringify(harness.userCredentials.create.mock.calls[0]);
-
-    expect(surface).not.toContain('cnf');
-    expect(surface).not.toContain('"kty"');
-    expect(surface).not.toContain('thumbprint');
-    expect(surface).not.toContain('did:');
-  });
-
-  it('stores a wallet binding the NEXT presentation can be matched against', async () => {
-    const credential = credentialFor({ given_name: 'Alice', family_name: 'Doe' });
-
-    await resolve(harness.fastify, credential);
-
-    const [written] = harness.userCredentials.create.mock.calls[0] as [Record<string, unknown>];
-    const stored = walletCredentialDataSchema.parse(written['credentialData']);
-
-    expect(stored.wallet_binding).toMatch(/^wb1:[0-9a-f]{64}$/);
-    expect(stored.subject_resolution).toBe('asserted-lookup');
-    expect(stored.issuer).toBe(ISSUER);
-
-    // The round trip that matters: replay the same credential against an
-    // account carrying the binding that enrolment just wrote.
-    const returning = fakeFastify();
-    returning.userCredentials.findAllByRealmAndExternalSub.mockResolvedValue([
-      credentialRow({ credentialData: stored }),
-    ]);
-
-    expect(await resolve(returning.fastify, credential)).toEqual({
-      status: 'authenticated',
-      userId: 'user-1',
-      externalSub: 'alice@example.com',
-      enrolled: false,
-    });
-    expect(returning.users.create).not.toHaveBeenCalled();
-    expect(returning.userCredentials.create).not.toHaveBeenCalled();
+    // The normalized asserted identifier (ADR-009 §1) — never a wallet key, a
+    // thumbprint or a DID (ADR-009 Finding 1).
+    expect(expected).toBe('alice@example.com');
+    expect(result).toEqual({ status: 'authenticated', userId: 'user-1', externalSub: expected });
   });
 
   it('writes the disclosed claims as verified wallet attributes with the credential’s expiry', async () => {
@@ -315,43 +349,43 @@ describe('resolveWalletAccount — enrolment (ADR-009 §1, first bootstrap case)
       { given_name: 'Alice', family_name: 'Doe', birthdate: '1990-01-01' },
       4_102_444_800
     );
+    seedReturningAccount(harness, credential);
 
     await resolve(harness.fastify, credential);
 
-    expect(harness.userAttributes.upsertMany).toHaveBeenCalledWith(
-      'user-new',
-      [
-        {
-          source: 'wallet',
-          attrKey: 'given_name',
-          attrValue: 'Alice',
-          verified: true,
-          expiresAt: 4_102_444_800_000,
-          provenance: PROVENANCE,
-        },
-        {
-          source: 'wallet',
-          attrKey: 'family_name',
-          attrValue: 'Doe',
-          verified: true,
-          expiresAt: 4_102_444_800_000,
-          provenance: PROVENANCE,
-        },
-        {
-          source: 'wallet',
-          attrKey: 'birthdate',
-          attrValue: '1990-01-01',
-          verified: true,
-          expiresAt: 4_102_444_800_000,
-          provenance: PROVENANCE,
-        },
-      ],
-      'tx'
-    );
+    expect(harness.userAttributes.upsertMany).toHaveBeenCalledWith('user-1', [
+      {
+        source: 'wallet',
+        attrKey: 'given_name',
+        attrValue: 'Alice',
+        verified: true,
+        expiresAt: 4_102_444_800_000,
+        provenance: PROVENANCE,
+      },
+      {
+        source: 'wallet',
+        attrKey: 'family_name',
+        attrValue: 'Doe',
+        verified: true,
+        expiresAt: 4_102_444_800_000,
+        provenance: PROVENANCE,
+      },
+      {
+        source: 'wallet',
+        attrKey: 'birthdate',
+        attrValue: '1990-01-01',
+        verified: true,
+        expiresAt: 4_102_444_800_000,
+        provenance: PROVENANCE,
+      },
+    ]);
   });
 
   it('writes a null expiry when the credential carries no exp', async () => {
-    await resolve(harness.fastify, credentialFor({ given_name: 'Alice', family_name: 'Doe' }));
+    const credential = credentialFor({ given_name: 'Alice', family_name: 'Doe' });
+    seedReturningAccount(harness, credential);
+
+    await resolve(harness.fastify, credential);
 
     const [, rows] = harness.userAttributes.upsertMany.mock.calls[0] as [
       string,
@@ -361,26 +395,14 @@ describe('resolveWalletAccount — enrolment (ADR-009 §1, first bootstrap case)
     expect(rows.every((row) => row.expiresAt === null)).toBe(true);
   });
 
-  it('refuses to enrol an account nothing could later prove entitlement to', async () => {
-    // The holder withheld `family_name`, one of the configured binding claims,
-    // so no binding can be derived. Enrolling would create an account that
-    // `asserted-lookup` can never match — a silent lockout.
+  it('refuses a credential that withholds a configured binding claim, before any lookup', async () => {
+    // The holder withheld `family_name`, so no binding can be re-derived and
+    // the real strategy refuses without touching the account store.
     const result = await resolve(harness.fastify, credentialFor({ given_name: 'Alice' }));
 
     expect(result).toEqual({ status: 'rejected' });
-    expect(harness.users.create).not.toHaveBeenCalled();
-    expect(harness.userCredentials.create).not.toHaveBeenCalled();
-    expect(harness.userAttributes.upsertMany).not.toHaveBeenCalled();
-  });
-
-  it('refuses, without a distinguishable outcome, when it loses the unique-index race', async () => {
-    harness.userCredentials.create.mockRejectedValue(
-      new UniqueConstraintError('idx_user_credentials_realm_provider_sub_unique')
-    );
-
-    expect(
-      await resolve(harness.fastify, credentialFor({ given_name: 'Alice', family_name: 'Doe' }))
-    ).toEqual({ status: 'rejected' });
+    expect(harness.userCredentials.findAllByRealmAndExternalSub).not.toHaveBeenCalled();
+    expectNothingWritten(harness);
   });
 });
 
@@ -392,18 +414,7 @@ describe('resolveWalletAccount — what a wallet attribute rests on (ANT-2026-UL
 
   /** A returning account whose stored binding the presented credential matches. */
   function returningAccount(credential: ValidatedCredential): void {
-    harness.userCredentials.findAllByRealmAndExternalSub.mockResolvedValue([
-      credentialRow({
-        credentialData: walletCredentialDataSchema.parse({
-          credential_format: 'dc+sd-jwt',
-          credential_type: VCT,
-          issuer: ISSUER,
-          wallet_binding: deriveEnrolmentWalletBinding(CONFIG, credential),
-          subject_resolution: 'asserted-lookup',
-          enrolled_at: 1,
-        }),
-      }),
-    ]);
+    seedReturningAccount(harness, credential);
   }
 
   /** The email row an EARLIER credential left, which this presentation does not rewrite. */
@@ -438,10 +449,10 @@ describe('resolveWalletAccount — what a wallet attribute rests on (ANT-2026-UL
   });
 
   it('records the issuer and the issuer-signed status reference on every row it writes', async () => {
-    await resolve(
-      harness.fastify,
-      credentialFor({ given_name: 'Alice', family_name: 'Doe', status: STATUS })
-    );
+    const credential = credentialFor({ given_name: 'Alice', family_name: 'Doe', status: STATUS });
+    returningAccount(credential);
+
+    await resolve(harness.fastify, credential);
 
     const [, rows] = harness.userAttributes.upsertMany.mock.calls[0] as [
       string,
@@ -546,6 +557,9 @@ describe('resolveWalletAccount — when the wallet email counts as verified (ANT
 
   beforeEach(() => {
     harness = fakeFastify();
+    // The binding covers `given_name` and `family_name` only, so every
+    // credential below signs in to this account whatever email it carries.
+    seedReturningAccount(harness, credentialFor({ given_name: 'Alice', family_name: 'Doe' }));
   });
 
   function emailRow(): { verified: boolean } | undefined {
@@ -594,7 +608,7 @@ describe('resolveWalletAccount — when the wallet email counts as verified (ANT
   });
 });
 
-describe('resolveWalletAccount — the refusals that must NEVER become an enrolment', () => {
+describe('resolveWalletAccount — the refusals, none of which writes anything', () => {
   let harness: ReturnType<typeof fakeFastify>;
 
   beforeEach(() => {
@@ -677,7 +691,6 @@ describe('resolveWalletAccount — the refusals that must NEVER become an enrolm
       status: 'authenticated',
       userId: 'user-1',
       externalSub: 'alice@example.com',
-      enrolled: false,
     });
     expect(harness.users.create).not.toHaveBeenCalled();
 
@@ -748,19 +761,22 @@ describe('resolveWalletAccount — the refusals that must NEVER become an enrolm
   });
 
   it('renders every refusal identically (no enumeration oracle)', async () => {
-    const unknownIdentifier = await resolve(
-      harness.fastify,
-      credentialFor({ given_name: 'Alice' })
-    );
+    // The SAME fully disclosed credential for both probes, so the real strategy
+    // reaches the account store on both: one finds nothing (`no-match`), the
+    // other a password account (`rejected`). A probe that withheld a binding
+    // claim would be refused before the lookup and prove nothing about it.
+    const probe = credentialFor({ given_name: 'Alice', family_name: 'Doe' });
+
+    const unknownIdentifier = await resolve(harness.fastify, probe, 'nobody@example.com');
 
     harness.userCredentials.findAllByRealmAndExternalSub.mockResolvedValue([
       credentialRow({ providerType: 'password', credentialData: {} }),
     ]);
-    const existingAccount = await resolve(
-      harness.fastify,
-      credentialFor({ given_name: 'Alice', family_name: 'Doe' })
-    );
+    const existingAccount = await resolve(harness.fastify, probe);
 
+    expect(unknownIdentifier).toEqual({ status: 'rejected' });
     expect(unknownIdentifier).toEqual(existingAccount);
+    expect(harness.userCredentials.findAllByRealmAndExternalSub).toHaveBeenCalledTimes(2);
+    expectNothingWritten(harness);
   });
 });

@@ -2,7 +2,7 @@
 
 **Status:** Accepted — **findings partially superseded, see
 [Drift re-check (2026-07-26)](#drift-re-check-2026-07-26)**
-**Date:** 2026-07-20 (findings amended 2026-07-26)
+**Date:** 2026-07-20 (findings amended 2026-07-26; Decision §1 amended 2026-10-19)
 **Authors:** QAuth Team
 
 > ⚠️ **Regulatory drift landed on 2026-07-22 — one Decision needs a human call.**
@@ -592,6 +592,44 @@ participation — and `asserted-lookup` obtains exactly that participation.
 >   account by asserting its email, which is the takeover the constraint exists to
 >   prevent. That path is account linking (#238) and requires an authenticated
 >   session — see `session-binding` below.
+
+> **Amended 2026-10-19 — wallet sign-in never creates an account (maintainer
+> decision).** The first bootstrap case above no longer applies to sign-in. A
+> presentation on an identifier with no account does **not** establish the
+> account. It gets the same refusal as a taken identifier: the same status, body,
+> headers and cookies, after the same single account lookup.
+>
+> Why (ANT-2026-NCX3VXDP): enrolling there let anyone holding a credential of
+> their own from any trusted issuer
+>
+> - learn whether an identifier has an account, because a taken identifier was
+>   refused and a free one signed in. That includes wallet-only accounts, which
+>   no other unauthenticated route reveals;
+> - claim an identifier that belongs to someone else. The new account was bound
+>   to the presenter's credential, and from then on the identifier's real owner
+>   was refused when presenting their own wallet on it.
+>
+> A typed identifier is an attribute the person asserts, never proof that it is
+> theirs. Accounts are linked only by signing in to the existing account, never
+> by matching an identifier.
+>
+> A wallet now gets onto an account in only two ways:
+>
+> - **Linking.** The person signs in to an account they already hold and
+>   attaches the wallet from that session (#238, `session-binding`, §5). This is
+>   the only way today. A person with only a wallet first creates an account
+>   (today `POST /auth/register`), signs in, and links the wallet from it.
+> - **Sign-up.** Wallet-first sign-up arrives with the hosted sign-up pages
+>   ([ADR-017](./017-first-party-login.md) F2a, planned for v0.3). Until then a
+>   wallet is added by linking it from a signed-in account.
+>
+> The second bootstrap case is unchanged. Accounts that wallet sign-in enrolled
+> before this amendment keep signing in with the credential they were enrolled
+> with. This is a breaking change for deployments with
+> `WALLET_FEDERATION_ENABLED=true`: a first presentation no longer creates an
+> account. In code, `resolveWalletAccount()`
+> (`apps/auth-server/src/app/helpers/wallet-account.ts`) signs in only on a
+> `matched` outcome and refuses `no-match`, `ambiguous` and `rejected` alike.
 
 ### 2. `issuer-scoped-claim` is opt-in, per named issuer
 

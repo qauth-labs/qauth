@@ -31,6 +31,8 @@
 > The flow runs on a dedicated seam in `apps/auth-server` (`routes/ui/wallet-login.ts` → `helpers/wallet-presentation.ts`), which resolves or enrols an account and mints a session. **`WalletProvider.verify()` still throws unconditionally and must keep doing so** — it is the generic `CredentialProvider`-registry entry point, and the wallet login path does not call it. Do not read that throw as "wallet login is unimplemented."
 >
 > It is **off by default** (`WALLET_FEDERATION_ENABLED=false`; the routes are not registered) and validated so far only on the `oid4vp-1.0-base` profile against a mock wallet. Remaining: HAIP profile wiring (#377) and the real-wallet interoperability pass (#376).
+>
+> **Amendment (2026-10-19): wallet sign-in no longer enrols.** The seam above signs in an account the presented credential is already bound to, or refuses. A presentation on an identifier with no account is refused exactly like a taken one, and a wallet reaches an account by being linked from a signed-in session (#238). See the 2026-10-19 amendment to [ADR-009](./009-wallet-account-resolution.md) §1.
 
 ## Context
 

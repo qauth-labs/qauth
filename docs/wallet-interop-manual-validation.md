@@ -101,6 +101,17 @@ refuses to START without both.
 
 Each item is pass/fail. Record the wallet's behaviour even when it matches.
 
+### Before you start: an account the wallet is linked to
+
+Wallet sign-in never creates an account (ADR-009 §1, amended 2026-10-19). A
+presentation on an identifier with no account is refused, so every sign-in
+below needs an account the wallet was linked to first:
+
+- [ ] Register a password account, sign in with it, open `/ui/wallet-link` and
+      complete a link with the wallet (see [Account linking](#account-linking)).
+      Use that account's email as the asserted identifier in every sign-in
+      below.
+
 ### Request construction
 
 - [ ] `GET /ui/wallet-login` renders, and asks for an account identifier. There
@@ -166,9 +177,10 @@ Each item is pass/fail. Record the wallet's behaviour even when it matches.
 
 ### What was written
 
-- [ ] `user_credentials` has exactly ONE new row: `provider_type='wallet'`,
-      `external_sub` equal to the **asserted, normalized identifier** — not a
-      wallet key, a JWK thumbprint or a DID.
+- [ ] The link wrote exactly ONE new `user_credentials` row:
+      `provider_type='wallet'`, `external_sub` equal to the account's
+      **normalized identifier** — not a wallet key, a JWK thumbprint or a DID.
+      The sign-in wrote no `users` or `user_credentials` row at all.
 - [ ] `credential_data` contains no `cnf`, no `kty`, no `did:` and no claim
       values in the clear. It carries a binding **digest**.
 - [ ] `user_attributes` has `source='wallet'`, `verified=true` rows for the
@@ -211,6 +223,11 @@ against issuers who publish none has bought nothing.
 
 ### Refusals (all must render the same single sentence)
 
+- [ ] Asserting an identifier that has **no account**, with the linked wallet,
+      is refused exactly like asserting another person's account, and writes
+      nothing: no `users` row, no `user_credentials` row, no session cookie.
+      If it signs in, stop and file a security issue — it means sign-in can be
+      used to find out which accounts exist and to claim identifiers.
 - [ ] An issuer not in `OID4VP_TRUSTED_ISSUERS` is refused.
 - [ ] An expired credential is refused.
 - [ ] With the `OID4VP_STATUS_LIST_*` pair configured: a credential whose Token
@@ -236,7 +253,8 @@ against issuers who publish none has bought nothing.
 ### Tokens
 
 - [ ] `/oauth/authorize` → `/oauth/token` on the wallet session yields an ID
-      token whose `sub` is the `users.id` created above.
+      token whose `sub` is the `users.id` of the account the wallet was linked
+      to.
 - [ ] With `OID4VP_ISSUER_ASSURANCE` configured for the issuer, the ID token
       carries the expected `acr` (see
       [ADR-010](./adr/010-acr-assurance-mapping.md) for the vocabulary).

@@ -146,12 +146,15 @@ export {
   WALLET_SOURCE,
 } from '@qauth-labs/server-federation';
 
-// VC claims normalization (#235). The wallet enrolment path in
-// `apps/auth-server` writes both the `user_credentials` row and its
-// `user_attributes` rows, so it needs the claim mapping and the ONE sanctioned
-// constructor of the wallet `credential_data` shape — hand-rolling that object
-// at the call site would pass every DB constraint and silently break the
-// entitlement check on every returning user (see `wallet.provider.ts`).
+// VC claims normalization (#235). Wallet sign-in in `apps/auth-server` writes
+// the `user_attributes` rows of a credential it holds, so it needs the claim
+// mapping. The ONE sanctioned constructor of the wallet `credential_data`
+// shape is exported beside it for any caller that writes a wallet
+// `user_credentials` row — hand-rolling that object would pass every DB
+// constraint and silently break the entitlement check on every returning user
+// (see `wallet.provider.ts`). Account linking builds it inside
+// `prepareWalletLink`; wallet sign-in no longer writes one (ADR-009 §1,
+// amended 2026-10-19).
 //
 // Note what is still NOT here: `createWalletProvider`, for the reason above.
 export type {

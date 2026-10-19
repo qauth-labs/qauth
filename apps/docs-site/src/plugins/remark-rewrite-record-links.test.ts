@@ -368,9 +368,11 @@ describe('rewriteRecordLink — the real docs/adr and docs/security corpus, enum
     // ADR-017), all → ROUTE. Counted with this test's own extraction regex before
     // the buckets below were touched.
     //
-    // 570 → 572 with the 2026-10-19 GATE 4d amendment: ADR-011 §3 links
-    // ADR-014, and ADR-014's header pointer links ADR-011, both → ROUTE.
-    expect(extractAllLinks()).toHaveLength(572);
+    // 570 → 574 with the 2026-10-19 amendments: ADR-011 §3 links ADR-014 and
+    // ADR-014's header pointer links ADR-011 (GATE 4d); ADR-009 §1's amendment
+    // links ADR-017 and ADR-004's links ADR-009 (wallet sign-in creates no
+    // accounts). All four → ROUTE.
+    expect(extractAllLinks()).toHaveLength(574);
   });
 
   it('every link falls into exactly one of the four outcomes, with none left unresolved', () => {
@@ -495,9 +497,9 @@ describe('rewriteRecordLink — the real docs/adr and docs/security corpus, enum
     // The 2026-10-11 decisions on ADR-011: 228 → 229 route (net +1, see the total
     // above). External, anchors, blob and unresolved unchanged.
     //
-    // The 2026-10-19 GATE 4d amendment: 229 → 231 route (ADR-011 → ADR-014,
-    // ADR-014 → ADR-011). External, anchors, blob and unresolved unchanged.
-    expect(rewrittenToRoute).toBe(231);
+    // The 2026-10-19 amendments: 229 → 233 route (ADR-011 → ADR-014, ADR-014 →
+    // ADR-011, ADR-009 → ADR-017, ADR-004 → ADR-009). Nothing else changes.
+    expect(rewrittenToRoute).toBe(233);
     expect(rewrittenToBlob).toBe(24);
     expect(leftUnresolved).toBe(0);
   });

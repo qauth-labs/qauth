@@ -434,8 +434,8 @@ export default async function (fastify: FastifyInstance) {
         // STILL only a structural parse. #238 picks the outcome up from exactly
         // here and PARKS it for the cookie-bound browser that is waiting on this
         // request; validation (#234), issuer trust (#236), subject resolution
-        // (#300) and enrolment (#235) all happen on that side, where the session
-        // and the asserted identifier exist. Nothing about this endpoint's
+        // (#300), claims (#235) and linking (#238) all happen on that side,
+        // where the session and the asserted identifier exist. Nothing about this endpoint's
         // posture changed: it still authenticates nobody, still creates nothing,
         // and still cannot name a browser, a user or an account.
         const outcome: Oid4vpDirectPostOutcome = {

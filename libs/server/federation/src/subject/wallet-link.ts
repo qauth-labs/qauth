@@ -221,9 +221,10 @@ export async function prepareWalletLink(
   const binding = deriveWalletBinding(credential, bindingClaims);
   if (binding === undefined) return REJECTED;
 
-  // The SAME writer the enrolment path uses (#235). A link and a first-time
-  // login must produce byte-identical column shapes, or a credential linked
-  // today reads as unbound at the next `asserted-lookup` login.
+  // The one sanctioned writer of the wallet `credential_data` shape — the one
+  // wallet sign-in also used while it still enrolled (#235, until ADR-009 §1's
+  // 2026-10-19 amendment). Any other shape reads as unbound at the next
+  // `asserted-lookup` login.
   const credentialData = buildWalletCredentialData({
     credential,
     walletBinding: binding,
