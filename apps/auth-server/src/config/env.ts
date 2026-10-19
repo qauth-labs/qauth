@@ -22,6 +22,16 @@ import {
 import { z } from 'zod';
 
 /**
+ * The switches that turn the SSRF guard off for an outbound fetch, each with
+ * the fetches it covers. They exist so a test can point a fetch at a localhost
+ * server, and the schema below refuses either one in production (#435).
+ */
+const PRIVATE_ADDRESS_SWITCHES = [
+  ['CIMD_ALLOW_PRIVATE_ADDRESSES', 'CIMD document and client jwks_uri fetches'],
+  ['ID_JAG_ALLOW_PRIVATE_ADDRESSES', 'ID-JAG issuer discovery and JWKS fetches'],
+] as const;
+
+/**
  * Auth server environment schema
  * Composes all required schemas and adds app-specific configuration
  */
@@ -120,6 +130,22 @@ const envSchema = z
         message:
           'SESSION_COOKIE_SECRET must be set to a strong secret of at least 32 characters in production (the dev default is not allowed).',
       });
+    }
+
+    // #435 — refuse the private-address switches in production. Either one
+    // lets a client_id URL, a client's jwks_uri or a trusted issuer's discovery
+    // reach loopback, private and link-local addresses. The rule keys on
+    // NODE_ENV, like the guard above, not on a realm's ADR-008 profile.
+    if (env.NODE_ENV === 'production') {
+      for (const [name, fetches] of PRIVATE_ADDRESS_SWITCHES) {
+        if (env[name]) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: [name],
+            message: `${name}=true is not allowed when NODE_ENV=production. It turns off the SSRF guard on ${fetches} and exists only for test servers on localhost. Unset it or set it to false.`,
+          });
+        }
+      }
     }
 
     // REQUIRE_VERIFIED_ACCOUNT and its deprecated alias REQUIRE_EMAIL_VERIFIED

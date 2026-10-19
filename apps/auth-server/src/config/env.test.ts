@@ -16,7 +16,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
  * Env-schema parsing tests for config fields added in the env-hardening
  * batch. Covers the REQUIRE_VERIFIED_ACCOUNT `z.coerce.boolean()` footgun
  * (F-08) and its deprecated REQUIRE_EMAIL_VERIFIED alias, the
- * SESSION_COOKIE_SECRET production guard (F-12), and the
+ * SESSION_COOKIE_SECRET production guard (F-12), the production refusal of
+ * the private-address SSRF switches (#435), and the
  * ENABLE_SWAGGER default (F-07). Without these, a future refactor could
  * silently re-introduce the bug.
  *
@@ -56,11 +57,15 @@ function setEnv(overrides: Record<string, string | undefined>) {
 
 beforeEach(() => {
   // Both names of the verified-account gate are cleared here, because a case
-  // that leaves an invalid value behind would fail every later import.
+  // that leaves an invalid value behind would fail every later import. The
+  // private-address switches too: one left at `true` fails every later
+  // production import.
   setEnv({
     NODE_ENV: 'development',
     REQUIRE_VERIFIED_ACCOUNT: undefined,
     REQUIRE_EMAIL_VERIFIED: undefined,
+    CIMD_ALLOW_PRIVATE_ADDRESSES: undefined,
+    ID_JAG_ALLOW_PRIVATE_ADDRESSES: undefined,
   });
 });
 
@@ -194,6 +199,65 @@ describe('SESSION_COOKIE_SECRET production guard (F-12)', () => {
     setEnv({ NODE_ENV: 'production', SESSION_COOKIE_SECRET: PROD_SECRET });
     const mod = await import('./env');
     expect(mod.env.SESSION_COOKIE_SECRET).toBe(PROD_SECRET);
+  });
+});
+
+/**
+ * The private-address switches in production (#435).
+ *
+ * `CIMD_ALLOW_PRIVATE_ADDRESSES` and `ID_JAG_ALLOW_PRIVATE_ADDRESSES` turn the
+ * SSRF guard off on outbound fetches so a test can use a localhost server. A
+ * production process must not start with either one on, and the error must
+ * name the variable the operator has to change.
+ */
+describe('private-address switches are refused in production (#435)', () => {
+  const SWITCHES = ['CIMD_ALLOW_PRIVATE_ADDRESSES', 'ID_JAG_ALLOW_PRIVATE_ADDRESSES'] as const;
+
+  it.each(SWITCHES)('%s=true fails the boot when NODE_ENV=production', async (name) => {
+    setEnv({ NODE_ENV: 'production', SESSION_COOKIE_SECRET: PROD_SECRET, [name]: 'true' });
+
+    await expect(import('./env')).rejects.toThrow(
+      `${name}=true is not allowed when NODE_ENV=production`
+    );
+  });
+
+  it('names both variables when both are on in production', async () => {
+    setEnv({
+      NODE_ENV: 'production',
+      SESSION_COOKIE_SECRET: PROD_SECRET,
+      CIMD_ALLOW_PRIVATE_ADDRESSES: 'true',
+      ID_JAG_ALLOW_PRIVATE_ADDRESSES: 'true',
+    });
+
+    const boot = import('./env');
+    await expect(boot).rejects.toThrow('CIMD_ALLOW_PRIVATE_ADDRESSES=true');
+    await expect(boot).rejects.toThrow('ID_JAG_ALLOW_PRIVATE_ADDRESSES=true');
+  });
+
+  it.each(SWITCHES)('%s=false boots in production', async (name) => {
+    setEnv({ NODE_ENV: 'production', SESSION_COOKIE_SECRET: PROD_SECRET, [name]: 'false' });
+    const mod = await import('./env');
+
+    expect(mod.env[name]).toBe(false);
+  });
+
+  it('unset boots in production, with both switches off', async () => {
+    setEnv({ NODE_ENV: 'production', SESSION_COOKIE_SECRET: PROD_SECRET });
+    const mod = await import('./env');
+
+    expect(mod.env.CIMD_ALLOW_PRIVATE_ADDRESSES).toBe(false);
+    expect(mod.env.ID_JAG_ALLOW_PRIVATE_ADDRESSES).toBe(false);
+  });
+
+  it.each(
+    (['development', 'test'] as const).flatMap((nodeEnv) =>
+      SWITCHES.map((name) => [name, nodeEnv] as const)
+    )
+  )('%s=true still works when NODE_ENV=%s', async (name, nodeEnv) => {
+    setEnv({ NODE_ENV: nodeEnv, [name]: 'true' });
+    const mod = await import('./env');
+
+    expect(mod.env[name]).toBe(true);
   });
 });
 
