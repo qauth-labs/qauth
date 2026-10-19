@@ -70,15 +70,15 @@ export interface FeatureStatus {
 
 export interface ReleaseInfo {
   version: string;
-  stage: 'pre-release' | 'ga';
+  stage: 'pre-release' | 'pre-1.0' | 'ga';
   /** ISO date (`YYYY-MM-DD`) this version was cut. */
   date: string;
 }
 
 export const CURRENT_RELEASE: ReleaseInfo = {
-  version: 'v0.1.0-rc.0',
-  stage: 'pre-release',
-  date: '2026-07-25',
+  version: 'v0.1.0',
+  stage: 'pre-1.0',
+  date: '2026-10-19',
 };
 
 /**

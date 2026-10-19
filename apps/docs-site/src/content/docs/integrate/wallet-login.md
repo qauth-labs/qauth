@@ -27,8 +27,8 @@ step, and what is deliberately not built yet. Implements
 > credential's claims become `source='wallet'` attribute rows at every wallet
 > sign-in.
 >
-> **Behaviour change (ANT-2026-NCX3VXDP, breaking).** `v0.1.0-rc.1` and
-> `v0.1.0-rc.2` created an account when a wallet was presented on an identifier
+> **Behaviour change (ANT-2026-NCX3VXDP, breaking).** `v0.1.0-rc.1` to
+> `v0.1.0-rc.3` created an account when a wallet was presented on an identifier
 > that had none. Wallet sign-in no longer creates accounts
 > ([ADR-009](/reference/records/adr/009-wallet-account-resolution/) §1, amended
 > 2026-10-19): that presentation is refused exactly like one on a taken
