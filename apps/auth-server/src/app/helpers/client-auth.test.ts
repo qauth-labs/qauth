@@ -176,6 +176,20 @@ describe('authenticateClient', () => {
     ).rejects.toThrow(InvalidClientError);
   });
 
+  // ANT-2026-DR5XI3LV: an operator's suspension refuses a client exactly as a
+  // disable does, whatever the owner's `enabled` says.
+  it('throws InvalidClientError for an operator-suspended client, before the secret check', async () => {
+    const fastify = makeFastifyStub({ ...baseClient, enabled: true, suspended: true }, true);
+    await expect(
+      authenticateClient(fastify, 'realm', {
+        clientId: 'cid',
+        clientSecret: 'secret',
+        method: 'client_secret_post',
+      })
+    ).rejects.toThrow(InvalidClientError);
+    expect(fastify.passwordHasher.verifyPassword).not.toHaveBeenCalled();
+  });
+
   it('throws InvalidClientError for disabled client', async () => {
     const fastify = makeFastifyStub({ ...baseClient, enabled: false }, true);
     await expect(
@@ -356,6 +370,32 @@ describe('authenticateClientRequest', () => {
         { allowPublic: false }
       )
     ).resolves.toMatchObject({ clientId: 'cid' });
+  });
+
+  it('refuses an operator-suspended PUBLIC client on the client_id-only path (ANT-2026-DR5XI3LV)', async () => {
+    const publicClient: OAuthClientLike = {
+      ...confidential,
+      tokenEndpointAuthMethod: 'none',
+      grantTypes: ['authorization_code', 'refresh_token'],
+    };
+    await expect(
+      authenticateClientRequest(
+        stub(publicClient),
+        'realm',
+        requestWith(undefined),
+        { client_id: 'cid' },
+        { allowPublic: true }
+      )
+    ).resolves.toMatchObject({ clientId: 'cid' });
+    await expect(
+      authenticateClientRequest(
+        stub({ ...publicClient, suspended: true }),
+        'realm',
+        requestWith(undefined),
+        { client_id: 'cid' },
+        { allowPublic: true }
+      )
+    ).rejects.toThrow(InvalidClientError);
   });
 
   it('rejects a credential-free request on a grant that forbids public clients', async () => {

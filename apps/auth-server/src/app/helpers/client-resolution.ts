@@ -34,7 +34,13 @@ export interface ResolvedClient {
   id: string;
   clientId: string;
   clientSecretHash: string;
+  /** The owner's on/off switch (`PATCH /api/clients/:id`). */
   enabled: boolean;
+  /**
+   * Operator-only suspension (ANT-2026-DR5XI3LV). Never written by any route
+   * and never by CIMD re-resolution. Read through `isClientUsable` (`helpers/client-status.ts`).
+   */
+  suspended: boolean;
   grantTypes: string[];
   responseTypes: string[];
   scopes: string[];
@@ -228,7 +234,10 @@ export async function resolveClient(
       // An operator's `enabled = false` survives re-resolution; the document
       // can never re-enable a client the server disabled. This snapshot
       // predates the fetch above, so the upsert ANDs it with the live row
-      // rather than writing it back (ANT-2026-SSI34ODQ).
+      // rather than writing it back (ANT-2026-SSI34ODQ). `suspended` is not
+      // part of the insert at all and the upsert never names it, so a
+      // re-resolution can neither set nor clear an operator's suspension
+      // (ANT-2026-DR5XI3LV); `.returning()` hands back the live value.
       const data = persisted ? { ...insert, enabled: persisted.enabled } : insert;
       // Unchanged document (the common, cache-served case) → no write.
       if (persisted && cimdRowMatchesInsert(persisted, data)) {

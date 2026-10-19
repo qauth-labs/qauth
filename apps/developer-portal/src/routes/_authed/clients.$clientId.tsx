@@ -193,7 +193,13 @@ function ClientDetailsPage() {
                 <Field label="Token endpoint auth method">
                   {load.client.tokenEndpointAuthMethod}
                 </Field>
-                <Field label="Status">{load.client.enabled ? 'Enabled' : 'Disabled'}</Field>
+                <Field label="Status">
+                  {load.client.suspended
+                    ? 'Suspended by the operator'
+                    : load.client.enabled
+                      ? 'Enabled'
+                      : 'Disabled'}
+                </Field>
                 <Field label="Client secret">
                   <div className="flex items-center justify-between gap-4">
                     <span className="text-sm text-gray-500">

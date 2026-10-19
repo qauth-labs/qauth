@@ -4,6 +4,7 @@ import { z } from 'zod';
 
 import { authenticateClientAssertion, type ClientAssertionCredentials } from './client-assertion';
 import { isAgentClient, resolveClient } from './client-resolution';
+import { isClientUsable } from './client-status';
 import { type AgentMode, findExceedingAgentScopes, parseAgentMode } from './scope-modes';
 
 /** Maximum length of a single audience URI (defensive cap, RFC 8707 leaves this open). */
@@ -25,6 +26,11 @@ export type OAuthClientLike = {
   clientId: string;
   clientSecretHash: string;
   enabled: boolean;
+  /**
+   * Operator-only suspension (ANT-2026-DR5XI3LV). Optional for older callers;
+   * every stored row carries it. Read through `isClientUsable`.
+   */
+  suspended?: boolean;
   grantTypes: string[];
   scopes: string[];
   audience: string[] | null;
@@ -177,7 +183,8 @@ export async function authenticateClient(
   creds: ExtractedClientCredentials
 ): Promise<OAuthClientLike> {
   const client = await fastify.repositories.oauthClients.findByClientId(realmId, creds.clientId);
-  if (!client || !client.enabled) {
+  // A disabled or operator-suspended client authenticates nothing.
+  if (!client || !isClientUsable(client)) {
     throw new InvalidClientError();
   }
   if (!acceptsClientSecret(client.tokenEndpointAuthMethod)) {
@@ -252,7 +259,7 @@ export async function authenticateClientPublicOrConfidential(
     throw new InvalidClientError();
   }
   const { client } = await resolveClient(fastify, realmId, bodyClientId);
-  if (!client || !client.enabled) {
+  if (!client || !isClientUsable(client)) {
     throw new InvalidClientError();
   }
   if (client.tokenEndpointAuthMethod !== 'none') {

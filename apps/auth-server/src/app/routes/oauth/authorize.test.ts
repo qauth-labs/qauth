@@ -1951,6 +1951,8 @@ describe('GET /oauth/authorize — RFC 9207 §2 `iss` on every authorization res
   // since DCR alone can register one that fails them, with any redirect URI.
   it.each([
     ['client disabled', { enabled: false }],
+    // ANT-2026-DR5XI3LV: an operator's suspension, whatever `enabled` says.
+    ['client suspended by the operator', { enabled: true, suspended: true }],
     ['grant type not allowed', { grantTypes: ['client_credentials'] }],
     ['response type not allowed', { responseTypes: [] }],
   ])('unauthorized_client (%s) is a 400, never a redirect', async (_label, override) => {

@@ -4,6 +4,7 @@ import { ForbiddenError } from '@qauth-labs/shared-errors';
 import type { FastifyInstance } from 'fastify';
 
 import { MIN_RESPONSE_TIME_MS } from '../constants/security';
+import { isClientUsable } from './client-status';
 import {
   type EnvironmentClientLike,
   type EnvironmentRealmLike,
@@ -199,7 +200,9 @@ async function resolveApiKey(
   // promoted out of `development` (directly, or via its realm ceiling) since the
   // key was minted; a key must not outlive its client's eligibility.
   const client = await fastify.repositories.oauthClients.findById(apiKey.clientId);
-  if (!client || !client.enabled) {
+  // A disabled or operator-suspended client (ANT-2026-DR5XI3LV) authenticates
+  // nothing, through its API keys either.
+  if (!client || !isClientUsable(client)) {
     return null;
   }
   const realm = await fastify.repositories.realms.findById(client.realmId);

@@ -700,6 +700,19 @@
           "notNull": true,
           "default": true
         },
+        "suspended": {
+          "name": "suspended",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": false
+        },
+        "suspended_at": {
+          "name": "suspended_at",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": false
+        },
         "require_pkce": {
           "name": "require_pkce",
           "type": "boolean",

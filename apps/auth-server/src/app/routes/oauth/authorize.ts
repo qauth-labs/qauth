@@ -21,6 +21,7 @@ import { resolveBrowserSession } from '../../helpers/browser-session';
 import { clientAddressKey } from '../../helpers/client-address';
 import { findExceedingAgentScopesForClient, resolveAudience } from '../../helpers/client-auth';
 import { resolveClient } from '../../helpers/client-resolution';
+import { isClientUsable } from '../../helpers/client-status';
 import { canSkipConsent, filterRequestedScopes } from '../../helpers/consent';
 import { resolveIssuerIdentifier } from '../../helpers/discovery';
 import { resolveEnvironmentPolicy } from '../../helpers/environment-policy';
@@ -221,7 +222,9 @@ export default async function (fastify: FastifyInstance) {
     // that fails them (`grant_types: ["refresh_token"]`) with any redirect
     // URI, and no working flow depends on receiving this error by redirect.
     let unauthorizedReason: string | null = null;
-    if (!client.enabled) {
+    if (!isClientUsable(client)) {
+      // A client its owner disabled and one an operator suspended
+      // (ANT-2026-DR5XI3LV) get the same answer.
       unauthorizedReason = 'client is disabled';
     } else if (!client.grantTypes.includes('authorization_code')) {
       unauthorizedReason = 'client is not registered for the authorization_code grant';

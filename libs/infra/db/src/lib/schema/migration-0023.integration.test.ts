@@ -1,11 +1,15 @@
 /**
  * Seed-then-migrate tests for migration 0023: the operator trust marker on
- * `oauth_clients` (ANT-2026-O8U3P920).
+ * `oauth_clients` (ANT-2026-O8U3P920) and the operator-only suspension
+ * (ANT-2026-DR5XI3LV).
  *
- * The backfill decides, from columns the earlier write paths always set, which
- * existing clients an operator provisioned. Getting a self-service client
+ * The first backfill decides, from columns the earlier write paths always set,
+ * which existing clients an operator provisioned. Getting a self-service client
  * wrong turns it back into an open redirector, so every kind of row the code
  * base can have written is seeded on the pre-0023 schema and checked after.
+ * The second carries every existing disable over as a suspension, because the
+ * owner may re-enable a client from now on and the row does not say who
+ * disabled it.
  *
  * Requires Docker; self-skips without it. Each case rebuilds the schema from
  * scratch (DROP SCHEMA CASCADE) inside one shared container.
@@ -221,5 +225,55 @@ describe('migration 0023 — oauth_clients operator marker (seed-then-migrate)',
     await seedClient(realmId, 'after-migration');
 
     expect(await marker('after-migration')).toBe(false);
+  });
+
+  async function suspension(
+    clientId: string
+  ): Promise<{ suspended: boolean; suspendedAt: string | null; enabled: boolean }> {
+    const { rows } = await db().query(
+      `SELECT suspended, suspended_at, enabled FROM oauth_clients WHERE client_id = $1`,
+      [clientId]
+    );
+    return {
+      suspended: rows[0].suspended as boolean,
+      suspendedAt: rows[0].suspended_at as string | null,
+      enabled: rows[0].enabled as boolean,
+    };
+  }
+
+  it('suspends every client that is disabled when it runs, and only those', async () => {
+    if (!target) throw new Error('migration 0023 missing from the journal');
+    const realmId = await seedRealm();
+    const developer = await seedUser(realmId);
+    // The operator's only switch until now: an UPDATE by hand.
+    await seedClient(realmId, 'operator-disabled', { developerId: developer, enabled: false });
+    await seedClient(realmId, 'ownerless-disabled', { enabled: false });
+    await seedClient(realmId, 'live', { developerId: developer });
+
+    await applyMigrationFile(db(), target);
+
+    const disabled = await suspension('operator-disabled');
+    expect(disabled.suspended).toBe(true);
+    expect(disabled.suspendedAt).not.toBeNull();
+    // `enabled` is left as it was; lifting the suspension later does not
+    // re-enable the client by itself.
+    expect(disabled.enabled).toBe(false);
+    expect((await suspension('ownerless-disabled')).suspended).toBe(true);
+    const live = await suspension('live');
+    expect(live).toEqual({ suspended: false, suspendedAt: null, enabled: true });
+  });
+
+  it('gives new rows suspended = false and no suspended_at', async () => {
+    if (!target) throw new Error('migration 0023 missing from the journal');
+    const realmId = await seedRealm();
+    await applyMigrationFile(db(), target);
+
+    await seedClient(realmId, 'after-migration', { enabled: false });
+
+    expect(await suspension('after-migration')).toEqual({
+      suspended: false,
+      suspendedAt: null,
+      enabled: false,
+    });
   });
 });

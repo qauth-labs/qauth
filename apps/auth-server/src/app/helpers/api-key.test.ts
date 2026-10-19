@@ -256,6 +256,24 @@ describe('authenticateApiKey', () => {
     expect(result).toBeNull();
   });
 
+  it('rejects when the owning client is operator-suspended (ANT-2026-DR5XI3LV)', async () => {
+    const { fastify } = makeFastify();
+    const generated = await generateApiKey(fastify);
+    const row = liveKeyRow(generated.prefix, generated.key);
+
+    (fastify.repositories.apiKeys.findByPrefix as ReturnType<typeof vi.fn>).mockResolvedValue(row);
+    (fastify.repositories.realms.findById as ReturnType<typeof vi.fn>).mockResolvedValue(devRealm);
+    const findClient = fastify.repositories.oauthClients.findById as ReturnType<typeof vi.fn>;
+
+    // Control: the same key authenticates while the client is not suspended.
+    findClient.mockResolvedValue({ ...devClient, suspended: false });
+    await expect(authenticateApiKey(fastify, `Bearer ${generated.key}`)).resolves.not.toBeNull();
+
+    // Suspended by the operator, though its owner keeps it enabled.
+    findClient.mockResolvedValue({ ...devClient, enabled: true, suspended: true });
+    await expect(authenticateApiKey(fastify, `Bearer ${generated.key}`)).resolves.toBeNull();
+  });
+
   it('rejects when the owning client is disabled', async () => {
     const { fastify } = makeFastify();
     const generated = await generateApiKey(fastify);

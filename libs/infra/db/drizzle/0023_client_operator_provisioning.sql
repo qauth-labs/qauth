@@ -34,3 +34,24 @@ WHERE c."developer_id" IS NULL
         'oauth.client.secret_regenerated'
       )
   );
+--> statement-breakpoint
+-- ANT-2026-DR5XI3LV: an operator-only suspension, separate from `enabled`,
+-- which is the owner's switch again (PATCH /api/clients/:id may set it either
+-- way). A suspended client is refused wherever a disabled one is.
+ALTER TABLE "oauth_clients" ADD COLUMN "suspended" boolean DEFAULT false NOT NULL;
+--> statement-breakpoint
+ALTER TABLE "oauth_clients" ADD COLUMN "suspended_at" bigint;
+--> statement-breakpoint
+-- Backfill: every client that is disabled when this runs is also suspended.
+-- Until now `enabled = false` was the operator's only switch (an UPDATE by
+-- hand), and the row does not record who cleared it. Since the owner may now
+-- re-enable a client, carrying a disable over as `enabled = false` alone would
+-- hand an operator's cut-off back to the owner. Suspending every disabled row
+-- keeps today's behaviour exactly: nobody but an operator can bring such a
+-- client back. A row the owner had disabled itself stays suspended until an
+-- operator lifts it (db:suspend-oauth-client --lift), after which the owner
+-- re-enables it as usual.
+UPDATE "oauth_clients"
+SET "suspended" = true,
+    "suspended_at" = (EXTRACT(EPOCH FROM now()) * 1000)::bigint
+WHERE "enabled" = false;

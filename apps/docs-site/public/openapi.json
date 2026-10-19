@@ -699,6 +699,9 @@
                           "enabled": {
                             "type": "boolean"
                           },
+                          "suspended": {
+                            "type": "boolean"
+                          },
                           "requirePkce": {
                             "type": "boolean"
                           },
@@ -737,6 +740,7 @@
                           "responseTypes",
                           "tokenEndpointAuthMethod",
                           "enabled",
+                          "suspended",
                           "requirePkce",
                           "environment",
                           "staticApiKeysAllowed",
@@ -906,6 +910,9 @@
                     "enabled": {
                       "type": "boolean"
                     },
+                    "suspended": {
+                      "type": "boolean"
+                    },
                     "requirePkce": {
                       "type": "boolean"
                     },
@@ -947,6 +954,7 @@
                     "responseTypes",
                     "tokenEndpointAuthMethod",
                     "enabled",
+                    "suspended",
                     "requirePkce",
                     "environment",
                     "staticApiKeysAllowed",
@@ -1040,6 +1048,9 @@
                     "enabled": {
                       "type": "boolean"
                     },
+                    "suspended": {
+                      "type": "boolean"
+                    },
                     "requirePkce": {
                       "type": "boolean"
                     },
@@ -1078,6 +1089,7 @@
                     "responseTypes",
                     "tokenEndpointAuthMethod",
                     "enabled",
+                    "suspended",
                     "requirePkce",
                     "environment",
                     "staticApiKeysAllowed",
@@ -1096,7 +1108,7 @@
         "tags": [
           "Clients"
         ],
-        "description": "Update mutable fields of one of the developer's OAuth clients (name, description, redirectUris, scopes, grantTypes, responseTypes, tokenEndpointAuthMethod, enabled). client_id and client_secret are immutable here. enabled can only be switched off: re-enabling a disabled client is an operator action and returns 403. Returns 404 if the client does not exist or is owned by another developer. (Phase 2.2, issue #88.)",
+        "description": "Update mutable fields of one of the developer's OAuth clients (name, description, redirectUris, scopes, grantTypes, responseTypes, tokenEndpointAuthMethod, enabled). client_id and client_secret are immutable here. enabled is the owner's switch and may be set either way; it does not lift an operator's suspension (the read-only suspended field), which only the operator can. Returns 404 if the client does not exist or is owned by another developer. (Phase 2.2, issue #88.)",
         "requestBody": {
           "required": true,
           "content": {
@@ -1250,6 +1262,9 @@
                     "enabled": {
                       "type": "boolean"
                     },
+                    "suspended": {
+                      "type": "boolean"
+                    },
                     "requirePkce": {
                       "type": "boolean"
                     },
@@ -1288,6 +1303,7 @@
                     "responseTypes",
                     "tokenEndpointAuthMethod",
                     "enabled",
+                    "suspended",
                     "requirePkce",
                     "environment",
                     "staticApiKeysAllowed",
@@ -1409,6 +1425,9 @@
                     "enabled": {
                       "type": "boolean"
                     },
+                    "suspended": {
+                      "type": "boolean"
+                    },
                     "requirePkce": {
                       "type": "boolean"
                     },
@@ -1450,6 +1469,7 @@
                     "responseTypes",
                     "tokenEndpointAuthMethod",
                     "enabled",
+                    "suspended",
                     "requirePkce",
                     "environment",
                     "staticApiKeysAllowed",

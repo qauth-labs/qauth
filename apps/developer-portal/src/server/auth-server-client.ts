@@ -89,7 +89,13 @@ export interface OAuthClient {
   grantTypes: GrantType[];
   responseTypes: string[];
   tokenEndpointAuthMethod: TokenEndpointAuthMethod;
+  /** The owner's switch. */
   enabled: boolean;
+  /**
+   * Set by the operator, never by the owner: a suspended client is refused
+   * whatever `enabled` says. Optional for an auth-server that predates it.
+   */
+  suspended?: boolean;
   requirePkce: boolean;
   /** Effective environment (ADR-008); read-only, resolved by the auth-server. */
   environment: ClientEnvironment;

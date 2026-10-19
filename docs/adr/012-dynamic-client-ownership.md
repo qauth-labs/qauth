@@ -22,6 +22,22 @@
 > a fact about a row, written by operator tooling, not an authorization
 > surface.
 
+> **Amendment (2026-10-19): `enabled` is the owner's switch; an operator
+> suspends.** The maintainer decided on 2026-10-19 (ANT-2026-DR5XI3LV) to stop
+> sharing one column between the owner's on/off switch and the operator's
+> cut-off. `oauth_clients.enabled` is the owner's again (`PATCH
+/api/clients/{id}` may set it either way). An operator who must keep a client
+> off sets `oauth_clients.suspended` (with `suspended_at`), which every check
+> that refuses a disabled client also reads, with the same error. No route
+> writes it, the repository's update type excludes it, and decision 3's
+> `ON CONFLICT` set never names it, so a CIMD document can neither set nor
+> clear it. (That set no longer refreshes `enabled` verbatim either: since
+> 2026-10-16 it can only narrow it.) Decision 4 still holds: there is no
+> operator role or route; the operator path is the `db:suspend-oauth-client`
+> script in `libs/infra/db`, which writes the column and an audit row, or the
+> same `UPDATE` by hand. Migration 0023 suspends every client that was disabled
+> when it ran, because the row does not say who disabled it.
+
 ## Context
 
 `oauth_clients.developer_id` is the only ownership signal the schema has, and

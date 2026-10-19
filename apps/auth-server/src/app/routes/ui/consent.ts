@@ -18,6 +18,7 @@ import { resolveBrowserSession, saveBrowserSession } from '../../helpers/browser
 import { clientAddressKey } from '../../helpers/client-address';
 import { findExceedingAgentScopesForClient } from '../../helpers/client-auth';
 import { isAgentClient, resolveClient } from '../../helpers/client-resolution';
+import { isClientUsable } from '../../helpers/client-status';
 import {
   canSkipConsent,
   describeScope,
@@ -378,7 +379,8 @@ export default async function (fastify: FastifyInstance) {
       // resolveClient hits it; if its document cache expired it is re-fetched
       // and re-validated here).
       const { client } = await resolveClient(fastify, realm.id, query.client_id);
-      if (!client || !client.enabled) {
+      // A disabled or operator-suspended client (ANT-2026-DR5XI3LV).
+      if (!client || !isClientUsable(client)) {
         throw new BadRequestError('invalid_client');
       }
       if (!redirectUriMatchesRegistered(query.redirect_uri, client.redirectUris)) {
@@ -598,7 +600,8 @@ export default async function (fastify: FastifyInstance) {
 
       const realm = await getOrCreateDefaultRealm(fastify);
       const { client } = await resolveClient(fastify, realm.id, body.client_id);
-      if (!client || !client.enabled) {
+      // A disabled or operator-suspended client (ANT-2026-DR5XI3LV).
+      if (!client || !isClientUsable(client)) {
         throw new BadRequestError('invalid_client');
       }
       if (!redirectUriMatchesRegistered(body.redirect_uri, client.redirectUris)) {

@@ -182,6 +182,8 @@ function makeClientRow(overrides: Record<string, unknown> = {}) {
     grantTypes: ['authorization_code', 'refresh_token'],
     responseTypes: ['code'],
     developerId: 'dev-A',
+    suspended: false,
+    suspendedAt: null,
     dynamicRegisteredAt: null,
     metadata: null,
     createdAt: 1700,
@@ -244,6 +246,7 @@ describe('GET /api/clients route', () => {
           responseTypes: ['code'],
           tokenEndpointAuthMethod: 'client_secret_post',
           enabled: true,
+          suspended: false,
           requirePkce: true,
           environment: 'development',
           staticApiKeysAllowed: true,
@@ -594,32 +597,12 @@ describe('PATCH /api/clients/:id (update) — #88', () => {
     expect(JSON.stringify(body)).not.toContain('clientSecretHash');
   });
 
-  it('refuses to re-enable a disabled client', async () => {
+  it("lets the owner re-enable a client it disabled (enabled is the owner's switch)", async () => {
     const { fastify, ctx } = makeFastify();
     await clientsRoute(fastify);
 
-    // The row does not say who disabled it, so this may be the operator's
-    // `UPDATE oauth_clients SET enabled = false`.
     (fastify.repositories.oauthClients.findById as unknown as Mock).mockResolvedValue(
       makeClientRow({ developerId: DEV_A, enabled: false })
-    );
-
-    const request = authedRequest({
-      params: { id: '0190a000-0000-7000-8000-000000000001' },
-      body: { enabled: true },
-    });
-    const { reply } = createReply();
-
-    await expect(route(ctx, 'PATCH /:id').handler(request, reply)).rejects.toThrow(ForbiddenError);
-    expect(fastify.repositories.oauthClients.update).not.toHaveBeenCalled();
-  });
-
-  it('never writes `enabled: true`, so it cannot overwrite a concurrent disable', async () => {
-    const { fastify, ctx } = makeFastify();
-    await clientsRoute(fastify);
-
-    (fastify.repositories.oauthClients.findById as unknown as Mock).mockResolvedValue(
-      makeClientRow({ developerId: DEV_A, enabled: true })
     );
     (fastify.repositories.oauthClients.update as unknown as Mock).mockImplementation(
       async (_id: string, data: Record<string, unknown>) =>
@@ -628,15 +611,48 @@ describe('PATCH /api/clients/:id (update) — #88', () => {
 
     const request = authedRequest({
       params: { id: '0190a000-0000-7000-8000-000000000001' },
-      body: { name: 'Renamed', enabled: true },
+      body: { enabled: true },
     });
-    const { reply } = createReply();
-
-    await route(ctx, 'PATCH /:id').handler(request, reply);
+    const body = (await route(ctx, 'PATCH /:id').handler(request, createReply().reply)) as Record<
+      string,
+      unknown
+    >;
 
     const updateArg = (fastify.repositories.oauthClients.update as unknown as Mock).mock
       .calls[0][1];
-    expect(updateArg).toEqual({ name: 'Renamed' });
+    expect(updateArg).toEqual({ enabled: true });
+    expect(body.enabled).toBe(true);
+  });
+
+  // ANT-2026-DR5XI3LV: an operator's cut-off is `suspended`, which the owner
+  // can neither write nor clear here, so re-enabling does not bring a
+  // suspended client back.
+  it('never writes `suspended`: re-enabling leaves an operator suspension in place', async () => {
+    const { fastify, ctx } = makeFastify();
+    await clientsRoute(fastify);
+
+    const suspendedRow = makeClientRow({ developerId: DEV_A, enabled: false, suspended: true });
+    (fastify.repositories.oauthClients.findById as unknown as Mock).mockResolvedValue(suspendedRow);
+    (fastify.repositories.oauthClients.update as unknown as Mock).mockImplementation(
+      async (_id: string, data: Record<string, unknown>) => ({ ...suspendedRow, ...data })
+    );
+
+    const request = authedRequest({
+      params: { id: '0190a000-0000-7000-8000-000000000001' },
+      body: { enabled: true, suspended: false, suspendedAt: null },
+    });
+    const body = (await route(ctx, 'PATCH /:id').handler(request, createReply().reply)) as Record<
+      string,
+      unknown
+    >;
+
+    const updateArg = (fastify.repositories.oauthClients.update as unknown as Mock).mock
+      .calls[0][1];
+    expect(updateArg).toEqual({ enabled: true });
+    expect(updateArg).not.toHaveProperty('suspended');
+    expect(updateArg).not.toHaveProperty('suspendedAt');
+    // The owner can see why the client is still refused.
+    expect(body.suspended).toBe(true);
   });
 
   it('validates the effective grant/response combination against persisted values', async () => {

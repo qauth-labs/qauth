@@ -161,7 +161,25 @@ export const oauthClients = pgTable(
     redirectUris: jsonb('redirect_uris').notNull().$type<string[]>(),
     scopes: jsonb('scopes').notNull().default(JSONB_EMPTY_ARRAY).$type<string[]>(),
     audience: jsonb('audience').$type<string[] | null>(),
+    /**
+     * The OWNER's on/off switch: `PATCH /api/clients/:id` may set it either
+     * way. An operator's cut-off is {@link oauthClients.suspended}, a separate
+     * column, so the owner can never undo it (ANT-2026-DR5XI3LV).
+     */
     enabled: boolean('enabled').notNull().default(true),
+    /**
+     * OPERATOR-ONLY suspension (ANT-2026-DR5XI3LV). A suspended client is
+     * refused everywhere a disabled one is (authorize, consent, every client
+     * authentication path and therefore token, introspection, revocation and
+     * token exchange, API keys), with the same error. Only an operator path
+     * sets or clears it: the `db:suspend-oauth-client` script (or the same
+     * `UPDATE` by hand). No route writes it, `UpdateOAuthClient` excludes it so
+     * application code cannot, and `upsertCimdClient` never names it, so a
+     * CIMD re-resolution cannot clear it.
+     */
+    suspended: boolean('suspended').notNull().default(false),
+    /** When the current suspension began (epoch ms); NULL when not suspended. */
+    suspendedAt: bigint('suspended_at', { mode: 'number' }),
     requirePkce: boolean('require_pkce').notNull().default(true),
     tokenEndpointAuthMethod: tokenEndpointAuthMethodEnum('token_endpoint_auth_method')
       .notNull()

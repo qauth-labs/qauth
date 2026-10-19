@@ -586,6 +586,7 @@ List the authenticated developer's OAuth clients.
       "responseTypes": ["code"],
       "tokenEndpointAuthMethod": "none",
       "enabled": true,
+      "suspended": false,
       "requirePkce": true,
       "createdAt": 1750000000000,
       "updatedAt": 1750000000000,
@@ -596,6 +597,12 @@ List the authenticated developer's OAuth clients.
 ```
 
 A developer with no clients gets `{ "clients": [] }`. Errors: `401` (missing/invalid bearer).
+
+`enabled` is the owner's switch. `suspended` is read-only: `true` when the
+operator has suspended the client, which is then refused wherever a disabled
+client is (`unauthorized_client` at `/oauth/authorize`, `invalid_client` at the
+token, introspection and revocation endpoints), whatever `enabled` says. Only
+the operator lifts a suspension.
 
 > **Ownership & 404 semantics.** Every per-client route is scoped to the token
 > subject's `developer_id`. A client that exists but is owned by another
@@ -641,6 +648,7 @@ argon2id hash on every call, so the cap is mandatory (`429` on exceed).
   "responseTypes": ["code"],
   "tokenEndpointAuthMethod": "client_secret_post",
   "enabled": true,
+  "suspended": false,
   "requirePkce": true,
   "createdAt": 1750000000000,
   "updatedAt": 1750000000000,
@@ -679,14 +687,13 @@ _effective_ configuration (request value or persisted value) is re-validated:
 grant/response-type consistency, a redirect URI for user-involving grants, and
 the realm scope cap when `scopes` is changed.
 
-`enabled` can only be switched **off** here. It is the same switch an operator
-uses to cut a client off, so `"enabled": true` on a disabled client is refused
-with `403`; re-enabling is an operator action.
+`enabled` is the owner's switch and may be set either way. It does not lift an
+operator's suspension: `suspended` cannot be written here, and a suspended
+client stays refused after `"enabled": true` until the operator lifts it.
 
 **`200 OK`** — the updated client (safe fields, no secret).
 Errors: `400` (validation / inconsistent config / disallowed scope / missing
-redirect for a user-involving grant), `401`, `403` (re-enabling a disabled
-client), `404`.
+redirect for a user-involving grant), `401`, `404`.
 
 ### `DELETE /api/clients/{id}`
 

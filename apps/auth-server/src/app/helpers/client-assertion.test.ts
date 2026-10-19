@@ -46,6 +46,7 @@ interface ClientRow {
   clientId: string;
   clientSecretHash: string;
   enabled: boolean;
+  suspended?: boolean;
   grantTypes: string[];
   scopes: string[];
   audience: string[] | null;
@@ -366,6 +367,15 @@ describe('authenticateClientAssertion — rejected', () => {
 
   it('rejects an unknown client', async () => {
     const stub = fastifyStub(null);
+    const assertion = await makeAssertion();
+
+    await expect(
+      authenticateClientAssertion(asFastify(stub), 'realm-1', creds(assertion))
+    ).rejects.toThrow(InvalidClientError);
+  });
+
+  it('rejects an operator-suspended client (ANT-2026-DR5XI3LV)', async () => {
+    const stub = fastifyStub(clientRow({ suspended: true, jwks: jwkSet(es256Jwk) }));
     const assertion = await makeAssertion();
 
     await expect(

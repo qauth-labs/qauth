@@ -297,3 +297,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   owner who changes the redirect URIs of a marked client loses the marker.
   OIDF conformance `prompt=none` modules need an operator-provisioned client
   (see `docs/oidf-op-certification-runbook.md`).
+- **Operator suspension separate from `enabled`** (ANT-2026-DR5XI3LV).
+  `oauth_clients.enabled` is the client owner's switch again:
+  `PATCH /api/clients/{id}` may set it either way (it no longer answers `403`
+  to `"enabled": true`). An operator keeps a client off with the new
+  `oauth_clients.suspended` / `suspended_at` (migration 0023), which no route
+  writes and a CIMD re-resolution never touches; a suspended client is refused
+  wherever a disabled one is, with the same error. New operator tooling:
+  `pnpm nx run infra-db:db:suspend-oauth-client -- --realm=<name>
+--client-id=<client_id> [--lift]`. The management API returns a read-only
+  `suspended` field. **Upgrade note**: migration 0023 suspends every client that
+  is disabled when it runs; one its owner had disabled stays off until an
+  operator lifts the suspension, after which the owner re-enables it.

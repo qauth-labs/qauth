@@ -136,6 +136,9 @@ A break of any of these is a finding:
   until they expire unless revoked by value, at `/oauth/revoke` or as the token
   presented to `/auth/logout` (current design, recorded in ADR-014).
 - A disabled user gets no tokens.
+- A client an operator suspended gets no authorization codes and cannot
+  authenticate, whatever its owner's `enabled` says. Only an operator lifts a
+  suspension.
 - Data in one realm never reaches another.
 - Secrets are hashed with Argon2id and compared in constant time.
 - Login and registration do not reveal whether an account exists.

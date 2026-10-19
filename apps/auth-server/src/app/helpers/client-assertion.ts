@@ -10,6 +10,7 @@ import {
 import type { OAuthClientLike } from './client-auth';
 import { resolveClientKeySet } from './client-jwks';
 import { resolveClient } from './client-resolution';
+import { isClientUsable } from './client-status';
 import { resolveIssuerIdentifier } from './discovery';
 
 /**
@@ -147,7 +148,7 @@ function readAssertionSubject(assertion: string): string | null {
  * operator has switched off, or a key the client has rotated out
  * (ANT-2026-4V7HWAND).
  *
- * Returns null for an unknown or disabled client. The caller maps that to the
+ * Returns null for an unknown, disabled or operator-suspended client. The caller maps that to the
  * same `invalid_client` every other failure produces, so this never becomes a
  * client-existence oracle.
  */
@@ -157,7 +158,7 @@ async function findAssertionClient(
   clientId: string
 ): Promise<OAuthClientLike | null> {
   const { client } = await resolveClient(fastify, realmId, clientId);
-  if (!client || !client.enabled) return null;
+  if (!client || !isClientUsable(client)) return null;
   return client;
 }
 
