@@ -93,6 +93,14 @@ them, so a rotation still forces users to sign in again. ADR-001's status note r
   twins included, and a wildcard host is refused.
 - A single-realm simple mode uses the deployment's configured host as the default realm's issuer.
   That is the host of the configured issuer, never the host a request names.
+- In simple mode the default realm is also the operator realm. Decided 2026-10-11 (maintainer). Its
+  admins are operator-realm admins, its service accounts live in it (Decision 7), and the admin
+  console is a client of it (Decisions 3 and 5). Simple mode needs no second realm or host for
+  administration.
+- Adding a second realm splits the operator realm from the default realm. This step is the
+  operator-realm split. The default realm keeps its host and its issuer, which are permanent
+  (below). The operator realm becomes a realm of its own, on a host of its own. The upgrade guide
+  documents the split.
 - QAuth needs a dedicated host. It never runs under a path of a shared host.
   - `__Host-` cookies need `Path=/`.
   - WebAuthn RP IDs are host-scoped.
