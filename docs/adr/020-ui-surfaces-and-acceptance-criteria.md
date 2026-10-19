@@ -1,6 +1,6 @@
 # ADR-020: 1.0 UI Surfaces and Acceptance Criteria
 
-**Status:** Accepted 2026-10-11 — records the maintainer's decisions of 2026-10-09 and 2026-10-10, together with the other 1.0 records.  
+**Status:** Accepted 2026-10-11 — records the maintainer's decisions of 2026-10-09 and 2026-10-10, together with the other 1.0 records. Amended 2026-10-19: the component foundation (§6).  
 **Date:** 2026-10-10  
 **Authors:** QAuth Team
 
@@ -378,6 +378,24 @@ a regression fails the build.
   implements it.
 - Each flow and screen is first written as a graph, which this stack implements
   ([ADR-021](./021-flows-and-ui-as-semantic-graphs.md)).
+- **Component foundation (decided 2026-10-19).** The interactive components of `libs/ui`
+  (checkbox, switch, select, combobox, dialog, menu, tabs, table, the command palette) are built on
+  React Aria Components. It wraps real `<input>` and `<select>` elements, so a control still
+  submits when JavaScript fails. It ships an accessible data table, which most admin console
+  screens need. It carries internationalisation and right-to-left support.
+- `libs/ui` has two entry points. The static entry renders native elements only and imports no
+  component library. The interactive entry wraps React Aria Components. Apps import `libs/ui`,
+  never the library itself, so the library can be replaced later.
+- The ceremony app imports the static entry only, and an Nx tag rule enforces it. Its forms must
+  work without JavaScript (criterion 5), and native elements meet that with nothing to hide.
+- React Aria Components render the hidden form input of a checkbox, switch or select with an
+  inline `style` attribute, which the proxy's policy blocks. `libs/ui` hides those inputs with a
+  stylesheet rule that keeps them focusable (`sr-only`), never with `display: none`, which would
+  take the real input out of the focus order and the accessibility tree. The visual regression
+  checks catch a library update that breaks the rule's selector.
+- A checkbox shows its checked state from the real input's `:checked` state, not from a data
+  attribute that JavaScript sets, so it renders correctly with JavaScript off.
+- React Aria's toast is not stable yet. Until it is, `libs/ui` uses its own `Alert` region.
 
 ### 7. Delivery
 
@@ -420,6 +438,11 @@ Wallet and PQC screens ship in the beta that carries their back end.
 
 ## Alternatives considered
 
+- **Base UI for the consoles.** Rejected on 2026-10-19. It has no data table, and its checkbox is
+  an element with a checkbox role that cannot be ticked with JavaScript off. Its stable toast and
+  smaller API did not outweigh those.
+- **No component library.** Rejected on 2026-10-19. The project would write and maintain an
+  accessible table, combobox, dialog and menu itself.
 - **A flow editor in 1.0.** Rejected for 1.0. It would put every flow shape inside the promise and
   reproduce Keycloak's hardest screen. It comes in 1.x.
 - **Template overrides or custom CSS.** Rejected. Both weaken the CSP and create an unpromised
