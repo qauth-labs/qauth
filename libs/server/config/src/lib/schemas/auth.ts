@@ -450,7 +450,9 @@ export const authEnvSchema = z.object({
     .default(64 * 1024),
 
   /**
-   * Per-fetch timeout (milliseconds) for retrieving a CIMD document.
+   * Per-fetch timeout (milliseconds) for retrieving a CIMD document: a
+   * deadline for the whole fetch, from name resolution to the last byte, not
+   * an idle timeout.
    */
   CIMD_FETCH_TIMEOUT_MS: z.coerce.number().int().min(100).default(5000),
 
@@ -523,7 +525,7 @@ export const authEnvSchema = z.object({
   /**
    * Per-fetch timeout (milliseconds) applied to BOTH outbound requests in the
    * key-resolution chain: the trusted issuer's OIDC discovery document and the
-   * `jwks_uri` it names.
+   * `jwks_uri` it names. A deadline for each whole fetch, not an idle timeout.
    */
   ID_JAG_FETCH_TIMEOUT_MS: z.coerce.number().int().min(100).default(5000),
 
@@ -572,9 +574,9 @@ export const authEnvSchema = z.object({
    * Maximum accepted lifetime (seconds) of an INBOUND assertion, measured
    * `exp - iat`. An assertion whose window is longer is rejected outright.
    * This is what makes `jti` replay prevention bounded and affordable: the
-   * replay cache only needs to retain a `jti` for this long (plus the skew
-   * leeway), so it cannot grow without limit. Default 5 minutes, hard cap 1
-   * hour.
+   * replay cache only needs to retain a `jti` for this long (plus twice the
+   * skew leeway), so it cannot grow without limit. Default 5 minutes, hard cap
+   * 1 hour.
    */
   ID_JAG_MAX_ASSERTION_LIFETIME: z.coerce
     .number()

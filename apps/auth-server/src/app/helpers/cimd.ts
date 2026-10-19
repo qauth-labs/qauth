@@ -13,6 +13,7 @@ import {
   CLIENT_JWKS_URI_MAX_LENGTH,
   clientJwkSetSchema,
 } from './client-jwks';
+import { validateRedirectUri } from './dynamic-client-registration';
 import { SsrfBlockedError, ssrfSafeGet } from './ssrf-safe-fetch';
 
 /**
@@ -158,6 +159,21 @@ const SUPPORTED_CIMD_GRANT_TYPES: readonly CimdGrantType[] = [
 
 function isSupportedCimdGrantType(value: string): value is CimdGrantType {
   return (SUPPORTED_CIMD_GRANT_TYPES as readonly string[]).includes(value);
+}
+
+/**
+ * Whether registration would accept `uri` as a redirect URI — the same
+ * {@link validateRedirectUri} Dynamic Client Registration and the management
+ * API apply: https, plain http to a loopback host only, a custom scheme, and
+ * never a fragment.
+ */
+function isRegistrableRedirectUri(uri: string): boolean {
+  try {
+    validateRedirectUri(uri);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export interface CimdClientInsert {
@@ -346,6 +362,17 @@ export function toCimdClientInsert(
   }
   const responseTypes: 'code'[] = supportedResponses.length > 0 ? supportedResponses : ['code'];
 
+  // The document's `redirect_uris` clear the bar every other source of
+  // registered URIs clears (ANT-2026-D0XJAT8S): a plain-http callback on a
+  // non-loopback host would receive the code in cleartext. A URI registration
+  // would refuse is DROPPED, the way an unsupported grant type is — the
+  // document describes the client across every AS it talks to — and a document
+  // with nothing usable left is unusable.
+  const redirectUris = doc.redirect_uris.filter(isRegistrableRedirectUri);
+  if (redirectUris.length === 0) {
+    throw new InvalidClientError('CIMD document declares no acceptable redirect_uris');
+  }
+
   // CIMD §6.2 / RFC 7591 §2 (#384). A document may register PUBLIC keys so the
   // client can authenticate with `private_key_jwt` instead of being restricted
   // to the public, PKCE-only posture it has had until now.
@@ -392,7 +419,7 @@ export function toCimdClientInsert(
     clientSecretHash: sentinelSecretHash,
     name: doc.client_name,
     description: 'CIMD client (client_id metadata document)',
-    redirectUris: doc.redirect_uris,
+    redirectUris,
     grantTypes,
     responseTypes,
     tokenEndpointAuthMethod: usesPrivateKeyJwt ? 'private_key_jwt' : 'none',

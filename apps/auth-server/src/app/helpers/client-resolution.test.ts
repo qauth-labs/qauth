@@ -144,6 +144,45 @@ describe('resolveClient — pre-registered → CIMD priority (MCP 2025-11-25)', 
       expect(fastify.repositories.oauthClients.upsertCimdClient).not.toHaveBeenCalled();
     });
 
+    // Regression (ANT-2026-AF8IKIPI): `canonicalJson` sorted object keys with
+    // `localeCompare`. ICU collation is quadratic in a run of combining marks
+    // that are out of canonical order, once per comparison, and JWK member
+    // names are the document author's — a stored row keeps whatever an earlier
+    // document carried.
+    it('compares the stored key set with the document without collating member names', async () => {
+      const marks = [0x345, 0x35d, 0x35c, 0x315, 0x301, 0x316, 0x31b, 0x321, 0x711, 0x670, 0x334];
+      const storedJwk: Record<string, unknown> = {
+        kty: 'EC',
+        ['й' + marks.map((mark) => String.fromCharCode(mark).repeat(800)).join('')]: 0,
+      };
+      // Names before and after 'й' in turns keep the long name where the sort
+      // compares it again and again.
+      for (let n = 0; n < 30; n++) {
+        storedJwk['а' + String.fromCharCode(0x430 + n)] = 0;
+        storedJwk['я' + String.fromCharCode(0x430 + n)] = 0;
+      }
+      const { fastify, upserted } = await materialise();
+      fastify.repositories.oauthClients.findByClientId.mockResolvedValue({
+        ...upserted[0],
+        tokenEndpointAuthMethod: 'private_key_jwt',
+        jwks: { keys: [storedJwk] },
+      });
+      ssrfSafeGet.mockResolvedValue(
+        ok({
+          ...DOC,
+          token_endpoint_auth_method: 'private_key_jwt',
+          jwks: { keys: [{ kty: 'EC', crv: 'P-256', x: 'abc', y: 'def' }] },
+        })
+      );
+
+      const startedAt = performance.now();
+      const { client } = await resolveClient(fastify, 'realm-1', CIMD_ID);
+
+      expect(performance.now() - startedAt).toBeLessThan(1000);
+      expect(client).not.toBeNull();
+      expect(fastify.repositories.oauthClients.upsertCimdClient).toHaveBeenCalledOnce();
+    }, 60_000);
+
     it('fails closed once CIMD is switched off, even for a stored client', async () => {
       const { fastify } = await materialise();
       ENV.CIMD_ENABLED = false;

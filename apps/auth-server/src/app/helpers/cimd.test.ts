@@ -292,6 +292,36 @@ describe('toCimdClientInsert — grant/response type tolerance (RFC 7591 §2)', 
     expect(insert.redirectUris).toEqual(redirectUris);
   });
 
+  // Regression (ANT-2026-D0XJAT8S): the document's `redirect_uris` were stored
+  // as they came, without the check DCR and the management API apply.
+  it('keeps only the redirect_uris registration would accept', () => {
+    const doc = cimdDocumentSchema.parse(
+      validDoc({
+        redirect_uris: [
+          'https://app.example.com/callback',
+          'http://app.example.com/callback', // plain http, not loopback
+          'https://app.example.com/cb#fragment',
+          'http://localhost/callback',
+          'com.example.app:/oauth2redirect',
+          'not a uri',
+        ],
+      })
+    );
+    const insert = toCimdClientInsert(REALM, CLIENT_ID, doc, SENTINEL);
+    expect(insert.redirectUris).toEqual([
+      'https://app.example.com/callback',
+      'http://localhost/callback',
+      'com.example.app:/oauth2redirect',
+    ]);
+  });
+
+  it('rejects a document none of whose redirect_uris registration would accept', () => {
+    const doc = cimdDocumentSchema.parse(
+      validDoc({ redirect_uris: ['http://app.example.com/callback'] })
+    );
+    expect(() => toCimdClientInsert(REALM, CLIENT_ID, doc, SENTINEL)).toThrow(InvalidClientError);
+  });
+
   it('accepts unknown grant_types and keeps only the supported ones (claude.ai shape)', () => {
     // Real-world shape: claude.ai's metadata document declares jwt-bearer
     // alongside the grants QAuth implements. The document must validate and

@@ -232,9 +232,12 @@ function decodeUnverified(
  *
  * `SET NX EX` is the whole mechanism: atomic, so two concurrent redemptions of
  * the same assertion cannot both win, and TTL-bounded so the store drains on its
- * own. The TTL is `ID_JAG_MAX_ASSERTION_LIFETIME + ID_JAG_CLOCK_SKEW_LEEWAY` —
- * the longest window in which a still-valid assertion could be re-presented —
+ * own. The TTL is `ID_JAG_MAX_ASSERTION_LIFETIME + 2 * ID_JAG_CLOCK_SKEW_LEEWAY`
+ * — the longest window in which a still-valid assertion could be re-presented —
  * which is precisely what the inbound `exp - iat` bound exists to make finite.
+ * The leeway counts TWICE (ANT-2026-D8J0C6IS): `iat` may be one leeway ahead of
+ * this clock, which puts `exp` up to `max lifetime + leeway` away, and the
+ * verifier then accepts the assertion for one more leeway past `exp`.
  *
  * FAILS CLOSED on a store error. Every other cache in this module treats an
  * unreachable Redis as a miss, because a miss there only costs a re-fetch. Here
@@ -247,7 +250,7 @@ async function consumeIdJagJti(
   issuer: string,
   jti: string
 ): Promise<void> {
-  const ttl = env.ID_JAG_MAX_ASSERTION_LIFETIME + env.ID_JAG_CLOCK_SKEW_LEEWAY;
+  const ttl = env.ID_JAG_MAX_ASSERTION_LIFETIME + 2 * env.ID_JAG_CLOCK_SKEW_LEEWAY;
   let stored: string | null;
   try {
     stored = await fastify.redis.set(REDIS_KEYS.ID_JAG_JTI(issuer, jti), '1', 'EX', ttl, 'NX');

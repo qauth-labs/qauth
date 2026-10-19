@@ -812,6 +812,44 @@ describe('GET /oauth/authorize — CIMD (Client ID Metadata Documents)', () => {
     ).rejects.toThrow(/redirect_uri/);
   });
 
+  // Regression (ANT-2026-D0XJAT8S): a CIMD document's `redirect_uris` never
+  // went through the check registration applies, so a plain-http callback on
+  // any host was stored and served — the code then crossed the network in
+  // cleartext.
+  it('does not register a non-loopback http redirect_uri a CIMD document declares', async () => {
+    ssrfSafeGet.mockReset();
+    ssrfSafeGet.mockResolvedValue(
+      cimdDoc(['https://app.example.com/callback', 'http://app.example.com/callback'])
+    );
+
+    const { fastify, ctx } = makeCimdFastify();
+    await authorizeRoute(fastify);
+
+    const { reply, state } = createReply();
+    await expect(
+      ctx.handler!(
+        {
+          query: {
+            response_type: 'code',
+            client_id: CIMD_ID,
+            redirect_uri: 'http://app.example.com/callback', // in the doc, but plain http
+            code_challenge: 'A'.repeat(43),
+            code_challenge_method: 'S256',
+            state: 'xyz',
+          },
+          url: `/oauth/authorize?response_type=code&client_id=${encodeURIComponent(CIMD_ID)}`,
+          headers: {},
+          ip: '127.0.0.1',
+        },
+        reply
+      )
+    ).rejects.toThrow(/redirect_uri/);
+    expect(state.redirected).toBeUndefined();
+    expect(fastify.repositories.oauthClients.upsertCimdClient).toHaveBeenCalledWith(
+      expect.objectContaining({ redirectUris: ['https://app.example.com/callback'] })
+    );
+  });
+
   it('happy path: resolves CIMD client, materialises it, and proceeds to login/consent', async () => {
     ssrfSafeGet.mockReset();
     ssrfSafeGet.mockResolvedValue(cimdDoc(['https://app.example.com/callback']));
@@ -879,6 +917,45 @@ describe('GET /oauth/authorize — CIMD (Client ID Metadata Documents)', () => {
     expect(state.statusCode).toBe(400);
     expect(state.body as string).toContain('<code>login_required</code>');
     expect(state.body as string).toContain('login-qauth.attacker.example');
+  });
+});
+
+// Regression (ANT-2026-D0XJAT8S): the environment gate let every redirect
+// through that was not a plain-http LOOPBACK one, so a registered plain-http
+// callback on another host (a CIMD document's, an operator-seeded row's)
+// received the code in cleartext. Registration refuses such a URI; the gate
+// now does too, whatever put it in the row.
+describe('GET /oauth/authorize — plain-http redirect gate', () => {
+  it('refuses a registered non-loopback http redirect_uri in every environment', async () => {
+    for (const environment of ['development', 'staging', 'production']) {
+      const { fastify, ctx } = makeFastify();
+      await authorizeRoute(fastify);
+      (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue({
+        ...CLIENT,
+        environment,
+        redirectUris: ['http://app.example.com/callback'],
+      });
+
+      const { reply, state } = createReply();
+      await expect(
+        ctx.handler!(
+          {
+            query: { ...BASE_QUERY, redirect_uri: 'http://app.example.com/callback' },
+            url: '/oauth/authorize?response_type=code&client_id=app-123',
+            headers: {},
+            ip: '127.0.0.1',
+          },
+          reply
+        )
+      ).rejects.toThrow('redirect_uri not permitted for this environment');
+      expect(state.redirected).toBeUndefined();
+      expect(fastify.repositories.auditLogs.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          event: 'oauth.authorize.failure',
+          metadata: expect.objectContaining({ reason: 'http_redirect_requires_loopback' }),
+        })
+      );
+    }
   });
 });
 

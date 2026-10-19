@@ -298,7 +298,8 @@ CIMD for anything you deploy.
   may declare portless loopback redirects such as `http://127.0.0.1/callback`
   (Claude Code does); the client's ephemeral port is accepted at authorization
   time ([Redirect URI matching](/integrate/oauth-flow/#redirect-uri-matching)).
-  For purely
+  Its `redirect_uris` get the check DCR applies: an `http://` URI on a host
+  that is not loopback, or one with a fragment, is ignored. For purely
   local testing over `http://localhost`, CIMD is impractical — use DCR.
   MCP 2026-07-28 still cites `draft-ietf-oauth-client-id-metadata-document-00`;
   the IETF draft has since reached **-02** (6 July 2026), and QAuth's

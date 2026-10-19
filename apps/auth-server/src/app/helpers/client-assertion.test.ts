@@ -26,6 +26,7 @@ vi.mock('./ssrf-safe-fetch', async () => {
 
 import {
   authenticateClientAssertion,
+  CLIENT_ASSERTION_CLOCK_SKEW_LEEWAY_SECONDS,
   CLIENT_ASSERTION_MAX_LIFETIME_SECONDS,
   type ClientAssertionCredentials,
 } from './client-assertion';
@@ -117,6 +118,9 @@ let otherKeys: { privateKey: CryptoKey; publicKey: CryptoKey };
 
 beforeEach(async () => {
   vi.clearAllMocks();
+  ENV.CIMD_ENABLED = true;
+  ENV.CIMD_TRUST_POLICY = 'accept-any-https';
+  ENV.CIMD_TRUSTED_DOMAINS = [];
   ENV.CIMD_ALLOW_PRIVATE_ADDRESSES = false;
   es256 = await generateKeyPair('ES256', { extractable: true });
   es256Jwk = await exportJWK(es256.publicKey);
@@ -459,6 +463,30 @@ describe('authenticateClientAssertion — rejected', () => {
     ).rejects.toMatchObject({ errorDescription: expect.stringMatching(/already been used/) });
   });
 
+  // Regression (ANT-2026-D8J0C6IS): the verifier grants the clock-skew leeway
+  // twice — an `iat` up to one leeway ahead, and `exp` accepted one leeway
+  // past — but the replay entry's ceiling counted it once, so it expired while
+  // the assertion of a client whose clock runs ahead was still acceptable.
+  it('keeps the jti entry until the assertion itself stops being acceptable', async () => {
+    // A client whose clock runs ahead, within the leeway, signing for the
+    // maximum lifetime: the longest-lived assertion the verifier accepts.
+    const stub = fastifyStub(clientRow({ jwks: jwkSet(es256Jwk) }));
+    const now = Math.floor(Date.now() / 1000);
+    const skew = CLIENT_ASSERTION_CLOCK_SKEW_LEEWAY_SECONDS - 5;
+    const assertion = await makeAssertion({
+      iat: now + skew,
+      expOffset: skew + CLIENT_ASSERTION_MAX_LIFETIME_SECONDS,
+    });
+
+    await authenticateClientAssertion(asFastify(stub), 'realm-1', creds(assertion));
+
+    const [, , , ttlSeconds] = stub.redis.set.mock.calls[0];
+    const acceptableFor =
+      skew + CLIENT_ASSERTION_MAX_LIFETIME_SECONDS + CLIENT_ASSERTION_CLOCK_SKEW_LEEWAY_SECONDS;
+    // 1 s of slack for a second boundary between `now` here and in the verifier.
+    expect(ttlSeconds).toBeGreaterThanOrEqual(acceptableFor - 1);
+  });
+
   it('rejects an assertion with no jti (replay protection needs one)', async () => {
     const stub = fastifyStub(clientRow({ jwks: jwkSet(es256Jwk) }));
     const assertion = await makeAssertion({ jti: null });
@@ -575,6 +603,27 @@ describe('authenticateClientAssertion — rejected', () => {
     });
   });
 
+  // Regression (ANT-2026-IY5YYLQR): the key went to WebCrypto's importKey with
+  // every member as the key set had it, and importKey converts a `key_ops`
+  // entry that is not a string with `String()` — which, for a deeply nested
+  // array, copies its text once per level. All of it before the signature of
+  // an assertion anybody can send was checked.
+  it('refuses a key whose key_ops is deeply nested before converting any of it', async () => {
+    let keyOps: unknown = Array.from({ length: 4000 }, () => ({}));
+    for (let level = 0; level < 2500; level++) keyOps = [keyOps, 0];
+    const jwk = { ...es256Jwk, key_ops: ['verify', keyOps] } as unknown as JWK;
+    const stub = fastifyStub(clientRow({ jwks: jwkSet(jwk) }));
+    const assertion = await makeAssertion();
+
+    const started = performance.now();
+    await expect(
+      authenticateClientAssertion(asFastify(stub), 'realm-1', creds(assertion))
+    ).rejects.toMatchObject({
+      errorDescription: expect.stringMatching(/not a valid public JWK Set/),
+    });
+    expect(performance.now() - started).toBeLessThan(250);
+  }, 60_000);
+
   it('rejects the grant-type URN presented as a client_assertion_type', async () => {
     // `...:grant-type:jwt-bearer` and `...:client-assertion-type:jwt-bearer`
     // differ by one path segment and must never be interchangeable.
@@ -614,5 +663,131 @@ describe('authenticateClientAssertion — rejected', () => {
     await expect(
       authenticateClientAssertion(asFastify(stub), 'realm-1', creds(genuine))
     ).resolves.toBeDefined();
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/*                                CIMD clients                                */
+/* -------------------------------------------------------------------------- */
+
+// Regression (ANT-2026-4V7HWAND): a materialised CIMD row is only a cache of
+// the metadata document (ADR-012 §3). The assertion path read the stored row
+// and went through `resolveClient` only when there was none, so once the row
+// existed, `CIMD_ENABLED=false`, the trust allowlist, a vanished document and
+// key rotation never reached a `private_key_jwt` CIMD client.
+describe('authenticateClientAssertion — re-resolves a materialised CIMD client', () => {
+  const CIMD_ID = 'https://app.example.com/client.json';
+
+  function cimdDocument(...keys: JWK[]) {
+    return {
+      status: 200,
+      body: JSON.stringify({
+        client_id: CIMD_ID,
+        client_name: 'Example',
+        redirect_uris: ['https://app.example.com/cb'],
+        token_endpoint_auth_method: 'private_key_jwt',
+        jwks: { keys },
+      }),
+      headers: {},
+    };
+  }
+
+  function cimdAssertion(key: CryptoKey) {
+    return makeAssertion({ iss: CIMD_ID, sub: CIMD_ID, key });
+  }
+
+  async function materialise() {
+    const stub = fastifyStub(null);
+    let stored: ClientRow | null = null;
+    stub.repositories.oauthClients.findByClientId.mockImplementation(async () => stored);
+    stub.repositories.oauthClients.upsertCimdClient.mockImplementation(async (row: ClientRow) => {
+      stored = { ...row, id: 'row-cimd', audience: null };
+      return stored;
+    });
+    ssrfSafeGet.mockResolvedValue(cimdDocument(es256Jwk));
+
+    await expect(
+      authenticateClientAssertion(
+        asFastify(stub),
+        'realm-1',
+        creds(await cimdAssertion(es256.privateKey))
+      )
+    ).resolves.toMatchObject({ clientId: CIMD_ID });
+    // From here on the row exists, exactly as after a first token request.
+    expect(stored).not.toBeNull();
+    stub.store.clear(); // expire the document cache
+    return stub;
+  }
+
+  it('keeps authenticating while the document is unchanged', async () => {
+    const stub = await materialise();
+
+    await expect(
+      authenticateClientAssertion(
+        asFastify(stub),
+        'realm-1',
+        creds(await cimdAssertion(es256.privateKey))
+      )
+    ).resolves.toMatchObject({ clientId: CIMD_ID });
+  });
+
+  it('follows a key rotation in the document', async () => {
+    const stub = await materialise();
+    ssrfSafeGet.mockResolvedValue(cimdDocument(await exportJWK(otherKeys.publicKey)));
+
+    await expect(
+      authenticateClientAssertion(
+        asFastify(stub),
+        'realm-1',
+        creds(await cimdAssertion(es256.privateKey))
+      )
+    ).rejects.toThrow(InvalidClientError);
+    await expect(
+      authenticateClientAssertion(
+        asFastify(stub),
+        'realm-1',
+        creds(await cimdAssertion(otherKeys.privateKey))
+      )
+    ).resolves.toMatchObject({ clientId: CIMD_ID });
+  });
+
+  it('fails closed once CIMD is switched off, even for a stored client', async () => {
+    const stub = await materialise();
+    ENV.CIMD_ENABLED = false;
+
+    await expect(
+      authenticateClientAssertion(
+        asFastify(stub),
+        'realm-1',
+        creds(await cimdAssertion(es256.privateKey))
+      )
+    ).rejects.toThrow(InvalidClientError);
+  });
+
+  it('fails closed once the host leaves the trust allowlist', async () => {
+    const stub = await materialise();
+    ENV.CIMD_TRUST_POLICY = 'allowlist';
+    ENV.CIMD_TRUSTED_DOMAINS = ['other.example.com'];
+
+    await expect(
+      authenticateClientAssertion(
+        asFastify(stub),
+        'realm-1',
+        creds(await cimdAssertion(es256.privateKey))
+      )
+    ).rejects.toThrow(InvalidClientError);
+  });
+
+  it('fails closed when the document can no longer be fetched', async () => {
+    const stub = await materialise();
+    ssrfSafeGet.mockResolvedValue({ status: 404, body: '', headers: {} });
+
+    await expect(
+      authenticateClientAssertion(
+        asFastify(stub),
+        'realm-1',
+        creds(await cimdAssertion(es256.privateKey))
+      )
+    ).rejects.toThrow(InvalidClientError);
   });
 });

@@ -41,6 +41,13 @@ export interface ResolvedClient {
   audience: string[] | null;
   redirectUris: string[];
   tokenEndpointAuthMethod?: string;
+  /**
+   * RFC 7591 §2 key set of a `private_key_jwt` client (#384), inline or by
+   * reference. Surfaced here so the assertion verifier authenticates against
+   * the row this resolver returned rather than a separate, un-resolved read.
+   */
+  jwks?: { keys: Record<string, unknown>[] } | null;
+  jwksUri?: string | null;
   name: string;
   dynamicRegisteredAt: number | null;
   /**
@@ -136,12 +143,23 @@ const CIMD_REFRESHED_FIELDS = [
   'enabled',
 ] as const;
 
-/** JSON with object keys sorted at every level, so jsonb key order cannot matter. */
+/**
+ * JSON with object keys sorted at every level, so jsonb key order cannot matter.
+ *
+ * Keys are compared by UTF-16 code unit, never collated. The order only has to
+ * be deterministic, and some keys are a document author's (JWK member names,
+ * and whatever a stored row kept from an earlier document): `localeCompare`
+ * is quadratic in a run of out-of-order combining marks, once per comparison
+ * (ANT-2026-AF8IKIPI), and it calls canonically equivalent names equal, which
+ * leaves their order to the input.
+ */
 function canonicalJson(value: unknown): string {
   return JSON.stringify(value, (_key, v: unknown) =>
     v && typeof v === 'object' && !Array.isArray(v)
       ? Object.fromEntries(
-          Object.entries(v as Record<string, unknown>).sort(([a], [b]) => a.localeCompare(b))
+          Object.entries(v as Record<string, unknown>).sort(([a], [b]) =>
+            a < b ? -1 : a > b ? 1 : 0
+          )
         )
       : v
   );
@@ -201,7 +219,9 @@ export async function resolveClient(
 
       const insert = toCimdClientInsert(realmId, clientId, doc, sentinelSecretHash);
       // An operator's `enabled = false` survives re-resolution; the document
-      // can never re-enable a client the server disabled.
+      // can never re-enable a client the server disabled. This snapshot
+      // predates the fetch above, so the upsert ANDs it with the live row
+      // rather than writing it back (ANT-2026-SSI34ODQ).
       const data = persisted ? { ...insert, enabled: persisted.enabled } : insert;
       // Unchanged document (the common, cache-served case) → no write.
       if (persisted && cimdRowMatchesInsert(persisted, data)) {

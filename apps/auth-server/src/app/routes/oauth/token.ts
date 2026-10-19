@@ -216,9 +216,24 @@ export default async function (fastify: FastifyInstance) {
             success: false,
             ipAddress: request.ip,
             userAgent: request.headers['user-agent'] || null,
-            metadata: { error: 'Client authentication failed', grantType: body.grant_type },
+            metadata: {
+              error: 'Client authentication failed',
+              grantType: body.grant_type,
+              // `authenticateClientAssertion` attaches WHY it refused for this
+              // log and nowhere else (the secret path throws bare on purpose).
+              ...(err instanceof InvalidClientError && err.errorDescription
+                ? { reason: err.errorDescription }
+                : {}),
+            },
           });
-          throw err;
+          // The reason stops here (ANT-2026-MW7I4DS4). The error handler renders
+          // `errorDescription` as `error_description`, and an authentication
+          // failure that describes itself is an oracle: it tells an
+          // unauthenticated caller which client_ids are registered and enabled,
+          // how they authenticate, and what a `jwks_uri` fetch found — including
+          // the address an internal name resolves to when the SSRF guard blocks
+          // it. Every mechanism answers with the bare `invalid_client`.
+          throw err instanceof InvalidClientError ? new InvalidClientError() : err;
         }
 
         // RFC 6749 §5.1: token responses MUST NOT be cached by intermediaries.

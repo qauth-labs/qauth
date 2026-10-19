@@ -1,6 +1,6 @@
 import { InvalidClientError } from '@qauth-labs/shared-errors';
 import type { FastifyInstance } from 'fastify';
-import type { JSONWebKeySet, JWK } from 'jose';
+import type { JSONWebKeySet } from 'jose';
 import { z } from 'zod';
 
 import { env } from '../../config/env';
@@ -26,6 +26,19 @@ import { SsrfBlockedError, ssrfSafeGet } from './ssrf-safe-fetch';
 /** Maximum number of keys accepted in a client JWK Set. Matches the seed-manifest cap. */
 const CLIENT_JWKS_MAX_KEYS = 20;
 
+/**
+ * Maximum number of members in one client JWK. RFC 7517/7518 register about
+ * twenty; this leaves room for extensions and bounds the object.
+ */
+const CLIENT_JWK_MAX_MEMBERS = 32;
+
+/**
+ * Maximum length of a JWK member name. The names RFC 7517/7518 register are
+ * short ASCII tokens (`key_ops`, `x5t#S256`); a long one is only a cost to
+ * every piece of code that walks the key set (ANT-2026-AF8IKIPI).
+ */
+const CLIENT_JWK_MEMBER_NAME_MAX_LENGTH = 64;
+
 /** Maximum accepted `jwks_uri` length, in characters. */
 export const CLIENT_JWKS_URI_MAX_LENGTH = 2048;
 
@@ -39,10 +52,19 @@ const CLIENT_JWKS_MAX_DOCUMENT_BYTES = 65536;
 const CLIENT_JWKS_CACHE_TTL_SECONDS = 300;
 
 /**
- * A single client JWK. Deliberately permissive about the parameters it carries
- * (RFC 7517 leaves the set open) and strict about what matters:
+ * A single client JWK. Permissive about the parameters it carries (RFC 7517
+ * leaves the set open) and strict about what matters:
  *
  *   - a `kty` must be present, so key selection is never left ambiguous;
+ *   - the members a verifier reads — the ones `jose` selects a key by and
+ *     imports it from: `kty`, `kid`, `alg`, `use`, `key_ops`, `crv`, `x`, `y`,
+ *     `n`, `e` — are typed and length-capped, and ONLY those are kept. Other
+ *     members are accepted (RFC 7517 §4) but dropped, so they never reach
+ *     `jose`: WebCrypto's `importKey` converts the members it knows (`p`, `q`,
+ *     `oth`, `priv`, …) with `String()` whatever their type, synchronously,
+ *     and `String()` of a deeply nested array costs as much as the nesting is
+ *     deep (ANT-2026-IY5YYLQR). The set is the one `id-jag-issuer-keys.ts`
+ *     keeps for issuer keys, plus `key_ops`, which `jose` selects by;
  *   - no PRIVATE component may be present. The AS never needs a client's
  *     private key, so accepting one is pure liability — a `d` (RSA/EC/OKP
  *     private exponent) or `k` (symmetric key value) member rejects the whole
@@ -52,16 +74,50 @@ const CLIENT_JWKS_CACHE_TTL_SECONDS = 300;
  *     algorithm, and none of those are in the permitted assertion algorithm
  *     list — rejecting it here states that intent instead of relying on `jose`
  *     to fail later for a reason nobody reads.
+ *   - member names are bounded in number and length.
  */
 const clientJwkSchema = z
-  .object({ kty: z.string().min(1).max(16) })
-  .catchall(z.unknown())
+  .looseObject({
+    kty: z.string().min(1).max(16),
+    kid: z.string().min(1).max(256).optional(),
+    alg: z.string().min(1).max(32).optional(),
+    use: z.string().min(1).max(16).optional(),
+    // RFC 7517 §4.3 registers eight operations and forbids duplicates.
+    key_ops: z.array(z.string().min(1).max(32)).max(8).optional(),
+    crv: z.string().min(1).max(32).optional(),
+    x: z.string().min(1).max(2048).optional(),
+    y: z.string().min(1).max(2048).optional(),
+    n: z.string().min(1).max(8192).optional(),
+    e: z.string().min(1).max(64).optional(),
+  })
+  .refine(
+    (jwk) => {
+      const names = Object.keys(jwk);
+      return (
+        names.length <= CLIENT_JWK_MAX_MEMBERS &&
+        names.every((name) => name.length <= CLIENT_JWK_MEMBER_NAME_MAX_LENGTH)
+      );
+    },
+    { message: 'jwks member names are bounded in number and length' }
+  )
   .refine((jwk) => !('d' in jwk) && !('k' in jwk), {
     message: 'jwks must contain PUBLIC keys only (a "d" or "k" member was present)',
   })
   .refine((jwk) => jwk.kty !== 'oct', {
     message: 'jwks must not contain symmetric ("oct") keys',
-  });
+  })
+  .transform((jwk) => ({
+    kty: jwk.kty,
+    ...(jwk.kid !== undefined ? { kid: jwk.kid } : {}),
+    ...(jwk.alg !== undefined ? { alg: jwk.alg } : {}),
+    ...(jwk.use !== undefined ? { use: jwk.use } : {}),
+    ...(jwk.key_ops !== undefined ? { key_ops: jwk.key_ops } : {}),
+    ...(jwk.crv !== undefined ? { crv: jwk.crv } : {}),
+    ...(jwk.x !== undefined ? { x: jwk.x } : {}),
+    ...(jwk.y !== undefined ? { y: jwk.y } : {}),
+    ...(jwk.n !== undefined ? { n: jwk.n } : {}),
+    ...(jwk.e !== undefined ? { e: jwk.e } : {}),
+  }));
 
 /** RFC 7517 §5 JWK Set as registered on a client. */
 export const clientJwkSetSchema = z.object({
@@ -84,9 +140,8 @@ export function parseClientJwkSet(value: unknown, source: string): JSONWebKeySet
   if (!parsed.success) {
     throw new InvalidClientError(`${source} is not a valid public JWK Set`);
   }
-  // The shape was just validated, and `jose` re-checks every parameter it
-  // actually consumes when it imports the key.
-  return { keys: parsed.data.keys.map((key) => key as unknown as JWK) };
+  // Typed, capped, and holding only the members `jose` reads.
+  return { keys: parsed.data.keys };
 }
 
 /**
@@ -126,7 +181,7 @@ export async function fetchClientJwkSet(
     if (cached) {
       const parsed = clientJwkSetSchema.safeParse(JSON.parse(cached));
       if (parsed.success) {
-        return { keys: parsed.data.keys.map((key) => key as unknown as JWK) };
+        return { keys: parsed.data.keys };
       }
     }
   } catch {

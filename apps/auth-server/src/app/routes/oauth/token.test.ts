@@ -83,6 +83,7 @@ vi.mock('../../helpers/ssrf-safe-fetch', async () => {
   return { ...actual, ssrfSafeGet };
 });
 
+import { SsrfBlockedError } from '../../helpers/ssrf-safe-fetch';
 import tokenRoute from './token';
 
 afterEach(() => {
@@ -4124,6 +4125,69 @@ describe('POST /oauth/token — private_key_jwt client authentication (#384 wiri
       })
     ).rejects.toThrow(InvalidClientError);
     expect(fastify.jwtUtils.signAccessToken).not.toHaveBeenCalled();
+  });
+
+  // Regression (ANT-2026-MW7I4DS4): the verifier's refusal reason, meant for
+  // the audit log, was rethrown with the error and rendered as
+  // `error_description` — telling an unauthenticated caller which client_ids
+  // are registered and how they authenticate, what a `jwks_uri` fetch found,
+  // and the address an internal name resolves to when the SSRF guard blocks it.
+  it('keeps the reason an assertion was refused off the wire and in the audit log', async () => {
+    const { fastify, ctx } = createFastifyStub();
+    await tokenRoute(fastify);
+    const handler = ctx.handler;
+    if (!handler) throw new Error('Handler missing');
+
+    // A registered client must answer exactly as an unregistered one does.
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(
+      pkjwtClient({ tokenEndpointAuthMethod: 'client_secret_post' })
+    );
+
+    const error = await runToken(handler, {
+      grant_type: 'client_credentials',
+      client_assertion_type: CLIENT_ASSERTION_TYPE,
+      client_assertion: await signAssertion(),
+    }).catch((err: unknown) => err);
+
+    expect(error).toBeInstanceOf(InvalidClientError);
+    expect((error as InvalidClientError).errorDescription).toBeUndefined();
+    expect(fastify.repositories.auditLogs.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        metadata: expect.objectContaining({
+          error: 'Client authentication failed',
+          reason: 'client is not registered for private_key_jwt',
+        }),
+      })
+    );
+  });
+
+  it('keeps a blocked jwks_uri target, and the address it resolved to, off the wire', async () => {
+    const { fastify, ctx } = createFastifyStub();
+    await tokenRoute(fastify);
+    const handler = ctx.handler;
+    if (!handler) throw new Error('Handler missing');
+
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(
+      pkjwtClient({ jwks: null, jwksUri: 'https://internal.example/jwks.json' })
+    );
+    ssrfSafeGet.mockRejectedValue(
+      new SsrfBlockedError('CIMD host resolves to a non-public address (10.9.8.7)')
+    );
+
+    const error = await runToken(handler, {
+      grant_type: 'client_credentials',
+      client_assertion_type: CLIENT_ASSERTION_TYPE,
+      client_assertion: await signAssertion(),
+    }).catch((err: unknown) => err);
+
+    expect(error).toBeInstanceOf(InvalidClientError);
+    expect((error as InvalidClientError).errorDescription).toBeUndefined();
+    expect(JSON.stringify(error)).not.toContain('10.9.8.7');
+    expect(fastify.repositories.auditLogs.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        metadata: expect.objectContaining({ reason: expect.stringContaining('10.9.8.7') }),
+      })
+    );
   });
 
   it('rejects a request presenting BOTH a secret and an assertion (RFC 6749 §2.3)', async () => {

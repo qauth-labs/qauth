@@ -75,6 +75,86 @@ describe('parseClientJwkSet', () => {
     const keys = Array.from({ length: 21 }, (_, i) => ({ ...PUBLIC_JWK, kid: `k${i}` }));
     expect(() => parseClientJwkSet({ keys }, 'test')).toThrow(InvalidClientError);
   });
+
+  // ANT-2026-AF8IKIPI: member names are the key set author's, and code that
+  // walks the key set (the CIMD re-resolution comparison among it) pays for
+  // every name. The names RFC 7517/7518 register are short ASCII tokens.
+  it('rejects a key with an overlong member name', () => {
+    const jwk = { ...PUBLIC_JWK, ['n'.repeat(65)]: 0 };
+    expect(() => parseClientJwkSet({ keys: [jwk] }, 'test')).toThrow(InvalidClientError);
+    expect(() =>
+      parseClientJwkSet({ keys: [{ ...PUBLIC_JWK, ['n'.repeat(64)]: 0 }] }, 'test')
+    ).not.toThrow();
+  });
+
+  it('rejects a key with too many members', () => {
+    const jwk: Record<string, unknown> = { ...PUBLIC_JWK };
+    for (let i = 0; Object.keys(jwk).length <= 32; i++) jwk[`m${i}`] = i;
+    expect(() => parseClientJwkSet({ keys: [jwk] }, 'test')).toThrow(InvalidClientError);
+  });
+});
+
+// Regression (ANT-2026-IY5YYLQR): only `kty` was typed, and the key went to
+// `jose` as it came. WebCrypto's `importKey` does not refuse a JWK member of
+// the wrong type: it converts it to a string, synchronously — and `String()`
+// of a deeply nested array copies its text once per level. That ran before the
+// assertion's signature was checked, on a key set any CIMD host can publish.
+describe('parseClientJwkSet — only typed members the verifier reads reach jose', () => {
+  const nested = (depth: number): unknown => {
+    let value: unknown = ['x'];
+    for (let level = 0; level < depth; level++) value = [value, 0];
+    return value;
+  };
+
+  it.each([
+    ['a nested array inside key_ops', { key_ops: ['verify', nested(50)] }],
+    ['a string as key_ops', { key_ops: 'verify' }],
+    ['an object as x', { x: { a: 1 } }],
+    ['an array as y', { y: ['def'] }],
+    ['a number as crv', { crv: 1 }],
+    ['a non-string kid', { kid: 1 }],
+    ['a non-string alg', { alg: ['ES256'] }],
+    ['a non-string use', { use: {} }],
+    ['a number as e', { kty: 'RSA', n: 'abc', e: 65537 }],
+    ['an overlong n', { kty: 'RSA', n: 'a'.repeat(8193), e: 'AQAB' }],
+  ])('rejects %s', (_label, overrides) => {
+    expect(() => parseClientJwkSet({ keys: [{ ...PUBLIC_JWK, ...overrides }] }, 'test')).toThrow(
+      InvalidClientError
+    );
+  });
+
+  it('passes on only the members jose selects and imports a key by', () => {
+    const jwk = {
+      ...PUBLIC_JWK,
+      alg: 'ES256',
+      use: 'sig',
+      key_ops: ['verify'],
+      ext: true,
+      x5c: ['MIIB'],
+      p: [[['deep']]],
+      oth: [{}],
+      priv: {},
+      note: 'hi',
+    };
+    expect(parseClientJwkSet({ keys: [jwk] }, 'test')).toEqual({
+      keys: [{ ...PUBLIC_JWK, alg: 'ES256', use: 'sig', key_ops: ['verify'] }],
+    });
+  });
+
+  it('re-fetches rather than serve a cached key set with a mistyped member', async () => {
+    const fastify = fastifyStub();
+    (fastify.redis.get as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
+      JSON.stringify({ keys: [{ ...PUBLIC_JWK, key_ops: ['verify', nested(50)] }] })
+    );
+    ssrfSafeGet.mockResolvedValue({
+      status: 200,
+      body: JSON.stringify({ keys: [PUBLIC_JWK] }),
+      headers: {},
+    });
+
+    await expect(fetchClientJwkSet(fastify, JWKS_URI)).resolves.toEqual({ keys: [PUBLIC_JWK] });
+    expect(ssrfSafeGet).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe('assertJwksMutuallyExclusive (RFC 7591 §2)', () => {

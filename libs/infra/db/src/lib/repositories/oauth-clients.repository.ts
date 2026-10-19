@@ -4,7 +4,7 @@ import {
   NotFoundError,
   UniqueConstraintError,
 } from '@qauth-labs/shared-errors';
-import { and, count, desc, eq } from 'drizzle-orm';
+import { and, count, desc, eq, sql } from 'drizzle-orm';
 
 import type {
   NewOAuthClient,
@@ -149,7 +149,9 @@ export function createOAuthClientsRepository(defaultDb: DbClient): OAuthClientsR
      * of racing on a find-then-create. On conflict we refresh only the
      * document-derived fields (name / redirect_uris / grant+response types /
      * auth method + key set) and bump `updatedAt`; identity columns and the
-     * secret sentinel are left as-is.
+     * secret sentinel are left as-is. `enabled` can only be narrowed: a row
+     * that is disabled when the statement runs stays disabled, whatever
+     * `data.enabled` says.
      */
     async upsertCimdClient(data: NewOAuthClient, tx?: DbClient): Promise<OAuthClient> {
       const invoker = tx ?? defaultDb;
@@ -179,7 +181,13 @@ export function createOAuthClientsRepository(defaultDb: DbClient): OAuthClientsR
             // re-resolution, matching the other document-derived fields above.
             isAgent: data.isAgent,
             metadata: data.metadata,
-            enabled: data.enabled,
+            // Narrow-only, evaluated against the row as it is under this
+            // statement's lock (ANT-2026-SSI34ODQ). The caller read
+            // `data.enabled` BEFORE fetching the metadata document, and the
+            // client's own host decides how long that fetch takes, so writing
+            // the snapshot verbatim would undo an operator's `enabled = false`
+            // that landed in between.
+            enabled: sql`${oauthClients.enabled} AND excluded.enabled`,
             updatedAt: Date.now(),
           },
         })
