@@ -7,7 +7,21 @@
       "generator": "pnpm exec nx run auth-server:openapi-export --skip-nx-cache",
       "path": "stable-surface/openapi.json",
       "stability": "stable",
-      "formerPaths": ["apps/docs-site/public/openapi.json"]
+      "formerPaths": ["apps/docs-site/public/openapi.json"],
+      "formerExperimental": [
+        "POST /auth/link/wallet",
+        "GET /auth/link/wallet/{handle}",
+        "GET /oid4vp/request/{handle}",
+        "POST /oid4vp/response",
+        "GET /ui/wallet-link",
+        "POST /ui/wallet-link",
+        "GET /ui/wallet-link/{handle}",
+        "GET /ui/wallet-login",
+        "POST /ui/wallet-login",
+        "GET /ui/wallet-login/return",
+        "GET /ui/wallet-login/{handle}",
+        "GET /ui/wallet-login/{handle}/status"
+      ]
     },
     {
       "name": "openapi-maximal",

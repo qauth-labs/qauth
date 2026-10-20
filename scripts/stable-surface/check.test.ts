@@ -81,6 +81,49 @@ describe('stable-surface check CLI', () => {
     );
   });
 
+  /** The fixture as a git repository with one commit, optionally tagged. */
+  function gitRepo(tag?: string) {
+    const root = fixtureRepo();
+    const git = (...args: string[]) =>
+      expect(
+        spawnSync(
+          'git',
+          ['-c', 'user.name=fixture', '-c', 'user.email=fixture@example.test', ...args],
+          { cwd: root }
+        ).status
+      ).toBe(0);
+    git('init', '-q');
+    git('add', '-A');
+    git('commit', '-q', '-m', 'fixture');
+    if (tag) git('tag', tag);
+    return root;
+  }
+
+  it('exits 2 when a baseline is required and no release tag exists', () => {
+    const { status, stderr, stdout } = check(
+      '--root',
+      gitRepo(),
+      '--only',
+      'breaks',
+      '--require-baseline',
+      '--no-summary'
+    );
+    expect(status).toBe(2);
+    expect(stdout + stderr).toContain('no release tag is reachable from HEAD');
+  });
+
+  it('exits 2, not 0, when the baseline tree cannot be read', () => {
+    const root = gitRepo('v1.0.0');
+    const tree = spawnSync('git', ['rev-parse', 'v1.0.0:stable-surface'], {
+      cwd: root,
+      encoding: 'utf8',
+    }).stdout.trim();
+    rmSync(join(root, '.git', 'objects', tree.slice(0, 2), tree.slice(2)));
+    const { status, stdout, stderr } = check('--root', root, '--only', 'breaks', '--no-summary');
+    expect(status).toBe(2);
+    expect(stdout + stderr).toContain('cannot read the tree of v1.0.0');
+  });
+
   it('exits 2 on an invalid registry', () => {
     const root = fixtureRepo();
     writeFileSync(join(root, 'stable-surface', 'surfaces.json'), '{"surfaces": [{"name": "x"}]}');

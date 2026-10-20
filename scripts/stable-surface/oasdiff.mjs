@@ -6,8 +6,8 @@
  * ships as a release binary, not an npm package — the `oasdiff` name on npm is
  * a security placeholder for a removed malicious package, so never install
  * that. This module downloads the pinned asset from the project's release
- * page, checks it against the SHA-256 recorded below before unpacking it, and
- * caches the binary under `node_modules/.cache/oasdiff/<version>/`.
+ * page, caches it under `node_modules/.cache/oasdiff/`, and checks it against
+ * the SHA-256 recorded below each time before unpacking it.
  *
  * Version choice: 1.33.0 (2026-10-01). Both published advisories are fixed
  * well before it — GHSA-2jcc-mxv7-p3f9 (`--allow-external-refs=false` not
@@ -29,7 +29,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
-  renameSync,
+  readFileSync,
   rmSync,
   writeFileSync,
 } from 'node:fs';
@@ -78,6 +78,11 @@ function reportedVersion(binary) {
 /**
  * The path of a verified oasdiff binary at {@link OASDIFF_VERSION}.
  *
+ * The cache under `node_modules/.cache/oasdiff/` keeps the release archive,
+ * not the binary, and the archive is checked against its pinned SHA-256 on
+ * every run before it is unpacked into a fresh temporary directory, so a
+ * binary that something else wrote into the cache is never run.
+ *
  * `OASDIFF_BIN` may point at an installed binary instead, for a machine with no
  * network; it must report exactly the pinned version, because the rule ids
  * and levels the gate relies on change between releases.
@@ -94,50 +99,43 @@ export async function ensureOasdiff(root) {
     return process.env.OASDIFF_BIN;
   }
 
-  const dir = join(root, 'node_modules', '.cache', 'oasdiff', OASDIFF_VERSION);
-  const binary = join(dir, BINARY);
-  if (existsSync(binary) && reportedVersion(binary) === expected) return binary;
-
   const asset = ASSETS[`${process.platform}-${process.arch}`];
   if (!asset) {
     throw new InputError(
       `no pinned oasdiff build for ${process.platform}-${process.arch}; install oasdiff ${OASDIFF_VERSION} and set OASDIFF_BIN`
     );
   }
-  const url = `https://github.com/oasdiff/oasdiff/releases/download/v${OASDIFF_VERSION}/${asset.file}`;
-  let archive;
-  try {
-    const response = await fetch(url);
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    archive = Buffer.from(await response.arrayBuffer());
-  } catch (error) {
-    throw new InputError(`cannot download ${url}: ${error.message}`);
-  }
-  const digest = createHash('sha256').update(archive).digest('hex');
-  if (digest !== asset.sha256) {
-    throw new InputError(
-      `${asset.file} has SHA-256 ${digest}, expected ${asset.sha256}; refusing to run it`
-    );
+  const sha256 = (bytes) => createHash('sha256').update(bytes).digest('hex');
+  const cacheDir = join(root, 'node_modules', '.cache', 'oasdiff');
+  const cached = join(cacheDir, asset.file);
+
+  let archive = existsSync(cached) ? readFileSync(cached) : null;
+  if (archive === null || sha256(archive) !== asset.sha256) {
+    const url = `https://github.com/oasdiff/oasdiff/releases/download/v${OASDIFF_VERSION}/${asset.file}`;
+    try {
+      const response = await fetch(url);
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      archive = Buffer.from(await response.arrayBuffer());
+    } catch (error) {
+      throw new InputError(`cannot download ${url}: ${error.message}`);
+    }
+    const digest = sha256(archive);
+    if (digest !== asset.sha256) {
+      throw new InputError(
+        `${asset.file} has SHA-256 ${digest}, expected ${asset.sha256}; refusing to run it`
+      );
+    }
+    mkdirSync(cacheDir, { recursive: true });
+    writeFileSync(cached, archive);
   }
 
-  mkdirSync(join(root, 'node_modules', '.cache', 'oasdiff'), { recursive: true });
-  const staging = mkdtempSync(
-    join(root, 'node_modules', '.cache', 'oasdiff', `.${OASDIFF_VERSION}-`)
-  );
-  try {
-    writeFileSync(join(staging, asset.file), archive);
-    const untar = spawnSync('tar', ['-xzf', asset.file, BINARY], {
-      cwd: staging,
-      encoding: 'utf8',
-    });
-    if (untar.status !== 0) throw new InputError(`cannot unpack ${asset.file}: ${untar.stderr}`);
-    chmodSync(join(staging, BINARY), 0o755);
-    rmSync(join(staging, asset.file));
-    rmSync(dir, { recursive: true, force: true });
-    renameSync(staging, dir);
-  } finally {
-    rmSync(staging, { recursive: true, force: true });
-  }
+  const dir = mkdtempSync(join(tmpdir(), 'oasdiff-'));
+  process.once('exit', () => rmSync(dir, { recursive: true, force: true }));
+  writeFileSync(join(dir, asset.file), archive);
+  const untar = spawnSync('tar', ['-xzf', asset.file, BINARY], { cwd: dir, encoding: 'utf8' });
+  if (untar.status !== 0) throw new InputError(`cannot unpack ${asset.file}: ${untar.stderr}`);
+  const binary = join(dir, BINARY);
+  chmodSync(binary, 0o755);
   if (reportedVersion(binary) !== expected) {
     throw new InputError(`the unpacked ${binary} does not report ${expected}`);
   }

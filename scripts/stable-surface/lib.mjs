@@ -21,6 +21,7 @@
  * Zero runtime dependencies — Node's standard library only.
  */
 
+import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
@@ -107,8 +108,11 @@ const SURFACE_KEYS = new Set([
   'stability',
   'role',
   'formerPaths',
+  'formerExperimental',
   'maximalOf',
 ]);
+
+const OPERATION_KEY = /^(GET|PUT|POST|DELETE|OPTIONS|HEAD|PATCH|TRACE) \/\S*$/;
 
 const NAME_SHAPE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
@@ -121,12 +125,13 @@ export function isRepoRelativePath(value) {
 
 /**
  * Validate `stable-surface/surfaces.json` and return its entries, normalised
- * (`formerPaths` defaults to `[]`). Unknown keys are refused, so a typo in a
- * field name cannot quietly switch a check off.
+ * (`formerPaths` and `formerExperimental` default to `[]`). Unknown keys are
+ * refused, so a typo in a field name cannot quietly switch a check off.
  *
  * @returns {Array<{name: string, description?: string, format: 'openapi'|'json-schema',
  *   generator: string, path: string, stability: 'stable'|'experimental',
- *   role?: 'input'|'output'|'both', formerPaths: string[], maximalOf?: string}>}
+ *   role?: 'input'|'output'|'both', formerPaths: string[], formerExperimental: string[],
+ *   maximalOf?: string}>}
  */
 export function parseRegistry(data, source = REGISTRY_PATH) {
   if (!isObject(data) || !Array.isArray(data.surfaces)) {
@@ -174,7 +179,20 @@ export function parseRegistry(data, source = REGISTRY_PATH) {
     if (!Array.isArray(formerPaths) || !formerPaths.every(isRepoRelativePath)) {
       errors.push(`${at}: "formerPaths" must be an array of repository-relative paths`);
     }
-    return { ...entry, formerPaths: Array.isArray(formerPaths) ? formerPaths : [] };
+    const formerExperimental = entry.formerExperimental ?? [];
+    if (
+      !Array.isArray(formerExperimental) ||
+      !formerExperimental.every((key) => typeof key === 'string' && OPERATION_KEY.test(key))
+    ) {
+      errors.push(`${at}: "formerExperimental" must be an array of operations, as "METHOD /path"`);
+    } else if (formerExperimental.length > 0 && entry.format !== 'openapi') {
+      errors.push(`${at}: "formerExperimental" applies to openapi surfaces only`);
+    }
+    return {
+      ...entry,
+      formerPaths: Array.isArray(formerPaths) ? formerPaths : [],
+      formerExperimental: Array.isArray(formerExperimental) ? formerExperimental : [],
+    };
   });
 
   const byName = new Map();
@@ -416,20 +434,22 @@ export function withoutOperations(doc, isExperimental) {
  * Each side is judged by its own tags, so a stable operation that turns
  * experimental leaves the compared baseline with an operation the revision
  * lacks, and is reported as removed. A baseline from a release older than the
- * tags (v0.1.0) has none; an untagged baseline operation then takes the tag
- * the same operation carries today, in this surface or in its maximal export,
- * and is stable when neither has it.
+ * tags (v0.1.0) has none. Its operations are then stable unless the registry
+ * entry's `formerExperimental` names them: a record of what that release kept
+ * behind a switch. Today's tags never decide it, or tagging an operation
+ * `experimental` in the pull request under check would exempt it.
  *
  * `info` is set alike on both sides: the release tag is the baseline, not
  * `info.version`, and a title or description is no part of the wire contract.
+ *
+ * @param {{baseline: object, current: object, formerExperimental?: string[]}} documents
  */
-export function prepareOpenApiPair({ baseline, current, maximal }) {
-  const currentTags = stabilityIndex(current);
-  const maximalTags = maximal ? stabilityIndex(maximal) : new Map();
+export function prepareOpenApiPair({ baseline, current, formerExperimental = [] }) {
+  const untaggedExperimental = new Set(formerExperimental);
   const baselineStability = (key, operation) => {
     const own = operation[STABILITY_EXTENSION];
     if (STABILITIES.includes(own)) return own;
-    return currentTags.get(key) ?? maximalTags.get(key) ?? 'stable';
+    return untaggedExperimental.has(key) ? 'experimental' : 'stable';
   };
   const base = withoutOperations(
     baseline,
@@ -459,7 +479,8 @@ const DEFINITION_REF = /^#\/(\$defs|definitions)\/([^/]+)$/;
  * unchanged apart from three moves:
  *
  *   - `$defs` (and draft-07 `definitions`) move to `components.schemas`, and
- *     each `#/$defs/Name` reference is rewritten to match;
+ *     each `#/$defs/Name` reference is rewritten to match; a name defined in
+ *     both is refused, since the two references would meet in one place;
  *   - `$id` and `$schema` are dropped from the root: identifiers, not shape,
  *     and a root `$id` would re-base the rewritten references;
  *   - any other reference (`#`, `#/properties/...`, another file) is refused
@@ -475,6 +496,12 @@ export function wrapJsonSchema(schema, { name, role }) {
   const { $defs, definitions, ...root } = clone(schema);
   delete root.$id;
   delete root.$schema;
+  const clash = Object.keys(definitions ?? {}).filter((key) => Object.hasOwn($defs ?? {}, key));
+  if (clash.length > 0) {
+    throw new InputError(
+      `${name}: ${clash.join(', ')} is defined in both $defs and definitions; keep one`
+    );
+  }
   const schemas = { ...(definitions ?? {}), ...($defs ?? {}) };
 
   const rewrite = (node) => {
@@ -531,28 +558,30 @@ const FINGERPRINT_SHAPE = /^[0-9a-f]{12}$/;
 
 /**
  * Validate `stable-surface/approved-breaks.json`. An entry names the surface,
- * the change (oasdiff's rule, the operation and the change's fingerprint), the
- * issue or ADR that decided it, and the release that will ship it.
+ * the change (oasdiff's rule, the operation, the change's fingerprint and its
+ * text), the issue or ADR that decided it, and the release that will ship it.
  *
  * An entry is refused — a gate failure, and it approves nothing — when it is
- * malformed, names an unknown or non-stable surface, repeats another entry,
- * or names a release that is already tagged or is not later than the
- * baseline: a break approved for a release that has shipped can no longer be
- * approved, because clients already have the release without it.
+ * malformed, names a surface that is not stable now and was not stable at the
+ * baseline, or names a release that is already tagged or is not later than
+ * the baseline: a break approved for a release that has shipped can no longer
+ * be approved, because clients already have the release without it.
  *
  * @param {unknown} data the parsed file
  * @param {{surfaces: ReturnType<typeof parseRegistry>, tagExists: (tag: string) => boolean,
- *   baselineTag: string|null}} context
+ *   baselineTag: string|null, baselineSurfaces?: ReturnType<typeof parseRegistry>|null}} context
  */
-export function validateApprovals(data, { surfaces, tagExists, baselineTag }) {
+export function validateApprovals(data, { surfaces, tagExists, baselineTag, baselineSurfaces }) {
   if (!isObject(data) || !Array.isArray(data.approvals)) {
     throw new InputError(`${APPROVALS_PATH}: expected an object with an "approvals" array`);
   }
   const baseline = baselineTag ? parseReleaseTag(baselineTag) : null;
-  const surfaceByName = new Map(surfaces.map((s) => [s.name, s]));
+  const stableNow = new Set(surfaces.filter((s) => s.stability === 'stable').map((s) => s.name));
+  const stableThen = new Set(
+    (baselineSurfaces ?? []).filter((s) => s.stability === 'stable').map((s) => s.name)
+  );
   const accepted = [];
   const problems = [];
-  const seen = new Set();
 
   data.approvals.forEach((entry, index) => {
     const at = `approvals[${index}]`;
@@ -564,17 +593,15 @@ export function validateApprovals(data, { surfaces, tagExists, baselineTag }) {
     for (const key of Object.keys(entry)) {
       if (!APPROVAL_KEYS.has(key)) reasons.push(`unknown key "${key}"`);
     }
-    const surface = surfaceByName.get(entry.surface);
-    if (!surface)
+    if (!stableNow.has(entry.surface) && !stableThen.has(entry.surface)) {
       reasons.push(
-        `"surface" must name a registered surface (got ${JSON.stringify(entry.surface)})`
+        `"surface" must name a stable surface, or one that was stable at the baseline (got ${JSON.stringify(entry.surface)})`
       );
-    else if (surface.stability !== 'stable')
-      reasons.push(`surface "${surface.name}" is not stable, so nothing in it needs approval`);
+    }
 
     const change = entry.change;
     if (!isObject(change)) {
-      reasons.push('"change" must be an object with rule, operation and fingerprint');
+      reasons.push('"change" must be an object with rule, operation, fingerprint and text');
     } else {
       for (const key of Object.keys(change)) {
         if (!CHANGE_KEYS.has(key)) reasons.push(`unknown key "change.${key}"`);
@@ -587,8 +614,9 @@ export function validateApprovals(data, { surfaces, tagExists, baselineTag }) {
       if (typeof change.fingerprint !== 'string' || !FINGERPRINT_SHAPE.test(change.fingerprint)) {
         reasons.push('"change.fingerprint" must be the 12-character fingerprint the check printed');
       }
-      if (change.text !== undefined && typeof change.text !== 'string')
-        reasons.push('"change.text" must be a string');
+      if (typeof change.text !== 'string' || change.text === '') {
+        reasons.push('"change.text" must be the text the check printed');
+      }
     }
     if (typeof entry.ref !== 'string' || !REF_SHAPE.test(entry.ref)) {
       reasons.push('"ref" must be an issue ("#123") or an ADR ("ADR-018", "ADR-018 §5")');
@@ -605,15 +633,10 @@ export function validateApprovals(data, { surfaces, tagExists, baselineTag }) {
       reasons.push(`release ${entry.release} is not later than the baseline ${baselineTag}`);
     }
 
-    const identity = `${entry.surface}\u0000${isObject(change) ? change.fingerprint : ''}`;
-    if (reasons.length === 0 && seen.has(identity))
-      reasons.push('another entry already approves this change');
-
     if (reasons.length > 0) {
       problems.push({ index, message: `${at}: ${reasons.join('; ')}` });
       return;
     }
-    seen.add(identity);
     accepted.push({ index, ...entry });
   });
 
@@ -629,20 +652,26 @@ export function findingOperation(finding) {
 
 /**
  * Split a surface's breaking findings into the approved and the unapproved.
- * An approval lets through exactly one change: the one whose fingerprint it
- * names, on its surface, with the rule and operation it names.
+ * An approval lets through exactly one change: one whose fingerprint, rule,
+ * operation and text it names, on its surface. Each approval is spent on the
+ * first change it matches, so two changes oasdiff cannot tell apart (its
+ * fingerprint leaves out the media type) need two entries, and an entry that
+ * is never spent is refused by the caller.
+ *
+ * @param {Set<object>} [used] approvals spent already, shared across surfaces
  */
-export function matchApprovals(surfaceName, breaking, approvals) {
+export function matchApprovals(surfaceName, breaking, approvals, used = new Set()) {
   const approved = [];
   const unapproved = [];
-  const used = new Set();
   for (const finding of breaking) {
     const approval = approvals.find(
       (a) =>
+        !used.has(a) &&
         a.surface === surfaceName &&
         a.change.fingerprint === finding.fingerprint &&
         a.change.rule === finding.id &&
-        a.change.operation === findingOperation(finding)
+        a.change.operation === findingOperation(finding) &&
+        a.change.text === finding.text
     );
     if (approval) {
       approved.push({ finding, approval });
@@ -775,14 +804,26 @@ export async function runBreakRuleCase(testCase, bases, differ) {
  * @param {(command: string) => {status: number, output: string}} options.runCommand
  * @param {(base: object, revision: object) => Promise<Array<object>>} options.differ
  *   oasdiff's `changelog` findings for two OpenAPI documents
+ * @param {boolean} [options.requireBaseline] fail, rather than pass, when no
+ *   release tag is reachable: CI sets it, so a checkout without tags cannot
+ *   turn the break check into a no-op
  */
-export async function runChecks({ root, steps, baselineRef, git, runCommand, differ }) {
+export async function runChecks({
+  root,
+  steps,
+  baselineRef,
+  requireBaseline = false,
+  git,
+  runCommand,
+  differ,
+}) {
   const surfaces = parseRegistry(readJsonFile(root, REGISTRY_PATH));
   const approvalsData = readJsonFile(root, APPROVALS_PATH);
   const report = {
     surfaces: surfaces.map((surface) => ({ surface })),
     baseline: null,
     tagProblems: [],
+    withdrawn: [],
     approvalProblems: [],
     approvalsUsed: [],
     errors: [],
@@ -812,15 +853,38 @@ export async function runChecks({ root, steps, baselineRef, git, runCommand, dif
     report.baseline = ref
       ? { ref, reason: baselineRef ? 'given with --baseline' : 'latest release tag' }
       : null;
+    if (!ref && requireBaseline) {
+      report.errors.push(
+        'no release tag is reachable from HEAD, so there is nothing to compare with; fetch the tags (a full-history checkout)'
+      );
+    }
+
+    // The registry as the baseline release had it. A surface that was stable
+    // there cannot leave the check by being renamed, demoted or deleted here.
+    const baselineSurfaces = ref ? readBaselineRegistry(git, ref) : null;
 
     const { approvals, problems } = validateApprovals(approvalsData, {
       surfaces,
       tagExists: git.tagExists,
       baselineTag: baselineRef && parseReleaseTag(baselineRef) ? baselineRef : tag,
+      baselineSurfaces,
     });
     report.approvalProblems = problems.map((p) => p.message);
 
     const used = new Set();
+    for (const former of baselineSurfaces ?? []) {
+      const now = surfaces.find((s) => s.name === former.name);
+      if (now?.stability === 'stable') continue;
+      const finding = withdrawnFinding(former.name, now);
+      const { approved } = matchApprovals(former.name, [finding], approvals, used);
+      report.withdrawn.push({
+        name: former.name,
+        path: former.path,
+        finding,
+        approval: approved[0]?.approval ?? null,
+      });
+    }
+
     for (const surface of surfaces) {
       const result = entry(surface.name);
       if (surface.stability !== 'stable') {
@@ -835,7 +899,7 @@ export async function runChecks({ root, steps, baselineRef, git, runCommand, dif
       try {
         result.breaks = await compareSurface({
           surface,
-          surfaces,
+          formerPath: baselineSurfaces?.find((s) => s.name === surface.name)?.path,
           docs,
           ref,
           git,
@@ -911,10 +975,47 @@ function checkDrift({ root, surfaces, git, runCommand, entry, report }) {
   }
 }
 
-async function compareSurface({ surface, surfaces, docs, ref, git, differ, approvals, used }) {
+/**
+ * The stable surfaces of the registry at `ref`, or null when that release had
+ * no registry (v0.1.0). Read leniently — only `name`, `path` and `stability`
+ * — so a later change to the registry's shape cannot make an old release
+ * unreadable.
+ */
+function readBaselineRegistry(git, ref) {
+  const text = git.show(ref, REGISTRY_PATH);
+  if (text === null) return null;
+  const data = parseJsonText(text, `${ref}:${REGISTRY_PATH}`);
+  if (!isObject(data) || !Array.isArray(data.surfaces)) {
+    throw new InputError(`${ref}:${REGISTRY_PATH}: expected an object with a "surfaces" array`);
+  }
+  return data.surfaces
+    .filter((s) => isObject(s) && s.stability === 'stable')
+    .map((s) => ({ name: s.name, path: s.path, stability: s.stability }));
+}
+
+/** The break of a surface that was stable at the baseline and is not stable now. */
+export function withdrawnFinding(name, now) {
+  const id = 'surface-withdrawn';
+  return {
+    id,
+    text: now
+      ? 'stable at the baseline, experimental now'
+      : 'stable at the baseline, no longer registered',
+    level: LEVEL.ERR,
+    section: 'surface',
+    fingerprint: createHash('sha256').update(`${id}:${name}`).digest('hex').slice(0, 12),
+  };
+}
+
+async function compareSurface({ surface, formerPath, docs, ref, git, differ, approvals, used }) {
+  // The registry's own record of where the file was comes last, after the
+  // paths an entry lists, so a rename needs no `formerPaths` entry.
+  const candidates = [
+    ...new Set([surface.path, ...surface.formerPaths, formerPath].filter(Boolean)),
+  ];
   let baselineText = null;
   let baselinePath = null;
-  for (const candidate of [surface.path, ...surface.formerPaths]) {
+  for (const candidate of candidates) {
     baselineText = git.show(ref, candidate);
     if (baselineText !== null) {
       baselinePath = candidate;
@@ -922,6 +1023,9 @@ async function compareSurface({ surface, surfaces, docs, ref, git, differ, appro
     }
   }
   if (baselineText === null) {
+    if (formerPath) {
+      throw new InputError(`stable at ${ref}, but none of ${candidates.join(', ')} is in ${ref}`);
+    }
     return {
       status: 'no-baseline',
       note: `${surface.path} is not in ${ref}; the first release that contains it becomes its baseline`,
@@ -930,26 +1034,14 @@ async function compareSurface({ surface, surfaces, docs, ref, git, differ, appro
   const baseline = parseJsonText(baselineText, `${ref}:${baselinePath}`);
   const current = docs.get(surface.name);
 
-  let pair;
-  if (surface.format === 'openapi') {
-    const maximalSurface = surfaces.find((s) => s.maximalOf === surface.name);
-    pair = prepareOpenApiPair({
-      baseline,
-      current,
-      maximal: maximalSurface ? docs.get(maximalSurface.name) : undefined,
-    });
-  } else {
-    pair = { base: wrapJsonSchema(baseline, surface), revision: wrapJsonSchema(current, surface) };
-  }
+  const pair =
+    surface.format === 'openapi'
+      ? prepareOpenApiPair({ baseline, current, formerExperimental: surface.formerExperimental })
+      : { base: wrapJsonSchema(baseline, surface), revision: wrapJsonSchema(current, surface) };
 
   const findings = await differ(pair.base, pair.revision);
   const breaking = findings.filter((f) => f.level === LEVEL.ERR);
-  const {
-    approved,
-    unapproved,
-    used: usedHere,
-  } = matchApprovals(surface.name, breaking, approvals);
-  for (const approval of usedHere) used.add(approval);
+  const { approved, unapproved } = matchApprovals(surface.name, breaking, approvals, used);
   return {
     status: unapproved.length > 0 ? 'breaks' : 'ok',
     source: `${ref}:${baselinePath}`,
@@ -966,6 +1058,7 @@ export function exitCodeOf(report) {
   const failed =
     report.tagProblems.length > 0 ||
     report.approvalProblems.length > 0 ||
+    report.withdrawn.some((w) => !w.approval) ||
     report.surfaces.some((s) => s.drift?.status === 'drift' || s.breaks?.status === 'breaks');
   return failed ? 1 : 0;
 }
@@ -1041,6 +1134,33 @@ export function renderSummary(report) {
   if (report.tagProblems.length > 0) {
     lines.push('### Stability tags', '');
     for (const p of report.tagProblems) lines.push(`- \`${p.file}\`: ${p.message}`);
+    lines.push('');
+  }
+
+  if (report.withdrawn.length > 0) {
+    lines.push(`### Surfaces stable at \`${report.baseline.ref}\` and not stable now`, '');
+    for (const w of report.withdrawn) {
+      lines.push(
+        w.approval
+          ? `- ✅ ${w.name} (\`${w.path}\`): ${w.finding.text}; approved for ${w.approval.release}, ${w.approval.ref}`
+          : `- ❌ ${w.name} (\`${w.path}\`): ${w.finding.text}; not approved`
+      );
+    }
+    const unapproved = report.withdrawn.filter((w) => !w.approval);
+    if (unapproved.length > 0) {
+      lines.push(
+        '',
+        `To withdraw a stable surface on purpose, add its entry to \`${APPROVALS_PATH}\`:`,
+        '',
+        '```json',
+        JSON.stringify(
+          unapproved.map((w) => approvalTemplate(w.name, w.finding)),
+          null,
+          2
+        ),
+        '```'
+      );
+    }
     lines.push('');
   }
 
@@ -1132,6 +1252,14 @@ export function annotations(report) {
     out.push({ level: 'error', file: p.file, message: p.message });
   for (const message of report.approvalProblems)
     out.push({ level: 'error', file: APPROVALS_PATH, message });
+  for (const w of report.withdrawn) {
+    if (w.approval) continue;
+    out.push({
+      level: 'error',
+      file: REGISTRY_PATH,
+      message: `${w.name} was ${w.finding.text} [${w.finding.id}, fingerprint ${w.finding.fingerprint}] — not approved in ${APPROVALS_PATH}`,
+    });
+  }
   for (const { surface, drift, breaks } of report.surfaces) {
     if (drift?.status === 'drift') {
       out.push({

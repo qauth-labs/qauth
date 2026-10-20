@@ -57,6 +57,7 @@ const USAGE = `Usage: node scripts/stable-surface/check.mjs [options]
 Options:
   --only <steps>     comma-separated subset of ${STEPS.join(',')} (default: all)
   --baseline <ref>   compare with this git ref instead of the latest release tag
+  --require-baseline exit 2 when no release tag is reachable (CI sets it)
   --self-test        run the break-rule fixtures through oasdiff, then exit
   --root <dir>       repository root (default: this checkout)
   --summary <path>   Markdown job summary sink (default: $GITHUB_STEP_SUMMARY, when set)
@@ -68,6 +69,7 @@ function parseArgs(argv) {
   const opts = {
     steps: Object.fromEntries(STEPS.map((step) => [step, true])),
     baseline: undefined,
+    requireBaseline: false,
     selfTest: false,
     root: REPO_ROOT,
     summary: process.env.GITHUB_STEP_SUMMARY || null,
@@ -91,6 +93,9 @@ function parseArgs(argv) {
       }
       case '--baseline':
         opts.baseline = next();
+        break;
+      case '--require-baseline':
+        opts.requireBaseline = true;
         break;
       case '--self-test':
         opts.selfTest = true;
@@ -135,7 +140,18 @@ function createGit(root) {
         }
         verified.add(ref);
       }
-      if (run(['cat-file', '-e', `${ref}:${path}`]).status !== 0) return null;
+      // `ls-tree` answers "absent" with an empty listing and exit 0, and fails
+      // only when it cannot read the tree — in a treeless clone, a fetch that
+      // did not work. That failure must stop the check, never read as "the
+      // file was not in this release", which would pass it.
+      const listed = run(['ls-tree', '-z', ref, '--', path]);
+      if (listed.status !== 0) {
+        throw new InputError(`cannot read the tree of ${ref} at ${path}: ${listed.stderr.trim()}`);
+      }
+      if (listed.stdout === '') return null;
+      // `<mode> <type> <object>\t<path>\0`
+      const type = listed.stdout.split('\t')[0].split(' ')[1];
+      if (type !== 'blob') throw new InputError(`${ref}:${path} is not a file`);
       const result = run(['show', `${ref}:${path}`]);
       if (result.status !== 0)
         throw new InputError(`git show ${ref}:${path} failed: ${result.stderr.trim()}`);
@@ -223,6 +239,7 @@ async function main() {
     root: opts.root,
     steps: opts.steps,
     baselineRef: opts.baseline,
+    requireBaseline: opts.requireBaseline,
     git: createGit(opts.root),
     runCommand: createRunCommand(opts.root),
     differ: async (base, revision) => {

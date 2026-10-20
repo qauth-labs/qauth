@@ -16,15 +16,18 @@ committed copy and with the last release, and fails on any change nobody approve
 ## Running it
 
 ```bash
-pnpm stable-surface                                   # drift, tags and breaks, as CI runs it
+pnpm stable-surface --require-baseline                # drift, tags and breaks, as CI runs it
 pnpm stable-surface --only drift,tags                 # no oasdiff download
 pnpm stable-surface --baseline v0.1.0                 # compare with another ref
 node scripts/stable-surface/check.mjs --self-test     # the break-rule fixtures, through oasdiff
 ```
 
 Exit codes: `0` clean, `1` a gate failure (drift, a missing tag, an unapproved break, a refused
-approval), `2` the check could not run (an invalid registry, a failing generator, no oasdiff).
-The report goes to stdout and, in CI, to the job summary.
+approval), `2` the check could not run (an invalid registry, a failing generator, no oasdiff, a
+baseline it cannot read). The report goes to stdout and, in CI, to the job summary.
+
+The check never treats "could not read the baseline" as "nothing to compare". A git error reading
+the tag fails the run, and CI passes `--require-baseline`, so a checkout without tags fails too.
 
 ## The three checks
 
@@ -59,6 +62,10 @@ latest release of 1.0 or later that is not a pre-release. The tag decides, not `
 
 Experimental operations are left out of both sides. A stable operation that turns experimental is
 therefore reported as removed, and an experimental one that turns stable as added.
+
+The registry itself is checked against the baseline release's copy. A surface that was stable there
+and is missing or `experimental` here is a break (`surface-withdrawn`), approved like any other. A
+surface whose `path` changed is still found at the baseline under its old path.
 
 ## What counts as a break
 
@@ -103,26 +110,30 @@ API steps, the realm file schema and the documented configuration keys register 
 }
 ```
 
-| Key           | Meaning                                                                                                                |
-| ------------- | ---------------------------------------------------------------------------------------------------------------------- |
-| `name`        | Kebab-case, unique. Approvals name it                                                                                  |
-| `format`      | `openapi` or `json-schema`                                                                                             |
-| `generator`   | The command that writes `path`, run from the repository root. It must write the same bytes on every run                |
-| `path`        | The committed file                                                                                                     |
-| `stability`   | `stable`: drift-checked and break-checked. `experimental`: drift-checked only                                          |
-| `role`        | `json-schema` only. `input` for documents QAuth accepts, `output` for documents it emits, `both`                       |
-| `formerPaths` | Where the file lived in earlier releases. The baseline is read from the first path that exists at the tag              |
-| `maximalOf`   | `openapi` only. Names the default-flag export this one is the maximal-flag export of. Such a surface is `experimental` |
-| `description` | Free text                                                                                                              |
+| Key                  | Meaning                                                                                                                     |
+| -------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| `name`               | Kebab-case, unique. Approvals name it                                                                                       |
+| `format`             | `openapi` or `json-schema`                                                                                                  |
+| `generator`          | The command that writes `path`, run from the repository root. It must write the same bytes on every run                     |
+| `path`               | The committed file                                                                                                          |
+| `stability`          | `stable`: drift-checked and break-checked. `experimental`: drift-checked only                                               |
+| `role`               | `json-schema` only. `input` for documents QAuth accepts, `output` for documents it emits, `both`                            |
+| `formerPaths`        | Where the file lived in a release older than this registry. The baseline is read from the first path that exists at the tag |
+| `formerExperimental` | `openapi` only. The operations a release older than the stability tags kept behind a switch, as `METHOD /path`              |
+| `maximalOf`          | `openapi` only. Names the default-flag export this one is the maximal-flag export of. Such a surface is `experimental`      |
+| `description`        | Free text                                                                                                                   |
 
 A JSON Schema file is compared as the request body (`input`), the response body (`output`) or both,
 so the rules above apply to it unchanged. Its references must point at its own `$defs`
 (`#/$defs/Name`); any other `$ref` is refused.
 
 The OpenAPI entry lists `apps/docs-site/public/openapi.json` under `formerPaths`, because v0.1.0
-shipped no `stable-surface/openapi.json`. That baseline carries no stability tags, so each of its
-operations takes the tag the same operation carries today, and is stable if no export has it any
-more. Once a release contains `stable-surface/openapi.json`, the former path is no longer read.
+shipped no `stable-surface/openapi.json`. That file is v0.1.0's maximal export and carries no
+stability tags, so `formerExperimental` records the twelve wallet-federation operations v0.1.0
+registered only behind `WALLET_FEDERATION_ENABLED`. Every other v0.1.0 operation is stable. Today's
+tags are never consulted for an untagged baseline: otherwise tagging a stable operation
+`experimental` would exempt it from the comparison. Once a release contains
+`stable-surface/openapi.json`, neither key is read again, and both can go.
 
 ## Approving a break
 
@@ -148,8 +159,10 @@ will ship it:
 }
 ```
 
-- An entry lets exactly one change through: the one with that fingerprint, rule and operation, on
-  that surface. The approved break stays in the job summary, with its release and reference.
+- An entry lets exactly one change through: one with that fingerprint, rule, operation and text, on
+  that surface. Each entry is spent on one change, so two changes oasdiff reports alike (its
+  fingerprint leaves out the media type) need two entries. The approved break stays in the job
+  summary, with its release and reference.
 - `ref` is an issue (`#123`) or an ADR (`ADR-018`, `ADR-018 §5`).
 - `release` must not be tagged yet, and must come after the baseline. Once the release is tagged it
   becomes the baseline, the break is part of it, and the entry is refused: delete it.

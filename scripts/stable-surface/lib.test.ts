@@ -102,6 +102,16 @@ describe('the registry (stable-surface/surfaces.json)', () => {
 
   it.each([
     ['an unknown key', [surface({ stabilty: 'stable' })], 'unknown key "stabilty"'],
+    [
+      'a formerExperimental entry that is not an operation',
+      [surface({ formerExperimental: ['/oid4vp/response'] })],
+      '"formerExperimental"',
+    ],
+    [
+      'formerExperimental on a json-schema surface',
+      [surface({ format: 'json-schema', role: 'output', formerExperimental: ['GET /a'] })],
+      'openapi surfaces only',
+    ],
     ['a duplicate name', [surface(), surface({ path: 'b.json' })], 'used twice'],
     ['a duplicate path', [surface(), surface({ name: 'other' })], 'registered by both'],
     ['a path outside the repository', [surface({ path: '../x.json' })], 'repository-relative'],
@@ -245,13 +255,22 @@ describe('the documents the break check compares', () => {
     expect(revision.paths).toEqual({});
   });
 
-  it('judges an untagged baseline operation by its tag today, here or in the maximal export', () => {
+  it('treats an untagged baseline operation as stable unless formerExperimental names it', () => {
     const { base } = prepareOpenApiPair({
       baseline: api({ '/a': { get: op() }, '/wallet': { post: op() }, '/gone': { get: op() } }),
       current: api({ '/a': { get: op('stable') } }),
-      maximal: api({ '/a': { get: op('stable') }, '/wallet': { post: op('experimental') } }),
+      formerExperimental: ['POST /wallet'],
     });
     expect(Object.keys(base.paths).sort()).toEqual(['/a', '/gone']);
+  });
+
+  it("never lets today's tag exempt an untagged baseline operation", () => {
+    const { base, revision } = prepareOpenApiPair({
+      baseline: api({ '/token': { post: op() } }),
+      current: api({ '/token': { post: op('experimental') } }),
+    });
+    expect(Object.keys(base.paths)).toEqual(['/token']);
+    expect(revision.paths).toEqual({});
   });
 
   it('compares the release tag, not info.version', () => {
@@ -317,6 +336,15 @@ describe('a JSON Schema surface, wrapped for oasdiff', () => {
   it('refuses a file that is not one schema object', () => {
     expect(() => wrapJsonSchema([], { name: 'e', role: 'output' })).toThrow(InputError);
   });
+
+  it('refuses a name defined in both $defs and definitions', () => {
+    expect(() =>
+      wrapJsonSchema(
+        { $defs: { X: { type: 'string' } }, definitions: { X: { type: 'integer' } } },
+        { name: 'e', role: 'output' }
+      )
+    ).toThrow('X is defined in both $defs and definitions');
+  });
 });
 
 describe('release tags and the baseline', () => {
@@ -375,6 +403,7 @@ describe('approved breaks (stable-surface/approved-breaks.json)', () => {
       rule: 'response-optional-property-removed',
       operation: 'GET /a',
       fingerprint: '0123456789ab',
+      text: 'removed 0123456789ab',
     },
     ref: '#451',
     release: 'v0.3.0',
@@ -402,14 +431,19 @@ describe('approved breaks (stable-surface/approved-breaks.json)', () => {
   });
 
   it.each([
-    ['an unknown surface', { surface: 'nope' }, 'registered surface'],
-    ['an experimental surface', { surface: 'max' }, 'is not stable'],
+    ['an unknown surface', { surface: 'nope' }, 'must name a stable surface'],
+    ['an experimental surface', { surface: 'max' }, 'must name a stable surface'],
     ['a ref that is neither an issue nor an ADR', { ref: 'see the chat' }, '"ref"'],
     ['a release that is not a tag', { release: '0.3' }, '"release"'],
     [
       'a fingerprint of the wrong shape',
-      { change: { rule: 'r', operation: 'GET /a', fingerprint: 'xyz' } },
+      { change: { rule: 'r', operation: 'GET /a', fingerprint: 'xyz', text: 't' } },
       'fingerprint',
+    ],
+    [
+      'a change without its text',
+      { change: { rule: 'r', operation: 'GET /a', fingerprint: '0123456789ab' } },
+      '"change.text"',
     ],
     ['an unknown key', { reason: 'because' }, 'unknown key "reason"'],
   ])('refuses %s', (_label, overrides, message) => {
@@ -424,10 +458,12 @@ describe('approved breaks (stable-surface/approved-breaks.json)', () => {
     ).toEqual([]);
   });
 
-  it('refuses a second entry for the same change', () => {
-    const { approvals, problems } = validateApprovals({ approvals: [entry(), entry()] }, context);
-    expect(approvals).toHaveLength(1);
-    expect(problems[0].message).toContain('another entry already approves this change');
+  it('accepts an entry for a surface that was stable at the baseline and is gone now', () => {
+    const { problems } = validateApprovals(
+      { approvals: [entry({ surface: 'events' })] },
+      { ...context, baselineSurfaces: [{ name: 'events', path: 'e.json', stability: 'stable' }] }
+    );
+    expect(problems).toEqual([]);
   });
 
   it('refuses a file without an approvals array', () => {
@@ -456,9 +492,24 @@ describe('approved breaks (stable-surface/approved-breaks.json)', () => {
     expect(unapproved.map((f) => f.fingerprint)).toEqual(['ba9876543210']);
   });
 
-  it('does not approve a change on another surface, rule or operation', () => {
+  it('spends an approval on one change, even when oasdiff cannot tell two apart', () => {
+    // oasdiff 1.33.0 leaves the media type out of the fingerprint, so the same
+    // property removed from two media types gives two equal findings.
+    const { approvals } = validateApprovals({ approvals: [entry()] }, context);
+    const twins = [finding('0123456789ab'), finding('0123456789ab')];
+    const once = matchApprovals('openapi', twins, approvals);
+    expect([once.approved.length, once.unapproved.length]).toEqual([1, 1]);
+
+    const both = validateApprovals({ approvals: [entry(), entry()] }, context).approvals;
+    expect(matchApprovals('openapi', twins, both).unapproved).toEqual([]);
+  });
+
+  it('does not approve a change on another surface, rule, operation or text', () => {
     const { approvals } = validateApprovals({ approvals: [entry()] }, context);
     expect(matchApprovals('other', [finding('0123456789ab')], approvals).approved).toEqual([]);
+    expect(
+      matchApprovals('openapi', [finding('0123456789ab', { text: 'other' })], approvals).approved
+    ).toEqual([]);
     expect(
       matchApprovals('openapi', [finding('0123456789ab', { id: 'x' })], approvals).approved
     ).toEqual([]);
@@ -627,8 +678,11 @@ function setup(root: string, { tags = ['v1.0.0'] }: { tags?: string[] } = {}) {
     differCalls.push(revision);
     return structuralDiffer(base, revision);
   };
-  const run = (steps: Doc = { drift: true, tags: true, breaks: true }, baselineRef?: string) =>
-    runChecks({ root, steps, baselineRef, git, runCommand, differ });
+  const run = (
+    steps: Doc = { drift: true, tags: true, breaks: true },
+    baselineRef?: string,
+    requireBaseline = false
+  ) => runChecks({ root, steps, baselineRef, requireBaseline, git, runCommand, differ });
   return { run, generated, differCalls };
 }
 
@@ -704,6 +758,7 @@ describe('a second surface needs only its registry entry', () => {
           rule: 'response-optional-property-removed',
           operation: 'POST /events',
           fingerprint,
+          text: 'removed the optional property `occurred_at` from the response',
         },
         ref: '#451',
         release: 'v1.1.0',
@@ -730,6 +785,7 @@ describe('a second surface needs only its registry entry', () => {
           rule: 'response-optional-property-removed',
           operation: 'POST /events',
           fingerprint,
+          text: 'removed the optional property `occurred_at` from the response',
         },
         ref: '#451',
         release: 'v1.1.0',
@@ -752,6 +808,7 @@ describe('a second surface needs only its registry entry', () => {
           rule: 'api-removed-without-deprecation',
           operation: 'GET /things',
           fingerprint: 'aaaaaaaaaaaa',
+          text: 'api removed without deprecation',
         },
         ref: 'ADR-018',
         release: 'v1.1.0',
@@ -800,6 +857,81 @@ describe('a second surface needs only its registry entry', () => {
     rmSync(join(root, 'baseline', 'stable-surface', 'events.schema.json'));
     const report = await setup(root).run({ breaks: true });
     expect(report.surfaces[1].breaks.source).toBe('v1.0.0:schemas/events.json');
+  });
+
+  it('cannot run without a release tag when a baseline is required', async () => {
+    const root = fixtureRepo();
+    const report = await setup(root, { tags: [] }).run({ breaks: true }, undefined, true);
+    expect(exitCodeOf(report)).toBe(2);
+    expect(report.errors[0]).toContain('no release tag is reachable from HEAD');
+  });
+
+  /** Give the baseline release a registry: the fixture's own, as committed. */
+  function releaseRegistry(root: string) {
+    cpSync(
+      join(root, 'stable-surface', 'surfaces.json'),
+      join(root, 'baseline', 'stable-surface', 'surfaces.json')
+    );
+  }
+
+  it.each([
+    ['dropped from the registry', (doc: Doc) => doc.surfaces.splice(1, 1), 'no longer registered'],
+    [
+      'turned experimental',
+      (doc: Doc) => (doc.surfaces[1].stability = 'experimental'),
+      'experimental now',
+    ],
+  ])('fails a surface that was stable at the baseline and is %s', async (_label, edit, text) => {
+    const root = fixtureRepo();
+    releaseRegistry(root);
+    editJson(join(root, 'stable-surface', 'surfaces.json'), edit);
+    const report = await setup(root).run({ breaks: true });
+
+    expect(exitCodeOf(report)).toBe(1);
+    expect(report.withdrawn).toEqual([expect.objectContaining({ name: 'events', approval: null })]);
+    expect(report.withdrawn[0].finding.text).toContain(text);
+    expect(renderSummary(report)).toContain('### Surfaces stable at `v1.0.0` and not stable now');
+  });
+
+  it('passes a withdrawn surface once approved', async () => {
+    const root = fixtureRepo();
+    releaseRegistry(root);
+    editJson(join(root, 'stable-surface', 'surfaces.json'), (doc) => doc.surfaces.splice(1, 1));
+    const { finding } = (await setup(root).run({ breaks: true })).withdrawn[0];
+    editJson(join(root, 'stable-surface', 'approved-breaks.json'), (doc) => {
+      doc.approvals.push({
+        ...approvalTemplate('events', finding),
+        ref: '#451',
+        release: 'v1.1.0',
+      });
+    });
+    const report = await setup(root).run({ breaks: true });
+    expect(exitCodeOf(report)).toBe(0);
+    expect(report.withdrawn[0].approval.release).toBe('v1.1.0');
+  });
+
+  it("finds a renamed surface's baseline through the baseline registry", async () => {
+    const root = fixtureRepo();
+    releaseRegistry(root);
+    editJson(join(root, 'stable-surface', 'surfaces.json'), (doc) => {
+      doc.surfaces[1].path = 'schemas/events.json';
+    });
+    mkdirSync(join(root, 'schemas'));
+    cpSync(
+      join(root, 'stable-surface', 'events.schema.json'),
+      join(root, 'schemas', 'events.json')
+    );
+    const report = await setup(root).run({ breaks: true });
+    expect(report.surfaces[1].breaks.source).toBe('v1.0.0:stable-surface/events.schema.json');
+  });
+
+  it('cannot run when a surface the baseline registered is missing from it', async () => {
+    const root = fixtureRepo();
+    releaseRegistry(root);
+    rmSync(join(root, 'baseline', 'stable-surface', 'events.schema.json'));
+    const report = await setup(root).run({ breaks: true });
+    expect(exitCodeOf(report)).toBe(2);
+    expect(report.errors[0]).toContain('events: stable at v1.0.0, but none of');
   });
 
   it('cannot run when a generator fails', async () => {

@@ -167,8 +167,10 @@ jobs:
       - name: Break rules match their fixtures
         run: node scripts/stable-surface/check.mjs --self-test
 
+      # `--require-baseline`: a checkout that lost its tags fails here instead
+      # of passing with nothing to compare.
       - name: Stable surface
-        run: node scripts/stable-surface/check.mjs
+        run: node scripts/stable-surface/check.mjs --require-baseline
 
   # Container boot smoke test — the guard for #370.
   #
