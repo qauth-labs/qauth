@@ -126,6 +126,50 @@ jobs:
       # end to end.
       - run: pnpm exec nx affected -t test-integration
 
+  # Stable-surface guard (#451, ADR-018 §5): a stable surface must not change
+  # by accident. `scripts/stable-surface/check.mjs` reads the registry
+  # `stable-surface/surfaces.json`, regenerates every surface and fails on
+  # drift from the committed file, requires `x-qauth-stability` on every
+  # OpenAPI operation, and compares each stable surface with the latest
+  # release tag through oasdiff, failing on a break that
+  # `stable-surface/approved-breaks.json` does not approve. The report and the
+  # diff go to the job summary.
+  #
+  # `fetch-depth: 0` is load-bearing: the baseline is read with
+  # `git show <tag>:<path>`, so the tags must be here. Deliberately NOT
+  # affected-scoped, like docker-smoke: the generator boots the whole app, so
+  # almost any change can move a surface. The timeout is the issue's budget.
+  stable-surface:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          filter: tree:0
+          fetch-depth: 0
+
+      - uses: pnpm/action-setup@v6
+        name: Install pnpm
+        with:
+          version: 11.4.0
+          run_install: false
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: 'pnpm'
+
+      - run: pnpm install --frozen-lockfile
+
+      # Pins what oasdiff reports as a break: one fixture per category of the
+      # definition, and the changes that must pass. Run first, because a
+      # differently-behaving oasdiff makes the real comparison meaningless.
+      - name: Break rules match their fixtures
+        run: node scripts/stable-surface/check.mjs --self-test
+
+      - name: Stable surface
+        run: node scripts/stable-surface/check.mjs
+
   # Container boot smoke test — the guard for #370.
   #
   # Nothing above this job ever builds or runs the auth-server image, so the
