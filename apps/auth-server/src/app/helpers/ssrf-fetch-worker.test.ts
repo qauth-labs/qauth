@@ -58,10 +58,17 @@ describe('guardedGet — timeoutMs bounds the whole fetch', () => {
     await new Promise<void>((resolve) => server.close(() => resolve()));
   });
 
-  const fetchFixture = (): Promise<GuardedGetOutcome> =>
+  // The deadline the timeout tests trip. A test that must NOT reach the
+  // deadline gets IN_TIME_MS instead: the first fetch in a process is cold
+  // (TLS context, CA store), and on a CPU-starved host it has taken over
+  // 400 ms and come back as "timed out".
+  const DEADLINE_MS = 400;
+  const IN_TIME_MS = 4000;
+
+  const fetchFixture = (timeoutMs = DEADLINE_MS): Promise<GuardedGetOutcome> =>
     guardedGet({
       url: `https://localhost:${port}/cimd.json`,
-      timeoutMs: 400,
+      timeoutMs,
       maxBytes: 4096,
       allowPrivateAddresses: true,
     });
@@ -78,7 +85,7 @@ describe('guardedGet — timeoutMs bounds the whole fetch', () => {
         'HTTP/1.1 103 Early Hints\r\nLink: </a.css>; rel=preload\r\n\r\n' +
           'HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\r\n{}'
       );
-    await expect(fetchFixture()).resolves.toMatchObject({
+    await expect(fetchFixture(IN_TIME_MS)).resolves.toMatchObject({
       kind: 'response',
       status: 200,
       body: '{}',
@@ -90,7 +97,7 @@ describe('guardedGet — timeoutMs bounds the whole fetch', () => {
       write('HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n{"a":1}');
       socket.end();
     };
-    await expect(fetchFixture()).resolves.toMatchObject({
+    await expect(fetchFixture(IN_TIME_MS)).resolves.toMatchObject({
       kind: 'response',
       status: 200,
       body: '{"a":1}',
@@ -125,12 +132,12 @@ describe('guardedGet — timeoutMs bounds the whole fetch', () => {
   // can — on the fetch thread's CPU.
   it('hangs up on a stream of 1xx interim responses before the deadline', async () => {
     respond = (write) => write('HTTP/1.1 102 Processing\r\n\r\n'.repeat(100));
-    const started = performance.now();
-    await expect(fetchFixture()).resolves.toEqual({
+    // The message, not the clock, shows the cap tripped first: with a long
+    // deadline, only the cap can end the fetch this way.
+    await expect(fetchFixture(IN_TIME_MS)).resolves.toEqual({
       kind: 'failed',
       message: 'CIMD fetch received too many interim responses',
     });
-    expect(performance.now() - started).toBeLessThan(350);
   }, 5000);
 
   // Node answers an unsolicited `101` by dropping the socket, and the request
@@ -138,8 +145,8 @@ describe('guardedGet — timeoutMs bounds the whole fetch', () => {
   it('settles when the host answers with an unsolicited 101 upgrade', async () => {
     respond = (write) =>
       write('HTTP/1.1 101 Switching Protocols\r\nConnection: upgrade\r\nUpgrade: x\r\n\r\n');
-    const started = performance.now();
-    await expect(fetchFixture()).resolves.toMatchObject({ kind: 'failed' });
-    expect(performance.now() - started).toBeLessThan(350);
+    const outcome = await fetchFixture(IN_TIME_MS);
+    expect(outcome).toMatchObject({ kind: 'failed' });
+    expect(outcome).not.toMatchObject({ message: 'CIMD fetch timed out' });
   }, 5000);
 });
