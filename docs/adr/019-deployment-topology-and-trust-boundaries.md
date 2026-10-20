@@ -867,9 +867,9 @@ Decided 2026-10-10 (maintainer).
   only once the roles run on separate nodes.
 - Sessions in Postgres add writes on sign-in and throttled writes on activity.
 - Envelope encryption, a signer role and automatic rotation are new code inside the audit's scope.
-- Passkeys need JavaScript. Only password and TOTP work without it. A required bot challenge needs
-  it too, so a user without JavaScript who meets one cannot finish that ceremony until they turn it
-  on.
+- Passkeys need JavaScript. Only password, the email-code step and TOTP work without it. A required
+  bot challenge needs it too, so a user without JavaScript who meets one cannot finish that ceremony
+  until they turn it on.
 - An operator who adds a hosted bot-challenge provider runs its script on the sign-up and sign-in
   pages, where passwords are typed.
 - Rebuilding today's server-rendered pages as a separate app is a large migration.
