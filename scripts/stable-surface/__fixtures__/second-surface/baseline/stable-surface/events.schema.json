@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["type", "subject"],
+  "properties": {
+    "type": { "type": "string" },
+    "subject": { "$ref": "#/$defs/Subject" },
+    "occurred_at": { "type": "string" }
+  },
+  "$defs": {
+    "Subject": { "type": "object", "properties": { "id": { "type": "string" } } }
+  }
+}

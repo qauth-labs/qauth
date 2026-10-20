@@ -1,0 +1,104 @@
+{
+  "openapi": "3.1.0",
+  "info": { "title": "Break-rule fixture", "version": "1" },
+  "components": {
+    "securitySchemes": { "bearerAuth": { "type": "http", "scheme": "bearer" } }
+  },
+  "paths": {
+    "/widgets": {
+      "get": {
+        "x-qauth-stability": "stable",
+        "security": [{ "bearerAuth": [] }],
+        "responses": {
+          "200": {
+            "description": "The widget",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["id", "name"],
+                  "properties": {
+                    "id": { "type": "string" },
+                    "name": { "type": "string" },
+                    "color": { "type": "string", "enum": ["red", "green"] },
+                    "size": { "type": "integer" }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "x-qauth-stability": "stable",
+        "security": [{ "bearerAuth": [] }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["name"],
+                "properties": {
+                  "name": { "type": "string" },
+                  "kind": { "type": "string", "enum": ["small", "large"] }
+                }
+              }
+            }
+          }
+        },
+        "responses": { "201": { "description": "Created" } }
+      }
+    },
+    "/widgets/{id}": {
+      "delete": {
+        "x-qauth-stability": "stable",
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": { "204": { "description": "Deleted" } }
+      }
+    },
+    "/status": {
+      "get": {
+        "x-qauth-stability": "stable",
+        "responses": { "200": { "description": "Up" } }
+      }
+    },
+    "/gadgets": {
+      "get": {
+        "x-qauth-stability": "experimental",
+        "responses": {
+          "200": {
+            "description": "The gadget",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["id"],
+                  "properties": { "id": { "type": "string" }, "label": { "type": "string" } }
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "x-qauth-stability": "experimental",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["label"],
+                "properties": { "label": { "type": "string" } }
+              }
+            }
+          }
+        },
+        "responses": { "201": { "description": "Created" } }
+      }
+    }
+  }
+}
