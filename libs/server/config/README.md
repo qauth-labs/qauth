@@ -140,7 +140,6 @@ Authentication-specific configuration.
 | --------------------------- | ------- | -------- | ---------------------------------------------- |
 | `DEFAULT_REALM_NAME`        | string  | `master` | Default realm name                             |
 | `REQUIRE_VERIFIED_ACCOUNT`  | boolean | `true`   | Refuse password login by an unverified account |
-| `REQUIRE_EMAIL_VERIFIED`    | boolean | —        | Deprecated alias of `REQUIRE_VERIFIED_ACCOUNT` |
 | `REGISTRATION_RATE_LIMIT`   | number  | `3`      | Max registrations/window                       |
 | `REGISTRATION_RATE_WINDOW`  | number  | `3600`   | Registration window (sec)                      |
 | `MAX_CLIENTS_PER_DEVELOPER` | number  | `100`    | Most OAuth clients one developer may own       |
@@ -153,11 +152,11 @@ caller in one response, so this is what bounds that response. It must be at
 least 1. An account already above a lowered limit keeps its clients but cannot
 create more.
 
-The schema parses both gate names but does not combine them. Read the gate
-through `resolveRequireVerifiedAccount()`. It applies the `true` default and
-the alias; a blank value of either name reads as unset. It returns a
-deprecation warning when the old name is set. It refuses the two names set to
-different values; the app must then fail its boot.
+`REQUIRE_EMAIL_VERIFIED` is the deprecated name of `REQUIRE_VERIFIED_ACCOUNT`.
+It is an alias in the configuration key registry (below), not a schema field:
+`readConfiguredEnv()` moves its value onto the current name, with a boot
+warning, before the schema sees the environment, and refuses the two names set
+to different values. A blank value of either name reads as unset.
 
 The gate defaults to `true` since 2026-10-19 (ANT-2026-SPEMY9GU). The
 auth-server refuses an unverified account with the same answer as a wrong
@@ -234,6 +233,67 @@ Per-issuer eIDAS level of assurance (`OID4VP_ISSUER_ASSURANCE`), mapped to the
 OIDC `acr` claim ([ADR-010](../../../docs/adr/010-acr-assurance-mapping.md)).
 Listing an issuer here does **not** make it trusted — that is
 `trustRegistryEnvSchema`'s job, and an issuer must appear in both.
+
+## Configuration key registry
+
+`src/lib/registry/` holds one entry for every environment key QAuth reads:
+the keys of the schemas above, the auth server's own keys and the developer
+portal's. It is the contract ADR-018 §5 describes. Each entry states:
+
+| Field                | Meaning                                                                                 |
+| -------------------- | --------------------------------------------------------------------------------------- |
+| `name`               | The environment variable.                                                               |
+| `tier`               | `stable` (deprecation policy), `advanced` (may change in a minor) or `experimental`.    |
+| `role`               | `deployment` (the environment owns it) or `realm-seed` (it seeds a new realm's policy). |
+| `seeds`              | For a `realm-seed` key, the realm policy path it seeds.                                 |
+| `secret`             | The value is a credential; the docs and the boot log never show it.                     |
+| `default`            | The value when unset, `null` for none, `{ required: true }` or `{ computed: '...' }`.   |
+| `since`              | The first release that reads the key.                                                   |
+| `aliases`            | Old names that still work, with the release that deprecated each.                       |
+| `docs`               | One sentence for the configuration page.                                                |
+| `owner`              | The area whose pull requests own the key.                                               |
+| `experimentalValues` | Values of a non-experimental key that are experimental, such as `oid4vp-1.0-base`.      |
+| `developmentOnly`    | The key exists for test and development stacks only.                                    |
+
+The docs site's [configuration page](https://docs.qauth.dev/operate/configuration/)
+is generated from the registry.
+
+`readConfiguredEnv(CONFIG_KEY_REGISTRY)` reads `process.env` the way the
+registry says. It loads `.env`, applies `applyKeyAliases()`, collects the boot
+warnings for deprecated names and experimental settings, and returns a `parse`
+whose errors name the old name when a value came from one:
+
+```typescript
+import { CONFIG_KEY_REGISTRY, readConfiguredEnv } from '@qauth-labs/server-config';
+
+const configured = readConfiguredEnv(CONFIG_KEY_REGISTRY);
+const env = configured.parse(envSchema);
+// Log configured.deprecations and configured.experimental once the logger exists.
+```
+
+`applyKeyAliases()` is the one alias mechanism. With only the old name set, the
+old value is used and a warning is returned. With both set to the same value, a
+warning is returned. With both set to different values, it throws
+`KeyAliasConflictError`, naming both.
+
+### Adding, renaming or removing a key
+
+Every area follows the same rule: **a key registers in the same pull request
+that adds it.** That pull request:
+
+1. adds the schema field (in a schema here, in `apps/auth-server/src/config/env-schema.ts`,
+   or a `process.env` read in `apps/developer-portal/src`);
+2. adds its entry to the area's file in `src/lib/registry/keys/`, with
+   `since` set to the next release and the tier the pull request proposes for
+   review;
+3. adds a stable key to `.env.example`;
+4. regenerates the page with `pnpm nx test server-config -- -u`.
+
+To rename a key, change `name`, rename the schema field, and add the old name to
+`aliases` with the release that deprecates it. A stable key's old name stays for
+at least 12 months and goes only in a new major release. The registry tests
+fail on an unregistered key, an entry without a key, a default that differs from
+the schema's, a stale page and a stable key missing from `.env.example`.
 
 ## API
 

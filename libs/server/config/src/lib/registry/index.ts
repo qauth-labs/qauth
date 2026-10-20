@@ -9,6 +9,7 @@ export {
   DEVELOPER_PORTAL_KEYS,
   SERVER_CONFIG_KEYS,
 } from './keys';
+export { CONFIGURATION_PAGE_PATH, describeDefault, renderConfigurationPage } from './page';
 export {
   type ConfigKey,
   type ConfigKeyInput,

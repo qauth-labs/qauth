@@ -74,6 +74,9 @@ A husky `pre-commit` hook runs lint-staged (ESLint + Prettier) on staged files.
 - Keep PRs small and focused; write a clear English description.
 - Link issues with `Fixes #N` / `Closes #N`.
 - Ensure `pnpm nx affected -t lint test typecheck build` passes before requesting review.
+- A PR that adds, renames or removes an environment key registers it in the
+  configuration key registry in the same PR, with its tier, role, default and
+  one sentence (see [`libs/server/config`](./libs/server/config/README.md#configuration-key-registry)).
 - All code, comments, docs, commits, and PRs are in **English**; only user-facing
   content may be localized.
 

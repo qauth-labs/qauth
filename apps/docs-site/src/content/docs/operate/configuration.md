@@ -1,0 +1,343 @@
+---
+title: Configuration
+description: Every environment key QAuth reads, with its stability tier, role, default and meaning.
+sidebar:
+  order: 8
+lastVerified: '2026-10-20'
+---
+
+<!-- Generated from libs/server/config/src/lib/registry by its tests. Do not edit by hand: change the registry and run `pnpm nx test server-config -- -u`. -->
+
+QAuth reads its configuration from environment variables. This page lists every key the auth server and the developer portal read, generated from the configuration key registry in `libs/server/config/src/lib/registry/`. A test fails when the page, the registry and the env schemas disagree.
+
+## Stability tiers
+
+Every key has a tier, which says how it may change ([ADR-018 §5](/reference/records/adr/018-1-0-scope-and-stability/)).
+
+- **Stable** keys follow the deprecation policy. A deprecation is announced in a minor release; the old name or behaviour keeps working, with a warning at boot, for at least 12 months, and it is removed only in a new major release.
+- **Advanced** keys may change in a minor release. Read the release notes before you upgrade a deployment that sets one.
+- **Experimental** keys may change at any time, without a deprecation window. The server logs a warning at boot for each experimental key that is set, and for each key set to an experimental value.
+
+## Roles
+
+Every key has a role, which says who owns its value ([ADR-019 Decision 10](/reference/records/adr/019-deployment-topology-and-trust-boundaries/)).
+
+- **deployment**: the environment owns the value, for the whole deployment.
+- **realm-seed**: a realm policy. Once realm policies live on the realm row, the key only seeds a new realm's default, and the realm row owns the value from then on. Until then the server reads the key for every realm. The Role column names the policy the key seeds.
+
+A key marked **Secret** holds a credential. This page never shows its value, not even as a default, and neither does the boot log.
+
+## Stable keys
+
+### Server
+
+| Key              | Role       | Default                                                                   | Since | Description                                                                                                                                                                                                    |
+| ---------------- | ---------- | ------------------------------------------------------------------------- | ----- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `CORS_ORIGIN`    | deployment | none in `production`, so cross-origin requests are refused; `*` otherwise | 0.1.0 | The origins, comma-separated, allowed to call the server cross-origin.                                                                                                                                         |
+| `ENABLE_SWAGGER` | deployment | `true`, or `false` when `NODE_ENV=production`                             | 0.1.0 | Serve the Swagger UI at `/docs`.                                                                                                                                                                               |
+| `HOST`           | deployment | `0.0.0.0`                                                                 | 0.1.0 | The address the auth server listens on.                                                                                                                                                                        |
+| `NODE_ENV`       | deployment | `development`                                                             | 0.1.0 | The runtime mode, `development`, `test` or `production`; `production` turns on the strict boot checks, such as refusing the development session secret.                                                        |
+| `PORT`           | deployment | `3000`                                                                    | 0.1.0 | The TCP port the auth server listens on.                                                                                                                                                                       |
+| `TRUST_PROXY`    | deployment | unset                                                                     | 0.1.0 | The reverse proxies whose `X-Forwarded-For` hops set the client address, as a comma-separated list of addresses, CIDR ranges or `loopback`, `linklocal` and `uniquelocal`; `true` and a hop count are refused. |
+
+### Logs and metrics
+
+| Key               | Role       | Default | Since | Description                                                                             |
+| ----------------- | ---------- | ------- | ----- | --------------------------------------------------------------------------------------- |
+| `LOG_LEVEL`       | deployment | `info`  | 0.1.0 | The lowest level the server logs: `fatal`, `error`, `warn`, `info`, `debug` or `trace`. |
+| `METRICS_ENABLED` | deployment | `true`  | 0.1.0 | Serve Prometheus metrics at `GET /metrics`.                                             |
+
+### Database and Redis
+
+| Key              | Role       | Default     | Since | Description                                                                                                          |
+| ---------------- | ---------- | ----------- | ----- | -------------------------------------------------------------------------------------------------------------------- |
+| `DATABASE_URL`   | deployment | required    | 0.1.0 | The Postgres connection URL, credentials included. Secret.                                                           |
+| `REDIS_DB`       | deployment | `0`         | 0.1.0 | The Redis database number, used when `REDIS_URL` is unset.                                                           |
+| `REDIS_HOST`     | deployment | `localhost` | 0.1.0 | The Redis host, used when `REDIS_URL` is unset.                                                                      |
+| `REDIS_PASSWORD` | deployment | unset       | 0.1.0 | The Redis password, used when `REDIS_URL` is unset. Secret.                                                          |
+| `REDIS_PORT`     | deployment | `6379`      | 0.1.0 | The Redis port, used when `REDIS_URL` is unset.                                                                      |
+| `REDIS_URL`      | deployment | unset       | 0.1.0 | The Redis connection URL; when set, `REDIS_HOST`, `REDIS_PORT`, `REDIS_PASSWORD` and `REDIS_DB` are ignored. Secret. |
+
+### Realms
+
+| Key                  | Role       | Default  | Since | Description                                                             |
+| -------------------- | ---------- | -------- | ----- | ----------------------------------------------------------------------- |
+| `DEFAULT_REALM_NAME` | deployment | `master` | 0.1.0 | The name of the realm a new installation creates and serves by default. |
+
+### Tokens
+
+| Key                         | Role                                                       | Default  | Since | Description                                                                                |
+| --------------------------- | ---------------------------------------------------------- | -------- | ----- | ------------------------------------------------------------------------------------------ |
+| `ACCESS_TOKEN_LIFESPAN`     | realm-seed: `tokens.accessTokenLifespanSeconds`            | `900`    | 0.1.0 | The access token lifetime, in seconds, for `staging` and `production` clients.             |
+| `DEV_ACCESS_TOKEN_LIFESPAN` | realm-seed: `tokens.developmentAccessTokenLifespanSeconds` | `28800`  | 0.1.0 | The access token lifetime, in seconds, for `development` clients only.                     |
+| `JWT_ISSUER`                | deployment                                                 | required | 0.1.0 | The issuer URL: the `iss` of every token QAuth issues and the public origin of the server. |
+| `REFRESH_TOKEN_LIFESPAN`    | realm-seed: `tokens.refreshTokenLifespanSeconds`           | `604800` | 0.1.0 | The refresh token lifetime, in seconds.                                                    |
+
+### Signing
+
+| Key                      | Role       | Default   | Since | Description                                                                                                                   |
+| ------------------------ | ---------- | --------- | ----- | ----------------------------------------------------------------------------------------------------------------------------- |
+| `HYBRID_SIGNING_ENABLED` | deployment | `false`   | 0.1.0 | Turn on hybrid Ed25519 and ML-DSA-65 signing, which requires `SIGNING_ALGORITHM_MODE=ed25519+ml-dsa-65` and an ML-DSA-65 key. |
+| `SIGNING_ALGORITHM_MODE` | deployment | `ed25519` | 0.1.0 | Which signature algorithms are enabled: `ed25519`, or `ed25519+ml-dsa-65` to add ML-DSA-65.                                   |
+
+### Accounts and passwords
+
+| Key                             | Role                                          | Default | Since | Description                                                                                                                                                                                   |
+| ------------------------------- | --------------------------------------------- | ------- | ----- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `FAILED_LOGIN_LOCKOUT_DURATION` | realm-seed: `bruteForce.lockoutSeconds`       | `900`   | 0.1.0 | How long, in seconds, a locked-out identifier is refused before any credential check.                                                                                                         |
+| `FAILED_LOGIN_MAX_ATTEMPTS`     | realm-seed: `bruteForce.maxAttempts`          | `5`     | 0.1.0 | How many failed logins for one identifier, inside `FAILED_LOGIN_WINDOW`, start a lockout.                                                                                                     |
+| `FAILED_LOGIN_TRACKING_ENABLED` | realm-seed: `bruteForce.enabled`              | `true`  | 0.1.0 | Lock an identifier out after repeated failed logins; with it off, failed logins are only logged.                                                                                              |
+| `FAILED_LOGIN_WINDOW`           | realm-seed: `bruteForce.windowSeconds`        | `900`   | 0.1.0 | The window, in seconds, over which failed logins are counted.                                                                                                                                 |
+| `PASSWORD_MIN_SCORE`            | realm-seed: `password.minScore`               | `2`     | 0.1.0 | The strength score, from 0 (very weak) to 4 (strong), a new password must reach.                                                                                                              |
+| `REQUIRE_VERIFIED_ACCOUNT`      | realm-seed: `accounts.requireVerifiedAccount` | `true`  | 0.1.0 | Refuse a password login, with the same answer as a wrong password, until the account is verified; for a password account, by its confirmed email address. Old name: `REQUIRE_EMAIL_VERIFIED`. |
+
+### Mail
+
+| Key                                                | Role                                                | Default  | Since | Description                                                                                  |
+| -------------------------------------------------- | --------------------------------------------------- | -------- | ----- | -------------------------------------------------------------------------------------------- |
+| `EMAIL_FROM_ADDRESS`                               | realm-seed: `mail.fromAddress`                      | required | 0.1.0 | The sender address of the mail QAuth sends.                                                  |
+| `EMAIL_FROM_NAME`                                  | realm-seed: `mail.fromName`                         | `QAuth`  | 0.1.0 | The sender name of the mail QAuth sends.                                                     |
+| `EMAIL_PROVIDER`                                   | realm-seed: `mail.provider`                         | `mock`   | 0.1.0 | How mail is sent: `mock`, which delivers nothing, `resend` or `smtp`.                        |
+| `EMAIL_VERIFICATION_INVALIDATE_EXISTING_ON_RESEND` | realm-seed: `mail.invalidateExistingTokensOnResend` | `true`   | 0.1.0 | When a new verification link is sent, invalidate the earlier ones, so only the latest works. |
+| `EMAIL_VERIFICATION_TOKEN_EXPIRY`                  | realm-seed: `mail.verificationTokenExpirySeconds`   | `86400`  | 0.1.0 | How long, in seconds, an email verification link stays valid; at least 3600.                 |
+| `RESEND_API_KEY`                                   | realm-seed: `mail.resend.apiKey`                    | unset    | 0.1.0 | The Resend API key, for `EMAIL_PROVIDER=resend`. Secret.                                     |
+| `SMTP_HOST`                                        | realm-seed: `mail.smtp.host`                        | unset    | 0.1.0 | The SMTP server host, for `EMAIL_PROVIDER=smtp`.                                             |
+| `SMTP_PASSWORD`                                    | realm-seed: `mail.smtp.password`                    | unset    | 0.1.0 | The SMTP password. Secret.                                                                   |
+| `SMTP_PORT`                                        | realm-seed: `mail.smtp.port`                        | unset    | 0.1.0 | The SMTP server port, for `EMAIL_PROVIDER=smtp`.                                             |
+| `SMTP_SECURE`                                      | realm-seed: `mail.smtp.secure`                      | `true`   | 0.1.0 | Connect to the SMTP server over TLS.                                                         |
+| `SMTP_USER`                                        | realm-seed: `mail.smtp.user`                        | unset    | 0.1.0 | The SMTP user name.                                                                          |
+
+### Client registration
+
+| Key                                   | Role                                                        | Default                               | Since | Description                                                                                                                               |
+| ------------------------------------- | ----------------------------------------------------------- | ------------------------------------- | ----- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| `CIMD_ENABLED`                        | realm-seed: `registration.cimd.enabled`                     | `true`                                | 0.1.0 | Accept an HTTPS URL as a `client_id` and fetch its Client ID Metadata Document on demand.                                                 |
+| `CIMD_TRUSTED_DOMAINS`                | realm-seed: `registration.cimd.trustedDomains`              | empty                                 | 0.1.0 | The hosts `CIMD_TRUST_POLICY=allowlist` accepts, separated by spaces or commas, where a leading `*.` matches subdomains.                  |
+| `CIMD_TRUST_POLICY`                   | realm-seed: `registration.cimd.trustPolicy`                 | `accept-any-https`                    | 0.1.0 | Which hosts a Client ID Metadata Document may come from: `accept-any-https`, or `allowlist` for the hosts in `CIMD_TRUSTED_DOMAINS` only. |
+| `DEFAULT_DYNAMIC_REGISTRATION_SCOPES` | realm-seed: `registration.dynamicRegistrationAllowedScopes` | `openid profile email offline_access` | 0.1.0 | The scopes a dynamically registered client may request when its realm sets none, separated by spaces or commas.                           |
+
+### Enterprise-managed authorization (ID-JAG)
+
+| Key                      | Role       | Default | Since | Description                                                                                                                                                |
+| ------------------------ | ---------- | ------- | ----- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ID_JAG_ENABLED`         | deployment | `false` | 0.1.0 | Turn on the Identity Assertion Authorization Grant: accepting ID-JAG assertions at the token endpoint and minting them by token exchange.                  |
+| `ID_JAG_TRUSTED_ISSUERS` | deployment | empty   | 0.1.0 | The exact issuer identifiers of the enterprise identity providers whose ID-JAG assertions are accepted, separated by spaces or commas; empty accepts none. |
+
+### Wallet federation
+
+| Key                         | Role       | Default | Since | Description                                                                                                                                                                                                   |
+| --------------------------- | ---------- | ------- | ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `OID4VP_VERIFIER_PROFILE`   | deployment | unset   | 0.1.0 | The verifier profile wallet sign-in runs under, `haip-1.0` or `oid4vp-1.0-base`, with no default: with wallet sign-in on and no profile, the server refuses to start. Experimental values: `oid4vp-1.0-base`. |
+| `WALLET_FEDERATION_ENABLED` | deployment | `false` | 0.1.0 | Turn on wallet sign-in with OpenID for Verifiable Presentations, which also requires `OID4VP_VERIFIER_PROFILE`.                                                                                               |
+
+## Advanced keys
+
+### Server
+
+| Key                     | Role       | Default    | Since | Description                                                                                                               |
+| ----------------------- | ---------- | ---------- | ----- | ------------------------------------------------------------------------------------------------------------------------- |
+| `REQUEST_TIMEOUT_MS`    | deployment | `60000`    | 0.1.0 | How long, in milliseconds, a client may take to send one complete request before the server answers `408`; at least 1000. |
+| `SECURITY_HSTS_ENABLED` | deployment | `true`     | 0.1.0 | Send the `Strict-Transport-Security` header; keep it on in production.                                                    |
+| `SECURITY_HSTS_MAX_AGE` | deployment | `31536000` | 0.1.0 | The `max-age`, in seconds, of the `Strict-Transport-Security` header.                                                     |
+
+### Logs and metrics
+
+| Key                 | Role       | Default        | Since | Description                                                                                                  |
+| ------------------- | ---------- | -------------- | ----- | ------------------------------------------------------------------------------------------------------------ |
+| `LOG_PRETTY`        | deployment | `false`        | 0.1.0 | Write human-readable, coloured logs instead of JSON, for local development.                                  |
+| `REQUEST_ID_HEADER` | deployment | `x-request-id` | 0.1.0 | The HTTP header that carries the request id, taken from the request when present and echoed on the response. |
+
+### Database and Redis
+
+| Key                          | Role       | Default | Since | Description                                                               |
+| ---------------------------- | ---------- | ------- | ----- | ------------------------------------------------------------------------- |
+| `DB_POOL_CONNECTION_TIMEOUT` | deployment | `2000`  | 0.1.0 | How long, in milliseconds, the pool waits for a new Postgres connection.  |
+| `DB_POOL_IDLE_TIMEOUT`       | deployment | `10000` | 0.1.0 | How long, in milliseconds, an idle Postgres connection stays in the pool. |
+| `DB_POOL_MAX`                | deployment | `20`    | 0.1.0 | The largest number of connections in the Postgres pool.                   |
+| `DB_POOL_MIN`                | deployment | `2`     | 0.1.0 | The smallest number of connections the Postgres pool keeps.               |
+| `REDIS_COMMAND_TIMEOUT`      | deployment | `5000`  | 0.1.0 | How long, in milliseconds, the server waits for one Redis command.        |
+| `REDIS_CONNECTION_TIMEOUT`   | deployment | `10000` | 0.1.0 | How long, in milliseconds, the server waits to connect to Redis.          |
+| `REDIS_MAX_RETRIES`          | deployment | `3`     | 0.1.0 | How many times one Redis command is retried before it fails.              |
+
+### Signing
+
+| Key                      | Role       | Default     | Since | Description                                                                                                                                                                                               |
+| ------------------------ | ---------- | ----------- | ----- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `PQC_SELF_CONTAINED_ACK` | deployment | `false`     | 0.1.0 | Confirm that `self-contained` hybrid tokens, whose ML-DSA-65 signature exceeds cookie and URL size limits, travel only where large headers are accepted; `PQC_TOKEN_DELIVERY=self-contained` requires it. |
+| `PQC_TOKEN_DELIVERY`     | deployment | `reference` | 0.1.0 | How the ML-DSA-65 signature of a hybrid token reaches a verifier: `reference`, through introspection, or `self-contained`, with the token.                                                                |
+
+### Keys and secrets
+
+| Key                                | Role       | Default                                                      | Since | Description                                                                                                                                             |
+| ---------------------------------- | ---------- | ------------------------------------------------------------ | ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `JWT_MLDSA_KID`                    | deployment | unset                                                        | 0.1.0 | The key id of the ML-DSA-65 key, published as `pqc_kid` and in the JWKS.                                                                                |
+| `JWT_MLDSA_PRIVATE_KEY`            | deployment | unset                                                        | 0.1.0 | The ML-DSA-65 private key for hybrid signing, as a base64url-encoded 32-byte seed. Secret.                                                              |
+| `JWT_MLDSA_PRIVATE_KEY_PATH`       | deployment | unset                                                        | 0.1.0 | A file holding the ML-DSA-65 seed; it takes precedence over `JWT_MLDSA_PRIVATE_KEY`.                                                                    |
+| `JWT_PRIVATE_KEY`                  | deployment | none; set this or `JWT_PRIVATE_KEY_PATH`                     | 0.1.0 | The Ed25519 private key, PEM, that signs the tokens QAuth issues. Secret.                                                                               |
+| `JWT_PRIVATE_KEY_PATH`             | deployment | none; set this or `JWT_PRIVATE_KEY`                          | 0.1.0 | A file holding the Ed25519 private key; it takes precedence over `JWT_PRIVATE_KEY`.                                                                     |
+| `JWT_PUBLIC_KEY`                   | deployment | unset                                                        | 0.1.0 | The Ed25519 public key, PEM; derived from the private key when unset.                                                                                   |
+| `JWT_PUBLIC_KEY_PATH`              | deployment | unset                                                        | 0.1.0 | A file holding the Ed25519 public key; it takes precedence over `JWT_PUBLIC_KEY`.                                                                       |
+| `JWT_RS256_KID`                    | deployment | unset                                                        | 0.1.0 | The `kid` of the RS256 key in the JWKS, which must differ from the Ed25519 key id.                                                                      |
+| `JWT_RS256_PRIVATE_KEY`            | deployment | unset                                                        | 0.1.0 | An RSA private key, PKCS#8 PEM; when set, ID tokens are signed with RS256 and its public key is published in the JWKS. Secret.                          |
+| `JWT_RS256_PRIVATE_KEY_PATH`       | deployment | unset                                                        | 0.1.0 | A file holding the RS256 private key; it takes precedence over `JWT_RS256_PRIVATE_KEY`.                                                                 |
+| `JWT_RS256_PUBLIC_KEY`             | deployment | unset                                                        | 0.1.0 | The RS256 public key, SPKI PEM; derived from the private key when unset.                                                                                |
+| `JWT_RS256_PUBLIC_KEY_PATH`        | deployment | unset                                                        | 0.1.0 | A file holding the RS256 public key; it takes precedence over `JWT_RS256_PUBLIC_KEY`.                                                                   |
+| `OID4VP_RESPONSE_KEY_SECRET`       | deployment | unset                                                        | 0.1.0 | A 32-byte key, base64 or base64url, that encrypts the stored per-request response decryption keys at rest; unset, they are stored in the clear. Secret. |
+| `OID4VP_VERIFIER_SIGNING_KEY`      | deployment | unset                                                        | 0.1.0 | The verifier's ES256 private key, PKCS#8 PEM, that signs authorization requests for a profile that requires signed requests. Secret.                    |
+| `OID4VP_VERIFIER_SIGNING_KEY_PATH` | deployment | unset                                                        | 0.1.0 | A file holding the verifier signing key; it takes precedence over `OID4VP_VERIFIER_SIGNING_KEY`.                                                        |
+| `PORTAL_SESSION_SECRET`            | deployment | required                                                     | 0.1.0 | The random secret, at least 32 characters, that signs the developer portal's session cookie. Secret.                                                    |
+| `SESSION_COOKIE_SECRET`            | deployment | a development-only value, refused when `NODE_ENV=production` | 0.1.0 | The HMAC secret, at least 32 characters, that signs the `__Host-qauth_session` cookie. Secret.                                                          |
+
+### Accounts and passwords
+
+| Key                    | Role       | Default  | Since | Description                                                                                                                 |
+| ---------------------- | ---------- | -------- | ----- | --------------------------------------------------------------------------------------------------------------------------- |
+| `PASSWORD_MEMORY_COST` | deployment | `65536`  | 0.1.0 | The Argon2id memory cost, in KiB, of a password hash.                                                                       |
+| `PASSWORD_PARALLELISM` | deployment | `4`      | 0.1.0 | The Argon2id parallelism, in lanes, of a password hash.                                                                     |
+| `PASSWORD_TIME_COST`   | deployment | `3`      | 0.1.0 | The Argon2id time cost, in iterations, of a password hash.                                                                  |
+| `SYSTEM_CLIENT_ID`     | deployment | `system` | 0.1.0 | The client id of the system client that direct logins, outside an OAuth flow, are issued under; it is created on first use. |
+
+### Browser sessions
+
+| Key                     | Role       | Default | Since | Description                                                                                         |
+| ----------------------- | ---------- | ------- | ----- | --------------------------------------------------------------------------------------------------- |
+| `SESSION_COOKIE_SECURE` | deployment | `true`  | 0.1.0 | Set the `Secure` attribute on the session cookie; only a plain-HTTP development stack turns it off. |
+| `SESSION_COOKIE_TTL`    | deployment | `86400` | 0.1.0 | The browser session lifetime, in seconds, counted from sign-in.                                     |
+
+### Mail
+
+| Key              | Role       | Default  | Since | Description                                                     |
+| ---------------- | ---------- | -------- | ----- | --------------------------------------------------------------- |
+| `EMAIL_BASE_URL` | deployment | required | 0.1.0 | The base URL of the links in mail, such as a verification link. |
+
+### Client registration
+
+| Key                            | Role       | Default | Since | Description                                                                                                                                                                                 |
+| ------------------------------ | ---------- | ------- | ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `CIMD_ALLOW_PRIVATE_ADDRESSES` | deployment | `false` | 0.1.0 | Let metadata document and client `jwks_uri` fetches reach loopback, private and link-local addresses, for a test server on localhost; refused when `NODE_ENV=production`. Development only. |
+| `CIMD_CACHE_DEFAULT_TTL`       | deployment | `300`   | 0.1.0 | How long, in seconds, a fetched metadata document is cached when its response states no lifetime.                                                                                           |
+| `CIMD_CACHE_MAX_TTL`           | deployment | `3600`  | 0.1.0 | The longest time, in seconds, a fetched metadata document is cached, whatever its response states.                                                                                          |
+| `CIMD_FETCH_TIMEOUT_MS`        | deployment | `5000`  | 0.1.0 | The deadline, in milliseconds, for one whole metadata document fetch.                                                                                                                       |
+| `CIMD_MAX_DOCUMENT_BYTES`      | deployment | `65536` | 0.1.0 | The largest metadata document, in bytes, the server accepts.                                                                                                                                |
+| `DYNAMIC_CLIENT_BADGE_DAYS`    | deployment | `30`    | 0.1.0 | How many days after dynamic registration the consent screen marks a client as newly registered; `0` turns the mark off.                                                                     |
+| `MAX_CLIENTS_PER_DEVELOPER`    | deployment | `100`   | 0.1.0 | The most OAuth clients one developer account may own, at least 1.                                                                                                                           |
+
+### Enterprise-managed authorization (ID-JAG)
+
+| Key                              | Role       | Default | Since | Description                                                                                                                                                                   |
+| -------------------------------- | ---------- | ------- | ----- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ID_JAG_ALLOW_PRIVATE_ADDRESSES` | deployment | `false` | 0.1.0 | Let issuer discovery and JWKS fetches reach loopback, private and link-local addresses, for a test server on localhost; refused when `NODE_ENV=production`. Development only. |
+| `ID_JAG_CLOCK_SKEW_LEEWAY`       | deployment | `60`    | 0.1.0 | The clock skew, in seconds, allowed when checking an assertion's `exp`, `nbf` and `iat`; at most 300.                                                                         |
+| `ID_JAG_FETCH_TIMEOUT_MS`        | deployment | `5000`  | 0.1.0 | The deadline, in milliseconds, for each fetch of a trusted issuer's discovery document and JWKS.                                                                              |
+| `ID_JAG_ISSUED_LIFETIME`         | deployment | `300`   | 0.1.0 | The lifetime, in seconds, of an ID-JAG the server mints; at most 3600.                                                                                                        |
+| `ID_JAG_JWKS_CACHE_TTL`          | deployment | `300`   | 0.1.0 | How long, in seconds, a trusted issuer's discovery document and JWKS are cached.                                                                                              |
+| `ID_JAG_MAX_ASSERTION_LIFETIME`  | deployment | `300`   | 0.1.0 | The longest lifetime, in seconds, of an assertion the server accepts; at most 3600.                                                                                           |
+| `ID_JAG_MAX_DOCUMENT_BYTES`      | deployment | `65536` | 0.1.0 | The largest discovery document or JWKS, in bytes, the server accepts.                                                                                                         |
+
+### Wallet federation
+
+| Key                                      | Role       | Default                                           | Since | Description                                                                                                                                 |
+| ---------------------------------------- | ---------- | ------------------------------------------------- | ----- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ACR_VALUE_STYLE`                        | deployment | `eidas-uri`                                       | 0.1.0 | How the `acr` claim is written: `eidas-uri` for the eIDAS URIs, or `loa-name` for the bare level names.                                     |
+| `OID4VP_ATTESTING_ISSUERS`               | deployment | unset                                             | 0.1.0 | As JSON, the issuers whose issuance validates a wallet's key attestation, each with the attack-potential grade it establishes.              |
+| `OID4VP_EMAIL_VERIFYING_ISSUERS`         | deployment | unset                                             | 0.1.0 | The trusted issuers, comma-separated, whose `email` claim counts as verified even when the wallet does not disclose `email_verified: true`. |
+| `OID4VP_ISSUER_ASSURANCE`                | deployment | unset                                             | 0.1.0 | As JSON, per realm name, the eIDAS level of assurance a trusted issuer's credentials establish, which becomes the `acr` claim.              |
+| `OID4VP_ISSUER_JWKS`                     | deployment | unset                                             | 0.1.0 | As JSON, the public keys each credential issuer signs with; a key here grants no trust on its own.                                          |
+| `OID4VP_REQUESTED_VCT`                   | deployment | unset                                             | 0.1.0 | The credential types (`vct` values) the wallet sign-in screen asks for, comma-separated; without them the screen is not offered.            |
+| `OID4VP_STATUS_LIST_SIGNERS`             | deployment | unset                                             | 0.1.0 | As JSON, the status issuer that may sign the lists served under a URI prefix on another host.                                               |
+| `OID4VP_STATUS_LIST_TRUST_ANCHORS`       | deployment | unset                                             | 0.1.0 | The PEM certificates a Status List Token's certificate chain must end at, set together with `OID4VP_STATUS_LIST_URI_ALLOWLIST`.             |
+| `OID4VP_STATUS_LIST_TRUST_ANCHORS_PATH`  | deployment | unset                                             | 0.1.0 | A file holding more status list trust anchors, added to `OID4VP_STATUS_LIST_TRUST_ANCHORS`.                                                 |
+| `OID4VP_STATUS_LIST_URI_ALLOWLIST`       | deployment | unset                                             | 0.1.0 | The `https://` URI prefixes, comma-separated, that status lists may be fetched from, set together with `OID4VP_STATUS_LIST_TRUST_ANCHORS`.  |
+| `OID4VP_SUBJECT_BINDING_CLAIMS`          | deployment | unset                                             | 0.1.0 | The credential claims, comma-separated, that bind a presentation to the asserted account; `asserted-lookup` refuses to start without them.  |
+| `OID4VP_SUBJECT_CLAIM`                   | deployment | unset                                             | 0.1.0 | The claim that carries an issuer's stable subject identifier, for `OID4VP_SUBJECT_RESOLUTION=issuer-scoped-claim`.                          |
+| `OID4VP_SUBJECT_CLAIM_ISSUERS`           | deployment | unset                                             | 0.1.0 | The issuers, comma-separated, whose credentials `issuer-scoped-claim` resolution may key an account on.                                     |
+| `OID4VP_SUBJECT_RESOLUTION`              | deployment | the verifier profile's default, `asserted-lookup` | 0.1.0 | How a presentation is resolved to an account: `asserted-lookup` or `issuer-scoped-claim`.                                                   |
+| `OID4VP_TRUSTED_ISSUERS`                 | deployment | unset                                             | 0.1.0 | As JSON, per realm name, the credential issuers whose credentials that realm accepts; unset, no realm trusts any issuer.                    |
+| `OID4VP_VERIFIER_CERTIFICATE_CHAIN`      | deployment | unset                                             | 0.1.0 | The verifier's PEM certificate chain, leaf first and without the trust anchor, sent as the signed request's `x5c`.                          |
+| `OID4VP_VERIFIER_CERTIFICATE_CHAIN_PATH` | deployment | unset                                             | 0.1.0 | A file holding the verifier certificate chain; it takes precedence over `OID4VP_VERIFIER_CERTIFICATE_CHAIN`.                                |
+| `OID4VP_VERIFIER_TRUST_ANCHORS`          | deployment | unset                                             | 0.1.0 | The PEM certificates the verifier certificate chain must end at, checked at boot.                                                           |
+| `OID4VP_VERIFIER_TRUST_ANCHORS_PATH`     | deployment | unset                                             | 0.1.0 | A file holding more verifier trust anchors, added to `OID4VP_VERIFIER_TRUST_ANCHORS`.                                                       |
+| `OID4VP_WALLET_INVOCATION_ENDPOINT`      | deployment | `openid4vp://`                                    | 0.1.0 | Where the wallet sign-in screen's QR code and wallet button point: a wallet's custom scheme or universal link.                              |
+
+### Rate limits
+
+| Key                                 | Role       | Default | Since | Description                                                                                                  |
+| ----------------------------------- | ---------- | ------- | ----- | ------------------------------------------------------------------------------------------------------------ |
+| `AUTHORIZE_RATE_LIMIT`              | deployment | `60`    | 0.1.0 | The most authorization requests allowed per window for a `production` realm, the strict tier.                |
+| `AUTHORIZE_RATE_LIMIT_LENIENT`      | deployment | `600`   | 0.1.0 | The most authorization requests allowed per window for a `development` or `staging` realm, the lenient tier. |
+| `AUTHORIZE_RATE_WINDOW`             | deployment | `60`    | 0.1.0 | The window, in seconds, of both authorization request limits.                                                |
+| `HEALTH_RATE_LIMIT_MAX`             | deployment | `1000`  | 0.1.0 | The most health endpoint requests allowed per window.                                                        |
+| `HEALTH_RATE_LIMIT_WINDOW`          | deployment | `60`    | 0.1.0 | The window, in seconds, of `HEALTH_RATE_LIMIT_MAX`.                                                          |
+| `INTROSPECT_RATE_LIMIT`             | deployment | `30`    | 0.1.0 | The most introspection requests allowed per window.                                                          |
+| `INTROSPECT_RATE_WINDOW`            | deployment | `60`    | 0.1.0 | The window, in seconds, of `INTROSPECT_RATE_LIMIT`.                                                          |
+| `LOGIN_RATE_LIMIT`                  | deployment | `5`     | 0.1.0 | The most login attempts allowed per window.                                                                  |
+| `LOGIN_RATE_WINDOW`                 | deployment | `900`   | 0.1.0 | The window, in seconds, of `LOGIN_RATE_LIMIT`.                                                               |
+| `LOGOUT_RATE_LIMIT`                 | deployment | `20`    | 0.1.0 | The most logout requests allowed per window.                                                                 |
+| `LOGOUT_RATE_WINDOW`                | deployment | `60`    | 0.1.0 | The window, in seconds, of `LOGOUT_RATE_LIMIT`.                                                              |
+| `OID4VP_REQUEST_OBJECT_RATE_LIMIT`  | deployment | `30`    | 0.1.0 | The most request object fetches from `GET /oid4vp/request/:handle` per client address allowed per window.    |
+| `OID4VP_REQUEST_OBJECT_RATE_WINDOW` | deployment | `60`    | 0.1.0 | The window, in seconds, of `OID4VP_REQUEST_OBJECT_RATE_LIMIT`.                                               |
+| `OID4VP_RESPONSE_RATE_LIMIT`        | deployment | `30`    | 0.1.0 | The most wallet responses to `POST /oid4vp/response` per client address allowed per window.                  |
+| `OID4VP_RESPONSE_RATE_WINDOW`       | deployment | `60`    | 0.1.0 | The window, in seconds, of `OID4VP_RESPONSE_RATE_LIMIT`.                                                     |
+| `RATE_LIMIT_ENABLED`                | deployment | `true`  | 0.1.0 | Apply the rate limits at all; only a development or test stack turns them off.                               |
+| `RATE_LIMIT_MAX`                    | deployment | `100`   | 0.1.0 | The most requests to a route with no limit of its own allowed per window.                                    |
+| `RATE_LIMIT_WINDOW`                 | deployment | `3600`  | 0.1.0 | The window, in seconds, of `RATE_LIMIT_MAX`.                                                                 |
+| `REFRESH_RATE_LIMIT`                | deployment | `10`    | 0.1.0 | The most refresh token requests allowed per window.                                                          |
+| `REFRESH_RATE_WINDOW`               | deployment | `60`    | 0.1.0 | The window, in seconds, of `REFRESH_RATE_LIMIT`.                                                             |
+| `REGISTER_CLIENT_RATE_LIMIT`        | deployment | `30`    | 0.1.0 | The most dynamic client registrations per client address allowed per window.                                 |
+| `REGISTER_CLIENT_RATE_WINDOW`       | deployment | `60`    | 0.1.0 | The window, in seconds, of `REGISTER_CLIENT_RATE_LIMIT`.                                                     |
+| `REGISTRATION_RATE_LIMIT`           | deployment | `3`     | 0.1.0 | The most account registrations allowed per window.                                                           |
+| `REGISTRATION_RATE_WINDOW`          | deployment | `3600`  | 0.1.0 | The window, in seconds, of `REGISTRATION_RATE_LIMIT`.                                                        |
+| `RESEND_VERIFICATION_EMAIL_LIMIT`   | deployment | `3`     | 0.1.0 | The most verification mail resends per email address allowed per window.                                     |
+| `RESEND_VERIFICATION_EMAIL_WINDOW`  | deployment | `3600`  | 0.1.0 | The window, in seconds, of `RESEND_VERIFICATION_EMAIL_LIMIT`.                                                |
+| `RESEND_VERIFICATION_MIN_INTERVAL`  | deployment | `60`    | 0.1.0 | The shortest time, in seconds, between two verification mail resends to one address.                         |
+| `RESEND_VERIFICATION_RATE_LIMIT`    | deployment | `100`   | 0.1.0 | The most verification mail resends per client address allowed per window.                                    |
+| `RESEND_VERIFICATION_RATE_WINDOW`   | deployment | `60`    | 0.1.0 | The window, in seconds, of `RESEND_VERIFICATION_RATE_LIMIT`.                                                 |
+| `TOKEN_RATE_LIMIT`                  | deployment | `30`    | 0.1.0 | The most token requests allowed per window for a `production` realm, the strict tier.                        |
+| `TOKEN_RATE_LIMIT_LENIENT`          | deployment | `300`   | 0.1.0 | The most token requests allowed per window for a `development` or `staging` realm, the lenient tier.         |
+| `TOKEN_RATE_WINDOW`                 | deployment | `60`    | 0.1.0 | The window, in seconds, of both token request limits.                                                        |
+| `USERINFO_RATE_LIMIT`               | deployment | `60`    | 0.1.0 | The most userinfo requests allowed per window.                                                               |
+| `USERINFO_RATE_WINDOW`              | deployment | `60`    | 0.1.0 | The window, in seconds, of `USERINFO_RATE_LIMIT`.                                                            |
+| `VERIFICATION_RATE_LIMIT`           | deployment | `10`    | 0.1.0 | The most email verification attempts allowed per window.                                                     |
+| `VERIFICATION_RATE_WINDOW`          | deployment | `900`   | 0.1.0 | The window, in seconds, of `VERIFICATION_RATE_LIMIT`.                                                        |
+
+### Developer portal
+
+| Key                  | Role       | Default  | Since | Description                                                                                                                                   |
+| -------------------- | ---------- | -------- | ----- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| `AUTH_SERVER_URL`    | deployment | required | 0.1.0 | The base URL the developer portal's server uses to reach the auth server.                                                                     |
+| `PORTAL_SESSION_TTL` | deployment | `900`    | 0.1.0 | The developer portal session lifetime, in seconds.                                                                                            |
+| `PORTAL_TRUST_PROXY` | deployment | unset    | 0.1.0 | The proxies in front of the developer portal, as comma-separated IP addresses, whose forwarded client address, protocol and host it believes. |
+
+### Testing
+
+| Key      | Role       | Default | Since | Description                                                                  |
+| -------- | ---------- | ------- | ----- | ---------------------------------------------------------------------------- |
+| `VITEST` | deployment | unset   | 0.1.0 | Set by the Vitest test runner; a deployment never sets it. Development only. |
+
+## Experimental keys
+
+No key is experimental.
+
+### Experimental values
+
+These values of stable and advanced keys are experimental, and the server warns at boot when one is set.
+
+| Key                       | Experimental values |
+| ------------------------- | ------------------- |
+| `OID4VP_VERIFIER_PROFILE` | `oid4vp-1.0-base`   |
+
+## Renamed keys
+
+A renamed key keeps working under its old name for the deprecation window.
+
+- Only the old name is set: the server uses its value and logs a warning at boot.
+- Both names are set to the same value: the server logs a warning at boot.
+- Both names are set to different values: the server refuses to start, and the error names both.
+
+| Old name                 | Use instead                | Deprecated since |
+| ------------------------ | -------------------------- | ---------------- |
+| `REQUIRE_EMAIL_VERIFIED` | `REQUIRE_VERIFIED_ACCOUNT` | 0.1.0            |
+
+## Adding a key
+
+A pull request that adds, renames or removes a key registers the change in the same pull request: an entry in `libs/server/config/src/lib/registry/keys/`, with its tier, role, default and one sentence, and a regenerated page. A stable key also appears in `.env.example`. A test fails until all three agree.
