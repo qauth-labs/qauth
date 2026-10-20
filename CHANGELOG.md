@@ -21,6 +21,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The auth-server logs a warning at boot for each experimental key or value that
   is set. The first is `OID4VP_VERIFIER_PROFILE=oid4vp-1.0-base`, which ADR-018
   §4 marks experimental; the setting works as before.
+- **Background jobs** ([#452], ADR-019 Decision 8). The auth-server runs
+  periodic jobs in-process. A Postgres advisory lock keeps each job to one node
+  per interval when several nodes share the database, and a job whose node dies
+  moves to another node at the next interval. Runs are logged and counted in
+  `qauth_job_runs_total`, and `SIGTERM` waits up to 5 seconds for a running
+  job. The first job, `purge-expired`, runs hourly and deletes expired
+  authorization codes, refresh tokens, email verification tokens and OID4VP
+  request states, which nothing removed before. A rotated refresh token is now
+  deleted once its own lifetime has ended, so replaying it after that is
+  refused as an unknown token and no longer revokes its family. The docs site's
+  observability page (`operate/observability`) describes the jobs.
 
 ### Changed
 
@@ -71,6 +82,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 [#435]: https://github.com/qauth-labs/qauth/issues/435
 [#449]: https://github.com/qauth-labs/qauth/issues/449
+[#452]: https://github.com/qauth-labs/qauth/issues/452
 [#754]: https://github.com/qauth-labs/qauth/issues/754
 [#755]: https://github.com/qauth-labs/qauth/issues/755
 

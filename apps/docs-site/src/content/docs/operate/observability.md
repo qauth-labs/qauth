@@ -19,6 +19,7 @@ and recommended alerting.
 | **Auth-event logging**    | Structured `authEvent` log lines for login/register/logout/token |
 | **Failed-login tracking** | Redis-backed per-identifier counters with temporary lockout      |
 | **Metrics**               | `GET /metrics` in Prometheus text format via `prom-client`       |
+| **Background jobs**       | Periodic jobs, one node at a time under a Postgres advisory lock |
 | **Alerting**              | Prometheus Alertmanager rules (see below)                        |
 
 ## Structured Logging
@@ -149,6 +150,7 @@ process/runtime metrics plus QAuth auth counters:
 | ---------------------------- | ------- | -------------------- | --------------------------------- |
 | `qauth_login_attempts_total` | counter | `result`, `reason`   | Login outcomes (success/failure). |
 | `qauth_tokens_issued_total`  | counter | `type`, `grant_type` | Tokens issued by type and grant.  |
+| `qauth_job_runs_total`       | counter | `job`, `result`      | Background job runs by outcome.   |
 
 Label values, as emitted today. The plugin
 (`apps/auth-server/src/app/plugins/metrics.ts`) does not constrain them, so treat
@@ -164,6 +166,8 @@ each list as **open** — a new call site can add a value without a schema chang
   the token-exchange grant). `grant_type` is e.g. `password`,
   `authorization_code`, `refresh_token`, `client_credentials`, `token-exchange`,
   or `jwt-bearer`.
+- `job` is a job's name, e.g. `purge-expired`. `result` is `success`, `failure`
+  or `timeout`; see [Background jobs](#background-jobs).
 
 The endpoint is **unauthenticated and rate-limit-exempt** (so a scraper can poll
 it frequently). Restrict access at the reverse proxy / network layer (e.g. to a
@@ -193,6 +197,48 @@ scrape_configs:
     static_configs:
       - targets: ['auth-server:3000']
 ```
+
+## Background Jobs
+
+The auth server runs periodic jobs in its own process
+(`apps/auth-server/src/app/jobs/`). Every node of a deployment runs the same
+jobs, and each job runs on at most one node at a time.
+
+| Job             | Interval | Time limit | What it does                                                                                        |
+| --------------- | -------- | ---------- | --------------------------------------------------------------------------------------------------- |
+| `purge-expired` | 1 hour   | 5 minutes  | Deletes expired authorization codes, refresh tokens, email verification tokens and OID4VP requests. |
+
+How a run is placed:
+
+- Runs are aligned to the interval on the wall clock: `purge-expired` runs once
+  per clock hour. Each node wakes at a random point in the first 10% of the
+  interval, at most 5 minutes in, so the nodes do not query the database
+  together.
+- The first node to wake takes a Postgres advisory lock named after the job, on
+  a connection of its own, and runs the job. It keeps the lock until twice that
+  wake window has passed (10 minutes past the hour for `purge-expired`), so the
+  nodes that wake after it skip that interval. The second window allows for
+  clock skew between nodes: keep their clocks synchronised (NTP).
+- The lock is a session-level lock, so a connection pooler in transaction mode
+  between QAuth and Postgres (for example PgBouncer with
+  `pool_mode = transaction`) cannot hold it.
+
+What happens when a run goes wrong:
+
+- A run that fails or reaches its time limit is logged and counted, and runs
+  again at the next interval. There is no retry queue: every job is safe to
+  repeat.
+- When a node dies or loses its database connection during a run, Postgres
+  drops the lock, and another node takes the job at its next interval.
+- On `SIGTERM` or `SIGINT` the server tells running jobs to stop and waits up to
+  5 seconds for them before it exits.
+
+Each log line carries the job's name as `job`: `job run started`,
+`job run finished` with `durationMs`, `job run failed` with `err`, and
+`job run exceeded its time limit and was stopped`. A node that skips a run
+because another node holds the lock logs `job run skipped: another node holds
+its lock` at `debug`. `qauth_job_runs_total` counts the runs; a skipped run is
+not counted.
 
 ## Alerting (Optional)
 
