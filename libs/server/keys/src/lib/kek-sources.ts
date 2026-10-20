@@ -73,9 +73,10 @@ function decodeKek(text: string, variable: string): Buffer {
   const bytes = BASE64.test(text) ? Buffer.from(text, 'base64') : undefined;
   // Node's decoder skips characters it does not expect, so a value is accepted
   // only when, padding aside, it is exactly what encoding its bytes gives back.
+  // BASE64 already allows at most two `=`; the bounded strip keeps it linear.
   if (
     bytes === undefined ||
-    bytes.toString('base64').replace(/=+$/, '') !== text.replace(/=+$/, '')
+    bytes.toString('base64').replace(/={1,2}$/, '') !== text.replace(/={1,2}$/, '')
   ) {
     bytes?.fill(0);
     throw new InvalidConfigurationError(
