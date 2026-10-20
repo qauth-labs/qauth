@@ -88,6 +88,8 @@ server.setSerializerCompiler(serializerCompiler);
 async function shutdown(signal: string) {
   server.log.info(`${signal} received, shutting down gracefully...`);
   try {
+    // close() also stops the job runner, which waits for a running job up to
+    // its shutdown limit before the database pool closes (app/plugins/jobs.ts).
     await server.close();
     process.exit(0);
   } catch (error) {
