@@ -302,7 +302,9 @@ async function main(): Promise<void> {
 
     mkdirSync(dirname(outputPath), { recursive: true });
     writeFileSync(outputPath, `${JSON.stringify(spec, null, 2)}\n`);
-    console.log(`openapi-export: wrote ${pathCount} path(s) for the ${surface} surface to ${outputPath}`);
+    console.log(
+      `openapi-export: wrote ${pathCount} path(s) for the ${surface} surface to ${outputPath}`
+    );
   } finally {
     // A `finally` block that itself throws REPLACES whatever error was
     // already propagating — the original cause (a registration bug, a
