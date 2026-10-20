@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
-import { authEnvSchema, resolveRequireVerifiedAccount } from './auth';
+import {
+  CONFIG_KEY_REGISTRY,
+  type EnvDeprecationWarning,
+  KeyAliasConflictError,
+  readConfiguredEnv,
+} from '../registry';
+import { authEnvSchema } from './auth';
 
 /**
  * REQUIRE_VERIFIED_ACCOUNT replaced REQUIRE_EMAIL_VERIFIED on 2026-10-09.
@@ -9,18 +15,42 @@ import { authEnvSchema, resolveRequireVerifiedAccount } from './auth';
  * account. The old name stays a working alias through the 1.x deprecation
  * window. These tests pin the alias, its boot warning, and the refusal when
  * the two names disagree.
+ *
+ * The alias is the configuration key registry's (`applyKeyAliases`), applied
+ * before `authEnvSchema` sees the environment, exactly as the auth server
+ * reads it.
  */
-function resolve(raw: Record<string, string | undefined>) {
+type Resolution =
+  | {
+      readonly ok: true;
+      readonly requireVerifiedAccount: boolean;
+      readonly deprecation: EnvDeprecationWarning | undefined;
+    }
+  | { readonly ok: false; readonly message: string };
+
+function resolve(raw: Record<string, string | undefined>): Resolution {
   const env: Record<string, string> = {};
   for (const [key, value] of Object.entries(raw)) {
     if (value !== undefined) env[key] = value;
   }
-  return resolveRequireVerifiedAccount(authEnvSchema.parse(env));
+  try {
+    const configured = readConfiguredEnv(CONFIG_KEY_REGISTRY, env);
+    return {
+      ok: true,
+      requireVerifiedAccount: configured.parse(authEnvSchema).REQUIRE_VERIFIED_ACCOUNT,
+      deprecation: configured.deprecations[0],
+    };
+  } catch (error) {
+    if (!(error instanceof KeyAliasConflictError)) throw error;
+    return { ok: false, message: error.message };
+  }
 }
 
 describe('authEnvSchema verified-account flags', () => {
   const parse = (name: 'REQUIRE_VERIFIED_ACCOUNT' | 'REQUIRE_EMAIL_VERIFIED', raw?: string) =>
-    authEnvSchema.parse(raw === undefined ? {} : { [name]: raw })[name];
+    readConfiguredEnv(CONFIG_KEY_REGISTRY, raw === undefined ? {} : { [name]: raw }).parse(
+      authEnvSchema
+    ).REQUIRE_VERIFIED_ACCOUNT;
 
   it.each(['REQUIRE_VERIFIED_ACCOUNT', 'REQUIRE_EMAIL_VERIFIED'] as const)(
     '%s parses "true" and "false" strictly (not the z.coerce.boolean footgun)',
@@ -31,12 +61,12 @@ describe('authEnvSchema verified-account flags', () => {
   );
 
   it.each(['REQUIRE_VERIFIED_ACCOUNT', 'REQUIRE_EMAIL_VERIFIED'] as const)(
-    '%s reads unset and blank as "not set"',
+    '%s reads unset and blank as "not set", which is the default, true',
     (name) => {
       // Blank is what `${VAR:-}` in docker-compose.yml expands to.
-      expect(parse(name)).toBeUndefined();
-      expect(parse(name, '')).toBeUndefined();
-      expect(parse(name, '   ')).toBeUndefined();
+      expect(parse(name)).toBe(true);
+      expect(parse(name, '')).toBe(true);
+      expect(parse(name, '   ')).toBe(true);
     }
   );
 
@@ -49,7 +79,7 @@ describe('authEnvSchema verified-account flags', () => {
   );
 });
 
-describe('resolveRequireVerifiedAccount', () => {
+describe('the REQUIRE_EMAIL_VERIFIED alias', () => {
   // Default true since 2026-10-19 (ANT-2026-SPEMY9GU): with the gate off,
   // registering an address and then logging in with the chosen password told
   // a free address (200) from a registered one (401).

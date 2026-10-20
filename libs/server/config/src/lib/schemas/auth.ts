@@ -15,7 +15,7 @@ export const DEV_SESSION_COOKIE_SECRET_DEFAULT =
   'dev-only-session-secret-change-me-1234567890abcdef';
 
 /**
- * An optional `'true'` / `'false'` flag. Unset and blank both mean "not set".
+ * A `'true'` / `'false'` flag. Unset and blank both take `defaultValue`.
  *
  * Uses `z.enum(['true', 'false'])`, NOT `z.coerce.boolean()`. `coerce.boolean`
  * treats ANY non-empty string as `true`, so `"false"` would become `true`. That
@@ -26,13 +26,13 @@ export const DEV_SESSION_COOKIE_SECRET_DEFAULT =
  * the `${VAR:-}` form. An absent variable then reaches the process as `''`.
  * The `z.preprocess` sits on the field, so the schema stays a plain `z.object`.
  */
-function optionalStrictBoolean() {
+function strictBoolean(defaultValue: boolean) {
   return z
     .preprocess(
       (value) => (typeof value === 'string' && value.trim() === '' ? undefined : value),
       z.enum(['true', 'false']).optional()
     )
-    .transform((value) => (value === undefined ? undefined : value === 'true'));
+    .transform((value) => (value === undefined ? defaultValue : value === 'true'));
 }
 
 /**
@@ -72,21 +72,16 @@ export const authEnvSchema = z.object({
    * register-then-login answer back. Do it only knowingly, for example on a
    * local development stack whose mail provider delivers nothing.
    *
-   * Parsed by {@link optionalStrictBoolean}, never `z.coerce.boolean()`. Unset
-   * here is NOT the final answer. Read the resolved value through
-   * {@link resolveRequireVerifiedAccount}, which applies the default and the
-   * deprecated alias below.
-   */
-  REQUIRE_VERIFIED_ACCOUNT: optionalStrictBoolean(),
-
-  /**
-   * DEPRECATED alias of {@link REQUIRE_VERIFIED_ACCOUNT}, renamed on 2026-10-09.
+   * Parsed by {@link strictBoolean}, never `z.coerce.boolean()`. Unset and
+   * blank mean `true`.
    *
-   * It still works through the 1.x deprecation window of at least 12 months.
-   * Setting it alone logs a deprecation warning at boot. Setting both names to
-   * different values fails the boot. See {@link resolveRequireVerifiedAccount}.
+   * The deprecated name `REQUIRE_EMAIL_VERIFIED` (renamed on 2026-10-09) still
+   * works through the 1.x deprecation window. It is an alias in the
+   * configuration key registry: `applyKeyAliases` moves its value onto this
+   * name, with a boot warning, before the schema sees the environment, and
+   * fails the boot when the two names disagree.
    */
-  REQUIRE_EMAIL_VERIFIED: optionalStrictBoolean(),
+  REQUIRE_VERIFIED_ACCOUNT: strictBoolean(true),
 
   /**
    * Maximum registration attempts per window
@@ -612,89 +607,3 @@ export const authEnvSchema = z.object({
  * Auth environment configuration type
  */
 export type AuthEnv = z.infer<typeof authEnvSchema>;
-
-/**
- * A deprecated configuration name that this deployment still sets.
- *
- * The app logs each one once at boot, after its logger exists.
- */
-export interface EnvDeprecationWarning {
-  /** The deprecated variable the deployment still sets. */
-  readonly variable: string;
-  /** The variable that replaces it. */
-  readonly replacement: string;
-  /** What the operator should do, in one line. */
-  readonly message: string;
-}
-
-/** The two parsed names of the verified-account gate, as {@link authEnvSchema} outputs them. */
-export type RequireVerifiedAccountInput = Pick<
-  AuthEnv,
-  'REQUIRE_VERIFIED_ACCOUNT' | 'REQUIRE_EMAIL_VERIFIED'
->;
-
-/** The outcome of {@link resolveRequireVerifiedAccount}. */
-export type RequireVerifiedAccountResolution =
-  | {
-      readonly ok: true;
-      /** The resolved gate. `true` when neither name is set. */
-      readonly requireVerifiedAccount: boolean;
-      /** Set when the deprecated `REQUIRE_EMAIL_VERIFIED` is still in use. */
-      readonly deprecation: EnvDeprecationWarning | undefined;
-    }
-  | {
-      readonly ok: false;
-      /** Why the boot must fail. Names both variables and their values. */
-      readonly message: string;
-    };
-
-/**
- * Resolve the verified-account gate from its current and deprecated names.
- *
- * - Only `REQUIRE_VERIFIED_ACCOUNT` is set: use it.
- * - Only `REQUIRE_EMAIL_VERIFIED` is set: use it, and return a deprecation warning.
- * - Both are set to the same value: use it, and return a deprecation warning.
- * - Both are set to different values: refuse. The caller must fail the boot.
- * - Neither is set: `true`, the default since 2026-10-19.
- *
- * Refusing a disagreement is deliberate. Picking either value would silently
- * turn the gate on or off against one of the operator's two statements.
- *
- * For a password account, the proof of a verified account is the confirmed
- * address.
- */
-export function resolveRequireVerifiedAccount(
-  input: RequireVerifiedAccountInput
-): RequireVerifiedAccountResolution {
-  const current = input.REQUIRE_VERIFIED_ACCOUNT;
-  const alias = input.REQUIRE_EMAIL_VERIFIED;
-
-  if (alias === undefined) {
-    return { ok: true, requireVerifiedAccount: current ?? true, deprecation: undefined };
-  }
-
-  if (current !== undefined && current !== alias) {
-    return {
-      ok: false,
-      message:
-        `REQUIRE_VERIFIED_ACCOUNT=${current} and REQUIRE_EMAIL_VERIFIED=${alias} disagree. ` +
-        'REQUIRE_EMAIL_VERIFIED is the deprecated name of the same setting. ' +
-        'Remove it and keep only REQUIRE_VERIFIED_ACCOUNT.',
-    };
-  }
-
-  return {
-    ok: true,
-    requireVerifiedAccount: alias,
-    deprecation: {
-      variable: 'REQUIRE_EMAIL_VERIFIED',
-      replacement: 'REQUIRE_VERIFIED_ACCOUNT',
-      message:
-        current === undefined
-          ? 'REQUIRE_EMAIL_VERIFIED is deprecated. Rename it to REQUIRE_VERIFIED_ACCOUNT. ' +
-            'The old name still works during the 1.x deprecation window.'
-          : 'REQUIRE_EMAIL_VERIFIED is deprecated and duplicates REQUIRE_VERIFIED_ACCOUNT. ' +
-            'Remove REQUIRE_EMAIL_VERIFIED.',
-    },
-  };
-}

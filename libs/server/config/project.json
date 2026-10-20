@@ -4,5 +4,21 @@
   "sourceRoot": "libs/server/config/src",
   "projectType": "library",
   "tags": ["scope:server", "scope:server-config", "type:config"],
-  "// targets": "to see all targets run: nx show project server-config --web"
+  "targets": {
+    "test": {
+      "inputs": [
+        "default",
+        "^default",
+        { "json": "{workspaceRoot}/tsconfig.json", "fields": ["compilerOptions"] },
+        { "externalDependencies": ["vitest"] },
+        { "env": "CI" },
+        { "dependentTasksOutputFiles": "**/*.js", "transitive": true },
+        "{workspaceRoot}/.env.example",
+        "{workspaceRoot}/apps/developer-portal/src/**/*.ts"
+      ],
+      "metadata": {
+        "description": "Overrides the @nx/vitest-inferred target's `inputs`, which only cover this project's own files. The configuration key registry tests (src/lib/registry) read two things outside it: `.env.example` (every stable key appears there) and the developer portal's sources (every `process.env` read there is registered). Without them, editing one would leave this target's cache hash unchanged and replay a stale pass. Setting `inputs` REPLACES the inferred array, so the first six entries are the inferred defaults re-declared."
+      }
+    }
+  }
 }
