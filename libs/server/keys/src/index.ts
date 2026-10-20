@@ -35,6 +35,10 @@ export type {
   KekWarning,
   WrappedDataKey,
 } from './lib/kek-provider';
+export {
+  type KekProviderContractOptions,
+  runKekProviderContract,
+} from './lib/kek-provider-contract';
 export { computeKekRef, DEV_KEK_DEFAULT, KEK_BYTES } from './lib/kek-sources';
 export {
   DEFAULT_KEK_PROVIDER,
