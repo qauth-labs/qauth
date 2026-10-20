@@ -139,6 +139,21 @@ export default [
               sourceTag: 'scope:ui',
               onlyDependOnLibsWithTags: [],
             },
+            // Wire suite (#450, ADR-018 §5): the black-box HTTP suite in
+            // apps/wire-suite. It may use `fetch`, `jose` and its own helpers,
+            // and NO workspace project: a helper shared with the server could
+            // carry the same encoding bug on both sides and hide it. Its
+            // `type:testing` tag does not widen this, because Nx requires
+            // every matching constraint to pass.
+            {
+              sourceTag: 'scope:wire-suite',
+              onlyDependOnLibsWithTags: [],
+            },
+            // ...and nothing imports the wire suite.
+            {
+              sourceTag: '*',
+              notDependOnLibsWithTags: ['scope:wire-suite'],
+            },
             {
               sourceTag: 'type:testing',
               onlyDependOnLibsWithTags: [
