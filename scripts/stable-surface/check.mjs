@@ -148,7 +148,7 @@ function createGit(root) {
         const b = join(dir, 'generated');
         writeFileSync(a, before);
         writeFileSync(b, after);
-        const result = run(['diff', '--no-index', '--no-color', '-U3', '--', a, b]);
+        const result = run(['diff', '--no-index', '--no-prefix', '--no-color', '-U3', '--', a, b]);
         return result.stdout.split(a).join(`committed/${path}`).split(b).join(`generated/${path}`);
       } finally {
         rmSync(dir, { recursive: true, force: true });
