@@ -43,6 +43,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `resolveRequireVerifiedAccount` is removed from `@qauth-labs/server-config`;
   `readConfiguredEnv` and `applyKeyAliases` replace it.
 
+- **BREAKING**: the auth-server refuses to start when `DB_POOL_MAX` is below 2
+  ([#452]). A running background job holds one pool connection for its lock,
+  so a pool of one would leave requests waiting until the job ends. The error
+  names the variable.
+
+  **Action for operators**: set `DB_POOL_MAX` to 2 or more, or leave it unset
+  (the default is 20).
+
 - **BREAKING (security)**: the auth-server refuses to start when `NODE_ENV` is
   `production` and `CIMD_ALLOW_PRIVATE_ADDRESSES` or
   `ID_JAG_ALLOW_PRIVATE_ADDRESSES` is `true` ([#435]). Both switches turn the

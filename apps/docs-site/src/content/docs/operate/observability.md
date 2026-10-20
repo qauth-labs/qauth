@@ -225,7 +225,8 @@ How a run is placed:
 - The lock's connection comes from the server's pool (`DB_POOL_MAX`, 20 by
   default). Each job holds one from the moment it takes the lock until it
   releases it, and the job's own queries use others. A node that finds the lock
-  held gives its connection back at once.
+  held gives its connection back at once. The server refuses to start with
+  `DB_POOL_MAX` below 2, where the lock would leave no connection for requests.
 - The lock is a session-level lock, so a connection pooler in transaction mode
   between QAuth and Postgres (for example PgBouncer with
   `pool_mode = transaction`) cannot hold it.
