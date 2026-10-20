@@ -1,0 +1,149 @@
+import {
+  assuranceEnvSchema,
+  authEnvSchema,
+  baseEnvSchema,
+  databaseEnvSchema,
+  DEV_SESSION_COOKIE_SECRET_DEFAULT,
+  emailEnvSchema,
+  federationEnvSchema,
+  issuerKeysEnvSchema,
+  keyAttestationEnvSchema,
+  observabilityEnvSchema,
+  passwordEnvSchema,
+  rateLimitEnvSchema,
+  redisEnvSchema,
+  trustRegistryEnvSchema,
+} from '@qauth-labs/server-config';
+import { z } from 'zod';
+
+/**
+ * The switches that turn the SSRF guard off for an outbound fetch, each with
+ * the fetches it covers. They exist so a test can point a fetch at a localhost
+ * server, and the schema below refuses either one in production (#435).
+ */
+const PRIVATE_ADDRESS_SWITCHES = [
+  ['CIMD_ALLOW_PRIVATE_ADDRESSES', 'CIMD document and client jwks_uri fetches'],
+  ['ID_JAG_ALLOW_PRIVATE_ADDRESSES', 'ID-JAG issuer discovery and JWKS fetches'],
+] as const;
+
+/**
+ * Auth server environment schema
+ * Composes all required schemas and adds app-specific configuration
+ *
+ * Kept apart from `env.ts`, which parses the process environment at import,
+ * so a test can read the keys without booting anything. Every key here has an
+ * entry in the configuration key registry (`env-schema.test.ts`).
+ */
+export const envSchema = z
+  .object({
+    ...baseEnvSchema.shape,
+    ...databaseEnvSchema.shape,
+    ...redisEnvSchema.shape,
+    ...passwordEnvSchema.shape,
+    ...authEnvSchema.shape,
+    ...rateLimitEnvSchema.shape,
+    ...emailEnvSchema.shape,
+    ...observabilityEnvSchema.shape,
+    // Wallet federation (ADR-004): WALLET_FEDERATION_ENABLED (#232, default
+    // off) and OID4VP_VERIFIER_PROFILE (#299, deliberately no default). Both
+    // arrive through this spread, which is why federationEnvSchema must stay a
+    // plain z.object — a `.superRefine()` on it would have no `.shape` here.
+    ...federationEnvSchema.shape,
+    // Issuer trust registry (ADR-004): OID4VP_TRUSTED_ISSUERS (#236) — the
+    // per-realm allowlist of credential ISSUERS a realm accepts credentials
+    // from. Separate from the two above on purpose: those configure the
+    // VERIFIER direction (how QAuth proves it is the Verifier); this one is the
+    // opposite direction and must never share configuration with them.
+    //
+    // Spread, not parsed separately, for the same reason as federation: it
+    // stays a plain z.object whose per-FIELD transform turns the raw JSON into
+    // a frozen, prototype-less map. Unset and blank both yield an empty map, so
+    // an absent variable means "no realm trusts any issuer" rather than taking
+    // the boot down — the value `${OID4VP_TRUSTED_ISSUERS:-}` in
+    // docker-compose.yml expands to.
+    ...trustRegistryEnvSchema.shape,
+    // Assurance → `acr` (ADR-004/ADR-010, #237): OID4VP_ISSUER_ASSURANCE (which
+    // issuers a realm considers assured, and at what eIDAS LoA) and
+    // ACR_VALUE_STYLE (which vocabulary the emitted `acr` value is written in).
+    //
+    // A THIRD variable in the trust neighbourhood, kept separate from the two
+    // above on purpose: OID4VP_TRUSTED_ISSUERS decides whether an issuer may be
+    // accepted at all, this decides what its credentials are worth once
+    // accepted. Merging them would make one of the two answers implicit.
+    //
+    // Spread for the same reason as the others — a plain z.object whose
+    // per-FIELD transform turns raw JSON into a frozen, prototype-less map, so
+    // an unset variable means "no realm assures any issuer" (hence no `acr`
+    // claim anywhere) rather than taking the boot down.
+    ...assuranceEnvSchema.shape,
+    // Key ATTESTATION (HAIP §4.5.1, #308/#379): OID4VP_ATTESTING_ISSUERS — which
+    // issuance chains validate a wallet's key attestation before issuing, and at
+    // what OID4VCI Appendix D §D.2 grade.
+    //
+    // A FOURTH variable in the neighbourhood, and the only deployment-wide one:
+    // what an issuer's issuance process establishes is a property of that
+    // ecosystem, not of any realm's opinion of it. It produces EVIDENCE and never
+    // a level — a realm still grants nothing unless its own OID4VP_ISSUER_ASSURANCE
+    // names the issuer with `requiresKeyStorage` and its own OID4VP_TRUSTED_ISSUERS
+    // accepts it, so listing an issuer here cannot raise any realm's assurance
+    // on its own.
+    ...keyAttestationEnvSchema.shape,
+    // Issuer VERIFICATION KEYS (ADR-004): OID4VP_ISSUER_JWKS (#234/#238) — the
+    // public keys credential issuers sign with, pinned in configuration. A
+    // third, separate question from the two above: the profile says who WE are,
+    // the allowlist says which issuers a realm ACCEPTS, and this says which key
+    // an issuer SIGNS WITH. Configuring a key here grants no trust, and
+    // allowlisting an issuer with no key here can never verify anything — both
+    // directions fail closed, which is why they do not share a variable.
+    ...issuerKeysEnvSchema.shape,
+    /**
+     * CORS allowed origin (app-specific). When unset in `production` the
+     * server denies all cross-origin requests (fail-closed); in non-production
+     * it falls back to `*` for local dev convenience.
+     */
+    CORS_ORIGIN: z.string().optional(),
+    /**
+     * Expose the Swagger UI at `/docs`. Defaults to `true` outside
+     * `production` and `false` in `production` so the API surface is not
+     * advertised to unauthenticated callers in a hardened deployment. An
+     * operator may opt back in by setting `ENABLE_SWAGGER=true` (e.g. for an
+     * internal docs mirror).
+     */
+    ENABLE_SWAGGER: z.coerce
+      .string()
+      .optional()
+      .transform((v) => (v === undefined ? undefined : v.toLowerCase() === 'true')),
+  })
+  .superRefine((env, ctx) => {
+    // F-12 — reject the dev-default SESSION_COOKIE_SECRET in production. The
+    // schema's own `.default()` ships a test-only value; without this guard a
+    // production deployment that forgets to set the env var silently signs
+    // session cookies with a publicly-known secret.
+    if (
+      env.NODE_ENV === 'production' &&
+      env.SESSION_COOKIE_SECRET === DEV_SESSION_COOKIE_SECRET_DEFAULT
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['SESSION_COOKIE_SECRET'],
+        message:
+          'SESSION_COOKIE_SECRET must be set to a strong secret of at least 32 characters in production (the dev default is not allowed).',
+      });
+    }
+
+    // #435 — refuse the private-address switches in production. Either one
+    // lets a client_id URL, a client's jwks_uri or a trusted issuer's discovery
+    // reach loopback, private and link-local addresses. The rule keys on
+    // NODE_ENV, like the guard above, not on a realm's ADR-008 profile.
+    if (env.NODE_ENV === 'production') {
+      for (const [name, fetches] of PRIVATE_ADDRESS_SWITCHES) {
+        if (env[name]) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: [name],
+            message: `${name}=true is not allowed when NODE_ENV=production. It turns off the SSRF guard on ${fetches} and exists only for test servers on localhost. Unset it or set it to false.`,
+          });
+        }
+      }
+    }
+  });

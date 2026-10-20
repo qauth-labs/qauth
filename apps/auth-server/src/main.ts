@@ -8,7 +8,7 @@ import { serializerCompiler, validatorCompiler, ZodTypeProvider } from 'fastify-
 import { app } from './app/app';
 import { answerUnknownRouteBeforeBody, requestDeadlineOptions } from './app/helpers/request-bounds';
 import { openapiOptions } from './app/openapi-options';
-import { env, envDeprecationWarnings } from './config/env';
+import { env, envDeprecationWarnings, envExperimentalWarnings } from './config/env';
 import { buildLoggerOptions } from './config/logger';
 
 // Instantiate Fastify with structured logging + request-id tracking.
@@ -110,6 +110,11 @@ async function start() {
         { variable: deprecation.variable, replacement: deprecation.replacement },
         deprecation.message
       );
+    }
+    // ADR-018 §5: an experimental key or value may change in any release, so
+    // a deployment that sets one is told so at every boot.
+    for (const experimental of envExperimentalWarnings) {
+      server.log.warn({ variable: experimental.variable }, experimental.message);
     }
 
     // Swagger UI + OpenAPI spec registration. Gated behind `ENABLE_SWAGGER`

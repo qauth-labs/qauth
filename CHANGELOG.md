@@ -7,7 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **A registry of configuration keys** ([#449], ADR-018 §5). Every environment
+  key the auth server and the developer portal read has one entry in
+  `libs/server/config/src/lib/registry/`: a tier (stable, advanced or
+  experimental), a role (deployment or realm seed), a default and one sentence.
+  The docs site's new **Configuration** page (`operate/configuration`) is
+  generated from it, and tests fail when the registry, the env schemas, the page
+  and `.env.example` disagree. Stable keys follow the deprecation policy, an
+  advanced key may change in a minor release, and an experimental key may change
+  at any time.
+- The auth-server logs a warning at boot for each experimental key or value that
+  is set. The first is `OID4VP_VERIFIER_PROFILE=oid4vp-1.0-base`, which ADR-018
+  §4 marks experimental; the setting works as before.
+
 ### Changed
+
+- `REQUIRE_EMAIL_VERIFIED` is now an alias in the key registry, resolved by the
+  same mechanism every future rename uses, instead of code of its own. It
+  behaves as before: the old name alone works and logs a deprecation warning,
+  and the two names set to different values fail the boot, naming both.
+  `resolveRequireVerifiedAccount` is removed from `@qauth-labs/server-config`;
+  `readConfiguredEnv` and `applyKeyAliases` replace it.
 
 - **BREAKING (security)**: the auth-server refuses to start when `NODE_ENV` is
   `production` and `CIMD_ALLOW_PRIVATE_ADDRESSES` or
@@ -20,6 +42,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `NODE_ENV=development` in `.env`.
 
 [#435]: https://github.com/qauth-labs/qauth/issues/435
+[#449]: https://github.com/qauth-labs/qauth/issues/449
 
 ## [0.1.0] - 2026-10-19
 
