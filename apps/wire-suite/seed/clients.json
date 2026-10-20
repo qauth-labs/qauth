@@ -1,0 +1,16 @@
+{
+  "realm": "master",
+  "clients": [
+    {
+      "client_id": "wire-confidential",
+      "name": "Wire suite confidential client",
+      "description": "Provisioned for the black-box wire suite (apps/wire-suite). Never seed this into a deployment that serves real users.",
+      "grant_types": ["authorization_code", "refresh_token", "client_credentials"],
+      "response_types": ["code"],
+      "scopes": ["openid", "profile", "email", "offline_access", "wire:read"],
+      "redirect_uris": ["http://127.0.0.1:9/wire-suite/callback"],
+      "require_pkce": true,
+      "token_endpoint_auth_method": "client_secret_basic"
+    }
+  ]
+}

@@ -1,0 +1,21 @@
+{
+  "name": "wire-suite",
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "sourceRoot": "apps/wire-suite/src",
+  "projectType": "application",
+  "tags": ["scope:wire-suite", "type:testing"],
+  "targets": {
+    "run": {
+      "executor": "nx:run-commands",
+      "cache": false,
+      "options": {
+        "command": "vitest run --config vitest.wire.config.ts",
+        "cwd": "apps/wire-suite",
+        "forwardAllArgs": true
+      },
+      "metadata": {
+        "description": "Run the black-box wire suite against a running QAuth (ADR-018 §5). Talks to the server only over HTTP. Needs QAUTH_BASE_URL, the seeded client id and secret, and QAUTH_WIRE_ALLOW_WRITES=1, because it creates users. Never cached: its input is a live server, not files. See apps/wire-suite/README.md."
+      }
+    }
+  }
+}
