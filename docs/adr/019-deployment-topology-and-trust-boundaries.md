@@ -39,6 +39,13 @@
 >
 > - Decisions 1, 3 and 5: in simple mode the default realm is also the operator realm. Adding a
 >   second realm splits the two; Decision 1 names that step, and the upgrade guide documents it.
+>
+> **Amended 2026-10-20** with the maintainer's decision of 2026-10-11 on the error format.
+> Decision 7 defined the API families and did not say how they report errors.
+>
+> - Decision 7: the API families, and every other route that is not an OAuth protocol endpoint,
+>   answer an error with an RFC 9457 problem details document that carries a stable `code` and a
+>   `trace_id`. OAuth protocol endpoints keep the error shape their specification defines.
 
 ## Context
 
@@ -373,6 +380,36 @@ There are three API families. Each token carries one audience.
 | admin     | Operator  | No admin API.                                                    |
 | account   | End user  | Cookie-authenticated `GET /consents` and `DELETE /consents/:id`. |
 | developer | Developer | `/api/clients`, its API-key routes, and `/api/consents`.         |
+
+**Error format**, decided 2026-10-11 (maintainer).
+
+- The admin, account and developer APIs answer an error with an RFC 9457 problem details document,
+  sent as `application/problem+json`. So does every other route that is not an OAuth protocol
+  endpoint.
+- Every problem document carries two extension members:
+  - `code`, a stable, machine-readable name for the error. A client branches on `code`, never on
+    `title` or `detail`, whose wording may change.
+  - `trace_id`, the id under which QAuth logged the request. An operator finds the failure by it.
+- The `code` values are part of the 1.0 stability promise (ADR-018 §5). A published code keeps its
+  meaning within 1.x and is removed only under ADR-018's deprecation rule. A minor release may add
+  codes, so a client treats a code it does not know by its HTTP status.
+
+OAuth protocol endpoints keep the error shape their specification defines, because the clients and
+libraries written to that specification parse it. A protocol endpoint is one whose error response
+an OAuth, OpenID Connect or OpenID for Verifiable Presentations specification defines: among them
+authorization, token, revocation, introspection, device authorization, dynamic registration,
+userinfo, the FiPA authorization challenge endpoint and the wallet-facing OID4VP endpoints. For
+example:
+
+- the token endpoint answers with the `error` and `error_description` of RFC 6749 §5.2;
+- a bearer-protected endpoint answers with the `WWW-Authenticate` challenge of RFC 6750 §3;
+- the authorization endpoint sends an error back to the client in the redirect, with the RFC 9207
+  `iss`, unless the client or its redirect URI is invalid (RFC 6749 §4.1.2.1).
+
+Today one global error handler answers every route with QAuth's own JSON body: `error`,
+`statusCode` and usually `code`, plus `error_description` on OAuth errors. No route sends
+`application/problem+json`. The request id goes back only in the response header that
+`REQUEST_ID_HEADER` names, `x-request-id` by default.
 
 **Who administers what.**
 
@@ -772,6 +809,9 @@ Decided 2026-10-10 (maintainer).
 - A key rotation no longer forces users to sign in again.
 - Security-critical state stays in one transactional store when a deployment scales out.
 - The Interaction API is versioned and published, so a custom UI has a stable target.
+- Every non-protocol route reports errors one way, with a `code` a client can branch on and a
+  `trace_id` an operator can look up. Protocol clients still get the shape their specification
+  defines.
 - A sandbox token can never pass a production resource server, because the issuer differs.
 - Events survive node failures, because the outbox shares the transaction of the change.
 
@@ -804,6 +844,9 @@ Decided 2026-10-10 (maintainer).
 - A sandbox realm doubles the host, DNS and TLS work for every realm that uses one.
 - Moving realm policies from environment keys to the realm row needs a one-time migration of today's
   values.
+- The error body of every non-protocol route changes from today's JSON shape to problem details.
+  Today's callers, the developer portal among them, must follow the change.
+- Every `code` is a long-term surface. An error that needs a new meaning needs a new code.
 
 ### Neutral
 
@@ -871,6 +914,7 @@ None. The UI screen list was answered on 2026-10-09 and 2026-10-10; ADR-020 reco
 - [RFC 8628: OAuth 2.0 Device Authorization Grant](https://www.rfc-editor.org/rfc/rfc8628)
 - [RFC 8693: OAuth 2.0 Token Exchange](https://www.rfc-editor.org/rfc/rfc8693)
 - [RFC 9449: OAuth 2.0 Demonstrating Proof of Possession (DPoP)](https://www.rfc-editor.org/rfc/rfc9449)
+- [RFC 9457: Problem Details for HTTP APIs](https://www.rfc-editor.org/rfc/rfc9457)
 - [RFC 9635: Grant Negotiation and Authorization Protocol (GNAP)](https://www.rfc-editor.org/rfc/rfc9635)
 - [OpenID Connect Core 1.0](https://openid.net/specs/openid-connect-core-1_0.html)
 - [OpenID Connect RP-Initiated Logout 1.0](https://openid.net/specs/openid-connect-rpinitiated-1_0.html)

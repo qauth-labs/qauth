@@ -25,6 +25,13 @@
 > - §8: My Number arrives through a plugin.
 > - Answers: question 12 lists what the UI scope leaves for later. The UI screen list is no longer
 >   open.
+>
+> **Amended 2026-10-20** with the maintainer's decision of 2026-10-11 on the error format.
+> ADR-019 Decision 7 states the rule.
+>
+> - §5: the error format of the API families and the other non-protocol routes joins the contract,
+>   with its `code` values. OAuth protocol endpoints keep the error shape their specification
+>   defines.
 
 ## Context
 
@@ -251,6 +258,12 @@ The contract covers:
 - **The Interaction API, version 1**, at `/interaction/v1`. It is published as OpenAPI, with JSON
   Schema for its steps. ADR-019 defines it.
 - **The three API families**: admin, account and developer. ADR-019 defines them.
+- **The error format outside the protocol endpoints.** The three API families, and every other
+  route that is not an OAuth protocol endpoint, answer an error with an RFC 9457 problem details
+  document (`application/problem+json`). It carries a stable `code` and a `trace_id`. The `code`
+  values are inside the promise; a minor release may add codes. OAuth protocol endpoints, such as
+  token, userinfo and the authorization redirect, keep the error shape their specification
+  defines. ADR-019 Decision 7 states the rule. Decided 2026-10-11 (maintainer).
 - **Stable SDKs**, per major version.
 - **QAuth-defined identifiers.** Each carries a version, for example a `urn:qauth:...:v1` form. A
   future standard identifier can then sit beside it without breaking 1.x.
@@ -502,5 +515,6 @@ None. The UI screen list was answered on 2026-10-09 and 2026-10-10; ADR-020 reco
   [`draft-ietf-jose-pq-composite-sigs`](https://datatracker.ietf.org/doc/draft-ietf-jose-pq-composite-sigs/),
   [RFC 8628](https://datatracker.ietf.org/doc/html/rfc8628),
   [RFC 9101](https://datatracker.ietf.org/doc/html/rfc9101),
-  [RFC 9126](https://datatracker.ietf.org/doc/html/rfc9126) and
-  [RFC 9449](https://datatracker.ietf.org/doc/html/rfc9449)
+  [RFC 9126](https://datatracker.ietf.org/doc/html/rfc9126),
+  [RFC 9449](https://datatracker.ietf.org/doc/html/rfc9449) and
+  [RFC 9457](https://datatracker.ietf.org/doc/html/rfc9457)
