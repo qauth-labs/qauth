@@ -50,10 +50,14 @@ function createRecordingDb(rows: unknown[] = []): { db: DbClient; queries: Captu
 /**
  * The part of a statement that reads data back: the select list of a
  * `SELECT`, or the `RETURNING` list of a write. An insert NAMES the wrapped
- * columns in order to write them, which is not reading them.
+ * columns in order to write them, which is not reading them. A statement
+ * that opens with a CTE is taken whole, so a read hidden in it still counts.
  */
 function readList(statement: string): string {
-  const text = statement.toLowerCase();
+  const text = statement.toLowerCase().trim();
+  if (text.startsWith('with ')) {
+    return text;
+  }
   if (text.startsWith('select ')) {
     return text.slice('select '.length, text.indexOf(' from '));
   }
@@ -61,22 +65,37 @@ function readList(statement: string): string {
   return returning === -1 ? '' : text.slice(returning + ' returning '.length);
 }
 
-/** Wrapped columns read by any of the statements. */
+/** Wrapped columns read by any of the statements. A `*` reads all of them. */
 function wrappedColumnsRead(queries: readonly CapturedQuery[]): string[] {
   return WRAPPED_COLUMNS.filter((column) =>
-    queries.some((query) => readList(query.text).includes(`"${column}"`))
+    queries.some((query) => {
+      const list = readList(query.text);
+      return list.includes(`"${column}"`) || /(^|[\s,.])\*/.test(list);
+    })
   );
 }
 
-/** A row in the shape `create`'s first insert reads back (the metadata columns, in order). */
+/**
+ * A row in the shape `create`'s first insert reads back (the metadata columns,
+ * in order). Its mirror values differ from {@link NEW_KEY}'s on purpose, so a
+ * test can tell copying from the stored row apart from copying the input.
+ */
+const STORED = {
+  realmId: '0190a000-0000-7000-8000-0000000000bb',
+  purpose: 'stored-purpose',
+  algorithm: 'stored-alg',
+  kid: 'stored-kid',
+  status: 'next',
+  unpublishAt: 1_800_000_000_999,
+} as const;
 const CREATED_ROW = [
   '0190a000-0000-7000-8000-0000000000aa', // id
-  REALM_ID, // realm_id
-  'token_signing', // purpose
+  STORED.realmId, // realm_id
+  STORED.purpose, // purpose
   null, // scope_id
-  'EdDSA', // algorithm
-  KID, // kid
-  'active', // status
+  STORED.algorithm, // algorithm
+  STORED.kid, // kid
+  STORED.status, // status
   null, // pair_id
   'kek-ref', // kek_ref
   1, // aad_version
@@ -84,7 +103,7 @@ const CREATED_ROW = [
   1_800_000_000_000, // publish_at
   1_800_000_000_000, // activate_at
   null, // retire_at
-  null, // unpublish_at
+  STORED.unpublishAt, // unpublish_at
   null, // compromised_at
 ];
 
@@ -167,15 +186,19 @@ describe('createRealmKeysRepository — statements', () => {
 
     expect(publicInsert.values).toEqual(
       expect.arrayContaining([
-        KID,
-        REALM_ID,
-        'token_signing',
-        'EdDSA',
-        'active',
+        STORED.kid,
+        STORED.realmId,
+        STORED.purpose,
+        STORED.algorithm,
+        STORED.status,
+        STORED.unpublishAt,
         NEW_KEY.publishAt,
         JSON.stringify({ kty: 'OKP', crv: 'Ed25519', x: 'AAAA' }),
       ])
     );
+    for (const input of [KID, REALM_ID, NEW_KEY.purpose, NEW_KEY.algorithm, NEW_KEY.status]) {
+      expect(publicInsert.values).not.toContain(input);
+    }
   });
 
   it('create writes no public row for a key without a public JWK', async () => {
