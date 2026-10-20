@@ -210,7 +210,7 @@ token issued to any other client or audience is refused.
 
 **`200 OK`**: `{ "success": true, "message": "Successfully logged out" }`
 
-Errors: `401` (missing/invalid bearer).
+Errors: `401` (missing/invalid bearer, or a token whose user no longer exists).
 
 ### `POST /auth/verify`
 

@@ -1,5 +1,5 @@
 import type { JWTPayload } from '@qauth-labs/fastify-plugin-jwt';
-import { JWTExpiredError, JWTInvalidError, NotFoundError } from '@qauth-labs/shared-errors';
+import { JWTExpiredError, JWTInvalidError } from '@qauth-labs/shared-errors';
 import type { FastifyInstance } from 'fastify';
 import { ZodTypeProvider } from 'fastify-type-provider-zod';
 
@@ -44,7 +44,10 @@ export default async function (fastify: FastifyInstance) {
       },
     },
     async (request, reply) => {
+      // `userId` is set only once the lookup below confirms a user owns the
+      // token's subject; until then the subject is only `tokenSub`.
       let userId: string | undefined;
+      let tokenSub: string | undefined;
       let isExpired = false;
 
       try {
@@ -83,17 +86,20 @@ export default async function (fastify: FastifyInstance) {
         // issued to another client or audience cannot end the user's sessions.
         // A disabled user may still sign out: logout only ends access.
         await assertManagementToken(fastify, claims, { requireActiveUser: false });
-        userId = claims.sub;
+        tokenSub = claims.sub;
 
-        if (!userId) {
+        if (!tokenSub) {
           throw new JWTInvalidError('Invalid JWT token');
         }
 
-        // Get user from database to verify existence
-        const user = await fastify.repositories.users.findById(userId);
+        // A subject that names no user, deleted since the token was minted,
+        // is refused as userinfo refuses it (#754; RFC 6750 §3.1
+        // `invalid_token`): there is nothing left to sign out.
+        const user = await fastify.repositories.users.findById(tokenSub);
         if (!user) {
-          throw new NotFoundError('User', userId);
+          throw new JWTInvalidError('Access token subject is not a user');
         }
+        userId = user.id;
 
         // End the user's hosted browser sessions first, so none of them can
         // obtain a new authorization code once the codes are invalidated
@@ -151,7 +157,9 @@ export default async function (fastify: FastifyInstance) {
           reason: error instanceof Error ? error.name : 'unknown_error',
         });
 
-        // Log failed logout attempt
+        // Log failed logout attempt. `audit_logs.user_id` references `users`:
+        // a subject no user owns would fail the insert and turn the refusal
+        // into a 500, so it is kept in `metadata.tokenSub` instead.
         await fastify.repositories.auditLogs.create({
           userId: userId ?? null,
           oauthClientId: null,
@@ -162,6 +170,7 @@ export default async function (fastify: FastifyInstance) {
           userAgent: request.headers['user-agent'] || null,
           metadata: {
             error: error instanceof Error ? error.message : 'Unknown error',
+            ...(userId === undefined && tokenSub ? { tokenSub } : {}),
           },
         });
 
