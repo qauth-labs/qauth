@@ -34,7 +34,7 @@ export const KEK_KEYS = defineKeys([
     owner: 'key-custody',
     default: null,
     since: '0.2.0',
-    docs: 'A file holding the KEK as base64; it takes precedence over `KEK`, and the server warns when group or others can read it.',
+    docs: 'A file holding the KEK as base64; it takes precedence over `KEK`, and the server warns when group or others can read or write it.',
   },
   {
     name: 'KEK_PREVIOUS',

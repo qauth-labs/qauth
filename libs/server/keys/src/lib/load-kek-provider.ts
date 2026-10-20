@@ -70,7 +70,8 @@ function factoryOf(module: unknown): KekProviderModule['createKekProvider'] | un
  * @param importAdapter - replaces the dynamic `import()`, for tests
  * @throws InvalidConfigurationError for a malformed name, a package that is
  *   not installed or does not export `createKekProvider`, or an adapter that
- *   returns no provider. The adapter's own settings errors pass through.
+ *   returns no provider or one under another name. The adapter's own settings
+ *   errors pass through.
  */
 export async function loadKekProvider(
   context: KekProviderContext,
@@ -112,6 +113,12 @@ export async function loadKekProvider(
     throw new InvalidConfigurationError(
       'The package KEK_PROVIDER selects returned something that is not a KEK provider. See this error\'s "details" for the package.',
       { variable: 'KEK_PROVIDER', value: name, package: specifier }
+    );
+  }
+  if (provider.name !== name) {
+    throw new InvalidConfigurationError(
+      'The package KEK_PROVIDER selects returned a provider under another name. See this error\'s "details" for both names.',
+      { variable: 'KEK_PROVIDER', value: name, package: specifier, provider: provider.name }
     );
   }
   return provider;

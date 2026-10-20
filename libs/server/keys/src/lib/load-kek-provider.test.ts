@@ -139,6 +139,16 @@ describe('loadKekProvider', () => {
     expect(error.message).toContain('is not a KEK provider');
   });
 
+  it('refuses an adapter whose provider names another KEK_PROVIDER value', async () => {
+    const error = await refusal(
+      loadKekProvider(context({ KEK_PROVIDER: 'vault' }), async () => ({
+        createKekProvider: () => adapterProvider('cloud-kms'),
+      }))
+    );
+
+    expect(error.details).toMatchObject({ value: 'vault', provider: 'cloud-kms' });
+  });
+
   it("lets the adapter's own configuration error stop the boot", async () => {
     const missing = new InvalidConfigurationError('KEK_CLOUD_KMS_KEY_ID must be set.');
 

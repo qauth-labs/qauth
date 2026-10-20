@@ -2,6 +2,7 @@ import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
 
 import { encodeKeyAad, KEY_AAD_VERSION, keyAad, type KeyIdentity } from './aad';
 import { KeyDecryptionError } from './errors';
+import { finishGcmDecryption } from './gcm';
 import type { KekProvider } from './kek-provider';
 
 /**
@@ -85,6 +86,8 @@ export async function sealKeyMaterial(
  *
  * @param identity - the row's identity, read from the row itself. It must be
  *   the identity the material was sealed with.
+ * @returns the plaintext material, in a buffer that belongs to the caller.
+ *   Zero it once the key has been imported.
  * @throws KeyDecryptionError when the associated data, the wrapped data key or
  *   the ciphertext does not match, or the row is malformed
  * @throws UnknownKekRefError when the provider holds no KEK named by `kekRef`
@@ -107,7 +110,8 @@ export async function openKeyMaterial(
   }
 
   // A view, not a copy, so the `fill(0)` below clears the bytes the provider
-  // returned rather than a duplicate of them.
+  // returned rather than a duplicate of them. They belong to this caller (see
+  // `KekProvider.unwrap`).
   const unwrapped = await provider.unwrap(sealed.wrappedDek, aad, sealed.kekRef);
   const dek = Buffer.from(unwrapped.buffer, unwrapped.byteOffset, unwrapped.byteLength);
   try {
@@ -120,7 +124,7 @@ export async function openKeyMaterial(
     decipher.setAAD(aadBytes);
     decipher.setAuthTag(tag);
     try {
-      return Buffer.concat([decipher.update(body), decipher.final()]);
+      return finishGcmDecryption(decipher, body);
     } catch (error) {
       throw new KeyDecryptionError({ detail: 'material did not authenticate', cause: error });
     }

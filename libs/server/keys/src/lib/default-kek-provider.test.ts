@@ -126,6 +126,28 @@ describe('the default KEK provider refuses', () => {
     expect(error.details).toMatchObject({ variable: 'KEK_PATH', code: 'ENOENT' });
   });
 
+  it('a KEK_PATH it cannot read, without falling back to KEK', () => {
+    const error = failure({ KEK: KEK_A, KEK_PATH: join(dir, 'missing') });
+
+    expect(error.details).toMatchObject({ variable: 'KEK_PATH', code: 'ENOENT' });
+  });
+
+  it('a KEK_PREVIOUS_PATH it cannot read, without falling back to KEK_PREVIOUS', () => {
+    const error = failure({
+      KEK: KEK_A,
+      KEK_PREVIOUS: KEK_B,
+      KEK_PREVIOUS_PATH: join(dir, 'missing'),
+    });
+
+    expect(error.details).toMatchObject({ variable: 'KEK_PREVIOUS_PATH', code: 'ENOENT' });
+  });
+
+  it('a KEK_PATH that names a malformed KEK, without falling back to KEK', () => {
+    const error = failure({ KEK: KEK_A, KEK_PATH: kekFile('not a key') });
+
+    expect(error.message).toContain('KEK_PATH must be the base64 encoding of 32');
+  });
+
   it('a KEK_PATH that names an empty file', () => {
     expect(failure({ KEK_PATH: kekFile('\n') }).message).toBe('The file KEK_PATH names is empty.');
   });
@@ -143,8 +165,8 @@ describe('the default KEK provider refuses', () => {
 });
 
 describe('the KEK file permissions', () => {
-  it.skipIf(process.platform === 'win32').each([0o644, 0o640, 0o604])(
-    'give a warning when group or others can read the file (mode %o)',
+  it.skipIf(process.platform === 'win32').each([0o644, 0o640, 0o604, 0o620, 0o602])(
+    'give a warning when group or others can read or write the file (mode %o)',
     async (mode) => {
       const warnings: KekWarning[] = [];
 
@@ -153,7 +175,9 @@ describe('the KEK file permissions', () => {
       expect(warnings).toEqual([
         {
           variable: 'KEK_PATH',
-          message: expect.stringContaining(`group or others can read (mode ${mode.toString(8)})`),
+          message: expect.stringContaining(
+            `group or others can read or write (mode ${mode.toString(8)})`
+          ),
         },
       ]);
     }
@@ -199,6 +223,12 @@ describe('the development KEK', () => {
     const error = failure({ NODE_ENV: 'production' });
 
     expect(error.message).toContain('KEK or KEK_PATH must be set when NODE_ENV=production');
+  });
+
+  it('is refused when NODE_ENV is production with stray whitespace', () => {
+    expect(failure({ NODE_ENV: ' production ' }).message).toContain(
+      'KEK or KEK_PATH must be set when NODE_ENV=production'
+    );
   });
 
   it.each([

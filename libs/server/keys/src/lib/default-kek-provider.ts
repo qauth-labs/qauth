@@ -3,6 +3,7 @@ import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
 import { encodeKeyAad, type KeyAad } from './aad';
 import { DATA_KEY_BYTES, IV_BYTES, TAG_BYTES } from './envelope';
 import { KeyDecryptionError, UnknownKekRefError } from './errors';
+import { finishGcmDecryption } from './gcm';
 import type {
   KekProvider,
   KekProviderContext,
@@ -80,7 +81,7 @@ export function createLocalKekProvider(context: KekProviderContext): KekProvider
       decipher.setAAD(aadBytes);
       decipher.setAuthTag(tag);
       try {
-        return Buffer.concat([decipher.update(body), decipher.final()]);
+        return finishGcmDecryption(decipher, body);
       } catch (error) {
         throw new KeyDecryptionError({ detail: 'data key did not authenticate', cause: error });
       }

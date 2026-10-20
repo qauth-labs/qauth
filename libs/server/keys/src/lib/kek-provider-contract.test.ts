@@ -153,6 +153,24 @@ describe('the contract kit fails a provider that', () => {
     await expect(caseNamed('opens with a second instance').run(forgetful)).rejects.toThrow();
   });
 
+  it('hands out a data key it keeps', async () => {
+    const caching = (): KekProvider => {
+      const inner = sound();
+      const cache = new Map<string, Uint8Array>();
+      return {
+        ...inner,
+        unwrap: async (wrapped, aad, kekRef) => {
+          const key = Buffer.from(wrapped).toString('hex');
+          const hit = cache.get(key) ?? (await inner.unwrap(wrapped, aad, kekRef));
+          cache.set(key, hit);
+          return hit;
+        },
+      };
+    };
+
+    await expect(caseNamed('returns a fresh buffer').run(caching)).rejects.toThrow();
+  });
+
   it('reports itself unhealthy', async () => {
     const unhealthy = (): KekProvider => ({
       ...sound(),

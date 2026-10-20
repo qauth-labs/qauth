@@ -62,18 +62,22 @@ const PREVIOUS: KekSetting = { variable: 'KEK_PREVIOUS', pathVariable: 'KEK_PREV
 /** Standard base64, padding optional. */
 const BASE64 = /^[A-Za-z0-9+/]+={0,2}$/;
 
-/** Group-read and other-read permission bits. */
-const READABLE_BY_OTHERS = 0o044;
+/**
+ * Group and other read and write bits. A reader learns the KEK; a writer can
+ * put in a KEK they know, and every data key wrapped afterwards is theirs.
+ */
+const OPEN_TO_OTHERS = 0o066;
 
 /** Decode a KEK, or refuse one that is not base64 of exactly 32 bytes. */
 function decodeKek(text: string, variable: string): Buffer {
   const bytes = BASE64.test(text) ? Buffer.from(text, 'base64') : undefined;
   // Node's decoder skips characters it does not expect, so a value is accepted
-  // only when it is exactly what encoding its bytes gives back.
+  // only when, padding aside, it is exactly what encoding its bytes gives back.
   if (
     bytes === undefined ||
     bytes.toString('base64').replace(/=+$/, '') !== text.replace(/=+$/, '')
   ) {
+    bytes?.fill(0);
     throw new InvalidConfigurationError(
       `${variable} must be the base64 encoding of ${KEK_BYTES} random bytes, for example from \`openssl rand -base64 ${KEK_BYTES}\`.`,
       { variable }
@@ -120,10 +124,10 @@ function readKekFile(
         path,
       });
     }
-    if (process.platform !== 'win32' && (stat.mode & READABLE_BY_OTHERS) !== 0) {
+    if (process.platform !== 'win32' && (stat.mode & OPEN_TO_OTHERS) !== 0) {
       warn({
         variable: pathVariable,
-        message: `${pathVariable} names a file that group or others can read (mode ${(stat.mode & 0o777).toString(8)}). Restrict it to its owner, for example with \`chmod 600\`.`,
+        message: `${pathVariable} names a file that group or others can read or write (mode ${(stat.mode & 0o777).toString(8)}). Restrict it to its owner, for example with \`chmod 600\`.`,
       });
     }
     const text = readFileSync(fd, 'utf8').trim();
@@ -199,7 +203,7 @@ export interface LocalKeks {
  *
  * - The file wins over the variable.
  * - A KEK that is not base64 of exactly 32 bytes is refused.
- * - A file that group or others can read gives a warning.
+ * - A file that group or others can read or write gives a warning.
  * - With neither `KEK` nor `KEK_PATH` set, outside production, the KEK is
  *   {@link DEV_KEK_DEFAULT}, with a warning.
  * - `NODE_ENV=production` refuses a missing KEK and the development KEK.
@@ -207,7 +211,7 @@ export interface LocalKeks {
  * @throws InvalidConfigurationError naming the variable at fault
  */
 export function readLocalKeks(env: KekEnv, warn: (warning: KekWarning) => void): LocalKeks {
-  const production = env['NODE_ENV'] === 'production';
+  const production = env['NODE_ENV']?.trim() === 'production';
 
   const configured = readKekSetting(env, CURRENT, warn);
   if (configured === undefined && production) {

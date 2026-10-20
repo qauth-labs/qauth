@@ -45,7 +45,7 @@ chmod 600 /run/secrets/qauth-kek
 
 - A KEK that is not base64 of exactly 32 bytes is refused, with an error that names the variable
   and never the value.
-- A KEK file that group or others can read gives a warning.
+- A KEK file that group or others can read or write gives a warning.
 - `kekRef` is the first 8 bytes of the KEK's SHA-256, in hex. It is stored with each key and is
   safe to log. The KEK itself is held as a key object and appears in no property, error or warning.
 - Outside production, an unset KEK falls back to `DEV_KEK_DEFAULT`, a published development key,
@@ -71,6 +71,7 @@ const sealed = await sealKeyMaterial(provider, pkcs8, identity);
 // Store sealed.ciphertext, sealed.iv, sealed.wrappedDek, sealed.kekRef and sealed.aadVersion.
 
 const material = await openKeyMaterial(provider, sealed, identity);
+// Import the key, then zero the buffer: material.fill(0).
 ```
 
 `openKeyMaterial` throws a `KeyDecryptionError` when the identity, the wrapped data key or the
@@ -85,6 +86,8 @@ An adapter is an optional package named `@qauth-labs/keys-<name>`, selected with
 configuration warnings through `context.warn`.
 
 - Bind the associated data. A byte-oriented backend can authenticate `encodeKeyAad(aad)`.
+- Return a fresh buffer from every `unwrap`. The caller zeroes it, so never hand out a cached data
+  key.
 - Map backend failures onto the typed errors: `KeyDecryptionError` for bytes that do not
   authenticate, `UnknownKekRefError` for a reference it holds no key for, `KekUnavailableError` for
   an outage or throttling, and `KekAccessDeniedError` for a refused call. Callers branch on `code`

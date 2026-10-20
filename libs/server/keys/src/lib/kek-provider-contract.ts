@@ -120,6 +120,18 @@ export const KEK_PROVIDER_CONTRACT_CASES: readonly KekProviderContractCase[] = [
     },
   },
   {
+    name: 'returns a fresh buffer from every unwrap, so the caller may zero it',
+    async run(createProvider) {
+      const provider = await createProvider();
+      const { dek, wrapped: bytes, kekRef } = await wrapped(provider);
+
+      const first = await provider.unwrap(bytes, AAD, kekRef);
+      first.fill(0);
+
+      assert.deepEqual(Buffer.from(await provider.unwrap(bytes, AAD, kekRef)), dek);
+    },
+  },
+  {
     name: 'opens with a second instance what the first one wrapped',
     async run(createProvider) {
       const { dek, wrapped: bytes, kekRef } = await wrapped(await createProvider());

@@ -32,6 +32,10 @@ export interface KekProvider {
   /**
    * Unwrap a data key that {@link wrap} returned, under the KEK `kekRef` names.
    *
+   * Every call returns a fresh buffer that belongs to the caller, who zeroes
+   * it after use. A provider must never return a buffer it keeps, such as a
+   * cached data key.
+   *
    * @throws KeyDecryptionError when `wrapped` does not authenticate under `aad`
    * @throws UnknownKekRefError when the provider holds no KEK named `kekRef`
    */
