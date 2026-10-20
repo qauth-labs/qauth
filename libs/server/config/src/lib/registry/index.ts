@@ -2,6 +2,7 @@
 export { type AliasedEnv, applyKeyAliases, KeyAliasConflictError, type RawEnv } from './aliases';
 export { type ConfiguredEnv, readConfiguredEnv } from './configured-env';
 export { envSchemaShape, findRegistryDrift, type RegistryDrift } from './drift';
+export { experimentalSettingWarnings } from './experimental';
 export {
   AUTH_SERVER_KEYS,
   CONFIG_KEY_REGISTRY,

@@ -1,5 +1,6 @@
 import {
   CONFIG_KEY_REGISTRY,
+  type ConfigWarning,
   cryptoEnvSchema,
   type EnvDeprecationWarning,
   jwtEnvSchema,
@@ -29,6 +30,12 @@ const parsedEnv = configured.parse(envSchema);
  * each one at boot, once the logger exists.
  */
 export const envDeprecationWarnings: readonly EnvDeprecationWarning[] = configured.deprecations;
+
+/**
+ * Experimental keys and values this deployment sets (ADR-018 §5). `main.ts`
+ * logs each one at boot, once the logger exists.
+ */
+export const envExperimentalWarnings: readonly ConfigWarning[] = configured.experimental;
 
 /**
  * The app's env.

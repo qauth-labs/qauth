@@ -2,7 +2,8 @@ import * as dotenv from 'dotenv';
 import { z } from 'zod';
 
 import { applyKeyAliases, type RawEnv } from './aliases';
-import type { ConfigKey, EnvDeprecationWarning } from './types';
+import { experimentalSettingWarnings } from './experimental';
+import type { ConfigKey, ConfigWarning, EnvDeprecationWarning } from './types';
 
 /** The environment as the registry reads it. See {@link readConfiguredEnv}. */
 export interface ConfiguredEnv {
@@ -10,6 +11,8 @@ export interface ConfiguredEnv {
   readonly env: RawEnv;
   /** One warning per deprecated name the deployment still sets. */
   readonly deprecations: readonly EnvDeprecationWarning[];
+  /** One warning per experimental key or value the deployment sets. */
+  readonly experimental: readonly ConfigWarning[];
   /**
    * Validate {@link env} against a schema.
    *
@@ -26,7 +29,8 @@ export interface ConfiguredEnv {
  *
  * Loads `.env` (variables already set win), moves every renamed key onto its
  * current name with {@link applyKeyAliases}, and collects the boot warnings
- * for deprecated names. The caller logs the warnings once its logger exists.
+ * for deprecated names and experimental settings. The caller logs the
+ * warnings once its logger exists.
  *
  * @param registry - the registry entries to apply, normally `CONFIG_KEY_REGISTRY`
  * @param source - the environment to read; `process.env`, after `.env` is
@@ -49,6 +53,7 @@ export function readConfiguredEnv(registry: readonly ConfigKey[], source?: RawEn
   return {
     env: aliased.env,
     deprecations: aliased.deprecations,
+    experimental: experimentalSettingWarnings(aliased.env, registry),
     parse<T extends z.ZodType>(schema: T): z.infer<T> {
       const result = schema.safeParse(aliased.env);
       if (result.success) {
