@@ -48,10 +48,11 @@ import { z } from 'zod';
 import {
   authEnvSchema,
   baseEnvSchema,
+  CONFIG_KEY_REGISTRY,
   databaseEnvSchema,
-  parseEnv,
   passwordEnvSchema,
   rateLimitEnvSchema,
+  readConfiguredEnv,
   redisEnvSchema,
 } from '@qauth-labs/server-config';
 
@@ -67,7 +68,11 @@ const envSchema = z.object({
   CORS_ORIGIN: z.string().optional(),
 });
 
-export const env = parseEnv(envSchema);
+// Read through the key registry, not parseEnv: authEnvSchema has a renamed key
+// (REQUIRE_EMAIL_VERIFIED), and only readConfiguredEnv applies its alias.
+const configured = readConfiguredEnv(CONFIG_KEY_REGISTRY);
+export const env = configured.parse(envSchema);
+// Log configured.deprecations and configured.experimental once the logger exists.
 ```
 
 ## Available Schemas
