@@ -41,8 +41,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   defaults `NODE_ENV` to `production`, so a local stack that needs one sets
   `NODE_ENV=development` in `.env`.
 
+- **BREAKING**: ID tokens now carry `name` only when the granted scope
+  includes `profile`, the rule userinfo already follows (OIDC Core §5.4)
+  ([#755]). Before, the `authorization_code` grant put the user's name in the
+  ID token whatever was granted, so a client that asked only for `openid` got
+  it. The ID token and userinfo now resolve the claim through one helper and
+  release the same profile claims for the same grant. No other grant signs an
+  ID token, and access tokens never carried `name`.
+
+  **Who is affected**: a client that reads `name` from the ID token without
+  requesting `profile`. **Action**: request the `profile` scope, which shows
+  on the consent screen. Userinfo behaves as before.
+
 [#435]: https://github.com/qauth-labs/qauth/issues/435
 [#449]: https://github.com/qauth-labs/qauth/issues/449
+[#755]: https://github.com/qauth-labs/qauth/issues/755
 
 ## [0.1.0] - 2026-10-19
 

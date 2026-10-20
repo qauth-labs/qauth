@@ -89,6 +89,15 @@ The `email` claim in ID tokens, access tokens and userinfo responses:
 This is intentional and correct per OIDC Core 1.0. Applications that assume
 `email` is always present in the userinfo response are not OIDC-compliant.
 
+## Profile Claim Behaviour
+
+The `name` claim (OIDC Core §5.1) is released only when the `profile` scope was
+granted, in the ID token (since #755) and at userinfo, and is omitted when the
+user has no first or last name stored. Both sites call
+`resolveProfileClaimsForScopes`
+(`apps/auth-server/src/app/helpers/profile-claims.ts`), so they release the same
+profile claims for the same grant. Access tokens carry no profile claim.
+
 ## PKCE
 
 PKCE is mandatory (S256 only; plain rejected) for all authorization code flows.
