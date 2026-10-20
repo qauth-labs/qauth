@@ -1548,6 +1548,16 @@ async function handleTokenExchange(
     throw new InvalidRequestError('subject_token was not issued for this client');
   }
 
+  // A `client_credentials` token names no user: its `sub` is its own
+  // `client_id` (handleClientCredentials). An agent's own machine token
+  // passes GATE 3c, since its `aud` falls back to that `client_id`, but there
+  // is no one to act on behalf of. Refused before the user lookup, so a
+  // `client_id` is never read as a `users.id` (#754).
+  if (subjectPayload.sub === subjectPayload.clientId) {
+    await auditFailure('invalid_request: subject_token has no user subject');
+    throw new InvalidRequestError('subject_token subject is not a user');
+  }
+
   // The subject user must still exist and be enabled (RFC 9700 §4.14). We bind
   // the delegated token's `sub` to the *current* user record, not blindly to
   // the token's `sub` string.
