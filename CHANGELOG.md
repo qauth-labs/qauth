@@ -44,6 +44,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   additive and needs no special deploy ordering. Nothing writes the tables
   yet: keys are still read from the environment until key generation lands.
 
+- **Envelope encryption for stored keys** ([#462], ADR-019 Decision 9). The new
+  library `@qauth-labs/server-keys` encrypts key material with a random 256-bit
+  data key and AES-256-GCM, and wraps the data key with a key-encryption key
+  (KEK) from a pluggable provider. The associated data binds each key to its
+  realm, purpose, scope, `kid` and algorithm, so a row copied to another realm
+  does not open. The default provider (`KEK_PROVIDER=local`) reads `KEK` or
+  `KEK_PATH`, plus `KEK_PREVIOUS` or `KEK_PREVIOUS_PATH` during a KEK rotation;
+  any other `KEK_PROVIDER` value loads the optional package
+  `@qauth-labs/keys-<name>`. The five keys are stable and listed on the
+  configuration page. Nothing reads them yet: the signer that stores keys
+  through this library comes next. When it does, `NODE_ENV=production` will
+  refuse an unset KEK and the published development KEK.
+
 ### Changed
 
 - `REQUIRE_EMAIL_VERIFIED` is now an alias in the key registry, resolved by the
@@ -103,6 +116,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#449]: https://github.com/qauth-labs/qauth/issues/449
 [#452]: https://github.com/qauth-labs/qauth/issues/452
 [#461]: https://github.com/qauth-labs/qauth/issues/461
+[#462]: https://github.com/qauth-labs/qauth/issues/462
 [#754]: https://github.com/qauth-labs/qauth/issues/754
 [#755]: https://github.com/qauth-labs/qauth/issues/755
 

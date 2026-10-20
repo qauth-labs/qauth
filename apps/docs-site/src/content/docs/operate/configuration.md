@@ -80,6 +80,16 @@ A key marked **Secret** holds a credential. This page never shows its value, not
 | `HYBRID_SIGNING_ENABLED` | deployment | `false`   | 0.1.0 | Turn on hybrid Ed25519 and ML-DSA-65 signing, which requires `SIGNING_ALGORITHM_MODE=ed25519+ml-dsa-65` and an ML-DSA-65 key. |
 | `SIGNING_ALGORITHM_MODE` | deployment | `ed25519` | 0.1.0 | Which signature algorithms are enabled: `ed25519`, or `ed25519+ml-dsa-65` to add ML-DSA-65.                                   |
 
+### Keys and secrets
+
+| Key                 | Role       | Default                                                                            | Since | Description                                                                                                                                                                                        |
+| ------------------- | ---------- | ---------------------------------------------------------------------------------- | ----- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `KEK`               | deployment | a published development KEK outside production; refused when `NODE_ENV=production` | 0.2.0 | The KEK of the `local` provider, as the base64 of 32 random bytes, for example from `openssl rand -base64 32`. Secret.                                                                             |
+| `KEK_PATH`          | deployment | unset                                                                              | 0.2.0 | A file holding the KEK as base64; it takes precedence over `KEK`, and the server warns when group or others can read or write it.                                                                  |
+| `KEK_PREVIOUS`      | deployment | unset                                                                              | 0.2.0 | The KEK in use before a KEK rotation, as base64; keys wrapped under it still open until they are re-wrapped. Secret.                                                                               |
+| `KEK_PREVIOUS_PATH` | deployment | unset                                                                              | 0.2.0 | A file holding the previous KEK as base64; it takes precedence over `KEK_PREVIOUS`.                                                                                                                |
+| `KEK_PROVIDER`      | deployment | `local`                                                                            | 0.2.0 | Which provider holds the key-encryption key (KEK) that wraps every stored key: `local` reads it from `KEK` or `KEK_PATH`, and any other name loads the optional package `@qauth-labs/keys-<name>`. |
+
 ### Accounts and passwords
 
 | Key                             | Role                                          | Default | Since | Description                                                                                                                                                                                   |

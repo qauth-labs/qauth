@@ -23,6 +23,7 @@ export {
 } from './federation';
 export { type IssuerKeysEnv, issuerKeysEnvSchema, type PerIssuerKeySets } from './issuer-keys';
 export { type JwtEnv, jwtEnvSchema } from './jwt';
+export { type KekEnv, kekEnvSchema } from './kek';
 export {
   type AttestedKeyStorageGrade,
   type AttestingIssuerMap,

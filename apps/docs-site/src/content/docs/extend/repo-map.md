@@ -46,6 +46,7 @@ Directory nesting under `libs/` is a readability convention. **The `scope:` tag 
 | `libs/server/config`              | `@qauth-labs/server-config`             | `scope:server` + `scope:server-config` |
 | `libs/server/federation`          | `@qauth-labs/server-federation`         | `scope:server`                         |
 | `libs/server/jwt`                 | `@qauth-labs/server-jwt`                | `scope:server`                         |
+| `libs/server/keys`                | `@qauth-labs/server-keys`               | `scope:server` + `type:key-custody`    |
 | `libs/server/password`            | `@qauth-labs/server-password`           | `scope:server`                         |
 | `libs/server/pkce`                | `@qauth-labs/server-pkce`               | `scope:server`                         |
 | `libs/server/email`               | `@qauth-labs/server-email`              | `scope:server`                         |
@@ -64,16 +65,17 @@ Every rule below is a `depConstraints` entry in `eslint.config.mjs:117`, and the
 the source of record. `onlyDependOnLibsWithTags` lists what a project carrying that source tag may
 import **from inside the workspace**; external npm packages are never restricted.
 
-| Source tag      | May import (workspace)                                                           | In `eslint.config.mjs`  |
-| --------------- | -------------------------------------------------------------------------------- | ----------------------- |
-| `scope:core`    | nothing — strict leaf                                                            | `eslint.config.mjs:132` |
-| `scope:shared`  | nothing — strict leaf                                                            | `eslint.config.mjs:122` |
-| `scope:ui`      | nothing — strict leaf                                                            | `eslint.config.mjs:139` |
-| `scope:infra`   | `scope:core`, `scope:infra`, `scope:shared`                                      | `eslint.config.mjs:158` |
-| `scope:server`  | `scope:core`, `scope:server`, `scope:shared`                                     | `eslint.config.mjs:166` |
-| `scope:fastify` | `scope:core`, `scope:fastify`, `scope:server`, `scope:infra`, `scope:shared`     | `eslint.config.mjs:174` |
-| `scope:app`     | `scope:core`, `scope:fastify`, `scope:shared`, `scope:server-config`, `scope:ui` | `eslint.config.mjs:187` |
-| `type:testing`  | see [the dead rule](#the-typetesting-rule-cannot-grant-anything)                 | `eslint.config.mjs:143` |
+| Source tag         | May import (workspace)                                                           | In `eslint.config.mjs`  |
+| ------------------ | -------------------------------------------------------------------------------- | ----------------------- |
+| `scope:core`       | nothing — strict leaf                                                            | `eslint.config.mjs:132` |
+| `scope:shared`     | nothing — strict leaf                                                            | `eslint.config.mjs:122` |
+| `scope:ui`         | nothing — strict leaf                                                            | `eslint.config.mjs:139` |
+| `scope:infra`      | `scope:core`, `scope:infra`, `scope:shared`                                      | `eslint.config.mjs:158` |
+| `scope:server`     | `scope:core`, `scope:server`, `scope:shared`                                     | `eslint.config.mjs:166` |
+| `scope:fastify`    | `scope:core`, `scope:fastify`, `scope:server`, `scope:infra`, `scope:shared`     | `eslint.config.mjs:174` |
+| `scope:app`        | `scope:core`, `scope:fastify`, `scope:shared`, `scope:server-config`, `scope:ui` | `eslint.config.mjs:187` |
+| `type:testing`     | see [the dead rule](#the-typetesting-rule-cannot-grant-anything)                 | `eslint.config.mjs:143` |
+| `type:key-custody` | `scope:core`, `scope:shared`                                                     | `eslint.config.mjs:202` |
 
 ### Why `scope:core` and `scope:shared` are strict leaves
 
@@ -140,6 +142,15 @@ workspace that can see both — which is why the cross-lib pin between the two l
 app's env test. Verified: nothing under `libs/server/config/src` imports `server-federation`. All
 15 references to it there are prose — 13 in comments, two in test description strings.
 
+### A second tag can also narrow
+
+`server-config`'s second tag widens who may import it. `type:key-custody` works the other way.
+`libs/server/keys/project.json` carries it beside `scope:server`, and Nx applies every constraint
+whose source tag a project carries, so both must pass. The library that opens stored keys may
+therefore import only `scope:core` and `scope:shared` libraries, never another `scope:server` one
+such as `server-config` (ADR-019 Decision 9). Its configuration keys are declared in
+`server-config`'s `kekEnvSchema`, and the key library reads them from the environment itself.
+
 ### A directory is not a tag
 
 `libs/core/crypto-native` sits under `libs/core/` and is tagged `scope:server`, not `scope:core`
@@ -197,7 +208,7 @@ Two rules of thumb that follow from the layering:
 `.tsx` (51 tracked files), `.mjs` (4), `.astro` (2) and `.css` (1).
 
 On a Windows checkout with `core.autocrlf=true`, those files land on disk with CRLF line endings.
-Prettier's config sets `endOfLine: "lf"` (`.prettierrc`) and `eslint.config.mjs:242` promotes
+Prettier's config sets `endOfLine: "lf"` (`.prettierrc`) and `eslint.config.mjs:251` promotes
 `prettier/prettier` to `error`, so:
 
 ```console
