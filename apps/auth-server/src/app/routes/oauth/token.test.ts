@@ -3078,6 +3078,34 @@ describe('POST /oauth/token route — token-exchange grant (RFC 8693, ADR-007 §
     expect(fastify.jwtUtils.signAccessToken).not.toHaveBeenCalled();
   });
 
+  it("rejects the agent's own client_credentials token as subject_token without a user lookup (#754)", async () => {
+    const { fastify, ctx, subjectPayload } = setupExchangeStub();
+    // What `handleClientCredentials` mints with no `resource` and no client
+    // audience: `sub` and `aud` are the agent's own client_id, so GATE 3c binds.
+    Object.assign(subjectPayload, {
+      sub: AGENT_CLIENT_ID,
+      clientId: AGENT_CLIENT_ID,
+      aud: AGENT_CLIENT_ID,
+    });
+
+    await expect(invoke(fastify, ctx, exchangeRequest())).rejects.toMatchObject({
+      message: 'invalid_request',
+      errorDescription: 'subject_token subject is not a user',
+    });
+
+    expect(fastify.repositories.users.findById).not.toHaveBeenCalled();
+    expect(fastify.jwtUtils.signAccessToken).not.toHaveBeenCalled();
+    expect(fastify.repositories.auditLogs.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: null,
+        event: 'oauth.token.exchange.failure',
+        metadata: expect.objectContaining({
+          error: 'invalid_request: subject_token has no user subject',
+        }),
+      })
+    );
+  });
+
   it('accepts and verifies an actor_token, recording the actor subject in audit', async () => {
     const { fastify, ctx } = setupExchangeStub();
     // Subject + actor tokens both verify; actor identity in `act` is still the
