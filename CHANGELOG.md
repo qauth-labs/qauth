@@ -34,6 +34,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   The docs site's observability page (`operate/observability`) describes the
   jobs.
 
+- **Schema**: migration 0024 adds the tables that will hold each realm's keys
+  ([#461], ADR-019 Decision 9). `realm_keys` stores a key per realm and
+  purpose, envelope-encrypted, with its lifecycle status (`next`, `active`,
+  `retired`, `compromised`) and times; one `active` key per realm, purpose,
+  scope and algorithm, and `kid` unique per realm. `realm_public_keys` holds
+  the public JWK of each published key, so roles that may not read
+  `realm_keys` can still serve the JWKS and verify tokens. The migration is
+  additive and needs no special deploy ordering. Nothing writes the tables
+  yet: keys are still read from the environment until key generation lands.
+
 ### Changed
 
 - `REQUIRE_EMAIL_VERIFIED` is now an alias in the key registry, resolved by the
@@ -92,6 +102,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#435]: https://github.com/qauth-labs/qauth/issues/435
 [#449]: https://github.com/qauth-labs/qauth/issues/449
 [#452]: https://github.com/qauth-labs/qauth/issues/452
+[#461]: https://github.com/qauth-labs/qauth/issues/461
 [#754]: https://github.com/qauth-labs/qauth/issues/754
 [#755]: https://github.com/qauth-labs/qauth/issues/755
 

@@ -238,6 +238,10 @@ Each factory takes a `defaultDb: DbClient`. Methods below take an optional
 - **`createOAuthConsentsRepository(db)`**: Consent grants and revocation
 - **`createOid4vpRequestStatesRepository(db)`**: OID4VP request/response correlation (T4)
   - Realm-scoped, unique `state_hash`, single-use via `redeemed_at`. Unused unless `WALLET_FEDERATION_ENABLED` is on.
+- **`createRealmKeysRepository(db)`**: Per-realm, per-purpose keys, envelope-encrypted (ADR-019 Decision 9)
+  - `create()`, `findByKid()`, `listByRealm()`, `getWrappedForSigner()`
+  - `create({ key, publicJwk? })` writes the `realm_keys` row and, for a published purpose, its `realm_public_keys` row in one transaction, copying the mirror columns from the key row.
+  - `getWrappedForSigner(realmId, kid)` is the **only** method that returns `ciphertext`, `iv` and `wrapped_dek`. Every other method returns a `RealmKey` without them; a unit test fails when another method selects one.
 - **`createRealmsRepository(db)`**: Realm CRUD
   - `create()`, `findById()`, `findByIdOrThrow()`, `findByName()`, `update()`, `delete()`
 - **`createOAuthClientsRepository(db)`**: OAuth client CRUD
@@ -451,6 +455,7 @@ libs/infra/db/
 │   │   │   ├── email-verification-tokens.repository.ts
 │   │   │   ├── api-keys.repository.ts
 │   │   │   ├── audit-logs.repository.ts
+│   │   │   ├── realm-keys.repository.ts  # realm_keys / realm_public_keys (signer only)
 │   │   │   └── integration-setup.ts
 │   │   ├── schema/
 │   │   │   ├── index.ts        # Main schema exports
@@ -460,6 +465,7 @@ libs/infra/db/
 │   │   │   ├── sessions.ts     # sessions (Phase 5+, currently unused — Redis holds sessions)
 │   │   │   ├── audit.ts        # audit_logs (with agent attribution)
 │   │   │   ├── roles.ts        # roles, user_roles (Phase 5+, currently unused)
+│   │   │   ├── keys.ts         # realm_keys, realm_public_keys (ADR-019 Decision 9)
 │   │   │   ├── enums.ts        # PostgreSQL enum types
 │   │   │   └── sql-helpers.ts  # EPOCH_MS_NOW, JSONB_EMPTY_ARRAY
 │   │   └── types/              # Repository/database type definitions
@@ -496,6 +502,11 @@ libs/infra/db/
 ### Federation Tables (T4)
 
 - **oid4vp_request_states**: OID4VP request/response correlation — realm-scoped, unique `state_hash`, a DCQL query, expiry and single-use `redeemed_at`. Unused unless `WALLET_FEDERATION_ENABLED` is on
+
+### Key Tables (ADR-019 Decision 9)
+
+- **realm_keys**: Each realm's keys, one row per key, per purpose and (for webhook and upstream client-assertion keys) per `scope_id`. The material is stored envelope-encrypted (`ciphertext`, `iv`, `wrapped_dek`, with `kek_ref` naming the KEK and `aad_version` the associated-data layout). `status` is `next`, `active`, `retired` or `compromised`; a partial unique index allows one `active` key per realm, purpose, scope and algorithm, and `kid` is unique per realm. Only the signer's database user may read it once the per-role grants (#498) are applied
+- **realm_public_keys**: The public JWK of every published key, keyed by `(realm_id, kid)` and referencing its `realm_keys` row. Every role may read it for the JWKS and for verification. Symmetric purposes have no row here, and a CHECK refuses private JWK members
 
 ### Additional Tables
 
