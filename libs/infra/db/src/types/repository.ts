@@ -2,7 +2,9 @@ import type { InferInsertModel, InferSelectModel } from 'drizzle-orm';
 
 import type { oauthConsents } from '../lib/schema/consents';
 import type { apiKeys, oauthClients } from '../lib/schema/core';
+import type { RealmKeyStatus } from '../lib/schema/enums';
 import type { userAttributes, userCredentials } from '../lib/schema/identity';
+import type { realmKeys, realmPublicKeys } from '../lib/schema/keys';
 import type { oid4vpRequestStates } from '../lib/schema/oid4vp';
 import type {
   authorizationCodes,
@@ -657,4 +659,93 @@ export interface Oid4vpRequestStatesRepository {
    * @returns count of deleted rows.
    */
   deleteExpired(tx?: DbClient): Promise<number>;
+}
+
+/**
+ * Realm key types (ADR-019 Decision 9, issue #461).
+ */
+export type NewRealmKey = InferInsertModel<typeof realmKeys>;
+export type RealmPublicKey = InferSelectModel<typeof realmPublicKeys>;
+
+/**
+ * The three `realm_keys` columns that hold wrapped key material. Only
+ * {@link RealmKeysRepository.getWrappedForSigner} returns them.
+ */
+export type RealmKeyWrappedColumn = 'ciphertext' | 'iv' | 'wrappedDek';
+
+/**
+ * A full `realm_keys` row, wrapped material included. Returned only by
+ * {@link RealmKeysRepository.getWrappedForSigner}.
+ */
+export type WrappedRealmKey = InferSelectModel<typeof realmKeys>;
+
+/**
+ * A `realm_keys` row without its wrapped material: what every list and find
+ * method returns. `kekRef` and `aadVersion` stay: they name how the key was
+ * wrapped, not what it is.
+ */
+export type RealmKey = Omit<WrappedRealmKey, RealmKeyWrappedColumn>;
+
+/**
+ * Input of {@link RealmKeysRepository.create}: the key row, plus the public
+ * JWK when the purpose is published.
+ *
+ * The public row's `realmId`, `kid`, `purpose`, `algorithm`, `status`,
+ * `publishAt` and `unpublishAt` are copied from `key`, so the two rows cannot
+ * disagree at creation. A published key therefore needs `publishAt`.
+ * Symmetric purposes (cookie HMAC, data at rest, webhook secrets) pass no
+ * `publicJwk` and get no public row.
+ */
+export type NewRealmKeyInput =
+  | { key: NewRealmKey & { publishAt: number }; publicJwk: Record<string, unknown> }
+  | { key: NewRealmKey; publicJwk?: undefined };
+
+/**
+ * Filter for {@link RealmKeysRepository.listByRealm}. An omitted field does not
+ * filter; `scopeId: null` selects unscoped keys only.
+ */
+export interface RealmKeyFilter {
+  purpose?: string;
+  scopeId?: string | null;
+  status?: RealmKeyStatus;
+}
+
+/**
+ * Realm keys repository (ADR-019 Decision 9, issue #461).
+ *
+ * The signer's view of `realm_keys` and `realm_public_keys`. Only the signer's
+ * database user may read `realm_keys` (#498), and in code the same rule holds
+ * one level up: {@link RealmKeysRepository.getWrappedForSigner} is the only
+ * method that selects `ciphertext`, `iv` or `wrapped_dek`. Every other method
+ * returns {@link RealmKey}, which has no wrapped columns, and a unit test fails
+ * when a new method selects one.
+ */
+export interface RealmKeysRepository {
+  /**
+   * Store a key, and its public row when `publicJwk` is given, in ONE
+   * transaction (a savepoint when `tx` is an outer transaction): either both
+   * rows exist afterwards or neither does.
+   *
+   * @throws UniqueConstraintError on a `kid` already used in the realm
+   * (`realm_keys_realm_id_kid_unique`) or a second `active` key for the same
+   * realm, purpose, scope and algorithm (`idx_realm_keys_one_active`)
+   */
+  create(input: NewRealmKeyInput, tx?: DbClient): Promise<RealmKey>;
+  /** Find a key by `kid` within a realm, without its wrapped material. */
+  findByKid(realmId: string, kid: string, tx?: DbClient): Promise<RealmKey | undefined>;
+  /**
+   * List a realm's keys, oldest first, without their wrapped material.
+   * Optionally narrowed by purpose, scope and status.
+   */
+  listByRealm(realmId: string, filter?: RealmKeyFilter, tx?: DbClient): Promise<RealmKey[]>;
+  /**
+   * The ONE method that returns wrapped key material: the full row, for the
+   * signer to unwrap. Takes the realm id as well as the `kid`, so a `kid` from
+   * one realm never opens another realm's key.
+   */
+  getWrappedForSigner(
+    realmId: string,
+    kid: string,
+    tx?: DbClient
+  ): Promise<WrappedRealmKey | undefined>;
 }

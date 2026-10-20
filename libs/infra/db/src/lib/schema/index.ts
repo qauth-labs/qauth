@@ -3,6 +3,7 @@ export * from './consents';
 export * from './core';
 export * from './enums';
 export * from './identity';
+export * from './keys';
 export * from './oid4vp';
 export * from './roles';
 export * from './sessions';

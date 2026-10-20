@@ -169,6 +169,13 @@
       "when": 1792387155010,
       "tag": "0023_client_operator_provisioning",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1792482170829,
+      "tag": "0024_realm_keys",
+      "breakpoints": true
     }
   ]
 }

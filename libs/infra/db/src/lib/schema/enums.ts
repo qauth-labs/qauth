@@ -150,6 +150,26 @@ export const environmentEnum = pgEnum('environment', ENVIRONMENTS);
 export type Environment = (typeof ENVIRONMENTS)[number];
 
 /**
+ * Lifecycle status of a realm key (ADR-019 Decision 9, issue #461).
+ *
+ * Shared by `realm_keys` and its public mirror `realm_public_keys`:
+ *
+ * - `next` — generated and (for a published purpose) pre-published in the
+ *   JWKS, but not yet used to sign or encrypt.
+ * - `active` — the key that signs or encrypts for its realm, purpose, scope
+ *   and algorithm. At most one per that tuple (a partial unique index).
+ * - `retired` — no longer signs or encrypts; still verifies or decrypts until
+ *   it is unpublished.
+ * - `compromised` — retired in an emergency: leaves the JWKS at once and its
+ *   `kid` is denylisted. Always carries `compromised_at` (a CHECK).
+ */
+const REALM_KEY_STATUSES = ['next', 'active', 'retired', 'compromised'] as const;
+
+export const realmKeyStatusEnum = pgEnum('realm_key_status', REALM_KEY_STATUSES);
+
+export type RealmKeyStatus = (typeof REALM_KEY_STATUSES)[number];
+
+/**
  * Audit Log Event Types
  * Categorizes audit events for filtering and analysis
  */

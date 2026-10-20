@@ -9,6 +9,7 @@ export * from './email-verification-tokens.repository';
 export * from './oauth-clients.repository';
 export * from './oauth-consents.repository';
 export * from './oid4vp-request-states.repository';
+export * from './realm-keys.repository';
 export * from './realms.repository';
 export * from './refresh-tokens.repository';
 export * from './user-attributes.repository';
