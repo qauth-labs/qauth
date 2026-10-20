@@ -1,9 +1,4 @@
-import {
-  InvalidRequestError,
-  JWTExpiredError,
-  JWTInvalidError,
-  NotFoundError,
-} from '@qauth-labs/shared-errors';
+import { InvalidRequestError, JWTExpiredError, JWTInvalidError } from '@qauth-labs/shared-errors';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import Fastify from 'fastify';
 import { serializerCompiler, validatorCompiler, ZodTypeProvider } from 'fastify-type-provider-zod';
@@ -377,7 +372,7 @@ describe('GET /userinfo route', () => {
     expect(result).toEqual({ sub: 'user-6', name: 'Dorothy Vaughan' });
   });
 
-  it('throws NotFoundError when user is not found', async () => {
+  it('refuses a token whose subject names no user (401 invalid_token, RFC 6750 §3.1)', async () => {
     const { fastify, ctx } = createFastifyStub();
     await userinfoRoute(fastify);
 
@@ -409,11 +404,17 @@ describe('GET /userinfo route', () => {
       throw new Error('Userinfo handler was not registered');
     }
 
-    await expect(handler(request, reply)).rejects.toThrow(NotFoundError);
+    // A deleted user's token: not a 404, which RFC 6750 §3.1 does not define
+    // for a protected resource, but the invalid-token refusal.
+    await expect(handler(request, reply)).rejects.toThrow(
+      new JWTInvalidError('Access token subject is not a user')
+    );
 
+    // `audit_logs.user_id` references `users`: an unconfirmed subject goes to
+    // metadata, or the insert would fail and turn the refusal into a 500.
     const auditLogMock = fastify.repositories.auditLogs.create as unknown as Mock;
     expect(auditLogMock).toHaveBeenCalledWith({
-      userId: 'missing-user',
+      userId: null,
       oauthClientId: null,
       event: 'oauth.userinfo.failure',
       eventType: 'token',
@@ -421,7 +422,8 @@ describe('GET /userinfo route', () => {
       ipAddress: '127.0.0.1',
       userAgent: 'vitest',
       metadata: {
-        error: expect.stringContaining('missing-user'),
+        error: 'Access token subject is not a user',
+        tokenSub: 'missing-user',
       },
     });
   });
@@ -889,7 +891,10 @@ describe('/userinfo — the token must be addressed to userinfo (RFC 8707)', () 
         userId: null,
         event: 'oauth.userinfo.failure',
         success: false,
-        metadata: { error: 'Access token audience does not include the userinfo endpoint' },
+        metadata: {
+          error: 'Access token audience does not include the userinfo endpoint',
+          tokenSub: 'user-1',
+        },
       })
     );
   }
@@ -1004,5 +1009,174 @@ describe('/userinfo — the token must be addressed to userinfo (RFC 8707)', () 
     await preHandler(request, reply);
     await expect(postHandler(request, reply)).rejects.toThrow(JWTInvalidError);
     expectRefusedBeforeAnyLookup(fastify);
+  });
+});
+
+/**
+ * #754: a `client_credentials` token carries `sub = client_id`. With no
+ * `resource` and no client audience its `aud` is the client_id too, so it
+ * passes the audience rule above — and userinfo then read the client_id as a
+ * `users.id` (a 500 from PostgreSQL for a non-UUID id). `sub === client_id` is
+ * the positive mark of a token with no end-user; it is refused before any
+ * lookup, with the same 401 `invalid_token` as every other invalid token.
+ */
+describe('/userinfo — the token subject must be a user (#754)', () => {
+  async function callWith(jwtPayload: Record<string, unknown>) {
+    const { fastify, ctx } = createFastifyStub();
+    await userinfoRoute(fastify);
+    const handler = ctx.handler;
+    if (!handler) throw new Error('Userinfo handler was not registered');
+    const request = {
+      jwtPayload: { scope: 'reports:read', ...jwtPayload },
+      ip: '127.0.0.1',
+      headers: { authorization: 'Bearer token', 'user-agent': 'vitest' },
+    } as unknown as FastifyRequest;
+    const reply = { send: (body: unknown) => body } as unknown as FastifyReply;
+    return { fastify, run: () => handler(request, reply) };
+  }
+
+  function expectRefusedAsNoUser(fastify: FastifyInstance, tokenSub: string) {
+    expect(fastify.repositories.users.findById).not.toHaveBeenCalled();
+    expect(fastify.repositories.userAttributes.findVerifiedByUserIdAndKey).not.toHaveBeenCalled();
+    expect(fastify.repositories.auditLogs.create).toHaveBeenCalledTimes(1);
+    expect(fastify.repositories.auditLogs.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: null,
+        event: 'oauth.userinfo.failure',
+        success: false,
+        metadata: { error: 'Access token subject is not a user', tokenSub },
+      })
+    );
+  }
+
+  it('refuses a client_credentials token whose client_id is not a UUID, before any lookup', async () => {
+    const { fastify, run } = await callWith({
+      sub: 'reporting-service',
+      clientId: 'reporting-service',
+      aud: 'reporting-service',
+    });
+
+    await expect(run()).rejects.toThrow(new JWTInvalidError('Access token subject is not a user'));
+    expectRefusedAsNoUser(fastify, 'reporting-service');
+  });
+
+  it('refuses a client_credentials token whose client_id is a UUID (the shape cannot decide)', async () => {
+    const clientId = '019a0b9e-4c2f-7d31-9f6e-2b8c4d5e6f70';
+    const { fastify, run } = await callWith({ sub: clientId, clientId, aud: clientId });
+
+    await expect(run()).rejects.toThrow(JWTInvalidError);
+    expectRefusedAsNoUser(fastify, clientId);
+  });
+
+  it('refuses a client_credentials token addressed to the userinfo endpoint', async () => {
+    const { fastify, run } = await callWith({
+      sub: 'reporting-service',
+      clientId: 'reporting-service',
+      aud: USERINFO_URL,
+    });
+
+    await expect(run()).rejects.toThrow(JWTInvalidError);
+    expectRefusedAsNoUser(fastify, 'reporting-service');
+  });
+
+  it('applies the same rule to POST (shared handler)', async () => {
+    const { fastify, ctx } = createFastifyStub();
+    (fastify as unknown as { jwtUtils: unknown }).jwtUtils = {
+      getIssuer: vi.fn().mockReturnValue(ISSUER),
+      extractFromHeader: vi.fn().mockReturnValue(null),
+    };
+    (fastify.requireJwt as unknown as Mock).mockImplementation(
+      async (req: { jwtPayload?: unknown }) => {
+        req.jwtPayload = {
+          sub: 'reporting-service',
+          scope: 'reports:read',
+          clientId: 'reporting-service',
+          aud: 'reporting-service',
+        };
+      }
+    );
+    await userinfoRoute(fastify);
+
+    const request = {
+      method: 'POST',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: { access_token: 'body.token' },
+      query: {},
+      ip: '127.0.0.1',
+    } as unknown as FastifyRequest;
+    const reply = { send: (body: unknown) => body } as unknown as FastifyReply;
+
+    const preHandler = ctx.postOptions?.preHandler;
+    const postHandler = ctx.postHandler;
+    if (!preHandler || !postHandler) throw new Error('POST /userinfo was not registered');
+    await preHandler(request, reply);
+    await expect(postHandler(request, reply)).rejects.toThrow(JWTInvalidError);
+    expectRefusedAsNoUser(fastify, 'reporting-service');
+  });
+
+  it('answers 401 with a Bearer invalid_token challenge on the wire', async () => {
+    const app = Fastify({ logger: false });
+    app.setValidatorCompiler(validatorCompiler);
+    app.setSerializerCompiler(serializerCompiler);
+    await app.register(errorHandler);
+
+    const { fastify, ctx } = createFastifyStub();
+    await userinfoRoute(fastify);
+    const handler = ctx.handler;
+    if (!handler) throw new Error('Userinfo handler was not registered');
+
+    app.get(
+      '/oauth/userinfo',
+      {
+        preHandler: async (request) => {
+          (request as unknown as { jwtPayload: unknown }).jwtPayload = {
+            sub: 'reporting-service',
+            clientId: 'reporting-service',
+            aud: 'reporting-service',
+          };
+        },
+      },
+      handler
+    );
+
+    try {
+      const response = await app.inject({
+        method: 'GET',
+        url: '/oauth/userinfo',
+        headers: { authorization: 'Bearer machine.token' },
+      });
+
+      expect(response.statusCode).toBe(401);
+      expect(response.headers['www-authenticate']).toBe(
+        'Bearer realm="OAuth", error="invalid_token", error_description="Access token subject is not a user"'
+      );
+      expect(response.json()).toMatchObject({
+        statusCode: 401,
+        error: 'Access token subject is not a user',
+        code: 'JWT_INVALID',
+      });
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("still answers a user's token whose client_id differs from its subject", async () => {
+    const { fastify, run } = await callWith({
+      sub: '019a0b9e-4c2f-7d31-9f6e-2b8c4d5e6f71',
+      clientId: 'client-1',
+      aud: 'client-1',
+      scope: 'openid',
+    });
+    (fastify.repositories.users.findById as unknown as Mock).mockResolvedValue({
+      id: '019a0b9e-4c2f-7d31-9f6e-2b8c4d5e6f71',
+      enabled: true,
+      firstName: null,
+      lastName: null,
+    });
+
+    await expect(run()).resolves.toEqual({ sub: '019a0b9e-4c2f-7d31-9f6e-2b8c4d5e6f71' });
+    expect(fastify.repositories.users.findById).toHaveBeenCalledWith(
+      '019a0b9e-4c2f-7d31-9f6e-2b8c4d5e6f71'
+    );
   });
 });

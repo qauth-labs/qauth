@@ -21,6 +21,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   requesting `profile`. **Action**: request the `profile` scope, which shows
   on the consent screen. Userinfo behaves as before.
 
+### Fixed
+
+- `/oauth/userinfo` answers a token whose subject is not a user with 401
+  `invalid_token` and a `WWW-Authenticate: Bearer` challenge, on GET and POST
+  ([#754], OIDC Core §5.3.3, RFC 6750 §3.1). A `client_credentials` token
+  carries its `client_id` as `sub`, and with no `resource` and no client
+  `audience` its `aud` is the `client_id` too, so it passed the audience check
+  and failed with 500: the user lookup, then the failure audit, sent the
+  `client_id` to PostgreSQL as a user id. A token whose user no longer exists
+  gets the same 401 instead of 404. Token exchange refuses such a token as
+  `subject_token` with `invalid_request` before any lookup, and the users
+  repository answers "no such user" for an id that is not a UUID without
+  querying.
+
+[#754]: https://github.com/qauth-labs/qauth/issues/754
 [#755]: https://github.com/qauth-labs/qauth/issues/755
 
 ## [0.1.0] - 2026-10-19
