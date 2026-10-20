@@ -349,6 +349,41 @@ describe('JobRunner', () => {
     await instance.stop();
   });
 
+  it('leaves the slot to the next interval when the lock is only taken after it closed', async () => {
+    const clock = createManualClock();
+    const shared = memoryLock();
+    const slow = deferred();
+    const lock: JobLock = {
+      tryAcquire: vi
+        .fn()
+        .mockImplementationOnce(async (name: string) => {
+          await slow.promise;
+          return shared.lock.tryAcquire(name);
+        })
+        .mockImplementation((name: string) => shared.lock.tryAcquire(name)),
+    };
+    const run = vi.fn(async () => undefined);
+    const { runner: instance, lines, runs } = runner(clock, lock, { jobs: [job({ run })] });
+
+    instance.start();
+    await clock.advanceTo(INTERVAL);
+    // Another node may already have run this slot and let go by now.
+    await clock.advanceTo(INTERVAL + 2 * WINDOW);
+    slow.resolve();
+    await clock.advanceBy(0);
+
+    expect(run).not.toHaveBeenCalled();
+    expect(runs.inc).not.toHaveBeenCalled();
+    expect(shared.holders.has('test-job')).toBe(false);
+    expect(
+      messages(lines, 'job run skipped: the lock was taken after its slot had closed')[0]?.level
+    ).toBe('warn');
+
+    await clock.advanceTo(2 * INTERVAL);
+    expect(run).toHaveBeenCalledOnce();
+    await instance.stop();
+  });
+
   it('logs and counts a failing job, and runs it again at the next interval', async () => {
     const clock = createManualClock();
     const shared = memoryLock();

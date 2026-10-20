@@ -6,7 +6,8 @@ import type { FastifyBaseLogger } from 'fastify';
  * A job is periodic work with no caller: purging expired rows, rotating keys,
  * purging ended sessions. Every node of a deployment runs the same codebase, so
  * every node would run every job; a Postgres advisory lock per job name keeps
- * each job on at most one node at a time.
+ * each job on one node at a time. The one exception is a run that ignores its
+ * signal (below): it can still be going when the lock passes to another node.
  *
  * There is no queue, no retry store and no cron syntax. A job runs on a fixed
  * interval and must be safe to repeat: a run that fails, times out or dies with
@@ -25,7 +26,8 @@ import type { FastifyBaseLogger } from 'fastify';
  * the job again. So the node that won the slot keeps the lock until its run has
  * ended AND twice the wake window has passed since the slot started. The second
  * window is the allowance for clock skew between nodes and for late timers. A
- * node that wakes while the lock is held skips the slot.
+ * node that wakes while the lock is held skips the slot, and so does a node
+ * that only gets the lock once that time has passed.
  *
  * The lock is a session-level lock on a connection of its own, so it lasts as
  * long as the run, however long that is, and Postgres drops it when that
@@ -425,12 +427,20 @@ export class JobRunner {
     }
 
     const held = lease;
+    const holdUntil = slotStart + 2 * jitterWindowMs(job.intervalMs);
     let settled: Promise<void> | undefined;
     const leased = (async () => {
       try {
         if (this.shutdown.signal.aborted) return;
+        // A node that got here after the slot's winner let go, because its
+        // timer fired late or the lock took long to take, would run the slot
+        // a second time. It leaves the slot to the next interval instead.
+        if (this.clock.now() >= holdUntil) {
+          log.warn('job run skipped: the lock was taken after its slot had closed');
+          return;
+        }
         ({ settled } = await this.execute(job, held, log));
-        await this.hold(held, slotStart + 2 * jitterWindowMs(job.intervalMs));
+        await this.hold(held, holdUntil);
       } finally {
         await held.release().catch((error: unknown) => {
           log.error({ err: error }, 'job lock could not be released');
