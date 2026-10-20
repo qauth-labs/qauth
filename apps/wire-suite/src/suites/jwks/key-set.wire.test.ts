@@ -18,7 +18,8 @@ async function discoveredKeySet(): Promise<Record<string, unknown>[]> {
   const jwksUri = configuration['jwks_uri'];
   expect(jwksUri, 'discovery names a jwks_uri').toBeTypeOf('string');
 
-  const { body } = await getJsonObject(jwksUri as string);
+  // RFC 7517 §8.5 registers application/jwk-set+json; plain JSON is accepted too.
+  const { body } = await getJsonObject(jwksUri as string, /^application\/(jwk-set\+)?json\b/i);
   expect(Array.isArray(body['keys']), 'the key set has a "keys" array').toBe(true);
   return body['keys'] as Record<string, unknown>[];
 }
@@ -30,14 +31,13 @@ describe('RFC 7517 §5 — the JWK Set at the discovered jwks_uri', () => {
     expect(keys.length).toBeGreaterThan(0);
   });
 
-  it('publishes public keys only, each with a "kty" and a "kid"', async () => {
+  it('publishes public keys only, each with a "kty" (§4.1)', async () => {
     const keys = await discoveredKeySet();
 
     for (const key of keys) {
       expect(key['kty'], JSON.stringify(key)).toBeTypeOf('string');
-      expect(key['kid'], JSON.stringify(key)).toBeTypeOf('string');
       for (const member of PRIVATE_MEMBERS) {
-        expect(key, `key ${String(key['kid'])} carries "${member}"`).not.toHaveProperty(member);
+        expect(key, `a published key carries "${member}"`).not.toHaveProperty(member);
       }
     }
   });

@@ -7,7 +7,7 @@ const { baseUrl } = wireConfig();
 const documentUrl = serverPath(baseUrl, '/.well-known/oauth-authorization-server');
 
 describe('RFC 8414 §3 — authorization server metadata, over HTTP', () => {
-  it('answers a GET at /.well-known/oauth-authorization-server with 200 and a JSON object (§3.1, §3.2)', async () => {
+  it('answers a GET at the well-known URL with 200 and an application/json object (§3.1, §3.2)', async () => {
     const { body } = await getJsonObject(documentUrl);
 
     expect(Object.keys(body).length).toBeGreaterThan(0);
