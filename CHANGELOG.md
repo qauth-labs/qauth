@@ -84,6 +84,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   defaults `NODE_ENV` to `production`, so a local stack that needs one sets
   `NODE_ENV=development` in `.env`.
 
+[#435]: https://github.com/qauth-labs/qauth/issues/435
+[#449]: https://github.com/qauth-labs/qauth/issues/449
+[#452]: https://github.com/qauth-labs/qauth/issues/452
+[#461]: https://github.com/qauth-labs/qauth/issues/461
+[#462]: https://github.com/qauth-labs/qauth/issues/462
+
+## [0.1.1] - 2026-10-21
+
+Fixes backported from `main` to the 0.1 line. One of them changes what the ID
+token carries; see Changed.
+
+### Changed
+
 - **BREAKING**: ID tokens now carry `name` only when the granted scope
   includes `profile`, the rule userinfo already follows (OIDC Core §5.4)
   ([#755]). Before, the `authorization_code` grant put the user's name in the
@@ -97,6 +110,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   on the consent screen. Userinfo behaves as before.
 
 ### Fixed
+
+- The auth server no longer exits when PostgreSQL closes an idle pooled
+  connection, as a restart, a failover or `pg_terminate_backend` does
+  ([#746]). pg-pool emits that error on the pool after it has dropped the
+  client, and with no listener Node threw it and ended the process. The pool
+  now logs the error and opens a fresh connection on the next query.
 
 - `/oauth/userinfo` answers a token whose subject is not a user with 401
   `invalid_token` and a `WWW-Authenticate: Bearer` challenge, on GET and POST
@@ -112,11 +131,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   token of a deleted user answered 500. It now answers 401 `invalid_token`
   instead of the intended 404.
 
-[#435]: https://github.com/qauth-labs/qauth/issues/435
-[#449]: https://github.com/qauth-labs/qauth/issues/449
-[#452]: https://github.com/qauth-labs/qauth/issues/452
-[#461]: https://github.com/qauth-labs/qauth/issues/461
-[#462]: https://github.com/qauth-labs/qauth/issues/462
+[#746]: https://github.com/qauth-labs/qauth/pull/746
 [#754]: https://github.com/qauth-labs/qauth/issues/754
 [#755]: https://github.com/qauth-labs/qauth/issues/755
 
@@ -608,5 +623,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`redirect_uri not permitted for this environment`). Re-register a native
   app that used a scheme without a period under a reverse-domain scheme.
 
-[Unreleased]: https://github.com/qauth-labs/qauth/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/qauth-labs/qauth/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/qauth-labs/qauth/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/qauth-labs/qauth/releases/tag/v0.1.0
