@@ -33,7 +33,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   gets the same 401 instead of 404. Token exchange refuses such a token as
   `subject_token` with `invalid_request` before any lookup, and the users
   repository answers "no such user" for an id that is not a UUID without
-  querying.
+  querying. `/auth/logout` had the same failure audit: a sign-out with the
+  token of a deleted user answered 500. It now answers 401 `invalid_token`
+  instead of the intended 404.
 
 [#754]: https://github.com/qauth-labs/qauth/issues/754
 [#755]: https://github.com/qauth-labs/qauth/issues/755
