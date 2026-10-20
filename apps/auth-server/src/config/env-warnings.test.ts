@@ -1,9 +1,13 @@
+import { CONFIG_KEY_REGISTRY } from '@qauth-labs/server-config';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 /**
  * The boot warnings `env.ts` collects for `main.ts` to log (ADR-018 §5): an
  * experimental key or value that is set. The deprecated-name warnings are
  * pinned in `env.test.ts`.
+ *
+ * The static import above also loads the library before the first case, so
+ * that case's `import('./env')` does not pay for transforming it.
  */
 
 const BASE: Record<string, string> = {
@@ -36,6 +40,12 @@ beforeEach(() => {
 });
 
 describe('experimental boot warnings', () => {
+  it('come from the registry, which marks oid4vp-1.0-base experimental (ADR-018 §4)', () => {
+    expect(
+      CONFIG_KEY_REGISTRY.find((key) => key.name === 'OID4VP_VERIFIER_PROFILE')?.experimentalValues
+    ).toEqual(['oid4vp-1.0-base']);
+  });
+
   it('warns when OID4VP_VERIFIER_PROFILE is set to the experimental oid4vp-1.0-base', async () => {
     setEnv({ OID4VP_VERIFIER_PROFILE: 'oid4vp-1.0-base' });
     const mod = await import('./env');
