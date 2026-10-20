@@ -56,23 +56,16 @@ jobs:
       # run twice (#400).
       - run: pnpm exec vitest run --coverage --reporter=default --reporter=json --outputFile.json=dist/vitest-report.json
 
-      # Spec-conformance matrix (#400). Deliberately NOT `if: always()`, unlike
-      # the issue-state guard below: when the suite fails the report is partial,
-      # and matrix noise on top of a real test failure helps nobody. The script
-      # exits 2 rather than rendering a partial report as proven, so skipping it
-      # here loses nothing.
-      - name: Spec conformance matrix
-        run: pnpm spec-matrix
-
-      # `always()` so a partial artifact survives a gate failure — the matrix is
-      # most useful precisely when it is red.
-      - name: Upload conformance matrix
-        if: always()
+      # Handed to the `conformance-matrix` job, which joins it with the wire
+      # suite's report (#450). Deliberately NOT `if: always()`: when the suite
+      # fails the report is partial, and a matrix on top of a real test failure
+      # helps nobody. With no artifact the matrix job does not run at all.
+      - name: Upload unit-suite report
         uses: actions/upload-artifact@v4
         with:
-          name: spec-conformance-matrix
-          path: dist/conformance/
-          if-no-files-found: ignore
+          name: vitest-report
+          path: dist/vitest-report.json
+          if-no-files-found: error
 
       # Issue-state drift guard (#399). The evidence-path half of
       # `status-claims.ts` runs inside the unit suite above; this half needs the
@@ -272,6 +265,240 @@ jobs:
       - name: Stop container
         if: always()
         run: docker rm -f "$CONTAINER" || true
+
+  # Black-box wire suite — the guard for the wire promise (#450, ADR-018 §5).
+  #
+  # docker-smoke proves the image boots; this proves what a client sees over
+  # HTTP. It builds the real auth-server and migration-runner images from this
+  # commit, migrates a fresh Postgres, seeds the clients the suite uses, starts
+  # the server and runs apps/wire-suite against it. The suite shares no code
+  # with the server, so an encoding bug cannot hide on both sides at once.
+  #
+  # Not affected-scoped, for the same reason as docker-smoke: the image is
+  # assembled from the lockfile and every workspace package, so almost any
+  # change can break it.
+  wire-suite:
+    runs-on: ubuntu-latest
+    env:
+      SERVER_IMAGE: qauth/auth-server:wire
+      MIGRATION_IMAGE: qauth/migration-runner:wire
+      CONTAINER: qauth-auth-server-wire
+      DATABASE_URL: postgresql://qauth:qauth_ci_password@localhost:5432/qauth
+      # The issuer the server is configured with, and the base URL the suite
+      # holds discovery to.
+      QAUTH_BASE_URL: http://localhost:3000
+    services:
+      # Same services as docker-smoke; the containers below join the runner's
+      # network with `--network host` and reach both over localhost.
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_DB: qauth
+          POSTGRES_USER: qauth
+          POSTGRES_PASSWORD: qauth_ci_password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U qauth -d qauth"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          filter: tree:0
+
+      - uses: pnpm/action-setup@v6
+        name: Install pnpm
+        with:
+          version: 11.4.0
+          run_install: false
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: 'pnpm'
+
+      # Only for the suite's own runner (Vitest, jose). The server runs from
+      # the image, never from this install.
+      - run: pnpm install --frozen-lockfile
+
+      # Same context and Dockerfiles as docker-compose.yml.
+      - name: Build auth-server and migration-runner images
+        env:
+          DOCKER_BUILDKIT: '1'
+        run: |
+          set -euo pipefail
+          docker build -f apps/auth-server/Dockerfile -t "$SERVER_IMAGE" .
+          docker build -f apps/migration-runner/Dockerfile -t "$MIGRATION_IMAGE" .
+
+      - name: Run the migration runner
+        run: docker run --rm --network host -e DATABASE_URL="$DATABASE_URL" "$MIGRATION_IMAGE"
+
+      # The operator realm first, because the seed command provisions clients
+      # into an existing realm only. Then the clients in
+      # apps/wire-suite/seed/clients.json, through the same operator command a
+      # deployment uses. It prints each generated secret once; the secret is
+      # masked before anything is logged and handed to the suite through the
+      # environment.
+      - name: Seed the realm and the wire-suite clients
+        run: |
+          set -euo pipefail
+          docker exec "${{ job.services.postgres.id }}" psql -v ON_ERROR_STOP=1 -U qauth -d qauth \
+            -c "INSERT INTO realms (name) VALUES ('master') ON CONFLICT (name) DO NOTHING"
+          seed_output="$(docker run --rm --network host -e DATABASE_URL="$DATABASE_URL" \
+            -v "$PWD/apps/wire-suite/seed/clients.json:/seed/clients.json:ro" \
+            --entrypoint pnpm "$MIGRATION_IMAGE" \
+            nx run infra-db:db:seed-oauth-clients -- --manifest=/seed/clients.json)"
+          secret="$(printf '%s\n' "$seed_output" \
+            | awk '/^  wire-confidential$/ { found = 1; next } found && $1 == "secret:" { print $2; exit }')"
+          if [ -z "$secret" ]; then
+            echo "::error::The seed printed no secret for wire-confidential."
+            printf '%s\n' "$seed_output" | grep -v 'secret:' || true
+            exit 1
+          fi
+          echo "::add-mask::$secret"
+          printf '%s\n' "$seed_output" | grep -E '^Seeded realm'
+          {
+            echo "QAUTH_WIRE_CLIENT_ID=wire-confidential"
+            echo "QAUTH_WIRE_CLIENT_SECRET=$secret"
+          } >> "$GITHUB_ENV"
+
+      # As docker-smoke, plus raised rate limits: the defaults allow three
+      # registrations and five logins per window per address, and every request
+      # of the suite comes from one address. Raised, not disabled — the
+      # rate-limit suite spends the registration budget and requires a 429.
+      - name: Start auth-server container
+        run: |
+          set -euo pipefail
+          jwt_private_key="$(openssl genpkey -algorithm ed25519)"
+          jwt_public_key="$(printf '%s' "$jwt_private_key" | openssl pkey -pubout)"
+          docker run -d \
+            --name "$CONTAINER" \
+            --network host \
+            -e NODE_ENV=production \
+            -e HOST=0.0.0.0 \
+            -e PORT=3000 \
+            -e LOG_LEVEL=info \
+            -e DATABASE_URL="$DATABASE_URL" \
+            -e REDIS_URL='redis://localhost:6379/0' \
+            -e REDIS_HOST=localhost \
+            -e REDIS_PORT=6379 \
+            -e JWT_PRIVATE_KEY="$jwt_private_key" \
+            -e JWT_PUBLIC_KEY="$jwt_public_key" \
+            -e JWT_ISSUER="$QAUTH_BASE_URL" \
+            -e SESSION_COOKIE_SECRET="$(openssl rand -base64 48)" \
+            -e SESSION_COOKIE_SECURE=false \
+            -e EMAIL_PROVIDER=mock \
+            -e EMAIL_FROM_ADDRESS='noreply@qauth.dev' \
+            -e EMAIL_BASE_URL="$QAUTH_BASE_URL" \
+            -e RATE_LIMIT_MAX=10000 \
+            -e REGISTRATION_RATE_LIMIT=100 \
+            -e LOGIN_RATE_LIMIT=100 \
+            "$SERVER_IMAGE"
+
+      - name: Wait for /health to report healthy
+        timeout-minutes: 3
+        run: |
+          set -uo pipefail
+          for _ in $(seq 1 60); do
+            if [ "$(docker inspect -f '{{.State.Running}}' "$CONTAINER")" != "true" ]; then
+              echo "::error::auth-server container stopped before becoming healthy."
+              exit 1
+            fi
+            case "$(curl -fsS --max-time 5 "$QAUTH_BASE_URL/health" || true)" in
+              *'"status":"ok"'*) exit 0 ;;
+            esac
+            sleep 2
+          done
+          echo "::error::auth-server did not report healthy within the timeout."
+          exit 1
+
+      # The JSON report is what the conformance matrix joins (#400), so a wire
+      # test that cites a registered section counts as evidence for its row.
+      - name: Run the wire suite
+        timeout-minutes: 10
+        env:
+          QAUTH_WIRE_ALLOW_WRITES: '1'
+        run: >-
+          pnpm exec nx run wire-suite:run --
+          --reporter=default --reporter=json
+          --outputFile.json="$GITHUB_WORKSPACE/dist/wire-report.json"
+
+      # `always()` so a red run still leaves its report behind.
+      - name: Upload wire-suite report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: wire-report
+          path: dist/wire-report.json
+          if-no-files-found: ignore
+
+      - name: Dump container diagnostics on failure
+        if: failure()
+        run: |
+          docker ps -a
+          docker logs "$CONTAINER" 2>&1 || true
+
+      - name: Stop container
+        if: always()
+        run: docker rm -f "$CONTAINER" || true
+
+  # Spec-conformance matrix (#400), joining the unit suite's report from `main`
+  # and the wire suite's (#450). It runs only when both jobs passed: a failed
+  # suite leaves a partial report, and matrix noise on top of a real test
+  # failure helps nobody. The joiner itself exits 2 on a missing or empty
+  # report, so neither suite can drop out of the evidence silently.
+  conformance-matrix:
+    runs-on: ubuntu-latest
+    needs: [main, wire-suite]
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          filter: tree:0
+
+      - uses: pnpm/action-setup@v6
+        name: Install pnpm
+        with:
+          version: 11.4.0
+          run_install: false
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+
+      # No install: the joiner uses Node's standard library only.
+      - uses: actions/download-artifact@v4
+        with:
+          name: vitest-report
+          path: dist
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: wire-report
+          path: dist
+
+      - name: Spec conformance matrix
+        run: pnpm spec-matrix
+
+      # `always()` so a partial artifact survives a gate failure — the matrix is
+      # most useful precisely when it is red.
+      - name: Upload conformance matrix
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: spec-conformance-matrix
+          path: dist/conformance/
+          if-no-files-found: ignore
 
   # Developer-portal boot smoke test.
   #
