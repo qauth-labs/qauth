@@ -83,6 +83,7 @@ export default async function (fastify: FastifyInstance) {
         description:
           'OID4VP 1.0 / RFC 9101 Request Object Endpoint. Serves the signed Authorization Request a `request_uri` refers to, as application/oauth-authz-req+jwt. TRANSPORT ONLY: the request state is neither read nor consumed here, nothing is written, and an unknown or expired reference is indistinguishable from a malformed one.',
         tags: ['OID4VP'],
+        'x-qauth-stability': 'experimental',
       },
       config: {
         // IP-scoped, in the shape every other unauthenticated surface in this

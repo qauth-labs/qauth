@@ -85,6 +85,7 @@ export default async function (fastify: FastifyInstance) {
         description:
           'List the active OAuth consents for the currently signed-in user. Drives the developer portal revocation screen (issue #150). The response also carries a per-session CSRF token that the caller MUST echo back as the `X-CSRF-Token` header on `DELETE /consents/:id`.',
         tags: ['Consents'],
+        'x-qauth-stability': 'stable',
         response: { 200: listResponseSchema, 401: unauthorizedResponseSchema },
       },
     },
@@ -108,6 +109,7 @@ export default async function (fastify: FastifyInstance) {
         description:
           'Revoke an OAuth consent row owned by the currently signed-in user. Requires a valid `X-CSRF-Token` header whose value matches the session CSRF token returned by `GET /consents`.',
         tags: ['Consents'],
+        'x-qauth-stability': 'stable',
         params: z.object({ id: z.string().uuid() }),
         response: { 204: z.null(), 401: z.null() },
       },

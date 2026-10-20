@@ -352,6 +352,7 @@ export default async function (fastify: FastifyInstance) {
         description:
           'Render the OAuth consent screen. Requires a valid __Host-qauth_session cookie; otherwise redirects to /ui/login.',
         tags: ['UI'],
+        'x-qauth-stability': 'stable',
         querystring: authorizeQuerySchema,
       },
     },
@@ -538,6 +539,7 @@ export default async function (fastify: FastifyInstance) {
         description:
           'Submit the consent decision. CSRF-protected; re-uses the authorize params to issue a code on Allow.',
         tags: ['UI'],
+        'x-qauth-stability': 'stable',
         body: consentFormSchema,
       },
       config: {

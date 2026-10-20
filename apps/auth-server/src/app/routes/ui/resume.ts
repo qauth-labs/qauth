@@ -104,6 +104,7 @@ export default async function (fastify: FastifyInstance) {
         description:
           'Resume a pending authorization request after login. The handle is single-use and resolves ONLY to an authorize URL this server minted. Issue #316.',
         tags: ['UI'],
+        'x-qauth-stability': 'stable',
         params: z.object({ handle: z.string() }),
       },
     },

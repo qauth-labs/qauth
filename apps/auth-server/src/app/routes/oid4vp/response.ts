@@ -199,6 +199,7 @@ export default async function (fastify: FastifyInstance) {
         description:
           'OID4VP 1.0 direct_post Response Endpoint. Accepts a wallet Authorization Response as application/x-www-form-urlencoded: in the clear (vp_token + state, or error + state) under response_mode=direct_post, or as a single `response` parameter carrying a JWE (ECDH-ES P-256, A128GCM/A256GCM) encrypted to the per-request key published in client_metadata under response_mode=direct_post.jwt. TRANSPORT ONLY: the response is correlated against a single-use presentation request and structurally parsed. No signature, credential or issuer validation is performed and no user is authenticated (that is #234/#236). Answers HTTP 200 with a JSON object (OID4VP 1.0 §8.2): `{}` for a cross-device request, or `{ redirect_uri }` for a same-device request — an absolute URI under the issuer carrying a fresh, single-use Response Code (HAIP 1.0 §5.1) that the wallet MUST redirect the user agent to.',
         tags: ['OID4VP'],
+        'x-qauth-stability': 'experimental',
         body: oid4vpDirectPostRequestSchema,
         response: { 200: oid4vpDirectPostResponseSchema },
       },

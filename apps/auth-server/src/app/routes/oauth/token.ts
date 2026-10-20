@@ -103,6 +103,7 @@ export default async function (fastify: FastifyInstance) {
         description:
           'OAuth 2.1 token endpoint. Supports authorization_code (with PKCE) and client_credentials grants. Client auth via client_secret_post or client_secret_basic.',
         tags: ['OAuth', 'Token'],
+        'x-qauth-stability': 'stable',
         body: tokenExchangeBodySchema,
         response: {
           // A UNION, not the Bearer-only schema: an ID-JAG mint (ADR-011) must

@@ -8,6 +8,7 @@ export default async function (fastify: FastifyInstance) {
         description:
           'Root API endpoint. Returns a simple greeting to verify the auth server is running.',
         tags: ['System'],
+        'x-qauth-stability': 'stable',
       },
     },
     async function () {

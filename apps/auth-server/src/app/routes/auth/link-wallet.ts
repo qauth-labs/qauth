@@ -135,6 +135,7 @@ export default async function (fastify: FastifyInstance) {
         description:
           "Start linking a wallet credential to the signed-in account. Requires a valid session cookie and an `X-CSRF-Token` header matching the per-session token returned by `GET /consents`. Issues an OID4VP 1.0 presentation request in LINKING mode: the validated response is bound to the caller's authenticated users.id and is never used to resolve or create an account (ADR-009 §5). The optional `device` field (`this` | `other`, default `other`) says where the wallet is: a same-device link completes on the browser's return leg at `GET /ui/wallet-login/return` and polls as `pending` until then (OID4VP 1.0 §14.2, HAIP 1.0 §5.1); a cross-device link completes by polling. Issues #238, #405.",
         tags: ['Auth'],
+        'x-qauth-stability': 'experimental',
         body: startRequestSchema,
         response: {
           200: startResponseSchema,
@@ -209,6 +210,7 @@ export default async function (fastify: FastifyInstance) {
         description:
           'Poll a wallet-linking flow. Reports whether the direct_post presentation response has arrived, and COMPLETES the link when it has — writing a second user_credentials row (provider_type=wallet) under the same users.id. A link started with `device=this` completes on the return leg instead and polls as `pending` until then, then `linked` once (#405). Issue #238.',
         tags: ['Auth'],
+        'x-qauth-stability': 'experimental',
         params: z.object({ handle: z.string() }),
         response: { 200: statusResponseSchema, 401: errorResponseSchema },
       },

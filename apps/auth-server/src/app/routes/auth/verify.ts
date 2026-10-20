@@ -65,6 +65,7 @@ export default async function (fastify: FastifyInstance) {
         description:
           'Verify email address using the token sent via email, in the request body. Single-use; marks token as used. POST so no link fetch or prefetch can verify an address on its own.',
         tags: ['Auth'],
+        'x-qauth-stability': 'stable',
         body: verifyBodySchema,
         response: {
           200: verifyResponseSchema,

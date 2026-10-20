@@ -23,6 +23,7 @@
           "System"
         ],
         "description": "Health check endpoint. Returns database and Redis connectivity status. Used for liveness and readiness probes.",
+        "x-qauth-stability": "stable",
         "responses": {
           "200": {
             "description": "Default Response"
@@ -36,6 +37,7 @@
           "System"
         ],
         "description": "Prometheus metrics endpoint. Returns process/runtime metrics plus auth counters in Prometheus text exposition format.",
+        "x-qauth-stability": "stable",
         "responses": {
           "200": {
             "description": "Default Response"
@@ -49,6 +51,7 @@
           "System"
         ],
         "description": "Root API endpoint. Returns a simple greeting to verify the auth server is running.",
+        "x-qauth-stability": "stable",
         "responses": {
           "200": {
             "description": "Default Response"
@@ -62,6 +65,7 @@
           "Discovery"
         ],
         "description": "OAuth 2.0 Authorization Server Metadata (RFC 8414). Unauthenticated, cacheable.",
+        "x-qauth-stability": "stable",
         "responses": {
           "200": {
             "description": "Default Response"
@@ -75,6 +79,7 @@
           "Discovery"
         ],
         "description": "OpenID Connect Discovery 1.0 document. Superset of RFC 8414 AS metadata with OIDC-specific fields. Unauthenticated, cacheable.",
+        "x-qauth-stability": "stable",
         "responses": {
           "200": {
             "description": "Default Response"
@@ -88,6 +93,7 @@
           "Discovery"
         ],
         "description": "JSON Web Key Set (RFC 7517) containing the active EdDSA public signing key(s). Used by clients and resource servers to verify JWT signatures.",
+        "x-qauth-stability": "stable",
         "responses": {
           "200": {
             "description": "Default Response"
@@ -128,6 +134,7 @@
             }
           }
         },
+        "x-qauth-stability": "experimental",
         "responses": {
           "200": {
             "description": "Default Response",
@@ -232,6 +239,7 @@
             "required": true
           }
         ],
+        "x-qauth-stability": "experimental",
         "responses": {
           "200": {
             "description": "Default Response",
@@ -316,6 +324,7 @@
             }
           }
         },
+        "x-qauth-stability": "stable",
         "responses": {
           "200": {
             "description": "Default Response",
@@ -371,6 +380,7 @@
             "required": true
           }
         ],
+        "x-qauth-stability": "stable",
         "responses": {
           "200": {
             "description": "Default Response",
@@ -441,6 +451,7 @@
             }
           }
         },
+        "x-qauth-stability": "stable",
         "responses": {
           "202": {
             "description": "Default Response",
@@ -491,6 +502,7 @@
             }
           }
         },
+        "x-qauth-stability": "stable",
         "responses": {
           "200": {
             "description": "Default Response",
@@ -570,6 +582,7 @@
             }
           }
         },
+        "x-qauth-stability": "stable",
         "responses": {
           "200": {
             "description": "Default Response",
@@ -610,6 +623,7 @@
             "bearerAuth": []
           }
         ],
+        "x-qauth-stability": "stable",
         "responses": {
           "200": {
             "description": "Default Response",
@@ -826,6 +840,7 @@
             "bearerAuth": []
           }
         ],
+        "x-qauth-stability": "stable",
         "responses": {
           "201": {
             "description": "Default Response",
@@ -964,6 +979,7 @@
             "bearerAuth": []
           }
         ],
+        "x-qauth-stability": "stable",
         "responses": {
           "200": {
             "description": "Default Response",
@@ -1178,6 +1194,7 @@
             "bearerAuth": []
           }
         ],
+        "x-qauth-stability": "stable",
         "responses": {
           "200": {
             "description": "Default Response",
@@ -1311,6 +1328,7 @@
             "bearerAuth": []
           }
         ],
+        "x-qauth-stability": "stable",
         "responses": {
           "204": {
             "description": "Default Response"
@@ -1341,6 +1359,7 @@
             "bearerAuth": []
           }
         ],
+        "x-qauth-stability": "stable",
         "responses": {
           "200": {
             "description": "Default Response",
@@ -1500,6 +1519,7 @@
             "bearerAuth": []
           }
         ],
+        "x-qauth-stability": "stable",
         "responses": {
           "201": {
             "description": "Default Response",
@@ -1586,6 +1606,7 @@
             "bearerAuth": []
           }
         ],
+        "x-qauth-stability": "stable",
         "responses": {
           "200": {
             "description": "Default Response",
@@ -1692,6 +1713,7 @@
             "bearerAuth": []
           }
         ],
+        "x-qauth-stability": "stable",
         "responses": {
           "200": {
             "description": "Default Response",
@@ -1759,6 +1781,7 @@
           "Consents"
         ],
         "description": "List the active OAuth consents for the currently signed-in user. Drives the developer portal revocation screen (issue #150). The response also carries a per-session CSRF token that the caller MUST echo back as the `X-CSRF-Token` header on `DELETE /consents/:id`.",
+        "x-qauth-stability": "stable",
         "responses": {
           "200": {
             "description": "Default Response",
@@ -1885,6 +1908,7 @@
             "required": true
           }
         ],
+        "x-qauth-stability": "stable",
         "responses": {
           "204": {
             "description": "Default Response"
@@ -1901,6 +1925,7 @@
           "Consents"
         ],
         "description": "List the active OAuth consents belonging to the authenticated user. Requires a developer Bearer access token. Drives the developer portal revocation screen (issue #366).",
+        "x-qauth-stability": "stable",
         "responses": {
           "200": {
             "description": "Default Response",
@@ -1973,6 +1998,7 @@
             "required": true
           }
         ],
+        "x-qauth-stability": "stable",
         "responses": {
           "204": {
             "description": "Default Response"
@@ -2116,6 +2142,7 @@
             "required": false
           }
         ],
+        "x-qauth-stability": "stable",
         "responses": {
           "200": {
             "description": "Default Response"
@@ -2219,6 +2246,7 @@
             }
           }
         },
+        "x-qauth-stability": "stable",
         "responses": {
           "200": {
             "description": "Default Response"
@@ -2266,6 +2294,7 @@
             }
           }
         },
+        "x-qauth-stability": "stable",
         "responses": {
           "200": {
             "description": "Default Response",
@@ -2441,6 +2470,7 @@
             }
           }
         },
+        "x-qauth-stability": "stable",
         "responses": {
           "201": {
             "description": "Default Response",
@@ -2578,6 +2608,7 @@
             }
           }
         },
+        "x-qauth-stability": "stable",
         "responses": {
           "200": {
             "description": "Default Response"
@@ -2954,6 +2985,7 @@
             }
           }
         },
+        "x-qauth-stability": "stable",
         "responses": {
           "200": {
             "description": "Default Response",
@@ -3049,6 +3081,7 @@
             "bearerAuth": []
           }
         ],
+        "x-qauth-stability": "stable",
         "responses": {
           "200": {
             "description": "Default Response",
@@ -3094,6 +3127,7 @@
             "bearerAuth": []
           }
         ],
+        "x-qauth-stability": "stable",
         "responses": {
           "200": {
             "description": "Default Response",
@@ -3135,6 +3169,7 @@
           "OID4VP"
         ],
         "description": "OID4VP 1.0 / RFC 9101 Request Object Endpoint. Serves the signed Authorization Request a `request_uri` refers to, as application/oauth-authz-req+jwt. TRANSPORT ONLY: the request state is neither read nor consumed here, nothing is written, and an unknown or expired reference is indistinguishable from a malformed one.",
+        "x-qauth-stability": "experimental",
         "parameters": [
           {
             "schema": {
@@ -3209,6 +3244,7 @@
             }
           }
         },
+        "x-qauth-stability": "experimental",
         "responses": {
           "200": {
             "description": "Transport-level acknowledgement (OID4VP 1.0 §8.2): HTTP 200 with a JSON object. Confirms the response was well-formed and correlated with a pending presentation request. For a same-device request the object carries `redirect_uri` — an absolute URI under the issuer with a fresh, single-use Response Code — which the wallet MUST redirect the user agent to (HAIP 1.0 §5.1); for a cross-device request it is empty and the wallet is not required to perform any further steps. It does NOT assert that any credential was verified or that any user was authenticated.",
@@ -3366,6 +3402,7 @@
             "required": false
           }
         ],
+        "x-qauth-stability": "stable",
         "responses": {
           "200": {
             "description": "Default Response"
@@ -3483,6 +3520,7 @@
             }
           }
         },
+        "x-qauth-stability": "stable",
         "responses": {
           "200": {
             "description": "Default Response"
@@ -3506,6 +3544,7 @@
             "required": false
           }
         ],
+        "x-qauth-stability": "stable",
         "responses": {
           "200": {
             "description": "Default Response"
@@ -3551,6 +3590,7 @@
             }
           }
         },
+        "x-qauth-stability": "stable",
         "responses": {
           "200": {
             "description": "Default Response"
@@ -3574,6 +3614,7 @@
             "required": true
           }
         ],
+        "x-qauth-stability": "stable",
         "responses": {
           "200": {
             "description": "Default Response"
@@ -3587,6 +3628,7 @@
           "UI"
         ],
         "description": "Renders the wallet-linking confirmation screen for the signed-in user. Issue #238.",
+        "x-qauth-stability": "experimental",
         "responses": {
           "200": {
             "description": "Default Response"
@@ -3625,6 +3667,7 @@
             }
           }
         },
+        "x-qauth-stability": "experimental",
         "responses": {
           "200": {
             "description": "Default Response"
@@ -3648,6 +3691,7 @@
             "required": true
           }
         ],
+        "x-qauth-stability": "experimental",
         "responses": {
           "200": {
             "description": "Default Response"
@@ -3671,6 +3715,7 @@
             "required": false
           }
         ],
+        "x-qauth-stability": "experimental",
         "responses": {
           "200": {
             "description": "Default Response"
@@ -3718,6 +3763,7 @@
             }
           }
         },
+        "x-qauth-stability": "experimental",
         "responses": {
           "200": {
             "description": "Default Response"
@@ -3741,6 +3787,7 @@
             "required": true
           }
         ],
+        "x-qauth-stability": "experimental",
         "responses": {
           "200": {
             "description": "Default Response"
@@ -3764,6 +3811,7 @@
             "required": true
           }
         ],
+        "x-qauth-stability": "experimental",
         "responses": {
           "200": {
             "description": "Default Response",
@@ -3815,6 +3863,7 @@
             "required": false
           }
         ],
+        "x-qauth-stability": "experimental",
         "responses": {
           "200": {
             "description": "Default Response"

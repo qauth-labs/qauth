@@ -76,6 +76,7 @@ export default async function (fastify: FastifyInstance) {
         description:
           'List the active OAuth consents belonging to the authenticated user. Requires a developer Bearer access token. Drives the developer portal revocation screen (issue #366).',
         tags: ['Consents'],
+        'x-qauth-stability': 'stable',
         response: { 200: listResponseSchema },
       },
     },
@@ -96,6 +97,7 @@ export default async function (fastify: FastifyInstance) {
         description:
           "Revoke one of the authenticated user's OAuth consents. Returns 404 if the consent does not exist or belongs to another user, so the API never reveals that another user's consent id exists. Requires a developer Bearer access token.",
         tags: ['Consents'],
+        'x-qauth-stability': 'stable',
         params: z.object({ id: z.string().uuid() }),
         response: { 204: z.null() },
       },

@@ -317,6 +317,7 @@ export default async function (fastify: FastifyInstance) {
         description:
           'List the OAuth clients owned by the authenticated developer. Scoped by oauth_clients.developer_id. Requires a developer Bearer access token. Never returns the client secret. (Phase 2.2, issue #85.)',
         tags: ['Clients'],
+        'x-qauth-stability': 'stable',
         security: [{ bearerAuth: [] }],
         response: { 200: listClientsResponseSchema },
       },
@@ -395,6 +396,7 @@ export default async function (fastify: FastifyInstance) {
         description:
           'Create an OAuth client owned by the authenticated developer. The server generates the client_id and (for confidential clients) a client_secret; the plaintext secret is returned in THIS response only and never again. Requires a developer Bearer access token. (Phase 2.2, issue #86.)',
         tags: ['Clients'],
+        'x-qauth-stability': 'stable',
         security: [{ bearerAuth: [] }],
         body: createClientRequestSchema,
         response: { 201: createClientResponseSchema },
@@ -537,6 +539,7 @@ export default async function (fastify: FastifyInstance) {
         description:
           "Get one of the authenticated developer's OAuth clients by id. Returns 404 if the client does not exist or is owned by another developer (no existence enumeration). Never returns the client secret. (Phase 2.2, issue #87.)",
         tags: ['Clients'],
+        'x-qauth-stability': 'stable',
         security: [{ bearerAuth: [] }],
         params: clientIdParamsSchema,
         response: { 200: clientSchema },
@@ -562,6 +565,7 @@ export default async function (fastify: FastifyInstance) {
         description:
           "Update mutable fields of one of the developer's OAuth clients (name, description, redirectUris, scopes, grantTypes, responseTypes, tokenEndpointAuthMethod, enabled). client_id and client_secret are immutable here. enabled is the owner's switch and may be set either way; it does not lift an operator's suspension (the read-only suspended field), which only the operator can. Returns 404 if the client does not exist or is owned by another developer. (Phase 2.2, issue #88.)",
         tags: ['Clients'],
+        'x-qauth-stability': 'stable',
         security: [{ bearerAuth: [] }],
         params: clientIdParamsSchema,
         body: updateClientRequestSchema,
@@ -658,6 +662,7 @@ export default async function (fastify: FastifyInstance) {
         description:
           "Delete one of the developer's OAuth clients. Returns 404 if the client does not exist or is owned by another developer. After deletion the client can no longer authenticate. (Phase 2.2, issue #89.)",
         tags: ['Clients'],
+        'x-qauth-stability': 'stable',
         security: [{ bearerAuth: [] }],
         params: clientIdParamsSchema,
         response: { 204: z.null() },
@@ -697,6 +702,7 @@ export default async function (fastify: FastifyInstance) {
         description:
           "Issue a new client_secret for one of the developer's OAuth clients. The previous secret is invalidated immediately and the new plaintext secret is returned in THIS response only. Returns 404 if the client does not exist or is owned by another developer; 400 for a public client that has no secret. (Phase 2.2, issue #90.)",
         tags: ['Clients'],
+        'x-qauth-stability': 'stable',
         security: [{ bearerAuth: [] }],
         params: clientIdParamsSchema,
         response: { 200: regenerateSecretResponseSchema },
