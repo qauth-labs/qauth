@@ -127,9 +127,19 @@ export const realmKeys = pgTable(
     compromisedAt: bigint('compromised_at', { mode: 'number' }),
   },
   (t) => [
-    // A constraint rather than an index so `realm_public_keys` can reference
-    // it: drizzle-kit adds foreign keys before it creates indexes.
     unique('realm_keys_realm_id_kid_unique').on(t.realmId, t.kid),
+    // The target of `realm_public_keys_realm_key_fk`. Already unique through
+    // `(realm_id, kid)`; it exists so the public row's copies of `purpose`,
+    // `algorithm` and `status` are checked against this row and follow it on
+    // update. A constraint rather than an index because drizzle-kit adds
+    // foreign keys before it creates indexes.
+    unique('realm_keys_public_mirror_unique').on(
+      t.realmId,
+      t.kid,
+      t.purpose,
+      t.algorithm,
+      t.status
+    ),
     // One key signs or encrypts per realm, purpose, scope and algorithm. A
     // hybrid pair is two algorithms, so both of its keys may be active.
     // `scope_id` goes through `coalesce` because a unique index treats NULLs
@@ -162,12 +172,23 @@ export const realmKeys = pgTable(
  * and verify tokens (#497).
  *
  * Symmetric purposes (cookie HMAC, data at rest, webhook secrets) have no row
- * here. The CHECK on `public_jwk` refuses every private JWK member, so a bug
- * in the writer cannot leak private material to the roles that read it.
+ * here: the CHECKs on `public_jwk` require a `kty` other than `oct` and refuse
+ * every private JWK member, so a bug in the writer cannot hand secret material
+ * to the roles that read this table.
  *
- * Keyed by `(realm_id, kid)`, and that pair references the key row: a public
- * key always has a stored key behind it, and deleting the key row removes its
- * public row.
+ * Keyed by `(realm_id, kid)`. The foreign key to the key row also covers
+ * `purpose`, `algorithm` and `status`, with `ON UPDATE CASCADE`:
+ *
+ * - a public key always has a stored key behind it, with the same purpose,
+ *   algorithm and status;
+ * - a status change on the key row (`next` → `active` → `retired`, or
+ *   `compromised`) reaches this row in the same statement, so the JWKS and
+ *   the verifiers never see a stale status. A writer changes the status on
+ *   `realm_keys` only; setting it here first fails the foreign key;
+ * - deleting the key row removes its public row.
+ *
+ * `publish_at` and `unpublish_at` are this row's own: they are the JWKS window,
+ * and the signer sets them here.
  */
 export const realmPublicKeys = pgTable(
   'realm_public_keys',
@@ -185,11 +206,25 @@ export const realmPublicKeys = pgTable(
   (t) => [
     primaryKey({ columns: [t.realmId, t.kid], name: 'realm_public_keys_pk' }),
     foreignKey({
-      columns: [t.realmId, t.kid],
-      foreignColumns: [realmKeys.realmId, realmKeys.kid],
+      columns: [t.realmId, t.kid, t.purpose, t.algorithm, t.status],
+      foreignColumns: [
+        realmKeys.realmId,
+        realmKeys.kid,
+        realmKeys.purpose,
+        realmKeys.algorithm,
+        realmKeys.status,
+      ],
       name: 'realm_public_keys_realm_key_fk',
-    }).onDelete('cascade'),
+    })
+      .onDelete('cascade')
+      .onUpdate('cascade'),
     check('realm_public_keys_public_jwk_object', sql`jsonb_typeof(${t.publicJwk}) = 'object'`),
+    // A JWK must name its key type (RFC 7517 §4.1), and `oct` is a symmetric
+    // key, whose only value is the secret itself (RFC 7518 §6.4).
+    check(
+      'realm_public_keys_public_jwk_asymmetric',
+      sql`${t.publicJwk} ? 'kty' and ${t.publicJwk} ->> 'kty' <> 'oct'`
+    ),
     // The private members of every JWK key type: `d` (EC, OKP, RSA; RFC 7518
     // §6.2.2, RFC 8037 §2), the RSA CRT members and `oth` (RFC 7518 §6.3.2),
     // `k` (oct; RFC 7518 §6.4) and `priv` (AKP / ML-DSA; RFC 9964).
@@ -213,7 +248,19 @@ export const realmKeysRelations = relations(realmKeys, ({ one }) => ({
 
 export const realmPublicKeysRelations = relations(realmPublicKeys, ({ one }) => ({
   key: one(realmKeys, {
-    fields: [realmPublicKeys.realmId, realmPublicKeys.kid],
-    references: [realmKeys.realmId, realmKeys.kid],
+    fields: [
+      realmPublicKeys.realmId,
+      realmPublicKeys.kid,
+      realmPublicKeys.purpose,
+      realmPublicKeys.algorithm,
+      realmPublicKeys.status,
+    ],
+    references: [
+      realmKeys.realmId,
+      realmKeys.kid,
+      realmKeys.purpose,
+      realmKeys.algorithm,
+      realmKeys.status,
+    ],
   }),
 }));

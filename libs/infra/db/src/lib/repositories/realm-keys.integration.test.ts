@@ -349,6 +349,106 @@ describe('realm_keys integration (real Postgres)', () => {
       await expect(keys.findByKid(realmId, kid)).resolves.toBeUndefined();
     });
 
+    it.each([
+      ['an oct key', { kty: 'oct', alg: 'HS256' }],
+      ['no kty', { crv: 'Ed25519', x: PUBLIC_JWK.x }],
+    ])('refuses a public JWK with %s', async (_label, publicJwk) => {
+      const realmId = await seedRealm();
+
+      await expect(
+        pgError(keys.create({ key: keyRow(realmId, { publishAt: PUBLISH_AT }), publicJwk }))
+      ).resolves.toEqual({ code: '23514', constraint: 'realm_public_keys_public_jwk_asymmetric' });
+    });
+
+    it('create inside an outer transaction rolls back only its own rows', async () => {
+      if (!ctx) throw new Error('no ctx');
+      const realmId = await seedRealm();
+
+      await ctx.database.db.transaction(async (tx) => {
+        await expect(
+          keys.create(
+            {
+              key: keyRow(realmId, { kid: 'refused', publishAt: PUBLISH_AT }),
+              publicJwk: { ...PUBLIC_JWK, d: 'secret' },
+            },
+            tx
+          )
+        ).rejects.toBeDefined();
+        // The savepoint rolled back; the outer transaction is still usable.
+        await keys.create(
+          { key: keyRow(realmId, { kid: 'kept', publishAt: PUBLISH_AT }), publicJwk: PUBLIC_JWK },
+          tx
+        );
+      });
+
+      const { rows } = await pool().query(
+        `SELECT k.kid, p.kid AS public_kid
+           FROM realm_keys k LEFT JOIN realm_public_keys p USING (realm_id, kid)
+          ORDER BY k.kid`
+      );
+      expect(rows).toEqual([{ kid: 'kept', public_kid: 'kept' }]);
+    });
+    it('follows a status change on the key row, compromised included', async () => {
+      const realmId = await seedRealm();
+      const key = await keys.create({
+        key: keyRow(realmId, { status: 'next' as const, publishAt: PUBLISH_AT }),
+        publicJwk: PUBLIC_JWK,
+      });
+      const publicStatus = async () =>
+        (await pool().query(`SELECT status FROM realm_public_keys WHERE kid = $1`, [key.kid]))
+          .rows[0].status;
+
+      await pool().query(`UPDATE realm_keys SET status = 'active' WHERE id = $1`, [key.id]);
+      expect(await publicStatus()).toBe('active');
+
+      await pool().query(
+        `UPDATE realm_keys SET status = 'compromised', compromised_at = $2 WHERE id = $1`,
+        [key.id, PUBLISH_AT + 1]
+      );
+      expect(await publicStatus()).toBe('compromised');
+    });
+
+    it('refuses a public row whose status, purpose or algorithm differs from the key row', async () => {
+      const realmId = await seedRealm();
+      const key = await keys.create({
+        key: keyRow(realmId, { publishAt: PUBLISH_AT }),
+        publicJwk: PUBLIC_JWK,
+      });
+
+      // Changing the copy alone, e.g. un-compromising a key in the JWKS.
+      await expect(
+        pgError(
+          pool().query(`UPDATE realm_public_keys SET status = 'retired' WHERE kid = $1`, [key.kid])
+        )
+      ).resolves.toEqual({ code: '23503', constraint: 'realm_public_keys_realm_key_fk' });
+
+      await pool().query(`DELETE FROM realm_public_keys WHERE kid = $1`, [key.kid]);
+      for (const mismatch of [
+        { purpose: 'token_signing', algorithm: 'EdDSA', status: 'next' },
+        { purpose: 'event_signing', algorithm: 'EdDSA', status: 'active' },
+        { purpose: 'token_signing', algorithm: 'ES256', status: 'active' },
+      ]) {
+        await expect(
+          pgError(
+            pool().query(
+              `INSERT INTO realm_public_keys
+                 (realm_id, kid, purpose, algorithm, status, public_jwk, publish_at)
+               VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+              [
+                realmId,
+                key.kid,
+                mismatch.purpose,
+                mismatch.algorithm,
+                mismatch.status,
+                PUBLIC_JWK,
+                PUBLISH_AT,
+              ]
+            )
+          )
+        ).resolves.toEqual({ code: '23503', constraint: 'realm_public_keys_realm_key_fk' });
+      }
+    });
+
     it('refuses a public row with no key behind it', async () => {
       const realmId = await seedRealm();
 

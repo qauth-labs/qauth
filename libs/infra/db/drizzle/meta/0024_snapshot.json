@@ -1,5 +1,5 @@
 {
-  "id": "99640561-d295-4c9c-8bef-b130a433309a",
+  "id": "ca7e6695-5f4e-4378-895a-537f8a8dc99e",
   "prevId": "65d85638-795d-4458-8d47-3f978190e470",
   "version": "7",
   "dialect": "postgresql",
@@ -1720,6 +1720,11 @@
           "name": "realm_keys_realm_id_kid_unique",
           "nullsNotDistinct": false,
           "columns": ["realm_id", "kid"]
+        },
+        "realm_keys_public_mirror_unique": {
+          "name": "realm_keys_public_mirror_unique",
+          "nullsNotDistinct": false,
+          "columns": ["realm_id", "kid", "purpose", "algorithm", "status"]
         }
       },
       "policies": {},
@@ -1799,10 +1804,10 @@
           "name": "realm_public_keys_realm_key_fk",
           "tableFrom": "realm_public_keys",
           "tableTo": "realm_keys",
-          "columnsFrom": ["realm_id", "kid"],
-          "columnsTo": ["realm_id", "kid"],
+          "columnsFrom": ["realm_id", "kid", "purpose", "algorithm", "status"],
+          "columnsTo": ["realm_id", "kid", "purpose", "algorithm", "status"],
           "onDelete": "cascade",
-          "onUpdate": "no action"
+          "onUpdate": "cascade"
         }
       },
       "compositePrimaryKeys": {
@@ -1817,6 +1822,10 @@
         "realm_public_keys_public_jwk_object": {
           "name": "realm_public_keys_public_jwk_object",
           "value": "jsonb_typeof(\"realm_public_keys\".\"public_jwk\") = 'object'"
+        },
+        "realm_public_keys_public_jwk_asymmetric": {
+          "name": "realm_public_keys_public_jwk_asymmetric",
+          "value": "\"realm_public_keys\".\"public_jwk\" ? 'kty' and \"realm_public_keys\".\"public_jwk\" ->> 'kty' <> 'oct'"
         },
         "realm_public_keys_public_jwk_no_private_members": {
           "name": "realm_public_keys_public_jwk_no_private_members",

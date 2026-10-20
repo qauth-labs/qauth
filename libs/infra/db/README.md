@@ -506,7 +506,7 @@ libs/infra/db/
 ### Key Tables (ADR-019 Decision 9)
 
 - **realm_keys**: Each realm's keys, one row per key, per purpose and (for webhook and upstream client-assertion keys) per `scope_id`. The material is stored envelope-encrypted (`ciphertext`, `iv`, `wrapped_dek`, with `kek_ref` naming the KEK and `aad_version` the associated-data layout). `status` is `next`, `active`, `retired` or `compromised`; a partial unique index allows one `active` key per realm, purpose, scope and algorithm, and `kid` is unique per realm. Only the signer's database user may read it once the per-role grants (#498) are applied
-- **realm_public_keys**: The public JWK of every published key, keyed by `(realm_id, kid)` and referencing its `realm_keys` row. Every role may read it for the JWKS and for verification. Symmetric purposes have no row here, and a CHECK refuses private JWK members
+- **realm_public_keys**: The public JWK of every published key, keyed by `(realm_id, kid)`. Its foreign key to the `realm_keys` row covers `purpose`, `algorithm` and `status` with `ON UPDATE CASCADE`, so a status change on the key row (a compromise included) reaches the public row in the same statement; change the status on `realm_keys` only. Every role may read it for the JWKS and for verification. Symmetric purposes have no row here: CHECKs require a `kty` other than `oct` and refuse private JWK members
 
 ### Additional Tables
 
