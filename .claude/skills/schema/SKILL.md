@@ -92,7 +92,11 @@ On email verification (one transaction): mark the token used, set
   verification signal); omitted together with `email` otherwise. The
   email-present-plus-verified-false shape no longer exists.
 - `name` — derived from `users.first_name` + `users.last_name` (omitted when
-  both are empty, never an empty string).
+  both are empty, never an empty string). Released only when the `profile`
+  SCOPE was granted, in the ID token (since #755) and at userinfo; both call
+  `resolveProfileClaimsForScopes`
+  (`apps/auth-server/src/app/helpers/profile-claims.ts`). Access tokens never
+  carry it.
 
 > The login-time `REQUIRE_VERIFIED_ACCOUNT` gate (F-08, default `true`) is a
 > SEPARATE control: it blocks logins by an unverified account pre-token, with

@@ -1262,7 +1262,7 @@ describe('POST /oauth/token route — authorization_code grant', () => {
     const { fastify, ctx, client, user, authCode } = setupAuthCodeStub();
     (fastify.repositories.authorizationCodes.findByCode as unknown as Mock).mockResolvedValue({
       ...authCode,
-      scopes: ['openid', 'email'],
+      scopes: ['openid', 'email', 'profile'],
       nonce: 'n-0S6_WzA2Mj',
     });
     await tokenRoute(fastify);
@@ -1273,7 +1273,8 @@ describe('POST /oauth/token route — authorization_code grant', () => {
     const result = await handler(baseRequest(), reply);
 
     // ID token `aud` is the client_id (NOT the resource audience). Nonce from
-    // the authorization request is echoed; name derives from first/last name.
+    // the authorization request is echoed; name derives from first/last name
+    // under the `profile` scope.
     expect(fastify.jwtUtils.signIdToken).toHaveBeenCalledWith(
       expect.objectContaining({
         sub: user.id,
@@ -1287,9 +1288,42 @@ describe('POST /oauth/token route — authorization_code grant', () => {
     expect(result).toMatchObject({
       access_token: 'signed.jwt.token',
       id_token: 'signed.id.token',
-      scope: 'openid email',
+      scope: 'openid email profile',
     });
   });
+
+  it.each([
+    ['openid alone', ['openid']],
+    ['openid email', ['openid', 'email']],
+  ])(
+    'omits name from the id_token under %s although the user has one — BREAKING #755',
+    async (_label, scopes) => {
+      const { fastify, ctx, authCode } = setupAuthCodeStub();
+      // The stub user is "Ada Lovelace", so only the scope gate can explain
+      // the omission (OIDC Core §5.4: `name` is a `profile` claim).
+      (fastify.repositories.authorizationCodes.findByCode as unknown as Mock).mockResolvedValue({
+        ...authCode,
+        scopes,
+      });
+      await tokenRoute(fastify);
+      const handler = ctx.handler;
+      if (!handler) throw new Error('Handler missing');
+
+      const result = await handler(baseRequest(), createReply());
+
+      expect(result).toHaveProperty('id_token', 'signed.id.token');
+      const idClaims = (fastify.jwtUtils.signIdToken as unknown as Mock).mock.calls[0][0] as Record<
+        string,
+        unknown
+      >;
+      // Absent, not undefined-valued: the key itself is missing.
+      expect('name' in idClaims).toBe(false);
+      // The access token never carries `name`, under any scope.
+      const accessClaims = (fastify.jwtUtils.signAccessToken as unknown as Mock).mock
+        .calls[0][0] as Record<string, unknown>;
+      expect('name' in accessClaims).toBe(false);
+    }
+  );
 
   it('threads the code auth_time (epoch ms) into the id_token (OIDC Core §2)', async () => {
     const { fastify, ctx, authCode } = setupAuthCodeStub();
@@ -1584,9 +1618,10 @@ describe('POST /oauth/token route — authorization_code grant', () => {
       firstName: null,
       lastName: null,
     });
+    // `profile` IS granted, so only the missing name can explain the omission.
     (fastify.repositories.authorizationCodes.findByCode as unknown as Mock).mockResolvedValue({
       ...authCode,
-      scopes: ['openid'],
+      scopes: ['openid', 'profile'],
     });
     await tokenRoute(fastify);
     const handler = ctx.handler;
@@ -1595,8 +1630,11 @@ describe('POST /oauth/token route — authorization_code grant', () => {
     const reply = createReply();
     await handler(baseRequest(), reply);
 
-    const call = (fastify.jwtUtils.signIdToken as unknown as Mock).mock.calls[0][0];
-    expect(call.name).toBeUndefined();
+    const call = (fastify.jwtUtils.signIdToken as unknown as Mock).mock.calls[0][0] as Record<
+      string,
+      unknown
+    >;
+    expect('name' in call).toBe(false);
   });
 
   it('rejects when authorization code was issued to a different client', async () => {
