@@ -336,8 +336,9 @@ export interface RefreshTokensRepository {
     tx?: DbClient
   ): Promise<number>;
   /**
-   * Delete expired tokens
-   * Returns count of deleted tokens
+   * Delete the families whose every token has expired, whole. A rotated token
+   * is kept while its family has a live token, so replay detection lasts as
+   * long as the family. Returns count of deleted tokens.
    */
   deleteExpired(tx?: DbClient): Promise<number>;
 }

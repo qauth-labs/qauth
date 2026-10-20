@@ -59,13 +59,14 @@ beforeEach(() => {
   // Both names of the verified-account gate are cleared here, because a case
   // that leaves an invalid value behind would fail every later import. The
   // private-address switches too: one left at `true` fails every later
-  // production import.
+  // production import. And DB_POOL_MAX, which a pool of one refuses.
   setEnv({
     NODE_ENV: 'development',
     REQUIRE_VERIFIED_ACCOUNT: undefined,
     REQUIRE_EMAIL_VERIFIED: undefined,
     CIMD_ALLOW_PRIVATE_ADDRESSES: undefined,
     ID_JAG_ALLOW_PRIVATE_ADDRESSES: undefined,
+    DB_POOL_MAX: undefined,
   });
 });
 
@@ -725,5 +726,36 @@ describe('OID4VP_ATTESTING_ISSUERS reaches the app env (#308/#379)', () => {
     expect(mod.env.OID4VP_ATTESTING_ISSUERS).toEqual({
       'https://pid.issuer.example': 'iso_18045_high',
     });
+  });
+});
+
+/**
+ * The pool floor of the background jobs (#452). A running job holds one pool
+ * connection for its advisory lock, so a pool of one would starve requests
+ * while it runs. The boot refuses it and says why, in every NODE_ENV.
+ */
+describe('DB_POOL_MAX leaves room for the job lock (#452)', () => {
+  it.each(['development', 'production'] as const)(
+    'DB_POOL_MAX=1 fails the boot when NODE_ENV=%s',
+    async (nodeEnv) => {
+      setEnv({ NODE_ENV: nodeEnv, SESSION_COOKIE_SECRET: PROD_SECRET, DB_POOL_MAX: '1' });
+
+      const boot = import('./env');
+      await expect(boot).rejects.toThrow('DB_POOL_MAX must be at least 2');
+      await expect(boot).rejects.toThrow('holds one pool connection for its lock');
+    }
+  );
+
+  it.each(['2', '20'])('DB_POOL_MAX=%s boots', async (value) => {
+    setEnv({ DB_POOL_MAX: value });
+    const mod = await import('./env');
+
+    expect(mod.env.DB_POOL_MAX).toBe(Number(value));
+  });
+
+  it('the default boots', async () => {
+    const mod = await import('./env');
+
+    expect(mod.env.DB_POOL_MAX).toBe(20);
   });
 });

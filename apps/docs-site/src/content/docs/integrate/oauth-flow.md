@@ -280,7 +280,9 @@ verifies the signature against the JWKS and checks `iss`, `exp`, `aud`, and scop
 
 Renew an access token without re-prompting the user. QAuth **rotates** the
 refresh token on every use and detects replay (RFC 9700 §2.2.2): reusing a
-already-rotated token revokes the entire token family.
+already-rotated token revokes the entire token family. That holds for as long
+as the family has a live token: the hourly `purge-expired` job deletes a family
+only once its newest token has expired, rotated tokens included.
 
 ```bash
 curl -s -X POST http://localhost:3000/oauth/token \

@@ -27,6 +27,15 @@ const PRIVATE_ADDRESS_SWITCHES = [
 ] as const;
 
 /**
+ * The smallest `DB_POOL_MAX` the background jobs allow (#452). A running job
+ * holds one pool connection for its advisory lock while its own queries take
+ * others, so a pool of one would leave requests waiting until the lock is
+ * released. Every node runs the jobs today; once roles land (#495), the rule
+ * applies to a node whose roles hold a job.
+ */
+export const JOBS_MIN_DB_POOL_MAX = 2;
+
+/**
  * Auth server environment schema
  * Composes all required schemas and adds app-specific configuration
  *
@@ -145,5 +154,14 @@ export const envSchema = z
           });
         }
       }
+    }
+
+    // #452 — the job lock takes a pool connection of its own.
+    if (env.DB_POOL_MAX < JOBS_MIN_DB_POOL_MAX) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['DB_POOL_MAX'],
+        message: `DB_POOL_MAX must be at least ${JOBS_MIN_DB_POOL_MAX}. A background job holds one pool connection for its lock while it runs, so with ${env.DB_POOL_MAX} requests would wait until the job ends.`,
+      });
     }
   });

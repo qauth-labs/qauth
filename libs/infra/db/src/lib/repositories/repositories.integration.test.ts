@@ -446,6 +446,61 @@ describe('repository integration (real Postgres)', () => {
       expect(otherRow[0].revoked).toBe(false);
     });
 
+    it('deleteExpired deletes a family whole once its newest token has expired, and keeps every family with a live token', async () => {
+      const realm = await seedRealm();
+      const user = await seedUser(realm.id);
+      const client = await seedClient(realm.id);
+      const tokens = createRefreshTokensRepository(db().database.db);
+      const past = Date.now() - 60_000;
+      const future = Date.now() + 600_000;
+      const family = async (rows: ReadonlyArray<readonly [string, number, boolean]>) => {
+        let familyId: string | undefined;
+        for (const [tokenHash, expiresAt, revoked] of rows) {
+          const row = await seedToken(user.id, client.id, tokenHash, familyId as string, {
+            familyId,
+            expiresAt,
+            revoked,
+          });
+          familyId = row.familyId;
+        }
+        return familyId as string;
+      };
+
+      // Every token expired: the family goes, rotated ancestor included.
+      const ended = await family([
+        ['a'.repeat(64), past - 60_000, true],
+        ['b'.repeat(64), past, false],
+      ]);
+      // The newest token is live: its expired, rotated ancestor stays, so a
+      // replay of the ancestor is still found revoked and revokes the family.
+      const live = await family([
+        ['c'.repeat(64), past, true],
+        ['d'.repeat(64), future, false],
+      ]);
+      // A revoked family follows the same rule while its newest row is unexpired.
+      const revoked = await family([
+        ['e'.repeat(64), past, true],
+        ['f'.repeat(64), future, true],
+      ]);
+
+      expect(await tokens.deleteExpired()).toBe(2);
+
+      const left = async (familyId: string) =>
+        (
+          await db()
+            .database.db.select({ tokenHash: refreshTokens.tokenHash })
+            .from(refreshTokens)
+            .where(eq(refreshTokens.familyId, familyId))
+        )
+          .map((r) => r.tokenHash)
+          .sort();
+      expect(await left(ended)).toEqual([]);
+      expect(await left(live)).toEqual(['c'.repeat(64), 'd'.repeat(64)]);
+      expect(await left(revoked)).toEqual(['e'.repeat(64), 'f'.repeat(64)]);
+      // The kept ancestor is what replay detection reads.
+      expect((await tokens.findByTokenHashIncludingRevoked('c'.repeat(64)))?.revoked).toBe(true);
+    });
+
     it('revokeFamily preserves the earliest revokedReason (only touches active rows)', async () => {
       const realm = await seedRealm();
       const user = await seedUser(realm.id);

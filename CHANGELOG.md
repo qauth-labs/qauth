@@ -21,6 +21,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The auth-server logs a warning at boot for each experimental key or value that
   is set. The first is `OID4VP_VERIFIER_PROFILE=oid4vp-1.0-base`, which ADR-018
   §4 marks experimental; the setting works as before.
+- **Background jobs** ([#452], ADR-019 Decision 8). The auth-server runs
+  periodic jobs in-process. A Postgres advisory lock keeps each job to one node
+  per interval when several nodes share the database, and a job whose node dies
+  moves to another node at the next interval. Runs are logged and counted in
+  `qauth_job_runs_total`, and on `SIGTERM` a running job is told to stop and
+  given up to 5 seconds. The first job, `purge-expired`, runs hourly and deletes expired
+  authorization codes, refresh tokens, email verification tokens and OID4VP
+  request states, which nothing removed before. Refresh tokens are deleted by
+  family, once the family's newest token has expired, so replaying a rotated
+  token still revokes its family for as long as the family has a live token.
+  The docs site's observability page (`operate/observability`) describes the
+  jobs.
 
 ### Changed
 
@@ -30,6 +42,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and the two names set to different values fail the boot, naming both.
   `resolveRequireVerifiedAccount` is removed from `@qauth-labs/server-config`;
   `readConfiguredEnv` and `applyKeyAliases` replace it.
+
+- **BREAKING**: the auth-server refuses to start when `DB_POOL_MAX` is below 2
+  ([#452]). A running background job holds one pool connection for its lock,
+  so a pool of one would leave requests waiting until the job ends. The error
+  names the variable.
+
+  **Action for operators**: set `DB_POOL_MAX` to 2 or more, or leave it unset
+  (the default is 20).
 
 - **BREAKING (security)**: the auth-server refuses to start when `NODE_ENV` is
   `production` and `CIMD_ALLOW_PRIVATE_ADDRESSES` or
@@ -71,6 +91,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 [#435]: https://github.com/qauth-labs/qauth/issues/435
 [#449]: https://github.com/qauth-labs/qauth/issues/449
+[#452]: https://github.com/qauth-labs/qauth/issues/452
 [#754]: https://github.com/qauth-labs/qauth/issues/754
 [#755]: https://github.com/qauth-labs/qauth/issues/755
 

@@ -19,7 +19,7 @@ export const STORAGE_KEYS = defineKeys([
     owner: 'storage',
     default: '20',
     since: '0.1.0',
-    docs: 'The largest number of connections in the Postgres pool.',
+    docs: 'The largest number of connections in the Postgres pool, at least 2 for the auth server, whose running jobs hold one for their lock.',
   },
   {
     name: 'DB_POOL_MIN',

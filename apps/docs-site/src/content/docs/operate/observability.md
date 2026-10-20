@@ -19,6 +19,7 @@ and recommended alerting.
 | **Auth-event logging**    | Structured `authEvent` log lines for login/register/logout/token |
 | **Failed-login tracking** | Redis-backed per-identifier counters with temporary lockout      |
 | **Metrics**               | `GET /metrics` in Prometheus text format via `prom-client`       |
+| **Background jobs**       | Periodic jobs, one node at a time under a Postgres advisory lock |
 | **Alerting**              | Prometheus Alertmanager rules (see below)                        |
 
 ## Structured Logging
@@ -149,6 +150,7 @@ process/runtime metrics plus QAuth auth counters:
 | ---------------------------- | ------- | -------------------- | --------------------------------- |
 | `qauth_login_attempts_total` | counter | `result`, `reason`   | Login outcomes (success/failure). |
 | `qauth_tokens_issued_total`  | counter | `type`, `grant_type` | Tokens issued by type and grant.  |
+| `qauth_job_runs_total`       | counter | `job`, `result`      | Background job runs by outcome.   |
 
 Label values, as emitted today. The plugin
 (`apps/auth-server/src/app/plugins/metrics.ts`) does not constrain them, so treat
@@ -164,6 +166,8 @@ each list as **open** — a new call site can add a value without a schema chang
   the token-exchange grant). `grant_type` is e.g. `password`,
   `authorization_code`, `refresh_token`, `client_credentials`, `token-exchange`,
   or `jwt-bearer`.
+- `job` is a job's name, e.g. `purge-expired`. `result` is `success`, `failure`
+  or `timeout`; see [Background jobs](#background-jobs).
 
 The endpoint is **unauthenticated and rate-limit-exempt** (so a scraper can poll
 it frequently). Restrict access at the reverse proxy / network layer (e.g. to a
@@ -193,6 +197,63 @@ scrape_configs:
     static_configs:
       - targets: ['auth-server:3000']
 ```
+
+## Background Jobs
+
+The auth server runs periodic jobs in its own process
+(`apps/auth-server/src/app/jobs/`). Every node of a deployment runs the same
+jobs, and each job runs on one node at a time. The exception is a run that keeps
+going past its time limit (below): it can overlap the next node's run, which is
+why every job must be safe to repeat.
+
+| Job             | Interval | Time limit | What it does                                                                                                                                     |
+| --------------- | -------- | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `purge-expired` | 1 hour   | 5 minutes  | Deletes expired authorization codes, email verification tokens and OID4VP requests, and each refresh-token family whose every token has expired. |
+
+How a run is placed:
+
+- Runs are aligned to the interval on the wall clock: `purge-expired` runs once
+  per clock hour. Each node wakes at a random point in the first 10% of the
+  interval, at most 5 minutes in, so the nodes do not query the database
+  together.
+- The first node to wake takes a Postgres advisory lock named after the job, on
+  a connection of its own, and runs the job. It keeps the lock until twice that
+  wake window has passed (10 minutes past the hour for `purge-expired`), so the
+  nodes that wake after it skip that interval. The second window allows for
+  clock skew between nodes: keep their clocks synchronised (NTP). A node that
+  only gets the lock after that time skips the interval too.
+- The lock's connection comes from the server's pool (`DB_POOL_MAX`, 20 by
+  default). Each job holds one from the moment it takes the lock until it
+  releases it, and the job's own queries use others. A node that finds the lock
+  held gives its connection back at once. The server refuses to start with
+  `DB_POOL_MAX` below 2, where the lock would leave no connection for requests.
+- The lock is a session-level lock, so a connection pooler in transaction mode
+  between QAuth and Postgres (for example PgBouncer with
+  `pool_mode = transaction`) cannot hold it.
+
+What happens when a run goes wrong:
+
+- A run that fails or reaches its time limit is logged and counted, and runs
+  again at the next interval. There is no retry queue: every job is safe to
+  repeat. A run is told to stop at its limit; a database statement it has
+  already sent still runs to its end in Postgres.
+- When a node dies or loses its database connection during a run, Postgres
+  drops the lock, and another node takes the job at its next interval. Postgres
+  notices at once when the node's process exits. A host that vanishes without
+  closing its connection keeps the lock until the database server's TCP
+  keepalive (`tcp_keepalives_idle` and the settings next to it) gives up on the
+  connection.
+- On `SIGTERM` or `SIGINT` the server tells running jobs to stop and waits up to
+  5 seconds for them. Then it closes the database pool, which waits for a
+  statement a job has already sent, so shutdown can take longer than that.
+
+Each log line carries the job's name as `job`: `job run started`,
+`job run finished` with `durationMs`, `job run failed` with `err`, and
+`job run exceeded its time limit and was stopped`. A node that skips a run
+because another node holds the lock logs `job run skipped: another node holds
+its lock` at `debug`. `qauth_job_runs_total` counts the runs; a skipped run is
+not counted, and a lock that cannot be taken, for example because the database
+is unreachable, counts as a `failure`.
 
 ## Alerting (Optional)
 
