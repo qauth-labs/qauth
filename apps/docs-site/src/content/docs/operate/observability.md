@@ -202,7 +202,9 @@ scrape_configs:
 
 The auth server runs periodic jobs in its own process
 (`apps/auth-server/src/app/jobs/`). Every node of a deployment runs the same
-jobs, and each job runs on at most one node at a time.
+jobs, and each job runs on one node at a time. The exception is a run that keeps
+going past its time limit (below): it can overlap the next node's run, which is
+why every job must be safe to repeat.
 
 | Job             | Interval | Time limit | What it does                                                                                        |
 | --------------- | -------- | ---------- | --------------------------------------------------------------------------------------------------- |
@@ -218,7 +220,12 @@ How a run is placed:
   a connection of its own, and runs the job. It keeps the lock until twice that
   wake window has passed (10 minutes past the hour for `purge-expired`), so the
   nodes that wake after it skip that interval. The second window allows for
-  clock skew between nodes: keep their clocks synchronised (NTP).
+  clock skew between nodes: keep their clocks synchronised (NTP). A node that
+  only gets the lock after that time skips the interval too.
+- The lock's connection comes from the server's pool (`DB_POOL_MAX`, 20 by
+  default). Each job holds one from the moment it takes the lock until it
+  releases it, and the job's own queries use others. A node that finds the lock
+  held gives its connection back at once.
 - The lock is a session-level lock, so a connection pooler in transaction mode
   between QAuth and Postgres (for example PgBouncer with
   `pool_mode = transaction`) cannot hold it.
@@ -227,18 +234,25 @@ What happens when a run goes wrong:
 
 - A run that fails or reaches its time limit is logged and counted, and runs
   again at the next interval. There is no retry queue: every job is safe to
-  repeat.
+  repeat. A run is told to stop at its limit; a database statement it has
+  already sent still runs to its end in Postgres.
 - When a node dies or loses its database connection during a run, Postgres
-  drops the lock, and another node takes the job at its next interval.
+  drops the lock, and another node takes the job at its next interval. Postgres
+  notices at once when the node's process exits. A host that vanishes without
+  closing its connection keeps the lock until the database server's TCP
+  keepalive (`tcp_keepalives_idle` and the settings next to it) gives up on the
+  connection.
 - On `SIGTERM` or `SIGINT` the server tells running jobs to stop and waits up to
-  5 seconds for them before it exits.
+  5 seconds for them. Then it closes the database pool, which waits for a
+  statement a job has already sent, so shutdown can take longer than that.
 
 Each log line carries the job's name as `job`: `job run started`,
 `job run finished` with `durationMs`, `job run failed` with `err`, and
 `job run exceeded its time limit and was stopped`. A node that skips a run
 because another node holds the lock logs `job run skipped: another node holds
 its lock` at `debug`. `qauth_job_runs_total` counts the runs; a skipped run is
-not counted.
+not counted, and a lock that cannot be taken, for example because the database
+is unreachable, counts as a `failure`.
 
 ## Alerting (Optional)
 

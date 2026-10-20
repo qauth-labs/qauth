@@ -25,8 +25,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   periodic jobs in-process. A Postgres advisory lock keeps each job to one node
   per interval when several nodes share the database, and a job whose node dies
   moves to another node at the next interval. Runs are logged and counted in
-  `qauth_job_runs_total`, and `SIGTERM` waits up to 5 seconds for a running
-  job. The first job, `purge-expired`, runs hourly and deletes expired
+  `qauth_job_runs_total`, and on `SIGTERM` a running job is told to stop and
+  given up to 5 seconds. The first job, `purge-expired`, runs hourly and deletes expired
   authorization codes, refresh tokens, email verification tokens and OID4VP
   request states, which nothing removed before. A rotated refresh token is now
   deleted once its own lifetime has ended, so replaying it after that is

@@ -26,7 +26,8 @@ export interface AppMetrics {
   /**
    * Background job runs (ADR-019 Decision 8). Labelled by `job` (the job's
    * name) and `result` = `success` | `failure` | `timeout`. A run skipped
-   * because another node holds the job's lock is not counted.
+   * because another node holds the job's lock is not counted; a lock that
+   * cannot be taken counts as a `failure`.
    */
   jobRuns: Counter<'job' | 'result'>;
 }
