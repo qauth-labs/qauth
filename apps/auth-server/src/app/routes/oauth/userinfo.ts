@@ -1,4 +1,4 @@
-import { InvalidRequestError, JWTInvalidError, NotFoundError } from '@qauth-labs/shared-errors';
+import { InvalidRequestError, JWTInvalidError } from '@qauth-labs/shared-errors';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { ZodTypeProvider } from 'fastify-type-provider-zod';
 
@@ -50,6 +50,23 @@ function isAddressedToUserinfo(
 }
 
 /**
+ * Whether a verified access token names an end-user as its subject (#754).
+ *
+ * The `client_credentials` grant mints `sub = client_id` (`handleClientCredentials`
+ * in `token.ts`): the client acts as itself and there is no end-user. Every
+ * other grant sets `sub` to a `users.id` and `client_id` to the client, so
+ * `sub === client_id` is the positive mark of a machine token — the signal
+ * introspection already uses. The UUID shape of `sub` cannot decide it: a
+ * dynamically registered client's id is a random UUID.
+ *
+ * Such a token passes {@link isAddressedToUserinfo} whenever its `aud` fell
+ * back to its own `client_id`, which is why this is checked separately.
+ */
+function hasUserSubject(payload: { sub: string; clientId?: string }): boolean {
+  return payload.sub !== payload.clientId;
+}
+
+/**
  * Shared userinfo handler for GET and POST (OIDC Core §5.3.1: the userinfo
  * endpoint MUST support both). By the time this runs, the access token has
  * already been verified by a preHandler and its claims are on
@@ -77,13 +94,23 @@ async function handleUserinfo(fastify: FastifyInstance, request: FastifyRequest)
       throw new JWTInvalidError('Access token audience does not include the userinfo endpoint');
     }
 
-    userId = payload.sub;
-
-    const user = await fastify.repositories.users.findById(userId);
-
-    if (!user) {
-      throw new NotFoundError('User', userId);
+    // A token with no end-user has no claims to return. Refused before the
+    // user lookup, so a `client_id` is never read as a `users.id` (#754; OIDC
+    // Core §5.3.3, RFC 6750 §3.1 `invalid_token`).
+    if (!hasUserSubject(payload)) {
+      throw new JWTInvalidError('Access token subject is not a user');
     }
+
+    const user = await fastify.repositories.users.findById(payload.sub);
+
+    // A subject that names no user — deleted since the token was minted — is
+    // the same refusal: the token is not valid for this endpoint any more.
+    // RFC 6750 §3.1 defines no "not found" for a protected resource.
+    if (!user) {
+      throw new JWTInvalidError('Access token subject is not a user');
+    }
+
+    userId = user.id;
 
     // A token outlives the login that minted it; a user disabled since gets
     // no claims, as introspection reports the token inactive and every grant
@@ -140,8 +167,13 @@ async function handleUserinfo(fastify: FastifyInstance, request: FastifyRequest)
     // aligned with the route's response schema across both GET and POST.
     return responseBody;
   } catch (error) {
+    // `audit_logs.user_id` is a uuid referencing `users`: only a subject the
+    // lookup above confirmed goes there. Any other token subject — a
+    // `client_id`, a deleted user's id — would fail the insert and turn the
+    // refusal into a 500, so it is kept in `metadata.tokenSub` instead.
+    const tokenSub = request.jwtPayload?.sub;
     await fastify.repositories.auditLogs.create({
-      userId: userId,
+      userId,
       oauthClientId: null,
       event: 'oauth.userinfo.failure',
       eventType: 'token',
@@ -150,6 +182,7 @@ async function handleUserinfo(fastify: FastifyInstance, request: FastifyRequest)
       userAgent: request.headers['user-agent'] || null,
       metadata: {
         error: error instanceof Error ? error.message : 'Unknown error',
+        ...(userId === null && tokenSub ? { tokenSub } : {}),
       },
     });
 
@@ -239,7 +272,7 @@ export default async function (fastify: FastifyInstance) {
       preHandler: fastify.requireJwt,
       schema: {
         description:
-          "OIDC userinfo endpoint (GET). Returns claims for the authenticated user. Requires a Bearer access token whose `aud` contains its own `client_id` or this endpoint's URL; a token for another resource server gets 401.",
+          "OIDC userinfo endpoint (GET). Returns claims for the authenticated user. Requires a Bearer access token whose `aud` contains its own `client_id` or this endpoint's URL; a token for another resource server gets 401, as does a token whose subject is not a user (a client_credentials token).",
         tags: ['OAuth', 'Userinfo'],
         security: [{ bearerAuth: [] }],
         response: {
@@ -264,7 +297,7 @@ export default async function (fastify: FastifyInstance) {
         resolveUserinfoTokenPreHandler(fastify, request, reply),
       schema: {
         description:
-          "OIDC userinfo endpoint (POST). Returns claims for the authenticated user. Accepts a Bearer access token in the Authorization header or a form-encoded access_token body parameter (RFC 6750 §2.2). The token's `aud` must contain its own `client_id` or this endpoint's URL; a token for another resource server gets 401.",
+          "OIDC userinfo endpoint (POST). Returns claims for the authenticated user. Accepts a Bearer access token in the Authorization header or a form-encoded access_token body parameter (RFC 6750 §2.2). The token's `aud` must contain its own `client_id` or this endpoint's URL; a token for another resource server gets 401, as does a token whose subject is not a user (a client_credentials token).",
         tags: ['OAuth', 'Userinfo'],
         security: [{ bearerAuth: [] }],
         response: {

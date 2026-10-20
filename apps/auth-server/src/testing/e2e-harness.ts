@@ -144,6 +144,16 @@ export function baseEnvironment(infra: E2eInfrastructure, jwt: PemKeyPair): Reco
   };
 }
 
+/** What {@link bootAuthServer} may vary beyond the environment. */
+export interface BootAuthServerOptions {
+  /**
+   * Receive the server's own log lines (pino NDJSON, level `warn` and up), for a
+   * suite that asserts what the server logged — e.g. that a refusal raised no
+   * database error. Without it the server is silent unless `E2E_DEBUG_LOG=1`.
+   */
+  readonly logStream?: { write(line: string): void };
+}
+
 /**
  * Boot the real auth-server under a given environment.
  *
@@ -152,7 +162,8 @@ export function baseEnvironment(infra: E2eInfrastructure, jwt: PemKeyPair): Reco
  * failure mode that would make the fail-closed suite pass for the wrong reason.
  */
 export async function bootAuthServer(
-  environment: Record<string, string>
+  environment: Record<string, string>,
+  options: BootAuthServerOptions = {}
 ): Promise<BootedAuthServer> {
   const vitest = await import('vitest');
 
@@ -174,7 +185,10 @@ export async function bootAuthServer(
   // is the only way to see WHY a uniform refusal was returned — the wire says
   // the same thing for every cause, by design.
   const server = Fastify({
-    logger: process.env['E2E_DEBUG_LOG'] === '1',
+    logger:
+      options.logStream !== undefined
+        ? { level: 'warn', stream: options.logStream }
+        : process.env['E2E_DEBUG_LOG'] === '1',
     routerOptions: { ignoreTrailingSlash: true },
   });
   server.setValidatorCompiler(validatorCompiler);
