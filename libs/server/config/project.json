@@ -16,7 +16,7 @@
         "{workspaceRoot}/.env.example",
         "{workspaceRoot}/.prettierrc",
         "{workspaceRoot}/apps/docs-site/src/content/docs/operate/configuration.md",
-        "{workspaceRoot}/apps/developer-portal/src/**/*.ts"
+        "{workspaceRoot}/apps/developer-portal/src/**/*.{ts,tsx}"
       ],
       "metadata": {
         "description": "Overrides the @nx/vitest-inferred target's `inputs`, which only cover this project's own files. The configuration key registry tests (src/lib/registry) read four things outside it: `.env.example` (every stable key appears there), the generated docs page `operate/configuration.md` (it must match the registry; `pnpm nx test server-config -- -u` rewrites it, formatted with the repo's Prettier config), and the developer portal's sources (every `process.env` read there is registered). Without them, editing one would leave this target's cache hash unchanged and replay a stale pass. Setting `inputs` REPLACES the inferred array, so the first six entries are the inferred defaults re-declared, with `prettier` added to the external dependencies."
