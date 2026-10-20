@@ -20,9 +20,11 @@ export type PurgeExpiredRepositories = Pick<
  * and OID4VP request states.
  *
  * Each table's own `deleteExpired` decides what has expired, so a row is gone
- * only once every read would refuse it anyway. An OID4VP request state, for
- * example, stays until its Response Code has expired too. Repeating the job
- * deletes nothing new, so a run cut short is simply finished by the next one.
+ * only once no read needs it. An OID4VP request state, for example, stays until
+ * its Response Code has expired too, and a refresh token stays until its whole
+ * family has expired, so a replay of a rotated token still revokes the family.
+ * Repeating the job deletes nothing new, so a run cut short is simply finished
+ * by the next one.
  *
  * Placed on the `api` role: the token endpoint is where codes and refresh
  * tokens are redeemed.

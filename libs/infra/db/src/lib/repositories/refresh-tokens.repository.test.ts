@@ -133,3 +133,23 @@ describe('refresh-token rotation lock', () => {
     }
   });
 });
+
+describe('refresh-token purge', () => {
+  it('deletes an expired token only when no token of its family is live', async () => {
+    const { db, queries } = createRecordingDb();
+
+    await createRefreshTokensRepository(db).deleteExpired();
+
+    const sql = texts(queries);
+    expect(sql).toHaveLength(1);
+    const [statement] = sql;
+    expect(statement.startsWith('delete from "refresh_tokens"')).toBe(true);
+    // The family test is correlated on family_id and asks for a live row,
+    // so a rotated token outlives its own expiry while its family is live.
+    expect(statement).toMatch(/not exists \(select 1 from "refresh_tokens" "live"/);
+    expect(statement).toContain('"live"."family_id" = "refresh_tokens"."family_id"');
+    expect(statement).toContain('"live"."expires_at" >=');
+    const [before, after] = queries[0].values;
+    expect(before).toBe(after);
+  });
+});

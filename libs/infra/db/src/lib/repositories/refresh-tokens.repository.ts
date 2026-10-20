@@ -1,5 +1,6 @@
 import { NotFoundError } from '@qauth-labs/shared-errors';
-import { and, eq, gt, lt, type SQL, sql } from 'drizzle-orm';
+import { and, eq, gt, gte, lt, notExists, type SQL, sql } from 'drizzle-orm';
+import { alias } from 'drizzle-orm/pg-core';
 
 import type { NewRefreshToken, RefreshToken, RefreshTokensRepository } from '../../types';
 import { DbClient } from '../db';
@@ -313,8 +314,14 @@ export function createRefreshTokensRepository(defaultDb: DbClient): RefreshToken
     },
 
     /**
-     * Delete expired tokens
-     * Useful for cleanup operations
+     * Delete the families whose every token has expired.
+     *
+     * A family is deleted whole, and only once its newest token has expired.
+     * A rotated token stays in place while any token of its family is live,
+     * so a replay of it is still found revoked and still revokes the family
+     * (RFC 9700 §4.14.2): deleting it at its own expiry would turn that
+     * replay into an unknown token and leave the family alive. Revoked
+     * families follow the same rule.
      *
      * @param tx - Optional transaction client
      * @returns Count of deleted tokens
@@ -322,10 +329,21 @@ export function createRefreshTokensRepository(defaultDb: DbClient): RefreshToken
     async deleteExpired(tx?: DbClient): Promise<number> {
       const invoker = tx ?? defaultDb;
       const now = Date.now();
+      const live = alias(refreshTokens, 'live');
 
       const deleted = await invoker
         .delete(refreshTokens)
-        .where(lt(refreshTokens.expiresAt, now))
+        .where(
+          and(
+            lt(refreshTokens.expiresAt, now),
+            notExists(
+              invoker
+                .select({ one: sql`1` })
+                .from(live)
+                .where(and(eq(live.familyId, refreshTokens.familyId), gte(live.expiresAt, now)))
+            )
+          )
+        )
         .returning({ id: refreshTokens.id });
 
       return deleted.length;

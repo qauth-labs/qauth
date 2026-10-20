@@ -206,9 +206,9 @@ jobs, and each job runs on one node at a time. The exception is a run that keeps
 going past its time limit (below): it can overlap the next node's run, which is
 why every job must be safe to repeat.
 
-| Job             | Interval | Time limit | What it does                                                                                        |
-| --------------- | -------- | ---------- | --------------------------------------------------------------------------------------------------- |
-| `purge-expired` | 1 hour   | 5 minutes  | Deletes expired authorization codes, refresh tokens, email verification tokens and OID4VP requests. |
+| Job             | Interval | Time limit | What it does                                                                                                                                     |
+| --------------- | -------- | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `purge-expired` | 1 hour   | 5 minutes  | Deletes expired authorization codes, email verification tokens and OID4VP requests, and each refresh-token family whose every token has expired. |
 
 How a run is placed:
 

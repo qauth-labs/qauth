@@ -1,4 +1,4 @@
-import { randomBytes } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 
 import { databasePlugin } from '@qauth-labs/fastify-plugin-db';
 import {
@@ -251,7 +251,7 @@ describe('job runner on a real Postgres', () => {
       return { realm, user, credential, client };
     }
 
-    it('removes the expired rows of the four tables and leaves the live ones', async () => {
+    it('removes the expired rows of the four tables, keeping each refresh-token family that has a live token', async () => {
       const { repositories, dbPool } = database();
       const { realm, user, credential, client } = await seed();
       const now = Date.now();
@@ -273,14 +273,29 @@ describe('job runner on a real Postgres', () => {
           expiresAt,
         });
       }
-      const refresh = { expired: hash(), live: hash(), revokedLive: hash() };
-      for (const [tokenHash, expiresAt, revoked] of [
-        [refresh.expired, past, false],
-        [refresh.live, future, false],
-        [refresh.revokedLive, future, true],
+      // Refresh tokens are purged by family: a family goes whole once its
+      // newest token has expired, and a rotated token stays while its family
+      // has a live token, so replaying it still revokes the family.
+      const family = { ended: randomUUID(), live: randomUUID(), revoked: randomUUID() };
+      const refresh = {
+        endedRotated: hash(),
+        endedNewest: hash(),
+        liveRotated: hash(),
+        liveNewest: hash(),
+        revokedRotated: hash(),
+        revokedNewest: hash(),
+      };
+      for (const [tokenHash, familyId, expiresAt, revoked] of [
+        [refresh.endedRotated, family.ended, past - 60_000, true],
+        [refresh.endedNewest, family.ended, past, false],
+        [refresh.liveRotated, family.live, past, true],
+        [refresh.liveNewest, family.live, future, false],
+        [refresh.revokedRotated, family.revoked, past, true],
+        [refresh.revokedNewest, family.revoked, future, true],
       ] as const) {
         await repositories.refreshTokens.create({
           tokenHash,
+          familyId,
           userId: user.id,
           oauthClientId: client.id,
           expiresAt,
@@ -330,7 +345,7 @@ describe('job runner on a real Postgres', () => {
         {
           deleted: {
             authorization_codes: 1,
-            refresh_tokens: 1,
+            refresh_tokens: 2,
             email_verification_tokens: 1,
             oid4vp_request_states: 1,
           },
@@ -341,7 +356,12 @@ describe('job runner on a real Postgres', () => {
         (await dbPool.query<{ value: string }>(sql)).rows.map((row) => row.value).sort();
       expect(await column('SELECT code AS value FROM authorization_codes')).toEqual(['live-code']);
       expect(await column('SELECT token_hash AS value FROM refresh_tokens')).toEqual(
-        [refresh.live, refresh.revokedLive].sort()
+        [
+          refresh.liveRotated,
+          refresh.liveNewest,
+          refresh.revokedRotated,
+          refresh.revokedNewest,
+        ].sort()
       );
       expect(await column('SELECT token_hash AS value FROM email_verification_tokens')).toEqual([
         verification.live,

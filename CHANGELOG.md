@@ -28,10 +28,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `qauth_job_runs_total`, and on `SIGTERM` a running job is told to stop and
   given up to 5 seconds. The first job, `purge-expired`, runs hourly and deletes expired
   authorization codes, refresh tokens, email verification tokens and OID4VP
-  request states, which nothing removed before. A rotated refresh token is now
-  deleted once its own lifetime has ended, so replaying it after that is
-  refused as an unknown token and no longer revokes its family. The docs site's
-  observability page (`operate/observability`) describes the jobs.
+  request states, which nothing removed before. Refresh tokens are deleted by
+  family, once the family's newest token has expired, so replaying a rotated
+  token still revokes its family for as long as the family has a live token.
+  The docs site's observability page (`operate/observability`) describes the
+  jobs.
 
 ### Changed
 
