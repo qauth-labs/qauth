@@ -78,6 +78,17 @@
 >   address from a registered one. This changes no decision of this record: the FiPA endpoint still
 >   verifies an unverified account after a correct password (Decision 8), and `/auth/register` is
 >   still removed in F1c.
+>
+> **Amended 2026-10-19** with the maintainer's decision of 2026-10-11 on the bot challenge, which
+> question 15 had left provider-neutral. Decision 7, the `captcha` step of Decision 3 and F1b are
+> edited in place; ADR-019 Decision 5 carries the matching page rules.
+>
+> - The default provider is a proof-of-work challenge built into QAuth. The reference ceremony app
+>   serves its script from the realm origin, so the strict CSP needs no exception for it.
+> - An operator may add their own hosted provider, and name script hosts for it. Those hosts apply
+>   to the hosted sign-up and sign-in pages only, and the list is empty by default.
+> - By choosing a hosted provider, the operator accepts that its script runs on those pages.
+> - A required challenge needs JavaScript on the hosted pages.
 
 ## Context
 
@@ -415,7 +426,7 @@ Proof-of-Possession" code binding and §9.6.1 "Auth Session DPoP Binding" (F3), 
 | `email_code`                  | F1    | `purpose` (`verify_address`, `recovery`, `confirm_sign_in`), `length` (6 or 8), `expires_in`, `resend_after` | `otp`; none = resend                          | —             |
 | `new_password`                | F1    | `min_length`, `max_length`, optional `reasons`                                                               | `new_password`                                | —             |
 | `password_reset`              | F1    | a path marker, no data                                                                                       | — (+ `login_hint`)                            | —             |
-| `captcha`                     | F1b   | `provider`, `site_key`                                                                                       | `captcha_token`                               | —             |
+| `captcha`                     | F1b   | one of: `provider` `pow` with `challenge`, `difficulty`; or a hosted provider's name with `site_key`         | `captcha_token`                               | —             |
 | `webauthn_get`                | F2b   | WebAuthn Level 3 request options JSON                                                                        | `webauthn_response`                           | `pop`, `mfa`  |
 | `webauthn_create`             | F2b   | WebAuthn Level 3 creation options JSON, `optional`                                                           | `webauthn_response`                           | — (enrolment) |
 | `totp`                        | F2c   | `digits`                                                                                                     | `otp`                                         | `otp`         |
@@ -863,12 +874,32 @@ values):
   `otp` exactly `length` digits; `auth_session` exactly 43 characters; `captcha_token` 4096 bytes;
   `webauthn_response` 16 KiB; `client_assertion` 8192 characters (`ASSERTION_MAX_LENGTH`); the other
   parameters as at `/oauth/authorize`.
-- Bot challenge (F1b): a provider-neutral verifier, called through a new SSRF-safe POST helper built
-  like `ssrfSafeGet` (`https` only, no redirects, DNS pinning, time and size caps) to one
-  operator-configured host. A required challenge with no provider, or an unreachable provider,
-  refuses the gated action; it is never waved through and never replaced by `redirect_to_web`. A
-  client that did not list `captcha` still gets the soft action's delay and the hard action's
-  answer, a 429. It is not exempt, and it is not sent to `redirect_to_web`.
+- Bot challenge (F1b): a provider-neutral verifier. Its providers were decided on 2026-10-11
+  (maintainer).
+  - The default provider is a proof-of-work challenge built into QAuth. The engine issues the puzzle
+    in the `captcha` step and checks the answer itself, so it makes no outbound call. The reference
+    ceremony app ships the solver as its own script, served from the realm origin, so the strict CSP
+    of ADR-019 Decision 5 needs no exception for it.
+  - The `captcha` step's parameters take one of two forms, never both. The built-in proof of work
+    sends `provider` `pow`, a name QAuth reserves, with the puzzle as `challenge` and `difficulty`. A
+    hosted provider sends the name the operator gave it, with its `site_key`. Either way the answer
+    comes back as `captcha_token`.
+  - An operator may add their own hosted provider. QAuth checks its token through a new SSRF-safe
+    POST helper built like `ssrfSafeGet` (`https` only, no redirects, DNS pinning, time and size
+    caps) to one operator-configured host. On the hosted pages, its script may run only on the
+    sign-up and sign-in pages, from script hosts the operator names; that list is empty by default
+    (ADR-019 Decision 5). On every other hosted page, a required challenge is the built-in proof of
+    work.
+  - By choosing a hosted provider, the operator accepts that its script runs on the sign-up and
+    sign-in pages, where passwords are typed. Like the ceremony app, that script then sees what the
+    user types there and can act as the user on the realm origin.
+  - A required challenge needs JavaScript on the hosted pages, whichever provider answers it. A user
+    without JavaScript cannot complete a step that requires one there; the challenge is not skipped
+    for them.
+  - A required challenge with no provider, or an unreachable provider, refuses the gated action; it
+    is never waved through and never replaced by `redirect_to_web`. A client that did not list
+    `captcha` still gets the soft action's delay and the hard action's answer, a 429. It is not
+    exempt, and it is not sent to `redirect_to_web`.
 
 Why. FiPA §9.3 "Credential Stuffing Attacks": "Implementors SHOULD consider similar security
 measures to reduce this risk in the authorization challenge endpoint." NIST SP 800-63B-4 §3.2.2
@@ -1671,9 +1702,11 @@ on. A phase whose target is the train ships no later than F1's release.
       old user except its audit rows, which keep the old id, and sends a back-channel logout for the
       old `sub`.
   - Dependencies: F0. None on ADR-014. No third-party provider.
-- F1b — bot challenge (same switch): the provider-neutral verifier, the SSRF-safe POST helper,
-  `urn:qauth:ia:captcha`, and a per-client requirement for registration. Depends on F1. F1b is in
-  1.0 and stays provider-neutral (question 15, decided 2026-10-09).
+- F1b — bot challenge (same switch): the provider-neutral verifier, the built-in proof-of-work
+  provider, the SSRF-safe POST helper for an operator's hosted provider, `urn:qauth:ia:captcha`, and
+  a per-client requirement for registration. Depends on F1. F1b is in 1.0 and stays provider-neutral
+  (question 15, decided 2026-10-09). The default provider and the operator's option were decided on
+  2026-10-11 (Decision 7).
 - F1c — removal of `/auth/login`, `/auth/logout` and the headless hand-off (question 19, decided
   2026-10-09), and of `/auth/register` (Decision 12). They are removed directly, with no freeze
   phase. Removal comes as soon as F0's portal move and the CLI client for scripted management tokens
@@ -1931,6 +1964,11 @@ them on 2026-10-09. The table keeps the proposed default beside the decision.
 | 28  | Endpoint path                                          | `/oauth/authorize-challenge`                                                                                           | the path is `/oauth/authorize-challenge`                                                                                                                                                                                            |
 | 29  | Known-IP exemption from the per-account wait           | on; the attempt still counts toward the ceiling                                                                        | the known-IP exemption is on; the attempt still counts                                                                                                                                                                              |
 | 30  | Account with no address                                | F1 registers password accounts only; F2b designs registration by passkey alone, proved by the registration ceremony    | passkey-only accounts (no address) are in 1.0; their registration ceremony proves them; recovery codes are mandatory for them                                                                                                       |
+
+On 2026-10-11 the maintainer chose the provider that question 15 had left open. The reference
+ceremony app ships a same-origin proof-of-work challenge, and an operator may add their own hosted
+provider, whose script then runs on the hosted sign-up and sign-in pages. A required challenge needs
+JavaScript there. Decision 7 and ADR-019 Decision 5 hold the rules.
 
 ## Decisions parked for the maintainer
 

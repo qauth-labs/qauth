@@ -40,6 +40,13 @@
 > - Decisions 1, 3 and 5: in simple mode the default realm is also the operator realm. Adding a
 >   second realm splits the two; Decision 1 names that step, and the upgrade guide documents it.
 >
+> **Amended 2026-10-19** with the maintainer's decision of 2026-10-11 on the bot challenge. ADR-017
+> Decision 7 holds the engine's side.
+>
+> - Decision 5: the reference ceremony app ships a same-origin proof-of-work challenge. An operator
+>   may name script hosts for a hosted challenge provider. They apply to the sign-up and sign-in
+>   pages only, and the default is empty. A required challenge needs JavaScript.
+>
 > **Amended 2026-10-20** with the maintainer's decision of 2026-10-11 on the error format.
 > Decision 7 defined the API families and did not say how they report errors.
 >
@@ -279,17 +286,39 @@ A component library builds on `libs/ui`.
 Every ceremony page meets one baseline:
 
 - WCAG 2.2 AA.
-- A strict CSP, with no third-party scripts.
+- A strict CSP, with no third-party scripts. The one exception is a hosted bot-challenge provider's
+  script hosts, which an operator may allow on the sign-up and sign-in pages (below).
 - `frame-ancestors 'none'`.
 - Password, the email-code step and TOTP work without JavaScript. Their forms post directly to the
   auth server, with the step's CSRF value (Decision 6).
-- Passkeys need JavaScript.
+- Passkeys need JavaScript. So does a required bot challenge (below).
 
 The proxy enforces the header part of the baseline. On every `/ui/*` response it sets the CSP
-(scripts from the realm origin only, no third-party script), `frame-ancestors 'none'`,
-`Referrer-Policy: no-referrer` and `Cache-Control: no-store`, replacing whatever the app sent. A
-replacement app cannot loosen them. QAuth's reference proxy configuration does this. The reference
-ceremony app runs under that policy with no inline script; the stack spike of ADR-020 §6 checks it.
+(scripts from the realm origin only, no third-party script, except the operator's challenge script
+hosts on the sign-up and sign-in pages), `frame-ancestors 'none'`, `Referrer-Policy: no-referrer`
+and `Cache-Control: no-store`, replacing whatever the app sent. A replacement app cannot loosen
+them. QAuth's reference proxy configuration does this. The reference ceremony app runs under that
+policy with no inline script; the stack spike of ADR-020 §6 checks it.
+
+**Bot challenge**, decided 2026-10-11 (maintainer). ADR-017 Decision 7 says when the engine
+requires one and how it checks the answer.
+
+- The reference ceremony app ships a proof-of-work challenge. Its script is the app's own and is
+  served from the realm origin, so the CSP above needs no exception for it. The engine issues the
+  puzzle and checks the answer.
+- An operator may add their own hosted challenge provider, and name script hosts for it. Those
+  hosts apply to the sign-up and sign-in pages only: there, the proxy adds them to the CSP's script
+  sources. On every other ceremony page, a required challenge is the built-in proof of work.
+- The list of script hosts is empty by default, so by default no ceremony page runs a third-party
+  script. It is operator configuration, not a brand setting: the theme tier still allows no custom
+  JavaScript.
+- By choosing a provider, the operator accepts that its script runs on the sign-up and sign-in
+  pages. Those are pages where passwords are typed. Like the ceremony app itself (above), the
+  provider's script joins the realm's trusted computing base there: it sees what the user types and
+  can act as the user on the realm origin.
+- A required challenge needs JavaScript, whichever provider answers it. A user without JavaScript
+  cannot complete a step that requires one; the challenge is never skipped for them (ADR-017
+  Decision 7).
 
 ### 6. The Interaction API
 
@@ -838,7 +867,11 @@ Decided 2026-10-10 (maintainer).
   only once the roles run on separate nodes.
 - Sessions in Postgres add writes on sign-in and throttled writes on activity.
 - Envelope encryption, a signer role and automatic rotation are new code inside the audit's scope.
-- Passkeys need JavaScript. Only password and TOTP work without it.
+- Passkeys need JavaScript. Only password, the email-code step and TOTP work without it. A required
+  bot challenge needs it too, so a user without JavaScript who meets one cannot finish that ceremony
+  until they turn it on.
+- An operator who adds a hosted bot-challenge provider runs its script on the sign-up and sign-in
+  pages, where passwords are typed.
 - Rebuilding today's server-rendered pages as a separate app is a large migration.
 - Several accounts on one browser make session handling, sign-out and `prompt=none` more complex.
 - A sandbox realm doubles the host, DNS and TLS work for every realm that uses one.
