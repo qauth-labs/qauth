@@ -3,6 +3,7 @@ import { ACCOUNT_KEYS } from './accounts';
 import { AUTH_SERVER_KEYS } from './auth-server';
 import { DEVELOPER_PORTAL_KEYS } from './developer-portal';
 import { FEDERATION_KEYS } from './federation';
+import { KEK_KEYS } from './kek';
 import { RATE_LIMIT_KEYS } from './rate-limits';
 import { REGISTRATION_KEYS } from './registration';
 import { SERVER_KEYS } from './server';
@@ -19,6 +20,7 @@ export const SERVER_CONFIG_KEYS: readonly ConfigKey[] = [
   ...SERVER_KEYS,
   ...STORAGE_KEYS,
   ...TOKEN_KEYS,
+  ...KEK_KEYS,
   ...ACCOUNT_KEYS,
   ...REGISTRATION_KEYS,
   ...RATE_LIMIT_KEYS,
