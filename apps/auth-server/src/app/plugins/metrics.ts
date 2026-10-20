@@ -23,6 +23,12 @@ export interface AppMetrics {
    * `client_credentials`, `token-exchange`).
    */
   tokensIssued: Counter<'type' | 'grant_type'>;
+  /**
+   * Background job runs (ADR-019 Decision 8). Labelled by `job` (the job's
+   * name) and `result` = `success` | `failure` | `timeout`. A run skipped
+   * because another node holds the job's lock is not counted.
+   */
+  jobRuns: Counter<'job' | 'result'>;
 }
 
 declare module 'fastify' {
@@ -63,7 +69,14 @@ export const metricsPlugin = fp<FastifyPluginOptions>(
       registers: [registry],
     });
 
-    const metrics: AppMetrics = { registry, loginAttempts, tokensIssued };
+    const jobRuns = new Counter({
+      name: 'qauth_job_runs_total',
+      help: 'Total background job runs by job and outcome.',
+      labelNames: ['job', 'result'] as const,
+      registers: [registry],
+    });
+
+    const metrics: AppMetrics = { registry, loginAttempts, tokensIssued, jobRuns };
     fastify.decorate('metrics', metrics);
 
     fastify.log.debug('Metrics plugin registered');

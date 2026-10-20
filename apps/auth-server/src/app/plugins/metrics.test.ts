@@ -65,6 +65,7 @@ describe('metrics + request-id', () => {
     app.metrics.loginAttempts.inc({ result: 'failure', reason: 'invalid_credentials' });
     app.metrics.tokensIssued.inc({ type: 'access', grant_type: 'password' });
     app.metrics.tokensIssued.inc({ type: 'refresh', grant_type: 'password' });
+    app.metrics.jobRuns.inc({ job: 'purge-expired', result: 'success' });
 
     const res = await app.inject({ method: 'GET', url: '/metrics' });
 
@@ -75,6 +76,7 @@ describe('metrics + request-id', () => {
     expect(res.body).toContain('result="success"');
     expect(res.body).toContain('type="access"');
     expect(res.body).toContain('grant_type="password"');
+    expect(res.body).toContain('qauth_job_runs_total{job="purge-expired",result="success"');
     // HELP/TYPE lines prove Prometheus exposition format.
     expect(res.body).toContain('# HELP qauth_login_attempts_total');
     expect(res.body).toContain('# TYPE qauth_login_attempts_total counter');

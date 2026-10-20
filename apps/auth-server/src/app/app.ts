@@ -34,6 +34,7 @@ import { oid4vpResponseKeySecret } from './helpers/oid4vp-response-key';
 import { isJtiRevoked } from './helpers/token-revocation';
 import { provisionedVerifierMaterial } from './helpers/verifier-identity';
 import errorHandler from './plugins/error-handler';
+import { jobsPlugin } from './plugins/jobs';
 import { metricsPlugin } from './plugins/metrics';
 import { rateLimitPlugin } from './plugins/rate-limit';
 import { requestIdPlugin } from './plugins/request-id';
@@ -394,6 +395,12 @@ export async function app(fastify: FastifyInstance, opts: object) {
   await fastify.register(requestIdPlugin);
   await fastify.register(metricsPlugin);
 
+  // Background jobs (ADR-019 Decision 8): purge-expired today. The runner
+  // starts on `onReady` and stops on `onClose`, so it needs the database and
+  // metrics plugins above it; it registers no route, so nothing below depends
+  // on its position.
+  await fastify.register(jobsPlugin);
+
   // Global error handler (#365). This MUST precede every route registration
   // below — it used to sit after both AutoLoads, under a comment claiming the
   // last position "catches all unhandled errors", and that is exactly
@@ -458,7 +465,7 @@ export async function app(fastify: FastifyInstance, opts: object) {
     dir: path.join(__dirname, 'plugins'),
     options: { ...opts },
     ignorePattern:
-      /(error-handler|rate-limit|security-headers|metrics|request-id)\.(ts|js)$|\.(test|spec)\.(ts|js)$/,
+      /(error-handler|rate-limit|security-headers|metrics|request-id|jobs)\.(ts|js)$|\.(test|spec)\.(ts|js)$/,
   });
 
   fastify.register(AutoLoad, {
