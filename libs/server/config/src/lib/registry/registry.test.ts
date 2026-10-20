@@ -214,10 +214,11 @@ describe('every entry is complete', () => {
 describe("every library entry's default matches its schema", () => {
   const fields = libraryKeys();
 
+  // `false` is not empty here: a flag that is off when unset states the
+  // literal `'false'`, so the page says so instead of "unset".
   function isEmpty(value: unknown): boolean {
     return (
       value === undefined ||
-      value === false ||
       (Array.isArray(value) && value.length === 0) ||
       (typeof value === 'object' && value !== null && Object.keys(value).length === 0)
     );

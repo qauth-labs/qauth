@@ -38,7 +38,7 @@ export const SERVER_KEYS = defineKeys([
     tier: 'stable',
     role: 'deployment',
     owner: 'server',
-    default: null,
+    default: 'false',
     since: '0.1.0',
     docs: 'The reverse proxies whose `X-Forwarded-For` hops set the client address, as a comma-separated list of addresses, CIDR ranges or `loopback`, `linklocal` and `uniquelocal`; `true` and a hop count are refused.',
   },

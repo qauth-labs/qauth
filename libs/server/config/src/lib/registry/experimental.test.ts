@@ -55,7 +55,7 @@ describe('experimentalSettingWarnings', () => {
     ]);
   });
 
-  it('reads the value the way the schemas do, ignoring surrounding whitespace', () => {
+  it('ignores whitespace around the value', () => {
     expect(experimentalSettingWarnings({ MODE: ' bold ' }, REGISTRY)).toHaveLength(1);
   });
 

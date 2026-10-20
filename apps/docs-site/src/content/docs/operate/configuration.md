@@ -8,7 +8,7 @@ lastVerified: '2026-10-20'
 
 <!-- Generated from libs/server/config/src/lib/registry by its tests. Do not edit by hand: change the registry and run `pnpm nx test server-config -- -u`. -->
 
-QAuth reads its configuration from environment variables. This page lists every key the auth server and the developer portal read, generated from the configuration key registry in `libs/server/config/src/lib/registry/`. A test fails when the page, the registry and the env schemas disagree.
+QAuth reads its configuration from environment variables. This page lists every QAuth key the auth server and the developer portal read, generated from the configuration key registry in `libs/server/config/src/lib/registry/`. A test fails when the page, the registry and the env schemas disagree. Variables of the Node.js runtime itself, such as `UV_THREADPOOL_SIZE`, are not listed.
 
 ## Stability tiers
 
@@ -23,7 +23,7 @@ Every key has a tier, which says how it may change ([ADR-018 §5](/reference/rec
 Every key has a role, which says who owns its value ([ADR-019 Decision 10](/reference/records/adr/019-deployment-topology-and-trust-boundaries/)).
 
 - **deployment**: the environment owns the value, for the whole deployment.
-- **realm-seed**: a realm policy. Once realm policies live on the realm row, the key only seeds a new realm's default, and the realm row owns the value from then on. Until then the server reads the key for every realm. The Role column names the policy the key seeds.
+- **realm-seed**: a realm policy. Once realm policies live on the realm row, the key only seeds a new realm's default, and the realm row owns the value from then on. Until then the server reads the key for every realm, unless its description says it already seeds the realm row. The Role column names the policy the key seeds.
 
 A key marked **Secret** holds a credential. This page never shows its value, not even as a default, and neither does the boot log.
 
@@ -38,7 +38,7 @@ A key marked **Secret** holds a credential. This page never shows its value, not
 | `HOST`           | deployment | `0.0.0.0`                                                                 | 0.1.0 | The address the auth server listens on.                                                                                                                                                                        |
 | `NODE_ENV`       | deployment | `development`                                                             | 0.1.0 | The runtime mode, `development`, `test` or `production`; `production` turns on the strict boot checks, such as refusing the development session secret.                                                        |
 | `PORT`           | deployment | `3000`                                                                    | 0.1.0 | The TCP port the auth server listens on.                                                                                                                                                                       |
-| `TRUST_PROXY`    | deployment | unset                                                                     | 0.1.0 | The reverse proxies whose `X-Forwarded-For` hops set the client address, as a comma-separated list of addresses, CIDR ranges or `loopback`, `linklocal` and `uniquelocal`; `true` and a hop count are refused. |
+| `TRUST_PROXY`    | deployment | `false`                                                                   | 0.1.0 | The reverse proxies whose `X-Forwarded-For` hops set the client address, as a comma-separated list of addresses, CIDR ranges or `loopback`, `linklocal` and `uniquelocal`; `true` and a hop count are refused. |
 
 ### Logs and metrics
 
@@ -109,12 +109,12 @@ A key marked **Secret** holds a credential. This page never shows its value, not
 
 ### Client registration
 
-| Key                                   | Role                                                        | Default                               | Since | Description                                                                                                                               |
-| ------------------------------------- | ----------------------------------------------------------- | ------------------------------------- | ----- | ----------------------------------------------------------------------------------------------------------------------------------------- |
-| `CIMD_ENABLED`                        | realm-seed: `registration.cimd.enabled`                     | `true`                                | 0.1.0 | Accept an HTTPS URL as a `client_id` and fetch its Client ID Metadata Document on demand.                                                 |
-| `CIMD_TRUSTED_DOMAINS`                | realm-seed: `registration.cimd.trustedDomains`              | empty                                 | 0.1.0 | The hosts `CIMD_TRUST_POLICY=allowlist` accepts, separated by spaces or commas, where a leading `*.` matches subdomains.                  |
-| `CIMD_TRUST_POLICY`                   | realm-seed: `registration.cimd.trustPolicy`                 | `accept-any-https`                    | 0.1.0 | Which hosts a Client ID Metadata Document may come from: `accept-any-https`, or `allowlist` for the hosts in `CIMD_TRUSTED_DOMAINS` only. |
-| `DEFAULT_DYNAMIC_REGISTRATION_SCOPES` | realm-seed: `registration.dynamicRegistrationAllowedScopes` | `openid profile email offline_access` | 0.1.0 | The scopes a dynamically registered client may request when its realm sets none, separated by spaces or commas.                           |
+| Key                                   | Role                                                        | Default                               | Since | Description                                                                                                                                                                        |
+| ------------------------------------- | ----------------------------------------------------------- | ------------------------------------- | ----- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `CIMD_ENABLED`                        | realm-seed: `registration.cimd.enabled`                     | `true`                                | 0.1.0 | Accept an HTTPS URL as a `client_id` and fetch its Client ID Metadata Document on demand.                                                                                          |
+| `CIMD_TRUSTED_DOMAINS`                | realm-seed: `registration.cimd.trustedDomains`              | empty                                 | 0.1.0 | The hosts `CIMD_TRUST_POLICY=allowlist` accepts, separated by spaces or commas, where a leading `*.` matches subdomains.                                                           |
+| `CIMD_TRUST_POLICY`                   | realm-seed: `registration.cimd.trustPolicy`                 | `accept-any-https`                    | 0.1.0 | Which hosts a Client ID Metadata Document may come from: `accept-any-https`, or `allowlist` for the hosts in `CIMD_TRUSTED_DOMAINS` only.                                          |
+| `DEFAULT_DYNAMIC_REGISTRATION_SCOPES` | realm-seed: `registration.dynamicRegistrationAllowedScopes` | `openid profile email offline_access` | 0.1.0 | The scopes, separated by spaces or commas, copied into a realm's empty dynamic registration allowlist at its first client registration; a later change leaves that realm as it is. |
 
 ### Enterprise-managed authorization (ID-JAG)
 
@@ -185,7 +185,7 @@ A key marked **Secret** holds a credential. This page never shows its value, not
 | `OID4VP_RESPONSE_KEY_SECRET`       | deployment | unset                                                        | 0.1.0 | A 32-byte key, base64 or base64url, that encrypts the stored per-request response decryption keys at rest; unset, they are stored in the clear. Secret. |
 | `OID4VP_VERIFIER_SIGNING_KEY`      | deployment | unset                                                        | 0.1.0 | The verifier's ES256 private key, PKCS#8 PEM, that signs authorization requests for a profile that requires signed requests. Secret.                    |
 | `OID4VP_VERIFIER_SIGNING_KEY_PATH` | deployment | unset                                                        | 0.1.0 | A file holding the verifier signing key; it takes precedence over `OID4VP_VERIFIER_SIGNING_KEY`.                                                        |
-| `PORTAL_SESSION_SECRET`            | deployment | required                                                     | 0.1.0 | The random secret, at least 32 characters, that signs the developer portal's session cookie. Secret.                                                    |
+| `PORTAL_SESSION_SECRET`            | deployment | required                                                     | 0.1.0 | The random secret that signs the developer portal's session cookie; use at least 32 characters. Secret.                                                 |
 | `SESSION_COOKIE_SECRET`            | deployment | a development-only value, refused when `NODE_ENV=production` | 0.1.0 | The HMAC secret, at least 32 characters, that signs the `__Host-qauth_session` cookie. Secret.                                                          |
 
 ### Accounts and passwords

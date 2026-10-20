@@ -26,7 +26,7 @@ export const DEVELOPER_PORTAL_KEYS = defineKeys([
     default: { required: true },
     since: '0.1.0',
     secret: true,
-    docs: "The random secret, at least 32 characters, that signs the developer portal's session cookie.",
+    docs: "The random secret that signs the developer portal's session cookie; use at least 32 characters.",
   },
   {
     name: 'PORTAL_SESSION_TTL',

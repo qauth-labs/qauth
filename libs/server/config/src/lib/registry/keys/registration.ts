@@ -14,7 +14,7 @@ export const REGISTRATION_KEYS = defineKeys([
     owner: 'client-registration',
     default: 'openid profile email offline_access',
     since: '0.1.0',
-    docs: 'The scopes a dynamically registered client may request when its realm sets none, separated by spaces or commas.',
+    docs: "The scopes, separated by spaces or commas, copied into a realm's empty dynamic registration allowlist at its first client registration; a later change leaves that realm as it is.",
   },
   {
     name: 'DYNAMIC_CLIENT_BADGE_DAYS',

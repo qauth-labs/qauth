@@ -34,6 +34,7 @@ function setEnv(overrides: Record<string, string | undefined>) {
 beforeEach(() => {
   setEnv({
     OID4VP_VERIFIER_PROFILE: undefined,
+    REQUIRE_VERIFIED_ACCOUNT: undefined,
     REQUIRE_EMAIL_VERIFIED: undefined,
     SESSION_COOKIE_SECRET: undefined,
   });
