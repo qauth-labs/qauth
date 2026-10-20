@@ -1,0 +1,15 @@
+{
+  "name": "@qauth-labs/server-keys",
+  "version": "0.0.0",
+  "private": true,
+  "main": "src/index.ts",
+  "dependencies": {
+    "@qauth-labs/shared-errors": "workspace:*",
+    "tslib": "catalog:"
+  },
+  "devDependencies": {
+    "@vitest/coverage-v8": "catalog:",
+    "@vitest/ui": "catalog:",
+    "vitest": "catalog:"
+  }
+}

@@ -193,6 +193,15 @@ export default [
                 'scope:ui',
               ],
             },
+            // Key custody (ADR-019 Decision 9)
+            // `@qauth-labs/server-keys` is also `scope:server`, and Nx applies
+            // every constraint whose tag a project carries, so this one narrows
+            // it: the library that opens stored keys reaches only the core and
+            // shared layers, never another server library such as config.
+            {
+              sourceTag: 'type:key-custody',
+              onlyDependOnLibsWithTags: ['scope:core', 'scope:shared'],
+            },
           ],
         },
       ],
