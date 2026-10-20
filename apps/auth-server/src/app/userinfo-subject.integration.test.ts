@@ -60,7 +60,7 @@ interface LogLine {
   readonly [key: string]: unknown;
 }
 
-describe('/oauth/userinfo refuses a token whose subject is not a user (real containers)', () => {
+describe('userinfo and logout refuse a token whose subject is not a user (real containers)', () => {
   let infra: E2eInfrastructure | undefined;
   let jwt: PemKeyPair | undefined;
   let dockerUp = false;
@@ -271,6 +271,43 @@ describe('/oauth/userinfo refuses a token whose subject is not a user (real cont
       }
       expectNoDatabaseError(log);
       expect(await userinfoFailureAudits(app)).toEqual([]);
+    });
+  }, 120_000);
+
+  /**
+   * `/auth/logout` had the same failure audit: it wrote the token's `sub` into
+   * `audit_logs.user_id` before knowing a user owned it. A first-party token
+   * outlives a deleted account, and its logout then failed the insert with
+   * 23503 and answered 500 instead of the refusal.
+   */
+  it("answers 401 invalid_token at /auth/logout, without a database error, once the token's user is deleted", async () => {
+    await withDeployment(async (app, log) => {
+      const email = 'logout-deleted@example.test';
+      const userId = await registerPasswordAccount(app, email);
+      const login = await app.inject({
+        method: 'POST',
+        url: '/auth/login',
+        payload: { email, password: E2E_PASSWORD },
+      });
+      expect(login.statusCode).toBe(200);
+      const accessToken = (login.json() as { access_token: string }).access_token;
+
+      await app.dbPool.query('DELETE FROM users WHERE id = $1', [userId]);
+
+      const logout = await app.inject({
+        method: 'POST',
+        url: '/auth/logout',
+        headers: { authorization: `Bearer ${accessToken}` },
+      });
+
+      expectInvalidToken(logout);
+      expectNoDatabaseError(log);
+      const audits = await app.dbPool.query<{ user_id: string | null; metadata: unknown }>(
+        `SELECT user_id, metadata FROM audit_logs WHERE event = 'user.logout.failure'`
+      );
+      expect(audits.rows).toEqual([
+        { user_id: null, metadata: expect.objectContaining({ tokenSub: userId }) },
+      ]);
     });
   }, 120_000);
 
