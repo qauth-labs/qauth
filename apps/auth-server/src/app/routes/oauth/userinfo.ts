@@ -7,6 +7,7 @@ import { MIN_RESPONSE_TIME_MS } from '../../constants';
 import { clientAddressKey } from '../../helpers/client-address';
 import { resolveUserinfoEndpoint } from '../../helpers/discovery';
 import { resolveEmailClaimsForScopes } from '../../helpers/email-claims';
+import { resolveProfileClaimsForScopes } from '../../helpers/profile-claims';
 import { ensureMinimumResponseTime } from '../../helpers/timing';
 import { userinfoResponseSchema } from '../../schemas/oauth';
 
@@ -117,16 +118,9 @@ async function handleUserinfo(fastify: FastifyInstance, request: FastifyRequest)
 
     // OIDC Core §5.1 `name` — the end-user display name, derived from the
     // stored first/last name parts. Released only under the `profile` scope;
-    // omitted when neither part is set, keeping the claim set consistent
-    // with the ID token.
-    if (grantedScopes.has('profile')) {
-      const nameParts = [user.firstName, user.lastName].filter(
-        (p): p is string => typeof p === 'string' && p.trim().length > 0
-      );
-      if (nameParts.length > 0) {
-        responseBody.name = nameParts.join(' ');
-      }
-    }
+    // omitted when neither part is set. The ID token resolves it through the
+    // same helper (#755), so the two release the same profile claims.
+    Object.assign(responseBody, resolveProfileClaimsForScopes(user, grantedScopes));
 
     await fastify.repositories.auditLogs.create({
       userId: user.id,

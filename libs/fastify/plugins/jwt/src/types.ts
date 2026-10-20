@@ -223,7 +223,8 @@ export interface JwtUtils {
    * Uses the same EdDSA signing key and lifespan as access tokens; `aud` is
    * the client identifier, `nonce` is echoed when the client supplied one in
    * the authorization request. Identity claims (`email`, `email_verified`,
-   * `name`) are included when available.
+   * `name`) are included when the caller passes them; the token route passes
+   * each only under the scope that releases it (`email`, `profile`).
    */
   signIdToken(payload: {
     sub: string;
