@@ -426,7 +426,7 @@ Proof-of-Possession" code binding and §9.6.1 "Auth Session DPoP Binding" (F3), 
 | `email_code`                  | F1    | `purpose` (`verify_address`, `recovery`, `confirm_sign_in`), `length` (6 or 8), `expires_in`, `resend_after` | `otp`; none = resend                          | —             |
 | `new_password`                | F1    | `min_length`, `max_length`, optional `reasons`                                                               | `new_password`                                | —             |
 | `password_reset`              | F1    | a path marker, no data                                                                                       | — (+ `login_hint`)                            | —             |
-| `captcha`                     | F1b   | `provider`; the puzzle for the built-in proof of work, `site_key` for a hosted provider                      | `captcha_token`                               | —             |
+| `captcha`                     | F1b   | one of: `provider` `pow` with `challenge`, `difficulty`; or a hosted provider's name with `site_key`         | `captcha_token`                               | —             |
 | `webauthn_get`                | F2b   | WebAuthn Level 3 request options JSON                                                                        | `webauthn_response`                           | `pop`, `mfa`  |
 | `webauthn_create`             | F2b   | WebAuthn Level 3 creation options JSON, `optional`                                                           | `webauthn_response`                           | — (enrolment) |
 | `totp`                        | F2c   | `digits`                                                                                                     | `otp`                                         | `otp`         |
@@ -880,6 +880,10 @@ values):
     in the `captcha` step and checks the answer itself, so it makes no outbound call. The reference
     ceremony app ships the solver as its own script, served from the realm origin, so the strict CSP
     of ADR-019 Decision 5 needs no exception for it.
+  - The `captcha` step's parameters take one of two forms, never both. The built-in proof of work
+    sends `provider` `pow`, a name QAuth reserves, with the puzzle as `challenge` and `difficulty`. A
+    hosted provider sends the name the operator gave it, with its `site_key`. Either way the answer
+    comes back as `captcha_token`.
   - An operator may add their own hosted provider. QAuth checks its token through a new SSRF-safe
     POST helper built like `ssrfSafeGet` (`https` only, no redirects, DNS pinning, time and size
     caps) to one operator-configured host. On the hosted pages, its script may run only on the
