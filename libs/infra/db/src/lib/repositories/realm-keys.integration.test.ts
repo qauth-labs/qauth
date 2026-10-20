@@ -61,8 +61,14 @@ describe('realm_keys integration (real Postgres)', () => {
     return realm.id;
   }
 
-  /** A key row with distinct wrapped bytes and a fresh `kid`. */
-  function keyRow(realmId: string, overrides: Partial<NewRealmKey> = {}): NewRealmKey {
+  /**
+   * A key row with distinct wrapped bytes and a fresh `kid`. Keeps the types
+   * of `overrides`, so a row given `publishAt` can carry a public JWK.
+   */
+  function keyRow<T extends Partial<NewRealmKey> = Record<never, never>>(
+    realmId: string,
+    overrides: T = {} as T
+  ): NewRealmKey & T {
     return {
       realmId,
       purpose: 'token_signing',
@@ -365,7 +371,7 @@ describe('realm_keys integration (real Postgres)', () => {
         publicJwk: PUBLIC_JWK,
       });
       await keys.create({
-        key: keyRow(realmId, { status: 'next', publishAt: PUBLISH_AT }),
+        key: keyRow(realmId, { status: 'next' as const, publishAt: PUBLISH_AT }),
         publicJwk: PUBLIC_JWK,
       });
 
