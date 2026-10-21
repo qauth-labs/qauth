@@ -1,5 +1,5 @@
 import type { FastifyInstance } from 'fastify';
-import { describe, expect, it, type Mock, vi } from 'vitest';
+import { afterEach, describe, expect, it, type Mock, vi } from 'vitest';
 
 const { ssrfSafeGet } = vi.hoisted(() => ({ ssrfSafeGet: vi.fn() }));
 
@@ -22,6 +22,7 @@ vi.mock('../../../config/env', () => ({
     CIMD_MAX_DOCUMENT_BYTES: 65536,
     CIMD_FETCH_TIMEOUT_MS: 5000,
     CIMD_ALLOW_PRIVATE_ADDRESSES: false,
+    REDIRECT_URI_CUSTOM_SCHEMES: [] as string[],
   },
 }));
 
@@ -33,6 +34,7 @@ vi.mock('../../helpers/ssrf-safe-fetch', async () => {
   return { ...actual, ssrfSafeGet };
 });
 
+import { env } from '../../../config/env';
 import { OAUTH_OPAQUE_PARAM_MAX_LENGTH, STEP_UP_FRESH_AUTH_WINDOW_MS } from '../../constants';
 import { buildAuthorizationServerMetadata } from '../../helpers/discovery';
 import { authorizeQuerySchema } from '../../schemas/oauth';
@@ -1014,6 +1016,65 @@ describe('GET /oauth/authorize — redirect URI scheme gate', () => {
       reply
     );
     expect(state.redirected).toContain('/ui/login?return_to=');
+  });
+
+  describe('REDIRECT_URI_CUSTOM_SCHEMES (#774)', () => {
+    const cursorCallback = 'cursor://anysphere.cursor-mcp/oauth/callback';
+
+    afterEach(() => {
+      env.REDIRECT_URI_CUSTOM_SCHEMES = [];
+    });
+
+    async function authorizeWith(uri: string, environment: string) {
+      const { fastify, ctx } = makeFastify();
+      await authorizeRoute(fastify);
+      (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue({
+        ...CLIENT,
+        environment,
+        redirectUris: [uri],
+      });
+      (fastify.jwtUtils.extractFromHeader as unknown as Mock).mockReturnValue(null);
+      (fastify.sessionUtils.getSession as unknown as Mock).mockResolvedValue(null);
+      const { reply, state } = createReply();
+      const run = () =>
+        ctx.handler!(
+          {
+            query: { ...BASE_QUERY, redirect_uri: uri },
+            url: '/oauth/authorize?response_type=code&client_id=app-123',
+            headers: {},
+            ip: '127.0.0.1',
+          },
+          reply
+        );
+      return { fastify, run, state };
+    }
+
+    it('refuses a registered bare scheme when the setting is empty', async () => {
+      const { fastify, run, state } = await authorizeWith(cursorCallback, 'production');
+      await expect(run()).rejects.toThrow('redirect_uri not permitted for this environment');
+      expect(state.redirected).toBeUndefined();
+      expect(fastify.repositories.auditLogs.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          metadata: expect.objectContaining({ reason: 'redirect_uri_scheme_not_allowed' }),
+        })
+      );
+    });
+
+    it('serves a registered bare scheme the deployment lists, in every environment', async () => {
+      env.REDIRECT_URI_CUSTOM_SCHEMES = ['cursor'];
+      for (const environment of ['development', 'staging', 'production']) {
+        const { run, state } = await authorizeWith(cursorCallback, environment);
+        await run();
+        expect(state.redirected).toContain('/ui/login?return_to=');
+      }
+    });
+
+    it('still refuses a registered bare scheme that is not listed', async () => {
+      env.REDIRECT_URI_CUSTOM_SCHEMES = ['cursor'];
+      const { run, state } = await authorizeWith('myapp:/callback', 'production');
+      await expect(run()).rejects.toThrow('redirect_uri not permitted for this environment');
+      expect(state.redirected).toBeUndefined();
+    });
   });
 });
 

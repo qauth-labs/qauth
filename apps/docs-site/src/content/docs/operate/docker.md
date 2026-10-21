@@ -437,6 +437,24 @@ A CIMD client starts with no scopes, so it is granted none of the scopes it asks
 - The seed refuses an entry whose `client_id` belongs to a client that is not a CIMD client, and changes nothing for it.
 - The client resolves only while `CIMD_ENABLED` is `true` and the trust policy accepts its host.
 
+### Redirect URI schemes for native apps
+
+A redirect URI must be `https`, `http` to a loopback host, or a private-use scheme written as a reverse domain name, such as `com.example.app:/callback` (RFC 8252 §7.1). Some native apps call back on a scheme without a period instead. Cursor's desktop app, for one, uses `cursor://anysphere.cursor-mcp/oauth/callback`. List each such scheme you accept in `REDIRECT_URI_CUSTOM_SCHEMES`:
+
+```bash
+# .env — accept the Cursor desktop app's callback
+REDIRECT_URI_CUSTOM_SCHEMES=cursor
+```
+
+| Variable                      | Required | Default   | Description                                                                                                       |
+| ----------------------------- | -------- | --------- | ----------------------------------------------------------------------------------------------------------------- |
+| `REDIRECT_URI_CUSTOM_SCHEMES` | No       | _(empty)_ | Scheme names, separated by spaces or commas, that a redirect URI may use besides the three kinds above. No colon. |
+
+- A listed scheme is accepted everywhere a redirect URI is: dynamic client registration, `POST /api/clients`, CIMD documents, a seeded client, `/oauth/authorize` and the consent screen. Matching stays exact.
+- Without it, registration refuses such a URI with `invalid_redirect_uri: unsupported scheme`, and `/oauth/authorize` refuses one already stored with `redirect_uri not permitted for this environment`. The client's `https` and loopback callbacks keep working either way.
+- The default is empty on purpose. The reverse-domain form only makes an accidental clash between two apps unlikely. Neither form stops a malicious app on the same device from claiming the scheme; PKCE, which QAuth requires of every client, is what protects the code (RFC 8252 §8.1). Which apps to trust on your users' devices is your choice, one scheme at a time.
+- The server refuses to start when an entry is not a scheme name, or names a scheme a browser or the operating system acts on itself: `http`, `https`, `javascript`, `data`, `file`, `blob`, `intent`, `mailto` and the like. Such schemes are refused at authorization whatever the list holds.
+
 ### ID-JAG / enterprise-managed authorization (ADR-011)
 
 **Off by default**, and doubly fail-closed: with `ID_JAG_ENABLED` off the

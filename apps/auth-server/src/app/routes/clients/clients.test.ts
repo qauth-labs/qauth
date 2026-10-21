@@ -5,7 +5,7 @@ import {
   NotFoundError,
 } from '@qauth-labs/shared-errors';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
-import { describe, expect, it, type Mock, vi } from 'vitest';
+import { afterEach, describe, expect, it, type Mock, vi } from 'vitest';
 
 // The create route transitively imports `helpers/realm` → `config/env`, which
 // validates required env at module load. Stub it so the unit run needs no real
@@ -20,6 +20,7 @@ vi.mock('../../../config/env', () => ({
     REGISTER_CLIENT_RATE_WINDOW: 60,
     DEFAULT_DYNAMIC_REGISTRATION_SCOPES: ['openid', 'profile', 'email', 'offline_access'],
     MAX_CLIENTS_PER_DEVELOPER: 3,
+    REDIRECT_URI_CUSTOM_SCHEMES: [] as string[],
   },
 }));
 
@@ -30,6 +31,7 @@ vi.mock('../../helpers/management-token', () => ({
   createRequireManagementJwt: () => managementGuard,
 }));
 
+import { env } from '../../../config/env';
 import clientsRoute, { autoPrefix } from './index';
 
 type RouteHandler = (request: FastifyRequest, reply: FastifyReply) => Promise<unknown>;
@@ -485,6 +487,73 @@ describe('POST /api/clients (create) — #86', () => {
       expect(fastify.repositories.oauthClients.update).not.toHaveBeenCalled();
     }
   );
+
+  describe('REDIRECT_URI_CUSTOM_SCHEMES (#774)', () => {
+    const cursorCallback = 'cursor://anysphere.cursor-mcp/oauth/callback';
+
+    afterEach(() => {
+      env.REDIRECT_URI_CUSTOM_SCHEMES = [];
+    });
+
+    async function createAndUpdate(uri: string) {
+      const { fastify, ctx } = makeFastify();
+      await clientsRoute(fastify);
+      (fastify.repositories.oauthClients.create as unknown as Mock).mockImplementation(
+        async (data: Record<string, unknown>) => makeClientRow({ ...data })
+      );
+      (fastify.repositories.oauthClients.findById as unknown as Mock).mockResolvedValue(
+        makeClientRow({ developerId: DEV_A })
+      );
+      (fastify.repositories.oauthClients.update as unknown as Mock).mockImplementation(
+        async (_id: string, data: Record<string, unknown>) =>
+          makeClientRow({ developerId: DEV_A, ...data })
+      );
+      const create = () =>
+        route(ctx, 'POST /').handler(
+          authedRequest({ body: { name: 'Native', redirectUris: [uri] } }),
+          createReply().reply
+        );
+      const update = () =>
+        route(ctx, 'PATCH /:id').handler(
+          authedRequest({
+            params: { id: '0190a000-0000-7000-8000-000000000001' },
+            body: { redirectUris: ['https://app.example.com/cb', uri] },
+          }),
+          createReply().reply
+        );
+      return { fastify, create, update };
+    }
+
+    it('refuses a bare scheme on create and on update when the setting is empty', async () => {
+      const { fastify, create, update } = await createAndUpdate(cursorCallback);
+      await expect(create()).rejects.toThrow(/^invalid_redirect_uri: unsupported scheme: cursor:/);
+      await expect(update()).rejects.toThrow(/^invalid_redirect_uri: unsupported scheme: cursor:/);
+      expect(fastify.repositories.oauthClients.create).not.toHaveBeenCalled();
+      expect(fastify.repositories.oauthClients.update).not.toHaveBeenCalled();
+    });
+
+    it('stores a listed bare scheme on create and on update', async () => {
+      env.REDIRECT_URI_CUSTOM_SCHEMES = ['cursor'];
+      const { fastify, create, update } = await createAndUpdate(cursorCallback);
+      await create();
+      await update();
+      const created = (fastify.repositories.oauthClients.create as unknown as Mock).mock
+        .calls[0][0];
+      expect(created.redirectUris).toEqual([cursorCallback]);
+      const updateArg = (fastify.repositories.oauthClients.update as unknown as Mock).mock
+        .calls[0][1];
+      expect(updateArg.redirectUris).toEqual(['https://app.example.com/cb', cursorCallback]);
+    });
+
+    it('still refuses a bare scheme that is not listed', async () => {
+      env.REDIRECT_URI_CUSTOM_SCHEMES = ['cursor'];
+      const { fastify, create, update } = await createAndUpdate('myapp:/callback');
+      await expect(create()).rejects.toThrow(/^invalid_redirect_uri: unsupported scheme: myapp:/);
+      await expect(update()).rejects.toThrow(/^invalid_redirect_uri: unsupported scheme: myapp:/);
+      expect(fastify.repositories.oauthClients.create).not.toHaveBeenCalled();
+      expect(fastify.repositories.oauthClients.update).not.toHaveBeenCalled();
+    });
+  });
 
   it('rejects an inconsistent grant/response-type combination', async () => {
     const { fastify, ctx } = makeFastify();
