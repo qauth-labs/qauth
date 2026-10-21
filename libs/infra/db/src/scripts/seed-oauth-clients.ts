@@ -121,12 +121,15 @@ async function main(): Promise<void> {
       issued.push(await provisionClient(db, realm.id, spec, rotate));
     }
 
+    // Print the secrets before anything else can fail: they are already
+    // committed, and the database keeps only their hashes.
+    if (issued.length > 0) report(manifest.realm, issued);
+
     const granted: CimdGrantResult[] = [];
     for (const spec of manifest.cimd_clients ?? []) {
       granted.push(await applyCimdClientGrant(db, realm.id, spec));
     }
 
-    if (issued.length > 0) report(manifest.realm, issued);
     reportCimdGrants(manifest.realm, granted);
 
     if (granted.some((g) => g.status === 'not_cimd')) process.exitCode = 1;
