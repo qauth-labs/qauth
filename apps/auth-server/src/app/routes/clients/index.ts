@@ -435,7 +435,7 @@ export default async function (fastify: FastifyInstance) {
       const scopes = [...new Set(body.scopes ?? [])];
 
       for (const uri of redirectUris) {
-        validateRedirectUri(uri);
+        validateRedirectUri(uri, env.REDIRECT_URI_CUSTOM_SCHEMES);
       }
       assertGrantResponseConsistency({
         grantTypes,
@@ -590,7 +590,7 @@ export default async function (fastify: FastifyInstance) {
 
       if (body.redirectUris) {
         for (const uri of body.redirectUris) {
-          validateRedirectUri(uri);
+          validateRedirectUri(uri, env.REDIRECT_URI_CUSTOM_SCHEMES);
         }
       }
       assertGrantResponseConsistency({

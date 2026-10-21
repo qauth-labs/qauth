@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.3] - 2026-10-21
+
+One addition backported from `main` to the 0.1 line, so that native apps that
+call back on a scheme without a period, such as the Cursor desktop app, can
+sign in to a deployment that lists that scheme.
+
+### Added
+
+- **Redirect URI schemes without a period, when the operator lists them**
+  ([#774]). Since 0.1.0 a redirect URI has had to be `https`, loopback `http`
+  or a reverse-domain private-use scheme (`com.example.app:`), which shut out
+  native apps that call back on a bare scheme: the Cursor desktop app's
+  `cursor://anysphere.cursor-mcp/oauth/callback` could neither register nor
+  authorize. `REDIRECT_URI_CUSTOM_SCHEMES` (empty by default) names the
+  bare schemes a deployment accepts, such as `cursor`. A listed scheme is
+  accepted by dynamic client registration, `POST /api/clients`, CIMD documents
+  and the authorization-time gate in `/oauth/authorize` and the consent screen;
+  matching stays exact. PKCE, required for every client, protects the code at
+  either kind of custom scheme (RFC 8252 §8.1). The server refuses to start
+  when an entry is not a scheme name or names one a browser or the operating
+  system acts on itself (`http`, `https`, `javascript`, `data`, `file`,
+  `intent`, `mailto` and the like), and refuses such schemes at authorization
+  whatever the list holds. With the variable unset, behaviour is unchanged.
+
+[#774]: https://github.com/qauth-labs/qauth/issues/774
+
 ## [0.1.2] - 2026-10-21
 
 One addition backported from `main` to the 0.1 line, so that a deployment on
@@ -561,7 +587,8 @@ token carries; see Changed.
   (`redirect_uri not permitted for this environment`). Re-register a native
   app that used a scheme without a period under a reverse-domain scheme.
 
-[Unreleased]: https://github.com/qauth-labs/qauth/compare/v0.1.2...HEAD
+[Unreleased]: https://github.com/qauth-labs/qauth/compare/v0.1.3...HEAD
+[0.1.3]: https://github.com/qauth-labs/qauth/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/qauth-labs/qauth/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/qauth-labs/qauth/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/qauth-labs/qauth/releases/tag/v0.1.0

@@ -204,6 +204,12 @@ Because the client passes the resource URL as the RFC 8707 `resource` parameter,
 the token's `aud` is bound to `http://localhost:8088` and is useless at any other
 resource server.
 
+A native client whose callback scheme has no period, such as the Cursor desktop
+app (`cursor://anysphere.cursor-mcp/oauth/callback`), needs that scheme listed:
+set `REDIRECT_URI_CUSTOM_SCHEMES=cursor` in `.env`. It is empty by default, and
+PKCE is what protects the code at any custom scheme; see
+[Redirect URI schemes for native apps](/operate/docker/#redirect-uri-schemes-for-native-apps).
+
 ### Option B — Verify the handshake with curl (no browser)
 
 To prove the token half end-to-end without an interactive client, mint a
@@ -336,13 +342,14 @@ even if both trust the same QAuth instance.
 
 ## Troubleshooting
 
-| Symptom                           | Likely cause / fix                                                                                                                                                                                       |
-| --------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `401` even with a token           | Token `aud` ≠ the server's `MCP_RESOURCE`. Ensure the `resource` you requested matches `MCP_RESOURCE` exactly.                                                                                           |
-| `invalid_scope` at `/oauth/token` | The client's `scopes` (machine client) or the realm allowlist (DCR client) doesn't include the requested scope. Re-check Step 1's `DEFAULT_DYNAMIC_REGISTRATION_SCOPES` or the seeded client's `scopes`. |
-| Seed script: realm not found      | The `master` realm hasn't been created yet — run the warm-up DCR call in Step 3 Option B first.                                                                                                          |
-| `mcp-guard` can't fetch JWKS      | `QAUTH_ISSUER` must be reachable from the resource server and serve `/.well-known/jwks.json`.                                                                                                            |
-| Port already in use               | Override `PORT` for the example, or remap `3000`/`5432`/`6379` in `docker-compose.yml`.                                                                                                                  |
+| Symptom                           | Likely cause / fix                                                                                                                                                                                               |
+| --------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `401` even with a token           | Token `aud` ≠ the server's `MCP_RESOURCE`. Ensure the `resource` you requested matches `MCP_RESOURCE` exactly.                                                                                                   |
+| `invalid_scope` at `/oauth/token` | The client's `scopes` (machine client) or the realm allowlist (DCR client) doesn't include the requested scope. Re-check Step 1's `DEFAULT_DYNAMIC_REGISTRATION_SCOPES` or the seeded client's `scopes`.         |
+| `unsupported scheme: cursor:`     | The client calls back on a scheme without a period. List it in `REDIRECT_URI_CUSTOM_SCHEMES` (here `cursor`); see [Redirect URI schemes for native apps](/operate/docker/#redirect-uri-schemes-for-native-apps). |
+| Seed script: realm not found      | The `master` realm hasn't been created yet — run the warm-up DCR call in Step 3 Option B first.                                                                                                                  |
+| `mcp-guard` can't fetch JWKS      | `QAUTH_ISSUER` must be reachable from the resource server and serve `/.well-known/jwks.json`.                                                                                                                    |
+| Port already in use               | Override `PORT` for the example, or remap `3000`/`5432`/`6379` in `docker-compose.yml`.                                                                                                                          |
 
 ---
 

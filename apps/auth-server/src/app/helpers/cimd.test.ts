@@ -1,5 +1,5 @@
 import { InvalidClientError } from '@qauth-labs/shared-errors';
-import { beforeEach, describe, expect, it, type Mock, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, type Mock, vi } from 'vitest';
 
 const { ENV, ssrfSafeGet } = vi.hoisted(() => ({
   ENV: {
@@ -11,6 +11,7 @@ const { ENV, ssrfSafeGet } = vi.hoisted(() => ({
     CIMD_MAX_DOCUMENT_BYTES: 65536,
     CIMD_FETCH_TIMEOUT_MS: 5000,
     CIMD_ALLOW_PRIVATE_ADDRESSES: false,
+    REDIRECT_URI_CUSTOM_SCHEMES: [] as string[],
   },
   ssrfSafeGet: vi.fn(),
 }));
@@ -340,6 +341,47 @@ describe('toCimdClientInsert — grant/response type tolerance (RFC 7591 §2)', 
     expect((thrown as InvalidClientError).errorDescription).toMatch(
       /^CIMD document refused: invalid_redirect_uri: /
     );
+  });
+
+  describe('REDIRECT_URI_CUSTOM_SCHEMES (#774)', () => {
+    const cursorCallback = 'cursor://anysphere.cursor-mcp/oauth/callback';
+
+    afterEach(() => {
+      ENV.REDIRECT_URI_CUSTOM_SCHEMES = [];
+    });
+
+    it('refuses a document listing a bare scheme when the setting is empty', () => {
+      const doc = cimdDocumentSchema.parse(validDoc({ redirect_uris: [cursorCallback] }));
+      expect(() => toCimdClientInsert(REALM, CLIENT_ID, doc, SENTINEL)).toThrow(InvalidClientError);
+    });
+
+    it('accepts a document listing a bare scheme the deployment lists', () => {
+      ENV.REDIRECT_URI_CUSTOM_SCHEMES = ['cursor'];
+      const doc = cimdDocumentSchema.parse(
+        validDoc({ redirect_uris: ['http://127.0.0.1/callback', cursorCallback] })
+      );
+      expect(toCimdClientInsert(REALM, CLIENT_ID, doc, SENTINEL).redirectUris).toEqual([
+        'http://127.0.0.1/callback',
+        cursorCallback,
+      ]);
+    });
+
+    it('still refuses a document listing a bare scheme that is not listed', () => {
+      ENV.REDIRECT_URI_CUSTOM_SCHEMES = ['cursor'];
+      const doc = cimdDocumentSchema.parse(
+        validDoc({ redirect_uris: [cursorCallback, 'myapp:/callback'] })
+      );
+      let thrown: unknown;
+      try {
+        toCimdClientInsert(REALM, CLIENT_ID, doc, SENTINEL);
+      } catch (err) {
+        thrown = err;
+      }
+      expect(thrown).toBeInstanceOf(InvalidClientError);
+      expect((thrown as InvalidClientError).errorDescription).toMatch(
+        /^CIMD document refused: invalid_redirect_uri: unsupported scheme: myapp:/
+      );
+    });
   });
 
   it('accepts unknown grant_types and keeps only the supported ones (claude.ai shape)', () => {

@@ -1,5 +1,5 @@
 import type { FastifyInstance } from 'fastify';
-import { beforeEach, describe, expect, it, type Mock, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, type Mock, vi } from 'vitest';
 
 vi.mock('../../../config/env', () => ({
   env: {
@@ -10,9 +10,11 @@ vi.mock('../../../config/env', () => ({
     SESSION_COOKIE_TTL: 3600,
     SESSION_COOKIE_SECURE: false,
     DYNAMIC_CLIENT_BADGE_DAYS: 30,
+    REDIRECT_URI_CUSTOM_SCHEMES: [] as string[],
   },
 }));
 
+import { env } from '../../../config/env';
 import { OAUTH_OPAQUE_PARAM_MAX_LENGTH } from '../../constants';
 import { buildAuthorizationServerMetadata } from '../../helpers/discovery';
 import consentRoute from './consent';
@@ -868,6 +870,97 @@ describe('UI /ui/consent — redirect URI scheme gate', () => {
       )
     ).rejects.toThrow('redirect_uri not permitted for this environment');
     expect(state.body).toBeUndefined();
+  });
+
+  describe('REDIRECT_URI_CUSTOM_SCHEMES (#774)', () => {
+    const cursorCallback = 'cursor://anysphere.cursor-mcp/oauth/callback';
+
+    afterEach(() => {
+      env.REDIRECT_URI_CUSTOM_SCHEMES = [];
+    });
+
+    async function withCursorClient(sid: string, csrfToken: string) {
+      const { fastify, ctx } = makeFastify();
+      await consentRoute(fastify);
+      const { signSessionId } = await import('../../helpers/session-cookie');
+      (fastify.sessionUtils.getSession as unknown as Mock).mockResolvedValue({
+        userId: 'user-1',
+        email: 'a@b.com',
+        sessionId: sid,
+        csrfToken,
+        createdAt: Date.now(),
+        // The scopes the rendered screen presented, which the POST must match.
+        consentScopes: { 'app-123': ['email'] },
+      });
+      (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue({
+        ...CLIENT,
+        redirectUris: [cursorCallback],
+      });
+      return { fastify, ctx, cookie: `__Host-qauth_session=${signSessionId(sid)}` };
+    }
+
+    function allowBody(csrfToken: string) {
+      return {
+        decision: 'allow',
+        csrf_token: csrfToken,
+        client_id: 'app-123',
+        redirect_uri: cursorCallback,
+        state: 'xyz',
+        scope: 'email',
+        code_challenge: 'A'.repeat(43),
+        code_challenge_method: 'S256',
+        response_type: 'code',
+      };
+    }
+
+    it('GET and POST refuse a registered bare scheme when the setting is empty', async () => {
+      const { fastify, ctx, cookie } = await withCursorClient('sid-cursor-1', 'csrf-cursor-1');
+      const { reply, state } = createReply();
+      await expect(
+        ctx.get!(
+          {
+            query: { ...BASE_QUERY, redirect_uri: cursorCallback },
+            url: '/ui/consent?...',
+            headers: { cookie },
+            ip: '127.0.0.1',
+          },
+          reply
+        )
+      ).rejects.toThrow('redirect_uri not permitted for this environment');
+      expect(state.body).toBeUndefined();
+
+      await expect(
+        ctx.post!(
+          { body: allowBody('csrf-cursor-1'), headers: { cookie }, ip: '127.0.0.1' },
+          createReply().reply
+        )
+      ).rejects.toThrow('redirect_uri not permitted for this environment');
+      expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
+    });
+
+    it('GET renders and POST issues a code to a bare scheme the deployment lists', async () => {
+      env.REDIRECT_URI_CUSTOM_SCHEMES = ['cursor'];
+      const { fastify, ctx, cookie } = await withCursorClient('sid-cursor-2', 'csrf-cursor-2');
+      const rendered = createReply();
+      await ctx.get!(
+        {
+          query: { ...BASE_QUERY, redirect_uri: cursorCallback },
+          url: '/ui/consent?...',
+          headers: { cookie },
+          ip: '127.0.0.1',
+        },
+        rendered.reply
+      );
+      expect(rendered.state.body).toBeDefined();
+
+      const { reply, state } = createReply();
+      await ctx.post!(
+        { body: allowBody('csrf-cursor-2'), headers: { cookie }, ip: '127.0.0.1' },
+        reply
+      );
+      expect(fastify.repositories.authorizationCodes.create).toHaveBeenCalledOnce();
+      expect(state.redirected).toMatch(/^cursor:\/\/anysphere\.cursor-mcp\/oauth\/callback\?code=/);
+    });
   });
 });
 
