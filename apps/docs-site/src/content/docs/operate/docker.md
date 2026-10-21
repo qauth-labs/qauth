@@ -429,7 +429,7 @@ A CIMD client starts with no scopes, so it is granted none of the scopes it asks
 }
 ```
 
-- Write `client_id` exactly as the client sends it: an `https` URL with a path and no fragment.
+- Write `client_id` exactly as the client sends it: an `https` URL of at most 255 ASCII characters, with a path beyond `/` and no fragment.
 - An entry sets only `scopes` and `audience`. `audience` is the token audience when the client names no `resource`. An empty `scopes` list withdraws the grant.
 - An entry has no secret, so the seed prints none and `--rotate` does not apply. Every run sets the row to the entry's values and leaves the rest of it alone.
 - Until the client's first authorization, its row has no redirect URI. That authorization reads the document and fills the row in, and later re-resolutions never change the grant.
