@@ -30,6 +30,12 @@
  *
  * The target realm must already exist. Create it via migrations or the
  * default-realm helper before running this.
+ *
+ * The manifest's optional `cimd_clients` section grants scopes to CIMD
+ * clients (#770). Each entry sets only the client's `scopes` and `audience`;
+ * its metadata document supplies the rest. It has no secret, so `--rotate`
+ * does not apply: an entry always converges the row on the manifest. See
+ * `cimd-client-grants.ts`.
  */
 import { createHash, randomBytes } from 'node:crypto';
 import { readFileSync } from 'node:fs';
@@ -38,106 +44,12 @@ import { hash } from '@node-rs/argon2';
 import * as dotenv from 'dotenv';
 import { and, eq, sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/node-postgres';
-import { z } from 'zod';
 
 import { oauthClients, realms } from '../lib/schema';
-import {
-  agentModeEnum,
-  grantTypeEnum,
-  responseTypeEnum,
-  tokenEndpointAuthMethodEnum,
-} from '../lib/schema/enums';
+import { applyCimdClientGrant, type CimdGrantResult } from './cimd-client-grants';
+import { type ClientSpec, manifestSchema } from './seed-manifest';
 
 dotenv.config({ path: '../../../.env' });
-
-/* ------------------------------------------------------------------------ */
-/*                       Manifest schema (zod)                              */
-/* ------------------------------------------------------------------------ */
-
-// Reuse pgEnum values to stay in lock-step with the database schema. If
-// someone adds a grant type or auth method to the enum, the manifest
-// validator picks it up automatically.
-const grantTypeZ = z.enum(grantTypeEnum.enumValues);
-const responseTypeZ = z.enum(responseTypeEnum.enumValues);
-const tokenEndpointAuthMethodZ = z.enum(tokenEndpointAuthMethodEnum.enumValues);
-const agentModeZ = z.enum(agentModeEnum.enumValues);
-
-/**
- * A single JWK inside a manifest-supplied key set. Deliberately loose about
- * which members are present (the verifier decides that) but STRICT about one
- * thing: no private-key material. `d` is the private exponent/scalar for RSA,
- * EC and OKP alike; `k` is a symmetric key. The AS only ever needs a client's
- * PUBLIC key to verify a `private_key_jwt` assertion, so a manifest carrying a
- * private component is an operator mistake worth failing loudly on rather than
- * silently persisting into the database.
- */
-const clientJwkZ = z
-  .object({ kty: z.string().min(1) })
-  .catchall(z.unknown())
-  .refine((jwk) => !('d' in jwk) && !('k' in jwk), {
-    message: 'jwks must contain PUBLIC keys only (a "d" or "k" member was present)',
-  });
-
-const clientSpecSchema = z
-  .object({
-    client_id: z.string().min(1).max(255),
-    name: z.string().min(1).max(255),
-    description: z.string().max(2000).optional(),
-    grant_types: z.array(grantTypeZ).min(1),
-    response_types: z.array(responseTypeZ).optional(),
-    scopes: z.array(z.string().min(1)).optional(),
-    audience: z.array(z.string().min(1)).nullable().optional(),
-    redirect_uris: z.array(z.url()).optional(),
-    require_pkce: z.boolean().optional(),
-    token_endpoint_auth_method: tokenEndpointAuthMethodZ.optional(),
-    // ADR-007 §2: classify a seeded client as an autonomous AI agent.
-    // Defaults to false (standard client) when omitted, mirroring the schema
-    // column default so existing manifests are unaffected.
-    is_agent: z.boolean().optional(),
-    // ADR-007 §2 (#184): operator-set MAXIMUM agent scope mode. This is the
-    // intended provisioning path for the cap — it is deliberately NOT
-    // accepted from a client's own DCR/CIMD registration (an escalation
-    // control must be server-set). Omitted ⇒ NULL ⇒ no agent mode permitted
-    // (deny-by-default). Only meaningful together with `is_agent: true`.
-    max_agent_mode: agentModeZ.optional(),
-    // RFC 7591 §2 client JWKS, consumed by `private_key_jwt` client
-    // authentication (#384). This is the ONLY provisioning path for it:
-    // `POST /oauth/register` (DCR) does not accept `jwks` / `jwks_uri` or the
-    // `private_key_jwt` auth method, so a client cannot self-register the keys
-    // that authenticate it — same operator-set posture as `max_agent_mode`.
-    jwks: z.object({ keys: z.array(clientJwkZ).min(1).max(20) }).optional(),
-    jwks_uri: z.url().max(2048).optional(),
-  })
-  .strict()
-  // RFC 7591 §2: "The `jwks_uri` and `jwks` parameters MUST NOT both be
-  // present in the same request or response." Enforced HERE, at the validation
-  // layer, rather than as a DB CHECK so the operator gets a message naming the
-  // conflict instead of a constraint violation.
-  .refine((spec) => !(spec.jwks && spec.jwks_uri), {
-    message: 'jwks and jwks_uri are mutually exclusive (RFC 7591 §2) — set at most one',
-    path: ['jwks'],
-  })
-  // Fail closed on a half-provisioned private_key_jwt client: without a key
-  // set there is nothing to verify an assertion against, so the client could
-  // never authenticate. Surfacing that at seed time beats a runtime
-  // `invalid_client` nobody can explain.
-  .refine(
-    (spec) =>
-      spec.token_endpoint_auth_method !== 'private_key_jwt' || Boolean(spec.jwks || spec.jwks_uri),
-    {
-      message: 'token_endpoint_auth_method=private_key_jwt requires either jwks or jwks_uri',
-      path: ['token_endpoint_auth_method'],
-    }
-  );
-
-const manifestSchema = z
-  .object({
-    realm: z.string().min(1),
-    clients: z.array(clientSpecSchema).min(1),
-  })
-  .strict();
-
-type ClientSpec = z.infer<typeof clientSpecSchema>;
 
 /* ------------------------------------------------------------------------ */
 /*                                 Helpers                                  */
@@ -205,11 +117,19 @@ async function main(): Promise<void> {
     }
 
     const issued: Issued[] = [];
-    for (const spec of manifest.clients) {
+    for (const spec of manifest.clients ?? []) {
       issued.push(await provisionClient(db, realm.id, spec, rotate));
     }
 
-    report(manifest.realm, issued);
+    const granted: CimdGrantResult[] = [];
+    for (const spec of manifest.cimd_clients ?? []) {
+      granted.push(await applyCimdClientGrant(db, realm.id, spec));
+    }
+
+    if (issued.length > 0) report(manifest.realm, issued);
+    reportCimdGrants(manifest.realm, granted);
+
+    if (granted.some((g) => g.status === 'not_cimd')) process.exitCode = 1;
   } finally {
     await db.$client.end();
   }
@@ -360,6 +280,26 @@ function report(realm: string, issued: Issued[]): void {
     console.log(
       `Skipped (already exist; pass --rotate to re-issue secrets):\n  ` +
         skipped.map((s) => s.clientId).join(', ') +
+        '\n'
+    );
+  }
+}
+
+function reportCimdGrants(realm: string, granted: CimdGrantResult[]): void {
+  if (granted.length === 0) return;
+
+  console.log(`\nCIMD clients in realm "${realm}" (scopes and audience only; no secret):`);
+  for (const g of granted) {
+    console.log(`  ${g.clientId}: ${g.status === 'not_cimd' ? 'REFUSED' : g.status}`);
+  }
+  console.log('');
+
+  const refused = granted.filter((g) => g.status === 'not_cimd');
+  if (refused.length > 0) {
+    console.error(
+      'Refused, and left unchanged: a client with this client_id exists and is not a CIMD ' +
+        'client. Provision it under "clients" instead:\n  ' +
+        refused.map((r) => r.clientId).join(', ') +
         '\n'
     );
   }

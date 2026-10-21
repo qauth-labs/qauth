@@ -412,6 +412,31 @@ CIMD is the recommended MCP client-registration mechanism (see [ADR-007](/refere
 
 > **Note:** the `CIMD_*` variables are optional and default-safe, so the stack runs without them, and `.env.docker.example` does not list them. The `auth-server` `environment:` map does, so setting them in `.env` takes effect. Be deliberate about `CIMD_TRUST_POLICY`: it defaults to `accept-any-https`, which returns before `CIMD_TRUSTED_DOMAINS` is consulted — so populating the domain list alone changes nothing until you also set `CIMD_TRUST_POLICY=allowlist`.
 
+#### Granting scopes to a CIMD client
+
+A CIMD client starts with no scopes, so it is granted none of the scopes it asks for. Its document owns its name, redirect URIs and grant types; which scopes it may receive is the operator's decision, which a document cannot make. Grant them in the `cimd_clients` section of the seed manifest, and run `db:seed-oauth-clients` as for any other manifest:
+
+```json
+{
+  "realm": "master",
+  "cimd_clients": [
+    {
+      "client_id": "https://client.example.com/oauth/metadata.json",
+      "scopes": ["mcp:read", "mcp:write", "offline_access"],
+      "audience": ["https://mcp.example.com/mcp"]
+    }
+  ]
+}
+```
+
+- Write `client_id` exactly as the client sends it: an `https` URL with a path and no fragment.
+- An entry sets only `scopes` and `audience`. `audience` is the token audience when the client names no `resource`. An empty `scopes` list withdraws the grant.
+- An entry has no secret, so the seed prints none and `--rotate` does not apply. Every run sets the row to the entry's values and leaves the rest of it alone.
+- Until the client's first authorization, its row has no redirect URI. That authorization reads the document and fills the row in, and later re-resolutions never change the grant.
+- The grant is a ceiling: the user still consents, for each resource.
+- The seed refuses an entry whose `client_id` belongs to a client that is not a CIMD client, and changes nothing for it.
+- The client resolves only while `CIMD_ENABLED` is `true` and the trust policy accepts its host.
+
 ### ID-JAG / enterprise-managed authorization (ADR-011)
 
 **Off by default**, and doubly fail-closed: with `ID_JAG_ENABLED` off the
