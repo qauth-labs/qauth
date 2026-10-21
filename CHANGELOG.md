@@ -57,6 +57,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   through this library comes next. When it does, `NODE_ENV=production` will
   refuse an unset KEK and the published development KEK.
 
+- **Redirect URI schemes without a period, when the operator lists them**
+  ([#774]). Since 0.1.0 a redirect URI has had to be `https`, loopback `http`
+  or a reverse-domain private-use scheme (`com.example.app:`), which shut out
+  native apps that call back on a bare scheme: the Cursor desktop app's
+  `cursor://anysphere.cursor-mcp/oauth/callback` could neither register nor
+  authorize. `REDIRECT_URI_CUSTOM_SCHEMES` (stable, empty by default) names the
+  bare schemes a deployment accepts, such as `cursor`. A listed scheme is
+  accepted by dynamic client registration, `POST /api/clients`, CIMD documents
+  and the authorization-time gate in `/oauth/authorize` and the consent screen;
+  matching stays exact. PKCE, required for every client, protects the code at
+  either kind of custom scheme (RFC 8252 §8.1). The server refuses to start
+  when an entry is not a scheme name or names one a browser or the operating
+  system acts on itself (`http`, `https`, `javascript`, `data`, `file`,
+  `intent`, `mailto` and the like), and refuses such schemes at authorization
+  whatever the list holds. With the variable unset, behaviour is unchanged.
+
 ### Changed
 
 - `REQUIRE_EMAIL_VERIFIED` is now an alias in the key registry, resolved by the
@@ -89,6 +105,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#452]: https://github.com/qauth-labs/qauth/issues/452
 [#461]: https://github.com/qauth-labs/qauth/issues/461
 [#462]: https://github.com/qauth-labs/qauth/issues/462
+[#774]: https://github.com/qauth-labs/qauth/issues/774
 
 ## [0.1.2] - 2026-10-21
 

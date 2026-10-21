@@ -41,7 +41,8 @@ export function isOperatorProvisionedClient(client: ClientOriginLike): boolean {
 function untrustedRedirectPage(location: string, params: AuthorizationErrorParams): string {
   const host = redirectHost(location);
   // Only an http(s) target becomes a link: the URI is client-supplied, and
-  // registration also accepts RFC 8252 private-use schemes for native apps.
+  // registration also accepts RFC 8252 private-use schemes for native apps,
+  // and the bare schemes listed in REDIRECT_URI_CUSTOM_SCHEMES (#774).
   const href = safeUrl(location);
   const description = params.error_description ? html`: ${params.error_description}` : safe('');
   const continueLink = href

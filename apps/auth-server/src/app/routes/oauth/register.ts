@@ -89,7 +89,7 @@ export default async function (fastify: FastifyInstance) {
       // Validate + normalize against realm policy. Throws BadRequestError
       // with RFC 7591 error codes embedded in the message on policy
       // violations; the global error handler maps to HTTP 400.
-      const normalized = validateAndNormalize(body, allowedScopes);
+      const normalized = validateAndNormalize(body, allowedScopes, env.REDIRECT_URI_CUSTOM_SCHEMES);
 
       // A registration attributed to a developer adds to the same list as
       // `POST /api/clients`, so it counts against the same ceiling, checked

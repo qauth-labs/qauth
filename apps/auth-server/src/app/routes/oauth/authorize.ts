@@ -190,13 +190,14 @@ export default async function (fastify: FastifyInstance) {
     // an `http://` loopback redirect is allowed only where PKCE is enforced or
     // the environment is `development`, a non-loopback `http://` redirect
     // is refused everywhere (ANT-2026-D0XJAT8S), and so is any scheme other
-    // than https, http and an RFC 8252 private-use one, which a row registered
-    // before registration refused them could still hold. Fail-safe: an unset
-    // client/realm resolves to `production`. We reject BEFORE redirecting (the
-    // redirect target is the very thing under suspicion), matching the
-    // unregistered-URI handling.
+    // than https, http, an RFC 8252 private-use one and a bare one the
+    // deployment lists in REDIRECT_URI_CUSTOM_SCHEMES (#774), which a row
+    // registered before registration refused them could still hold. Fail-safe:
+    // an unset client/realm resolves to `production`. We reject BEFORE
+    // redirecting (the redirect target is the very thing under suspicion),
+    // matching the unregistered-URI handling.
     const policy = resolveEnvironmentPolicy(client, realm);
-    if (!isRedirectUriAllowedForPolicy(redirectUri, policy)) {
+    if (!isRedirectUriAllowedForPolicy(redirectUri, policy, env.REDIRECT_URI_CUSTOM_SCHEMES)) {
       await fastify.repositories.auditLogs.create({
         userId: null,
         oauthClientId: client.id,
@@ -207,7 +208,7 @@ export default async function (fastify: FastifyInstance) {
         userAgent: request.headers['user-agent'] || null,
         metadata: {
           error: 'redirect_uri not permitted for this environment',
-          reason: !isAllowedRedirectUriScheme(redirectUri)
+          reason: !isAllowedRedirectUriScheme(redirectUri, env.REDIRECT_URI_CUSTOM_SCHEMES)
             ? 'redirect_uri_scheme_not_allowed'
             : isHttpLocalhostRedirect(redirectUri)
               ? 'http_localhost_redirect_requires_development'

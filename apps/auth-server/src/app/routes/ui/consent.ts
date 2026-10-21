@@ -394,7 +394,9 @@ export default async function (fastify: FastifyInstance) {
       // applies on the render path so we never show a consent screen for a
       // redirect the POST handler will (correctly) refuse.
       const policy = resolveEnvironmentPolicy(client, realm);
-      if (!isRedirectUriAllowedForPolicy(query.redirect_uri, policy)) {
+      if (
+        !isRedirectUriAllowedForPolicy(query.redirect_uri, policy, env.REDIRECT_URI_CUSTOM_SCHEMES)
+      ) {
         throw new BadRequestError('redirect_uri not permitted for this environment');
       }
 
@@ -611,7 +613,9 @@ export default async function (fastify: FastifyInstance) {
       // ADR-008 §5/§7 (#197): effective environment policy for this (client,
       // realm). Gates the localhost redirect and the automatic step-up below.
       const policy = resolveEnvironmentPolicy(client, realm);
-      if (!isRedirectUriAllowedForPolicy(body.redirect_uri, policy)) {
+      if (
+        !isRedirectUriAllowedForPolicy(body.redirect_uri, policy, env.REDIRECT_URI_CUSTOM_SCHEMES)
+      ) {
         throw new BadRequestError('redirect_uri not permitted for this environment');
       }
 

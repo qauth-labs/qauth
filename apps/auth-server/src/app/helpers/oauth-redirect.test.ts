@@ -11,6 +11,12 @@ import {
 
 const ISS = 'https://auth.example.com';
 
+/** `REDIRECT_URI_CUSTOM_SCHEMES` unset: the default. */
+const NO_CUSTOM_SCHEMES: readonly string[] = [];
+
+/** Cursor's desktop callback (#774): a scheme without a period. */
+const CURSOR_CALLBACK = 'cursor://anysphere.cursor-mcp/oauth/callback';
+
 describe('oauth-redirect — isHttpLocalhostRedirect (ADR-008 §5, #197)', () => {
   it('is true for http loopback hosts (localhost, 127.0.0.0/8, ::1)', () => {
     expect(isHttpLocalhostRedirect('http://localhost/cb')).toBe(true);
@@ -39,16 +45,28 @@ describe('oauth-redirect — isHttpLocalhostRedirect (ADR-008 §5, #197)', () =>
 describe('oauth-redirect — isRedirectUriAllowedForPolicy (ADR-008 §5, #197)', () => {
   it('development permits http://localhost redirects', () => {
     expect(
-      isRedirectUriAllowedForPolicy('http://localhost:3000/cb', ENVIRONMENT_PROFILES.development)
+      isRedirectUriAllowedForPolicy(
+        'http://localhost:3000/cb',
+        ENVIRONMENT_PROFILES.development,
+        NO_CUSTOM_SCHEMES
+      )
     ).toBe(true);
   });
 
   it('staging and production permit http://localhost because PKCE is enforced (RFC 8252 native/CLI)', () => {
     expect(
-      isRedirectUriAllowedForPolicy('http://localhost:3000/cb', ENVIRONMENT_PROFILES.staging)
+      isRedirectUriAllowedForPolicy(
+        'http://localhost:3000/cb',
+        ENVIRONMENT_PROFILES.staging,
+        NO_CUSTOM_SCHEMES
+      )
     ).toBe(true);
     expect(
-      isRedirectUriAllowedForPolicy('http://127.0.0.1/cb', ENVIRONMENT_PROFILES.production)
+      isRedirectUriAllowedForPolicy(
+        'http://127.0.0.1/cb',
+        ENVIRONMENT_PROFILES.production,
+        NO_CUSTOM_SCHEMES
+      )
     ).toBe(true);
   });
 
@@ -61,7 +79,9 @@ describe('oauth-redirect — isRedirectUriAllowedForPolicy (ADR-008 §5, #197)',
       localhostRedirectAllowed: false,
       pkceRequired: false,
     };
-    expect(isRedirectUriAllowedForPolicy('http://localhost:3000/cb', noPkceNonDev)).toBe(false);
+    expect(
+      isRedirectUriAllowedForPolicy('http://localhost:3000/cb', noPkceNonDev, NO_CUSTOM_SCHEMES)
+    ).toBe(false);
   });
 
   // Regression (ANT-2026-D0XJAT8S): only plain-http LOOPBACK redirects were
@@ -79,7 +99,9 @@ describe('oauth-redirect — isRedirectUriAllowedForPolicy (ADR-008 §5, #197)',
         'http://app.localhost:8080/cb',
         'http://[::ffff:127.0.0.1]:8080/cb',
       ]) {
-        expect(isRedirectUriAllowedForPolicy(uri, ENVIRONMENT_PROFILES[env])).toBe(false);
+        expect(
+          isRedirectUriAllowedForPolicy(uri, ENVIRONMENT_PROFILES[env], NO_CUSTOM_SCHEMES)
+        ).toBe(false);
       }
     }
   });
@@ -87,11 +109,19 @@ describe('oauth-redirect — isRedirectUriAllowedForPolicy (ADR-008 §5, #197)',
   it('https redirects are permitted in every environment (the gate never widens)', () => {
     for (const env of ['development', 'staging', 'production'] as const) {
       expect(
-        isRedirectUriAllowedForPolicy('https://example.com/cb', ENVIRONMENT_PROFILES[env])
+        isRedirectUriAllowedForPolicy(
+          'https://example.com/cb',
+          ENVIRONMENT_PROFILES[env],
+          NO_CUSTOM_SCHEMES
+        )
       ).toBe(true);
-      expect(isRedirectUriAllowedForPolicy('https://localhost/cb', ENVIRONMENT_PROFILES[env])).toBe(
-        true
-      );
+      expect(
+        isRedirectUriAllowedForPolicy(
+          'https://localhost/cb',
+          ENVIRONMENT_PROFILES[env],
+          NO_CUSTOM_SCHEMES
+        )
+      ).toBe(true);
     }
   });
 
@@ -99,7 +129,8 @@ describe('oauth-redirect — isRedirectUriAllowedForPolicy (ADR-008 §5, #197)',
     expect(
       isRedirectUriAllowedForPolicy(
         'com.example.app:/oauth2redirect',
-        ENVIRONMENT_PROFILES.production
+        ENVIRONMENT_PROFILES.production,
+        NO_CUSTOM_SCHEMES
       )
     ).toBe(true);
   });
@@ -122,14 +153,36 @@ describe('oauth-redirect — isRedirectUriAllowedForPolicy (ADR-008 §5, #197)',
     'com..example:/cb',
   ])('refuses a registered %s in every environment', (uri) => {
     for (const env of ['development', 'staging', 'production'] as const) {
-      expect(isRedirectUriAllowedForPolicy(uri, ENVIRONMENT_PROFILES[env])).toBe(false);
+      expect(isRedirectUriAllowedForPolicy(uri, ENVIRONMENT_PROFILES[env], NO_CUSTOM_SCHEMES)).toBe(
+        false
+      );
+    }
+  });
+
+  it('a listed bare scheme (#774) is allowed in every environment, an unlisted one in none', () => {
+    for (const env of ['development', 'staging', 'production'] as const) {
+      expect(
+        isRedirectUriAllowedForPolicy(CURSOR_CALLBACK, ENVIRONMENT_PROFILES[env], ['cursor'])
+      ).toBe(true);
+      expect(
+        isRedirectUriAllowedForPolicy(CURSOR_CALLBACK, ENVIRONMENT_PROFILES[env], NO_CUSTOM_SCHEMES)
+      ).toBe(false);
+      expect(
+        isRedirectUriAllowedForPolicy('javascript:alert(1)', ENVIRONMENT_PROFILES[env], [
+          'javascript',
+        ])
+      ).toBe(false);
     }
   });
 
   it('refuses what it cannot parse', () => {
-    expect(isRedirectUriAllowedForPolicy('not a url', ENVIRONMENT_PROFILES.development)).toBe(
-      false
-    );
+    expect(
+      isRedirectUriAllowedForPolicy(
+        'not a url',
+        ENVIRONMENT_PROFILES.development,
+        NO_CUSTOM_SCHEMES
+      )
+    ).toBe(false);
   });
 });
 
@@ -143,7 +196,7 @@ describe('oauth-redirect — isAllowedRedirectUriScheme', () => {
     'COM.Example.App:/cb',
     'net.example-1.tool://cb',
   ])('allows %s', (uri) => {
-    expect(isAllowedRedirectUriScheme(uri)).toBe(true);
+    expect(isAllowedRedirectUriScheme(uri, NO_CUSTOM_SCHEMES)).toBe(true);
   });
 
   it.each([
@@ -160,7 +213,42 @@ describe('oauth-redirect — isAllowedRedirectUriScheme', () => {
     'wss://app.example/cb',
     'com..example:/cb',
   ])('refuses %s', (uri) => {
-    expect(isAllowedRedirectUriScheme(uri)).toBe(false);
+    expect(isAllowedRedirectUriScheme(uri, NO_CUSTOM_SCHEMES)).toBe(false);
+  });
+
+  describe('REDIRECT_URI_CUSTOM_SCHEMES (#774)', () => {
+    it('refuses a bare scheme the deployment does not list', () => {
+      expect(isAllowedRedirectUriScheme(CURSOR_CALLBACK, NO_CUSTOM_SCHEMES)).toBe(false);
+      expect(isAllowedRedirectUriScheme(CURSOR_CALLBACK, ['vscode'])).toBe(false);
+    });
+
+    it('allows a bare scheme the deployment lists, whatever its case in the URI', () => {
+      expect(isAllowedRedirectUriScheme(CURSOR_CALLBACK, ['cursor'])).toBe(true);
+      expect(
+        isAllowedRedirectUriScheme('CURSOR://anysphere.cursor-mcp/oauth/callback', ['cursor'])
+      ).toBe(true);
+      expect(isAllowedRedirectUriScheme('cursor:/callback', ['vscode', 'cursor'])).toBe(true);
+    });
+
+    it.each(['myapp://callback', 'cursorx://callback', 'cur://callback', 'cursor.:/cb'])(
+      'still refuses %s with only cursor listed',
+      (uri) => {
+        expect(isAllowedRedirectUriScheme(uri, ['cursor'])).toBe(false);
+      }
+    );
+
+    // Boot refuses such a list; the runtime rule does not depend on that.
+    it.each([
+      ['javascript', 'javascript:alert(document.domain)'],
+      ['data', 'data:text/html,<script>alert(1)</script>'],
+      ['file', 'file:///etc/passwd'],
+      ['blob', 'blob:https://app.example/0b3f5a2e-6c1d-4d7e-9a8b-1f2e3d4c5b6a'],
+      ['intent', 'intent://scan/#Intent;scheme=zxing;end'],
+      ['ws', 'ws://app.example/cb'],
+      ['chrome-extension', 'chrome-extension://abcdefghijklmnop/cb.html'],
+    ])('refuses a %s URI even when the list names %s', (scheme, uri) => {
+      expect(isAllowedRedirectUriScheme(uri, [scheme])).toBe(false);
+    });
   });
 });
 

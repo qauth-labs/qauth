@@ -35,6 +35,16 @@ export const REGISTRATION_KEYS = defineKeys([
     docs: 'The most OAuth clients one developer account may own, at least 1.',
   },
   {
+    name: 'REDIRECT_URI_CUSTOM_SCHEMES',
+    tier: 'stable',
+    role: 'realm-seed',
+    seeds: 'registration.redirectUriCustomSchemes',
+    owner: 'client-registration',
+    default: '',
+    since: '0.2.0',
+    docs: 'Schemes without a period that a redirect URI may use besides `https`, loopback `http` and reverse-domain schemes, separated by spaces or commas, such as `cursor`; boot refuses one a browser or the operating system acts on, such as `javascript`.',
+  },
+  {
     name: 'CIMD_ENABLED',
     tier: 'stable',
     role: 'realm-seed',
