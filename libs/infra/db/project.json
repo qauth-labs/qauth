@@ -68,7 +68,7 @@
         "cwd": "libs/infra/db",
         "forwardAllArgs": true
       },
-      "description": "Idempotent OAuth-client provisioner \u2014 pass `-- --manifest=<path> [--rotate]`"
+      "description": "Idempotent OAuth-client provisioner, and scope grants for CIMD clients \u2014 pass `-- --manifest=<path> [--rotate]`"
     },
     "db:suspend-oauth-client": {
       "executor": "nx:run-commands",

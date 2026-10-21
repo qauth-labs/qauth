@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Scopes for CIMD clients from the seed manifest** ([#770]). A CIMD client
+  starts with no scopes, and until now only a hand-written database row could
+  give it any. The seed manifest's new `cimd_clients` section sets a CIMD
+  client's `scopes` and `audience` and nothing else: the client's metadata
+  document still supplies every other field, and re-resolving it never changes
+  the grant. An entry has no secret, so the seed prints none for it and every
+  run sets the row to the entry's values. The seed refuses an entry whose
+  `client_id` belongs to a client that is not a CIMD client. `clients` is now
+  optional, so a manifest may hold only CIMD entries; existing manifests work
+  as before. The Docker guide's CIMD section describes it.
+
+[#770]: https://github.com/qauth-labs/qauth/issues/770
+
 ## [0.1.1] - 2026-10-21
 
 Fixes backported from `main` to the 0.1 line. One of them changes what the ID
