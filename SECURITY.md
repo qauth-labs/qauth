@@ -67,8 +67,11 @@ is a dropped ball, not a policy.
 
 ## Supported versions
 
-Only `main` and the latest release receive fixes. There are no maintenance
-branches and no backports. The 1.0 release will ship its own support policy.
+`main` and the latest release line receive fixes. A fix lands on `main`
+first. When the latest release needs it before the next minor release, it is
+backported to that line's release branch and shipped as a patch release, as
+v0.1.1 was. Earlier lines receive no fixes. The 1.0 release will ship its own
+support policy.
 
 ## Coordinated disclosure
 
