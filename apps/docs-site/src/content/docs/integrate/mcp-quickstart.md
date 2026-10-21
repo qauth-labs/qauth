@@ -301,8 +301,11 @@ CIMD for anything you deploy.
   Its `redirect_uris` get the check DCR applies, and like DCR QAuth refuses the
   whole document if one of them fails it (for example an `http://` URI on a
   host that is not loopback, or one with a fragment): the client does not
-  resolve, so every request for it gets `invalid_client`. For purely
-  local testing over `http://localhost`, CIMD is impractical — use DCR.
+  resolve, so every request for it gets `invalid_client`. A CIMD client starts
+  with no scopes; the operator grants them in the seed manifest's
+  `cimd_clients` section
+  ([Granting scopes to a CIMD client](/operate/docker/#granting-scopes-to-a-cimd-client)).
+  For purely local testing over `http://localhost`, CIMD is impractical — use DCR.
   MCP 2026-07-28 still cites `draft-ietf-oauth-client-id-metadata-document-00`;
   the IETF draft has since reached **-02** (6 July 2026), and QAuth's
   implementation already satisfies its added hardening (HTTPS-only fetches with
