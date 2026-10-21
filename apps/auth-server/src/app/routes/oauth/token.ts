@@ -45,6 +45,7 @@ import {
   type ValidatedIdJag,
   validateIdJagAssertion,
 } from '../../helpers/id-jag';
+import { resolveProfileClaimsForScopes } from '../../helpers/profile-claims';
 import { getOrCreateDefaultRealm } from '../../helpers/realm';
 import { resolveRealmRateLimitMax } from '../../helpers/realm-rate-limit';
 import { highestAgentModeInScopes } from '../../helpers/scope-modes';
@@ -703,7 +704,9 @@ async function handleAuthorizationCode(
         // §5.4). `emailClaims` is already empty without it, and the shared
         // resolution keeps the access token and ID token consistent.
         ...emailClaims,
-        name: resolveDisplayName(user),
+        // BREAKING (#755): `name` is released only under the `profile` scope,
+        // through the same helper userinfo uses, so the two cannot drift.
+        ...resolveProfileClaimsForScopes(user, authCode.scopes),
         nonce: authCode.nonce ?? undefined,
         // OIDC Core §2 `auth_time`: the real end-user authentication time
         // (session establishment), captured on the auth code at mint time. In
@@ -772,24 +775,6 @@ async function handleAuthorizationCode(
     ...(scopeString ? { scope: scopeString } : {}),
     ...(idToken ? { id_token: idToken } : {}),
   };
-}
-
-/**
- * Derive the OIDC `name` claim from a user record.
- *
- * OIDC Core §5.1 defines `name` as the end-user's full display name. QAuth
- * stores `firstName` / `lastName` separately (both optional), so we join the
- * present parts. Returns `undefined` when neither is set so the claim is
- * omitted entirely rather than emitted as an empty string.
- */
-function resolveDisplayName(user: {
-  firstName?: string | null;
-  lastName?: string | null;
-}): string | undefined {
-  const parts = [user.firstName, user.lastName].filter(
-    (p): p is string => typeof p === 'string' && p.trim().length > 0
-  );
-  return parts.length > 0 ? parts.join(' ') : undefined;
 }
 
 /**
@@ -1561,6 +1546,16 @@ async function handleTokenExchange(
       subjectAudience,
     });
     throw new InvalidRequestError('subject_token was not issued for this client');
+  }
+
+  // A `client_credentials` token names no user: its `sub` is its own
+  // `client_id` (handleClientCredentials). An agent's own machine token
+  // passes GATE 3c, since its `aud` falls back to that `client_id`, but there
+  // is no one to act on behalf of. Refused before the user lookup, so a
+  // `client_id` is never read as a `users.id` (#754).
+  if (subjectPayload.sub === subjectPayload.clientId) {
+    await auditFailure('invalid_request: subject_token has no user subject');
+    throw new InvalidRequestError('subject_token subject is not a user');
   }
 
   // The subject user must still exist and be enabled (RFC 9700 §4.14). We bind

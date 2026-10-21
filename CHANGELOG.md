@@ -7,6 +7,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-10-21
+
+Fixes backported from `main` to the 0.1 line. One of them changes what the ID
+token carries; see Changed.
+
+### Changed
+
+- **BREAKING**: ID tokens now carry `name` only when the granted scope
+  includes `profile`, the rule userinfo already follows (OIDC Core §5.4)
+  ([#755]). Before, the `authorization_code` grant put the user's name in the
+  ID token whatever was granted, so a client that asked only for `openid` got
+  it. The ID token and userinfo now resolve the claim through one helper and
+  release the same profile claims for the same grant. No other grant signs an
+  ID token, and access tokens never carried `name`.
+
+  **Who is affected**: a client that reads `name` from the ID token without
+  requesting `profile`. **Action**: request the `profile` scope, which shows
+  on the consent screen. Userinfo behaves as before.
+
+### Fixed
+
+- The auth server no longer exits when PostgreSQL closes an idle pooled
+  connection, as a restart, a failover or `pg_terminate_backend` does
+  ([#746]). pg-pool emits that error on the pool after it has dropped the
+  client, and with no listener Node threw it and ended the process. The pool
+  now logs the error and opens a fresh connection on the next query.
+
+- `/oauth/userinfo` answers a token whose subject is not a user with 401
+  `invalid_token` and a `WWW-Authenticate: Bearer` challenge, on GET and POST
+  ([#754], OIDC Core §5.3.3, RFC 6750 §3.1). A `client_credentials` token
+  carries its `client_id` as `sub`, and with no `resource` and no client
+  `audience` its `aud` is the `client_id` too, so it passed the audience check
+  and failed with 500: the user lookup, then the failure audit, sent the
+  `client_id` to PostgreSQL as a user id. A token whose user no longer exists
+  gets the same 401 instead of 404. Token exchange refuses such a token as
+  `subject_token` with `invalid_request` before any lookup, and the users
+  repository answers "no such user" for an id that is not a UUID without
+  querying. `/auth/logout` had the same failure audit: a sign-out with the
+  token of a deleted user answered 500. It now answers 401 `invalid_token`
+  instead of the intended 404.
+
+[#746]: https://github.com/qauth-labs/qauth/pull/746
+[#754]: https://github.com/qauth-labs/qauth/issues/754
+[#755]: https://github.com/qauth-labs/qauth/issues/755
+
 ## [0.1.0] - 2026-10-19
 
 ### Added
@@ -495,5 +540,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`redirect_uri not permitted for this environment`). Re-register a native
   app that used a scheme without a period under a reverse-domain scheme.
 
-[Unreleased]: https://github.com/qauth-labs/qauth/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/qauth-labs/qauth/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/qauth-labs/qauth/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/qauth-labs/qauth/releases/tag/v0.1.0

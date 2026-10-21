@@ -1,4 +1,4 @@
-import { JWTExpiredError, JWTInvalidError, NotFoundError } from '@qauth-labs/shared-errors';
+import { JWTExpiredError, JWTInvalidError } from '@qauth-labs/shared-errors';
 import type { FastifyInstance } from 'fastify';
 import { describe, expect, it, type Mock, vi } from 'vitest';
 
@@ -442,7 +442,7 @@ describe('POST /auth/logout', () => {
     expect(fastify.repositories.refreshTokens.revokeAllForUser).not.toHaveBeenCalled();
   });
 
-  it('throws NotFoundError (404) when the user does not exist, without revoking', async () => {
+  it('throws (401) when the user does not exist, without revoking, and audits no user id', async () => {
     const { fastify, ctx } = createFastifyStub();
     (fastify.jwtUtils.extractFromHeader as unknown as Mock).mockReturnValue('valid.access.jwt');
     (fastify.jwtUtils.verifyAccessToken as unknown as Mock).mockResolvedValue(
@@ -454,8 +454,17 @@ describe('POST /auth/logout', () => {
     const handler = ctx.handler;
     if (!handler) throw new Error('Handler missing');
 
-    await expect(handler(logoutRequest(), createReply())).rejects.toThrow(NotFoundError);
+    await expect(handler(logoutRequest(), createReply())).rejects.toThrow(JWTInvalidError);
     expect(fastify.repositories.refreshTokens.revokeAllForUser).not.toHaveBeenCalled();
+    // `audit_logs.user_id` references `users`: the deleted subject goes to
+    // metadata, or the insert fails and the 401 becomes a 500 (#754).
+    expect(fastify.repositories.auditLogs.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: 'user.logout.failure',
+        userId: null,
+        metadata: expect.objectContaining({ tokenSub: 'ghost-user' }),
+      })
+    );
   });
 
   it('writes a failure audit log (user.logout.failure) when logout fails', async () => {

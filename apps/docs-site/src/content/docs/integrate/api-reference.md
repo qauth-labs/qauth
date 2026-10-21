@@ -210,7 +210,7 @@ token issued to any other client or audience is refused.
 
 **`200 OK`**: `{ "success": true, "message": "Successfully logged out" }`
 
-Errors: `401` (missing/invalid bearer).
+Errors: `401` (missing/invalid bearer, or a token whose user no longer exists).
 
 ### `POST /auth/verify`
 
@@ -340,11 +340,12 @@ Key contract facts:
 
 `id_token` is a separate, client-audienced (`aud` = your `client_id`) EdDSA JWT
 asserting the sign-in event: `sub`, `nonce` (when sent), `auth_time`, `name`
-(when set on the user, not gated by the `profile` scope), and `email` /
+(only under the `profile` scope, and only when set on the user), and `email` /
 `email_verified` (only under the `email` scope, same trust-ordered resolution
 as the [UserInfo response](#userinfo-response-getpost-oauthuserinfo-200-ok)
-below). Only the `authorization_code` grant issues one; `refresh_token` does
-not reissue it. See
+below). The ID token and UserInfo release the same profile and email claims
+for the same grant. Only the `authorization_code` grant issues one;
+`refresh_token` does not reissue it. See
 [ID token claims](/integrate/oauth-flow/#id-token-claims-oidc) for the full
 list.
 

@@ -243,17 +243,18 @@ Notes:
 Beyond the standard `iss` / `sub` / `aud` / `exp` / `iat`, `id_token` carries
 (all via `signIdToken`, `libs/server/jwt/src/lib/jwt-service.ts:170-204`):
 
-| Claim            | Present when                                                                             |
-| ---------------- | ---------------------------------------------------------------------------------------- |
-| `nonce`          | The authorize request sent one (OIDC Core §3.1.3.6) — echoed back unmodified.            |
-| `auth_time`      | Always for the code flow (the session's real authentication time, epoch seconds).        |
-| `name`           | The user has a `firstName` and/or `lastName` set — **not gated by the `profile` scope**. |
-| `email`          | The granted scope includes `email` **and** a verified email attribute exists.            |
-| `email_verified` | Same condition as `email`; always `true` when present.                                   |
+| Claim            | Present when                                                                                   |
+| ---------------- | ---------------------------------------------------------------------------------------------- |
+| `nonce`          | The authorize request sent one (OIDC Core §3.1.3.6) — echoed back unmodified.                  |
+| `auth_time`      | Always for the code flow (the session's real authentication time, epoch seconds).              |
+| `name`           | The granted scope includes `profile` **and** the user has a `firstName` and/or `lastName` set. |
+| `email`          | The granted scope includes `email` **and** a verified email attribute exists.                  |
+| `email_verified` | Same condition as `email`; always `true` when present.                                         |
 
 `email`/`email_verified` share the same trust-ordered resolution the access
 token and [UserInfo](#userinfo-oidc) use, so all three never disagree within
-one issuance.
+one issuance. `name` follows the rule UserInfo applies (OIDC Core §5.4), so a
+client that asks only for `openid` gets no `name` from either.
 
 The **access token** follows the same `email` rule on every grant
 (`authorization_code`, `refresh_token`, token exchange, `jwt-bearer`): it
