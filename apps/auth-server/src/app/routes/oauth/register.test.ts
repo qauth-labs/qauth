@@ -1,6 +1,6 @@
 import { BadRequestError, ForbiddenError } from '@qauth-labs/shared-errors';
 import type { FastifyInstance } from 'fastify';
-import { describe, expect, it, type Mock, vi } from 'vitest';
+import { afterEach, describe, expect, it, type Mock, vi } from 'vitest';
 
 vi.mock('../../../config/env', () => ({
   env: {
@@ -12,6 +12,7 @@ vi.mock('../../../config/env', () => ({
     REGISTER_CLIENT_RATE_WINDOW: 60,
     DEFAULT_DYNAMIC_REGISTRATION_SCOPES: ['openid', 'profile', 'email', 'offline_access'],
     MAX_CLIENTS_PER_DEVELOPER: 3,
+    REDIRECT_URI_CUSTOM_SCHEMES: [] as string[],
   },
 }));
 
@@ -24,6 +25,7 @@ vi.mock('../../helpers/registration-attribution', () => ({
   resolveRegistrationDeveloperId: resolveDeveloperId,
 }));
 
+import { env } from '../../../config/env';
 import { dynamicClientRegistrationRequestSchema } from '../../schemas/oauth';
 import registerRoute from './register';
 
@@ -281,6 +283,52 @@ describe('POST /oauth/register — Dynamic Client Registration (RFC 7591)', () =
       expect(state.createdClients).toHaveLength(0);
     }
   );
+
+  describe('REDIRECT_URI_CUSTOM_SCHEMES (#774)', () => {
+    const cursorCallback = 'cursor://anysphere.cursor-mcp/oauth/callback';
+
+    afterEach(() => {
+      env.REDIRECT_URI_CUSTOM_SCHEMES = [];
+    });
+
+    async function registerWith(redirectUri: string) {
+      const { fastify, ctx, state } = createFastifyStub();
+      await registerRoute(fastify);
+      const { reply, state: replyState } = createReply();
+      const run = () =>
+        ctx.handler!(
+          {
+            body: { client_name: 'Native MCP Client', redirect_uris: [redirectUri] },
+            ip: '127.0.0.1',
+            headers: {},
+          },
+          reply
+        );
+      return { run, state, replyState };
+    }
+
+    it('refuses a bare scheme when the setting is empty', async () => {
+      const { run, state } = await registerWith(cursorCallback);
+      await expect(run()).rejects.toThrow(/^invalid_redirect_uri: unsupported scheme: cursor:/);
+      expect(state.createdClients).toHaveLength(0);
+    });
+
+    it('registers a client whose redirect URI uses a listed bare scheme', async () => {
+      env.REDIRECT_URI_CUSTOM_SCHEMES = ['cursor'];
+      const { run, state, replyState } = await registerWith(cursorCallback);
+      await expect(run()).resolves.toMatchObject({ redirect_uris: [cursorCallback] });
+      expect(replyState.statusCode).toBe(201);
+      expect(state.createdClients).toHaveLength(1);
+      expect(state.createdClients[0].redirectUris).toEqual([cursorCallback]);
+    });
+
+    it('still refuses a bare scheme that is not listed', async () => {
+      env.REDIRECT_URI_CUSTOM_SCHEMES = ['cursor'];
+      const { run, state } = await registerWith('myapp:/callback');
+      await expect(run()).rejects.toThrow(/^invalid_redirect_uri: unsupported scheme: myapp:/);
+      expect(state.createdClients).toHaveLength(0);
+    });
+  });
 
   it('rejects client_credentials with token_endpoint_auth_method=none', async () => {
     const { fastify, ctx } = createFastifyStub();

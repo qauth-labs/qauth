@@ -353,7 +353,8 @@ describe('the token-exchange grant is reachable through a shipped provisioning p
           response_types: [],
           token_endpoint_auth_method: 'none',
         },
-        ['openid']
+        ['openid'],
+        []
       )
     ).toThrow(/invalid_client_metadata/);
   });

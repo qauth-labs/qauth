@@ -1,5 +1,7 @@
 import { z } from 'zod';
 
+import { parseRedirectUriCustomSchemes } from './redirect-uri-schemes';
+
 /**
  * The development-only default for {@link SESSION_COOKIE_SECRET}.
  *
@@ -379,6 +381,23 @@ export const authEnvSchema = z.object({
         .map((x) => x.trim())
         .filter((x) => x.length > 0)
     ),
+
+  /**
+   * Bare custom schemes a redirect URI may use (#774), separated by spaces or
+   * commas, such as `cursor`. A redirect URI is otherwise limited to `https`,
+   * `http` to a loopback host, and an RFC 8252 §7.1 private-use scheme written
+   * as a reverse domain name (`com.example.app`). Some native apps call back on
+   * a scheme without a period (`cursor://…`); listing it accepts it at
+   * registration (dynamic registration, the management API, CIMD documents)
+   * and at authorization. Matching stays exact.
+   *
+   * Empty by default: which apps a deployment trusts on its users' devices is
+   * the operator's choice. PKCE, required for every client, is what protects
+   * the code at a custom scheme (RFC 8252 §8.1), whether or not the scheme is
+   * a reverse domain name. Boot refuses an entry that is not a scheme name and
+   * one a browser or the OS acts on itself (`javascript`, `data`, `file`, …).
+   */
+  REDIRECT_URI_CUSTOM_SCHEMES: z.string().default('').transform(parseRedirectUriCustomSchemes),
 
   // ------------------------------------------------------------------
   // Client ID Metadata Documents (CIMD) — draft-ietf-oauth-client-id-

@@ -242,6 +242,10 @@ services:
       # hand. Restating each default here is what let the two lists drift apart
       # in the first place.
 
+      # Redirect URI schemes without a period that native apps call back on,
+      # such as `cursor` (#774). Empty by default.
+      REDIRECT_URI_CUSTOM_SCHEMES:
+
       # Client ID Metadata Documents (CIMD)
       CIMD_ENABLED:
       CIMD_TRUST_POLICY:

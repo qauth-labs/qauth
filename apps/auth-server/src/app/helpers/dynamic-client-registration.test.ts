@@ -3,32 +3,41 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { validateAndNormalize, validateRedirectUri } from './dynamic-client-registration';
 
+/** `REDIRECT_URI_CUSTOM_SCHEMES` unset: the default. */
+const NO_CUSTOM_SCHEMES: readonly string[] = [];
+
 describe('validateRedirectUri', () => {
   it('accepts https URIs', () => {
-    expect(() => validateRedirectUri('https://app.example/cb')).not.toThrow();
+    expect(() => validateRedirectUri('https://app.example/cb', NO_CUSTOM_SCHEMES)).not.toThrow();
   });
 
   it('accepts http only for loopback addresses', () => {
-    expect(() => validateRedirectUri('http://127.0.0.1:8080/cb')).not.toThrow();
-    expect(() => validateRedirectUri('http://[::1]:8080/cb')).not.toThrow();
-    expect(() => validateRedirectUri('http://localhost:9000/cb')).not.toThrow();
+    expect(() => validateRedirectUri('http://127.0.0.1:8080/cb', NO_CUSTOM_SCHEMES)).not.toThrow();
+    expect(() => validateRedirectUri('http://[::1]:8080/cb', NO_CUSTOM_SCHEMES)).not.toThrow();
+    expect(() => validateRedirectUri('http://localhost:9000/cb', NO_CUSTOM_SCHEMES)).not.toThrow();
   });
 
   it('accepts portless loopback redirects (RFC 8252 §7.3 — the port is chosen per request, #414)', () => {
-    expect(() => validateRedirectUri('http://127.0.0.1/callback')).not.toThrow();
-    expect(() => validateRedirectUri('http://[::1]/callback')).not.toThrow();
-    expect(() => validateRedirectUri('http://localhost/callback')).not.toThrow();
+    expect(() => validateRedirectUri('http://127.0.0.1/callback', NO_CUSTOM_SCHEMES)).not.toThrow();
+    expect(() => validateRedirectUri('http://[::1]/callback', NO_CUSTOM_SCHEMES)).not.toThrow();
+    expect(() => validateRedirectUri('http://localhost/callback', NO_CUSTOM_SCHEMES)).not.toThrow();
   });
 
   it('rejects http for non-loopback hosts', () => {
-    expect(() => validateRedirectUri('http://app.example/cb')).toThrow(BadRequestError);
+    expect(() => validateRedirectUri('http://app.example/cb', NO_CUSTOM_SCHEMES)).toThrow(
+      BadRequestError
+    );
   });
 
   it('accepts private-use schemes for native apps (RFC 8252 §7.1)', () => {
-    expect(() => validateRedirectUri('com.example.app:/oauth/callback')).not.toThrow();
-    expect(() => validateRedirectUri('com.example.app://oauth/callback')).not.toThrow();
     expect(() =>
-      validateRedirectUri('com.googleusercontent.apps.123-abc:/oauth2redirect')
+      validateRedirectUri('com.example.app:/oauth/callback', NO_CUSTOM_SCHEMES)
+    ).not.toThrow();
+    expect(() =>
+      validateRedirectUri('com.example.app://oauth/callback', NO_CUSTOM_SCHEMES)
+    ).not.toThrow();
+    expect(() =>
+      validateRedirectUri('com.googleusercontent.apps.123-abc:/oauth2redirect', NO_CUSTOM_SCHEMES)
     ).not.toThrow();
   });
 
@@ -48,15 +57,59 @@ describe('validateRedirectUri', () => {
     'wss://app.example/cb',
     'com..example:/cb',
   ])('refuses the redirect URI %s (scheme not allowed)', (uri) => {
-    expect(() => validateRedirectUri(uri)).toThrow(/^invalid_redirect_uri: unsupported scheme: /);
+    expect(() => validateRedirectUri(uri, NO_CUSTOM_SCHEMES)).toThrow(
+      /^invalid_redirect_uri: unsupported scheme: /
+    );
+  });
+
+  describe('REDIRECT_URI_CUSTOM_SCHEMES (#774)', () => {
+    const cursorCallback = 'cursor://anysphere.cursor-mcp/oauth/callback';
+
+    it('refuses a bare scheme by default, with the existing error', () => {
+      expect(() => validateRedirectUri(cursorCallback, NO_CUSTOM_SCHEMES)).toThrow(
+        /^invalid_redirect_uri: unsupported scheme: cursor:/
+      );
+    });
+
+    it('accepts a bare scheme the deployment lists', () => {
+      expect(() => validateRedirectUri(cursorCallback, ['cursor'])).not.toThrow();
+    });
+
+    it('still refuses a bare scheme that is not listed', () => {
+      expect(() => validateRedirectUri('myapp://callback', ['cursor'])).toThrow(
+        /^invalid_redirect_uri: unsupported scheme: myapp:/
+      );
+    });
+
+    it('still refuses a fragment on a listed scheme', () => {
+      expect(() => validateRedirectUri(`${cursorCallback}#x`, ['cursor'])).toThrow(/fragment/);
+    });
+
+    it('refuses javascript: even when the list names it', () => {
+      expect(() => validateRedirectUri('javascript:alert(1)', ['javascript'])).toThrow(
+        /^invalid_redirect_uri: unsupported scheme: /
+      );
+    });
+
+    it('carries the list through dynamic registration', () => {
+      const body = { redirect_uris: [cursorCallback] };
+      expect(() => validateAndNormalize(body, ['openid'], NO_CUSTOM_SCHEMES)).toThrow(
+        /invalid_redirect_uri/
+      );
+      expect(validateAndNormalize(body, ['openid'], ['cursor']).redirectUris).toEqual([
+        cursorCallback,
+      ]);
+    });
   });
 
   it('rejects redirect URIs containing a fragment', () => {
-    expect(() => validateRedirectUri('https://app.example/cb#fragment')).toThrow(BadRequestError);
+    expect(() => validateRedirectUri('https://app.example/cb#fragment', NO_CUSTOM_SCHEMES)).toThrow(
+      BadRequestError
+    );
   });
 
   it('rejects malformed URIs', () => {
-    expect(() => validateRedirectUri('not a url')).toThrow(BadRequestError);
+    expect(() => validateRedirectUri('not a url', NO_CUSTOM_SCHEMES)).toThrow(BadRequestError);
   });
 
   it('rejects a tab or line break anywhere in the URI, which new URL() would silently delete', () => {
@@ -66,7 +119,7 @@ describe('validateRedirectUri', () => {
       'https://app.example/cb\r\n',
       '\thttps://app.example/cb',
     ]) {
-      expect(() => validateRedirectUri(uri)).toThrow(BadRequestError);
+      expect(() => validateRedirectUri(uri, NO_CUSTOM_SCHEMES)).toThrow(BadRequestError);
     }
   });
 
@@ -95,13 +148,15 @@ describe('validateRedirectUri', () => {
         'https://bücher.example/cb',
         'https://a.example/c b',
       ]) {
-        expect(() => validateRedirectUri(uri)).toThrow(BadRequestError);
+        expect(() => validateRedirectUri(uri, NO_CUSTOM_SCHEMES)).toThrow(BadRequestError);
       }
       expect(constructed).not.toHaveBeenCalled();
     } finally {
       vi.unstubAllGlobals();
     }
-    expect(() => validateRedirectUri('https://xn--bcher-kva.example/cb')).not.toThrow();
+    expect(() =>
+      validateRedirectUri('https://xn--bcher-kva.example/cb', NO_CUSTOM_SCHEMES)
+    ).not.toThrow();
   });
 });
 
@@ -109,7 +164,11 @@ describe('validateAndNormalize', () => {
   const allowedScopes = ['openid', 'profile', 'email', 'offline_access'];
 
   it('defaults grant_types/response_types/token_endpoint_auth_method when omitted', () => {
-    const n = validateAndNormalize({ redirect_uris: ['https://app.example/cb'] }, allowedScopes);
+    const n = validateAndNormalize(
+      { redirect_uris: ['https://app.example/cb'] },
+      allowedScopes,
+      NO_CUSTOM_SCHEMES
+    );
     expect(n.grantTypes).toEqual(['authorization_code', 'refresh_token']);
     expect(n.responseTypes).toEqual(['code']);
     expect(n.tokenEndpointAuthMethod).toBe('none');
@@ -122,7 +181,7 @@ describe('validateAndNormalize', () => {
       'http://[::1]/callback',
       'http://localhost/callback',
     ];
-    const n = validateAndNormalize({ redirect_uris: uris }, allowedScopes);
+    const n = validateAndNormalize({ redirect_uris: uris }, allowedScopes, NO_CUSTOM_SCHEMES);
     expect(n.redirectUris).toEqual(uris);
   });
 
@@ -132,7 +191,8 @@ describe('validateAndNormalize', () => {
         redirect_uris: ['https://app.example/cb'],
         scope: 'openid email',
       },
-      allowedScopes
+      allowedScopes,
+      NO_CUSTOM_SCHEMES
     );
     expect(n.scopes).toEqual(['openid', 'email']);
     expect(n.scopeString).toBe('openid email');
@@ -144,7 +204,8 @@ describe('validateAndNormalize', () => {
         redirect_uris: ['https://app.example/cb'],
         scope: 'openid example:admin',
       },
-      allowedScopes
+      allowedScopes,
+      NO_CUSTOM_SCHEMES
     );
     expect(n.scopes).toEqual(['openid']);
     expect(n.scopeString).toBe('openid');
@@ -156,7 +217,8 @@ describe('validateAndNormalize', () => {
         redirect_uris: ['https://app.example/cb'],
         scope: 'openid openid email example:admin',
       },
-      allowedScopes
+      allowedScopes,
+      NO_CUSTOM_SCHEMES
     );
     expect(n.scopes).toEqual(['openid', 'email']);
   });
@@ -167,7 +229,8 @@ describe('validateAndNormalize', () => {
         redirect_uris: ['https://app.example/cb'],
         scope: 'openid',
       },
-      []
+      [],
+      NO_CUSTOM_SCHEMES
     );
     expect(n.scopes).toEqual([]);
     expect(n.scopeString).toBeUndefined();
@@ -177,7 +240,8 @@ describe('validateAndNormalize', () => {
     expect(() =>
       validateAndNormalize(
         { grant_types: ['authorization_code'], response_types: ['code'] },
-        allowedScopes
+        allowedScopes,
+        NO_CUSTOM_SCHEMES
       )
     ).toThrow(/invalid_redirect_uri/);
   });
@@ -189,7 +253,8 @@ describe('validateAndNormalize', () => {
         response_types: [],
         token_endpoint_auth_method: 'client_secret_basic',
       },
-      allowedScopes
+      allowedScopes,
+      NO_CUSTOM_SCHEMES
     );
     expect(n.redirectUris).toEqual([]);
     expect(n.isPublic).toBe(false);
@@ -203,7 +268,8 @@ describe('validateAndNormalize', () => {
           response_types: [],
           token_endpoint_auth_method: 'none',
         },
-        allowedScopes
+        allowedScopes,
+        NO_CUSTOM_SCHEMES
       )
     ).toThrow(/invalid_client_metadata.*client_credentials/);
   });
@@ -216,7 +282,8 @@ describe('validateAndNormalize', () => {
           grant_types: ['authorization_code'],
           response_types: [],
         },
-        allowedScopes
+        allowedScopes,
+        NO_CUSTOM_SCHEMES
       )
     ).toThrow(/invalid_client_metadata.*code.*response type/);
   });
@@ -227,7 +294,8 @@ describe('validateAndNormalize', () => {
         redirect_uris: ['https://app.example/cb'],
         token_endpoint_auth_method: 'client_secret_basic',
       },
-      allowedScopes
+      allowedScopes,
+      NO_CUSTOM_SCHEMES
     );
     expect(n.isPublic).toBe(false);
     expect(n.tokenEndpointAuthMethod).toBe('client_secret_basic');

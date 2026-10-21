@@ -165,8 +165,8 @@ apps: a **loopback** redirect may carry **any port**.
 - `localhost` is accepted because real clients (Claude Code among them) use
   it, but RFC 8252 §8.3 recommends the IP literal: prefer `127.0.0.1` or
   `[::1]` for clients you write.
-- `https` and private-use-scheme redirects always need an exact match, port
-  included.
+- `https` and custom-scheme redirects, reverse-domain or listed in
+  `REDIRECT_URI_CUSTOM_SCHEMES`, always need an exact match, port included.
 - QAuth redirects to the port you **requested** and binds the code to that
   exact URI, so the token request must repeat it verbatim — port included
   (RFC 6749 §4.1.3).
@@ -687,10 +687,11 @@ See the example in [step 0](#0-prerequisites--a-client). Key fields:
 
 Each redirect URI must be `https`, `http` to a loopback host (`127.0.0.1`,
 `[::1]` or `localhost`), or an RFC 8252 §7.1 private-use scheme for a native
-app: a reverse domain name you control, such as `com.example.app:/callback`. Any
-other scheme, `javascript:`, `data:`, `file:` and schemes without a period
-(`myapp:`) included, is refused with `invalid_redirect_uri`, and a URI with a
-fragment is refused too. The same rule applies to `POST /api/clients` and to a
+app: a reverse domain name you control, such as `com.example.app:/callback`. A
+scheme without a period (`myapp:`) is accepted only when the server's operator
+lists it in `REDIRECT_URI_CUSTOM_SCHEMES`, as for the Cursor desktop app's
+`cursor:`. Any other scheme, `javascript:`, `data:` and `file:` included, is
+refused with `invalid_redirect_uri`, and a URI with a fragment is refused too. The same rule applies to `POST /api/clients` and to a
 CIMD document, and `/oauth/authorize` refuses any other scheme still stored on a
 client.
 

@@ -1,3 +1,5 @@
+import { REFUSED_CUSTOM_REDIRECT_URI_SCHEMES } from '@qauth-labs/server-config';
+
 import type { EnvironmentPolicy } from './environment-policy';
 
 /**
@@ -31,22 +33,43 @@ const PRIVATE_USE_SCHEME = /^[a-z][a-z0-9-]*(?:\.[a-z0-9-]+)+:$/;
 /**
  * Whether a redirect URI's scheme may receive an authorization response at
  * all (found while fixing scan qauth-20261015-005): `https:`, `http:` (whose
- * host is judged separately: loopback only), or an RFC 8252 §7.1 private-use
- * scheme. Everything else is refused: `javascript:`, `data:`, `vbscript:`,
- * `file:`, `blob:`, `about:`, and any scheme without a period, which is not a
- * reverse-domain name. Registration ({@link validateRedirectUri} in
+ * host is judged separately: loopback only), an RFC 8252 §7.1 private-use
+ * scheme, or a scheme the deployment lists in `REDIRECT_URI_CUSTOM_SCHEMES`
+ * (#774), passed in as `customSchemes`. Everything else is refused:
+ * `javascript:`, `data:`, `vbscript:`, `file:`, `blob:`, `about:`, and any
+ * other scheme without a period, which is not a reverse-domain name.
+ * Registration ({@link validateRedirectUri} in
  * `dynamic-client-registration.ts`) and the authorization-time gate
  * ({@link isRedirectUriAllowedForPolicy}) share this one rule. Unparseable
  * input is not allowed.
+ *
+ * Some native apps call back on a scheme without a period, such as Cursor's
+ * `cursor://anysphere.cursor-mcp/oauth/callback`. RFC 8252 §7.1 asks apps
+ * for a reverse-domain scheme, which makes an accidental collision between
+ * apps unlikely; it does not stop a malicious app on the device from claiming
+ * either kind, so the code is protected by PKCE (§8.1), required for every
+ * client, not by the scheme's shape. Which bare schemes to accept is the
+ * operator's choice, one app at a time. A scheme in
+ * `REFUSED_CUSTOM_REDIRECT_URI_SCHEMES` is refused even if the list names it:
+ * boot already rejects such a list, and this keeps the rule from depending on
+ * that alone.
  */
-export function isAllowedRedirectUriScheme(redirectUri: string): boolean {
+export function isAllowedRedirectUriScheme(
+  redirectUri: string,
+  customSchemes: readonly string[]
+): boolean {
   let protocol: string;
   try {
     protocol = new URL(redirectUri).protocol;
   } catch {
     return false;
   }
-  return protocol === 'https:' || protocol === 'http:' || PRIVATE_USE_SCHEME.test(protocol);
+  if (protocol === 'https:' || protocol === 'http:' || PRIVATE_USE_SCHEME.test(protocol)) {
+    return true;
+  }
+  // `URL.protocol` is lower-cased and ends with the colon.
+  const scheme = protocol.slice(0, -1);
+  return customSchemes.includes(scheme) && !REFUSED_CUSTOM_REDIRECT_URI_SCHEMES.has(scheme);
 }
 
 /**
@@ -192,9 +215,10 @@ export function redirectUriMatchesRegistered(
  * what is allowed.
  *
  * Before any of that, the scheme must be one {@link isAllowedRedirectUriScheme}
- * accepts. Registration refuses the others, but a row stored before it did, or
- * one an operator seeded, could still hold `javascript:` or `data:`, so the
- * gate refuses them too, in every environment.
+ * accepts, given the deployment's `customSchemes`. Registration refuses the
+ * others, but a row stored before it did, or one an operator seeded, could
+ * still hold `javascript:` or `data:`, so the gate refuses them too, in every
+ * environment.
  *
  * FAIL-SAFE: a future non-`development` profile that ALSO drops `pkceRequired`
  * would once again reject plain-HTTP loopback (no PKCE → interceptable), the
@@ -209,9 +233,10 @@ export function redirectUriMatchesRegistered(
  */
 export function isRedirectUriAllowedForPolicy(
   redirectUri: string,
-  policy: EnvironmentPolicy
+  policy: EnvironmentPolicy,
+  customSchemes: readonly string[]
 ): boolean {
-  if (!isAllowedRedirectUriScheme(redirectUri)) return false;
+  if (!isAllowedRedirectUriScheme(redirectUri, customSchemes)) return false;
   if (!isPlainHttpRedirect(redirectUri)) return true;
   if (!isHttpLocalhostRedirect(redirectUri)) return false;
   return policy.localhostRedirectAllowed || policy.pkceRequired;

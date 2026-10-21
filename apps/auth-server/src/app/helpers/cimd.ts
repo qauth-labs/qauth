@@ -173,7 +173,7 @@ function isSupportedCimdGrantType(value: string): value is CimdGrantType {
 function assertRegistrableRedirectUris(uris: readonly string[]): void {
   for (const uri of uris) {
     try {
-      validateRedirectUri(uri);
+      validateRedirectUri(uri, env.REDIRECT_URI_CUSTOM_SCHEMES);
     } catch (err) {
       const detail = err instanceof Error ? err.message : 'invalid_redirect_uri';
       throw new InvalidClientError(`CIMD document refused: ${detail}`);

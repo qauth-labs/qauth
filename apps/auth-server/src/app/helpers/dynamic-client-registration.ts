@@ -33,10 +33,12 @@ export function rejectRegistration(code: DynamicRegistrationErrorCode, descripti
 
 /**
  * OAuth 2.1 §10.3 / RFC 8252: `http://` redirect URIs are permitted only for
- * loopback (native app) flows. Anything else MUST be `https://`, or an
+ * loopback (native app) flows. Anything else MUST be `https://`, an
  * RFC 8252 §7.1 private-use scheme for a native app (a reverse domain name,
- * e.g. `com.example.app:/callback`). No other scheme is accepted: `javascript:`,
- * `data:`, `vbscript:`, `file:`, `blob:`, `about:` and every scheme without a
+ * e.g. `com.example.app:/callback`), or a scheme without a period that the
+ * deployment lists in `REDIRECT_URI_CUSTOM_SCHEMES` (#774), passed in as
+ * `customSchemes`. No other scheme is accepted: `javascript:`, `data:`,
+ * `vbscript:`, `file:`, `blob:`, `about:` and every other scheme without a
  * period are refused (`isAllowedRedirectUriScheme`, shared with the
  * authorization-time gate).
  *
@@ -46,7 +48,7 @@ export function rejectRegistration(code: DynamicRegistrationErrorCode, descripti
  */
 const LOOPBACK_HOSTS = new Set(['127.0.0.1', '[::1]', '::1', 'localhost']);
 
-export function validateRedirectUri(uri: string): void {
+export function validateRedirectUri(uri: string, customSchemes: readonly string[]): void {
   // `new URL()` silently deletes an ASCII tab, LF or CR, so it would accept a
   // URI carrying one, and the value is stored as sent. The authorization
   // endpoint trims the requested redirect_uri and refuses one with such a
@@ -90,9 +92,10 @@ export function validateRedirectUri(uri: string): void {
   }
 
   // A private-use scheme for a native app (RFC 8252 §7.1): a reverse domain
-  // name such as `com.example.app:/cb`. Any other scheme is refused, whatever
-  // it would do in a browser (found while fixing scan qauth-20261015-005).
-  if (isAllowedRedirectUriScheme(uri)) {
+  // name such as `com.example.app:/cb`, or a bare scheme the deployment lists
+  // (#774). Any other scheme is refused, whatever it would do in a browser
+  // (found while fixing scan qauth-20261015-005).
+  if (isAllowedRedirectUriScheme(uri, customSchemes)) {
     return;
   }
 
@@ -165,7 +168,8 @@ export interface NormalizedRegistrationRequest {
  */
 export function validateAndNormalize(
   body: DynamicClientRegistrationRequest,
-  realmAllowedScopes: string[]
+  realmAllowedScopes: string[],
+  customRedirectSchemes: readonly string[]
 ): NormalizedRegistrationRequest {
   const grantTypes = (body.grant_types ?? [...DYN_REG_DEFAULTS.grantTypes]) as DynRegGrantType[];
   const responseTypes = (body.response_types ?? [...DYN_REG_DEFAULTS.responseTypes]) as 'code'[];
@@ -197,7 +201,7 @@ export function validateAndNormalize(
     );
   }
   for (const uri of redirectUris) {
-    validateRedirectUri(uri);
+    validateRedirectUri(uri, customRedirectSchemes);
   }
 
   // Scope cap: intersect requested scopes with the realm's allowlist. Per
