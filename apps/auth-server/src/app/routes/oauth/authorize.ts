@@ -192,10 +192,10 @@ export default async function (fastify: FastifyInstance) {
     // is refused everywhere (ANT-2026-D0XJAT8S), and so is any scheme other
     // than https, http, an RFC 8252 private-use one and a bare one the
     // deployment lists in REDIRECT_URI_CUSTOM_SCHEMES (#774), which a row
-    // registered before registration refused them could still hold. Fail-safe: an unset
-    // client/realm resolves to `production`. We reject BEFORE redirecting (the
-    // redirect target is the very thing under suspicion), matching the
-    // unregistered-URI handling.
+    // registered before registration refused them could still hold. Fail-safe:
+    // an unset client/realm resolves to `production`. We reject BEFORE
+    // redirecting (the redirect target is the very thing under suspicion),
+    // matching the unregistered-URI handling.
     const policy = resolveEnvironmentPolicy(client, realm);
     if (!isRedirectUriAllowedForPolicy(redirectUri, policy, env.REDIRECT_URI_CUSTOM_SCHEMES)) {
       await fastify.repositories.auditLogs.create({
