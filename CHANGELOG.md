@@ -74,6 +74,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   no trailing dot. It refuses wildcards, white space, empty labels and hosts
   over 253 characters.
 
+- **Schema**: migration 0026 adds the admin audit log ([#448], ADR-019
+  Decision 7, ADR-020 §3). `admin_audit_log` keeps one hash chain per target
+  realm: each row carries a `seq` without a gap, the previous row's hash and
+  its own, SHA-256 over that hash and the RFC 8785 canonical JSON of the row.
+  A row records the actor and its kind (human admin, service account,
+  break-glass operator or host operator), the full act chain when the actor
+  acted for a user, the operation id, class, effects and outcome, the diff with
+  every secret field masked, the approvals, the request digest and the trace
+  id. Database triggers refuse `UPDATE`, `DELETE` and `TRUNCATE` for every
+  role; the only delete is `admin_audit_log_prune()`, which removes a realm's
+  oldest rows, never one younger than 90 days, and records a checkpoint in
+  `admin_audit_log_checkpoints` so the chain still verifies. In
+  `@qauth-labs/infra-db`, `createAdminAuditLogRepository` gives
+  `appendAdminAudit(tx, entry)`, which writes in the caller's transaction and
+  calls an outbox hook after the insert, and `verifyAdminAuditChain(realmId)`,
+  which reports the first row that breaks the chain;
+  `adminAuditLogWriterGrantStatements()` grants a writing role `INSERT` and
+  `SELECT` only. The migration is additive. Nothing writes the log yet: the
+  admin API that will is still to come.
+
 - **A guard on the stable surface** ([#451], ADR-018 §5). Every OpenAPI
   operation carries `x-qauth-stability` (`stable` or `experimental`; the wallet
   federation routes, which a switch registers, are experimental). The OpenAPI
@@ -123,6 +143,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and `npm install --global pnpm@12.14.0`.
 
 [#435]: https://github.com/qauth-labs/qauth/issues/435
+[#448]: https://github.com/qauth-labs/qauth/issues/448
 [#449]: https://github.com/qauth-labs/qauth/issues/449
 [#451]: https://github.com/qauth-labs/qauth/issues/451
 [#452]: https://github.com/qauth-labs/qauth/issues/452
