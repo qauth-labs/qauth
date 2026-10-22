@@ -596,5 +596,135 @@ describe('realm hosts and issuers integration (real Postgres)', () => {
       expect(row).toMatchObject({ issuer: null, isOperator: false });
       expect(await hostsOf(realmId)).toEqual([]);
     });
+
+    it('assignIssuer gives a realm without an issuer its issuer and primary host', async () => {
+      const realmId = await bareRealm();
+
+      await expect(
+        repo.assignIssuer(realmId, 'https://Auth.Example.com:8443/qauth', 'Auth.Example.com:8443')
+      ).resolves.toMatchObject({
+        realm: { id: realmId, issuer: 'https://Auth.Example.com:8443/qauth' },
+        host: { host: 'auth.example.com', kind: 'primary', realmId },
+      });
+      expect(await hostsOf(realmId)).toEqual([{ host: 'auth.example.com', kind: 'primary' }]);
+    });
+
+    it('assignIssuer writes nothing the second time with the same values', async () => {
+      const realmId = await bareRealm();
+      const first = await repo.assignIssuer(
+        realmId,
+        'https://auth.example.com',
+        'auth.example.com'
+      );
+
+      const second = await repo.assignIssuer(
+        realmId,
+        'https://auth.example.com',
+        'auth.example.com'
+      );
+      expect(second).toEqual(first);
+      expect(await hostsOf(realmId)).toEqual([{ host: 'auth.example.com', kind: 'primary' }]);
+    });
+
+    it('assignIssuer adds the primary host a realm with that issuer still lacks', async () => {
+      const realmId = await bareRealm();
+      await repo.update(realmId, { issuer: 'https://auth.example.com' });
+
+      await expect(
+        repo.assignIssuer(realmId, 'https://auth.example.com', 'auth.example.com')
+      ).resolves.toMatchObject({ host: { host: 'auth.example.com', kind: 'primary' } });
+    });
+
+    it('assignIssuer refuses a different issuer or primary host, and writes nothing', async () => {
+      const realmId = await realmOn('auth.example.com');
+
+      await expect(
+        repo.assignIssuer(realmId, 'https://other.example.com', 'other.example.com')
+      ).rejects.toThrow('Realm already has a different issuer');
+      expect(await hostsOf(realmId)).toEqual([{ host: 'auth.example.com', kind: 'primary' }]);
+
+      const bare = await bareRealm();
+      await pool().query(
+        `INSERT INTO realm_hosts (host, realm_id, kind) VALUES ($1, $2, 'primary')`,
+        ['first.example.com', bare]
+      );
+      await expect(
+        repo.assignIssuer(bare, 'https://second.example.com', 'second.example.com')
+      ).rejects.toThrow('Realm already has a different primary host');
+      expect((await repo.findById(bare))?.issuer).toBeNull();
+    });
+
+    it("assignIssuer refuses another realm's host or issuer, and leaves the issuer NULL", async () => {
+      await realmOn('auth.example.com');
+      const realmId = await bareRealm();
+
+      const takenHost = repo.assignIssuer(
+        realmId,
+        'https://auth.example.com/x',
+        'auth.example.com'
+      );
+      await expect(takenHost).rejects.toBeInstanceOf(UniqueConstraintError);
+      await expect(takenHost).rejects.toMatchObject({ constraint: 'realm_hosts_pkey' });
+      expect((await repo.findById(realmId))?.issuer).toBeNull();
+      expect(await hostsOf(realmId)).toEqual([]);
+    });
+
+    it('assignIssuer refuses an issuer off its primary host and a realm that does not exist', async () => {
+      const realmId = await bareRealm();
+
+      await expect(
+        repo.assignIssuer(realmId, 'https://auth.example.com', 'other.example.com')
+      ).rejects.toBeInstanceOf(BadRequestError);
+      await expect(
+        repo.assignIssuer(realmId, 'https://127.0.0.1', '127.0.0.1')
+      ).rejects.toBeInstanceOf(InvalidRealmHostError);
+      await expect(
+        repo.assignIssuer(
+          '00000000-0000-7000-8000-000000000000',
+          'https://auth.example.com',
+          'auth.example.com'
+        )
+      ).rejects.toThrow(/not found/i);
+    });
+
+    it('findOperator finds the marked realm, or nothing', async () => {
+      const realmId = await bareRealm();
+      await expect(repo.findOperator()).resolves.toBeUndefined();
+
+      await repo.update(realmId, { isOperator: true });
+      await expect(repo.findOperator()).resolves.toMatchObject({ id: realmId, isOperator: true });
+    });
+
+    it('lockProvisioning keeps a second transaction waiting until the first ends', async () => {
+      const order: string[] = [];
+      let releaseFirst: () => void = () => undefined;
+      const firstMayEnd = new Promise<void>((resolve) => {
+        releaseFirst = resolve;
+      });
+      let firstLocked: () => void = () => undefined;
+      const firstHasLock = new Promise<void>((resolve) => {
+        firstLocked = resolve;
+      });
+
+      const first = db().transaction(async (tx) => {
+        await repo.lockProvisioning(tx);
+        order.push('first locked');
+        firstLocked();
+        await firstMayEnd;
+        order.push('first ends');
+      });
+      await firstHasLock;
+      const second = db().transaction(async (tx) => {
+        await repo.lockProvisioning(tx);
+        order.push('second locked');
+      });
+      // Give the second transaction time to reach the lock and wait on it.
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      order.push('released');
+      releaseFirst();
+      await Promise.all([first, second]);
+
+      expect(order).toEqual(['first locked', 'released', 'first ends', 'second locked']);
+    });
   });
 });

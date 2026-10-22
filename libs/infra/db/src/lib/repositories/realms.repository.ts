@@ -6,8 +6,9 @@ import {
   UniqueConstraintError,
 } from '@qauth-labs/shared-errors';
 import { InvalidRealmHostError, normaliseRealmHost } from '@qauth-labs/shared-validation';
-import { and, eq, InferInsertModel, InferSelectModel } from 'drizzle-orm';
+import { and, eq, InferInsertModel, InferSelectModel, sql } from 'drizzle-orm';
 
+import type { DbTransaction } from '../../types';
 import { DbClient } from '../db';
 import { realmHosts, realms } from '../schema/core';
 import { BaseRepository } from './base.repository';
@@ -32,6 +33,14 @@ export type NewRealmWithIssuer = NewRealm & { issuer: string };
 
 /** Constraint behind a duplicate host: `host` is the primary key of `realm_hosts`. */
 const REALM_HOSTS_PKEY = 'realm_hosts_pkey';
+
+/**
+ * The advisory lock key text of {@link RealmsRepository.lockProvisioning},
+ * hashed to a `bigint` by Postgres. The `qauth:` prefix keeps it apart from
+ * the admin audit chain locks and from keys other software on the database
+ * might choose.
+ */
+const PROVISIONING_LOCK = 'qauth:realm-provisioning';
 
 /**
  * Realms repository interface extending BaseRepository with additional methods
@@ -71,6 +80,40 @@ export interface RealmsRepository extends BaseRepository<Realm, NewRealm, Update
     primaryHost: string,
     tx?: DbClient
   ): Promise<RealmWithHost>;
+
+  /**
+   * Give a realm its issuer and its primary host, in one transaction (#484).
+   *
+   * Each is written only where the realm has none yet, so a second call with
+   * the same values changes nothing. This is how a realm created before
+   * migration 0025, whose issuer is NULL, gets its identity. The issuer and
+   * host rules are those of {@link createWithPrimaryHost}.
+   *
+   * @throws InvalidRealmHostError if the host cannot be a primary host
+   * @throws BadRequestError if the issuer is not a URL on the primary host, or
+   * the realm already has a different issuer or primary host (both permanent)
+   * @throws NotFoundError if the realm does not exist
+   * @throws UniqueConstraintError if another realm has the host or the issuer
+   */
+  assignIssuer(
+    realmId: string,
+    issuer: string,
+    primaryHost: string,
+    tx?: DbClient
+  ): Promise<RealmWithHost>;
+
+  /**
+   * Find the operator realm (ADR-019 Decisions 1 and 7), if one is marked.
+   */
+  findOperator(tx?: DbClient): Promise<Realm | undefined>;
+
+  /**
+   * Take the realm provisioning lock until `tx` ends: a transaction-scoped
+   * Postgres advisory lock. The auth server's boot step holds it while it
+   * creates or completes the default realm, so nodes that start together
+   * provision it one at a time and the later ones find the first one's work.
+   */
+  lockProvisioning(tx: DbTransaction): Promise<void>;
 
   /**
    * Add an endpoint host to a realm. An IP literal is allowed.
@@ -268,6 +311,82 @@ export function createRealmsRepository(defaultDb: DbClient): RealmsRepository {
       } catch (error) {
         rethrowUnique(error, REALM_HOSTS_PKEY);
       }
+    },
+
+    async assignIssuer(
+      realmId: string,
+      issuer: string,
+      primaryHost: string,
+      tx?: DbClient
+    ): Promise<RealmWithHost> {
+      const host = normaliseRealmHost(primaryHost, 'primary');
+      assertIssuerOnPrimaryHost(issuer, host);
+      const invoker = tx ?? defaultDb;
+      try {
+        // A savepoint inside an outer transaction, as in createWithPrimaryHost.
+        return await invoker.transaction(async (innerTx) => {
+          const [current] = await innerTx
+            .select()
+            .from(realms)
+            .where(eq(realms.id, realmId))
+            .limit(1)
+            .for('update');
+          if (!current) {
+            throw new NotFoundError('Realm', realmId);
+          }
+
+          let realm = current;
+          if (current.issuer === null) {
+            [realm] = await innerTx
+              .update(realms)
+              .set({ issuer, updatedAt: Date.now() })
+              .where(eq(realms.id, realmId))
+              .returning();
+          } else if (current.issuer !== issuer) {
+            throw new BadRequestError(
+              'Realm already has a different issuer; an issuer is permanent'
+            );
+          }
+
+          const [primary] = await innerTx
+            .select()
+            .from(realmHosts)
+            .where(and(eq(realmHosts.realmId, realmId), eq(realmHosts.kind, 'primary')))
+            .limit(1);
+          if (primary) {
+            if (primary.host !== host) {
+              throw new BadRequestError(
+                'Realm already has a different primary host; a primary host is permanent'
+              );
+            }
+            return { realm, host: primary };
+          }
+
+          const [realmHost] = await innerTx
+            .insert(realmHosts)
+            .values({ host, realmId, kind: 'primary' })
+            .returning();
+          return { realm, host: realmHost };
+        });
+      } catch (error) {
+        rethrowUnique(error, REALM_HOSTS_PKEY);
+      }
+    },
+
+    async findOperator(tx?: DbClient): Promise<Realm | undefined> {
+      const invoker = tx ?? defaultDb;
+      const [realm] = await invoker
+        .select()
+        .from(realms)
+        .where(eq(realms.isOperator, true))
+        .limit(1);
+      return realm;
+    },
+
+    async lockProvisioning(tx: DbTransaction): Promise<void> {
+      await tx.execute(
+        sql`select pg_advisory_xact_lock(hashtextextended(${PROVISIONING_LOCK}, 0))`
+      );
     },
 
     async addEndpointHost(realmId: string, host: string, tx?: DbClient): Promise<RealmHost> {
