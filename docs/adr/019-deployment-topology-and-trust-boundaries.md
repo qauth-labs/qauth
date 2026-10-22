@@ -98,7 +98,7 @@ So two realms on one host would share one session cookie and one RP ID.
 | Resuming an authorization | A Redis pending-authorization stash, picked up by `/ui/resume/{handle}` after sign-in.                                                                                          | Replaced by the Interaction API (Decision 6).                                                                                    |
 | Management API            | `/api/clients`, with its API-key routes, and `/api/consents` accept only the portal's system-client token (`assertManagementToken`). `roles` and `user_roles` are not enforced. | Three API families, one audience per token. Admin access by scope and role, DPoP-bound, passkey-gated (Decision 7).              |
 | Scale-out                 | Every auth-server instance serves every route and reads every key.                                                                                                              | Roles of one codebase over one transactional store (Decision 8).                                                                 |
-| Keys                      | Read from environment variables or files on every instance. Retired keys are not wired at the app layer.                                                                        | Per realm and per purpose, envelope-encrypted in Postgres, held by a signer role, rotated every 90 days by default (Decision 9). |
+| Keys                      | Read from environment variables or files on every instance. Retired keys are not published, named or used to verify (three gaps, below).                                       | Per realm and per purpose, envelope-encrypted in Postgres, held by a signer role, rotated every 90 days by default (Decision 9). |
 | Settings                  | Most policies are environment keys: `ACCESS_TOKEN_LIFESPAN`, `REFRESH_TOKEN_LIFESPAN`, `REQUIRE_VERIFIED_ACCOUNT`, `PASSWORD_MIN_SCORE`, `EMAIL_FROM_*`, `SMTP_*` and `CIMD_*`. | Deployment switches stay in the environment. Realm policies live on the realm row (Decision 10).                                 |
 | Sandbox                   | None.                                                                                                                                                                           | A paired sandbox realm with its own host, issuer and keys (Decision 11).                                                         |
 | Plugins                   | `CredentialProvider` implementations compiled into the auth server.                                                                                                             | Operator-installed, in-process plugins on the AuthMethod contract (Decision 12).                                                 |
@@ -109,8 +109,15 @@ Today's key and secret variables include:
 - `OID4VP_VERIFIER_SIGNING_KEY` and `OID4VP_RESPONSE_KEY_SECRET`;
 - `SESSION_COOKIE_SECRET` and `PORTAL_SESSION_SECRET`.
 
-The JWT plugin can already publish retired keys under their own `kid`. The app layer does not pass
-them, so a rotation still forces users to sign in again. ADR-001's status note records this gap.
+The JWT plugin can already publish retired keys under their own `kid`. A rotation still forces
+users to sign in again, because of three separate gaps. ADR-001's status note records them.
+
+- **Not wired.** No configuration key holds a retired key or the Ed25519 key's `kid`, and the app
+  passes neither to the plugin. The JWKS holds only the active keys.
+- **Not named.** Access tokens and EdDSA ID tokens carry no `kid` header, so a token cannot name
+  the retired key that signed it.
+- **Not verified.** The server's own checks verify with the active key only. A retired key would be
+  published but would not verify.
 
 ## Decision
 
@@ -770,7 +777,8 @@ How that separation is enforced:
 - The old key stays published for verification.
 - The default period is 90 days. The operator can change it.
 - A manual rotation needs `admin:security` plus a passkey approval.
-- This record closes the retired-key wiring gap that ADR-001's status note records.
+- This record closes the three retired-key gaps that ADR-001's status note records: retired keys
+  are published, every token names its key by `kid`, and verification resolves a retired key.
 - Both keys of a hybrid pair rotate together, under the same overlap.
 - The cookie HMAC and the data-at-rest key rotate the same way: the new key signs or encrypts, and
   the old one only verifies or decrypts until it is retired.

@@ -286,9 +286,12 @@ The contract covers:
   them. Environment keys only seed a new realm's defaults. ADR-019 Decision 10 draws the line.
   Decided 2026-10-10 (maintainer).
 - **Upgrades within 1.x.** Migrations only go forward. Every upgrade completes by running the
-  migration runner, with no manual step. No 1.x migration is destructive; changes use
-  expand-then-contract. CI tests an upgrade from every earlier 1.x minor release. Downgrades are not
-  supported, so the upgrade guide tells operators to back up first.
+  migration runner, with no manual step. No 1.x migration is destructive: none drops or renames a
+  table or column, narrows a column's type or deletes rows. A change of shape adds the new form
+  beside the old one in a 1.x release (expand). Removing the old form (contract) waits for the
+  next major release, like any other removal (below). CI tests an upgrade from every earlier 1.x
+  minor release. Downgrades are not supported, so the upgrade guide tells operators to back up
+  first.
 
 The contract does not cover the experimental items in §4, which include the plugin API, or internal
 code that no stable surface exposes.

@@ -4,11 +4,12 @@
 **Date:** 2026-10-10  
 **Authors:** QAuth Team
 
-> Nothing below is built. This record answers the open question of
-> [ADR-018](./018-1-0-scope-and-stability.md): which screens 1.0 ships. It names the UI surfaces,
-> records seven design choices, lists what each surface contains and sets the bar a screen must
-> meet before it counts as done. [ADR-019](./019-deployment-topology-and-trust-boundaries.md)
-> Decision 5 already fixes how the UIs are deployed; this record does not restate it.
+> Nothing below is built except the developer portal's srvx entry (§6). This record answers the
+> open question of [ADR-018](./018-1-0-scope-and-stability.md): which screens 1.0 ships. It names
+> the UI surfaces, records seven design choices, lists what each surface contains and sets the bar
+> a screen must meet before it counts as done.
+> [ADR-019](./019-deployment-topology-and-trust-boundaries.md) Decision 5 already fixes how the
+> UIs are deployed; this record does not restate it.
 >
 > Some decisions here change ADR-018's scope or ADR-019's topology: the device authorization
 > grant, account selection, event delivery, the plugin API and the paired sandbox realm. Those
@@ -255,8 +256,9 @@ Placement rules that follow from earlier decisions:
 - Each upstream provider has a name, an icon, an order and a "hide on login page" switch. A hidden
   provider is still reachable through a direct-routing parameter.
 - A server-info screen shows the version, the switches, experimental features, installed plugins
-  and role health. Operator-realm admins see all of it; a realm admin sees only what affects that
-  realm.
+  and role health. Only operator-realm admins see it: it describes the whole deployment, and a
+  realm-local admin manages only their own realm (ADR-019 Decision 7). In simple mode the default
+  realm is the operator realm, so its admins see it.
 - Console import of users comes in 1.x. In 1.0 the `db:import-users` CLI of ADR-017 F1d does it.
   Inbound SCIM provisioning comes in 1.x, together with organizations.
 
@@ -378,8 +380,8 @@ a regression fails the build.
 - If the spike fails, only the ceremony app moves to React Router's framework mode. The components
   stay shared.
 - The developer portal is served by a small [srvx](https://srvx.h3.dev/) entry around TanStack
-  Start's server handler, with no Nitro. The maintainer chose this on 2026-10-10; a separate change
-  implements it.
+  Start's server handler, with no Nitro. The maintainer chose this on 2026-10-10. The entry is
+  built: `apps/developer-portal/src/node-entry.ts`.
 - Each flow and screen is first written as a graph, which this stack implements
   ([ADR-021](./021-flows-and-ui-as-semantic-graphs.md)).
 - **Component foundation (decided 2026-10-19).** The interactive components of `libs/ui`
