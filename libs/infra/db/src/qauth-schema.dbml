@@ -34,6 +34,11 @@ Enum "response_type" {
   "code" [note: "Authorization Code (only supported in OAuth 2.1)"]
 }
 
+Enum "realm_host_kind" {
+  "primary" [note: "The realm's issuer host: one per realm, permanent, never an IP literal"]
+  "endpoint" [note: "An extra name for server-to-server callers; API routes only"]
+}
+
 Enum "audit_event_type" {
   "auth" [note: "Authentication events (login, logout, register)"]
   "token" [note: "Token events (issued, refreshed, revoked)"]
@@ -51,6 +56,8 @@ Table "realms" {
   "id" uuid [pk, default: `uuidv7()`]
   "name" varchar(255) [not null, unique]
   "enabled" boolean [not null, default: true]
+  "issuer" text [unique, note: "RFC 8414 issuer, no trailing slash; permanent once set (trigger); NULL until the boot step fills it"]
+  "is_operator" boolean [not null, default: false, note: "The operator realm; at most one"]
   "access_token_lifespan" bigint [default: 900, note: "15 minutes in seconds"]
   "refresh_token_lifespan" bigint [default: 604800, note: "7 days in seconds"]
   "ssl_required" "ssl_required" [default: 'external']
@@ -71,6 +78,21 @@ Table "realms" {
 
   Indexes {
     enabled [name: "idx_realms_enabled", note: "Partial index: WHERE enabled = true"]
+    is_operator [unique, name: "idx_realms_one_operator", note: "Partial unique index: WHERE is_operator = true"]
+  }
+}
+
+// One host exists once across every realm and both kinds (host is the primary key).
+// Hosts are stored lower-case, ASCII (punycode), with no port and no trailing dot.
+Table "realm_hosts" {
+  "host" varchar(253) [pk, note: "Normalised by normaliseRealmHost()"]
+  "realm_id" uuid [not null, ref: > realms.id]
+  "kind" realm_host_kind [not null]
+  "created_at" bigint [not null, default: `EXTRACT(EPOCH FROM NOW())::bigint * 1000`]
+
+  Indexes {
+    realm_id [unique, name: "idx_realm_hosts_one_primary", note: "Partial unique index: WHERE kind = 'primary'"]
+    realm_id [name: "idx_realm_hosts_realm_id"]
   }
 }
 

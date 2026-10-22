@@ -242,8 +242,13 @@ Each factory takes a `defaultDb: DbClient`. Methods below take an optional
   - `create()`, `findByKid()`, `listByRealm()`, `getWrappedForSigner()`
   - `create({ key, publicJwk? })` writes the `realm_keys` row and, for a published purpose, its `realm_public_keys` row in one transaction, copying the mirror columns from the key row.
   - `getWrappedForSigner(realmId, kid)` is the **only** method that returns `ciphertext`, `iv` and `wrapped_dek`. Every other method returns a `RealmKey` without them; a unit test fails when another method selects one.
-- **`createRealmsRepository(db)`**: Realm CRUD
+- **`createRealmsRepository(db)`**: Realm CRUD, and the realm's hosts (ADR-019 Decision 1)
   - `create()`, `findById()`, `findByIdOrThrow()`, `findByName()`, `update()`, `delete()`
+  - `findByHost(host)`, `createWithPrimaryHost(data, host)`, `addEndpointHost(realmId, host)`, `removeEndpointHost(realmId, host)`
+  - Every host goes through `normaliseRealmHost()` from `@qauth-labs/shared-validation` (lower case, punycode, no port, no trailing dot), so any spelling of a stored host finds it and a host is stored only once. `findByHost` returns `{ realm, host }` and matches nothing for a value that cannot be a host. A duplicate host, of either kind and in any realm, is a `UniqueConstraintError` on `realm_hosts_pkey`.
+  - `createWithPrimaryHost` writes the realm and its primary host in one transaction. The issuer is required and must sit on the primary host; a primary host is never an IP literal.
+  - A realm's `issuer` and primary host are **permanent**: database triggers allow them to be set once, from nothing, and refuse every later change (SQLSTATE 23514, constraints `realms_issuer_permanent` and `realm_hosts_primary_permanent`). Deleting the realm still removes its hosts. The triggers are hand-written SQL in migration 0025, which `drizzle-kit push` does not create; use the migrations.
+  - At most one realm has `isOperator: true` (`idx_realms_one_operator`).
 - **`createOAuthClientsRepository(db)`**: OAuth client CRUD
   - `create()`, `findById()`, `findByIdOrThrow()`, `findByClientId()`, `listByDeveloper()`, `upsertCimdClient()`, `update()`, `delete()`
   - `listByDeveloper(developerId, tx?)`: lists a developer's own clients, scoped strictly by `developer_id` and ordered newest-first. Dynamically registered (RFC 7591 / DCR) clients carry a null `developer_id` and are excluded.

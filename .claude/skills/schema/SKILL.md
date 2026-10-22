@@ -120,10 +120,17 @@ Schema lives in `libs/infra/db/src/lib/schema/`:
 | `authorization_codes`       | `tokens.ts`   | OAuth codes with PKCE (S256) challenge, nonce, RFC 8707 `resource`                                            |
 | `refresh_tokens`            | `tokens.ts`   | Opaque refresh tokens with `family_id` (RFC 9700 rotation family) + `resource`                                |
 | `audit_logs`                | `audit.ts`    | Auth/token/consent/client events with agent attribution (`actor_client_id`, `delegation_chain`, `scope_mode`) |
+| `realm_hosts`               | `core.ts`     | Host → realm, PK `host`; `primary` (one per realm, permanent) or `endpoint`; written via `normaliseRealmHost` |
 | `realm_keys`                | `keys.ts`     | Envelope-encrypted keys per realm and purpose (ADR-019 D9); only `getWrappedForSigner` reads wrapped columns  |
 | `realm_public_keys`         | `keys.ts`     | Public JWK of each published key, `(realm_id, kid)` → `realm_keys`; every role reads it (JWKS, verify)        |
 | `sessions`                  | `sessions.ts` | DB session table (PHASE-5+, **currently unused** — sessions live in Redis via `fastify.sessionUtils`)         |
 | `roles`, `user_roles`       | `roles.ts`    | RBAC (PHASE-5+, **currently unused** by auth-server routes)                                                   |
+
+A realm's `issuer` and its `primary` host in `realm_hosts` are **permanent**
+(ADR-019 Decision 1, migration 0025): triggers allow each to be set once, from
+nothing, and refuse every later change. Store and look up hosts only through
+`normaliseRealmHost()` (`@qauth-labs/shared-validation`) and the realms
+repository's host methods. At most one realm has `is_operator = true`.
 
 See `libs/infra/db/src/qauth-schema.dbml` for the full visual schema.
 
