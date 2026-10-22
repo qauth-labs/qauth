@@ -48,10 +48,18 @@
  */
 import { generateKeyPairSync } from 'node:crypto';
 
-import { UniqueConstraintError } from '@qauth-labs/shared-errors';
+import { NotFoundError, UniqueConstraintError } from '@qauth-labs/shared-errors';
 import Fastify, { type FastifyInstance, type InjectOptions } from 'fastify';
-import { serializerCompiler, validatorCompiler } from 'fastify-type-provider-zod';
+import {
+  serializerCompiler,
+  validatorCompiler,
+  type ZodTypeProvider,
+} from 'fastify-type-provider-zod';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { z } from 'zod';
+
+import { pageQuerySchema, pageSchema } from './api-conventions/paging';
+import { problemResponses } from './api-conventions/problem';
 
 /** Test-only route that raises a real `UniqueConstraintError`. See {@link buildAssembledApp}. */
 const UNIQUE_CONSTRAINT_ROUTE = '/__error-handler-wiring__/unique-constraint';
@@ -62,6 +70,14 @@ const UNIQUE_CONSTRAINT_ROUTE = '/__error-handler-wiring__/unique-constraint';
  * never reach the wire — naming it makes an account an enumeration oracle.
  */
 const LEAKY_CONSTRAINT_NAME = 'user_credentials_realm_provider_sub_unique';
+
+/**
+ * Test-only API family routes (#506): a paged list and a lookup that fails.
+ * Under `/developer/v1`, so the error handler answers them with problem
+ * documents, exactly as it will a real family route.
+ */
+const FAMILY_LIST_ROUTE = '/developer/v1/__error-handler-wiring__/widgets';
+const FAMILY_MISSING_ROUTE = '/developer/v1/__error-handler-wiring__/widgets/missing';
 
 const FORM: Record<string, string> = { 'content-type': 'application/x-www-form-urlencoded' };
 
@@ -185,6 +201,31 @@ async function buildAssembledApp(): Promise<FastifyInstance> {
     scope.post(UNIQUE_CONSTRAINT_ROUTE, async () => {
       throw new UniqueConstraintError(LEAKY_CONSTRAINT_NAME);
     });
+
+    // #506: two API family routes in the same scope, built with the shared
+    // paging and problem helpers. Like the route above, they load after both
+    // AutoLoads, so they prove what the handler answers on a family route,
+    // not the registration order.
+    scope.withTypeProvider<ZodTypeProvider>().get(
+      FAMILY_LIST_ROUTE,
+      {
+        schema: {
+          querystring: pageQuerySchema,
+          response: {
+            200: pageSchema(z.object({ id: z.uuid() })),
+            ...problemResponses(400, 401),
+          },
+        },
+      },
+      async () => ({ items: [], nextCursor: null })
+    );
+    scope.get(
+      FAMILY_MISSING_ROUTE,
+      { schema: { response: { ...problemResponses(404) } } },
+      async () => {
+        throw new NotFoundError('Widget', 'missing');
+      }
+    );
   });
 
   await instance.ready();
@@ -368,6 +409,54 @@ describe('assembled app — global error handler reachability (#365)', () => {
       expect(body, label).not.toHaveProperty('message');
       expect(String(body['code'] ?? ''), label).not.toMatch(/^FST_ERR/);
     }
+  });
+});
+
+/**
+ * The error format of ADR-019 Decision 7 in the assembled app (#506): an API
+ * family route answers an RFC 9457 problem document, and the OAuth protocol
+ * endpoints keep the error shape their specification defines. The token and
+ * revocation endpoints look the realm up before they refuse anything, so their
+ * half lives in `error-format.integration.test.ts`, against a real Postgres.
+ */
+describe('assembled app — problem details on the API families (#506)', () => {
+  const PROBLEM = /^application\/problem\+json(?:;|$)/;
+
+  it('a paged family list answers { items, nextCursor }', async () => {
+    const res = await server.inject({ method: 'GET', url: FAMILY_LIST_ROUTE });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ items: [], nextCursor: null });
+  });
+
+  it('a limit above 200 is refused with a problem document that points at /limit', async () => {
+    const res = await server.inject({ method: 'GET', url: `${FAMILY_LIST_ROUTE}?limit=201` });
+
+    expect(res.statusCode).toBe(400);
+    expect(res.headers['content-type']).toMatch(PROBLEM);
+    const body = res.json() as Record<string, unknown>;
+    expect(body).toMatchObject({ type: 'about:blank', status: 400, code: 'validation_error' });
+    expect(body['errors']).toEqual([{ pointer: '/limit', message: expect.any(String) }]);
+    // `trace_id` is the request id the response header carries and the
+    // request logger binds as `reqId` (`plugins/request-id.ts`).
+    expect(body['trace_id']).toBe(res.headers['x-request-id']);
+  });
+
+  it('a domain error on a family route answers a problem document with its code', async () => {
+    const res = await server.inject({ method: 'GET', url: FAMILY_MISSING_ROUTE });
+
+    expect(res.statusCode).toBe(404);
+    expect(res.headers['content-type']).toMatch(PROBLEM);
+    expect(res.json()).toMatchObject({ status: 404, code: 'not_found' });
+    expect(typeof res.json().trace_id).toBe('string');
+  });
+
+  it('GET /oauth/userinfo keeps the RFC 6750 §3 challenge and is not a problem document', async () => {
+    const res = await server.inject({ method: 'GET', url: '/oauth/userinfo' });
+
+    expect(res.statusCode).toBe(401);
+    expect(res.headers['content-type']).not.toMatch(PROBLEM);
+    expect(res.headers['www-authenticate']).toContain('error="invalid_token"');
   });
 });
 

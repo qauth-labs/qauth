@@ -25,6 +25,37 @@ import fp from 'fastify-plugin';
 
 import { env } from '../../config/env';
 import { redactLoggedUrl } from '../../config/logger';
+import { apiFamilyOf } from '../api-conventions/families';
+import {
+  DEFAULT_PROBLEM_TYPE,
+  PROBLEM_MEDIA_TYPE,
+  problemCodeFor,
+  type ProblemDocument,
+  statusTitle,
+} from '../api-conventions/problem';
+
+/**
+ * How a route answers an error (ADR-019 Decision 7, #506):
+ *
+ *   - `problem`: an RFC 9457 problem details document, sent as
+ *     `application/problem+json`, with a stable `code` and a `trace_id`;
+ *   - `oauth`: the error shape of the specification the endpoint implements,
+ *     such as RFC 6749 §5.2 on the token endpoint.
+ *
+ * A route under an API family prefix (`/admin/v1`, `/account/v1`,
+ * `/developer/v1`) answers `problem` unless it says otherwise. Every other
+ * route keeps the body this handler sent before the API families existed,
+ * until #513 makes `problem` the default and sets `oauth` on the OAuth
+ * protocol endpoints.
+ */
+export type ErrorFormat = 'problem' | 'oauth';
+
+declare module 'fastify' {
+  interface FastifyContextConfig {
+    /** The route's error format; see {@link ErrorFormat}. */
+    errorFormat?: ErrorFormat;
+  }
+}
 
 interface ErrorResponse {
   error: string;
@@ -152,6 +183,99 @@ function loggableError(error: FastifyError | Error): unknown {
   };
 }
 
+/**
+ * Whether the route that failed answers with a problem document: it says so in
+ * `config.errorFormat`, or it sits under an API family prefix. A request that
+ * matched no route has no `routeOptions.url` and keeps today's shape.
+ */
+function answersWithProblem(request: FastifyRequest): boolean {
+  const declared = request.routeOptions.config?.errorFormat;
+  if (declared !== undefined) return declared === 'problem';
+  const url = request.routeOptions.url;
+  return url !== undefined && apiFamilyOf(url) !== undefined;
+}
+
+/** The OAuth error classes whose `message` is the registered token, not prose. */
+function isOAuthTokenError(
+  error: unknown
+): error is
+  | InvalidScopeError
+  | InvalidGrantError
+  | InvalidRequestError
+  | InvalidTargetError
+  | InvalidClientError
+  | UnauthorizedClientError {
+  return (
+    error instanceof InvalidScopeError ||
+    error instanceof InvalidGrantError ||
+    error instanceof InvalidRequestError ||
+    error instanceof InvalidTargetError ||
+    error instanceof InvalidClientError ||
+    error instanceof UnauthorizedClientError
+  );
+}
+
+/**
+ * The `detail` of a problem document: what a caller may read about this
+ * failure, or nothing.
+ *
+ * A 5xx never carries one. The message of an unexpected error is ours, not the
+ * caller's, and the `trace_id` already leads an operator to it. Nor does a
+ * `UniqueConstraintError`'s own message, which embeds the constraint name (the
+ * enumeration oracle the legacy branch below guards against). An OAuth error
+ * class carries its token as the message, so its description is the detail.
+ */
+function problemDetail(error: FastifyError | Error, status: number): string | undefined {
+  if (status >= 500) return undefined;
+  if ('validation' in error && error.validation) return 'The request is not valid.';
+  if (error instanceof UniqueConstraintError) return 'Resource already exists';
+  if (isOAuthTokenError(error)) return error.errorDescription || undefined;
+  return error.message || undefined;
+}
+
+/**
+ * Build the RFC 9457 document for `error` (#506).
+ *
+ * `type` is `about:blank` and `title` the status phrase (RFC 9457 §4.2.1);
+ * `code` is one of the published codes (`api-conventions/problem.ts`), never a
+ * framework code such as `FST_ERR_VALIDATION`; `trace_id` is the request id the
+ * request logger carries as `reqId`, so an operator finds the log line by it. A
+ * validation failure lists each field in `errors`, from the same projection
+ * the legacy shape uses, and a weak password lists its feedback under
+ * `/password`.
+ */
+function problemDocument(
+  error: FastifyError | Error,
+  request: FastifyRequest,
+  status: number
+): ProblemDocument {
+  const isValidation = 'validation' in error && Boolean(error.validation);
+  const document: ProblemDocument = {
+    type: DEFAULT_PROBLEM_TYPE,
+    title: statusTitle(status),
+    status,
+    code: isValidation
+      ? 'validation_error'
+      : problemCodeFor((error as { code?: unknown }).code, status),
+    trace_id: request.id,
+  };
+
+  const detail = problemDetail(error, status);
+  if (detail) document.detail = detail;
+
+  const errors = isValidation
+    ? projectValidationDetails((error as FastifyError).validation).map(({ path, message }) => ({
+        pointer: path,
+        message,
+      }))
+    : error instanceof WeakPasswordError
+      ? (error.feedback ?? []).map((message) => ({ pointer: '/password', message }))
+      : [];
+  if (errors.length > 0) document.errors = errors;
+
+  return document;
+}
+
 /** Simple errors that only need message and statusCode */
 const SimpleErrorClasses = [
   BadRequestError,
@@ -220,6 +344,36 @@ export default fp(async function (fastify: FastifyInstance) {
         'Error occurred'
       );
 
+      // RFC 6750 §3: a bearer-protected resource (e.g. /oauth/userinfo) that
+      // rejects an access token MUST answer with a `WWW-Authenticate: Bearer`
+      // challenge carrying the `invalid_token` error code. This is scoped to the
+      // JWT/access-token failures — thrown by `requireJwt` / access-token
+      // verification on bearer-protected routes — and is DISTINCT from the
+      // client-authentication Basic case below (`InvalidClientError`).
+      // `InvalidTokenError` (email-verification tokens, etc.) is intentionally
+      // NOT included: it is not a bearer resource failure. We only set the
+      // header here and fall through so the normal body/status handling runs,
+      // in either error format: an API family route is bearer-protected too.
+      if (error instanceof JWTInvalidError || error instanceof JWTExpiredError) {
+        reply.header(
+          'WWW-Authenticate',
+          `Bearer realm="OAuth", error="invalid_token", error_description="${sanitizeChallengeDescription(
+            error.message
+          )}"`
+        );
+      }
+
+      // The API families, and any route that asks for it, answer with an RFC
+      // 9457 problem document (ADR-019 Decision 7, #506). Every branch below is
+      // the shape the other routes keep until #513 converts them.
+      if (answersWithProblem(request)) {
+        const status = statusCode >= 400 ? statusCode : 500;
+        return reply
+          .code(status)
+          .type(PROBLEM_MEDIA_TYPE)
+          .send(problemDocument(error, request, status));
+      }
+
       // RFC 6749 §5.2: if the client attempted Basic auth, the 401 response
       // MUST include a `WWW-Authenticate` header matching the scheme used.
       // Set here and fallen through, so the body below is built in ONE place
@@ -240,14 +394,7 @@ export default fp(async function (fastify: FastifyInstance) {
       // valid JSON')` — put that sentence in `error`, where the specification
       // requires the bare token and where every OAuth client library looks for
       // one. The response shape therefore depended on which call site threw.
-      if (
-        error instanceof InvalidScopeError ||
-        error instanceof InvalidGrantError ||
-        error instanceof InvalidRequestError ||
-        error instanceof InvalidTargetError ||
-        error instanceof InvalidClientError ||
-        error instanceof UnauthorizedClientError
-      ) {
+      if (isOAuthTokenError(error)) {
         const response: ErrorResponse = {
           error: error.message,
           statusCode: error.statusCode,
@@ -255,24 +402,6 @@ export default fp(async function (fastify: FastifyInstance) {
           ...(error.errorDescription ? { error_description: error.errorDescription } : {}),
         };
         return reply.code(error.statusCode).send(response);
-      }
-
-      // RFC 6750 §3: a bearer-protected resource (e.g. /oauth/userinfo) that
-      // rejects an access token MUST answer with a `WWW-Authenticate: Bearer`
-      // challenge carrying the `invalid_token` error code. This is scoped to the
-      // JWT/access-token failures — thrown by `requireJwt` / access-token
-      // verification on bearer-protected routes — and is DISTINCT from the
-      // client-authentication Basic case above (`InvalidClientError`).
-      // `InvalidTokenError` (email-verification tokens, etc.) is intentionally
-      // NOT included: it is not a bearer resource failure. We only set the
-      // header here and fall through so the normal body/status handling runs.
-      if (error instanceof JWTInvalidError || error instanceof JWTExpiredError) {
-        reply.header(
-          'WWW-Authenticate',
-          `Bearer realm="OAuth", error="invalid_token", error_description="${sanitizeChallengeDescription(
-            error.message
-          )}"`
-        );
       }
 
       // Handle simple error types (message + statusCode + optional code)

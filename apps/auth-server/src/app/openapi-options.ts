@@ -1,5 +1,8 @@
 import type * as SwaggerPlugin from '@fastify/swagger';
-import { createJsonSchemaTransform } from 'fastify-type-provider-zod';
+import {
+  createJsonSchemaTransform,
+  createJsonSchemaTransformObject,
+} from 'fastify-type-provider-zod';
 
 /**
  * Where one HTTP operation stands under the ADR-018 §5 stability contract.
@@ -7,6 +10,14 @@ import { createJsonSchemaTransform } from 'fastify-type-provider-zod';
  * release; everything else is `stable`.
  */
 export type OperationStability = 'stable' | 'experimental';
+
+/**
+ * What an admin, account or developer API operation does, for authorization
+ * (ADR-019 Decision 7, #506). On the admin API the class names the scope it
+ * needs: `admin:read`, `admin:write` or `admin:security`. `security` is used on
+ * the admin API only.
+ */
+export type OperationClass = 'read' | 'write' | 'security';
 
 declare module 'fastify' {
   interface FastifySchema {
@@ -19,8 +30,76 @@ declare module 'fastify' {
      * check.
      */
     'x-qauth-stability'?: OperationStability;
+    /**
+     * The extensions below are required on every operation of the admin,
+     * account and developer APIs and absent elsewhere. The API conventions
+     * check (`api-conventions/openapi-conventions.ts`) enforces them over the
+     * generated document; the docs site's `reference/api-conventions.md`
+     * defines them.
+     */
+    'x-qauth-class'?: OperationClass;
+    /** The permission the caller needs, or the list when the request decides which. */
+    'x-qauth-permission'?: string | readonly string[];
+    /** The effects that make an admin operation a security operation (ADR-019 Decision 7). */
+    'x-qauth-effects'?: readonly string[];
+    /** Set on every admin security operation: the console recommends a second admin. */
+    'x-qauth-two-admin'?: 'recommended';
   }
 }
+
+/** Where `@fastify/swagger` and the Zod transform put named schemas. */
+const COMPONENT_SCHEMA_REF = '#/components/schemas/';
+
+/**
+ * Keep only the component schemas the document's operations reference,
+ * directly or through another component.
+ *
+ * The Zod transform below turns a schema registered with an `id` (the shared
+ * `Problem` schema, `api-conventions/problem.ts`) into a `$ref`, and
+ * `createJsonSchemaTransformObject` adds every registered schema to
+ * `components.schemas`, used or not, each twice: as an output schema and as an
+ * `…Input` copy. A document then lists `ProblemInput`, which no operation
+ * accepts, and `Problem` on a surface with no operation that answers it. Only
+ * what a reference reaches is published.
+ */
+function withReferencedSchemasOnly<
+  Document extends { paths?: unknown; components?: { schemas?: Record<string, unknown> } },
+>(document: Document): Document {
+  const schemas: Record<string, unknown> = { ...document.components?.schemas };
+  const referenced = new Set<string>();
+
+  const visit = (node: unknown): void => {
+    if (Array.isArray(node)) {
+      node.forEach(visit);
+      return;
+    }
+    if (node === null || typeof node !== 'object') return;
+    for (const [key, value] of Object.entries(node)) {
+      if (key === '$ref' && typeof value === 'string' && value.startsWith(COMPONENT_SCHEMA_REF)) {
+        const name = value.slice(COMPONENT_SCHEMA_REF.length);
+        if (!referenced.has(name)) {
+          referenced.add(name);
+          visit(schemas[name]);
+        }
+      } else {
+        visit(value);
+      }
+    }
+  };
+  visit(document.paths);
+
+  return {
+    ...document,
+    components: {
+      ...document.components,
+      schemas: Object.fromEntries(Object.entries(schemas).filter(([name]) => referenced.has(name))),
+    },
+  };
+}
+
+const zodToJsonConfig = { target: 'draft-2020-12' } as const;
+
+const addComponentSchemas = createJsonSchemaTransformObject({ zodToJsonConfig });
 
 /**
  * `@fastify/swagger` registration options — the `openapi` object plus the
@@ -71,7 +150,7 @@ export const openapiOptions: SwaggerPlugin.FastifyDynamicSwaggerOptions = {
       },
     },
   },
-  transform: createJsonSchemaTransform({
-    zodToJsonConfig: { target: 'draft-2020-12' },
-  }),
+  transform: createJsonSchemaTransform({ zodToJsonConfig }),
+  transformObject: (documentObject) =>
+    withReferencedSchemasOnly(addComponentSchemas(documentObject)),
 };
