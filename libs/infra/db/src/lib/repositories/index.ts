@@ -2,6 +2,7 @@
 export * from './base.repository';
 
 // Export all repositories
+export * from './admin-audit-log.repository';
 export * from './api-keys.repository';
 export * from './audit-logs.repository';
 export * from './authorization-codes.repository';
