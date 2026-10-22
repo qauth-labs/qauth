@@ -25,7 +25,15 @@ graphs/
     catalog/en.json      the UI strings that ui.yaml names
     binding.yaml         where a running QAuth is found when delurio replays the flow
   nav/<app>/nav.yaml     an app's navigation graph (kind: nav)
+  bindings/              shared bindings that per-flow binding.yaml files extend: where the server
+                         and the apps run, and how a replay signs in
+  fixtures/              the seed data a replay starts from
+  kits/                  delurio kits that draw the state pages with QAuth's own components
+  claims.yaml            which API operations and UI routes each graph covers, or why one is exempt
 ```
+
+`graphs/` will also become a small Nx project whose targets only run delurio's tool (#560). It
+holds no code.
 
 The areas under `flows/` follow the beta order of ADR-018 and the apps of ADR-020: `core`,
 `authority-tree` and `federation` for protocol flows, `ceremony`, `account`, `admin` and

@@ -39,3 +39,8 @@ vitest.config.*.timestamp*
 # re-committed by accident, so the ignore is restored as a guard. Drop this
 # block if Cursor is ever adopted.
 .cursor/
+
+# delurio writes a graph's generated page to <graph dir>/viz/ and its replay
+# reports to <graph dir>/replay/ (graphs/README.md). Both are build output.
+graphs/**/viz/
+graphs/**/replay/

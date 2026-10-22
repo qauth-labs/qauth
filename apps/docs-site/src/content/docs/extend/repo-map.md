@@ -3,7 +3,7 @@ title: Repository map
 description: The apps/ and libs/ layout, the Nx scope tags and the eslint boundary constraints derived from them, where new code belongs, and the Windows CRLF gotcha that breaks nx lint on files you never touched.
 sidebar:
   order: 3
-lastVerified: '2026-10-20'
+lastVerified: '2026-10-22'
 ---
 
 QAuth is an Nx monorepo with two trees: `apps/` for deployable entry points and `libs/` for
@@ -214,6 +214,7 @@ Projects cannot be imported by a relative or absolute path, and must begin with 
 | An error class or a shared type                      | `libs/shared/errors` / `libs/shared/validation`     |
 | Domain logic with no Fastify and no I/O              | `libs/server/<area>`                                |
 | A database table, migration, or repository           | `libs/infra/db`                                     |
+| The graph of a flow or a screen (ADR-021)            | `graphs/flows/<area>/<flow>/` (`graphs/README.md`)  |
 | The Fastify wiring that exposes the above to the app | `libs/fastify/plugins/<area>`                       |
 | An HTTP route                                        | `apps/auth-server/src/app/routes/<dir>`             |
 | Configuration schema an app must read                | `libs/server/config` (already dual-tagged for this) |

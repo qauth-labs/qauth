@@ -249,12 +249,16 @@ graphs/
                          flow with screens; binding.yaml for a replay against QAuth
                          areas: core, authority-tree, federation, ceremony, account, admin, developer
   nav/<app>/             nav.yaml, an app's navigation graph
+  bindings/              shared bindings that per-flow binding files extend
+  fixtures/              the seed data a replay starts from
+  kits/                  delurio kits that draw the state pages with QAuth's own components
+  claims.yaml            which API operations and UI routes each graph covers
 ```
 
 The graphs are neither prose nor TypeScript. `docs/` holds text for readers, and `libs/` holds Nx
 code projects with their own boundaries. A top-level directory gives delurio, and any other
-consumer, a stable path that does not depend on QAuth's build layout. QAuth has no graph tooling
-project.
+consumer, a stable path that does not depend on QAuth's build layout. QAuth has no graph tooling;
+`graphs/` is an Nx project only so that its targets can run delurio's tool.
 
 ### 6. The boundary with delurio
 
