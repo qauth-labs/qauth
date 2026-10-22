@@ -379,7 +379,11 @@ describe('rewriteRecordLink — the real docs/adr and docs/security corpus, enum
     //
     // 575 → 576 with the same amendment to ADR-018 §5: RFC 9457 joins the
     // record's Related list. §5 names ADR-019 without a link, as it already did.
-    expect(extractAllLinks()).toHaveLength(576);
+    //
+    // 576 → 575 with the 2026-10-22 amendment to ADR-021: the format is
+    // delurio's, so the record's JSON Schema link (external) goes; delurio is
+    // named without a link.
+    expect(extractAllLinks()).toHaveLength(575);
   });
 
   it('every link falls into exactly one of the four outcomes, with none left unresolved', () => {
@@ -502,7 +506,10 @@ describe('rewriteRecordLink — the real docs/adr and docs/security corpus, enum
     //
     // The 2026-10-20 error-format amendments: 279 → 281 external (RFC 9457 in
     // ADR-019 and ADR-018). Anchors, route, blob and unresolved unchanged.
-    expect(untouchedExternalOrAnchor).toBe(281 + 38);
+    //
+    // The 2026-10-22 amendment to ADR-021: 281 → 280 external (its JSON
+    // Schema link). Anchors, route, blob and unresolved unchanged.
+    expect(untouchedExternalOrAnchor).toBe(280 + 38);
     //
     // The 2026-10-11 decisions on ADR-011: 228 → 229 route (net +1, see the total
     // above). External, anchors, blob and unresolved unchanged.
