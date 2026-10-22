@@ -64,6 +64,7 @@ export interface KeyFactoryOptions<Tx> {
 
 /** Input of {@link KeyFactory.createKey}. */
 export interface CreateKeyInput<Tx> {
+  /** A UUID. It is stored, and sealed into the key's associated data, in lowercase. */
   readonly realmId: string;
   readonly purpose: KeyPurpose;
   /** The owner inside the realm, for a scoped purpose only. */
@@ -136,6 +137,8 @@ export interface KeyFactory<Tx> {
    * serializes them, for example with an advisory lock (#485).
    *
    * @returns the keys it created; empty when the realm lacked none.
+   * @throws KeyCreationRefusedError (`INVALID_REALM_ID`) when the realm id is
+   *   not a UUID, before the store is read.
    * @throws KeyCreationRefusedError (`HYBRID_PAIR_INCOMPLETE`) when hybrid
    *   signing is on and the realm holds only one active key of the
    *   `token_signing` pair. Creating the other half alone would leave two keys
@@ -186,10 +189,8 @@ export function createKeyFactory<Tx>(options: KeyFactoryOptions<Tx>): KeyFactory
   }
 
   function resolveRequest(input: Omit<CreateKeyInput<Tx>, 'tx'>): KeyRequest {
-    const { realmId, purpose } = input;
-    if (typeof realmId !== 'string' || !UUID_PATTERN.test(realmId)) {
-      throw new KeyCreationRefusedError('INVALID_REALM_ID', 'A realm id is a UUID');
-    }
+    const realmId = resolveRealmId(input.realmId);
+    const { purpose } = input;
     if (typeof purpose !== 'string' || !isKeyPurpose(purpose)) {
       throw new KeyCreationRefusedError('UNKNOWN_PURPOSE', `Unknown key purpose '${purpose}'`);
     }
@@ -337,9 +338,11 @@ export function createKeyFactory<Tx>(options: KeyFactoryOptions<Tx>): KeyFactory
     },
 
     async provisionRealmKeys(
-      realmId: string,
+      requestedRealmId: string,
       provisionOptions: ProvisionRealmKeysOptions<Tx> = {}
     ): Promise<readonly CreatedKey[]> {
+      // Checked before the store sees it, as createKey does.
+      const realmId = resolveRealmId(requestedRealmId);
       return store.transaction(async (tx) => {
         const created: CreatedKey[] = [];
         for (const purpose of STANDARD_REALM_KEY_PURPOSES) {
@@ -373,6 +376,19 @@ export function createKeyFactory<Tx>(options: KeyFactoryOptions<Tx>): KeyFactory
       }, provisionOptions.tx);
     },
   });
+}
+
+/**
+ * The stored realm id: a UUID in lowercase, the form Postgres returns for
+ * `realm_keys.realm_id`. The realm id is part of the associated data that
+ * seals a key, so a key sealed under another casing would not open from its
+ * stored row.
+ */
+function resolveRealmId(realmId: unknown): string {
+  if (typeof realmId !== 'string' || !UUID_PATTERN.test(realmId)) {
+    throw new KeyCreationRefusedError('INVALID_REALM_ID', 'A realm id is a UUID');
+  }
+  return realmId.toLowerCase();
 }
 
 /**

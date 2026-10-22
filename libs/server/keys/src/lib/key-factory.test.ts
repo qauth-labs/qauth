@@ -352,6 +352,22 @@ describe('createKey', () => {
     }
   );
 
+  it('stores an upper-case realm id in lowercase, so the key opens from its stored row', async () => {
+    const { factory, store, kekProvider } = setup();
+
+    const [created] = await factory.createKey({
+      realmId: REALM.toUpperCase(),
+      purpose: 'event_signing',
+    });
+
+    expect(created.realmId).toBe(REALM);
+    const { key } = store.rows[0];
+    expect(key.realmId).toBe(REALM);
+    // Postgres returns the uuid column in lowercase.
+    const material = await openKeyMaterial(kekProvider, key, { ...key, realmId: REALM });
+    expect(material.length).toBeGreaterThan(0);
+  });
+
   it('refuses an unknown purpose', async () => {
     const { factory } = setup();
 
@@ -584,6 +600,27 @@ describe('provisionRealmKeys', () => {
     const keys = await factory.provisionRealmKeys(REALM);
 
     expect(keys[0]).toMatchObject({ purpose: 'token_signing', algorithm: 'EdDSA' });
+  });
+
+  it.each(['', 'realm-1', '0190d7a2-6f4e-7c1a-9b3e-5a8d2c4f6e0'])(
+    'refuses a realm id that is not a UUID (%j) before reading the store',
+    async (realmId) => {
+      const { factory, store } = setup();
+
+      await expect(factory.provisionRealmKeys(realmId)).rejects.toMatchObject({
+        reason: 'INVALID_REALM_ID',
+      });
+      expect(store.calls).toEqual([]);
+    }
+  );
+
+  it('finds the keys of a realm named in upper case', async () => {
+    const { factory, store } = setup();
+
+    await factory.provisionRealmKeys(REALM.toUpperCase());
+
+    expect(await factory.provisionRealmKeys(REALM)).toEqual([]);
+    expect(store.rows.map((row) => row.key.realmId)).toEqual([REALM, REALM, REALM, REALM]);
   });
 
   it('runs in the caller’s transaction when given one', async () => {
