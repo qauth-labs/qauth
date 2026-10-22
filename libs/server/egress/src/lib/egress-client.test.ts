@@ -10,17 +10,40 @@ import {
   type FixtureServer,
 } from '../testing/fixture-network';
 import {
-  createEgressClientWithTransport,
+  createEgressClient,
   type EgressClient,
   type EgressClientOptions,
   type EgressRequest,
 } from './egress-client';
 import { EgressError } from './errors';
+import type { EgressTransport } from './transport';
 
 /*
  * The egress client against local HTTPS servers. `fixture-network.ts` says how
  * public addresses reach them; everything else is the production code path.
+ *
+ * The library has no way to hand the client another network, so the tests
+ * replace the transport module's NODE_TRANSPORT with one that delegates to
+ * `network.current`.
  */
+
+const network = vi.hoisted(() => ({ current: undefined as EgressTransport | undefined }));
+
+vi.mock('./transport', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./transport')>();
+  const current = (): EgressTransport => {
+    if (network.current === undefined) throw new Error('no fixture network');
+    return network.current;
+  };
+  return {
+    ...actual,
+    NODE_TRANSPORT: {
+      resolveHost: (...args: Parameters<EgressTransport['resolveHost']>) =>
+        current().resolveHost(...args),
+      dial: (...args: Parameters<EgressTransport['dial']>) => current().dial(...args),
+    },
+  };
+});
 
 /** Public addresses the fixture DNS hands out; each is served by a local server. */
 const PUBLIC_A = '93.184.215.14';
@@ -71,10 +94,10 @@ beforeEach(() => {
     server.handler = ok;
   }
   internal.handler = (_req, _body, res) => res.end('internal secret');
+  network.current = net.transport;
 });
 
-const client = (options: EgressClientOptions = {}): EgressClient =>
-  createEgressClientWithTransport(options, net.transport);
+const client = (options: EgressClientOptions = {}): EgressClient => createEgressClient(options);
 
 const get = (url: string, extra: Partial<EgressRequest> = {}, egress = client()) =>
   egress.request({ method: 'GET', url, purpose: 'test', ...extra });
@@ -471,11 +494,59 @@ describe('response size (local test servers)', () => {
   });
 
   it('refuses a declared length above the cap without reading the body', async () => {
-    serverA.handler = (_req, _body, res) => res.end('x'.repeat(101));
+    // The head declares 101 bytes and no body byte ever follows: only the
+    // declared length can fail the call before the total timeout.
+    serverA.handler = (_req, _body, res) => {
+      res.writeHead(200, { 'content-length': '101' });
+      res.flushHeaders();
+    };
+    const started = performance.now();
     const err = await refusal(
-      get('https://api.egress.test/', { limits: { maxResponseBytes: 100 } })
+      get('https://api.egress.test/', {
+        limits: { maxResponseBytes: 100, totalTimeoutMs: 5000 },
+      })
     );
     expect(err).toMatchObject({ reason: 'size', outcome: 'failed' });
+    expect(performance.now() - started).toBeLessThan(2000);
+  });
+
+  // Chunk-size lines and chunk extensions are not body bytes; without a cap
+  // on the bytes read from the connection, a host could stream them until the
+  // total timeout.
+  it.each([
+    ['chunk extensions', `1;x=${'a'.repeat(8000)}\r\nb\r\n`],
+    ['zero-padded chunk sizes', `${'0'.repeat(8000)}1\r\nb\r\n`],
+  ])('stops reading a body framed with endless %s', async (_label, chunk) => {
+    let written = 0;
+    let closed = false;
+    serverA.handler = (_req, _body, res) => {
+      const socket = res.socket;
+      if (socket === null) return;
+      socket.on('close', () => {
+        closed = true;
+      });
+      socket.write('HTTP/1.1 200 OK\r\ntransfer-encoding: chunked\r\n\r\n');
+      const pump = (): void => {
+        while (!closed && written < 64 * 1024 * 1024) {
+          written += chunk.length;
+          if (!socket.write(chunk)) {
+            socket.once('drain', pump);
+            return;
+          }
+        }
+      };
+      pump();
+    };
+    const started = performance.now();
+    const err = await refusal(
+      get('https://api.egress.test/', {
+        limits: { maxResponseBytes: 1024, totalTimeoutMs: 10_000 },
+      })
+    );
+    expect(err).toMatchObject({ reason: 'size', outcome: 'failed' });
+    expect(performance.now() - started).toBeLessThan(5000);
+    await vi.waitFor(() => expect(closed).toBe(true));
+    expect(written).toBeLessThan(4 * 1024 * 1024);
   });
 
   it('cuts off an undeclared body at the cap and stops reading', async () => {
@@ -566,13 +637,8 @@ describe('timeouts (local test servers)', () => {
   });
 
   it('gives up on a name server that never answers at the total timeout', async () => {
-    const egress = createEgressClientWithTransport(
-      {},
-      { ...net.transport, resolveHost: () => new Promise(() => undefined) }
-    );
-    const err = await refusal(
-      get('https://api.egress.test/', { limits: { totalTimeoutMs: 200 } }, egress)
-    );
+    network.current = { ...net.transport, resolveHost: () => new Promise(() => undefined) };
+    const err = await refusal(get('https://api.egress.test/', { limits: { totalTimeoutMs: 200 } }));
     expect(err).toMatchObject({ reason: 'timeout', outcome: 'failed' });
   });
 });
@@ -580,9 +646,9 @@ describe('timeouts (local test servers)', () => {
 describe('validateDestination', () => {
   it('resolves and checks without sending anything', async () => {
     const dial = vi.fn(net.transport.dial);
-    const egress = createEgressClientWithTransport({}, { ...net.transport, dial });
+    network.current = { ...net.transport, dial };
     await expect(
-      egress.validateDestination('https://api.egress.test/hook?token=abc', { purpose: 'webhook' })
+      client().validateDestination('https://api.egress.test/hook?token=abc', { purpose: 'webhook' })
     ).resolves.toEqual({
       url: 'https://api.egress.test/hook?token=abc',
       host: 'api.egress.test',
@@ -706,6 +772,18 @@ describe('counting and logging', () => {
     );
     expect(err.message).not.toContain('secret');
     expect(err.message).not.toContain('/x');
+  });
+
+  it('counts a purpose that names an Object.prototype property like any other', async () => {
+    const egress = client();
+    const err = await refusal(
+      get('https://internal.egress.test/', { purpose: 'constructor' }, egress)
+    );
+    expect(err.reason).toBe('address');
+    expect(egress.counts()).toEqual({
+      constructor: { blocked: 1, failed: 0, reasons: { address: 1 } },
+    });
+    expect(Object.hasOwn(Object, 'blocked')).toBe(false);
   });
 
   it('counts validateDestination refusals too', async () => {

@@ -98,7 +98,10 @@ id is refused.
 
 `createEgressClient({ limits })` sets the client's limits; `request({ limits })` and
 `validateDestination(url, { limits })` override them for one call. The client also caps the
-response head at 16 KiB and tolerates at most three `1xx` interim responses.
+response head at 16 KiB and tolerates at most three `1xx` interim responses. Chunk-size lines, chunk
+extensions and trailers are not body bytes, so it also caps everything it reads from the connection
+at twice `maxResponseBytes` plus room for the heads; a host cannot stream framing until the total
+timeout.
 
 ## Errors, counts and logs
 
@@ -128,8 +131,10 @@ message)`) gets one line per call with `purpose`, `host`, `reason` and `outcome`
 `src/lib/egress-client.test.ts` runs the production path against local HTTPS servers.
 `src/testing/fixture-network.ts` replaces only the two network edges: a resolver that answers from a
 table, and a dialler that routes the public addresses the test hands out to local servers. The
-resolver (`resolveWithCares`) and the dialler (`dialPinned`) the client uses outside tests have
-their own tests in `src/lib/transport.test.ts`. Run them with:
+library exports no way to hand the client another network, so the test swaps them in by mocking
+the transport module (`vi.mock('./transport')`). The resolver (`resolveWithCares`) and the dialler
+(`dialPinned`) the client uses outside tests have their own tests in `src/lib/transport.test.ts`.
+Run them with:
 
 ```console
 pnpm nx test server-egress

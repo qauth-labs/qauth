@@ -205,18 +205,15 @@ function withinDeadline<T>(work: Promise<T>, signal: AbortSignal, host: string):
 }
 
 /**
- * Create the client with the network replaced. Tests use it to answer name
- * lookups and to route dialled addresses to local servers; it is not exported
- * from the library.
- *
- * @internal
+ * The client over `transport`. Only {@link createEgressClient} calls it, with
+ * the real network: no export lets a caller hand in a network of its own. The
+ * tests replace the transport module instead.
  */
-export function createEgressClientWithTransport(
-  options: EgressClientOptions,
-  transport: EgressTransport
-): EgressClient {
+function buildEgressClient(options: EgressClientOptions, transport: EgressTransport): EgressClient {
   const baseLimits = mergeLimits(DEFAULT_EGRESS_LIMITS, options.limits);
-  const counts: EgressCounts = {};
+  // A Map, not an object: a purpose such as `constructor` must not reach a
+  // prototype.
+  const counts = new Map<string, EgressCounts[string]>();
 
   /** Count, log and convert a refusal or failure into the error the caller gets. */
   const report = (err: unknown, purpose: string, host: string | undefined): EgressError => {
@@ -229,7 +226,11 @@ export function createEgressClientWithTransport(
             `egress to ${host ?? 'a URL'} failed: ${err instanceof Error ? err.message : 'unknown error'}`
           );
     const { reason, outcome } = failure;
-    const entry = (counts[purpose] ??= { blocked: 0, failed: 0, reasons: {} });
+    let entry = counts.get(purpose);
+    if (entry === undefined) {
+      entry = { blocked: 0, failed: 0, reasons: {} };
+      counts.set(purpose, entry);
+    }
     entry[outcome] += 1;
     entry.reasons[reason] = (entry.reasons[reason] ?? 0) + 1;
     options.counter?.inc({ purpose, outcome, reason });
@@ -389,10 +390,7 @@ export function createEgressClientWithTransport(
 
   const snapshot = (): EgressCounts =>
     Object.fromEntries(
-      Object.entries(counts).map(([purpose, entry]) => [
-        purpose,
-        { ...entry, reasons: { ...entry.reasons } },
-      ])
+      [...counts].map(([purpose, entry]) => [purpose, { ...entry, reasons: { ...entry.reasons } }])
     );
 
   return { request, validateDestination, counts: snapshot };
@@ -413,5 +411,5 @@ export function createEgressClientWithTransport(
  * no switch that lets it reach a private address.
  */
 export function createEgressClient(options: EgressClientOptions = {}): EgressClient {
-  return createEgressClientWithTransport(options, NODE_TRANSPORT);
+  return buildEgressClient(options, NODE_TRANSPORT);
 }

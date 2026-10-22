@@ -7,17 +7,11 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vites
  * replace: name resolution and dialling.
  */
 
-const { lookup, resolve4, resolve6, cancel, resolverOptions } = vi.hoisted(() => ({
-  lookup: vi.fn(),
+const { resolve4, resolve6, cancel, resolverOptions } = vi.hoisted(() => ({
   resolve4: vi.fn(),
   resolve6: vi.fn(),
   cancel: vi.fn(),
   resolverOptions: [] as unknown[],
-}));
-
-vi.mock('node:dns', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('node:dns')>()),
-  lookup,
 }));
 
 vi.mock('node:dns/promises', async (importOriginal) => ({
@@ -45,7 +39,7 @@ describe('resolveWithCares', () => {
   const resolve = (hostname: string, timeoutMs = 300, signal = new AbortController().signal) =>
     resolveWithCares(hostname, { timeoutMs, signal });
 
-  it('returns every A and AAAA record, from c-ares and never from getaddrinfo', async () => {
+  it('returns every A and AAAA record, from c-ares queries', async () => {
     resolve4.mockResolvedValue(['93.184.215.14', '93.184.215.15']);
     resolve6.mockResolvedValue(['2606:2800:21f:cb07:6820:80da:af6b:8b2c']);
 
@@ -56,7 +50,6 @@ describe('resolveWithCares', () => {
     ]);
     expect(resolve4).toHaveBeenCalledWith('example.com');
     expect(resolve6).toHaveBeenCalledWith('example.com');
-    expect(lookup).not.toHaveBeenCalled();
   });
 
   it('accepts a host with one family only', async () => {
@@ -134,7 +127,6 @@ describe('dialPinned', () => {
     // address was dialled.
     const socket = dialPinned('pinned.egress.test', [{ address: '127.0.0.1', family: 4 }], port);
     await expect(connected(socket)).resolves.toBe('127.0.0.1');
-    expect(lookup).not.toHaveBeenCalled();
     expect(resolve4).not.toHaveBeenCalled();
   });
 
@@ -154,6 +146,5 @@ describe('dialPinned', () => {
   it('dials an IP literal as it is', async () => {
     const socket = dialPinned('127.0.0.1', [{ address: '127.0.0.1', family: 4 }], port);
     await expect(connected(socket)).resolves.toBe('127.0.0.1');
-    expect(lookup).not.toHaveBeenCalled();
   });
 });

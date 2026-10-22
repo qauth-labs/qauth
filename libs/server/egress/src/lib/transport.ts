@@ -232,6 +232,27 @@ export function exchange(job: Exchange, dial: Dial): Promise<ExchangeResult> {
     });
     sockets.push(tls);
     tls.on('error', (err) => fail(failed(err.message)));
+
+    const tooLarge = (): EgressFailure =>
+      new EgressFailure(
+        'size',
+        'failed',
+        `egress to ${target.hostname} failed: the response is larger than ${job.maxResponseBytes} bytes`
+      );
+
+    // The body cap counts body bytes only. Chunk-size lines, chunk extensions
+    // and trailers are not body, and a host could send them without end; this
+    // caps everything read from the connection: the heads, and twice the body
+    // cap for the body with its framing.
+    const maxWireBytes = 2 * job.maxResponseBytes + MAX_HEADER_BYTES * (MAX_INTERIM_RESPONSES + 2);
+    let wireBytes = 0;
+    tls.on('data', (chunk: Buffer) => {
+      wireBytes += chunk.length;
+      // Fail once this chunk has reached the HTTP parser, which listens after
+      // this listener: a socket destroyed under it in the middle of a 'data'
+      // event trips an assertion in Node's HTTP client, an uncaught exception.
+      if (wireBytes > maxWireBytes) process.nextTick(() => fail(tooLarge()));
+    });
     tls.once('secureConnect', () => clearTimeout(connectTimer));
 
     const headers: Record<string, string> = {
@@ -292,12 +313,6 @@ export function exchange(job: Exchange, dial: Dial): Promise<ExchangeResult> {
         res.on('error', (err) => fail(failed(err.message)));
       }
     );
-    const tooLarge = (): EgressFailure =>
-      new EgressFailure(
-        'size',
-        'failed',
-        `egress to ${target.hostname} failed: the response is larger than ${job.maxResponseBytes} bytes`
-      );
 
     // 1xx responses never reach the response callback, so the byte cap does
     // not see them; a host could stream them until the deadline.

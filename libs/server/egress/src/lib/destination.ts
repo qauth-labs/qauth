@@ -23,13 +23,21 @@ export type ResolveHost = (
   options: { timeoutMs: number; signal: AbortSignal }
 ) => Promise<LookupAddress[]>;
 
+/** A URL's host name without IPv6 brackets or a trailing dot, in lower case. */
+function normalizeHostname(hostname: string): string {
+  return hostname
+    .replace(/^\[|\]$/g, '')
+    .replace(/\.$/, '')
+    .toLowerCase();
+}
+
 /**
  * The host of `url` for errors and logs, or `undefined` when there is none.
  * Never the path, the query string or the user name.
  */
 export function hostForLog(url: string | URL): string | undefined {
   try {
-    const host = (typeof url === 'string' ? new URL(url) : url).hostname;
+    const host = normalizeHostname((typeof url === 'string' ? new URL(url) : url).hostname);
     return host === '' ? undefined : host;
   } catch {
     return undefined;
@@ -64,10 +72,7 @@ export function checkUrl(input: string | URL): CheckedUrl {
     );
   }
 
-  const hostname = url.hostname
-    .replace(/^\[|\]$/g, '')
-    .replace(/\.$/, '')
-    .toLowerCase();
+  const hostname = normalizeHostname(url.hostname);
   const family = isIP(hostname);
   const literalFamily = family === 4 || family === 6 ? family : 0;
   if (literalFamily !== 0) {
