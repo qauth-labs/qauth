@@ -15,7 +15,12 @@ import { BaseRepository } from './base.repository';
 
 export type Realm = InferSelectModel<typeof realms>;
 export type NewRealm = InferInsertModel<typeof realms>;
-export type UpdateRealm = Partial<Omit<NewRealm, 'id' | 'createdAt'>> & {
+/**
+ * Fields a realm update may change. `webauthnRpId` is left out on purpose
+ * (#467): the passkey RP ID lock is written only by `lockWebAuthnRpId`, which
+ * normalises it and holds the realm row while the first enrolment commits.
+ */
+export type UpdateRealm = Partial<Omit<NewRealm, 'id' | 'createdAt' | 'webauthnRpId'>> & {
   updatedAt?: number;
 };
 

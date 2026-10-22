@@ -1,6 +1,10 @@
 import { randomBytes as nodeRandomBytes } from 'node:crypto';
 
-import { isWebAuthnOriginForRpId, normaliseWebAuthnOrigin } from '@qauth-labs/shared-validation';
+import {
+  InvalidWebAuthnOriginError,
+  isWebAuthnOriginForRpId,
+  normaliseWebAuthnOrigin,
+} from '@qauth-labs/shared-validation';
 import { z } from 'zod';
 
 import {
@@ -91,10 +95,18 @@ export const WEBAUTHN_CHALLENGE_BYTES = 32;
 /** Longest `user.name` and `user.displayName` sent to an authenticator. */
 const USER_NAME_MAX_LENGTH = 256;
 
-/** A user handle: 1–64 bytes (§5.4.3), base64url. */
+/**
+ * A user handle: 1–64 bytes (§5.4.3), in canonical base64url, the form a
+ * browser re-encodes `userHandle` in. A non-canonical spelling of the same
+ * bytes would be stored as given and never match the answer of a passkey-first
+ * sign-in, so it is refused here.
+ */
 const userHandleSchema = z
   .string()
-  .regex(/^[A-Za-z0-9_-]{2,86}$/, 'must be the base64url form of 1 to 64 bytes');
+  .regex(/^[A-Za-z0-9_-]{2,86}$/, 'must be the base64url form of 1 to 64 bytes')
+  .refine((handle) => Buffer.from(handle, 'base64url').toString('base64url') === handle, {
+    message: 'must be canonical base64url without padding',
+  });
 
 /** What {@link WebAuthnProvider.startRegistration} takes. */
 export interface StartRegistrationInput {
@@ -505,14 +517,24 @@ function assertTransactionId(transactionId: string): void {
 
 /**
  * The origins a ceremony allows, normalised, each one usable under the RP ID.
- * A wrong origin is the operator's configuration error, so it throws a plain
- * error naming it, at the start of the ceremony.
+ * A wrong origin is the operator's configuration error, so it throws a PLAIN
+ * error naming it, at the start of the ceremony: the error handler then logs it
+ * and answers 500, where `InvalidWebAuthnOriginError` (status 400) would tell
+ * the user their request was wrong.
  */
 function ceremonyOrigins(origins: readonly string[], rpId: string): string[] {
   if (origins.length === 0) throw new Error('A WebAuthn ceremony needs at least one origin');
   const normalised = new Set<string>();
   for (const origin of origins) {
-    const value = normaliseWebAuthnOrigin(origin);
+    let value: string;
+    try {
+      value = normaliseWebAuthnOrigin(origin);
+    } catch (error) {
+      if (!(error instanceof InvalidWebAuthnOriginError)) throw error;
+      throw new Error(`The origin "${origin}" is not a WebAuthn origin: ${error.message}`, {
+        cause: error,
+      });
+    }
     if (!isWebAuthnOriginForRpId(value, rpId)) {
       throw new Error(`The origin "${value}" cannot run a ceremony for the RP ID "${rpId}"`);
     }

@@ -237,17 +237,73 @@ describe('createWebAuthnProvider', () => {
       ).resolves.toBeDefined();
     });
 
-    it('refuses a second ceremony on a transaction that has one waiting', async () => {
+    it('throws a plain error, not a 400, for an origin that is not one', async () => {
       const { provider } = setup();
-      const start = () =>
-        provider.startAuthentication({
+      const error = await provider
+        .startAuthentication({
           transactionId: 'tx',
           purpose: 'sign-in',
           rpId: 'auth.example.com',
+          origins: ['http://auth.example.com'],
+        })
+        .then(
+          () => undefined,
+          (caught: unknown) => caught
+        );
+      expect(error).toBeInstanceOf(Error);
+      expect(error).not.toHaveProperty('statusCode');
+      expect((error as Error).message).toContain(
+        '"http://auth.example.com" is not a WebAuthn origin'
+      );
+    });
+
+    it('refuses a user handle that is not canonical base64url', async () => {
+      const { provider } = setup();
+      // "AB" decodes to one byte whose re-encoding is "AA".
+      await expect(
+        provider.startRegistration({
+          transactionId: 'tx',
+          purpose: 'sign-in',
+          rp: { id: 'auth.example.com', name: 'Example' },
           origins: ['https://auth.example.com'],
-        });
-      await start();
-      await expect(start()).rejects.toThrow('already has a ceremony waiting');
+          user: { handle: 'AB', name: 'ada', displayName: 'Ada' },
+        })
+      ).rejects.toThrow('canonical base64url');
+    });
+  });
+
+  describe('a new start on the same transaction', () => {
+    it('replaces the waiting ceremony, so a dismissed prompt can be retried at once', async () => {
+      const vector = W3C_WEBAUTHN_VECTORS.packedEs256;
+      // The first start gets another challenge; the retry gets the vector's.
+      const context = setup([
+        vector.registration.challenge,
+        '11'.repeat(32),
+        vector.authentication.challenge,
+      ]);
+      const enrolment = await enrol(context, vector, 'sign-in');
+      const first = await startSignIn(context, vector, 'sign-in');
+      const retry = await startSignIn(context, vector, 'sign-in');
+
+      expect(retry.challenge).not.toBe(first.challenge);
+      expect(context.challenges.pending()).toEqual(['login-1']);
+      await expect(context.provider.verify(verifyInput(vector, enrolment))).resolves.toBeDefined();
+    });
+
+    it('refuses an answer to the replaced challenge', async () => {
+      const vector = W3C_WEBAUTHN_VECTORS.packedEs256;
+      const context = setup([
+        vector.registration.challenge,
+        vector.authentication.challenge,
+        '11'.repeat(32),
+      ]);
+      const enrolment = await enrol(context, vector, 'sign-in');
+      await startSignIn(context, vector, 'sign-in');
+      await startSignIn(context, vector, 'sign-in');
+
+      expect(await rejectionOf(context.provider.verify(verifyInput(vector, enrolment)))).toBe(
+        'challenge-mismatch'
+      );
     });
   });
 

@@ -20,11 +20,16 @@ import { WEBAUTHN_PURPOSES, type WebAuthnPurpose } from './webauthn.types';
  */
 export interface WebAuthnChallengeStore {
   /**
-   * Store the state of a ceremony that is starting, for `ttlMs`.
+   * Store the state of a ceremony that is starting, for `ttlMs`, REPLACING any
+   * ceremony the transaction has waiting (a plain Redis `SET … PX` in the
+   * deployment store).
    *
-   * @throws when the transaction already has a ceremony waiting. A transaction
-   * runs one ceremony at a time; overwriting would let a second start replace
-   * a challenge the browser is already answering.
+   * A transaction runs one ceremony at a time, and the newest start wins. A
+   * user who dismisses the platform prompt, or a page whose autofill request is
+   * still pending when the user picks the passkey button, asks for new options
+   * on the same transaction; refusing that until the old state expired would
+   * lock the user out for the ceremony timeout. Replacing costs nothing: an
+   * answer to the replaced challenge is refused (`challenge-mismatch`).
    */
   begin(transactionId: string, state: WebAuthnCeremonyState, ttlMs: number): Promise<void>;
 

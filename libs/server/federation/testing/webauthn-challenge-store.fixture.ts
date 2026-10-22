@@ -19,9 +19,7 @@ export function createInMemoryChallengeStore(): WebAuthnChallengeStore & {
   const entries = new Map<string, WebAuthnCeremonyState>();
   return {
     async begin(transactionId: string, state: WebAuthnCeremonyState): Promise<void> {
-      if (entries.has(transactionId)) {
-        throw new Error(`transaction ${transactionId} already has a ceremony waiting`);
-      }
+      // Replaces a waiting ceremony, as the port asks.
       entries.set(transactionId, structuredClone(state));
     },
     async take(transactionId: string): Promise<WebAuthnCeremonyState | undefined> {
