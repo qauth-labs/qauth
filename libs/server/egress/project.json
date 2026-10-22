@@ -1,0 +1,8 @@
+{
+  "name": "server-egress",
+  "$schema": "../../../node_modules/nx/schemas/project-schema.json",
+  "sourceRoot": "libs/server/egress/src",
+  "projectType": "library",
+  "tags": ["scope:server", "type:utility"],
+  "// targets": "to see all targets run: nx show project server-egress --web"
+}
