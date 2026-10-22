@@ -22,7 +22,7 @@ jobs:
       - uses: pnpm/action-setup@v6
         name: Install pnpm
         with:
-          version: 11.4.0
+          version: 12.14.0
           run_install: false
 
       # This enables task distribution via Nx Cloud
@@ -34,7 +34,7 @@ jobs:
       # Cache node_modules
       - uses: actions/setup-node@v7
         with:
-          node-version: 24
+          node-version: 26
           cache: 'pnpm'
 
       - run: pnpm install --frozen-lockfile
@@ -106,12 +106,12 @@ jobs:
       - uses: pnpm/action-setup@v6
         name: Install pnpm
         with:
-          version: 11.4.0
+          version: 12.14.0
           run_install: false
 
       - uses: actions/setup-node@v7
         with:
-          node-version: 24
+          node-version: 26
           cache: 'pnpm'
 
       - run: pnpm install --frozen-lockfile
@@ -320,12 +320,12 @@ jobs:
       - uses: pnpm/action-setup@v6
         name: Install pnpm
         with:
-          version: 11.4.0
+          version: 12.14.0
           run_install: false
 
       - uses: actions/setup-node@v7
         with:
-          node-version: 24
+          node-version: 26
           cache: 'pnpm'
 
       # Only for the suite's own runner (Vitest, jose). The server runs from
@@ -469,12 +469,12 @@ jobs:
       - uses: pnpm/action-setup@v6
         name: Install pnpm
         with:
-          version: 11.4.0
+          version: 12.14.0
           run_install: false
 
       - uses: actions/setup-node@v7
         with:
-          node-version: 24
+          node-version: 26
 
       # No install: the joiner uses Node's standard library only.
       - uses: actions/download-artifact@v4
