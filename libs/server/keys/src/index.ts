@@ -41,6 +41,21 @@ export {
 } from './lib/kek-provider-contract';
 export { computeKekRef, DEV_KEK_DEFAULT, KEK_BYTES } from './lib/kek-sources';
 export {
+  type KeyCreationRefusalReason,
+  KeyCreationRefusedError,
+  KeyIdConflictError,
+} from './lib/key-creation-errors';
+export {
+  assertAllowedBySigningMode,
+  type GeneratedKeyMaterial,
+  generateKeyMaterial,
+  type GenerateKeyMaterialOptions,
+  isAllowedBySigningMode,
+  jwkThumbprintKid,
+  RANDOM_KID_BYTES,
+  SYMMETRIC_KEY_BYTES,
+} from './lib/key-generation';
+export {
   DEFAULT_KEY_ROTATION_PERIOD_DAYS,
   getKeyPurpose,
   isKeyPurpose,

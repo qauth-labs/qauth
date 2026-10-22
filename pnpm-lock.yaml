@@ -967,9 +967,15 @@ importers:
 
   libs/server/keys:
     dependencies:
+      '@qauth-labs/core-crypto':
+        specifier: workspace:*
+        version: link:../../core/crypto
       '@qauth-labs/shared-errors':
         specifier: workspace:*
         version: link:../../shared/errors
+      jose:
+        specifier: 'catalog:'
+        version: 6.2.4
       tslib:
         specifier: 'catalog:'
         version: 2.8.1
