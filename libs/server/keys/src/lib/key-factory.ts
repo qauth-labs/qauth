@@ -318,9 +318,10 @@ export function createKeyFactory<Tx>(options: KeyFactoryOptions<Tx>): KeyFactory
 }
 
 /**
- * The stored scope id: a non-empty string of at most
+ * The stored scope id: a non-empty, well-formed string of at most
  * {@link MAX_SCOPE_ID_LENGTH} characters for a scoped purpose, `null` for an
- * unscoped one.
+ * unscoped one. A lone surrogate is refused here, before a key is generated;
+ * the associated-data encoder would refuse it later anyway.
  */
 function resolveScopeId(
   purpose: KeyPurpose,
@@ -342,10 +343,15 @@ function resolveScopeId(
       `Key purpose '${purpose}' is scoped and needs a scope id`
     );
   }
-  if (typeof scopeId !== 'string' || scopeId.length === 0 || scopeId.length > MAX_SCOPE_ID_LENGTH) {
+  if (
+    typeof scopeId !== 'string' ||
+    scopeId.length === 0 ||
+    scopeId.length > MAX_SCOPE_ID_LENGTH ||
+    Buffer.from(scopeId, 'utf8').toString('utf8') !== scopeId
+  ) {
     throw new KeyCreationRefusedError(
       'INVALID_SCOPE_ID',
-      `A scope id is a non-empty string of at most ${MAX_SCOPE_ID_LENGTH} characters`
+      `A scope id is a non-empty, well-formed string of at most ${MAX_SCOPE_ID_LENGTH} characters`
     );
   }
   return scopeId;

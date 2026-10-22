@@ -345,14 +345,15 @@ describe('createKey', () => {
       ).rejects.toMatchObject({ reason: 'SCOPE_NOT_ALLOWED' });
     });
 
-    it.each(['', 'x'.repeat(MAX_SCOPE_ID_LENGTH + 1)])(
-      'are refused when empty or too long (%#)',
+    it.each(['', 'x'.repeat(MAX_SCOPE_ID_LENGTH + 1), 'provider-' + String.fromCharCode(0xd800)])(
+      'are refused when empty, too long or not well-formed (%#)',
       async (scopeId) => {
-        const { factory } = setup();
+        const { factory, wrap } = setup();
 
         await expect(
           factory.createKey({ realmId: REALM, purpose: 'upstream_client_assertion', scopeId })
         ).rejects.toMatchObject({ reason: 'INVALID_SCOPE_ID' });
+        expect(wrap).not.toHaveBeenCalled();
       }
     );
   });
