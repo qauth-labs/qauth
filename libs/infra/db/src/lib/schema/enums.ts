@@ -180,6 +180,50 @@ export type RealmKeyStatus = (typeof REALM_KEY_STATUSES)[number];
 export const realmHostKindEnum = pgEnum('realm_host_kind', REALM_HOST_KINDS);
 
 /**
+ * Who performed an admin operation recorded in `admin_audit_log` (ADR-019
+ * Decision 7, issue #448):
+ *
+ * - `human_admin` — an admin account, signed in with a passkey.
+ * - `service_account` — an operator-realm service account (`client_credentials`).
+ * - `break_glass_operator` — the break-glass CLI, run on a host that holds the
+ *   database credentials and the KEK. The actor id is the operating-system user.
+ * - `host_operator` — a host-side tool that is not break-glass, such as the
+ *   seed script. The actor id is the operating-system user.
+ */
+const ADMIN_ACTOR_KINDS = [
+  'human_admin',
+  'service_account',
+  'break_glass_operator',
+  'host_operator',
+] as const;
+
+export const adminActorKindEnum = pgEnum('admin_actor_kind', ADMIN_ACTOR_KINDS);
+
+export type AdminActorKind = (typeof ADMIN_ACTOR_KINDS)[number];
+
+/**
+ * Class of an admin operation, from the permission catalog (ADR-019 Decision
+ * 7): each class is reached by its own scope, `admin:read`, `admin:write` or
+ * `admin:security`.
+ */
+const ADMIN_OPERATION_CLASSES = ['read', 'write', 'security'] as const;
+
+export const adminOperationClassEnum = pgEnum('admin_operation_class', ADMIN_OPERATION_CLASSES);
+
+export type AdminOperationClass = (typeof ADMIN_OPERATION_CLASSES)[number];
+
+/**
+ * How an admin operation ended. A `succeeded` row commits in the transaction
+ * of the change it records; `failed` and `denied` rows record an operation
+ * whose change did not happen.
+ */
+const ADMIN_AUDIT_OUTCOMES = ['succeeded', 'failed', 'denied'] as const;
+
+export const adminAuditOutcomeEnum = pgEnum('admin_audit_outcome', ADMIN_AUDIT_OUTCOMES);
+
+export type AdminAuditOutcome = (typeof ADMIN_AUDIT_OUTCOMES)[number];
+
+/**
  * Audit Log Event Types
  * Categorizes audit events for filtering and analysis
  */

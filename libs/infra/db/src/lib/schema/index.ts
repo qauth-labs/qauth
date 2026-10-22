@@ -1,3 +1,4 @@
+export * from './admin-audit';
 export * from './audit';
 export * from './consents';
 export * from './core';
