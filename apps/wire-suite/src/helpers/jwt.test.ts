@@ -2,14 +2,14 @@ import { createLocalJWKSet, exportJWK, generateKeyPair, type JWK, SignJWT } from
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { peekHeader, remoteKeySet, verifyJwt } from './jwt';
-import { type LocalServer, startLocalServer } from './local-server';
+import { type LoopbackServer, startLoopbackServer } from './loopback-server';
 
 const ISSUER = 'http://localhost:3000';
 
 let publicJwk: JWK;
 let privateKey: CryptoKey;
 let otherPrivateKey: CryptoKey;
-let jwksServer: LocalServer;
+let jwksServer: LoopbackServer;
 let jwksRequests = 0;
 
 beforeAll(async () => {
@@ -18,7 +18,7 @@ beforeAll(async () => {
   publicJwk = { ...(await exportJWK(pair.publicKey)), kid: 'k1', alg: 'EdDSA', use: 'sig' };
   otherPrivateKey = (await generateKeyPair('EdDSA', { crv: 'Ed25519' })).privateKey;
 
-  jwksServer = await startLocalServer((_request, response) => {
+  jwksServer = await startLoopbackServer((_request, response) => {
     jwksRequests++;
     response.writeHead(200, { 'content-type': 'application/json' });
     response.end(JSON.stringify({ keys: [publicJwk] }));

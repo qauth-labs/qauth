@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { CookieJar } from './cookie-jar';
-import { type LocalServer, startLocalServer } from './local-server';
+import { type LoopbackServer, startLoopbackServer } from './loopback-server';
 import { followRedirects } from './redirects';
 
 interface Seen {
@@ -12,11 +12,11 @@ interface Seen {
   contentType?: string;
 }
 
-let server: LocalServer;
+let server: LoopbackServer;
 const seen: Seen[] = [];
 
 beforeAll(async () => {
-  server = await startLocalServer((request, response, body) => {
+  server = await startLoopbackServer((request, response, body) => {
     const url = request.url ?? '/';
     seen.push({
       method: request.method ?? '',
