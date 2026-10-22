@@ -10,8 +10,11 @@
     "tslib": "catalog:"
   },
   "devDependencies": {
+    "@qauth-labs/shared-testing": "workspace:*",
+    "@types/pg": "catalog:",
     "@vitest/coverage-v8": "catalog:",
     "@vitest/ui": "catalog:",
+    "pg": "catalog:",
     "vitest": "catalog:"
   }
 }

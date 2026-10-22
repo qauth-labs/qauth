@@ -4,5 +4,15 @@
   "sourceRoot": "libs/server/keys/src",
   "projectType": "library",
   "tags": ["scope:server", "type:key-custody"],
+  "targets": {
+    "test-integration": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "vitest run --config vitest.integration.config.ts libs/server/keys",
+        "cwd": "{workspaceRoot}"
+      },
+      "description": "Run the Docker-backed key creation tests against the migrated schema (testcontainers Postgres). Requires a running Docker daemon."
+    }
+  },
   "// targets": "to see all targets run: nx show project server-keys --web"
 }
