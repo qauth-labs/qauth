@@ -71,6 +71,9 @@ describe('migration 0025 — realm hosts and issuers (seed-then-migrate)', () =>
   let dockerUp = false;
   let before0025: string | undefined;
   let atIssueBaseline: string | undefined;
+  // Upgrade to 0025 itself, not to the newest migration: a later migration
+  // may change the tables and the journal count this suite pins.
+  let through0025: string | undefined;
 
   beforeAll(async () => {
     dockerUp = await requireDockerOrSkip();
@@ -79,18 +82,19 @@ describe('migration 0025 — realm hosts and issuers (seed-then-migrate)', () =>
     pool = new Pool({ connectionString: container.connectionString, max: 2 });
     before0025 = migrationsFolderBefore(MIGRATION_IDX);
     atIssueBaseline = migrationsFolderBefore(ISSUE_BASELINE_IDX + 1);
+    through0025 = migrationsFolderBefore(MIGRATION_IDX + 1);
   }, 180_000);
 
   afterAll(async () => {
     await pool?.end();
     await container?.stop();
-    for (const folder of [before0025, atIssueBaseline]) {
+    for (const folder of [before0025, atIssueBaseline, through0025]) {
       if (folder) rmSync(folder, { recursive: true, force: true });
     }
   });
 
   beforeEach(async (testCtx) => {
-    if (!dockerUp || !pool || !container || !before0025 || !atIssueBaseline) {
+    if (!dockerUp || !pool || !container || !before0025 || !atIssueBaseline || !through0025) {
       testCtx.skip();
       return;
     }
@@ -109,8 +113,8 @@ describe('migration 0025 — realm hosts and issuers (seed-then-migrate)', () =>
     return container.connectionString;
   }
 
-  function folder(which: 'before0025' | 'atIssueBaseline'): string {
-    const result = which === 'before0025' ? before0025 : atIssueBaseline;
+  function folder(which: 'before0025' | 'atIssueBaseline' | 'through0025'): string {
+    const result = { before0025, atIssueBaseline, through0025 }[which];
     if (!result) throw new Error('no migrations folder');
     return result;
   }
@@ -268,7 +272,7 @@ describe('migration 0025 — realm hosts and issuers (seed-then-migrate)', () =>
     // is checked against real data, not empty tables.
     expect(Object.values(before).every((table) => (table as { rows: number }).rows > 0)).toBe(true);
 
-    await applyQauthMigrations(connectionString());
+    await applyQauthMigrations(connectionString(), folder('through0025'));
 
     expect(await appliedMigrations()).toBe(MIGRATION_IDX + 1);
     expect(await publicTables()).toEqual([...tablesBefore, 'realm_hosts'].sort());
@@ -298,7 +302,7 @@ describe('migration 0025 — realm hosts and issuers (seed-then-migrate)', () =>
       `SELECT id, name, enabled, created_at FROM realms ORDER BY name`
     );
 
-    await applyQauthMigrations(connectionString());
+    await applyQauthMigrations(connectionString(), folder('through0025'));
 
     expect(await appliedMigrations()).toBe(MIGRATION_IDX + 1);
     // 0021–0024 add columns and backfill some of them, so this run checks that
@@ -323,7 +327,7 @@ describe('migration 0025 — realm hosts and issuers (seed-then-migrate)', () =>
   it('lets an existing realm take its issuer and primary host once after the upgrade', async () => {
     await applyQauthMigrations(connectionString(), folder('before0025'));
     const [realmId, secondRealmId] = await seedEveryTable();
-    await applyQauthMigrations(connectionString());
+    await applyQauthMigrations(connectionString(), folder('through0025'));
 
     // What the boot step (#484) will do for the default realm.
     await db().query(
