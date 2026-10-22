@@ -107,24 +107,26 @@ On email verification (one transaction): mark the token used, set
 
 Schema lives in `libs/infra/db/src/lib/schema/`:
 
-| Table                       | Schema file   | Purpose                                                                                                       |
-| --------------------------- | ------------- | ------------------------------------------------------------------------------------------------------------- |
-| `realms`                    | `core.ts`     | Multi-tenancy root; realm-level policy (env ceiling, rate-limit tier, allowed scopes, password policy)        |
-| `users`                     | `core.ts`     | Pure identity anchor (ADR-002) — the stable OIDC `sub`                                                        |
-| `user_credentials`          | `identity.ts` | One row per authentication method; UNIQUE (realm_id, provider_type, external_sub)                             |
-| `user_attributes`           | `identity.ts` | Claims as data with source trust order; UNIQUE (user_id, source, attr_key)                                    |
-| `oauth_clients`             | `core.ts`     | OAuth 2.1 client registrations; ADR-007 `is_agent`/`max_agent_mode`, ADR-008 `environment`                    |
-| `api_keys`                  | `core.ts`     | Static developer API keys (ADR-008 §6, env-gated)                                                             |
-| `oauth_consents`            | `consents.ts` | User consent grants; unique per `(user_id, client_id) WHERE revoked_at IS NULL`                               |
-| `email_verification_tokens` | `tokens.ts`   | Token hash + `credential_id` (NOT NULL → `user_credentials.id`; `user_id` dropped in #230)                    |
-| `authorization_codes`       | `tokens.ts`   | OAuth codes with PKCE (S256) challenge, nonce, RFC 8707 `resource`                                            |
-| `refresh_tokens`            | `tokens.ts`   | Opaque refresh tokens with `family_id` (RFC 9700 rotation family) + `resource`                                |
-| `audit_logs`                | `audit.ts`    | Auth/token/consent/client events with agent attribution (`actor_client_id`, `delegation_chain`, `scope_mode`) |
-| `realm_hosts`               | `core.ts`     | Host → realm, PK `host`; `primary` (one per realm, permanent) or `endpoint`; written via `normaliseRealmHost` |
-| `realm_keys`                | `keys.ts`     | Envelope-encrypted keys per realm and purpose (ADR-019 D9); only `getWrappedForSigner` reads wrapped columns  |
-| `realm_public_keys`         | `keys.ts`     | Public JWK of each published key, `(realm_id, kid)` → `realm_keys`; every role reads it (JWKS, verify)        |
-| `sessions`                  | `sessions.ts` | DB session table (PHASE-5+, **currently unused** — sessions live in Redis via `fastify.sessionUtils`)         |
-| `roles`, `user_roles`       | `roles.ts`    | RBAC (PHASE-5+, **currently unused** by auth-server routes)                                                   |
+| Table                         | Schema file      | Purpose                                                                                                        |
+| ----------------------------- | ---------------- | -------------------------------------------------------------------------------------------------------------- |
+| `realms`                      | `core.ts`        | Multi-tenancy root; realm-level policy (env ceiling, rate-limit tier, allowed scopes, password policy)         |
+| `users`                       | `core.ts`        | Pure identity anchor (ADR-002) — the stable OIDC `sub`                                                         |
+| `user_credentials`            | `identity.ts`    | One row per authentication method; UNIQUE (realm_id, provider_type, external_sub)                              |
+| `user_attributes`             | `identity.ts`    | Claims as data with source trust order; UNIQUE (user_id, source, attr_key)                                     |
+| `oauth_clients`               | `core.ts`        | OAuth 2.1 client registrations; ADR-007 `is_agent`/`max_agent_mode`, ADR-008 `environment`                     |
+| `api_keys`                    | `core.ts`        | Static developer API keys (ADR-008 §6, env-gated)                                                              |
+| `oauth_consents`              | `consents.ts`    | User consent grants; unique per `(user_id, client_id) WHERE revoked_at IS NULL`                                |
+| `email_verification_tokens`   | `tokens.ts`      | Token hash + `credential_id` (NOT NULL → `user_credentials.id`; `user_id` dropped in #230)                     |
+| `authorization_codes`         | `tokens.ts`      | OAuth codes with PKCE (S256) challenge, nonce, RFC 8707 `resource`                                             |
+| `refresh_tokens`              | `tokens.ts`      | Opaque refresh tokens with `family_id` (RFC 9700 rotation family) + `resource`                                 |
+| `audit_logs`                  | `audit.ts`       | Auth/token/consent/client events with agent attribution (`actor_client_id`, `delegation_chain`, `scope_mode`)  |
+| `admin_audit_log`             | `admin-audit.ts` | Admin operations, append-only (triggers), one hash chain per target realm; write via `appendAdminAudit(tx, …)` |
+| `admin_audit_log_checkpoints` | `admin-audit.ts` | `seq` + `row_hash` of the last row each `admin_audit_log_prune()` removed; the chain verifies from there       |
+| `realm_hosts`                 | `core.ts`        | Host → realm, PK `host`; `primary` (one per realm, permanent) or `endpoint`; written via `normaliseRealmHost`  |
+| `realm_keys`                  | `keys.ts`        | Envelope-encrypted keys per realm and purpose (ADR-019 D9); only `getWrappedForSigner` reads wrapped columns   |
+| `realm_public_keys`           | `keys.ts`        | Public JWK of each published key, `(realm_id, kid)` → `realm_keys`; every role reads it (JWKS, verify)         |
+| `sessions`                    | `sessions.ts`    | DB session table (PHASE-5+, **currently unused** — sessions live in Redis via `fastify.sessionUtils`)          |
+| `roles`, `user_roles`         | `roles.ts`       | RBAC (PHASE-5+, **currently unused** by auth-server routes)                                                    |
 
 A realm's `issuer` and its `primary` host in `realm_hosts` are **permanent**
 (ADR-019 Decision 1, migration 0025): triggers allow each to be set once, from

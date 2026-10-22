@@ -257,6 +257,14 @@ Each factory takes a `defaultDb: DbClient`. Methods below take an optional
 - **`createApiKeysRepository(db)`**: Static developer API-key CRUD (ADR-008 §6)
 - **`createAuditLogsRepository(db)`**: Audit-log operations
   - `create()`, `findByUserId()`, `findByRealmId()`, `findByRealmAndUserId()`, plus realm-isolated filters
+- **`createAdminAuditLogRepository(db, options?)`**: The append-only admin audit log (ADR-019 Decision 7, #448). It takes the root database, not a `DbClient`, because verification opens its own transaction.
+  - `appendAdminAudit(tx, entry)` needs the caller's transaction (a `DbTransaction`, not the root database), so the row commits or rolls back with the change it records. It takes the target realm's chain lock (`pg_advisory_xact_lock`), masks the diff with `maskSecrets(change, annotations)` and appends the next row of the realm's chain. `options.afterAppend(tx, record)` runs right after the insert, in the same transaction; it is the hook for the event outbox writer.
+  - `verifyAdminAuditChain(realmId)` checks the chain from the oldest retained row, anchored on the newest checkpoint after a prune, and returns the first row that breaks it (`sequence_mismatch`, `prev_hash_mismatch` or `row_hash_mismatch`).
+  - `row_hash` is SHA-256 over `prev_hash` and the RFC 8785 canonical JSON (`canonicalizeJson`) of the row's other columns, under their column names (`computeAdminAuditRowHash`). The first row's `prev_hash` is 32 zero bytes.
+  - A secret field is stored as `ADMIN_AUDIT_SECRET_MARKER`, never as a value. Annotate every secret a diff can carry, a set-up or reset link, code or token included.
+  - Triggers in migration 0026 hold for every role whose statements fire them (SQLSTATE 23514, the constraint named): an inserted row must follow the realm's chain head (`admin_audit_log_follows_head`); no row is updated and neither table is truncated (`admin_audit_log_append_only`, `admin_audit_log_checkpoints_append_only`); a row is deleted only when a checkpoint covers it; a checkpoint names a row still in the log with its hash (`admin_audit_log_checkpoints_match`), moves forward (`admin_audit_log_checkpoints_forward`), covers an unbroken, linked run of rows (`admin_audit_log_checkpoints_unbroken`) and none younger than 90 days (`admin_audit_log_retention_floor`). The retention job removes rows with `SELECT admin_audit_log_prune(realm_id, through_seq)`, which writes the checkpoint and deletes the realm's rows up to that `seq`; `EXECUTE` on it is revoked from `PUBLIC`. Run `verifyAdminAuditChain` before a prune: the database checks the links, not the row hashes. A table owner or a superuser can disable a trigger, so only the per-role grants (#498) protect the log from the application's own database user. The triggers are hand-written SQL, which `drizzle-kit push` does not create; use the migrations.
+  - The hash is unkeyed: a party that can rewrite a row and every row after it, or cut the newest rows, leaves a chain that verifies. A copy of each head kept outside the database, such as the outbox event that mirrors the row with its `seq` and `row_hash`, is what shows that.
+  - `adminAuditLogWriterGrantStatements(role)` returns the statements that give a writing role `INSERT` and `SELECT` on the log and `SELECT` on the checkpoints, and nothing else. The per-role grants script (#498) applies them.
 - **`createAuthorizationCodesRepository(db)`**: Authorization code lifecycle
   - `create()`, `findByCode()`, `markUsed()`
 - **`createRefreshTokensRepository(db)`**: Refresh-token lifecycle + family revocation
@@ -449,9 +457,11 @@ libs/infra/db/
 ├── src/
 │   ├── lib/
 │   │   ├── db.ts              # createDatabase factory + pool/Drizzle client
+│   │   ├── admin-audit/       # canonicalizeJson (RFC 8785), maskSecrets, row hash, grants
 │   │   ├── repositories/      # Repository pattern implementations
 │   │   │   ├── index.ts        # Factory exports
 │   │   │   ├── base.repository.ts  # Base repository interface
+│   │   │   ├── admin-audit-log.repository.ts  # admin_audit_log (append-only, hash-chained)
 │   │   │   ├── users.repository.ts
 │   │   │   ├── realms.repository.ts
 │   │   │   ├── oauth-clients.repository.ts
@@ -470,10 +480,11 @@ libs/infra/db/
 │   │   │   ├── consents.ts     # oauth_consents
 │   │   │   ├── sessions.ts     # sessions (Phase 5+, currently unused — Redis holds sessions)
 │   │   │   ├── audit.ts        # audit_logs (with agent attribution)
+│   │   │   ├── admin-audit.ts  # admin_audit_log, admin_audit_log_checkpoints (ADR-019 Decision 7)
 │   │   │   ├── roles.ts        # roles, user_roles (Phase 5+, currently unused)
 │   │   │   ├── keys.ts         # realm_keys, realm_public_keys (ADR-019 Decision 9)
 │   │   │   ├── enums.ts        # PostgreSQL enum types
-│   │   │   └── sql-helpers.ts  # EPOCH_MS_NOW, JSONB_EMPTY_ARRAY
+│   │   │   └── sql-helpers.ts  # EPOCH_MS_NOW, JSONB_EMPTY_ARRAY, bytea
 │   │   └── types/              # Repository/database type definitions
 │   ├── scripts/
 │   │   ├── seed.ts                    # Dev-fixture seeder (drizzle-seed)
@@ -513,6 +524,11 @@ libs/infra/db/
 
 - **realm_keys**: Each realm's keys, one row per key, per purpose and (for webhook and upstream client-assertion keys) per `scope_id`. The material is stored envelope-encrypted (`ciphertext`, `iv`, `wrapped_dek`, with `kek_ref` naming the KEK and `aad_version` the associated-data layout). `status` is `next`, `active`, `retired` or `compromised`; a partial unique index allows one `active` key per realm, purpose, scope and algorithm, and `kid` is unique per realm. Only the signer's database user may read it once the per-role grants (#498) are applied
 - **realm_public_keys**: The public JWK of every published key, keyed by `(realm_id, kid)`. Its foreign key to the `realm_keys` row covers `purpose`, `algorithm` and `status` with `ON UPDATE CASCADE`, so a status change on the key row (a compromise included) reaches the public row in the same statement; change the status on `realm_keys` only. Every role may read it for the JWKS and for verification. Symmetric purposes have no row here: CHECKs require a `kty` other than `oct` and refuse private JWK members
+
+### Admin Audit Tables (ADR-019 Decision 7)
+
+- **admin_audit_log**: One row per admin operation, written in the transaction of the change. Keyed by `(realm_id, seq)`: one hash chain per target realm, `seq` from 1 without a gap, each row carrying the previous row's hash (`prev_hash`) and its own (`row_hash`). It records the actor kind (`human_admin`, `service_account`, `break_glass_operator`, `host_operator`), the actor and the actor's realm, the full act chain when the actor acted for a user, the operation id and class, its effects and outcome, the diff with secrets masked, the approvals, the request digest, the trace id and the time. No foreign keys: a realm's record outlives the realm row. Append-only by trigger; a writing role is granted `INSERT` and `SELECT` only
+- **admin_audit_log_checkpoints**: The `seq` and `row_hash` of the last row each prune removed, so the oldest retained row still verifies. Written by `admin_audit_log_prune()`; a trigger accepts a checkpoint only over an unbroken run of rows at least 90 days old. Append-only too
 
 ### Additional Tables
 

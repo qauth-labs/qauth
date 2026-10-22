@@ -2,7 +2,6 @@ import { relations, sql } from 'drizzle-orm';
 import {
   bigint,
   check,
-  customType,
   foreignKey,
   jsonb,
   pgTable,
@@ -17,18 +16,7 @@ import {
 
 import { realms } from './core';
 import { realmKeyStatusEnum } from './enums';
-import { EPOCH_MS_NOW } from './sql-helpers';
-
-/**
- * Postgres `bytea`, read and written as a Node `Buffer` (node-postgres hands
- * `bytea` back as a `Buffer` and binds a `Buffer` parameter as `bytea`).
- * drizzle-orm has no built-in `bytea` column.
- */
-const bytea = customType<{ data: Buffer; driverData: Buffer }>({
-  dataType() {
-    return 'bytea';
-  },
-});
+import { bytea, EPOCH_MS_NOW } from './sql-helpers';
 
 /**
  * A realm's keys, envelope-encrypted (ADR-019 Decision 9, issue #461).

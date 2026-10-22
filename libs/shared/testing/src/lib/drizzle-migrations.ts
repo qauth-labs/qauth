@@ -58,6 +58,10 @@ export async function applyQauthMigrations(
  * Order is irrelevant (`CASCADE`), but completeness is not: a table missing from
  * this list leaks rows into the next test, and the failure surfaces as an
  * unrelated uniqueness violation somewhere far away.
+ *
+ * `admin_audit_log` and `admin_audit_log_checkpoints` are left out on purpose:
+ * a trigger refuses `TRUNCATE` on them (migration 0026), and no foreign key
+ * leads a `CASCADE` there. A suite that writes them uses a realm id of its own.
  */
 export const QAUTH_DOMAIN_TABLES: readonly string[] = Object.freeze([
   'api_keys',

@@ -1,8 +1,20 @@
 import type { InferInsertModel, InferSelectModel } from 'drizzle-orm';
 
+import type {
+  AdminAuditActChain,
+  AdminAuditApproval,
+  AdminAuditDiff,
+  FieldAnnotations,
+} from '../lib/admin-audit/types';
+import type { adminAuditLog } from '../lib/schema/admin-audit';
 import type { oauthConsents } from '../lib/schema/consents';
 import type { apiKeys, oauthClients } from '../lib/schema/core';
-import type { RealmKeyStatus } from '../lib/schema/enums';
+import type {
+  AdminActorKind,
+  AdminAuditOutcome,
+  AdminOperationClass,
+  RealmKeyStatus,
+} from '../lib/schema/enums';
 import type { userAttributes, userCredentials } from '../lib/schema/identity';
 import type { realmKeys, realmPublicKeys } from '../lib/schema/keys';
 import type { oid4vpRequestStates } from '../lib/schema/oid4vp';
@@ -11,7 +23,7 @@ import type {
   emailVerificationTokens,
   refreshTokens,
 } from '../lib/schema/tokens';
-import type { DbClient } from './database';
+import type { DbClient, DbTransaction } from './database';
 
 /**
  * OAuth client types
@@ -748,4 +760,150 @@ export interface RealmKeysRepository {
     kid: string,
     tx?: DbClient
   ): Promise<WrappedRealmKey | undefined>;
+}
+
+/** A stored `admin_audit_log` row (ADR-019 Decision 7, issue #448). */
+export type AdminAuditRecord = InferSelectModel<typeof adminAuditLog>;
+
+/**
+ * One admin operation, as its caller records it with
+ * {@link AdminAuditLogRepository.appendAdminAudit}. The repository adds the
+ * chain columns (`seq`, `prev_hash`, `row_hash`) and the time.
+ */
+export interface AdminAuditEntry {
+  /** The realm the operation targeted. Its chain receives the row. */
+  realmId: string;
+  actorKind: AdminActorKind;
+  /**
+   * An account id for a human admin, a `client_id` for a service account, the
+   * operating-system user for the break-glass CLI or a host tool.
+   */
+  actorId: string;
+  /**
+   * The realm the actor's account lives in. Required for a human admin or a
+   * service account, and `null` for the host-side kinds.
+   */
+  actorRealmId: string | null;
+  /**
+   * The full act chain, when the actor acted for a user: every link, each with
+   * the claims {@link AdminAuditActClaim} names. Other members are not stored.
+   */
+  actChain?: AdminAuditActChain | null;
+  /** The permission catalog id of the operation, such as `realms.policies.write`. */
+  operationId: string;
+  operationClass: AdminOperationClass;
+  /** Ids of the effects that make the operation what it is (ADR-019 Decision 7). */
+  effects?: readonly string[];
+  outcome: AdminAuditOutcome;
+  /**
+   * The change, with the annotations that name the resource's secret fields.
+   * It is stored only through `maskSecrets`, never as given.
+   */
+  diff?: { change: AdminAuditDiff; annotations: FieldAnnotations } | null;
+  /** The approvals the operation ran on, with the members their type names only. */
+  approvals?: readonly AdminAuditApproval[];
+  /** SHA-256 (32 bytes) of the canonical request an approval is bound to. */
+  requestDigest?: Buffer | null;
+  /** The id under which QAuth logged the request, at most 128 characters. */
+  traceId?: string | null;
+}
+
+/** Why {@link AdminAuditLogRepository.verifyAdminAuditChain} stopped at a row. */
+export type AdminAuditChainBreakReason =
+  /** The row's `seq` is not the one after the row (or the checkpoint) before it. */
+  | 'sequence_mismatch'
+  /** The row's `prev_hash` is not the `row_hash` of the row (or checkpoint) before it. */
+  | 'prev_hash_mismatch'
+  /** The row's content does not hash to its `row_hash`: the row was changed. */
+  | 'row_hash_mismatch'
+  /** The row's JSON columns hold a value that cannot be hashed. */
+  | 'unhashable_row';
+
+/**
+ * The result of {@link AdminAuditLogRepository.verifyAdminAuditChain}. Hashes
+ * are lowercase hex.
+ */
+export type AdminAuditChainReport =
+  | {
+      ok: true;
+      realmId: string;
+      /** How many rows were checked. */
+      rowsChecked: number;
+      /** The checkpoint the chain was checked from, or `null` from the first row. */
+      checkpoint: { seq: number; rowHash: string } | null;
+      /** The newest row, or `null` when the realm has no retained row. */
+      head: { seq: number; rowHash: string } | null;
+    }
+  | {
+      ok: false;
+      realmId: string;
+      /** How many rows verified before the break. */
+      rowsChecked: number;
+      checkpoint: { seq: number; rowHash: string } | null;
+      /** The first row that does not verify. */
+      break: {
+        seq: number;
+        reason: AdminAuditChainBreakReason;
+        /** The `seq` the row should have had, for a `sequence_mismatch`. */
+        expectedSeq?: number;
+      };
+    };
+
+/**
+ * Called inside the transaction right after a row is inserted. The event
+ * outbox writer plugs in here (ADR-019 Decision 8): it writes the event that
+ * mirrors the row in the same transaction, and an error it throws rolls back
+ * the row and the change with it.
+ */
+export type AdminAuditAfterAppend = (tx: DbTransaction, record: AdminAuditRecord) => Promise<void>;
+
+/** Options of `createAdminAuditLogRepository`. */
+export interface AdminAuditLogOptions {
+  /** See {@link AdminAuditAfterAppend}. */
+  afterAppend?: AdminAuditAfterAppend;
+  /** The clock for `created_at`, in epoch milliseconds. Defaults to `Date.now`. */
+  now?: () => number;
+  /** Rows read per query while verifying, a positive integer. Defaults to 500. */
+  verifyBatchSize?: number;
+}
+
+/**
+ * The admin audit log (ADR-019 Decision 7, issue #448): append-only, one hash
+ * chain per target realm.
+ */
+export interface AdminAuditLogRepository {
+  /**
+   * Append one row to the target realm's chain, in the caller's transaction,
+   * so the row commits or rolls back with the change it records.
+   *
+   * Takes the realm's chain lock (`pg_advisory_xact_lock`) until the
+   * transaction ends, so appends to one realm form one linear chain. Under
+   * REPEATABLE READ or SERIALIZABLE, an append that raced another fails on the
+   * primary key instead; retry the transaction. Because the lock lasts to the
+   * end of the transaction, append last; a transaction that appends to
+   * several realms appends in a fixed order (by realm id), or two such
+   * transactions can deadlock.
+   *
+   * After the insert it hashes the row as Postgres returned it and throws if
+   * that differs from the hash it wrote, so a row the chain would reject later
+   * never commits.
+   *
+   * @throws TypeError on an entry that cannot be stored: an id that is not a
+   *   UUID, a missing or extra `actorRealmId`, a digest that is not 32 bytes,
+   *   a text longer than its column, an act chain without a `sub`, or a JSON
+   *   value outside the I-JSON model.
+   */
+  appendAdminAudit(tx: DbTransaction, entry: AdminAuditEntry): Promise<AdminAuditRecord>;
+
+  /**
+   * Check a realm's chain from its oldest retained row to its newest, and
+   * report the first row that breaks it.
+   *
+   * The chain starts at `seq` 1 and the genesis hash, or, after a prune, at
+   * the newest checkpoint. Every row must follow the one before it in `seq`,
+   * carry its hash as `prev_hash`, and hash to its own `row_hash`. Reads run
+   * in one REPEATABLE READ transaction, so a concurrent append or prune
+   * cannot produce a false break.
+   */
+  verifyAdminAuditChain(realmId: string): Promise<AdminAuditChainReport>;
 }

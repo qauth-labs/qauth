@@ -183,6 +183,13 @@
       "when": 1792636412076,
       "tag": "0025_realm_hosts",
       "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1792649554465,
+      "tag": "0026_admin_audit_log",
+      "breakpoints": true
     }
   ]
 }

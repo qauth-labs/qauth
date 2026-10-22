@@ -48,6 +48,25 @@ Enum "audit_event_type" {
   "realm" [note: "Realm management events"]
 }
 
+Enum "admin_actor_kind" {
+  "human_admin" [note: "An admin account, signed in with a passkey"]
+  "service_account" [note: "An operator-realm service account (client_credentials)"]
+  "break_glass_operator" [note: "The break-glass CLI; actor_id is the operating-system user"]
+  "host_operator" [note: "A host-side tool such as the seed script; actor_id is the operating-system user"]
+}
+
+Enum "admin_operation_class" {
+  "read"
+  "write"
+  "security"
+}
+
+Enum "admin_audit_outcome" {
+  "succeeded"
+  "failed"
+  "denied"
+}
+
 // ============================================================================
 // CORE TABLES
 // ============================================================================
@@ -277,6 +296,50 @@ Table "audit_logs" {
     (user_id, event, created_at) [name: "idx_audit_logs_user_event"]
     (event, created_at) [name: "idx_audit_logs_failed", note: "Partial index: WHERE success = false"]
     ip_address [name: "idx_audit_logs_ip_address"]
+  }
+}
+
+// Admin audit log (ADR-019 Decision 7, #448). Append-only: triggers refuse
+// UPDATE and TRUNCATE, accept a row only as the next link of its chain, and a
+// DELETE only of rows a checkpoint covers; admin_audit_log_prune() writes the
+// checkpoint, oldest rows first and never younger than 90 days. One hash chain per target realm:
+// row_hash = SHA-256(prev_hash || RFC 8785 canonical JSON of the other columns).
+// No foreign keys, so a realm's record outlives the realm row.
+Table "admin_audit_log" {
+  "realm_id" uuid [not null, note: "Target realm: the chain the row belongs to"]
+  "seq" bigint [not null, note: "From 1, without a gap"]
+  "prev_hash" bytea [not null, note: "32 bytes; 32 zero bytes on seq 1"]
+  "row_hash" bytea [not null, note: "32 bytes"]
+  "actor_kind" "admin_actor_kind" [not null]
+  "actor_id" varchar(255) [not null]
+  "actor_realm_id" uuid [note: "Null exactly for the host-side actor kinds"]
+  "act_chain" jsonb [note: "{ sub, act } when the actor acted for a user"]
+  "operation_id" varchar(128) [not null, note: "Permission catalog id"]
+  "operation_class" "admin_operation_class" [not null]
+  "effects" jsonb [not null]
+  "outcome" "admin_audit_outcome" [not null]
+  "masked_diff" jsonb [note: "{ before, after } with every secret field masked"]
+  "approvals" jsonb [not null]
+  "request_digest" bytea [note: "32 bytes"]
+  "trace_id" varchar(128)
+  "created_at" bigint [not null]
+
+  Indexes {
+    (realm_id, seq) [pk, name: "admin_audit_log_pk"]
+  }
+}
+
+// Where a realm's chain resumes after a prune: seq and row_hash of the last
+// removed row. Written by admin_audit_log_prune(), accepted only over an
+// unbroken run of rows at least 90 days old; append-only.
+Table "admin_audit_log_checkpoints" {
+  "realm_id" uuid [not null]
+  "seq" bigint [not null]
+  "row_hash" bytea [not null]
+  "created_at" bigint [not null, default: `EXTRACT(EPOCH FROM NOW())::bigint * 1000`]
+
+  Indexes {
+    (realm_id, seq) [pk, name: "admin_audit_log_checkpoints_pk"]
   }
 }
 
