@@ -39,6 +39,7 @@ under us. Pin what moves.
 | `2026-09-26` | Second pass; every row re-opened | Every row re-verified against upstream. **OAuth 2.1 re-pinned `-15` → `-16`.** Five rows added. An `Expires` column added. The Token Status List verdict corrected from HAIP 1.0 §6.1 to §9.4. The `Re-check by` rule made explicit: the expiry date applies to `latest` Internet-Draft rows only. `deliberate` widened to cover a spec QAuth does not implement. |
 | `2026-10-11` | ADR-011 moves to Accepted        | Two rows re-verified, the ones ADR-011 rests on. **ID-JAG `-04` is still the newest revision** (IETF `id-archive` over rsync, because Datatracker answers 403 from this host, and the draft repository's release list). The MCP `ext-auth` EMA file is unchanged since `e5eef54`. No drift; nothing re-pinned.                                                    |
 | `2026-10-22` | #465 — rfc7523bis row falls due  | One row re-verified, the one due on 2026-10-30. **rfc7523bis `-11` is still not an RFC.** It is in the RFC Editor queue, where a draft does not expire, so ADR-014's "none" was right and this log's 2026-10-30 was wrong. The row takes the quarterly date. Seven more files that cite the draft joined its `Consumers`.                                         |
+| `2026-10-22` | #466 — ID-JAG `-04` expires soon | The ID-JAG row (due 2026-11-22) and the `ext-auth` row re-verified. **ID-JAG `-04` is still the newest revision; there is no `-05`.** The EMA file is unchanged since `e5eef54` and names `-04`. So ID-JAG moves from `latest` to `derived`, as the maintainer chose on 2026-10-19, and takes the quarterly date. Nothing re-pinned. Next pass: 2026-11-30.       |
 
 The first pass deliberately re-stated what ADR-005, ADR-007, ADR-009 and ADR-011
 had already recorded, rather than re-investigating each source. Its
@@ -113,8 +114,9 @@ this column cannot tell a derived pin from a latest-published one.
 2. for a `latest` row pinned to an Internet-Draft, that revision's own expiry,
    if it has one. A draft in the RFC Editor queue has none.
 
-A `derived` or `deliberate` row pinned to a revision that has already expired
-keeps the quarterly date. The document that dictates the pin keeps it alive, so
+A `derived` or `deliberate` row keeps the quarterly date, even when its
+revision has already expired or expires before the pass (ID-JAG `-04`). The
+document that dictates the pin keeps it alive, so
 the draft's expiry is not a reason to look sooner. That expiry is still recorded
 in `Expires`, so for those rows the two columns disagree on purpose. OpenID
 Foundation Finals, MCP revisions and the `ext-auth` branch do not expire: their
@@ -134,7 +136,7 @@ not, because a pin nothing consumes is a pin nobody will notice going stale.
 | ----------------------------------------------------------------------- | ---------------------------------------------- | ------------------ | ------------ | ------------- | ------------ | -------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | SD-JWT VC (`draft-ietf-oauth-sd-jwt-vc`)                                | `-13`                                          | expired 2026-05-10 | `derived`    | `2026-09-26`  | `2026-11-30` | Current for HAIP 1.0 §9.4; upstream is at `-19`                                                          | `libs/server/federation/src/oid4vp/sd-jwt-vc.ts`, `libs/server/federation/src/oid4vp/sd-jwt-vc.test.ts`, `libs/server/federation/src/oid4vp/sd-jwt-vc.credential-status.test.ts`, `libs/server/federation/src/oid4vp/presentation-rejection.ts`, `libs/server/config/src/lib/schemas/federation.ts`, `apps/auth-server/src/testing/mock-wallet.ts`, `apps/auth-server/src/testing/mock-wallet.test.ts`, `docs/adr/004-wallet-agnostic-federation.md`, `docs/adr/009-wallet-account-resolution.md`, `apps/docs-site/src/invariants/spec-pins.test.ts` |
 | Token Status List (`draft-ietf-oauth-status-list`)                      | `-14`                                          | expired 2026-06-13 | `derived`    | `2026-09-26`  | `2026-11-30` | Current for HAIP 1.0 §9.4; upstream is at `-21`, in the RFC Editor queue                                 | `libs/server/federation/src/status/status-list-spec.ts`, `libs/server/federation/src/status/status-list-spec.test.ts`, `libs/server/federation/src/status`, `libs/server/federation/README.md`, `apps/auth-server/src/testing/mock-status-list.ts`, `docs/adr/004-wallet-agnostic-federation.md`                                                                                                                                                                                                                                                     |
-| ID-JAG (`draft-ietf-oauth-identity-assertion-authz-grant`)              | `-04`                                          | 2026-11-22         | `latest`     | `2026-10-11`  | `2026-11-22` | Current; `-04` is the newest revision                                                                    | `apps/auth-server/src/app/helpers/id-jag.ts`, `apps/auth-server/src/app/helpers/id-jag-draft-pin.test.ts`, `docs/adr/011-enterprise-managed-authorization.md`, `apps/docs-site/src/invariants/spec-pins.test.ts`                                                                                                                                                                                                                                                                                                                                     |
+| ID-JAG (`draft-ietf-oauth-identity-assertion-authz-grant`)              | `-04`                                          | 2026-11-22         | `derived`    | `2026-10-22`  | `2026-11-30` | Current for the `ext-auth` EMA file at `e5eef54`, which names `-04`; no `-05` upstream                   | `apps/auth-server/src/app/helpers/id-jag.ts`, `apps/auth-server/src/app/helpers/id-jag-draft-pin.test.ts`, `docs/adr/011-enterprise-managed-authorization.md`, `docs/adr/014-agent-authority-tree.md`, `apps/docs-site/src/invariants/spec-pins.test.ts`                                                                                                                                                                                                                                                                                             |
 | CIMD (`draft-ietf-oauth-client-id-metadata-document`)                   | `-00` cited, `-02` current                     | expired 2026-04-11 | `deliberate` | `2026-09-26`  | `2026-11-30` | Reason holds: MCP 2026-07-28 still cites `-00`; code meets `-02` per ADR-007 (2026-08-06, not re-tested) | `apps/auth-server/src/app/helpers/cimd.ts`, `apps/auth-server/src/app/helpers/discovery.ts`, `libs/server/config/src/lib/schemas/auth.ts`, `apps/auth-server/src/app/helpers/ssrf-safe-fetch.ts`, `apps/docs-site/src/content/docs/integrate/mcp-quickstart.md`, `docs/adr/007-mcp-first-positioning.md`                                                                                                                                                                                                                                             |
 | OAuth 2.1 (`draft-ietf-oauth-v2-1`)                                     | `-16`                                          | 2027-03-07         | `latest`     | `2026-09-26`  | `2026-11-30` | Re-pinned from `-15`, which expired 2026-09-03; still not an RFC                                         | `docs/adr/007-mcp-first-positioning.md`, `.claude/skills/oauth-oidc/SKILL.md`, `.claude/skills/auth-oauth/reference.md`                                                                                                                                                                                                                                                                                                                                                                                                                              |
 | JWT client authentication update (`draft-ietf-oauth-rfc7523bis`)        | `-11`                                          | none: RFC Ed Queue | `latest`     | `2026-10-22`  | `2026-11-30` | Current; still in the RFC Editor queue on 2026-10-22, not an RFC; the next change is an RFC number       | `.claude/agents/auth-specialist.md`, `apps/auth-server/src/app/helpers/client-assertion.ts`, `apps/auth-server/src/app/helpers/client-assertion.test.ts`, `apps/docs-site/src/content/docs/integrate/oauth-flow.md`, `docs/adr/011-enterprise-managed-authorization.md`, `docs/adr/014-agent-authority-tree.md`, `docs/adr/015-agent-tree-hardening.md`, `docs/adr/017-first-party-login.md`, `apps/docs-site/src/invariants/spec-pins.test.ts`                                                                                                      |
@@ -144,7 +146,7 @@ not, because a pin nothing consumes is a pin nobody will notice going stale.
 | OpenID4VCI                                                              | 1.0 Final (2025-09-16)                         | —                  | `latest`     | `2026-09-26`  | `2026-11-30` | Final; no newer published revision. Appendix D and §3.3.2 are what QAuth cites                           | `libs/server/federation/src/attestation/attack-potential.ts`, `libs/server/federation/src/attestation/key-attestation.ts`, `libs/server/config/src/lib/schemas/key-attestation.ts`, `libs/server/config/src/lib/schemas/assurance.ts`, `libs/server/federation/src/subject/subject-resolution.types.ts`, `libs/server/federation/src/subject/subject-resolution-strategies.ts`, `docs/adr/009-wallet-account-resolution.md`, `docs/adr/010-acr-assurance-mapping.md`                                                                                 |
 | OpenID Connect Core 1.0                                                 | Final, incorporating errata set 2 (2023-12-15) | —                  | `latest`     | `2026-09-26`  | `2026-11-30` | Errata set 2 is still the latest approved text; errata set 3 is only a draft                             | `docs/adr/002-identifier-abstraction.md`, `docs/adr/010-acr-assurance-mapping.md`, `docs/adr/011-enterprise-managed-authorization.md`, `docs/conformance/requirements/oidc-core-1_0.json`, `docs/conformance/specs.json`                                                                                                                                                                                                                                                                                                                             |
 | MCP authorization                                                       | `2026-07-28`                                   | —                  | `latest`     | `2026-09-26`  | `2026-11-30` | Current published revision                                                                               | `docs/adr/007-mcp-first-positioning.md`, `libs/fastify/plugins/mcp-guard`, `apps/docs-site/src/content/docs/integrate/mcp-quickstart.md`, `apps/docs-site/src/content/docs/integrate/agent-authorization.md`, `apps/docs-site/src/content/docs/integrate/api-reference.md`, `apps/docs-site/src/content/docs/operate/docker.md`, `README.md`, `apps/auth-server/src/app/helpers/discovery.ts`, `docs/adr/014-agent-authority-tree.md`                                                                                                                |
-| MCP `ext-auth` EMA extension (STABLE)                                   | repo `main` at `e5eef54` (2026-06-18)          | —                  | `latest`     | `2026-10-11`  | `2026-11-30` | Still the only STABLE extension; the file is unchanged since the pinned commit                           | `docs/adr/011-enterprise-managed-authorization.md`, `apps/auth-server/src/app/routes/oauth/token.ts`, `apps/auth-server/src/app/routes/oauth/token.test.ts`, `apps/auth-server/src/app/helpers/id-jag.ts`, `docs/adr/007-mcp-first-positioning.md`, `docs/adr/014-agent-authority-tree.md`                                                                                                                                                                                                                                                           |
+| MCP `ext-auth` EMA extension (STABLE)                                   | repo `main` at `e5eef54` (2026-06-18)          | —                  | `latest`     | `2026-10-22`  | `2026-11-30` | Still the only STABLE extension; the file is unchanged since the pinned commit                           | `docs/adr/011-enterprise-managed-authorization.md`, `apps/auth-server/src/app/routes/oauth/token.ts`, `apps/auth-server/src/app/routes/oauth/token.test.ts`, `apps/auth-server/src/app/helpers/id-jag.ts`, `docs/adr/007-mcp-first-positioning.md`, `docs/adr/014-agent-authority-tree.md`                                                                                                                                                                                                                                                           |
 | PQC composite signatures for JOSE (`draft-ietf-jose-pq-composite-sigs`) | not implemented                                | —                  | `deliberate` | `2026-09-26`  | `2026-11-30` | Reason holds at `-04`: QAuth signs in parallel, not composite (ADR-005 amendment #245)                   | `docs/adr/005-pqc-hybrid-signing.md`, `apps/docs-site/src/content/docs/operate/pqc-verifier-guide.md`, `libs/core/crypto/src/lib/hybrid-signing.ts`                                                                                                                                                                                                                                                                                                                                                                                                  |
 | Composite ML-DSA for X.509 (`draft-ietf-lamps-pq-composite-sigs`)       | not implemented                                | —                  | `deliberate` | `2026-09-26`  | `2026-11-30` | Reason holds at `-19`, now in the RFC Editor queue; drop the row once it is an RFC                       | `docs/adr/005-pqc-hybrid-signing.md`, `MVP-PRD.md`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
 
@@ -188,11 +190,31 @@ not, because a pin nothing consumes is a pin nobody will notice going stale.
   2022-03-04. So the row takes the quarterly date. It leaves the queue as an
   RFC, and then the row goes, or it goes back to the working group with a new
   IESG state, which the next pass sees.
+- **ID-JAG is `derived` from the `ext-auth` EMA file (since 2026-10-22, #466).**
+  QAuth's ID-JAG support follows the MCP EMA extension at the commit this log
+  pins (ADR-018 §3). At `e5eef54` that file links `-04` by its archive URL
+  eleven times, for §2, §3.1, §4.3, §4.3.3, §4.3.4, §4.4, §4.4.1, §4.5, §5,
+  §6 and §7.2. It also links the unversioned Datatracker page twice. The
+  `ext-auth` pull request that made it STABLE (#29, merged 2026-06-18) is
+  titled "Align Enterprise-Managed Authorization with id-jag-04". So the
+  extension fixes the revision QAuth implements, not the draft's newest
+  revision. As a `latest` row, ID-JAG would fall due on 2026-11-22, when `-04`
+  expires. With no `-05`, the rule would then give it no later date. The
+  maintainer chose on 2026-10-19 to make the row `derived` (Option B in #466).
+  Option A, keeping `latest` and changing this log's rule for a draft that
+  expires with no successor, was not taken. The re-check question is now: does
+  the EMA file, at the commit the `ext-auth` row pins, still name `-04`? A
+  `-05` on its own does not move the row. The pass reads its diff against
+  `-04` and files one issue per behaviour change. The row and `ID_JAG_DRAFT`
+  move once the EMA file names the new revision and the code implements it.
 - **The `ext-auth` pin is a branch.** The repository publishes no tags and no
   releases, so the pin is `main` plus the last commit that touched
   `specification/stable/enterprise-managed-authorization.mdx`. The file's blob
   is `586ce278` at both `e5eef54` and the `main` head on 2026-09-26. Two open
-  pull requests (#12 and #30) change that file; neither has merged.
+  pull requests (#12 and #30) change that file; neither has merged. Both were
+  still open on 2026-10-22, and neither changes its ID-JAG links. Since
+  2026-10-22 this row also dictates the ID-JAG row, so a new commit to the EMA
+  file re-checks both.
 
 ### Rows that were considered and deliberately excluded
 
@@ -380,8 +402,9 @@ change; none of them changes a pin.
   `realToday()` comment also says this test goes red when ID-JAG `-04` expires
   on 2026-11-22. The earliest `Re-check by` is now rfc7523bis `-11`, on
   2026-10-30, so the test goes red on 2026-10-31. **Resolved on 2026-10-22:**
-  the rfc7523bis row now takes the quarterly date, so ID-JAG is the earliest
-  again and the comment is right.
+  the rfc7523bis row now takes the quarterly date (#465), and the comment
+  names no row (#466). It says the test goes red when the earliest
+  `Re-check by` passes.
 - `libs/server/config/src/lib/schemas/federation.ts` — cites "SD-JWT VC draft-13
   §3.2.2.2" for "`vct` is an arbitrary string". In `-13` that rule is §3.2.2.1,
   and it requires a Collision-Resistant Name.
@@ -416,6 +439,8 @@ change; none of them changes a pin.
   wrong (see the rfc7523bis row note).
 - `docs/adr/011-enterprise-managed-authorization.md`, "What EMA is" — "currently
   the only" STABLE extension carries no date. It is still true on 2026-09-26.
+  **Resolved on 2026-10-22 (#466):** still true, and ADR-011 now gives that
+  date.
 - `apps/auth-server/src/app/helpers/id-jag.ts` and
   `apps/auth-server/src/app/helpers/id-jag-draft-pin.test.ts` — cite ADR-011
   by a line-number range that has since drifted off the sentence it meant. A
@@ -435,14 +460,16 @@ A pass runs when **any** of these fires:
    **2026-11-30**.
 2. **A draft expiry.** A `latest` I-D row's `Re-check by` is the earlier of the
    next quarter and its pinned revision's expiry. ID-JAG `-04` expires
-   **2026-11-22**, a date recorded nowhere before this file existed.
-   rfc7523bis `-11` has no expiry while it is in the RFC Editor queue (see the
-   row notes).
+   **2026-11-22**, a date recorded nowhere before this file existed. Since
+   2026-10-22 that row is `derived`, so the date no longer fires a pass.
+   rfc7523bis `-11` has no expiry while it is in the RFC Editor queue. See
+   the row notes for both.
 3. **An ADR moving Proposed → Accepted** re-verifies its own rows first. ADR-011
    did so on 2026-10-11 (see the ledger).
 4. **A dictating document changing.** A new HAIP version or a published HAIP
-   errata set re-checks both derived rows. An MCP revision after 2026-07-28
-   re-checks the CIMD and MCP rows.
+   errata set re-checks the SD-JWT VC and Token Status List rows. An MCP
+   revision after 2026-07-28 re-checks the CIMD and MCP rows. A new commit to
+   the `ext-auth` EMA file re-checks the `ext-auth` and ID-JAG rows.
 5. **A draft in the RFC Editor queue becoming an RFC.** Token Status List,
    rfc7523bis and the LAMPS composite draft were all in the RFC Editor queue on
    2026-09-26, and still were on 2026-10-22.
@@ -452,8 +479,8 @@ A pass runs when **any** of these fires:
 ## Method and controls
 
 **Read the pinning document, not just the pinned one.** For a `derived` row the
-question is whether HAIP still references that revision. A newer draft is not
-by itself drift.
+question is whether HAIP, or for ID-JAG the `ext-auth` EMA file, still
+references that revision. A newer draft is not by itself drift.
 
 **Use Datatracker for Internet-Drafts, and parse it with code.** Never read
 revision numbers or dates from a summary. The current revision, its expiry and
@@ -536,7 +563,9 @@ revision, and `rsync -q` with the same path fetches the archived texts.
   before the date.
 - **Derived pins are checked at the dictating document.** The SD-JWT VC and
   Token Status List rows were verified by reading HAIP 1.0 §9.4 itself, not by
-  asking Datatracker what is current, which answers a different question.
+  asking Datatracker what is current, which answers a different question. The
+  ID-JAG row is verified by reading the revision in the EMA file's archive
+  links at the pinned commit.
 - **MCP citations are counted in the specification's source files**, not taken
   from ADR-007's summary of them.
 - **The `ext-auth` catalogue is listed through the GitHub contents API**, so
@@ -597,7 +626,7 @@ All fetched with `curl` (GitHub API calls with `gh api`) and parsed with
   of the EMA file, the file at `e5eef546`, tags, releases and open pull
   requests.
 
-### Sources read on 2026-10-22
+### Sources read on 2026-10-22 (rfc7523bis, #465)
 
 One row, rfc7523bis, re-checked for #465. Fetched with `curl`, `rsync` and
 `gh api`, and parsed with `python3` or `grep`. HTTP status in brackets.
@@ -634,6 +663,52 @@ One row, rfc7523bis, re-checked for #465. Fetched with `curl`, `rsync` and
   at `-06` (2026-10-20), a move since the last pass. That row was not
   re-checked here: the quarterly pass re-checks its reason at `-06`.
 
+### Sources read on 2026-10-22 (ID-JAG, #466)
+
+The ID-JAG row and the `ext-auth` row it now derives from, re-checked before
+`-04` expires. Fetched with `curl`, `rsync` and `gh api`, and parsed with
+`python3` or `grep`. HTTP status in brackets.
+
+- **Datatracker [403]:** `doc.json` and the relations API for the draft, each a
+  bot-challenge page. So was `www.ietf.org/archive/id/` [403]. The same facts
+  were read over rsync.
+- **`rsync.ietf.org::internet-drafts/all_id2.txt`**, generated 2026-10-21
+  18:09:44 PDT. `draft-ietf-oauth-identity-assertion-authz-grant-04`: `Active`,
+  IESG state `I-D Exists`, no RFC number, not replaced, revision date
+  2026-05-21. It replaces `draft-parecki-oauth-identity-assertion-authz-grant`
+  and nothing else. `I-D Exists` is an expirable state, so 2026-05-21 plus 185
+  days, 2026-11-22, is a real expiry (`expirable_drafts` in Datatracker's
+  `ietf/doc/expire.py`: "all IESG states except I-D Exists and Dead block
+  expiry").
+- **`rsync.ietf.org::id-archive/`:** `-00` to `-04`, no `-05`. The `-04` text's
+  header says 21 May 2026, expiring 22 November 2026, so the two expiry
+  sources agree. `rsync.ietf.org::internet-drafts/` (the active directory)
+  holds `-04` only.
+- **`https://www.rfc-editor.org/rfc-index.xml` [200]**, current to RFC 10065.
+  No RFC names the draft.
+- **The draft repository [200, `gh api`]**,
+  `oauth-wg/oauth-identity-assertion-authz-grant`. The newest release is
+  `-04` (2026-05-21). `main` is identical to the `-04` tag (`9c907a7`): nothing
+  has merged since `-04`. Eleven pull requests are open, none merged. Among
+  other things they propose mTLS binding (#118) and JWE encryption (#102) of
+  an ID-JAG, `access_denied` at the IdP and the RAS (#112), a constrained
+  `resource` with AS metadata `iss` validation (#123), and rules for subject
+  tokens (#127, #128). None is in a published revision, so no behaviour change
+  is filed. They are what a `-05` may carry.
+- **`ext-auth` [200, `gh api`]:** `main` is `fb374c7d`, the merge of #29
+  (2026-06-18), and no commit is newer. The EMA file's last commit is still
+  `e5eef546`. Its blob is `586ce278` at `e5eef546` and at `main`.
+  `specification/stable` holds only the EMA file; `specification/draft` holds
+  only `oauth-client-credentials.mdx`. No tags, no releases. Open pull requests
+  #12 and #30 change the EMA file but not its ID-JAG links; #33, #35 and #36
+  change only `specification/draft/dpop-extension.mdx`.
+- **Positive controls, run on the same queries.** The index shows
+  `draft-ietf-jose-pq-composite-sigs` at `-06` (2026-10-20), a move since
+  2026-09-26, and `id-archive` lists its `-05` and `-06`. In the draft
+  repository, `main` is 20 commits ahead of the `-03` tag. The EMA
+  file's blob at `9c25bbe8`, a commit before `e5eef546`, is `4945c570`, not
+  `586ce278`.
+
 ---
 
 ## Residual uncertainty
@@ -654,7 +729,9 @@ One row, rfc7523bis, re-checked for #465. Fetched with `curl`, `rsync` and
   quarterly cadence and the expiry clock bound how long that can go unnoticed;
   nothing shortens it.
 - **(d) `ext-auth` is pinned to a branch.** Nothing stops `main` from moving,
-  and there is no tag or release to pin to instead.
+  and there is no tag or release to pin to instead. Since 2026-10-22 the
+  ID-JAG row is derived from that branch too, so a move there can move the
+  ID-JAG pin with no event in this repository until the next pass.
 - **(e) The consumer lists are the load-bearing citations, not an exhaustive
   index.** Each row names the files that must change when its pin changes. A
   citation elsewhere can go stale without failing the check. `git grep` for the
@@ -676,8 +753,8 @@ Every date in the table, in order:
 
 | Date           | What falls due                                                                    |
 | -------------- | --------------------------------------------------------------------------------- |
-| **2026-11-22** | ID-JAG `-04` expires. Its row's `Re-check by`.                                    |
-| **2026-11-30** | The quarterly pass. `Re-check by` for the other fourteen rows.                    |
+| 2026-11-22     | ID-JAG `-04` expires. Not a fuse: the row is `derived` (see the row notes).       |
+| **2026-11-30** | The quarterly pass. `Re-check by` for all fifteen rows.                           |
 | 2027-01-07     | security-topics-update `-03` expires. Not a fuse: the quarterly pass comes first. |
 | 2027-03-07     | OAuth 2.1 `-16` expires. Not a fuse: the quarterly pass comes first.              |
 
@@ -685,10 +762,12 @@ Past dates in the `Expires` column (SD-JWT VC `-13`, Token Status List `-14`,
 CIMD `-00`) are recorded, not due: those rows are `derived` or `deliberate`.
 rfc7523bis `-11` has no date here: a draft in the RFC Editor queue does not
 expire.
+ID-JAG `-04` joins them on 2026-11-22.
 
 Watch specifically for: a new HAIP version or a published HAIP errata set
 (either could move the SD-JWT VC and Token Status List pins together), an MCP
 revision after `2026-07-28` or a change in what the MCP `draft` tree cites
-(either could move the CIMD pin), OIDC Core errata
+(either could move the CIMD pin), a new commit to the `ext-auth` EMA file or
+an ID-JAG `-05` (see the ID-JAG row note), OIDC Core errata
 set 3 being approved (see finding 4), OAuth 2.1 reaching RFC status (which
 would retire its row), `ext-auth` pull requests #12 or #30 merging.
