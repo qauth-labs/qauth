@@ -100,8 +100,9 @@ function normaliseForMatch(host: string, kind?: 'endpoint'): string | undefined 
 }
 
 /**
- * Check that an issuer can sit on `primaryHost`: a URL with no trailing slash,
- * query or fragment (RFC 8414 §2), whose host normalises to the primary host.
+ * Check that an issuer can sit on `primaryHost`: a URL with no userinfo,
+ * trailing slash, query or fragment (RFC 8414 §2), whose host normalises to
+ * the primary host.
  * The scheme is the configuration's to check; a development issuer may be
  * `http://localhost:3000`.
  */
@@ -117,6 +118,9 @@ function assertIssuerOnPrimaryHost(issuer: string, primaryHost: string): void {
   }
   if (issuer.includes('?') || issuer.includes('#')) {
     throw new BadRequestError('Realm issuer must not have a query or fragment');
+  }
+  if (url.username !== '' || url.password !== '') {
+    throw new BadRequestError('Realm issuer must not carry a user name or password');
   }
   if (normaliseForMatch(url.host) !== primaryHost) {
     throw new BadRequestError("Realm issuer's host is not the realm's primary host");

@@ -435,6 +435,8 @@ describe('realm hosts and issuers integration (real Postgres)', () => {
         'https://auth.example.com/',
         'https://auth.example.com?tenant=a',
         'https://auth.example.com#x',
+        'https://user@auth.example.com',
+        'https://user:secret@auth.example.com',
         'auth.example.com',
       ];
       for (const issuer of cases) {
