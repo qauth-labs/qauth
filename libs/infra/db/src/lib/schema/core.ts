@@ -16,6 +16,7 @@ import {
   agentModeEnum,
   environmentEnum,
   GrantType,
+  realmHostKindEnum,
   ResponseType,
   sslRequiredEnum,
   tokenEndpointAuthMethodEnum,
@@ -63,6 +64,28 @@ export const realms = pgTable(
       .default(sql`uuidv7()`),
     name: varchar('name', { length: 255 }).notNull().unique(),
     enabled: boolean('enabled').notNull().default(true),
+    /**
+     * The realm's issuer identifier (RFC 8414 §2; ADR-019 Decision 1, issue
+     * #470): the `iss` of every token the realm signs and the base of its
+     * discovery document. Its host is the realm's primary host in
+     * {@link realmHosts}. Stored without a trailing slash (a CHECK).
+     *
+     * PERMANENT once set: the trigger `realms_issuer_permanent` refuses every
+     * UPDATE that changes a non-NULL issuer, so the only change allowed is from
+     * NULL to a value. A new issuer would break issued tokens, registered
+     * clients, enrolled passkeys and federation partners.
+     *
+     * NULL only on a realm that predates migration 0025. Such a realm is
+     * unroutable until the boot step fills it from `JWT_ISSUER` (#484). Unique,
+     * because a token's `iss` must name one realm.
+     */
+    issuer: text('issuer').unique(),
+    /**
+     * Marks the operator realm (ADR-019 Decisions 1 and 7): the realm whose
+     * admins administer the deployment. In simple mode it is the default realm.
+     * The partial unique index `idx_realms_one_operator` allows at most one.
+     */
+    isOperator: boolean('is_operator').notNull().default(false),
     accessTokenLifespan: bigint('access_token_lifespan', { mode: 'number' }).default(900),
     refreshTokenLifespan: bigint('refresh_token_lifespan', { mode: 'number' }).default(604800),
     sslRequired: sslRequiredEnum('ssl_required').default('external'),
@@ -117,6 +140,68 @@ export const realms = pgTable(
     index('idx_realms_enabled')
       .on(t.enabled)
       .where(sql`${t.enabled} = true`),
+    // Every indexed row has the same key, `true`, so the index admits one.
+    uniqueIndex('idx_realms_one_operator')
+      .on(t.isOperator)
+      .where(sql`${t.isOperator} = true`),
+    check('realms_issuer_not_empty', sql`${t.issuer} <> ''`),
+    check('realms_issuer_no_trailing_slash', sql`right(${t.issuer}, 1) <> '/'`),
+  ]
+);
+
+/**
+ * The hosts a realm answers on (ADR-019 Decision 1, issue #470).
+ *
+ * A request belongs to the realm whose host equals the request's authority:
+ * exact and case-insensitive, on the port-less ASCII form. Every `host` here is
+ * in that form, written by `normaliseRealmHost()` from
+ * `@qauth-labs/shared-validation`, so the lookup is a plain equality on the
+ * primary key. The CHECK `realm_hosts_host_normalised` refuses anything else
+ * (upper case, a port, a trailing dot, a wildcard, an empty label, non-ASCII),
+ * so a row written by hand cannot dodge the uniqueness below.
+ *
+ * - `primary` — the realm's issuer host and default passkey RP ID. At most one
+ *   per realm (`idx_realm_hosts_one_primary`) and never an IP literal
+ *   (`realm_hosts_primary_not_ip_literal`). PERMANENT once set: the trigger
+ *   `realm_hosts_primary_permanent` refuses an UPDATE that changes a primary
+ *   row and a DELETE of one while its realm exists. Only the realm's own
+ *   deletion removes it.
+ * - `endpoint` — an extra name a server-to-server caller addresses the realm
+ *   by, such as the Compose service name in `AUTH_SERVER_URL`. It answers API
+ *   routes only. May be an IP literal; added and removed freely.
+ *
+ * Both kinds share one table on purpose: `host` is the primary key, so a host
+ * exists once across every realm and both kinds, sandbox twins included. A
+ * host cannot be one realm's primary host and another's endpoint host.
+ */
+export const realmHosts = pgTable(
+  'realm_hosts',
+  {
+    host: varchar('host', { length: 253 }).primaryKey(),
+    realmId: uuid('realm_id')
+      .notNull()
+      .references(() => realms.id, { onDelete: 'cascade' }),
+    kind: realmHostKindEnum('kind').notNull(),
+    createdAt: bigint('created_at', { mode: 'number' }).notNull().default(EPOCH_MS_NOW),
+  },
+  (t) => [
+    uniqueIndex('idx_realm_hosts_one_primary')
+      .on(t.realmId)
+      .where(sql`${t.kind} = 'primary'`),
+    // The partial index above covers primary rows only; listing a realm's
+    // endpoint hosts and the cascade from `realms` need the full column.
+    index('idx_realm_hosts_realm_id').on(t.realmId),
+    // A bracketed IPv6 literal, or dot-separated non-empty ASCII labels. The
+    // finer rules (hyphens, label length, IDNA) are `normaliseRealmHost()`'s.
+    check(
+      'realm_hosts_host_normalised',
+      sql`${t.host} ~ '^(\\[[0-9a-f:.]+\\]|[a-z0-9_-]+(\\.[a-z0-9_-]+)*)$'`
+    ),
+    // A passkey RP ID cannot be an IP address (ADR-019 Decision 2).
+    check(
+      'realm_hosts_primary_not_ip_literal',
+      sql`${t.kind} = 'endpoint' or (${t.host} !~ '^\\[' and ${t.host} !~ '^[0-9.]+$')`
+    ),
   ]
 );
 
@@ -436,9 +521,14 @@ export const apiKeys = pgTable(
 );
 
 export const realmsRelations = relations(realms, ({ many }) => ({
+  hosts: many(realmHosts),
   users: many(users),
   oauthClients: many(oauthClients),
   apiKeys: many(apiKeys),
+}));
+
+export const realmHostsRelations = relations(realmHosts, ({ one }) => ({
+  realm: one(realms, { fields: [realmHosts.realmId], references: [realms.id] }),
 }));
 
 export const usersRelations = relations(users, ({ one, many }) => ({

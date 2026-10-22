@@ -176,6 +176,13 @@
       "when": 1792482170829,
       "tag": "0024_realm_keys",
       "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1792636412076,
+      "tag": "0025_realm_hosts",
+      "breakpoints": true
     }
   ]
 }

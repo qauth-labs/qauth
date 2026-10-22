@@ -819,6 +819,9 @@ importers:
       '@qauth-labs/shared-errors':
         specifier: workspace:*
         version: link:../../shared/errors
+      '@qauth-labs/shared-validation':
+        specifier: workspace:*
+        version: link:../../shared/validation
       dotenv:
         specifier: 'catalog:'
         version: 17.4.2
