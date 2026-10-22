@@ -56,7 +56,7 @@ listed in [Deprecations](#deprecations).
 ## Requests and responses
 
 - A request body is `application/json`, except a `PATCH` body ([Updates](#updates)).
-- A request with an unknown member is refused with 400 `VALIDATION_ERROR`. Request objects are
+- A request with an unknown member is refused with 400 `validation_error`. Request objects are
   closed (`additionalProperties: false`).
 - A client ignores response members it does not know and enum values it does not know. Both may be
   added in a minor release.
@@ -83,7 +83,7 @@ The response is an object with exactly two members:
 - There is no offset, page number or total. A cursor stays correct while rows are added between two
   calls; an offset does not.
 - A cursor that does not parse, or that belongs to another list, is refused with 400
-  `INVALID_CURSOR`.
+  `invalid_cursor`.
 - A `limit` above 200 is refused, not clamped, so a short page is never mistaken for the end of the
   list.
 - The cursor-based event API uses the same shape.
@@ -98,8 +98,8 @@ Updates use optimistic concurrency (RFC 9110 §13.1.1).
 - A read of one resource returns an `ETag`. It is a strong validator: a client compares it only for
   equality.
 - `PATCH` and `PUT` require `If-Match` with that value.
-- An update without `If-Match` is refused with 428 `PRECONDITION_REQUIRED` (RFC 6585 §3).
-- An update whose `If-Match` is stale is refused with 412 `PRECONDITION_FAILED`. The client reads
+- An update without `If-Match` is refused with 428 `precondition_required` (RFC 6585 §3).
+- An update whose `If-Match` is stale is refused with 412 `precondition_failed`. The client reads
   the resource again and retries on the new representation.
 - A successful update returns the new representation and its new `ETag`.
 
@@ -108,9 +108,9 @@ Updates use optimistic concurrency (RFC 9110 §13.1.1).
 - `PATCH` takes a JSON Merge Patch (RFC 7396), sent as `application/merge-patch+json`.
 - A member set to `null` is removed, or reset to its default. A member left out keeps its value. An
   array is replaced whole.
-- The patch itself is a request body: an unknown member is refused with 400 `VALIDATION_ERROR`.
+- The patch itself is a request body: an unknown member is refused with 400 `validation_error`.
 - The merged result is checked against the resource's schema. A result that fails is refused with
-  422 `UNPROCESSABLE_CONTENT`, and `errors` names each failing field.
+  422 `unprocessable_content`, and `errors` names each failing field.
 
 ## Errors
 
@@ -123,7 +123,7 @@ document, sent as `application/problem+json` (ADR-019 Decision 7, decided 2026-1
   "title": "Bad Request",
   "status": 400,
   "detail": "The request is not valid.",
-  "code": "VALIDATION_ERROR",
+  "code": "validation_error",
   "trace_id": "req-7f3a",
   "errors": [{ "pointer": "/limit", "message": "Too big: expected number to be <=200" }]
 }
@@ -164,36 +164,37 @@ protocol endpoints (`/auth/*`, `/api/*`, `/consents`) still answer the earlier
 
 The codes are inside the 1.0 promise: a published code keeps its meaning within a major version.
 Each is sent with one status. An error that has no code of its own is sent with the code of its
-status.
+status. Codes are lower-case `snake_case`, like the `error` values of OAuth. The earlier body of the
+routes that #513 converts names the same errors in upper case (`VALIDATION_ERROR`).
 
 | Code                          | Status | Meaning                                                                                                                             |
 | ----------------------------- | ------ | ----------------------------------------------------------------------------------------------------------------------------------- |
-| `BAD_REQUEST`                 | 400    | The request is malformed and no more specific code applies.                                                                         |
-| `VALIDATION_ERROR`            | 400    | The request does not match the schema of the operation. `errors` names each field.                                                  |
-| `INVALID_CURSOR`              | 400    | The `cursor` does not parse, or it belongs to another list.                                                                         |
-| `INVALID_TOKEN`               | 400    | A one-time token in the request, such as an email verification token, is not valid.                                                 |
-| `UNAUTHORIZED`                | 401    | The request carries no valid credentials.                                                                                           |
-| `JWT_EXPIRED`                 | 401    | The access token has expired.                                                                                                       |
-| `JWT_INVALID`                 | 401    | The access token is not valid.                                                                                                      |
-| `INVALID_CREDENTIALS`         | 401    | The identifier or the credential is wrong. The answer does not say which.                                                           |
-| `FORBIDDEN`                   | 403    | The caller is authenticated but may not perform the operation.                                                                      |
-| `EMAIL_NOT_VERIFIED`          | 403    | The account must verify its email address first.                                                                                    |
-| `NOT_FOUND`                   | 404    | The resource does not exist, or the caller may not know that it exists.                                                             |
-| `METHOD_NOT_ALLOWED`          | 405    | The resource does not support the method.                                                                                           |
-| `CONFLICT`                    | 409    | The request conflicts with the current state of the resource.                                                                       |
-| `UNIQUE_CONSTRAINT_VIOLATION` | 409    | A resource with the same unique value already exists.                                                                               |
-| `EMAIL_ALREADY_VERIFIED`      | 409    | The email address is already verified.                                                                                              |
-| `TOKEN_ALREADY_USED`          | 409    | The one-time token has already been used.                                                                                           |
-| `TOKEN_EXPIRED`               | 410    | The one-time token has expired.                                                                                                     |
-| `PRECONDITION_FAILED`         | 412    | The `If-Match` value does not match the current `ETag` of the resource.                                                             |
-| `CONTENT_TOO_LARGE`           | 413    | The request body is larger than the server accepts.                                                                                 |
-| `UNSUPPORTED_MEDIA_TYPE`      | 415    | The media type of the request body is not one the operation accepts.                                                                |
-| `UNPROCESSABLE_CONTENT`       | 422    | The request is well formed, but its content cannot be applied, such as a merge patch whose result fails the schema of the resource. |
-| `WEAK_PASSWORD`               | 422    | The new password is too weak. `errors` carries the feedback under `/password`.                                                      |
-| `PRECONDITION_REQUIRED`       | 428    | The update needs an `If-Match` header.                                                                                              |
-| `TOO_MANY_REQUESTS`           | 429    | The caller has sent too many requests. `Retry-After` says when to try again.                                                        |
-| `INTERNAL_ERROR`              | 500    | The server failed. `trace_id` finds the failure in the server log.                                                                  |
-| `SERVICE_UNAVAILABLE`         | 503    | The server cannot answer now, for example while a dependency is down.                                                               |
+| `bad_request`                 | 400    | The request is malformed and no more specific code applies.                                                                         |
+| `validation_error`            | 400    | The request does not match the schema of the operation. `errors` names each field.                                                  |
+| `invalid_cursor`              | 400    | The `cursor` does not parse, or it belongs to another list.                                                                         |
+| `invalid_token`               | 400    | A one-time token in the request, such as an email verification token, is not valid.                                                 |
+| `unauthorized`                | 401    | The request carries no valid credentials.                                                                                           |
+| `jwt_expired`                 | 401    | The access token has expired.                                                                                                       |
+| `jwt_invalid`                 | 401    | The access token is not valid.                                                                                                      |
+| `invalid_credentials`         | 401    | The identifier or the credential is wrong. The answer does not say which.                                                           |
+| `forbidden`                   | 403    | The caller is authenticated but may not perform the operation.                                                                      |
+| `email_not_verified`          | 403    | The account must verify its email address first.                                                                                    |
+| `not_found`                   | 404    | The resource does not exist, or the caller may not know that it exists.                                                             |
+| `method_not_allowed`          | 405    | The resource does not support the method.                                                                                           |
+| `conflict`                    | 409    | The request conflicts with the current state of the resource.                                                                       |
+| `unique_constraint_violation` | 409    | A resource with the same unique value already exists.                                                                               |
+| `email_already_verified`      | 409    | The email address is already verified.                                                                                              |
+| `token_already_used`          | 409    | The one-time token has already been used.                                                                                           |
+| `token_expired`               | 410    | The one-time token has expired.                                                                                                     |
+| `precondition_failed`         | 412    | The `If-Match` value does not match the current `ETag` of the resource.                                                             |
+| `content_too_large`           | 413    | The request body is larger than the server accepts.                                                                                 |
+| `unsupported_media_type`      | 415    | The media type of the request body is not one the operation accepts.                                                                |
+| `unprocessable_content`       | 422    | The request is well formed, but its content cannot be applied, such as a merge patch whose result fails the schema of the resource. |
+| `weak_password`               | 422    | The new password is too weak. `errors` carries the feedback under `/password`.                                                      |
+| `precondition_required`       | 428    | The update needs an `If-Match` header.                                                                                              |
+| `too_many_requests`           | 429    | The caller has sent too many requests. `Retry-After` says when to try again.                                                        |
+| `internal_error`              | 500    | The server failed. `trace_id` finds the failure in the server log.                                                                  |
+| `service_unavailable`         | 503    | The server cannot answer now, for example while a dependency is down.                                                               |
 
 `PROBLEM_CODES` in `apps/auth-server/src/app/api-conventions/problem.ts` is the source of this
 table, and a test fails when the two differ.

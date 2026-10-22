@@ -28,7 +28,7 @@ export const PAGE_CURSOR_MAX_LENGTH = 512;
  * `limit` arrives as a query string. Only a digit string is converted, as in
  * `maxAgeParamSchema` (`schemas/oauth.ts`), and not with `z.coerce.number()`,
  * whose `Number()` accepts `''`, `'0x10'` and `'1e2'`. A value above
- * {@link PAGE_LIMIT_MAX} fails validation (400 `VALIDATION_ERROR`, pointer
+ * {@link PAGE_LIMIT_MAX} fails validation (400 `validation_error`, pointer
  * `/limit`) rather than being clamped, so a client never mistakes a short page
  * for the end of the list. The default is a `.prefault()`, which Zod keeps in
  * the published JSON Schema of a preprocessed value (see `boundedArray` in

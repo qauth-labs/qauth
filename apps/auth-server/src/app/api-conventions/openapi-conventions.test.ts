@@ -190,7 +190,7 @@ describe('the API conventions check — fixture document (#506)', () => {
     });
     expect(fixture.components.schemas.Problem.properties.trace_id).toEqual({ type: 'string' });
     expect(fixture.components.schemas.Problem.properties.code['x-extensible-enum']).toContain(
-      'VALIDATION_ERROR'
+      'validation_error'
     );
     // `openapiOptions` publishes only referenced components: no `ProblemInput`.
     expect(Object.keys(fixture.components.schemas)).toEqual(['Problem']);

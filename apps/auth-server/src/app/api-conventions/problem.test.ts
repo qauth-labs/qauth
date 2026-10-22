@@ -33,24 +33,26 @@ describe('problem codes (#506)', () => {
     }
   });
 
-  it('falls back to BAD_REQUEST for another 4xx and INTERNAL_ERROR for anything else', () => {
-    expect(codeForStatus(418)).toBe('BAD_REQUEST');
-    expect(codeForStatus(502)).toBe('INTERNAL_ERROR');
-    expect(codeForStatus(200)).toBe('INTERNAL_ERROR');
+  it('falls back to bad_request for another 4xx and internal_error for anything else', () => {
+    expect(codeForStatus(418)).toBe('bad_request');
+    expect(codeForStatus(502)).toBe('internal_error');
+    expect(codeForStatus(200)).toBe('internal_error');
   });
 
   it("keeps an error's own code only when it is published for that status", () => {
-    expect(problemCodeFor('WEAK_PASSWORD', 422)).toBe('WEAK_PASSWORD');
-    expect(problemCodeFor('NOT_FOUND', 400)).toBe('BAD_REQUEST');
-    expect(problemCodeFor('FST_ERR_CTP_INVALID_MEDIA_TYPE', 415)).toBe('UNSUPPORTED_MEDIA_TYPE');
-    expect(problemCodeFor('INVALID_GRANT', 400)).toBe('BAD_REQUEST');
-    expect(problemCodeFor(undefined, 404)).toBe('NOT_FOUND');
-    expect(problemCodeFor('toString', 400)).toBe('BAD_REQUEST');
+    // The error classes name their codes in upper case, for the earlier body.
+    expect(problemCodeFor('WEAK_PASSWORD', 422)).toBe('weak_password');
+    expect(problemCodeFor('weak_password', 422)).toBe('weak_password');
+    expect(problemCodeFor('NOT_FOUND', 400)).toBe('bad_request');
+    expect(problemCodeFor('FST_ERR_CTP_INVALID_MEDIA_TYPE', 415)).toBe('unsupported_media_type');
+    expect(problemCodeFor('INVALID_GRANT', 400)).toBe('bad_request');
+    expect(problemCodeFor(undefined, 404)).toBe('not_found');
+    expect(problemCodeFor('toString', 400)).toBe('bad_request');
   });
 
-  it('names every code in UPPER_SNAKE_CASE and sends it with a 4xx or 5xx status', () => {
+  it('names every code in lower-case snake_case and sends it with a 4xx or 5xx status', () => {
     for (const [code, { status }] of Object.entries(PROBLEM_CODES)) {
-      expect(code).toMatch(/^[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)*$/);
+      expect(code).toMatch(/^[a-z][a-z0-9]*(?:_[a-z0-9]+)*$/);
       expect(status).toBeGreaterThanOrEqual(400);
       expect(status).toBeLessThanOrEqual(599);
     }

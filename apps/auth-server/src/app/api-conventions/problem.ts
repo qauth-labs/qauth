@@ -42,110 +42,110 @@ export interface ProblemCodeEntry {
  * `reference/api-conventions.md`, and a test keeps the page equal to it.
  */
 export const PROBLEM_CODES = {
-  BAD_REQUEST: {
+  bad_request: {
     status: 400,
     description: 'The request is malformed and no more specific code applies.',
   },
-  VALIDATION_ERROR: {
+  validation_error: {
     status: 400,
     description:
       'The request does not match the schema of the operation. `errors` names each field.',
   },
-  INVALID_CURSOR: {
+  invalid_cursor: {
     status: 400,
     description: 'The `cursor` does not parse, or it belongs to another list.',
   },
-  INVALID_TOKEN: {
+  invalid_token: {
     status: 400,
     description:
       'A one-time token in the request, such as an email verification token, is not valid.',
   },
-  UNAUTHORIZED: {
+  unauthorized: {
     status: 401,
     description: 'The request carries no valid credentials.',
   },
-  JWT_EXPIRED: {
+  jwt_expired: {
     status: 401,
     description: 'The access token has expired.',
   },
-  JWT_INVALID: {
+  jwt_invalid: {
     status: 401,
     description: 'The access token is not valid.',
   },
-  INVALID_CREDENTIALS: {
+  invalid_credentials: {
     status: 401,
     description: 'The identifier or the credential is wrong. The answer does not say which.',
   },
-  FORBIDDEN: {
+  forbidden: {
     status: 403,
     description: 'The caller is authenticated but may not perform the operation.',
   },
-  EMAIL_NOT_VERIFIED: {
+  email_not_verified: {
     status: 403,
     description: 'The account must verify its email address first.',
   },
-  NOT_FOUND: {
+  not_found: {
     status: 404,
     description: 'The resource does not exist, or the caller may not know that it exists.',
   },
-  METHOD_NOT_ALLOWED: {
+  method_not_allowed: {
     status: 405,
     description: 'The resource does not support the method.',
   },
-  CONFLICT: {
+  conflict: {
     status: 409,
     description: 'The request conflicts with the current state of the resource.',
   },
-  UNIQUE_CONSTRAINT_VIOLATION: {
+  unique_constraint_violation: {
     status: 409,
     description: 'A resource with the same unique value already exists.',
   },
-  EMAIL_ALREADY_VERIFIED: {
+  email_already_verified: {
     status: 409,
     description: 'The email address is already verified.',
   },
-  TOKEN_ALREADY_USED: {
+  token_already_used: {
     status: 409,
     description: 'The one-time token has already been used.',
   },
-  TOKEN_EXPIRED: {
+  token_expired: {
     status: 410,
     description: 'The one-time token has expired.',
   },
-  PRECONDITION_FAILED: {
+  precondition_failed: {
     status: 412,
     description: 'The `If-Match` value does not match the current `ETag` of the resource.',
   },
-  CONTENT_TOO_LARGE: {
+  content_too_large: {
     status: 413,
     description: 'The request body is larger than the server accepts.',
   },
-  UNSUPPORTED_MEDIA_TYPE: {
+  unsupported_media_type: {
     status: 415,
     description: 'The media type of the request body is not one the operation accepts.',
   },
-  UNPROCESSABLE_CONTENT: {
+  unprocessable_content: {
     status: 422,
     description:
       'The request is well formed, but its content cannot be applied, such as a merge patch whose result fails the schema of the resource.',
   },
-  WEAK_PASSWORD: {
+  weak_password: {
     status: 422,
     description: 'The new password is too weak. `errors` carries the feedback under `/password`.',
   },
-  PRECONDITION_REQUIRED: {
+  precondition_required: {
     status: 428,
     description: 'The update needs an `If-Match` header.',
   },
-  TOO_MANY_REQUESTS: {
+  too_many_requests: {
     status: 429,
     description: 'The caller has sent too many requests. `Retry-After` says when to try again.',
   },
-  INTERNAL_ERROR: {
+  internal_error: {
     status: 500,
     description: 'The server failed. `trace_id` finds the failure in the server log.',
   },
-  SERVICE_UNAVAILABLE: {
+  service_unavailable: {
     status: 503,
     description: 'The server cannot answer now, for example while a dependency is down.',
   },
@@ -155,20 +155,20 @@ export type ProblemCode = keyof typeof PROBLEM_CODES;
 
 /** The code a status gets when the error carries no published code of its own. */
 const STATUS_FALLBACK_CODES: Readonly<Record<number, ProblemCode>> = {
-  400: 'BAD_REQUEST',
-  401: 'UNAUTHORIZED',
-  403: 'FORBIDDEN',
-  404: 'NOT_FOUND',
-  405: 'METHOD_NOT_ALLOWED',
-  409: 'CONFLICT',
-  412: 'PRECONDITION_FAILED',
-  413: 'CONTENT_TOO_LARGE',
-  415: 'UNSUPPORTED_MEDIA_TYPE',
-  422: 'UNPROCESSABLE_CONTENT',
-  428: 'PRECONDITION_REQUIRED',
-  429: 'TOO_MANY_REQUESTS',
-  500: 'INTERNAL_ERROR',
-  503: 'SERVICE_UNAVAILABLE',
+  400: 'bad_request',
+  401: 'unauthorized',
+  403: 'forbidden',
+  404: 'not_found',
+  405: 'method_not_allowed',
+  409: 'conflict',
+  412: 'precondition_failed',
+  413: 'content_too_large',
+  415: 'unsupported_media_type',
+  422: 'unprocessable_content',
+  428: 'precondition_required',
+  429: 'too_many_requests',
+  500: 'internal_error',
+  503: 'service_unavailable',
 };
 
 /** Whether `value` is a published {@link ProblemCode}. */
@@ -177,23 +177,26 @@ export function isProblemCode(value: unknown): value is ProblemCode {
 }
 
 /**
- * The published code for a status: its own entry, else `BAD_REQUEST` for any
- * other 4xx and `INTERNAL_ERROR` for anything else.
+ * The published code for a status: its own entry, else `bad_request` for any
+ * other 4xx and `internal_error` for anything else.
  */
 export function codeForStatus(status: number): ProblemCode {
   return (
     STATUS_FALLBACK_CODES[status] ??
-    (status >= 400 && status < 500 ? 'BAD_REQUEST' : 'INTERNAL_ERROR')
+    (status >= 400 && status < 500 ? 'bad_request' : 'internal_error')
   );
 }
 
 /**
- * The code a problem document carries: the error's own `code` when it is
- * published for this status, else the code of the status. A framework code
- * (`FST_ERR_*`) or an internal one never reaches the wire.
+ * The code a problem document carries: the error's own `code`, in lower case,
+ * when it is published for this status, else the code of the status. The
+ * error classes of `@qauth-labs/shared-errors` name their codes in upper case
+ * for the earlier body; a problem document names them in lower case. A
+ * framework code (`FST_ERR_*`) or an internal one never reaches the wire.
  */
 export function problemCodeFor(errorCode: unknown, status: number): ProblemCode {
-  if (isProblemCode(errorCode) && PROBLEM_CODES[errorCode].status === status) return errorCode;
+  const code = typeof errorCode === 'string' ? errorCode.toLowerCase() : errorCode;
+  if (isProblemCode(code) && PROBLEM_CODES[code].status === status) return code;
   return codeForStatus(status);
 }
 

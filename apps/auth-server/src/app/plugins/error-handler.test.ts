@@ -363,7 +363,7 @@ describe('error-handler plugin', () => {
         type: 'about:blank',
         title: 'Not Found',
         status: 404,
-        code: 'NOT_FOUND',
+        code: 'not_found',
         trace_id: 'trace-123',
       });
       // The legacy members are gone, so a client cannot branch on them.
@@ -381,7 +381,7 @@ describe('error-handler plugin', () => {
       expect(response.statusCode).toBe(400);
       expect(response.headers['content-type']).toMatch(PROBLEM_CONTENT_TYPE);
       const body = response.json();
-      expect(body).toMatchObject({ status: 400, code: 'VALIDATION_ERROR' });
+      expect(body).toMatchObject({ status: 400, code: 'validation_error' });
       expect(body.errors).toEqual([{ pointer: '/limit', message: expect.any(String) }]);
       for (const internal of ['schemaPath', 'keyword', 'params', 'instancePath', 'FST_ERR']) {
         expect(response.body).not.toContain(internal);
@@ -403,13 +403,13 @@ describe('error-handler plugin', () => {
           url: `/developer/v1/widgets?limit=${limit}`,
         });
         expect(refused.statusCode).toBe(400);
-        expect(refused.json().code).toBe('VALIDATION_ERROR');
+        expect(refused.json().code).toBe('validation_error');
       }
 
       await app.close();
     });
 
-    it('never sends a framework code: a 415 answers UNSUPPORTED_MEDIA_TYPE', async () => {
+    it('never sends a framework code: a 415 answers unsupported_media_type', async () => {
       const app = await buildProblemApp();
 
       const response = await app.inject({
@@ -420,7 +420,7 @@ describe('error-handler plugin', () => {
       });
 
       expect(response.statusCode).toBe(415);
-      expect(response.json()).toMatchObject({ status: 415, code: 'UNSUPPORTED_MEDIA_TYPE' });
+      expect(response.json()).toMatchObject({ status: 415, code: 'unsupported_media_type' });
 
       await app.close();
     });
@@ -431,7 +431,7 @@ describe('error-handler plugin', () => {
       const response = await app.inject({ method: 'GET', url: '/admin/v1/fail' });
 
       expect(response.statusCode).toBe(500);
-      expect(response.json()).toMatchObject({ status: 500, code: 'INTERNAL_ERROR' });
+      expect(response.json()).toMatchObject({ status: 500, code: 'internal_error' });
       expect(response.json()).not.toHaveProperty('detail');
       expect(response.body).not.toContain('postgres://');
       expect(response.body).not.toContain('stack');
@@ -445,7 +445,7 @@ describe('error-handler plugin', () => {
       const response = await app.inject({ method: 'GET', url: '/admin/v1/conflict' });
 
       expect(response.statusCode).toBe(409);
-      expect(response.json().code).toBe('UNIQUE_CONSTRAINT_VIOLATION');
+      expect(response.json().code).toBe('unique_constraint_violation');
       expect(response.body).not.toContain('users_email_realm_key');
 
       await app.close();
@@ -457,7 +457,7 @@ describe('error-handler plugin', () => {
       const response = await app.inject({ method: 'GET', url: '/account/v1/token' });
 
       expect(response.statusCode).toBe(401);
-      expect(response.json().code).toBe('JWT_INVALID');
+      expect(response.json().code).toBe('jwt_invalid');
       expect(response.headers['www-authenticate']).toContain('error="invalid_token"');
 
       await app.close();
@@ -469,7 +469,7 @@ describe('error-handler plugin', () => {
       const response = await app.inject({ method: 'POST', url: '/account/v1/password' });
 
       expect(response.statusCode).toBe(422);
-      expect(response.json().code).toBe('WEAK_PASSWORD');
+      expect(response.json().code).toBe('weak_password');
       expect(response.json().errors).toEqual([
         { pointer: '/password', message: expect.any(String) },
         { pointer: '/password', message: expect.any(String) },
@@ -483,10 +483,10 @@ describe('error-handler plugin', () => {
 
       // An OAuth error class is not a published problem code: its status decides.
       const oauthClass = await app.inject({ method: 'GET', url: '/account/v1/oauth-class' });
-      expect(oauthClass.json()).toMatchObject({ status: 400, code: 'BAD_REQUEST' });
+      expect(oauthClass.json()).toMatchObject({ status: 400, code: 'bad_request' });
       // A published code thrown with another status is not sent with it.
       const odd = await app.inject({ method: 'GET', url: '/account/v1/odd-code' });
-      expect(odd.json()).toMatchObject({ status: 400, code: 'BAD_REQUEST' });
+      expect(odd.json()).toMatchObject({ status: 400, code: 'bad_request' });
 
       for (const response of [oauthClass, odd]) {
         const { code, status } = response.json() as {
@@ -504,7 +504,7 @@ describe('error-handler plugin', () => {
 
       const optIn = await app.inject({ method: 'GET', url: '/opt-in' });
       expect(optIn.headers['content-type']).toMatch(PROBLEM_CONTENT_TYPE);
-      expect(optIn.json()).toMatchObject({ status: 403, code: 'FORBIDDEN' });
+      expect(optIn.json()).toMatchObject({ status: 403, code: 'forbidden' });
 
       for (const url of ['/developer/v1/opt-out', '/legacy']) {
         const response = await app.inject({ method: 'GET', url });

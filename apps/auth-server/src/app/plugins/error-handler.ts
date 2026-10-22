@@ -255,7 +255,7 @@ function problemDocument(
     title: statusTitle(status),
     status,
     code: isValidation
-      ? 'VALIDATION_ERROR'
+      ? 'validation_error'
       : problemCodeFor((error as { code?: unknown }).code, status),
     trace_id: request.id,
   };

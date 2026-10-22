@@ -433,7 +433,7 @@ describe('assembled app — problem details on the API families (#506)', () => {
     expect(res.statusCode).toBe(400);
     expect(res.headers['content-type']).toMatch(PROBLEM);
     const body = res.json() as Record<string, unknown>;
-    expect(body).toMatchObject({ type: 'about:blank', status: 400, code: 'VALIDATION_ERROR' });
+    expect(body).toMatchObject({ type: 'about:blank', status: 400, code: 'validation_error' });
     expect(body['errors']).toEqual([{ pointer: '/limit', message: expect.any(String) }]);
     // `trace_id` is the request id the response header carries and the
     // request logger binds as `reqId` (`plugins/request-id.ts`).
@@ -445,7 +445,7 @@ describe('assembled app — problem details on the API families (#506)', () => {
 
     expect(res.statusCode).toBe(404);
     expect(res.headers['content-type']).toMatch(PROBLEM);
-    expect(res.json()).toMatchObject({ status: 404, code: 'NOT_FOUND' });
+    expect(res.json()).toMatchObject({ status: 404, code: 'not_found' });
     expect(typeof res.json().trace_id).toBe('string');
   });
 
