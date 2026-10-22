@@ -38,6 +38,7 @@ under us. Pin what moves.
 | `2026-08-31` | #401 — first pass, log created   | Rows established from citations already recorded in the ADRs and the code. **No new drift found; nothing re-pinned.**                                                                                                                                                                                                                                             |
 | `2026-09-26` | Second pass; every row re-opened | Every row re-verified against upstream. **OAuth 2.1 re-pinned `-15` → `-16`.** Five rows added. An `Expires` column added. The Token Status List verdict corrected from HAIP 1.0 §6.1 to §9.4. The `Re-check by` rule made explicit: the expiry date applies to `latest` Internet-Draft rows only. `deliberate` widened to cover a spec QAuth does not implement. |
 | `2026-10-11` | ADR-011 moves to Accepted        | Two rows re-verified, the ones ADR-011 rests on. **ID-JAG `-04` is still the newest revision** (IETF `id-archive` over rsync, because Datatracker answers 403 from this host, and the draft repository's release list). The MCP `ext-auth` EMA file is unchanged since `e5eef54`. No drift; nothing re-pinned.                                                    |
+| `2026-10-22` | #465 — rfc7523bis row falls due  | One row re-verified, the one due on 2026-10-30. **rfc7523bis `-11` is still not an RFC.** It is in the RFC Editor queue, where a draft does not expire, so ADR-014's "none" was right and this log's 2026-10-30 was wrong. The row takes the quarterly date. Seven more files that cite the draft joined its `Consumers`.                                         |
 
 The first pass deliberately re-stated what ADR-005, ADR-007, ADR-009 and ADR-011
 had already recorded, rather than re-investigating each source. Its
@@ -46,7 +47,8 @@ had already recorded, rather than re-investigating each source. Its
 unfalsifiable claim this log exists to stop.
 
 The 2026-09-26 pass re-opened every upstream source, so every `Last verified`
-in the table is now that date. Where a verdict still rests on an older check of
+in the table became that date. Later passes moved only the rows they
+re-checked. Where a verdict still rests on an older check of
 QAuth's own code, the cell says so and gives that check's date. The pass also
 added five rows, the draft expiries, the HAIP §9.4 quote and the method notes.
 Every number in it comes from a fresh fetch (see
@@ -108,7 +110,8 @@ this column cannot tell a derived pin from a latest-published one.
 **How `Re-check by` is set.** It is the earlier of two dates:
 
 1. the next quarterly pass, **2026-11-30**; and
-2. for a `latest` row pinned to an Internet-Draft, that revision's own expiry.
+2. for a `latest` row pinned to an Internet-Draft, that revision's own expiry,
+   if it has one. A draft in the RFC Editor queue has none.
 
 A `derived` or `deliberate` row pinned to a revision that has already expired
 keeps the quarterly date. The document that dictates the pin keeps it alive, so
@@ -116,7 +119,9 @@ the draft's expiry is not a reason to look sooner. That expiry is still recorded
 in `Expires`, so for those rows the two columns disagree on purpose. OpenID
 Foundation Finals, MCP revisions and the `ext-auth` branch do not expire: their
 `Expires` is `—` and they take the quarterly date. A `deliberate` row that pins
-no revision also shows `—`.
+no revision also shows `—`. An Internet-Draft in the RFC Editor queue does not
+expire either. Its `Expires` reads `none: RFC Ed Queue`, and it takes the
+quarterly date (see the rfc7523bis row note).
 
 `Expires` comes from Datatracker for a draft's current revision and from the
 archived text's `Expires:` line for a superseded one (see
@@ -132,7 +137,7 @@ not, because a pin nothing consumes is a pin nobody will notice going stale.
 | ID-JAG (`draft-ietf-oauth-identity-assertion-authz-grant`)              | `-04`                                          | 2026-11-22         | `latest`     | `2026-10-11`  | `2026-11-22` | Current; `-04` is the newest revision                                                                    | `apps/auth-server/src/app/helpers/id-jag.ts`, `apps/auth-server/src/app/helpers/id-jag-draft-pin.test.ts`, `docs/adr/011-enterprise-managed-authorization.md`, `apps/docs-site/src/invariants/spec-pins.test.ts`                                                                                                                                                                                                                                                                                                                                     |
 | CIMD (`draft-ietf-oauth-client-id-metadata-document`)                   | `-00` cited, `-02` current                     | expired 2026-04-11 | `deliberate` | `2026-09-26`  | `2026-11-30` | Reason holds: MCP 2026-07-28 still cites `-00`; code meets `-02` per ADR-007 (2026-08-06, not re-tested) | `apps/auth-server/src/app/helpers/cimd.ts`, `apps/auth-server/src/app/helpers/discovery.ts`, `libs/server/config/src/lib/schemas/auth.ts`, `apps/auth-server/src/app/helpers/ssrf-safe-fetch.ts`, `apps/docs-site/src/content/docs/integrate/mcp-quickstart.md`, `docs/adr/007-mcp-first-positioning.md`                                                                                                                                                                                                                                             |
 | OAuth 2.1 (`draft-ietf-oauth-v2-1`)                                     | `-16`                                          | 2027-03-07         | `latest`     | `2026-09-26`  | `2026-11-30` | Re-pinned from `-15`, which expired 2026-09-03; still not an RFC                                         | `docs/adr/007-mcp-first-positioning.md`, `.claude/skills/oauth-oidc/SKILL.md`, `.claude/skills/auth-oauth/reference.md`                                                                                                                                                                                                                                                                                                                                                                                                                              |
-| JWT client authentication update (`draft-ietf-oauth-rfc7523bis`)        | `-11`                                          | 2026-10-30         | `latest`     | `2026-09-26`  | `2026-10-30` | Current; in the RFC Editor queue, so the next change is an RFC number                                    | `.claude/agents/auth-specialist.md`, `docs/adr/014-agent-authority-tree.md`                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| JWT client authentication update (`draft-ietf-oauth-rfc7523bis`)        | `-11`                                          | none: RFC Ed Queue | `latest`     | `2026-10-22`  | `2026-11-30` | Current; still in the RFC Editor queue on 2026-10-22, not an RFC; the next change is an RFC number       | `.claude/agents/auth-specialist.md`, `apps/auth-server/src/app/helpers/client-assertion.ts`, `apps/auth-server/src/app/helpers/client-assertion.test.ts`, `apps/docs-site/src/content/docs/integrate/oauth-flow.md`, `docs/adr/011-enterprise-managed-authorization.md`, `docs/adr/014-agent-authority-tree.md`, `docs/adr/015-agent-tree-hardening.md`, `docs/adr/017-first-party-login.md`, `apps/docs-site/src/invariants/spec-pins.test.ts`                                                                                                      |
 | OAuth security BCP update (`draft-ietf-oauth-security-topics-update`)   | `-03`                                          | 2027-01-07         | `latest`     | `2026-09-26`  | `2026-11-30` | Current; `-03` is the newest revision                                                                    | `.claude/skills/auth-oauth/reference.md`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 | OpenID4VP                                                               | 1.0 Final (2025-07-09)                         | —                  | `latest`     | `2026-09-26`  | `2026-11-30` | Final; no newer published revision                                                                       | `libs/server/federation/src/oid4vp`, `libs/server/federation/src/profiles/verifier-profile.types.ts`, `apps/auth-server/src/app/routes/oid4vp`, `docs/adr/004-wallet-agnostic-federation.md`, `docs/adr/010-acr-assurance-mapping.md`, `docs/conformance/requirements/oid4vp-1_0.json`, `docs/conformance/specs.json`                                                                                                                                                                                                                                |
 | OpenID4VC HAIP                                                          | 1.0 Final (2025-12-24)                         | —                  | `latest`     | `2026-09-26`  | `2026-11-30` | Final; §9.4 still names the two derived pins above                                                       | `libs/server/federation/src/profiles/verifier-profiles.ts`, `docs/conformance/requirements/haip-1_0.json`, `docs/conformance/specs.json`, `docs/adr/004-wallet-agnostic-federation.md`, `docs/adr/010-acr-assurance-mapping.md`, `docs/adr/013-same-device-return-leg.md`, `docs/wallet-interop-manual-validation.md`                                                                                                                                                                                                                                |
@@ -165,11 +170,24 @@ not, because a pin nothing consumes is a pin nobody will notice going stale.
   id such as `ML-DSA-65-Ed25519`. `-04` also changed the ECDSA component
   encoding (new §4.5), which does not touch the Ed25519 pair. LAMPS `-19` (2026-04-21) is in the RFC Editor queue; once it is
   an RFC, the row goes, because published RFCs get no rows.
-- **rfc7523bis `-11` has two expiry dates upstream.** Datatracker says
-  2026-10-30: `-11` was posted on 2026-04-28, and an I-D expires 185 days after
-  posting. The archived text's header says 27 September 2026, because the
-  authors have not changed the date line since `-07` (posted 2026-03-26). This
-  log uses Datatracker. ADR-014's watch list took the header date.
+- **rfc7523bis `-11` does not expire while it is in the RFC Editor queue.**
+  Three sources gave three answers. Datatracker's `doc.json` said 2026-10-30,
+  because `-11` was posted on 2026-04-28 and an I-D expires 185 days after
+  posting. The draft's own header says 27 September 2026, because the authors
+  have not changed the date line since `-07` (dated 26 March 2026). ADR-014's
+  watch list says "none: in the RFC Editor queue", as it has since #419.
+  **ADR-014 is right, and this log was wrong** until the 2026-10-22 pass.
+  Datatracker's expiry job skips every active draft whose IESG state is
+  anything but "I-D Exists" or "Dead" (`expirable_drafts` in
+  `ietf/doc/expire.py`). `-11` is in "RFC Ed Queue", and the RFC Editor
+  received it on 2026-04-30. So the `doc.json` date is computed but
+  never applied, and the header date is stale text. Two observations confirm
+  it. On 2026-10-22, 25 days after its header date, `-11` was still in the
+  active Internet-Drafts directory. And 48 of the 138 active drafts in "RFC Ed
+  Queue" were past their 185-day mark and still active, the oldest dated
+  2022-03-04. So the row takes the quarterly date. It leaves the queue as an
+  RFC, and then the row goes, or it goes back to the working group with a new
+  IESG state, which the next pass sees.
 - **The `ext-auth` pin is a branch.** The repository publishes no tags and no
   releases, so the pin is `main` plus the last commit that touched
   `specification/stable/enterprise-managed-authorization.mdx`. The file's blob
@@ -361,7 +379,9 @@ change; none of them changes a pin.
   "`-18` is current". It is `-19`. The assertions themselves still hold. The
   `realToday()` comment also says this test goes red when ID-JAG `-04` expires
   on 2026-11-22. The earliest `Re-check by` is now rfc7523bis `-11`, on
-  2026-10-30, so the test goes red on 2026-10-31.
+  2026-10-30, so the test goes red on 2026-10-31. **Resolved on 2026-10-22:**
+  the rfc7523bis row now takes the quarterly date, so ID-JAG is the earliest
+  again and the comment is right.
 - `libs/server/config/src/lib/schemas/federation.ts` — cites "SD-JWT VC draft-13
   §3.2.2.2" for "`vct` is an arbitrary string". In `-13` that rule is §3.2.2.1,
   and it requires a Collision-Resistant Name.
@@ -390,7 +410,10 @@ change; none of them changes a pin.
   `README.md`, which now says MCP 2026-07-28.
 - `docs/adr/014-agent-authority-tree.md` — its watch list dates rfc7523bis
   `-11` from the stale text header (26 March, expiring 27 September 2026).
-  Datatracker says posted 2026-04-28, expiring 2026-10-30.
+  Datatracker says posted 2026-04-28, expiring 2026-10-30. **Resolved:** #419
+  changed the watch list to "`-11` · 28 Apr 2026" and "none: in the RFC Editor
+  queue". The 2026-10-22 pass found that ADR-014 is right and this log was
+  wrong (see the rfc7523bis row note).
 - `docs/adr/011-enterprise-managed-authorization.md`, "What EMA is" — "currently
   the only" STABLE extension carries no date. It is still true on 2026-09-26.
 - `apps/auth-server/src/app/helpers/id-jag.ts` and
@@ -412,8 +435,9 @@ A pass runs when **any** of these fires:
    **2026-11-30**.
 2. **A draft expiry.** A `latest` I-D row's `Re-check by` is the earlier of the
    next quarter and its pinned revision's expiry. ID-JAG `-04` expires
-   **2026-11-22**, a date recorded nowhere before this file existed;
-   rfc7523bis `-11` expires **2026-10-30**.
+   **2026-11-22**, a date recorded nowhere before this file existed.
+   rfc7523bis `-11` has no expiry while it is in the RFC Editor queue (see the
+   row notes).
 3. **An ADR moving Proposed → Accepted** re-verifies its own rows first. ADR-011
    did so on 2026-10-11 (see the ledger).
 4. **A dictating document changing.** A new HAIP version or a published HAIP
@@ -421,7 +445,7 @@ A pass runs when **any** of these fires:
    re-checks the CIMD and MCP rows.
 5. **A draft in the RFC Editor queue becoming an RFC.** Token Status List,
    rfc7523bis and the LAMPS composite draft were all in the RFC Editor queue on
-   2026-09-26.
+   2026-09-26, and still were on 2026-10-22.
 
 ---
 
@@ -460,6 +484,36 @@ curl -s 'https://datatracker.ietf.org/api/v1/doc/relateddocument/?source__name=d
 # -> 0
 ```
 
+**When Datatracker answers 403.** From some hosts it answers every URL, the
+API included, with a bot-challenge page.
+Datatracker also publishes its draft index over rsync, and that index answers
+the same questions. In `all_id2.txt`, field 2 is the status, field 3 the IESG
+state, field 4 the RFC number and field 5 the replacing draft. A row whose
+field 5 names the draft is a draft it replaces, so one scan covers `replaces`
+in both directions and `became_rfc` from the draft's side:
+
+```bash
+rsync -q rsync.ietf.org::internet-drafts/all_id2.txt .
+python3 -c 'import sys
+for line in open("all_id2.txt", encoding="utf-8"):
+    f = line.rstrip("\n").split("\t")
+    if not line.startswith("#") and (f[0].rsplit("-", 1)[0] == sys.argv[1] or f[5] == sys.argv[1]):
+        print(" | ".join(f[i] for i in (0, 2, 3, 4, 5, 6)))' draft-ietf-oauth-rfc7523bis
+# -> draft-ietf-oauth-rfc7523bis-11 | Active | RFC Ed Queue |  |  | 2026-04-28
+# -> draft-jones-oauth-rfc7523bis-00 | Replaced |  |  | draft-ietf-oauth-rfc7523bis | 2025-01-27
+```
+
+The RFC side of `became_rfc` is the RFC Editor's index, which names the draft
+each RFC came from:
+
+```bash
+curl -s https://www.rfc-editor.org/rfc-index.xml | grep -c '<draft>draft-ietf-oauth-rfc7523bis-'
+# -> 0
+```
+
+`rsync --list-only 'rsync.ietf.org::id-archive/<draft>-*.txt'` lists every
+revision, and `rsync -q` with the same path fetches the archived texts.
+
 **Controls applied before believing a result:**
 
 - **Positive control.** Before trusting "no change" on any row, run the same
@@ -477,6 +531,9 @@ curl -s 'https://datatracker.ietf.org/api/v1/doc/relateddocument/?source__name=d
   185 days after posting. The archived header's `Expires:` line is written by
   the authors. On 2026-09-26 they agree for every pinned revision except
   rfc7523bis `-11` (see the row notes). Where they disagree, Datatracker wins.
+  Neither date applies to a draft in an IESG state other than "I-D Exists" or
+  "Dead". Datatracker does not expire such a draft, so read the IESG state
+  before the date.
 - **Derived pins are checked at the dictating document.** The SD-JWT VC and
   Token Status List rows were verified by reading HAIP 1.0 §9.4 itself, not by
   asking Datatracker what is current, which answers a different question.
@@ -540,6 +597,43 @@ All fetched with `curl` (GitHub API calls with `gh api`) and parsed with
   of the EMA file, the file at `e5eef546`, tags, releases and open pull
   requests.
 
+### Sources read on 2026-10-22
+
+One row, rfc7523bis, re-checked for #465. Fetched with `curl`, `rsync` and
+`gh api`, and parsed with `python3` or `grep`. HTTP status in brackets.
+
+- **Datatracker [403]:** `doc.json`, the document API and the relations API,
+  each a bot-challenge page. The same facts were read from Datatracker's
+  rsync index instead (see [Method and controls](#method-and-controls)).
+- **`rsync.ietf.org::internet-drafts/all_id2.txt`**, generated 2026-10-21
+  18:09:44 PDT. rfc7523bis `-11`: `Active`, IESG state `RFC Ed Queue`, no RFC
+  number, not replaced, revision date 2026-04-28. It replaces
+  `draft-jones-oauth-rfc7523bis-00` and nothing else. 48 of the 138 active
+  drafts in `RFC Ed Queue` were past 185 days, the oldest
+  `draft-ietf-ecrit-similar-location-19` (2022-03-04).
+- **`rsync.ietf.org::id-archive/`:** rfc7523bis `-00` to `-11`, no `-12`. The
+  headers of `-07`, `-08`, `-10` and `-11` all say 26 March 2026, expiring 27
+  September 2026. `-11` §4 item (b) still makes the issuer identifier the sole
+  `aud` value for client authentication. `rsync.ietf.org::internet-drafts/`
+  (the active directory) still holds `-11`, and also
+  `draft-ietf-ecrit-similar-location-19` and
+  `draft-ietf-acme-integrations-17`, two queued drafts long past 185 days.
+- **`https://www.rfc-editor.org/rfc-index.xml` [200]**, current to RFC 10065
+  (October 2026). No RFC names `draft-ietf-oauth-rfc7523bis`.
+- **`https://www.rfc-editor.org/queue2.xml` [302]**, served by
+  `https://queue.rfc-editor.org/api/v1/queue.xml` [200]. rfc7523bis `-11`,
+  received 2026-04-30, assignment `blocked`, no normative reference listed.
+- **`ietf/doc/expire.py` in `ietf-tools/datatracker` [200, `gh api`]**, last
+  changed in `4a024d9` (2026-02-10). `expirable_drafts` excludes every IESG
+  state but `idexists` and `dead`; its comment reads "all IESG states except
+  I-D Exists and Dead block expiry".
+- **Positive controls, run on the same queries.** `draft-ietf-cose-dilithium`
+  shows RFC 9964 on both sides, and `draft-ietf-oauth-browser-based-apps` shows
+  RFC 10017. `draft-ietf-oauth-v2-1` shows `-16` (2026-09-03), the move the
+  last pass recorded. The same index also shows `draft-ietf-jose-pq-composite-sigs`
+  at `-06` (2026-10-20), a move since the last pass. That row was not
+  re-checked here: the quarterly pass re-checks its reason at `-06`.
+
 ---
 
 ## Residual uncertainty
@@ -568,9 +662,10 @@ All fetched with `curl` (GitHub API calls with `gh api`) and parsed with
 - **(f) Drafts in the RFC Editor queue.** On 2026-09-26, Token Status List,
   rfc7523bis and the LAMPS composite draft were frozen there, and the next
   change is an RFC number. Datatracker showed an expiry for each (LAMPS `-19`:
-  2026-10-23), though a draft in the queue does not usually lapse. The rule
-  still uses that date for
-  rfc7523bis. When Token Status List becomes an RFC, its row stays: HAIP 1.0
+  2026-10-23), but it does not apply that date to a draft in the queue (see the
+  rfc7523bis row note). So the queue gives no date to re-check by, and nothing
+  here signals the RFC number between passes. The quarterly pass and trigger 5
+  catch it. When Token Status List becomes an RFC, its row stays: HAIP 1.0
   §9.4 would still name `-14`.
 
 ---
@@ -581,14 +676,15 @@ Every date in the table, in order:
 
 | Date           | What falls due                                                                    |
 | -------------- | --------------------------------------------------------------------------------- |
-| **2026-10-30** | rfc7523bis `-11` expires (Datatracker). Its row's `Re-check by`.                  |
 | **2026-11-22** | ID-JAG `-04` expires. Its row's `Re-check by`.                                    |
-| **2026-11-30** | The quarterly pass. `Re-check by` for the other thirteen rows.                    |
+| **2026-11-30** | The quarterly pass. `Re-check by` for the other fourteen rows.                    |
 | 2027-01-07     | security-topics-update `-03` expires. Not a fuse: the quarterly pass comes first. |
 | 2027-03-07     | OAuth 2.1 `-16` expires. Not a fuse: the quarterly pass comes first.              |
 
 Past dates in the `Expires` column (SD-JWT VC `-13`, Token Status List `-14`,
 CIMD `-00`) are recorded, not due: those rows are `derived` or `deliberate`.
+rfc7523bis `-11` has no date here: a draft in the RFC Editor queue does not
+expire.
 
 Watch specifically for: a new HAIP version or a published HAIP errata set
 (either could move the SD-JWT VC and Token Status List pins together), an MCP
