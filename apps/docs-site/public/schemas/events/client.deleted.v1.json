@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://docs.qauth.dev/schemas/events/client.deleted.v1.json",
   "title": "urn:qauth:event:client.deleted:v1",
-  "description": "A client.deleted event, version 1. A developer deleted a client.",
+  "description": "The client.deleted event, version 1. A developer deleted a client.",
   "type": "object",
   "properties": {
     "id": {

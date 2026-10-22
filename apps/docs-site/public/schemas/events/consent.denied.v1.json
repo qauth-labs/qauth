@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://docs.qauth.dev/schemas/events/consent.denied.v1.json",
   "title": "urn:qauth:event:consent.denied:v1",
-  "description": "A consent.denied event, version 1. Consent was not given: the user declined, or the request did not match what the consent screen showed.",
+  "description": "The consent.denied event, version 1. Consent was not given: the user declined, or the request did not match what the consent screen showed.",
   "type": "object",
   "properties": {
     "id": {

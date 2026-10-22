@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://docs.qauth.dev/schemas/events/user.signed_out.v1.json",
   "title": "urn:qauth:event:user.signed_out:v1",
-  "description": "A user.signed_out event, version 1. A person signed out, and QAuth ended their sessions.",
+  "description": "The user.signed_out event, version 1. A person signed out, and QAuth ended their sessions.",
   "type": "object",
   "properties": {
     "id": {

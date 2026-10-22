@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://docs.qauth.dev/schemas/events/consent.revoked.v1.json",
   "title": "urn:qauth:event:consent.revoked:v1",
-  "description": "A consent.revoked event, version 1. A user withdrew a client's consent. QAuth revoked the refresh tokens the consent covered.",
+  "description": "The consent.revoked event, version 1. A user withdrew a client's consent. QAuth revoked the refresh tokens the consent covered.",
   "type": "object",
   "properties": {
     "id": {

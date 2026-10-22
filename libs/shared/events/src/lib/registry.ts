@@ -54,7 +54,7 @@ export function eventSchemaFor(definition: EventTypeDefinition) {
     definition.type,
     definition.category,
     definition.data,
-    `A ${definition.name} event, version ${definition.version}. ${definition.description}`
+    `The ${definition.name} event, version ${definition.version}. ${definition.description}`
   );
 }
 

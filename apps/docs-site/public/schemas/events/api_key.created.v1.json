@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://docs.qauth.dev/schemas/events/api_key.created.v1.json",
   "title": "urn:qauth:event:api_key.created:v1",
-  "description": "A api_key.created event, version 1. A developer created an API key for a client.",
+  "description": "The api_key.created event, version 1. A developer created an API key for a client.",
   "type": "object",
   "properties": {
     "id": {

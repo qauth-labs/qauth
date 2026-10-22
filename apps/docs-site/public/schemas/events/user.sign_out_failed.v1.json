@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://docs.qauth.dev/schemas/events/user.sign_out_failed.v1.json",
   "title": "urn:qauth:event:user.sign_out_failed:v1",
-  "description": "A user.sign_out_failed event, version 1. A sign-out request was refused or could not complete.",
+  "description": "The user.sign_out_failed event, version 1. A sign-out request was refused or could not complete.",
   "type": "object",
   "properties": {
     "id": {

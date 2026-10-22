@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://docs.qauth.dev/schemas/events/user.registration_failed.v1.json",
   "title": "urn:qauth:event:user.registration_failed:v1",
-  "description": "A user.registration_failed event, version 1. An account could not be created, for example because the address is in use.",
+  "description": "The user.registration_failed event, version 1. An account could not be created, for example because the address is in use.",
   "type": "object",
   "properties": {
     "id": {

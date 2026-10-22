@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://docs.qauth.dev/schemas/events/token.revocation_failed.v1.json",
   "title": "urn:qauth:event:token.revocation_failed:v1",
-  "description": "A token.revocation_failed event, version 1. The revocation endpoint refused a request, for example on failed client authentication.",
+  "description": "The token.revocation_failed event, version 1. The revocation endpoint refused a request, for example on failed client authentication.",
   "type": "object",
   "properties": {
     "id": {

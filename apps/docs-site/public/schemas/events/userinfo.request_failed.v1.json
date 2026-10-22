@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://docs.qauth.dev/schemas/events/userinfo.request_failed.v1.json",
   "title": "urn:qauth:event:userinfo.request_failed:v1",
-  "description": "A userinfo.request_failed event, version 1. The userinfo endpoint refused a request.",
+  "description": "The userinfo.request_failed event, version 1. The userinfo endpoint refused a request.",
   "type": "object",
   "properties": {
     "id": {

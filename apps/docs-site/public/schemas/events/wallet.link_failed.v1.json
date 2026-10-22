@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://docs.qauth.dev/schemas/events/wallet.link_failed.v1.json",
   "title": "urn:qauth:event:wallet.link_failed:v1",
-  "description": "A wallet.link_failed event, version 1. A wallet could not be linked, for example because it is linked to another account.",
+  "description": "The wallet.link_failed event, version 1. A wallet could not be linked, for example because it is linked to another account.",
   "type": "object",
   "properties": {
     "id": {

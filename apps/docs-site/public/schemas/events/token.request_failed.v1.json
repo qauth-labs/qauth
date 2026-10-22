@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://docs.qauth.dev/schemas/events/token.request_failed.v1.json",
   "title": "urn:qauth:event:token.request_failed:v1",
-  "description": "A token.request_failed event, version 1. The token endpoint refused a request: failed client authentication, an invalid or replayed grant, a scope or resource outside what was granted.",
+  "description": "The token.request_failed event, version 1. The token endpoint refused a request: failed client authentication, an invalid or replayed grant, a scope or resource outside what was granted.",
   "type": "object",
   "properties": {
     "id": {

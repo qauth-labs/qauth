@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://docs.qauth.dev/schemas/events/consent.granted.v1.json",
   "title": "urn:qauth:event:consent.granted:v1",
-  "description": "A consent.granted event, version 1. A user granted a client the scopes it asked for.",
+  "description": "The consent.granted event, version 1. A user granted a client the scopes it asked for.",
   "type": "object",
   "properties": {
     "id": {

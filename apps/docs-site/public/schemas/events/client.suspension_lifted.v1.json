@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://docs.qauth.dev/schemas/events/client.suspension_lifted.v1.json",
   "title": "urn:qauth:event:client.suspension_lifted:v1",
-  "description": "A client.suspension_lifted event, version 1. An operator lifted a client's suspension.",
+  "description": "The client.suspension_lifted event, version 1. An operator lifted a client's suspension.",
   "type": "object",
   "properties": {
     "id": {

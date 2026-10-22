@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://docs.qauth.dev/schemas/events/client.created.v1.json",
   "title": "urn:qauth:event:client.created:v1",
-  "description": "A client.created event, version 1. An OAuth client was created: by RFC 7591 dynamic registration, or by a developer through the developer API.",
+  "description": "The client.created event, version 1. An OAuth client was created: by RFC 7591 dynamic registration, or by a developer through the developer API.",
   "type": "object",
   "properties": {
     "id": {

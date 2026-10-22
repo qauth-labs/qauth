@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://docs.qauth.dev/schemas/events/user.registered.v1.json",
   "title": "urn:qauth:event:user.registered:v1",
-  "description": "A user.registered event, version 1. A person created an account.",
+  "description": "The user.registered event, version 1. A person created an account.",
   "type": "object",
   "properties": {
     "id": {

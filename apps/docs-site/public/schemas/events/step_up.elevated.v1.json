@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://docs.qauth.dev/schemas/events/step_up.elevated.v1.json",
   "title": "urn:qauth:event:step_up.elevated:v1",
-  "description": "A step_up.elevated event, version 1. After a fresh sign-in, a user granted a client dangerous scopes (ADR-007 §2).",
+  "description": "The step_up.elevated event, version 1. After a fresh sign-in, a user granted a client dangerous scopes (ADR-007 §2).",
   "type": "object",
   "properties": {
     "id": {

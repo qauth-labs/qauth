@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://docs.qauth.dev/schemas/events/token.issued.v1.json",
   "title": "urn:qauth:event:token.issued:v1",
-  "description": "A token.issued event, version 1. The token endpoint issued tokens: for an authorization code, a refresh, client credentials, a token exchange or a JWT bearer assertion.",
+  "description": "The token.issued event, version 1. The token endpoint issued tokens: for an authorization code, a refresh, client credentials, a token exchange or a JWT bearer assertion.",
   "type": "object",
   "properties": {
     "id": {

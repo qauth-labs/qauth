@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://docs.qauth.dev/schemas/events/authorization.completed.v1.json",
   "title": "urn:qauth:event:authorization.completed:v1",
-  "description": "A authorization.completed event, version 1. The authorization endpoint sent the client back with an authorization response that grants access.",
+  "description": "The authorization.completed event, version 1. The authorization endpoint sent the client back with an authorization response that grants access.",
   "type": "object",
   "properties": {
     "id": {
