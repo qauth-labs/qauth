@@ -95,10 +95,13 @@ requires the format to express.
 
 #### Domain layer
 
-- **Entities and fields.** Each field has a kind (text, identifier, enum, URI list, boolean, time
-  and so on) and a sensitivity. A `secret` field is never projected: no screen, response or tool
-  output may contain it.
-- **Edges.** Typed relations between entities, such as a client's realm or a consent's user.
+- **Entities and fields.** Each field is a JSON Schema 2020-12 schema (its type, format, enum and
+  the like) plus delurio's keywords: `references` names another entity's key, `unique` marks a
+  value that is unique, exactly or ignoring case, and `sensitivity` marks how far the value may
+  travel. An entity names its `key` and its `lifecycle`. A `secret` field is never projected: no
+  screen, response or tool output may contain it.
+- **Edges.** Typed relations between entities, such as a client's realm or a consent's user. A
+  field that holds another entity's key says so with `references`.
 - **Policies.** An actor, a subject and an optional condition, followed by what the actor may read,
   write and do. The actors are the three API families of
   [ADR-019](./019-deployment-topology-and-trust-boundaries.md) Decision 7: admin, account and
