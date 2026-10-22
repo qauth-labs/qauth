@@ -95,20 +95,25 @@ a reviewer sees everything that changed since the release.
 
 ## Registering a surface
 
-A new surface is one entry in `surfaces.json`, and nothing else. The event schemas, the Interaction
-API steps, the realm file schema and the documented configuration keys register this way.
+A new surface is one entry in `surfaces.json`, and nothing else. The event schemas register this
+way, one entry per file (#456), and the Interaction API steps, the realm file schema and the
+documented configuration keys will too.
 
 ```json
 {
-  "name": "events",
-  "description": "The payload schema of every event type (ADR-018 §5).",
+  "name": "event-user-signed-in-v1",
+  "description": "The urn:qauth:event:user.signed_in:v1 event: the envelope with that type's data (ADR-018 §5, #456).",
   "format": "json-schema",
-  "role": "output",
-  "generator": "pnpm exec nx run events:schema-export",
-  "path": "stable-surface/events.schema.json",
+  "role": "both",
+  "generator": "pnpm exec nx run shared-events:schema-export --skip-nx-cache",
+  "path": "apps/docs-site/public/schemas/events/user.signed_in.v1.json",
   "stability": "stable"
 }
 ```
+
+An event schema is `both`: QAuth emits the event, and the events it stored under an earlier
+release must still match the schema, so a new required member is a break and a new optional one
+is not. The tests of `libs/shared/events` fail when a schema file is missing from the registry.
 
 | Key                  | Meaning                                                                                                                     |
 | -------------------- | --------------------------------------------------------------------------------------------------------------------------- |
