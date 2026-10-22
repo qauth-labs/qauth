@@ -91,8 +91,8 @@
 > - A required challenge needs JavaScript on the hosted pages.
 >
 > **Amended 2026-10-22** (before any implementation): every step URN ends in a version,
-> `urn:qauth:ia:<name>:v1`, as ADR-018 §5 requires of every QAuth-defined identifier. Decisions 3, 8
-> and 12 and F1b are edited in place, wire examples included. No rule changed.
+> `urn:qauth:ia:<name>:v1`, as ADR-018 §5 requires of every QAuth-defined identifier. Decisions 3,
+> 8 and 12 and F1b are edited in place, wire examples included. No rule changed.
 
 ## Context
 
