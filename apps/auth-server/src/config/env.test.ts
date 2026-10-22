@@ -67,6 +67,7 @@ beforeEach(() => {
     CIMD_ALLOW_PRIVATE_ADDRESSES: undefined,
     ID_JAG_ALLOW_PRIVATE_ADDRESSES: undefined,
     DB_POOL_MAX: undefined,
+    WEBAUTHN_ENABLED: undefined,
   });
 });
 
@@ -259,6 +260,38 @@ describe('private-address switches are refused in production (#435)', () => {
     const mod = await import('./env');
 
     expect(mod.env[name]).toBe(true);
+  });
+});
+
+/**
+ * WEBAUTHN_ENABLED (ADR-017 phase F2b, #467). Until the change that completes
+ * F2b, the environment schema refuses the switch, so passkeys cannot be turned
+ * on before their ceremonies and abuse controls exist. That change removes the
+ * refusal and this block with it.
+ */
+describe('WEBAUTHN_ENABLED is refused at boot until F2b is complete (#467)', () => {
+  it('WEBAUTHN_ENABLED=true fails the boot, naming the variable and the way out', async () => {
+    setEnv({ NODE_ENV: 'development', WEBAUTHN_ENABLED: 'true' });
+
+    const boot = import('./env');
+    await expect(boot).rejects.toThrow('WEBAUTHN_ENABLED=true is not available yet');
+    await expect(boot).rejects.toThrow('Unset WEBAUTHN_ENABLED or set it to false');
+  });
+
+  it('unset or false boots with passkeys off, in production too', async () => {
+    setEnv({
+      NODE_ENV: 'production',
+      SESSION_COOKIE_SECRET: PROD_SECRET,
+      WEBAUTHN_ENABLED: undefined,
+    });
+    expect((await import('./env')).env.WEBAUTHN_ENABLED).toBe(false);
+
+    setEnv({
+      NODE_ENV: 'production',
+      SESSION_COOKIE_SECRET: PROD_SECRET,
+      WEBAUTHN_ENABLED: 'false',
+    });
+    expect((await import('./env')).env.WEBAUTHN_ENABLED).toBe(false);
   });
 });
 

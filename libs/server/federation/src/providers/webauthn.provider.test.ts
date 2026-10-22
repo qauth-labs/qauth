@@ -210,7 +210,7 @@ describe('createWebAuthnProvider', () => {
           rpId: 'auth.example.com',
           origins: ['https://auth.example.com'],
         })
-      ).rejects.toThrow('needs the account’s credentials');
+      ).rejects.toThrow("needs the account's credentials");
     });
 
     it('refuses an origin the RP ID does not cover, and accepts an Android app origin', async () => {

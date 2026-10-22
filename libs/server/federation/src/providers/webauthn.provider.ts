@@ -365,7 +365,7 @@ export function createWebAuthnProvider(deps: WebAuthnProviderDependencies): WebA
       const allow = descriptors(input.allowCredentials);
       if (input.purpose === 'second-factor' && allow.length === 0) {
         throw new Error(
-          'A second-factor WebAuthn ceremony needs the account’s credentials in allowCredentials'
+          "A second-factor WebAuthn ceremony needs the account's credentials in allowCredentials"
         );
       }
 
