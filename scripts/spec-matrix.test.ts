@@ -107,6 +107,12 @@ interface RunResult {
 function run(options: {
   rows?: Row[];
   reportBody?: unknown;
+  /**
+   * Further reports, each passed with its own `--vitest-report` after the
+   * first. Same conventions as `reportBody`: a string is written verbatim and
+   * `null` passes the argument without writing the file.
+   */
+  extraReports?: unknown[];
   specs?: unknown;
   omitReportArg?: boolean;
 }): RunResult {
@@ -133,6 +139,13 @@ function run(options: {
 
   const outDir = join(dir, 'out');
   const args = ['--conformance-dir', conformanceDir, '--out-dir', outDir, '--no-summary'];
+  (options.extraReports ?? []).forEach((body, index) => {
+    const path = join(dir, `report-${index + 2}.json`);
+    if (body !== null) {
+      writeFileSync(path, typeof body === 'string' ? body : JSON.stringify(body));
+    }
+    args.push('--vitest-report', path);
+  });
   if (!options.omitReportArg) args.unshift('--vitest-report', reportPath);
 
   const proc = spawnSync(process.execPath, [SCRIPT, ...args], {
@@ -216,6 +229,84 @@ describe('spec-matrix — fail-closed on the Vitest report', () => {
 
     expect(input.status).toBe(EXIT_INPUT);
     expect(gate.status).toBe(EXIT_GATE);
+  });
+});
+
+describe('spec-matrix — several reports (the unit and the wire suite, #450)', () => {
+  const unit = report([{ fullName: 'an uncited unit test' }]);
+
+  // The second report is the wire suite's. A wire job that wrote nothing, or
+  // half a file, must fail the gate exactly like a broken first report — never
+  // leave the matrix green on the unit report alone.
+  const broken: Array<[string, unknown]> = [
+    ['no file at the given path', null],
+    ['an empty file', ''],
+    ['whitespace only', '  \n '],
+    ['a file that is not JSON', '{"testResults": ['],
+    ['an object with no testResults', {}],
+    ['testResults present but empty', { testResults: [] }],
+    ['suites present but zero assertions', { testResults: [{ name: 'w', assertionResults: [] }] }],
+  ];
+
+  it.each(broken)('exits 2 and renders nothing when the second report is %s', (_label, body) => {
+    const result = run({ reportBody: report([{ fullName: CITING }]), extraReports: [body] });
+
+    expect(result.status).toBe(EXIT_INPUT);
+    expect(result.rendered).toBe(false);
+    expect(result.stderr).toMatch(/spec-matrix:/);
+  });
+
+  it('exits 2 when the first report is broken and the second is fine', () => {
+    const result = run({ reportBody: '', extraReports: [report([{ fullName: CITING }])] });
+
+    expect(result.status).toBe(EXIT_INPUT);
+    expect(result.rendered).toBe(false);
+  });
+
+  it('counts a citing test in the second report as evidence for the row', () => {
+    const wire = report([{ fullName: CITING }]);
+    const result = run({ reportBody: unit, extraReports: [wire] });
+
+    expect(result.status).toBe(EXIT_OK);
+    expect(readFileSync(join(result.outDir, 'matrix.md'), 'utf8')).toContain(CITING);
+    expect(result.stdout).toContain('2 assertions read from');
+    expect(result.stdout).toMatch(/report\.json \(1\) and .*report-2\.json \(1\)/);
+  });
+
+  it('still fails the row when neither report proves it', () => {
+    const result = run({ reportBody: unit, extraReports: [report([{ fullName: 'uncited' }])] });
+
+    expect(result.status).toBe(EXIT_GATE);
+    expect(result.stderr).toContain('unproven: rfc9999 §2');
+  });
+
+  it('names every report in the rendered matrix', () => {
+    const result = run({ reportBody: unit, extraReports: [report([{ fullName: CITING }])] });
+
+    const markdown = readFileSync(join(result.outDir, 'matrix.md'), 'utf8');
+    expect(markdown).toMatch(
+      /Vitest reports: `.*report\.json` \(1 assertions\), `.*report-2\.json`/
+    );
+    const json = JSON.parse(readFileSync(join(result.outDir, 'matrix.json'), 'utf8'));
+    expect(json.meta.reports).toHaveLength(2);
+    expect(json.meta.assertionCount).toBe(2);
+  });
+
+  it('exits 2 when the same report is given twice, which would count it twice', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'spec-matrix-'));
+    workspaces.push(dir);
+    const path = join(dir, 'report.json');
+    writeFileSync(path, JSON.stringify(report([{ fullName: CITING }])));
+
+    // `--no-summary` keeps an ambient job-summary path from being written to.
+    const proc = spawnSync(
+      process.execPath,
+      [SCRIPT, '--vitest-report', path, '--vitest-report', path, '--no-summary'],
+      { encoding: 'utf8' }
+    );
+
+    expect(proc.status).toBe(EXIT_INPUT);
+    expect(proc.stderr).toContain('is given more than once');
   });
 });
 

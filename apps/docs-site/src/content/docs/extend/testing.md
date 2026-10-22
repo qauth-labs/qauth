@@ -1,13 +1,13 @@
 ---
 title: Testing
-description: The four tiers — unit, testcontainers integration, the repo-wide coverage gate, and the documentation invariants — what each can and cannot catch, how to run them, and the two caching lessons this repo learned the hard way.
+description: The five tiers — unit, testcontainers integration, the repo-wide coverage gate, the documentation invariants, and the black-box wire suite — what each can and cannot catch, how to run them, and the two caching lessons this repo learned the hard way.
 sidebar:
   order: 4
-lastVerified: '2026-08-10'
+lastVerified: '2026-10-20'
 ---
 
-QAuth has three test tiers plus a fourth that guards this documentation site. Knowing what each
-one **cannot** catch matters more than knowing what it can, because the gaps are where the two
+QAuth has three test tiers, a fourth that guards this documentation site, and a fifth that tests
+the built server from outside, over HTTP. Knowing what each one **cannot** catch matters more than knowing what it can, because the gaps are where the two
 worst incidents in this repo's history came from: a suite that passed while running zero tests,
 and a schema change no unit test could see.
 
@@ -17,6 +17,7 @@ and a schema change no unit test could see.
 | Integration          | `pnpm exec nx run infra-db:test-integration` | the `integration` job   | Real Postgres DDL, migrations, repositories       |
 | Repo-wide coverage   | `pnpm exec vitest run --coverage`            | a separate step         | Coverage regression across the whole fast suite   |
 | Documentation guards | `pnpm exec nx test docs-site`                | part of the unit tier   | Drift between this site and the tree it describes |
+| Wire suite           | `pnpm nx run wire-suite:run`                 | the `wire-suite` job    | What a client sees over HTTP from the built image |
 
 ## Tier 1 — unit
 
@@ -52,6 +53,9 @@ or a valid environment — but be clear about what it therefore does **not** ver
   `schema` is not applied to the payload the test passes in.
 - **Nothing about the real environment schema.** `vi.mock('../../../config/env')` replaces it with
   an object literal, so a new required variable does not fail these tests.
+
+The [wire suite](#tier-5--the-wire-suite) is the one tier that sees none of these stand-ins: it
+talks to the image CI builds, over HTTP.
 
 There are two stronger patterns in the tree, and the difference between them is worth knowing:
 
@@ -100,7 +104,7 @@ comment at `.github/workflows/ci.yml:56` states the reasoning better than a para
 > re-narrowed column would sail through a fully green CI.
 
 Both exclusions it names are real and worth seeing for yourself: `vitest.config.ts:23` keeps these
-suites out of the fast run, and `vitest.config.ts:35` keeps them out of the coverage report. A
+suites out of the fast run, and `vitest.config.ts:62` keeps them out of the coverage report. A
 migration that never got committed, or a column quietly re-narrowed by a schema edit, produces no
 failure anywhere else.
 
@@ -122,7 +126,7 @@ migration, or repository change runs it and a docs-only pull request pays nothin
 pnpm exec vitest run --coverage
 ```
 
-Thresholds live in the root config at `vitest.config.ts:42` — statements 70, branches 55,
+Thresholds live in the root config at `vitest.config.ts:69` — statements 70, branches 55,
 functions 65, lines 70 — and the comment there is explicit that they sit comfortably below today's
 numbers so the gate passes now and fails on a real regression, to be ratcheted up as the
 container-backed suite grows.
@@ -236,6 +240,37 @@ not the guard. If you genuinely believe the guard is wrong rather than your page
 raising as its own issue — bending content to satisfy a guard has already produced one real defect
 in this site's history, and a guard nobody trusts gets deleted.
 
+## Tier 5 — the wire suite
+
+```bash
+pnpm nx run wire-suite:run    # against a running server; setup in apps/wire-suite/README.md
+```
+
+`apps/wire-suite` talks to a **running** QAuth over HTTP and nothing else. It guards the
+wire-level stability promise of [ADR-018 §5](/reference/records/adr/018-1-0-scope-and-stability/):
+the contract is what a client sees on the wire, whatever the server is written in.
+
+The `wire-suite` CI job builds the auth-server and migration-runner
+images from the pull request, starts them with Postgres 18 and Redis 7, seeds the clients in
+`apps/wire-suite/seed/clients.json`, and runs the suite with the rate limits raised. It is not
+affected-scoped, for the same reason as the image smoke test: almost any change can break the
+image. Its JSON report joins the unit suite's in the spec-conformance matrix, so a wire test that
+cites a registered spec section counts as evidence for that row.
+
+Three rules keep it honest:
+
+- **It shares no code with the server.** `nx lint` fails an import of any workspace project into
+  the suite, and an import of the suite from anywhere (`scope:wire-suite` in `eslint.config.mjs`).
+  A helper used on both sides could carry the same encoding bug and hide it.
+- **It refuses to start without `QAUTH_WIRE_ALLOW_WRITES=1`**, because it registers users and uses
+  clients on the server it targets.
+- **Its `*.wire.test.ts` files never run in the fast tier.** The root config excludes them; only
+  `apps/wire-suite/vitest.wire.config.ts` includes them. The suite's own unit tests — the
+  configuration guard and the helpers — run with Tier 1.
+
+What it cannot catch: anything a client cannot observe. It sees responses, not the database or
+the logs, so a write that should not have happened, or a secret in a log line, is outside it.
+
 ## Before you open a pull request
 
 ```bash
@@ -243,6 +278,7 @@ pnpm exec nx affected -t lint typecheck test build
 pnpm exec vitest run --coverage
 pnpm exec nx run infra-db:test-integration      # if you touched schema, migrations, or repositories
 pnpm exec nx run auth-server:test-integration   # if you touched wallet federation or credential status
+pnpm nx run wire-suite:run                      # against a running server (apps/wire-suite/README.md)
 ```
 
 If you changed anything under `apps/docs-site`, add:

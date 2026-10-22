@@ -9,7 +9,9 @@
  *
  *   - `docs/conformance/specs.json`               — the spec alias registry
  *   - `docs/conformance/requirements/<id>.json`   — the requirement rows
- *   - a Vitest JSON report                        — the run that proves them
+ *   - one or more Vitest JSON reports             — the runs that prove them:
+ *     the in-repo unit suite and the black-box wire suite (#450), which
+ *     tests the built server over HTTP
  *
  * and writes `matrix.md` (for a human or an OIDF certification reviewer),
  * `matrix.json` (for machines) and a GitHub job summary.
@@ -38,8 +40,14 @@
  * `fullName` must ALSO match before it counts as proof of that row, so the
  * Evidence column names a test that really proves the sentence beside it.
  *
+ * Every report given is read and validated on its own, and a missing, empty
+ * or shape-changed one fails the run with exit 2 even when the others are
+ * fine: a wire report that silently dropped out would otherwise leave the
+ * matrix green on the unit suite alone.
+ *
  * Usage:
- *   node scripts/spec-matrix.mjs --vitest-report dist/vitest/unit-report.json
+ *   node scripts/spec-matrix.mjs --vitest-report dist/vitest-report.json \
+ *     --vitest-report dist/wire-report.json
  */
 
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
@@ -123,10 +131,11 @@ class Finding {
 // Arguments
 // ---------------------------------------------------------------------------
 
-const USAGE = `Usage: node scripts/spec-matrix.mjs --vitest-report <path> [options]
+const USAGE = `Usage: node scripts/spec-matrix.mjs --vitest-report <path> [--vitest-report <path> ...] [options]
 
 Options:
-  --vitest-report <path>   Vitest JSON report to join against (required)
+  --vitest-report <path>   Vitest JSON report to join against (required; repeat
+                           it to join several, e.g. the unit and wire suites)
   --conformance-dir <dir>  default: docs/conformance
   --out-dir <dir>          default: dist/spec-matrix
   --summary <path>         Markdown job summary sink
@@ -137,7 +146,7 @@ Options:
 
 function parseArgs(argv) {
   const opts = {
-    vitestReport: null,
+    vitestReports: [],
     conformanceDir: join(REPO_ROOT, 'docs', 'conformance'),
     outDir: join(REPO_ROOT, 'dist', 'spec-matrix'),
     summary: process.env.GITHUB_STEP_SUMMARY || null,
@@ -152,7 +161,7 @@ function parseArgs(argv) {
     };
     switch (arg) {
       case '--vitest-report':
-        opts.vitestReport = next();
+        opts.vitestReports.push(resolve(next()));
         break;
       case '--conformance-dir':
         opts.conformanceDir = resolve(next());
@@ -174,10 +183,14 @@ function parseArgs(argv) {
         throw new InputError(`unknown argument: ${arg}`);
     }
   }
-  if (!opts.help && !opts.vitestReport) {
+  if (!opts.help && opts.vitestReports.length === 0) {
     throw new InputError('--vitest-report is required');
   }
-  if (opts.vitestReport) opts.vitestReport = resolve(opts.vitestReport);
+  // The same report twice would count every assertion twice.
+  const duplicate = opts.vitestReports.find((path, i) => opts.vitestReports.indexOf(path) !== i);
+  if (duplicate) {
+    throw new InputError(`--vitest-report ${repoPath(duplicate)} is given more than once`);
+  }
   return opts;
 }
 
@@ -702,7 +715,10 @@ function renderMarkdown(matrix, meta) {
   );
   out.push('');
   out.push(`- Generated: ${meta.generatedAt}`);
-  out.push(`- Vitest report: \`${meta.report}\` (${meta.assertionCount} assertions)`);
+  out.push(
+    `- Vitest report${meta.reports.length === 1 ? '' : 's'}: ` +
+      meta.reports.map((r) => `\`${r.path}\` (${r.assertionCount} assertions)`).join(', ')
+  );
   out.push(
     `- Joinable corpus: **${meta.citingAssertionCount}** of those assertions ` +
       `(${((meta.citingAssertionCount / meta.assertionCount) * 100).toFixed(1)}%) cite a ` +
@@ -850,11 +866,18 @@ function main() {
   }
 
   let specs;
-  let assertions;
+  const assertions = [];
+  const reports = [];
   try {
     specs = loadRegistry(opts.conformanceDir);
     loadRequirements(opts.conformanceDir, specs);
-    assertions = loadReport(opts.vitestReport);
+    // Each report is validated on its own: one good report must not carry a
+    // missing or empty one through the gate.
+    for (const path of opts.vitestReports) {
+      const loaded = loadReport(path);
+      reports.push({ path: repoPath(path), assertionCount: loaded.length });
+      assertions.push(...loaded);
+    }
   } catch (err) {
     if (!(err instanceof InputError)) throw err;
     process.stderr.write(`spec-matrix: ${err.message}\n`);
@@ -867,7 +890,7 @@ function main() {
 
   const meta = {
     generatedAt: new Date().toISOString(),
-    report: repoPath(opts.vitestReport),
+    reports,
     assertionCount: assertions.length,
     citingAssertionCount: citing.assertions,
     citingFileCount: citing.files,
@@ -903,7 +926,8 @@ function main() {
   process.stdout.write(
     `spec-matrix: ${counts.total} rows across ${rendered.length} specs — ` +
       `${counts.covered} covered, ${counts.manual} manual, ${counts.waived} waived, ` +
-      `${counts['n/a']} n/a; ${assertions.length} assertions read from ${meta.report}, ` +
+      `${counts['n/a']} n/a; ${assertions.length} assertions read from ` +
+      `${reports.map((r) => `${r.path} (${r.assertionCount})`).join(' and ')}, ` +
       `${meta.citingAssertionCount} of them citing a registered spec across ` +
       `${meta.citingFileCount} file(s)\n`
   );

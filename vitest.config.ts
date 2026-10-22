@@ -21,6 +21,10 @@ export default defineConfig({
       // fast unit run so CI needs no Postgres/Redis; run it via the dedicated
       // `test-integration` target instead.
       '**/*.integration.test.ts',
+      // The black-box wire suite (#450) talks to a RUNNING server over HTTP,
+      // so it cannot run here. `apps/wire-suite/vitest.wire.config.ts` runs it,
+      // through the `wire-suite:run` target and the `wire-suite` CI job.
+      '**/*.wire.test.ts',
     ],
     server: {
       deps: {
