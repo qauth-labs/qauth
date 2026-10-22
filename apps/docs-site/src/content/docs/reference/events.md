@@ -101,9 +101,9 @@ These rules hold for every event's `data`. They were written for the audit log
    value and never as a plain hash.
 
 A scanner enforces the rules. The registry's tests fail when a type's schema declares a field
-named like a secret, or like personal data the type has not declared. `parseEvent`, which checks
-an event before it is stored or sent, applies them again: a field named like a secret, or a value
-shaped like a token or a key, refuses the event. The scanner reads names, so a field that holds an
+named like a secret, or like personal data the type has not declared. `parseEvent`, the check a
+single event passes before it is stored or sent, applies them again: a field named like a secret,
+or a value shaped like a token or a key, refuses the event. The scanner reads names, so a field that holds an
 id, a type or a count of such a thing passes when its name ends in `Id`, `Type` or `Count`
 (`apiKeyId`, `issuedTokenType`).
 

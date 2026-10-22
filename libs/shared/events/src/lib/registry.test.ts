@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, expectTypeOf, it } from 'vitest';
 import { z } from 'zod';
 
 import { defineEventType, type EventTypeDefinition, RELEASE_TAG_PATTERN } from './definition';
@@ -8,6 +8,7 @@ import { EVENT_TYPE_PATTERN } from './identifier';
 import { dataJsonSchema } from './json-schema';
 import {
   EVENT_TYPES,
+  type EventDataOf,
   EventValidationError,
   getEventType,
   isRegisteredEventType,
@@ -52,6 +53,15 @@ describe('the event type registry', () => {
   it('registers each type once', () => {
     const types = EVENT_TYPES.map((definition) => definition.type);
     expect(new Set(types).size).toBe(types.length);
+  });
+
+  it('types each registered identifier and its data', () => {
+    expectTypeOf<EventDataOf<'urn:qauth:event:user.signed_in:v1'>>().toEqualTypeOf<{
+      method: 'password' | 'wallet';
+      verifierProfile?: string | undefined;
+    }>();
+    // @ts-expect-error an identifier the registry does not hold
+    expectTypeOf<EventDataOf<'urn:qauth:event:user.teleported:v1'>>().toBeObject();
   });
 
   it('looks types up by identifier', () => {
