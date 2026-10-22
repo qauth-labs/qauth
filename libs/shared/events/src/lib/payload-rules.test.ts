@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
-import { classifyFieldName, fieldNameWords, scanJsonSchema, scanPayload } from './payload-rules';
+import {
+  classifyFieldName,
+  fieldNameWords,
+  scanJsonSchema,
+  scanPayload,
+  scanValues,
+} from './payload-rules';
 
 describe('fieldNameWords', () => {
   it.each([
@@ -56,6 +62,20 @@ describe('the payload scanner', () => {
     'accesstoken',
     'clientsecret',
     'passwordhash',
+    'jwt',
+    'idJwt',
+    'sdJwt',
+    'jwk',
+    'privateJwk',
+    'credential',
+    'credentials',
+    'presentation',
+    'bearer',
+    'mfaSeed',
+    'dpopProof',
+    'apikey',
+    'privatekey',
+    'signingkey',
   ])('refuses a field named %s', (name) => {
     expect(classifyFieldName(name)).toBe('secret_field');
     expect(scanPayload({ [name]: 'x' })).toEqual([
@@ -82,21 +102,34 @@ describe('the payload scanner', () => {
     'scopes',
     'typeHint',
     'encoded',
+    'credentialId',
+    'presentationCount',
+    'idJagId',
   ])('allows a field named %s', (name) => {
     expect(classifyFieldName(name)).toBeNull();
     expect(scanPayload({ [name]: 'x' })).toEqual([]);
   });
 
-  it.each(['email', 'emailAddress', 'ipAddress', 'ip', 'phone', 'name', 'displayName', 'username'])(
-    'refuses personal data named %s unless the type declares it',
-    (name) => {
-      expect(classifyFieldName(name)).toBe('personal_data_field');
-      expect(classifyFieldName(name, { personalData: [name] })).toBeNull();
-    }
-  );
+  it.each([
+    'email',
+    'emailAddress',
+    'ipAddress',
+    'ip',
+    'phone',
+    'name',
+    'displayName',
+    'username',
+    'identifier',
+    'assertedIdentifier',
+    'loginHint',
+  ])('refuses personal data named %s unless the type declares it', (name) => {
+    expect(classifyFieldName(name)).toBe('personal_data_field');
+    expect(classifyFieldName(name, { personalData: [name] })).toBeNull();
+  });
 
   it('allows an HMAC or an id of personal data', () => {
     expect(classifyFieldName('emailHmac')).toBeNull();
+    expect(classifyFieldName('identifierHmac')).toBeNull();
     expect(classifyFieldName('addressId')).toBeNull();
   });
 
@@ -116,6 +149,9 @@ describe('the payload scanner', () => {
     ['a JWT', 'eyJhbGciOiJFUzI1NiJ9.eyJzdWIiOiJ4In0.c2lnbmF0dXJl'],
     ['a JWE', 'eyJhbGciOiJSU0EtT0FFUCJ9.a2V5.aXY.Y2lwaGVy.dGFn'],
     ['a PEM key', '-----BEGIN PRIVATE KEY-----\nMIIB...\n-----END PRIVATE KEY-----'],
+    ['an SD-JWT', 'eyJhbGciOiJFUzI1NiJ9.eyJzdWIiOiJ4In0.c2ln~WyJzYWx0IiwiYSIsMV0~'],
+    ['a bearer header', 'Bearer eyJhbGciOiJFUzI1NiJ9.eyJzdWIiOiJ4In0.c2lnbmF0dXJl'],
+    ['a JWT with whitespace around it', ' eyJhbGciOiJFUzI1NiJ9.eyJzdWIiOiJ4In0.c2ln\n'],
   ])('refuses a value shaped like %s, wherever it sits', (_label, value) => {
     expect(scanPayload({ reason: value })).toEqual([
       expect.objectContaining({ path: '/reason', rule: 'secret_value' }),
@@ -130,7 +166,29 @@ describe('the payload scanner', () => {
   });
 });
 
+describe('the value-only scanner', () => {
+  it('reads values and ignores names', () => {
+    expect(scanValues({ ip: '203.0.113.7', password: 'x' })).toEqual([]);
+    expect(scanValues({ actor: { id: 'eyJhbGciOiJFUzI1NiJ9.eyJzdWIiOiJ4In0.c2ln' } })).toEqual([
+      expect.objectContaining({ path: '/actor/id', rule: 'secret_value' }),
+    ]);
+  });
+});
+
 describe('the schema scanner', () => {
+  it('reads the fixed keys of a record', () => {
+    const schema = {
+      properties: {
+        byKind: { type: 'object', propertyNames: { enum: ['ok', 'accessToken'] } },
+        single: { propertyNames: { const: 'clientSecret' } },
+      },
+    };
+    expect(scanJsonSchema(schema).map((f) => f.message)).toEqual([
+      expect.stringContaining('"accessToken"'),
+      expect.stringContaining('"clientSecret"'),
+    ]);
+  });
+
   it('finds a declared secret field at any depth', () => {
     const schema = {
       type: 'object',

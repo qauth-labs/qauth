@@ -140,7 +140,7 @@ function typeSection(definition: EventTypeDefinition): string {
   const facts = [
     `- Identifier: ${code(definition.type)}`,
     `- Category: ${code(definition.category)} · Severity: ${code(definition.severity)} · Since: ${definition.since}`,
-    `- Subject: ${definition.subject ? code(definition.subject) : 'none'}`,
+    `- Subject: ${definition.subject ? `${code(definition.subject)}, when known` : 'none: the event never carries one'}`,
     `- Schema: [${eventSchemaFile(definition)}](${SCHEMA_PATH}${eventSchemaFile(definition)})`,
   ];
   if (definition.deprecated) {

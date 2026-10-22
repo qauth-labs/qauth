@@ -91,6 +91,19 @@ export const clientSchema = z
   })
   .describe('The OAuth client the request came through.');
 
+/** The longest `traceId` and `userAgent` an event carries; {@link eventRequest} cuts to them. */
+export const TRACE_ID_MAX = 128;
+export const USER_AGENT_MAX = 1024;
+
+/**
+ * Whether an address matches the patterns the published schema carries. Zod's
+ * own IPv6 check also accepts forms those patterns refuse, such as the
+ * IPv4-mapped `::ffff:203.0.113.5`, and an event must validate against the
+ * schema QAuth publishes.
+ */
+const matchesPublishedIpPattern = (value: string) =>
+  z.regexes.ipv4.test(value) || z.regexes.ipv6.test(value);
+
 /**
  * The HTTP request that caused the event. `ip` and `userAgent` are personal
  * data: they are present on events that a person's own request caused, where a
@@ -101,22 +114,60 @@ export const requestSchema = z
     traceId: z
       .string()
       .min(1)
-      .max(128)
+      .max(TRACE_ID_MAX)
       .optional()
       .describe(
         'The id under which QAuth logged the request: the `trace_id` of a problem document from the same request.'
       ),
     ip: z
       .union([z.ipv4(), z.ipv6()])
+      .refine(matchesPublishedIpPattern, 'not an address in the published form')
       .optional()
-      .describe("The end user's IP address, as QAuth derived it from the request."),
+      .describe(
+        "The end user's IP address, as QAuth derived it from the request. An IPv4-mapped IPv6 address is written in its IPv4 form."
+      ),
     userAgent: z
       .string()
-      .max(1024)
+      .max(USER_AGENT_MAX)
       .optional()
       .describe('The `User-Agent` header, cut to 1024 characters.'),
   })
   .describe('The HTTP request that caused the event.');
+
+export type EventRequest = z.infer<typeof requestSchema>;
+
+/** Cut a string to `max` UTF-16 units without splitting a surrogate pair. */
+function cut(value: string, max: number): string {
+  if (value.length <= max) return value;
+  const end = /[\uD800-\uDBFF]/.test(value.charAt(max - 1)) ? max - 1 : max;
+  return value.slice(0, end);
+}
+
+/**
+ * The `request` member from what a request handler has. The client controls
+ * all three values, so this sizes them rather than let an over-long header or
+ * a malformed forwarded address make the event fail its schema and drop it:
+ * `traceId` and `userAgent` are cut to their limits, an IPv4-mapped address
+ * is written in its IPv4 form, and an address in any other unpublished form is
+ * left out.
+ *
+ * @returns the member, or `undefined` when none of the three is present
+ */
+export function eventRequest(input: {
+  readonly traceId?: string | null;
+  readonly ip?: string | null;
+  readonly userAgent?: string | null;
+}): EventRequest | undefined {
+  const request: { traceId?: string; ip?: string; userAgent?: string } = {};
+  if (input.traceId) request.traceId = cut(input.traceId, TRACE_ID_MAX);
+  if (input.ip) {
+    const mapped = /^::ffff:(\d{1,3}(?:\.\d{1,3}){3})$/i.exec(input.ip);
+    const ip = mapped ? mapped[1] : input.ip;
+    if (requestSchema.shape.ip.safeParse(ip).success) request.ip = ip;
+  }
+  if (input.userAgent) request.userAgent = cut(input.userAgent, USER_AGENT_MAX);
+  return Object.keys(request).length > 0 ? request : undefined;
+}
 
 /** The descriptions of the members a per-type schema fixes. */
 export const TYPE_DESCRIPTION =

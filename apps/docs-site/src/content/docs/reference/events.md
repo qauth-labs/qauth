@@ -71,7 +71,7 @@ others mean the same for every type. A member that does not apply is absent, nev
 | `client.id`             | string                                                              | yes      | The client's `client_id`.                                                                                                                                                                                                                                             |
 | `request`               | object                                                              | no       | The HTTP request that caused the event.                                                                                                                                                                                                                               |
 | `request.traceId`       | string                                                              | no       | The id under which QAuth logged the request: the `trace_id` of a problem document from the same request.                                                                                                                                                              |
-| `request.ip`            | IPv4 address or IPv6 address                                        | no       | The end user's IP address, as QAuth derived it from the request.                                                                                                                                                                                                      |
+| `request.ip`            | IPv4 address or IPv6 address                                        | no       | The end user's IP address, as QAuth derived it from the request. An IPv4-mapped IPv6 address is written in its IPv4 form.                                                                                                                                             |
 | `request.userAgent`     | string                                                              | no       | The `User-Agent` header, cut to 1024 characters.                                                                                                                                                                                                                      |
 | `data`                  | object                                                              | yes      | The type's own payload. Its schema is the type's.                                                                                                                                                                                                                     |
 
@@ -183,7 +183,7 @@ A person signed in: the credential checked out and QAuth started a browser sessi
 
 - Identifier: `urn:qauth:event:user.signed_in:v1`
 - Category: `user` · Severity: `info` · Since: v0.2.0
-- Subject: `user`
+- Subject: `user`, when known
 - Schema: [user.signed_in.v1.json](/schemas/events/user.signed_in.v1.json)
 
 | Member            | Type                                          | Required | Meaning                                                                                                                                    |
@@ -197,7 +197,7 @@ A sign-in was refused: an unknown identifier, a wrong credential, a locked or di
 
 - Identifier: `urn:qauth:event:user.sign_in_failed:v1`
 - Category: `user` · Severity: `warning` · Since: v0.2.0
-- Subject: `user`
+- Subject: `user`, when known
 - Schema: [user.sign_in_failed.v1.json](/schemas/events/user.sign_in_failed.v1.json)
 
 | Member            | Type                                          | Required | Meaning                                                                                                                                                                                                                        |
@@ -213,7 +213,7 @@ A person signed out, and QAuth ended their sessions.
 
 - Identifier: `urn:qauth:event:user.signed_out:v1`
 - Category: `user` · Severity: `info` · Since: v0.2.0
-- Subject: `user`
+- Subject: `user`, when known
 - Schema: [user.signed_out.v1.json](/schemas/events/user.signed_out.v1.json)
 
 `data` has no members: the envelope carries the event.
@@ -224,7 +224,7 @@ A sign-out request was refused or could not complete.
 
 - Identifier: `urn:qauth:event:user.sign_out_failed:v1`
 - Category: `user` · Severity: `warning` · Since: v0.2.0
-- Subject: `user`
+- Subject: `user`, when known
 - Schema: [user.sign_out_failed.v1.json](/schemas/events/user.sign_out_failed.v1.json)
 
 | Member   | Type   | Required | Meaning                                                                                         |
@@ -237,7 +237,7 @@ A person created an account.
 
 - Identifier: `urn:qauth:event:user.registered:v1`
 - Category: `user` · Severity: `info` · Since: v0.2.0
-- Subject: `user`
+- Subject: `user`, when known
 - Schema: [user.registered.v1.json](/schemas/events/user.registered.v1.json)
 
 | Member   | Type                                          | Required | Meaning                                                                                                                                    |
@@ -250,7 +250,7 @@ An account could not be created, for example because the address is in use.
 
 - Identifier: `urn:qauth:event:user.registration_failed:v1`
 - Category: `user` · Severity: `warning` · Since: v0.2.0
-- Subject: none
+- Subject: none: the event never carries one
 - Schema: [user.registration_failed.v1.json](/schemas/events/user.registration_failed.v1.json)
 
 | Member           | Type   | Required | Meaning                                                                                                                                                                                                                        |
@@ -264,7 +264,7 @@ The authorization endpoint sent the client back with an authorization response t
 
 - Identifier: `urn:qauth:event:authorization.completed:v1`
 - Category: `user` · Severity: `info` · Since: v0.2.0
-- Subject: `user`
+- Subject: `user`, when known
 - Schema: [authorization.completed.v1.json](/schemas/events/authorization.completed.v1.json)
 
 `data` has no members: the envelope carries the event.
@@ -275,7 +275,7 @@ The authorization endpoint refused a request: an unknown client, a redirect URI 
 
 - Identifier: `urn:qauth:event:authorization.failed:v1`
 - Category: `user` · Severity: `warning` · Since: v0.2.0
-- Subject: `user`
+- Subject: `user`, when known
 - Schema: [authorization.failed.v1.json](/schemas/events/authorization.failed.v1.json)
 
 | Member   | Type   | Required | Meaning                                                                                         |
@@ -289,7 +289,7 @@ A request needs a fresh sign-in or new consent before it can go on, for example 
 
 - Identifier: `urn:qauth:event:step_up.required:v1`
 - Category: `user` · Severity: `info` · Since: v0.2.0
-- Subject: `user`
+- Subject: `user`, when known
 - Schema: [step_up.required.v1.json](/schemas/events/step_up.required.v1.json)
 
 | Member            | Type            | Required | Meaning                                                                                         |
@@ -307,7 +307,7 @@ After a fresh sign-in, a user granted a client dangerous scopes (ADR-007 §2).
 
 - Identifier: `urn:qauth:event:step_up.elevated:v1`
 - Category: `user` · Severity: `info` · Since: v0.2.0
-- Subject: `user`
+- Subject: `user`, when known
 - Schema: [step_up.elevated.v1.json](/schemas/events/step_up.elevated.v1.json)
 
 | Member            | Type                                                 | Required | Meaning                                                                                   |
@@ -323,7 +323,7 @@ A user granted a client the scopes it asked for.
 
 - Identifier: `urn:qauth:event:consent.granted:v1`
 - Category: `user` · Severity: `info` · Since: v0.2.0
-- Subject: `user`
+- Subject: `user`, when known
 - Schema: [consent.granted.v1.json](/schemas/events/consent.granted.v1.json)
 
 | Member            | Type            | Required | Meaning                                                             |
@@ -338,7 +338,7 @@ Consent was not given: the user declined, or the request did not match what the 
 
 - Identifier: `urn:qauth:event:consent.denied:v1`
 - Category: `user` · Severity: `info` · Since: v0.2.0
-- Subject: `user`
+- Subject: `user`, when known
 - Schema: [consent.denied.v1.json](/schemas/events/consent.denied.v1.json)
 
 | Member   | Type   | Required | Meaning                                                                                         |
@@ -352,7 +352,7 @@ A user withdrew a client's consent. QAuth revoked the refresh tokens the consent
 
 - Identifier: `urn:qauth:event:consent.revoked:v1`
 - Category: `user` · Severity: `info` · Since: v0.2.0
-- Subject: `user`
+- Subject: `user`, when known
 - Schema: [consent.revoked.v1.json](/schemas/events/consent.revoked.v1.json)
 
 | Member                | Type    | Required | Meaning                                       |
@@ -366,7 +366,7 @@ The token endpoint issued tokens: for an authorization code, a refresh, client c
 
 - Identifier: `urn:qauth:event:token.issued:v1`
 - Category: `user` · Severity: `info` · Since: v0.2.0
-- Subject: `user`
+- Subject: `user`, when known
 - Schema: [token.issued.v1.json](/schemas/events/token.issued.v1.json)
 
 | Member            | Type                                                 | Required | Meaning                                                                                                       |
@@ -389,7 +389,7 @@ The token endpoint refused a request: failed client authentication, an invalid o
 
 - Identifier: `urn:qauth:event:token.request_failed:v1`
 - Category: `user` · Severity: `warning` · Since: v0.2.0
-- Subject: `user`
+- Subject: `user`, when known
 - Schema: [token.request_failed.v1.json](/schemas/events/token.request_failed.v1.json)
 
 | Member      | Type   | Required | Meaning                                                                                         |
@@ -404,7 +404,7 @@ A client revoked a token at the RFC 7009 revocation endpoint.
 
 - Identifier: `urn:qauth:event:token.revoked:v1`
 - Category: `user` · Severity: `info` · Since: v0.2.0
-- Subject: `user`
+- Subject: `user`, when known
 - Schema: [token.revoked.v1.json](/schemas/events/token.revoked.v1.json)
 
 | Member     | Type   | Required | Meaning                                                         |
@@ -417,7 +417,7 @@ The revocation endpoint refused a request, for example on failed client authenti
 
 - Identifier: `urn:qauth:event:token.revocation_failed:v1`
 - Category: `user` · Severity: `warning` · Since: v0.2.0
-- Subject: none
+- Subject: none: the event never carries one
 - Schema: [token.revocation_failed.v1.json](/schemas/events/token.revocation_failed.v1.json)
 
 | Member   | Type   | Required | Meaning                                                                                         |
@@ -431,7 +431,7 @@ A resource server introspected an active token (RFC 7662).
 
 - Identifier: `urn:qauth:event:token.introspected:v1`
 - Category: `user` · Severity: `info` · Since: v0.2.0
-- Subject: `user`
+- Subject: `user`, when known
 - Schema: [token.introspected.v1.json](/schemas/events/token.introspected.v1.json)
 
 | Member          | Type   | Required | Meaning                                               |
@@ -444,7 +444,7 @@ An introspection request failed: client authentication, or a token that is inval
 
 - Identifier: `urn:qauth:event:token.introspection_failed:v1`
 - Category: `user` · Severity: `warning` · Since: v0.2.0
-- Subject: none
+- Subject: `user`, when known
 - Schema: [token.introspection_failed.v1.json](/schemas/events/token.introspection_failed.v1.json)
 
 | Member   | Type   | Required | Meaning                                                                                         |
@@ -458,7 +458,7 @@ The userinfo endpoint returned claims for an access token.
 
 - Identifier: `urn:qauth:event:userinfo.served:v1`
 - Category: `user` · Severity: `info` · Since: v0.2.0
-- Subject: `user`
+- Subject: `user`, when known
 - Schema: [userinfo.served.v1.json](/schemas/events/userinfo.served.v1.json)
 
 `data` has no members: the envelope carries the event.
@@ -469,7 +469,7 @@ The userinfo endpoint refused a request.
 
 - Identifier: `urn:qauth:event:userinfo.request_failed:v1`
 - Category: `user` · Severity: `warning` · Since: v0.2.0
-- Subject: none
+- Subject: `user`, when known
 - Schema: [userinfo.request_failed.v1.json](/schemas/events/userinfo.request_failed.v1.json)
 
 | Member   | Type   | Required | Meaning                                                                                         |
@@ -483,7 +483,7 @@ An OAuth client was created: by RFC 7591 dynamic registration, or by a developer
 
 - Identifier: `urn:qauth:event:client.created:v1`
 - Category: `user` · Severity: `info` · Since: v0.2.0
-- Subject: `client`
+- Subject: `client`, when known
 - Schema: [client.created.v1.json](/schemas/events/client.created.v1.json)
 
 | Member         | Type                                                | Required | Meaning                                                                                                                        |
@@ -501,7 +501,7 @@ A developer changed a client's settings.
 
 - Identifier: `urn:qauth:event:client.updated:v1`
 - Category: `user` · Severity: `info` · Since: v0.2.0
-- Subject: `client`
+- Subject: `client`, when known
 - Schema: [client.updated.v1.json](/schemas/events/client.updated.v1.json)
 
 | Member   | Type            | Required | Meaning                                                     |
@@ -514,7 +514,7 @@ A developer deleted a client.
 
 - Identifier: `urn:qauth:event:client.deleted:v1`
 - Category: `user` · Severity: `info` · Since: v0.2.0
-- Subject: `client`
+- Subject: `client`, when known
 - Schema: [client.deleted.v1.json](/schemas/events/client.deleted.v1.json)
 
 `data` has no members: the envelope carries the event.
@@ -525,7 +525,7 @@ A developer replaced a client's secret. The old secret stopped working.
 
 - Identifier: `urn:qauth:event:client.secret_rotated:v1`
 - Category: `user` · Severity: `info` · Since: v0.2.0
-- Subject: `client`
+- Subject: `client`, when known
 - Schema: [client.secret_rotated.v1.json](/schemas/events/client.secret_rotated.v1.json)
 
 `data` has no members: the envelope carries the event.
@@ -536,7 +536,7 @@ An operator suspended a client: it can no longer obtain tokens until the suspens
 
 - Identifier: `urn:qauth:event:client.suspended:v1`
 - Category: `admin` · Severity: `warning` · Since: v0.2.0
-- Subject: `client`
+- Subject: `client`, when known
 - Schema: [client.suspended.v1.json](/schemas/events/client.suspended.v1.json)
 
 `data` has no members: the envelope carries the event.
@@ -547,7 +547,7 @@ An operator lifted a client's suspension.
 
 - Identifier: `urn:qauth:event:client.suspension_lifted:v1`
 - Category: `admin` · Severity: `info` · Since: v0.2.0
-- Subject: `client`
+- Subject: `client`, when known
 - Schema: [client.suspension_lifted.v1.json](/schemas/events/client.suspension_lifted.v1.json)
 
 `data` has no members: the envelope carries the event.
@@ -558,7 +558,7 @@ A developer created an API key for a client.
 
 - Identifier: `urn:qauth:event:api_key.created:v1`
 - Category: `user` · Severity: `info` · Since: v0.2.0
-- Subject: `api_key`
+- Subject: `api_key`, when known
 - Schema: [api_key.created.v1.json](/schemas/events/api_key.created.v1.json)
 
 `data` has no members: the envelope carries the event.
@@ -569,7 +569,7 @@ A developer revoked an API key. It stopped working.
 
 - Identifier: `urn:qauth:event:api_key.revoked:v1`
 - Category: `user` · Severity: `info` · Since: v0.2.0
-- Subject: `api_key`
+- Subject: `api_key`, when known
 - Schema: [api_key.revoked.v1.json](/schemas/events/api_key.revoked.v1.json)
 
 `data` has no members: the envelope carries the event.
@@ -580,7 +580,7 @@ A signed-in user linked a wallet credential to their account.
 
 - Identifier: `urn:qauth:event:wallet.linked:v1`
 - Category: `user` · Severity: `info` · Since: v0.2.0
-- Subject: `user`
+- Subject: `user`, when known
 - Schema: [wallet.linked.v1.json](/schemas/events/wallet.linked.v1.json)
 
 | Member            | Type    | Required | Meaning                                                                             |
@@ -596,7 +596,7 @@ A wallet could not be linked, for example because it is linked to another accoun
 
 - Identifier: `urn:qauth:event:wallet.link_failed:v1`
 - Category: `user` · Severity: `warning` · Since: v0.2.0
-- Subject: `user`
+- Subject: `user`, when known
 - Schema: [wallet.link_failed.v1.json](/schemas/events/wallet.link_failed.v1.json)
 
 | Member            | Type   | Required | Meaning                                                                                         |
@@ -610,7 +610,7 @@ The OpenID4VP response endpoint accepted a wallet presentation. This is not a si
 
 - Identifier: `urn:qauth:event:wallet.presentation_received:v1`
 - Category: `user` · Severity: `info` · Since: v0.2.0
-- Subject: none
+- Subject: none: the event never carries one
 - Schema: [wallet.presentation_received.v1.json](/schemas/events/wallet.presentation_received.v1.json)
 
 | Member              | Type    | Required | Meaning                                                                             |
@@ -624,7 +624,7 @@ A form post was refused because its CSRF check failed: the token was missing or 
 
 - Identifier: `urn:qauth:event:request.csrf_rejected:v1`
 - Category: `user` · Severity: `warning` · Since: v0.2.0
-- Subject: `user`
+- Subject: `user`, when known
 - Schema: [request.csrf_rejected.v1.json](/schemas/events/request.csrf_rejected.v1.json)
 
 | Member | Type                                                                                                 | Required | Meaning                                                        |

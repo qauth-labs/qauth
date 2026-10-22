@@ -23,13 +23,17 @@ the JSON Schema files under `apps/docs-site/public/schemas/events/`.
 | `scripts/export-schemas.ts` | Writes the schema files and the page. The library's only I/O; nothing imports it                         |
 
 ```ts
-import { parseEvent, type EventDataOf } from '@qauth-labs/shared-events';
+import { type EventDataOf, eventRequest, parseEvent } from '@qauth-labs/shared-events';
 
 // Throws EventValidationError on an unknown type, a bad envelope, data that
 // fails the type's schema, or data that breaks a payload rule.
 const event = parseEvent(candidate);
 
 type SignInData = EventDataOf<'urn:qauth:event:user.signed_in:v1'>;
+
+// The client controls the User-Agent and a forwarded address. eventRequest
+// cuts and normalises them, so a long header cannot make the event fail.
+const request = eventRequest({ traceId: req.id, ip: req.ip, userAgent: req.headers['user-agent'] });
 ```
 
 ## Adding an event type

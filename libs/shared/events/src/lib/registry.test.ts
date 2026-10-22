@@ -191,18 +191,56 @@ describe('parseEvent', () => {
   });
 
   it.each([
-    ['an id that is not a UUIDv7', { id: '6f1c2c4e-0f0a-4b1e-9c3d-2a1b0c9d8e7f' }],
-    ['a time with an offset', { time: '2026-10-22T11:30:00+02:00' }],
-    ['a time as a number', { time: 1_761_125_400_000 }],
-    ['a category the type does not have', { category: 'admin' }],
-    ['a null member', { client: null }],
-    ['an unknown envelope member', { extra: true }],
-    ['data that misses a required member', { data: {} }],
-    ['data with an undeclared member', { data: { method: 'password', email: 'a@b.test' } }],
-    ['data with a value outside a set', { data: { method: 'carrier_pigeon' } }],
-    ['a subject of the wrong kind', { subject: { type: 'client', id: 'notes-app' } }],
-  ])('refuses %s', (_label, overrides) => {
+    ['an id that is not a UUIDv7', { id: '6f1c2c4e-0f0a-4b1e-9c3d-2a1b0c9d8e7f' }, '/id'],
+    ['a time with an offset', { time: '2026-10-22T11:30:00+02:00' }, '/time'],
+    ['a time as a number', { time: 1_761_125_400_000 }, '/time'],
+    ['a category the type does not have', { category: 'admin' }, '/category'],
+    ['a null member', { client: null }, '/client'],
+    ['an unknown envelope member', { extra: true }, 'extra'],
+    ['data that misses a required member', { data: {} }, '/data/method'],
+    [
+      'data with an undeclared member',
+      { data: { method: 'password', email: 'a@b.test' } },
+      'email',
+    ],
+    ['data with a value outside a set', { data: { method: 'carrier_pigeon' } }, '/data/method'],
+    [
+      'a subject of the wrong kind',
+      { subject: { type: 'client', id: 'notes-app' } },
+      '/subject/type',
+    ],
+    [
+      'an IPv4-mapped address in raw form',
+      { request: { ip: '::ffff:203.0.113.5' } },
+      '/request/ip',
+    ],
+  ])('refuses %s', (_label, overrides, where) => {
     expect(() => parseEvent(event(overrides))).toThrow(EventValidationError);
+    expect(() => parseEvent(event(overrides))).toThrow(where);
+  });
+
+  it('refuses a subject on a type that has none', () => {
+    const { id, time, realm, category, client } = EXAMPLE_EVENT;
+    const revocation = {
+      id,
+      type: 'urn:qauth:event:token.revocation_failed:v1',
+      time,
+      realm,
+      category,
+      client,
+      data: { error: 'invalid_client' },
+    };
+    expect(() => parseEvent(revocation)).not.toThrow();
+    expect(() => parseEvent({ ...revocation, subject: { type: 'user', id: 'u-1' } })).toThrow(
+      '/subject: a token.revocation_failed event has no subject'
+    );
+  });
+
+  it('refuses a token-shaped value outside data too', () => {
+    const jwt = 'eyJhbGciOiJFUzI1NiJ9.eyJzdWIiOiJ4In0.c2lnbmF0dXJl';
+    expect(() => parseEvent(event({ actor: { type: 'user', id: jwt } }))).toThrow(
+      '/actor/id: the value is shaped like a token'
+    );
   });
 
   it('refuses a token-shaped value in a free-form member', () => {

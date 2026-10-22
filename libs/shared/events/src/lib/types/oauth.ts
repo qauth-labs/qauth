@@ -267,6 +267,7 @@ export const tokenIntrospectionFailed = defineEventType({
   category: 'user',
   severity: 'warning',
   since: FIRST_RELEASE,
+  subject: 'user',
   data: z.strictObject(failure()),
 });
 
@@ -288,6 +289,7 @@ export const userinfoRequestFailed = defineEventType({
   category: 'user',
   severity: 'warning',
   since: FIRST_RELEASE,
+  subject: 'user',
   data: z.strictObject(failure()),
 });
 

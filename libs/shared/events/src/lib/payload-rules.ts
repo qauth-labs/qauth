@@ -73,13 +73,25 @@ export const SECRET_WORDS: ReadonlySet<string> = new Set([
   'uri',
   'uris',
   'href',
+  // Token and key formats, and credentials that are themselves secrets.
+  'jwt',
+  'jwts',
+  'jwk',
+  'jwks',
+  'bearer',
+  'credential',
+  'credentials',
+  'presentation',
+  'presentations',
+  'seed',
+  'proof',
 ]);
 
 /**
  * Secret words that are also caught inside a longer word, for names written
- * without a separator (`accesstoken`, `clientsecret`). Only words that no
- * harmless word contains: `code` (`encode`), `key` (`monkey`) and `link`
- * (`linked`) are matched as whole words only.
+ * without a separator (`accesstoken`, `clientsecret`, `apikey`). Only stems
+ * that no harmless word contains: `code` (`encode`), `key` (`monkey`) and
+ * `link` (`linked`) alone are matched as whole words only.
  */
 export const SECRET_STEMS: readonly string[] = [
   'password',
@@ -88,6 +100,10 @@ export const SECRET_STEMS: readonly string[] = [
   'secret',
   'token',
   'assertion',
+  'jwt',
+  'apikey',
+  'privatekey',
+  'signingkey',
 ];
 
 /** Words that name a person or an address (rule 1). */
@@ -110,6 +126,10 @@ export const PERSONAL_DATA_WORDS: ReadonlySet<string> = new Set([
   'surname',
   'birthdate',
   'birthday',
+  // What a person typed to name their account: `assertedIdentifier`,
+  // `loginHint`. Carried as a keyed HMAC (`identifierHmac`), never in clear.
+  'identifier',
+  'login',
 ]);
 
 /**
@@ -130,8 +150,11 @@ export const DESCRIPTOR_WORDS: ReadonlySet<string> = new Set([
  */
 const HIDDEN_WORDS: ReadonlySet<string> = new Set([...DESCRIPTOR_WORDS, 'hmac']);
 
-/** A compact JWT, JWS (three parts) or JWE (five parts). */
-const COMPACT_JOSE = /^eyJ[A-Za-z0-9_-]*(?:\.[A-Za-z0-9_-]*){2}(?:(?:\.[A-Za-z0-9_-]*){2})?$/;
+/**
+ * A compact JWT, JWS or JWE anywhere in a string: inside an SD-JWT
+ * (`<jwt>~<disclosure>~`), after `Bearer `, or with whitespace around it.
+ */
+const COMPACT_JOSE = /eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*\.[A-Za-z0-9_-]*/;
 
 /** A PEM block: a key, a certificate or anything else armoured. */
 const PEM = /-----BEGIN [A-Z0-9 ]+-----/;
@@ -187,13 +210,7 @@ function fieldFinding(path: string, name: string, rule: Exclude<PayloadRule, 'se
   } satisfies PayloadFinding;
 }
 
-/**
- * Scan a payload (an event's `data`, or any JSON value) for fields and values
- * that break the payload rules.
- *
- * @returns every finding, in document order; empty when the payload is clean
- */
-export function scanPayload(value: unknown, options: PayloadScanOptions = {}): PayloadFinding[] {
+function scan(value: unknown, readNames: boolean, options: PayloadScanOptions): PayloadFinding[] {
   const findings: PayloadFinding[] = [];
   const visit = (node: unknown, path: string) => {
     if (typeof node === 'string') {
@@ -213,7 +230,7 @@ export function scanPayload(value: unknown, options: PayloadScanOptions = {}): P
     if (typeof node === 'object' && node !== null) {
       for (const [key, child] of Object.entries(node)) {
         const childPath = `${path}/${escapePointer(key)}`;
-        const rule = classifyFieldName(key, options);
+        const rule = readNames ? classifyFieldName(key, options) : null;
         if (rule) findings.push(fieldFinding(childPath, key, rule));
         visit(child, childPath);
       }
@@ -221,6 +238,25 @@ export function scanPayload(value: unknown, options: PayloadScanOptions = {}): P
   };
   visit(value, '');
   return findings;
+}
+
+/**
+ * Scan a payload (an event's `data`, or any JSON value) for fields and values
+ * that break the payload rules.
+ *
+ * @returns every finding, in document order; empty when the payload is clean
+ */
+export function scanPayload(value: unknown, options: PayloadScanOptions = {}): PayloadFinding[] {
+  return scan(value, true, options);
+}
+
+/**
+ * Scan only the values: a string shaped like a token or a key, wherever it
+ * sits. For the envelope's own members, whose names are fixed and some of
+ * which (`request.ip`) name personal data on purpose.
+ */
+export function scanValues(value: unknown): PayloadFinding[] {
+  return scan(value, false, {});
 }
 
 const SUBSCHEMA_KEYS = ['items', 'additionalProperties', 'not', 'if', 'then', 'else'] as const;
@@ -242,6 +278,17 @@ export function scanJsonSchema(
   const visit = (node: unknown, path: string) => {
     if (typeof node !== 'object' || node === null || Array.isArray(node)) return;
     const record = node as Record<string, unknown>;
+    // A record whose keys are a fixed set (`z.record(z.enum([...]), ...)`)
+    // declares those keys as field names too.
+    const names = record['propertyNames'];
+    if (typeof names === 'object' && names !== null) {
+      const { enum: values, const: single } = names as Record<string, unknown>;
+      const listed = Array.isArray(values) ? values : single === undefined ? [] : [single];
+      for (const key of listed.filter((value): value is string => typeof value === 'string')) {
+        const rule = classifyFieldName(key, options);
+        if (rule) findings.push(fieldFinding(`${path}/propertyNames`, key, rule));
+      }
+    }
     const properties = record['properties'];
     if (typeof properties === 'object' && properties !== null) {
       for (const [key, child] of Object.entries(properties)) {

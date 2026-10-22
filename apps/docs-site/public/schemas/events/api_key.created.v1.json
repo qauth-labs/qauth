@@ -119,7 +119,7 @@
           "maxLength": 128
         },
         "ip": {
-          "description": "The end user's IP address, as QAuth derived it from the request.",
+          "description": "The end user's IP address, as QAuth derived it from the request. An IPv4-mapped IPv6 address is written in its IPv4 form.",
           "anyOf": [
             {
               "type": "string",

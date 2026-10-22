@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { EVENT_SEVERITIES, type EventTypeDefinition, RELEASE_TAG_PATTERN } from './definition';
 import { envelopeSchema, EVENT_CATEGORIES, SUBJECT_TYPES, typedEnvelopeSchema } from './envelope';
 import { EVENT_NAME_PATTERN, EVENT_TYPE_PATTERN, eventTypeId, parseEventType } from './identifier';
-import { type PayloadFinding, scanJsonSchema, scanPayload } from './payload-rules';
+import { type PayloadFinding, scanJsonSchema, scanPayload, scanValues } from './payload-rules';
 import { CLIENT_EVENT_TYPES } from './types/client';
 import { OAUTH_EVENT_TYPES } from './types/oauth';
 import { REQUEST_EVENT_TYPES } from './types/request';
@@ -80,7 +80,8 @@ const describeFindings = (findings: readonly PayloadFinding[]) =>
 /**
  * Check an event before it is stored or sent: its envelope, its type (which
  * must be registered), its `data` against the type's schema, its subject
- * against the type's, and its `data` against the payload rules.
+ * against the type's (a type without one takes none), its `data` against the
+ * payload rules, and every other member for token- or key-shaped values.
  *
  * @returns the event, typed by the envelope
  * @throws {EventValidationError} on an unknown type or any problem above
@@ -104,15 +105,18 @@ export function parseEvent(input: unknown) {
     );
   }
   const problems: string[] = [];
-  if (definition.subject && typed.data.subject && typed.data.subject.type !== definition.subject) {
+  const subject = typed.data.subject;
+  if (subject && !definition.subject) {
+    problems.push(`/subject: a ${definition.name} event has no subject`);
+  } else if (subject && subject.type !== definition.subject) {
     problems.push(
-      `/subject/type: a ${definition.name} event is about a ${definition.subject}, not a ${typed.data.subject.type}`
+      `/subject/type: a ${definition.name} event is about a ${definition.subject}, not a ${subject.type}`
     );
   }
+  const { data, ...members } = typed.data;
   problems.push(
-    ...describeFindings(
-      scanPayload(typed.data.data, { personalData: definition.personalData ?? [] })
-    )
+    ...scanValues(members).map((finding) => `${finding.path}: ${finding.message}`),
+    ...describeFindings(scanPayload(data, { personalData: definition.personalData ?? [] }))
   );
   if (problems.length > 0) {
     throw new EventValidationError(`not a valid ${definition.type} event`, problems);
