@@ -9,13 +9,19 @@ import { env } from '../../config/env';
  * `@qauth-labs/fastify-plugin-db`), matching the boundary that
  * `routes/clients/index.ts` keeps with its `OAuthClientRow` type.
  */
-type RealmRow = NonNullable<
+export type RealmRow = NonNullable<
   Awaited<ReturnType<FastifyInstance['repositories']['realms']['findByName']>>
 >;
 
 /**
  * Get or create default realm
  * Helper function to get the default realm for user operations
+ *
+ * The boot step (`./default-realm-boot.ts`, #484) creates the realm and gives
+ * it its issuer and primary host before the server listens, so this normally
+ * finds it. The request-time creation stays as a fallback until routing by
+ * host replaces this function; a realm it creates has no issuer until the
+ * next boot fills it.
  *
  * The return type is explicit rather than inferred: TypeScript 7 rejects the
  * inferred form with TS2883, because naming it would require a reference to

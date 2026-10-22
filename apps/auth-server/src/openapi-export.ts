@@ -28,7 +28,9 @@
  *     `libs/fastify/plugins/cache/src/lib/fastify-plugin-cache.ts`) — neither
  *     throws, so `await server.ready()` resolves even against the
  *     unreachable, ephemeral URLs set below. This script does not start a
- *     Docker container.
+ *     Docker container. The default realm's boot step, which does need the
+ *     database, is turned off (`defaultRealmBoot: false`); it registers no
+ *     route, so the spec is the same.
  *
  * ## Two flag surfaces (why, not just what)
  *
@@ -281,7 +283,8 @@ async function main(): Promise<void> {
     // rather than each file's own copy (#347 fix round 3).
     await server.register(swagger, openapiOptions);
 
-    await server.register(app);
+    // No database behind this boot, so no default realm step (#484).
+    await server.register(app, { defaultRealmBoot: false });
     await server.ready();
 
     const spec = server.swagger() as OpenApiDocument;

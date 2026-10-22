@@ -152,6 +152,12 @@ export interface BootAuthServerOptions {
    * database error. Without it the server is silent unless `E2E_DEBUG_LOG=1`.
    */
   readonly logStream?: { write(line: string): void };
+  /**
+   * Run the default realm's boot step (#484), which needs the database. On by
+   * default. A suite that boots against a database URL it never dials, to test
+   * what registration accepts or refuses, turns it off.
+   */
+  readonly defaultRealmBoot?: boolean;
 }
 
 /**
@@ -198,7 +204,7 @@ export async function bootAuthServer(
   // instance instead of inside the app's own scope, which is what lets
   // `resetE2eState` truncate the database the server is actually looking at.
   // Nothing under test observes the difference.
-  await server.register(fp(app));
+  await server.register(fp(app), { defaultRealmBoot: options.defaultRealmBoot ?? true });
   await server.ready();
 
   return {
