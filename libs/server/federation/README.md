@@ -42,6 +42,8 @@ This library defines that abstraction (see
 > - `subject/` — configurable `SubjectResolutionStrategy` and account linking
 >   (#300, #238)
 > - `profiles/` — the `VerifierProfile` abstraction (#299)
+> - `providers/webauthn.provider.ts` and `webauthn/` — the **`WebAuthnProvider`**
+>   (#467) and the relying-party ID rules, below
 
 ## Usage
 
@@ -191,6 +193,45 @@ Known limits, stated rather than implied: DNS rebinding against an allowlisted
 hostname is not defended here (supply your own `fetch` over an
 address-pinning agent); redirects are refused outright; the `x5c` chain is not
 checked for revocation (CRL/OCSP), name constraints or policy OIDs.
+
+## WebAuthn — passkeys (#467)
+
+The one WebAuthn `CredentialProvider` QAuth has
+([ADR-017](../../../docs/adr/017-first-party-login.md) Decision 14, phase F2b):
+first-party sign-in, the hosted account pages, admin sign-in and the Authority
+Tree approval all use it. The deployment switch `WEBAUTHN_ENABLED` stays refused
+at boot until F2b's ceremonies land, so nothing calls it yet.
+
+- `provider_type` is `webauthn` and `external_sub` is the credential id
+  (base64url). `credential_data` holds the COSE public key, its algorithm, the
+  sign counter, transports, the BE and BS backup flags, the AAGUID, the RP ID,
+  the user handle, a nickname and timestamps (`webauthnCredentialDataSchema`).
+- Ceremonies are two rounds around ADR-003's single-shot `verify()`:
+  `startRegistration` / `finishRegistration` for enrolment, and
+  `startAuthentication` then `verify()` for an assertion. Options ask for
+  `attestation: "none"` and the algorithms EdDSA, ES256 and RS256 only.
+- Each ceremony's state (challenge, RP ID, origins, purpose) is stored under its
+  transaction through the `WebAuthnChallengeStore` port and taken atomically
+  before an answer is checked, so a challenge answers once and only for its
+  transaction.
+- Sign-in requires the UV flag; a second factor requires UP only. A sign
+  counter that does not grow past a nonzero stored one is flagged
+  (`sign_counter_regressed`), not refused.
+- Every refusal is a `WebAuthnRejection` whose `reason` is for logs only.
+
+The WebAuthn library, `@simplewebauthn/server` (pinned exactly), sits behind the
+`WebAuthnVerifier` port (`webauthn/simplewebauthn-verifier.ts`); nothing else
+imports it, so moving verification to the Rust core (ADR-018 §6) replaces one
+adapter. The adapter checks the ceremony itself, each step with its own reason,
+before the library does the CBOR, COSE, attestation and signature work.
+
+`webauthn/relying-party-id.ts` holds the RP ID rules of
+[ADR-019](../../../docs/adr/019-deployment-topology-and-trust-boundaries.md)
+Decision 2: the realm's exact host by default, a parent domain only with the
+operator's opt-in and a warning, and a lock once the realm has a passkey.
+
+The unit tests run the WebAuthn Level 3 §16 test vectors
+(`testing/webauthn-w3c-vectors.fixture.ts`, copied from the specification).
 
 ## Installation
 
