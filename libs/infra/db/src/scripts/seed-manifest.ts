@@ -59,6 +59,12 @@ export const clientSpecSchema = z
     // control must be server-set). Omitted ⇒ NULL ⇒ no agent mode permitted
     // (deny-by-default). Only meaningful together with `is_agent: true`.
     max_agent_mode: agentModeZ.optional(),
+    // ADR-011 (#434): the foreign authorization servers and MCP servers this
+    // client may name when it mints an ID-JAG, and the resources it may redeem
+    // one for. Separate from `audience`, which bounds the QAuth tokens
+    // `client_credentials` issues. Like `max_agent_mode`, this manifest is the
+    // only path that sets it. Omitted ⇒ `[]` ⇒ no ID-JAG target (deny).
+    id_jag_targets: z.array(z.string().min(1)).optional(),
     // RFC 7591 §2 client JWKS, consumed by `private_key_jwt` client
     // authentication (#384). This is the ONLY provisioning path for it:
     // `POST /oauth/register` (DCR) does not accept `jwks` / `jwks_uri` or the

@@ -27,6 +27,28 @@ describe('manifestSchema', () => {
     expect(manifestSchema.parse(manifest)).toEqual(manifest);
   });
 
+  it('accepts ID-JAG targets on a provisioned client, apart from its audience (#434)', () => {
+    const idJagClient = {
+      ...machineClient,
+      grant_types: ['urn:ietf:params:oauth:grant-type:token-exchange'],
+      id_jag_targets: ['https://as.partner.example', 'https://mcp.partner.example/mcp'],
+    };
+    const parsed = manifestSchema.parse({ realm: 'master', clients: [idJagClient] });
+    expect(parsed.clients?.[0]?.id_jag_targets).toEqual(idJagClient.id_jag_targets);
+    expect(parsed.clients?.[0]?.audience).toEqual(machineClient.audience);
+  });
+
+  it.each([
+    ['an empty string', ['']],
+    ['a string instead of a list', 'https://as.partner.example'],
+  ])('refuses ID-JAG targets holding %s', (_label, idJagTargets) => {
+    const result = manifestSchema.safeParse({
+      realm: 'master',
+      clients: [{ ...machineClient, id_jag_targets: idJagTargets }],
+    });
+    expect(result.success).toBe(false);
+  });
+
   it('accepts a manifest with only CIMD entries, or with both kinds', () => {
     expect(manifestSchema.safeParse({ realm: 'master', cimd_clients: [cimdClient] }).success).toBe(
       true
@@ -69,6 +91,7 @@ describe('manifestSchema', () => {
     ['a field the document owns', { name: 'Example' }],
     ['a redirect URI', { redirect_uris: ['https://client.example.com/cb'] }],
     ['a secret', { client_secret: 'x' }],
+    ['ID-JAG targets (#434)', { id_jag_targets: ['https://as.partner.example'] }],
   ])('refuses a CIMD entry carrying %s', (_label, extra) => {
     const result = manifestSchema.safeParse({
       realm: 'master',

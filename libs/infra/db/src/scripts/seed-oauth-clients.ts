@@ -201,6 +201,8 @@ function buildInsert(realmId: string, spec: ClientSpec, clientSecretHash: string
     redirectUris: spec.redirect_uris ?? [],
     scopes: spec.scopes ?? [],
     audience: spec.audience ?? null,
+    // ADR-011 (#434) ID-JAG targets; `[]` = no ID-JAG mint or redemption.
+    idJagTargets: spec.id_jag_targets ?? [],
     requirePkce: spec.require_pkce ?? true,
     tokenEndpointAuthMethod: spec.token_endpoint_auth_method ?? 'client_secret_basic',
     grantTypes: spec.grant_types,
@@ -233,6 +235,8 @@ function buildUpdate(spec: ClientSpec, clientSecretHash: string) {
     redirectUris: spec.redirect_uris ?? [],
     scopes: spec.scopes ?? [],
     audience: spec.audience ?? null,
+    // ADR-011 (#434) ID-JAG targets; `[]` = no ID-JAG mint or redemption.
+    idJagTargets: spec.id_jag_targets ?? [],
     requirePkce: spec.require_pkce ?? true,
     tokenEndpointAuthMethod: spec.token_endpoint_auth_method ?? 'client_secret_basic',
     grantTypes: spec.grant_types,

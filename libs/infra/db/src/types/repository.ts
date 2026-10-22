@@ -34,10 +34,15 @@ export type NewOAuthClient = InferInsertModel<typeof oauthClients>;
  * Fields an application write may change. `suspended` / `suspendedAt` are left
  * out on purpose (ANT-2026-DR5XI3LV): a suspension is operator state, set and
  * lifted only by the operator tooling (`scripts/client-suspension.ts`), so no
- * route can write it through `update`, not even by mistake.
+ * route can write it through `update`, not even by mistake. `idJagTargets` is
+ * left out for the same reason (#434): only the `db:seed-oauth-clients`
+ * manifest writes a client's ID-JAG targets.
  */
 export type UpdateOAuthClient = Partial<
-  Omit<NewOAuthClient, 'id' | 'createdAt' | 'realmId' | 'suspended' | 'suspendedAt'>
+  Omit<
+    NewOAuthClient,
+    'id' | 'createdAt' | 'realmId' | 'suspended' | 'suspendedAt' | 'idJagTargets'
+  >
 > & {
   updatedAt?: number;
 };
