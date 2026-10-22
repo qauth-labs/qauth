@@ -24,7 +24,7 @@ const CONVENTIONS_PAGE = join(
 );
 
 /** One row of the page's code table: `` | `CODE` | 400 | Meaning | ``. */
-const CODE_ROW = /^\|\s*`([A-Z_]+)`\s*\|\s*(\d{3})\s*\|\s*(.*?)\s*\|\s*$/;
+const CODE_ROW = /^\|\s*`([a-z_]+)`\s*\|\s*(\d{3})\s*\|\s*(.*?)\s*\|\s*$/;
 
 describe('problem codes (#506)', () => {
   it('gives every status the code its entry lists for that status', () => {
