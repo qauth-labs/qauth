@@ -479,5 +479,70 @@
       }
     ],
     "breaks": []
+  },
+  {
+    "name": "json-schema both: a new required member of a nested object breaks",
+    "format": "json-schema",
+    "role": "both",
+    "basePatch": [
+      {
+        "op": "add",
+        "path": "/properties/data",
+        "value": {
+          "type": "object",
+          "required": ["method"],
+          "properties": {
+            "method": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    ],
+    "patch": [
+      {
+        "op": "add",
+        "path": "/properties/data/properties/reason",
+        "value": {
+          "type": "string"
+        }
+      },
+      {
+        "op": "add",
+        "path": "/properties/data/required/-",
+        "value": "reason"
+      }
+    ],
+    "breaks": ["new-required-request-property"]
+  },
+  {
+    "name": "json-schema both: a new optional member of a nested object passes",
+    "format": "json-schema",
+    "role": "both",
+    "basePatch": [
+      {
+        "op": "add",
+        "path": "/properties/data",
+        "value": {
+          "type": "object",
+          "required": ["method"],
+          "properties": {
+            "method": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    ],
+    "patch": [
+      {
+        "op": "add",
+        "path": "/properties/data/properties/reason",
+        "value": {
+          "type": "string"
+        }
+      }
+    ],
+    "breaks": []
   }
 ]
