@@ -45,6 +45,12 @@ export interface ResolvedClient {
   responseTypes: string[];
   scopes: string[];
   audience: string[] | null;
+  /**
+   * ADR-011 (#434) ID-JAG mint targets and redeemable resources. Operator-set
+   * through the seed manifest only; `[]` for every DCR, developer-API and CIMD
+   * row, which denies both ID-JAG paths.
+   */
+  idJagTargets: string[];
   redirectUris: string[];
   tokenEndpointAuthMethod?: string;
   /**
