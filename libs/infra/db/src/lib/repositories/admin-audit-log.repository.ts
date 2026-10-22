@@ -11,12 +11,18 @@ import type {
   DbClient,
   DbTransaction,
 } from '../../types';
+import { canonicalizeJson } from '../admin-audit/canonical-json';
 import { maskSecrets } from '../admin-audit/mask-secrets';
 import {
   ADMIN_AUDIT_GENESIS_HASH,
   type AdminAuditRowContent,
   computeAdminAuditRowHash,
 } from '../admin-audit/row-hash';
+import type {
+  AdminAuditActChain,
+  AdminAuditActClaim,
+  AdminAuditApproval,
+} from '../admin-audit/types';
 import { adminAuditLog, adminAuditLogCheckpoints } from '../schema/admin-audit';
 
 /**
@@ -28,9 +34,16 @@ const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{
 
 const DEFAULT_VERIFY_BATCH_SIZE = 500;
 
+/**
+ * The `varchar` limits of the text columns. Postgres cuts an over-long value
+ * silently when the excess is spaces, which would store something other than
+ * what was hashed, so a longer value is refused here instead.
+ */
+const MAX_LENGTH = { actorId: 255, operationId: 128, traceId: 128 } as const;
+
 function canonicalUuid(value: string, field: string): string {
   if (!UUID_PATTERN.test(value)) {
-    throw new TypeError(`appendAdminAudit: ${field} is not a UUID`);
+    throw new TypeError(`admin audit log: ${field} is not a UUID`);
   }
   return value.toLowerCase();
 }
@@ -75,14 +88,56 @@ async function readNewestCheckpoint(
   return checkpoint;
 }
 
+function checkLength(field: keyof typeof MAX_LENGTH, value: string | null | undefined): void {
+  // A JavaScript length counts UTF-16 units, at least the characters Postgres counts.
+  if (value != null && value.length > MAX_LENGTH[field]) {
+    throw new TypeError(`appendAdminAudit: ${field} is longer than ${MAX_LENGTH[field]}`);
+  }
+}
+
+/**
+ * The stored form of an act claim: its identity claims and the actor before
+ * it, every link of the chain and nothing else. A member the type does not
+ * name, which a caller could carry in from a decoded token, is not stored.
+ */
+function storedActClaim(claim: AdminAuditActClaim): AdminAuditActClaim {
+  if (typeof claim.sub !== 'string' || claim.sub === '') {
+    throw new TypeError('appendAdminAudit: every actor of the act chain needs a sub');
+  }
+  return {
+    sub: claim.sub,
+    ...(claim.iss !== undefined ? { iss: claim.iss } : {}),
+    ...(claim.client_id !== undefined ? { client_id: claim.client_id } : {}),
+    ...(claim.act !== undefined ? { act: storedActClaim(claim.act) } : {}),
+  };
+}
+
+function storedActChain(chain: AdminAuditActChain | null | undefined): AdminAuditActChain | null {
+  if (!chain) return null;
+  if (typeof chain.sub !== 'string' || chain.sub === '' || !chain.act) {
+    throw new TypeError('appendAdminAudit: an act chain needs the user acted for and an actor');
+  }
+  return { sub: chain.sub, act: storedActClaim(chain.act) };
+}
+
+/** The stored form of an approval: the four members the type names, nothing else. */
+function storedApproval(approval: AdminAuditApproval): AdminAuditApproval {
+  return {
+    approverId: approval.approverId,
+    credentialId: approval.credentialId,
+    approverCreatedBy: approval.approverCreatedBy,
+    approvedAt: approval.approvedAt,
+  };
+}
+
 /**
  * The content of the row an entry becomes, without its place in the chain and
  * its time: ids in canonical form, the diff masked, the act chain and the
- * approvals as given.
+ * approvals with the members their types name.
  *
  * @throws TypeError on an entry that cannot be stored.
  */
-export function buildAdminAuditRowContent(
+function buildAdminAuditRowContent(
   entry: AdminAuditEntry
 ): Omit<AdminAuditRowContent, 'seq' | 'createdAt'> {
   const hostSide =
@@ -95,22 +150,28 @@ export function buildAdminAuditRowContent(
   if (entry.requestDigest && entry.requestDigest.length !== 32) {
     throw new TypeError('appendAdminAudit: requestDigest is not a SHA-256 digest');
   }
-  return {
+  checkLength('actorId', entry.actorId);
+  checkLength('operationId', entry.operationId);
+  checkLength('traceId', entry.traceId);
+  const content = {
     realmId: canonicalUuid(entry.realmId, 'realmId'),
     actorKind: entry.actorKind,
     actorId: entry.actorId,
     actorRealmId:
       entry.actorRealmId === null ? null : canonicalUuid(entry.actorRealmId, 'actorRealmId'),
-    actChain: entry.actChain ?? null,
+    actChain: storedActChain(entry.actChain),
     operationId: entry.operationId,
     operationClass: entry.operationClass,
     effects: [...(entry.effects ?? [])],
     outcome: entry.outcome,
     maskedDiff: entry.diff ? maskSecrets(entry.diff.change, entry.diff.annotations) : null,
-    approvals: [...(entry.approvals ?? [])],
+    approvals: (entry.approvals ?? []).map(storedApproval),
     requestDigest: entry.requestDigest ?? null,
     traceId: entry.traceId ?? null,
   };
+  // Every JSON column must canonicalize, or the row cannot be hashed.
+  canonicalizeJson([content.actChain, content.effects, content.maskedDiff, content.approvals]);
+  return content;
 }
 
 const hex = (hash: Buffer): string => hash.toString('hex');
@@ -148,10 +209,15 @@ export function createAdminAuditLogRepository(
 ): AdminAuditLogRepository {
   const now = options.now ?? Date.now;
   const batchSize = options.verifyBatchSize ?? DEFAULT_VERIFY_BATCH_SIZE;
+  if (!Number.isSafeInteger(batchSize) || batchSize < 1) {
+    throw new TypeError(
+      'createAdminAuditLogRepository: verifyBatchSize must be a positive integer'
+    );
+  }
 
   return {
     async appendAdminAudit(tx: DbTransaction, entry: AdminAuditEntry): Promise<AdminAuditRecord> {
-      // Built before the lock is taken, so a bad entry never waits for it.
+      // Built and checked before the lock is taken, so a bad entry never waits for it.
       const draft = buildAdminAuditRowContent(entry);
 
       await lockRealmChain(tx, draft.realmId);
@@ -163,6 +229,16 @@ export function createAdminAuditLogRepository(
         .insert(adminAuditLog)
         .values({ ...content, prevHash: head.rowHash, rowHash })
         .returning();
+
+      // The row as Postgres stored it must hash to its row_hash, or the chain
+      // would break at this row for good. Throwing here rolls it back with
+      // the caller's change.
+      const { prevHash: storedPrev, rowHash: storedHash, ...stored } = record;
+      if (!computeAdminAuditRowHash(storedPrev, stored).equals(storedHash)) {
+        throw new Error(
+          'appendAdminAudit: the stored row does not hash to its row_hash; nothing was appended'
+        );
+      }
 
       await options.afterAppend?.(tx, record);
       return record;

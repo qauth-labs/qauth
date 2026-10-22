@@ -12,8 +12,9 @@
  * and that `jsonb` stores: `null`, booleans, finite numbers, well-formed
  * strings, arrays and plain objects. Anything else throws, so a value that
  * would serialize one way here and another way on the way into `jsonb` (a
- * `Date`, a `Buffer`, `NaN`, a lone surrogate) never reaches a hash. As in
- * `JSON.stringify`, an object member whose value is `undefined` is absent.
+ * `Date`, a `Buffer`, `NaN`, a lone surrogate, a hole in an array) never
+ * reaches a hash. As in `JSON.stringify`, an object member whose value is
+ * `undefined` is absent.
  */
 
 /** A lone UTF-16 surrogate: not well-formed Unicode, refused by I-JSON. */
@@ -47,7 +48,16 @@ function serialize(value: unknown, path: string): string {
       return serializeString(value, path);
     case 'object': {
       if (Array.isArray(value)) {
-        return `[${value.map((item, index) => serialize(item, `${path}[${index}]`)).join(',')}]`;
+        // `map` skips a hole and `join` writes it as nothing, which is not
+        // JSON, while `JSON.stringify` writes it as `null`: refuse it.
+        const items: string[] = [];
+        for (let index = 0; index < value.length; index += 1) {
+          if (!Object.hasOwn(value, index)) {
+            throw new TypeError(`canonicalizeJson: hole at ${path}[${index}]`);
+          }
+          items.push(serialize(value[index], `${path}[${index}]`));
+        }
+        return `[${items.join(',')}]`;
       }
       if (!isPlainObject(value)) {
         throw new TypeError(`canonicalizeJson: ${path} is not a plain object`);

@@ -78,6 +78,9 @@ describe('canonicalizeJson', () => {
     ['a Buffer', Buffer.from('a')],
     ['a Map', new Map()],
     ['undefined inside an array', [1, undefined]],
+    // eslint-disable-next-line no-sparse-arrays
+    ['a hole in an array', [1, , 3]],
+    ['an array with no elements set', new Array(2)],
     ['a lone high surrogate', '\ud800'],
     ['a lone low surrogate', 'a\udc00b'],
     ['a lone surrogate in a member name', { '\ud800': 1 }],

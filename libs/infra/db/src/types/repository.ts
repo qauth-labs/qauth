@@ -784,7 +784,10 @@ export interface AdminAuditEntry {
    * service account, and `null` for the host-side kinds.
    */
   actorRealmId: string | null;
-  /** The full act chain, when the actor acted for a user. Stored as given. */
+  /**
+   * The full act chain, when the actor acted for a user: every link, each with
+   * the claims {@link AdminAuditActClaim} names. Other members are not stored.
+   */
   actChain?: AdminAuditActChain | null;
   /** The permission catalog id of the operation, such as `realms.policies.write`. */
   operationId: string;
@@ -797,11 +800,11 @@ export interface AdminAuditEntry {
    * It is stored only through `maskSecrets`, never as given.
    */
   diff?: { change: AdminAuditDiff; annotations: FieldAnnotations } | null;
-  /** The approvals the operation ran on. */
+  /** The approvals the operation ran on, with the members their type names only. */
   approvals?: readonly AdminAuditApproval[];
   /** SHA-256 (32 bytes) of the canonical request an approval is bound to. */
   requestDigest?: Buffer | null;
-  /** The id under which QAuth logged the request. */
+  /** The id under which QAuth logged the request, at most 128 characters. */
   traceId?: string | null;
 }
 
@@ -860,7 +863,7 @@ export interface AdminAuditLogOptions {
   afterAppend?: AdminAuditAfterAppend;
   /** The clock for `created_at`, in epoch milliseconds. Defaults to `Date.now`. */
   now?: () => number;
-  /** Rows read per query while verifying. Defaults to 500. */
+  /** Rows read per query while verifying, a positive integer. Defaults to 500. */
   verifyBatchSize?: number;
 }
 
@@ -876,11 +879,19 @@ export interface AdminAuditLogRepository {
    * Takes the realm's chain lock (`pg_advisory_xact_lock`) until the
    * transaction ends, so appends to one realm form one linear chain. Under
    * REPEATABLE READ or SERIALIZABLE, an append that raced another fails on the
-   * primary key instead; retry the transaction.
+   * primary key instead; retry the transaction. Because the lock lasts to the
+   * end of the transaction, append last; a transaction that appends to
+   * several realms appends in a fixed order (by realm id), or two such
+   * transactions can deadlock.
+   *
+   * After the insert it hashes the row as Postgres returned it and throws if
+   * that differs from the hash it wrote, so a row the chain would reject later
+   * never commits.
    *
    * @throws TypeError on an entry that cannot be stored: an id that is not a
    *   UUID, a missing or extra `actorRealmId`, a digest that is not 32 bytes,
-   *   or a JSON value outside the I-JSON model.
+   *   a text longer than its column, an act chain without a `sub`, or a JSON
+   *   value outside the I-JSON model.
    */
   appendAdminAudit(tx: DbTransaction, entry: AdminAuditEntry): Promise<AdminAuditRecord>;
 

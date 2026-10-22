@@ -24,10 +24,10 @@ export type FieldAnnotation = 'secret';
 
 /**
  * Field annotations of a resource, keyed by the field's path inside the
- * resource: member names joined by `.`, where `*` matches any member or any
- * array element. For example `clientSecretHash`, `smtp.password` or
- * `webhooks.*.secret`. A secret field's whole value is masked, nested values
- * included.
+ * resource: member names or array indexes joined by `.`, where `*` matches any
+ * member or any array element. For example `clientSecretHash`,
+ * `smtp.password` or `webhooks.*.secret`. A secret field's whole value is
+ * masked, nested values included.
  */
 export type FieldAnnotations = Readonly<Record<string, FieldAnnotation>>;
 

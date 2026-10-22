@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { ADMIN_AUDIT_SECRET_MARKER, maskSecrets } from './mask-secrets';
-import type { AdminAuditDiff } from './types';
+import type { AdminAuditDiff, JsonObject } from './types';
 
 /**
  * Secret masking for admin audit diffs (issue #448, ADR-020 §3). A field
@@ -111,6 +111,52 @@ describe('maskSecrets', () => {
 
     expect(Object.getPrototypeOf(masked.before)).toBe(Object.prototype);
     expect(JSON.stringify(masked.before)).toBe('{"__proto__":{"token":"***"},"a":1}');
+  });
+
+  it('refuses a member name where the diff holds an array, which would mask nothing', () => {
+    expect(() =>
+      maskSecrets(
+        { before: null, after: { webhooks: [{ secret: 'whsec_1' }] } },
+        { 'webhooks.secret': 'secret' }
+      )
+    ).toThrow(TypeError);
+    // An index names one element.
+    expect(
+      maskSecrets(
+        { before: null, after: { webhooks: [{ secret: 'whsec_1' }, { secret: 'whsec_2' }] } },
+        { 'webhooks.1.secret': 'secret' }
+      ).after
+    ).toEqual({ webhooks: [{ secret: 'whsec_1' }, { secret: ADMIN_AUDIT_SECRET_MARKER }] });
+  });
+
+  it('lets a path through * meet an array that has no such field', () => {
+    const masked = maskSecrets(
+      {
+        before: null,
+        after: { redirectUris: ['https://app.example.test/cb'], smtp: { token: 't-1' } },
+      },
+      { '*.token': 'secret' }
+    );
+
+    expect(masked.after).toEqual({
+      redirectUris: ['https://app.example.test/cb'],
+      smtp: { token: ADMIN_AUDIT_SECRET_MARKER },
+    });
+  });
+
+  it('masks a member whose name holds a dot through * on its parent', () => {
+    const masked = maskSecrets(
+      { before: null, after: { headers: { 'x.api.key': 'k-1' } } },
+      { 'headers.*': 'secret' }
+    );
+
+    expect(masked.after).toEqual({ headers: { 'x.api.key': ADMIN_AUDIT_SECRET_MARKER } });
+  });
+
+  it('refuses a value that is not plain JSON instead of turning it into {}', () => {
+    const after = { createdAt: new Date(0) } as unknown as JsonObject;
+
+    expect(() => maskSecrets({ before: null, after }, { '*.secret': 'secret' })).toThrow(TypeError);
   });
 
   it('refuses an annotation path with an empty segment', () => {

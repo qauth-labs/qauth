@@ -4,8 +4,8 @@ import { describe, expect, it, vi } from 'vitest';
 
 import type { AdminAuditEntry, Database, DbTransaction } from '../../types';
 import { ADMIN_AUDIT_SECRET_MARKER } from '../admin-audit/mask-secrets';
-import type { AdminAuditActChain } from '../admin-audit/types';
 import { ADMIN_AUDIT_GENESIS_HASH } from '../admin-audit/row-hash';
+import type { AdminAuditActChain } from '../admin-audit/types';
 import { createAdminAuditLogRepository } from './admin-audit-log.repository';
 
 /**
@@ -20,15 +20,24 @@ interface CapturedQuery {
   readonly values: readonly unknown[];
 }
 
-/** A `pg` client that records queries instead of running them. */
-function createRecordingDb(): { db: Database; queries: CapturedQuery[] } {
+/**
+ * A `pg` client that records queries instead of running them. Reads find no
+ * row; an INSERT ... RETURNING gives back the values it bound, in column
+ * order, the way Postgres returns a row it stored unchanged. `stored` can
+ * alter that row, the way Postgres would by cutting a value.
+ */
+function createRecordingDb(stored: (row: unknown[]) => unknown[] = (row) => row): {
+  db: Database;
+  queries: CapturedQuery[];
+} {
   const queries: CapturedQuery[] = [];
   const client = {
     query: (config: { text?: string; values?: unknown[] } | string, values?: unknown[]) => {
       const text = typeof config === 'string' ? config : (config.text ?? '');
       const params = typeof config === 'string' ? (values ?? []) : (config.values ?? values ?? []);
       queries.push({ text, values: params });
-      return Promise.resolve({ rows: [], rowCount: 0, fields: [], command: '', oid: 0 });
+      const rows = text.toLowerCase().startsWith('insert into') ? [stored([...params])] : [];
+      return Promise.resolve({ rows, rowCount: rows.length, fields: [], command: '', oid: 0 });
     },
   };
   return { db: drizzle(client as unknown as Pool) as unknown as Database, queries };
@@ -128,7 +137,7 @@ describe('appendAdminAudit', () => {
     expect(bound).not.toContain('new-hash');
   });
 
-  it('stores the full act chain, every actor and claim, as given', async () => {
+  it('stores the full act chain, every actor with its identity claims', async () => {
     const { db, queries } = createRecordingDb();
     // Deeper than the four actors QAuth mints, with claims beyond `sub`: none
     // of it may be flattened or cut.
@@ -156,6 +165,49 @@ describe('appendAdminAudit', () => {
     expect(jsonValues(insertQuery(queries))).toContainEqual(actChain);
   });
 
+  it('stores only the members an act claim and an approval name', async () => {
+    const { db, queries } = createRecordingDb();
+    const approval = {
+      approverId: 'admin-2',
+      credentialId: 'cred-2',
+      approverCreatedBy: 'admin-1',
+      approvedAt: 1_800_000_000_000,
+      assertion: 'webauthn-assertion-bytes',
+    };
+
+    await createAdminAuditLogRepository(db).appendAdminAudit(db as unknown as DbTransaction, {
+      ...ENTRY,
+      actChain: {
+        sub: USER_ID,
+        act: { sub: ADMIN_ID, token: 'eyJ.raw.token' } as AdminAuditActChain['act'],
+      },
+      approvals: [approval],
+    });
+
+    const bound = JSON.stringify(insertQuery(queries).values);
+    expect(bound).not.toContain('eyJ.raw.token');
+    expect(bound).not.toContain('webauthn-assertion-bytes');
+    expect(jsonValues(insertQuery(queries))).toContainEqual({
+      sub: USER_ID,
+      act: { sub: ADMIN_ID },
+    });
+  });
+
+  it('refuses a row that Postgres stored differently from what it hashed', async () => {
+    // Postgres cuts trailing spaces past a varchar limit; any such change to
+    // the stored row must fail the append, not break the chain later.
+    const { db } = createRecordingDb((row) =>
+      row.map((value) => (value === 'trace-1' ? 'trace-' : value))
+    );
+
+    await expect(
+      createAdminAuditLogRepository(db).appendAdminAudit(db as unknown as DbTransaction, {
+        ...ENTRY,
+        traceId: 'trace-1',
+      })
+    ).rejects.toThrow('does not hash to its row_hash');
+  });
+
   it('calls the outbox hook after the insert, in the same transaction', async () => {
     const { db, queries } = createRecordingDb();
     const afterAppend = vi.fn(async () => {
@@ -178,6 +230,13 @@ describe('appendAdminAudit', () => {
       { actorKind: 'host_operator', actorRealmId: OPERATOR_REALM_ID },
     ],
     ['a request digest that is not 32 bytes', { requestDigest: Buffer.alloc(31) }],
+    ['a trace id longer than its column', { traceId: `${'a'.repeat(128)}   ` }],
+    ['an actor id longer than its column', { actorId: 'a'.repeat(256) }],
+    ['an operation id longer than its column', { operationId: 'o'.repeat(129) }],
+    [
+      'an act chain actor without a sub',
+      { actChain: { sub: USER_ID, act: {} as AdminAuditActChain['act'] } },
+    ],
     [
       'a diff value outside I-JSON',
       { diff: { change: { before: null, after: { n: Number.NaN } }, annotations: {} } },
