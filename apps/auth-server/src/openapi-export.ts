@@ -1,9 +1,18 @@
 /**
- * Exports the auth-server's OpenAPI 3.1 spec to `apps/docs-site/public/openapi.json`
- * (committed) — the source the docs site's API reference is built from, and
- * the artifact Task 3's endpoint-coverage guard checks against (#347).
+ * Exports the auth-server's OpenAPI 3.1 spec, under one of two flag surfaces:
  *
- * Run via `pnpm exec nx run auth-server:openapi-export` (see project.json).
+ *   - `--surface default` writes `stable-surface/openapi.json`: the app as a
+ *     default deployment serves it, every feature switch at its default. This
+ *     is the stable surface of ADR-018 §5. CI regenerates it, fails on drift,
+ *     and compares it with the latest release tag (`scripts/stable-surface/`,
+ *     #451).
+ *   - `--surface maximal` writes `apps/docs-site/public/openapi.json`: every
+ *     switch that registers a route turned on. The docs site's API reference is
+ *     built from it, the endpoint-coverage guard checks against it (#347), and
+ *     the stable-surface check requires every operation it adds over the
+ *     default export to be tagged `x-qauth-stability: experimental`.
+ *
+ * Run both via `pnpm exec nx run auth-server:openapi-export` (see project.json).
  *
  * ## Why this exists instead of hitting the live server
  *
@@ -21,14 +30,22 @@
  *     unreachable, ephemeral URLs set below. This script does not start a
  *     Docker container.
  *
- * ## Maximal flag surface (why, not just what)
+ * ## Two flag surfaces (why, not just what)
  *
  * A default-flag boot omits `POST /oid4vp/response` entirely — that route is
  * registered only when `WALLET_FEDERATION_ENABLED` is on
  * (`apps/auth-server/src/app/routes/oid4vp/response.ts`), and it additionally
  * requires `OID4VP_VERIFIER_PROFILE` to be set or the app refuses to boot
- * (fail-closed, #299). Exporting under the defaults would leave Task 3's
- * endpoint-coverage guard checking a spec that never had that route to miss.
+ * (fail-closed, #299). Exporting only under the defaults would leave Task 3's
+ * endpoint-coverage guard checking a spec that never had that route to miss;
+ * exporting only under the maximal surface would publish switch-gated routes
+ * as if a default deployment served them. Hence one process per surface: the
+ * env is parsed once, at import (see "Ordering" below), so one process cannot
+ * boot the app twice under different flags.
+ *
+ * Each surface sets every switch that decides whether a route registers
+ * (`WALLET_FEDERATION_ENABLED`, `METRICS_ENABLED`) explicitly, so a value in
+ * the caller's shell cannot change which operations an export contains.
  * `oid4vp-1.0-base` is used because it is the profile that actually starts on
  * this deployment's crypto (EdDSA-only) — `haip-1.0` requires ES256 signing
  * and an unprovisioned certificate chain and refuses to boot; see
@@ -63,13 +80,38 @@ import { dirname, resolve } from 'node:path';
 
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 
+/** Which feature switches the exported app boots with (see the module doc comment). */
+type FlagSurface = 'default' | 'maximal';
+
+const FLAG_SURFACES: readonly FlagSurface[] = ['default', 'maximal'];
+
 /**
- * Output path: `apps/docs-site/public/openapi.json`, resolved from this
- * file's own location rather than `process.cwd()` so the script behaves the
- * same whether it is run via the Nx target (`cwd: apps/auth-server`) or
- * directly with `tsx` from any directory.
+ * Output path per surface, resolved from this file's own location rather than
+ * `process.cwd()` so the script behaves the same whether it is run via the Nx
+ * target (`cwd: apps/auth-server`) or directly with `tsx` from any directory.
+ * `stable-surface/surfaces.json` registers both paths.
  */
-const OUTPUT_PATH = resolve(__dirname, '..', '..', 'docs-site', 'public', 'openapi.json');
+const OUTPUT_PATHS: Readonly<Record<FlagSurface, string>> = {
+  default: resolve(__dirname, '..', '..', '..', 'stable-surface', 'openapi.json'),
+  maximal: resolve(__dirname, '..', '..', 'docs-site', 'public', 'openapi.json'),
+};
+
+/** Read `--surface default|maximal` (or `--surface=…`) from the command line. */
+function parseFlagSurface(argv: readonly string[]): FlagSurface {
+  const index = argv.findIndex((arg) => arg === '--surface' || arg.startsWith('--surface='));
+  const value =
+    index === -1
+      ? undefined
+      : argv[index].includes('=')
+        ? argv[index].slice('--surface='.length)
+        : argv[index + 1];
+  if (!FLAG_SURFACES.includes(value as FlagSurface)) {
+    throw new Error(
+      `openapi-export: pass --surface ${FLAG_SURFACES.join('|')} (got ${value ?? 'nothing'})`
+    );
+  }
+  return value as FlagSurface;
+}
 
 /**
  * Minimum number of OpenAPI paths the export must produce before it is
@@ -77,8 +119,9 @@ const OUTPUT_PATH = resolve(__dirname, '..', '..', 'docs-site', 'public', 'opena
  * make Task 3's endpoint-coverage guard vacuous (nothing to compare against)
  * and the docs site's API reference blank.
  *
- * Chosen against the ACTUAL count observed at scaffold time (28 paths under
- * the full maximal-flag-surface environment, #347 Task 1) with headroom
+ * Applies to both surfaces. Chosen against the ACTUAL count observed at
+ * scaffold time (28 paths under the full maximal-flag-surface environment,
+ * #347 Task 1; the default surface has had 29 since #451) with headroom
  * UNDER it, not pinned to it: the threshold exists to catch "most routes
  * silently failed to register" (a dropped env flag, a plugin registration
  * that threw and was swallowed) — a catastrophic drop to a handful of paths
@@ -123,11 +166,11 @@ function generateMlDsaSeedBase64Url(): string {
 }
 
 /**
- * Populate `process.env` with the maximal flag surface + ephemeral key
- * material this export needs, BEFORE anything that reads `config/env.ts` is
- * imported (see the module doc comment).
+ * Populate `process.env` with the given flag surface + ephemeral key material
+ * this export needs, BEFORE anything that reads `config/env.ts` is imported
+ * (see the module doc comment).
  */
-function setEphemeralEnv(): void {
+function setEphemeralEnv(surface: FlagSurface): void {
   const ed25519 = generateEd25519KeyPairPem();
 
   Object.assign(process.env, {
@@ -155,6 +198,17 @@ function setEphemeralEnv(): void {
 
     RATE_LIMIT_ENABLED: 'false',
 
+    // On by default; pinned so that a caller's `METRICS_ENABLED=false` cannot
+    // drop `GET /metrics` from either export.
+    METRICS_ENABLED: 'true',
+  });
+
+  if (surface === 'default') {
+    Object.assign(process.env, { WALLET_FEDERATION_ENABLED: 'false' });
+    return;
+  }
+
+  Object.assign(process.env, {
     // Wallet federation (ADR-004): all three are required together, or the app
     // refuses to boot (#299 and #379, both fail-closed). `POST /oid4vp/response`
     // is registered only when the flag is on — this is the whole reason the
@@ -183,7 +237,9 @@ interface OpenApiDocument {
 }
 
 async function main(): Promise<void> {
-  setEphemeralEnv();
+  const surface = parseFlagSurface(process.argv.slice(2));
+  const outputPath = OUTPUT_PATHS[surface];
+  setEphemeralEnv(surface);
 
   // Dynamic imports, not static ones: every one of these transitively
   // reaches `../config/env`, which validates `process.env` at import time.
@@ -237,15 +293,18 @@ async function main(): Promise<void> {
       // not two.
       throw new Error(
         `openapi-export: refusing to write a near-empty spec — got ${pathCount} path(s), ` +
-          `expected at least ${MIN_EXPECTED_PATHS}. This usually means one of the maximal-surface ` +
-          'env flags did not take effect (WALLET_FEDERATION_ENABLED / OID4VP_VERIFIER_PROFILE) or a ' +
-          'route registration failed silently. Re-run with FASTIFY_DEBUG or inspect the app registration.'
+          `expected at least ${MIN_EXPECTED_PATHS} for the ${surface} surface. This usually means ` +
+          'one of the env flags did not take effect (WALLET_FEDERATION_ENABLED / ' +
+          'OID4VP_VERIFIER_PROFILE) or a route registration failed silently. Re-run with ' +
+          'FASTIFY_DEBUG or inspect the app registration.'
       );
     }
 
-    mkdirSync(dirname(OUTPUT_PATH), { recursive: true });
-    writeFileSync(OUTPUT_PATH, `${JSON.stringify(spec, null, 2)}\n`);
-    console.log(`openapi-export: wrote ${pathCount} path(s) to ${OUTPUT_PATH}`);
+    mkdirSync(dirname(outputPath), { recursive: true });
+    writeFileSync(outputPath, `${JSON.stringify(spec, null, 2)}\n`);
+    console.log(
+      `openapi-export: wrote ${pathCount} path(s) for the ${surface} surface to ${outputPath}`
+    );
   } finally {
     // A `finally` block that itself throws REPLACES whatever error was
     // already propagating — the original cause (a registration bug, a

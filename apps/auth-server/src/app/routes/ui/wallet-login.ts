@@ -877,6 +877,7 @@ export default async function (fastify: FastifyInstance) {
         description:
           'Renders the wallet sign-in screen, which collects the account identifier the user asserts (ADR-009). Issue #239.',
         tags: ['UI'],
+        'x-qauth-stability': 'experimental',
         // No `error` parameter: the page never shows caller-supplied text.
         // The server's own refusals are fixed strings rendered by the POST.
         querystring: z.object({
@@ -927,6 +928,7 @@ export default async function (fastify: FastifyInstance) {
         description:
           'Starts a wallet sign-in: records the asserted account identifier and issues an OID4VP presentation request. Issue #239.',
         tags: ['UI'],
+        'x-qauth-stability': 'experimental',
         body: walletLoginFormSchema,
       },
       config: {
@@ -1120,6 +1122,7 @@ export default async function (fastify: FastifyInstance) {
         description:
           'Re-renders a wallet sign-in in progress, advancing it if the wallet has responded. Also the no-JavaScript refresh path. Issue #239.',
         tags: ['UI'],
+        'x-qauth-stability': 'experimental',
         params: z.object({ handle: z.string() }),
       },
       config: {
@@ -1201,6 +1204,7 @@ export default async function (fastify: FastifyInstance) {
         description:
           'Polled by the wallet sign-in screen. Reports whether the direct_post presentation response has arrived, and completes the sign-in when it has. Issue #239.',
         tags: ['UI'],
+        'x-qauth-stability': 'experimental',
         params: z.object({ handle: z.string() }),
         response: { 200: walletLoginStatusSchema },
       },
@@ -1341,6 +1345,7 @@ export default async function (fastify: FastifyInstance) {
       schema: {
         description: `Same-device return leg of a wallet sign-in (OID4VP 1.0 §8.2 / §14.2, HAIP 1.0 §5.1). The wallet redirects the browser here with the single-use Response Code (${MAX_OID4VP_RESPONSE_CODE_LENGTH} base64url characters) it received from the direct_post Response Endpoint; the code is spent first, then matched against the flows this browser holds, and the sign-in completes only in the browser that started it. Every refusal renders one identical page. Issue #405.`,
         tags: ['UI'],
+        'x-qauth-stability': 'experimental',
         querystring: z.object({
           response_code: z.string().optional(),
         }),

@@ -301,6 +301,7 @@ export default async function (fastify: FastifyInstance) {
         description:
           'Renders the wallet-linking confirmation screen for the signed-in user. Issue #238.',
         tags: ['UI'],
+        'x-qauth-stability': 'experimental',
       },
     },
     async (request, reply) => {
@@ -338,6 +339,7 @@ export default async function (fastify: FastifyInstance) {
         description:
           'Starts a wallet-linking flow for the signed-in user and issues an OID4VP presentation request. Issue #238.',
         tags: ['UI'],
+        'x-qauth-stability': 'experimental',
         body: linkFormSchema,
       },
       config: {
@@ -442,6 +444,7 @@ export default async function (fastify: FastifyInstance) {
         description:
           'Re-renders a wallet-linking flow in progress, completing it if the wallet has responded. Also the no-JavaScript refresh path. Issue #238.',
         tags: ['UI'],
+        'x-qauth-stability': 'experimental',
         params: z.object({ handle: z.string() }),
       },
       config: {

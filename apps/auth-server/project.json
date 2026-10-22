@@ -85,10 +85,14 @@
     "openapi-export": {
       "executor": "nx:run-commands",
       "options": {
-        "command": "tsx src/openapi-export.ts",
+        "commands": [
+          "tsx src/openapi-export.ts --surface default",
+          "tsx src/openapi-export.ts --surface maximal"
+        ],
+        "parallel": false,
         "cwd": "apps/auth-server"
       },
-      "description": "Boot the real app (no Postgres/Redis required, no listening port) under the maximal flag surface and write apps/docs-site/public/openapi.json"
+      "description": "Boot the real app (no Postgres/Redis required, no listening port) twice: under default flags to write stable-surface/openapi.json, and under the maximal flag surface to write apps/docs-site/public/openapi.json"
     },
     "serve": {
       "continuous": true,

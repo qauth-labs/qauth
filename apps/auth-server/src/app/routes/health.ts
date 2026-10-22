@@ -20,6 +20,7 @@ export default async function (fastify: FastifyInstance) {
         description:
           'Health check endpoint. Returns database and Redis connectivity status. Used for liveness and readiness probes.',
         tags: ['System'],
+        'x-qauth-stability': 'stable',
       },
       config: {
         rateLimit: {

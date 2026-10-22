@@ -112,6 +112,7 @@ export async function registerApiKeyRoutes(fastify: FastifyInstance): Promise<vo
         description:
           "Mint a static developer API key for one of the developer's OAuth clients. ENVIRONMENT-GATED (ADR-008 §6): permitted only while the client resolves to a development environment; a staging/production (or unset-environment) client is refused with 403 and must use the OAuth client_credentials grant. The plaintext key is returned in THIS response only and never again. Returns 404 if the client does not exist or is owned by another developer. (Issue #97.)",
         tags: ['API Keys'],
+        'x-qauth-stability': 'stable',
         security: [{ bearerAuth: [] }],
         params: clientIdParamsSchema,
         body: createApiKeyRequestSchema,
@@ -188,6 +189,7 @@ export async function registerApiKeyRoutes(fastify: FastifyInstance): Promise<vo
         description:
           "List the static API keys for one of the developer's OAuth clients. Returns masked fields only (prefix + last4) — never the key or its hash. Includes revoked keys (with revokedAt set). Returns 404 if the client does not exist or is owned by another developer. (Issue #97.)",
         tags: ['API Keys'],
+        'x-qauth-stability': 'stable',
         security: [{ bearerAuth: [] }],
         params: clientIdParamsSchema,
         response: { 200: listApiKeysResponseSchema },
@@ -213,6 +215,7 @@ export async function registerApiKeyRoutes(fastify: FastifyInstance): Promise<vo
         description:
           "Revoke one static API key for one of the developer's OAuth clients. Idempotent soft-delete: the row is retained with revokedAt set, and a revoked key never authenticates again. Returns 404 if the client or key does not exist or is owned by another developer. (Issue #97.)",
         tags: ['API Keys'],
+        'x-qauth-stability': 'stable',
         security: [{ bearerAuth: [] }],
         params: keyParamsSchema,
         response: { 200: apiKeySchema },

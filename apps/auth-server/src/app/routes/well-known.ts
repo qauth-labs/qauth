@@ -51,6 +51,7 @@ export default async function (fastify: FastifyInstance) {
         description:
           'OAuth 2.0 Authorization Server Metadata (RFC 8414). Unauthenticated, cacheable.',
         tags: ['Discovery'],
+        'x-qauth-stability': 'stable',
       },
     },
     async (_request, reply) => {
@@ -68,6 +69,7 @@ export default async function (fastify: FastifyInstance) {
         description:
           'OpenID Connect Discovery 1.0 document. Superset of RFC 8414 AS metadata with OIDC-specific fields. Unauthenticated, cacheable.',
         tags: ['Discovery'],
+        'x-qauth-stability': 'stable',
       },
     },
     async (_request, reply) => {
@@ -85,6 +87,7 @@ export default async function (fastify: FastifyInstance) {
         description:
           'JSON Web Key Set (RFC 7517) containing the active EdDSA public signing key(s). Used by clients and resource servers to verify JWT signatures.',
         tags: ['Discovery'],
+        'x-qauth-stability': 'stable',
       },
     },
     async (_request, reply) => {

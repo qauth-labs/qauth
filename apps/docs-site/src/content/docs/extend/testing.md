@@ -11,13 +11,14 @@ the built server from outside, over HTTP. Knowing what each one **cannot** catch
 worst incidents in this repo's history came from: a suite that passed while running zero tests,
 and a schema change no unit test could see.
 
-| Tier                 | Command                                      | Runs in CI              | Catches                                           |
-| -------------------- | -------------------------------------------- | ----------------------- | ------------------------------------------------- |
-| Unit                 | `pnpm exec nx run-many -t test --all`        | `nx affected -t … test` | Handler and helper logic, in isolation            |
-| Integration          | `pnpm exec nx run infra-db:test-integration` | the `integration` job   | Real Postgres DDL, migrations, repositories       |
-| Repo-wide coverage   | `pnpm exec vitest run --coverage`            | a separate step         | Coverage regression across the whole fast suite   |
-| Documentation guards | `pnpm exec nx test docs-site`                | part of the unit tier   | Drift between this site and the tree it describes |
-| Wire suite           | `pnpm nx run wire-suite:run`                 | the `wire-suite` job    | What a client sees over HTTP from the built image |
+| Tier                 | Command                                      | Runs in CI               | Catches                                                 |
+| -------------------- | -------------------------------------------- | ------------------------ | ------------------------------------------------------- |
+| Unit                 | `pnpm exec nx run-many -t test --all`        | `nx affected -t … test`  | Handler and helper logic, in isolation                  |
+| Integration          | `pnpm exec nx run infra-db:test-integration` | the `integration` job    | Real Postgres DDL, migrations, repositories             |
+| Repo-wide coverage   | `pnpm exec vitest run --coverage`            | a separate step          | Coverage regression across the whole fast suite         |
+| Documentation guards | `pnpm exec nx test docs-site`                | part of the unit tier    | Drift between this site and the tree it describes       |
+| Wire suite           | `pnpm nx run wire-suite:run`                 | the `wire-suite` job     | What a client sees over HTTP from the built image       |
+| Stable surface       | `pnpm stable-surface`                        | the `stable-surface` job | A surface out of step with the code or the last release |
 
 ## Tier 1 — unit
 
@@ -271,11 +272,30 @@ Three rules keep it honest:
 What it cannot catch: anything a client cannot observe. It sees responses, not the database or
 the logs, so a write that should not have happened, or a secret in a log line, is outside it.
 
+## The stable-surface guard
+
+The `stable-surface` CI job keeps the files that carry the ADR-018 §5 stability promise in step with
+the code and with the last release. It regenerates every surface registered in
+`stable-surface/surfaces.json` — today the auth server's OpenAPI document, exported once under
+default flags and once with every route switch on — and fails when:
+
+- a committed copy differs from what its generator writes;
+- an OpenAPI operation has no `x-qauth-stability`, or an operation only a switch registers is not
+  `experimental`;
+- a stable surface breaks since the latest release tag — a removed operation or response field, a
+  new required request field, a narrowed enum, a changed type, a new required scope — and
+  `stable-surface/approved-breaks.json` does not approve that exact change.
+
+`stable-surface/README.md` defines a break in full and says how to register a surface and how to
+approve a break. Experimental operations are never compared.
+
 ## Before you open a pull request
 
 ```bash
 pnpm exec nx affected -t lint typecheck test build
 pnpm exec vitest run --coverage
+pnpm exec nx run auth-server:openapi-export     # if you changed a route; commit both exports
+pnpm stable-surface                             # drift, tags and breaks since the last release
 pnpm exec nx run infra-db:test-integration      # if you touched schema, migrations, or repositories
 pnpm exec nx run auth-server:test-integration   # if you touched wallet federation or credential status
 pnpm nx run wire-suite:run                      # against a running server (apps/wire-suite/README.md)

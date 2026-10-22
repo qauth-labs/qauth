@@ -762,6 +762,7 @@ export default async function (fastify: FastifyInstance) {
         description:
           'OAuth 2.1 authorization endpoint (GET). Issues an authorization code with PKCE and redirects to the client redirect_uri.',
         tags: ['OAuth', 'Authorization'],
+        'x-qauth-stability': 'stable',
         querystring: authorizeQuerySchema,
       },
       config,
@@ -778,6 +779,7 @@ export default async function (fastify: FastifyInstance) {
         description:
           'OAuth 2.1 authorization endpoint (POST). Identical to GET; parameters are form-encoded in the request body (OIDC Core §3.1.2.1).',
         tags: ['OAuth', 'Authorization'],
+        'x-qauth-stability': 'stable',
         body: authorizeQuerySchema,
       },
       config,

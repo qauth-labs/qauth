@@ -1,0 +1,36 @@
+{
+  "surfaces": [
+    {
+      "name": "openapi",
+      "description": "The auth server's HTTP API as a default deployment serves it: every feature switch at its default. The stable surface of ADR-018 §5.",
+      "format": "openapi",
+      "generator": "pnpm exec nx run auth-server:openapi-export --skip-nx-cache",
+      "path": "stable-surface/openapi.json",
+      "stability": "stable",
+      "formerPaths": ["apps/docs-site/public/openapi.json"],
+      "formerExperimental": [
+        "POST /auth/link/wallet",
+        "GET /auth/link/wallet/{handle}",
+        "GET /oid4vp/request/{handle}",
+        "POST /oid4vp/response",
+        "GET /ui/wallet-link",
+        "POST /ui/wallet-link",
+        "GET /ui/wallet-link/{handle}",
+        "GET /ui/wallet-login",
+        "POST /ui/wallet-login",
+        "GET /ui/wallet-login/return",
+        "GET /ui/wallet-login/{handle}",
+        "GET /ui/wallet-login/{handle}/status"
+      ]
+    },
+    {
+      "name": "openapi-maximal",
+      "description": "The same API with every switch that registers a route turned on, as the docs site publishes it. Checked for drift and for stability tags, never for breaks.",
+      "format": "openapi",
+      "generator": "pnpm exec nx run auth-server:openapi-export --skip-nx-cache",
+      "path": "apps/docs-site/public/openapi.json",
+      "stability": "experimental",
+      "maximalOf": "openapi"
+    }
+  ]
+}

@@ -30,6 +30,7 @@ export default async function (fastify: FastifyInstance) {
         description:
           "Log out the current user. Ends the user's hosted browser sessions, revokes all refresh tokens and unredeemed authorization codes for the user, and the access token presented. Accepts expired access tokens.",
         tags: ['Auth'],
+        'x-qauth-stability': 'stable',
         headers: logoutHeadersSchema,
         response: {
           200: logoutResponseSchema,

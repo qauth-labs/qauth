@@ -2,6 +2,27 @@ import type * as SwaggerPlugin from '@fastify/swagger';
 import { createJsonSchemaTransform } from 'fastify-type-provider-zod';
 
 /**
+ * Where one HTTP operation stands under the ADR-018 §5 stability contract.
+ * `experimental` operations sit behind a switch and may change in a minor
+ * release; everything else is `stable`.
+ */
+export type OperationStability = 'stable' | 'experimental';
+
+declare module 'fastify' {
+  interface FastifySchema {
+    /**
+     * Required on every route schema, though optional in the type so that
+     * routes outside this app are not forced to carry it. `@fastify/swagger`
+     * copies every `x-` key of a route schema onto the OpenAPI operation, where
+     * the stable-surface check (`scripts/stable-surface/`) fails CI when an
+     * operation lacks it and skips `experimental` operations in its break
+     * check.
+     */
+    'x-qauth-stability'?: OperationStability;
+  }
+}
+
+/**
  * `@fastify/swagger` registration options — the `openapi` object plus the
  * `transform` — shared verbatim by `main.ts` (the running server, `/docs`),
  * `openapi-export.ts` (the offline exporter that writes

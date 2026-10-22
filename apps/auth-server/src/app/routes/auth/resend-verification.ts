@@ -59,6 +59,7 @@ export default async function (fastify: FastifyInstance) {
         description:
           'Request a new verification email. Rate limited per IP and per email. Always returns success to prevent email enumeration.',
         tags: ['Auth'],
+        'x-qauth-stability': 'stable',
         body: resendVerificationSchema,
         response: {
           200: resendVerificationResponseSchema,

@@ -26,6 +26,7 @@ export default async function (fastify: FastifyInstance) {
         description:
           'Prometheus metrics endpoint. Returns process/runtime metrics plus auth counters in Prometheus text exposition format.',
         tags: ['System'],
+        'x-qauth-stability': 'stable',
       },
       // High-frequency scrape target — exempt from rate limiting.
       config: { rateLimit: false },

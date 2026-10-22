@@ -74,6 +74,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   no trailing dot. It refuses wildcards, white space, empty labels and hosts
   over 253 characters.
 
+- **A guard on the stable surface** ([#451], ADR-018 §5). Every OpenAPI
+  operation carries `x-qauth-stability` (`stable` or `experimental`; the wallet
+  federation routes, which a switch registers, are experimental). The OpenAPI
+  export now runs twice: under default flags to `stable-surface/openapi.json`,
+  the stable surface, and with every route switch on to the docs site's
+  `openapi.json`. A new CI job regenerates every surface registered in
+  `stable-surface/surfaces.json` and fails on drift from the committed file, on
+  a missing stability tag, and on a break since the latest release tag that
+  `stable-surface/approved-breaks.json` does not approve. See
+  `stable-surface/README.md`.
+
 ### Changed
 
 - `REQUIRE_EMAIL_VERIFIED` is now an alias in the key registry, resolved by the
@@ -113,6 +124,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 [#435]: https://github.com/qauth-labs/qauth/issues/435
 [#449]: https://github.com/qauth-labs/qauth/issues/449
+[#451]: https://github.com/qauth-labs/qauth/issues/451
 [#452]: https://github.com/qauth-labs/qauth/issues/452
 [#461]: https://github.com/qauth-labs/qauth/issues/461
 [#462]: https://github.com/qauth-labs/qauth/issues/462

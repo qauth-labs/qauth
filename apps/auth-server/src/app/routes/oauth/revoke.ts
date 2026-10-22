@@ -46,6 +46,7 @@ export default async function (fastify: FastifyInstance) {
         description:
           'RFC 7009 token revocation. Send the token and confidential client credentials in an application/x-www-form-urlencoded body. Always returns 200 with an empty body on success.',
         tags: ['OAuth', 'Revocation'],
+        'x-qauth-stability': 'stable',
         body: revokeRequestSchema,
       },
       config: {

@@ -59,13 +59,13 @@ const AUTO_PREFIX_RE = /export const autoPrefix\s*=\s*['"]([^'"]+)['"]/;
  * literal requirement exists to suppress (the `redis.get` case above, pinned
  * by the `routes-non-literal-get` fixture in `endpoint-coverage.test.ts`),
  * and reviewers have concluded that trade is worth keeping. The residual
- * exposure is worth stating plainly rather than rediscovering: a contributor
- * who uses a non-literal registration shape AND skips the OpenAPI export
- * ships an undocumented endpoint past all three legs of this guard, since
- * `apps/docs-site/public/openapi.json` is a hand-regenerated committed
- * snapshot that no workflow diffs against the running app. Do not widen this
- * regex without a plan for the false positives; add the missing route to the
- * spec instead.
+ * exposure is closed outside this guard: a contributor who uses a
+ * non-literal registration shape AND skips the OpenAPI export no longer ships
+ * an undocumented endpoint past it, because CI's stable-surface drift check
+ * (`scripts/stable-surface/`, #451) regenerates `public/openapi.json` from the
+ * running app and fails when it differs from the committed copy. Do not widen
+ * this regex without a plan for the false positives; add the missing route to
+ * the spec instead.
  */
 const METHOD_CALL_RE =
   /\.(get|post|put|patch|delete|head|options)\s*(?:<[^>]*>)?\s*\(\s*\n?\s*['"]([^'"]*)['"]/g;

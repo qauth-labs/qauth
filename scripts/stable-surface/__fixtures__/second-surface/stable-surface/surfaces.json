@@ -1,0 +1,19 @@
+{
+  "surfaces": [
+    {
+      "name": "openapi",
+      "format": "openapi",
+      "generator": "node generate.mjs",
+      "path": "stable-surface/openapi.json",
+      "stability": "stable"
+    },
+    {
+      "name": "events",
+      "format": "json-schema",
+      "role": "output",
+      "generator": "node generate.mjs",
+      "path": "stable-surface/events.schema.json",
+      "stability": "stable"
+    }
+  ]
+}

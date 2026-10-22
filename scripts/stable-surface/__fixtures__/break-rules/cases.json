@@ -1,0 +1,435 @@
+[
+  {
+    "name": "a removed optional response field on a stable operation breaks",
+    "format": "openapi",
+    "patch": [
+      {
+        "op": "remove",
+        "path": "/paths/~1widgets/get/responses/200/content/application~1json/schema/properties/color"
+      }
+    ],
+    "breaks": ["response-optional-property-removed"]
+  },
+  {
+    "name": "a removed required response field on a stable operation breaks",
+    "format": "openapi",
+    "patch": [
+      {
+        "op": "remove",
+        "path": "/paths/~1widgets/get/responses/200/content/application~1json/schema/properties/name"
+      },
+      {
+        "op": "remove",
+        "path": "/paths/~1widgets/get/responses/200/content/application~1json/schema/required/1"
+      }
+    ],
+    "breaks": ["response-required-property-removed"]
+  },
+  {
+    "name": "a renamed response field breaks",
+    "format": "openapi",
+    "patch": [
+      {
+        "op": "remove",
+        "path": "/paths/~1widgets/get/responses/200/content/application~1json/schema/properties/size"
+      },
+      {
+        "op": "add",
+        "path": "/paths/~1widgets/get/responses/200/content/application~1json/schema/properties/dimension",
+        "value": {
+          "type": "integer"
+        }
+      }
+    ],
+    "breaks": ["response-optional-property-removed"]
+  },
+  {
+    "name": "an added optional response field passes",
+    "format": "openapi",
+    "patch": [
+      {
+        "op": "add",
+        "path": "/paths/~1widgets/get/responses/200/content/application~1json/schema/properties/shape",
+        "value": {
+          "type": "string"
+        }
+      }
+    ],
+    "breaks": []
+  },
+  {
+    "name": "a new required request field on a stable operation breaks",
+    "format": "openapi",
+    "patch": [
+      {
+        "op": "add",
+        "path": "/paths/~1widgets/post/requestBody/content/application~1json/schema/properties/owner",
+        "value": {
+          "type": "string"
+        }
+      },
+      {
+        "op": "add",
+        "path": "/paths/~1widgets/post/requestBody/content/application~1json/schema/required/-",
+        "value": "owner"
+      }
+    ],
+    "breaks": ["new-required-request-property"]
+  },
+  {
+    "name": "a new required request field on an experimental operation passes",
+    "format": "openapi",
+    "patch": [
+      {
+        "op": "add",
+        "path": "/paths/~1gadgets/post/requestBody/content/application~1json/schema/properties/owner",
+        "value": {
+          "type": "string"
+        }
+      },
+      {
+        "op": "add",
+        "path": "/paths/~1gadgets/post/requestBody/content/application~1json/schema/required/-",
+        "value": "owner"
+      }
+    ],
+    "breaks": []
+  },
+  {
+    "name": "an optional request field that becomes required breaks",
+    "format": "openapi",
+    "patch": [
+      {
+        "op": "add",
+        "path": "/paths/~1widgets/post/requestBody/content/application~1json/schema/required/-",
+        "value": "kind"
+      }
+    ],
+    "breaks": ["request-property-became-required"]
+  },
+  {
+    "name": "an added optional request field passes",
+    "format": "openapi",
+    "patch": [
+      {
+        "op": "add",
+        "path": "/paths/~1widgets/post/requestBody/content/application~1json/schema/properties/tags",
+        "value": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    ],
+    "breaks": []
+  },
+  {
+    "name": "a narrowed request enum breaks",
+    "format": "openapi",
+    "patch": [
+      {
+        "op": "remove",
+        "path": "/paths/~1widgets/post/requestBody/content/application~1json/schema/properties/kind/enum/1"
+      }
+    ],
+    "breaks": ["request-property-enum-value-removed"]
+  },
+  {
+    "name": "a widened request enum passes",
+    "format": "openapi",
+    "patch": [
+      {
+        "op": "add",
+        "path": "/paths/~1widgets/post/requestBody/content/application~1json/schema/properties/kind/enum/-",
+        "value": "medium"
+      }
+    ],
+    "breaks": []
+  },
+  {
+    "name": "a changed response field type breaks",
+    "format": "openapi",
+    "patch": [
+      {
+        "op": "replace",
+        "path": "/paths/~1widgets/get/responses/200/content/application~1json/schema/properties/size/type",
+        "value": "string"
+      }
+    ],
+    "breaks": ["response-property-type-changed"]
+  },
+  {
+    "name": "a changed request field type breaks",
+    "format": "openapi",
+    "patch": [
+      {
+        "op": "replace",
+        "path": "/paths/~1widgets/post/requestBody/content/application~1json/schema/properties/name/type",
+        "value": "integer"
+      }
+    ],
+    "breaks": ["request-property-type-changed"]
+  },
+  {
+    "name": "a new required scope breaks",
+    "format": "openapi",
+    "patch": [
+      {
+        "op": "replace",
+        "path": "/paths/~1widgets/get/security/0/bearerAuth",
+        "value": ["widgets:read"]
+      }
+    ],
+    "breaks": ["api-security-scope-added"]
+  },
+  {
+    "name": "a credential required on an open operation breaks",
+    "format": "openapi",
+    "patch": [
+      {
+        "op": "add",
+        "path": "/paths/~1status/get/security",
+        "value": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    ],
+    "breaks": ["api-security-added"]
+  },
+  {
+    "name": "a removed operation breaks",
+    "format": "openapi",
+    "patch": [
+      {
+        "op": "remove",
+        "path": "/paths/~1widgets/post"
+      }
+    ],
+    "breaks": ["api-removed-without-deprecation"]
+  },
+  {
+    "name": "a removed path breaks",
+    "format": "openapi",
+    "patch": [
+      {
+        "op": "remove",
+        "path": "/paths/~1widgets~1{id}"
+      }
+    ],
+    "breaks": ["api-path-removed-without-deprecation"]
+  },
+  {
+    "name": "a removed operation breaks even after its deprecation",
+    "format": "openapi",
+    "basePatch": [
+      {
+        "op": "add",
+        "path": "/paths/~1widgets/post/deprecated",
+        "value": true
+      }
+    ],
+    "patch": [
+      {
+        "op": "remove",
+        "path": "/paths/~1widgets/post"
+      }
+    ],
+    "breaks": ["api-removed-with-deprecation"]
+  },
+  {
+    "name": "a stable operation turned experimental breaks as a removal",
+    "format": "openapi",
+    "patch": [
+      {
+        "op": "replace",
+        "path": "/paths/~1widgets/post/x-qauth-stability",
+        "value": "experimental"
+      }
+    ],
+    "breaks": ["api-removed-without-deprecation"]
+  },
+  {
+    "name": "an experimental operation promoted to stable passes",
+    "format": "openapi",
+    "patch": [
+      {
+        "op": "replace",
+        "path": "/paths/~1gadgets/post/x-qauth-stability",
+        "value": "stable"
+      }
+    ],
+    "breaks": []
+  },
+  {
+    "name": "a removed response field on an experimental operation passes",
+    "format": "openapi",
+    "patch": [
+      {
+        "op": "remove",
+        "path": "/paths/~1gadgets/get/responses/200/content/application~1json/schema/properties/label"
+      }
+    ],
+    "breaks": []
+  },
+  {
+    "name": "removing every experimental operation passes",
+    "format": "openapi",
+    "patch": [
+      {
+        "op": "remove",
+        "path": "/paths/~1gadgets"
+      }
+    ],
+    "breaks": []
+  },
+  {
+    "name": "json-schema output: a removed field breaks",
+    "format": "json-schema",
+    "role": "output",
+    "patch": [
+      {
+        "op": "remove",
+        "path": "/properties/note"
+      }
+    ],
+    "breaks": ["response-optional-property-removed"]
+  },
+  {
+    "name": "json-schema output: a removed field inside a $defs definition breaks",
+    "format": "json-schema",
+    "role": "output",
+    "patch": [
+      {
+        "op": "remove",
+        "path": "/$defs/Subject/properties/realm"
+      }
+    ],
+    "breaks": ["response-optional-property-removed"]
+  },
+  {
+    "name": "json-schema output: an added optional field passes",
+    "format": "json-schema",
+    "role": "output",
+    "patch": [
+      {
+        "op": "add",
+        "path": "/properties/trace_id",
+        "value": {
+          "type": "string"
+        }
+      }
+    ],
+    "breaks": []
+  },
+  {
+    "name": "json-schema output: a changed type breaks",
+    "format": "json-schema",
+    "role": "output",
+    "patch": [
+      {
+        "op": "replace",
+        "path": "/properties/note/type",
+        "value": "integer"
+      }
+    ],
+    "breaks": ["response-property-type-changed"]
+  },
+  {
+    "name": "json-schema output: an added enum value breaks",
+    "format": "json-schema",
+    "role": "output",
+    "patch": [
+      {
+        "op": "add",
+        "path": "/properties/type/enum/-",
+        "value": "user.suspended"
+      }
+    ],
+    "breaks": ["response-property-enum-value-added"]
+  },
+  {
+    "name": "json-schema output: an added value of an x-extensible-enum passes",
+    "format": "json-schema",
+    "role": "output",
+    "basePatch": [
+      {
+        "op": "replace",
+        "path": "/properties/type",
+        "value": {
+          "type": "string",
+          "x-extensible-enum": ["user.created", "user.deleted"]
+        }
+      }
+    ],
+    "patch": [
+      {
+        "op": "add",
+        "path": "/properties/type/x-extensible-enum/-",
+        "value": "user.suspended"
+      }
+    ],
+    "breaks": []
+  },
+  {
+    "name": "json-schema input: a new required field breaks",
+    "format": "json-schema",
+    "role": "input",
+    "patch": [
+      {
+        "op": "add",
+        "path": "/properties/reason",
+        "value": {
+          "type": "string"
+        }
+      },
+      {
+        "op": "add",
+        "path": "/required/-",
+        "value": "reason"
+      }
+    ],
+    "breaks": ["new-required-request-property"]
+  },
+  {
+    "name": "json-schema input: a narrowed enum breaks",
+    "format": "json-schema",
+    "role": "input",
+    "patch": [
+      {
+        "op": "remove",
+        "path": "/properties/type/enum/1"
+      }
+    ],
+    "breaks": ["request-property-enum-value-removed"]
+  },
+  {
+    "name": "json-schema input: an added optional field passes",
+    "format": "json-schema",
+    "role": "input",
+    "patch": [
+      {
+        "op": "add",
+        "path": "/properties/trace_id",
+        "value": {
+          "type": "string"
+        }
+      }
+    ],
+    "breaks": []
+  },
+  {
+    "name": "json-schema both: a removed field breaks on the output side",
+    "format": "json-schema",
+    "role": "both",
+    "patch": [
+      {
+        "op": "remove",
+        "path": "/properties/note"
+      }
+    ],
+    "breaks": ["response-optional-property-removed"]
+  }
+]
