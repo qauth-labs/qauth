@@ -421,6 +421,20 @@ returns `iss` on both success and error redirects, so the flag is not
 configurable), and, when enabled, `client_id_metadata_document_supported: true`
 (CIMD).
 
+### Passkey association files
+
+Experimental. Two more well-known files tell Apple and Android
+platforms which native apps share the realm host's passkeys and passwords. They
+are served only while the passkey RP ID is the realm host (`WEBAUTHN_RP_ID`
+unset or equal to it), and only for a platform the operator listed apps for;
+otherwise the path answers `404`. Both carry `Content-Type: application/json`
+and `Cache-Control: public, max-age=3600`.
+
+| Endpoint                                      | Returns                                                                                       |
+| --------------------------------------------- | --------------------------------------------------------------------------------------------- |
+| `GET /.well-known/apple-app-site-association` | `webcredentials.apps` from `WEBAUTHN_APPLE_APP_IDS`                                           |
+| `GET /.well-known/assetlinks.json`            | One `delegate_permission/common.get_login_creds` statement per app in `WEBAUTHN_ANDROID_APPS` |
+
 ---
 
 ## Hosted UI
