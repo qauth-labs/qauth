@@ -17,6 +17,8 @@ CREATE UNIQUE INDEX "idx_realms_one_operator" ON "realms" USING btree ("is_opera
 ALTER TABLE "realms" ADD CONSTRAINT "realms_issuer_unique" UNIQUE("issuer");--> statement-breakpoint
 ALTER TABLE "realms" ADD CONSTRAINT "realms_issuer_not_empty" CHECK ("realms"."issuer" <> '');--> statement-breakpoint
 ALTER TABLE "realms" ADD CONSTRAINT "realms_issuer_no_trailing_slash" CHECK (right("realms"."issuer", 1) <> '/');--> statement-breakpoint
+ALTER TABLE "realms" ADD CONSTRAINT "realms_issuer_scheme" CHECK ("realms"."issuer" ~* '^(https://|http://([^/?#@:]+\.)?localhost(:[0-9]+)?(/|$))');--> statement-breakpoint
+ALTER TABLE "realms" ADD CONSTRAINT "realms_issuer_no_space_or_control" CHECK ("realms"."issuer" !~ '[[:space:][:cntrl:]\\]');--> statement-breakpoint
 -- Hand-written below this line: drizzle-kit does not model functions or
 -- triggers, so `db:generate` neither writes nor drops them.
 --

@@ -56,7 +56,7 @@ Table "realms" {
   "id" uuid [pk, default: `uuidv7()`]
   "name" varchar(255) [not null, unique]
   "enabled" boolean [not null, default: true]
-  "issuer" text [unique, note: "RFC 8414 issuer, no trailing slash; permanent once set (trigger); NULL until the boot step fills it"]
+  "issuer" text [unique, note: "RFC 8414 issuer: https (plain http only on localhost), no trailing slash, white space, control characters or backslash; permanent once set (trigger); NULL until the boot step fills it"]
   "is_operator" boolean [not null, default: false, note: "The operator realm; at most one"]
   "access_token_lifespan" bigint [default: 900, note: "15 minutes in seconds"]
   "refresh_token_lifespan" bigint [default: 604800, note: "7 days in seconds"]

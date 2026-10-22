@@ -57,8 +57,10 @@ export interface RealmsRepository extends BaseRepository<Realm, NewRealm, Update
    * Create a realm and its primary host in one transaction.
    *
    * The host is normalised as a primary host, so an IP literal is refused. The
-   * issuer is required, has no trailing slash, query or fragment, and its host
-   * must be the primary host: the two are the realm's permanent identity.
+   * issuer is required and is an `https` URL (plain `http` on `localhost`
+   * only) with no white space, control character, backslash, userinfo,
+   * trailing slash, query or fragment. Its host must be the primary host: the
+   * two are the realm's permanent identity.
    *
    * @throws InvalidRealmHostError if the host cannot be a primary host
    * @throws BadRequestError if the issuer is not a URL on the primary host
@@ -100,13 +102,34 @@ function normaliseForMatch(host: string, kind?: 'endpoint'): string | undefined 
 }
 
 /**
- * Check that an issuer can sit on `primaryHost`: a URL with no userinfo,
- * trailing slash, query or fragment (RFC 8414 §2), whose host normalises to
- * the primary host.
- * The scheme is the configuration's to check; a development issuer may be
- * `http://localhost:3000`.
+ * White space, C0 controls, DEL and `\`. The WHATWG URL parser drops the
+ * first three and reads `\` as `/`, so it would accept an issuer that is not
+ * the string it parsed.
+ */
+// eslint-disable-next-line no-control-regex -- matching control characters is the entire purpose of this pattern
+const UNPARSED_ISSUER_CHARACTERS = /[\s\u0000-\u001f\u007f\\]/u;
+
+/** `localhost` or a name under it (RFC 6761 §6.3), where plain http may serve development. */
+const isLocalhost = (hostname: string): boolean =>
+  hostname === 'localhost' || hostname.endsWith('.localhost');
+
+/**
+ * Check that an issuer can sit on `primaryHost`: an `https` URL with no white
+ * space, control character, backslash, userinfo, trailing slash, query or
+ * fragment (RFC 8414 §2), whose host normalises to the primary host. Plain
+ * `http` is accepted on `localhost` only, for development
+ * (`http://localhost:3000`).
+ *
+ * The scheme and character rules are CHECKs on `realms.issuer` too, because
+ * `update` may set an issuer that is still NULL. The issuer is permanent, so
+ * a value refused here could never be corrected later.
  */
 function assertIssuerOnPrimaryHost(issuer: string, primaryHost: string): void {
+  if (UNPARSED_ISSUER_CHARACTERS.test(issuer)) {
+    throw new BadRequestError(
+      'Realm issuer must not contain white space, control characters or a backslash'
+    );
+  }
   let url: URL;
   try {
     url = new URL(issuer);
@@ -121,6 +144,9 @@ function assertIssuerOnPrimaryHost(issuer: string, primaryHost: string): void {
   }
   if (url.username !== '' || url.password !== '') {
     throw new BadRequestError('Realm issuer must not carry a user name or password');
+  }
+  if (url.protocol !== 'https:' && !(url.protocol === 'http:' && isLocalhost(url.hostname))) {
+    throw new BadRequestError('Realm issuer must use https; plain http is for localhost only');
   }
   if (normaliseForMatch(url.host) !== primaryHost) {
     throw new BadRequestError("Realm issuer's host is not the realm's primary host");

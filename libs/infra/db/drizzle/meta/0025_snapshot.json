@@ -1279,6 +1279,14 @@
         "realms_issuer_no_trailing_slash": {
           "name": "realms_issuer_no_trailing_slash",
           "value": "right(\"realms\".\"issuer\", 1) <> '/'"
+        },
+        "realms_issuer_scheme": {
+          "name": "realms_issuer_scheme",
+          "value": "\"realms\".\"issuer\" ~* '^(https://|http://([^/?#@:]+\\.)?localhost(:[0-9]+)?(/|$))'"
+        },
+        "realms_issuer_no_space_or_control": {
+          "name": "realms_issuer_no_space_or_control",
+          "value": "\"realms\".\"issuer\" !~ '[[:space:][:cntrl:]\\\\]'"
         }
       },
       "isRLSEnabled": false

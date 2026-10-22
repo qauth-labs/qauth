@@ -146,6 +146,15 @@ export const realms = pgTable(
       .where(sql`${t.isOperator} = true`),
     check('realms_issuer_not_empty', sql`${t.issuer} <> ''`),
     check('realms_issuer_no_trailing_slash', sql`right(${t.issuer}, 1) <> '/'`),
+    // RFC 8414 §2 issuers are https. Plain http only on localhost or a name
+    // under it (RFC 6761 §6.3), for development.
+    check(
+      'realms_issuer_scheme',
+      sql`${t.issuer} ~* '^(https://|http://([^/?#@:]+\\.)?localhost(:[0-9]+)?(/|$))'`
+    ),
+    // The URL parser drops white space and control characters and reads `\`
+    // as `/`, so such an issuer is not the string a parser compares.
+    check('realms_issuer_no_space_or_control', sql`${t.issuer} !~ '[[:space:][:cntrl:]\\\\]'`),
   ]
 );
 

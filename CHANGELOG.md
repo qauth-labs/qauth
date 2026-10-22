@@ -58,8 +58,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   refuse an unset KEK and the published development KEK.
 
 - **Schema**: migration 0025 gives every realm an issuer and hosts ([#470],
-  ADR-019 Decision 1). `realms.issuer` holds the realm's issuer without a
-  trailing slash, and `realms.is_operator` marks the operator realm, of which
+  ADR-019 Decision 1). `realms.issuer` holds the realm's issuer: an `https`
+  URL (plain `http` only on `localhost`, for development) without a trailing
+  slash, white space, control characters or a backslash. `realms.is_operator`
+  marks the operator realm, of which
   there is at most one. The new `realm_hosts` table maps each host to one
   realm, as its `primary` host (at most one per realm, never an IP literal) or
   as an `endpoint` host for server-to-server callers. A host exists once across

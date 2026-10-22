@@ -327,6 +327,28 @@ describe('realm hosts and issuers integration (real Postgres)', () => {
         pgError(repo.update(realmId, { issuer: 'https://auth.example.com/' }))
       ).resolves.toEqual({ code: '23514', constraint: 'realms_issuer_no_trailing_slash' });
     });
+
+    it('refuses plain http off localhost, and white space, control characters or a backslash', async () => {
+      const realmId = await bareRealm();
+      const cases: Array<[string, string]> = [
+        ['http://auth.example.com', 'realms_issuer_scheme'],
+        ['ftp://auth.example.com', 'realms_issuer_scheme'],
+        ['http://localhost.example.com', 'realms_issuer_scheme'],
+        ['https://auth.example.com/ ', 'realms_issuer_no_space_or_control'],
+        ['https://auth.example.com\n', 'realms_issuer_no_space_or_control'],
+        ['https://auth.example.com/a\tb', 'realms_issuer_no_space_or_control'],
+        ['https://auth.example.com\\auth', 'realms_issuer_no_space_or_control'],
+      ];
+      for (const [issuer, constraint] of cases) {
+        await expect(pgError(repo.update(realmId, { issuer }))).resolves.toEqual({
+          code: '23514',
+          constraint,
+        });
+      }
+
+      const dev = `http://${unique('dev')}.localhost:3000`;
+      await expect(repo.update(realmId, { issuer: dev })).resolves.toMatchObject({ issuer: dev });
+    });
   });
 
   describe('one operator realm', () => {
@@ -451,6 +473,32 @@ describe('realm hosts and issuers integration (real Postgres)', () => {
           'auth.example.com'
         )
       ).resolves.toMatchObject({ host: { host: 'auth.example.com' } });
+    });
+
+    it('createWithPrimaryHost refuses plain http off localhost, white space, control characters and a backslash', async () => {
+      const cases = [
+        'http://auth.example.com',
+        'http://auth.example.com:8080/auth',
+        ' https://auth.example.com',
+        'https://auth.example.com/ ',
+        'https://auth.example.com\n',
+        'https://auth.example.com/a\tb',
+        'https://auth.example.com/\u007f',
+        'https://auth.example.com\\auth',
+      ];
+      for (const issuer of cases) {
+        const name = unique('bad');
+        await expect(
+          repo.createWithPrimaryHost({ name, issuer }, 'auth.example.com')
+        ).rejects.toBeInstanceOf(BadRequestError);
+        expect(await repo.findByName(name)).toBeUndefined();
+      }
+
+      // Development: plain http on localhost or a name under it.
+      const host = `${unique('dev')}.localhost`;
+      await expect(
+        repo.createWithPrimaryHost({ name: unique('dev'), issuer: `http://${host}:3000` }, host)
+      ).resolves.toMatchObject({ host: { host } });
     });
 
     it('createWithPrimaryHost joins an outer transaction and rolls back with it', async () => {
