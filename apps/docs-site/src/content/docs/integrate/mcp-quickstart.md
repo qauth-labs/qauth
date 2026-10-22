@@ -217,14 +217,9 @@ To prove the token half end-to-end without an interactive client, mint a
 `audience` are set explicitly, which the seed script provisions.
 
 ```bash
-# The seed script targets an existing realm. The default realm ("master") is
-# created lazily on first auth request, so warm it up with one throwaway
-# Dynamic Client Registration call (open mode — no token required):
-curl -s -X POST http://localhost:3000/oauth/register \
-  -H 'Content-Type: application/json' \
-  -d '{"client_name":"warmup","grant_types":["authorization_code"],"redirect_uris":["http://localhost/cb"],"token_endpoint_auth_method":"none"}' \
-  >/dev/null
-
+# The seed script targets an existing realm. The auth-server creates the
+# default realm ("master", from DEFAULT_REALM_NAME) when it boots, so the stack
+# from Step 1 already has it.
 # Provision a machine client bound to the example's resource URL:
 cat > /tmp/mcp-demo-clients.json <<'JSON'
 {
@@ -347,7 +342,7 @@ even if both trust the same QAuth instance.
 | `401` even with a token           | Token `aud` ≠ the server's `MCP_RESOURCE`. Ensure the `resource` you requested matches `MCP_RESOURCE` exactly.                                                                                                   |
 | `invalid_scope` at `/oauth/token` | The client's `scopes` (machine client) or the realm allowlist (DCR client) doesn't include the requested scope. Re-check Step 1's `DEFAULT_DYNAMIC_REGISTRATION_SCOPES` or the seeded client's `scopes`.         |
 | `unsupported scheme: cursor:`     | The client calls back on a scheme without a period. List it in `REDIRECT_URI_CUSTOM_SCHEMES` (here `cursor`); see [Redirect URI schemes for native apps](/operate/docker/#redirect-uri-schemes-for-native-apps). |
-| Seed script: realm not found      | The `master` realm hasn't been created yet — run the warm-up DCR call in Step 3 Option B first.                                                                                                                  |
+| Seed script: realm not found      | The auth-server has not booted against this database yet, or the manifest's `realm` is not `DEFAULT_REALM_NAME`. Start the stack (Step 1) and check its log for the `default realm ready` line.                  |
 | `mcp-guard` can't fetch JWKS      | `QAUTH_ISSUER` must be reachable from the resource server and serve `/.well-known/jwks.json`.                                                                                                                    |
 | Port already in use               | Override `PORT` for the example, or remap `3000`/`5432`/`6379` in `docker-compose.yml`.                                                                                                                          |
 
