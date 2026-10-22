@@ -15,7 +15,17 @@ describe('tableCell', () => {
     expect(tableCell('C:\\path')).toBe('C:\\\\path');
   });
 
-  it('flattens newlines', () => {
+  it('flattens newlines and the whitespace around them', () => {
     expect(tableCell('one\n  two')).toBe('one two');
+    expect(tableCell('one \n \n two')).toBe('one two');
+  });
+
+  it('keeps whitespace with no newline', () => {
+    expect(tableCell('one  two\tthree')).toBe('one  two\tthree');
+  });
+
+  it('reads a long run of spaces in linear time', () => {
+    const spaces = ' '.repeat(200_000);
+    expect(tableCell(`a${spaces}b`)).toBe(`a${spaces}b`);
   });
 });

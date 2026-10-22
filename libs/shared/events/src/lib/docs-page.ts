@@ -29,13 +29,15 @@ const code = (value: string) => `\`${value}\``;
 
 /**
  * A table cell: backslashes and pipes escaped, newlines flattened. The
- * backslash goes first, or a `\|` in the text would end the cell.
+ * backslash goes first, or a `\|` in the text would end the cell. A run of
+ * whitespace that holds a newline becomes one space; matching whole runs
+ * keeps this linear on a long run of spaces.
  */
 export const tableCell = (value: string) =>
   value
     .replace(/\\/g, '\\\\')
     .replace(/\|/g, '\\|')
-    .replace(/\s*\n\s*/g, ' ');
+    .replace(/\s+/g, (run) => (run.includes('\n') ? ' ' : run));
 
 /** The heading anchor Starlight renders for an ASCII heading, as its slugger computes it. */
 export function headingAnchor(text: string): string {
