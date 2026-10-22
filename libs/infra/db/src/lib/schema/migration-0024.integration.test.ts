@@ -62,6 +62,9 @@ describe('migration 0024 — realm key tables (seed-then-migrate)', () => {
   let pool: Pool | undefined;
   let dockerUp = false;
   let previousFolder: string | undefined;
+  // Upgrade to 0024 itself, not to the newest migration: a later migration
+  // changes the tables and the journal count this suite pins.
+  let throughFolder: string | undefined;
 
   beforeAll(async () => {
     dockerUp = await requireDockerOrSkip();
@@ -69,16 +72,19 @@ describe('migration 0024 — realm key tables (seed-then-migrate)', () => {
     container = await startPostgresContainer();
     pool = new Pool({ connectionString: container.connectionString, max: 2 });
     previousFolder = migrationsFolderBefore(MIGRATION_IDX);
+    throughFolder = migrationsFolderBefore(MIGRATION_IDX + 1);
   }, 180_000);
 
   afterAll(async () => {
     await pool?.end();
     await container?.stop();
-    if (previousFolder) rmSync(previousFolder, { recursive: true, force: true });
+    for (const folder of [previousFolder, throughFolder]) {
+      if (folder) rmSync(folder, { recursive: true, force: true });
+    }
   });
 
   beforeEach(async (testCtx) => {
-    if (!dockerUp || !pool || !container || !previousFolder) {
+    if (!dockerUp || !pool || !container || !previousFolder || !throughFolder) {
       testCtx.skip();
       return;
     }
@@ -96,6 +102,12 @@ describe('migration 0024 — realm key tables (seed-then-migrate)', () => {
   function connectionString(): string {
     if (!container) throw new Error('no container');
     return container.connectionString;
+  }
+
+  /** Apply the migrations up to and including 0024. */
+  async function upgradeTo0024(): Promise<void> {
+    if (!throughFolder) throw new Error('no migrations folder');
+    await applyQauthMigrations(connectionString(), throughFolder);
   }
 
   async function one(statement: string, params: unknown[] = []): Promise<string> {
@@ -204,7 +216,7 @@ describe('migration 0024 — realm key tables (seed-then-migrate)', () => {
     // is checked against real data, not empty tables.
     expect(Object.values(before).every((table) => (table as { rows: number }).rows > 0)).toBe(true);
 
-    await applyQauthMigrations(connectionString());
+    await upgradeTo0024();
 
     const { rows: applied } = await db().query(
       `SELECT count(*)::int AS n FROM drizzle.__drizzle_migrations`
@@ -222,7 +234,7 @@ describe('migration 0024 — realm key tables (seed-then-migrate)', () => {
 
   it('lets an existing realm take keys after the upgrade', async () => {
     const realmId = await seedEveryTable();
-    await applyQauthMigrations(connectionString());
+    await upgradeTo0024();
 
     await db().query(
       `INSERT INTO realm_keys

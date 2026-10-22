@@ -71,6 +71,7 @@ export const QAUTH_DOMAIN_TABLES: readonly string[] = Object.freeze([
   'email_verification_tokens',
   'oauth_clients',
   'users',
+  'realm_hosts',
   'realms',
 ]);
 

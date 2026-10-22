@@ -57,6 +57,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   through this library comes next. When it does, `NODE_ENV=production` will
   refuse an unset KEK and the published development KEK.
 
+- **Schema**: migration 0025 gives every realm an issuer and hosts ([#470],
+  ADR-019 Decision 1). `realms.issuer` holds the realm's issuer: an `https`
+  URL (plain `http` only on `localhost`, for development) without a trailing
+  slash, white space, control characters or a backslash. `realms.is_operator`
+  marks the operator realm, of which
+  there is at most one. The new `realm_hosts` table maps each host to one
+  realm, as its `primary` host (at most one per realm, never an IP literal) or
+  as an `endpoint` host for server-to-server callers. A host exists once across
+  every realm and both kinds. Once set, a realm's issuer and primary host
+  cannot change: database triggers refuse it. Existing realms keep a NULL
+  issuer and no host, and nothing reads the new columns yet, so the upgrade
+  changes no behaviour. A later boot step fills the default realm from
+  `JWT_ISSUER`. `normaliseRealmHost()` in `@qauth-labs/shared-validation` is the
+  one function that writes the stored form: lower case, punycode, no port and
+  no trailing dot. It refuses wildcards, white space, empty labels and hosts
+  over 253 characters.
+
 ### Changed
 
 - `REQUIRE_EMAIL_VERIFIED` is now an alias in the key registry, resolved by the
@@ -99,6 +116,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#452]: https://github.com/qauth-labs/qauth/issues/452
 [#461]: https://github.com/qauth-labs/qauth/issues/461
 [#462]: https://github.com/qauth-labs/qauth/issues/462
+[#470]: https://github.com/qauth-labs/qauth/issues/470
 
 ## [0.1.3] - 2026-10-21
 

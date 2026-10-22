@@ -4,6 +4,7 @@
  * Centralized enum definitions for type safety and database constraints
  */
 
+import { REALM_HOST_KINDS } from '@qauth-labs/shared-validation';
 import { pgEnum } from 'drizzle-orm/pg-core';
 
 /**
@@ -168,6 +169,15 @@ const REALM_KEY_STATUSES = ['next', 'active', 'retired', 'compromised'] as const
 export const realmKeyStatusEnum = pgEnum('realm_key_status', REALM_KEY_STATUSES);
 
 export type RealmKeyStatus = (typeof REALM_KEY_STATUSES)[number];
+
+/**
+ * Kind of a `realm_hosts` row (ADR-019 Decision 1, issue #470): `primary` is
+ * the realm's issuer host, `endpoint` an extra name for server-to-server
+ * callers. The list is `REALM_HOST_KINDS` from `@qauth-labs/shared-validation`,
+ * the same list `normaliseRealmHost()` checks a host against, so the two
+ * cannot drift.
+ */
+export const realmHostKindEnum = pgEnum('realm_host_kind', REALM_HOST_KINDS);
 
 /**
  * Audit Log Event Types
