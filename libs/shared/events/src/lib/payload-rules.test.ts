@@ -159,6 +159,24 @@ describe('the payload scanner', () => {
     expect(scanPayload({ fields: ['ok', value] })[0]?.path).toBe('/fields/1');
   });
 
+  it.each([
+    ['a header segment with no dot', 'eyJhbGciOiJFUzI1NiJ9'],
+    ['two segments', 'eyJhbGciOiJFUzI1NiJ9.eyJzdWIiOiJ4In0'],
+    ['nothing after eyJ in its segment', 'eyJ.a.b'],
+    ['dots split by a space', 'eyJhbGci.a b.c'],
+  ])('passes %s', (_label, value) => {
+    expect(scanPayload({ reason: value })).toEqual([]);
+  });
+
+  it('finds a token that follows other segments in the same run', () => {
+    expect(scanPayload({ reason: 'x.prefixeyJhbGci.a.' })[0]?.rule).toBe('secret_value');
+  });
+
+  it('reads a long run of eyJ in linear time', () => {
+    expect(scanPayload({ reason: 'eyJ'.repeat(100_000) })).toEqual([]);
+    expect(scanPayload({ reason: `..${'eyJ'.repeat(100_000)}.` })).toEqual([]);
+  });
+
   it('passes a clean payload', () => {
     expect(
       scanPayload({ grantType: 'authorization_code', scopes: ['openid'], expiresIn: 3600 })

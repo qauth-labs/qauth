@@ -150,11 +150,28 @@ export const DESCRIPTOR_WORDS: ReadonlySet<string> = new Set([
  */
 const HIDDEN_WORDS: ReadonlySet<string> = new Set([...DESCRIPTOR_WORDS, 'hmac']);
 
+/** A run of base64url characters and the dots between compact segments. */
+const COMPACT_RUN = /[A-Za-z0-9_.-]+/g;
+
 /**
  * A compact JWT, JWS or JWE anywhere in a string: inside an SD-JWT
  * (`<jwt>~<disclosure>~`), after `Bearer `, or with whitespace around it.
+ * That is a segment holding `eyJ` and at least one character after it,
+ * followed by two more dots in the same run.
+ *
+ * Read run by run in linear time. A regular expression that looks for `eyJ`
+ * anywhere backtracks quadratically on a long run of `eyJ` with no dot.
  */
-const COMPACT_JOSE = /eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*\.[A-Za-z0-9_-]*/;
+function hasCompactJose(value: string): boolean {
+  for (const [run] of value.matchAll(COMPACT_RUN)) {
+    const segments = run.split('.');
+    for (let i = 0; i + 2 < segments.length; i++) {
+      const at = segments[i].indexOf('eyJ');
+      if (at !== -1 && at + 3 < segments[i].length) return true;
+    }
+  }
+  return false;
+}
 
 /** A PEM block: a key, a certificate or anything else armoured. */
 const PEM = /-----BEGIN [A-Z0-9 ]+-----/;
@@ -214,7 +231,7 @@ function scan(value: unknown, readNames: boolean, options: PayloadScanOptions): 
   const findings: PayloadFinding[] = [];
   const visit = (node: unknown, path: string) => {
     if (typeof node === 'string') {
-      if (COMPACT_JOSE.test(node) || PEM.test(node)) {
+      if (hasCompactJose(node) || PEM.test(node)) {
         findings.push({
           path: path || '/',
           rule: 'secret_value',

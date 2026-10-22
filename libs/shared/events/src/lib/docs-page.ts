@@ -27,8 +27,15 @@ const isObject = (value: unknown): value is JsonObject =>
 
 const code = (value: string) => `\`${value}\``;
 
-/** A table cell: pipes escaped, newlines flattened. */
-const cell = (value: string) => value.replace(/\|/g, '\\|').replace(/\s*\n\s*/g, ' ');
+/**
+ * A table cell: backslashes and pipes escaped, newlines flattened. The
+ * backslash goes first, or a `\|` in the text would end the cell.
+ */
+export const tableCell = (value: string) =>
+  value
+    .replace(/\\/g, '\\\\')
+    .replace(/\|/g, '\\|')
+    .replace(/\s*\n\s*/g, ' ');
 
 /** The heading anchor Starlight renders for an ASCII heading, as its slugger computes it. */
 export function headingAnchor(text: string): string {
@@ -114,7 +121,7 @@ function memberTable(rows: readonly MemberRow[]): string {
   const lines = ['| Member | Type | Required | Meaning |', '| --- | --- | --- | --- |'];
   for (const row of rows) {
     lines.push(
-      `| ${code(row.name)} | ${cell(row.type)} | ${row.required ? 'yes' : 'no'} | ${cell(row.description)} |`
+      `| ${code(row.name)} | ${tableCell(row.type)} | ${row.required ? 'yes' : 'no'} | ${tableCell(row.description)} |`
     );
   }
   return lines.join('\n');
