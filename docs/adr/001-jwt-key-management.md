@@ -4,9 +4,15 @@
 **Date:** 2026-01-15  
 **Authors:** QAuth Team
 
-> **Status (2026-08-08): the "Future — JWKS Support" framing below is superseded; the JWKS endpoint and multi-key publication have shipped.** `GET /.well-known/jwks.json` is registered (`apps/auth-server/src/app/routes/well-known.ts`) and serves `fastify.jwtUtils.getJwks()`. The key set is genuinely multi-entry (`libs/fastify/plugins/jwt/src/lib/fastify-plugin-jwt.ts`): the active Ed25519 key, an optional RS256 key (#309), ML-DSA `AKP` entries (#246), and retired Ed25519 keys published under their own `kid` so in-flight tokens keep verifying across a rotation (#248 F9).
+> **Status (2026-08-08): the "Future — JWKS Support" framing below is superseded; the JWKS endpoint and multi-key publication have shipped.** `GET /.well-known/jwks.json` is registered (`apps/auth-server/src/app/routes/well-known.ts`) and serves `fastify.jwtUtils.getJwks()`. The key set is genuinely multi-entry (`libs/fastify/plugins/jwt/src/lib/fastify-plugin-jwt.ts`): the active Ed25519 key, an optional RS256 key (#309), ML-DSA `AKP` entries (#246), and retired Ed25519 and ML-DSA keys, each under its own `kid` (#248 F9).
 >
-> **What is still accurate:** `apps/auth-server/src/app/app.ts` does not currently pass retired keys when it constructs the JWT plugin, so a deployed server publishes a single EdDSA key and the "users must re-login on rotation" consequence below still holds in practice. The distinction matters — the JWKS _machinery_ is built, its retired-key _configuration_ is not yet wired at the app layer. Read the "Future" headings below as "not yet wired", not "not yet built".
+> **What is still accurate:** a rotation still makes every user sign in again, so the "users must re-login on rotation" consequence below holds for a deployed server. Three separate gaps cause it, and closing one leaves the other two:
+>
+> - **Retired keys are not wired.** No configuration key holds a retired key or the Ed25519 key's `kid`, and `apps/auth-server/src/app/app.ts` passes none of `retiredKeys`, `retiredMlDsaPublicKeys` or `keyId` to the JWT plugin. A deployed JWKS holds only the active keys, and its Ed25519 entry has no `kid`. The plugin has no retired-key option for the RS256 key.
+> - **Tokens carry no `kid`.** `signAccessToken` (`libs/server/jwt/src/lib/jwt-service.ts`) stamps none, and the plugin passes none when it signs an EdDSA ID token, even when `keyId` is set. Such a token cannot name the retired key that signed it: `selectJwksKey` matches a token without a `kid` only to the JWKS entry without one, which after a rotation is the new key.
+> - **Retired keys never verify.** The plugin's `verifyAccessToken` checks only the active Ed25519 key, and its hybrid resolver returns only the active ML-DSA key. A retired key passed to the plugin is published but not used to verify, so the server's own checks (introspection, revocation, token exchange and every bearer-protected route) reject a token that key signed.
+>
+> The JWKS _machinery_ is built; the rest of rotation is not. Read the "Future" headings below as "not yet complete", not "not yet built".
 >
 > **Status (2026-10-09): [ADR-019](./019-deployment-topology-and-trust-boundaries.md) supersedes this record's production key model.**
 >
@@ -15,7 +21,7 @@
 > - The key-encryption key comes from a pluggable provider. Environment variables or a file remain the default source.
 > - Per-realm keys follow from ADR-019's rule that each realm has its own host and its own issuer.
 > - Rotation becomes automatic and overlapping. The next key is pre-published in JWKS, and the old key stays for verification.
-> - ADR-019 decides to close the retired-key wiring gap described above. Until that change lands, the note above still describes a deployed server.
+> - ADR-019 decides to close the three retired-key gaps described above. Until all three are closed, the note above still describes a deployed server.
 
 ## Context
 
