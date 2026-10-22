@@ -476,7 +476,10 @@ run against an already-allowlisted issuer.
 
 A client presents an ID-JAG minted by a trusted enterprise IdP under the
 `jwt-bearer` grant and receives an access token audience-restricted to the MCP
-server named by the assertion's `resource` claim.
+server named by the assertion's `resource` claim. That `resource` must be among
+the client's ID-JAG targets, which an operator sets with `id_jag_targets` in the
+seed manifest; an empty list denies, and the client's `audience` does not count.
+See [Provisioning a client for ID-JAG](/operate/docker/#provisioning-a-client-for-id-jag).
 
 ```bash
 curl -s -X POST http://localhost:3000/oauth/token \
@@ -527,7 +530,9 @@ what it can mint:
 
 - `audience` (exactly one value, the target authorization server's issuer) and
   `resource` (exactly one value, the MCP server) must both appear in the
-  client's `audience` list. An empty list denies.
+  client's ID-JAG targets (`id_jag_targets` in the seed manifest). An empty list
+  denies. The client's `audience`, which bounds the tokens QAuth issues, does not
+  count.
 - The assertion's `scope` is the subject token's scope, or the narrower `scope`
   the request names, and every value must also appear in the client's
   registered `scopes`. A value outside that list is refused with

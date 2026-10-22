@@ -482,6 +482,59 @@ of the discovery metadata. See
 > `CIMD_ALLOW_PRIVATE_ADDRESSES=true`) stops the container at boot unless `.env`
 > also sets `NODE_ENV=development`.
 
+#### Provisioning a client for ID-JAG
+
+The switches above turn the feature on. Each client still needs its own list of
+targets: the foreign authorization servers and MCP servers it may name when it
+mints an ID-JAG, and the MCP servers it may redeem an assertion for. Set it with
+`id_jag_targets` on the client's entry in the `db:seed-oauth-clients` manifest:
+
+```json
+{
+  "realm": "master",
+  "clients": [
+    {
+      "client_id": "partner-agent",
+      "name": "Partner agent (mints ID-JAGs)",
+      "grant_types": ["urn:ietf:params:oauth:grant-type:token-exchange"],
+      "scopes": ["chat.read"],
+      "token_endpoint_auth_method": "client_secret_basic",
+      "is_agent": true,
+      "id_jag_targets": ["https://auth.partner.example", "https://mcp.partner.example/mcp"]
+    },
+    {
+      "client_id": "enterprise-mcp-client",
+      "name": "MCP client (redeems ID-JAGs)",
+      "grant_types": ["urn:ietf:params:oauth:grant-type:jwt-bearer"],
+      "scopes": ["chat.read"],
+      "token_endpoint_auth_method": "client_secret_basic",
+      "id_jag_targets": ["https://mcp.example.com/mcp"]
+    }
+  ]
+}
+```
+
+Two client columns hold resource identifiers, and each does one job:
+
+| Manifest field   | Column                         | What it bounds                                                                                                                                                                                  |
+| ---------------- | ------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `audience`       | `oauth_clients.audience`       | The tokens QAuth issues to the client: the `resource` values `client_credentials` accepts, the token `aud` when a grant names no `resource`, and the token audiences the client may introspect. |
+| `id_jag_targets` | `oauth_clients.id_jag_targets` | ID-JAG only. Minting: the `audience` (the target authorization server's issuer) and the `resource` (the MCP server) must both be listed. Redeeming: the assertion's `resource` must be listed.  |
+
+- Neither list falls back to the other. A server listed only in `audience` is not
+  an ID-JAG target, and one listed only in `id_jag_targets` is not a
+  `client_credentials` audience.
+- An empty or missing `id_jag_targets` denies both minting and redeeming.
+- Only the manifest's `clients` entries set it. Dynamic registration,
+  `POST /api/clients`, a CIMD metadata document and the manifest's `cimd_clients`
+  entries cannot, and a client created by one of them has an empty list.
+- The seed skips a client that already exists. To change the list of an existing
+  client, re-run its entry with `--rotate`, which also issues a new secret, or set
+  `oauth_clients.id_jag_targets` with an `UPDATE` by hand.
+- Before migration 0027 the targets were read from `audience`. The migration
+  copies nothing, so a client set up that way mints and redeems nothing until its
+  targets are listed here.
+
 ### Wallet federation (OID4VP, T4)
 
 Wallet sign-in is **off by default**. With `WALLET_FEDERATION_ENABLED` unset or
