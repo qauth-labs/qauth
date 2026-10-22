@@ -114,6 +114,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `SELECT` only. The migration is additive. Nothing writes the log yet: the
   admin API that will is still to come.
 
+- **The event contract** ([#456], ADR-018 §3 and §5, ADR-019 Decision 8). The
+  new library `@qauth-labs/shared-events` defines what an event looks like on
+  every delivery route: an envelope (`id`, a UUIDv7 kept across routes and
+  retries; `type`; `time`; `realm`; `category`, `user` or `admin`; `actor`;
+  `subject`; `client`; `request`; `data`) and a registry of 33 event types,
+  named `urn:qauth:event:<name>:v<N>`, each with a payload schema, a category,
+  a severity and the release it appeared in. Every event the auth server
+  records today has a type, and a map from each earlier audit or log name to
+  its type is ready for copying the audit log into the event store. A scanner
+  enforces the payload rules of ADR-011 §8 and ADR-017 §11 (ids, not names or
+  addresses; never a password, code, OTP, token, key, assertion or link;
+  hidden identifiers as keyed HMACs) over every type's schema and every event.
+  The JSON Schema of the envelope and of each type is published under
+  `/schemas/events/` on the docs site and registered with the stable-surface
+  guard, so a new required member fails CI and a new optional one passes. The
+  docs site's new **Events** page (`reference/events`) is generated from the
+  registry. Nothing emits these events yet: the event store and the emitters
+  come next.
+
 - **A guard on the stable surface** ([#451], ADR-018 §5). Every OpenAPI
   operation carries `x-qauth-stability` (`stable` or `experimental`; the wallet
   federation routes, which a switch registers, are experimental). The OpenAPI
@@ -181,6 +200,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#449]: https://github.com/qauth-labs/qauth/issues/449
 [#451]: https://github.com/qauth-labs/qauth/issues/451
 [#452]: https://github.com/qauth-labs/qauth/issues/452
+[#456]: https://github.com/qauth-labs/qauth/issues/456
 [#461]: https://github.com/qauth-labs/qauth/issues/461
 [#462]: https://github.com/qauth-labs/qauth/issues/462
 [#470]: https://github.com/qauth-labs/qauth/issues/470
