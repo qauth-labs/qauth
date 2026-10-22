@@ -4,14 +4,23 @@ import rateLimit from '@fastify/rate-limit';
 import {
   ForbiddenError,
   InvalidClientError,
+  InvalidRequestError,
   JWTExpiredError,
   JWTInvalidError,
+  NotFoundError,
   UnauthorizedClientError,
   UniqueConstraintError,
+  WeakPasswordError,
 } from '@qauth-labs/shared-errors';
 import type { FastifyInstance } from 'fastify';
 import Fastify, { LogController } from 'fastify';
+import {
+  serializerCompiler,
+  validatorCompiler,
+  type ZodTypeProvider,
+} from 'fastify-type-provider-zod';
 import { describe, expect, it, vi } from 'vitest';
+import { z } from 'zod';
 
 import { LOG_REDACT_CENSOR } from '../../config/logger';
 
@@ -24,6 +33,8 @@ vi.mock('../../config/env', () => ({
   },
 }));
 
+import { pageQuerySchema, pageSchema } from '../api-conventions/paging';
+import { PROBLEM_CODES, problemResponses } from '../api-conventions/problem';
 import errorHandler from './error-handler';
 
 async function buildTestApp(): Promise<FastifyInstance> {
@@ -76,6 +87,77 @@ async function buildTestApp(): Promise<FastifyInstance> {
     // The DB layer surfaces the offending constraint name; the handler must NOT
     // leak it (account-enumeration oracle, e.g. duplicate-email registration).
     throw new UniqueConstraintError('users_email_realm_key');
+  });
+
+  return app;
+}
+
+/**
+ * The media type, with the `charset` parameter Fastify appends to every JSON
+ * body it serializes. JSON has no charset parameter (RFC 8259 §11), so a
+ * recipient ignores it.
+ */
+const PROBLEM_CONTENT_TYPE = /^application\/problem\+json(?:;|$)/;
+
+/**
+ * A Fastify instance with the error handler and API family routes, validated
+ * by the Zod compiler production uses, so a validation failure carries the
+ * issues the problem formatter projects (#506).
+ */
+async function buildProblemApp(): Promise<FastifyInstance> {
+  const app = Fastify({ logger: false, requestIdHeader: 'x-request-id' });
+  app.setValidatorCompiler(validatorCompiler);
+  app.setSerializerCompiler(serializerCompiler);
+  await app.register(errorHandler);
+  const typed = app.withTypeProvider<ZodTypeProvider>();
+
+  typed.get(
+    '/developer/v1/widgets',
+    {
+      schema: {
+        querystring: pageQuerySchema,
+        response: {
+          200: pageSchema(z.object({ id: z.uuid() })),
+          ...problemResponses(400, 401, 404),
+        },
+      },
+    },
+    async () => ({ items: [], nextCursor: null })
+  );
+  typed.get(
+    '/developer/v1/widgets/:id',
+    { schema: { response: { ...problemResponses(404) } } },
+    async () => {
+      throw new NotFoundError('Widget', 'missing');
+    }
+  );
+  typed.post('/developer/v1/widgets', async () => ({ created: true }));
+  app.get('/admin/v1/fail', async () => {
+    throw new Error('connection string postgres://secret@db');
+  });
+  app.get('/admin/v1/conflict', async () => {
+    throw new UniqueConstraintError('users_email_realm_key');
+  });
+  app.get('/account/v1/token', async () => {
+    throw new JWTInvalidError('Invalid JWT token');
+  });
+  app.post('/account/v1/password', async () => {
+    throw new WeakPasswordError(undefined, ['Add another word or two.', 'Avoid common phrases.']);
+  });
+  app.get('/account/v1/oauth-class', async () => {
+    throw new InvalidRequestError('the cursor has expired');
+  });
+  app.get('/account/v1/odd-code', async () => {
+    throw Object.assign(new Error('mismatched'), { statusCode: 400, code: 'NOT_FOUND' });
+  });
+  app.get('/opt-in', { config: { errorFormat: 'problem' } }, async () => {
+    throw new ForbiddenError('No.');
+  });
+  app.get('/developer/v1/opt-out', { config: { errorFormat: 'oauth' } }, async () => {
+    throw new ForbiddenError('No.');
+  });
+  app.get('/legacy', async () => {
+    throw new ForbiddenError('No.');
   });
 
   return app;
@@ -265,6 +347,175 @@ describe('error-handler plugin', () => {
    * `error === 'invalid_client'` saw a different string depending on which call
    * site threw.
    */
+  describe('problem details on the API families (#506)', () => {
+    it('answers application/problem+json with type, title, status, code and trace_id', async () => {
+      const app = await buildProblemApp();
+
+      const response = await app.inject({
+        method: 'GET',
+        url: '/developer/v1/widgets/9b2b',
+        headers: { 'x-request-id': 'trace-123' },
+      });
+
+      expect(response.statusCode).toBe(404);
+      expect(response.headers['content-type']).toMatch(PROBLEM_CONTENT_TYPE);
+      expect(response.json()).toMatchObject({
+        type: 'about:blank',
+        title: 'Not Found',
+        status: 404,
+        code: 'NOT_FOUND',
+        trace_id: 'trace-123',
+      });
+      // The legacy members are gone, so a client cannot branch on them.
+      expect(response.json()).not.toHaveProperty('error');
+      expect(response.json()).not.toHaveProperty('statusCode');
+
+      await app.close();
+    });
+
+    it('lists each failing field in errors[] with a pointer, and refuses a limit above 200', async () => {
+      const app = await buildProblemApp();
+
+      const response = await app.inject({ method: 'GET', url: '/developer/v1/widgets?limit=201' });
+
+      expect(response.statusCode).toBe(400);
+      expect(response.headers['content-type']).toMatch(PROBLEM_CONTENT_TYPE);
+      const body = response.json();
+      expect(body).toMatchObject({ status: 400, code: 'VALIDATION_ERROR' });
+      expect(body.errors).toEqual([{ pointer: '/limit', message: expect.any(String) }]);
+      for (const internal of ['schemaPath', 'keyword', 'params', 'instancePath', 'FST_ERR']) {
+        expect(response.body).not.toContain(internal);
+      }
+
+      await app.close();
+    });
+
+    it('pages with limit and cursor and answers { items, nextCursor }', async () => {
+      const app = await buildProblemApp();
+
+      const response = await app.inject({ method: 'GET', url: '/developer/v1/widgets' });
+
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toEqual({ items: [], nextCursor: null });
+      for (const limit of ['0', '1.5', 'abc', '0x10', '']) {
+        const refused = await app.inject({
+          method: 'GET',
+          url: `/developer/v1/widgets?limit=${limit}`,
+        });
+        expect(refused.statusCode).toBe(400);
+        expect(refused.json().code).toBe('VALIDATION_ERROR');
+      }
+
+      await app.close();
+    });
+
+    it('never sends a framework code: a 415 answers UNSUPPORTED_MEDIA_TYPE', async () => {
+      const app = await buildProblemApp();
+
+      const response = await app.inject({
+        method: 'POST',
+        url: '/developer/v1/widgets',
+        headers: { 'content-type': 'text/x-unknown' },
+        payload: 'hello',
+      });
+
+      expect(response.statusCode).toBe(415);
+      expect(response.json()).toMatchObject({ status: 415, code: 'UNSUPPORTED_MEDIA_TYPE' });
+
+      await app.close();
+    });
+
+    it('sends a 500 with no detail and no stack, even outside production', async () => {
+      const app = await buildProblemApp();
+
+      const response = await app.inject({ method: 'GET', url: '/admin/v1/fail' });
+
+      expect(response.statusCode).toBe(500);
+      expect(response.json()).toMatchObject({ status: 500, code: 'INTERNAL_ERROR' });
+      expect(response.json()).not.toHaveProperty('detail');
+      expect(response.body).not.toContain('postgres://');
+      expect(response.body).not.toContain('stack');
+
+      await app.close();
+    });
+
+    it('does not leak the constraint name of a UniqueConstraintError', async () => {
+      const app = await buildProblemApp();
+
+      const response = await app.inject({ method: 'GET', url: '/admin/v1/conflict' });
+
+      expect(response.statusCode).toBe(409);
+      expect(response.json().code).toBe('UNIQUE_CONSTRAINT_VIOLATION');
+      expect(response.body).not.toContain('users_email_realm_key');
+
+      await app.close();
+    });
+
+    it('keeps the RFC 6750 Bearer challenge beside the problem document', async () => {
+      const app = await buildProblemApp();
+
+      const response = await app.inject({ method: 'GET', url: '/account/v1/token' });
+
+      expect(response.statusCode).toBe(401);
+      expect(response.json().code).toBe('JWT_INVALID');
+      expect(response.headers['www-authenticate']).toContain('error="invalid_token"');
+
+      await app.close();
+    });
+
+    it('puts weak-password feedback in errors[] under /password', async () => {
+      const app = await buildProblemApp();
+
+      const response = await app.inject({ method: 'POST', url: '/account/v1/password' });
+
+      expect(response.statusCode).toBe(422);
+      expect(response.json().code).toBe('WEAK_PASSWORD');
+      expect(response.json().errors).toEqual([
+        { pointer: '/password', message: expect.any(String) },
+        { pointer: '/password', message: expect.any(String) },
+      ]);
+
+      await app.close();
+    });
+
+    it('sends only published codes, each with its own status', async () => {
+      const app = await buildProblemApp();
+
+      // An OAuth error class is not a published problem code: its status decides.
+      const oauthClass = await app.inject({ method: 'GET', url: '/account/v1/oauth-class' });
+      expect(oauthClass.json()).toMatchObject({ status: 400, code: 'BAD_REQUEST' });
+      // A published code thrown with another status is not sent with it.
+      const odd = await app.inject({ method: 'GET', url: '/account/v1/odd-code' });
+      expect(odd.json()).toMatchObject({ status: 400, code: 'BAD_REQUEST' });
+
+      for (const response of [oauthClass, odd]) {
+        const { code, status } = response.json() as {
+          code: keyof typeof PROBLEM_CODES;
+          status: number;
+        };
+        expect(PROBLEM_CODES[code].status).toBe(status);
+      }
+
+      await app.close();
+    });
+
+    it('follows config.errorFormat over the path: opt in outside a family, opt out inside one', async () => {
+      const app = await buildProblemApp();
+
+      const optIn = await app.inject({ method: 'GET', url: '/opt-in' });
+      expect(optIn.headers['content-type']).toMatch(PROBLEM_CONTENT_TYPE);
+      expect(optIn.json()).toMatchObject({ status: 403, code: 'FORBIDDEN' });
+
+      for (const url of ['/developer/v1/opt-out', '/legacy']) {
+        const response = await app.inject({ method: 'GET', url });
+        expect(response.headers['content-type']).toMatch(/^application\/json/);
+        expect(response.json()).toMatchObject({ statusCode: 403, code: 'FORBIDDEN' });
+      }
+
+      await app.close();
+    });
+  });
+
   describe('OAuth §5.2 error codes', () => {
     it('renders a DESCRIBED InvalidClientError as the token plus error_description', async () => {
       const app = await buildTestApp();
