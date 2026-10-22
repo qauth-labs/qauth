@@ -170,6 +170,19 @@ describe('docs/spec-pin-log.md — real tree', () => {
     expect(findStaleSpecPins(rows, REPO_ROOT, realToday())).toEqual([]);
   });
 
+  it('stays in date through 2026-11-21, past the old rfc7523bis fuse (#465)', () => {
+    // The rfc7523bis row used to fall due on 2026-10-30, the date Datatracker
+    // computes for `-11`. A draft in the RFC Editor queue does not expire, so
+    // the 2026-10-22 pass moved the row to the quarterly date after checking.
+    // 2026-11-21 is the last day before the next fuse, ID-JAG `-04`. A row
+    // added later that falls due sooner fails here first; then move this date
+    // to the day before that row's `Re-check by`.
+    const rows = parseSpecPinTable(readFileSync(LOG_PATH, 'utf8'));
+
+    expect(rows.length).toBeGreaterThanOrEqual(8);
+    expect(findStaleSpecPins(rows, REPO_ROOT, '2026-11-21')).toEqual([]);
+  });
+
   it('records the ID-JAG draft expiry the issue says is written down nowhere', () => {
     const rows = parseSpecPinTable(readFileSync(LOG_PATH, 'utf8'));
     const idJag = rows.find((row) => row.spec.includes('ID-JAG'));
