@@ -300,8 +300,9 @@ Table "audit_logs" {
 }
 
 // Admin audit log (ADR-019 Decision 7, #448). Append-only: triggers refuse
-// UPDATE, DELETE and TRUNCATE; only admin_audit_log_prune() deletes, oldest rows
-// first and never younger than 90 days. One hash chain per target realm:
+// UPDATE and TRUNCATE, accept a row only as the next link of its chain, and a
+// DELETE only of rows a checkpoint covers; admin_audit_log_prune() writes the
+// checkpoint, oldest rows first and never younger than 90 days. One hash chain per target realm:
 // row_hash = SHA-256(prev_hash || RFC 8785 canonical JSON of the other columns).
 // No foreign keys, so a realm's record outlives the realm row.
 Table "admin_audit_log" {
@@ -329,7 +330,8 @@ Table "admin_audit_log" {
 }
 
 // Where a realm's chain resumes after a prune: seq and row_hash of the last
-// removed row. Written only by admin_audit_log_prune(); append-only.
+// removed row. Written by admin_audit_log_prune(), accepted only over an
+// unbroken run of rows at least 90 days old; append-only.
 Table "admin_audit_log_checkpoints" {
   "realm_id" uuid [not null]
   "seq" bigint [not null]

@@ -270,6 +270,24 @@ describe('admin_audit_log integration (real Postgres)', () => {
     });
   });
 
+  describe('entries the chain could not verify later', () => {
+    it('are refused and leave no row: a hole in a diff array, a trace id past its column', async () => {
+      const realmId = randomUUID();
+      // eslint-disable-next-line no-sparse-arrays
+      const sparse = [1, , 3] as unknown as number[];
+
+      for (const overrides of [
+        { diff: { change: { before: null, after: { list: sparse } }, annotations: {} } },
+        { traceId: `${'a'.repeat(128)}   ` },
+      ] as Partial<AdminAuditEntry>[]) {
+        await expect(
+          db().transaction((tx) => auditLog.appendAdminAudit(tx, entry(realmId, overrides)))
+        ).rejects.toThrow(TypeError);
+      }
+      expect(await chainRows(realmId)).toEqual([]);
+    });
+  });
+
   describe('append-only triggers', () => {
     it('refuse UPDATE, DELETE and TRUNCATE on the log, the table owner included', async () => {
       const realmId = randomUUID();
@@ -288,21 +306,49 @@ describe('admin_audit_log integration (real Postgres)', () => {
       expect(await chainRows(realmId)).toHaveLength(2);
     });
 
-    it('refuse a DELETE that sets the prune flag by hand without a checkpoint', async () => {
+    it('refuse an inserted row that does not follow the chain head', async () => {
       const realmId = randomUUID();
-      await appendRows(realmId, 1);
-      const client = await pool().connect();
-      try {
-        await client.query('BEGIN');
-        await client.query(`SELECT set_config('qauth.admin_audit_log_prune', $1, true)`, [realmId]);
-        await expect(
-          pgError(client.query(`DELETE FROM admin_audit_log WHERE realm_id = $1`, [realmId]))
-        ).resolves.toEqual({ code: '23514', constraint: 'admin_audit_log_append_only' });
-        await client.query('ROLLBACK');
-      } finally {
-        client.release();
+      await appendRows(realmId, 2);
+      const [head] = (await chainRows(realmId)).slice(-1);
+      const insert = (seq: number, prevHash: Buffer) =>
+        pool().query(
+          `INSERT INTO admin_audit_log
+             (realm_id, seq, prev_hash, row_hash, actor_kind, actor_id, operation_id,
+              operation_class, effects, outcome, approvals, created_at)
+           VALUES ($1, $2, $3, $4, 'host_operator', 'root', 'realms.read', 'read', '[]',
+                   'succeeded', '[]', 0)`,
+          [realmId, seq, prevHash, Buffer.alloc(32, 7)]
+        );
+
+      // A gap in seq, a repeated link, and the right seq on the wrong hash.
+      for (const [seq, prevHash] of [
+        [5, head.row_hash],
+        [2, head.prev_hash],
+        [3, Buffer.alloc(32, 1)],
+      ] as [number, Buffer][]) {
+        await expect(pgError(insert(seq, prevHash))).resolves.toEqual({
+          code: '23514',
+          constraint: 'admin_audit_log_follows_head',
+        });
       }
-      expect(await chainRows(realmId)).toHaveLength(1);
+      expect(await chainRows(realmId)).toHaveLength(2);
+    });
+
+    it('pin the search_path of every function they run', async () => {
+      const { rows } = await pool().query(
+        `SELECT proname, proconfig FROM pg_proc
+          WHERE proname IN ('admin_audit_log_follows_head', 'admin_audit_log_append_only',
+                            'admin_audit_log_checkpoint_valid', 'admin_audit_log_prune')
+          ORDER BY proname`
+      );
+      expect(rows).toEqual(
+        [
+          'admin_audit_log_append_only',
+          'admin_audit_log_checkpoint_valid',
+          'admin_audit_log_follows_head',
+          'admin_audit_log_prune',
+        ].map((proname) => ({ proname, proconfig: ['search_path=pg_catalog, pg_temp'] }))
+      );
     });
 
     it('refuse UPDATE, DELETE and TRUNCATE on the checkpoints', async () => {
@@ -407,6 +453,107 @@ describe('admin_audit_log integration (real Postgres)', () => {
         });
       }
       expect(await chainRows(realmId)).toHaveLength(1);
+    });
+  });
+
+  describe('a role granted DML on both tables, beyond the writer grants', () => {
+    const ROLE = 'qauth_admin_audit_dml';
+    let dml: Pool | undefined;
+
+    beforeAll(async () => {
+      if (!dockerUp || !ctx) return;
+      await pool().query(`CREATE ROLE ${ROLE} LOGIN PASSWORD '${ROLE}'`);
+      await pool().query(`GRANT USAGE ON SCHEMA public TO ${ROLE}`);
+      await pool().query(
+        `GRANT SELECT, INSERT, DELETE ON admin_audit_log, admin_audit_log_checkpoints TO ${ROLE}`
+      );
+      const url = new URL(ctx.connectionString);
+      url.username = ROLE;
+      url.password = ROLE;
+      dml = new Pool({ connectionString: url.toString(), max: 1 });
+    });
+
+    afterAll(async () => {
+      await dml?.end();
+    });
+
+    /** Run statements as that role in one transaction, rolled back on error. */
+    async function asDml(statements: [string, unknown[]][]): Promise<void> {
+      if (!dml) throw new Error('no dml pool');
+      const client = await dml.connect();
+      try {
+        await client.query('BEGIN');
+        for (const [text, values] of statements) await client.query(text, values);
+        await client.query('COMMIT');
+      } catch (error) {
+        await client.query('ROLLBACK');
+        throw error;
+      } finally {
+        client.release();
+      }
+    }
+
+    /** A checkpoint copied from a real row, the way a prune would write it. */
+    const COPY_CHECKPOINT = `INSERT INTO admin_audit_log_checkpoints (realm_id, seq, row_hash)
+      SELECT realm_id, seq, row_hash FROM admin_audit_log WHERE realm_id = $1 AND seq = $2`;
+
+    it('cannot delete a row that no checkpoint covers', async () => {
+      const realmId = randomUUID();
+      await appendRows(realmId, 2);
+
+      await expect(
+        pgError(asDml([[`DELETE FROM admin_audit_log WHERE realm_id = $1`, [realmId]]]))
+      ).resolves.toEqual({ code: '23514', constraint: 'admin_audit_log_append_only' });
+      expect(await chainRows(realmId)).toHaveLength(2);
+    });
+
+    it('cannot write its own checkpoint over rows younger than 90 days, and so cannot delete them', async () => {
+      const realmId = randomUUID();
+      await appendRows(realmId, 5);
+      await expect(
+        pgError(
+          asDml([
+            [COPY_CHECKPOINT, [realmId, 3]],
+            [`DELETE FROM admin_audit_log WHERE realm_id = $1 AND seq <= 3`, [realmId]],
+          ])
+        )
+      ).resolves.toEqual({ code: '23514', constraint: 'admin_audit_log_retention_floor' });
+      expect(await chainRows(realmId)).toHaveLength(5);
+      await expect(auditLog.verifyAdminAuditChain(realmId)).resolves.toMatchObject({
+        ok: true,
+        rowsChecked: 5,
+      });
+    });
+
+    it('cannot write a checkpoint with another hash, or one behind the newest', async () => {
+      const realmId = randomUUID();
+      await appendRows(
+        realmId,
+        4,
+        createAdminAuditLogRepository(db(), { now: () => Date.now() - 100 * DAY_MS })
+      );
+      await pool().query(`SELECT admin_audit_log_prune($1, 2)`, [realmId]);
+
+      await expect(
+        pgError(
+          asDml([
+            [
+              `INSERT INTO admin_audit_log_checkpoints (realm_id, seq, row_hash) VALUES ($1, 3, $2)`,
+              [realmId, Buffer.alloc(32, 9)],
+            ],
+          ])
+        )
+      ).resolves.toEqual({ code: '23514', constraint: 'admin_audit_log_checkpoints_match' });
+      await expect(
+        pgError(
+          asDml([
+            [
+              `INSERT INTO admin_audit_log_checkpoints (realm_id, seq, row_hash) VALUES ($1, 1, $2)`,
+              [realmId, Buffer.alloc(32, 9)],
+            ],
+          ])
+        )
+      ).resolves.toEqual({ code: '23514', constraint: 'admin_audit_log_checkpoints_forward' });
     });
   });
 
@@ -577,6 +724,31 @@ describe('admin_audit_log integration (real Postgres)', () => {
         await expect(
           pgError(pool().query(`SELECT admin_audit_log_prune($1, $2)`, [realmId, seq]))
         ).resolves.toMatchObject({ code: 'P0002' });
+      }
+    });
+
+    it('refuses to prune over a row removed or relinked outside the rules', async () => {
+      const removed = randomUUID();
+      await appendRows(removed, 5, oldLog());
+      await tamper([[`DELETE FROM admin_audit_log WHERE realm_id = $1 AND seq = 2`, [removed]]]);
+
+      const relinked = randomUUID();
+      await appendRows(relinked, 5, oldLog());
+      await tamper([
+        [
+          `UPDATE admin_audit_log SET prev_hash = sha256(prev_hash) WHERE realm_id = $1 AND seq = 3`,
+          [relinked],
+        ],
+      ]);
+
+      for (const realmId of [removed, relinked]) {
+        await expect(
+          pgError(pool().query(`SELECT admin_audit_log_prune($1, 3)`, [realmId]))
+        ).resolves.toEqual({ code: '23514', constraint: 'admin_audit_log_checkpoints_unbroken' });
+        // The prune left the evidence where verification finds it.
+        await expect(auditLog.verifyAdminAuditChain(realmId)).resolves.toMatchObject({
+          ok: false,
+        });
       }
     });
 

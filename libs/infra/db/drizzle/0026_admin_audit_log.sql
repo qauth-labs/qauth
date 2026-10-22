@@ -47,23 +47,72 @@ CREATE TABLE "admin_audit_log_checkpoints" (
 -- Hand-written below this line: drizzle-kit does not model functions,
 -- triggers or grants, so `db:generate` neither writes nor drops them.
 --
--- The admin audit log is append-only (ADR-019 Decision 7, #448). These
--- triggers hold whoever writes, the table owner included, before any per-role
--- grants exist; the grants (`adminAuditLogWriterGrantStatements`) are the
--- second wall once the roles are split (#498). The one DELETE allowed is the
--- one `admin_audit_log_prune` performs: it marks its transaction with the
--- realm it prunes and has already written the checkpoint that covers every
--- row it deletes. Checkpoints are never changed or deleted.
+-- The admin audit log is append-only (ADR-019 Decision 7, #448). The rules
+-- below are database rules: they hold for every role whose statements fire
+-- the triggers, so they stop an application bug, or a role granted more than
+-- it should be, before the per-role grants exist (#498). A table owner or a
+-- superuser can still disable or drop a trigger; against them only the role
+-- split helps, and the hash chain shows what they changed as long as a later
+-- row, a checkpoint or a copy of the head kept outside the database disagrees.
+--
+-- * A row is inserted only as the next link of its realm's chain: `seq` one
+--   above the head (the newest row, else the newest checkpoint, else 0) and
+--   `prev_hash` the head's hash.
+-- * No row is updated, and neither table is truncated.
+-- * A row is deleted only when a checkpoint covers its `seq`.
+-- * A checkpoint is inserted only for a row still in the log, with that row's
+--   hash, ahead of the realm's newest checkpoint, over an unbroken run of rows
+--   since that checkpoint, and when none of those rows is younger than 90
+--   days. So whoever may write checkpoints can do no more than a prune.
+-- * No checkpoint is updated or deleted.
+--
+-- Every function pins its search_path and names tables with their schema, so
+-- no caller can swap in its own operators or tables.
+CREATE FUNCTION "admin_audit_log_follows_head"() RETURNS trigger
+LANGUAGE plpgsql
+SET search_path = pg_catalog, pg_temp
+AS $$
+DECLARE
+  v_seq bigint;
+  v_hash bytea;
+BEGIN
+  SELECT l."seq", l."row_hash" INTO v_seq, v_hash
+    FROM public."admin_audit_log" l
+    WHERE l."realm_id" = NEW."realm_id"
+    ORDER BY l."seq" DESC LIMIT 1;
+  IF NOT FOUND THEN
+    SELECT c."seq", c."row_hash" INTO v_seq, v_hash
+      FROM public."admin_audit_log_checkpoints" c
+      WHERE c."realm_id" = NEW."realm_id"
+      ORDER BY c."seq" DESC LIMIT 1;
+    IF NOT FOUND THEN
+      v_seq := 0;
+      v_hash := decode(repeat('00', 32), 'hex');
+    END IF;
+  END IF;
+  IF NEW."seq" <> v_seq + 1 OR NEW."prev_hash" <> v_hash THEN
+    RAISE EXCEPTION 'admin_audit_log row % of realm % does not follow the chain head %', NEW."seq", NEW."realm_id", v_seq
+      USING ERRCODE = 'check_violation',
+            CONSTRAINT = 'admin_audit_log_follows_head',
+            HINT = 'Append through appendAdminAudit, which takes the realm''s chain lock.';
+  END IF;
+  RETURN NEW;
+END;
+$$;--> statement-breakpoint
+CREATE TRIGGER "admin_audit_log_follows_head"
+  BEFORE INSERT ON "admin_audit_log"
+  FOR EACH ROW
+  EXECUTE FUNCTION "admin_audit_log_follows_head"();--> statement-breakpoint
 CREATE FUNCTION "admin_audit_log_append_only"() RETURNS trigger
-LANGUAGE plpgsql AS $$
+LANGUAGE plpgsql
+SET search_path = pg_catalog, pg_temp
+AS $$
 BEGIN
   IF TG_TABLE_NAME = 'admin_audit_log' AND TG_OP = 'DELETE' THEN
-    IF current_setting('qauth.admin_audit_log_prune', true) = OLD."realm_id"::text
-       AND EXISTS (
-         SELECT 1 FROM public."admin_audit_log_checkpoints" c
-         WHERE c."realm_id" = OLD."realm_id" AND c."seq" >= OLD."seq"
-       )
-    THEN
+    IF EXISTS (
+      SELECT 1 FROM public."admin_audit_log_checkpoints" c
+      WHERE c."realm_id" = OLD."realm_id" AND c."seq" >= OLD."seq"
+    ) THEN
       RETURN OLD;
     END IF;
   END IF;
@@ -89,16 +138,82 @@ CREATE TRIGGER "admin_audit_log_checkpoints_no_truncate"
   BEFORE TRUNCATE ON "admin_audit_log_checkpoints"
   FOR EACH STATEMENT
   EXECUTE FUNCTION "admin_audit_log_append_only"();--> statement-breakpoint
--- The retention job's only way to remove rows (ADR-020 §3). It deletes the
--- realm's rows up to and including `p_through_seq`, oldest first by
--- construction, and refuses when any of them is younger than 90 days, the
--- floor below which no realm setting may go. Before it deletes, it records the
--- `seq` and `row_hash` of the last row it removes as a checkpoint, so the
--- oldest retained row still verifies. It takes the realm's chain lock, the
--- same one `appendAdminAudit` takes, so no append interleaves.
+-- What makes a checkpoint, and so a prune, legitimate (ADR-020 §3: retention
+-- removes only the oldest admin events and keeps them at least 90 days). The
+-- run of rows it covers must be whole and linked by prev_hash, so a prune
+-- cannot hide a row removed or a link changed earlier. Row hashes themselves
+-- are not recomputed here: SQL has no RFC 8785 canonicalizer, so the retention
+-- job runs verifyAdminAuditChain before it prunes.
+CREATE FUNCTION "admin_audit_log_checkpoint_valid"() RETURNS trigger
+LANGUAGE plpgsql
+SET search_path = pg_catalog, pg_temp
+AS $$
+DECLARE
+  v_prev_seq bigint;
+  v_prev_hash bytea;
+  v_row_hash bytea;
+  v_rows bigint;
+  v_unlinked bigint;
+  v_newest_created_at bigint;
+BEGIN
+  SELECT c."seq", c."row_hash" INTO v_prev_seq, v_prev_hash
+    FROM public."admin_audit_log_checkpoints" c
+    WHERE c."realm_id" = NEW."realm_id"
+    ORDER BY c."seq" DESC LIMIT 1;
+  IF NOT FOUND THEN
+    v_prev_seq := 0;
+    v_prev_hash := decode(repeat('00', 32), 'hex');
+  END IF;
+  IF NEW."seq" <= v_prev_seq THEN
+    RAISE EXCEPTION 'a checkpoint of realm % must be past seq %', NEW."realm_id", v_prev_seq
+      USING ERRCODE = 'check_violation', CONSTRAINT = 'admin_audit_log_checkpoints_forward';
+  END IF;
+
+  SELECT l."row_hash" INTO v_row_hash
+    FROM public."admin_audit_log" l
+    WHERE l."realm_id" = NEW."realm_id" AND l."seq" = NEW."seq";
+  IF NOT FOUND OR v_row_hash <> NEW."row_hash" THEN
+    RAISE EXCEPTION 'a checkpoint must name a row of the log and carry its hash'
+      USING ERRCODE = 'check_violation', CONSTRAINT = 'admin_audit_log_checkpoints_match',
+            DETAIL = format('realm %s, seq %s', NEW."realm_id", NEW."seq");
+  END IF;
+
+  SELECT count(*),
+         count(*) FILTER (WHERE r."prev_hash" <> r."expected_prev"),
+         max(r."created_at")
+    INTO v_rows, v_unlinked, v_newest_created_at
+    FROM (
+      SELECT l."prev_hash", l."created_at",
+             coalesce(lag(l."row_hash") OVER (ORDER BY l."seq"), v_prev_hash) AS "expected_prev"
+        FROM public."admin_audit_log" l
+        WHERE l."realm_id" = NEW."realm_id" AND l."seq" > v_prev_seq AND l."seq" <= NEW."seq"
+    ) r;
+  IF v_rows <> NEW."seq" - v_prev_seq OR v_unlinked > 0 THEN
+    RAISE EXCEPTION 'the rows of realm % from seq % to % are not an unbroken chain', NEW."realm_id", v_prev_seq + 1, NEW."seq"
+      USING ERRCODE = 'check_violation', CONSTRAINT = 'admin_audit_log_checkpoints_unbroken',
+            HINT = 'Run verifyAdminAuditChain: a row was removed or relinked outside the log''s rules.';
+  END IF;
+  IF v_newest_created_at > (extract(epoch FROM now()) * 1000)::bigint - 90::bigint * 86400000 THEN
+    RAISE EXCEPTION 'admin_audit_log keeps every row for at least 90 days'
+      USING ERRCODE = 'check_violation', CONSTRAINT = 'admin_audit_log_retention_floor',
+            DETAIL = format('realm %s, a row up to seq %s is younger than 90 days', NEW."realm_id", NEW."seq");
+  END IF;
+  RETURN NEW;
+END;
+$$;--> statement-breakpoint
+CREATE TRIGGER "admin_audit_log_checkpoints_valid"
+  BEFORE INSERT ON "admin_audit_log_checkpoints"
+  FOR EACH ROW
+  EXECUTE FUNCTION "admin_audit_log_checkpoint_valid"();--> statement-breakpoint
+-- The retention job's way to remove rows. It deletes the realm's rows up to
+-- and including `p_through_seq`, oldest first by construction, after writing
+-- the checkpoint that covers them; the checkpoint trigger above refuses the
+-- prune unless the rows are whole, linked and at least 90 days old. It takes
+-- the realm's chain lock, the same one `appendAdminAudit` takes, so no append
+-- interleaves.
 --
 -- SECURITY DEFINER, so a retention role can be granted EXECUTE without any
--- DELETE grant on the table; EXECUTE is revoked from PUBLIC below.
+-- DELETE or checkpoint INSERT grant; EXECUTE is revoked from PUBLIC below.
 CREATE FUNCTION "admin_audit_log_prune"(p_realm_id uuid, p_through_seq bigint) RETURNS bigint
 LANGUAGE plpgsql
 SECURITY DEFINER
@@ -106,7 +221,6 @@ SET search_path = pg_catalog, pg_temp
 AS $$
 DECLARE
   v_row_hash bytea;
-  v_newest_created_at bigint;
   v_deleted bigint;
 BEGIN
   IF p_realm_id IS NULL OR p_through_seq IS NULL THEN
@@ -125,24 +239,12 @@ BEGIN
             HINT = 'Prune through a seq that is still in the log.';
   END IF;
 
-  SELECT max("created_at") INTO v_newest_created_at
-    FROM public."admin_audit_log"
-    WHERE "realm_id" = p_realm_id AND "seq" <= p_through_seq;
-  IF v_newest_created_at > (extract(epoch FROM now()) * 1000)::bigint - 90::bigint * 86400000 THEN
-    RAISE EXCEPTION 'admin_audit_log keeps every row for at least 90 days'
-      USING ERRCODE = 'check_violation',
-            CONSTRAINT = 'admin_audit_log_retention_floor',
-            DETAIL = format('realm %s, a row up to seq %s is younger than 90 days', p_realm_id, p_through_seq);
-  END IF;
-
   INSERT INTO public."admin_audit_log_checkpoints" ("realm_id", "seq", "row_hash")
     VALUES (p_realm_id, p_through_seq, v_row_hash);
 
-  PERFORM set_config('qauth.admin_audit_log_prune', p_realm_id::text, true);
   DELETE FROM public."admin_audit_log"
     WHERE "realm_id" = p_realm_id AND "seq" <= p_through_seq;
   GET DIAGNOSTICS v_deleted = ROW_COUNT;
-  PERFORM set_config('qauth.admin_audit_log_prune', '', true);
 
   RETURN v_deleted;
 END;

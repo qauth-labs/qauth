@@ -82,10 +82,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   break-glass operator or host operator), the full act chain when the actor
   acted for a user, the operation id, class, effects and outcome, the diff with
   every secret field masked, the approvals, the request digest and the trace
-  id. Database triggers refuse `UPDATE`, `DELETE` and `TRUNCATE` for every
-  role; the only delete is `admin_audit_log_prune()`, which removes a realm's
-  oldest rows, never one younger than 90 days, and records a checkpoint in
-  `admin_audit_log_checkpoints` so the chain still verifies. In
+  id. Database triggers refuse `UPDATE` and `TRUNCATE`, accept a row only as
+  the next link of its realm's chain, and accept a `DELETE` only of rows a
+  checkpoint covers. `admin_audit_log_prune()` writes that checkpoint in
+  `admin_audit_log_checkpoints` and removes a realm's oldest rows; a trigger
+  accepts the checkpoint only over an unbroken run of rows at least 90 days
+  old, so the chain still verifies after a prune. A table owner can still
+  disable a trigger: the per-role database users (#498) are what keep the
+  application from being one. In
   `@qauth-labs/infra-db`, `createAdminAuditLogRepository` gives
   `appendAdminAudit(tx, entry)`, which writes in the caller's transaction and
   calls an outbox hook after the insert, and `verifyAdminAuditChain(realmId)`,
