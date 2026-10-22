@@ -2,11 +2,14 @@
 # Uses the Vite dev server via nx; pair with docker-compose.dev.yml +
 # Compose Watch (sync). Mirrors apps/auth-server/Dockerfile.dev.
 
-FROM node:24-alpine
+FROM node:26-alpine
 
 WORKDIR /app
 
-RUN corepack enable
+# pnpm comes from npm at the exact version CI uses. Node 26 no longer ships
+# corepack, and a pinned global install means nothing fetches pnpm later.
+ARG PNPM_VERSION=12.14.0
+RUN npm install --global pnpm@${PNPM_VERSION}
 
 # Dependencies only (layer cache)
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./

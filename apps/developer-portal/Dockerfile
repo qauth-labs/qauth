@@ -14,9 +14,12 @@
 # syntax=docker/dockerfile:1.7
 
 # Stage 1: Workspace install + Nx build.
-FROM node:24-alpine AS builder
+FROM node:26-alpine AS builder
 WORKDIR /app
-RUN corepack enable
+# pnpm comes from npm at the exact version CI uses. Node 26 no longer ships
+# corepack, and a pinned global install means nothing fetches pnpm later.
+ARG PNPM_VERSION=12.14.0
+RUN npm install --global pnpm@${PNPM_VERSION}
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY nx.json tsconfig.base.json ./
 COPY vitest.config.ts ./
@@ -39,7 +42,7 @@ ENV VITE_AUTH_SERVER_URL=$VITE_AUTH_SERVER_URL
 RUN pnpm nx build developer-portal
 
 # Stage 2: Runner.
-FROM node:24-alpine AS runner
+FROM node:26-alpine AS runner
 WORKDIR /app
 ENV NODE_ENV=production
 
