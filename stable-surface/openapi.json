@@ -2884,7 +2884,7 @@
           "OAuth",
           "Userinfo"
         ],
-        "description": "OIDC userinfo endpoint (GET). Returns claims for the authenticated user. Requires a Bearer access token whose `aud` contains its own `client_id` or this endpoint's URL; a token for another resource server gets 401.",
+        "description": "OIDC userinfo endpoint (GET). Returns claims for the authenticated user. Requires a Bearer access token whose `aud` contains its own `client_id` or this endpoint's URL; a token for another resource server gets 401, as does a token whose subject is not a user (a client_credentials token).",
         "security": [
           {
             "bearerAuth": []
@@ -2930,7 +2930,7 @@
           "OAuth",
           "Userinfo"
         ],
-        "description": "OIDC userinfo endpoint (POST). Returns claims for the authenticated user. Accepts a Bearer access token in the Authorization header or a form-encoded access_token body parameter (RFC 6750 §2.2). The token's `aud` must contain its own `client_id` or this endpoint's URL; a token for another resource server gets 401.",
+        "description": "OIDC userinfo endpoint (POST). Returns claims for the authenticated user. Accepts a Bearer access token in the Authorization header or a form-encoded access_token body parameter (RFC 6750 §2.2). The token's `aud` must contain its own `client_id` or this endpoint's URL; a token for another resource server gets 401, as does a token whose subject is not a user (a client_credentials token).",
         "security": [
           {
             "bearerAuth": []
