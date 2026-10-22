@@ -119,6 +119,8 @@ export interface KeyPurposeDefinition {
  *
  * - `federation_entity` and `trust_anchor` default to `RS256`, the one
  *   algorithm OpenID Federation 1.0 §3 asks every implementation to verify.
+ *   Both rotate manually: a superior's subordinate statement lists the
+ *   entity's keys, so a new key needs the superior's statement updated.
  * - `oid4vp_request_signing` is `ES256` only (HAIP §7). It rotates manually:
  *   its X.509 certificate names the key, and the verifier's `x509_hash`
  *   client id is the certificate's hash.
@@ -162,7 +164,7 @@ export const KEY_PURPOSES = freezeRegistry({
     defaultAlgorithm: 'RS256',
     scoped: false,
     published: true,
-    rotation: AUTOMATIC,
+    rotation: MANUAL,
   },
   trust_anchor: {
     description: 'Signs subordinate statements as a federation trust anchor.',

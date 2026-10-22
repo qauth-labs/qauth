@@ -129,6 +129,20 @@ describe('KEY_PURPOSES', () => {
     expect(DEFAULT_KEY_ROTATION_PERIOD_DAYS).toBe(90);
   });
 
+  it('rotates manually every purpose whose key or public half a party outside the deployment holds', () => {
+    const manual = entries
+      .filter(([, definition]) => definition.rotation.mode === 'manual')
+      .map(([name]) => name);
+    expect(manual.sort()).toEqual([
+      'agent_upstream_identity',
+      'federation_entity',
+      'oid4vp_request_signing',
+      'trust_anchor',
+      'upstream_client_assertion',
+      'webhook_signing',
+    ]);
+  });
+
   it('pins the algorithms the wire depends on', () => {
     expect(KEY_PURPOSES.oid4vp_request_signing.algorithms).toEqual(['ES256']);
     expect(KEY_PURPOSES.oid4vp_response_encryption.algorithms).toEqual(['ECDH-ES']);
