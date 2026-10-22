@@ -53,6 +53,14 @@
 > - Decision 7: the API families, and every other route that is not an OAuth protocol endpoint,
 >   answer an error with an RFC 9457 problem details document that carries a stable `code` and a
 >   `trace_id`. OAuth protocol endpoints keep the error shape their specification defines.
+>
+> **Amended 2026-10-22** with the maintainer's decision, taken in the review of this amendment, on
+> what may be cached. Decision 5 put `Cache-Control: no-store` on every `/ui/*` response, hashed
+> assets included. That defeated the browser cache and worked against the per-page size budget of
+> ADR-020 §5.
+>
+> - Decision 5: pages and API answers keep `no-store`. A static file whose name carries a hash of
+>   its content may be cached as immutable. The proxy decides which responses qualify.
 
 ## Context
 
@@ -296,9 +304,49 @@ Every ceremony page meets one baseline:
 The proxy enforces the header part of the baseline. On every `/ui/*` response it sets the CSP
 (scripts from the realm origin only, no third-party script, except the operator's challenge script
 hosts on the sign-up and sign-in pages), `frame-ancestors 'none'`, `Referrer-Policy: no-referrer`
-and `Cache-Control: no-store`, replacing whatever the app sent. A replacement app cannot loosen
-them. QAuth's reference proxy configuration does this. The reference ceremony app runs under that
-policy with no inline script; the stack spike of ADR-020 §6 checks it.
+and `Cache-Control`, replacing whatever the app sent. `Cache-Control` is `no-store`, except on the
+fingerprinted static assets below. A replacement app cannot loosen them. QAuth's reference proxy
+configuration does this. The reference ceremony app runs under that policy with no inline script;
+the stack spike of ADR-020 §6 checks it.
+
+**What may be cached**, decided in the review of the 2026-10-22 amendment (maintainer).
+
+- Pages and API answers keep `Cache-Control: no-store`. Under `/ui/*` that is every HTML page,
+  redirect and error, and every other answer but the assets below. The engine sets `no-store` on
+  every Interaction API answer too. These carry the step's CSRF value, the interaction's display
+  data or personal data, and no browser or shared cache keeps them.
+- A static file whose name carries a hash of its content may be cached as immutable:
+  `Cache-Control: public, max-age=31536000, immutable` (RFC 9111, RFC 8246).
+- The proxy sends that header only when all of these hold. Every other `/ui/*` response gets
+  `no-store`.
+  - The path is under the ceremony app's asset prefix, `/ui/assets/` in the reference
+    configuration, and the app's build puts nothing there but files it named by their content.
+    The reference app's Vite build does this by default (`assets/[name]-[hash][extname]`); a file
+    it does not hash, from Vite's `public/` directory, is served from outside the prefix.
+  - The path matches
+    `^/ui/assets/(?:[A-Za-z0-9._-]+-)?[A-Za-z0-9_-]{8,}\.(?:js|mjs|css|woff2|woff|svg|png|jpg|jpeg|gif|webp|avif|ico)$`.
+    The hash is the last segment before the extension: at least eight characters of the URL-safe
+    base64 alphabet the build writes, eight by default. The extensions are the script, stylesheet,
+    font and image types; a source map, an HTML file or any other type gets `no-store`. The
+    pattern alone cannot tell `logo-standard.svg` from a hashed name, which is why the prefix must
+    hold only hashed files.
+  - The answer is a `200` or a `304` to a `GET` or `HEAD`.
+  - The answer sets no cookie.
+
+Why this is safe:
+
+- What `no-store` protects lives in pages and API answers: the step's CSRF value, the
+  interaction's display data, the account chooser's list and error details. A fingerprinted asset
+  is the same bytes for every user of the realm. The proxy strips QAuth's cookies from the request,
+  so the answer cannot depend on the session either.
+- A changed file gets a new name, because the hash is of its content. The page that names it is
+  `no-store`, so the next page load names the new file. A fixed script reaches every browser at its
+  next page load, with no cache purge; the old file may stay in a cache, but no page loads it.
+- The proxy cannot check that a hash in a name is the hash of the content. The app's build
+  guarantees it. An app that changes a file under an unchanged hashed name leaves browsers on the
+  old file for up to a year. That is a fault of the ceremony app, which is part of the realm's
+  trusted computing base anyway (above). An app that writes no hashed names gets `no-store` on
+  every response: slower, never looser.
 
 **Bot challenge**, decided 2026-10-11 (maintainer). ADR-017 Decision 7 says when the engine
 requires one and how it checks the answer.
@@ -838,6 +886,8 @@ Decided 2026-10-10 (maintainer).
 - A key rotation no longer forces users to sign in again.
 - Security-critical state stays in one transactional store when a deployment scales out.
 - The Interaction API is versioned and published, so a custom UI has a stable target.
+- A returning browser loads the ceremony app's fingerprinted scripts, stylesheets, fonts and images
+  from its cache, while every page and API answer stays `no-store`.
 - Every non-protocol route reports errors one way, with a `code` a client can branch on and a
   `trace_id` an operator can look up. Protocol clients still get the shape their specification
   defines.
@@ -853,6 +903,9 @@ Decided 2026-10-10 (maintainer).
   realms federate.
 - A path-routing reverse proxy becomes a deployment requirement. Its cookie stripping for `/ui/*`
   and the baseline headers it sets must be configured correctly.
+- The proxy's cache rule has two outcomes. A match written too wide would let a cache keep what it
+  must not, so the reference configuration fixes the asset prefix, the hash form and the extension
+  list, and everything else falls back to `no-store`.
 - The ceremony app shares the realm origin, so it is part of the realm's trusted computing base. A
   compromised or careless replacement sees every credential typed into it and can act as the
   signed-in user.
@@ -943,9 +996,11 @@ None. The UI screen list was answered on 2026-10-09 and 2026-10-10; ADR-020 reco
   — the 1.0 scope and the stability promise this topology serves.
 - ADR-020 — UI surfaces and UX acceptance criteria.
 - [Hosted UI guide](https://docs.qauth.dev/integrate/hosted-ui/) — today's server-rendered pages.
+- [RFC 8246: HTTP Immutable Responses](https://www.rfc-editor.org/rfc/rfc8246)
 - [RFC 8414: OAuth 2.0 Authorization Server Metadata](https://www.rfc-editor.org/rfc/rfc8414)
 - [RFC 8628: OAuth 2.0 Device Authorization Grant](https://www.rfc-editor.org/rfc/rfc8628)
 - [RFC 8693: OAuth 2.0 Token Exchange](https://www.rfc-editor.org/rfc/rfc8693)
+- [RFC 9111: HTTP Caching](https://www.rfc-editor.org/rfc/rfc9111)
 - [RFC 9449: OAuth 2.0 Demonstrating Proof of Possession (DPoP)](https://www.rfc-editor.org/rfc/rfc9449)
 - [RFC 9457: Problem Details for HTTP APIs](https://www.rfc-editor.org/rfc/rfc9457)
 - [RFC 9635: Grant Negotiation and Authorization Protocol (GNAP)](https://www.rfc-editor.org/rfc/rfc9635)

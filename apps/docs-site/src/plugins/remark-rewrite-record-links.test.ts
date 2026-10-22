@@ -383,7 +383,11 @@ describe('rewriteRecordLink — the real docs/adr and docs/security corpus, enum
     // 576 → 575 with the 2026-10-22 amendment to ADR-021: the format is
     // delurio's, so the record's JSON Schema link (external) goes; delurio is
     // named without a link.
-    expect(extractAllLinks()).toHaveLength(575);
+    //
+    // 575 → 577 with the 2026-10-22 cache amendment to ADR-019 Decision 5: two
+    // external links in Related, RFC 8246 and RFC 9111. The rule's body names
+    // them and ADR-020 without links.
+    expect(extractAllLinks()).toHaveLength(577);
   });
 
   it('every link falls into exactly one of the four outcomes, with none left unresolved', () => {
@@ -509,7 +513,10 @@ describe('rewriteRecordLink — the real docs/adr and docs/security corpus, enum
     //
     // The 2026-10-22 amendment to ADR-021: 281 → 280 external (its JSON
     // Schema link). Anchors, route, blob and unresolved unchanged.
-    expect(untouchedExternalOrAnchor).toBe(280 + 38);
+    //
+    // The 2026-10-22 cache amendment to ADR-019: 280 → 282 external (RFC 8246
+    // and RFC 9111). Anchors, route, blob and unresolved unchanged.
+    expect(untouchedExternalOrAnchor).toBe(282 + 38);
     //
     // The 2026-10-11 decisions on ADR-011: 228 → 229 route (net +1, see the total
     // above). External, anchors, blob and unresolved unchanged.
