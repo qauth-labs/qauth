@@ -387,7 +387,11 @@ describe('rewriteRecordLink — the real docs/adr and docs/security corpus, enum
     // 575 → 577 with the 2026-10-22 cache amendment to ADR-019 Decision 5: two
     // external links in Related, RFC 8246 and RFC 9111. The rule's body names
     // them and ADR-020 without links.
-    expect(extractAllLinks()).toHaveLength(577);
+    //
+    // 577 → 579 with the 2026-10-22 amendment to ADR-003 (the plugin API is
+    // public and experimental): its note links ADR-018 and ADR-019, both →
+    // ROUTE.
+    expect(extractAllLinks()).toHaveLength(579);
   });
 
   it('every link falls into exactly one of the four outcomes, with none left unresolved', () => {
@@ -523,7 +527,10 @@ describe('rewriteRecordLink — the real docs/adr and docs/security corpus, enum
     //
     // The 2026-10-19 amendments: 229 → 233 route (ADR-011 → ADR-014, ADR-014 →
     // ADR-011, ADR-009 → ADR-017, ADR-004 → ADR-009). Nothing else changes.
-    expect(rewrittenToRoute).toBe(233);
+    //
+    // The 2026-10-22 amendment to ADR-003: 233 → 235 route (ADR-003 → ADR-018,
+    // ADR-003 → ADR-019). Nothing else changes.
+    expect(rewrittenToRoute).toBe(235);
     expect(rewrittenToBlob).toBe(24);
     expect(leftUnresolved).toBe(0);
   });

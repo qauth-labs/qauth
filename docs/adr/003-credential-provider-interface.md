@@ -12,8 +12,18 @@
 > that upstream sign-in methods plug in through an AuthMethod contract.
 > AuthMethod extends `CredentialProvider`. `CredentialProvider` stays the verification half.
 > AuthMethod adds the Interaction API steps that ADR-019 defines and the routes an upstream needs.
-> The TypeScript plugin API stays internal and outside the 1.0 promise. `WalletProvider.verify()`
-> keeps throwing, as a deliberate fail-closed property; wallet sign-in keeps its dedicated seam.
+> The plugin API is the AuthMethod contract as plugins see it. It is public and documented, so
+> others can write plugins. It is experimental in 1.0: it stays outside the 1.0 promise and may
+> change in a minor release. It becomes stable in 1.x. `WalletProvider.verify()` keeps throwing,
+> as a deliberate fail-closed property; wallet sign-in keeps its dedicated seam.
+>
+> **Amended 2026-10-22: the plugin API is public and experimental.** The note above said "The
+> TypeScript plugin API stays internal and outside the 1.0 promise." The maintainer decided on
+> 2026-10-10 that the plugin API is public, documented and experimental in 1.0. That decision is
+> in [ADR-018](./018-1-0-scope-and-stability.md) §4 and in
+> [ADR-019](./019-deployment-topology-and-trust-boundaries.md) Decision 12, and the note now
+> agrees with both. Plugins are operator-installed code that runs in-process; ADR-019 Decision 12
+> sets the rules they follow.
 
 ## Context
 
