@@ -189,10 +189,15 @@ jobs:
   # assembled from the lockfile and every workspace package, so almost any
   # change can break it, and "affected" cannot see a dependency-manifest edit
   # as reaching the container.
+  #
+  # The server boots only against a migrated database: its boot step reads and
+  # writes the default realm (#484). The job runs the migration runner first,
+  # as docker-compose.yml does, so it also checks that image.
   docker-smoke:
     runs-on: ubuntu-latest
     env:
       IMAGE: qauth/auth-server:smoke
+      MIGRATION_IMAGE: qauth/migration-runner:smoke
       CONTAINER: qauth-auth-server-smoke
     services:
       # Mirrors docker-compose.yml. GitHub publishes service ports on the
@@ -225,13 +230,22 @@ jobs:
         with:
           filter: tree:0
 
-      # Same context and Dockerfile as the `auth-server` service in
-      # docker-compose.yml. BuildKit is required for the Dockerfile's
-      # `--mount=type=cache` pnpm-store mount.
-      - name: Build auth-server image
+      # Same context and Dockerfiles as the `auth-server` and
+      # `migration-runner` services in docker-compose.yml. BuildKit is required
+      # for the Dockerfiles' `--mount=type=cache` pnpm-store mount.
+      - name: Build auth-server and migration-runner images
         env:
           DOCKER_BUILDKIT: '1'
-        run: docker build -f apps/auth-server/Dockerfile -t "$IMAGE" .
+        run: |
+          set -euo pipefail
+          docker build -f apps/auth-server/Dockerfile -t "$IMAGE" .
+          docker build -f apps/migration-runner/Dockerfile -t "$MIGRATION_IMAGE" .
+
+      - name: Run the migration runner
+        run: >-
+          docker run --rm --network host
+          -e DATABASE_URL='postgresql://qauth:qauth_ci_password@localhost:5432/qauth'
+          "$MIGRATION_IMAGE"
 
       - name: Start auth-server container
         run: |
