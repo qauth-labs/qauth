@@ -320,10 +320,16 @@ the stack spike of ADR-020 §6 checks it.
 - The proxy sends that header only when all of these hold. Every other `/ui/*` response gets
   `no-store`.
   - The path is under the ceremony app's asset prefix, `/ui/assets/` in the reference
-    configuration.
-  - The file name carries a hash segment of at least eight characters, in the form the reference
-    app's build writes, and an extension from a fixed list of script, stylesheet, font and image
-    types.
+    configuration, and the app's build puts nothing there but files it named by their content.
+    The reference app's Vite build does this by default (`assets/[name]-[hash][extname]`); a file
+    it does not hash, from Vite's `public/` directory, is served from outside the prefix.
+  - The path matches
+    `^/ui/assets/(?:[A-Za-z0-9._-]+-)?[A-Za-z0-9_-]{8,}\.(?:js|mjs|css|woff2|woff|svg|png|jpg|jpeg|gif|webp|avif|ico)$`.
+    The hash is the last segment before the extension: at least eight characters of the URL-safe
+    base64 alphabet the build writes, eight by default. The extensions are the script, stylesheet,
+    font and image types; a source map, an HTML file or any other type gets `no-store`. The
+    pattern alone cannot tell `logo-standard.svg` from a hashed name, which is why the prefix must
+    hold only hashed files.
   - The answer is a `200` or a `304` to a `GET` or `HEAD`.
   - The answer sets no cookie.
 
