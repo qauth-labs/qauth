@@ -84,6 +84,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   defaults `NODE_ENV` to `production`, so a local stack that needs one sets
   `NODE_ENV=development` in `.env`.
 
+- The images and CI run on Node.js 26 and pnpm 12.14.0, up from Node.js 24 and
+  pnpm 11. Node 26 no longer ships corepack, so each image installs pnpm from
+  npm at that exact version while it builds. The migration-runner image no
+  longer downloads pnpm each time it runs, which also made it fail whenever
+  the npm registry was slow. `engines` now asks for Node.js ≥ 26.10.0 and
+  pnpm ≥ 12.14.0.
+
+  **Action for contributors**: install Node.js 26 (`nvm use` reads `.nvmrc`)
+  and `npm install --global pnpm@12.14.0`.
+
 [#435]: https://github.com/qauth-labs/qauth/issues/435
 [#449]: https://github.com/qauth-labs/qauth/issues/449
 [#452]: https://github.com/qauth-labs/qauth/issues/452

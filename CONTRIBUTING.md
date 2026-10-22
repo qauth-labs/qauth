@@ -10,8 +10,8 @@ By participating in this project, you are expected to uphold our
 
 ## Prerequisites
 
-- **Node.js** ≥ 24.7.0 (see `.nvmrc` — `nvm use`)
-- **pnpm** ≥ 11 (`corepack enable`)
+- **Node.js** ≥ 26.10.0 (see `.nvmrc` — `nvm use`)
+- **pnpm** ≥ 12.14.0 (`npm install --global pnpm@12.14.0`; Node 26 no longer ships corepack)
 - **Docker** 20.10+ and Docker Compose 2.0+ (for Postgres 18 + Redis 7)
 
 ## Getting started
