@@ -356,16 +356,17 @@ docker exec -it qauth-redis sh
 
 See `.env.docker.example` for all available variables. Key variables:
 
-| Variable                   | Required | Description                                                  |
-| -------------------------- | -------- | ------------------------------------------------------------ |
-| `DB_PASSWORD`              | Yes      | PostgreSQL password                                          |
-| `JWT_PRIVATE_KEY`          | Yes      | EdDSA private key (PEM format)                               |
-| `JWT_PUBLIC_KEY`           | Yes      | EdDSA public key (PEM format)                                |
-| `JWT_ISSUER`               | No       | JWT issuer URL (default: http://localhost:3000)              |
-| `EMAIL_PROVIDER`           | No       | Email provider: mock, resend, smtp (default: mock)           |
-| `REQUIRE_VERIFIED_ACCOUNT` | No       | Refuse password login until the address is verified (`true`) |
-| `NODE_ENV`                 | No       | `production` (default) or `development` for dev              |
-| `LOG_LEVEL`                | No       | `info` (default); use `debug` for development                |
+| Variable                       | Required | Description                                                                                                                                                      |
+| ------------------------------ | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `DB_PASSWORD`                  | Yes      | PostgreSQL password                                                                                                                                              |
+| `JWT_PRIVATE_KEY`              | Yes      | EdDSA private key (PEM format)                                                                                                                                   |
+| `JWT_PUBLIC_KEY`               | Yes      | EdDSA public key (PEM format)                                                                                                                                    |
+| `JWT_ISSUER`                   | No       | JWT issuer URL (default: http://localhost:3000). At first boot it becomes the default realm's permanent issuer; a later boot with another value refuses to start |
+| `DEFAULT_REALM_ENDPOINT_HOSTS` | No       | Names server-side callers reach the auth-server by (default: `auth-server`, the developer portal's)                                                              |
+| `EMAIL_PROVIDER`               | No       | Email provider: mock, resend, smtp (default: mock)                                                                                                               |
+| `REQUIRE_VERIFIED_ACCOUNT`     | No       | Refuse password login until the address is verified (`true`)                                                                                                     |
+| `NODE_ENV`                     | No       | `production` (default) or `development` for dev                                                                                                                  |
+| `LOG_LEVEL`                    | No       | `info` (default); use `debug` for development                                                                                                                    |
 
 > **The `mock` email provider delivers nothing, and a new account cannot sign in
 > until its address is verified.** `REQUIRE_VERIFIED_ACCOUNT` defaults to `true`

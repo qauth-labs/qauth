@@ -94,6 +94,9 @@ services:
 
       # Auth
       DEFAULT_REALM_NAME: ${DEFAULT_REALM_NAME:-master}
+      # The developer portal reaches this server as `auth-server` (its
+      # AUTH_SERVER_URL), so that name is an endpoint host of the default realm.
+      DEFAULT_REALM_ENDPOINT_HOSTS: ${DEFAULT_REALM_ENDPOINT_HOSTS:-auth-server}
       SYSTEM_CLIENT_ID: ${SYSTEM_CLIENT_ID:-system}
       # HMAC secret signing the __Host-qauth_session cookie. REQUIRED in
       # production (the env schema rejects the dev default when NODE_ENV=production).

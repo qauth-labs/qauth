@@ -142,6 +142,12 @@ function haipVerifierEnvironment(pki: ReturnType<typeof createMockVerifierPki>) 
   };
 }
 
+/**
+ * The boot-gate block points at a database it never dials, so the default
+ * realm's boot step (#484), which needs one, stays off there.
+ */
+const NO_DATABASE = { defaultRealmBoot: false } as const;
+
 describe('wallet federation — haip-1.0 boot gate after #377 Phase C', () => {
   it('refuses on the key-storage assurance count, NOT on any count #377 cleared', async () => {
     const jwt = await generateJwtPem();
@@ -162,13 +168,13 @@ describe('wallet federation — haip-1.0 boot gate after #377 Phase C', () => {
     // is also what proves the provisioned chain VALIDATED: an unusable one
     // would take this boot down too, since the material is checked whatever
     // profile is selected.
-    const base = await bootAuthServer({
-      ...environment,
-      OID4VP_VERIFIER_PROFILE: 'oid4vp-1.0-base',
-    });
+    const base = await bootAuthServer(
+      { ...environment, OID4VP_VERIFIER_PROFILE: 'oid4vp-1.0-base' },
+      NO_DATABASE
+    );
     await base.close();
 
-    const refusal = await bootAuthServer(environment).then(
+    const refusal = await bootAuthServer(environment, NO_DATABASE).then(
       async (server) => {
         await server.close();
         return undefined;
@@ -197,17 +203,20 @@ describe('wallet federation — haip-1.0 boot gate after #377 Phase C', () => {
     const pki = createMockVerifierPki();
     const statusList = createMockStatusList();
 
-    const server = await bootAuthServer({
-      ...REQUIRED_TEST_ENVIRONMENT,
-      DATABASE_URL: 'postgresql://unused:unused@127.0.0.1:1/unused',
-      REDIS_URL: 'redis://127.0.0.1:1/0',
-      JWT_PRIVATE_KEY: jwt.privateKey,
-      JWT_PUBLIC_KEY: jwt.publicKey,
-      ...haipVerifierEnvironment(pki),
-      OID4VP_ATTESTING_ISSUERS: JSON.stringify({ [TRUSTED_ISSUER]: 'iso_18045_high' }),
-      OID4VP_STATUS_LIST_TRUST_ANCHORS: statusList.anchorPem,
-      OID4VP_STATUS_LIST_URI_ALLOWLIST: statusList.uriAllowlistPrefix,
-    });
+    const server = await bootAuthServer(
+      {
+        ...REQUIRED_TEST_ENVIRONMENT,
+        DATABASE_URL: 'postgresql://unused:unused@127.0.0.1:1/unused',
+        REDIS_URL: 'redis://127.0.0.1:1/0',
+        JWT_PRIVATE_KEY: jwt.privateKey,
+        JWT_PUBLIC_KEY: jwt.publicKey,
+        ...haipVerifierEnvironment(pki),
+        OID4VP_ATTESTING_ISSUERS: JSON.stringify({ [TRUSTED_ISSUER]: 'iso_18045_high' }),
+        OID4VP_STATUS_LIST_TRUST_ANCHORS: statusList.anchorPem,
+        OID4VP_STATUS_LIST_URI_ALLOWLIST: statusList.uriAllowlistPrefix,
+      },
+      NO_DATABASE
+    );
 
     try {
       expect(server.app.providerRegistry.has('wallet')).toBe(true);
@@ -225,15 +234,18 @@ describe('wallet federation — haip-1.0 boot gate after #377 Phase C', () => {
     const jwt = await generateJwtPem();
 
     await expect(
-      bootAuthServer({
-        ...REQUIRED_TEST_ENVIRONMENT,
-        DATABASE_URL: 'postgresql://unused:unused@127.0.0.1:1/unused',
-        REDIS_URL: 'redis://127.0.0.1:1/0',
-        JWT_PRIVATE_KEY: jwt.privateKey,
-        JWT_PUBLIC_KEY: jwt.publicKey,
-        WALLET_FEDERATION_ENABLED: 'false',
-        OID4VP_RESPONSE_KEY_SECRET: 'dG9vLXNob3J0',
-      })
+      bootAuthServer(
+        {
+          ...REQUIRED_TEST_ENVIRONMENT,
+          DATABASE_URL: 'postgresql://unused:unused@127.0.0.1:1/unused',
+          REDIS_URL: 'redis://127.0.0.1:1/0',
+          JWT_PRIVATE_KEY: jwt.privateKey,
+          JWT_PUBLIC_KEY: jwt.publicKey,
+          WALLET_FEDERATION_ENABLED: 'false',
+          OID4VP_RESPONSE_KEY_SECRET: 'dG9vLXNob3J0',
+        },
+        NO_DATABASE
+      )
     ).rejects.toThrow(/OID4VP_RESPONSE_KEY_SECRET must decode to exactly 32 bytes/);
   }, 60_000);
 });

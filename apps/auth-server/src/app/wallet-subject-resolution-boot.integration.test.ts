@@ -29,6 +29,12 @@ import { bootAuthServer, generateJwtPem, REQUIRED_TEST_ENVIRONMENT } from '../te
  * start, which is the defect — not the refusal.
  */
 
+/**
+ * Every deployment here points at a database it never dials, so the default
+ * realm's boot step (#484), which needs one, stays off.
+ */
+const NO_DATABASE = { defaultRealmBoot: false } as const;
+
 describe('subject-resolution boot gate (#379 D2)', () => {
   /** A deployment with wallet federation on, minus any subject configuration. */
   async function walletEnvironment(): Promise<Record<string, string>> {
@@ -55,20 +61,25 @@ describe('subject-resolution boot gate (#379 D2)', () => {
     // database URL, the missing issuer keys, or anything else in this
     // environment — which is how a "fails to boot" test stops testing what it
     // claims to.
-    const configured = await bootAuthServer({
-      ...environment,
-      OID4VP_SUBJECT_BINDING_CLAIMS: 'family_name,given_name,birth_date',
-    });
+    const configured = await bootAuthServer(
+      {
+        ...environment,
+        OID4VP_SUBJECT_BINDING_CLAIMS: 'family_name,given_name,birth_date',
+      },
+      NO_DATABASE
+    );
     await configured.close();
 
-    await expect(bootAuthServer(environment)).rejects.toThrow(/OID4VP_SUBJECT_BINDING_CLAIMS/);
+    await expect(bootAuthServer(environment, NO_DATABASE)).rejects.toThrow(
+      /OID4VP_SUBJECT_BINDING_CLAIMS/
+    );
   }, 60_000);
 
   it("surfaces the resolver's own message rather than a boolean of it", async () => {
     // D2 put the gate in `app.ts` instead of behind a boolean option threaded
     // into `createConfiguredProviders` precisely so this text reaches the
     // operator intact.
-    await expect(bootAuthServer(await walletEnvironment())).rejects.toThrow(
+    await expect(bootAuthServer(await walletEnvironment(), NO_DATABASE)).rejects.toThrow(
       /at least one credential claim/
     );
   }, 60_000);
@@ -77,11 +88,14 @@ describe('subject-resolution boot gate (#379 D2)', () => {
     const environment = await walletEnvironment();
 
     await expect(
-      bootAuthServer({
-        ...environment,
-        OID4VP_SUBJECT_RESOLUTION: 'issuer-scoped-claim',
-        OID4VP_SUBJECT_BINDING_CLAIMS: 'family_name,given_name',
-      })
+      bootAuthServer(
+        {
+          ...environment,
+          OID4VP_SUBJECT_RESOLUTION: 'issuer-scoped-claim',
+          OID4VP_SUBJECT_BINDING_CLAIMS: 'family_name,given_name',
+        },
+        NO_DATABASE
+      )
     ).rejects.toThrow(/OID4VP_SUBJECT_CLAIM/);
   }, 60_000);
 
@@ -93,14 +107,17 @@ describe('subject-resolution boot gate (#379 D2)', () => {
     // CORRECT state for a deployment that serves no wallet flows, and a gate
     // that refused it would have made WALLET_FEDERATION_ENABLED=false
     // unbootable — which is every deployment that predates epic #231.
-    const server = await bootAuthServer({
-      ...REQUIRED_TEST_ENVIRONMENT,
-      DATABASE_URL: 'postgresql://unused:unused@127.0.0.1:1/unused',
-      REDIS_URL: 'redis://127.0.0.1:1/0',
-      JWT_PRIVATE_KEY: jwt.privateKey,
-      JWT_PUBLIC_KEY: jwt.publicKey,
-      WALLET_FEDERATION_ENABLED: 'false',
-    });
+    const server = await bootAuthServer(
+      {
+        ...REQUIRED_TEST_ENVIRONMENT,
+        DATABASE_URL: 'postgresql://unused:unused@127.0.0.1:1/unused',
+        REDIS_URL: 'redis://127.0.0.1:1/0',
+        JWT_PRIVATE_KEY: jwt.privateKey,
+        JWT_PUBLIC_KEY: jwt.publicKey,
+        WALLET_FEDERATION_ENABLED: 'false',
+      },
+      NO_DATABASE
+    );
 
     await server.close();
   }, 60_000);
@@ -113,8 +130,8 @@ describe('subject-resolution boot gate (#379 D2)', () => {
     // Asserting the message is `/no VerifierProfile is selected/` rather than
     // merely "it threw" is what stops the gate silently taking over a refusal it
     // does not own.
-    await expect(bootAuthServer({ ...environment, OID4VP_VERIFIER_PROFILE: '' })).rejects.toThrow(
-      /no VerifierProfile is selected/i
-    );
+    await expect(
+      bootAuthServer({ ...environment, OID4VP_VERIFIER_PROFILE: '' }, NO_DATABASE)
+    ).rejects.toThrow(/no VerifierProfile is selected/i);
   }, 60_000);
 });

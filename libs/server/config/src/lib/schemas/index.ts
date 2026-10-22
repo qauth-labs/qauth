@@ -33,6 +33,7 @@ export {
 export { type ObservabilityEnv, observabilityEnvSchema } from './observability';
 export { type PasswordEnv, passwordEnvSchema } from './password';
 export { type RateLimitEnv, rateLimitEnvSchema } from './rate-limit';
+export { parseRealmEndpointHosts } from './realm-endpoint-hosts';
 export {
   parseRedirectUriCustomSchemes,
   REFUSED_CUSTOM_REDIRECT_URI_SCHEMES,

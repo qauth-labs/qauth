@@ -112,7 +112,16 @@ export const SERVER_KEYS = defineKeys([
     owner: 'realms',
     default: 'master',
     since: '0.1.0',
-    docs: 'The name of the realm a new installation creates and serves by default.',
+    docs: 'The name of the default realm, a single-realm setting with `JWT_ISSUER`: the server creates the realm at boot when it is missing, and in simple mode it is also the operator realm.',
+  },
+  {
+    name: 'DEFAULT_REALM_ENDPOINT_HOSTS',
+    tier: 'stable',
+    role: 'deployment',
+    owner: 'realms',
+    default: '',
+    since: '0.2.0',
+    docs: "Host names, comma-separated, that server-side callers reach the default realm by, such as `auth-server` from the developer portal's `AUTH_SERVER_URL`; each missing one is added as an endpoint host at boot and none is ever removed.",
   },
   {
     name: 'VITEST',

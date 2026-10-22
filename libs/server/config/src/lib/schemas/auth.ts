@@ -1,5 +1,6 @@
 import { z } from 'zod';
 
+import { parseRealmEndpointHosts } from './realm-endpoint-hosts';
 import { parseRedirectUriCustomSchemes } from './redirect-uri-schemes';
 
 /**
@@ -43,9 +44,29 @@ function strictBoolean(defaultValue: boolean) {
  */
 export const authEnvSchema = z.object({
   /**
-   * Default realm name for new installations
+   * The name of the default realm: a single-realm (simple mode) setting, with
+   * `JWT_ISSUER` (ADR-019 Decision 1, #484).
+   *
+   * At boot the auth server finds the realm of this name, or creates it, and
+   * gives it `JWT_ISSUER` as its issuer and that URL's host as its primary
+   * host. In simple mode the default realm is also the operator realm.
    */
   DEFAULT_REALM_NAME: z.string().min(1).default('master'),
+
+  /**
+   * Endpoint hosts of the default realm, comma-separated (ADR-019 Decision 1,
+   * #484): the names a server-to-server caller reaches the auth server by,
+   * such as `auth-server`, the Compose service name in the developer portal's
+   * `AUTH_SERVER_URL`.
+   *
+   * A bootstrap aid, like `JWT_ISSUER`. At boot each name is added to the
+   * default realm when it is missing, and none is ever removed, so a shorter
+   * list later changes nothing; once the admin API manages endpoint hosts, the
+   * realm row owns the list. Boot refuses a name that cannot be a host, and
+   * one that another realm, or the default realm as its primary host, already
+   * has. Empty by default.
+   */
+  DEFAULT_REALM_ENDPOINT_HOSTS: z.string().default('').transform(parseRealmEndpointHosts),
 
   /**
    * System OAuth client ID (defaults to "system")

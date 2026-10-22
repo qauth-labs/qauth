@@ -28,8 +28,9 @@
  *   client_ids. Uses plain `drizzle-orm` inserts because `drizzle-seed`'s
  *   faker-style API is awkward for "insert these exact rows."
  *
- * The target realm must already exist. Create it via migrations or the
- * default-realm helper before running this.
+ * The target realm must already exist. The auth-server creates the default
+ * realm (`DEFAULT_REALM_NAME`, with its issuer from `JWT_ISSUER`) when it
+ * boots, so start it once against the migrated database before running this.
  *
  * The manifest's optional `cimd_clients` section grants scopes to CIMD
  * clients (#770). Each entry sets only the client's `scopes` and `audience`;
@@ -110,8 +111,9 @@ async function main(): Promise<void> {
     const [realm] = await db.select().from(realms).where(eq(realms.name, manifest.realm)).limit(1);
     if (!realm) {
       console.error(
-        `Realm "${manifest.realm}" not found. Create it first (via migrations or the ` +
-          `default-realm helper) before seeding clients.`
+        `Realm "${manifest.realm}" not found. The auth-server creates the default realm, ` +
+          `named by DEFAULT_REALM_NAME, when it boots: start it once against this database, ` +
+          `or set "realm" in the manifest to an existing realm, before seeding clients.`
       );
       process.exit(1);
     }

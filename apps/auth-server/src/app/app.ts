@@ -33,6 +33,7 @@ import { assertSubjectResolutionProvisioned } from './helpers/assert-subject-res
 import { oid4vpResponseKeySecret } from './helpers/oid4vp-response-key';
 import { isJtiRevoked } from './helpers/token-revocation';
 import { provisionedVerifierMaterial } from './helpers/verifier-identity';
+import { defaultRealmPlugin } from './plugins/default-realm';
 import errorHandler from './plugins/error-handler';
 import { jobsPlugin } from './plugins/jobs';
 import { metricsPlugin } from './plugins/metrics';
@@ -69,7 +70,19 @@ const CRYPTO_CAPABILITIES: VerifierCryptoCapabilities = deriveCryptoCapabilities
   verifierCertificateChainPems: resolveVerifierCertificateChainPems(env),
 });
 
-export async function app(fastify: FastifyInstance, opts: object) {
+/** Options for {@link app}. */
+export interface AppOptions {
+  /**
+   * Run the default realm's boot step (#484) when the server is ready. On
+   * unless set to `false`, which only a boot with no database does: the
+   * OpenAPI export and the error-handler wiring test.
+   */
+  defaultRealmBoot?: boolean;
+}
+
+export async function app(fastify: FastifyInstance, opts: AppOptions) {
+  const { defaultRealmBoot = true, ...pluginOptions } = opts;
+
   await fastify.register(databasePlugin, {
     config: {
       connectionString: env.DATABASE_URL,
@@ -81,6 +94,21 @@ export async function app(fastify: FastifyInstance, opts: object) {
       },
     },
   });
+
+  // The default realm's boot step (ADR-019 Decision 1, #484): find or create
+  // the realm named DEFAULT_REALM_NAME, give it its issuer and primary host
+  // from JWT_ISSUER, mark it the operator realm when there is none, and add
+  // DEFAULT_REALM_ENDPOINT_HOSTS. It runs in an `onReady` hook, so before the
+  // server listens, and refuses the boot when the stored issuer differs from
+  // JWT_ISSUER. Registered right after the database so its hook runs before
+  // the job runner starts.
+  if (defaultRealmBoot) {
+    await fastify.register(defaultRealmPlugin, {
+      realmName: env.DEFAULT_REALM_NAME,
+      jwtIssuer: env.JWT_ISSUER,
+      endpointHosts: env.DEFAULT_REALM_ENDPOINT_HOSTS,
+    });
+  }
 
   await fastify.register(cachePlugin, {
     config: {
@@ -463,14 +491,14 @@ export async function app(fastify: FastifyInstance, opts: object) {
 
   fastify.register(AutoLoad, {
     dir: path.join(__dirname, 'plugins'),
-    options: { ...opts },
+    options: { ...pluginOptions },
     ignorePattern:
-      /(error-handler|rate-limit|security-headers|metrics|request-id|jobs)\.(ts|js)$|\.(test|spec)\.(ts|js)$/,
+      /(error-handler|rate-limit|security-headers|metrics|request-id|jobs|default-realm)\.(ts|js)$|\.(test|spec)\.(ts|js)$/,
   });
 
   fastify.register(AutoLoad, {
     dir: path.join(__dirname, 'routes'),
-    options: { ...opts },
+    options: { ...pluginOptions },
     ignorePattern: /\.(test|spec)\.(ts|js)$/,
   });
 }

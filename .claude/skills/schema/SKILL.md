@@ -133,6 +133,9 @@ A realm's `issuer` and its `primary` host in `realm_hosts` are **permanent**
 nothing, and refuse every later change. Store and look up hosts only through
 `normaliseRealmHost()` (`@qauth-labs/shared-validation`) and the realms
 repository's host methods. At most one realm has `is_operator = true`.
+The auth-server's boot step (#484) fills the default realm's issuer and primary
+host from `JWT_ISSUER` (`assignIssuer` for a realm from before 0025) under
+`lockProvisioning`, and marks it the operator realm when none is.
 
 See `libs/infra/db/src/qauth-schema.dbml` for the full visual schema.
 

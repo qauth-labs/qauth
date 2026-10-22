@@ -74,6 +74,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   no trailing dot. It refuses wildcards, white space, empty labels and hosts
   over 253 characters.
 
+- **The default realm at boot** ([#484], ADR-019 Decision 1). Before it
+  listens, the auth-server finds the realm named by `DEFAULT_REALM_NAME`, or
+  creates it, and gives it `JWT_ISSUER` as its issuer, without a trailing
+  slash, and that URL's host as its primary host. When no realm is the
+  operator realm, the default realm becomes it: in simple mode the two are one.
+  The new stable key `DEFAULT_REALM_ENDPOINT_HOSTS` (comma-separated) adds
+  endpoint hosts to the default realm, such as `auth-server`, the name the
+  developer portal reaches the server by; the Compose file sets it, and a boot
+  never removes one. The step runs in one transaction under a Postgres advisory
+  lock, so nodes that start together create one realm. It logs one line,
+  `default realm ready`, with the realm, issuer, host and operator flag, and
+  warns when `JWT_ISSUER` has a trailing slash or a path. A realm from before
+  migration 0025 keeps its id, users and clients, and only gains its issuer
+  and host, so existing clients and tokens keep working. `DEFAULT_REALM_NAME`
+  and `JWT_ISSUER` are documented as the single-realm settings.
+
 - **Schema**: migration 0026 adds the admin audit log ([#448], ADR-019
   Decision 7, ADR-020 §3). `admin_audit_log` keeps one hash chain per target
   realm: each row carries a `seq` without a gap, the previous row's hash and
@@ -118,6 +134,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `resolveRequireVerifiedAccount` is removed from `@qauth-labs/server-config`;
   `readConfiguredEnv` and `applyKeyAliases` replace it.
 
+- **BREAKING**: the auth-server refuses to start when the default realm's
+  stored issuer differs from `JWT_ISSUER` ([#484]). A realm's issuer and its
+  host are permanent, and the error names both values. It also refuses a
+  `JWT_ISSUER` that cannot be a realm issuer (plain `http` off `localhost`, an
+  IP address as the host, a query or a fragment), and a `JWT_ISSUER` host or a
+  `DEFAULT_REALM_ENDPOINT_HOSTS` name that another realm already has. The step
+  needs the database, so a server that cannot reach it no longer starts.
+
+  **Action for operators**: keep `JWT_ISSUER` as it is at the first boot after
+  the upgrade, and make it an `https` URL on a host name (`http://localhost`
+  serves development). A trailing slash or a path keeps working, with a boot
+  warning: the realm stores the issuer without the slash, while tokens carry
+  `JWT_ISSUER` as written.
+
 - **BREAKING**: the auth-server refuses to start when `DB_POOL_MAX` is below 2
   ([#452]). A running background job holds one pool connection for its lock,
   so a pool of one would leave requests waiting until the job ends. The error
@@ -154,6 +184,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#461]: https://github.com/qauth-labs/qauth/issues/461
 [#462]: https://github.com/qauth-labs/qauth/issues/462
 [#470]: https://github.com/qauth-labs/qauth/issues/470
+[#484]: https://github.com/qauth-labs/qauth/issues/484
 
 ## [0.1.3] - 2026-10-21
 

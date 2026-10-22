@@ -158,7 +158,9 @@ async function buildAssembledApp(): Promise<FastifyInstance> {
   instance.setSerializerCompiler(serializerCompiler);
 
   await instance.register(async (scope, opts) => {
-    await app(scope, opts as object);
+    // The database is unreachable on purpose (above), so the default realm's
+    // boot step (#484), which needs it, stays off.
+    await app(scope, { ...(opts as object), defaultRealmBoot: false });
 
     // ── Acceptance criterion (c): how the F-01 guarantee is exercised.
     //

@@ -51,25 +51,29 @@ const pki = createMockVerifierPki();
 async function bootWithVerifierIdentity() {
   const jwt = await generateJwtPem();
 
-  return bootAuthServer({
-    ...REQUIRED_TEST_ENVIRONMENT,
-    // Syntactically valid and never dialled: nothing here issues a query.
-    DATABASE_URL: 'postgresql://unused:unused@127.0.0.1:1/unused',
-    REDIS_URL: 'redis://127.0.0.1:1/0',
-    JWT_PRIVATE_KEY: jwt.privateKey,
-    JWT_PUBLIC_KEY: jwt.publicKey,
-    WALLET_FEDERATION_ENABLED: 'true',
-    OID4VP_VERIFIER_PROFILE: 'oid4vp-1.0-base',
-    OID4VP_REQUESTED_VCT: 'https://credentials.example.com/pid',
-    // Subject resolution, stated because #379 made it a BOOT gate: an enabled
-    // deployment that names no binding claims refuses to start (ADR-010 §6).
-    // Irrelevant to what this suite asserts — no request here reaches a
-    // presentation — but the boot has to succeed before anything can be
-    // asserted about the key sets it produced.
-    OID4VP_SUBJECT_RESOLUTION: 'asserted-lookup',
-    OID4VP_SUBJECT_BINDING_CLAIMS: 'family_name,given_name,birth_date',
-    ...verifierIdentityEnvironment(pki),
-  });
+  return bootAuthServer(
+    {
+      ...REQUIRED_TEST_ENVIRONMENT,
+      // Syntactically valid and never dialled: nothing here issues a query.
+      DATABASE_URL: 'postgresql://unused:unused@127.0.0.1:1/unused',
+      REDIS_URL: 'redis://127.0.0.1:1/0',
+      JWT_PRIVATE_KEY: jwt.privateKey,
+      JWT_PUBLIC_KEY: jwt.publicKey,
+      WALLET_FEDERATION_ENABLED: 'true',
+      OID4VP_VERIFIER_PROFILE: 'oid4vp-1.0-base',
+      OID4VP_REQUESTED_VCT: 'https://credentials.example.com/pid',
+      // Subject resolution, stated because #379 made it a BOOT gate: an enabled
+      // deployment that names no binding claims refuses to start (ADR-010 §6).
+      // Irrelevant to what this suite asserts — no request here reaches a
+      // presentation — but the boot has to succeed before anything can be
+      // asserted about the key sets it produced.
+      OID4VP_SUBJECT_RESOLUTION: 'asserted-lookup',
+      OID4VP_SUBJECT_BINDING_CLAIMS: 'family_name,given_name,birth_date',
+      ...verifierIdentityEnvironment(pki),
+    },
+    // The default realm's boot step (#484) would dial the database.
+    { defaultRealmBoot: false }
+  );
 }
 
 /**
