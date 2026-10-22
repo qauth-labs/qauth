@@ -41,6 +41,7 @@ export {
 } from './lib/kek-provider-contract';
 export { computeKekRef, DEV_KEK_DEFAULT, KEK_BYTES } from './lib/kek-sources';
 export {
+  ActiveKeyConflictError,
   type KeyCreationRefusalReason,
   KeyCreationRefusedError,
   KeyIdConflictError,

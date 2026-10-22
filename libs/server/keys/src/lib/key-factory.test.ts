@@ -8,7 +8,11 @@ import { KEK_A, localProvider } from '../testing/keks';
 import { createMemoryKeyStore, type MemoryKeyStore } from '../testing/memory-key-store';
 import { openKeyMaterial } from './envelope';
 import type { KekProvider } from './kek-provider';
-import { KeyCreationRefusedError, KeyIdConflictError } from './key-creation-errors';
+import {
+  ActiveKeyConflictError,
+  KeyCreationRefusedError,
+  KeyIdConflictError,
+} from './key-creation-errors';
 import { createKeyFactory, type KeyFactoryOptions, MAX_SCOPE_ID_LENGTH } from './key-factory';
 import { KEY_PURPOSES, type KeyPurpose } from './key-purposes';
 
@@ -235,6 +239,14 @@ describe('createKey', () => {
     });
   });
 
+  it('leaves hybrid signing off unless the switch is the boolean true', async () => {
+    const { factory } = setup({ hybridSigning: 'false' as unknown as boolean });
+
+    const keys = await factory.createKey({ realmId: REALM, purpose: 'token_signing' });
+
+    expect(keys.map((key) => key.algorithm)).toEqual(['EdDSA']);
+  });
+
   it('creates one token key with hybrid signing off', async () => {
     const { factory, store } = setup({
       enabledSignatureAlgorithms: HYBRID_CAPABLE,
@@ -261,6 +273,14 @@ describe('createKey', () => {
 
     it('is refused when the federation-operator switch is off', async () => {
       const { factory } = setup({ federationOperator: false });
+
+      await expect(
+        factory.createKey({ realmId: REALM, purpose: 'trust_anchor' })
+      ).rejects.toMatchObject({ reason: 'FEDERATION_OPERATOR_ONLY' });
+    });
+
+    it('is refused when the switch arrives as a string from an untyped path', async () => {
+      const { factory } = setup({ federationOperator: 'true' as unknown as boolean });
 
       await expect(
         factory.createKey({ realmId: REALM, purpose: 'trust_anchor' })
@@ -320,6 +340,18 @@ describe('createKey', () => {
     ).rejects.toMatchObject({ reason: 'ALGORITHM_NOT_ALLOWED' });
   });
 
+  it.each(['', 'realm-1', '0190d7a2-6f4e-7c1a-9b3e-5a8d2c4f6e0'])(
+    'refuses a realm id that is not a UUID (%j) before generating a key',
+    async (realmId) => {
+      const { factory, wrap } = setup();
+
+      await expect(factory.createKey({ realmId, purpose: 'cookie_hmac' })).rejects.toMatchObject({
+        reason: 'INVALID_REALM_ID',
+      });
+      expect(wrap).not.toHaveBeenCalled();
+    }
+  );
+
   it('refuses an unknown purpose', async () => {
     const { factory } = setup();
 
@@ -345,17 +377,54 @@ describe('createKey', () => {
       ).rejects.toMatchObject({ reason: 'SCOPE_NOT_ALLOWED' });
     });
 
-    it.each(['', 'x'.repeat(MAX_SCOPE_ID_LENGTH + 1), 'provider-' + String.fromCharCode(0xd800)])(
-      'are refused when empty, too long or not well-formed (%#)',
-      async (scopeId) => {
-        const { factory, wrap } = setup();
+    it.each([
+      '',
+      'x'.repeat(MAX_SCOPE_ID_LENGTH + 1),
+      'provider-' + String.fromCharCode(0xd800),
+      'provider\u0000',
+    ])('are refused when empty, too long or not well-formed (%#)', async (scopeId) => {
+      const { factory, wrap } = setup();
 
-        await expect(
-          factory.createKey({ realmId: REALM, purpose: 'upstream_client_assertion', scopeId })
-        ).rejects.toMatchObject({ reason: 'INVALID_SCOPE_ID' });
-        expect(wrap).not.toHaveBeenCalled();
-      }
-    );
+      await expect(
+        factory.createKey({ realmId: REALM, purpose: 'upstream_client_assertion', scopeId })
+      ).rejects.toMatchObject({ reason: 'INVALID_SCOPE_ID' });
+      expect(wrap).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('a second active key', () => {
+    it('is refused before the insert, for the same realm, purpose, scope and algorithm', async () => {
+      const { factory, store } = setup();
+      const input = { realmId: REALM, purpose: 'webhook_signing', scopeId: 'sub-1' } as const;
+      await factory.createKey(input);
+
+      const attempt = factory.createKey(input);
+
+      await expect(attempt).rejects.toBeInstanceOf(ActiveKeyConflictError);
+      await expect(attempt).rejects.toMatchObject({
+        purpose: 'webhook_signing',
+        algorithm: 'HS256',
+      });
+      expect(store.rows).toHaveLength(1);
+      expect(store.calls.filter((call) => call.method === 'create')).toHaveLength(1);
+    });
+
+    it('is allowed as next, and beside another scope or algorithm', async () => {
+      const { factory, store } = setup();
+      await factory.createKey({ realmId: REALM, purpose: 'webhook_signing', scopeId: 'sub-1' });
+
+      await factory.createKey({
+        realmId: REALM,
+        purpose: 'webhook_signing',
+        scopeId: 'sub-1',
+        status: 'next',
+      });
+      await factory.createKey({ realmId: REALM, purpose: 'webhook_signing', scopeId: 'sub-2' });
+      await factory.createKey({ realmId: REALM, purpose: 'token_signing' });
+      await factory.createKey({ realmId: REALM, purpose: 'token_signing', algorithm: 'RS256' });
+
+      expect(store.rows).toHaveLength(5);
+    });
   });
 
   it('rejects a kid the realm already holds before the insert', async () => {
@@ -424,6 +493,64 @@ describe('provisionRealmKeys', () => {
     ]);
     expect(keys[0].pairId).not.toBeNull();
     expect(keys[1].pairId).toBe(keys[0].pairId);
+  });
+
+  it('leaves a complete hybrid pair alone when called again', async () => {
+    const { factory, store } = setup({
+      enabledSignatureAlgorithms: HYBRID_CAPABLE,
+      hybridSigning: true,
+    });
+    await factory.provisionRealmKeys(REALM);
+
+    expect(await factory.provisionRealmKeys(REALM)).toEqual([]);
+    expect(store.rows).toHaveLength(5);
+  });
+
+  it('refuses a realm whose token key has no ML-DSA-65 half once hybrid signing is on', async () => {
+    const store = createMemoryKeyStore();
+    await setup({ store }).factory.provisionRealmKeys(REALM);
+    const { factory, wrap } = setup({
+      store,
+      enabledSignatureAlgorithms: HYBRID_CAPABLE,
+      hybridSigning: true,
+    });
+
+    await expect(factory.provisionRealmKeys(REALM)).rejects.toMatchObject({
+      reason: 'HYBRID_PAIR_INCOMPLETE',
+    });
+    expect(wrap).not.toHaveBeenCalled();
+    expect(store.rows).toHaveLength(4);
+  });
+
+  it('refuses a realm whose token key has no Ed25519 half with hybrid signing on', async () => {
+    const store = createMemoryKeyStore();
+    const loneMlDsa = {
+      realmId: REALM,
+      purpose: 'token_signing',
+      scopeId: null,
+      algorithm: 'ML-DSA-65',
+      kid: 'lone-ml-dsa',
+      status: 'active',
+      pairId: null,
+      ciphertext: Buffer.alloc(48),
+      iv: Buffer.alloc(12),
+      wrappedDek: Buffer.alloc(61),
+      kekRef: 'ref',
+      aadVersion: 1,
+      publishAt: null,
+      activateAt: NOW,
+    } as const;
+    await store.create({ key: loneMlDsa }, { id: 0 });
+    const { factory } = setup({
+      store,
+      enabledSignatureAlgorithms: HYBRID_CAPABLE,
+      hybridSigning: true,
+    });
+
+    await expect(factory.provisionRealmKeys(REALM)).rejects.toMatchObject({
+      reason: 'HYBRID_PAIR_INCOMPLETE',
+    });
+    expect(store.rows).toHaveLength(1);
   });
 
   it('creates none of the keys when one cannot be stored', async () => {

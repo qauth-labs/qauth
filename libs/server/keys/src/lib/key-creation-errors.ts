@@ -8,6 +8,8 @@
 
 /** Why a key was refused, as a stable value to branch on. */
 export type KeyCreationRefusalReason =
+  /** The realm id is not a UUID. */
+  | 'INVALID_REALM_ID'
   /** The purpose is not in `KEY_PURPOSES`. */
   | 'UNKNOWN_PURPOSE'
   /** The purpose belongs to a federation-operator deployment, and this is not one. */
@@ -22,13 +24,19 @@ export type KeyCreationRefusalReason =
   | 'SCOPE_REQUIRED'
   /** An unscoped purpose was given a scope id. */
   | 'SCOPE_NOT_ALLOWED'
-  /** The scope id is empty or longer than `realm_keys.scope_id` holds. */
-  | 'INVALID_SCOPE_ID';
+  /** The scope id is empty, too long for `realm_keys.scope_id`, or not well-formed text. */
+  | 'INVALID_SCOPE_ID'
+  /**
+   * With hybrid signing on, the realm holds only one active key of the pair,
+   * so provisioning would have to create the other half alone.
+   */
+  | 'HYBRID_PAIR_INCOMPLETE';
 
 /**
- * A key the deployment does not create: an unknown or operator-only purpose,
- * an algorithm the purpose or `SIGNING_ALGORITHM_MODE` does not allow, or a
- * scope id that does not fit the purpose. Branch on {@link reason}.
+ * A key the deployment does not create: a malformed realm id, an unknown or
+ * operator-only purpose, an algorithm the purpose or `SIGNING_ALGORITHM_MODE`
+ * does not allow, a scope id that does not fit the purpose, or one half of a
+ * hybrid pair. Branch on {@link reason}.
  */
 export class KeyCreationRefusedError extends Error {
   readonly statusCode = 400;
@@ -42,6 +50,29 @@ export class KeyCreationRefusedError extends Error {
     Object.setPrototypeOf(this, KeyCreationRefusedError.prototype);
     if (Error.captureStackTrace) {
       Error.captureStackTrace(this, KeyCreationRefusedError);
+    }
+  }
+}
+
+/**
+ * A new `active` key would be the second active key of its realm, purpose,
+ * scope and algorithm (`idx_realm_keys_one_active`). Raised before the insert.
+ * A replacement is created as `next` and activated by a rotation.
+ */
+export class ActiveKeyConflictError extends Error {
+  readonly statusCode = 409;
+  readonly code = 'ACTIVE_KEY_CONFLICT';
+  readonly purpose: string;
+  readonly algorithm: string;
+
+  constructor(purpose: string, algorithm: string) {
+    super(`The realm already holds an active '${algorithm}' key for purpose '${purpose}'`);
+    this.name = 'ActiveKeyConflictError';
+    this.purpose = purpose;
+    this.algorithm = algorithm;
+    Object.setPrototypeOf(this, ActiveKeyConflictError.prototype);
+    if (Error.captureStackTrace) {
+      Error.captureStackTrace(this, ActiveKeyConflictError);
     }
   }
 }

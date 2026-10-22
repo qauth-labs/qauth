@@ -6,7 +6,11 @@ import type { JWK } from 'jose';
 
 import { sealKeyMaterial } from './envelope';
 import type { KekProvider } from './kek-provider';
-import { KeyCreationRefusedError, KeyIdConflictError } from './key-creation-errors';
+import {
+  ActiveKeyConflictError,
+  KeyCreationRefusedError,
+  KeyIdConflictError,
+} from './key-creation-errors';
 import { assertAllowedBySigningMode, generateKeyMaterial } from './key-generation';
 import {
   isKeyPurpose,
@@ -26,6 +30,9 @@ import type { NewKeyStatus, NewStoredKey, RealmKeyStore } from './key-store';
 
 /** The longest `scope_id` that `realm_keys` holds. */
 export const MAX_SCOPE_ID_LENGTH = 255;
+
+/** The textual form of a UUID, the type of `realm_keys.realm_id`. */
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /** The deployment a {@link KeyFactory} creates keys for. */
 export interface KeyFactoryOptions<Tx> {
@@ -99,10 +106,16 @@ export interface KeyFactory<Tx> {
    *
    * @returns the stored keys: the requested key first, then its hybrid
    *   companion if there is one.
-   * @throws KeyCreationRefusedError when the purpose, algorithm or scope is
-   *   not one this deployment creates. Nothing is generated or stored.
+   * @throws KeyCreationRefusedError when the realm id, purpose, algorithm or
+   *   scope is not one this deployment creates. Nothing is generated or stored.
    * @throws KeyIdConflictError when the realm already holds a key with the new
    *   `kid`. Nothing is stored.
+   * @throws ActiveKeyConflictError when a new `active` key would be the second
+   *   active key of its realm, purpose, scope and algorithm. Create it as
+   *   `next` instead. Nothing is stored.
+   *
+   * A writer that commits between the checks and the insert can still make the
+   * store raise its unique-constraint error; nothing is stored then either.
    */
   createKey(input: CreateKeyInput<Tx>): Promise<readonly CreatedKey[]>;
   /**
@@ -112,11 +125,21 @@ export interface KeyFactory<Tx> {
    * purpose's default algorithm.
    *
    * A purpose that already holds an active unscoped key of its default
-   * algorithm is left as it is, so the call is safe to repeat: it fills the
+   * algorithm is left as it is (for `token_signing` with hybrid signing on:
+   * both keys of the pair), so the call can be repeated: it fills the
    * standard keys a realm lacks, as the boot step for the default realm needs
    * (#485). If one key cannot be stored, none is.
    *
+   * Two calls for one realm must not run at once. Both would see the same
+   * missing keys, and the second would fail on the one-active-key index and
+   * roll back. A caller that may run on several nodes, such as the boot step,
+   * serializes them, for example with an advisory lock (#485).
+   *
    * @returns the keys it created; empty when the realm lacked none.
+   * @throws KeyCreationRefusedError (`HYBRID_PAIR_INCOMPLETE`) when hybrid
+   *   signing is on and the realm holds only one active key of the
+   *   `token_signing` pair. Creating the other half alone would leave two keys
+   *   that do not rotate together; a rotation to a new pair fixes it (#542).
    */
   provisionRealmKeys(
     realmId: string,
@@ -149,8 +172,11 @@ interface PreparedKey {
  *   refuses that too; this keeps the factory closed on its own.
  */
 export function createKeyFactory<Tx>(options: KeyFactoryOptions<Tx>): KeyFactory<Tx> {
-  const { store, kekProvider, enabledSignatureAlgorithms, hybridSigning } = options;
-  const federationOperator = options.federationOperator ?? false;
+  const { store, kekProvider, enabledSignatureAlgorithms } = options;
+  // Strict comparisons, so a string from an untyped configuration path such
+  // as 'false' leaves both switches off.
+  const hybridSigning = options.hybridSigning === true;
+  const federationOperator = options.federationOperator === true;
   const now = options.now ?? Date.now;
 
   if (hybridSigning && !enabledSignatureAlgorithms.includes('ML-DSA-65')) {
@@ -161,6 +187,9 @@ export function createKeyFactory<Tx>(options: KeyFactoryOptions<Tx>): KeyFactory
 
   function resolveRequest(input: Omit<CreateKeyInput<Tx>, 'tx'>): KeyRequest {
     const { realmId, purpose } = input;
+    if (typeof realmId !== 'string' || !UUID_PATTERN.test(realmId)) {
+      throw new KeyCreationRefusedError('INVALID_REALM_ID', 'A realm id is a UUID');
+    }
     if (typeof purpose !== 'string' || !isKeyPurpose(purpose)) {
       throw new KeyCreationRefusedError('UNKNOWN_PURPOSE', `Unknown key purpose '${purpose}'`);
     }
@@ -269,7 +298,11 @@ export function createKeyFactory<Tx>(options: KeyFactoryOptions<Tx>): KeyFactory
     return prepared;
   }
 
-  /** Check every new `kid` against the realm, then store the keys, inside `tx`. */
+  /**
+   * Check every new key against the realm, then store the keys, inside `tx`:
+   * its `kid` must be new, and an `active` key must be the only active key of
+   * its realm, purpose, scope and algorithm.
+   */
   async function writeKeys(prepared: readonly PreparedKey[], tx: Tx): Promise<CreatedKey[]> {
     const seen = new Set<string>();
     for (const { created } of prepared) {
@@ -277,6 +310,16 @@ export function createKeyFactory<Tx>(options: KeyFactoryOptions<Tx>): KeyFactory
       seen.add(created.kid);
       if ((await store.findByKid(created.realmId, created.kid, tx)) !== undefined) {
         throw new KeyIdConflictError(created.kid);
+      }
+      if (created.status === 'active') {
+        const active = await store.listByRealm(
+          created.realmId,
+          { purpose: created.purpose, scopeId: created.scopeId, status: 'active' },
+          tx
+        );
+        if (active.some((key) => key.algorithm === created.algorithm)) {
+          throw new ActiveKeyConflictError(created.purpose, created.algorithm);
+        }
       }
     }
     for (const { stored } of prepared) {
@@ -300,13 +343,28 @@ export function createKeyFactory<Tx>(options: KeyFactoryOptions<Tx>): KeyFactory
       return store.transaction(async (tx) => {
         const created: CreatedKey[] = [];
         for (const purpose of STANDARD_REALM_KEY_PURPOSES) {
-          const { defaultAlgorithm } = KEY_PURPOSES[purpose];
+          const definition: KeyPurposeDefinition = KEY_PURPOSES[purpose];
+          const wanted =
+            hybridSigning && definition.hybridCompanion !== undefined
+              ? [definition.defaultAlgorithm, definition.hybridCompanion]
+              : [definition.defaultAlgorithm];
           const active = await store.listByRealm(
             realmId,
             { purpose, scopeId: null, status: 'active' },
             tx
           );
-          if (active.some((key) => key.algorithm === defaultAlgorithm)) continue;
+          const present = wanted.filter((algorithm) =>
+            active.some((key) => key.algorithm === algorithm)
+          );
+          if (present.length === wanted.length) continue;
+          if (present.length > 0) {
+            throw new KeyCreationRefusedError(
+              'HYBRID_PAIR_INCOMPLETE',
+              `The realm's active '${purpose}' keys are not a complete hybrid pair ` +
+                `(active: ${present.join(', ')}; a pair is ${wanted.join(' and ')}). ` +
+                'Rotate them to a new pair.'
+            );
+          }
 
           const prepared = await prepareKeys(resolveRequest({ realmId, purpose }));
           created.push(...(await writeKeys(prepared, tx)));
@@ -320,8 +378,9 @@ export function createKeyFactory<Tx>(options: KeyFactoryOptions<Tx>): KeyFactory
 /**
  * The stored scope id: a non-empty, well-formed string of at most
  * {@link MAX_SCOPE_ID_LENGTH} characters for a scoped purpose, `null` for an
- * unscoped one. A lone surrogate is refused here, before a key is generated;
- * the associated-data encoder would refuse it later anyway.
+ * unscoped one. A lone surrogate and a NUL are refused here, before a key is
+ * generated: the associated-data encoder refuses the first, and Postgres text
+ * the second.
  */
 function resolveScopeId(
   purpose: KeyPurpose,
@@ -347,6 +406,7 @@ function resolveScopeId(
     typeof scopeId !== 'string' ||
     scopeId.length === 0 ||
     scopeId.length > MAX_SCOPE_ID_LENGTH ||
+    scopeId.includes('\u0000') ||
     Buffer.from(scopeId, 'utf8').toString('utf8') !== scopeId
   ) {
     throw new KeyCreationRefusedError(

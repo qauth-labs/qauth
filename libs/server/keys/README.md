@@ -117,7 +117,7 @@ default.
 | ---------------------------- | ---------- | ----------------------------- | ------ | --------- | -------- |
 | `token_signing`              | signing    | `EdDSA`, `RS256`, `ML-DSA-65` | no     | yes       | 90 days  |
 | `event_signing`              | signing    | `EdDSA`, `RS256`              | no     | yes       | 90 days  |
-| `federation_entity`          | signing    | `RS256`, `ES256`, `EdDSA`     | no     | yes       | 90 days  |
+| `federation_entity`          | signing    | `RS256`, `ES256`, `EdDSA`     | no     | yes       | manual   |
 | `trust_anchor`               | signing    | `RS256`, `ES256`, `EdDSA`     | no     | yes       | manual   |
 | `oid4vp_request_signing`     | signing    | `ES256`                       | no     | yes       | manual   |
 | `oid4vp_response_encryption` | encryption | `ECDH-ES`                     | no     | yes       | 90 days  |
@@ -134,7 +134,8 @@ default.
   read it. Its consumer decides where it appears: the JWKS, an entity configuration or client
   metadata.
 - **Manual rotation**: someone outside the deployment holds the key or its public half, such as
-  the subscriber of a webhook secret or the certificate that names the OID4VP verifier key.
+  the subscriber of a webhook secret, the certificate that names the OID4VP verifier key, or the
+  superior whose subordinate statement lists the federation entity keys.
 - `ML-DSA-65` is never created alone. It is the second key of a hybrid `token_signing` pair
   (ADR-005).
 - Only a federation-operator deployment creates `trust_anchor` keys.
@@ -169,15 +170,19 @@ anything is generated when:
   it does not name the other algorithms;
 - a scoped purpose gets no scope id, or an unscoped one gets one.
 
-A `kid` the realm already uses gives a `KeyIdConflictError`, and nothing is stored.
+A `kid` the realm already uses gives a `KeyIdConflictError`. A second `active` key for the same
+realm, purpose, scope and algorithm gives an `ActiveKeyConflictError`; a replacement is created as
+`next`. Nothing is stored in either case.
 
 With `HYBRID_SIGNING_ENABLED` on, an `EdDSA` `token_signing` key is created with an `ML-DSA-65` key,
 and both rows share one `pair_id`.
 
 `provisionRealmKeys` creates a realm's standard keys in one transaction: all of them or none. It
-skips a purpose that already holds an active key of its default algorithm, so it can run at every
-boot. Both functions take an outer transaction (`tx`) so a realm and its keys can be created
-together.
+skips a purpose that already holds an active key of its default algorithm (with hybrid signing on,
+both keys of the `token_signing` pair), so it can run at every boot. It refuses a realm that holds
+only one half of that pair. Two calls for one realm must not run at once: a caller on several nodes
+serializes them, as the boot step's advisory lock does (#485). Both functions take an outer
+transaction (`tx`) so a realm and its keys can be created together.
 
 `federationOperator` is the seam for the federation-operator deployment. It defaults to `false`;
 the federation work names the switch that sets it.

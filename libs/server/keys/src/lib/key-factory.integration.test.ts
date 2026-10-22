@@ -409,7 +409,18 @@ describe('key creation integration (real Postgres)', () => {
       try {
         await client.query('BEGIN');
         realmId = await seedRealm(client);
-        await factory().provisionRealmKeys(realmId, { tx: client });
+        const created = await factory().provisionRealmKeys(realmId, { tx: client });
+
+        // Written inside the caller's transaction: visible to it, not yet to others.
+        expect(created).toHaveLength(4);
+        const inside = await client.query('SELECT kid FROM realm_keys WHERE realm_id = $1', [
+          realmId,
+        ]);
+        expect(inside.rows.map((row) => row.kid).sort()).toEqual(
+          created.map((key) => key.kid).sort()
+        );
+        expect(await keyRows(realmId)).toEqual([]);
+
         await client.query('ROLLBACK');
       } finally {
         client.release();
