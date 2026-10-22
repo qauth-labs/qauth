@@ -256,8 +256,9 @@ Placement rules that follow from earlier decisions:
 - Each upstream provider has a name, an icon, an order and a "hide on login page" switch. A hidden
   provider is still reachable through a direct-routing parameter.
 - A server-info screen shows the version, the switches, experimental features, installed plugins
-  and role health. Operator-realm admins see all of it; a realm admin sees only what affects that
-  realm.
+  and role health. Only operator-realm admins see it: it describes the whole deployment, and a
+  realm-local admin manages only their own realm (ADR-019 Decision 7). In simple mode the default
+  realm is the operator realm, so its admins see it.
 - Console import of users comes in 1.x. In 1.0 the `db:import-users` CLI of ADR-017 F1d does it.
   Inbound SCIM provisioning comes in 1.x, together with organizations.
 
