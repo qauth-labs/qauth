@@ -31,7 +31,7 @@
   publish = "dist/apps/docs-site"
 
 [build.environment]
-  # Pinned to what the root `package.json` demands (`engines.pnpm: ">=11.0.0"`)
+  # Pinned to what the root `package.json` demands (`engines.pnpm: ">=12.14.0"`)
   # and to what every workflow in `.github/workflows/` installs.
   #
   # Without this the build image activates its own bundled pnpm — 10.30.3 at the
@@ -40,11 +40,11 @@
   # `pnpm/action-setup` input rather than in a `packageManager` field, so an
   # external builder has nothing to read it from; this is that pin for Netlify.
   # Keep it in step with `.github/workflows/*.yml`.
-  PNPM_VERSION = "11.4.0"
+  PNPM_VERSION = "12.14.0"
 
-  # `engines.node` is `>=24.7.0`. Naming the major lets Netlify take the current
-  # 24.x rather than freezing a patch release nobody will remember to bump.
-  NODE_VERSION = "24"
+  # `engines.node` is `>=26.10.0`. Naming the major lets the builder take the
+  # current 26.x rather than freezing a patch release nobody will remember to bump.
+  NODE_VERSION = "26"
 
   # No Nx daemon in an ephemeral builder: it exists to keep a project graph warm
   # across repeated invocations, and there is exactly one here. Left on, it also
