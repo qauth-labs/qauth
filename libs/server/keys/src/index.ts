@@ -46,6 +46,15 @@ export {
   KeyIdConflictError,
 } from './lib/key-creation-errors';
 export {
+  type CreatedKey,
+  createKeyFactory,
+  type CreateKeyInput,
+  type KeyFactory,
+  type KeyFactoryOptions,
+  MAX_SCOPE_ID_LENGTH,
+  type ProvisionRealmKeysOptions,
+} from './lib/key-factory';
+export {
   assertAllowedBySigningMode,
   type GeneratedKeyMaterial,
   generateKeyMaterial,
@@ -69,6 +78,15 @@ export {
   type KeyRotationDefault,
   STANDARD_REALM_KEY_PURPOSES,
 } from './lib/key-purposes';
+export type {
+  NewKeyStatus,
+  NewStoredKey,
+  NewStoredKeyRow,
+  RealmKeyStore,
+  StoredKeyFilter,
+  StoredKeyStatus,
+  StoredKeySummary,
+} from './lib/key-store';
 export {
   DEFAULT_KEK_PROVIDER,
   type ImportKekProviderModule,
