@@ -766,6 +766,7 @@ interactive OpenAPI / Swagger UI at `/docs` on any running instance.
 - [@qauth-labs/server-pkce](./libs/server/pkce/README.md) — PKCE challenge generation and verification
 - [@qauth-labs/server-federation](./libs/server/federation/README.md) — `CredentialProvider` interface, registry, and the password/wallet providers
 - [@qauth-labs/server-keys](./libs/server/keys/README.md) — envelope encryption of stored keys and the KEK provider
+- [@qauth-labs/server-egress](./libs/server/egress/README.md) — SSRF-safe client for every outbound call
 - [@qauth-labs/core-crypto](./libs/core/crypto/README.md) — algorithm-agnostic sign/verify/JWE and the hybrid PQC layer
 - [@qauth-labs/crypto-native](./libs/core/crypto-native/README.md) — napi-rs binding over `aws-lc-rs`
 - [@qauth-labs/mcp-guard](./libs/fastify/plugins/mcp-guard/README.md) — resource-server SDK for protecting MCP servers
