@@ -26,17 +26,31 @@ job summary, so every PR shows the delta without downloading anything.
 
 ## Running it
 
+The gate joins two reports: the in-repo unit suite, and the
+[wire suite](../../apps/wire-suite/README.md), which tests the built server over
+HTTP. Each suite runs once, with two reporters; the JSON report is what the gate
+reads.
+
 ```bash
-# One suite run, two reporters — the JSON report is what the gate reads.
 pnpm exec vitest run --coverage --reporter=default \
   --reporter=json --outputFile.json=dist/vitest-report.json
 
-pnpm spec-matrix    # node scripts/spec-matrix.mjs --vitest-report dist/vitest-report.json --out-dir dist/conformance
+# Against a running server — see apps/wire-suite/README.md for the setup.
+pnpm exec nx run wire-suite:run -- --reporter=default \
+  --reporter=json --outputFile.json="$PWD/dist/wire-report.json"
+
+pnpm spec-matrix    # node scripts/spec-matrix.mjs --vitest-report dist/vitest-report.json --vitest-report dist/wire-report.json --out-dir dist/conformance
 ```
+
+`--vitest-report` may be given any number of times. A test in any of the reports
+counts as evidence, so a wire test whose title cites a registered section proves
+that row exactly as a unit test does.
 
 Exit codes: `0` clean, `1` gate failure, `2` input error. A missing, empty or
 shape-changed report is an **input error**, never a clean matrix — certification
-evidence that fails open is worse than no evidence at all.
+evidence that fails open is worse than no evidence at all. Each report is checked
+on its own: a broken wire report exits `2` even when the unit report is fine, so
+the matrix can never pass on one suite while the other silently dropped out.
 
 ## The alias registry
 
@@ -110,10 +124,11 @@ a certification reviewer, conflating the two destroys the document.
 
 ## How the join works
 
-The joiner reads the Vitest JSON report the coverage step already emits — the
-suite is never run twice — and extracts `(specId, section)` citations from each
-test's `fullName`. Matching `fullName` rather than the leaf title is what makes a
-`describe`-level citation carry down to every test inside it.
+The joiner reads the Vitest JSON reports the coverage step and the wire-suite
+job already emit — no suite is run twice — and extracts `(specId, section)`
+citations from each test's `fullName`. Matching `fullName` rather than the leaf
+title is what makes a `describe`-level citation carry down to every test inside
+it.
 
 Sections match **hierarchically**: a test citing `§2.4` proves a row declared at
 `§2.4` or at `§2`, but not one at `§2.4.1`. Cited depth in this repo ranges from

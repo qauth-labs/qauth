@@ -3,7 +3,7 @@ title: Repository map
 description: The apps/ and libs/ layout, the Nx scope tags and the eslint boundary constraints derived from them, where new code belongs, and the Windows CRLF gotcha that breaks nx lint on files you never touched.
 sidebar:
   order: 3
-lastVerified: '2026-08-10'
+lastVerified: '2026-10-20'
 ---
 
 QAuth is an Nx monorepo with two trees: `apps/` for deployable entry points and `libs/` for
@@ -19,9 +19,12 @@ as a lint error naming the tag you violated.
 | `apps/developer-portal` | `developer-portal` | The client-management UI. TanStack Start + React.                               |
 | `apps/docs-site`        | `docs-site`        | This site. Astro + Starlight, plus the drift-guard invariants.                  |
 | `apps/migration-runner` | —                  | Not an Nx project: a `Dockerfile` and an entrypoint script that run migrations. |
+| `apps/wire-suite`       | `wire-suite`       | The black-box HTTP suite that tests a running server. Ships nothing.            |
 
-All three real apps are tagged `scope:app` (e.g. `apps/auth-server/project.json:6`). Nothing in
-`apps/` may be imported by anything — the app layer is the top of the graph.
+The three deployable apps are tagged `scope:app` (e.g. `apps/auth-server/project.json:6`).
+`apps/wire-suite` is tagged `scope:wire-suite` and `type:testing` instead, because it must import
+**nothing** from the workspace — see [the wire suite](#the-wire-suite-imports-nothing) below.
+Nothing in `apps/` may be imported by anything — the app layer is the top of the graph.
 
 `apps/migration-runner` has no `project.json` and no `package.json`, so `nx show projects` does not
 list it. It is deliberately just a container image; if you are looking for the migration logic
@@ -70,12 +73,13 @@ import **from inside the workspace**; external npm packages are never restricted
 | `scope:core`       | nothing — strict leaf                                                            | `eslint.config.mjs:132` |
 | `scope:shared`     | nothing — strict leaf                                                            | `eslint.config.mjs:122` |
 | `scope:ui`         | nothing — strict leaf                                                            | `eslint.config.mjs:139` |
-| `scope:infra`      | `scope:core`, `scope:infra`, `scope:shared`                                      | `eslint.config.mjs:158` |
-| `scope:server`     | `scope:core`, `scope:server`, `scope:shared`                                     | `eslint.config.mjs:166` |
-| `scope:fastify`    | `scope:core`, `scope:fastify`, `scope:server`, `scope:infra`, `scope:shared`     | `eslint.config.mjs:174` |
-| `scope:app`        | `scope:core`, `scope:fastify`, `scope:shared`, `scope:server-config`, `scope:ui` | `eslint.config.mjs:187` |
-| `type:testing`     | see [the dead rule](#the-typetesting-rule-cannot-grant-anything)                 | `eslint.config.mjs:143` |
-| `type:key-custody` | `scope:core`, `scope:shared`                                                     | `eslint.config.mjs:202` |
+| `scope:infra`      | `scope:core`, `scope:infra`, `scope:shared`                                      | `eslint.config.mjs:173` |
+| `scope:server`     | `scope:core`, `scope:server`, `scope:shared`                                     | `eslint.config.mjs:181` |
+| `scope:fastify`    | `scope:core`, `scope:fastify`, `scope:server`, `scope:infra`, `scope:shared`     | `eslint.config.mjs:189` |
+| `scope:app`        | `scope:core`, `scope:fastify`, `scope:shared`, `scope:server-config`, `scope:ui` | `eslint.config.mjs:202` |
+| `type:testing`     | see [the dead rule](#the-typetesting-rule-cannot-grant-anything)                 | `eslint.config.mjs:158` |
+| `type:key-custody` | `scope:core`, `scope:shared`                                                     | `eslint.config.mjs:217` |
+| `scope:wire-suite` | nothing — and nothing may import it                                              | `eslint.config.mjs:149` |
 
 ### Why `scope:core` and `scope:shared` are strict leaves
 
@@ -104,7 +108,7 @@ would therefore slip past every leaf constraint. Tag every new lib as the first 
 
 ### The consequence you will actually hit: `scope:app` cannot import `scope:server`
 
-`scope:app`'s allowlist (`eslint.config.mjs:187`) contains `scope:fastify` but **not**
+`scope:app`'s allowlist (`eslint.config.mjs:202`) contains `scope:fastify` but **not**
 `scope:server`. So `apps/auth-server` cannot import `@qauth-labs/server-federation`,
 `@qauth-labs/server-jwt`, or any other `libs/server/*` package directly, even though it is
 obviously the consumer of all of them. The only sanctioned route is through the matching
@@ -165,20 +169,42 @@ So do not infer a project's layer from its path. Read its `project.json`.
 
 ### The `type:testing` rule cannot grant anything
 
-`eslint.config.mjs:143` declares that a `type:testing` project may depend on `scope:core`,
+`eslint.config.mjs:158` declares that a `type:testing` project may depend on `scope:core`,
 `scope:shared`, `scope:ui`, `scope:infra`, `scope:server` and `scope:fastify` — a deliberately
 broad allowance, so test helpers can reach whatever they need to build fixtures.
 
 It does not currently do that. Nx collects **every** `depConstraints` entry whose `sourceTag` the
-source project carries and requires **all** of them to pass. The only `type:testing` project is
-`libs/shared/testing` (`libs/shared/testing/project.json:6`), which is also tagged `scope:shared`
-— and `scope:shared` is the strict leaf above. The two constraints intersect to "nothing", so the
-broad allowance grants no import at all.
+source project carries and requires **all** of them to pass. Two projects carry `type:testing`,
+and each pairs it with a strict leaf: `libs/shared/testing` (`libs/shared/testing/project.json:6`)
+is also tagged `scope:shared`, and `apps/wire-suite` is also tagged `scope:wire-suite`. The
+constraints intersect to "nothing", so the broad allowance grants no import at all.
 
 This is inert today because `libs/shared/testing` imports no workspace package. It stops being
 inert the moment someone adds a fixture there that imports, say, `@qauth-labs/infra-db` — which
 the `type:testing` rule appears to bless and lint will reject. If you hit that, the fix is a
 decision about tags, not a cast or an eslint-disable; raise it rather than working around it.
+
+### The wire suite imports nothing
+
+`apps/wire-suite` tests a running server over HTTP (see [Testing](/extend/testing/)). It may use
+`fetch`, `jose` and its own helpers, and no workspace project, because a helper shared with the
+server could carry the same encoding bug on both sides and hide it. Two constraints hold that
+down. `scope:wire-suite` depends on nothing (`eslint.config.mjs:149`). A second entry with
+`sourceTag: '*'` and `notDependOnLibsWithTags: ['scope:wire-suite']` (`eslint.config.mjs:154`)
+stops every project from importing the suite. The suite is an application, so Nx's "Imports of apps
+are forbidden" check stops that too; the tag rule still holds if it ever becomes a library.
+
+An import of `@qauth-labs/shared-errors` into the suite fails `nx lint` with:
+
+```text
+A project tagged with "scope:wire-suite" cannot depend on any libs with tags
+```
+
+A relative import of `apps/auth-server` source fails with:
+
+```text
+Projects cannot be imported by a relative or absolute path, and must begin with a npm scope
+```
 
 ## Where new code belongs
 
@@ -208,7 +234,7 @@ Two rules of thumb that follow from the layering:
 `.tsx` (51 tracked files), `.mjs` (4), `.astro` (2) and `.css` (1).
 
 On a Windows checkout with `core.autocrlf=true`, those files land on disk with CRLF line endings.
-Prettier's config sets `endOfLine: "lf"` (`.prettierrc`) and `eslint.config.mjs:251` promotes
+Prettier's config sets `endOfLine: "lf"` (`.prettierrc`) and `eslint.config.mjs:266` promotes
 `prettier/prettier` to `error`, so:
 
 ```console
