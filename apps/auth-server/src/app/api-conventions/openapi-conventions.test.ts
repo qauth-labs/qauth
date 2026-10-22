@@ -389,6 +389,10 @@ describe('the API conventions check — fixture document (#506)', () => {
       expect(rulesOf(mutated((d) => delete jsonSchema(LIST(d)).properties.nextCursor))).toEqual([
         'paging',
       ]);
+      // nextCursor is null on the last page, so a plain string cannot describe it
+      expect(
+        rulesOf(mutated((d) => (jsonSchema(LIST(d)).properties.nextCursor = { type: 'string' })))
+      ).toEqual(['paging']);
       expect(
         rulesOf(mutated((d) => (jsonSchema(LIST(d)).properties.total = { type: 'integer' })))
       ).toEqual(['paging']);

@@ -424,6 +424,7 @@ function checkPaging(context: OperationContext): void {
   if (
     !('nextCursor' in properties) ||
     !isStringSchema(properties['nextCursor'], resolve) ||
+    !allowsNull(properties['nextCursor'], resolve) ||
     !required.includes('items') ||
     !required.includes('nextCursor') ||
     extra.length > 0
@@ -463,6 +464,25 @@ function checkPaging(context: OperationContext): void {
       report('paging', `query parameter "${name}" is offset paging; a list pages by cursor`);
     }
   }
+}
+
+/**
+ * Whether `schema` admits `null`: `null` in its type, or a branch of `anyOf` or
+ * `oneOf` that does. `valueBranches` drops the null branches, so a check that
+ * needs one asks this.
+ */
+function allowsNull(schema: unknown, resolve: Resolve, depth = 0): boolean {
+  const node = resolve(schema);
+  if (!isObject(node) || depth > 16) return false;
+  const type = node['type'];
+  if (type === 'null' || (Array.isArray(type) && type.includes('null'))) return true;
+  return (['anyOf', 'oneOf'] as const).some((key) => {
+    const alternatives = node[key];
+    return (
+      Array.isArray(alternatives) &&
+      alternatives.some((alternative) => allowsNull(alternative, resolve, depth + 1))
+    );
+  });
 }
 
 /** Whether every non-null branch of `schema` is a string. */
