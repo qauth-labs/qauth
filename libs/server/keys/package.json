@@ -4,12 +4,17 @@
   "private": true,
   "main": "src/index.ts",
   "dependencies": {
+    "@qauth-labs/core-crypto": "workspace:*",
     "@qauth-labs/shared-errors": "workspace:*",
+    "jose": "catalog:",
     "tslib": "catalog:"
   },
   "devDependencies": {
+    "@qauth-labs/shared-testing": "workspace:*",
+    "@types/pg": "catalog:",
     "@vitest/coverage-v8": "catalog:",
     "@vitest/ui": "catalog:",
+    "pg": "catalog:",
     "vitest": "catalog:"
   }
 }

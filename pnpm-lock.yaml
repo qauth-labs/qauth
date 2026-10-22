@@ -967,19 +967,34 @@ importers:
 
   libs/server/keys:
     dependencies:
+      '@qauth-labs/core-crypto':
+        specifier: workspace:*
+        version: link:../../core/crypto
       '@qauth-labs/shared-errors':
         specifier: workspace:*
         version: link:../../shared/errors
+      jose:
+        specifier: 'catalog:'
+        version: 6.2.4
       tslib:
         specifier: 'catalog:'
         version: 2.8.1
     devDependencies:
+      '@qauth-labs/shared-testing':
+        specifier: workspace:*
+        version: link:../../shared/testing
+      '@types/pg':
+        specifier: 'catalog:'
+        version: 8.20.0
       '@vitest/coverage-v8':
         specifier: 'catalog:'
         version: 4.1.11(vitest@4.1.11)
       '@vitest/ui':
         specifier: 'catalog:'
         version: 4.1.11(vitest@4.1.11)
+      pg:
+        specifier: 'catalog:'
+        version: 8.22.0
       vitest:
         specifier: 'catalog:'
         version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.1.1)(@vitest/coverage-v8@4.1.11)(@vitest/ui@4.1.11)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.1.5(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.23.1)(yaml@2.9.0))
