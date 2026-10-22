@@ -89,6 +89,10 @@
 >   to the hosted sign-up and sign-in pages only, and the list is empty by default.
 > - By choosing a hosted provider, the operator accepts that its script runs on those pages.
 > - A required challenge needs JavaScript on the hosted pages.
+>
+> **Amended 2026-10-22** (before any implementation): every step URN ends in a version,
+> `urn:qauth:ia:<name>:v1`, as ADR-018 §5 requires of every QAuth-defined identifier. Decisions 3, 8
+> and 12 and F1b are edited in place, wire examples included. No rule changed.
 
 ## Context
 
@@ -370,14 +374,17 @@ a client assertion.
 
 **QAuth signals every next step as FiPA's HTTP 403 `insufficient_authorization` plus OpenID4VCI
 1.1's `interaction_type_required`.** The step is negotiated from the client's
-`interaction_types_supported`. QAuth step identifiers sit under `urn:qauth:ia:`, and every
-QAuth-defined member is prefixed `qauth_`. No QAuth value ever appears in `error`. No prose goes on
-the wire. Every response carries `iss`.
+`interaction_types_supported`. QAuth step identifiers have the form `urn:qauth:ia:<name>:v1`, and
+every QAuth-defined member is prefixed `qauth_`. No QAuth value ever appears in `error`. No prose
+goes on the wire. Every response carries `iss`.
 
 The `urn:qauth:ia:` step names become stable through the Interaction API's `/interaction/v1`
 (ADR-018 and ADR-019). If a registry of standard step names
 appears, its names are added as aliases. QAuth never renames a step. The maintainer decided this on
 2026-10-09 (question 18).
+
+Each step URN ends in its version, `:v1`, because ADR-018 §5 requires a version on every
+QAuth-defined identifier. A future standard name can then sit beside it without breaking 1.x.
 
 The envelope. `POST {issuer}/oauth/authorize-challenge`, `https` only. Every request, initial and
 intermediate, is `application/x-www-form-urlencoded`, UTF-8; a JSON-valued answer (a WebAuthn
@@ -419,17 +426,17 @@ Proof-of-Possession" code binding and §9.6.1 "Auth Session DPoP Binding" (F3), 
 | `qauth_interaction_error`         | 403 body    | closed set: `invalid_credentials` (any rejected password, code or passkey, for any account state), `code_expired`, `password_rejected` (with `reasons`), `captcha_failed` (F1b); a rejected answer is still 403 `insufficient_authorization` with a new `auth_session` |
 | answer fields                     | request     | unprefixed, scoped by step: `login_hint`, `password`, `otp` (the name of FiPA Appendix B.1 "Authorization Challenge Request Parameters"), `new_password`, `captcha_token`, `webauthn_response`                                                                         |
 
-| Step (`urn:qauth:ia:` + name) | Phase | `qauth_interaction_params` entry                                                                             | Answer fields                                 | `amr`         |
-| ----------------------------- | ----- | ------------------------------------------------------------------------------------------------------------ | --------------------------------------------- | ------------- |
-| `identifier`                  | F1    | `{}`                                                                                                         | `login_hint`                                  | —             |
-| `password`                    | F1    | `{}`                                                                                                         | `password` (+ `login_hint` if none was given) | `pwd`         |
-| `email_code`                  | F1    | `purpose` (`verify_address`, `recovery`, `confirm_sign_in`), `length` (6 or 8), `expires_in`, `resend_after` | `otp`; none = resend                          | —             |
-| `new_password`                | F1    | `min_length`, `max_length`, optional `reasons`                                                               | `new_password`                                | —             |
-| `password_reset`              | F1    | a path marker, no data                                                                                       | — (+ `login_hint`)                            | —             |
-| `captcha`                     | F1b   | one of: `provider` `pow` with `challenge`, `difficulty`; or a hosted provider's name with `site_key`         | `captcha_token`                               | —             |
-| `webauthn_get`                | F2b   | WebAuthn Level 3 request options JSON                                                                        | `webauthn_response`                           | `pop`, `mfa`  |
-| `webauthn_create`             | F2b   | WebAuthn Level 3 creation options JSON, `optional`                                                           | `webauthn_response`                           | — (enrolment) |
-| `totp`                        | F2c   | `digits`                                                                                                     | `otp`                                         | `otp`         |
+| Step (`urn:qauth:ia:<name>:v1`) | Phase | `qauth_interaction_params` entry                                                                             | Answer fields                                 | `amr`         |
+| ------------------------------- | ----- | ------------------------------------------------------------------------------------------------------------ | --------------------------------------------- | ------------- |
+| `identifier`                    | F1    | `{}`                                                                                                         | `login_hint`                                  | —             |
+| `password`                      | F1    | `{}`                                                                                                         | `password` (+ `login_hint` if none was given) | `pwd`         |
+| `email_code`                    | F1    | `purpose` (`verify_address`, `recovery`, `confirm_sign_in`), `length` (6 or 8), `expires_in`, `resend_after` | `otp`; none = resend                          | —             |
+| `new_password`                  | F1    | `min_length`, `max_length`, optional `reasons`                                                               | `new_password`                                | —             |
+| `password_reset`                | F1    | a path marker, no data                                                                                       | — (+ `login_hint`)                            | —             |
+| `captcha`                       | F1b   | one of: `provider` `pow` with `challenge`, `difficulty`; or a hosted provider's name with `site_key`         | `captcha_token`                               | —             |
+| `webauthn_get`                  | F2b   | WebAuthn Level 3 request options JSON                                                                        | `webauthn_response`                           | `pop`, `mfa`  |
+| `webauthn_create`               | F2b   | WebAuthn Level 3 creation options JSON, `optional`                                                           | `webauthn_response`                           | — (enrolment) |
+| `totp`                          | F2c   | `digits`                                                                                                     | `otp`                                         | `otp`         |
 
 | Situation (every body carries `iss`)                                                                                                                         | HTTP                      | `error`                                      | Notes                                                                                                                        |
 | ------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------- | -------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
@@ -457,8 +464,8 @@ Content-Type: application/x-www-form-urlencoded
 
 response_type=code&CA&scope=openid%20profile%20offline_access
 &code_challenge=E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM&code_challenge_method=S256
-&interaction_types_supported=urn%3Aqauth%3Aia%3Apassword%2Curn%3Aqauth%3Aia%3Aemail_code%2Curn%3Aqauth%3Aia%3Anew_password%2Curn%3Aqauth%3Aia%3Apassword_reset
-&qauth_interaction_type=urn%3Aqauth%3Aia%3Apassword
+&interaction_types_supported=urn%3Aqauth%3Aia%3Apassword%3Av1%2Curn%3Aqauth%3Aia%3Aemail_code%3Av1%2Curn%3Aqauth%3Aia%3Anew_password%3Av1%2Curn%3Aqauth%3Aia%3Apassword_reset%3Av1
+&qauth_interaction_type=urn%3Aqauth%3Aia%3Apassword%3Av1
 &login_hint=alice%40example.com&password=correct%20horse%20battery%20staple%20x
 
 HTTP/1.1 200 OK
@@ -474,14 +481,14 @@ is not yet verified (a password account whose address is unproved), followed by 
 ```text
 ← 403 { "error": "insufficient_authorization", "iss": "https://auth.acme.example",
         "auth_session": "Qm9vbGVhbi1ub3QtYS1yZWFsLWhhbmRsZS0yNTYtYml0cw",
-        "interaction_type_required": "urn:qauth:ia:password",
-        "qauth_interaction_types_offered": ["urn:qauth:ia:password", "urn:qauth:ia:password_reset"] }
+        "interaction_type_required": "urn:qauth:ia:password:v1",
+        "qauth_interaction_types_offered": ["urn:qauth:ia:password:v1", "urn:qauth:ia:password_reset:v1"] }
 
 ← 403 { "error": "insufficient_authorization", "iss": "https://auth.acme.example", "auth_session": "p0Lr…",
-        "interaction_type_required": "urn:qauth:ia:email_code", "qauth_interaction_types_offered": ["urn:qauth:ia:email_code"],
-        "qauth_interaction_params": { "urn:qauth:ia:email_code":
+        "interaction_type_required": "urn:qauth:ia:email_code:v1", "qauth_interaction_types_offered": ["urn:qauth:ia:email_code:v1"],
+        "qauth_interaction_params": { "urn:qauth:ia:email_code:v1":
             { "purpose": "verify_address", "length": 6, "expires_in": 600, "resend_after": 60 } } }
-→ auth_session=p0Lr…&qauth_interaction_type=urn%3Aqauth%3Aia%3Aemail_code&otp=482913&CA
+→ auth_session=p0Lr…&qauth_interaction_type=urn%3Aqauth%3Aia%3Aemail_code%3Av1&otp=482913&CA
 ← 200 { "authorization_code": "…", "iss": "https://auth.acme.example" }
 ```
 
@@ -1004,7 +1011,7 @@ OpenID Connect 1.0, an OIDF specification. There is no path marker (question 14,
 Reset is a QAuth extension. FiPA Appendix A.2 "Redirect to Authorization Server" and §5.2.2.1.1
 "Redirect to Web Error Response" route recovery to the browser instead.
 
-1. The client selects `urn:qauth:ia:password_reset`. The client's `flows` must contain `reset`.
+1. The client selects `urn:qauth:ia:password_reset:v1`. The client's `flows` must contain `reset`.
 2. QAuth answers 403 `email_code` (`recovery`, 8 digits) for every address. Mail goes only to a
    known address with a password.
 3. If the account has another bound authenticator (a passkey from F2b, TOTP from F2c), that
@@ -1052,13 +1059,13 @@ Second factors and recovery codes (F2b, F2c):
 On the wire, registration starts on an initial request with `prompt=create`. Reset starts with
 `qauth_interaction_type` set to its path marker. On both paths `login_hint` carries the address
 unless the transaction already has one. The registration request's `interaction_types_supported`
-lists `urn:qauth:ia:email_code` and `urn:qauth:ia:new_password`, plus `urn:qauth:ia:password` so
-that an existing account can sign in. Reset starts on the initial request, or from any 403 that
-offers `urn:qauth:ia:password_reset`. Its initial `interaction_types_supported` lists
-`urn:qauth:ia:password_reset`, `urn:qauth:ia:email_code` and `urn:qauth:ia:new_password`, because
-the list is frozen at round 0. For a new address, or for a password-only account, the answers are
-403 `email_code` (8 digits), then 403 `new_password`, then 200 with the code. A step the client did
-not list answers `redirect_to_web` (Decision 4).
+lists `urn:qauth:ia:email_code:v1` and `urn:qauth:ia:new_password:v1`, plus
+`urn:qauth:ia:password:v1` so that an existing account can sign in. Reset starts on the initial
+request, or from any 403 that offers `urn:qauth:ia:password_reset:v1`. Its initial
+`interaction_types_supported` lists `urn:qauth:ia:password_reset:v1`, `urn:qauth:ia:email_code:v1`
+and `urn:qauth:ia:new_password:v1`, because the list is frozen at round 0. For a new address, or
+for a password-only account, the answers are 403 `email_code` (8 digits), then 403 `new_password`,
+then 200 with the code. A step the client did not list answers `redirect_to_web` (Decision 4).
 
 Disabled users. These flows never change a user whose `users.enabled` is false, and never give that
 user a code. Registration and reset send that address no mail, as at a quiet send tier (Decision 5),
@@ -1330,7 +1337,7 @@ const r = await qauth.signInWithPassword({
 | ------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `grant_type=password` at the token endpoint | `response_type=code` at the authorization challenge endpoint, then `grant_type=authorization_code` at `/oauth/token`                                                                                                                                                              |
 | `username`                                  | `login_hint`, which must be an email address                                                                                                                                                                                                                                      |
-| `password`                                  | `password`, eager with `qauth_interaction_type=urn:qauth:ia:password`, or as a step answer                                                                                                                                                                                        |
+| `password`                                  | `password`, eager with `qauth_interaction_type=urn:qauth:ia:password:v1`, or as a step answer                                                                                                                                                                                     |
 | `client_secret`                             | `private_key_jwt` (`aud` = issuer as sole value, `typ: client-authentication+jwt`, at most 60 s, `qauth_end_user_ip`)                                                                                                                                                             |
 | `scope`                                     | `scope`. A dangerous scope (`write:*`, `agent:admin`, `agent:exec` and, once ADR-016's pass-through leg lands, its `<kind>:owner-token`; Decision 4) is never granted headlessly. A request that includes one answers `redirect_to_web`, and the sign-in continues in the browser |
 | 400 `invalid_grant` for bad credentials     | 403 `insufficient_authorization`, same step, `qauth_interaction_error: "invalid_credentials"`                                                                                                                                                                                     |
@@ -1703,10 +1710,10 @@ on. A phase whose target is the train ships no later than F1's release.
       old `sub`.
   - Dependencies: F0. None on ADR-014. No third-party provider.
 - F1b — bot challenge (same switch): the provider-neutral verifier, the built-in proof-of-work
-  provider, the SSRF-safe POST helper for an operator's hosted provider, `urn:qauth:ia:captcha`, and
-  a per-client requirement for registration. Depends on F1. F1b is in 1.0 and stays provider-neutral
-  (question 15, decided 2026-10-09). The default provider and the operator's option were decided on
-  2026-10-11 (Decision 7).
+  provider, the SSRF-safe POST helper for an operator's hosted provider, `urn:qauth:ia:captcha:v1`,
+  and a per-client requirement for registration. Depends on F1. F1b is in 1.0 and stays
+  provider-neutral (question 15, decided 2026-10-09). The default provider and the operator's
+  option were decided on 2026-10-11 (Decision 7).
 - F1c — removal of `/auth/login`, `/auth/logout` and the headless hand-off (question 19, decided
   2026-10-09), and of `/auth/register` (Decision 12). They are removed directly, with no freeze
   phase. Removal comes as soon as F0's portal move and the CLI client for scripted management tokens
