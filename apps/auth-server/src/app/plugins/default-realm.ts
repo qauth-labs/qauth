@@ -30,6 +30,7 @@ export const defaultRealmPlugin = fp<DefaultRealmPluginOptions>(
       realmName: options.realmName,
       jwtIssuer: options.jwtIssuer,
       endpointHosts: options.endpointHosts,
+      ...(options.passkeys === undefined ? {} : { passkeys: options.passkeys }),
     };
     fastify.addHook('onReady', async () => {
       await bootDefaultRealm(

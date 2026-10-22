@@ -174,7 +174,12 @@ export async function bootAuthServer(
   const vitest = await import('vitest');
 
   for (const key of Object.keys(process.env)) {
-    if (key.startsWith('OID4VP_') || key.startsWith('WALLET_') || key.startsWith('ACR_')) {
+    if (
+      key.startsWith('OID4VP_') ||
+      key.startsWith('WALLET_') ||
+      key.startsWith('ACR_') ||
+      key.startsWith('WEBAUTHN_')
+    ) {
       delete process.env[key];
     }
   }
