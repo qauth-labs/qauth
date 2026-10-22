@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  passkeyCeremonyOrigins,
   PasskeyRelyingPartyError,
   REALM_HOST_RELYING_PARTY,
   resolveRealmRelyingParty,
@@ -54,5 +55,20 @@ describe('resolveRealmRelyingParty', () => {
     expect(resolve).toThrow(PasskeyRelyingPartyError);
     expect(resolve).toThrow(/^WEBAUTHN_RP_ID: /);
     expect(resolve).toThrow(remedy);
+  });
+});
+
+describe('passkeyCeremonyOrigins', () => {
+  it("puts the realm issuer's origin first, then the client's operator-set origins, once each", () => {
+    const apk = 'android:apk-key-hash:sYUC8p5I9SxqFernBPHmDxz_YVZXmVJdW8s-m3RTTqE';
+    expect(passkeyCeremonyOrigins('https://auth.example.com', [])).toEqual([
+      'https://auth.example.com',
+    ]);
+    expect(
+      passkeyCeremonyOrigins('https://auth.example.com:8443/auth', [
+        apk,
+        'https://auth.example.com:8443',
+      ])
+    ).toEqual(['https://auth.example.com:8443', apk]);
   });
 });
