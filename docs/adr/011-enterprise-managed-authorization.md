@@ -20,7 +20,7 @@
 
 ### What EMA is
 
-**Enterprise-Managed Authorization (EMA)** is the first — and currently the only —
+**Enterprise-Managed Authorization (EMA)** is the first — and, on 2026-10-22, the only —
 extension marked **STABLE** in the MCP [`ext-auth`](https://github.com/modelcontextprotocol/ext-auth)
 catalogue (the OAuth Client Credentials extension beside it is **DRAFT**). It
 specifies how an MCP client obtains an access token for an MCP server by way of
@@ -29,10 +29,12 @@ for single sign-on, using OAuth 2.0 Token Exchange ([RFC 8693](https://datatrack
 and the JWT authorization grant ([RFC 7523](https://datatracker.ietf.org/doc/html/rfc7523)).
 The wire format is the **Identity Assertion JWT Authorization Grant (ID-JAG)**,
 specified in [`draft-ietf-oauth-identity-assertion-authz-grant`](https://datatracker.ietf.org/doc/html/draft-ietf-oauth-identity-assertion-authz-grant),
-pinned at `-04` (verified 2026-08-06; that revision expires **2026-11-22**).
+pinned at `-04`, the revision the EMA extension names (verified 2026-10-22; that
+revision expires **2026-11-22**). The pin is `derived` from the extension, so its
+re-check date is the quarterly pass, **2026-11-30**, not the expiry.
 "Currently" was the original wording and could not be falsified — see
-[`docs/spec-pin-log.md`](../spec-pin-log.md), which now carries the row and the
-expiry date, and whose freshness check fails the build once the re-check is
+[`docs/spec-pin-log.md`](../spec-pin-log.md), which now carries the row, its basis
+and the expiry date, and whose freshness check fails the build once the re-check is
 overdue.
 
 It is a **three-party** flow. The parties are distinct roles, not distinct
@@ -501,6 +503,9 @@ path is audited at least as carefully as the accept path.
   the code at the moment of writing, not carried forward. That schedule is now
   kept in [`docs/spec-pin-log.md`](../spec-pin-log.md), whose freshness check
   fails the build once this row's re-check date passes. This ADR re-verified its own rows on 2026-10-11, before moving to Accepted: `-04` is still the newest revision and the `ext-auth` EMA file is unchanged since `e5eef54`.
+  On 2026-10-22 (#466) there was still no `-05`. The row is now `derived`: the EMA
+  file at `e5eef54` names `-04`, and QAuth follows that extension (ADR-018 §3). So
+  `-04`'s expiry is no longer the re-check date; the quarterly pass, 2026-11-30, is.
 
 ## Explicitly out of scope
 
@@ -573,7 +578,13 @@ Each new test was checked to fail when its fix is removed.
 This record rests on `draft-ietf-oauth-identity-assertion-authz-grant-04`. The OAuth
 working group adopted the draft, and it is still an Internet-Draft. On 2026-10-11 the
 newest revision in the IETF archive was `-04`, dated 21 May 2026. No `-05` existed.
-`-04` expires on 2026-11-22.
+`-04` expires on 2026-11-22. On 2026-10-22 there was still no `-05`.
+
+The pin follows the MCP EMA extension, not the draft's newest revision. At the commit
+the pin log records, `e5eef54`, the extension cites `-04` section by section. So the
+log's row is `derived` (decided 2026-10-19, #466), and its re-check date is the
+quarterly pass, 2026-11-30. A later revision moves the pin once the extension names
+it and the code implements it.
 
 Acceptance covers the trust model and the gates. The wire constants follow the draft: the
 `typ` value, the claim names, the token-type URN and the profile URN. They are pinned in
