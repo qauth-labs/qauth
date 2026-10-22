@@ -1813,7 +1813,10 @@ RFC 9396 §6.1's "fewer permissions" — composition by analogy, not text.
 
 Rows go into [`docs/spec-pin-log.md`](../spec-pin-log.md) with P0, each with
 a `Re-check by` date no later than its expiry — `spec-pins.test.ts` fails the
-build on a past date. A draft in the RFC Editor queue does not expire.
+build on a past date. A draft in the RFC Editor queue does not expire. A
+`derived` row takes the quarterly date instead, because the document that names
+its revision keeps it alive: ID-JAG is one, since the MCP EMA extension names
+`-04` (pin log, 2026-10-22).
 
 | Document                                                                    | Revision · date                                              | Expires                           | Why watched                                                                                                                                                  |
 | --------------------------------------------------------------------------- | ------------------------------------------------------------ | --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -1823,7 +1826,7 @@ build on a past date. A draft in the RFC Editor queue does not expire.
 | draft-asor-wimse-agent-delegation-chain (individual)                        | `-01` · 3 Sep 2026                                           | 7 Mar 2027                        | header only; open before citing                                                                                                                              |
 | draft-ietf-wimse-aims (WG, Informational; replaces draft-klrc-aiagent-auth) | `-00` · 15 Sep 2026                                          | 19 Mar 2027                       | audit minimums; "LLM MUST NOT hold credentials"                                                                                                              |
 | draft-ietf-oauth-transaction-tokens (WG)                                    | `-11` · 30 Jul 2026                                          | 31 Jan 2027                       | rejected as tree id; `txn` reused                                                                                                                            |
-| draft-ietf-oauth-identity-assertion-authz-grant (WG)                        | `-04` · 21 May 2026                                          | 22 Nov 2026                       | ADR-011 pin; actor profile layers on it                                                                                                                      |
+| draft-ietf-oauth-identity-assertion-authz-grant (WG)                        | `-04` · 21 May 2026                                          | 22 Nov 2026                       | ADR-011 pin, `derived` from the MCP EMA extension; actor profile layers on it                                                                                |
 | draft-ietf-oauth-client-id-metadata-document (WG)                           | `-02` · 6 Jul 2026                                           | 7 Jan 2027                        | agent client naming                                                                                                                                          |
 | draft-ietf-oauth-rfc7523bis (WG)                                            | `-11` · 28 Apr 2026                                          | none: in the RFC Editor queue     | `aud` = issuer only                                                                                                                                          |
 | draft-ietf-wimse-workload-creds / -wpt (WG; s2s-protocol is dead)           | `-02` · 2 Jul / 27 Aug 2026                                  | 3 Jan / 28 Feb 2027               | one identity per credential                                                                                                                                  |

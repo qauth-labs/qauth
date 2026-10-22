@@ -20,9 +20,11 @@ import { ID_JAG_DRAFT } from './id-jag';
  *
  * ADR-011:420-422 requires the implementation to pin the revision it targets
  * **in code**, not only in prose. `ID_JAG_DRAFT` is that pin. `docs/spec-pin-log.md`
- * is what makes it re-checkable — it carries the revision, the basis, and the
- * draft's 2026-11-22 expiry, and its freshness check fails the build once that
- * date passes.
+ * is what makes it re-checkable — it carries the revision, the basis, the
+ * draft's 2026-11-22 expiry and the row's `Re-check by` date, and its freshness
+ * check fails the build once the `Re-check by` date passes. The basis is
+ * `derived` (#466): the MCP `ext-auth` EMA extension names the revision, so the
+ * re-check date is the quarterly pass, not the expiry.
  *
  * Two artefacts stating the same fact drift unless something compares them.
  * This is that something.
@@ -51,6 +53,22 @@ function pinTableRow(): string | undefined {
   return PIN_LOG.split('\n').find((line) => line.startsWith('| ID-JAG ('));
 }
 
+/** The ID-JAG row's cells, keyed by the pin table's own column names. */
+function pinTableCells(): Record<string, string> {
+  const lines = PIN_LOG.split('\n');
+  const header = lines.find((line) => line.startsWith('| Spec ') && line.includes('Re-check by'));
+  const row = pinTableRow();
+  if (!header || !row) return {};
+
+  const cells = (line: string) =>
+    line
+      .split('|')
+      .slice(1, -1)
+      .map((cell) => cell.trim());
+  const values = cells(row);
+  return Object.fromEntries(cells(header).map((name, i) => [name, values[i]]));
+}
+
 describe('ID_JAG_DRAFT — the in-code pin ADR-011 requires', () => {
   it('names a concrete revision, not a floating draft reference', () => {
     // `draft-ietf-oauth-identity-assertion-authz-grant` without a revision is
@@ -68,9 +86,18 @@ describe('ID_JAG_DRAFT — the in-code pin ADR-011 requires', () => {
   });
 
   it('is covered by a pin-log row carrying the draft expiry', () => {
-    // The expiry is what turns the pin into something that expires loudly
-    // rather than silently. Before #401 it was recorded nowhere.
-    const row = pinTableRow();
-    expect(row).toContain('2026-11-22');
+    // Before #401 the expiry was recorded nowhere. Since #466 it no longer sets
+    // the re-check date, but it stays in the row: anyone citing `-04` after
+    // 2026-11-22 cites an expired draft, and should be able to see that.
+    expect(pinTableCells()['Expires']).toBe('2026-11-22');
+  });
+
+  it('is derived from the MCP EMA extension, so it is re-checked at the quarterly pass', () => {
+    // A newer IETF revision alone does not move this constant. It moves when
+    // the EMA file at the commit the log pins names a newer revision, and the
+    // code here implements it.
+    const cells = pinTableCells();
+    expect(cells['Pin basis']).toBe('`derived`');
+    expect(cells['Re-check by']).toBe('`2026-11-30`');
   });
 });

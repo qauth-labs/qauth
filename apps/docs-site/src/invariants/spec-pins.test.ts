@@ -31,9 +31,9 @@ const TODAY = '2026-08-31';
  * The actual date, used only by the real-tree case.
  *
  * This is the whole point of the gate and it must not be pinned: a freshness
- * check frozen at a fixed date passes forever and enforces nothing. When
- * ID-JAG `-04` expires on 2026-11-22, this test goes red and someone runs the
- * quarterly pass — which is the mechanism ADR-007 asked for and has never had.
+ * check frozen at a fixed date passes forever and enforces nothing. When the
+ * earliest `Re-check by` in the log passes, this test goes red and someone runs
+ * the pass — which is the mechanism ADR-007 asked for and has never had.
  *
  * Yes, that means the suite can fail on a day nobody changed any code. That is
  * the design, not a flake: the tree really has become stale on that day, and a
@@ -170,23 +170,41 @@ describe('docs/spec-pin-log.md — real tree', () => {
     expect(findStaleSpecPins(rows, REPO_ROOT, realToday())).toEqual([]);
   });
 
-  it('stays in date through 2026-11-21, past the old rfc7523bis fuse (#465)', () => {
+  it('stays in date through 2026-11-29, past the old rfc7523bis and ID-JAG fuses (#465, #466)', () => {
     // The rfc7523bis row used to fall due on 2026-10-30, the date Datatracker
     // computes for `-11`. A draft in the RFC Editor queue does not expire, so
     // the 2026-10-22 pass moved the row to the quarterly date after checking.
-    // 2026-11-21 is the last day before the next fuse, ID-JAG `-04`. A row
-    // added later that falls due sooner fails here first; then move this date
-    // to the day before that row's `Re-check by`.
+    // The ID-JAG row, due when `-04` expires on 2026-11-22, became `derived`
+    // the same day (#466). Every row now falls due at the quarterly pass, so
+    // 2026-11-29 is the last day before the next fuse. A row added later that
+    // falls due sooner fails here first; then move this date to the day
+    // before that row's `Re-check by`.
     const rows = parseSpecPinTable(readFileSync(LOG_PATH, 'utf8'));
 
     expect(rows.length).toBeGreaterThanOrEqual(8);
-    expect(findStaleSpecPins(rows, REPO_ROOT, '2026-11-21')).toEqual([]);
+    expect(findStaleSpecPins(rows, REPO_ROOT, '2026-11-29')).toEqual([]);
   });
 
-  it('records the ID-JAG draft expiry the issue says is written down nowhere', () => {
+  it('pins ID-JAG on a DERIVED basis and re-checks it at the quarterly pass (#466)', () => {
+    // `-04` expires on 2026-11-22 with no `-05` published. The MCP `ext-auth`
+    // EMA file at the commit the log pins names `-04`, and QAuth follows that
+    // extension (ADR-018 §3), so the row is `derived` and the expiry is not its
+    // re-check date. The maintainer chose this on 2026-10-19.
     const rows = parseSpecPinTable(readFileSync(LOG_PATH, 'utf8'));
     const idJag = rows.find((row) => row.spec.includes('ID-JAG'));
-    expect(idJag?.recheckBy).toBe('2026-11-22');
+    expect(idJag?.revision).toBe('-04');
+    expect(idJag?.basis).toBe('derived');
+    expect(idJag?.recheckBy).toBe('2026-11-30');
+  });
+
+  it('keeps the ID-JAG row in date past the draft expiry, to the day before the pass (#466)', () => {
+    // Only the ID-JAG row: another row falling due first is that row's pass.
+    const rows = parseSpecPinTable(readFileSync(LOG_PATH, 'utf8')).filter((row) =>
+      row.spec.includes('ID-JAG')
+    );
+
+    expect(rows).toHaveLength(1);
+    expect(findStaleSpecPins(rows, REPO_ROOT, '2026-11-29')).toEqual([]);
   });
 
   it('pins SD-JWT VC at draft-13 on a DERIVED basis, not as a latest-published pin', () => {

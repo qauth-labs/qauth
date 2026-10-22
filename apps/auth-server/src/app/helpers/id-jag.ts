@@ -64,10 +64,14 @@ import {
  * **in code**" rather than only in prose, so the pin lives here beside the wire
  * constants it governs and moves in the same diff they do.
  *
- * `-04` expires **2026-11-22**, which is this row's `Re-check by` date in
- * `docs/spec-pin-log.md`; that log's freshness check fails the build once the
- * date passes, so the pass cannot be forgotten. Changing this constant without
- * updating the log — or the reverse — is the drift both are there to prevent.
+ * The revision is the one the MCP `ext-auth` Enterprise-Managed Authorization
+ * extension names, at the commit `docs/spec-pin-log.md` records (ADR-018 §3),
+ * so the log's row is `derived`: a newer IETF revision moves this constant only
+ * once that extension names it and this code implements it. `-04` expires on
+ * 2026-11-22; the row's `Re-check by` is the quarterly pass, 2026-11-30, and
+ * the log's freshness check fails the build once that date passes, so the pass
+ * cannot be forgotten. Changing this constant without updating the log — or the
+ * reverse — is the drift both are there to prevent.
  */
 export const ID_JAG_DRAFT = 'draft-ietf-oauth-identity-assertion-authz-grant-04' as const;
 
