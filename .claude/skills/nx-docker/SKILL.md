@@ -44,16 +44,18 @@ pnpm nx run auth-server:prune
 
 ```dockerfile
 # Stage 1: Build
-FROM node:24-alpine AS builder
+FROM node:26-alpine AS builder
 WORKDIR /app
+RUN npm install --global pnpm@12.14.0
 COPY . .
 RUN pnpm install --frozen-lockfile
 RUN pnpm nx build auth-server --configuration=production
 RUN pnpm nx run auth-server:prune
 
 # Stage 2: Run
-FROM node:24-alpine AS runner
+FROM node:26-alpine AS runner
 WORKDIR /app
+RUN npm install --global pnpm@12.14.0
 COPY --from=builder /app/dist/apps/auth-server .
 RUN pnpm install --prod --frozen-lockfile
 CMD ["node", "main.js"]

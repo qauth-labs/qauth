@@ -5,11 +5,16 @@
 #
 # syntax=docker/dockerfile:1.7
 
-# Stage 1: Base image with corepack + root workspace manifests.
+# Stage 1: Base image with pnpm + root workspace manifests.
 # No install here — see the auth-server Dockerfile for the reason.
-FROM node:24-alpine AS deps
+FROM node:26-alpine AS deps
 WORKDIR /app
-RUN corepack enable
+# pnpm comes from npm at the exact version CI uses. Node 26 no longer ships
+# corepack. The image runs `pnpm` as the non-root user (the entrypoint, and
+# `--entrypoint pnpm` for seeding), so it must be installed here, globally:
+# corepack fetched it into root's cache and then again at every run.
+ARG PNPM_VERSION=12.14.0
+RUN npm install --global pnpm@${PNPM_VERSION}
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY nx.json tsconfig.base.json ./
 

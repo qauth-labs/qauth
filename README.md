@@ -388,7 +388,7 @@ qauth/
 
 **Backend:**
 
-- **Runtime**: Node.js 24 LTS
+- **Runtime**: Node.js 26 (LTS from 2026-10-28)
 - **Language**: TypeScript 6.0
 - **Framework**: Fastify
 - **API**: REST (OAuth 2.1 / OIDC)
@@ -414,7 +414,7 @@ qauth/
 **Infrastructure:**
 
 - **Monorepo**: Nx 23
-- **Package Manager**: pnpm 11
+- **Package Manager**: pnpm 12
 - **Linting**: ESLint 10
 - **Containerization**: Docker
 - **Orchestration**: Kubernetes ready (manifests planned, Phase 3)

@@ -22,7 +22,7 @@
 # docs/security/threat-model.md tells a reviewer what to look at and how
 # findings are rated. SECURITY.md says how to report one.
 
-FROM node:24-bookworm
+FROM node:26-bookworm
 
 ENV DEBIAN_FRONTEND=noninteractive \
     CI=true \
@@ -39,7 +39,7 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 # The pnpm version CI uses.
-RUN npm install -g pnpm@11.4.0
+RUN npm install -g pnpm@12.14.0
 
 COPY . /src
 WORKDIR /src
