@@ -2021,9 +2021,10 @@ async function mintIdJagForExchange(args: {
  *    client (draft §4.4.1). This is what stops a valid assertion intended for
  *    client A being redeemed by client B.
  *  - GATE 4 — the assertion's `resource` MUST be inside the operator's
- *    per-client ID-JAG target list (`id_jag_targets`). A trusted IdP is trusted to say WHICH USER authorized
- *    WHICH CLIENT; it is not thereby trusted to enrol this deployment's clients
- *    into resources an operator never granted them.
+ *    per-client ID-JAG target list (`id_jag_targets`). A trusted IdP is trusted
+ *    to say WHICH USER authorized WHICH CLIENT; it is not thereby trusted to
+ *    enrol this deployment's clients into resources an operator never granted
+ *    them.
  *  - GATE 5 — the granted scope is the assertion's scope, optionally narrowed by
  *    the request, and then still subject to the client's own allowlist and the
  *    agent scope-mode cap. Both ceilings apply; neither can raise the other.
