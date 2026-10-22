@@ -240,9 +240,37 @@ describe('normaliseRealmHost', () => {
       expect(error).toBeInstanceOf(InvalidRealmHostError);
       expect(error).toMatchObject({
         name: 'InvalidRealmHostError',
+        statusCode: 400,
         code: 'INVALID_REALM_HOST',
         reason: 'wildcard',
+        input: '*.example.com',
       });
+    }
+  });
+
+  it('keeps the refused value out of the message', () => {
+    const inputs = [
+      '',
+      'evil\nhost',
+      '*.evil-marker.example',
+      'evil-marker..example',
+      'evil-marker.example:99999',
+      'user@evil-marker.example',
+      `${'evil-marker.'.repeat(30)}example`,
+      '-evil-marker.example',
+      '[evil-marker',
+      '192.0.2.66',
+    ];
+    for (const input of inputs) {
+      try {
+        normaliseRealmHost(input, 'primary');
+        expect.unreachable(input);
+      } catch (error) {
+        expect(error).toBeInstanceOf(InvalidRealmHostError);
+        const { message } = error as InvalidRealmHostError;
+        expect(message).not.toMatch(/evil|192\.0\.2\.66/);
+        expect(message).not.toContain('\n');
+      }
     }
   });
 });

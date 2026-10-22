@@ -67,15 +67,25 @@ export type InvalidRealmHostReason =
 
 /**
  * Thrown by {@link normaliseRealmHost} for a value that cannot be a realm host.
- * `reason` is stable and safe to branch on; the message is for operators and
- * repeats the value, so do not echo it to an anonymous caller.
+ *
+ * `reason` is stable and safe to branch on. The message is fixed text and
+ * never repeats the value, because the value may be a request's `Host` header
+ * and the message may reach a log line or a response. The value is on
+ * {@link InvalidRealmHostError.input} for an operator-facing log.
  */
 export class InvalidRealmHostError extends Error {
+  readonly statusCode = 400;
   readonly code = 'INVALID_REALM_HOST';
 
+  /**
+   * @param reason - why the value was refused.
+   * @param message - fixed text that names no part of the value.
+   * @param input - the refused value, as given.
+   */
   constructor(
     public readonly reason: InvalidRealmHostReason,
-    message: string
+    message: string,
+    public readonly input: string
   ) {
     super(message);
     this.name = 'InvalidRealmHostError';
@@ -115,7 +125,7 @@ function splitPort(input: string): { host: string; port: string } {
   if (input.startsWith('[')) {
     const close = input.indexOf(']');
     if (close === -1) {
-      throw new InvalidRealmHostError('malformed', `Realm host "${input}" has no closing "]"`);
+      throw new InvalidRealmHostError('malformed', 'Realm host has no closing "]"', input);
     }
     return { host: input.slice(0, close + 1), port: input.slice(close + 1) };
   }
@@ -125,7 +135,8 @@ function splitPort(input: string): { host: string; port: string } {
   if (input.indexOf(':', colon + 1) !== -1) {
     throw new InvalidRealmHostError(
       'malformed',
-      `Realm host "${input}" has more than one ":"; an IPv6 address goes in brackets`
+      'Realm host has more than one ":"; an IPv6 address goes in brackets',
+      input
     );
   }
   return { host: input.slice(0, colon), port: input.slice(colon) };
@@ -162,54 +173,56 @@ function splitPort(input: string): { host: string; port: string } {
  */
 export function normaliseRealmHost(input: string, kind?: RealmHostKind): string {
   if (typeof input !== 'string' || input.length === 0) {
-    throw new InvalidRealmHostError('empty', 'Realm host is empty');
+    throw new InvalidRealmHostError('empty', 'Realm host is empty', String(input));
   }
   if (/\s/u.test(input)) {
-    throw new InvalidRealmHostError('whitespace', `Realm host "${input}" contains white space`);
+    throw new InvalidRealmHostError('whitespace', 'Realm host contains white space', input);
   }
   if (input.includes('*')) {
     throw new InvalidRealmHostError(
       'wildcard',
-      `Realm host "${input}" is a wildcard; a realm owns exact hosts only`
+      'Realm host is a wildcard; a realm owns exact hosts only',
+      input
     );
   }
 
   if (NON_HOST_CHARACTERS.test(input)) {
-    throw new InvalidRealmHostError('malformed', `Realm host "${input}" is not a bare host`);
+    throw new InvalidRealmHostError('malformed', 'Realm host is not a bare host', input);
   }
 
   const { host: rawHost, port } = splitPort(input);
   if (port !== '') {
     const match = PORT.exec(port);
     if (!match || Number(match[1]) > 65535) {
-      throw new InvalidRealmHostError('invalid_port', `Realm host "${input}" has an invalid port`);
+      throw new InvalidRealmHostError('invalid_port', 'Realm host has an invalid port', input);
     }
   }
 
   const bracketed = rawHost.startsWith('[');
   if (!bracketed && /[[\]]/.test(rawHost)) {
-    throw new InvalidRealmHostError('malformed', `Realm host "${input}" is not a bare host`);
+    throw new InvalidRealmHostError('malformed', 'Realm host is not a bare host', input);
   }
   if (rawHost.length === 0) {
-    throw new InvalidRealmHostError('empty', `Realm host "${input}" has no host`);
+    throw new InvalidRealmHostError('empty', 'Realm host has no host name', input);
   }
 
   let host: string;
   try {
     host = new URL(`http://${rawHost}/`).hostname;
   } catch {
-    throw new InvalidRealmHostError('malformed', `Realm host "${input}" is not a valid host`);
+    throw new InvalidRealmHostError('malformed', 'Realm host is not a valid host', input);
   }
 
   // After the IDNA step, so a trailing ideographic full stop counts as a dot.
   if (host.endsWith('.')) host = host.slice(0, -1);
   if (host.length === 0) {
-    throw new InvalidRealmHostError('empty', `Realm host "${input}" has no host`);
+    throw new InvalidRealmHostError('empty', 'Realm host has no host name', input);
   }
   if (host.length > REALM_HOST_MAX_LENGTH) {
     throw new InvalidRealmHostError(
       'too_long',
-      `Realm host "${input}" is longer than ${REALM_HOST_MAX_LENGTH} characters`
+      `Realm host is longer than ${REALM_HOST_MAX_LENGTH} characters`,
+      input
     );
   }
 
@@ -217,22 +230,16 @@ export function normaliseRealmHost(input: string, kind?: RealmHostKind): string 
     ? ipv6Schema.safeParse(host.slice(1, -1)).success
     : ipv4Schema.safeParse(host).success;
   if (bracketed && !ipLiteral) {
-    throw new InvalidRealmHostError(
-      'malformed',
-      `Realm host "${input}" is not a valid IPv6 address`
-    );
+    throw new InvalidRealmHostError('malformed', 'Realm host is not a valid IPv6 address', input);
   }
 
   if (!ipLiteral) {
     for (const label of host.split('.')) {
       if (label.length === 0) {
-        throw new InvalidRealmHostError('empty_label', `Realm host "${input}" has an empty label`);
+        throw new InvalidRealmHostError('empty_label', 'Realm host has an empty label', input);
       }
       if (label.length > REALM_HOST_MAX_LABEL_LENGTH || !LABEL.test(label)) {
-        throw new InvalidRealmHostError(
-          'malformed',
-          `Realm host "${input}" has an invalid label "${label}"`
-        );
+        throw new InvalidRealmHostError('malformed', 'Realm host has an invalid label', input);
       }
     }
   }
@@ -240,7 +247,8 @@ export function normaliseRealmHost(input: string, kind?: RealmHostKind): string 
   if (ipLiteral && kind === 'primary') {
     throw new InvalidRealmHostError(
       'ip_literal',
-      `Realm host "${input}" is an IP address; a primary host must be a name, because a passkey RP ID cannot be an IP address`
+      'Realm host is an IP address; a primary host must be a name, because a passkey RP ID cannot be one',
+      input
     );
   }
 
