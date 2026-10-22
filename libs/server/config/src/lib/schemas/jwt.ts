@@ -118,8 +118,14 @@ export const jwtEnvSchema = z
     JWT_RS256_KID: z.string().optional(),
 
     /**
-     * JWT issuer URL (required)
-     * Used as the 'iss' claim in JWT tokens
+     * JWT issuer URL (required): the 'iss' claim in JWT tokens.
+     *
+     * A single-realm (simple mode) setting, with `DEFAULT_REALM_NAME` (ADR-019
+     * Decision 1, #484). At first boot it becomes the default realm's issuer,
+     * stored without a trailing slash, and its host becomes the realm's primary
+     * host. Both are permanent: a later boot with a different value refuses to
+     * start. A path keeps working, since only the host routes requests, and
+     * the boot warns about it and about a trailing slash.
      */
     JWT_ISSUER: z.url('JWT issuer must be a valid URL'),
 

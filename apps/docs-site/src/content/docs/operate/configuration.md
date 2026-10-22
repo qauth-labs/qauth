@@ -60,18 +60,19 @@ A key marked **Secret** holds a credential. This page never shows its value, not
 
 ### Realms
 
-| Key                  | Role       | Default  | Since | Description                                                             |
-| -------------------- | ---------- | -------- | ----- | ----------------------------------------------------------------------- |
-| `DEFAULT_REALM_NAME` | deployment | `master` | 0.1.0 | The name of the realm a new installation creates and serves by default. |
+| Key                            | Role       | Default  | Since | Description                                                                                                                                                                                                                            |
+| ------------------------------ | ---------- | -------- | ----- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `DEFAULT_REALM_ENDPOINT_HOSTS` | deployment | empty    | 0.2.0 | Host names, comma-separated, that server-side callers reach the default realm by, such as `auth-server` from the developer portal's `AUTH_SERVER_URL`; each missing one is added as an endpoint host at boot and none is ever removed. |
+| `DEFAULT_REALM_NAME`           | deployment | `master` | 0.1.0 | The name of the default realm, a single-realm setting with `JWT_ISSUER`: the server creates the realm at boot when it is missing, and in simple mode it is also the operator realm.                                                    |
 
 ### Tokens
 
-| Key                         | Role                                                       | Default  | Since | Description                                                                                |
-| --------------------------- | ---------------------------------------------------------- | -------- | ----- | ------------------------------------------------------------------------------------------ |
-| `ACCESS_TOKEN_LIFESPAN`     | realm-seed: `tokens.accessTokenLifespanSeconds`            | `900`    | 0.1.0 | The access token lifetime, in seconds, for `staging` and `production` clients.             |
-| `DEV_ACCESS_TOKEN_LIFESPAN` | realm-seed: `tokens.developmentAccessTokenLifespanSeconds` | `28800`  | 0.1.0 | The access token lifetime, in seconds, for `development` clients only.                     |
-| `JWT_ISSUER`                | deployment                                                 | required | 0.1.0 | The issuer URL: the `iss` of every token QAuth issues and the public origin of the server. |
-| `REFRESH_TOKEN_LIFESPAN`    | realm-seed: `tokens.refreshTokenLifespanSeconds`           | `604800` | 0.1.0 | The refresh token lifetime, in seconds.                                                    |
+| Key                         | Role                                                       | Default  | Since | Description                                                                                                                                                                                                                    |
+| --------------------------- | ---------------------------------------------------------- | -------- | ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `ACCESS_TOKEN_LIFESPAN`     | realm-seed: `tokens.accessTokenLifespanSeconds`            | `900`    | 0.1.0 | The access token lifetime, in seconds, for `staging` and `production` clients.                                                                                                                                                 |
+| `DEV_ACCESS_TOKEN_LIFESPAN` | realm-seed: `tokens.developmentAccessTokenLifespanSeconds` | `28800`  | 0.1.0 | The access token lifetime, in seconds, for `development` clients only.                                                                                                                                                         |
+| `JWT_ISSUER`                | deployment                                                 | required | 0.1.0 | The issuer URL and the `iss` of every token, a single-realm setting with `DEFAULT_REALM_NAME`: at first boot it becomes the default realm's issuer, without a trailing slash, and its host the realm's permanent primary host. |
+| `REFRESH_TOKEN_LIFESPAN`    | realm-seed: `tokens.refreshTokenLifespanSeconds`           | `604800` | 0.1.0 | The refresh token lifetime, in seconds.                                                                                                                                                                                        |
 
 ### Signing
 
