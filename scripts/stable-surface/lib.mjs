@@ -1069,7 +1069,9 @@ export function exitCodeOf(report) {
 
 const MAX_DIFF_LINES = 400;
 
-const escapeCell = (text) => String(text).replace(/\|/g, '\\|').replace(/\n/g, ' ');
+/** One Markdown table cell. Backslashes go first, so a `\` already before a `|` cannot unescape it. */
+export const escapeCell = (text) =>
+  String(text).replace(/\\/g, '\\\\').replace(/\|/g, '\\|').replace(/\r?\n/g, ' ');
 
 function truncate(diff) {
   const lines = diff.split('\n');

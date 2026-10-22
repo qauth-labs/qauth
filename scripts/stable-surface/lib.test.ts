@@ -25,6 +25,7 @@ import {
   approvalTemplate,
   checkStabilityTags,
   compareReleases,
+  escapeCell,
   exitCodeOf,
   InputError,
   isRepoRelativePath,
@@ -940,5 +941,13 @@ describe('a second surface needs only its registry entry', () => {
     const report = await setup(root).run({ drift: true });
     expect(exitCodeOf(report)).toBe(2);
     expect(report.errors[0]).toContain('generator failed (exit 1): node generate.mjs');
+  });
+});
+
+describe('escapeCell', () => {
+  it('escapes backslashes before pipes, so a cell cannot end early', () => {
+    expect(escapeCell('a|b')).toBe('a\\|b');
+    expect(escapeCell('a\\|b')).toBe('a\\\\\\|b');
+    expect(escapeCell('one\r\ntwo\nthree')).toBe('one two three');
   });
 });
