@@ -134,6 +134,13 @@
 > parameter, the commit trailer and the broker's state file are renamed
 > with it (§1). `sid` now appears in this record only for the browser
 > session. No rule changed.
+>
+> **Amended 2026-10-22** (before any implementation): the URIs this record
+> defines carry a version, as ADR-018 §5 requires of every QAuth-defined
+> identifier. The spawn assertion's token-type identifier (§4), the
+> `agent-task` RAR type (§5) and the `agent-action` event type (§7) now end
+> in `/v1`. The SCIM extension schema already ends in `1.0` (§13). No rule
+> changed.
 
 ## Context
 
@@ -672,7 +679,7 @@ broker on the child's behalf: `subject_token` is the parent's token,
 - **(b) `spawn_assertion`** — a new token-request parameter (RFC 6749 §8.2 is
   the extension point; draft-liu §5.2 adds `delegatee_id` the same way): a JWT
   typed `typ: spawn-assertion+jwt`, token-type identifier
-  `https://schemas.qauth.dev/token-type/spawn-assertion`, signed by the
+  `https://schemas.qauth.dev/token-type/spawn-assertion/v1`, signed by the
   **parent's** DPoP key with its public key in the `jwk` header: `iss` =
   parent `client_id`, `sub` = child `client_id`, `aud` = QAuth issuer
   identifier (the rfc7523bis rule), `iat`, `exp` ≤ `iat` + 60 s, `jti` (single
@@ -774,14 +781,14 @@ itself spawn and the resources it may reach, all ⊆ the parent's `aud` (GATE
 
 ### 5. Purpose — one RFC 9396 type, narrow-only
 
-QAuth's first RAR support is one type, `https://schemas.qauth.dev/agent-task`,
+QAuth's first RAR support is one type, `https://schemas.qauth.dev/agent-task/v1`,
 carried in `authorization_details` on the authorization request (root), in
 the spawn assertion (child), in the token response (RFC 9396 §7), in the JWT
 filtered to the audience (§9.1) and in introspection (§9.2):
 
 ```json
 {
-  "type": "https://schemas.qauth.dev/agent-task",
+  "type": "https://schemas.qauth.dev/agent-task/v1",
   "purpose": "Open the release PR",
   "task": "pr-open",
   "caused_by": "<parent jti, written by QAuth>",
@@ -794,8 +801,8 @@ The `locations` and `actions` above are a git host's, as the worked example.
 Each credential adapter defines the strings it maps to its upstream (§9).
 
 `purpose` and `task` are recorded, displayed and never evaluated. Version 1
-of the type says so: `task` is free text, a label shown to people and never
-a policy input (decision 2). Both are
+of the type, the `/v1` that ends its URI, says so: `task` is free text, a
+label shown to people and never a policy input (decision 2). Both are
 client-authored at the root and model-authored at every hop, so they are
 data, never markup or policy (RFC 9396 §12: the AS MUST sanitise
 `authorization_details` against injection). The type bounds them: `task` ≤ 64
@@ -962,7 +969,7 @@ action it reports, which signs with that node's own DPoP key and never with
 the type's registered key (below). SSF stream
 management is not required inbound in the first slice; RFC 8935 stands alone
 and SSF layers on later. One event type,
-`https://schemas.qauth.dev/secevent/agent-action`, with members `action`,
+`https://schemas.qauth.dev/secevent/agent-action/v1`, with members `action`,
 `resource`, `decision` and optional `tool`, `arguments_digest`, `outcome`;
 `toe` and `txn` are top-level SET claims (RFC 8417 §2.2), `txn` correlating
 the SETs of one tool call; the subject is `sub_id` in the `jwt_id` format
@@ -1016,7 +1023,9 @@ daemon on a laptop behind NAT cannot serve. A transmitter-initiated
 registration and an `agent-action` event type are what QAuth would take to
 the Shared Signals WG, which is extending SSF and CAEP toward agentic use
 cases; until either exists the out-of-band row is the mechanism, and the
-event URI stays QAuth's.
+event URI stays QAuth's. It ends in its version, `/v1`, as ADR-018 §5
+requires of every QAuth-defined identifier, so a standard event type, if one
+appears, sits beside it without breaking 1.x.
 
 **The agent on a stored row, and the members that name a model.** Every
 `agent_actions` row gains an `agent_id` column that QAuth fills from the
