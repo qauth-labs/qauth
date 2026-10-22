@@ -472,6 +472,39 @@ describe('methods and bodies (local test servers)', () => {
     expect(serverA.connections).toBe(0);
   });
 
+  it('refuses an oversized array before copying it', async () => {
+    const big = new Uint8Array(65);
+    const from = vi.spyOn(Buffer, 'from');
+    try {
+      const err = await refusal(
+        client().request({
+          method: 'POST',
+          url: 'https://api.egress.test/',
+          body: big,
+          purpose: 'test',
+          limits: { maxRequestBytes: 64 },
+        })
+      );
+      expect(err.reason).toBe('size');
+      expect(from).not.toHaveBeenCalledWith(big);
+    } finally {
+      from.mockRestore();
+    }
+  });
+
+  it('measures and sends only the bytes of an array view', async () => {
+    const backing = new Uint8Array(200).fill(0x61);
+    const res = await client().request({
+      method: 'POST',
+      url: 'https://api.egress.test/',
+      body: backing.subarray(100, 164),
+      purpose: 'test',
+      limits: { maxRequestBytes: 64 },
+    });
+    expect(res.status).toBe(200);
+    expect(serverA.requests[0].body.length).toBe(64);
+  });
+
   it('counts a multi-byte body in bytes, not characters', async () => {
     const err = await refusal(
       client().request({

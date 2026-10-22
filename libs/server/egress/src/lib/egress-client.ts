@@ -160,14 +160,20 @@ function requestHeaders(headers: Record<string, string> | undefined): Record<str
   return result;
 }
 
-function requestBody(
+/** The body's size in bytes, measured without copying it. */
+function requestBodyBytes(
   method: EgressMethod,
   body: string | Uint8Array | undefined
-): Buffer | undefined {
+): number | undefined {
   if (body === undefined) return undefined;
   if (method === 'GET' || method === 'HEAD') {
     throw new TypeError(`an egress ${method} request has no body`);
   }
+  return typeof body === 'string' ? Buffer.byteLength(body, 'utf8') : body.byteLength;
+}
+
+function copyBody(body: string | Uint8Array | undefined): Buffer | undefined {
+  if (body === undefined) return undefined;
   // A copy: the caller may reuse its array while the call is in flight.
   return typeof body === 'string' ? Buffer.from(body, 'utf8') : Buffer.from(body);
 }
@@ -264,18 +270,21 @@ function buildEgressClient(options: EgressClientOptions, transport: EgressTransp
     }
     const limits = mergeLimits(baseLimits, call.limits);
     let headers = requestHeaders(call.headers);
-    let body = requestBody(call.method, call.body);
+    const bodyBytes = requestBodyBytes(call.method, call.body);
+    let body: Buffer | undefined;
     let method: EgressMethod = call.method;
     let host = hostForLog(call.url);
 
     try {
-      if (body !== undefined && body.length > limits.maxRequestBytes) {
+      // Before the copy: an oversized body is refused without a second allocation.
+      if (bodyBytes !== undefined && bodyBytes > limits.maxRequestBytes) {
         throw new EgressFailure(
           'size',
           'blocked',
           `egress to ${host ?? 'a URL'} refused: the request body is larger than ${limits.maxRequestBytes} bytes`
         );
       }
+      body = copyBody(call.body);
       return await withDeadline(limits, async (signal) => {
         const startedAt = Date.now();
         let target = checkUrl(call.url);
