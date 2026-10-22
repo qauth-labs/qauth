@@ -151,12 +151,12 @@ jobs:
       - uses: pnpm/action-setup@v6
         name: Install pnpm
         with:
-          version: 11.4.0
+          version: 12.14.0
           run_install: false
 
       - uses: actions/setup-node@v7
         with:
-          node-version: 24
+          node-version: 26
           cache: 'pnpm'
 
       - run: pnpm install --frozen-lockfile
