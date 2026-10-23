@@ -7,6 +7,7 @@ import {
   jsonb,
   pgTable,
   text,
+  unique,
   uniqueIndex,
   uuid,
   varchar,
@@ -251,6 +252,12 @@ export const users = pgTable(
     lastLoginAt: bigint('last_login_at', { mode: 'number' }),
   },
   (t) => [
+    // The target of `sessions_user_realm_fk` (issue #468). Already unique
+    // through `id`; it exists so a row that names a user can also name the
+    // user's realm, and the database refuses a pair that disagrees. A
+    // constraint rather than an index because drizzle-kit adds foreign keys
+    // before it creates indexes.
+    unique('users_id_realm_id_unique').on(t.id, t.realmId),
     index('idx_users_realm_id').on(t.realmId),
     index('idx_users_enabled')
       .on(t.enabled)
