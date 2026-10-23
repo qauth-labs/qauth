@@ -519,12 +519,39 @@ describe('the key cache', () => {
     expect(decodeProtectedHeader(await signer.signJws('local', accessToken())).kid).toBe(next.kid);
   });
 
-  it('unwraps a key once for concurrent first calls', async () => {
-    const { signer, unwrap } = await setup();
+  it('reads and unwraps once for concurrent first calls', async () => {
+    const { signer, unwrap, store } = await setup();
 
     await Promise.all([1, 2, 3].map(() => signer.signJws('local', accessToken())));
+    await Promise.all([1, 2, 3].map(() => signer.getJwks('local', REALM_A)));
 
     expect(unwrap).toHaveBeenCalledTimes(1);
+    expect(store.calls.filter((call) => call === 'listKeys')).toHaveLength(1);
+    expect(store.calls.filter((call) => call === 'listPublicKeys')).toHaveLength(1);
+  });
+
+  it('never signs with a key its own verification keys leave out', async () => {
+    const { signer, store, factory, keys, advance } = await setup();
+    const oldKid = activeKid(keys, REALM_A, 'token_signing');
+    const [next] = await factory.createKey({
+      realmId: REALM_A,
+      purpose: 'token_signing',
+      status: 'next',
+    });
+    await signer.signJws('local', accessToken());
+    // The published keys are read later than the key list, while the new key is still `next`.
+    advance(REFRESH_MS / 3);
+    const before = await signer.getVerificationKeys('local', REALM_A, 'token_signing');
+    expect(before.map((key) => key.kid)).toEqual([oldKid]);
+
+    store.update(REALM_A, oldKid, { status: 'retired', retireAt: NOW });
+    store.update(REALM_A, next.kid, { status: 'active' });
+    advance((REFRESH_MS * 2) / 3);
+    const token = await signer.signJws('local', accessToken());
+    const after = await signer.getVerificationKeys('local', REALM_A, 'token_signing');
+
+    expect(decodeProtectedHeader(token).kid).toBe(next.kid);
+    expect(after.map((key) => key.kid)).toContain(next.kid);
   });
 
   it('holds no more keys than its size limit', async () => {
@@ -668,6 +695,15 @@ describe('getCookieSecrets', () => {
     );
   });
 
+  it('hands out buffers that reach no other memory', async () => {
+    const { signer } = await setup();
+
+    const { current } = await signer.getCookieSecrets('local', REALM_A);
+
+    expect(current.secret.byteOffset).toBe(0);
+    expect(current.secret.buffer.byteLength).toBe(current.secret.length);
+  });
+
   it('gives a typed error for a realm with no cookie key', async () => {
     const { signer } = await setup();
 
@@ -793,7 +829,7 @@ describe('encrypt and decrypt', () => {
   });
 
   it('finds a key created after the key list was read', async () => {
-    const { signer, keys, factory, store } = await setup();
+    const { signer, keys, factory, store, advance } = await setup();
     const oldKid = activeKid(keys, REALM_A, 'data_at_rest', 'A256GCM');
     await signer.encrypt('local', { realmId: REALM_A, plaintext });
     // Another node rotated: this signer's list is still fresh and lacks the key.
@@ -812,8 +848,25 @@ describe('encrypt and decrypt', () => {
       now: () => NOW,
     });
     const ciphertext = await other.encrypt('local', { realmId: REALM_A, plaintext });
+    advance(1_000);
 
     expect(await signer.decrypt('local', { realmId: REALM_A, ciphertext })).toEqual(plaintext);
+  });
+
+  it('reads the key list at most once a second for ciphertexts naming unknown keys', async () => {
+    const { signer, store, advance } = await setup();
+    const ciphertext = await signer.encrypt('local', { realmId: REALM_A, plaintext });
+    const unknown = ciphertext.replace(/^v1\.[^.]+\./, 'v1.unknown-kid.');
+    advance(1_000);
+    store.calls.length = 0;
+
+    for (let attempt = 0; attempt < 5; attempt++) {
+      await expect(
+        signer.decrypt('local', { realmId: REALM_A, ciphertext: unknown })
+      ).rejects.toBeInstanceOf(SignerKeyNotFoundError);
+    }
+
+    expect(store.calls).toEqual(['listKeys']);
   });
 
   it.each([
@@ -861,7 +914,7 @@ describe('getVerificationKeys and getJwks', () => {
     expect(verification.map((key) => key.kid)).not.toContain(next.kid);
   });
 
-  it('keep a retired key until its window closes, and drop a compromised one at once', async () => {
+  it('keep a retired key until its window closes, and drop a compromised one at the next read', async () => {
     const { signer, keys, store, advance } = await setup();
     const kid = activeKid(keys, REALM_A, 'token_signing');
     store.update(REALM_A, kid, { status: 'retired', unpublishAt: NOW + 2 * REFRESH_MS });

@@ -4,10 +4,16 @@
  *
  * A JWS names what it is in its protected `typ` header (RFC 8725 §3.11), and a
  * verifier that checks `typ` refuses a token of another type. Binding each
- * purpose to its types closes the other direction: a caller allowed to sign
- * logout tokens cannot obtain an access token, because no `event_signing` key
- * ever signs `at+jwt`, and the realm's verifiers resolve access tokens against
- * `token_signing` keys only.
+ * purpose to its types means a role allowed to sign one kind of token cannot
+ * obtain another kind with the right `typ`: `delivery` cannot get an `at+jwt`,
+ * and `api` cannot get a `logout+jwt`.
+ *
+ * The protection reaches as far as the verifier checks `typ`. QAuth's own
+ * verifiers resolve access tokens against `token_signing` keys only. Both
+ * purposes publish in one realm JWKS, though, so a relying party that does not
+ * require `logout+jwt` (OpenID Connect Back-Channel Logout leaves explicit
+ * typing optional) can be handed a `JWT`-typed token from `token_signing`
+ * that carries a logout `events` claim.
  *
  * A purpose that is not listed is not signed through `signJws` at all. The
  * purposes added later (webhooks and client assertions, #547; the OID4VP

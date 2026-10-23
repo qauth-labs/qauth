@@ -70,14 +70,21 @@ import {
  * in memory, unwrapped, under a size limit ({@link DEFAULT_SIGNER_KEY_CACHE_SIZE}).
  * Signing and encryption keys are imported as non-extractable WebCrypto keys,
  * so not even this module can export them again. The plaintext material is
- * zeroed as soon as the key is imported.
+ * zeroed as soon as the key is imported; the ML-DSA-65 backend takes its seed
+ * as a base64url string, a copy that cannot be zeroed.
  *
  * Which key is active is read from the store at most once per refresh
  * interval ({@link DEFAULT_SIGNER_REFRESH_INTERVAL_MS}) per realm, purpose
  * and scope, so a signature with a warm cache runs no database query. A
  * rotation (#542) is seen within one interval; until then the old key, which
- * stays published and verifiable, keeps signing. The realm's issuer never
- * changes once set, so it is read once.
+ * stays published and verifiable, keeps signing. When the key list changes,
+ * the node reads its published keys again, so it never signs with a key its
+ * own verification set does not list. Two nodes can still disagree for up to
+ * one interval, which the rotation's schedule must allow for. A key marked
+ * `compromised` likewise stops signing, decrypting and appearing in the JWKS
+ * at each node's next read; emergency retirement (#551) needs an invalidation
+ * that reaches every node at once. The realm's issuer never changes once set,
+ * so it is read once.
  *
  * ## What it never does
  *
@@ -94,6 +101,13 @@ export const DEFAULT_SIGNER_KEY_CACHE_SIZE = 256;
 
 /** The default time a key lookup is trusted before the store is asked again, in ms. */
 export const DEFAULT_SIGNER_REFRESH_INTERVAL_MS = 60_000;
+
+/**
+ * The least time between two reads that a `decrypt` miss forces, per realm
+ * and purpose, in ms. A ciphertext naming a key the cached list lacks reads
+ * the list again, but a run of them does not each cost a query.
+ */
+const MIN_FORCED_READ_INTERVAL_MS = 1_000;
 
 /** Options of {@link createInProcessSigner}. */
 export interface InProcessSignerOptions {
@@ -199,6 +213,8 @@ export function createInProcessSigner(options: InProcessSignerOptions): Signer {
   const pendingKeys = new Map<string, Promise<LoadedKey>>();
   const keyLists = new BoundedCache<string, Timed<readonly SignerKeyRecord[]>>(keyCacheSize);
   const publicLists = new BoundedCache<string, Timed<readonly PublicKeyRecord[]>>(keyCacheSize);
+  // One store read per slot at a time: concurrent callers share it.
+  const pendingReads = new Map<string, Promise<unknown>>();
   const issuers = new BoundedCache<string, string>(keyCacheSize);
 
   function isFresh(entry: Timed<unknown> | undefined): boolean {
@@ -217,28 +233,70 @@ export function createInProcessSigner(options: InProcessSignerOptions): Signer {
     return issuer;
   }
 
-  /** Every key of the realm's purpose and scope, read at most once per refresh interval. */
+  /**
+   * Run `read` once for `slot` however many callers ask while it runs. The
+   * time is taken before the read, so an answer is never trusted for longer
+   * than the interval since the store was asked.
+   */
+  function sharedRead<T>(slot: string, read: (readAt: number) => Promise<T>): Promise<T> {
+    let pending = pendingReads.get(slot) as Promise<T> | undefined;
+    if (pending === undefined) {
+      pending = read(now()).finally(() => pendingReads.delete(slot));
+      pendingReads.set(slot, pending);
+    }
+    return pending;
+  }
+
+  /**
+   * Every key of the realm's purpose and scope, read at most once per refresh
+   * interval. `forceRead` reads again sooner, but not twice within
+   * {@link MIN_FORCED_READ_INTERVAL_MS}.
+   */
   async function listKeys(
     realmId: string,
     purpose: KeyPurpose,
     scopeId: string | null,
     forceRead = false
   ): Promise<readonly SignerKeyRecord[]> {
-    const slot = `${realmId}\u0000${purpose}\u0000${scopeId ?? ''}`;
+    const slot = `keys\u0000${realmId}\u0000${purpose}\u0000${scopeId ?? ''}`;
     const cached = keyLists.get(slot);
-    if (!forceRead && cached !== undefined && isFresh(cached)) return cached.value;
-    const value = Object.freeze([...(await store.listKeys(realmId, { purpose, scopeId }))]);
-    keyLists.set(slot, { value, readAt: now() });
-    return value;
+    if (cached !== undefined) {
+      const age = now() - cached.readAt;
+      const trusted = forceRead
+        ? Math.min(MIN_FORCED_READ_INTERVAL_MS, refreshIntervalMs)
+        : refreshIntervalMs;
+      if (age < trusted) {
+        return cached.value;
+      }
+    }
+    return sharedRead(slot, async (readAt) => {
+      const value = Object.freeze([...(await store.listKeys(realmId, { purpose, scopeId }))]);
+      const current = keyLists.get(slot);
+      if (current === undefined || current.readAt <= readAt) {
+        // A key changed status: the published keys this node holds are as old
+        // as this list was, so read them again too. Otherwise this node could
+        // sign with a key its own verification set still calls `next`.
+        if (current !== undefined && !sameKeys(current.value, value)) {
+          publicLists.delete(realmId);
+        }
+        keyLists.set(slot, { value, readAt });
+      }
+      return value;
+    });
   }
 
   /** The realm's published keys, read at most once per refresh interval. */
   async function listPublicKeys(realmId: string): Promise<readonly PublicKeyRecord[]> {
     const cached = publicLists.get(realmId);
     if (cached !== undefined && isFresh(cached)) return cached.value;
-    const value = Object.freeze([...(await store.listPublicKeys(realmId))]);
-    publicLists.set(realmId, { value, readAt: now() });
-    return value;
+    return sharedRead(`public\u0000${realmId}`, async (readAt) => {
+      const value = Object.freeze([...(await store.listPublicKeys(realmId))]);
+      const current = publicLists.get(realmId);
+      if (current === undefined || current.readAt <= readAt) {
+        publicLists.set(realmId, { value, readAt });
+      }
+      return value;
+    });
   }
 
   /** The one active key of the purpose, scope and algorithm. */
@@ -332,7 +390,7 @@ export function createInProcessSigner(options: InProcessSignerOptions): Signer {
         return Object.freeze({ kind: 'ml-dsa', key });
       }
       case 'HS256':
-        return Object.freeze({ kind: 'hmac', secret: Buffer.from(material) });
+        return Object.freeze({ kind: 'hmac', secret: ownCopy(material) });
       case 'A256GCM': {
         const key = await crypto.subtle.importKey('raw', bufferSource(material), 'AES-GCM', false, [
           'encrypt',
@@ -365,7 +423,7 @@ export function createInProcessSigner(options: InProcessSignerOptions): Signer {
   async function secretOf(realmId: string, record: SignerKeyRecord): Promise<CookieSecret> {
     const loaded = await loadKey(identityOf(realmId, 'cookie_hmac', record));
     if (loaded.kind !== 'hmac') throw new KeyDecryptionError({ detail: 'not an HMAC secret' });
-    return Object.freeze({ kid: record.kid, secret: Buffer.from(loaded.secret) });
+    return Object.freeze({ kid: record.kid, secret: ownCopy(loaded.secret) });
   }
 
   function authorize(caller: unknown, operation: SignerOperation, purpose?: string): void {
@@ -680,6 +738,27 @@ function claimsRefusal(claims: unknown): SignerRequestRefusedError {
     );
   }
   return new SignerRequestRefusedError('INVALID_CLAIMS', 'The claims are not a JSON object');
+}
+
+/**
+ * A copy of `bytes` in memory of its own. `Buffer.from` would place a small
+ * copy in Node's shared allocation pool, where its `.buffer` reaches the
+ * bytes of other buffers, a cached secret among them.
+ */
+function ownCopy(bytes: Uint8Array): Buffer {
+  const copy = Buffer.alloc(bytes.length);
+  copy.set(bytes);
+  return copy;
+}
+
+/** Whether two key lists name the same keys with the same statuses. */
+function sameKeys(a: readonly SignerKeyRecord[], b: readonly SignerKeyRecord[]): boolean {
+  const describe = (keys: readonly SignerKeyRecord[]) =>
+    keys
+      .map((key) => `${key.kid}\u0000${key.status}`)
+      .sort()
+      .join('\u0001');
+  return describe(a) === describe(b);
 }
 
 /** Newest retirement first; a key without a retirement time, then the newest key, last. */

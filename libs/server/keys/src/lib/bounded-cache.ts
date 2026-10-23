@@ -32,6 +32,11 @@ export class BoundedCache<K, V> {
     return value;
   }
 
+  /** Drop the entry for `key`, without calling `onEvict`. */
+  delete(key: K): void {
+    this.#entries.delete(key);
+  }
+
   /** Store `value` as the most recently used entry, evicting the oldest past the limit. */
   set(key: K, value: V): void {
     this.#entries.delete(key);
