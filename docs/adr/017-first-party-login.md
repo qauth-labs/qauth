@@ -100,7 +100,8 @@
 > F5 now follow the later records. Step 8 now also places the forced update and the required
 > actions of ADR-020 §3: after every factor the login needs, before the passkey enrolment offer.
 > The maintainer also decided that day that an upstream sign-in ranks with the password in the
-> downgrade rule, below a passkey.
+> downgrade rule, below a passkey, and that a forced update on a password-only account first asks
+> for a code mailed to its address.
 
 ## Context
 
@@ -560,7 +561,9 @@ response.
    update and the other required actions (ADR-020 §3, #635, #700), and from F2b an optional passkey
    enrolment offer. The forced update and the required actions come only after every factor the
    login needs. When the login needs another factor, a person who knows only a breached password
-   must not be able to set a new one before passing it.
+   must not be able to set a new one before passing it. When the password is the account's only
+   factor, a forced update first asks for a code mailed to the account's address, as a reset does
+   (Decision 8), so the password alone never sets a new one (decided 2026-10-23, maintainer).
 9. Mint the code.
 
 Any other rule that needs a step the client did not list answers `redirect_to_web`.
