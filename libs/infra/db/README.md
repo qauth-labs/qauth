@@ -242,6 +242,10 @@ Each factory takes a `defaultDb: DbClient`. Methods below take an optional
   - `create()`, `findByKid()`, `listByRealm()`, `getWrappedForSigner()`
   - `create({ key, publicJwk? })` writes the `realm_keys` row and, for a published purpose, its `realm_public_keys` row in one transaction, copying the mirror columns from the key row.
   - `getWrappedForSigner(realmId, kid)` is the **only** method that returns `ciphertext`, `iv` and `wrapped_dek`. Every other method returns a `RealmKey` without them; a unit test fails when another method selects one.
+- **`createSessionsRepository(db)`**: Browser sessions (ADR-019 Decision 3, #468)
+  - `create()`, `findById(realmId, id)`, `updateLastSeen(realmId, id, { minIntervalMs? })`, `revoke(realmId, id, reason)`, `listActiveForUser(realmId, userId)`
+  - Every method that names a session or a user takes the realm id too, and its statement filters on it; a unit test fails when one stops doing so. A session of another realm is never found, touched, ended or listed. The database adds the rest: the composite foreign key `sessions_user_realm_fk` refuses a session whose realm is not its user's.
+  - `create` leaves the id to the database (`uuidv7()`); it is the session's `sid`. `findById` returns the row whatever its state, for the session service to judge. `updateLastSeen` is one conditional `UPDATE` on a live row seen at least `minIntervalMs` ago, so nodes touching one session within the interval write once. `revoke` ends a session not yet revoked and returns it; a second call returns `undefined` and keeps the first reason.
 - **`createRealmsRepository(db)`**: Realm CRUD, and the realm's hosts (ADR-019 Decision 1)
   - `create()`, `findById()`, `findByIdOrThrow()`, `findByName()`, `update()`, `delete()`
   - `findByHost(host)`, `createWithPrimaryHost(data, host)`, `assignIssuer(realmId, issuer, host)`, `addEndpointHost(realmId, host)`, `removeEndpointHost(realmId, host)`, `findOperator()`, `lockProvisioning(tx)`
@@ -544,13 +548,14 @@ libs/infra/db/
 │   │   │   ├── api-keys.repository.ts
 │   │   │   ├── audit-logs.repository.ts
 │   │   │   ├── realm-keys.repository.ts  # realm_keys / realm_public_keys (signer only)
+│   │   │   ├── sessions.repository.ts    # sessions (realm-bound lookups)
 │   │   │   └── integration-setup.ts
 │   │   ├── schema/
 │   │   │   ├── index.ts        # Main schema exports
 │   │   │   ├── core.ts         # Core tables: realms, users, oauth_clients, api_keys
 │   │   │   ├── tokens.ts       # email_verification_tokens, authorization_codes, refresh_tokens
 │   │   │   ├── consents.ts     # oauth_consents
-│   │   │   ├── sessions.ts     # sessions (Phase 5+, currently unused — Redis holds sessions)
+│   │   │   ├── sessions.ts     # sessions, session_clients (ADR-019 Decision 3)
 │   │   │   ├── audit.ts        # audit_logs (with agent attribution)
 │   │   │   ├── admin-audit.ts  # admin_audit_log, admin_audit_log_checkpoints (ADR-019 Decision 7)
 │   │   │   ├── roles.ts        # roles, user_roles (Phase 5+, currently unused)
@@ -608,7 +613,8 @@ libs/infra/db/
 
 ### Additional Tables
 
-- **sessions**: User sessions (optional, can use Redis instead)
+- **sessions**: Browser sessions (ADR-019 Decision 3, #468): one row per account signed in on one browser, in one realm. The `id` (`uuidv7()`) is the session's `sid`. Holds the authentication (`auth_time`, `amr`, `assurance_level`), the address and user agent at creation, `last_seen_at`, the absolute end `expires_at`, and `revoked_at` with `revoked_reason` (set together). `(user_id, realm_id)` references `users (id, realm_id)`, so a session never names a user of another realm. Not stored here: the cookie, the CSRF values and the consent scopes. The auth server does not read or write it yet; Redis still holds the live sessions until the session service (#469) lands
+- **session_clients**: The clients a session has served, keyed by `(session_id, oauth_client_id)`, for back-channel logout. Deleting the session or the client deletes its rows
 - **audit_logs**: Comprehensive audit logging for security events
 - **api_keys**: Environment-gated static developer API keys (ADR-008 §6)
 - **roles**: Role-based access control (Phase 5+)

@@ -131,6 +131,7 @@ Table "users" {
   "last_login_at" bigint
 
   Indexes {
+    (id, realm_id) [unique, name: "users_id_realm_id_unique", note: "Unique constraint; target of sessions_user_realm_fk"]
     realm_id [name: "idx_users_realm_id"]
     enabled [name: "idx_users_enabled", note: "Partial index: WHERE enabled = true"]
   }
@@ -380,29 +381,44 @@ Table "events" {
 }
 
 // ============================================================================
-// OPTIONAL: SESSION MANAGEMENT (can use Redis instead)
+// BROWSER SESSIONS (ADR-019 Decision 3, #468)
 // ============================================================================
 
+// One row per account signed in on one browser, in one realm. The id is the
+// session's sid. (user_id, realm_id) references users (id, realm_id), so a
+// session never names a user of another realm. The cookie, the CSRF values and
+// the consent scopes are not stored here.
 Table "sessions" {
-  "id" uuid [pk, default: `uuidv7()`]
-  "user_id" uuid [not null, ref: > users.id]
-  "oauth_client_id" uuid [ref: > oauth_clients.id]
-  "access_token_hash" text [note: "SHA-256 hash of current access token"]
-  "refresh_token_hash" text [note: "SHA-256 hash of current refresh token"]
-  "ip_address" varchar(45)
-  "user_agent" text
-  "expires_at" bigint [not null]
-  "revoked" boolean [not null, default: false]
+  "id" uuid [pk, default: `uuidv7()`, note: "The session's sid"]
+  "realm_id" uuid [not null, ref: > realms.id]
+  "user_id" uuid [not null, note: "(user_id, realm_id) references users (id, realm_id): sessions_user_realm_fk, ON DELETE CASCADE"]
+  "auth_time" bigint [not null, note: "When the user authenticated (epoch ms); read by max_age and the auth_time claim"]
+  "amr" jsonb [not null, default: `'[]'::jsonb`, note: "Authentication methods (RFC 8176); CHECK: JSON array"]
+  "assurance_level" text [note: "'substantial' | 'high' | NULL"]
+  "ip_address" varchar(45) [note: "At creation"]
+  "user_agent" text [note: "At creation"]
+  "expires_at" bigint [not null, note: "Absolute end (epoch ms)"]
   "revoked_at" bigint
+  "revoked_reason" text [note: "sign_out | sign_out_everywhere | admin | reset | key_retired | browser_limit | idle | expired; set together with revoked_at"]
   "created_at" bigint [not null, default: `EXTRACT(EPOCH FROM NOW())::bigint * 1000`]
-  "last_activity_at" bigint [not null, default: `EXTRACT(EPOCH FROM NOW())::bigint * 1000`]
+  "last_seen_at" bigint [not null, default: `EXTRACT(EPOCH FROM NOW())::bigint * 1000`, note: "Throttled writes"]
 
   Indexes {
     user_id [name: "idx_sessions_user_id"]
-    (user_id, expires_at) [name: "idx_sessions_active", note: "Partial index: WHERE revoked = false"]
+    (realm_id, user_id) [name: "idx_sessions_realm_user_active", note: "Partial index: WHERE revoked_at IS NULL"]
     expires_at [name: "idx_sessions_expires_at"]
-    access_token_hash [name: "idx_sessions_access_token_hash"]
-    oauth_client_id [name: "idx_sessions_oauth_client_id"]
+  }
+}
+
+// The clients a session has served, for back-channel logout.
+Table "session_clients" {
+  "session_id" uuid [not null, ref: > sessions.id, note: "ON DELETE CASCADE"]
+  "oauth_client_id" uuid [not null, ref: > oauth_clients.id, note: "ON DELETE CASCADE"]
+  "first_seen_at" bigint [not null, default: `EXTRACT(EPOCH FROM NOW())::bigint * 1000`]
+
+  Indexes {
+    (session_id, oauth_client_id) [pk, name: "session_clients_pk"]
+    oauth_client_id [name: "idx_session_clients_oauth_client_id"]
   }
 }
 
@@ -478,6 +494,6 @@ Table "user_roles" {
 // - Belongs to one realm
 // - Multiple authorization codes (via oauth_client_id)
 // - Multiple refresh tokens (via oauth_client_id)
-// - Multiple sessions (via oauth_client_id)
+// - Multiple sessions served (via session_clients)
 // - Multiple roles (client-specific, via oauth_client_id)
 // - Multiple audit logs (via oauth_client_id)
