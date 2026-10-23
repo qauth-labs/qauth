@@ -62,7 +62,7 @@ export type SessionRevokedReason = (typeof SESSION_REVOKED_REASONS)[number];
  * volatile per-flow values and stay in the cache.
  *
  * Revocation is a soft end: `revoked_at` and `revoked_reason` are set together
- * (`sessions_revoked_pair`) and the row stays until the purge job removes it.
+ * (`sessions_revoked_pair`) and the row stays until a purge deletes it.
  * The idle limit is the realm's (`sso_idle_timeout`), judged from
  * `last_seen_at` by the session service.
  */
@@ -124,7 +124,7 @@ export const sessions = pgTable(
     index('idx_sessions_realm_user_active')
       .on(t.realmId, t.userId)
       .where(sql`${t.revokedAt} IS NULL`),
-    // The purge job and expiry sweeps.
+    // Purging ended rows and sweeping expired ones.
     index('idx_sessions_expires_at').on(t.expiresAt),
     check('sessions_amr_is_array', sql`jsonb_typeof(${t.amr}) = 'array'`),
     check(
@@ -147,7 +147,8 @@ export const sessions = pgTable(
  * Back-channel logout reads it to learn which clients to notify when the
  * session ends.
  *
- * Both foreign keys cascade: ending the row with its session or its client.
+ * Both foreign keys cascade: deleting the session or the client deletes the
+ * row.
  */
 export const sessionClients = pgTable(
   'session_clients',
