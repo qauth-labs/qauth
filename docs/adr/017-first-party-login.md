@@ -563,7 +563,8 @@ response.
    login needs. When the login needs another factor, a person who knows only a breached password
    must not be able to set a new one before passing it. When the password is the account's only
    factor, a forced update first asks for a code mailed to the account's address, as a reset does
-   (Decision 8), so the password alone never sets a new one (decided 2026-10-23, maintainer).
+   (Decision 8), so the password alone never sets a new one (decided 2026-10-23, maintainer). A
+   code the same transaction already took for that mailbox counts; no second code is mailed.
 9. Mint the code.
 
 Any other rule that needs a step the client did not list answers `redirect_to_web`.
